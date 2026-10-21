@@ -15,6 +15,7 @@ It calls tools in a loop until it can name a cause, quoting the log lines that s
 - Tools are plain async Python functions registered with a decorator. Their argument schemas come from type hints.
 - Tools read the cluster through the Kubernetes API: logs of every pod of a service, pod status, and the list of services.
 - A traces tool queries Jaeger (the test bed's trace store) through the Kubernetes API service proxy, so no port-forward is needed. It shows which service a failing request called and where the failure started.
+- A metrics tool queries Prometheus the same way. It gives a service's request rate, error rate and latency now against the 30 minutes before, and the error rate over time. It runs as an MCP server beside the logs server.
 - Every run ends with a named stop reason: `done`, `tool_errors`, `bad_call`, `truncated`, `content_filtered`, `refused`, `model_error`, `step_limit`, `token_limit` or `time_limit`.
 - One deadline covers the whole run, including model calls, retries and tool calls.
 

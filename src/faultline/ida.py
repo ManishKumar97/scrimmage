@@ -6,7 +6,7 @@ import sys
 from dataclasses import dataclass
 
 from faultline import kube_tools
-from faultline.mcp_client import LOGS_SERVER, mcp_tools
+from faultline.mcp_client import LOGS_SERVER, METRICS_SERVER, mcp_tools
 from faultline.models import (
     BadToolCall,
     Message,
@@ -24,13 +24,20 @@ MAX_CONSECUTIVE_TOOL_ERRORS = 3
 
 SYSTEM_PROMPT = (
     "You diagnose incidents in the Astronomy Shop, a microservice app on Kubernetes. "
-    "Tools: list_services, list_pods (pod status), get_logs (one service per call) "
-    "and get_error_traces (failed spans in recent traces). "
+    "Tools: list_services, list_pods (pod status), get_logs (one service per call), "
+    "get_error_traces (failed spans in recent traces), get_service_metrics "
+    "(request rate, error rate and latency now against the 30 minutes before) "
+    "and get_error_rate_trend (error rate over time). "
     "Start with get_error_traces for the service named in the report. "
     "A service often fails because a service it calls fails, and the caller may log nothing. "
     "A span marked last failed span has no failed span below it: the failed call was made there. "
     "If it is a client span, the service it calls (the peer) may be the one that is down, "
     "so look at that service's traces, logs and pod status. "
+    "Use metrics to size the symptom: whether a service's error rate is above its baseline "
+    "or always like this, how large the rise is, and when it started. "
+    "Check the error rate of the reported service and of the services it calls. "
+    "A rise over baseline that fits the symptom is evidence. A steady rate is not a change. "
+    "Metrics say 'no data' when Prometheus has no series. That is not proof of no errors. "
     "Confirm with that service's own logs and pod status before you answer. "
     "get_logs shows only the last 100 lines, so a busy service can hide an error. "
     "Even then, name a cause only if the failure repeats across traces "
@@ -171,8 +178,11 @@ def describe(call: ToolCall) -> str:
 
 async def diagnose_async(question: str) -> RunResult:
     model = make_model(get_settings())
-    # get_logs comes from the MCP server. The server lives for this one run.
-    async with mcp_tools(LOGS_SERVER, kube_tools.registry) as tools:
+    # The logs and metrics tools come from MCP servers. They live for this one run.
+    async with (
+        mcp_tools(LOGS_SERVER, kube_tools.registry) as with_logs,
+        mcp_tools(METRICS_SERVER, with_logs) as tools,
+    ):
         return await run(question, model, tools=tools)
 
 

@@ -2,9 +2,12 @@
 
 import asyncio
 import json
+import math
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import ClassVar
 
 from kubernetes_asyncio import config
 from kubernetes_asyncio.client import ApiClient, ApiException, AppsV1Api, CoreV1Api
@@ -48,6 +51,7 @@ class FakeCluster:
         self.jaeger_requests: list[tuple[str, dict]] = []  # (path, query)
         self.jaeger_status = 200
         self.jaeger_body: str | None = None  # replaces the JSON answer
+        self.prom = FakePrometheus()
         self.hang = False  # every API call waits forever
 
     def add(
@@ -135,6 +139,11 @@ class FakeCluster:
     async def call_api(self, path: str, method: str, **kwargs):
         """The Kubernetes service proxy in front of Jaeger's query API."""
         await self._wait()
+        if "/services/prometheus:9090/proxy/api/v1/" in path:
+            status, body = self.prom.handle(path, dict(kwargs["query_params"]))
+            return SimpleNamespace(
+                status=status, reason="Service Unavailable", text=_text(body)
+            )
         marker = "/proxy/jaeger/ui/api/"
         assert method == "GET" and marker in path, path
         query = dict(kwargs["query_params"])
@@ -169,6 +178,130 @@ class FakeCluster:
         await self._wait()
         self.log_requests.append((name, kwargs))
         return self.logs[name]
+
+
+class FakePrometheus:
+    """Prometheus's HTTP API over counter samples held in memory.
+
+    It answers only the query shapes the metrics tools send, and refuses any other
+    with the 400 the real server gives for a bad query. It honours the label
+    matchers, the range window and the evaluation time, so a tool that asks for
+    the wrong service, window or moment gets a different answer.
+    Rates are (last - first) / elapsed over the samples in the window, without
+    Prometheus's extrapolation.
+    """
+
+    SELECTOR = r"(?P<metric>\w+)\{(?P<labels>[^}]*)\}\[(?P<window>\d+)m\]"
+    SHAPES: ClassVar[dict[str, str]] = {
+        "sum": rf"sum\(rate\({SELECTOR}\)\)",
+        "quantile": rf"histogram_quantile\((?P<q>[\d.]+), sum by \(le\) \(rate\({SELECTOR}\)\)\)",
+        "topk": rf"topk\((?P<k>\d+), sum by \(span_name\) \(rate\({SELECTOR}\)\)\)",
+    }
+    STEP = 15  # seconds between samples
+
+    def __init__(self) -> None:
+        self.series: list[tuple[str, dict[str, str], list[tuple[float, float]]]] = []
+        self.requests: list[tuple[str, dict]] = []  # (path after v1/, query)
+        self.status = 200
+        self.body: str | None = None  # replaces the answer
+
+    def counter(
+        self,
+        metric: str,
+        labels: dict[str, str],
+        rates: list[tuple[int, float]],
+        points: int = 240,
+        ended: int = 0,
+    ) -> None:
+        """A counter sampled every 15 s up to NOW. `rates` is (seconds ago the rate
+        starts, per second), oldest first. Samples start 3600 s ago by default and
+        stop `ended` seconds ago."""
+        samples, value = [], 0.0
+        for k in range(points + 1):
+            ago = (points - k) * self.STEP
+            active = [r for start, r in rates if start > ago]
+            value += (active[-1] if active else 0.0) * self.STEP
+            if ago >= ended:
+                samples.append((NOW.timestamp() - ago, value))
+        self.series.append((metric, labels, samples))
+
+    def handle(self, path: str, query: dict) -> tuple[int, str]:
+        endpoint = path.split("/proxy/api/v1/")[1]
+        self.requests.append((endpoint, query))
+        if self.body is not None:
+            return self.status, self.body
+        if endpoint == "label/service_name/values":
+            names = sorted({lab["service_name"] for _, lab, _ in self.series})
+            return 200, json.dumps({"status": "success", "data": names})
+        try:
+            if endpoint == "query":
+                at = float(query["time"])
+                result = [
+                    {"metric": m, "value": [at, v]}
+                    for m, v in self._eval(query["query"], at)
+                ]
+                data = {"resultType": "vector", "result": result}
+            else:
+                assert endpoint == "query_range", endpoint
+                start, end, step = (float(query[k]) for k in ("start", "end", "step"))
+                values: dict[tuple, list] = {}
+                at = start
+                while at <= end:
+                    for m, v in self._eval(query["query"], at):
+                        values.setdefault(tuple(sorted(m.items())), []).append([at, v])
+                    at += step
+                result = [{"metric": dict(m), "values": v} for m, v in values.items()]
+                data = {"resultType": "matrix", "result": result}
+        except ValueError as exc:
+            error = {"status": "error", "errorType": "bad_data", "error": str(exc)}
+            return 400, json.dumps(error)
+        return self.status, json.dumps({"status": "success", "data": data})
+
+    def _eval(self, query: str, at: float) -> list[tuple[dict[str, str], str]]:
+        for shape, pattern in self.SHAPES.items():
+            if found := re.fullmatch(pattern, query):
+                break
+        else:
+            raise ValueError(f"1:1: parse error: unsupported query {query!r}")
+        wanted = dict(re.findall(r'(\w+)="([^"]*)"', found["labels"]))
+        window = int(found["window"]) * 60
+        rates = []  # (labels, rate per second) of every series that has a rate
+        for metric, labels, samples in self.series:
+            if metric != found["metric"] or not wanted.items() <= labels.items():
+                continue
+            inside = [(t, v) for t, v in samples if at - window <= t <= at]
+            if len(inside) >= 2:
+                span = inside[-1][0] - inside[0][0]
+                rates.append((labels, (inside[-1][1] - inside[0][1]) / span))
+        if shape == "sum":
+            return [({}, str(sum(r for _, r in rates)))] if rates else []
+        if shape == "topk":
+            by_name: dict[str, float] = {}
+            for labels, r in rates:
+                by_name[labels["span_name"]] = by_name.get(labels["span_name"], 0) + r
+            top = sorted(by_name.items(), key=lambda item: -item[1])[: int(found["k"])]
+            return [({"span_name": n}, str(r)) for n, r in top]
+        return [({}, str(self._quantile(float(found["q"]), rates)))] if rates else []
+
+    @staticmethod
+    def _quantile(q: float, rates: list[tuple[dict[str, str], float]]) -> float:
+        """Prometheus's histogram_quantile: linear inside the bucket the rank falls in."""
+        per_le: dict[float, float] = {}
+        for labels, r in rates:
+            le = float(labels["le"])
+            per_le[le] = per_le.get(le, 0) + r
+        bounds = sorted(per_le)
+        total = per_le[bounds[-1]]
+        if total == 0:
+            return math.nan
+        rank, lower, below = q * total, 0.0, 0.0
+        for le in bounds:
+            if per_le[le] >= rank:
+                if math.isinf(le):
+                    return lower
+                return lower + (le - lower) * (rank - below) / (per_le[le] - below)
+            lower, below = le, per_le[le]
+        return math.nan
 
 
 def _text(body: str) -> Callable[[], object]:

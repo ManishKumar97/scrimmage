@@ -15,6 +15,9 @@ START_TIMEOUT = 15.0  # seconds to start the server and list its tools
 LOGS_SERVER = StdioServerParameters(
     command=sys.executable, args=["-m", "faultline.mcp_logs"]
 )
+METRICS_SERVER = StdioServerParameters(
+    command=sys.executable, args=["-m", "faultline.mcp_metrics"]
+)
 
 
 @asynccontextmanager
