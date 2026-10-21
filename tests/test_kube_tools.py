@@ -100,3 +100,45 @@ def test_a_hanging_api_call_is_a_tool_error(monkeypatch):
         "Error: get_logs raised RuntimeError: "
         "deployment named 'cart' timed out after 0.1s"
     )
+
+
+def test_list_pods_shows_status_restarts_and_last_termination(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    cluster.add("cart", {"cart-a": "x", "cart-b": "x"})
+    cluster.add("checkout", {"checkout-a": "x"})
+    cluster.set_status("cart-b", ready=False, restarts=4, terminated="OOMKilled")
+    cluster.set_status("checkout-a", age_seconds=90)
+
+    output = asyncio.run(kube_tools.list_pods("cart"))
+
+    assert re.match(NOW, output)
+    assert output.splitlines()[1:] == [
+        "POD PHASE READY RESTARTS LAST_TERMINATION AGE",
+        "cart-a Running 1/1 0 none 3600s",
+        "cart-b Running 0/1 4 OOMKilled 3600s",
+    ]
+
+
+def test_list_pods_without_a_service_lists_every_service(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    cluster.add("cart", {"cart-a": "x"})
+    cluster.add("checkout", {"checkout-a": "x"})
+    cluster.set_status("checkout-a", age_seconds=90)
+
+    output = asyncio.run(kube_tools.list_pods())
+
+    assert output.splitlines()[2:] == [
+        "cart-a Running 1/1 0 none 3600s",
+        "checkout-a Running 1/1 0 none 90s",
+    ]
+
+
+def test_list_pods_of_an_unknown_service_is_an_error_the_model_can_read(monkeypatch):
+    fake_cluster(monkeypatch)
+
+    try:
+        asyncio.run(kube_tools.list_pods("nope"))
+    except RuntimeError as exc:
+        assert str(exc) == "no deployment named 'nope' in astronomy-shop"
+    else:
+        raise AssertionError("expected an error")

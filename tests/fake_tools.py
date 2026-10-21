@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from kubernetes_asyncio import config
@@ -34,6 +35,8 @@ class FakeCluster:
         self.ready: dict[str, int | None] = {}
         self.pods: dict[str, dict[str, str]] = {}  # pod name -> labels
         self.logs: dict[str, str] = {}  # pod name -> log text
+        self.status: dict[str, SimpleNamespace] = {}  # pod name -> pod status
+        self.created: dict[str, datetime] = {}  # pod name -> creation time
         self.log_requests: list[tuple[str, dict]] = []
         self.hang = False  # every API call waits forever
 
@@ -46,6 +49,26 @@ class FakeCluster:
         for pod, text in pod_logs.items():
             self.pods[pod] = labels
             self.logs[pod] = text
+            self.set_status(pod)
+
+    def set_status(
+        self,
+        pod: str,
+        phase: str = "Running",
+        ready: bool = True,
+        restarts: int = 0,
+        terminated: str | None = None,
+        age_seconds: int = 3600,
+    ) -> None:
+        """Set what the pod reports about itself. One container per pod."""
+        last = SimpleNamespace(
+            terminated=SimpleNamespace(reason=terminated) if terminated else None
+        )
+        container = SimpleNamespace(
+            ready=ready, restart_count=restarts, last_state=last
+        )
+        self.status[pod] = SimpleNamespace(phase=phase, container_statuses=[container])
+        self.created[pod] = datetime.now(UTC) - timedelta(seconds=age_seconds)
 
     async def _wait(self) -> None:
         if self.hang:
@@ -72,12 +95,17 @@ class FakeCluster:
 
     async def list_namespaced_pod(self, namespace: str, label_selector: str):
         await self._wait()
-        wanted = dict(pair.split("=") for pair in label_selector.split(","))
+        wanted = dict(pair.split("=") for pair in label_selector.split(",") if pair)
         return SimpleNamespace(
             items=[
-                SimpleNamespace(metadata=SimpleNamespace(name=pod))
+                SimpleNamespace(
+                    metadata=SimpleNamespace(
+                        name=pod, creation_timestamp=self.created[pod]
+                    ),
+                    status=self.status[pod],
+                )
                 for pod, labels in self.pods.items()
-                if labels == wanted
+                if not wanted or labels == wanted
             ]
         )
 

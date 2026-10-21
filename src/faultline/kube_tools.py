@@ -76,6 +76,51 @@ async def get_logs(
 
 
 @registry.tool
+async def list_pods(
+    service: Annotated[
+        str | None,
+        Field(description="Service name. Leave out to list the pods of every service."),
+    ] = None,
+) -> str:
+    """List pods with phase, ready containers, restarts, last termination reason and age."""
+    async with kube_api() as api, api_errors("pod list"):
+        core = CoreV1Api(api)
+        selector = ""
+        if service:
+            with_name = f"deployment named {service!r}"
+            async with api_errors(with_name):
+                deployment = await AppsV1Api(api).read_namespaced_deployment(
+                    service, NAMESPACE
+                )
+            labels = deployment.spec.selector.match_labels or {}
+            selector = ",".join(f"{key}={value}" for key, value in labels.items())
+        pods = await core.list_namespaced_pod(NAMESPACE, label_selector=selector)
+    now = datetime.now(UTC)
+    rows = [pod_row(pod, now) for pod in pods.items]
+    header = f"Now: {now.strftime('%Y-%m-%dT%H:%M:%SZ')}."
+    if not rows:
+        return f"{header} No pods."
+    return "\n".join([header, "POD PHASE READY RESTARTS LAST_TERMINATION AGE", *rows])
+
+
+def pod_row(pod, now: datetime) -> str:
+    statuses = pod.status.container_statuses or []
+    ready = sum(1 for c in statuses if c.ready)
+    restarts = sum(c.restart_count for c in statuses)
+    reasons = [
+        c.last_state.terminated.reason
+        for c in statuses
+        if c.last_state and c.last_state.terminated
+    ]
+    started = pod.metadata.creation_timestamp
+    age = f"{int((now - started).total_seconds())}s" if started else "unknown"
+    return (
+        f"{pod.metadata.name} {pod.status.phase} {ready}/{len(statuses)} "
+        f"{restarts} {','.join(reasons) or 'none'} {age}"
+    )
+
+
+@registry.tool
 async def list_services() -> str:
     """List the services running in the Astronomy Shop, with ready replicas."""
     async with kube_api() as api, api_errors("deployment list"):
