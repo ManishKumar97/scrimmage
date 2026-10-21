@@ -14,7 +14,7 @@ from functools import partial
 from pathlib import Path
 
 from faultline import ida
-from faultline.incidents import flagd, health, load_catalog
+from faultline.incidents import cluster, flagd, health, load_catalog
 from faultline.incidents import records as rec
 from faultline.incidents.runner import Deps, run_all, utc_now
 from faultline.incidents.webhook import AlertInbox, Listener
@@ -63,6 +63,8 @@ async def run_command(args: argparse.Namespace) -> int:
             diagnose=lambda question, trace_file: ida.diagnose_async(
                 question, trace_file=trace_file, trace_content=True
             ),
+            reset_traces=partial(cluster.reset_traces, api),
+            sleep=asyncio.sleep,
             inbox=inbox,
             now=utc_now,
             sha=git_sha(),

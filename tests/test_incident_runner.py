@@ -51,6 +51,7 @@ class World:
         self.page: Notification | None = firing()  # what injecting makes fire
         self.answer = "cart cannot reach redis.\nROOT CAUSE SERVICE: cart"
         self.inject_error: Exception | None = None
+        self.reset_error: Exception | None = None
         self.diagnose_error: BaseException | None = None
         self.hang_diagnose = False
         self.questions: list[str] = []
@@ -66,6 +67,14 @@ class World:
             raise self.inject_error
         if self.page:
             self.inbox.accept(self.page)
+
+    async def reset_traces(self) -> None:
+        self.calls.append("reset traces")
+        if self.reset_error:
+            raise self.reset_error
+
+    async def sleep(self, seconds: float) -> None:
+        self.calls.append(f"sleep {seconds:g}")
 
     async def recover_all(self) -> dict[str, str]:
         self.calls.append("recover_all")
@@ -86,12 +95,15 @@ class World:
             inject=self.inject,
             recover_all=self.recover_all,
             diagnose=self.diagnose,
+            reset_traces=self.reset_traces,
+            sleep=self.sleep,
             inbox=self.inbox,
             now=lambda: T0,
             sha="abc123",
             trace_dir=self.tmp / "traces",
             setup_timeout=1.0,
             alert_timeout=alert_timeout,
+            control_delay=300.0,
         )
 
 
@@ -118,6 +130,7 @@ def test_a_correct_trial_records_everything_and_cleans_up(tmp_path):
     assert world.calls == [
         "recover_all",
         "healthy?",
+        "reset traces",
         "inject cartFailure",
         "diagnose",
         "recover_all",
@@ -167,6 +180,16 @@ def test_an_unhealthy_test_bed_means_setup_failed_and_no_injection(tmp_path):
 
     assert r.outcome == "setup failed"
     assert "FrontendErrorRate" in r.detail
+    assert not any(c.startswith("inject") for c in world.calls)
+
+
+def test_traces_are_reset_before_injecting_and_a_failed_reset_is_setup_failed(tmp_path):
+    world = World(tmp_path)
+    world.reset_error = RuntimeError("jaeger stuck")
+
+    r = trial(world)
+
+    assert r.outcome == "setup failed" and "jaeger stuck" in r.detail
     assert not any(c.startswith("inject") for c in world.calls)
 
 
@@ -243,7 +266,14 @@ def test_the_control_gets_a_false_alarm_and_is_right_to_say_none(tmp_path):
     assert r.outcome == "correct" and r.expected == "none"
     assert not any(c.startswith("inject") for c in world.calls)
     assert r.alert == "FrontendErrorRate"
-    assert "diagnose" in world.calls
+    # Traces are cleared, then the control waits for them to refill before it is asked.
+    assert world.calls[:5] == [
+        "recover_all",
+        "healthy?",
+        "reset traces",
+        "sleep 300",
+        "diagnose",
+    ]
 
 
 def test_the_control_is_wrong_when_the_agent_blames_a_service(tmp_path):

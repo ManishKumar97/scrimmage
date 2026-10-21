@@ -30,6 +30,7 @@ CONTROL_LABELS = {
     "severity": "page",
     "service_name": "frontend",
 }
+CONTROL_DELAY = 300.0  # seconds
 CONTROL_SUMMARY = "frontend fails 2% of its requests"
 
 
@@ -41,12 +42,17 @@ class Deps:
     inject: Callable[[Incident], Awaitable[None]]
     recover_all: Callable[[], Awaitable[dict[str, str]]]
     diagnose: Callable[[str, Path], Awaitable[RunResult]]
+    reset_traces: Callable[[], Awaitable[None]]
+    sleep: Callable[[float], Awaitable[None]]
     inbox: AlertInbox
     now: Callable[[], datetime]
     sha: str
     trace_dir: Path
     setup_timeout: float = SETUP_TIMEOUT
     alert_timeout: float = ALERT_TIMEOUT
+    # The control has no fault to take time to show. It waits this long, as the other
+    # trials wait for their page, so the traces it is asked about have refilled.
+    control_delay: float = CONTROL_DELAY
 
 
 async def wait_for_page(
@@ -106,12 +112,20 @@ async def run_steps(deps: Deps, record: Record, incident: Incident | None) -> No
         record.detail = f"test bed not healthy: {health.describe()}"
         return
 
+    # The last trial's failed traces would still be in Jaeger and mislead this one.
+    try:
+        await deps.reset_traces()
+    except Exception as exc:  # noqa: BLE001 - reported on the record
+        record.detail = f"could not reset traces: {exc}"
+        return
+
     deps.inbox.reset()
     injected_at = deps.now()
     try:
         if incident:
             await deps.inject(incident)
         else:
+            await deps.sleep(deps.control_delay)
             note = synthetic_notification(CONTROL_LABELS, CONTROL_SUMMARY, injected_at)
             deps.inbox.accept(note)
     except Exception as exc:  # noqa: BLE001 - reported on the record
