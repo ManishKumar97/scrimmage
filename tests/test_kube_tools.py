@@ -5,6 +5,7 @@ import fake_tools
 from fake_tools import fake_cluster
 
 from faultline import kube_tools
+from faultline.tools import Registry
 
 NOW = r"Now: \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\."
 
@@ -62,12 +63,17 @@ def test_a_pod_with_no_recent_logs_says_so(monkeypatch):
     ]
 
 
+def logs_registry() -> Registry:
+    """get_logs is served over MCP, so the test bed registry does not hold it."""
+    registry = Registry()
+    registry.tool(kube_tools.get_logs)
+    return registry
+
+
 def test_an_unknown_service_is_a_clear_tool_error(monkeypatch):
     fake_cluster(monkeypatch)
 
-    output, ok = asyncio.run(
-        kube_tools.registry.call("get_logs", '{"service": "order"}')
-    )
+    output, ok = asyncio.run(logs_registry().call("get_logs", '{"service": "order"}'))
 
     assert not ok
     assert output == (
@@ -92,9 +98,7 @@ def test_a_hanging_api_call_is_a_tool_error(monkeypatch):
     cluster.hang = True
     monkeypatch.setattr(kube_tools, "API_TIMEOUT", 0.1)
 
-    output, ok = asyncio.run(
-        kube_tools.registry.call("get_logs", '{"service": "cart"}')
-    )
+    output, ok = asyncio.run(logs_registry().call("get_logs", '{"service": "cart"}'))
 
     assert not ok
     assert output == (

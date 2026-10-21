@@ -2,8 +2,10 @@
 
 import asyncio
 import inspect
-from collections.abc import Callable
+import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Any
 
 from openai.types.chat import ChatCompletionFunctionToolParam
 from pydantic import BaseModel, ValidationError, create_model
@@ -17,7 +19,9 @@ class Tool:
     name: str
     description: str
     function: Callable[..., object]
-    arguments: type[BaseModel]
+    parameters: dict[str, Any]  # JSON schema of the arguments
+    # Local tools check arguments here. A remote tool's server checks its own.
+    arguments: type[BaseModel] | None = None
 
     def schema(self) -> ChatCompletionFunctionToolParam:
         """The tool in the OpenAI function-calling format."""
@@ -26,7 +30,7 @@ class Tool:
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": self.arguments.model_json_schema(),
+                "parameters": self.parameters,
             },
         }
 
@@ -50,9 +54,31 @@ class Registry:
             name=function.__name__,
             description=inspect.getdoc(function) or "",
             function=function,
+            parameters=arguments.model_json_schema(),
             arguments=arguments,
         )
         return function
+
+    def remote(
+        self,
+        name: str,
+        description: str,
+        parameters: dict[str, Any],
+        function: Callable[..., Awaitable[str]],
+    ) -> None:
+        """Register a tool that runs elsewhere, such as on an MCP server.
+
+        The function takes the arguments as keywords and raises when the tool fails.
+        """
+        if name in self.tools:
+            raise ValueError(f"tool {name!r} is already registered")
+        self.tools[name] = Tool(name, description, function, parameters)
+
+    def copy(self) -> "Registry":
+        """A registry with the same tools, so one run can add its own."""
+        other = Registry()
+        other.tools = dict(self.tools)
+        return other
 
     def schemas(self) -> list[ChatCompletionFunctionToolParam]:
         return [tool.schema() for tool in self.tools.values()]
@@ -63,20 +89,28 @@ class Registry:
         if tool is None:
             available = ", ".join(self.tools)
             return f"Error: unknown tool {name!r}. Available tools: {available}.", False
-        try:
-            args = tool.arguments.model_validate_json(arguments)
-        except ValidationError as exc:
-            problems = "; ".join(
-                f"{'.'.join(map(str, e['loc'])) or 'arguments'}: {e['msg']}"
-                for e in exc.errors()
-            )
-            return f"Error: bad arguments {arguments} ({problems}).", False
+        if tool.arguments is None:
+            try:
+                args = json.loads(arguments or "{}")
+            except ValueError:
+                args = None
+            if not isinstance(args, dict):
+                return f"Error: bad arguments {arguments} (not a JSON object).", False
+        else:
+            try:
+                args = dict(tool.arguments.model_validate_json(arguments))
+            except ValidationError as exc:
+                problems = "; ".join(
+                    f"{'.'.join(map(str, e['loc'])) or 'arguments'}: {e['msg']}"
+                    for e in exc.errors()
+                )
+                return f"Error: bad arguments {arguments} ({problems}).", False
         try:
             if inspect.iscoroutinefunction(tool.function):
-                output = await tool.function(**dict(args))
+                output = await tool.function(**args)
             else:
                 # A thread cannot be cancelled, so a sync tool can run past the deadline.
-                output = await asyncio.to_thread(tool.function, **dict(args))
+                output = await asyncio.to_thread(tool.function, **args)
         except Exception as exc:  # noqa: BLE001 - any tool failure goes back to the model
             return f"Error: {name} raised {type(exc).__name__}: {exc}", False
         return clean_output(output), True

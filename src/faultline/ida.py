@@ -6,6 +6,7 @@ import sys
 from dataclasses import dataclass
 
 from faultline import kube_tools
+from faultline.mcp_client import LOGS_SERVER, mcp_tools
 from faultline.models import (
     BadToolCall,
     Message,
@@ -167,8 +168,15 @@ def describe(call: ToolCall) -> str:
     return f"{call.name} (custom tool call)"
 
 
+async def diagnose_async(question: str) -> RunResult:
+    model = make_model(get_settings())
+    # get_logs comes from the MCP server. The server lives for this one run.
+    async with mcp_tools(LOGS_SERVER, kube_tools.registry) as tools:
+        return await run(question, model, tools=tools)
+
+
 def diagnose(question: str) -> RunResult:
-    return asyncio.run(run(question, make_model(get_settings())))
+    return asyncio.run(diagnose_async(question))
 
 
 if __name__ == "__main__":

@@ -51,7 +51,7 @@ async def api_errors(what: str) -> AsyncIterator[None]:
         raise RuntimeError(f"{what} failed: {exc.status} {exc.reason}") from None
 
 
-@registry.tool
+# Not in this registry: the IDA reaches get_logs through the MCP server in mcp_logs.
 async def get_logs(
     service: Annotated[
         str, Field(description="Service name, for example cart, checkout or frontend.")

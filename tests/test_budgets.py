@@ -103,8 +103,10 @@ def test_the_deadline_cancels_a_hanging_api_call(monkeypatch):
     cluster.add("cart", {"cart-a": "line\n"})
     cluster.hang = True  # the API server never answers; the 30 s tool cap is longer
     client = FakeClient(tool_reply(logs_call("cart")))
+    tools = Registry()
+    tools.tool(kube_tools.get_logs)
 
-    result = run_ida("why?", client, "fake", SHORT, kube_tools.registry)
+    result = run_ida("why?", client, "fake", SHORT, tools)
 
     assert result.stop_reason == "time_limit"
     assert result.seconds <= 0.5

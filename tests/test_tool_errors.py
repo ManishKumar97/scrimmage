@@ -5,7 +5,7 @@ from fake_tools import fake_cluster, logs_registry
 from openai.types.chat import ChatCompletionMessageCustomToolCall
 
 from faultline import kube_tools
-from faultline.tools import MAX_TOOL_OUTPUT_CHARS, clean_output
+from faultline.tools import MAX_TOOL_OUTPUT_CHARS, Registry, clean_output
 
 
 def test_tool_exception_goes_back_to_the_model():
@@ -109,8 +109,10 @@ def test_an_unknown_deployment_counts_as_a_tool_error(monkeypatch):
     fake_cluster(monkeypatch)
     bad = tool_reply(logs_call("order"))
     client = FakeClient(bad, bad, bad)
+    logs = Registry()
+    logs.tool(kube_tools.get_logs)
 
-    result = run_ida("why?", client, "fake", tools=kube_tools.registry)
+    result = run_ida("why?", client, "fake", tools=logs)
 
     assert result.stop_reason == "tool_errors"
     assert client.tool_results()[0] == (
