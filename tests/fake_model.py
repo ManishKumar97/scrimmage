@@ -31,8 +31,8 @@ def logs_call(service: str) -> tuple[str, str]:
     return ("get_logs", json.dumps({"service": service}))
 
 
-def text_reply(text: str) -> ChatCompletion:
-    return _completion({"role": "assistant", "content": text}, "stop")
+def text_reply(text: str, finish_reason: str = "stop") -> ChatCompletion:
+    return _completion({"role": "assistant", "content": text}, finish_reason)
 
 
 def _completion(message: dict, finish_reason: str) -> ChatCompletion:

@@ -149,3 +149,20 @@ def test_a_custom_tool_call_is_a_tool_error():
 
     assert result.stop_reason == "done"
     assert client.tool_results() == ["Error: only function tools are supported."]
+
+
+def test_a_reply_cut_off_at_the_output_limit_is_not_done():
+    client = FakeClient(text_reply("The cart service fails because", "length"))
+
+    result = run_ida("why?", client, "fake", tools=logs_registry(str))
+
+    assert result.stop_reason == "truncated"
+    assert result.answer == "The cart service fails because"
+
+
+def test_a_reply_stopped_by_the_content_filter_is_not_done():
+    client = FakeClient(text_reply("", "content_filter"))
+
+    result = run_ida("why?", client, "fake", tools=logs_registry(str))
+
+    assert result.stop_reason == "content_filtered"

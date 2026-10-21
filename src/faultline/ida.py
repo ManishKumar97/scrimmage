@@ -99,7 +99,13 @@ async def run(
                 steps += 1
                 tokens += response.usage.total_tokens if response.usage else 0
 
-                reply = response.choices[0].message
+                choice = response.choices[0]
+                reply = choice.message
+                # A cut-off reply has no tool calls, so it must not pass as an answer.
+                if choice.finish_reason == "length":
+                    return stop(reply.content or "", "truncated")
+                if choice.finish_reason == "content_filter":
+                    return stop(reply.content or "", "content_filtered")
                 if not reply.tool_calls:
                     return stop(reply.content or "", "done")
                 if tokens >= budget.max_tokens:
