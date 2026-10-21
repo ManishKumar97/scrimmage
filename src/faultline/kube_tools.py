@@ -21,6 +21,7 @@ JAEGER_API = (
     f"/api/v1/namespaces/{NAMESPACE}/services/jaeger-query:16686/proxy/jaeger/ui/api"
 )
 MAX_TRACES = 20  # traces fetched per call
+MAX_TRACE_MINUTES = 15  # the test bed Jaeger keeps about this much
 MAX_ERROR_GROUPS = 8  # distinct errors shown per call
 MAX_MESSAGE_CHARS = 200  # one error message, cut
 API_TIMEOUT = 30.0  # seconds, for all the API calls of one tool call
@@ -229,8 +230,8 @@ class Failure:
     last: bool
 
 
-def summarize_trace(trace: dict) -> list[tuple[Failure, int]]:
-    """The failed spans of one trace, each with its start time in microseconds.
+def summarize_trace(trace: dict) -> list[tuple[Failure, int, int]]:
+    """The failed spans of one trace, each with its start and duration in microseconds.
 
     A failed span is `last` when no span below it failed. Errors travel up a call
     chain, so the last failed span is where the failed call was made. That is
@@ -262,9 +263,19 @@ def summarize_trace(trace: dict) -> list[tuple[Failure, int]]:
                 s["spanID"] not in has_failed_descendant,
             ),
             s["startTime"],
+            s["duration"],
         )
         for s in failed
     ]
+
+
+def format_duration(micros: int) -> str:
+    seconds = micros / 1_000_000
+    if seconds < 1:
+        return f"{micros / 1000:.0f}ms"
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    return f"{int(seconds // 60)}m{int(seconds % 60):02d}s"
 
 
 def describe_failure(f: Failure) -> str:
@@ -280,14 +291,22 @@ async def get_error_traces(
         str, Field(description="Service name, for example checkout or frontend.")
     ],
     minutes: Annotated[
-        int, Field(ge=1, le=60, description="How far back to look.")
+        int,
+        Field(
+            ge=1,
+            le=MAX_TRACE_MINUTES,
+            description="How far back to look. Jaeger keeps about 15 minutes.",
+        ),
     ] = 15,
 ) -> str:
     """Find recent traces in which a span of this service failed.
 
     A service that hides a downstream failure has no failed span, so it shows none
     here: query its callees too. Each line is one kind of failure, with the number
-    of traces and the time of the newest. A span marked last has no failed span
+    of traces and when the latest one ended, with how long that call took: a call
+    that fails after minutes ends long after it started. Jaeger keeps only about
+    the last 15 minutes of traces, so "no failed spans" says nothing about older
+    failures. A span marked last has no failed span
     below it, so the failed call was made there. If it is a client span, the
     service it calls may be the one that is down or unreachable.
     Long-lived stream spans are ignored.
@@ -316,30 +335,38 @@ async def get_error_traces(
                     + ", ".join(sorted(known))
                 )
     stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    groups: dict[Failure, tuple[int, int]] = {}  # failure -> traces, newest start
+    # failure -> traces, (end, duration) of the span that ended last
+    groups: dict[Failure, tuple[int, tuple[int, int]]] = {}
     for trace in traces:
         # Count a failure once per trace, however many spans repeat it.
-        newest: dict[Failure, int] = {}
-        for failure, started in summarize_trace(trace):
-            newest[failure] = max(newest.get(failure, 0), started)
-        for failure, started in newest.items():
-            count, latest = groups.get(failure, (0, 0))
-            groups[failure] = (count + 1, max(latest, started))
+        newest: dict[Failure, tuple[int, int]] = {}
+        for failure, started, duration in summarize_trace(trace):
+            newest[failure] = max(
+                newest.get(failure, (0, 0)), (started + duration, duration)
+            )
+        for failure, ended in newest.items():
+            count, latest = groups.get(failure, (0, (0, 0)))
+            groups[failure] = (count + 1, max(latest, ended))
     if not groups:
         return (
             f"Now: {stamp}. No failed spans of {service} in the last {minutes} "
-            "minutes. If it hides a downstream failure, check the services it calls."
+            "minutes. Jaeger keeps only about the last 15 minutes, so older failures "
+            "may be gone. If it hides a downstream failure, check the services it "
+            "calls."
         )
     ranked = sorted(groups.items(), key=lambda item: (not item[0].last, -item[1][0]))
     header = (
         f"Now: {stamp}. {len(traces)} traces with a failed {service} span in the last "
         f"{minutes} minutes (up to {MAX_TRACES} newest). Failures, last failed spans "
-        "first, with the number of traces and the time of the newest:"
+        "first, with the number of traces and when the latest one ended:"
     )
     lines = [header]
-    for failure, (count, latest) in ranked[:MAX_ERROR_GROUPS]:
-        when = datetime.fromtimestamp(latest / 1_000_000, UTC).strftime("%H:%M:%SZ")
-        lines.append(f"{count} traces, newest {when}: {describe_failure(failure)}")
+    for failure, (count, (ended, duration)) in ranked[:MAX_ERROR_GROUPS]:
+        when = datetime.fromtimestamp(ended / 1_000_000, UTC).strftime("%H:%M:%SZ")
+        lines.append(
+            f"{count} traces, latest ended {when} after {format_duration(duration)}: "
+            + describe_failure(failure)
+        )
     if len(ranked) > MAX_ERROR_GROUPS:
         lines.append(
             f"{len(ranked) - MAX_ERROR_GROUPS} more kinds of failure not shown."

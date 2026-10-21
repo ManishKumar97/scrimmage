@@ -2,6 +2,7 @@ import asyncio
 import re
 
 import fake_tools
+import pytest
 from fake_tools import fake_cluster
 
 from faultline import kube_tools
@@ -234,13 +235,37 @@ def test_error_traces_point_at_the_last_failed_span_and_its_peer(monkeypatch):
     lines = output.splitlines()
     assert re.match(NOW + r" 2 traces with a failed checkout span", lines[0])
     assert lines[1] == (
-        "2 traces, newest 11:59:30Z: cart EmptyCart [last failed span]: cart down"
+        "2 traces, latest ended 11:59:30Z after 0ms: cart EmptyCart [last failed span]: cart down"
     )
     assert sorted(lines[2:]) == [
-        "2 traces, newest 11:59:30Z: "
+        "2 traces, latest ended 11:59:30Z after 0ms: "
         + "checkout CartService/EmptyCart client calls CartService: cart down",
-        "2 traces, newest 11:59:30Z: checkout PlaceOrder: cart down",
+        "2 traces, latest ended 11:59:30Z after 0ms: checkout PlaceOrder: cart down",
     ]
+
+
+def test_a_slow_failing_call_is_dated_by_its_end_not_its_start(monkeypatch):
+    t = fake_tools
+    cluster = fake_cluster(monkeypatch)
+    cluster.traces = [
+        t.trace(t.span("a", "cart", "EmptyCart", error="x", started=200, duration=144))
+    ]
+
+    lines = asyncio.run(kube_tools.get_error_traces("cart")).splitlines()
+
+    assert lines[1] == (
+        "1 traces, latest ended 11:59:04Z after 2m24s: cart EmptyCart "
+        "[last failed span]: x"
+    )
+
+
+def test_an_empty_answer_says_jaeger_keeps_only_recent_traces(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    cluster.trace_services = ["checkout"]
+
+    output = asyncio.run(kube_tools.get_error_traces("checkout"))
+
+    assert "Jaeger keeps only about the last 15 minutes" in output
 
 
 def test_the_window_is_sent_as_start_and_end_in_microseconds(monkeypatch):
@@ -296,7 +321,7 @@ def test_a_client_span_with_an_untraced_callee_is_the_last_failed_span(monkeypat
     output = asyncio.run(kube_tools.get_error_traces("checkout"))
 
     assert output.splitlines()[1] == (
-        "1 traces, newest 12:00:00Z: checkout PaymentService/Charge client calls "
+        "1 traces, latest ended 12:00:00Z after 0ms: checkout PaymentService/Charge client calls "
         "PaymentService [last failed span]: 14 UNAVAILABLE"
     )
 
@@ -317,8 +342,8 @@ def test_a_failed_grandchild_under_a_healthy_span_makes_the_parent_not_last(
     lines = asyncio.run(kube_tools.get_error_traces("checkout")).splitlines()
 
     assert lines[1:] == [
-        "1 traces, newest 12:00:00Z: quote Compute [last failed span]: boom",
-        "1 traces, newest 12:00:00Z: checkout PlaceOrder: boom",
+        "1 traces, latest ended 12:00:00Z after 0ms: quote Compute [last failed span]: boom",
+        "1 traces, latest ended 12:00:00Z after 0ms: checkout PlaceOrder: boom",
     ]
 
 
@@ -336,8 +361,8 @@ def test_two_failure_branches_in_one_trace_are_both_last(monkeypatch):
     lines = asyncio.run(kube_tools.get_error_traces("checkout")).splitlines()
 
     assert sorted(lines[1:3]) == [
-        "1 traces, newest 12:00:00Z: cart EmptyCart [last failed span]: x",
-        "1 traces, newest 12:00:00Z: email Send [last failed span]: x",
+        "1 traces, latest ended 12:00:00Z after 0ms: cart EmptyCart [last failed span]: x",
+        "1 traces, latest ended 12:00:00Z after 0ms: email Send [last failed span]: x",
     ]
 
 
@@ -457,12 +482,13 @@ def test_an_error_tag_spelled_true_counts(monkeypatch):
     assert "cart GetCart [last failed span]" in output
 
 
-def test_minutes_outside_the_range_is_a_tool_error(monkeypatch):
+@pytest.mark.parametrize("minutes", [0, 16])
+def test_minutes_outside_the_range_is_a_tool_error(monkeypatch, minutes):
     fake_cluster(monkeypatch)
 
     output, ok = asyncio.run(
         kube_tools.registry.call(
-            "get_error_traces", '{"service": "cart", "minutes": 0}'
+            "get_error_traces", f'{{"service": "cart", "minutes": {minutes}}}'
         )
     )
 

@@ -188,10 +188,11 @@ def span(
     peer: str | None = None,
     method: str | None = None,
     started: int = 0,
+    duration: float = 0,
 ) -> dict:
     """One Jaeger span. A span with `error` set carries the error tags.
 
-    `started` is seconds before NOW.
+    `started` is seconds before NOW and `duration` is in seconds.
     """
     tags = [{"key": "rpc.grpc.status_code", "value": 0}]
     if error is not None:
@@ -215,6 +216,7 @@ def span(
         "tags": tags,
         "processID": service,
         "startTime": int((NOW.timestamp() - started) * 1_000_000),
+        "duration": int(duration * 1_000_000),
         "logs": [],
     }
 
