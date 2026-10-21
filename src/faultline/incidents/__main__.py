@@ -1,6 +1,6 @@
 """Command line: run the incidents, or summarize a results file.
 
-uv run python -m faultline.incidents run --trials 3
+uv run python -m faultline.incidents run --trials 3 --out runs/incidents-NAME.jsonl
 uv run python -m faultline.incidents summary
 """
 
@@ -51,7 +51,7 @@ async def run_command(args: argparse.Namespace) -> int:
     os.environ["PROVIDER"] = args.provider
     get_settings()  # fail now, not at the first agent run, when the key is missing
     catalog = load_catalog()
-    out = args.out or RUNS / f"incidents-{datetime.now(UTC):%Y-%m-%d}.jsonl"
+    out: Path = args.out
     inbox = AlertInbox()
     async with kube_api() as api, Listener(inbox, args.host, args.port):
         deps = Deps(
@@ -102,7 +102,10 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument(
         "--only", type=lambda s: s.split(","), help="comma-separated names"
     )
-    run.add_argument("--out", type=Path, help="results file (default: dated, in runs/)")
+    # No default: a dated name would start a new file when a resume crosses midnight.
+    run.add_argument(
+        "--out", type=Path, required=True, help="results file; rerun with it to resume"
+    )
     run.add_argument("--provider", default="anthropic", choices=["anthropic", "groq"])
     run.add_argument("--host", default=DEFAULT_HOST, help="address the listener binds")
     run.add_argument("--port", type=int, default=DEFAULT_PORT)
