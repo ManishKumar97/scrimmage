@@ -21,9 +21,10 @@ JAEGER_API = (
     f"/api/v1/namespaces/{NAMESPACE}/services/jaeger-query:16686/proxy/jaeger/ui/api"
 )
 MAX_TRACES = 20  # traces fetched per call
-# Jaeger keeps a fixed number of traces (--memory.max-traces), not a time. At normal
-# test bed load that is about this long; under fault load it is less.
-MAX_TRACE_MINUTES = 15
+# Jaeger keeps a fixed number of traces (--memory.max-traces=12000), not a time.
+# Measured on the test bed with 3 load generator users: about 1500 new traces a
+# minute, so the store reaches back about 7 minutes. More load means less.
+MAX_TRACE_MINUTES = 7
 MAX_ERROR_GROUPS = 8  # distinct errors shown per call
 MAX_MESSAGE_CHARS = 200  # one error message, cut
 API_TIMEOUT = 30.0  # seconds, for all the API calls of one tool call
@@ -302,7 +303,7 @@ async def get_error_traces(
                 "a fixed number of traces, so older failures may be gone."
             ),
         ),
-    ] = 15,
+    ] = MAX_TRACE_MINUTES,
 ) -> str:
     """Find recent traces in which a span of this service failed.
 

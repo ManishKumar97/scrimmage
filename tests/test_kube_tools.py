@@ -291,14 +291,21 @@ def test_the_window_is_sent_as_start_and_end_in_microseconds(monkeypatch):
 def test_traces_outside_the_window_are_not_shown(monkeypatch):
     cluster = fake_cluster(monkeypatch)
     cluster.trace_services = ["checkout"]
-    cluster.traces = [checkout_calls_failing_cart(started=600)]
+    cluster.traces = [checkout_calls_failing_cart(started=360)]
 
     assert "No failed spans" in asyncio.run(
         kube_tools.get_error_traces("checkout", minutes=5)
     )
-    assert "1 traces" in asyncio.run(
-        kube_tools.get_error_traces("checkout", minutes=15)
-    )
+    assert "1 traces" in asyncio.run(kube_tools.get_error_traces("checkout"))
+
+
+def test_the_default_window_is_what_jaeger_holds_not_longer(monkeypatch):
+    # Measured retention is about 7 minutes, so a 10 minute old trace is out of range.
+    cluster = fake_cluster(monkeypatch)
+    cluster.trace_services = ["checkout"]
+    cluster.traces = [checkout_calls_failing_cart(started=600)]
+
+    assert "No failed spans" in asyncio.run(kube_tools.get_error_traces("checkout"))
 
 
 def test_a_client_span_with_an_untraced_callee_is_the_last_failed_span(monkeypatch):
@@ -483,7 +490,7 @@ def test_an_error_tag_spelled_true_counts(monkeypatch):
     assert "cart GetCart [last failed span]" in output
 
 
-@pytest.mark.parametrize("minutes", [0, 16])
+@pytest.mark.parametrize("minutes", [0, kube_tools.MAX_TRACE_MINUTES + 1])
 def test_minutes_outside_the_range_is_a_tool_error(monkeypatch, minutes):
     fake_cluster(monkeypatch)
 
