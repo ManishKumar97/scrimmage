@@ -300,10 +300,10 @@ def test_traces_outside_the_window_are_not_shown(monkeypatch):
 
 
 def test_the_default_window_is_what_jaeger_holds_not_longer(monkeypatch):
-    # Measured retention is about 7 minutes, so a 10 minute old trace is out of range.
+    # Measured retention is about 15 minutes, so a 17 minute old trace is out of range.
     cluster = fake_cluster(monkeypatch)
     cluster.trace_services = ["checkout"]
-    cluster.traces = [checkout_calls_failing_cart(started=600)]
+    cluster.traces = [checkout_calls_failing_cart(started=1000)]
 
     assert "No failed spans" in asyncio.run(kube_tools.get_error_traces("checkout"))
 

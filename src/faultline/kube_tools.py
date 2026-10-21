@@ -21,10 +21,11 @@ JAEGER_API = (
     f"/api/v1/namespaces/{NAMESPACE}/services/jaeger-query:16686/proxy/jaeger/ui/api"
 )
 MAX_TRACES = 20  # traces fetched per call
-# Jaeger keeps a fixed number of traces (--memory.max-traces=12000), not a time.
+# Jaeger keeps a fixed number of traces (--memory.max-traces=24000), not a time.
 # Measured on the test bed with 3 load generator users: about 1500 new traces a
-# minute, so the store reaches back about 7 minutes. More load means less.
-MAX_TRACE_MINUTES = 7
+# minute, so the store reaches back about 15 minutes (oldest trace found 15.5 minutes
+# old, none at 16). More load means less.
+MAX_TRACE_MINUTES = 15
 MAX_ERROR_GROUPS = 8  # distinct errors shown per call
 MAX_MESSAGE_CHARS = 200  # one error message, cut
 API_TIMEOUT = 30.0  # seconds, for all the API calls of one tool call
