@@ -8,6 +8,7 @@ import pytest
 from fake_model import FakeClient, logs_call, rejected, text_reply, tool_reply
 from fake_tools import logs_registry
 from openai import AsyncOpenAI
+from openai.types.completion_usage import PromptTokensDetails
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
@@ -469,3 +470,14 @@ def test_token_attributes_are_left_out_when_the_provider_reports_no_usage():
 
     (chat,) = spans["chat"]
     assert not any(key.startswith("gen_ai.usage") for key in attrs(chat))
+
+
+def test_groq_cached_tokens_are_recorded_when_the_usage_has_them():
+    reply = text_reply("hi")
+    assert reply.usage
+    reply.usage.prompt_tokens_details = PromptTokensDetails(cached_tokens=64)
+
+    _, spans = traced(FakeClient(reply))
+
+    (chat,) = spans["chat"]
+    assert attrs(chat)["gen_ai.usage.cache_read.input_tokens"] == 64

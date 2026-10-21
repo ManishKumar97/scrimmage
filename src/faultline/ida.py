@@ -87,6 +87,7 @@ class RunResult:
     steps: int = 0
     tokens: int = 0
     seconds: float = 0.0
+    cache_read_tokens: int = 0  # input tokens served from the provider's prompt cache
 
 
 async def run(
@@ -136,12 +137,13 @@ async def run_loop(
     consecutive_errors = 0
     steps = 0
     tokens = 0
+    cache_read = 0
     clock = asyncio.get_running_loop()
     started = clock.time()
 
     def stop(answer: str, reason: str) -> RunResult:
         elapsed = round(clock.time() - started, 1)
-        return RunResult(answer, reason, steps, tokens, elapsed)
+        return RunResult(answer, reason, steps, tokens, elapsed, cache_read)
 
     try:
         # One deadline for the whole run. When it passes, whatever is in flight is
@@ -165,6 +167,7 @@ async def run_loop(
                     return stop(f"Model API failed: {exc}", "model_error")
                 steps += 1
                 tokens += reply.tokens
+                cache_read += reply.cache_read_tokens or 0
 
                 # A reply cut off at the output limit is incomplete, with or without tool calls.
                 # Its tool calls may be half written, so none of them run.
@@ -296,6 +299,7 @@ if __name__ == "__main__":
     print(f"[spans] {get_settings().trace_file}", file=sys.stderr)
     print(
         f"[stop] {result.stop_reason} after {result.steps} steps, "
-        f"{result.tokens} tokens, {result.seconds}s",
+        f"{result.tokens} tokens, {result.seconds}s, "
+        f"{result.cache_read_tokens} cache-read tokens",
         file=sys.stderr,
     )

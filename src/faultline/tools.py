@@ -81,7 +81,9 @@ class Registry:
         return other
 
     def schemas(self) -> list[ChatCompletionFunctionToolParam]:
-        return [tool.schema() for tool in self.tools.values()]
+        # Sorted by name: a prompt cache matches the request prefix, and the tools
+        # come first, so their order must not depend on registration or MCP list order.
+        return [self.tools[name].schema() for name in sorted(self.tools)]
 
     async def call(self, name: str, arguments: str) -> tuple[str, bool]:
         """Run the tool the model asked for. Return its output and whether it worked."""

@@ -1,4 +1,5 @@
 import asyncio
+import json
 from typing import cast
 
 import anthropic
@@ -18,6 +19,7 @@ from faultline.models import (
     make_model,
 )
 from faultline.settings import Settings
+from faultline.tools import Registry
 
 
 def message(
@@ -296,3 +298,65 @@ def test_cached_input_tokens_count_in_input_and_are_reported_apart():
     assert (result.cache_read_tokens, result.cache_creation_tokens) == (70, 30)
     assert result.tokens == 120  # the budget count is unchanged
     assert (result.response_id, result.response_model) == ("msg_fake", "fake-model")
+
+
+def test_every_request_carries_the_cache_marker():
+    model, client = adapter(message([text("ok")], "end_turn"))
+
+    complete(model, ["why?"])
+
+    assert client.requests[0]["cache_control"] == {"type": "ephemeral"}
+
+
+def frozen(request: dict) -> str:
+    """The request as JSON, so a prefix can be compared byte for byte."""
+    return json.dumps(
+        request, default=lambda block: block.model_dump(), sort_keys=False
+    )
+
+
+def test_each_request_starts_with_the_bytes_of_the_one_before():
+    model, client = adapter(
+        message([thinking("hm"), tool_use("tu_1", "cart")], "tool_use"),
+        message([tool_use("tu_2", "redis")], "tool_use"),
+        message([text("done")], "end_turn"),
+    )
+
+    result = asyncio.run(
+        ida.run("why?", model, tools=logs_registry(lambda service: f"{service} logs"))
+    )
+
+    assert result.steps == 3
+    # What an earlier request sent, a later one repeats before adding its new turns.
+    for earlier, later in zip(client.requests, client.requests[1:], strict=False):
+        assert frozen(later["tools"]) == frozen(earlier["tools"])
+        assert later["system"] == earlier["system"]
+        sent = earlier["messages"]
+        assert frozen(later["messages"][: len(sent)]) == frozen(sent)
+        assert len(later["messages"]) > len(sent)
+
+
+def test_tool_order_does_not_depend_on_registration_order():
+    first, second = Registry(), Registry()
+
+    async def noop(**_: object) -> str:
+        return ""
+
+    for registry, names in ((first, "ab"), (second, "ba")):
+        for name in names:
+            registry.remote(name, "", {"type": "object"}, noop)
+
+    assert first.schemas() == second.schemas()
+    assert [t["function"]["name"] for t in first.schemas()] == ["a", "b"]
+
+
+def test_the_loop_totals_cache_reads_over_the_run():
+    first = message([tool_use("tu_1", "cart")], "tool_use")
+    second = message([text("done")], "end_turn")
+    first.usage.cache_creation_input_tokens = 500
+    second.usage.cache_read_input_tokens = 500
+    model, _ = adapter(first, second)
+
+    result = asyncio.run(ida.run("why?", model, tools=logs_registry(str)))
+
+    assert result.cache_read_tokens == 500

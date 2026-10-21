@@ -138,6 +138,12 @@ class OpenAIModel:
             tokens=response.usage.total_tokens if response.usage else 0,
             input_tokens=response.usage.prompt_tokens if response.usage else None,
             output_tokens=response.usage.completion_tokens if response.usage else None,
+            # Groq's usage carries this field for models it caches. Absent means unreported.
+            cache_read_tokens=(
+                response.usage.prompt_tokens_details.cached_tokens
+                if response.usage and response.usage.prompt_tokens_details
+                else None
+            ),
             response_model=response.model,
             response_id=response.id,
             # The response and request types describe the same JSON.
@@ -190,6 +196,13 @@ class AnthropicModel:
                 model=self.model,
                 max_tokens=ANTHROPIC_MAX_OUTPUT_TOKENS,
                 system=system,
+                # One top-level marker. The API puts the breakpoint on the last
+                # cacheable block, so it moves forward as the conversation grows and
+                # each step reads the earlier steps from cache. Per-block markers
+                # would need us to track the last block and stay under four.
+                # The cache matches a prefix (tools, system, messages in order), so
+                # every earlier byte must repeat: schemas are sorted, turns replayed as received.
+                cache_control={"type": "ephemeral"},
                 messages=self.wire_messages(messages),
                 tools=[self.wire_tool(tool) for tool in tools],
             )
