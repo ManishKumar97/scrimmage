@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -385,11 +386,12 @@ def test_the_real_stdio_server_joins_the_registry_beside_the_logs_server():
     assert "bad service name 'a b'" in bad[0]
 
 
-def test_a_diagnosis_run_offers_the_model_the_metrics_tools(monkeypatch):
+def test_a_diagnosis_run_offers_the_model_the_metrics_tools(monkeypatch, tmp_path):
     client = FakeClient(text_reply("No fault found."))
     model = OpenAIModel(cast(AsyncOpenAI, client), "fake")
     monkeypatch.setattr(ida, "make_model", lambda _settings: model)
-    monkeypatch.setattr(ida, "get_settings", lambda: None)
+    settings = SimpleNamespace(trace_file=tmp_path / "t.jsonl", trace_content=False)
+    monkeypatch.setattr(ida, "get_settings", lambda: settings)
 
     result = run(ida.diagnose_async("why?"))
 

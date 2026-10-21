@@ -19,6 +19,18 @@ It calls tools in a loop until it can name a cause, quoting the log lines that s
 - Every run ends with a named stop reason: `done`, `tool_errors`, `bad_call`, `truncated`, `content_filtered`, `refused`, `model_error`, `step_limit`, `token_limit` or `time_limit`.
 - One deadline covers the whole run, including model calls, retries and tool calls.
 
+## Traces
+
+Every run writes OpenTelemetry spans to a local file.
+Nothing is sent over the network.
+
+- One root span per run (`invoke_agent`), one child span per model call (`chat <model>`) and one per tool call (`execute_tool <name>`).
+- Tool spans are children of the run span, not of a model call, because a reply's tool calls run at the same time. Each span has `faultline.step`, the number of the model call it belongs to.
+- Attribute names follow the OpenTelemetry GenAI semantic conventions: operation, provider, model, input and output tokens, finish reasons, tool name, tool call id.
+- The root span carries the stop reason, steps, tokens and budget. A tool error, a model API error and any stop reason other than `done` set the span status to ERROR with the error text.
+- Spans are written as OTLP JSON, one line per export, to `runs/traces.jsonl` (the `runs/` folder is git-ignored). `TRACE_FILE` changes the path.
+- By default spans hold no prompts and no tool output, because they are large and may be private. `TRACE_CONTENT=true` adds the system prompt, the messages, the tool definitions, tool arguments and results, the question and the answer. A later replay needs them.
+
 ## Run it
 
 Requirements: Python 3.12, [uv](https://docs.astral.sh/uv/), a kubeconfig for the test cluster, and a provider API key.

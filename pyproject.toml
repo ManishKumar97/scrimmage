@@ -9,6 +9,8 @@ dependencies = [
     "kubernetes-asyncio>=36.1.0",
     "mcp>=2.3.0",
     "openai>=3.31.0",
+    "opentelemetry-exporter-otlp-proto-common>=1.45.1",
+    "opentelemetry-sdk>=1.45.1",
     "pydantic>=2.14.1",
     "pydantic-settings>=2.15.0",
 ]

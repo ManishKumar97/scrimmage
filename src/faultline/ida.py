@@ -1,23 +1,31 @@
 """Incident diagnosis agent: calls tools in a loop until the model stops."""
 
 import asyncio
+import json
 import os
 import sys
 from dataclasses import dataclass
 
+from opentelemetry.context import Context
+from opentelemetry.semconv._incubating.attributes import gen_ai_attributes as gen_ai
+from opentelemetry.trace import Span
+
 from faultline import kube_tools
+from faultline import tracing as spans
 from faultline.mcp_client import LOGS_SERVER, METRICS_SERVER, mcp_tools
 from faultline.models import (
     BadToolCall,
     Message,
     ModelClient,
     ModelError,
+    Reply,
     ToolCall,
     ToolResult,
     make_model,
 )
 from faultline.settings import get_settings
 from faultline.tools import Registry
+from faultline.tracing import Tracing
 
 # Stop when the model keeps making tool calls that all fail.
 MAX_CONSECUTIVE_TOOL_ERRORS = 3
@@ -86,7 +94,43 @@ async def run(
     budget: Budget = DEFAULT_BUDGET,
     *,
     tools: Registry,
+    tracing: Tracing | None = None,
 ) -> RunResult:
+    """Run the loop inside one root span. The span ends on every exit path."""
+    tracing = tracing or Tracing()
+    attributes = {
+        gen_ai.GEN_AI_OPERATION_NAME: gen_ai.GenAiOperationNameValues.INVOKE_AGENT.value,
+        gen_ai.GEN_AI_AGENT_NAME: spans.AGENT_NAME,
+        gen_ai.GEN_AI_PROVIDER_NAME: model.provider,
+        gen_ai.GEN_AI_REQUEST_MODEL: model.model,
+        "faultline.budget.max_steps": budget.max_steps,
+        "faultline.budget.max_tokens": budget.max_tokens,
+        "faultline.budget.max_seconds": budget.max_seconds,
+    }
+    if tracing.content:
+        attributes["faultline.question"] = question
+    with tracing.span(f"invoke_agent {spans.AGENT_NAME}", attributes) as root:
+        result = await run_loop(question, model, budget, tools, tracing, root)
+        root.set_attribute("faultline.stop_reason", result.stop_reason)
+        root.set_attribute("faultline.steps", result.steps)
+        root.set_attribute("faultline.tokens", result.tokens)
+        root.set_attribute("faultline.seconds", result.seconds)
+        if tracing.content:
+            root.set_attribute("faultline.answer", result.answer)
+        if result.stop_reason != "done":
+            spans.fail(root, result.stop_reason, result.answer)
+        return result
+
+
+async def run_loop(
+    question: str,
+    model: ModelClient,
+    budget: Budget,
+    tools: Registry,
+    tracing: Tracing,
+    root: Span,
+) -> RunResult:
+    parent = spans.context_of(root)
     messages: list[Message] = [question]
     consecutive_errors = 0
     steps = 0
@@ -108,8 +152,8 @@ async def run(
                         f"Step limit of {budget.max_steps} reached.", "step_limit"
                     )
                 try:
-                    reply = await model.complete(
-                        SYSTEM_PROMPT, messages, tools.schemas()
+                    reply = await complete(
+                        model, messages, tools, tracing, parent, steps + 1
                     )
                 except BadToolCall as exc:
                     return stop(
@@ -139,7 +183,10 @@ async def run(
                 messages.append(reply)
                 # Tool calls from one reply run at the same time.
                 results = await asyncio.gather(
-                    *(call_tool(tools, call) for call in reply.tool_calls)
+                    *(
+                        call_tool(tools, call, tracing, parent, steps)
+                        for call in reply.tool_calls
+                    )
                 )
                 for call, (output, ok) in zip(reply.tool_calls, results, strict=True):
                     consecutive_errors = 0 if ok else consecutive_errors + 1
@@ -167,10 +214,51 @@ async def run(
         return stop(f"Time limit of {budget.max_seconds}s reached.", "time_limit")
 
 
-async def call_tool(tools: Registry, call: ToolCall) -> tuple[str, bool]:
-    if not call.function:
-        return "Error: only function tools are supported.", False
-    return await tools.call(call.name, call.arguments)
+async def complete(
+    model: ModelClient,
+    messages: list[Message],
+    tools: Registry,
+    tracing: Tracing,
+    parent: Context,
+    step: int,
+) -> Reply:
+    """One model call, in its own span."""
+    attributes = spans.model_attributes(model.provider, model.model, step)
+    schemas = tools.schemas()
+    if tracing.content:
+        attributes[gen_ai.GEN_AI_SYSTEM_INSTRUCTIONS] = SYSTEM_PROMPT
+        attributes[gen_ai.GEN_AI_INPUT_MESSAGES] = spans.messages_json(messages)
+        attributes[gen_ai.GEN_AI_TOOL_DEFINITIONS] = json.dumps(schemas)
+    with tracing.span(f"chat {model.model}", attributes, parent) as span:
+        reply = await model.complete(SYSTEM_PROMPT, messages, schemas)
+        spans.record_reply(span, reply)
+        if tracing.content:
+            span.set_attribute(gen_ai.GEN_AI_OUTPUT_MESSAGES, spans.output_json(reply))
+        return reply
+
+
+async def call_tool(
+    tools: Registry, call: ToolCall, tracing: Tracing, parent: Context, step: int
+) -> tuple[str, bool]:
+    """One tool call, in its own span.
+
+    The span is a child of the run span, not of the model call: the model call has
+    ended by now, and calls from one reply run at the same time, so they are siblings.
+    The step number ties each tool span to the model call that asked for it.
+    """
+    attributes = spans.tool_attributes(call.name, call.id, step)
+    if tracing.content:
+        attributes[gen_ai.GEN_AI_TOOL_CALL_ARGUMENTS] = call.arguments
+    with tracing.span(f"execute_tool {call.name}", attributes, parent) as span:
+        if not call.function:
+            output, ok = "Error: only function tools are supported.", False
+        else:
+            output, ok = await tools.call(call.name, call.arguments)
+        if tracing.content:
+            span.set_attribute(gen_ai.GEN_AI_TOOL_CALL_RESULT, output)
+        if not ok:
+            spans.fail(span, "tool_error", output)
+        return output, ok
 
 
 def describe(call: ToolCall) -> str:
@@ -180,13 +268,19 @@ def describe(call: ToolCall) -> str:
 
 
 async def diagnose_async(question: str) -> RunResult:
-    model = make_model(get_settings())
-    # The logs and metrics tools come from MCP servers. They live for this one run.
-    async with (
-        mcp_tools(LOGS_SERVER, kube_tools.registry, "logs MCP") as with_logs,
-        mcp_tools(METRICS_SERVER, with_logs, "metrics MCP") as tools,
-    ):
-        return await run(question, model, tools=tools)
+    settings = get_settings()
+    model = make_model(settings)
+    provider = spans.file_provider(settings.trace_file)
+    tracing = Tracing(provider.get_tracer("faultline"), settings.trace_content)
+    try:
+        # The logs and metrics tools come from MCP servers. They live for this one run.
+        async with (
+            mcp_tools(LOGS_SERVER, kube_tools.registry, "logs MCP") as with_logs,
+            mcp_tools(METRICS_SERVER, with_logs, "metrics MCP") as tools,
+        ):
+            return await run(question, model, tools=tools, tracing=tracing)
+    finally:
+        provider.shutdown()
 
 
 def diagnose(question: str) -> RunResult:
@@ -196,6 +290,7 @@ def diagnose(question: str) -> RunResult:
 if __name__ == "__main__":
     result = diagnose(" ".join(sys.argv[1:]) or "Customers report checkout fails. Why?")
     print(result.answer)
+    print(f"[spans] {get_settings().trace_file}", file=sys.stderr)
     print(
         f"[stop] {result.stop_reason} after {result.steps} steps, "
         f"{result.tokens} tokens, {result.seconds}s",

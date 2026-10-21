@@ -42,6 +42,9 @@ class Reply:
     # The provider's own form of this turn. It is sent back unchanged on the next call,
     # because some providers (Anthropic thinking blocks) reject a rebuilt turn.
     raw: Any = None
+    # The split of `tokens`, for traces. Zero when the provider did not report it.
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -65,6 +68,9 @@ class BadToolCall(ModelError):
 
 
 class ModelClient(Protocol):
+    provider: str  # the OpenTelemetry provider name, such as "anthropic"
+    model: str
+
     async def complete(
         self,
         system: str,
@@ -76,9 +82,12 @@ class ModelClient(Protocol):
 class OpenAIModel:
     """Any OpenAI-compatible chat completions endpoint. Groq is the default."""
 
-    def __init__(self, client: AsyncOpenAI, model: str) -> None:
+    def __init__(
+        self, client: AsyncOpenAI, model: str, provider: str = "openai"
+    ) -> None:
         self.client = client
         self.model = model
+        self.provider = provider
 
     async def complete(
         self,
@@ -122,6 +131,8 @@ class OpenAIModel:
                 else choice.finish_reason
             ),
             tokens=response.usage.total_tokens if response.usage else 0,
+            input_tokens=response.usage.prompt_tokens if response.usage else 0,
+            output_tokens=response.usage.completion_tokens if response.usage else 0,
             # The response and request types describe the same JSON.
             raw=[call.model_dump() for call in choice.message.tool_calls or []],
         )
@@ -154,6 +165,8 @@ class OpenAIModel:
 
 class AnthropicModel:
     """Anthropic's native Messages API."""
+
+    provider = "anthropic"
 
     def __init__(self, client: AsyncAnthropic, model: str) -> None:
         self.client = client
@@ -190,6 +203,8 @@ class AnthropicModel:
             finish_reason=finish_reason(response.stop_reason),
             tokens=response.usage.input_tokens + response.usage.output_tokens,
             raw=response.content,
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
         )
 
     @staticmethod
@@ -265,4 +280,5 @@ def make_model(settings: Settings) -> ModelClient:
             max_retries=5,
         ),
         settings.groq_model,
+        provider="groq",
     )
