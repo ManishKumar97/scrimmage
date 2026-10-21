@@ -7,8 +7,7 @@ import sys
 from dataclasses import dataclass
 
 from opentelemetry.context import Context
-from opentelemetry.semconv._incubating.attributes import gen_ai_attributes as gen_ai
-from opentelemetry.trace import Span
+from opentelemetry.trace import Span, SpanKind
 
 from faultline import kube_tools
 from faultline import tracing as spans
@@ -99,10 +98,10 @@ async def run(
     """Run the loop inside one root span. The span ends on every exit path."""
     tracing = tracing or Tracing()
     attributes = {
-        gen_ai.GEN_AI_OPERATION_NAME: gen_ai.GenAiOperationNameValues.INVOKE_AGENT.value,
-        gen_ai.GEN_AI_AGENT_NAME: spans.AGENT_NAME,
-        gen_ai.GEN_AI_PROVIDER_NAME: model.provider,
-        gen_ai.GEN_AI_REQUEST_MODEL: model.model,
+        spans.GEN_AI_OPERATION_NAME: spans.INVOKE_AGENT,
+        spans.GEN_AI_AGENT_NAME: spans.AGENT_NAME,
+        spans.GEN_AI_PROVIDER_NAME: model.provider,
+        spans.GEN_AI_REQUEST_MODEL: model.model,
         "faultline.budget.max_steps": budget.max_steps,
         "faultline.budget.max_tokens": budget.max_tokens,
         "faultline.budget.max_seconds": budget.max_seconds,
@@ -118,7 +117,7 @@ async def run(
         if tracing.content:
             root.set_attribute("faultline.answer", result.answer)
         if result.stop_reason != "done":
-            spans.fail(root, result.stop_reason, result.answer)
+            tracing.fail(root, result.stop_reason, result.answer)
         return result
 
 
@@ -226,14 +225,16 @@ async def complete(
     attributes = spans.model_attributes(model.provider, model.model, step)
     schemas = tools.schemas()
     if tracing.content:
-        attributes[gen_ai.GEN_AI_SYSTEM_INSTRUCTIONS] = SYSTEM_PROMPT
-        attributes[gen_ai.GEN_AI_INPUT_MESSAGES] = spans.messages_json(messages)
-        attributes[gen_ai.GEN_AI_TOOL_DEFINITIONS] = json.dumps(schemas)
-    with tracing.span(f"chat {model.model}", attributes, parent) as span:
+        attributes[spans.GEN_AI_SYSTEM_INSTRUCTIONS] = SYSTEM_PROMPT
+        attributes[spans.GEN_AI_INPUT_MESSAGES] = spans.messages_json(messages)
+        attributes[spans.GEN_AI_TOOL_DEFINITIONS] = json.dumps(schemas)
+    with tracing.span(
+        f"chat {model.model}", attributes, parent, SpanKind.CLIENT
+    ) as span:
         reply = await model.complete(SYSTEM_PROMPT, messages, schemas)
         spans.record_reply(span, reply)
         if tracing.content:
-            span.set_attribute(gen_ai.GEN_AI_OUTPUT_MESSAGES, spans.output_json(reply))
+            span.set_attribute(spans.GEN_AI_OUTPUT_MESSAGES, spans.output_json(reply))
         return reply
 
 
@@ -248,16 +249,16 @@ async def call_tool(
     """
     attributes = spans.tool_attributes(call.name, call.id, step)
     if tracing.content:
-        attributes[gen_ai.GEN_AI_TOOL_CALL_ARGUMENTS] = call.arguments
+        attributes[spans.GEN_AI_TOOL_CALL_ARGUMENTS] = call.arguments
     with tracing.span(f"execute_tool {call.name}", attributes, parent) as span:
         if not call.function:
             output, ok = "Error: only function tools are supported.", False
         else:
             output, ok = await tools.call(call.name, call.arguments)
         if tracing.content:
-            span.set_attribute(gen_ai.GEN_AI_TOOL_CALL_RESULT, output)
+            span.set_attribute(spans.GEN_AI_TOOL_CALL_RESULT, output)
         if not ok:
-            spans.fail(span, "tool_error", output)
+            tracing.fail(span, "tool_error", output)
         return output, ok
 
 

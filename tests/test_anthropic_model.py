@@ -281,3 +281,18 @@ def test_two_tool_calls_with_one_failing_go_back_in_one_user_message():
     blocks = messages[2]["content"]
     assert [b["tool_use_id"] for b in blocks] == ids == ["tu_1", "tu_2"]
     assert [b.get("is_error", False) for b in blocks] == [False, True]
+
+
+def test_cached_input_tokens_count_in_input_and_are_reported_apart():
+    reply = message([text("ok")], "end_turn")
+    reply.usage.cache_read_input_tokens = 70
+    reply.usage.cache_creation_input_tokens = 30
+    model, _ = adapter(reply)
+
+    result = asyncio.run(model.complete("sys", ["q"], []))
+
+    assert result.input_tokens == 200  # 100 uncached + 70 read + 30 written
+    assert result.output_tokens == 20
+    assert (result.cache_read_tokens, result.cache_creation_tokens) == (70, 30)
+    assert result.tokens == 120  # the budget count is unchanged
+    assert (result.response_id, result.response_model) == ("msg_fake", "fake-model")

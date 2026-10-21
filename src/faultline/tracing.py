@@ -2,8 +2,14 @@
 
 Attribute names follow the OpenTelemetry GenAI semantic conventions.
 Anything Faultline adds sits under the `faultline.` prefix.
+
+The convention names are written out below, not imported from the semconv package.
+Its constants for them are marked deprecated (the GenAI conventions are moving to their own
+repository) and sit in a private `_incubating` module.
+Names are from the GenAI semantic conventions as in opentelemetry-semantic-conventions 0.66b1.
 """
 
+import base64
 import json
 import threading
 from collections.abc import Iterator, Sequence
@@ -11,7 +17,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from google.protobuf.json_format import MessageToJson
+from google.protobuf.json_format import MessageToDict
 from opentelemetry import trace
 from opentelemetry.context import Context
 from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
@@ -22,13 +28,36 @@ from opentelemetry.sdk.trace.export import (
     SpanExporter,
     SpanExportResult,
 )
-from opentelemetry.semconv._incubating.attributes import gen_ai_attributes as gen_ai
-from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
-from opentelemetry.trace import Span, Status, StatusCode, Tracer
+from opentelemetry.trace import Span, SpanKind, Status, StatusCode, Tracer
 
 from faultline.models import Message, Reply, ToolResult
 
 AGENT_NAME = "faultline-ida"
+
+GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
+GEN_AI_AGENT_NAME = "gen_ai.agent.name"
+GEN_AI_PROVIDER_NAME = "gen_ai.provider.name"
+GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
+GEN_AI_RESPONSE_MODEL = "gen_ai.response.model"
+GEN_AI_RESPONSE_ID = "gen_ai.response.id"
+GEN_AI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons"
+GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
+GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
+GEN_AI_USAGE_CACHE_READ_TOKENS = "gen_ai.usage.cache_read.input_tokens"
+GEN_AI_USAGE_CACHE_CREATION_TOKENS = "gen_ai.usage.cache_creation.input_tokens"
+GEN_AI_SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions"
+GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages"
+GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages"
+GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions"
+GEN_AI_TOOL_NAME = "gen_ai.tool.name"
+GEN_AI_TOOL_TYPE = "gen_ai.tool.type"
+GEN_AI_TOOL_CALL_ID = "gen_ai.tool.call.id"
+GEN_AI_TOOL_CALL_ARGUMENTS = "gen_ai.tool.call.arguments"
+GEN_AI_TOOL_CALL_RESULT = "gen_ai.tool.call.result"
+ERROR_TYPE = "error.type"
+CHAT = "chat"
+INVOKE_AGENT = "invoke_agent"
+EXECUTE_TOOL = "execute_tool"
 
 type Attributes = dict[str, str | int | float]
 
@@ -45,13 +74,32 @@ class OtlpJsonFileExporter(SpanExporter):
         path.parent.mkdir(parents=True, exist_ok=True)
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        line = MessageToJson(encode_spans(spans), indent=None)
+        request = MessageToDict(encode_spans(spans), use_integers_for_enums=True)
+        line = json.dumps(hex_ids(request), separators=(",", ":"))
         try:
             with self.lock, self.path.open("a", encoding="utf-8") as file:
                 file.write(line + "\n")
         except OSError:
             return SpanExportResult.FAILURE
         return SpanExportResult.SUCCESS
+
+
+# The protobuf JSON mapping writes bytes as base64. OTLP/JSON wants ids as hex.
+ID_KEYS = {"traceId", "spanId", "parentSpanId"}
+
+
+def hex_ids(node):
+    """Rewrite every trace, span and parent id in an OTLP JSON tree from base64 to hex."""
+    if isinstance(node, dict):
+        return {
+            key: base64.b64decode(value).hex()
+            if key in ID_KEYS and isinstance(value, str)
+            else hex_ids(value)
+            for key, value in node.items()
+        }
+    if isinstance(node, list):
+        return [hex_ids(item) for item in node]
+    return node
 
 
 def file_provider(path: Path) -> TracerProvider:
@@ -76,49 +124,66 @@ class Tracing:
         name: str,
         attributes: Attributes,
         parent: Context | None = None,
+        kind: SpanKind = SpanKind.INTERNAL,
     ) -> Iterator[Span]:
         """A span that always ends, and is marked ERROR if the block raises or is cancelled."""
-        span = self.tracer.start_span(name, context=parent, attributes=attributes)
+        span = self.tracer.start_span(
+            name, context=parent, kind=kind, attributes=attributes
+        )
         try:
             yield span
         except BaseException as exc:
             # BaseException, so a deadline's CancelledError is recorded too.
-            fail(span, type(exc).__name__, str(exc) or type(exc).__name__)
+            self.fail(span, type(exc).__name__, str(exc))
             raise
         finally:
             span.end()
+
+    def fail(self, span: Span, error_type: str, text: str) -> None:
+        """Mark a span ERROR. The text (an error body, a tool output) is kept only with content on."""
+        span.set_attribute(ERROR_TYPE, error_type)
+        span.set_status(
+            Status(
+                StatusCode.ERROR, (text or error_type) if self.content else error_type
+            )
+        )
 
 
 def context_of(span: Span) -> Context:
     return trace.set_span_in_context(span)
 
 
-def fail(span: Span, error_type: str, description: str) -> None:
-    span.set_attribute(ERROR_TYPE, error_type)
-    span.set_status(Status(StatusCode.ERROR, description))
-
-
 def model_attributes(provider: str, model: str, step: int) -> Attributes:
     return {
-        gen_ai.GEN_AI_OPERATION_NAME: gen_ai.GenAiOperationNameValues.CHAT.value,
-        gen_ai.GEN_AI_PROVIDER_NAME: provider,
-        gen_ai.GEN_AI_REQUEST_MODEL: model,
+        GEN_AI_OPERATION_NAME: CHAT,
+        GEN_AI_PROVIDER_NAME: provider,
+        GEN_AI_REQUEST_MODEL: model,
         "faultline.step": step,
     }
 
 
 def record_reply(span: Span, reply: Reply) -> None:
-    span.set_attribute(gen_ai.GEN_AI_USAGE_INPUT_TOKENS, reply.input_tokens)
-    span.set_attribute(gen_ai.GEN_AI_USAGE_OUTPUT_TOKENS, reply.output_tokens)
-    span.set_attribute(gen_ai.GEN_AI_RESPONSE_FINISH_REASONS, [reply.finish_reason])
+    # A token count the provider did not report is left out, not written as zero.
+    optional = {
+        GEN_AI_USAGE_INPUT_TOKENS: reply.input_tokens,
+        GEN_AI_USAGE_OUTPUT_TOKENS: reply.output_tokens,
+        GEN_AI_USAGE_CACHE_READ_TOKENS: reply.cache_read_tokens,
+        GEN_AI_USAGE_CACHE_CREATION_TOKENS: reply.cache_creation_tokens,
+        GEN_AI_RESPONSE_MODEL: reply.response_model,
+        GEN_AI_RESPONSE_ID: reply.response_id,
+    }
+    for key, value in optional.items():
+        if value is not None:
+            span.set_attribute(key, value)
+    span.set_attribute(GEN_AI_RESPONSE_FINISH_REASONS, [reply.finish_reason])
 
 
 def tool_attributes(name: str, call_id: str, step: int) -> Attributes:
     return {
-        gen_ai.GEN_AI_OPERATION_NAME: gen_ai.GenAiOperationNameValues.EXECUTE_TOOL.value,
-        gen_ai.GEN_AI_TOOL_NAME: name,
-        gen_ai.GEN_AI_TOOL_CALL_ID: call_id,
-        gen_ai.GEN_AI_TOOL_TYPE: "function",
+        GEN_AI_OPERATION_NAME: EXECUTE_TOOL,
+        GEN_AI_TOOL_NAME: name,
+        GEN_AI_TOOL_CALL_ID: call_id,
+        GEN_AI_TOOL_TYPE: "function",
         "faultline.step": step,
     }
 
@@ -149,7 +214,9 @@ def reply_json(reply: Reply) -> dict:
         }
         for call in reply.tool_calls
     ]
-    return {"role": "assistant", "parts": parts, "finish_reason": reply.finish_reason}
+    # The convention's value for a turn that ends in tool calls is "tool_call".
+    finish = "tool_call" if reply.finish_reason == "tool_calls" else reply.finish_reason
+    return {"role": "assistant", "parts": parts, "finish_reason": finish}
 
 
 def result_part(result: ToolResult) -> dict:

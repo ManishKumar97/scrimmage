@@ -42,9 +42,14 @@ class Reply:
     # The provider's own form of this turn. It is sent back unchanged on the next call,
     # because some providers (Anthropic thinking blocks) reject a rebuilt turn.
     raw: Any = None
-    # The split of `tokens`, for traces. Zero when the provider did not report it.
-    input_tokens: int = 0
-    output_tokens: int = 0
+    # For traces. None when the provider did not report them (not zero).
+    # input_tokens includes cached input, as the OpenTelemetry convention says.
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_creation_tokens: int | None = None
+    response_model: str | None = None
+    response_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -131,8 +136,10 @@ class OpenAIModel:
                 else choice.finish_reason
             ),
             tokens=response.usage.total_tokens if response.usage else 0,
-            input_tokens=response.usage.prompt_tokens if response.usage else 0,
-            output_tokens=response.usage.completion_tokens if response.usage else 0,
+            input_tokens=response.usage.prompt_tokens if response.usage else None,
+            output_tokens=response.usage.completion_tokens if response.usage else None,
+            response_model=response.model,
+            response_id=response.id,
             # The response and request types describe the same JSON.
             raw=[call.model_dump() for call in choice.message.tool_calls or []],
         )
@@ -203,8 +210,16 @@ class AnthropicModel:
             finish_reason=finish_reason(response.stop_reason),
             tokens=response.usage.input_tokens + response.usage.output_tokens,
             raw=response.content,
-            input_tokens=response.usage.input_tokens,
+            input_tokens=(
+                response.usage.input_tokens
+                + (response.usage.cache_read_input_tokens or 0)
+                + (response.usage.cache_creation_input_tokens or 0)
+            ),
             output_tokens=response.usage.output_tokens,
+            cache_read_tokens=response.usage.cache_read_input_tokens,
+            cache_creation_tokens=response.usage.cache_creation_input_tokens,
+            response_model=response.model,
+            response_id=response.id,
         )
 
     @staticmethod
