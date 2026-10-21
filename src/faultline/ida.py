@@ -5,6 +5,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 from opentelemetry.context import Context
 from opentelemetry.trace import Span, SpanKind
@@ -277,11 +278,18 @@ def describe(call: ToolCall) -> str:
     return f"{call.name} (custom tool call)"
 
 
-async def diagnose_async(question: str) -> RunResult:
+async def diagnose_async(
+    question: str,
+    *,
+    trace_file: Path | None = None,
+    trace_content: bool | None = None,
+) -> RunResult:
+    """Run one diagnosis. The trace settings, when given, override the environment's."""
     settings = get_settings()
     model = make_model(settings)
-    provider = spans.file_provider(settings.trace_file)
-    tracing = Tracing(provider.get_tracer("faultline"), settings.trace_content)
+    provider = spans.file_provider(trace_file or settings.trace_file)
+    content = settings.trace_content if trace_content is None else trace_content
+    tracing = Tracing(provider.get_tracer("faultline"), content)
     try:
         # The logs and metrics tools come from MCP servers. They live for this one run.
         async with (
