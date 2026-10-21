@@ -5,6 +5,7 @@ description = "Find the silent failures in an AI agent, prove the fix, and stop 
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "anthropic>=1.17.0",
     "kubernetes-asyncio>=36.1.0",
     "openai>=3.31.0",
     "pydantic>=2.14.1",

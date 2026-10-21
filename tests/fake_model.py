@@ -10,6 +10,7 @@ from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion
 
 from faultline import ida
+from faultline.models import OpenAIModel
 
 
 def tool_reply(*calls: tuple[str, str]) -> ChatCompletion:
@@ -72,10 +73,13 @@ def rejected(
     return error(message, response=response, body=body)
 
 
-def run_ida(question: str, client: "FakeClient", *args, **kwargs) -> ida.RunResult:
+def run_ida(
+    question: str, client: "FakeClient", model_name: str, *args, **kwargs
+) -> ida.RunResult:
     """Run the async loop to completion against a fake client."""
-    # FakeClient implements only the part of AsyncOpenAI the loop uses.
-    return asyncio.run(ida.run(question, cast(AsyncOpenAI, client), *args, **kwargs))
+    # FakeClient implements only the part of AsyncOpenAI the adapter uses.
+    model = OpenAIModel(cast(AsyncOpenAI, client), model_name)
+    return asyncio.run(ida.run(question, model, *args, **kwargs))
 
 
 class FakeClient:

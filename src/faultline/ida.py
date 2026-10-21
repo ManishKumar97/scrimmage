@@ -3,18 +3,17 @@
 import asyncio
 import sys
 from dataclasses import dataclass
-from typing import cast
-
-import openai
-from openai import AsyncOpenAI
-from openai.types.chat import (
-    ChatCompletionMessageFunctionToolCall,
-    ChatCompletionMessageParam,
-    ChatCompletionMessageToolCallUnion,
-    ChatCompletionMessageToolCallUnionParam,
-)
 
 from faultline import kube_tools
+from faultline.models import (
+    BadToolCall,
+    Message,
+    ModelClient,
+    ModelError,
+    ToolCall,
+    ToolResult,
+    make_model,
+)
 from faultline.settings import get_settings
 from faultline.tools import Registry
 
@@ -61,15 +60,11 @@ class RunResult:
 
 async def run(
     question: str,
-    client: AsyncOpenAI,
-    model: str,
+    model: ModelClient,
     budget: Budget = DEFAULT_BUDGET,
     tools: Registry = kube_tools.registry,
 ) -> RunResult:
-    messages: list[ChatCompletionMessageParam] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": question},
-    ]
+    messages: list[Message] = [question]
     consecutive_errors = 0
     steps = 0
     tokens = 0
@@ -90,52 +85,35 @@ async def run(
                         f"Step limit of {budget.max_steps} reached.", "step_limit"
                     )
                 try:
-                    response = await client.chat.completions.create(
-                        model=model, messages=messages, tools=tools.schemas()
+                    reply = await model.complete(
+                        SYSTEM_PROMPT, messages, tools.schemas()
                     )
-                except openai.BadRequestError as exc:
-                    # Groq rejects a reply whose tool call it cannot parse.
-                    # Any other 400, such as a context overflow, is not the model's fault.
-                    if exc.code == "tool_use_failed":
-                        return stop(
-                            f"Model produced an invalid tool call: {exc}", "bad_call"
-                        )
-                    return stop(f"Model API failed: {exc}", "model_error")
-                except openai.APIError as exc:
+                except BadToolCall as exc:
+                    return stop(
+                        f"Model produced an invalid tool call: {exc}", "bad_call"
+                    )
+                except ModelError as exc:
                     # Rate limits after the SDK's own retries, oversized requests, outages.
                     return stop(f"Model API failed: {exc}", "model_error")
                 steps += 1
-                tokens += response.usage.total_tokens if response.usage else 0
+                tokens += reply.tokens
 
-                choice = response.choices[0]
-                reply = choice.message
                 # A reply cut off at the output limit is incomplete, with or without tool calls.
                 # Its tool calls may be half written, so none of them run.
-                if choice.finish_reason == "length":
-                    return stop(reply.content or "", "truncated")
-                if choice.finish_reason == "content_filter":
-                    return stop(reply.content or "", "content_filtered")
+                if reply.finish_reason == "length":
+                    return stop(reply.text, "truncated")
+                if reply.finish_reason == "content_filter":
+                    return stop(reply.text, "content_filtered")
+                if reply.finish_reason == "refusal":
+                    return stop(reply.text, "refused")
                 if not reply.tool_calls:
-                    return stop(reply.content or "", "done")
+                    return stop(reply.text, "done")
                 if tokens >= budget.max_tokens:
                     return stop(
                         f"Token limit of {budget.max_tokens} reached.", "token_limit"
                     )
 
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": reply.content,
-                        # The response and request types describe the same JSON.
-                        "tool_calls": [
-                            cast(
-                                ChatCompletionMessageToolCallUnionParam,
-                                call.model_dump(),
-                            )
-                            for call in reply.tool_calls
-                        ],
-                    }
-                )
+                messages.append(reply)
                 # Tool calls from one reply run at the same time.
                 results = await asyncio.gather(
                     *(call_tool(tools, call) for call in reply.tool_calls)
@@ -146,9 +124,14 @@ async def run(
                         f"[tool] {describe(call)}{'' if ok else ' -> error'}",
                         file=sys.stderr,
                     )
-                    messages.append(
-                        {"role": "tool", "tool_call_id": call.id, "content": output}
-                    )
+                messages.append(
+                    [
+                        ToolResult(call.id, output, not ok)
+                        for call, (output, ok) in zip(
+                            reply.tool_calls, results, strict=True
+                        )
+                    ]
+                )
                 if consecutive_errors >= MAX_CONSECUTIVE_TOOL_ERRORS:
                     return stop(
                         f"Stopped after {consecutive_errors} tool errors in a row. "
@@ -159,30 +142,20 @@ async def run(
         return stop(f"Time limit of {budget.max_seconds}s reached.", "time_limit")
 
 
-async def call_tool(
-    tools: Registry, call: ChatCompletionMessageToolCallUnion
-) -> tuple[str, bool]:
-    if not isinstance(call, ChatCompletionMessageFunctionToolCall):
+async def call_tool(tools: Registry, call: ToolCall) -> tuple[str, bool]:
+    if not call.function:
         return "Error: only function tools are supported.", False
-    return await tools.call(call.function.name, call.function.arguments)
+    return await tools.call(call.name, call.arguments)
 
 
-def describe(call: ChatCompletionMessageToolCallUnion) -> str:
-    if isinstance(call, ChatCompletionMessageFunctionToolCall):
-        return f"{call.function.name}({call.function.arguments})"
-    return f"{call.custom.name} (custom tool call)"
+def describe(call: ToolCall) -> str:
+    if call.function:
+        return f"{call.name}({call.arguments})"
+    return f"{call.name} (custom tool call)"
 
 
 def diagnose(question: str) -> RunResult:
-    settings = get_settings()
-    # The SDK retries rate limits and outages with backoff. The run's deadline
-    # cancels those retries too, so they cannot push a run past its time budget.
-    client = AsyncOpenAI(
-        api_key=settings.groq_api_key.get_secret_value(),
-        base_url=settings.groq_base_url,
-        max_retries=5,
-    )
-    return asyncio.run(run(question, client, settings.model))
+    return asyncio.run(run(question, make_model(get_settings())))
 
 
 if __name__ == "__main__":
