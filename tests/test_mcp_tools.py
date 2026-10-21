@@ -121,8 +121,8 @@ def test_the_server_stops_when_the_block_raises():
 
     try:
         asyncio.run(with_server(use))
-    except BaseException as exc:  # noqa: BLE001 - anyio wraps it in an ExceptionGroup
-        assert "boom" in repr(exc)
+    except KeyError as exc:
+        assert exc.args == ("boom",)
     else:
         raise AssertionError("the error was swallowed")
 
@@ -131,7 +131,7 @@ def test_the_server_stops_when_the_block_raises():
 
 def run_loop(tools: Registry, client: FakeClient, budget: ida.Budget):
     model = OpenAIModel(cast(AsyncOpenAI, client), "fake")
-    return ida.run("why?", model, budget, tools)
+    return ida.run("why?", model, budget, tools=tools)
 
 
 def test_the_loop_calls_an_mcp_tool():
@@ -180,3 +180,48 @@ def test_get_logs_over_mcp_reports_cluster_errors_to_the_model(monkeypatch):
     assert "boom" in text_of(ok)
     assert bad.is_error
     assert "no deployment named 'order' in astronomy-shop" in text_of(bad)
+
+
+def test_a_server_that_never_answers_fails_the_start(monkeypatch):
+    monkeypatch.setattr(mcp_client, "START_TIMEOUT", 0.5)
+    silent = StdioServerParameters(
+        command=sys.executable, args=["-c", "import time; time.sleep(60)"]
+    )
+
+    async def start():
+        async with mcp_client.mcp_tools(silent, Registry()):
+            pass
+
+    try:
+        asyncio.run(start())
+    except RuntimeError as exc:
+        assert "did not start within 0.5s" in str(exc)
+    else:
+        raise AssertionError("the start did not time out")
+
+
+def test_the_server_gets_the_kube_config_path(monkeypatch):
+    monkeypatch.setenv("KUBECONFIG", "/tmp/some-config")
+    env_server = StdioServerParameters(
+        command=sys.executable,
+        args=["-c", "import os; print(os.environ.get('KUBECONFIG'))"],
+    )
+    seen = {}
+
+    class Spy:
+        def __init__(self, params):
+            seen["env"] = params.env
+            raise RuntimeError("stop")
+
+    monkeypatch.setattr(mcp_client, "Client", Spy)
+
+    async def start():
+        async with mcp_client.mcp_tools(env_server, Registry()):
+            pass
+
+    try:
+        asyncio.run(start())
+    except RuntimeError:
+        pass
+
+    assert seen["env"] == {"KUBECONFIG": "/tmp/some-config"}

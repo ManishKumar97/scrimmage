@@ -74,7 +74,8 @@ async def run(
     question: str,
     model: ModelClient,
     budget: Budget = DEFAULT_BUDGET,
-    tools: Registry = kube_tools.registry,
+    *,
+    tools: Registry,
 ) -> RunResult:
     messages: list[Message] = [question]
     consecutive_errors = 0

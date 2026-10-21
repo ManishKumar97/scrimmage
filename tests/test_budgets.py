@@ -32,7 +32,7 @@ SHORT = ida.Budget(max_seconds=0.3)
 def test_step_limit_stops_a_run_that_loops_forever():
     client = ForeverClient()
 
-    result = run_ida("why?", client, "fake", ida.Budget(max_steps=4), SAME_LOGS)
+    result = run_ida("why?", client, "fake", ida.Budget(max_steps=4), tools=SAME_LOGS)
 
     assert result.stop_reason == "step_limit"
     assert result.answer == "Step limit of 4 reached."
@@ -43,7 +43,9 @@ def test_step_limit_stops_a_run_that_loops_forever():
 def test_token_limit_stops_a_run_that_loops_forever():
     client = ForeverClient()  # every fake reply reports 120 tokens
 
-    result = run_ida("why?", client, "fake", ida.Budget(max_tokens=500), SAME_LOGS)
+    result = run_ida(
+        "why?", client, "fake", ida.Budget(max_tokens=500), tools=SAME_LOGS
+    )
 
     assert result.stop_reason == "token_limit"
     assert result.tokens == 600
@@ -53,7 +55,7 @@ def test_token_limit_stops_a_run_that_loops_forever():
 def test_a_final_answer_wins_over_the_token_limit():
     client = FakeClient(text_reply("cart cannot reach redis"))
 
-    result = run_ida("why?", client, "fake", ida.Budget(max_tokens=10), SAME_LOGS)
+    result = run_ida("why?", client, "fake", ida.Budget(max_tokens=10), tools=SAME_LOGS)
 
     assert result.stop_reason == "done"
 
@@ -62,7 +64,7 @@ def test_time_limit_stops_a_run_that_loops_forever():
     client = ForeverClient()
     budget = ida.Budget(max_steps=10**9, max_tokens=10**12, max_seconds=0.3)
 
-    result = run_ida("why?", client, "fake", budget, SAME_LOGS)
+    result = run_ida("why?", client, "fake", budget, tools=SAME_LOGS)
 
     assert result.stop_reason == "time_limit"
     assert result.answer == "Time limit of 0.3s reached."
@@ -71,7 +73,7 @@ def test_time_limit_stops_a_run_that_loops_forever():
 def test_a_slow_model_call_is_cancelled_at_the_deadline():
     started = time.monotonic()
 
-    result = run_ida("why?", SlowClient(), "fake", SHORT, SAME_LOGS)
+    result = run_ida("why?", SlowClient(), "fake", SHORT, tools=SAME_LOGS)
 
     assert result.stop_reason == "time_limit"
     assert time.monotonic() - started < 0.5
@@ -91,7 +93,7 @@ def test_a_slow_tool_is_cancelled_at_the_deadline():
     client = FakeClient(tool_reply(logs_call("cart")))
     started = time.monotonic()
 
-    result = run_ida("why?", client, "fake", SHORT, tools)
+    result = run_ida("why?", client, "fake", SHORT, tools=tools)
 
     assert result.stop_reason == "time_limit"
     assert time.monotonic() - started < 0.5
@@ -106,7 +108,7 @@ def test_the_deadline_cancels_a_hanging_api_call(monkeypatch):
     tools = Registry()
     tools.tool(kube_tools.get_logs)
 
-    result = run_ida("why?", client, "fake", SHORT, tools)
+    result = run_ida("why?", client, "fake", SHORT, tools=tools)
 
     assert result.stop_reason == "time_limit"
     assert result.seconds <= 0.5
