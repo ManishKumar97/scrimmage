@@ -8,7 +8,10 @@ from types import SimpleNamespace
 from kubernetes_asyncio import config
 from kubernetes_asyncio.client import ApiException, AppsV1Api, CoreV1Api
 
+from faultline import kube_tools
 from faultline.tools import Registry
+
+NOW = datetime(2026, 10, 21, 12, 0, 0, tzinfo=UTC)  # the clock list_pods sees
 
 
 def logs_registry(get_logs_body: Callable[[str], object]) -> Registry:
@@ -37,6 +40,7 @@ class FakeCluster:
         self.logs: dict[str, str] = {}  # pod name -> log text
         self.status: dict[str, SimpleNamespace] = {}  # pod name -> pod status
         self.created: dict[str, datetime] = {}  # pod name -> creation time
+        self.deleting: dict[str, bool] = {}  # pod name -> has a deletion timestamp
         self.log_requests: list[tuple[str, dict]] = []
         self.hang = False  # every API call waits forever
 
@@ -59,16 +63,27 @@ class FakeCluster:
         restarts: int = 0,
         terminated: str | None = None,
         age_seconds: int = 3600,
+        waiting: str | None = None,
+        exited: str | None = None,
+        deleting: bool = False,
+        no_containers: bool = False,
     ) -> None:
         """Set what the pod reports about itself. One container per pod."""
         last = SimpleNamespace(
             terminated=SimpleNamespace(reason=terminated) if terminated else None
         )
-        container = SimpleNamespace(
-            ready=ready, restart_count=restarts, last_state=last
+        state = SimpleNamespace(
+            waiting=SimpleNamespace(reason=waiting) if waiting else None,
+            terminated=SimpleNamespace(reason=exited) if exited else None,
         )
-        self.status[pod] = SimpleNamespace(phase=phase, container_statuses=[container])
-        self.created[pod] = datetime.now(UTC) - timedelta(seconds=age_seconds)
+        container = SimpleNamespace(
+            ready=ready, restart_count=restarts, last_state=last, state=state
+        )
+        self.status[pod] = SimpleNamespace(
+            phase=phase, container_statuses=None if no_containers else [container]
+        )
+        self.created[pod] = NOW - timedelta(seconds=age_seconds)
+        self.deleting[pod] = deleting
 
     async def _wait(self) -> None:
         if self.hang:
@@ -100,7 +115,9 @@ class FakeCluster:
             items=[
                 SimpleNamespace(
                     metadata=SimpleNamespace(
-                        name=pod, creation_timestamp=self.created[pod]
+                        name=pod,
+                        creation_timestamp=self.created[pod],
+                        deletion_timestamp=NOW if self.deleting[pod] else None,
                     ),
                     status=self.status[pod],
                 )
@@ -123,6 +140,7 @@ def fake_cluster(monkeypatch) -> FakeCluster:
         pass
 
     monkeypatch.setattr(config, "load_kube_config", no_kubeconfig)
+    monkeypatch.setattr(kube_tools, "utc_now", lambda: NOW)
     for api, methods in [
         (AppsV1Api, ["read_namespaced_deployment", "list_namespaced_deployment"]),
         (CoreV1Api, ["list_namespaced_pod", "read_namespaced_pod_log"]),

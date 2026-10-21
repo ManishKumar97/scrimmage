@@ -120,7 +120,7 @@ def test_an_unknown_deployment_counts_as_a_tool_error(monkeypatch):
 
 
 def test_unparseable_tool_call_from_the_model_stops_cleanly():
-    client = FakeClient(rejected(400, "tool_use_failed"))
+    client = FakeClient(rejected(400, "bad tool call", code="tool_use_failed"))
 
     result = run_ida("why?", client, "fake", tools=logs_registry(str))
 
@@ -166,3 +166,24 @@ def test_a_reply_stopped_by_the_content_filter_is_not_done():
     result = run_ida("why?", client, "fake", tools=logs_registry(str))
 
     assert result.stop_reason == "content_filtered"
+
+
+def test_a_400_that_is_not_a_tool_call_failure_is_a_model_error():
+    client = FakeClient(rejected(400, "context length exceeded"))
+
+    result = run_ida("why?", client, "fake", tools=logs_registry(str))
+
+    assert result.stop_reason == "model_error"
+    assert "context length exceeded" in result.answer
+
+
+def test_tool_calls_in_a_cut_off_reply_do_not_run():
+    ran = []
+    tools = logs_registry(lambda service: ran.append(service) or "logs")
+    reply = tool_reply(logs_call("cart"))
+    reply.choices[0].finish_reason = "length"
+
+    result = run_ida("why?", FakeClient(reply), "fake", tools=tools)
+
+    assert result.stop_reason == "truncated"
+    assert ran == []

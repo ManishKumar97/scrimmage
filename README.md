@@ -12,7 +12,7 @@ It calls tools in a loop until it can name a cause, quoting the log lines that s
 
 - It uses the raw chat completions API of an OpenAI-compatible provider. No agent framework.
 - Tools are plain async Python functions registered with a decorator. Their argument schemas come from type hints.
-- Tools read the cluster through the Kubernetes API: logs of every pod of a service, and the list of services.
+- Tools read the cluster through the Kubernetes API: logs of every pod of a service, pod status, and the list of services.
 - Every run ends with a named stop reason: `done`, `tool_errors`, `bad_call`, `truncated`, `content_filtered`, `model_error`, `step_limit`, `token_limit` or `time_limit`.
 - One deadline covers the whole run, including model calls, retries and tool calls.
 

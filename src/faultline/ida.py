@@ -95,9 +95,12 @@ async def run(
                     )
                 except openai.BadRequestError as exc:
                     # Groq rejects a reply whose tool call it cannot parse.
-                    return stop(
-                        f"Model produced an invalid tool call: {exc}", "bad_call"
-                    )
+                    # Any other 400, such as a context overflow, is not the model's fault.
+                    if exc.code == "tool_use_failed":
+                        return stop(
+                            f"Model produced an invalid tool call: {exc}", "bad_call"
+                        )
+                    return stop(f"Model API failed: {exc}", "model_error")
                 except openai.APIError as exc:
                     # Rate limits after the SDK's own retries, oversized requests, outages.
                     return stop(f"Model API failed: {exc}", "model_error")
@@ -106,7 +109,8 @@ async def run(
 
                 choice = response.choices[0]
                 reply = choice.message
-                # A cut-off reply has no tool calls, so it must not pass as an answer.
+                # A reply cut off at the output limit is incomplete, with or without tool calls.
+                # Its tool calls may be half written, so none of them run.
                 if choice.finish_reason == "length":
                     return stop(reply.content or "", "truncated")
                 if choice.finish_reason == "content_filter":

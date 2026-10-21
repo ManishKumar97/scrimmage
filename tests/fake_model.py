@@ -55,7 +55,10 @@ def _completion(message: dict, finish_reason: str) -> ChatCompletion:
 
 
 def rejected(
-    status: int, message: str, headers: dict[str, str] | None = None
+    status: int,
+    message: str,
+    headers: dict[str, str] | None = None,
+    code: str | None = None,
 ) -> openai.APIStatusError:
     """The error the SDK raises when Groq answers with this HTTP status."""
     request = httpx2.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
@@ -65,7 +68,8 @@ def rejected(
         429: openai.RateLimitError,
         500: openai.InternalServerError,
     }.get(status, openai.APIStatusError)
-    return error(message, response=response, body=None)
+    body = {"code": code, "message": message}
+    return error(message, response=response, body=body)
 
 
 def run_ida(question: str, client: "FakeClient", *args, **kwargs) -> ida.RunResult:
