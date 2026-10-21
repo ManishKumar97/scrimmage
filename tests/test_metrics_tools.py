@@ -451,6 +451,19 @@ def test_a_new_error_series_with_a_flat_second_sample_is_not_zero(monkeypatch):
 
     assert "last 5m 2.00 started started" in output
     assert "baseline, the 30m before that 2.00 0.00 0.0%" in output
+    assert "error-free baseline" not in output
+
+
+def test_a_baseline_with_a_new_error_series_says_it_is_not_clean(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    cluster.prom.counter(CALLS, labels("cart"), [(3600, 2.0)])
+    # The series began 8 minutes ago: inside the baseline, before the last 5m.
+    two_flat_error_samples(cluster, ago=480)
+
+    output = run(metrics_tools.get_service_metrics("cart", 5))
+
+    assert "the 30m before that 2.00 started started" in output
+    assert "it is not an error-free baseline" in output
 
 
 def test_an_old_flat_error_counter_is_zero_errors_in_the_window(monkeypatch):

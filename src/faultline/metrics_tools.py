@@ -281,8 +281,14 @@ async def get_service_metrics(
     ]
     if current.errors_started or baseline.errors_started:
         lines.append(
-            "started: error spans appeared in that window, but Prometheus cannot "
-            "measure a rate from one sample yet. Errors exist; the rate is above zero."
+            "started: the first error spans of this service appeared in that row's "
+            "window, and Prometheus cannot measure their rate yet. Errors exist; "
+            "the rate is above zero."
+        )
+    if baseline.errors_started:
+        lines.append(
+            "The baseline row has errors that began inside it, so it is not an "
+            "error-free baseline: the problem began before the current window."
         )
     if top:
         lines.append(f"Failing operations in the last {minutes}m: " + "; ".join(top))
