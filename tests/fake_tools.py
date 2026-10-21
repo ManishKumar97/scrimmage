@@ -197,6 +197,11 @@ class FakePrometheus:
         "quantile": rf"histogram_quantile\((?P<q>[\d.]+), sum by \(le\) \(rate\({SELECTOR}{WINDOW}\)\)\)",
         "topk": rf"topk\((?P<k>\d+), sum by \(span_name\) \(rate\({SELECTOR}{WINDOW}\)\)\)",
         "count": rf"count\(last_over_time\({SELECTOR}{WINDOW}\)\)",
+        "born": (
+            rf"count\(last_over_time\({SELECTOR}{WINDOW}\) unless "
+            r"last_over_time\((?P=metric)\{(?P=labels)\}\[(?P=window)m\] "
+            r"offset (?P=window)m\)\)"
+        ),
         "earliest": rf"min\(min_over_time\(timestamp\({SELECTOR}\)\[(?P<window>\d+)m:1m\]\)\)",
     }
     STEP = 15  # seconds between samples
@@ -283,6 +288,15 @@ class FakePrometheus:
         if shape == "count":
             seen = [1 for _, s in matching if any(at - window <= t <= at for t, _ in s)]
             return [({}, str(len(seen)))] if seen else []
+        if shape == "born":
+            # A series with a sample in the window and none in the window before it.
+            born = [
+                1
+                for _, s in matching
+                if any(at - window <= t <= at for t, _ in s)
+                and not any(at - 2 * window <= t < at - window for t, _ in s)
+            ]
+            return [({}, str(len(born)))] if born else []
         if shape == "earliest":
             # A subquery at 1m steps; each step sees the latest sample of the last 5m.
             firsts = []

@@ -100,6 +100,14 @@ def rate(metric: str, labels: str, window: str) -> str:
     return f"rate({metric}{{{labels}}}[{window}])"
 
 
+def new_series(metric: str, labels: str, window: str) -> str:
+    """Series with a sample in the window and none in the window before it."""
+    return (
+        f"count(last_over_time({metric}{{{labels}}}[{window}]) "
+        f"unless last_over_time({metric}{{{labels}}}[{window}] offset {window}))"
+    )
+
+
 def per_second(value: float | None) -> str:
     return "no data" if value is None else f"{value:.2f}"
 
@@ -158,13 +166,15 @@ async def window_stats(
         first_sample(api, sel, window, at) if covered else no_value(),
     )
     # Prometheus has no zero start for a counter: the first error sample gives no
-    # rate. A missing rate with error spans in the window is not "no errors".
+    # rate, and the second, if equal, gives a rate of zero. Neither is "no errors".
     started = False
     if total is not None and errors is None:
         present = await scalar(
             api, f"count(last_over_time({CALLS}{{{err}}}[{window}]))", at
         )
         started = bool(present)
+    elif total is not None and not errors:
+        started = bool(await scalar(api, new_series(CALLS, err, window), at))
     minutes = None if earliest is None else max(0.0, (at - earliest) / 60)
     return Stats(total, errors, started, p50, p95, minutes)
 
@@ -323,7 +333,7 @@ async def get_error_rate_trend(
     step = 60 * math.ceil(minutes / (MAX_TREND_POINTS - 1))
     start = end - minutes * 60
     async with kube_api() as api, api_errors("Prometheus"):
-        total, errors, started = await asyncio.gather(
+        total, errors, started, born = await asyncio.gather(
             range_values(
                 api,
                 f"sum({rate(CALLS, selector(service), TREND_RATE_WINDOW)})",
@@ -346,6 +356,13 @@ async def get_error_rate_trend(
                 end,
                 step,
             ),
+            range_values(
+                api,
+                new_series(CALLS, selector(service, ERROR), TREND_RATE_WINDOW),
+                start,
+                end,
+                step,
+            ),
         )
         if not total:
             return f"Now: {stamp(now)}. " + await no_data(api, service, minutes)
@@ -354,9 +371,9 @@ async def get_error_rate_trend(
         clock = datetime.fromtimestamp(t, now.tzinfo).strftime("%H:%M")
         if t not in total:
             value = "n/a"
-        elif t in errors:
+        elif t in errors and not (errors[t] == 0 and t in born):
             value = percent(errors[t], total[t])
-        elif t in started:
+        elif t in started or t in born:
             value = "started"  # error spans, but one sample gives no rate
         else:
             value = percent(0.0, total[t])

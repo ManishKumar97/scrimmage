@@ -328,7 +328,7 @@ def test_the_trend_asks_for_the_range_it_shows(monkeypatch):
 
     ranges = [q for path, q in cluster.prom.requests if path == "query_range"]
     now = int(NOW.timestamp())
-    assert len(ranges) == 3
+    assert len(ranges) == 4
     for q in ranges:
         assert (q["start"], q["end"], q["step"]) == (
             str(now - 1800),
@@ -429,6 +429,47 @@ def test_the_trend_shows_started_for_a_step_with_a_first_error_sample(monkeypatc
     cluster = fake_cluster(monkeypatch)
     cluster.prom.counter(CALLS, labels("cart"), [(3600, 2.0)])
     cluster.prom.counter(CALLS, labels("cart", status=ERROR), [(3600, 1.0)], points=0)
+
+    cells = run(metrics_tools.get_error_rate_trend("cart", 30)).splitlines()[1]
+
+    assert cells.endswith("11:57 0.0%, 12:00 started")
+
+
+def two_flat_error_samples(cluster, ago: int = 120):
+    """A new error series: its counter starts at 1, so the next sample is equal."""
+    start = NOW.timestamp()
+    samples = [(start - ago, 1.0), (start - ago + 60, 1.0)]
+    cluster.prom.series.append((CALLS, labels("cart", status=ERROR), samples))
+
+
+def test_a_new_error_series_with_a_flat_second_sample_is_not_zero(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    cluster.prom.counter(CALLS, labels("cart"), [(3600, 2.0)])
+    two_flat_error_samples(cluster)
+
+    output = run(metrics_tools.get_service_metrics("cart", 5))
+
+    assert "last 5m 2.00 started started" in output
+    assert "baseline, the 30m before that 2.00 0.00 0.0%" in output
+
+
+def test_an_old_flat_error_counter_is_zero_errors_in_the_window(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    cluster.prom.counter(CALLS, labels("cart"), [(3600, 2.0)])
+    # The series began 20 minutes ago and has not moved since.
+    two_flat_error_samples(cluster, ago=1200)
+
+    output = run(metrics_tools.get_service_metrics("cart", 5))
+
+    assert "last 5m 2.00 0.00 0.0%" in output
+
+
+def test_the_trend_shows_started_for_a_new_series_with_a_flat_second_sample(
+    monkeypatch,
+):
+    cluster = fake_cluster(monkeypatch)
+    cluster.prom.counter(CALLS, labels("cart"), [(3600, 2.0)])
+    two_flat_error_samples(cluster)
 
     cells = run(metrics_tools.get_error_rate_trend("cart", 30)).splitlines()[1]
 
