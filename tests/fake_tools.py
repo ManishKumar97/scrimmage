@@ -190,11 +190,14 @@ class FakePrometheus:
     Prometheus's extrapolation.
     """
 
-    SELECTOR = r"(?P<metric>\w+)\{(?P<labels>[^}]*)\}\[(?P<window>\d+)m\]"
+    SELECTOR = r"(?P<metric>\w+)\{(?P<labels>[^}]*)\}"
+    WINDOW = r"\[(?P<window>\d+)m\]"
     SHAPES: ClassVar[dict[str, str]] = {
-        "sum": rf"sum\(rate\({SELECTOR}\)\)",
-        "quantile": rf"histogram_quantile\((?P<q>[\d.]+), sum by \(le\) \(rate\({SELECTOR}\)\)\)",
-        "topk": rf"topk\((?P<k>\d+), sum by \(span_name\) \(rate\({SELECTOR}\)\)\)",
+        "sum": rf"sum\(rate\({SELECTOR}{WINDOW}\)\)",
+        "quantile": rf"histogram_quantile\((?P<q>[\d.]+), sum by \(le\) \(rate\({SELECTOR}{WINDOW}\)\)\)",
+        "topk": rf"topk\((?P<k>\d+), sum by \(span_name\) \(rate\({SELECTOR}{WINDOW}\)\)\)",
+        "count": rf"count\(last_over_time\({SELECTOR}{WINDOW}\)\)",
+        "earliest": rf"min\(min_over_time\(timestamp\({SELECTOR}\)\[(?P<window>\d+)m:1m\]\)\)",
     }
     STEP = 15  # seconds between samples
 
@@ -262,12 +265,38 @@ class FakePrometheus:
                 break
         else:
             raise ValueError(f"1:1: parse error: unsupported query {query!r}")
-        wanted = dict(re.findall(r'(\w+)="([^"]*)"', found["labels"]))
+        wanted = re.findall(r'(\w+)(=~|=)"([^"]*)"', found["labels"])
         window = int(found["window"]) * 60
+        matching = [
+            (labels, samples)
+            for metric, labels, samples in self.series
+            if metric == found["metric"]
+            and all(
+                (
+                    re.fullmatch(v, labels.get(k, ""))
+                    if op == "=~"
+                    else labels.get(k) == v
+                )
+                for k, op, v in wanted
+            )
+        ]
+        if shape == "count":
+            seen = [1 for _, s in matching if any(at - window <= t <= at for t, _ in s)]
+            return [({}, str(len(seen)))] if seen else []
+        if shape == "earliest":
+            # A subquery at 1m steps; each step sees the latest sample of the last 5m.
+            firsts = []
+            for _, samples in matching:
+                step = math.ceil((at - window) / 60) * 60
+                while step <= at:
+                    seen = [t for t, _ in samples if step - 300 < t <= step]
+                    if seen:
+                        firsts.append(max(seen))
+                        break
+                    step += 60
+            return [({}, str(min(firsts)))] if firsts else []
         rates = []  # (labels, rate per second) of every series that has a rate
-        for metric, labels, samples in self.series:
-            if metric != found["metric"] or not wanted.items() <= labels.items():
-                continue
+        for labels, samples in matching:
             inside = [(t, v) for t, v in samples if at - window <= t <= at]
             if len(inside) >= 2:
                 span = inside[-1][0] - inside[0][0]

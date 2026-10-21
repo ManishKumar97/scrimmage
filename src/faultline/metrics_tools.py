@@ -6,13 +6,15 @@ connectors.spanmetrics, pipeline metrics, exporter otlphttp/prometheus):
   traces_span_metrics_calls_total                  counter of ended spans
   traces_span_metrics_duration_milliseconds_bucket histogram of span durations (ms)
 Labels: service_name, span_name, span_kind (SPAN_KIND_SERVER for a request a
-service handled) and status_code (STATUS_CODE_ERROR for a failed span).
+service handled, SPAN_KIND_CONSUMER for a message it consumed) and status_code
+(STATUS_CODE_ERROR for a failed span).
 """
 
 import asyncio
 import json
 import math
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated
 
@@ -26,13 +28,17 @@ from faultline.kube_tools import NAMESPACE, api_errors, format_duration, kube_ap
 PROMETHEUS_API = f"/api/v1/namespaces/{NAMESPACE}/services/prometheus:9090/proxy/api/v1"
 CALLS = "traces_span_metrics_calls_total"
 DURATION = "traces_span_metrics_duration_milliseconds_bucket"
-SERVER = 'span_kind="SPAN_KIND_SERVER"'
+# Requests a service handled. Consumer spans count, since a service such as
+# accounting only reads from Kafka and has no server spans.
+SERVER = 'span_kind=~"SPAN_KIND_SERVER|SPAN_KIND_CONSUMER"'
 ERROR = 'status_code="STATUS_CODE_ERROR"'
 MIN_WINDOW = 3  # minutes. The collector flushes span metrics about once a minute.
 MAX_WINDOW = 30
 BASELINE_MINUTES = 30  # the window before the current one
 TREND_RATE_WINDOW = "3m"
 MAX_TREND_POINTS = 15
+# The collector's default top histogram bucket, in ms. A slower span lands in +Inf.
+TOP_BUCKET_MS = 15_000
 MAX_TOP_OPERATIONS = 3
 SERVICE_NAME = re.compile(r"[A-Za-z0-9_.-]{1,63}")
 
@@ -107,36 +113,85 @@ def percent(errors: float | None, total: float | None) -> str:
 
 
 def latency(value_ms: float | None) -> str:
-    return "no data" if value_ms is None else format_duration(int(value_ms * 1000))
+    if value_ms is None:
+        return "no data"
+    # Prometheus cannot see past the top bucket, so it reports the bucket's bound.
+    if value_ms >= TOP_BUCKET_MS:
+        return f">={format_duration(TOP_BUCKET_MS * 1000)}"
+    return format_duration(int(value_ms * 1000))
+
+
+async def no_value() -> None:
+    return None
+
+
+async def first_sample(
+    api: ApiClient, sel: str, window: str, at: float
+) -> float | None:
+    """Time of the oldest sample in the window (a subquery at 1m steps)."""
+    query = f"min(min_over_time(timestamp({CALLS}{{{sel}}})[{window}:1m]))"
+    return await scalar(api, query, at)
+
+
+@dataclass(frozen=True)
+class Stats:
+    """One window of one service. None means Prometheus has no series."""
+
+    total: float | None  # calls per second
+    errors: float | None  # failed calls per second
+    errors_started: bool  # error spans exist in the window but have no rate yet
+    p50: float | None  # ms
+    p95: float | None  # ms
+    covered: float | None = None  # minutes of the window that have samples
 
 
 async def window_stats(
-    api: ApiClient, service: str, window: str, at: float
-) -> tuple[float | None, float | None, float | None, float | None]:
-    """Calls per second, errors per second, p50 and p95 in ms. None means no series."""
+    api: ApiClient, service: str, window: str, at: float, covered: bool = False
+) -> Stats:
     sel, err = selector(service), selector(service, ERROR)
     buckets = f"sum by (le) ({rate(DURATION, sel, window)})"
-    total, errors, p50, p95 = await asyncio.gather(
+    total, errors, p50, p95, earliest = await asyncio.gather(
         scalar(api, f"sum({rate(CALLS, sel, window)})", at),
         scalar(api, f"sum({rate(CALLS, err, window)})", at),
         scalar(api, f"histogram_quantile(0.5, {buckets})", at),
         scalar(api, f"histogram_quantile(0.95, {buckets})", at),
+        first_sample(api, sel, window, at) if covered else no_value(),
     )
-    # A counter only gets an error series after the first error. With calls present,
-    # a missing error series means no errors were counted in this window.
+    # Prometheus has no zero start for a counter: the first error sample gives no
+    # rate. A missing rate with error spans in the window is not "no errors".
+    started = False
     if total is not None and errors is None:
-        errors = 0.0
-    return total, errors, p50, p95
+        present = await scalar(
+            api, f"count(last_over_time({CALLS}{{{err}}}[{window}]))", at
+        )
+        started = bool(present)
+    minutes = None if earliest is None else max(0.0, (at - earliest) / 60)
+    return Stats(total, errors, started, p50, p95, minutes)
 
 
-def row(stats: tuple[float | None, float | None, float | None, float | None]) -> str:
-    total, errors, p50, p95 = stats
-    if total is None:
+def row(stats: Stats) -> str:
+    if stats.total is None:
         return "no data"
+    if stats.errors_started:
+        errors = percent_cell = "started"
+    else:
+        errors = per_second(0.0 if stats.errors is None else stats.errors)
+        percent_cell = percent(stats.errors, stats.total)
     return (
-        f"{per_second(total)} {per_second(errors)} {percent(errors, total)} "
-        f"{latency(p50)} {latency(p95)}"
+        f"{per_second(stats.total)} {errors} {percent_cell} "
+        f"{latency(stats.p50)} {latency(stats.p95)}"
     )
+
+
+def baseline_label(baseline: Stats) -> str:
+    covered = baseline.covered
+    if (
+        baseline.total is not None
+        and covered is not None
+        and covered < BASELINE_MINUTES - 1
+    ):
+        return f"baseline (only {baseline.covered:.0f}m of data)"
+    return f"baseline, the {BASELINE_MINUTES}m before that"
 
 
 async def top_errors(api: ApiClient, service: str, window: str, at: float) -> list[str]:
@@ -184,11 +239,15 @@ async def get_service_metrics(
 
     Counts the requests the service handled (server spans), from span metrics in
     Prometheus. Two rows: the last `minutes`, and the 30 minutes before that.
-    Compare them: an error rate far above its baseline is a change, one equal to
-    its baseline is how the service always is. Spans count when they end, so a
-    call that fails after minutes shows up late. "no data" means Prometheus has
-    no series, not that there were no errors. p50 and p95 come from histogram
-    buckets, so they are estimates.
+    Compare them: an error rate, p95 or call rate far above the baseline is a
+    change. A high value equal to its baseline can be a problem older than the
+    baseline: check the trend. Spans count when they end, so a call that fails
+    after minutes shows up late. "no data" means Prometheus has no series, not
+    that there were no errors. "started" means error spans appeared in the window
+    but their rate is not measurable yet: errors exist. p50 and p95 come from
+    histogram buckets, so they are estimates, and 15s or more reads ">=15s"
+    because 15 s is the top bucket. If Prometheus holds less than 30 minutes
+    before the window, the baseline row says how many minutes it has.
     """
     check_service(service)
     now = kube_tools.utc_now()
@@ -197,17 +256,24 @@ async def get_service_metrics(
     async with kube_api() as api, api_errors("Prometheus"):
         current, baseline, top = await asyncio.gather(
             window_stats(api, service, window, at),
-            window_stats(api, service, f"{BASELINE_MINUTES}m", at - minutes * 60),
+            window_stats(
+                api, service, f"{BASELINE_MINUTES}m", at - minutes * 60, covered=True
+            ),
             top_errors(api, service, window, at),
         )
-        if current[0] is None:
+        if current.total is None:
             return f"Now: {stamp(now)}. " + await no_data(api, service, minutes)
     lines = [
         f"Now: {stamp(now)}. {service}, requests handled, from span metrics.",
         "WINDOW CALLS/S ERRORS/S ERROR% P50 P95",
         f"last {minutes}m {row(current)}",
-        f"baseline, the {BASELINE_MINUTES}m before that {row(baseline)}",
+        f"{baseline_label(baseline)} {row(baseline)}",
     ]
+    if current.errors_started or baseline.errors_started:
+        lines.append(
+            "started: error spans appeared in that window, but Prometheus cannot "
+            "measure a rate from one sample yet. Errors exist; the rate is above zero."
+        )
     if top:
         lines.append(f"Failing operations in the last {minutes}m: " + "; ".join(top))
     return "\n".join(lines)
@@ -245,17 +311,19 @@ async def get_error_rate_trend(
 ) -> str:
     """Error rate of one service over time, to see when it changed.
 
-    One value per step (up to 15), oldest first, for the requests the service
+    One value per step (at most 15), oldest first, for the requests the service
     handled. "n/a" means Prometheus has no requests for that step. This does not
-    mean there were no errors.
+    mean there were no errors. "started" means error spans appeared in that step
+    but their rate is not measurable yet: errors exist.
     """
     check_service(service)
     now = kube_tools.utc_now()
     end = int(now.timestamp())
-    step = 60 * math.ceil(minutes / MAX_TREND_POINTS)
+    # minutes / step intervals give one more point than intervals
+    step = 60 * math.ceil(minutes / (MAX_TREND_POINTS - 1))
     start = end - minutes * 60
     async with kube_api() as api, api_errors("Prometheus"):
-        total, errors = await asyncio.gather(
+        total, errors, started = await asyncio.gather(
             range_values(
                 api,
                 f"sum({rate(CALLS, selector(service), TREND_RATE_WINDOW)})",
@@ -270,17 +338,29 @@ async def get_error_rate_trend(
                 end,
                 step,
             ),
+            range_values(
+                api,
+                f"count(last_over_time({CALLS}{{{selector(service, ERROR)}}}"
+                f"[{TREND_RATE_WINDOW}]))",
+                start,
+                end,
+                step,
+            ),
         )
         if not total:
             return f"Now: {stamp(now)}. " + await no_data(api, service, minutes)
     cells = []
     for t in range(start, end + 1, step):
         clock = datetime.fromtimestamp(t, now.tzinfo).strftime("%H:%M")
-        # Requests present and no error series: zero errors. No requests: no answer.
-        cells.append(
-            f"{clock} "
-            + ("n/a" if t not in total else percent(errors.get(t, 0.0), total[t]))
-        )
+        if t not in total:
+            value = "n/a"
+        elif t in errors:
+            value = percent(errors[t], total[t])
+        elif t in started:
+            value = "started"  # error spans, but one sample gives no rate
+        else:
+            value = percent(0.0, total[t])
+        cells.append(f"{clock} {value}")
     return (
         f"Now: {stamp(now)}. {service} error rate of requests handled, one value per "
         f"{step // 60} min (rate over {TREND_RATE_WINDOW}), oldest first:\n"

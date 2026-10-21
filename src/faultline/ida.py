@@ -36,7 +36,10 @@ SYSTEM_PROMPT = (
     "Use metrics to size the symptom: whether a service's error rate is above its baseline "
     "or always like this, how large the rise is, and when it started. "
     "Check the error rate of the reported service and of the services it calls. "
-    "A rise over baseline that fits the symptom is evidence. A steady rate is not a change. "
+    "A rise over baseline in error rate, p95 latency or calls per second that fits the symptom "
+    "is evidence, even when the error rate is flat. "
+    "A high value equal to its baseline can mean the problem is older than the baseline: "
+    "check the trend. A low value equal to its baseline is how the service always is. "
     "Metrics say 'no data' when Prometheus has no series. That is not proof of no errors. "
     "Confirm with that service's own logs and pod status before you answer. "
     "get_logs shows only the last 100 lines, so a busy service can hide an error. "
@@ -180,8 +183,8 @@ async def diagnose_async(question: str) -> RunResult:
     model = make_model(get_settings())
     # The logs and metrics tools come from MCP servers. They live for this one run.
     async with (
-        mcp_tools(LOGS_SERVER, kube_tools.registry) as with_logs,
-        mcp_tools(METRICS_SERVER, with_logs) as tools,
+        mcp_tools(LOGS_SERVER, kube_tools.registry, "logs MCP") as with_logs,
+        mcp_tools(METRICS_SERVER, with_logs, "metrics MCP") as tools,
     ):
         return await run(question, model, tools=tools)
 

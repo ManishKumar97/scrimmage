@@ -1,15 +1,18 @@
 import asyncio
 import json
+import sys
 from typing import cast
 
 import pytest
 from fake_model import FakeClient, text_reply
 from fake_tools import NOW, FakeCluster, fake_cluster
 from mcp import Client
+from mcp.client.stdio import StdioServerParameters
 from openai import AsyncOpenAI
 
 from faultline import ida, kube_tools, mcp_client, mcp_metrics, metrics_tools
 from faultline.models import OpenAIModel
+from faultline.tools import Registry
 
 CALLS = "traces_span_metrics_calls_total"
 BUCKET = "traces_span_metrics_duration_milliseconds_bucket"
@@ -124,8 +127,11 @@ def test_the_queries_use_the_right_window_and_moment(monkeypatch):
     current = [q["query"] for q in asked if q["time"] == str(now)]
     baseline = [q["query"] for q in asked if q["time"] == str(now - 600)]
     assert all("[10m]" in q and 'service_name="cart"' in q for q in current)
-    assert all("[30m]" in q and 'service_name="cart"' in q for q in baseline)
-    assert all('span_kind="SPAN_KIND_SERVER"' in q for q in current + baseline)
+    assert all("[30m" in q and 'service_name="cart"' in q for q in baseline)
+    assert all(
+        'span_kind=~"SPAN_KIND_SERVER|SPAN_KIND_CONSUMER"' in q
+        for q in current + baseline
+    )
 
 
 def test_a_service_with_calls_but_no_error_series_has_zero_errors(monkeypatch):
@@ -289,11 +295,10 @@ def test_the_trend_shows_when_the_error_rate_rose(monkeypatch):
     output = run(metrics_tools.get_error_rate_trend("cart", 30))
 
     assert output.splitlines()[1] == (
-        "11:30 0.0%, 11:32 0.0%, 11:34 0.0%, 11:36 0.0%, 11:38 0.0%, 11:40 0.0%, "
-        "11:42 0.0%, 11:44 0.0%, 11:46 0.0%, 11:48 0.0%, 11:50 0.0%, 11:52 0.0%, "
-        "11:54 0.0%, 11:56 13.3%, 11:58 40.0%, 12:00 40.0%"
+        "11:30 0.0%, 11:33 0.0%, 11:36 0.0%, 11:39 0.0%, 11:42 0.0%, 11:45 0.0%, "
+        "11:48 0.0%, 11:51 0.0%, 11:54 0.0%, 11:57 26.7%, 12:00 40.0%"
     )
-    assert "one value per 2 min" in output
+    assert "one value per 3 min" in output
 
 
 def test_the_trend_says_n_a_before_the_data_starts(monkeypatch):
@@ -302,8 +307,8 @@ def test_the_trend_says_n_a_before_the_data_starts(monkeypatch):
 
     cells = run(metrics_tools.get_error_rate_trend("cart", 30)).splitlines()[1]
 
-    assert cells.startswith("11:30 n/a, 11:32 n/a")
-    assert cells.endswith("11:58 0.0%, 12:00 0.0%")
+    assert cells.startswith("11:30 n/a, 11:33 n/a")
+    assert cells.endswith("11:57 0.0%, 12:00 0.0%")
 
 
 def test_a_trend_with_no_series_is_no_data(monkeypatch):
@@ -322,12 +327,12 @@ def test_the_trend_asks_for_the_range_it_shows(monkeypatch):
 
     ranges = [q for path, q in cluster.prom.requests if path == "query_range"]
     now = int(NOW.timestamp())
-    assert len(ranges) == 2
+    assert len(ranges) == 3
     for q in ranges:
         assert (q["start"], q["end"], q["step"]) == (
             str(now - 1800),
             str(now),
-            "120",
+            "180",
         )
         assert 'service_name="cart"' in q["query"]
 
@@ -392,3 +397,86 @@ def test_a_diagnosis_run_offers_the_model_the_metrics_tools(monkeypatch):
     assert result.stop_reason == "done"
     assert "get_service_metrics" in offered and "get_error_rate_trend" in offered
     assert "get_logs" in offered
+
+
+def test_a_baseline_with_less_data_than_its_label_says_is_labelled_partial(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    # 20 minutes of samples: 15 of them fall in the baseline window, 5 in the current.
+    cluster.prom.counter(CALLS, labels("cart"), [(1200, 1.0)], points=80)
+
+    output = run(metrics_tools.get_service_metrics("cart", 5))
+
+    assert "baseline (only 15m of data) 1.00 0.00 0.0%" in output
+    assert "the 30m before that" not in output
+
+
+def test_errors_that_just_started_are_not_reported_as_zero(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    cluster.prom.counter(CALLS, labels("cart"), [(3600, 2.0)])
+    # The first error sample: one point, so Prometheus has no rate for it yet.
+    cluster.prom.counter(CALLS, labels("cart", status=ERROR), [(3600, 1.0)], points=0)
+
+    output = run(metrics_tools.get_service_metrics("cart", 5))
+
+    assert "last 5m 2.00 started started" in output
+    assert "0.0%" not in output.splitlines()[2]
+    assert "Errors exist; the rate is above zero." in output
+
+
+def test_the_trend_shows_started_for_a_step_with_a_first_error_sample(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    cluster.prom.counter(CALLS, labels("cart"), [(3600, 2.0)])
+    cluster.prom.counter(CALLS, labels("cart", status=ERROR), [(3600, 1.0)], points=0)
+
+    cells = run(metrics_tools.get_error_rate_trend("cart", 30)).splitlines()[1]
+
+    assert cells.endswith("11:57 0.0%, 12:00 started")
+
+
+def test_a_service_that_only_consumes_messages_has_metrics(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    for kind in ("SPAN_KIND_CONSUMER", "SPAN_KIND_PRODUCER"):
+        cluster.prom.counter(
+            CALLS,
+            labels("accounting", kind=kind),
+            [(3600, 1.0 if kind.endswith("CONSUMER") else 9.0)],
+        )
+
+    output = run(metrics_tools.get_service_metrics("accounting", 5))
+
+    assert "last 5m 1.00 0.00 0.0%" in output  # the producer spans are not requests
+
+
+def test_a_latency_in_the_top_bucket_is_shown_as_a_lower_bound(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    for le, rate in (("100", 0.0), ("15000", 0.0), ("+Inf", 2.0)):
+        cluster.prom.counter(BUCKET, labels("cart", le=le), [(3600, rate)])
+    cluster.prom.counter(CALLS, labels("cart"), [(3600, 2.0)])
+
+    output = run(metrics_tools.get_service_metrics("cart", 5))
+
+    assert "last 5m 2.00 0.00 0.0% >=15.0s >=15.0s" in output
+
+
+@pytest.mark.parametrize("minutes", [10, 30, 45, 60])
+def test_the_trend_has_at_most_fifteen_values(monkeypatch, minutes):
+    cluster = fake_cluster(monkeypatch)
+    cart_incident(cluster)
+
+    cells = run(metrics_tools.get_error_rate_trend("cart", minutes)).splitlines()[1]
+
+    assert 2 <= len(cells.split(", ")) <= 15
+
+
+def test_a_server_that_does_not_start_is_named(monkeypatch):
+    monkeypatch.setattr(mcp_client, "START_TIMEOUT", 0.3)
+    silent = StdioServerParameters(
+        command=sys.executable, args=["-c", "import time; time.sleep(60)"]
+    )
+
+    async def start():
+        async with mcp_client.mcp_tools(silent, Registry(), "metrics MCP"):
+            pass
+
+    with pytest.raises(RuntimeError, match="metrics MCP server did not start"):
+        run(start())

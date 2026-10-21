@@ -22,7 +22,7 @@ METRICS_SERVER = StdioServerParameters(
 
 @asynccontextmanager
 async def mcp_tools(
-    server: StdioServerParameters, base: Registry
+    server: StdioServerParameters, base: Registry, name: str = "MCP"
 ) -> AsyncIterator[Registry]:
     """Start the server, add its tools to a copy of base, and stop it on every exit.
 
@@ -42,7 +42,7 @@ async def mcp_tools(
                     listed = await client.list_tools()
             except TimeoutError:
                 raise RuntimeError(
-                    f"MCP server did not start within {START_TIMEOUT:g}s"
+                    f"{name} server did not start within {START_TIMEOUT:g}s"
                 ) from None
             for tool in listed.tools:
                 registry.remote(
