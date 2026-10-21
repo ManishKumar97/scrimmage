@@ -62,7 +62,11 @@ SYSTEM_PROMPT = (
     "Normal startup lines are not a fault. "
     "Only name a cause that explains the reported symptom. "
     "Name a cause only with a quoted log line, a failed span or a pod status fact that supports it. "
-    "If the evidence shows no fault, answer 'No fault found' and say what you checked."
+    "If the evidence shows no fault, answer 'No fault found' and say what you checked. "
+    "End your final answer with one last line, ROOT CAUSE SERVICE: <name>, "
+    "where <name> is the service, as list_services spells it, whose own fault explains the symptom. "
+    "A service that only passes on a failure from one it calls is not the cause. "
+    "If you found no fault, end with ROOT CAUSE SERVICE: none."
 )
 
 
