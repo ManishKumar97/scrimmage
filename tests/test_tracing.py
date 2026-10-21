@@ -135,7 +135,7 @@ def test_the_root_span_has_the_stop_reason_steps_tokens_and_budget():
         "gen_ai.provider.name": "groq",
         "gen_ai.request.model": "fake-model",
         "faultline.budget.max_steps": 7,
-        "faultline.budget.max_tokens": 40_000,
+        "faultline.budget.max_tokens": 60_000,
         "faultline.budget.max_seconds": 120.0,
         "faultline.stop_reason": "done",
         "faultline.steps": 2,

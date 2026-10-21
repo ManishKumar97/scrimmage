@@ -71,7 +71,9 @@ class Budget:
     """Hard limits on one run. A run stops at whichever it hits first."""
 
     max_steps: int = 15  # model calls
-    max_tokens: int = 40_000  # prompt plus completion tokens, summed over calls
+    # prompt plus completion tokens, summed over calls. With the metrics tools a
+    # run that checks several services reaches 45k.
+    max_tokens: int = 60_000
     max_seconds: float = 120.0  # wall clock for the whole run
 
 
