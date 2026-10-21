@@ -188,46 +188,188 @@ def test_a_pod_without_container_statuses_is_pending_with_zero_containers(monkey
     assert row == "cart-a Pending Pending 0/0 0 none 2s"
 
 
-def checkout_calls_failing_cart():
+def checkout_calls_failing_cart(started: int = 60):
     """frontend -> checkout -> cart, where cart fails and the error travels up."""
-    return fake_tools.trace(
-        fake_tools.span("a", "frontend", "POST /api/checkout"),
-        fake_tools.span("b", "checkout", "PlaceOrder", parent="a", error="cart down"),
-        fake_tools.span("c", "cart", "EmptyCart", parent="b", error="cart down"),
-        fake_tools.span("d", "email", "send_email", parent="b"),
+    t = fake_tools
+    return t.trace(
+        t.span("a", "frontend", "POST /api/checkout", started=started),
+        t.span(
+            "b",
+            "checkout",
+            "PlaceOrder",
+            parent="a",
+            error="cart down",
+            started=started,
+        ),
+        t.span(
+            "c",
+            "checkout",
+            "CartService/EmptyCart",
+            parent="b",
+            error="cart down",
+            kind="client",
+            peer="CartService",
+            started=started,
+        ),
+        t.span(
+            "d", "cart", "EmptyCart", parent="c", error="cart down", started=started
+        ),
+        t.span("e", "email", "send_email", parent="b", started=started),
     )
 
 
-def test_error_traces_point_at_the_deepest_failed_service(monkeypatch):
+def test_error_traces_point_at_the_last_failed_span_and_its_peer(monkeypatch):
     cluster = fake_cluster(monkeypatch)
-    cluster.traces = [checkout_calls_failing_cart(), checkout_calls_failing_cart()]
+    cluster.traces = [
+        checkout_calls_failing_cart(60),
+        checkout_calls_failing_cart(30),
+    ]
 
     output = asyncio.run(kube_tools.get_error_traces("checkout"))
 
-    assert output.splitlines()[1:] == [
-        "2 traces: cart EmptyCart [deepest]: cart down",
-        "2 traces: checkout PlaceOrder: cart down",
+    lines = output.splitlines()
+    assert re.match(NOW + r" 2 traces with a failed checkout span", lines[0])
+    assert lines[1] == (
+        "2 traces, newest 11:59:30Z: cart EmptyCart [last failed span]: cart down"
+    )
+    assert sorted(lines[2:]) == [
+        "2 traces, newest 11:59:30Z: "
+        + "checkout CartService/EmptyCart client calls CartService: cart down",
+        "2 traces, newest 11:59:30Z: checkout PlaceOrder: cart down",
     ]
-    assert cluster.jaeger_requests == [
-        (
-            "traces",
-            {
-                "service": "checkout",
-                "lookback": "15m",
-                "limit": "20",
-                "tags": '{"error": "true"}',
-            },
+
+
+def test_the_window_is_sent_as_start_and_end_in_microseconds(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    cluster.trace_services = ["checkout"]
+    end = int(fake_tools.NOW.timestamp() * 1_000_000)
+
+    asyncio.run(kube_tools.get_error_traces("checkout", minutes=5))
+
+    assert cluster.jaeger_requests[0] == (
+        "traces",
+        {
+            "service": "checkout",
+            "start": str(end - 5 * 60 * 1_000_000),
+            "end": str(end),
+            "limit": "20",
+            "tags": '{"error": "true"}',
+        },
+    )
+
+
+def test_traces_outside_the_window_are_not_shown(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    cluster.trace_services = ["checkout"]
+    cluster.traces = [checkout_calls_failing_cart(started=600)]
+
+    assert "No failed spans" in asyncio.run(
+        kube_tools.get_error_traces("checkout", minutes=5)
+    )
+    assert "1 traces" in asyncio.run(
+        kube_tools.get_error_traces("checkout", minutes=15)
+    )
+
+
+def test_a_client_span_with_an_untraced_callee_is_the_last_failed_span(monkeypatch):
+    t = fake_tools
+    cluster = fake_cluster(monkeypatch)
+    cluster.traces = [
+        t.trace(
+            t.span("a", "checkout", "PlaceOrder", error="payment unreachable"),
+            t.span(
+                "b",
+                "checkout",
+                "PaymentService/Charge",
+                parent="a",
+                error="14 UNAVAILABLE",
+                kind="client",
+                peer="PaymentService",
+            ),
         )
     ]
 
+    output = asyncio.run(kube_tools.get_error_traces("checkout"))
 
-def test_no_failed_traces_for_a_known_service(monkeypatch):
+    assert output.splitlines()[1] == (
+        "1 traces, newest 12:00:00Z: checkout PaymentService/Charge client calls "
+        "PaymentService [last failed span]: 14 UNAVAILABLE"
+    )
+
+
+def test_a_failed_grandchild_under_a_healthy_span_makes_the_parent_not_last(
+    monkeypatch,
+):
+    t = fake_tools
     cluster = fake_cluster(monkeypatch)
-    cluster.trace_services = ["checkout", "cart"]
+    cluster.traces = [
+        t.trace(
+            t.span("a", "checkout", "PlaceOrder", error="boom"),
+            t.span("b", "shipping", "Quote", parent="a"),
+            t.span("c", "quote", "Compute", parent="b", error="boom"),
+        )
+    ]
 
-    output = asyncio.run(kube_tools.get_error_traces("cart", minutes=5))
+    lines = asyncio.run(kube_tools.get_error_traces("checkout")).splitlines()
 
-    assert output == "No failed traces for cart in the last 5 minutes."
+    assert lines[1:] == [
+        "1 traces, newest 12:00:00Z: quote Compute [last failed span]: boom",
+        "1 traces, newest 12:00:00Z: checkout PlaceOrder: boom",
+    ]
+
+
+def test_two_failure_branches_in_one_trace_are_both_last(monkeypatch):
+    t = fake_tools
+    cluster = fake_cluster(monkeypatch)
+    cluster.traces = [
+        t.trace(
+            t.span("a", "checkout", "PlaceOrder", error="x"),
+            t.span("b", "cart", "EmptyCart", parent="a", error="x"),
+            t.span("c", "email", "Send", parent="a", error="x"),
+        )
+    ]
+
+    lines = asyncio.run(kube_tools.get_error_traces("checkout")).splitlines()
+
+    assert sorted(lines[1:3]) == [
+        "1 traces, newest 12:00:00Z: cart EmptyCart [last failed span]: x",
+        "1 traces, newest 12:00:00Z: email Send [last failed span]: x",
+    ]
+
+
+def test_long_lived_stream_spans_are_ignored(monkeypatch):
+    t = fake_tools
+    cluster = fake_cluster(monkeypatch)
+    cluster.trace_services = ["cart"]
+    cluster.traces = [
+        t.trace(
+            t.span(
+                "a",
+                "cart",
+                "flagd/EventStream",
+                error="",
+                kind="client",
+                method="EventStream",
+            )
+        )
+    ]
+
+    output = asyncio.run(kube_tools.get_error_traces("cart"))
+
+    assert "No failed spans of cart" in output
+
+
+def test_a_service_that_hides_a_failure_shows_none_and_the_output_says_so(
+    monkeypatch,
+):
+    cluster = fake_cluster(monkeypatch)
+    cluster.trace_services = ["frontend", "checkout"]
+    cluster.traces = [checkout_calls_failing_cart()]
+    cluster.traces[0]["spans"][0]["tags"] = [{"key": "http.status_code", "value": 200}]
+
+    output = asyncio.run(kube_tools.get_error_traces("frontend"))
+
+    assert output.endswith("check the services it calls.")
 
 
 def test_an_unknown_service_lists_the_services_that_have_traces(monkeypatch):
@@ -259,6 +401,18 @@ def test_a_failing_jaeger_is_a_clear_tool_error(monkeypatch):
     )
 
 
+def test_an_answer_that_is_not_json_is_a_clear_tool_error(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    cluster.jaeger_body = "<html>Jaeger UI</html>"
+
+    output, ok = asyncio.run(
+        kube_tools.registry.call("get_error_traces", '{"service": "cart"}')
+    )
+
+    assert not ok
+    assert "not JSON" in output
+
+
 def test_trace_output_stays_small_with_many_long_failures(monkeypatch):
     cluster = fake_cluster(monkeypatch)
     cluster.traces = [
@@ -273,7 +427,7 @@ def test_trace_output_stays_small_with_many_long_failures(monkeypatch):
     lines = output.splitlines()
     assert len(lines) == 1 + kube_tools.MAX_ERROR_GROUPS + 1
     assert lines[-1] == "12 more kinds of failure not shown."
-    assert all(len(line) < kube_tools.MAX_MESSAGE_CHARS + 60 for line in lines[1:-1])
+    assert all(len(line) < kube_tools.MAX_MESSAGE_CHARS + 90 for line in lines[1:-1])
     assert len(output) < 3_000
 
 
@@ -285,7 +439,18 @@ def test_the_exception_event_message_is_used_when_the_status_has_none(monkeypatc
 
     output = asyncio.run(kube_tools.get_error_traces("cart"))
 
-    assert output.splitlines()[1] == "1 traces: cart GetCart [deepest]: no redis"
+    assert output.splitlines()[1].endswith("cart GetCart [last failed span]: no redis")
+
+
+def test_an_error_tag_spelled_true_counts(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    failed = fake_tools.span("a", "cart", "GetCart", error="x")
+    failed["tags"] = [{"key": "error", "value": "true"}]
+    cluster.traces = [fake_tools.trace(failed)]
+
+    output = asyncio.run(kube_tools.get_error_traces("cart"))
+
+    assert "cart GetCart [last failed span]" in output
 
 
 def test_minutes_outside_the_range_is_a_tool_error(monkeypatch):

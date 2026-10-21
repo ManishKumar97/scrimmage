@@ -4,6 +4,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -172,7 +173,10 @@ async def jaeger_get(api: ApiClient, path: str, params: list[tuple[str, str]]) -
     )
     if response.status >= 400:
         raise ApiException(status=response.status, reason=response.reason)
-    return json.loads(await response.text())
+    try:
+        return json.loads(await response.text())
+    except json.JSONDecodeError:
+        raise RuntimeError("Jaeger answered with something that is not JSON") from None
 
 
 def tag_value(span: dict, key: str) -> str:
@@ -181,9 +185,25 @@ def tag_value(span: dict, key: str) -> str:
 
 def is_error(span: dict) -> bool:
     return (
-        tag_value(span, "error") == "True"
+        tag_value(span, "error").lower() == "true"
         or tag_value(span, "otel.status_code") == "ERROR"
     )
+
+
+def is_stream(span: dict) -> bool:
+    """A streaming call, such as flagd's EventStream, lives for the whole process.
+
+    It fails whenever the server restarts, which says nothing about a request.
+    """
+    return tag_value(span, "rpc.method").endswith("Stream")
+
+
+def peer(span: dict) -> str:
+    """Who a span talks to. For a client span this is the callee."""
+    for key in ("rpc.service", "peer.service", "server.address", "net.peer.name"):
+        if value := tag_value(span, key):
+            return value
+    return ""
 
 
 def error_message(span: dict) -> str:
@@ -197,28 +217,61 @@ def error_message(span: dict) -> str:
     return text[:MAX_MESSAGE_CHARS] or "no message"
 
 
-def summarize_trace(trace: dict) -> list[tuple[str, str, str, bool]]:
-    """The failed spans of one trace as (service, operation, message, deepest).
+@dataclass(frozen=True)
+class Failure:
+    """One kind of failed span. `last` is the deepest one of its chain."""
 
-    A span is deepest when none of its children failed. Errors travel up a call
-    chain, so the deepest failed span is where the failure started.
+    service: str
+    operation: str
+    kind: str
+    peer: str
+    message: str
+    last: bool
+
+
+def summarize_trace(trace: dict) -> list[tuple[Failure, int]]:
+    """The failed spans of one trace, each with its start time in microseconds.
+
+    A failed span is `last` when no span below it failed. Errors travel up a call
+    chain, so the last failed span is where the failed call was made. That is
+    not always the cause: if it is a client span, its callee may be down.
     """
-    failed = [s for s in trace["spans"] if is_error(s)]
-    parents = {
-        ref["spanID"]
-        for s in failed
+    spans = trace["spans"]
+    failed = [s for s in spans if is_error(s) and not is_stream(s)]
+    parent_of = {
+        s["spanID"]: ref["spanID"]
+        for s in spans
         for ref in s.get("references", [])
         if ref["refType"] == "CHILD_OF"
     }
+    has_failed_descendant = set()
+    for s in failed:
+        # Walk up through every ancestor, failed or not.
+        ancestor = parent_of.get(s["spanID"])
+        while ancestor is not None and ancestor not in has_failed_descendant:
+            has_failed_descendant.add(ancestor)
+            ancestor = parent_of.get(ancestor)
     return [
         (
-            trace["processes"][s["processID"]]["serviceName"],
-            s["operationName"],
-            error_message(s),
-            s["spanID"] not in parents,
+            Failure(
+                trace["processes"][s["processID"]]["serviceName"],
+                s["operationName"],
+                tag_value(s, "span.kind"),
+                peer(s),
+                error_message(s),
+                s["spanID"] not in has_failed_descendant,
+            ),
+            s["startTime"],
         )
         for s in failed
     ]
+
+
+def describe_failure(f: Failure) -> str:
+    kind = f" {f.kind}" if f.kind else ""
+    callee = f" calls {f.peer}" if f.kind == "client" and f.peer else ""
+    last = " [last failed span]" if f.last else ""
+    return f"{f.service} {f.operation}{kind}{callee}{last}: {f.message}"
 
 
 @registry.tool
@@ -230,19 +283,26 @@ async def get_error_traces(
         int, Field(ge=1, le=60, description="How far back to look.")
     ] = 15,
 ) -> str:
-    """Find recent traces that touch a service and contain failed spans.
+    """Find recent traces in which a span of this service failed.
 
-    Shows each distinct failure with the service and operation that failed.
-    A failed span marked deepest has no failed child, so the failure started there.
-    This is how to see which downstream service a failing request called.
+    A service that hides a downstream failure has no failed span, so it shows none
+    here: query its callees too. Each line is one kind of failure, with the number
+    of traces and the time of the newest. A span marked last has no failed span
+    below it, so the failed call was made there. If it is a client span, the
+    service it calls may be the one that is down or unreachable.
+    Long-lived stream spans are ignored.
     """
+    now = utc_now()
+    end = int(now.timestamp() * 1_000_000)
+    start = end - minutes * 60 * 1_000_000
     async with kube_api() as api, api_errors("trace query"):
         found = await jaeger_get(
             api,
             "traces",
             [
                 ("service", service),
-                ("lookback", f"{minutes}m"),
+                ("start", str(start)),
+                ("end", str(end)),
                 ("limit", str(MAX_TRACES)),
                 ("tags", json.dumps({"error": "true"})),
             ],
@@ -255,22 +315,31 @@ async def get_error_traces(
                     f"no service {service!r} in the traces. Services with traces: "
                     + ", ".join(sorted(known))
                 )
-            return f"No failed traces for {service} in the last {minutes} minutes."
-    groups: dict[tuple[str, str, str, bool], int] = {}
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    groups: dict[Failure, tuple[int, int]] = {}  # failure -> traces, newest start
     for trace in traces:
         # Count a failure once per trace, however many spans repeat it.
-        for key in set(summarize_trace(trace)):
-            groups[key] = groups.get(key, 0) + 1
-    ranked = sorted(groups.items(), key=lambda item: (not item[0][3], -item[1]))
+        newest: dict[Failure, int] = {}
+        for failure, started in summarize_trace(trace):
+            newest[failure] = max(newest.get(failure, 0), started)
+        for failure, started in newest.items():
+            count, latest = groups.get(failure, (0, 0))
+            groups[failure] = (count + 1, max(latest, started))
+    if not groups:
+        return (
+            f"Now: {stamp}. No failed spans of {service} in the last {minutes} "
+            "minutes. If it hides a downstream failure, check the services it calls."
+        )
+    ranked = sorted(groups.items(), key=lambda item: (not item[0].last, -item[1][0]))
     header = (
-        f"{len(traces)} traces with failed spans for {service} in the last {minutes} "
-        f"minutes (up to {MAX_TRACES} newest). Failed spans, deepest first, "
-        "with the number of traces each appears in:"
+        f"Now: {stamp}. {len(traces)} traces with a failed {service} span in the last "
+        f"{minutes} minutes (up to {MAX_TRACES} newest). Failures, last failed spans "
+        "first, with the number of traces and the time of the newest:"
     )
     lines = [header]
-    for (svc, operation, message, deepest), count in ranked[:MAX_ERROR_GROUPS]:
-        mark = " [deepest]" if deepest else ""
-        lines.append(f"{count} traces: {svc} {operation}{mark}: {message}")
+    for failure, (count, latest) in ranked[:MAX_ERROR_GROUPS]:
+        when = datetime.fromtimestamp(latest / 1_000_000, UTC).strftime("%H:%M:%SZ")
+        lines.append(f"{count} traces, newest {when}: {describe_failure(failure)}")
     if len(ranked) > MAX_ERROR_GROUPS:
         lines.append(
             f"{len(ranked) - MAX_ERROR_GROUPS} more kinds of failure not shown."

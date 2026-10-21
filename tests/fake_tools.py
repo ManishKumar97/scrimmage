@@ -47,6 +47,7 @@ class FakeCluster:
         self.trace_services: list[str] = []  # services Jaeger knows
         self.jaeger_requests: list[tuple[str, dict]] = []  # (path, query)
         self.jaeger_status = 200
+        self.jaeger_body: str | None = None  # replaces the JSON answer
         self.hang = False  # every API call waits forever
 
     def add(
@@ -138,11 +139,31 @@ class FakeCluster:
         assert method == "GET" and marker in path, path
         query = dict(kwargs["query_params"])
         self.jaeger_requests.append((path.split(marker)[1], query))
-        data = self.traces if path.endswith("/traces") else self.trace_services
-        body = json.dumps({"data": data})
+        data = self.trace_services
+        if path.endswith("/traces"):
+            data = self._search(query)
+        body = self.jaeger_body or json.dumps({"data": data})
         return SimpleNamespace(
             status=self.jaeger_status, reason="Bad Gateway", text=_text(body)
         )
+
+    def _search(self, query: dict) -> list[dict]:
+        """What Jaeger does: the service, tag and time filters must match one span."""
+        wanted = json.loads(query.get("tags", "{}"))
+        found = []
+        for trace in self.traces:
+            first = min(s["startTime"] for s in trace["spans"])
+            if not int(query["start"]) <= first <= int(query["end"]):
+                continue
+            for s in trace["spans"]:
+                service = trace["processes"][s["processID"]]["serviceName"]
+                tags = {t["key"]: str(t["value"]).lower() for t in s["tags"]}
+                if service == query["service"] and all(
+                    tags.get(k) == v for k, v in wanted.items()
+                ):
+                    found.append(trace)
+                    break
+        return found[: int(query["limit"])]
 
     async def read_namespaced_pod_log(self, name: str, namespace: str, **kwargs):
         await self._wait()
@@ -163,8 +184,15 @@ def span(
     operation: str,
     parent: str | None = None,
     error: str | None = None,
+    kind: str | None = None,
+    peer: str | None = None,
+    method: str | None = None,
+    started: int = 0,
 ) -> dict:
-    """One Jaeger span. A span with `error` set carries the error tags."""
+    """One Jaeger span. A span with `error` set carries the error tags.
+
+    `started` is seconds before NOW.
+    """
     tags = [{"key": "rpc.grpc.status_code", "value": 0}]
     if error is not None:
         tags = [
@@ -172,6 +200,13 @@ def span(
             {"key": "error", "value": "True"},
             {"key": "otel.status_description", "value": error},
         ]
+    for key, value in [
+        ("span.kind", kind),
+        ("rpc.service", peer),
+        ("rpc.method", method),
+    ]:
+        if value:
+            tags.append({"key": key, "value": value})
     refs = [{"refType": "CHILD_OF", "spanID": parent}] if parent else []
     return {
         "spanID": span_id,
@@ -179,6 +214,7 @@ def span(
         "references": refs,
         "tags": tags,
         "processID": service,
+        "startTime": int((NOW.timestamp() - started) * 1_000_000),
         "logs": [],
     }
 

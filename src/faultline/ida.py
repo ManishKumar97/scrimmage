@@ -1,6 +1,7 @@
 """Incident diagnosis agent: calls tools in a loop until the model stops."""
 
 import asyncio
+import os
 import sys
 from dataclasses import dataclass
 
@@ -26,10 +27,13 @@ SYSTEM_PROMPT = (
     "and get_error_traces (failed spans in recent traces). "
     "Start with get_error_traces for the service named in the report. "
     "A service often fails because a service it calls fails, and the caller may log nothing. "
-    "A span marked deepest has no failed child, so the failure started in that service. "
-    "Then confirm with that service's own logs and pod status before you answer. "
-    "get_logs shows only the last 100 lines, so a busy service can hide an error: "
-    "a failed span is still evidence when the logs look clean. "
+    "A span marked last failed span has no failed span below it: the failed call was made there. "
+    "If it is a client span, the service it calls (the peer) may be the one that is down, "
+    "so look at that service's traces, logs and pod status. "
+    "Confirm with that service's own logs and pod status before you answer. "
+    "get_logs shows only the last 100 lines, so a busy service can hide an error. "
+    "Even then, name a cause only if the failure repeats across traces "
+    "or a log line or pod status fact confirms it. One failed span alone is weak evidence. "
     "If the traces show no failed spans, check pod status and logs of the reported service. "
     "If a tool returns an error, read it and try again with a fix. "
     "Each log line starts with its timestamp, and each result says the time now. "
@@ -131,6 +135,8 @@ async def run(
                         f"[tool] {describe(call)}{'' if ok else ' -> error'}",
                         file=sys.stderr,
                     )
+                    if os.environ.get("FAULTLINE_DEBUG_TOOLS"):
+                        print(f"[tool output]\n{output}\n[end]", file=sys.stderr)
                 messages.append(
                     [
                         ToolResult(call.id, output, not ok)
