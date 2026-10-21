@@ -161,10 +161,9 @@ class FakeCluster:
         wanted = json.loads(query.get("tags", "{}"))
         found = []
         for trace in self.traces:
-            first = min(s["startTime"] for s in trace["spans"])
-            if not int(query["start"]) <= first <= int(query["end"]):
-                continue
             for s in trace["spans"]:
+                if not int(query["start"]) <= s["startTime"] <= int(query["end"]):
+                    continue
                 service = trace["processes"][s["processID"]]["serviceName"]
                 tags = {t["key"]: str(t["value"]).lower() for t in s["tags"]}
                 if service == query["service"] and all(

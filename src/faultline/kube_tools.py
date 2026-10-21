@@ -21,7 +21,9 @@ JAEGER_API = (
     f"/api/v1/namespaces/{NAMESPACE}/services/jaeger-query:16686/proxy/jaeger/ui/api"
 )
 MAX_TRACES = 20  # traces fetched per call
-MAX_TRACE_MINUTES = 15  # the test bed Jaeger keeps about this much
+# Jaeger keeps a fixed number of traces (--memory.max-traces), not a time. At normal
+# test bed load that is about this long; under fault load it is less.
+MAX_TRACE_MINUTES = 15
 MAX_ERROR_GROUPS = 8  # distinct errors shown per call
 MAX_MESSAGE_CHARS = 200  # one error message, cut
 API_TIMEOUT = 30.0  # seconds, for all the API calls of one tool call
@@ -295,7 +297,10 @@ async def get_error_traces(
         Field(
             ge=1,
             le=MAX_TRACE_MINUTES,
-            description="How far back to look. Jaeger keeps about 15 minutes.",
+            description=(
+                f"How far back to look, at most {MAX_TRACE_MINUTES}. Jaeger keeps "
+                "a fixed number of traces, so older failures may be gone."
+            ),
         ),
     ] = 15,
 ) -> str:
@@ -304,9 +309,9 @@ async def get_error_traces(
     A service that hides a downstream failure has no failed span, so it shows none
     here: query its callees too. Each line is one kind of failure, with the number
     of traces and when the latest one ended, with how long that call took: a call
-    that fails after minutes ends long after it started. Jaeger keeps only about
-    the last 15 minutes of traces, so "no failed spans" says nothing about older
-    failures. A span marked last has no failed span
+    that fails after minutes ends long after it started. Jaeger keeps only a
+    fixed number of recent traces, so "no failed spans" says nothing about failures
+    it has already dropped. A span marked last has no failed span
     below it, so the failed call was made there. If it is a client span, the
     service it calls may be the one that is down or unreachable.
     Long-lived stream spans are ignored.
@@ -350,9 +355,9 @@ async def get_error_traces(
     if not groups:
         return (
             f"Now: {stamp}. No failed spans of {service} in the last {minutes} "
-            "minutes. Jaeger keeps only about the last 15 minutes, so older failures "
-            "may be gone. If it hides a downstream failure, check the services it "
-            "calls."
+            f"minutes. Jaeger keeps a fixed number of traces, about {MAX_TRACE_MINUTES} "
+            "minutes at normal test-bed load, so older failures may be gone. If it "
+            "hides a downstream failure, check the services it calls."
         )
     ranked = sorted(groups.items(), key=lambda item: (not item[0].last, -item[1][0]))
     header = (

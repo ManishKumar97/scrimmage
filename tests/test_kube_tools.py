@@ -265,7 +265,8 @@ def test_an_empty_answer_says_jaeger_keeps_only_recent_traces(monkeypatch):
 
     output = asyncio.run(kube_tools.get_error_traces("checkout"))
 
-    assert "Jaeger keeps only about the last 15 minutes" in output
+    assert "Jaeger keeps a fixed number of traces" in output
+    assert f"about {kube_tools.MAX_TRACE_MINUTES} minutes" in output
 
 
 def test_the_window_is_sent_as_start_and_end_in_microseconds(monkeypatch):
@@ -494,3 +495,45 @@ def test_minutes_outside_the_range_is_a_tool_error(monkeypatch, minutes):
 
     assert not ok
     assert output.startswith("Error: bad arguments")
+
+
+def test_a_trace_is_found_by_the_span_in_the_window_not_by_its_root(monkeypatch):
+    t = fake_tools
+    cluster = fake_cluster(monkeypatch)
+    cluster.trace_services = ["cart"]
+    # The root began 10 minutes ago, the failing cart span 2 minutes ago.
+    cluster.traces = [
+        t.trace(
+            t.span("a", "frontend", "GET /", started=600),
+            t.span("b", "cart", "GetCart", parent="a", error="x", started=120),
+        )
+    ]
+
+    output = asyncio.run(kube_tools.get_error_traces("cart", minutes=5))
+
+    assert "1 traces with a failed cart span" in output
+
+
+def test_the_latest_end_of_a_repeated_failure_wins_whatever_the_span_order(
+    monkeypatch,
+):
+    t = fake_tools
+    cluster = fake_cluster(monkeypatch)
+    cluster.trace_services = ["cart"]
+    # The later span is listed first.
+    cluster.traces = [
+        t.trace(
+            t.span("b", "cart", "GetCart", error="x", started=30, duration=1),
+            t.span("a", "cart", "GetCart", error="x", started=120, duration=1),
+        )
+    ]
+
+    output = asyncio.run(kube_tools.get_error_traces("cart"))
+
+    assert "1 traces, latest ended 11:59:31Z after 1.0s" in output
+
+
+def test_format_duration_covers_milliseconds_seconds_and_minutes():
+    assert kube_tools.format_duration(250_000) == "250ms"
+    assert kube_tools.format_duration(2_500_000) == "2.5s"
+    assert kube_tools.format_duration(144_000_000) == "2m24s"
