@@ -36,7 +36,7 @@ One setting picks the provider: `PROVIDER` in `.env` or the environment.
 | `groq` (default) | `GROQ_API_KEY`, optional `GROQ_BASE_URL` for any OpenAI-compatible endpoint | `openai/gpt-oss-120b` |
 | `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-5-5` |
 
-Set `MODEL` to override the default model of the chosen provider.
+Each provider has its own model setting, `GROQ_MODEL` and `ANTHROPIC_MODEL`, so switching `PROVIDER` never sends one provider's model name to the other.
 
 ```bash
 PROVIDER=anthropic uv run python -m faultline.ida "Customers report checkout fails. Why?"

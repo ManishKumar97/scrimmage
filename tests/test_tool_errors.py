@@ -187,3 +187,28 @@ def test_tool_calls_in_a_cut_off_reply_do_not_run():
 
     assert result.stop_reason == "truncated"
     assert ran == []
+
+
+def test_the_second_openai_request_carries_the_calls_and_their_results():
+    client = FakeClient(
+        tool_reply(logs_call("cart"), logs_call("redis")), text_reply("done")
+    )
+
+    run_ida("why?", client, "fake", tools=logs_registry(lambda service: service))
+
+    messages = client.requests[1]["messages"]
+    assert [m["role"] for m in messages] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "tool",
+    ]
+    assert messages[1]["content"] == "why?"
+    calls = messages[2]["tool_calls"]
+    assert [c["id"] for c in calls] == ["call_0", "call_1"]
+    assert [c["function"]["name"] for c in calls] == ["get_logs", "get_logs"]
+    assert [(m["tool_call_id"], m["content"]) for m in messages[3:]] == [
+        ("call_0", "cart"),
+        ("call_1", "redis"),
+    ]

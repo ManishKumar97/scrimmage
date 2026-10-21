@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import dataclass
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 import anthropic
 import openai
@@ -22,7 +22,7 @@ from faultline.settings import Settings
 ANTHROPIC_MAX_OUTPUT_TOKENS = 16_000
 
 # What the loop sees as finish_reason, whatever the provider calls it.
-FINISH_REASONS = ("stop", "tool_calls", "length", "content_filter", "refusal")
+type FinishReason = Literal["stop", "tool_calls", "length", "content_filter", "refusal"]
 
 
 @dataclass(frozen=True)
@@ -37,7 +37,7 @@ class ToolCall:
 class Reply:
     text: str
     tool_calls: list[ToolCall]
-    finish_reason: str
+    finish_reason: FinishReason
     tokens: int
     # The provider's own form of this turn. It is sent back unchanged on the next call,
     # because some providers (Anthropic thinking blocks) reject a rebuilt turn.
@@ -115,7 +115,12 @@ class OpenAIModel:
         return Reply(
             text=choice.message.content or "",
             tool_calls=calls,
-            finish_reason=choice.finish_reason,
+            # function_call is the legacy name for tool_calls.
+            finish_reason=(
+                "tool_calls"
+                if choice.finish_reason == "function_call"
+                else choice.finish_reason
+            ),
             tokens=response.usage.total_tokens if response.usage else 0,
             # The response and request types describe the same JSON.
             raw=[call.model_dump() for call in choice.message.tool_calls or []],
@@ -168,7 +173,9 @@ class AnthropicModel:
                 messages=self.wire_messages(messages),
                 tools=[self.wire_tool(tool) for tool in tools],
             )
-        except anthropic.APIError as exc:
+        except (anthropic.APIError, ValueError) as exc:
+            # ValueError: the SDK refuses before sending, for example when
+            # max_tokens is over a model's non-streaming cap.
             raise ModelError(str(exc)) from exc
 
         text = "".join(b.text for b in response.content if b.type == "text")
@@ -222,19 +229,21 @@ class AnthropicModel:
         return wire
 
 
-def finish_reason(stop_reason: str | None) -> str:
+def finish_reason(stop_reason: str | None) -> FinishReason:
     match stop_reason:
         case "tool_use":
             return "tool_calls"
-        case "max_tokens":
+        case "max_tokens" | "model_context_window_exceeded":
             return "length"
         case "refusal":
             return "refusal"
         case "pause_turn":
             # Only server-side tools pause a turn, and none are sent.
             raise ModelError("the model paused the turn, which needs a server tool")
-        case _:
+        case "end_turn" | "stop_sequence":
             return "stop"
+        case _:
+            raise ModelError(f"unknown stop reason {stop_reason!r}")
 
 
 def make_model(settings: Settings) -> ModelClient:
@@ -247,7 +256,7 @@ def make_model(settings: Settings) -> ModelClient:
                 api_key=settings.anthropic_api_key.get_secret_value(),
                 max_retries=5,
             ),
-            settings.model or "claude-haiku-5-5",
+            settings.anthropic_model,
         )
     return OpenAIModel(
         AsyncOpenAI(
@@ -255,5 +264,5 @@ def make_model(settings: Settings) -> ModelClient:
             base_url=settings.groq_base_url,
             max_retries=5,
         ),
-        settings.model or "openai/gpt-oss-120b",
+        settings.groq_model,
     )

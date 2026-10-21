@@ -14,6 +14,7 @@ from faultline.models import (
     Reply,
     ToolCall,
     ToolResult,
+    finish_reason,
     make_model,
 )
 from faultline.settings import Settings
@@ -114,7 +115,8 @@ def test_assistant_turn_is_replayed_with_thinking_blocks_unchanged():
     )
     first = complete(model, ["why?"])
 
-    complete(model, ["why?", first, [ToolResult("tu_1", "boom", False)]])
+    results = [ToolResult("tu_1", "boom", False), ToolResult("tu_2", "boom", False)]
+    complete(model, ["why?", first, results])
 
     sent = client.requests[1]["messages"][1]
     assert sent["role"] == "assistant"
@@ -153,6 +155,7 @@ def test_all_tool_results_go_back_in_one_user_message():
     [
         ("end_turn", "stop"),
         ("stop_sequence", "stop"),
+        ("model_context_window_exceeded", "length"),
         ("tool_use", "tool_calls"),
         ("max_tokens", "length"),
         ("refusal", "refusal"),
@@ -210,7 +213,21 @@ def test_a_refusal_stops_the_loop_as_refused():
     assert result.answer == "I cannot help"
 
 
-def test_the_provider_setting_picks_the_adapter_and_default_model():
+@pytest.fixture
+def clean_env(monkeypatch):
+    for name in (
+        "PROVIDER",
+        "GROQ_API_KEY",
+        "GROQ_MODEL",
+        "GROQ_BASE_URL",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_MODEL",
+        "MODEL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_the_provider_setting_picks_the_adapter_and_default_model(clean_env):
     groq = Settings(provider="groq", groq_api_key="g", _env_file=None)  # pyright: ignore
     claude = Settings(provider="anthropic", anthropic_api_key="a", _env_file=None)  # pyright: ignore
 
@@ -220,6 +237,47 @@ def test_the_provider_setting_picks_the_adapter_and_default_model():
     assert make_model(claude).model == "claude-haiku-5-5"  # pyright: ignore
 
 
-def test_a_provider_without_its_key_is_rejected():
+def test_each_provider_reads_its_own_model_setting(clean_env, monkeypatch):
+    monkeypatch.setenv("GROQ_MODEL", "some/groq-model")
+    claude = Settings(provider="anthropic", anthropic_api_key="a", _env_file=None)  # pyright: ignore
+
+    assert make_model(claude).model == "claude-haiku-5-5"  # pyright: ignore
+
+
+def test_a_provider_without_its_key_is_rejected(clean_env):
     with pytest.raises(ValidationError, match="PROVIDER=anthropic"):
         Settings(provider="anthropic", groq_api_key="g", _env_file=None)  # pyright: ignore
+
+
+def test_an_unknown_stop_reason_is_a_model_error():
+    with pytest.raises(ModelError, match="something_new"):
+        finish_reason("something_new")
+
+
+def test_an_sdk_value_error_becomes_a_model_error():
+    model, _ = adapter(ValueError("max_tokens too large for non-streaming"))
+
+    with pytest.raises(ModelError, match="non-streaming"):
+        complete(model, ["why?"])
+
+
+def test_two_tool_calls_with_one_failing_go_back_in_one_user_message():
+    model, client = adapter(
+        message([tool_use("tu_1", "cart"), tool_use("tu_2", "nope")], "tool_use"),
+        message([text("cart")], "end_turn"),
+    )
+
+    def logs(service: str) -> str:
+        if service == "nope":
+            raise RuntimeError("no such service")
+        return "cart logs"
+
+    result = asyncio.run(ida.run("why?", model, tools=logs_registry(logs)))
+
+    assert result.stop_reason == "done"
+    messages = client.requests[1]["messages"]
+    assert [m["role"] for m in messages] == ["user", "assistant", "user"]
+    ids = [b.id for b in messages[1]["content"]]
+    blocks = messages[2]["content"]
+    assert [b["tool_use_id"] for b in blocks] == ids == ["tu_1", "tu_2"]
+    assert [b.get("is_error", False) for b in blocks] == [False, True]
