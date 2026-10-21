@@ -481,3 +481,15 @@ def test_groq_cached_tokens_are_recorded_when_the_usage_has_them():
 
     (chat,) = spans["chat"]
     assert attrs(chat)["gen_ai.usage.cache_read.input_tokens"] == 64
+
+
+def test_groq_cached_tokens_are_not_added_to_the_token_total_again():
+    reply = text_reply("hi")
+    assert reply.usage
+    reply.usage.prompt_tokens_details = PromptTokensDetails(cached_tokens=64)
+
+    result = asyncio.run(
+        OpenAIModel(cast(AsyncOpenAI, FakeClient(reply)), "m").complete("s", ["q"], [])
+    )
+
+    assert result.tokens == 120  # prompt_tokens already includes the cached 64

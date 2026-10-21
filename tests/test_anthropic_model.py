@@ -296,7 +296,7 @@ def test_cached_input_tokens_count_in_input_and_are_reported_apart():
     assert result.input_tokens == 200  # 100 uncached + 70 read + 30 written
     assert result.output_tokens == 20
     assert (result.cache_read_tokens, result.cache_creation_tokens) == (70, 30)
-    assert result.tokens == 120  # the budget count is unchanged
+    assert result.tokens == 220  # the budget counts cached input too
     assert (result.response_id, result.response_model) == ("msg_fake", "fake-model")
 
 
@@ -360,3 +360,14 @@ def test_the_loop_totals_cache_reads_over_the_run():
     result = asyncio.run(ida.run("why?", model, tools=logs_registry(str)))
 
     assert result.cache_read_tokens == 500
+
+
+def test_cached_input_counts_against_the_token_budget():
+    first = message([tool_use("tu_1", "cart")], "tool_use", usage=(10, 5))
+    first.usage.cache_read_input_tokens = 70_000
+    model, _ = adapter(first)
+
+    result = asyncio.run(ida.run("why?", model, tools=logs_registry(str)))
+
+    assert result.stop_reason == "token_limit"
+    assert result.tokens == 70_015

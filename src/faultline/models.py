@@ -221,7 +221,14 @@ class AnthropicModel:
             text=text,
             tool_calls=calls,
             finish_reason=finish_reason(response.stop_reason),
-            tokens=response.usage.input_tokens + response.usage.output_tokens,
+            # Anthropic's input_tokens leaves out cached input. The budget counts
+            # everything the model processed, so add it back.
+            tokens=(
+                response.usage.input_tokens
+                + (response.usage.cache_read_input_tokens or 0)
+                + (response.usage.cache_creation_input_tokens or 0)
+                + response.usage.output_tokens
+            ),
             raw=response.content,
             input_tokens=(
                 response.usage.input_tokens
