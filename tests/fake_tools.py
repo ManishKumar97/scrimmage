@@ -1,12 +1,13 @@
 """Small registries for tests, so no test touches the real cluster."""
 
 import asyncio
+import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from kubernetes_asyncio import config
-from kubernetes_asyncio.client import ApiException, AppsV1Api, CoreV1Api
+from kubernetes_asyncio.client import ApiClient, ApiException, AppsV1Api, CoreV1Api
 
 from faultline import kube_tools
 from faultline.tools import Registry
@@ -42,6 +43,10 @@ class FakeCluster:
         self.created: dict[str, datetime] = {}  # pod name -> creation time
         self.deleting: dict[str, bool] = {}  # pod name -> has a deletion timestamp
         self.log_requests: list[tuple[str, dict]] = []
+        self.traces: list[dict] = []  # Jaeger traces the fake query API returns
+        self.trace_services: list[str] = []  # services Jaeger knows
+        self.jaeger_requests: list[tuple[str, dict]] = []  # (path, query)
+        self.jaeger_status = 200
         self.hang = False  # every API call waits forever
 
     def add(
@@ -126,10 +131,62 @@ class FakeCluster:
             ]
         )
 
+    async def call_api(self, path: str, method: str, **kwargs):
+        """The Kubernetes service proxy in front of Jaeger's query API."""
+        await self._wait()
+        marker = "/proxy/jaeger/ui/api/"
+        assert method == "GET" and marker in path, path
+        query = dict(kwargs["query_params"])
+        self.jaeger_requests.append((path.split(marker)[1], query))
+        data = self.traces if path.endswith("/traces") else self.trace_services
+        body = json.dumps({"data": data})
+        return SimpleNamespace(
+            status=self.jaeger_status, reason="Bad Gateway", text=_text(body)
+        )
+
     async def read_namespaced_pod_log(self, name: str, namespace: str, **kwargs):
         await self._wait()
         self.log_requests.append((name, kwargs))
         return self.logs[name]
+
+
+def _text(body: str) -> Callable[[], object]:
+    async def text() -> str:
+        return body
+
+    return text
+
+
+def span(
+    span_id: str,
+    service: str,
+    operation: str,
+    parent: str | None = None,
+    error: str | None = None,
+) -> dict:
+    """One Jaeger span. A span with `error` set carries the error tags."""
+    tags = [{"key": "rpc.grpc.status_code", "value": 0}]
+    if error is not None:
+        tags = [
+            {"key": "otel.status_code", "value": "ERROR"},
+            {"key": "error", "value": "True"},
+            {"key": "otel.status_description", "value": error},
+        ]
+    refs = [{"refType": "CHILD_OF", "spanID": parent}] if parent else []
+    return {
+        "spanID": span_id,
+        "operationName": operation,
+        "references": refs,
+        "tags": tags,
+        "processID": service,
+        "logs": [],
+    }
+
+
+def trace(*spans: dict) -> dict:
+    """A Jaeger trace. Each span's processID is its service name."""
+    processes = {s["processID"]: {"serviceName": s["processID"]} for s in spans}
+    return {"traceID": "t", "spans": list(spans), "processes": processes}
 
 
 def fake_cluster(monkeypatch) -> FakeCluster:
@@ -141,6 +198,9 @@ def fake_cluster(monkeypatch) -> FakeCluster:
 
     monkeypatch.setattr(config, "load_kube_config", no_kubeconfig)
     monkeypatch.setattr(kube_tools, "utc_now", lambda: NOW)
+    monkeypatch.setattr(
+        ApiClient, "call_api", lambda _self, *a, **k: cluster.call_api(*a, **k)
+    )
     for api, methods in [
         (AppsV1Api, ["read_namespaced_deployment", "list_namespaced_deployment"]),
         (CoreV1Api, ["list_namespaced_pod", "read_namespaced_pod_log"]),

@@ -91,7 +91,12 @@ def test_defaults_apply_and_types_are_checked():
 
 
 def test_the_test_bed_registry_has_the_kubernetes_tools():
-    assert list(kube_tools.registry.tools) == ["get_logs", "list_pods", "list_services"]
+    assert list(kube_tools.registry.tools) == [
+        "get_logs",
+        "list_pods",
+        "list_services",
+        "get_error_traces",
+    ]
     list_services = kube_tools.registry.tools["list_services"].arguments
     assert list_services.model_json_schema()["properties"] == {}
 

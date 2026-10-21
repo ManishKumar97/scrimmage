@@ -1,6 +1,7 @@
 import asyncio
 import re
 
+import fake_tools
 from fake_tools import fake_cluster
 
 from faultline import kube_tools
@@ -185,3 +186,116 @@ def test_a_pod_without_container_statuses_is_pending_with_zero_containers(monkey
     row = pods_of(monkeypatch, phase="Pending", no_containers=True, age_seconds=2)
 
     assert row == "cart-a Pending Pending 0/0 0 none 2s"
+
+
+def checkout_calls_failing_cart():
+    """frontend -> checkout -> cart, where cart fails and the error travels up."""
+    return fake_tools.trace(
+        fake_tools.span("a", "frontend", "POST /api/checkout"),
+        fake_tools.span("b", "checkout", "PlaceOrder", parent="a", error="cart down"),
+        fake_tools.span("c", "cart", "EmptyCart", parent="b", error="cart down"),
+        fake_tools.span("d", "email", "send_email", parent="b"),
+    )
+
+
+def test_error_traces_point_at_the_deepest_failed_service(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    cluster.traces = [checkout_calls_failing_cart(), checkout_calls_failing_cart()]
+
+    output = asyncio.run(kube_tools.get_error_traces("checkout"))
+
+    assert output.splitlines()[1:] == [
+        "2 traces: cart EmptyCart [deepest]: cart down",
+        "2 traces: checkout PlaceOrder: cart down",
+    ]
+    assert cluster.jaeger_requests == [
+        (
+            "traces",
+            {
+                "service": "checkout",
+                "lookback": "15m",
+                "limit": "20",
+                "tags": '{"error": "true"}',
+            },
+        )
+    ]
+
+
+def test_no_failed_traces_for_a_known_service(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    cluster.trace_services = ["checkout", "cart"]
+
+    output = asyncio.run(kube_tools.get_error_traces("cart", minutes=5))
+
+    assert output == "No failed traces for cart in the last 5 minutes."
+
+
+def test_an_unknown_service_lists_the_services_that_have_traces(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    cluster.trace_services = ["checkout", "cart"]
+
+    output, ok = asyncio.run(
+        kube_tools.registry.call("get_error_traces", '{"service": "order"}')
+    )
+
+    assert not ok
+    assert output == (
+        "Error: get_error_traces raised RuntimeError: no service 'order' in the "
+        "traces. Services with traces: cart, checkout"
+    )
+
+
+def test_a_failing_jaeger_is_a_clear_tool_error(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    cluster.jaeger_status = 502
+
+    output, ok = asyncio.run(
+        kube_tools.registry.call("get_error_traces", '{"service": "cart"}')
+    )
+
+    assert not ok
+    assert output == (
+        "Error: get_error_traces raised RuntimeError: trace query failed: 502 Bad Gateway"
+    )
+
+
+def test_trace_output_stays_small_with_many_long_failures(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    cluster.traces = [
+        fake_tools.trace(
+            fake_tools.span(f"s{i}", "checkout", f"op{i}", error="boom " * 500)
+        )
+        for i in range(kube_tools.MAX_TRACES)
+    ]
+
+    output = asyncio.run(kube_tools.get_error_traces("checkout"))
+
+    lines = output.splitlines()
+    assert len(lines) == 1 + kube_tools.MAX_ERROR_GROUPS + 1
+    assert lines[-1] == "12 more kinds of failure not shown."
+    assert all(len(line) < kube_tools.MAX_MESSAGE_CHARS + 60 for line in lines[1:-1])
+    assert len(output) < 3_000
+
+
+def test_the_exception_event_message_is_used_when_the_status_has_none(monkeypatch):
+    cluster = fake_cluster(monkeypatch)
+    failed = fake_tools.span("a", "cart", "GetCart", error="")
+    failed["logs"] = [{"fields": [{"key": "exception.message", "value": "no redis"}]}]
+    cluster.traces = [fake_tools.trace(failed)]
+
+    output = asyncio.run(kube_tools.get_error_traces("cart"))
+
+    assert output.splitlines()[1] == "1 traces: cart GetCart [deepest]: no redis"
+
+
+def test_minutes_outside_the_range_is_a_tool_error(monkeypatch):
+    fake_cluster(monkeypatch)
+
+    output, ok = asyncio.run(
+        kube_tools.registry.call(
+            "get_error_traces", '{"service": "cart", "minutes": 0}'
+        )
+    )
+
+    assert not ok
+    assert output.startswith("Error: bad arguments")

@@ -1,6 +1,7 @@
 """Tools that read the test bed through the real Kubernetes API."""
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -13,6 +14,14 @@ from pydantic import Field
 from faultline.tools import Registry
 
 NAMESPACE = "astronomy-shop"
+# Jaeger's query API, reached through the Kubernetes API server's service proxy.
+# The chart serves Jaeger under /jaeger/ui, so its API lives below that path.
+JAEGER_API = (
+    f"/api/v1/namespaces/{NAMESPACE}/services/jaeger-query:16686/proxy/jaeger/ui/api"
+)
+MAX_TRACES = 20  # traces fetched per call
+MAX_ERROR_GROUPS = 8  # distinct errors shown per call
+MAX_MESSAGE_CHARS = 200  # one error message, cut
 API_TIMEOUT = 30.0  # seconds, for all the API calls of one tool call
 
 registry = Registry()
@@ -149,3 +158,121 @@ async def list_services() -> str:
         f"{d.metadata.name} {d.status.ready_replicas or 0}" for d in deployments.items
     ]
     return "\n".join(["SERVICE READY", *rows])
+
+
+async def jaeger_get(api: ApiClient, path: str, params: list[tuple[str, str]]) -> dict:
+    """GET one Jaeger query API path through the Kubernetes service proxy."""
+    response = await api.call_api(
+        f"{JAEGER_API}/{path}",
+        "GET",
+        query_params=params,
+        header_params={"Accept": "application/json"},
+        auth_settings=["BearerToken"],
+        _preload_content=False,
+    )
+    if response.status >= 400:
+        raise ApiException(status=response.status, reason=response.reason)
+    return json.loads(await response.text())
+
+
+def tag_value(span: dict, key: str) -> str:
+    return next((str(t["value"]) for t in span["tags"] if t["key"] == key), "")
+
+
+def is_error(span: dict) -> bool:
+    return (
+        tag_value(span, "error") == "True"
+        or tag_value(span, "otel.status_code") == "ERROR"
+    )
+
+
+def error_message(span: dict) -> str:
+    """The status text of a failed span, else the exception message of its events."""
+    text = tag_value(span, "otel.status_description")
+    for log in span.get("logs", []):
+        for field in log["fields"]:
+            if not text and field["key"] == "exception.message":
+                text = str(field["value"])
+    text = " ".join(text.split())
+    return text[:MAX_MESSAGE_CHARS] or "no message"
+
+
+def summarize_trace(trace: dict) -> list[tuple[str, str, str, bool]]:
+    """The failed spans of one trace as (service, operation, message, deepest).
+
+    A span is deepest when none of its children failed. Errors travel up a call
+    chain, so the deepest failed span is where the failure started.
+    """
+    failed = [s for s in trace["spans"] if is_error(s)]
+    parents = {
+        ref["spanID"]
+        for s in failed
+        for ref in s.get("references", [])
+        if ref["refType"] == "CHILD_OF"
+    }
+    return [
+        (
+            trace["processes"][s["processID"]]["serviceName"],
+            s["operationName"],
+            error_message(s),
+            s["spanID"] not in parents,
+        )
+        for s in failed
+    ]
+
+
+@registry.tool
+async def get_error_traces(
+    service: Annotated[
+        str, Field(description="Service name, for example checkout or frontend.")
+    ],
+    minutes: Annotated[
+        int, Field(ge=1, le=60, description="How far back to look.")
+    ] = 15,
+) -> str:
+    """Find recent traces that touch a service and contain failed spans.
+
+    Shows each distinct failure with the service and operation that failed.
+    A failed span marked deepest has no failed child, so the failure started there.
+    This is how to see which downstream service a failing request called.
+    """
+    async with kube_api() as api, api_errors("trace query"):
+        found = await jaeger_get(
+            api,
+            "traces",
+            [
+                ("service", service),
+                ("lookback", f"{minutes}m"),
+                ("limit", str(MAX_TRACES)),
+                ("tags", json.dumps({"error": "true"})),
+            ],
+        )
+        traces = found["data"]
+        if not traces:
+            known = (await jaeger_get(api, "services", []))["data"]
+            if service not in known:
+                raise RuntimeError(
+                    f"no service {service!r} in the traces. Services with traces: "
+                    + ", ".join(sorted(known))
+                )
+            return f"No failed traces for {service} in the last {minutes} minutes."
+    groups: dict[tuple[str, str, str, bool], int] = {}
+    for trace in traces:
+        # Count a failure once per trace, however many spans repeat it.
+        for key in set(summarize_trace(trace)):
+            groups[key] = groups.get(key, 0) + 1
+    ranked = sorted(groups.items(), key=lambda item: (not item[0][3], -item[1]))
+    header = (
+        f"{len(traces)} traces with failed spans for {service} in the last {minutes} "
+        f"minutes (up to {MAX_TRACES} newest). Failed spans, deepest first, "
+        "with the number of traces each appears in:"
+    )
+    lines = [header]
+    for (svc, operation, message, deepest), count in ranked[:MAX_ERROR_GROUPS]:
+        mark = " [deepest]" if deepest else ""
+        lines.append(f"{count} traces: {svc} {operation}{mark}: {message}")
+    if len(ranked) > MAX_ERROR_GROUPS:
+        lines.append(
+            f"{len(ranked) - MAX_ERROR_GROUPS} more kinds of failure not shown."
+        )
+    return "\n".join(lines)
