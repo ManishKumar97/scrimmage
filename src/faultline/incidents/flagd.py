@@ -16,7 +16,7 @@ from typing import Any
 from kubernetes_asyncio.client import ApiClient, ApiException
 
 from faultline.incidents.catalog import Incident
-from faultline.kube_tools import NAMESPACE
+from faultline.kube_tools import NAMESPACE, proxy_request
 
 # flagd-ui is port 4000 of the flagd service, reached through the API server's proxy.
 # Its next.config sets basePath "/feature", so every route sits under that.
@@ -30,15 +30,9 @@ class FlagdError(RuntimeError):
 
 
 async def _call(api: ApiClient, path: str, method: str, **kwargs: Any) -> Any:
+    """One flagd-ui request. Any failure, an HTTP error status included, is a FlagdError."""
     try:
-        response = await api.call_api(
-            f"{FLAGD_UI_API}/{path}",
-            method,
-            header_params={"Accept": "application/json", **kwargs.pop("headers", {})},
-            auth_settings=["BearerToken"],
-            _preload_content=False,
-            **kwargs,
-        )
+        response = await proxy_request(api, f"{FLAGD_UI_API}/{path}", method, **kwargs)
     except ApiException as exc:
         raise FlagdError(f"flagd-ui {path} failed: {exc.status} {exc.reason}") from exc
     if response.status >= 400:
@@ -48,9 +42,7 @@ async def _call(api: ApiClient, path: str, method: str, **kwargs: Any) -> Any:
 
 async def read_flags(api: ApiClient) -> dict[str, Any]:
     """The whole flag file."""
-    response = await _call(
-        api, "read-file", "GET", query_params=[("file_name", FLAG_FILE)]
-    )
+    response = await _call(api, "read-file", "GET", params=[("file_name", FLAG_FILE)])
     try:
         doc = json.loads(await response.text())
     except json.JSONDecodeError:

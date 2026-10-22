@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from kubernetes_asyncio import config
 from kubernetes_asyncio.client import ApiClient, ApiException, AppsV1Api, CoreV1Api
@@ -166,16 +166,34 @@ async def list_services() -> str:
     return "\n".join(["SERVICE READY", *rows])
 
 
-async def jaeger_get(api: ApiClient, path: str, params: list[tuple[str, str]]) -> dict:
-    """GET one Jaeger query API path through the Kubernetes service proxy."""
-    response = await api.call_api(
-        f"{JAEGER_API}/{path}",
-        "GET",
+async def proxy_request(
+    api: ApiClient,
+    url: str,
+    method: str = "GET",
+    *,
+    params: list[tuple[str, str]] | None = None,
+    headers: dict[str, str] | None = None,
+    body: object = None,
+) -> Any:
+    """Call a service through the Kubernetes API server's service proxy.
+
+    Returns the raw response, unread: each service reports its errors its own way,
+    so the caller checks the status and parses the body.
+    """
+    return await api.call_api(
+        url,
+        method,
         query_params=params,
-        header_params={"Accept": "application/json"},
+        header_params={"Accept": "application/json", **(headers or {})},
+        body=body,
         auth_settings=["BearerToken"],
         _preload_content=False,
     )
+
+
+async def jaeger_get(api: ApiClient, path: str, params: list[tuple[str, str]]) -> dict:
+    """GET one Jaeger query API path through the Kubernetes service proxy."""
+    response = await proxy_request(api, f"{JAEGER_API}/{path}", params=params)
     if response.status >= 400:
         raise ApiException(status=response.status, reason=response.reason)
     try:

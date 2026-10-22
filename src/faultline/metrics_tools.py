@@ -22,7 +22,13 @@ from kubernetes_asyncio.client import ApiClient, ApiException
 from pydantic import Field
 
 from faultline import kube_tools
-from faultline.kube_tools import NAMESPACE, api_errors, format_duration, kube_api
+from faultline.kube_tools import (
+    NAMESPACE,
+    api_errors,
+    format_duration,
+    kube_api,
+    proxy_request,
+)
 
 # Prometheus's HTTP API, reached through the Kubernetes API server's service proxy.
 PROMETHEUS_API = f"/api/v1/namespaces/{NAMESPACE}/services/prometheus:9090/proxy/api/v1"
@@ -54,14 +60,7 @@ def check_service(service: str) -> str:
 
 async def prom_get(api: ApiClient, path: str, params: list[tuple[str, str]]) -> dict:
     """GET one Prometheus API path. Return its `data`, or raise a readable error."""
-    response = await api.call_api(
-        f"{PROMETHEUS_API}/{path}",
-        "GET",
-        query_params=params,
-        header_params={"Accept": "application/json"},
-        auth_settings=["BearerToken"],
-        _preload_content=False,
-    )
+    response = await proxy_request(api, f"{PROMETHEUS_API}/{path}", params=params)
     text = await response.text()
     try:
         body = json.loads(text)
