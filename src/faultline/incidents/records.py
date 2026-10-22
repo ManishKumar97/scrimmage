@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -35,6 +36,18 @@ class Record:
     trace_file: str | None = None
     recovery: str = "not needed"  # "ok", or why the test bed did not come back
     detail: str = ""  # why a trial has no answer
+
+
+_LABEL = re.compile(r"\bservice_name=([A-Za-z0-9_.-]+?)\.?(?:,|\s|$)")
+
+
+def label_service(question: str | None) -> str | None:
+    """The `service_name` label the page carried, read from the question the agent got.
+
+    Read from the question so records written before this existed still count.
+    """
+    match = _LABEL.search(question or "")
+    return match[1] if match else None
 
 
 def append(path: Path, record: Record) -> None:
@@ -84,11 +97,14 @@ class Tally:
     no_alert: int = 0
     setup_failed: int = 0
     agent_error: int = 0
+    label_correct: int = 0  # pages whose service_name label is the answer key
 
-    def add(self, outcome: str) -> None:
+    def add(self, record: Record) -> None:
         self.trials += 1
-        field_name = outcome.replace(" ", "_")
+        field_name = record.outcome.replace(" ", "_")
         setattr(self, field_name, getattr(self, field_name) + 1)
+        if record.outcome not in (NO_ALERT, SETUP_FAILED):
+            self.label_correct += label_service(record.question) == record.expected
 
     @property
     def paged(self) -> int:
@@ -98,29 +114,41 @@ class Tally:
     def accuracy(self) -> str:
         return f"{self.correct}/{self.paged}" if self.paged else "-"
 
+    def label_baseline(self) -> str:
+        """What answering the page's own service_name label would have scored."""
+        return f"{self.label_correct}/{self.paged}" if self.paged else "-"
+
 
 def summarize(records: list[Record], control: str) -> str:
-    """Per-incident and overall accuracy, with the trials that never reached the agent."""
+    """Per-incident and overall accuracy, with the trials that never reached the agent.
+
+    The label baseline is the score of an agent that answers the page's service_name
+    label and does nothing else. Accuracy only means something above it.
+    """
     per: dict[str, Tally] = {}
     for record in latest(records).values():
-        per.setdefault(record.incident, Tally()).add(record.outcome)
-    header = f"{'incident':40} {'correct/paged':>13} {'wrong':>5} {'no verdict':>10} {'no alert':>8} {'setup failed':>12} {'agent error':>11}"
+        per.setdefault(record.incident, Tally()).add(record)
+    header = (
+        f"{'incident':40} {'correct/paged':>13} {'label baseline':>14} {'wrong':>5} "
+        f"{'no verdict':>10} {'no alert':>8} {'setup failed':>12} {'agent error':>11}"
+    )
     rows = [header]
     overall = Tally()
+
+    def row(label: str, tally: Tally) -> str:
+        return (
+            f"{label:40} {tally.accuracy():>13} {tally.label_baseline():>14} "
+            f"{tally.wrong:>5} {tally.no_verdict:>10} {tally.no_alert:>8} "
+            f"{tally.setup_failed:>12} {tally.agent_error:>11}"
+        )
+
     for name, tally in sorted(per.items(), key=lambda kv: (kv[0] == control, kv[0])):
         label = f"{name} (control)" if name == control else name
-        rows.append(
-            f"{label:40} {tally.accuracy():>13} {tally.wrong:>5} {tally.no_verdict:>10} "
-            f"{tally.no_alert:>8} {tally.setup_failed:>12} {tally.agent_error:>11}"
-        )
+        rows.append(row(label, tally))
         if name != control:
             for key in vars(tally):
                 setattr(overall, key, getattr(overall, key) + getattr(tally, key))
-    rows.append(
-        f"{'overall (faults only)':40} {overall.accuracy():>13} {overall.wrong:>5} "
-        f"{overall.no_verdict:>10} {overall.no_alert:>8} {overall.setup_failed:>12} "
-        f"{overall.agent_error:>11}"
-    )
+    rows.append(row("overall (faults only)", overall))
     shas = sorted({r.sha for r in latest(records).values()})
     rows.append(f"git: {', '.join(shas)}")
     return "\n".join(rows)

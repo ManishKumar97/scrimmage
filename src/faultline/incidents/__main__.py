@@ -131,7 +131,8 @@ def summary_command(args: argparse.Namespace) -> int:
         )
         return 1
     print(f"{path}")
-    print(rec.summarize(rec.load(path), load_catalog().control.name))
+    catalog = load_catalog()
+    print(rec.summarize(rec.load(path), catalog.control.name))
     return 0
 
 

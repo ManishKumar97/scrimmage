@@ -385,10 +385,10 @@ def test_the_summary_counts_each_kind_and_leaves_the_control_out_of_the_total():
     text = rec.summarize(records, "no_op")
 
     lines = {line.split()[0]: line for line in text.splitlines()}
-    assert lines["cart"].split()[1:] == ["1/2", "1", "0", "1", "0", "0"]
-    assert lines["ad"].split()[1:] == ["0/1", "0", "1", "0", "1", "0"]
-    assert lines["no_op"].split()[2:4] == ["0/1", "1"]
-    assert lines["overall"].split()[3:5] == ["1/3", "1"]
+    assert lines["cart"].split()[1:] == ["1/2", "0/2", "1", "0", "1", "0", "0"]
+    assert lines["ad"].split()[1:] == ["0/1", "0/1", "0", "1", "0", "1", "0"]
+    assert lines["no_op"].split()[2:5] == ["0/1", "0/1", "1"]
+    assert lines["overall"].split()[3:6] == ["1/3", "0/3", "1"]
 
 
 def test_a_cancel_while_the_bed_recovers_keeps_the_answered_trial(tmp_path):
@@ -461,3 +461,36 @@ def test_the_summary_lists_only_the_code_that_made_the_counted_results():
     records = [r("old-sha", "setup failed"), r("new-sha", "correct")]
 
     assert rec.summarize(records, "no_op").splitlines()[-1] == "git: new-sha"
+
+
+def test_the_label_baseline_scores_an_agent_that_only_reads_the_page():
+    def r(incident, expected, label, outcome="correct"):
+        question = f"The alert A is firing. Labels: severity=page, service_name={label}. Find the cause."
+        return rec.Record("sha", incident, 1, outcome, "t", expected, question=question)
+
+    records = [
+        r("cart_service_failure", "cart", "cart"),  # the label gives it away
+        r("payment_service_failure", "payment", "checkout"),  # the label misleads
+        r("kafka_queue_problems", "kafka", "product-catalog"),
+        r("no_op", "none", "frontend"),  # a false alarm: the label is always wrong
+        rec.Record("sha", "ad_service_failure", 1, "no alert", "t", "ad"),
+    ]
+
+    text = rec.summarize(records, "no_op")
+
+    lines = {line.split()[0]: line for line in text.splitlines()}
+    assert "label baseline" in text.splitlines()[0]
+    assert lines["cart_service_failure"].split()[1:3] == ["1/1", "1/1"]
+    assert lines["payment_service_failure"].split()[1:3] == ["1/1", "0/1"]
+    assert lines["kafka_queue_problems"].split()[2] == "0/1"
+    assert lines["no_op"].split()[2:4] == ["1/1", "0/1"]
+    assert lines["ad_service_failure"].split()[1:3] == ["-", "-"]
+    assert lines["overall"].split()[3:5] == ["3/3", "1/3"]
+
+
+def test_the_label_is_read_from_the_stored_question():
+    question = "x. Labels: severity=page, service_name=product-catalog. Find the cause."
+
+    assert rec.label_service(question) == "product-catalog"
+    assert rec.label_service("The alert A is firing. Find the cause.") is None
+    assert rec.label_service(None) is None
