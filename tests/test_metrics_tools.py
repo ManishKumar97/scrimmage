@@ -374,17 +374,6 @@ def test_the_real_stdio_server_joins_the_registry_beside_the_logs_server():
     assert "bad service name 'a b'" in bad[0]
 
 
-def test_a_baseline_with_less_data_than_its_label_says_is_labelled_partial(monkeypatch):
-    cluster = fake_cluster(monkeypatch)
-    # 20 minutes of samples: 15 of them fall in the baseline window, 5 in the current.
-    cluster.prom.counter(CALLS, labels("cart"), [(1200, 1.0)], points=80)
-
-    output = run(metrics_tools.get_service_metrics("cart", 5))
-
-    assert "baseline (only 15m of data) 1.00 0.00 0.0%" in output
-    assert "the 30m before that" not in output
-
-
 def test_errors_that_just_started_are_not_reported_as_zero(monkeypatch):
     cluster = fake_cluster(monkeypatch)
     cluster.prom.counter(CALLS, labels("cart"), [(3600, 2.0)])

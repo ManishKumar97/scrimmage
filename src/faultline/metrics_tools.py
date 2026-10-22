@@ -129,10 +129,6 @@ def latency(value_ms: float | None) -> str:
     return format_duration(int(value_ms * 1000))
 
 
-async def no_value() -> None:
-    return None
-
-
 @dataclass(frozen=True)
 class Stats:
     """One window of one service. None means Prometheus has no series."""
@@ -142,22 +138,16 @@ class Stats:
     errors_started: bool  # error spans exist in the window but have no rate yet
     p50: float | None  # ms
     p95: float | None  # ms
-    covered: float | None = None  # minutes of the window that have samples
 
 
-async def window_stats(
-    api: ApiClient, service: str, window: str, at: float, covered: bool = False
-) -> Stats:
+async def window_stats(api: ApiClient, service: str, window: str, at: float) -> Stats:
     sel, err = selector(service), selector(service, ERROR)
     buckets = f"sum by (le) ({rate(DURATION, sel, window)})"
-    # Time of the oldest sample in the window (a subquery at 1m steps).
-    oldest = f"min(min_over_time(timestamp({CALLS}{{{sel}}})[{window}:1m]))"
-    total, errors, p50, p95, earliest = await asyncio.gather(
+    total, errors, p50, p95 = await asyncio.gather(
         scalar(api, f"sum({rate(CALLS, sel, window)})", at),
         scalar(api, f"sum({rate(CALLS, err, window)})", at),
         scalar(api, f"histogram_quantile(0.5, {buckets})", at),
         scalar(api, f"histogram_quantile(0.95, {buckets})", at),
-        scalar(api, oldest, at) if covered else no_value(),
     )
     # Prometheus has no zero start for a counter: the first error sample gives no
     # rate, and the second, if equal, gives a rate of zero. Neither is "no errors".
@@ -169,8 +159,7 @@ async def window_stats(
         started = bool(present)
     elif total is not None and not errors:
         started = bool(await scalar(api, new_series(CALLS, err, window), at))
-    minutes = None if earliest is None else max(0.0, (at - earliest) / 60)
-    return Stats(total, errors, started, p50, p95, minutes)
+    return Stats(total, errors, started, p50, p95)
 
 
 def row(stats: Stats) -> str:
@@ -185,17 +174,6 @@ def row(stats: Stats) -> str:
         f"{per_second(stats.total)} {errors} {percent_cell} "
         f"{latency(stats.p50)} {latency(stats.p95)}"
     )
-
-
-def baseline_label(baseline: Stats) -> str:
-    covered = baseline.covered
-    if (
-        baseline.total is not None
-        and covered is not None
-        and covered < BASELINE_MINUTES - 1
-    ):
-        return f"baseline (only {baseline.covered:.0f}m of data)"
-    return f"baseline, the {BASELINE_MINUTES}m before that"
 
 
 async def top_errors(api: ApiClient, service: str, window: str, at: float) -> list[str]:
@@ -260,9 +238,7 @@ async def get_service_metrics(
     async with kube_api() as api, api_errors("Prometheus"):
         current, baseline, top = await asyncio.gather(
             window_stats(api, service, window, at),
-            window_stats(
-                api, service, f"{BASELINE_MINUTES}m", at - minutes * 60, covered=True
-            ),
+            window_stats(api, service, f"{BASELINE_MINUTES}m", at - minutes * 60),
             top_errors(api, service, window, at),
         )
         if current.total is None:
@@ -271,7 +247,7 @@ async def get_service_metrics(
         f"Now: {stamp(now)}. {service}, requests handled, from span metrics.",
         "WINDOW CALLS/S ERRORS/S ERROR% P50 P95",
         f"last {minutes}m {row(current)}",
-        f"{baseline_label(baseline)} {row(baseline)}",
+        f"baseline, the {BASELINE_MINUTES}m before that {row(baseline)}",
     ]
     if current.errors_started or baseline.errors_started:
         lines.append(

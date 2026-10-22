@@ -192,7 +192,6 @@ class FakePrometheus:
             r"last_over_time\((?P=metric)\{(?P=labels)\}\[(?P=window)m\] "
             r"offset (?P=window)m\)\)"
         ),
-        "earliest": rf"min\(min_over_time\(timestamp\({SELECTOR}\)\[(?P<window>\d+)m:1m\]\)\)",
     }
     STEP = 15  # seconds between samples
 
@@ -287,18 +286,6 @@ class FakePrometheus:
                 and not any(at - 2 * window <= t < at - window for t, _ in s)
             ]
             return [({}, str(len(born)))] if born else []
-        if shape == "earliest":
-            # A subquery at 1m steps; each step sees the latest sample of the last 5m.
-            firsts = []
-            for _, samples in matching:
-                step = math.ceil((at - window) / 60) * 60
-                while step <= at:
-                    seen = [t for t, _ in samples if step - 300 < t <= step]
-                    if seen:
-                        firsts.append(max(seen))
-                        break
-                    step += 60
-            return [({}, str(min(firsts)))] if firsts else []
         rates = []  # (labels, rate per second) of every series that has a rate
         for labels, samples in matching:
             inside = [(t, v) for t, v in samples if at - window <= t <= at]
