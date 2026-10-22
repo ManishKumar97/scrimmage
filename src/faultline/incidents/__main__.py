@@ -115,7 +115,7 @@ async def run_command(args: argparse.Namespace) -> int:
             alert_timeout=args.alert_timeout,
         )
         await run_all(deps, catalog, out, args.trials, args.only, log=log)
-    print(rec.summarize(rec.load(out), catalog.control.name))
+    print(rec.summarize(rec.load(out), catalog.control.name, catalog.notes()))
     return 0
 
 
@@ -132,7 +132,7 @@ def summary_command(args: argparse.Namespace) -> int:
         return 1
     print(f"{path}")
     catalog = load_catalog()
-    print(rec.summarize(rec.load(path), catalog.control.name))
+    print(rec.summarize(rec.load(path), catalog.control.name, catalog.notes()))
     return 0
 
 

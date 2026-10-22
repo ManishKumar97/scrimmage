@@ -3,6 +3,7 @@
 import json
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -119,12 +120,15 @@ class Tally:
         return f"{self.label_correct}/{self.paged}" if self.paged else "-"
 
 
-def summarize(records: list[Record], control: str) -> str:
+def summarize(
+    records: list[Record], control: str, notes: Mapping[str, str] | None = None
+) -> str:
     """Per-incident and overall accuracy, with the trials that never reached the agent.
 
     The label baseline is the score of an agent that answers the page's service_name
     label and does nothing else. Accuracy only means something above it.
     """
+    notes = notes or {}
     per: dict[str, Tally] = {}
     for record in latest(records).values():
         per.setdefault(record.incident, Tally()).add(record)
@@ -144,11 +148,12 @@ def summarize(records: list[Record], control: str) -> str:
 
     for name, tally in sorted(per.items(), key=lambda kv: (kv[0] == control, kv[0])):
         label = f"{name} (control)" if name == control else name
-        rows.append(row(label, tally))
+        rows.append(row(label + ("*" if name in notes else ""), tally))
         if name != control:
             for key in vars(tally):
                 setattr(overall, key, getattr(overall, key) + getattr(tally, key))
     rows.append(row("overall (faults only)", overall))
+    rows.extend(f"* {name}: {notes[name]}" for name in sorted(notes) if name in per)
     shas = sorted({r.sha for r in latest(records).values()})
     rows.append(f"git: {', '.join(shas)}")
     return "\n".join(rows)

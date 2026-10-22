@@ -476,16 +476,17 @@ def test_the_label_baseline_scores_an_agent_that_only_reads_the_page():
         rec.Record("sha", "ad_service_failure", 1, "no alert", "t", "ad"),
     ]
 
-    text = rec.summarize(records, "no_op")
+    text = rec.summarize(records, "no_op", {"payment_service_failure": "key differs"})
 
     lines = {line.split()[0]: line for line in text.splitlines()}
     assert "label baseline" in text.splitlines()[0]
     assert lines["cart_service_failure"].split()[1:3] == ["1/1", "1/1"]
-    assert lines["payment_service_failure"].split()[1:3] == ["1/1", "0/1"]
+    assert lines["payment_service_failure*"].split()[1:3] == ["1/1", "0/1"]
     assert lines["kafka_queue_problems"].split()[2] == "0/1"
     assert lines["no_op"].split()[2:4] == ["1/1", "0/1"]
     assert lines["ad_service_failure"].split()[1:3] == ["-", "-"]
     assert lines["overall"].split()[3:5] == ["3/3", "1/3"]
+    assert "* payment_service_failure: key differs" in text
 
 
 def test_the_label_is_read_from_the_stored_question():
@@ -494,3 +495,10 @@ def test_the_label_is_read_from_the_stored_question():
     assert rec.label_service(question) == "product-catalog"
     assert rec.label_service("The alert A is firing. Find the cause.") is None
     assert rec.label_service(None) is None
+
+
+def test_the_shipped_catalog_flags_the_two_keys_that_disagree_with_the_prompt():
+    assert set(load_catalog().notes()) == {
+        "payment_service_unreachable",
+        "loadgenerator_flood_homepage",
+    }
