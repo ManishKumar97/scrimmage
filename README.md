@@ -29,7 +29,7 @@ Nothing is sent over the network.
 - Attribute names follow the OpenTelemetry GenAI semantic conventions: operation, provider, model, input and output tokens, finish reasons, tool name, tool call id.
 - The root span carries the stop reason, steps, tokens and budget. A tool error, a model API error and any stop reason other than `done` set the span status to ERROR with the error text.
 - Spans are written as OTLP JSON, one line per export, to `runs/traces.jsonl` (the `runs/` folder is git-ignored). `TRACE_FILE` changes the path.
-- By default spans hold no prompts and no tool output, because they are large and may be private. `TRACE_CONTENT=true` adds the system prompt, the messages, the tool definitions, tool arguments and results, the question and the answer. A later replay needs them.
+- Spans hold the system prompt, the messages, the tool definitions, tool arguments and results, the question and the answer, because a later replay needs them. They are written to a local file and go nowhere else.
 
 ## Run it
 
