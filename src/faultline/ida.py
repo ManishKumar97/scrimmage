@@ -191,13 +191,14 @@ async def run_loop(
 
                 messages.append(reply)
                 # Tool calls from one reply run at the same time.
-                results = await asyncio.gather(
+                outcomes = await asyncio.gather(
                     *(
                         call_tool(tools, call, tracing, parent, steps)
                         for call in reply.tool_calls
                     )
                 )
-                for call, (output, ok) in zip(reply.tool_calls, results, strict=True):
+                results = []
+                for call, (output, ok) in zip(reply.tool_calls, outcomes, strict=True):
                     consecutive_errors = 0 if ok else consecutive_errors + 1
                     print(
                         f"[tool] {describe(call)}{'' if ok else ' -> error'}",
@@ -205,18 +206,12 @@ async def run_loop(
                     )
                     if os.environ.get("FAULTLINE_DEBUG_TOOLS"):
                         print(f"[tool output]\n{output}\n[end]", file=sys.stderr)
-                messages.append(
-                    [
-                        ToolResult(call.id, output, not ok)
-                        for call, (output, ok) in zip(
-                            reply.tool_calls, results, strict=True
-                        )
-                    ]
-                )
+                    results.append(ToolResult(call.id, output, not ok))
+                messages.append(results)
                 if consecutive_errors >= MAX_CONSECUTIVE_TOOL_ERRORS:
                     return stop(
                         f"Stopped after {consecutive_errors} tool errors in a row. "
-                        f"Last error: {results[-1][0]}",
+                        f"Last error: {results[-1].content}",
                         "tool_errors",
                     )
     except TimeoutError:

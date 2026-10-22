@@ -217,27 +217,24 @@ class AnthropicModel:
             for b in response.content
             if b.type == "tool_use"
         ]
+        usage = response.usage
+        # Anthropic's input_tokens leaves out cached input. The budget counts
+        # everything the model processed, so add it back.
+        input_tokens = (
+            usage.input_tokens
+            + (usage.cache_read_input_tokens or 0)
+            + (usage.cache_creation_input_tokens or 0)
+        )
         return Reply(
             text=text,
             tool_calls=calls,
             finish_reason=finish_reason(response.stop_reason),
-            # Anthropic's input_tokens leaves out cached input. The budget counts
-            # everything the model processed, so add it back.
-            tokens=(
-                response.usage.input_tokens
-                + (response.usage.cache_read_input_tokens or 0)
-                + (response.usage.cache_creation_input_tokens or 0)
-                + response.usage.output_tokens
-            ),
+            tokens=input_tokens + usage.output_tokens,
             raw=response.content,
-            input_tokens=(
-                response.usage.input_tokens
-                + (response.usage.cache_read_input_tokens or 0)
-                + (response.usage.cache_creation_input_tokens or 0)
-            ),
-            output_tokens=response.usage.output_tokens,
-            cache_read_tokens=response.usage.cache_read_input_tokens,
-            cache_creation_tokens=response.usage.cache_creation_input_tokens,
+            input_tokens=input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_read_tokens=usage.cache_read_input_tokens,
+            cache_creation_tokens=usage.cache_creation_input_tokens,
             response_model=response.model,
             response_id=response.id,
         )
