@@ -83,7 +83,7 @@ async def get_logs(
             body = logs.rstrip("\n") or "No log lines in the last 10 minutes."
             sections.append(f"--- pod {pod.metadata.name} ---\n{body}")
     # Every line starts with its time. "Now" lets the model judge how old a line is.
-    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = stamp(utc_now())
     if not sections:
         return f"Now: {now}. The deployment has no pods."
     header = f"Now: {now}. Last 100 lines of the past 10 minutes per pod, oldest first."
@@ -113,7 +113,7 @@ async def list_pods(
             )
     now = utc_now()
     rows = [pod_row(pod, now) for pod in pods.items]
-    header = f"Now: {now.strftime('%Y-%m-%dT%H:%M:%SZ')}."
+    header = f"Now: {stamp(now)}."
     if not rows:
         return f"{header} No pods."
     columns = "POD STATE PHASE READY RESTARTS LAST_TERMINATION AGE"
@@ -122,6 +122,10 @@ async def list_pods(
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def stamp(now: datetime) -> str:
+    return now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def pod_state(pod) -> str:
@@ -359,7 +363,6 @@ async def get_error_traces(
                     f"no service {service!r} in the traces. Services with traces: "
                     + ", ".join(sorted(known))
                 )
-    stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     # failure -> traces, (end, duration) of the span that ended last
     groups: dict[Failure, tuple[int, tuple[int, int]]] = {}
     for trace in traces:
@@ -374,14 +377,14 @@ async def get_error_traces(
             groups[failure] = (count + 1, max(latest, ended))
     if not groups:
         return (
-            f"Now: {stamp}. No failed spans of {service} in the last {minutes} "
+            f"Now: {stamp(now)}. No failed spans of {service} in the last {minutes} "
             f"minutes. Jaeger keeps a fixed number of traces, about {MAX_TRACE_MINUTES} "
             "minutes at normal test-bed load, so older failures may be gone. If it "
             "hides a downstream failure, check the services it calls."
         )
     ranked = sorted(groups.items(), key=lambda item: (not item[0].last, -item[1][0]))
     header = (
-        f"Now: {stamp}. {len(traces)} traces with a failed {service} span in the last "
+        f"Now: {stamp(now)}. {len(traces)} traces with a failed {service} span in the last "
         f"{minutes} minutes (up to {MAX_TRACES} newest). Failures, last failed spans "
         "first, with the number of traces and when the latest one ended:"
     )

@@ -28,6 +28,7 @@ from faultline.kube_tools import (
     format_duration,
     kube_api,
     proxy_request,
+    stamp,
 )
 
 # Prometheus's HTTP API, reached through the Kubernetes API server's service proxy.
@@ -132,14 +133,6 @@ async def no_value() -> None:
     return None
 
 
-async def first_sample(
-    api: ApiClient, sel: str, window: str, at: float
-) -> float | None:
-    """Time of the oldest sample in the window (a subquery at 1m steps)."""
-    query = f"min(min_over_time(timestamp({CALLS}{{{sel}}})[{window}:1m]))"
-    return await scalar(api, query, at)
-
-
 @dataclass(frozen=True)
 class Stats:
     """One window of one service. None means Prometheus has no series."""
@@ -157,12 +150,14 @@ async def window_stats(
 ) -> Stats:
     sel, err = selector(service), selector(service, ERROR)
     buckets = f"sum by (le) ({rate(DURATION, sel, window)})"
+    # Time of the oldest sample in the window (a subquery at 1m steps).
+    oldest = f"min(min_over_time(timestamp({CALLS}{{{sel}}})[{window}:1m]))"
     total, errors, p50, p95, earliest = await asyncio.gather(
         scalar(api, f"sum({rate(CALLS, sel, window)})", at),
         scalar(api, f"sum({rate(CALLS, err, window)})", at),
         scalar(api, f"histogram_quantile(0.5, {buckets})", at),
         scalar(api, f"histogram_quantile(0.95, {buckets})", at),
-        first_sample(api, sel, window, at) if covered else no_value(),
+        scalar(api, oldest, at) if covered else no_value(),
     )
     # Prometheus has no zero start for a counter: the first error sample gives no
     # rate, and the second, if equal, gives a rate of zero. Neither is "no errors".
@@ -388,7 +383,3 @@ async def get_error_rate_trend(
         f"{step // 60} min (rate over {TREND_RATE_WINDOW}), oldest first:\n"
         + ", ".join(cells)
     )
-
-
-def stamp(now: datetime) -> str:
-    return now.strftime("%Y-%m-%dT%H:%M:%SZ")
