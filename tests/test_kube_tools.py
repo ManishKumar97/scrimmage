@@ -119,9 +119,9 @@ def test_list_pods_shows_status_restarts_and_last_termination(monkeypatch):
 
     assert re.match(NOW, output)
     assert output.splitlines()[1:] == [
-        "POD STATE PHASE READY RESTARTS LAST_TERMINATION AGE",
-        "cart-a Running Running 1/1 0 none 3600s",
-        "cart-b Running Running 0/1 4 OOMKilled 3600s",
+        "POD PHASE READY RESTARTS LAST_TERMINATION AGE",
+        "cart-a Running 1/1 0 none 3600s",
+        "cart-b Running 0/1 4 OOMKilled 3600s",
     ]
 
 
@@ -134,8 +134,8 @@ def test_list_pods_without_a_service_lists_every_service(monkeypatch):
     output = asyncio.run(kube_tools.list_pods())
 
     assert output.splitlines()[2:] == [
-        "cart-a Running Running 1/1 0 none 3600s",
-        "checkout-a Running Running 1/1 0 none 90s",
+        "cart-a Running 1/1 0 none 3600s",
+        "checkout-a Running 1/1 0 none 90s",
     ]
 
 
@@ -157,40 +157,10 @@ def pods_of(monkeypatch, **status) -> str:
     return asyncio.run(kube_tools.list_pods("cart")).splitlines()[2]
 
 
-def test_a_crash_looping_pod_shows_its_waiting_reason(monkeypatch):
-    row = pods_of(
-        monkeypatch,
-        ready=False,
-        restarts=7,
-        terminated="Error",
-        waiting="CrashLoopBackOff",
-    )
-
-    assert row == "cart-a CrashLoopBackOff Running 0/1 7 Error 3600s"
-
-
-def test_an_image_pull_failure_shows_its_waiting_reason(monkeypatch):
-    row = pods_of(monkeypatch, phase="Pending", ready=False, waiting="ImagePullBackOff")
-
-    assert row == "cart-a ImagePullBackOff Pending 0/1 0 none 3600s"
-
-
-def test_a_finished_container_shows_why_it_ended(monkeypatch):
-    row = pods_of(monkeypatch, ready=False, exited="OOMKilled")
-
-    assert row == "cart-a OOMKilled Running 0/1 0 none 3600s"
-
-
-def test_a_deleted_pod_shows_terminating(monkeypatch):
-    row = pods_of(monkeypatch, deleting=True)
-
-    assert row == "cart-a Terminating Running 1/1 0 none 3600s"
-
-
 def test_a_pod_without_container_statuses_is_pending_with_zero_containers(monkeypatch):
     row = pods_of(monkeypatch, phase="Pending", no_containers=True, age_seconds=2)
 
-    assert row == "cart-a Pending Pending 0/0 0 none 2s"
+    assert row == "cart-a Pending 0/0 0 none 2s"
 
 
 def checkout_calls_failing_cart(started: int = 60):

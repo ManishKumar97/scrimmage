@@ -44,7 +44,6 @@ class FakeCluster:
         self.logs: dict[str, str] = {}  # pod name -> log text
         self.status: dict[str, SimpleNamespace] = {}  # pod name -> pod status
         self.created: dict[str, datetime] = {}  # pod name -> creation time
-        self.deleting: dict[str, bool] = {}  # pod name -> has a deletion timestamp
         self.log_requests: list[tuple[str, dict]] = []
         self.traces: list[dict] = []  # Jaeger traces the fake query API returns
         self.trace_services: list[str] = []  # services Jaeger knows
@@ -73,27 +72,19 @@ class FakeCluster:
         restarts: int = 0,
         terminated: str | None = None,
         age_seconds: int = 3600,
-        waiting: str | None = None,
-        exited: str | None = None,
-        deleting: bool = False,
         no_containers: bool = False,
     ) -> None:
         """Set what the pod reports about itself. One container per pod."""
         last = SimpleNamespace(
             terminated=SimpleNamespace(reason=terminated) if terminated else None
         )
-        state = SimpleNamespace(
-            waiting=SimpleNamespace(reason=waiting) if waiting else None,
-            terminated=SimpleNamespace(reason=exited) if exited else None,
-        )
         container = SimpleNamespace(
-            ready=ready, restart_count=restarts, last_state=last, state=state
+            ready=ready, restart_count=restarts, last_state=last
         )
         self.status[pod] = SimpleNamespace(
             phase=phase, container_statuses=None if no_containers else [container]
         )
         self.created[pod] = NOW - timedelta(seconds=age_seconds)
-        self.deleting[pod] = deleting
 
     async def _wait(self) -> None:
         if self.hang:
@@ -127,7 +118,6 @@ class FakeCluster:
                     metadata=SimpleNamespace(
                         name=pod,
                         creation_timestamp=self.created[pod],
-                        deletion_timestamp=NOW if self.deleting[pod] else None,
                     ),
                     status=self.status[pod],
                 )

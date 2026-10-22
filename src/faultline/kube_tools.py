@@ -116,7 +116,7 @@ async def list_pods(
     header = f"Now: {stamp(now)}."
     if not rows:
         return f"{header} No pods."
-    columns = "POD STATE PHASE READY RESTARTS LAST_TERMINATION AGE"
+    columns = "POD PHASE READY RESTARTS LAST_TERMINATION AGE"
     return "\n".join([header, columns, *rows])
 
 
@@ -126,20 +126,6 @@ def utc_now() -> datetime:
 
 def stamp(now: datetime) -> str:
     return now.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def pod_state(pod) -> str:
-    """What kubectl shows as STATUS: why a container waits, why it ended, or Running."""
-    if pod.metadata.deletion_timestamp:
-        return "Terminating"
-    statuses = pod.status.container_statuses or []
-    for c in statuses:
-        if c.state and c.state.waiting and c.state.waiting.reason:
-            return c.state.waiting.reason
-    for c in statuses:
-        if c.state and c.state.terminated and c.state.terminated.reason:
-            return c.state.terminated.reason
-    return "Running" if statuses else pod.status.phase
 
 
 def pod_row(pod, now: datetime) -> str:
@@ -154,7 +140,7 @@ def pod_row(pod, now: datetime) -> str:
     started = pod.metadata.creation_timestamp
     age = f"{int((now - started).total_seconds())}s" if started else "unknown"
     return (
-        f"{pod.metadata.name} {pod_state(pod)} {pod.status.phase} {ready}/{len(statuses)} "
+        f"{pod.metadata.name} {pod.status.phase} {ready}/{len(statuses)} "
         f"{restarts} {','.join(reasons) or 'none'} {age}"
     )
 
