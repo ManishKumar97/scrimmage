@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 
@@ -251,7 +251,3 @@ async def run_all(
                 f"--out {out} to resume."
             )
     return ran
-
-
-def utc_now() -> datetime:
-    return datetime.now(UTC)

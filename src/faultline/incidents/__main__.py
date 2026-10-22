@@ -18,9 +18,9 @@ from pathlib import Path
 from faultline import ida
 from faultline.incidents import cluster, flagd, health, load_catalog
 from faultline.incidents import records as rec
-from faultline.incidents.runner import Deps, SetupAborted, run_all, utc_now
+from faultline.incidents.runner import Deps, SetupAborted, run_all
 from faultline.incidents.webhook import AlertInbox, Listener
-from faultline.kube_tools import kube_api
+from faultline.kube_tools import kube_api, utc_now
 from faultline.settings import get_settings
 
 RUNS = Path("runs")

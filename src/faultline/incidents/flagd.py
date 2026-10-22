@@ -80,9 +80,8 @@ async def inject(api: ApiClient, incident: Incident) -> None:
     await set_variant(api, incident.flag, incident.variant)
 
 
-async def active_faults(api: ApiClient) -> dict[str, str]:
-    """Every flag whose default variant is not off."""
-    doc = await read_flags(api)
+def flags_on(doc: dict[str, Any]) -> dict[str, str]:
+    """Every flag in the file whose default variant is not off."""
     return {
         name: flag["defaultVariant"]
         for name, flag in doc["flags"].items()
@@ -90,14 +89,14 @@ async def active_faults(api: ApiClient) -> dict[str, str]:
     }
 
 
+async def active_faults(api: ApiClient) -> dict[str, str]:
+    return flags_on(await read_flags(api))
+
+
 async def recover_all(api: ApiClient) -> dict[str, str]:
     """Turn every flag off in one write. Return the flags that were on."""
     doc = await read_flags(api)
-    was_on = {
-        name: flag["defaultVariant"]
-        for name, flag in doc["flags"].items()
-        if flag.get("defaultVariant") != OFF
-    }
+    was_on = flags_on(doc)
     if was_on:
         for name in was_on:
             doc["flags"][name]["defaultVariant"] = OFF

@@ -7,9 +7,6 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-CORRECT = "correct"
-WRONG = "wrong"
-NO_VERDICT = "no verdict"  # the answer had no ROOT CAUSE SERVICE line
 NO_ALERT = "no alert"  # no page came: a monitoring gap, not an agent error
 SETUP_FAILED = "setup failed"  # the test bed never became healthy
 AGENT_ERROR = "agent error"  # the run raised instead of ending with a stop reason
@@ -94,7 +91,7 @@ class Tally:
     trials: int = 0
     correct: int = 0
     wrong: int = 0
-    no_verdict: int = 0
+    no_verdict: int = 0  # the answer had no ROOT CAUSE SERVICE line
     no_alert: int = 0
     setup_failed: int = 0
     agent_error: int = 0
