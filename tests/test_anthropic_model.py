@@ -168,13 +168,6 @@ def test_stop_reasons_are_normalized(stop_reason, expected):
     assert complete(model, ["why?"]).finish_reason == expected
 
 
-def test_a_paused_turn_is_a_model_error():
-    model, _ = adapter(message([text("x")], "pause_turn"))
-
-    with pytest.raises(ModelError):
-        complete(model, ["why?"])
-
-
 def test_sdk_errors_become_model_errors():
     request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
     response = httpx2.Response(400, request=request)
@@ -250,9 +243,10 @@ def test_a_provider_without_its_key_is_rejected(clean_env):
         Settings(provider="anthropic", groq_api_key="g", _env_file=None)  # pyright: ignore
 
 
-def test_an_unknown_stop_reason_is_a_model_error():
-    with pytest.raises(ModelError, match="something_new"):
-        AnthropicModel.finish_reason("something_new")
+@pytest.mark.parametrize("reason", ["something_new", "pause_turn"])
+def test_an_unknown_stop_reason_is_a_model_error(reason):
+    with pytest.raises(ModelError, match=reason):
+        AnthropicModel.finish_reason(reason)
 
 
 def test_an_sdk_value_error_becomes_a_model_error():

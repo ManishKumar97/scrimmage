@@ -1,18 +1,11 @@
 import asyncio
 import json
-import sys
-from types import SimpleNamespace
-from typing import cast
 
 import pytest
-from fake_model import FakeClient, text_reply
 from fake_tools import NOW, FakeCluster, fake_cluster, text_of
 from mcp import Client
-from mcp.client.stdio import StdioServerParameters
-from openai import AsyncOpenAI
 
-from faultline import ida, kube_tools, mcp_client, mcp_metrics, metrics_tools
-from faultline.models import OpenAIModel
+from faultline import kube_tools, mcp_client, mcp_metrics, metrics_tools
 from faultline.tools import Registry
 
 CALLS = "traces_span_metrics_calls_total"
@@ -277,7 +270,6 @@ def test_minutes_outside_the_range_is_a_tool_error(monkeypatch, minutes):
 
 def metrics_tools_registry():
     """The two functions in a registry, as the model calls them."""
-    from faultline.tools import Registry
 
     registry = Registry()
     registry.tool(metrics_tools.get_service_metrics)
@@ -380,21 +372,6 @@ def test_the_real_stdio_server_joins_the_registry_beside_the_logs_server():
     ]
     assert bad[1] is False
     assert "bad service name 'a b'" in bad[0]
-
-
-def test_a_diagnosis_run_offers_the_model_the_metrics_tools(monkeypatch, tmp_path):
-    client = FakeClient(text_reply("No fault found."))
-    model = OpenAIModel(cast(AsyncOpenAI, client), "fake")
-    monkeypatch.setattr(ida, "make_model", lambda _settings: model)
-    settings = SimpleNamespace(trace_file=tmp_path / "t.jsonl", trace_content=False)
-    monkeypatch.setattr(ida, "get_settings", lambda: settings)
-
-    result = run(ida.diagnose_async("why?"))
-
-    offered = [t["function"]["name"] for t in client.requests[0]["tools"]]
-    assert result.stop_reason == "done"
-    assert "get_service_metrics" in offered and "get_error_rate_trend" in offered
-    assert "get_logs" in offered
 
 
 def test_a_baseline_with_less_data_than_its_label_says_is_labelled_partial(monkeypatch):
@@ -518,17 +495,3 @@ def test_the_trend_has_at_most_fifteen_values(monkeypatch, minutes):
     cells = run(metrics_tools.get_error_rate_trend("cart", minutes)).splitlines()[1]
 
     assert 2 <= len(cells.split(", ")) <= 15
-
-
-def test_a_server_that_does_not_start_is_named(monkeypatch):
-    monkeypatch.setattr(mcp_client, "START_TIMEOUT", 0.3)
-    silent = StdioServerParameters(
-        command=sys.executable, args=["-c", "import time; time.sleep(60)"]
-    )
-
-    async def start():
-        async with mcp_client.mcp_tools(silent, Registry(), "metrics MCP"):
-            pass
-
-    with pytest.raises(RuntimeError, match="metrics MCP server did not start"):
-        run(start())

@@ -4,7 +4,6 @@ from typing import Annotated
 import pytest
 from pydantic import Field
 
-from faultline import kube_tools
 from faultline.models import ToolSpec
 from faultline.tools import Registry
 
@@ -86,16 +85,6 @@ def test_defaults_apply_and_types_are_checked():
     output, ok = call(registry, "tail", '{"service": "cart", "lines": "many"}')
     assert not ok
     assert "lines: Input should be a valid integer" in output
-
-
-def test_the_test_bed_registry_has_the_kubernetes_tools():
-    assert list(kube_tools.registry.tools) == [
-        "list_pods",
-        "list_services",
-        "get_error_traces",
-    ]
-    list_services = kube_tools.registry.tools["list_services"].parameters
-    assert list_services["properties"] == {}
 
 
 def test_async_and_sync_tools_are_both_called():

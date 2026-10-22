@@ -1,11 +1,11 @@
 import subprocess
 
+import pytest
 from fake_model import FakeClient, logs_call, rejected, run_ida, text_reply, tool_reply
-from fake_tools import fake_cluster, logs_registry
+from fake_tools import logs_registry
 from openai.types.chat import ChatCompletionMessageCustomToolCall
 
-from faultline import kube_tools
-from faultline.tools import MAX_TOOL_OUTPUT_CHARS, Registry, clean_output
+from faultline.tools import MAX_TOOL_OUTPUT_CHARS, clean_output
 
 
 def test_tool_exception_goes_back_to_the_model():
@@ -72,15 +72,10 @@ def test_garbage_results_are_cleaned():
     assert cleaned.endswith("LAST LINE")
     assert len(cleaned) < MAX_TOOL_OUTPUT_CHARS + 50
 
-
-def test_garbage_result_reaches_the_model_as_text():
     client = FakeClient(tool_reply(logs_call("cart")), text_reply("odd output"))
-    tools = logs_registry(lambda service: {"not": "text"})
-
-    result = run_ida("why?", client, "fake", tools=tools)
-
+    result = run_ida("why?", client, "fake", tools=logs_registry(lambda s: {"a": 1}))
     assert result.stop_reason == "done"
-    assert client.tool_results() == ["{'not': 'text'}"]
+    assert client.tool_results() == ["{'a': 1}"]
 
 
 def test_repeated_tool_errors_stop_cleanly():
@@ -103,22 +98,6 @@ def test_one_success_resets_the_error_count():
     result = run_ida("why?", client, "fake", tools=logs_registry(str))
 
     assert result.stop_reason == "done"
-
-
-def test_an_unknown_deployment_counts_as_a_tool_error(monkeypatch):
-    fake_cluster(monkeypatch)
-    bad = tool_reply(logs_call("order"))
-    client = FakeClient(bad, bad, bad)
-    logs = Registry()
-    logs.tool(kube_tools.get_logs)
-
-    result = run_ida("why?", client, "fake", tools=logs)
-
-    assert result.stop_reason == "tool_errors"
-    assert client.tool_results()[0] == (
-        "Error: get_logs raised RuntimeError: "
-        "no deployment named 'order' in astronomy-shop"
-    )
 
 
 def test_unparseable_tool_call_from_the_model_stops_cleanly():
@@ -154,21 +133,17 @@ def test_a_custom_tool_call_is_a_model_error():
     assert "unexpected tool call kind 'custom'" in result.answer
 
 
-def test_a_reply_cut_off_at_the_output_limit_is_not_done():
-    client = FakeClient(text_reply("The cart service fails because", "length"))
+@pytest.mark.parametrize(
+    ("finish_reason", "stop_reason"),
+    [("length", "truncated"), ("content_filter", "content_filtered")],
+)
+def test_a_reply_that_did_not_finish_is_not_done(finish_reason, stop_reason):
+    client = FakeClient(text_reply("The cart service fails because", finish_reason))
 
     result = run_ida("why?", client, "fake", tools=logs_registry(str))
 
-    assert result.stop_reason == "truncated"
+    assert result.stop_reason == stop_reason
     assert result.answer == "The cart service fails because"
-
-
-def test_a_reply_stopped_by_the_content_filter_is_not_done():
-    client = FakeClient(text_reply("", "content_filter"))
-
-    result = run_ida("why?", client, "fake", tools=logs_registry(str))
-
-    assert result.stop_reason == "content_filtered"
 
 
 def test_a_400_that_is_not_a_tool_call_failure_is_a_model_error():

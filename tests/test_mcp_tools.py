@@ -186,13 +186,13 @@ def test_a_server_that_never_answers_fails_the_start(monkeypatch):
     )
 
     async def start():
-        async with mcp_client.mcp_tools(silent, Registry()):
+        async with mcp_client.mcp_tools(silent, Registry(), "metrics MCP"):
             pass
 
     try:
         asyncio.run(start())
     except RuntimeError as exc:
-        assert "did not start within 0.5s" in str(exc)
+        assert "metrics MCP server did not start within 0.5s" in str(exc)
     else:
         raise AssertionError("the start did not time out")
 
