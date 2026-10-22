@@ -10,7 +10,7 @@ from faultline.incidents import load_catalog
 from faultline.incidents import records as rec
 from faultline.incidents.catalog import Incident
 from faultline.incidents.health import Health
-from faultline.incidents.runner import Deps, plan, run_all, run_trial
+from faultline.incidents.runner import Deps, SetupAborted, plan, run_all, run_trial
 from faultline.incidents.webhook import AlertInbox, Notification
 
 T0 = datetime(2026, 10, 21, 12, 0, tzinfo=UTC)
@@ -389,3 +389,66 @@ def test_the_summary_counts_each_kind_and_leaves_the_control_out_of_the_total():
     assert lines["ad"].split()[1:] == ["0/1", "0", "1", "0", "1", "0"]
     assert lines["no_op"].split()[2:4] == ["0/1", "1"]
     assert lines["overall"].split()[3:5] == ["1/3", "1"]
+
+
+def test_a_cancel_while_the_bed_recovers_keeps_the_answered_trial(tmp_path):
+    world = World(tmp_path)
+    saved: list[rec.Record] = []
+    waits = 0
+
+    async def wait_healthy(timeout):
+        nonlocal waits
+        waits += 1
+        if waits == 2:  # the first is the setup check, the second is the recovery
+            await asyncio.Event().wait()
+        return Health()
+
+    deps = world.deps()
+    deps.wait_healthy = wait_healthy
+
+    async def go():
+        task = asyncio.create_task(run_trial(deps, CART.name, 1, CART, saved.append))
+        while waits < 2:
+            await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(go())
+
+    assert len(saved) == 1
+    assert saved[0].outcome == "correct" and saved[0].answer
+    assert saved[0].recovery.startswith("interrupted")
+
+
+def test_two_setup_failures_in_a_row_stop_the_run_and_keep_the_results(tmp_path):
+    world = World(tmp_path)
+    world.health = Health(firing=["FrontendErrorRate"])
+    out = tmp_path / "incidents.jsonl"
+
+    with pytest.raises(SetupAborted, match=r"2 trials in a row.*--out .*incidents"):
+        asyncio.run(
+            run_all(world.deps(), load_catalog(), out, 1, None, log=lambda _: None)
+        )
+
+    assert [r.outcome for r in rec.load(out)] == ["setup failed"] * 2
+
+
+def test_a_good_trial_between_setup_failures_resets_the_count(tmp_path):
+    world = World(tmp_path)
+    healths = iter([Health(firing=["x"]), Health(), Health(), Health(firing=["x"])])
+    quiet = lambda _: None
+
+    async def wait_healthy(timeout):
+        return next(healths, Health())
+
+    deps = world.deps()
+    deps.wait_healthy = wait_healthy
+    only = ["cart_service_failure", "ad_service_failure"]
+
+    # fail, ok (setup + recovery), fail: never two failures in a row
+    ran = asyncio.run(
+        run_all(deps, load_catalog(), tmp_path / "o.jsonl", 2, only, log=quiet)
+    )
+
+    assert [r.outcome for r in ran][:3] == ["setup failed", "correct", "setup failed"]

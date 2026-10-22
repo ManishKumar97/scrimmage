@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 
 from faultline.ida import RunResult
@@ -22,6 +23,7 @@ from faultline.verdict import score
 SETUP_TIMEOUT = 20 * 60.0  # seconds to wait for a healthy test bed
 ALERT_TIMEOUT = 20 * 60.0  # seconds to wait for a page after injecting
 RECOVER_CALL_TIMEOUT = 60.0  # the cleanup call, even when the trial was cancelled
+MAX_SETUP_FAILURES = 2  # in a row, then the run stops: the test bed is not coming back
 
 # The control is a false alarm: a symptom page while nothing is wrong. It is the same
 # kind of page the other trials get, so the agent cannot tell it apart by its form.
@@ -32,6 +34,14 @@ CONTROL_LABELS = {
 }
 CONTROL_DELAY = 300.0  # seconds
 CONTROL_SUMMARY = "frontend fails 2% of its requests"
+
+
+class SetupAborted(RuntimeError):
+    """Too many trials in a row could not start. The results file is safe to resume."""
+
+
+def keep_nothing(record: Record) -> None:
+    pass
 
 
 @dataclass
@@ -67,9 +77,17 @@ async def page_or_none(
 
 
 async def run_trial(
-    deps: Deps, name: str, trial: int, incident: Incident | None
+    deps: Deps,
+    name: str,
+    trial: int,
+    incident: Incident | None,
+    save: Callable[[Record], None] = keep_nothing,
 ) -> Record:
-    """One trial. `incident` None is the control. Always leaves the flags off."""
+    """One trial. `incident` None is the control. Always leaves the flags off.
+
+    `save` is called with the finished record, or earlier if the run is cancelled
+    while the test bed recovers, so a trial the agent already answered is never lost.
+    """
     started = deps.now()
     expected = incident.service if incident else "none"
     record = Record(
@@ -83,7 +101,8 @@ async def run_trial(
     try:
         await run_steps(deps, record, incident)
     finally:
-        await recover(deps, record)
+        await recover(deps, record, save)
+    save(record)
     return record
 
 
@@ -150,7 +169,7 @@ async def run_steps(deps: Deps, record: Record, incident: Incident | None) -> No
     record.detail = ""
 
 
-async def recover(deps: Deps, record: Record) -> None:
+async def recover(deps: Deps, record: Record, save: Callable[[Record], None]) -> None:
     """Turn every flag off and wait for the test bed to come back.
 
     Runs on every exit path, including a cancelled trial. A test bed that does not
@@ -165,7 +184,12 @@ async def recover(deps: Deps, record: Record) -> None:
     if record.outcome == rec.SETUP_FAILED:
         record.recovery = "not needed"  # nothing was injected
         return
-    health = await deps.wait_healthy(deps.setup_timeout)
+    try:
+        health = await deps.wait_healthy(deps.setup_timeout)
+    except BaseException:  # a cancel or a crash must not lose a trial already answered
+        record.recovery = "interrupted before the test bed was confirmed healthy"
+        save(record)
+        raise
     record.recovery = "ok" if health.ok else f"not healthy: {health.describe()}"
     deps.inbox.reset()
 
@@ -194,16 +218,23 @@ async def run_all(
     """Run every planned trial not already in `out`. Append a line per trial."""
     done = rec.finished(rec.load(out))
     ran = []
+    setup_failures = 0  # in a row
     for name, trial in plan(catalog, trials, only):
         if (name, trial) in done:
             log(f"skip {name} #{trial}: already in {out}")
             continue
         incident = None if name == catalog.control.name else catalog.get(name)
         log(f"start {name} #{trial}")
-        record = await run_trial(deps, name, trial, incident)
-        rec.append(out, record)
+        record = await run_trial(deps, name, trial, incident, partial(rec.append, out))
         ran.append(record)
         log(f"done  {name} #{trial}: {record.outcome} (recovery {record.recovery})")
+        setup_failures = setup_failures + 1 if record.outcome == rec.SETUP_FAILED else 0
+        if setup_failures >= MAX_SETUP_FAILURES:
+            raise SetupAborted(
+                f"{setup_failures} trials in a row could not start "
+                f"(last: {record.detail}). Fix the test bed and rerun with "
+                f"--out {out} to resume."
+            )
     return ran
 
 

@@ -18,7 +18,7 @@ from pathlib import Path
 from faultline import ida
 from faultline.incidents import cluster, flagd, health, load_catalog
 from faultline.incidents import records as rec
-from faultline.incidents.runner import Deps, run_all, utc_now
+from faultline.incidents.runner import Deps, SetupAborted, run_all, utc_now
 from faultline.incidents.webhook import AlertInbox, Listener
 from faultline.kube_tools import kube_api
 from faultline.settings import get_settings
@@ -164,6 +164,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--trials must be at least 1")
     try:
         return asyncio.run(stop_on_signals(run_command(args)))
+    except SetupAborted as stop:
+        print(f"stopped: {stop}", file=sys.stderr)
+        return 1
     except Terminated as stop:
         print(f"{stop}: flags were turned off; rerun to resume", file=sys.stderr)
         return 128 + stop.signum
