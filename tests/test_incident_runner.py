@@ -421,6 +421,49 @@ def test_a_cancel_while_the_bed_recovers_keeps_the_answered_trial(tmp_path):
     assert saved[0].recovery.startswith("interrupted")
 
 
+def test_a_cancel_during_the_flags_off_call_lets_it_finish_and_keeps_the_trial(
+    tmp_path,
+):
+    world = World(tmp_path)
+    saved: list[rec.Record] = []
+    flags_on = False
+    calls = 0
+    in_flight = asyncio.Event()
+
+    async def inject(incident):
+        nonlocal flags_on
+        flags_on = True
+        await world.inject(incident)
+
+    async def recover_all():
+        nonlocal flags_on, calls
+        calls += 1
+        if calls == 2:  # the first is the setup clear, the second is the cleanup
+            in_flight.set()
+            await asyncio.sleep(
+                0.05
+            )  # the HTTP call is still going when the cancel hits
+        flags_on = False
+        return {}
+
+    deps = world.deps()
+    deps.inject, deps.recover_all = inject, recover_all
+
+    async def go():
+        task = asyncio.create_task(run_trial(deps, CART.name, 1, CART, saved.append))
+        await in_flight.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(go())
+
+    assert not flags_on
+    assert len(saved) == 1
+    assert saved[0].outcome == "correct" and saved[0].answer
+    assert saved[0].recovery.startswith("interrupted")
+
+
 def test_two_setup_failures_in_a_row_stop_the_run_and_keep_the_results(tmp_path):
     world = World(tmp_path)
     world.health = Health(firing=["FrontendErrorRate"])

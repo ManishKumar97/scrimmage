@@ -175,11 +175,26 @@ async def recover(deps: Deps, record: Record, save: Callable[[Record], None]) ->
     Runs on every exit path, including a cancelled trial. A test bed that does not
     come back is written on the record, so the next trial is not blamed for it.
     """
-    try:
-        async with asyncio.timeout(RECOVER_CALL_TIMEOUT):
-            await deps.recover_all()
-    except Exception as exc:  # noqa: BLE001 - TimeoutError is included
-        record.recovery = f"could not clear flags: {exc!r}"
+    # A cancel must not abort the flags-off call half way: wait for it, it has its own
+    # timeout. The cancel is raised again once the flags are off and the record is kept.
+    call = asyncio.ensure_future(
+        asyncio.wait_for(deps.recover_all(), RECOVER_CALL_TIMEOUT)
+    )
+    cancelled = False
+    while not call.done():
+        try:
+            await asyncio.wait({call})
+        except asyncio.CancelledError:
+            cancelled = True
+    failure = asyncio.CancelledError() if call.cancelled() else call.exception()
+    if failure is not None:
+        record.recovery = f"could not clear flags: {failure!r}"
+    if cancelled:
+        if failure is None:
+            record.recovery = "interrupted before the test bed was confirmed healthy"
+        save(record)
+        raise asyncio.CancelledError
+    if failure is not None:
         return
     if record.outcome == rec.SETUP_FAILED:
         record.recovery = "not needed"  # nothing was injected
