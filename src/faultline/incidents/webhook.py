@@ -15,7 +15,7 @@ from aiohttp import web
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError
 
 # Labels that identify the alert's source. Others (job, instance, pod IPs) are noise.
-LABELS_SHOWN = ("alertname", "severity", "service_name")
+LABELS_SHOWN = ("alertname", "severity", "service_name", "route")
 
 
 class Alert(BaseModel):

@@ -27,12 +27,13 @@ MAX_SETUP_FAILURES = 2  # in a row, then the run stops: the test bed is not comi
 # The control is a false alarm: a symptom page while nothing is wrong. It is the same
 # kind of page the other trials get, so the agent cannot tell it apart by its form.
 CONTROL_LABELS = {
-    "alertname": "FrontendErrorRate",
+    "alertname": "RouteErrorRate",
     "severity": "page",
-    "service_name": "frontend",
+    "service_name": "frontend-proxy",
+    "route": "cart-api",
 }
 CONTROL_DELAY = 300.0  # seconds
-CONTROL_SUMMARY = "frontend fails 2% of its requests"
+CONTROL_SUMMARY = "cart-api fails 6% of its requests"
 
 
 class SetupAborted(RuntimeError):

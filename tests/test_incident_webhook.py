@@ -171,3 +171,19 @@ def test_a_stale_alert_is_dropped_and_does_not_hide_a_later_real_page():
 
     again = alert("AStale", fingerprint="s", startsAt="2026-10-21T12:07:00Z")
     assert inbox.accept(Notification.model_validate(payload(again))) == 1
+
+
+def test_the_route_label_reaches_the_question():
+    note = Notification.model_validate(
+        payload(
+            alert(
+                "CheckoutRouteErrorRate",
+                labels={"service_name": "frontend-proxy", "route": "checkout"},
+                annotations={"summary": "checkout fails 100% of its requests"},
+            )
+        )
+    )
+
+    question = build_question(note.alerts[0])
+
+    assert "route=checkout" in question

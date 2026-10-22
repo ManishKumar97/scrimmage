@@ -264,7 +264,7 @@ def test_the_control_gets_a_false_alarm_and_is_right_to_say_none(tmp_path):
 
     assert r.outcome == "correct" and r.expected == "none"
     assert not any(c.startswith("inject") for c in world.calls)
-    assert r.alert == "FrontendErrorRate"
+    assert r.alert == "RouteErrorRate"
     # Traces are cleared, then the control waits for them to refill before it is asked.
     assert world.calls[:5] == [
         "recover_all",
