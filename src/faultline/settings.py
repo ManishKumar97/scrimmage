@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     )
 
     # The one setting that picks the model provider.
-    provider: Literal["groq", "anthropic"] = "groq"
+    provider: Literal["groq", "anthropic"] = "anthropic"
     groq_api_key: SecretStr = SecretStr("")
     groq_model: str = "openai/gpt-oss-120b"
     groq_base_url: str = "https://api.groq.com/openai/v1"

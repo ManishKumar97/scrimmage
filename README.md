@@ -47,8 +47,8 @@ One setting picks the provider: `PROVIDER` in `.env` or the environment.
 
 | `PROVIDER` | Needs | Default model |
 | --- | --- | --- |
-| `groq` (default) | `GROQ_API_KEY`, optional `GROQ_BASE_URL` for any OpenAI-compatible endpoint | `openai/gpt-oss-120b` |
-| `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-5-5` |
+| `groq` | `GROQ_API_KEY`, optional `GROQ_BASE_URL` for any OpenAI-compatible endpoint | `openai/gpt-oss-120b` |
+| `anthropic` (default) | `ANTHROPIC_API_KEY` | `claude-haiku-5-5` |
 
 Each provider has its own model setting, `GROQ_MODEL` and `ANTHROPIC_MODEL`, so switching `PROVIDER` never sends one provider's model name to the other.
 
