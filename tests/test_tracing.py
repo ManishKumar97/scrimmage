@@ -5,7 +5,14 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from fake_model import FakeClient, logs_call, rejected, text_reply, tool_reply
+from fake_model import (
+    FakeClient,
+    SlowClient,
+    logs_call,
+    rejected,
+    text_reply,
+    tool_reply,
+)
 from fake_tools import logs_registry
 from openai import AsyncOpenAI
 from openai.types.completion_usage import PromptTokensDetails
@@ -35,6 +42,7 @@ def traced(
     client: FakeClient,
     budget: ida.Budget = ida.DEFAULT_BUDGET,
     content: bool = False,
+    tools: Registry = TOOLS,
 ) -> tuple[ida.RunResult | None, dict[str, list[ReadableSpan]]]:
     """Run the loop with an in-memory exporter. Spans come back grouped by name prefix."""
     exporter = InMemorySpanExporter()
@@ -45,7 +53,7 @@ def traced(
     result = None
     try:
         result = asyncio.run(
-            ida.run("why?", model, budget, tools=TOOLS, tracing=config)
+            ida.run("why?", model, budget, tools=tools, tracing=config)
         )
     except RuntimeError:
         pass  # the test checks the span of the run that blew up
@@ -168,12 +176,6 @@ def test_a_model_api_error_is_recorded_on_the_model_span_and_the_root():
     assert attrs(chat)["error.type"] == "ModelError"
     (root,) = spans["invoke_agent"]
     assert attrs(root)["faultline.stop_reason"] == "model_error"
-
-
-class SlowClient(FakeClient):
-    async def create(self, **kwargs):
-        await asyncio.sleep(5)  # cancelled by the deadline long before this ends
-        return text_reply("too late")
 
 
 def test_the_deadline_ends_and_exports_every_open_span():
@@ -369,16 +371,8 @@ def everything_in(spans: dict[str, list[ReadableSpan]]) -> str:
 
 
 def run_leaky(client: FakeClient, budget: ida.Budget, content: bool = False):
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    model = OpenAIModel(cast(AsyncOpenAI, client), "fake-model")
-    config = Tracing(provider.get_tracer("test"), content)
-    try:
-        asyncio.run(ida.run("why?", model, budget, tools=leaky_tools(), tracing=config))
-    except RuntimeError:
-        pass
-    return {"all": list(exporter.get_finished_spans())}
+    _, spans = traced(client, budget, content, leaky_tools())
+    return {"all": [s for found in spans.values() for s in found]}
 
 
 @pytest.mark.parametrize(

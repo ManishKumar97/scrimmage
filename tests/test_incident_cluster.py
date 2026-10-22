@@ -2,6 +2,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+from fake_incidents import Clock
 
 from faultline.incidents import cluster
 
@@ -37,17 +38,6 @@ class FakeApps:
                 ready_replicas=1 if ready else 0,
             )
         )
-
-
-class Clock:
-    def __init__(self) -> None:
-        self.t = 0.0
-
-    def now(self) -> float:
-        return self.t
-
-    async def sleep(self, s: float) -> None:
-        self.t += s
 
 
 def reset(monkeypatch, timeout=60.0):

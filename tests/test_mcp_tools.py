@@ -7,6 +7,7 @@ from typing import cast
 
 import fake_tools
 from fake_model import FakeClient, text_reply, tool_reply
+from fake_tools import text_of
 from mcp import Client
 from mcp.client.stdio import StdioServerParameters
 from openai import AsyncOpenAI
@@ -18,10 +19,6 @@ from faultline.tools import Registry
 SERVER = StdioServerParameters(
     command=sys.executable, args=[str(Path(__file__).parent / "mcp_test_server.py")]
 )
-
-
-def text_of(result) -> str:
-    return "\n".join(b.text for b in result.content if b.type == "text")
 
 
 def alive(pid: int) -> bool:

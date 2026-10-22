@@ -1,7 +1,14 @@
 import asyncio
 import time
 
-from fake_model import FakeClient, logs_call, run_ida, text_reply, tool_reply
+from fake_model import (
+    FakeClient,
+    SlowClient,
+    logs_call,
+    run_ida,
+    text_reply,
+    tool_reply,
+)
 from fake_tools import fake_cluster, logs_registry
 
 from faultline import ida, kube_tools
@@ -14,15 +21,6 @@ class ForeverClient(FakeClient):
     async def create(self, **kwargs):
         self.requests.append(kwargs)
         return tool_reply(logs_call("cart"))
-
-
-class SlowClient(FakeClient):
-    """A model call that takes longer than any budget in these tests."""
-
-    async def create(self, **kwargs):
-        self.requests.append(kwargs)
-        await asyncio.sleep(5)
-        return text_reply("too late")
 
 
 SAME_LOGS = logs_registry(lambda service: "same logs again")

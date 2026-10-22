@@ -106,3 +106,12 @@ class FakeClient:
         """Every tool result the loop sent back to the model, in order."""
         last = self.requests[-1]["messages"]
         return [m["content"] for m in last if m["role"] == "tool"]
+
+
+class SlowClient(FakeClient):
+    """A model call that takes longer than any budget in these tests."""
+
+    async def create(self, **kwargs):
+        self.requests.append(kwargs)
+        await asyncio.sleep(5)
+        return text_reply("too late")

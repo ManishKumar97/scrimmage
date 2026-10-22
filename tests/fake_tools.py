@@ -402,6 +402,10 @@ def trace(*spans: dict) -> dict:
     return {"traceID": "t", "spans": list(spans), "processes": processes}
 
 
+def text_of(result) -> str:
+    return "\n".join(b.text for b in result.content if b.type == "text")
+
+
 def fake_cluster(monkeypatch) -> FakeCluster:
     """Serve the kube tools from a FakeCluster instead of the real test bed."""
     cluster = FakeCluster()

@@ -6,7 +6,7 @@ from typing import cast
 
 import pytest
 from fake_model import FakeClient, text_reply
-from fake_tools import NOW, FakeCluster, fake_cluster
+from fake_tools import NOW, FakeCluster, fake_cluster, text_of
 from mcp import Client
 from mcp.client.stdio import StdioServerParameters
 from openai import AsyncOpenAI
@@ -80,10 +80,6 @@ def cart_incident(cluster: FakeCluster) -> None:
     # Other services and a client span that must not leak into cart's numbers.
     add_service(cluster, "checkout", 4.0, errors=[(3600, 3.0)])
     cluster.prom.counter(CALLS, labels("cart", kind="SPAN_KIND_CLIENT"), [(3600, 50.0)])
-
-
-def text_of(result) -> str:
-    return "\n".join(b.text for b in result.content if b.type == "text")
 
 
 def run(call):

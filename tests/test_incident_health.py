@@ -2,7 +2,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
-from fake_incidents import FakeApi, pod, vector
+from fake_incidents import Clock, FakeApi, pod, vector
 
 from faultline.incidents import flagd, health
 from faultline.incidents.health import Health
@@ -101,21 +101,6 @@ def test_the_queries_are_the_ones_the_health_check_documents(monkeypatch):
 
     assert not result.ok
     assert result.error is not None and "rejected the query" in result.error
-
-
-class Clock:
-    """Time that moves only when the poll loop sleeps."""
-
-    def __init__(self) -> None:
-        self.t = 0.0
-        self.sleeps: list[float] = []
-
-    def now(self) -> float:
-        return self.t
-
-    async def sleep(self, seconds: float) -> None:
-        self.sleeps.append(seconds)
-        self.t += seconds
 
 
 def wait(readings, timeout=60.0, interval=15.0):

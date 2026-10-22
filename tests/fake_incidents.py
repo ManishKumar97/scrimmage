@@ -4,7 +4,7 @@ import json
 from types import SimpleNamespace
 from typing import cast
 
-from kubernetes_asyncio.client import ApiClient, ApiException
+from kubernetes_asyncio.client import ApiClient
 
 FLAG_FILE = {
     "$schema": "https://flagd.dev/schema/v0/flags.json",
@@ -52,6 +52,21 @@ class FakeFlagdUi:
         return reply(404, "not found")
 
 
+class Clock:
+    """Time that moves only when the poll loop sleeps."""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+        self.sleeps: list[float] = []
+
+    def now(self) -> float:
+        return self.t
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.t += seconds
+
+
 def reply(status: int, text: str) -> SimpleNamespace:
     async def body() -> str:
         return text
@@ -84,10 +99,6 @@ class FakeApi:
             return reply(400, json.dumps({"status": "error", "error": "bad query"}))
         body = {"status": "success", "data": {"result": self.queries[query]}}
         return reply(200, json.dumps(body))
-
-
-def not_found() -> ApiException:
-    return ApiException(status=404, reason="Not Found")
 
 
 def vector(value: float, **labels: str) -> dict:
