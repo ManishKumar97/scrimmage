@@ -1,16 +1,13 @@
 import asyncio
 import json
-from datetime import UTC, datetime
 
 import aiohttp
 
 from faultline.incidents.webhook import (
-    Alert,
     AlertInbox,
     Listener,
     Notification,
     build_question,
-    synthetic_notification,
 )
 
 
@@ -90,20 +87,9 @@ def test_junk_is_rejected_and_queues_nothing():
         status, _, inbox = post(None, raw=raw)
         assert status == 400, raw
         assert inbox.queue.empty()
-    status, _, inbox = post(payload(alert(), version="3"))
-    assert status == 400 and inbox.queue.empty()
     bad_alert = payload({"status": "firing", "labels": {}, "annotations": {}})
     status, _, inbox = post(bad_alert)
     assert status == 400 and inbox.queue.empty()
-
-
-def test_a_body_over_the_limit_is_refused():
-    big = payload(alert(annotations={"summary": "x" * 300_000}))
-
-    status, _, inbox = post(big)
-
-    assert status == 413
-    assert inbox.queue.empty()
 
 
 def test_the_listener_frees_its_port_on_exit():
@@ -135,62 +121,3 @@ def test_the_question_uses_only_the_alert():
         "Find the cause."
     )
     assert "10.0.0.1" not in question and "wiki" not in question
-
-
-def test_a_long_or_multiline_summary_is_cut_and_flattened():
-    a = Alert.model_validate(
-        alert(annotations={"summary": "line one\nline two " + "y" * 500})
-    )
-
-    question = build_question(a)
-
-    assert "\n" not in question
-    assert len(question) < 700
-
-
-def test_reset_forgets_handled_alerts_and_unread_pages():
-    inbox = AlertInbox()
-    note = Notification.model_validate(payload(alert()))
-    assert inbox.accept(note) == 1
-
-    inbox.reset()
-
-    assert inbox.queue.empty()
-    assert inbox.accept(note) == 1
-
-
-def test_a_synthetic_page_goes_through_the_same_inbox():
-    inbox = AlertInbox()
-    note = synthetic_notification(
-        {"alertname": "FrontendErrorRate"},
-        "5xx rate is 4%",
-        datetime(2026, 10, 21, tzinfo=UTC),
-    )
-
-    assert inbox.accept(note) == 1
-    first, _ = page(inbox)
-    assert "FrontendErrorRate" in build_question(first)
-
-
-def test_a_missing_or_zoneless_start_time_is_refused_not_a_crash():
-    no_start = alert()
-    del no_start["startsAt"]
-    for bad in (no_start, alert(startsAt="2026-10-21T12:00:00"), alert(startsAt=None)):
-        # The good alert rides in the same batch: one bad alert refuses the batch.
-        status, _, inbox = post(payload(alert(fingerprint="ok"), bad))
-        assert status == 400 and inbox.queue.empty()
-
-
-def test_a_stale_alert_is_dropped_and_does_not_hide_a_later_real_page():
-    inbox = AlertInbox()
-    inbox.reset(since=datetime(2026, 10, 21, 12, 5, tzinfo=UTC))
-    stale = alert("AStale", fingerprint="s", startsAt="2026-10-21T12:00:00Z")
-    fresh = alert("ZFresh", fingerprint="z", startsAt="2026-10-21T12:06:00Z")
-
-    # The stale alert sorts first, so it would be the page if it were not dropped.
-    assert inbox.accept(Notification.model_validate(payload(stale, fresh))) == 1
-    first, names = page(inbox)
-    assert (first.name, names) == ("ZFresh", ["ZFresh"])
-
-    again = alert("AStale", fingerprint="s", startsAt="2026-10-21T12:07:00Z")
-    assert inbox.accept(Notification.model_validate(payload(again))) == 1

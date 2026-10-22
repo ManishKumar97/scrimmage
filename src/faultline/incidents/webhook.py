@@ -14,8 +14,6 @@ from typing import Self
 from aiohttp import web
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError
 
-MAX_BODY_BYTES = 256 * 1024
-MAX_VALUE_CHARS = 300  # one label or summary, cut
 # Labels that identify the alert's source. Others (job, instance, pod IPs) are noise.
 LABELS_SHOWN = ("alertname", "severity", "service_name")
 
@@ -41,26 +39,20 @@ class Notification(BaseModel):
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    version: str
     status: str
     alerts: list[Alert]
-
-
-def clip(text: str) -> str:
-    text = " ".join(text.split())
-    return text if len(text) <= MAX_VALUE_CHARS else text[: MAX_VALUE_CHARS - 1] + "…"
 
 
 def build_question(alert: Alert) -> str:
     """The agent's question. It uses only what the alert itself says."""
     labels = ", ".join(
-        f"{key}={clip(alert.labels[key])}"
+        f"{key}={alert.labels[key]}"
         for key in LABELS_SHOWN
         if key in alert.labels and key != "alertname"
     )
-    parts = [f"The alert {clip(alert.name)} is firing in the Astronomy Shop."]
+    parts = [f"The alert {alert.name} is firing in the Astronomy Shop."]
     if summary := alert.annotations.get("summary"):
-        parts.append(clip(summary).rstrip(".") + ".")
+        parts.append(summary.rstrip(".") + ".")
     if labels:
         parts.append(f"Labels: {labels}.")
     parts.append("Find the cause.")
@@ -120,11 +112,9 @@ def make_app(inbox: AlertInbox) -> web.Application:
             return web.json_response(
                 {"error": "not an Alertmanager payload"}, status=400
             )
-        if note.version != "4":
-            return web.json_response({"error": "unsupported version"}, status=400)
         return web.json_response({"new": inbox.accept(note)})
 
-    app = web.Application(client_max_size=MAX_BODY_BYTES)
+    app = web.Application()
     app.router.add_post("/alerts", alerts)
     return app
 
@@ -141,12 +131,7 @@ class Listener:
     async def __aenter__(self) -> Self:
         self.runner = web.AppRunner(make_app(self.inbox), access_log=None)
         await self.runner.setup()
-        try:
-            site = web.TCPSite(self.runner, self.host, self.port)
-            await site.start()
-        except BaseException:
-            await self.runner.cleanup()
-            raise
+        await web.TCPSite(self.runner, self.host, self.port).start()
         return self
 
     @property
@@ -170,4 +155,4 @@ def synthetic_notification(
         annotations={"summary": summary},
         fingerprint="synthetic-" + labels.get("alertname", "alert"),
     )
-    return Notification(version="4", status="firing", alerts=[alert])
+    return Notification(status="firing", alerts=[alert])
