@@ -97,7 +97,7 @@ async def run_command(args: argparse.Namespace) -> int:
             inject=partial(flagd.inject, api),
             recover_all=partial(flagd.recover_all, api),
             diagnose=lambda question, trace_file: ida.diagnose_async(
-                question, trace_file=trace_file, trace_content=True
+                question, trace_file=trace_file
             ),
             reset_traces=partial(cluster.reset_traces, api),
             sleep=asyncio.sleep,

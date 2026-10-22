@@ -113,16 +113,14 @@ async def run(
         "faultline.budget.max_tokens": budget.max_tokens,
         "faultline.budget.max_seconds": budget.max_seconds,
     }
-    if tracing.content:
-        attributes["faultline.question"] = question
+    attributes["faultline.question"] = question
     with tracing.span(f"invoke_agent {spans.AGENT_NAME}", attributes) as root:
         result = await run_loop(question, model, budget, tools, tracing, root)
         root.set_attribute("faultline.stop_reason", result.stop_reason)
         root.set_attribute("faultline.steps", result.steps)
         root.set_attribute("faultline.tokens", result.tokens)
         root.set_attribute("faultline.seconds", result.seconds)
-        if tracing.content:
-            root.set_attribute("faultline.answer", result.answer)
+        root.set_attribute("faultline.answer", result.answer)
         if result.stop_reason != "done":
             tracing.fail(root, result.stop_reason, result.answer)
         return result
@@ -226,19 +224,17 @@ async def complete(
     """One model call, in its own span."""
     attributes = spans.model_attributes(model.provider, model.model, step)
     specs = tools.specs()
-    if tracing.content:
-        attributes[spans.GEN_AI_SYSTEM_INSTRUCTIONS] = SYSTEM_PROMPT
-        attributes[spans.GEN_AI_INPUT_MESSAGES] = spans.messages_json(messages)
-        attributes[spans.GEN_AI_TOOL_DEFINITIONS] = json.dumps(
-            [{"type": "function", **asdict(spec)} for spec in specs]
-        )
+    attributes[spans.GEN_AI_SYSTEM_INSTRUCTIONS] = SYSTEM_PROMPT
+    attributes[spans.GEN_AI_INPUT_MESSAGES] = spans.messages_json(messages)
+    attributes[spans.GEN_AI_TOOL_DEFINITIONS] = json.dumps(
+        [{"type": "function", **asdict(spec)} for spec in specs]
+    )
     with tracing.span(
         f"chat {model.model}", attributes, parent, SpanKind.CLIENT
     ) as span:
         reply = await model.complete(SYSTEM_PROMPT, messages, specs)
         spans.record_reply(span, reply)
-        if tracing.content:
-            span.set_attribute(spans.GEN_AI_OUTPUT_MESSAGES, spans.output_json(reply))
+        span.set_attribute(spans.GEN_AI_OUTPUT_MESSAGES, spans.output_json(reply))
         return reply
 
 
@@ -252,12 +248,10 @@ async def call_tool(
     The step number ties each tool span to the model call that asked for it.
     """
     attributes = spans.tool_attributes(call.name, call.id, step)
-    if tracing.content:
-        attributes[spans.GEN_AI_TOOL_CALL_ARGUMENTS] = call.arguments
+    attributes[spans.GEN_AI_TOOL_CALL_ARGUMENTS] = call.arguments
     with tracing.span(f"execute_tool {call.name}", attributes, parent) as span:
         output, ok = await tools.call(call.name, call.arguments)
-        if tracing.content:
-            span.set_attribute(spans.GEN_AI_TOOL_CALL_RESULT, output)
+        span.set_attribute(spans.GEN_AI_TOOL_CALL_RESULT, output)
         if not ok:
             tracing.fail(span, "tool_error", output)
         return output, ok
@@ -267,18 +261,12 @@ def describe(call: ToolCall) -> str:
     return f"{call.name}({call.arguments})"
 
 
-async def diagnose_async(
-    question: str,
-    *,
-    trace_file: Path | None = None,
-    trace_content: bool | None = None,
-) -> RunResult:
-    """Run one diagnosis. The trace settings, when given, override the environment's."""
+async def diagnose_async(question: str, *, trace_file: Path | None = None) -> RunResult:
+    """Run one diagnosis. A trace file, when given, overrides the environment's."""
     settings = get_settings()
     model = make_model(settings)
     provider = spans.file_provider(trace_file or settings.trace_file)
-    content = settings.trace_content if trace_content is None else trace_content
-    tracing = Tracing(provider.get_tracer("faultline"), content)
+    tracing = Tracing(provider.get_tracer("faultline"))
     try:
         # The logs and metrics tools come from MCP servers. They live for this one run.
         async with (

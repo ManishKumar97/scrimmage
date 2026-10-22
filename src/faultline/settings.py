@@ -21,8 +21,6 @@ class Settings(BaseSettings):
 
     # Where each run writes its spans (OTLP JSON, one line per export).
     trace_file: Path = Path("runs/traces.jsonl")
-    # Off by default: spans carry no prompts or tool output. On, they carry all of it.
-    trace_content: bool = False
 
     @model_validator(mode="after")
     def key_for_provider(self) -> "Settings":

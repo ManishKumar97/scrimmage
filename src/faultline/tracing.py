@@ -115,8 +115,6 @@ class Tracing:
     """What the loop needs to emit spans. The default emits nothing (no provider set)."""
 
     tracer: Tracer = field(default_factory=lambda: trace.get_tracer("faultline"))
-    # True puts full prompts and tool output in the spans. They can be large and private.
-    content: bool = False
 
     @contextmanager
     def span(
@@ -140,13 +138,9 @@ class Tracing:
             span.end()
 
     def fail(self, span: Span, error_type: str, text: str) -> None:
-        """Mark a span ERROR. The text (an error body, a tool output) is kept only with content on."""
+        """Mark a span ERROR, keeping the error text (an error body, a tool output)."""
         span.set_attribute(ERROR_TYPE, error_type)
-        span.set_status(
-            Status(
-                StatusCode.ERROR, (text or error_type) if self.content else error_type
-            )
-        )
+        span.set_status(Status(StatusCode.ERROR, text or error_type))
 
 
 def context_of(span: Span) -> Context:

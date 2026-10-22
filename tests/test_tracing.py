@@ -4,7 +4,6 @@ import re
 from pathlib import Path
 from typing import cast
 
-import pytest
 from fake_model import (
     FakeClient,
     SlowClient,
@@ -40,7 +39,6 @@ TOOLS = logs_registry(logs)
 def traced(
     client: FakeClient,
     budget: ida.Budget = ida.DEFAULT_BUDGET,
-    content: bool = False,
     tools: Registry = TOOLS,
 ) -> tuple[ida.RunResult | None, dict[str, list[ReadableSpan]]]:
     """Run the loop with an in-memory exporter. Spans come back grouped by name prefix."""
@@ -48,7 +46,7 @@ def traced(
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     model = OpenAIModel(cast(AsyncOpenAI, client), "fake-model", provider="groq")
-    config = Tracing(provider.get_tracer("test"), content)
+    config = Tracing(provider.get_tracer("test"))
     result = None
     try:
         result = asyncio.run(
@@ -112,6 +110,10 @@ def test_model_spans_carry_the_genai_attributes_and_token_counts():
         "gen_ai.usage.output_tokens": 20,
         "gen_ai.response.finish_reasons": ("tool_calls",),
         "faultline.step": 1,
+        "gen_ai.system_instructions": ida.SYSTEM_PROMPT,
+        "gen_ai.input.messages": attrs(first)["gen_ai.input.messages"],
+        "gen_ai.output.messages": attrs(first)["gen_ai.output.messages"],
+        "gen_ai.tool.definitions": attrs(first)["gen_ai.tool.definitions"],
     }
     assert attrs(second)["gen_ai.response.finish_reasons"] == ("stop",)
     assert attrs(second)["faultline.step"] == 2
@@ -128,7 +130,7 @@ def test_a_failing_tool_span_is_an_error_with_the_error_text():
     assert attrs(ok)["faultline.step"] == 1
     assert ok.status.status_code == StatusCode.UNSET
     assert failed.status.status_code == StatusCode.ERROR
-    assert failed.status.description == "tool_error"  # the text needs content on
+    assert "pod not found" in (failed.status.description or "")
     assert attrs(failed)["error.type"] == "tool_error"
 
 
@@ -149,6 +151,8 @@ def test_the_root_span_has_the_stop_reason_steps_tokens_and_budget():
         "faultline.steps": 2,
         "faultline.tokens": 240,
         "faultline.seconds": result.seconds,
+        "faultline.question": "why?",
+        "faultline.answer": "Cart is down.",
     }
     assert root.status.status_code == StatusCode.UNSET
 
@@ -161,7 +165,7 @@ def test_a_run_that_stops_for_a_limit_is_an_error_on_the_root_span():
     (root,) = spans["invoke_agent"]
     assert attrs(root)["faultline.stop_reason"] == "step_limit"
     assert root.status.status_code == StatusCode.ERROR
-    assert root.status.description == "step_limit"
+    assert root.status.description == "Step limit of 2 reached."
 
 
 def test_a_model_api_error_is_recorded_on_the_model_span_and_the_root():
@@ -171,7 +175,7 @@ def test_a_model_api_error_is_recorded_on_the_model_span_and_the_root():
 
     (chat,) = spans["chat"]
     assert chat.status.status_code == StatusCode.ERROR
-    assert chat.status.description == "ModelError"
+    assert chat.status.description == "upstream is down"
     assert attrs(chat)["error.type"] == "ModelError"
     (root,) = spans["invoke_agent"]
     assert attrs(root)["faultline.stop_reason"] == "model_error"
@@ -199,30 +203,11 @@ def test_a_crash_in_the_loop_still_ends_the_root_span():
     (root,) = spans["invoke_agent"]
     assert root.status.status_code == StatusCode.ERROR
     assert attrs(root)["error.type"] == "RuntimeError"
-    assert root.status.description == "RuntimeError"
+    assert root.status.description == "bug in the adapter"
 
 
-def test_spans_hold_no_prompts_or_tool_output_by_default():
+def test_spans_hold_what_a_replay_needs():
     _, spans = traced(two_tool_run())
-
-    everything = json.dumps([attrs(s) for found in spans.values() for s in found])
-    assert "logs of cart" not in everything
-    assert "why?" not in everything
-    assert "gen_ai.input.messages" not in everything
-    assert "gen_ai.tool.call.arguments" not in everything
-
-
-def test_with_content_on_the_error_text_is_kept_in_the_status():
-    _, spans = traced(two_tool_run(), content=True)
-
-    failed = next(
-        s for s in spans["execute_tool"] if attrs(s)["gen_ai.tool.call.id"] == "call_1"
-    )
-    assert "pod not found" in (failed.status.description or "")
-
-
-def test_with_content_on_spans_hold_what_a_replay_needs():
-    _, spans = traced(two_tool_run(), content=True)
 
     (root,) = spans["invoke_agent"]
     assert attrs(root)["faultline.question"] == "why?"
@@ -321,102 +306,16 @@ def test_a_file_that_cannot_be_written_does_not_crash_the_run(tmp_path: Path):
     assert result.stop_reason == "done"
 
 
-@pytest.mark.parametrize("flag", ["true", "false"])
-def test_the_content_setting_reads_from_the_environment(flag, monkeypatch):
+def test_the_trace_file_setting_reads_from_the_environment(monkeypatch):
     from faultline.settings import Settings
 
     monkeypatch.setenv("PROVIDER", "groq")
     monkeypatch.setenv("GROQ_API_KEY", "x")
-    monkeypatch.setenv("TRACE_CONTENT", flag)
     monkeypatch.setenv("TRACE_FILE", "elsewhere.jsonl")
 
     settings = Settings()
 
-    assert settings.trace_content is (flag == "true")
     assert settings.trace_file == Path("elsewhere.jsonl")
-
-
-SECRET = "sk-planted-marker-123"
-
-
-def leaky_tools() -> Registry:
-    registry = Registry()
-
-    @registry.tool
-    def get_logs(service: str) -> str:
-        """Get logs."""
-        raise RuntimeError(f"password={SECRET}")
-
-    return registry
-
-
-def everything_in(spans: dict[str, list[ReadableSpan]]) -> str:
-    """Every attribute, status and event of every span, as one string."""
-    return json.dumps(
-        [
-            [
-                attrs(s),
-                s.status.description,
-                [(e.name, dict(e.attributes or {})) for e in s.events],
-            ]
-            for found in spans.values()
-            for s in found
-        ],
-        default=str,
-    )
-
-
-def run_leaky(client: FakeClient, budget: ida.Budget, content: bool = False):
-    _, spans = traced(client, budget, content, leaky_tools())
-    return {"all": [s for found in spans.values() for s in found]}
-
-
-@pytest.mark.parametrize(
-    ("client", "budget", "reason"),
-    [
-        (
-            FakeClient(tool_reply(logs_call("a")), text_reply(f"found {SECRET}")),
-            ida.DEFAULT_BUDGET,
-            "done",
-        ),
-        (
-            FakeClient(*[tool_reply(logs_call("a")) for _ in range(3)]),
-            ida.DEFAULT_BUDGET,
-            "tool_errors",
-        ),
-        (
-            FakeClient(text_reply(f"cut {SECRET}", "length")),
-            ida.DEFAULT_BUDGET,
-            "truncated",
-        ),
-        (
-            FakeClient(tool_reply(logs_call("a")), tool_reply(logs_call("a"))),
-            ida.Budget(max_steps=1),
-            "step_limit",
-        ),
-        (
-            FakeClient(rejected(500, f"body {SECRET}")),
-            ida.DEFAULT_BUDGET,
-            "model_error",
-        ),
-        (FakeClient(RuntimeError(f"bug {SECRET}")), ida.DEFAULT_BUDGET, "crash"),
-    ],
-)
-def test_nothing_from_a_prompt_answer_or_tool_output_leaks_with_content_off(
-    client, budget, reason
-):
-    spans = run_leaky(client, budget)
-
-    assert spans["all"]
-    assert SECRET not in everything_in(spans), reason
-    on = run_leaky(
-        FakeClient(tool_reply(logs_call("a")), text_reply(f"found {SECRET}")),
-        ida.DEFAULT_BUDGET,
-        content=True,
-    )
-    assert SECRET in everything_in(
-        on
-    )  # the marker is detectable, so the check can fail
 
 
 def test_the_file_uses_hex_ids_and_integer_enums_as_otlp_json_requires(tmp_path: Path):
