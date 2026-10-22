@@ -169,10 +169,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"stopped: {stop}", file=sys.stderr)
         return 1
     except Terminated as stop:
-        print(f"{stop}: flags were turned off; rerun to resume", file=sys.stderr)
+        print(
+            f"{stop}: stopped; rerun to resume (it turns flags off first)",
+            file=sys.stderr,
+        )
         return 128 + stop.signum
     except KeyboardInterrupt:
-        print("interrupted: flags were turned off; rerun to resume", file=sys.stderr)
+        print(
+            "interrupted; rerun to resume (it turns flags off first)", file=sys.stderr
+        )
         return 130
 
 
