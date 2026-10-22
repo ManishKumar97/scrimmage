@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import os
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -204,8 +203,6 @@ async def run_loop(
                         f"[tool] {describe(call)}{'' if ok else ' -> error'}",
                         file=sys.stderr,
                     )
-                    if os.environ.get("FAULTLINE_DEBUG_TOOLS"):
-                        print(f"[tool output]\n{output}\n[end]", file=sys.stderr)
                     results.append(ToolResult(call.id, output, not ok))
                 messages.append(results)
                 if consecutive_errors >= MAX_CONSECUTIVE_TOOL_ERRORS:

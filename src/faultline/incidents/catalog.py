@@ -21,8 +21,6 @@ class Incident(BaseModel):
     variant: str = Field(min_length=1)  # the value AIOpsLab sets it to
     service: str = Field(pattern=_SERVICE)  # AIOpsLab's faulty_service: the answer key
     source: str = Field(pattern=r"^aiopslab/.+\.py$")  # file in the AIOpsLab repository
-    # Shown in the summary when the key and the prompt's root-cause definition differ.
-    note: str = ""
 
 
 class Control(BaseModel):
@@ -49,10 +47,6 @@ class Catalog(BaseModel):
             if seen:
                 raise ValueError(f"duplicate incident {label}: {sorted(seen)}")
         return self
-
-    def notes(self) -> dict[str, str]:
-        """Incident name -> caveat, for the incidents that have one."""
-        return {i.name: i.note for i in self.incidents if i.note}
 
     def get(self, name: str) -> Incident:
         for incident in self.incidents:

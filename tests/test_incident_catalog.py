@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from faultline.incidents import CATALOG_PATH, load_catalog
+from faultline.incidents.catalog import CATALOG_PATH, load_catalog
 
 ROW = {
     "name": "cart_service_failure",

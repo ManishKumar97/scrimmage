@@ -16,8 +16,9 @@ from functools import partial
 from pathlib import Path
 
 from faultline import ida
-from faultline.incidents import cluster, flagd, health, load_catalog
+from faultline.incidents import cluster, flagd, health
 from faultline.incidents import records as rec
+from faultline.incidents.catalog import load_catalog
 from faultline.incidents.runner import Deps, SetupAborted, run_all
 from faultline.incidents.webhook import AlertInbox, Listener
 from faultline.kube_tools import kube_api, utc_now
@@ -115,7 +116,7 @@ async def run_command(args: argparse.Namespace) -> int:
             alert_timeout=args.alert_timeout,
         )
         await run_all(deps, catalog, out, args.trials, args.only, log=log)
-    print(rec.summarize(rec.load(out), catalog.control.name, catalog.notes()))
+    print(rec.summarize(rec.load(out), catalog.control.name))
     return 0
 
 
@@ -132,7 +133,7 @@ def summary_command(args: argparse.Namespace) -> int:
         return 1
     print(f"{path}")
     catalog = load_catalog()
-    print(rec.summarize(rec.load(path), catalog.control.name, catalog.notes()))
+    print(rec.summarize(rec.load(path), catalog.control.name))
     return 0
 
 

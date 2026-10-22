@@ -3,7 +3,6 @@
 # `service` is AIOpsLab's own `faulty_service`, so the answer key is the published one.
 # `source` is the AIOpsLab file that defines the problem, relative to the AIOpsLab repository.
 # `variant` is the value AIOpsLab sets the flag to. Every other flag stays "off".
-# `note` marks a key that disagrees with the prompt's root-cause definition. It changes no score.
 # The control has no flag: nothing is injected and the correct answer is "none".
 
 incidents:
@@ -44,7 +43,6 @@ incidents:
     variant: "on"
     service: frontend
     source: aiopslab/orchestrator/problems/loadgenerator_flood_homepage/loadgenerator_flood_homepage.py
-    note: the load generator sends the flood, the key names frontend, which takes it
   - name: payment_service_failure
     flag: paymentFailure
     variant: 100%
@@ -56,7 +54,6 @@ incidents:
     variant: "on"
     service: checkout
     source: aiopslab/orchestrator/problems/payment_service_unreachable/payment_service_unreachable.py
-    note: the key names checkout, but payment is the service that cannot be reached
   - name: product_catalog_failure
     flag: productCatalogFailure
     variant: "on"
