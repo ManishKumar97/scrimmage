@@ -90,7 +90,7 @@ def test_recover_all_turns_off_every_flag_and_reports_what_was_on():
     was_on = asyncio.run(flagd.recover_all(api.client))
 
     assert was_on == {"cartFailure": "on", "paymentFailure": "100%"}
-    assert asyncio.run(flagd.active_faults(api.client)) == {}
+    assert flagd.flags_on(api.flagd.file) == {}
 
 
 def test_recover_all_writes_nothing_when_nothing_is_on():

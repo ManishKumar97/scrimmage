@@ -1,6 +1,6 @@
 """Is the test bed clean enough to start an incident?
 
-Clean means: every pod Ready, no alert firing, no flag left on, and no new failed
+Clean means: every pod Ready, no alert firing, and no new failed
 spans for the last three minutes.
 """
 
@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 
 from kubernetes_asyncio.client import ApiClient, CoreV1Api
 
-from faultline.incidents import flagd
 from faultline.kube_tools import NAMESPACE
 from faultline.metrics_tools import prom_get
 
@@ -33,7 +32,6 @@ MAX_FAILED_SPANS = 0.0
 class Health:
     not_ready: list[str] = field(default_factory=list)
     firing: list[str] = field(default_factory=list)
-    faults: dict[str, str] = field(default_factory=dict)
     failed_spans: float | None = None  # None: Prometheus has no such series yet
     error: str | None = None  # the check itself could not run
 
@@ -43,7 +41,6 @@ class Health:
             self.error
             or self.not_ready
             or self.firing
-            or self.faults
             or (self.failed_spans or 0.0) > MAX_FAILED_SPANS
         )
 
@@ -57,8 +54,6 @@ class Health:
             parts.append(f"pods not ready: {', '.join(sorted(self.not_ready))}")
         if self.firing:
             parts.append(f"alerts firing: {', '.join(sorted(self.firing))}")
-        if self.faults:
-            parts.append(f"flags on: {self.faults}")
         if (self.failed_spans or 0.0) > MAX_FAILED_SPANS:
             parts.append(f"{self.failed_spans:g} failed spans in {QUIET_WINDOW}")
         return "; ".join(parts)
@@ -96,7 +91,6 @@ async def check_health(api: ApiClient) -> Health:
     return Health(
         not_ready=await not_ready_pods(api),
         firing=await firing_alerts(api),
-        faults=await flagd.active_faults(api),
         failed_spans=await failed_spans(api),
     )
 

@@ -89,10 +89,6 @@ def flags_on(doc: dict[str, Any]) -> dict[str, str]:
     }
 
 
-async def active_faults(api: ApiClient) -> dict[str, str]:
-    return flags_on(await read_flags(api))
-
-
 async def recover_all(api: ApiClient) -> dict[str, str]:
     """Turn every flag off in one write. Return the flags that were on."""
     doc = await read_flags(api)
@@ -101,7 +97,7 @@ async def recover_all(api: ApiClient) -> dict[str, str]:
         for name in was_on:
             doc["flags"][name]["defaultVariant"] = OFF
         await write_flags(api, doc)
-        left = await active_faults(api)
+        left = flags_on(await read_flags(api))
         if left:
             raise FlagdError(f"flags still on after recovery: {left}")
     return was_on

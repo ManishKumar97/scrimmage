@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from fake_incidents import Clock, FakeApi, pod, vector
 
-from faultline.incidents import flagd, health
+from faultline.incidents import health
 from faultline.incidents.health import Health
 
 
@@ -61,16 +61,6 @@ def test_a_firing_alert_is_unhealthy(monkeypatch):
     assert not result.ok
     assert result.firing == ["FrontendErrors"]
     assert "FrontendErrors" in result.describe()
-
-
-def test_a_flag_left_on_is_unhealthy(monkeypatch):
-    api = cluster(monkeypatch, [pod("ad")])
-    api.flagd.file["flags"]["cartFailure"]["defaultVariant"] = "on"
-
-    result = check(api)
-
-    assert not result.ok
-    assert result.faults == {"cartFailure": "on"}
 
 
 def test_new_failed_spans_are_unhealthy(monkeypatch):
@@ -147,11 +137,3 @@ def test_an_api_error_is_unhealthy_not_a_crash():
     assert not result.ok
     assert result.error == "RuntimeError: proxy down"
     assert "proxy down" in result.describe()
-
-
-def test_flag_file_errors_surface_through_the_health_check(monkeypatch):
-    api = cluster(monkeypatch, [pod("ad")])
-    api.flagd.status = 500
-
-    with pytest.raises(flagd.FlagdError):
-        check(api)
