@@ -1,3 +1,4 @@
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
@@ -31,6 +32,6 @@ class Settings(BaseSettings):
         return self
 
 
+@lru_cache
 def get_settings() -> Settings:
-    # The keys come from the environment, which pyright cannot see.
     return Settings()
