@@ -55,26 +55,13 @@ class Deps:
     control_delay: float = CONTROL_DELAY
 
 
-async def wait_for_page(
-    inbox: AlertInbox, since: datetime, timeout: float
-) -> tuple[Alert, list[str]] | None:
-    """The first page for an alert that started after `since`, or None at the timeout.
-
-    A late notification for the previous trial's alert starts before `since`, so it
-    cannot pass for this trial's page.
-    """
-    async with asyncio.timeout(timeout):
-        while True:
-            page, names = await inbox.queue.get()
-            if page.starts_at >= since:
-                return page, names
-
-
 async def page_or_none(
-    inbox: AlertInbox, since: datetime, timeout: float
+    inbox: AlertInbox, timeout: float
 ) -> tuple[Alert, list[str]] | None:
+    """The next page, or None at the timeout. Stale alerts never reach the queue."""
     try:
-        return await wait_for_page(inbox, since, timeout)
+        async with asyncio.timeout(timeout):
+            return await inbox.queue.get()
     except TimeoutError:
         return None
 
@@ -119,8 +106,8 @@ async def run_steps(deps: Deps, record: Record, incident: Incident | None) -> No
         record.detail = f"could not reset traces: {exc}"
         return
 
-    deps.inbox.reset()
     injected_at = deps.now()
+    deps.inbox.reset(since=injected_at)
     try:
         if incident:
             await deps.inject(incident)
@@ -132,7 +119,7 @@ async def run_steps(deps: Deps, record: Record, incident: Incident | None) -> No
         record.detail = f"injection failed: {exc}"
         return
 
-    page = await page_or_none(deps.inbox, injected_at, deps.alert_timeout)
+    page = await page_or_none(deps.inbox, deps.alert_timeout)
     if page is None:
         record.outcome = rec.NO_ALERT
         record.detail = f"no alert within {deps.alert_timeout:g}s"

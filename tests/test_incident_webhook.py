@@ -185,3 +185,18 @@ def test_a_missing_or_zoneless_start_time_is_refused_not_a_crash():
         # The good alert rides in the same batch: one bad alert refuses the batch.
         status, _, inbox = post(payload(alert(fingerprint="ok"), bad))
         assert status == 400 and inbox.queue.empty()
+
+
+def test_a_stale_alert_is_dropped_and_does_not_hide_a_later_real_page():
+    inbox = AlertInbox()
+    inbox.reset(since=datetime(2026, 10, 21, 12, 5, tzinfo=UTC))
+    stale = alert("AStale", fingerprint="s", startsAt="2026-10-21T12:00:00Z")
+    fresh = alert("ZFresh", fingerprint="z", startsAt="2026-10-21T12:06:00Z")
+
+    # The stale alert sorts first, so it would be the page if it were not dropped.
+    assert inbox.accept(Notification.model_validate(payload(stale, fresh))) == 1
+    first, names = page(inbox)
+    assert (first.name, names) == ("ZFresh", ["ZFresh"])
+
+    again = alert("AStale", fingerprint="s", startsAt="2026-10-21T12:07:00Z")
+    assert inbox.accept(Notification.model_validate(payload(again))) == 1

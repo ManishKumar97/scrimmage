@@ -80,18 +80,33 @@ class AlertInbox:
 
     def __init__(self) -> None:
         self.handled: set[str] = set()  # fingerprints already handed on
+        self.since: datetime | None = None  # alerts that started earlier are stale
         self.queue: asyncio.Queue[tuple[Alert, list[str]]] = asyncio.Queue()
 
     def accept(self, note: Notification) -> int:
-        """Queue the new firing alerts. Return how many were new."""
-        new = [a for a in firing(note) if a.fingerprint not in self.handled]
+        """Queue the new firing alerts. Return how many were new.
+
+        A stale alert, one that started before `since`, is dropped without being
+        marked handled, so the same alert firing again later still gets through.
+        """
+        new = [
+            a
+            for a in firing(note)
+            if a.fingerprint not in self.handled
+            and (self.since is None or a.starts_at >= self.since)
+        ]
         if new:
             self.handled.update(a.fingerprint for a in new)
             self.queue.put_nowait((new[0], [a.name for a in new]))
         return len(new)
 
-    def reset(self) -> None:
-        """Forget what was handled and drop anything unread. Call between trials."""
+    def reset(self, since: datetime | None = None) -> None:
+        """Forget what was handled and drop anything unread. Call between trials.
+
+        With `since`, later alerts that started before it are ignored: a late
+        notification for the previous trial's alert must not pass for this one's.
+        """
+        self.since = since
         self.handled.clear()
         while not self.queue.empty():
             self.queue.get_nowait()
