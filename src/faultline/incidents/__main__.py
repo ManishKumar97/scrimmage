@@ -6,10 +6,8 @@ uv run python -m faultline.incidents summary --file runs/incidents-NAME.jsonl
 
 import argparse
 import asyncio
-import signal
 import subprocess
 import sys
-from collections.abc import Awaitable
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -43,45 +41,6 @@ def git_sha() -> str:
         return sha + ("-dirty" if git("status", "--porcelain") else "")
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
-
-
-class Terminated(Exception):
-    """The process was asked to stop by a signal. Cleanup has already run."""
-
-    def __init__(self, signum: int) -> None:
-        super().__init__(signal.Signals(signum).name)
-        self.signum = signum
-
-
-async def stop_on_signals(work: Awaitable[int]) -> int:
-    """Run `work`. SIGTERM and SIGHUP cancel it the way Ctrl-C does.
-
-    The cancel unwinds through the trial's `finally`, which turns the flags off. A
-    default handler would end the process before that. A second signal is ignored
-    while the first is cleaning up.
-    """
-    loop = asyncio.get_running_loop()
-    task = asyncio.current_task()
-    assert task is not None
-    caught: list[int] = []
-
-    def stop(signum: int) -> None:
-        if not caught:
-            caught.append(signum)
-            task.cancel()
-
-    signums = (signal.SIGTERM, signal.SIGHUP)
-    for signum in signums:
-        loop.add_signal_handler(signum, stop, signum)
-    try:
-        return await work
-    except asyncio.CancelledError:
-        if caught:
-            raise Terminated(caught[0]) from None
-        raise
-    finally:
-        for signum in signums:
-            loop.remove_signal_handler(signum)
 
 
 async def run_command(args: argparse.Namespace) -> int:
@@ -149,16 +108,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.trials < 1:
         parser.error("--trials must be at least 1")
     try:
-        return asyncio.run(stop_on_signals(run_command(args)))
+        return asyncio.run(run_command(args))
     except SetupAborted as stop:
         print(f"stopped: {stop}", file=sys.stderr)
         return 1
-    except Terminated as stop:
-        print(
-            f"{stop}: stopped; rerun to resume (it turns flags off first)",
-            file=sys.stderr,
-        )
-        return 128 + stop.signum
     except KeyboardInterrupt:
         print(
             "interrupted; rerun to resume (it turns flags off first)", file=sys.stderr

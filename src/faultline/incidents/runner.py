@@ -4,7 +4,6 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
-from functools import partial
 from pathlib import Path
 
 from faultline.ida import RunResult
@@ -38,10 +37,6 @@ CONTROL_SUMMARY = "frontend fails 2% of its requests"
 
 class SetupAborted(RuntimeError):
     """Too many trials in a row could not start. The results file is safe to resume."""
-
-
-def keep_nothing(record: Record) -> None:
-    pass
 
 
 @dataclass
@@ -81,13 +76,8 @@ async def run_trial(
     name: str,
     trial: int,
     incident: Incident | None,
-    save: Callable[[Record], None] = keep_nothing,
 ) -> Record:
-    """One trial. `incident` None is the control. Always leaves the flags off.
-
-    `save` is called with the finished record, or earlier if the run is cancelled
-    while the test bed recovers, so a trial the agent already answered is never lost.
-    """
+    """One trial. `incident` None is the control. Always leaves the flags off."""
     started = deps.now()
     expected = incident.service if incident else "none"
     record = Record(
@@ -101,13 +91,13 @@ async def run_trial(
     try:
         await run_steps(deps, record, incident)
     finally:
-        await recover(deps, record, save)
-    save(record)
+        await recover(deps, record)
     return record
 
 
 async def run_steps(deps: Deps, record: Record, incident: Incident | None) -> None:
-    # A fault left on by an earlier run must be off before the health check.
+    # Every trial starts here, so a run that was killed mid-trial (Ctrl-C, SIGTERM, a
+    # dropped SSH session, a reboot) is cleaned up by the next run, not by a handler.
     try:
         await deps.recover_all()
     except Exception as exc:  # noqa: BLE001 - reported on the record
@@ -169,42 +159,21 @@ async def run_steps(deps: Deps, record: Record, incident: Incident | None) -> No
     record.detail = ""
 
 
-async def recover(deps: Deps, record: Record, save: Callable[[Record], None]) -> None:
+async def recover(deps: Deps, record: Record) -> None:
     """Turn every flag off and wait for the test bed to come back.
 
     Runs on every exit path, including a cancelled trial. A test bed that does not
     come back is written on the record, so the next trial is not blamed for it.
     """
-    # A cancel must not abort the flags-off call half way: wait for it, it has its own
-    # timeout. The cancel is raised again once the flags are off and the record is kept.
-    call = asyncio.ensure_future(
-        asyncio.wait_for(deps.recover_all(), RECOVER_CALL_TIMEOUT)
-    )
-    cancelled = False
-    while not call.done():
-        try:
-            await asyncio.wait({call})
-        except asyncio.CancelledError:
-            cancelled = True
-    failure = asyncio.CancelledError() if call.cancelled() else call.exception()
-    if failure is not None:
-        record.recovery = f"could not clear flags: {failure!r}"
-    if cancelled:
-        if failure is None:
-            record.recovery = "interrupted before the test bed was confirmed healthy"
-        save(record)
-        raise asyncio.CancelledError
-    if failure is not None:
+    try:
+        await asyncio.wait_for(deps.recover_all(), RECOVER_CALL_TIMEOUT)
+    except Exception as exc:  # noqa: BLE001 - reported on the record
+        record.recovery = f"could not clear flags: {exc!r}"
         return
     if record.outcome == rec.SETUP_FAILED:
         record.recovery = "not needed"  # nothing was injected
         return
-    try:
-        health = await deps.wait_healthy(deps.setup_timeout)
-    except BaseException:  # a cancel or a crash must not lose a trial already answered
-        record.recovery = "interrupted before the test bed was confirmed healthy"
-        save(record)
-        raise
+    health = await deps.wait_healthy(deps.setup_timeout)
     record.recovery = "ok" if health.ok else f"not healthy: {health.describe()}"
     deps.inbox.reset()
 
@@ -240,7 +209,8 @@ async def run_all(
             continue
         incident = None if name == catalog.control.name else catalog.get(name)
         log(f"start {name} #{trial}")
-        record = await run_trial(deps, name, trial, incident, partial(rec.append, out))
+        record = await run_trial(deps, name, trial, incident)
+        rec.append(out, record)
         ran.append(record)
         log(f"done  {name} #{trial}: {record.outcome} (recovery {record.recovery})")
         setup_failures = setup_failures + 1 if record.outcome == rec.SETUP_FAILED else 0
