@@ -38,15 +38,6 @@ def test_inject_sets_only_that_flag_and_keeps_the_rest_of_the_file():
     assert api.flagd.file["flags"]["paymentFailure"]["variants"]["50%"] == 0.5
 
 
-def test_recover_turns_it_off_again():
-    api = FakeApi()
-    asyncio.run(flagd.inject(api.client, CART))
-
-    asyncio.run(flagd.recover(api.client, CART))
-
-    assert flag(api, "cartFailure") == "off"
-
-
 def test_inject_never_touches_anything_but_the_two_routes():
     api = FakeApi()
 

@@ -111,13 +111,6 @@ class AlertInbox:
         while not self.queue.empty():
             self.queue.get_nowait()
 
-    async def next_alert(self, timeout: float) -> tuple[Alert, list[str]] | None:
-        """The next page, or None when none comes within the timeout."""
-        try:
-            return await asyncio.wait_for(self.queue.get(), timeout)
-        except TimeoutError:
-            return None
-
 
 def make_app(inbox: AlertInbox) -> web.Application:
     async def alerts(request: web.Request) -> web.Response:

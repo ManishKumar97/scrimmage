@@ -37,9 +37,7 @@ def payload(*alerts, version="4", status="firing"):
 
 
 def page(inbox: AlertInbox):
-    found = asyncio.run(inbox.next_alert(1))
-    assert found is not None
-    return found
+    return inbox.queue.get_nowait()
 
 
 def post(body, raw: bytes | None = None, inbox: AlertInbox | None = None):
@@ -148,10 +146,6 @@ def test_a_long_or_multiline_summary_is_cut_and_flattened():
 
     assert "\n" not in question
     assert len(question) < 700
-
-
-def test_next_alert_times_out_with_none():
-    assert asyncio.run(AlertInbox().next_alert(0.01)) is None
 
 
 def test_reset_forgets_handled_alerts_and_unread_pages():

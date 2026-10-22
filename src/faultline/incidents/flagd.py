@@ -88,10 +88,6 @@ async def inject(api: ApiClient, incident: Incident) -> None:
     await set_variant(api, incident.flag, incident.variant)
 
 
-async def recover(api: ApiClient, incident: Incident) -> None:
-    await set_variant(api, incident.flag, OFF)
-
-
 async def active_faults(api: ApiClient) -> dict[str, str]:
     """Every flag whose default variant is not off."""
     doc = await read_flags(api)
