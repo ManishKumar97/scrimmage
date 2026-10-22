@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Self
 
 from aiohttp import web
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError
 
 MAX_BODY_BYTES = 256 * 1024
 MAX_VALUE_CHARS = 300  # one label or summary, cut
@@ -27,7 +27,9 @@ class Alert(BaseModel):
     labels: dict[str, str]
     annotations: dict[str, str] = Field(default_factory=dict)
     fingerprint: str = Field(min_length=1)
-    starts_at: datetime | None = Field(default=None, alias="startsAt")
+    # Alertmanager always sends it with an offset. A page without one cannot be placed
+    # in time, so it is refused instead of guessed at.
+    starts_at: AwareDatetime = Field(alias="startsAt")
 
     @property
     def name(self) -> str:

@@ -66,7 +66,7 @@ async def wait_for_page(
     async with asyncio.timeout(timeout):
         while True:
             page, names = await inbox.queue.get()
-            if page.starts_at is None or page.starts_at >= since:
+            if page.starts_at >= since:
                 return page, names
 
 

@@ -176,3 +176,12 @@ def test_a_synthetic_page_goes_through_the_same_inbox():
     assert inbox.accept(note) == 1
     first, _ = page(inbox)
     assert "FrontendErrorRate" in build_question(first)
+
+
+def test_a_missing_or_zoneless_start_time_is_refused_not_a_crash():
+    no_start = alert()
+    del no_start["startsAt"]
+    for bad in (no_start, alert(startsAt="2026-10-21T12:00:00"), alert(startsAt=None)):
+        # The good alert rides in the same batch: one bad alert refuses the batch.
+        status, _, inbox = post(payload(alert(fingerprint="ok"), bad))
+        assert status == 400 and inbox.queue.empty()
