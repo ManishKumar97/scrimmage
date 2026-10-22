@@ -45,8 +45,9 @@ def git_sha() -> str:
 
 
 def newest_results() -> Path | None:
-    files = sorted(RUNS.glob("incidents-*.jsonl"))
-    return files[-1] if files else None
+    """The results file written last. Names do not sort by age."""
+    files = list(RUNS.glob("incidents-*.jsonl"))
+    return max(files, key=lambda f: f.stat().st_mtime) if files else None
 
 
 class Terminated(Exception):

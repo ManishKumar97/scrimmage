@@ -4,6 +4,7 @@ import signal
 
 import pytest
 
+from faultline.incidents import __main__ as main_module
 from faultline.incidents.__main__ import Terminated, main, stop_on_signals
 
 
@@ -45,3 +46,23 @@ def test_the_signal_handlers_are_removed_afterwards():
         signal.SIG_DFL,
         signal.default_int_handler,
     )
+
+
+def test_summary_picks_the_file_written_last_not_the_last_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(main_module, "RUNS", tmp_path)
+    older, newer = (
+        tmp_path / "incidents-smoke2.jsonl",
+        tmp_path / "incidents-2026.jsonl",
+    )
+    older.write_text("")
+    newer.write_text("")
+    os.utime(older, (1_000, 1_000))
+    os.utime(newer, (2_000, 2_000))
+
+    assert main_module.newest_results() == newer
+
+
+def test_summary_with_no_results_says_so(tmp_path, monkeypatch):
+    monkeypatch.setattr(main_module, "RUNS", tmp_path)
+
+    assert main_module.newest_results() is None
