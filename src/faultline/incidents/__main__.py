@@ -1,12 +1,11 @@
 """Command line: run the incidents, or summarize a results file.
 
 uv run python -m faultline.incidents run --trials 3 --out runs/incidents-NAME.jsonl
-uv run python -m faultline.incidents summary
+uv run python -m faultline.incidents summary --file runs/incidents-NAME.jsonl
 """
 
 import argparse
 import asyncio
-import os
 import signal
 import subprocess
 import sys
@@ -25,9 +24,10 @@ from faultline.kube_tools import kube_api, utc_now
 from faultline.settings import get_settings
 
 RUNS = Path("runs")
-# The kind Docker network's gateway: the VM as the cluster's pods see it.
-DEFAULT_HOST = "172.18.0.1"
-DEFAULT_PORT = 9099
+# The kind Docker network's gateway: the VM as the cluster's pods see it. The port
+# must match the webhook URL in the Alertmanager values.
+HOST = "172.18.0.1"
+PORT = 9099
 
 
 def git_sha() -> str:
@@ -43,12 +43,6 @@ def git_sha() -> str:
         return sha + ("-dirty" if git("status", "--porcelain") else "")
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
-
-
-def newest_results() -> Path | None:
-    """The results file written last. Names do not sort by age."""
-    files = list(RUNS.glob("incidents-*.jsonl"))
-    return max(files, key=lambda f: f.stat().st_mtime) if files else None
 
 
 class Terminated(Exception):
@@ -91,12 +85,11 @@ async def stop_on_signals(work: Awaitable[int]) -> int:
 
 
 async def run_command(args: argparse.Namespace) -> int:
-    os.environ["PROVIDER"] = args.provider
     get_settings()  # fail now, not at the first agent run, when the key is missing
     catalog = load_catalog()
     out: Path = args.out
     inbox = AlertInbox()
-    async with kube_api() as api, Listener(inbox, args.host, args.port):
+    async with kube_api() as api, Listener(inbox, HOST, PORT):
         deps = Deps(
             wait_healthy=lambda timeout: health.wait_healthy(
                 partial(health.check_health, api), timeout
@@ -112,8 +105,6 @@ async def run_command(args: argparse.Namespace) -> int:
             now=utc_now,
             sha=git_sha(),
             trace_dir=RUNS / "traces" / out.stem,
-            setup_timeout=args.setup_timeout,
-            alert_timeout=args.alert_timeout,
         )
         await run_all(deps, catalog, out, args.trials, args.only, log=log)
     print(rec.summarize(rec.load(out), catalog.control.name))
@@ -125,11 +116,9 @@ def log(message: str) -> None:
 
 
 def summary_command(args: argparse.Namespace) -> int:
-    path = args.file or newest_results()
-    if path is None or not path.exists():
-        print(
-            "no results file: pass --file or run the incidents first", file=sys.stderr
-        )
+    path: Path = args.file
+    if not path.exists():
+        print(f"no results file at {path}", file=sys.stderr)
         return 1
     print(f"{path}")
     catalog = load_catalog()
@@ -150,14 +139,9 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument(
         "--out", type=Path, required=True, help="results file; rerun with it to resume"
     )
-    run.add_argument("--provider", default="anthropic", choices=["anthropic", "groq"])
-    run.add_argument("--host", default=DEFAULT_HOST, help="address the listener binds")
-    run.add_argument("--port", type=int, default=DEFAULT_PORT)
-    run.add_argument("--setup-timeout", type=float, default=1200.0)
-    run.add_argument("--alert-timeout", type=float, default=1200.0)
 
     summary = sub.add_parser("summary", help="accuracy per incident and overall")
-    summary.add_argument("--file", type=Path)
+    summary.add_argument("--file", type=Path, required=True)
 
     args = parser.parse_args(argv)
     if args.command == "summary":
