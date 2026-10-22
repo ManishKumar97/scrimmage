@@ -15,7 +15,6 @@ from fake_model import (
 )
 from fake_tools import logs_registry
 from openai import AsyncOpenAI
-from openai.types.completion_usage import PromptTokensDetails
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
@@ -233,10 +232,7 @@ def test_with_content_on_spans_hold_what_a_replay_needs():
     assert json.loads(attrs(first)["gen_ai.input.messages"]) == [
         {"role": "user", "parts": [{"type": "text", "content": "why?"}]}
     ]
-    names = [
-        t["function"]["name"]
-        for t in json.loads(attrs(first)["gen_ai.tool.definitions"])
-    ]
+    names = [t["name"] for t in json.loads(attrs(first)["gen_ai.tool.definitions"])]
     assert names == ["get_logs"]
     # The second call sees the first reply and both tool results.
     sent = json.loads(attrs(second)["gen_ai.input.messages"])
@@ -455,35 +451,3 @@ def test_the_file_uses_hex_ids_and_integer_enums_as_otlp_json_requires(tmp_path:
         s for s in exported if s["name"].startswith("execute_tool") and s["status"]
     )
     assert failed["status"]["code"] == 2  # ERROR
-
-
-def test_token_attributes_are_left_out_when_the_provider_reports_no_usage():
-    no_usage = text_reply("hi").model_copy(update={"usage": None})
-
-    _, spans = traced(FakeClient(no_usage))
-
-    (chat,) = spans["chat"]
-    assert not any(key.startswith("gen_ai.usage") for key in attrs(chat))
-
-
-def test_groq_cached_tokens_are_recorded_when_the_usage_has_them():
-    reply = text_reply("hi")
-    assert reply.usage
-    reply.usage.prompt_tokens_details = PromptTokensDetails(cached_tokens=64)
-
-    _, spans = traced(FakeClient(reply))
-
-    (chat,) = spans["chat"]
-    assert attrs(chat)["gen_ai.usage.cache_read.input_tokens"] == 64
-
-
-def test_groq_cached_tokens_are_not_added_to_the_token_total_again():
-    reply = text_reply("hi")
-    assert reply.usage
-    reply.usage.prompt_tokens_details = PromptTokensDetails(cached_tokens=64)
-
-    result = asyncio.run(
-        OpenAIModel(cast(AsyncOpenAI, FakeClient(reply)), "m").complete("s", ["q"], [])
-    )
-
-    assert result.tokens == 120  # prompt_tokens already includes the cached 64

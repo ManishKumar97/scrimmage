@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from opentelemetry.context import Context
@@ -228,15 +228,17 @@ async def complete(
 ) -> Reply:
     """One model call, in its own span."""
     attributes = spans.model_attributes(model.provider, model.model, step)
-    schemas = tools.schemas()
+    specs = tools.specs()
     if tracing.content:
         attributes[spans.GEN_AI_SYSTEM_INSTRUCTIONS] = SYSTEM_PROMPT
         attributes[spans.GEN_AI_INPUT_MESSAGES] = spans.messages_json(messages)
-        attributes[spans.GEN_AI_TOOL_DEFINITIONS] = json.dumps(schemas)
+        attributes[spans.GEN_AI_TOOL_DEFINITIONS] = json.dumps(
+            [{"type": "function", **asdict(spec)} for spec in specs]
+        )
     with tracing.span(
         f"chat {model.model}", attributes, parent, SpanKind.CLIENT
     ) as span:
-        reply = await model.complete(SYSTEM_PROMPT, messages, schemas)
+        reply = await model.complete(SYSTEM_PROMPT, messages, specs)
         spans.record_reply(span, reply)
         if tracing.content:
             span.set_attribute(spans.GEN_AI_OUTPUT_MESSAGES, spans.output_json(reply))
@@ -256,10 +258,7 @@ async def call_tool(
     if tracing.content:
         attributes[spans.GEN_AI_TOOL_CALL_ARGUMENTS] = call.arguments
     with tracing.span(f"execute_tool {call.name}", attributes, parent) as span:
-        if not call.function:
-            output, ok = "Error: only function tools are supported.", False
-        else:
-            output, ok = await tools.call(call.name, call.arguments)
+        output, ok = await tools.call(call.name, call.arguments)
         if tracing.content:
             span.set_attribute(spans.GEN_AI_TOOL_CALL_RESULT, output)
         if not ok:
@@ -268,9 +267,7 @@ async def call_tool(
 
 
 def describe(call: ToolCall) -> str:
-    if call.function:
-        return f"{call.name}({call.arguments})"
-    return f"{call.name} (custom tool call)"
+    return f"{call.name}({call.arguments})"
 
 
 async def diagnose_async(

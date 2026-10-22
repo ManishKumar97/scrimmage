@@ -38,16 +38,16 @@ def test_server_tools_join_the_registry_with_the_servers_schema():
     async def use(tools: Registry):
         return (
             list(tools.tools),
-            tools.schemas(),
+            tools.specs(),
             await tools.call("echo", '{"text": "hi"}'),
         )
 
-    names, schemas, result = asyncio.run(with_server(use))
+    names, specs, result = asyncio.run(with_server(use))
 
     assert names == ["pid", "echo", "fail", "hang"]
-    echo = next(s for s in schemas if s["function"]["name"] == "echo")
-    assert echo["function"]["description"] == "Echo the text."
-    assert echo["function"]["parameters"]["required"] == ["text"]
+    echo = next(s for s in specs if s.name == "echo")
+    assert echo.description == "Echo the text."
+    assert echo.parameters["required"] == ["text"]
     assert result == ("echo hi", True)
 
 

@@ -15,7 +15,6 @@ from faultline.models import (
     Reply,
     ToolCall,
     ToolResult,
-    finish_reason,
     make_model,
 )
 from faultline.settings import Settings
@@ -83,7 +82,7 @@ def complete(model: AnthropicModel, messages, tools=None) -> Reply:
 
 def test_tool_schemas_are_sent_in_anthropic_form():
     model, client = adapter(message([text("hi")], "end_turn"))
-    tools = logs_registry(str).schemas()
+    tools = logs_registry(str).specs()
 
     complete(model, ["why?"], tools)
 
@@ -94,8 +93,8 @@ def test_tool_schemas_are_sent_in_anthropic_form():
     assert request["messages"] == [{"role": "user", "content": "why?"}]
     [tool] = request["tools"]
     assert tool["name"] == "get_logs"
-    assert tool["description"] == tools[0]["function"].get("description")
-    assert tool["input_schema"] == tools[0]["function"].get("parameters")
+    assert tool["description"] == tools[0].description
+    assert tool["input_schema"] == tools[0].parameters
 
 
 def test_reply_is_normalized_and_tokens_are_input_plus_output():
@@ -253,7 +252,7 @@ def test_a_provider_without_its_key_is_rejected(clean_env):
 
 def test_an_unknown_stop_reason_is_a_model_error():
     with pytest.raises(ModelError, match="something_new"):
-        finish_reason("something_new")
+        AnthropicModel.finish_reason("something_new")
 
 
 def test_an_sdk_value_error_becomes_a_model_error():
@@ -346,8 +345,8 @@ def test_tool_order_does_not_depend_on_registration_order():
         for name in names:
             registry.remote(name, "", {"type": "object"}, noop)
 
-    assert first.schemas() == second.schemas()
-    assert [t["function"]["name"] for t in first.schemas()] == ["a", "b"]
+    assert first.specs() == second.specs()
+    assert [t.name for t in first.specs()] == ["a", "b"]
 
 
 def test_the_loop_totals_cache_reads_over_the_run():

@@ -139,18 +139,19 @@ def test_model_api_failure_stops_cleanly():
     assert "Limit 8000" in result.answer
 
 
-def test_a_custom_tool_call_is_a_tool_error():
+def test_a_custom_tool_call_is_a_model_error():
+    # Only function tools are sent, so another kind means the provider broke the contract.
     custom = {"id": "call_0", "type": "custom", "custom": {"name": "x", "input": "y"}}
     reply = tool_reply()
     reply.choices[0].message.tool_calls = [
         ChatCompletionMessageCustomToolCall.model_validate(custom)
     ]
-    client = FakeClient(reply, text_reply("ok"))
+    client = FakeClient(reply)
 
     result = run_ida("why?", client, "fake", tools=logs_registry(str))
 
-    assert result.stop_reason == "done"
-    assert client.tool_results() == ["Error: only function tools are supported."]
+    assert result.stop_reason == "model_error"
+    assert "unexpected tool call kind 'custom'" in result.answer
 
 
 def test_a_reply_cut_off_at_the_output_limit_is_not_done():

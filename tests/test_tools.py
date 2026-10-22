@@ -5,6 +5,7 @@ import pytest
 from pydantic import Field
 
 from faultline import kube_tools
+from faultline.models import ToolSpec
 from faultline.tools import Registry
 
 
@@ -19,31 +20,28 @@ def test_schema_comes_from_type_hints_and_docstring():
         """Get request metrics for one service."""
         return ""
 
-    assert registry.schemas() == [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_metrics",
-                "description": "Get request metrics for one service.",
-                "parameters": {
-                    "title": "get_metrics_arguments",
-                    "type": "object",
-                    "properties": {
-                        "service": {
-                            "title": "Service",
-                            "type": "string",
-                            "description": "Service name.",
-                        },
-                        "minutes": {
-                            "title": "Minutes",
-                            "type": "integer",
-                            "default": 5,
-                        },
+    assert registry.specs() == [
+        ToolSpec(
+            name="get_metrics",
+            description="Get request metrics for one service.",
+            parameters={
+                "title": "get_metrics_arguments",
+                "type": "object",
+                "properties": {
+                    "service": {
+                        "title": "Service",
+                        "type": "string",
+                        "description": "Service name.",
                     },
-                    "required": ["service"],
+                    "minutes": {
+                        "title": "Minutes",
+                        "type": "integer",
+                        "default": 5,
+                    },
                 },
+                "required": ["service"],
             },
-        }
+        )
     ]
 
 

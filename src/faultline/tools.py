@@ -7,8 +7,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from openai.types.chat import ChatCompletionFunctionToolParam
 from pydantic import BaseModel, ValidationError, create_model
+
+from faultline.models import ToolSpec
 
 # Long tool output is cut to its last part. Recent log lines matter most.
 MAX_TOOL_OUTPUT_CHARS = 20_000
@@ -23,16 +24,8 @@ class Tool:
     # Local tools check arguments here. A remote tool's server checks its own.
     arguments: type[BaseModel] | None = None
 
-    def schema(self) -> ChatCompletionFunctionToolParam:
-        """The tool in the OpenAI function-calling format."""
-        return {
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "description": self.description,
-                "parameters": self.parameters,
-            },
-        }
+    def spec(self) -> ToolSpec:
+        return ToolSpec(self.name, self.description, self.parameters)
 
 
 class Registry:
@@ -80,10 +73,10 @@ class Registry:
         other.tools = dict(self.tools)
         return other
 
-    def schemas(self) -> list[ChatCompletionFunctionToolParam]:
+    def specs(self) -> list[ToolSpec]:
         # Sorted by name: a prompt cache matches the request prefix, and the tools
         # come first, so their order must not depend on registration or MCP list order.
-        return [self.tools[name].schema() for name in sorted(self.tools)]
+        return [self.tools[name].spec() for name in sorted(self.tools)]
 
     async def call(self, name: str, arguments: str) -> tuple[str, bool]:
         """Run the tool the model asked for. Return its output and whether it worked."""

@@ -1,5 +1,3 @@
-"""Model adapters: the loop talks to ModelClient, each provider has one implementation."""
-
 import json
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, cast
@@ -30,7 +28,6 @@ class ToolCall:
     id: str
     name: str
     arguments: str  # raw JSON, as the model wrote it
-    function: bool = True  # False for a tool kind the loop cannot run
 
 
 @dataclass(frozen=True)
@@ -42,14 +39,21 @@ class Reply:
     # The provider's own form of this turn. It is sent back unchanged on the next call,
     # because some providers (Anthropic thinking blocks) reject a rebuilt turn.
     raw: Any = None
-    # For traces. None when the provider did not report them (not zero).
-    # input_tokens includes cached input, as the OpenTelemetry convention says.
     input_tokens: int | None = None
     output_tokens: int | None = None
     cache_read_tokens: int | None = None
     cache_creation_tokens: int | None = None
     response_model: str | None = None
     response_id: str | None = None
+
+
+@dataclass(frozen=True)
+class ToolSpec:
+    """A tool as the model sees it. Each adapter turns it into its provider's format."""
+
+    name: str
+    description: str
+    parameters: dict[str, Any]  # JSON schema of the arguments
 
 
 @dataclass(frozen=True)
@@ -80,13 +84,11 @@ class ModelClient(Protocol):
         self,
         system: str,
         messages: list[Message],
-        tools: list[ChatCompletionFunctionToolParam],
+        tools: list[ToolSpec],
     ) -> Reply: ...
 
 
 class OpenAIModel:
-    """Any OpenAI-compatible chat completions endpoint. Groq is the default."""
-
     def __init__(
         self, client: AsyncOpenAI, model: str, provider: str = "openai"
     ) -> None:
@@ -98,13 +100,13 @@ class OpenAIModel:
         self,
         system: str,
         messages: list[Message],
-        tools: list[ChatCompletionFunctionToolParam],
+        tools: list[ToolSpec],
     ) -> Reply:
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=self.wire_messages(system, messages),
-                tools=tools,
+                tools=[self.wire_tool(tool) for tool in tools],
             )
         except openai.BadRequestError as exc:
             # Groq rejects a reply whose tool call it cannot parse.
@@ -115,40 +117,52 @@ class OpenAIModel:
         except openai.APIError as exc:
             raise ModelError(str(exc)) from exc
 
+        if not response.choices:
+            raise ModelError("the response has no choices")
+        # Without usage the token budget cannot count this call, so it must not pass as zero.
+        if response.usage is None:
+            raise ModelError("the response has no token usage")
         choice = response.choices[0]
-        calls = [
-            ToolCall(
-                call.id,
-                call.function.name,
-                call.function.arguments,
-            )
-            if isinstance(call, ChatCompletionMessageFunctionToolCall)
-            else ToolCall(call.id, call.custom.name, call.custom.input, function=False)
-            for call in choice.message.tool_calls or []
-        ]
+        usage = response.usage
+        calls: list[ToolCall] = []
+        for call in choice.message.tool_calls or []:
+            # Only function tools are sent, so any other kind is the provider's error.
+            if not isinstance(call, ChatCompletionMessageFunctionToolCall):
+                raise ModelError(f"unexpected tool call kind {call.type!r}")
+            calls.append(ToolCall(call.id, call.function.name, call.function.arguments))
         return Reply(
             text=choice.message.content or "",
             tool_calls=calls,
-            # function_call is the legacy name for tool_calls.
-            finish_reason=(
-                "tool_calls"
-                if choice.finish_reason == "function_call"
-                else choice.finish_reason
-            ),
-            tokens=response.usage.total_tokens if response.usage else 0,
-            input_tokens=response.usage.prompt_tokens if response.usage else None,
-            output_tokens=response.usage.completion_tokens if response.usage else None,
-            # Groq's usage carries this field for models it caches. Absent means unreported.
-            cache_read_tokens=(
-                response.usage.prompt_tokens_details.cached_tokens
-                if response.usage and response.usage.prompt_tokens_details
-                else None
-            ),
+            finish_reason=self.finish_reason(choice.finish_reason),
+            tokens=usage.total_tokens,
+            input_tokens=usage.prompt_tokens,
+            output_tokens=usage.completion_tokens,
             response_model=response.model,
             response_id=response.id,
             # The response and request types describe the same JSON.
             raw=[call.model_dump() for call in choice.message.tool_calls or []],
         )
+
+    @staticmethod
+    def finish_reason(reason: str | None) -> FinishReason:
+        match reason:
+            case "tool_calls" | "function_call":  # function_call is the legacy name
+                return "tool_calls"
+            case "stop" | "length" | "content_filter":
+                return reason
+            case _:
+                raise ModelError(f"unknown finish reason {reason!r}")
+
+    @staticmethod
+    def wire_tool(tool: ToolSpec) -> ChatCompletionFunctionToolParam:
+        return {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.parameters,
+            },
+        }
 
     @staticmethod
     def wire_messages(
@@ -189,7 +203,7 @@ class AnthropicModel:
         self,
         system: str,
         messages: list[Message],
-        tools: list[ChatCompletionFunctionToolParam],
+        tools: list[ToolSpec],
     ) -> Reply:
         try:
             response = await self.client.messages.create(
@@ -228,7 +242,7 @@ class AnthropicModel:
         return Reply(
             text=text,
             tool_calls=calls,
-            finish_reason=finish_reason(response.stop_reason),
+            finish_reason=self.finish_reason(response.stop_reason),
             tokens=input_tokens + usage.output_tokens,
             raw=response.content,
             input_tokens=input_tokens,
@@ -240,12 +254,26 @@ class AnthropicModel:
         )
 
     @staticmethod
-    def wire_tool(tool: ChatCompletionFunctionToolParam) -> ToolParam:
-        function = tool["function"]
+    def finish_reason(stop_reason: str | None) -> FinishReason:
+        match stop_reason:
+            case "tool_use":
+                return "tool_calls"
+            case "max_tokens" | "model_context_window_exceeded":
+                return "length"
+            case "refusal":
+                return "refusal"
+            case "end_turn" | "stop_sequence":
+                return "stop"
+            case _:
+                # pause_turn lands here too: only server-side tools pause, and none are sent.
+                raise ModelError(f"unknown stop reason {stop_reason!r}")
+
+    @staticmethod
+    def wire_tool(tool: ToolSpec) -> ToolParam:
         return {
-            "name": function["name"],
-            "description": function.get("description", ""),
-            "input_schema": function.get("parameters", {"type": "object"}),
+            "name": tool.name,
+            "description": tool.description,
+            "input_schema": tool.parameters,
         }
 
     @staticmethod
@@ -274,23 +302,6 @@ class AnthropicModel:
                     }
                 )
         return wire
-
-
-def finish_reason(stop_reason: str | None) -> FinishReason:
-    match stop_reason:
-        case "tool_use":
-            return "tool_calls"
-        case "max_tokens" | "model_context_window_exceeded":
-            return "length"
-        case "refusal":
-            return "refusal"
-        case "pause_turn":
-            # Only server-side tools pause a turn, and none are sent.
-            raise ModelError("the model paused the turn, which needs a server tool")
-        case "end_turn" | "stop_sequence":
-            return "stop"
-        case _:
-            raise ModelError(f"unknown stop reason {stop_reason!r}")
 
 
 def make_model(settings: Settings) -> ModelClient:
