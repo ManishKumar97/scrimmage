@@ -452,3 +452,12 @@ def test_a_good_trial_between_setup_failures_resets_the_count(tmp_path):
     )
 
     assert [r.outcome for r in ran][:3] == ["setup failed", "correct", "setup failed"]
+
+
+def test_the_summary_lists_only_the_code_that_made_the_counted_results():
+    def r(sha, outcome):
+        return rec.Record(sha, "cart", 1, outcome, "t", "cart")
+
+    records = [r("old-sha", "setup failed"), r("new-sha", "correct")]
+
+    assert rec.summarize(records, "no_op").splitlines()[-1] == "git: new-sha"

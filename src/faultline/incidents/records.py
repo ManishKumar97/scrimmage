@@ -121,6 +121,6 @@ def summarize(records: list[Record], control: str) -> str:
         f"{overall.no_verdict:>10} {overall.no_alert:>8} {overall.setup_failed:>12} "
         f"{overall.agent_error:>11}"
     )
-    shas = sorted({r.sha for r in records})
+    shas = sorted({r.sha for r in latest(records).values()})
     rows.append(f"git: {', '.join(shas)}")
     return "\n".join(rows)
