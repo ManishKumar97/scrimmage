@@ -131,13 +131,27 @@ def read_runs(path: Path) -> Reading:
             if not request.get("resourceSpans"):
                 no_spans += 1
                 continue
-            for resource in request["resourceSpans"]:
-                for scope in resource.get("scopeSpans", []):
-                    for span in scope.get("spans", []):
-                        span["attrs"] = attributes_of(span)
-                        traces.setdefault(span["traceId"], []).append(span)
+            try:
+                spans = spans_in(request)
+            except (TypeError, KeyError, AttributeError):
+                unreadable += 1  # a span file shape this reader does not know
+                continue
+            for span in spans:
+                traces.setdefault(span["traceId"], []).append(span)
     runs = [run for tid, spans in traces.items() if (run := build_run(tid, spans))]
     return Reading(runs, unreadable, no_spans)
+
+
+def spans_in(request: dict) -> list[dict]:
+    """Every span in one request, with its attributes decoded. Raises on a bad shape."""
+    spans = []
+    for resource in request["resourceSpans"]:
+        for scope in resource.get("scopeSpans", []):
+            for span in scope.get("spans", []):
+                span["attrs"] = attributes_of(span)
+                span["traceId"]  # a span without one cannot be placed in a run
+                spans.append(span)
+    return spans
 
 
 def operation(span: dict) -> str | None:
@@ -182,13 +196,16 @@ def build_run(trace_id: str, spans: list[dict]) -> Run | None:
         run.steps.append(step)
         for call_id in asked_ids(span):
             asked.setdefault(call_id, step)
-    if run.answer is None:
-        run.answer = run.steps[-1].text
     tools = sorted((s for s in spans if operation(s) == EXECUTE_TOOL), key=started)
     for span in tools:
         call = tool_call_of(span)
         step = asked.get(call.call_id) or last_started_before(run.steps, call.started)
         (step.tool_calls if step else run.unplaced).append(call)
+    final = run.steps[-1]
+    # Only a last reply that ends the turn is an answer. A run cut off mid-way ends in
+    # narration before tool calls, which is not one.
+    if run.answer is None and is_final(final):
+        run.answer = final.text
     return run
 
 
@@ -199,6 +216,11 @@ def output_parts(span: dict) -> list[dict]:
         return [part for message in messages for part in message.get("parts", [])]
     except (ValueError, AttributeError, TypeError):
         return []
+
+
+def is_final(step: Step) -> bool:
+    asked_tools = step.finish_reason in ("tool_call", "tool_calls")
+    return not (step.tool_calls or step.error_type or asked_tools)
 
 
 def first_user_text(span: dict) -> str | None:

@@ -6,7 +6,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Span, Status, StatusCode
 
 from faultline import tracing
-from faultline.models import Reply, ToolCall
+from faultline.models import Message, Reply, ToolCall
 from faultline.runs import any_value, cut, main, read_runs, show_run
 
 SECOND = 1_000_000_000
@@ -56,6 +56,7 @@ class Writer:
         text: str = "",
         *,
         question: str | None = None,
+        inputs: list[Message] | None = None,
         error: str | None = None,
     ) -> None:
         reply = Reply(
@@ -73,9 +74,10 @@ class Writer:
             attributes=attributes,
             start_time=BASE + start,
         )
-        if question:
+        inputs = inputs or ([question] if question else [])
+        if inputs:
             span.set_attribute(
-                tracing.GEN_AI_INPUT_MESSAGES, tracing.messages_json([question])
+                tracing.GEN_AI_INPUT_MESSAGES, tracing.messages_json(inputs)
             )
         if error:  # a failed model call has no reply
             span.set_attribute(tracing.ERROR_TYPE, error)
@@ -489,3 +491,89 @@ def test_faultline_attributes_win_over_the_message_fallback(tmp_path):
     [run] = read_runs(path).runs
 
     assert (run.question, run.answer) == ("why?", "because")
+
+
+def test_narration_before_tool_calls_in_a_cut_run_is_not_the_answer(tmp_path):
+    path = tmp_path / "spans.jsonl"
+    writer = Writer(path)
+    # No root span was written: the process died after the tool calls ran.
+    unfinished = writer.tracer.start_span("invoke_agent", start_time=0)
+    writer.chat(unfinished, 1 * SECOND, [call("a")], "I'll check the traces")
+    writer.tool(unfinished, 2 * SECOND, "a")
+
+    [run] = read_runs(path).runs
+
+    assert run.complete is False
+    assert run.answer is None
+
+
+def test_narration_is_not_the_answer_when_the_tool_spans_were_never_written(tmp_path):
+    path = tmp_path / "spans.jsonl"
+    writer = Writer(path)
+    unfinished = writer.tracer.start_span("invoke_agent", start_time=0)
+    writer.chat(unfinished, 1 * SECOND, [call("a")], "I'll check the traces")
+
+    [run] = read_runs(path).runs
+
+    assert run.steps[0].tool_calls == []
+    assert run.answer is None
+
+
+def test_a_failed_last_step_is_not_the_answer(tmp_path):
+    path = tmp_path / "spans.jsonl"
+    writer = Writer(path)
+    root = writer.root(0, 5 * SECOND, extras=False)
+    writer.chat(root, 1 * SECOND, [], error="RateLimitError")
+
+    [run] = read_runs(path).runs
+
+    assert run.answer is None
+
+
+def test_the_question_skips_messages_that_are_not_from_the_user(tmp_path):
+    path = tmp_path / "spans.jsonl"
+    writer = Writer(path)
+    root = writer.root(0, 5 * SECOND, extras=False)
+    earlier = Reply("earlier reply", [], "stop", tokens=1)
+    writer.chat(root, 1 * SECOND, [], inputs=[earlier, "the real question"])
+
+    [run] = read_runs(path).runs
+
+    assert run.question == "the real question"
+
+
+def test_lines_of_an_unknown_shape_are_unreadable_not_fatal(tmp_path):
+    path = tmp_path / "spans.jsonl"
+    writer = Writer(path)
+    root = writer.root(0, 5 * SECOND)
+    writer.chat(root, 1 * SECOND, [])
+    no_trace_id = raw_span("chat", 1, 2)
+    del no_trace_id["traceId"]
+    with path.open("a") as file:
+        file.write('{"resourceSpans": 5}\n')
+        file.write('{"resourceSpans": [{"scopeSpans": [{"spans": [null]}]}]}\n')
+    write_raw_append(path, [no_trace_id])
+
+    reading = read_runs(path)
+
+    assert reading.unreadable == 3
+    assert len(reading.runs) == 1
+
+
+def write_raw_append(path: Path, spans: list[dict]) -> None:
+    request = {"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]}
+    with path.open("a") as file:
+        file.write(json.dumps(request) + "\n")
+
+
+def test_a_reply_followed_by_a_tool_call_is_not_the_answer(tmp_path):
+    path = tmp_path / "spans.jsonl"
+    writer = Writer(path)
+    root = writer.root(0, 5 * SECOND, extras=False)
+    # The reply asked for no tool by its own record, but a tool ran right after it.
+    writer.chat(root, 1 * SECOND, [], "all done")
+    writer.tool(root, 2 * SECOND, "unclaimed")
+
+    [run] = read_runs(path).runs
+
+    assert run.answer is None
