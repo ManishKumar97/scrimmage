@@ -19,22 +19,44 @@ class Writer:
     def __init__(self, path: Path) -> None:
         self.tracer = tracing.file_provider(path).get_tracer("test")
 
-    def root(self, start: int, end: int, *, trace_of: Span | None = None) -> Span:
+    def root(
+        self,
+        start: int,
+        end: int,
+        *,
+        parent: Span | None = None,
+        extras: bool = True,
+        error: str | None = None,
+    ) -> Span:
         attributes = {
             tracing.GEN_AI_OPERATION_NAME: tracing.INVOKE_AGENT,
             tracing.GEN_AI_REQUEST_MODEL: "fake-model",
-            "faultline.question": "why?",
-            "faultline.stop_reason": "done",
-            "faultline.answer": "because",
         }
+        if extras:  # what only the IDA writes
+            attributes["faultline.question"] = "why?"
+            attributes["faultline.stop_reason"] = "done"
+            attributes["faultline.answer"] = "because"
         span = self.tracer.start_span(
-            "invoke_agent", attributes=attributes, start_time=BASE + start
+            "invoke_agent",
+            context=trace.set_span_in_context(parent) if parent else None,
+            attributes=attributes,
+            start_time=BASE + start,
         )
+        if error:
+            span.set_attribute(tracing.ERROR_TYPE, error)
+            span.set_status(Status(StatusCode.ERROR, "failed"))
         span.end(BASE + end)
         return span
 
     def chat(
-        self, parent: Span, start: int, calls: list[ToolCall], text: str = ""
+        self,
+        parent: Span,
+        start: int,
+        calls: list[ToolCall],
+        text: str = "",
+        *,
+        question: str | None = None,
+        error: str | None = None,
     ) -> None:
         reply = Reply(
             text,
@@ -51,6 +73,15 @@ class Writer:
             attributes=attributes,
             start_time=BASE + start,
         )
+        if question:
+            span.set_attribute(
+                tracing.GEN_AI_INPUT_MESSAGES, tracing.messages_json([question])
+            )
+        if error:  # a failed model call has no reply
+            span.set_attribute(tracing.ERROR_TYPE, error)
+            span.set_status(Status(StatusCode.ERROR, "failed"))
+            span.end(BASE + start + SECOND)
+            return
         tracing.record_reply(span, reply)
         span.set_attribute(tracing.GEN_AI_OUTPUT_MESSAGES, tracing.output_json(reply))
         span.end(BASE + start + SECOND)
@@ -91,10 +122,10 @@ def test_a_normal_run_has_its_steps_and_tool_calls(tmp_path):
     writer.tool(root, 3 * SECOND, "b", "list_pods")
     writer.chat(root, 4 * SECOND, [], "done")
 
-    runs, skipped = read_runs(path)
+    reading = read_runs(path)
 
-    assert skipped == 0
-    [run] = runs
+    assert (reading.unreadable, reading.no_spans) == (0, 0)
+    [run] = reading.runs
     assert (run.complete, run.model, run.stop_reason) == (True, "fake-model", "done")
     assert (run.question, run.answer, run.seconds) == ("why?", "because", 10.0)
     assert [s.number for s in run.steps] == [1, 2]
@@ -118,7 +149,7 @@ def test_a_tool_call_belongs_to_the_step_that_asked_for_its_id(tmp_path):
     # Started after step 2, but step 1 asked for it: the id wins over the time.
     writer.tool(root, 5 * SECOND, "a")
 
-    [run], _ = read_runs(path)
+    [run] = read_runs(path).runs
 
     assert [c.call_id for c in run.steps[0].tool_calls] == ["a"]
     assert run.steps[1].tool_calls == []
@@ -132,7 +163,7 @@ def test_a_tool_call_no_step_claims_goes_to_the_last_step_before_it(tmp_path):
     writer.chat(root, 3 * SECOND, [])
     writer.tool(root, 4 * SECOND, "unknown")
 
-    [run], _ = read_runs(path)
+    [run] = read_runs(path).runs
 
     assert run.steps[0].tool_calls == []
     assert [c.call_id for c in run.steps[1].tool_calls] == ["unknown"]
@@ -145,7 +176,7 @@ def test_a_tool_call_before_any_step_is_kept_on_the_run(tmp_path):
     writer.tool(root, 1 * SECOND, "early")
     writer.chat(root, 2 * SECOND, [])
 
-    [run], _ = read_runs(path)
+    [run] = read_runs(path).runs
 
     assert [c.call_id for c in run.unplaced] == ["early"]
     assert run.steps[0].tool_calls == []
@@ -161,7 +192,7 @@ def test_a_trace_with_no_root_span_is_an_incomplete_run(tmp_path):
     writer.chat(unfinished, 1 * SECOND, [call("a")])
     writer.tool(unfinished, 2 * SECOND, "a")
 
-    [run], _ = read_runs(path)
+    [run] = read_runs(path).runs
 
     assert run.complete is False
     assert run.seconds is None
@@ -181,7 +212,7 @@ def test_two_traces_in_one_file_are_two_runs(tmp_path):
     writer.chat(second, 11 * SECOND, [call("x")])
     writer.chat(second, 12 * SECOND, [])
 
-    runs, _ = read_runs(path)
+    runs = read_runs(path).runs
 
     assert len(runs) == 2
     assert runs[0].trace_id != runs[1].trace_id
@@ -196,8 +227,8 @@ def test_a_cut_final_line_is_skipped_and_reported(tmp_path, capsys, monkeypatch)
     with path.open("a") as file:
         file.write('{"resourceSpans": [{"scopeSp')  # the process died mid-write
 
-    runs, skipped = read_runs(path)
-    assert (len(runs), skipped) == (1, 1)
+    reading = read_runs(path)
+    assert (len(reading.runs), reading.unreadable) == (1, 1)
 
     monkeypatch.setattr(sys, "argv", ["runs", str(path)])
     main()
@@ -211,7 +242,7 @@ def test_an_error_tool_span_shows_its_error(tmp_path):
     writer.chat(root, 1 * SECOND, [call("a")])
     writer.tool(root, 2 * SECOND, "a", error="pod not found")
 
-    [run], _ = read_runs(path)
+    [run] = read_runs(path).runs
 
     [failed] = run.tool_calls
     assert failed.error_type == "tool_error"
@@ -226,7 +257,7 @@ def test_a_successful_tool_span_has_no_error(tmp_path):
     writer.chat(root, 1 * SECOND, [call("a")])
     writer.tool(root, 2 * SECOND, "a")
 
-    [run], _ = read_runs(path)
+    [run] = read_runs(path).runs
 
     assert run.tool_calls[0].error_type is None
 
@@ -236,9 +267,9 @@ def test_a_trace_without_a_model_call_is_not_a_run(tmp_path):
     writer = Writer(path)
     writer.root(0, 5 * SECOND)
 
-    runs, skipped = read_runs(path)
+    reading = read_runs(path)
 
-    assert (runs, skipped) == ([], 0)
+    assert (reading.runs, reading.unreadable) == ([], 0)
 
 
 def test_any_value_decodes_every_kind_the_exporter_writes():
@@ -268,3 +299,193 @@ def test_written_lines_are_the_otlp_shape_the_reader_expects(tmp_path):
     span = request["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
     assert len(span["traceId"]) == 32
     assert isinstance(span["startTimeUnixNano"], str)
+
+
+def test_a_failed_model_call_is_a_step_with_its_error(tmp_path):
+    path = tmp_path / "spans.jsonl"
+    writer = Writer(path)
+    root = writer.root(0, 5 * SECOND, error="RateLimitError")
+    writer.chat(root, 1 * SECOND, [], error="RateLimitError")
+
+    [run] = read_runs(path).runs
+
+    assert [s.error_type for s in run.steps] == ["RateLimitError"]
+    assert run.error_type == "RateLimitError"
+    text = show_run(run)
+    assert "step 1 in=None out=None finish=None ERROR RateLimitError" in text
+    assert "seconds=5.0 complete ERROR RateLimitError" in text
+
+
+def test_a_successful_step_and_run_have_no_error(tmp_path):
+    path = tmp_path / "spans.jsonl"
+    writer = Writer(path)
+    root = writer.root(0, 5 * SECOND)
+    writer.chat(root, 1 * SECOND, [])
+
+    [run] = read_runs(path).runs
+
+    assert run.error_type is None
+    assert run.steps[0].error_type is None
+    assert "ERROR" not in show_run(run)
+
+
+def test_a_line_with_bad_utf8_is_skipped_and_the_rest_is_read(tmp_path):
+    path = tmp_path / "spans.jsonl"
+    writer = Writer(path)
+    root = writer.root(0, 5 * SECOND)
+    with path.open("ab") as file:
+        file.write(b'{"resourceSpans": "\xff\xfe"}\n')
+    writer.chat(root, 1 * SECOND, [])
+
+    reading = read_runs(path)
+
+    assert reading.unreadable == 1
+    assert len(reading.runs) == 1
+    assert len(reading.runs[0].steps) == 1
+
+
+def test_a_line_that_is_json_but_not_an_object_is_skipped(tmp_path):
+    path = tmp_path / "spans.jsonl"
+    path.write_text('[1, 2]\n"text"\n42\nnull\n')
+
+    reading = read_runs(path)
+
+    assert (reading.runs, reading.unreadable, reading.no_spans) == ([], 4, 0)
+
+
+def test_lines_with_no_spans_are_counted_and_reported(tmp_path, capsys, monkeypatch):
+    path = tmp_path / "results.jsonl"
+    path.write_text('{"incident": "a", "steps": 3}\n{"incident": "b"}\n\n')
+
+    assert read_runs(path).no_spans == 2
+
+    monkeypatch.setattr(sys, "argv", ["runs", str(path)])
+    main()
+    out = capsys.readouterr().out
+    assert "0 run(s)" in out
+    assert "2 line(s) held no spans" in out
+
+
+def raw_span(operation: str, start: int | None, end: int | None, **extra) -> dict:
+    """A hand-written OTLP span in trace "t1". A missing time is left out."""
+    span = {
+        "traceId": "t1",
+        "spanId": extra.pop("span_id", "s"),
+        "attributes": [
+            {"key": "gen_ai.operation.name", "value": {"stringValue": operation}}
+        ],
+        **extra,
+    }
+    if start is not None:
+        span["startTimeUnixNano"] = str(BASE + start)
+    if end is not None:
+        span["endTimeUnixNano"] = str(BASE + end)
+    return span
+
+
+def write_raw(path: Path, spans: list[dict]) -> None:
+    request = {"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]}
+    path.write_text(json.dumps(request) + "\n")
+
+
+def test_with_two_roots_the_one_without_a_parent_is_the_run_root(tmp_path):
+    path = tmp_path / "spans.jsonl"
+    write_raw(
+        path,
+        [
+            # A nested agent run that started first, but has a parent.
+            raw_span("invoke_agent", 0, 2 * SECOND, span_id="n", parentSpanId="r"),
+            raw_span("invoke_agent", 1 * SECOND, 10 * SECOND, span_id="r"),
+            raw_span("chat", 2 * SECOND, 3 * SECOND),
+        ],
+    )
+
+    [run] = read_runs(path).runs
+
+    assert run.seconds == 9.0
+
+
+def test_with_no_single_parentless_root_the_earliest_root_is_used(tmp_path):
+    path = tmp_path / "spans.jsonl"
+    write_raw(
+        path,
+        [
+            raw_span("invoke_agent", 5 * SECOND, 6 * SECOND, span_id="b"),
+            raw_span("invoke_agent", 1 * SECOND, 4 * SECOND, span_id="a"),
+            raw_span("invoke_agent", 7 * SECOND, 9 * SECOND, span_id="c"),
+            raw_span("chat", 2 * SECOND, 3 * SECOND),
+        ],
+    )
+
+    [run] = read_runs(path).runs
+
+    assert run.seconds == 3.0
+
+
+def test_a_span_with_no_times_does_not_crash(tmp_path):
+    path = tmp_path / "spans.jsonl"
+    write_raw(
+        path,
+        [
+            raw_span("invoke_agent", None, None, span_id="r"),
+            raw_span("chat", None, None),
+            raw_span("execute_tool", None, None),
+        ],
+    )
+
+    [run] = read_runs(path).runs
+
+    assert len(run.steps) == 1
+    assert len(run.tool_calls) == 1
+
+
+def test_when_two_steps_ask_for_one_id_the_first_gets_the_call(tmp_path):
+    path = tmp_path / "spans.jsonl"
+    writer = Writer(path)
+    root = writer.root(0, 10 * SECOND)
+    writer.chat(root, 1 * SECOND, [call("a")])
+    writer.chat(root, 3 * SECOND, [call("a")])
+    writer.tool(root, 5 * SECOND, "a")
+
+    [run] = read_runs(path).runs
+
+    assert len(run.steps[0].tool_calls) == 1
+    assert run.steps[1].tool_calls == []
+
+
+def test_a_tool_call_that_starts_with_a_step_belongs_to_it(tmp_path):
+    path = tmp_path / "spans.jsonl"
+    writer = Writer(path)
+    root = writer.root(0, 10 * SECOND)
+    writer.chat(root, 3 * SECOND, [])
+    writer.tool(root, 3 * SECOND, "unknown")
+
+    [run] = read_runs(path).runs
+
+    assert run.unplaced == []
+    assert len(run.steps[0].tool_calls) == 1
+
+
+def test_question_and_answer_fall_back_to_the_messages(tmp_path):
+    path = tmp_path / "spans.jsonl"
+    writer = Writer(path)
+    root = writer.root(0, 10 * SECOND, extras=False)
+    writer.chat(root, 1 * SECOND, [call("a")], "checking", question="why down?")
+    writer.chat(root, 3 * SECOND, [], "the cause is X")
+
+    [run] = read_runs(path).runs
+
+    assert run.question == "why down?"
+    assert run.answer == "the cause is X"
+    assert run.stop_reason is None
+
+
+def test_faultline_attributes_win_over_the_message_fallback(tmp_path):
+    path = tmp_path / "spans.jsonl"
+    writer = Writer(path)
+    root = writer.root(0, 10 * SECOND)
+    writer.chat(root, 1 * SECOND, [], "last words", question="other")
+
+    [run] = read_runs(path).runs
+
+    assert (run.question, run.answer) == ("why?", "because")
