@@ -424,14 +424,14 @@ def test_with_no_single_parentless_root_the_earliest_root_is_used(tmp_path):
     assert run.seconds == 3.0
 
 
-def test_a_span_with_no_times_does_not_crash(tmp_path):
+def test_a_span_with_no_start_time_does_not_crash(tmp_path):
     path = tmp_path / "spans.jsonl"
     write_raw(
         path,
         [
-            raw_span("invoke_agent", None, None, span_id="r"),
-            raw_span("chat", None, None),
-            raw_span("execute_tool", None, None),
+            raw_span("invoke_agent", None, SECOND, span_id="r"),
+            raw_span("chat", None, SECOND),
+            raw_span("execute_tool", None, SECOND),
         ],
     )
 

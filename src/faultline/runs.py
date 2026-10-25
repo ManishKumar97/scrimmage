@@ -133,7 +133,7 @@ def read_runs(path: Path) -> Reading:
                 continue
             try:
                 spans = spans_in(request)
-            except (TypeError, KeyError, AttributeError):
+            except (TypeError, ValueError, KeyError, AttributeError):
                 unreadable += 1  # a span file shape this reader does not know
                 continue
             for span in spans:
@@ -149,7 +149,8 @@ def spans_in(request: dict) -> list[dict]:
         for scope in resource.get("scopeSpans", []):
             for span in scope.get("spans", []):
                 span["attrs"] = attributes_of(span)
-                span["traceId"]  # a span without one cannot be placed in a run
+                if not span.get("traceId"):
+                    raise ValueError("span has no traceId")  # it cannot join a run
                 spans.append(span)
     return spans
 
@@ -164,7 +165,7 @@ def started(span: dict) -> int:
 
 
 def seconds_of(span: dict) -> float:
-    return (int(span.get("endTimeUnixNano", 0)) - started(span)) / NANOS
+    return (int(span["endTimeUnixNano"]) - started(span)) / NANOS
 
 
 def build_run(trace_id: str, spans: list[dict]) -> Run | None:
