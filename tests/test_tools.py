@@ -4,7 +4,7 @@ from typing import Annotated
 import pytest
 from pydantic import Field
 
-from faultline import kube_tools
+from faultline.models import ToolSpec
 from faultline.tools import Registry
 
 
@@ -19,31 +19,28 @@ def test_schema_comes_from_type_hints_and_docstring():
         """Get request metrics for one service."""
         return ""
 
-    assert registry.schemas() == [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_metrics",
-                "description": "Get request metrics for one service.",
-                "parameters": {
-                    "title": "get_metrics_arguments",
-                    "type": "object",
-                    "properties": {
-                        "service": {
-                            "title": "Service",
-                            "type": "string",
-                            "description": "Service name.",
-                        },
-                        "minutes": {
-                            "title": "Minutes",
-                            "type": "integer",
-                            "default": 5,
-                        },
+    assert registry.specs() == [
+        ToolSpec(
+            name="get_metrics",
+            description="Get request metrics for one service.",
+            parameters={
+                "title": "get_metrics_arguments",
+                "type": "object",
+                "properties": {
+                    "service": {
+                        "title": "Service",
+                        "type": "string",
+                        "description": "Service name.",
                     },
-                    "required": ["service"],
+                    "minutes": {
+                        "title": "Minutes",
+                        "type": "integer",
+                        "default": 5,
+                    },
                 },
+                "required": ["service"],
             },
-        }
+        )
     ]
 
 
@@ -90,12 +87,6 @@ def test_defaults_apply_and_types_are_checked():
     assert "lines: Input should be a valid integer" in output
 
 
-def test_the_test_bed_registry_has_both_kubectl_tools():
-    assert list(kube_tools.registry.tools) == ["get_logs", "list_services"]
-    list_services = kube_tools.registry.tools["list_services"].arguments
-    assert list_services.model_json_schema()["properties"] == {}
-
-
 def test_async_and_sync_tools_are_both_called():
     registry = Registry()
 
@@ -112,5 +103,5 @@ def test_async_and_sync_tools_are_both_called():
 
     assert call(registry, "ping", '{"name": "a"}') == ("pong a", True)
     assert call(registry, "echo", '{"name": "b"}') == ("b", True)
-    ping_schema = registry.tools["ping"].arguments.model_json_schema()
+    ping_schema = registry.tools["ping"].parameters
     assert ping_schema["required"] == ["name"]

@@ -10,6 +10,7 @@ from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion
 
 from faultline import ida
+from faultline.models import OpenAIModel
 
 
 def tool_reply(*calls: tuple[str, str]) -> ChatCompletion:
@@ -31,8 +32,8 @@ def logs_call(service: str) -> tuple[str, str]:
     return ("get_logs", json.dumps({"service": service}))
 
 
-def text_reply(text: str) -> ChatCompletion:
-    return _completion({"role": "assistant", "content": text}, "stop")
+def text_reply(text: str, finish_reason: str = "stop") -> ChatCompletion:
+    return _completion({"role": "assistant", "content": text}, finish_reason)
 
 
 def _completion(message: dict, finish_reason: str) -> ChatCompletion:
@@ -55,7 +56,10 @@ def _completion(message: dict, finish_reason: str) -> ChatCompletion:
 
 
 def rejected(
-    status: int, message: str, headers: dict[str, str] | None = None
+    status: int,
+    message: str,
+    headers: dict[str, str] | None = None,
+    code: str | None = None,
 ) -> openai.APIStatusError:
     """The error the SDK raises when Groq answers with this HTTP status."""
     request = httpx2.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
@@ -65,13 +69,17 @@ def rejected(
         429: openai.RateLimitError,
         500: openai.InternalServerError,
     }.get(status, openai.APIStatusError)
-    return error(message, response=response, body=None)
+    body = {"code": code, "message": message}
+    return error(message, response=response, body=body)
 
 
-def run_ida(question: str, client: "FakeClient", *args, **kwargs) -> ida.RunResult:
+def run_ida(
+    question: str, client: "FakeClient", model_name: str, *args, **kwargs
+) -> ida.RunResult:
     """Run the async loop to completion against a fake client."""
-    # FakeClient implements only the part of AsyncOpenAI the loop uses.
-    return asyncio.run(ida.run(question, cast(AsyncOpenAI, client), *args, **kwargs))
+    # FakeClient implements only the part of AsyncOpenAI the adapter uses.
+    model = OpenAIModel(cast(AsyncOpenAI, client), model_name)
+    return asyncio.run(ida.run(question, model, *args, **kwargs))
 
 
 class FakeClient:
@@ -98,3 +106,12 @@ class FakeClient:
         """Every tool result the loop sent back to the model, in order."""
         last = self.requests[-1]["messages"]
         return [m["content"] for m in last if m["role"] == "tool"]
+
+
+class SlowClient(FakeClient):
+    """A model call that takes longer than any budget in these tests."""
+
+    async def create(self, **kwargs):
+        self.requests.append(kwargs)
+        await asyncio.sleep(5)
+        return text_reply("too late")

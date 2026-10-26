@@ -1,0 +1,70 @@
+# Incidents the diagnosis agent is scored on.
+# Each one is an AIOpsLab problem on the Astronomy Shop: a feature flag in flagd that turns a fault on.
+# `service` is AIOpsLab's own `faulty_service`, so the answer key is the published one.
+# `source` is the AIOpsLab file that defines the problem, relative to the AIOpsLab repository.
+# `variant` is the value AIOpsLab sets the flag to. Every other flag stays "off".
+# The control has no flag: nothing is injected and the correct answer is "none".
+
+incidents:
+  - name: ad_service_failure
+    flag: adFailure
+    variant: "on"
+    service: ad
+    source: aiopslab/orchestrator/problems/ad_service_failure/ad_service_failure.py
+  - name: ad_service_high_cpu
+    flag: adHighCpu
+    variant: "on"
+    service: ad
+    source: aiopslab/orchestrator/problems/ad_service_high_cpu/ad_service_high_cpu.py
+  - name: ad_service_manual_gc
+    flag: adManualGc
+    variant: "on"
+    service: ad
+    source: aiopslab/orchestrator/problems/ad_service_manual_gc/ad_service_manual_gc.py
+  - name: cart_service_failure
+    flag: cartFailure
+    variant: "on"
+    service: cart
+    source: aiopslab/orchestrator/problems/cart_service_failure/cart_service_failure.py
+  - name: image_slow_load
+    flag: imageSlowLoad
+    variant: 10sec
+    service: frontend
+    source: aiopslab/orchestrator/problems/image_slow_load/image_slow_load.py
+  - name: kafka_queue_problems
+    flag: kafkaQueueProblems
+    variant: "on"
+    service: kafka
+    source: aiopslab/orchestrator/problems/kafka_queue_problems/kafka_queue_problems.py
+  # AIOpsLab's key is frontend, the service that takes the flood.
+  # The flood itself comes from the load generator.
+  - name: loadgenerator_flood_homepage
+    flag: loadGeneratorFloodHomepage
+    variant: "on"
+    service: frontend
+    source: aiopslab/orchestrator/problems/loadgenerator_flood_homepage/loadgenerator_flood_homepage.py
+  - name: payment_service_failure
+    flag: paymentFailure
+    variant: 100%
+    service: payment
+    source: aiopslab/orchestrator/problems/payment_service_failure/payment_service_failure.py
+  # AIOpsLab blames checkout here: its payment address is the broken part.
+  - name: payment_service_unreachable
+    flag: paymentUnreachable
+    variant: "on"
+    service: checkout
+    source: aiopslab/orchestrator/problems/payment_service_unreachable/payment_service_unreachable.py
+  - name: product_catalog_failure
+    flag: productCatalogFailure
+    variant: "on"
+    service: product-catalog
+    source: aiopslab/orchestrator/problems/product_catalog_failure/product_catalog_failure.py
+  - name: recommendation_service_cache_failure
+    flag: recommendationCacheFailure
+    variant: "on"
+    service: recommendation
+    source: aiopslab/orchestrator/problems/recommendation_service_cache_failure/recommendation_service_cache_failure.py
+
+control:
+  name: no_op
+  source: aiopslab/orchestrator/problems/no_op/no_op.py

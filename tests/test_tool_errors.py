@@ -1,10 +1,10 @@
 import subprocess
 
+import pytest
 from fake_model import FakeClient, logs_call, rejected, run_ida, text_reply, tool_reply
-from fake_tools import fake_cluster, logs_registry
+from fake_tools import logs_registry
 from openai.types.chat import ChatCompletionMessageCustomToolCall
 
-from faultline import kube_tools
 from faultline.tools import MAX_TOOL_OUTPUT_CHARS, clean_output
 
 
@@ -72,15 +72,10 @@ def test_garbage_results_are_cleaned():
     assert cleaned.endswith("LAST LINE")
     assert len(cleaned) < MAX_TOOL_OUTPUT_CHARS + 50
 
-
-def test_garbage_result_reaches_the_model_as_text():
     client = FakeClient(tool_reply(logs_call("cart")), text_reply("odd output"))
-    tools = logs_registry(lambda service: {"not": "text"})
-
-    result = run_ida("why?", client, "fake", tools=tools)
-
+    result = run_ida("why?", client, "fake", tools=logs_registry(lambda s: {"a": 1}))
     assert result.stop_reason == "done"
-    assert client.tool_results() == ["{'not': 'text'}"]
+    assert client.tool_results() == ["{'a': 1}"]
 
 
 def test_repeated_tool_errors_stop_cleanly():
@@ -105,22 +100,8 @@ def test_one_success_resets_the_error_count():
     assert result.stop_reason == "done"
 
 
-def test_an_unknown_deployment_counts_as_a_tool_error(monkeypatch):
-    fake_cluster(monkeypatch)
-    bad = tool_reply(logs_call("order"))
-    client = FakeClient(bad, bad, bad)
-
-    result = run_ida("why?", client, "fake", tools=kube_tools.registry)
-
-    assert result.stop_reason == "tool_errors"
-    assert client.tool_results()[0] == (
-        "Error: get_logs raised RuntimeError: "
-        "no deployment named 'order' in astronomy-shop"
-    )
-
-
 def test_unparseable_tool_call_from_the_model_stops_cleanly():
-    client = FakeClient(rejected(400, "tool_use_failed"))
+    client = FakeClient(rejected(400, "bad tool call", code="tool_use_failed"))
 
     result = run_ida("why?", client, "fake", tools=logs_registry(str))
 
@@ -137,15 +118,75 @@ def test_model_api_failure_stops_cleanly():
     assert "Limit 8000" in result.answer
 
 
-def test_a_custom_tool_call_is_a_tool_error():
+def test_a_custom_tool_call_is_a_model_error():
+    # Only function tools are sent, so another kind means the provider broke the contract.
     custom = {"id": "call_0", "type": "custom", "custom": {"name": "x", "input": "y"}}
     reply = tool_reply()
     reply.choices[0].message.tool_calls = [
         ChatCompletionMessageCustomToolCall.model_validate(custom)
     ]
-    client = FakeClient(reply, text_reply("ok"))
+    client = FakeClient(reply)
 
     result = run_ida("why?", client, "fake", tools=logs_registry(str))
 
-    assert result.stop_reason == "done"
-    assert client.tool_results() == ["Error: only function tools are supported."]
+    assert result.stop_reason == "model_error"
+    assert "unexpected tool call kind 'custom'" in result.answer
+
+
+@pytest.mark.parametrize(
+    ("finish_reason", "stop_reason"),
+    [("length", "truncated"), ("content_filter", "content_filtered")],
+)
+def test_a_reply_that_did_not_finish_is_not_done(finish_reason, stop_reason):
+    client = FakeClient(text_reply("The cart service fails because", finish_reason))
+
+    result = run_ida("why?", client, "fake", tools=logs_registry(str))
+
+    assert result.stop_reason == stop_reason
+    assert result.answer == "The cart service fails because"
+
+
+def test_a_400_that_is_not_a_tool_call_failure_is_a_model_error():
+    client = FakeClient(rejected(400, "context length exceeded"))
+
+    result = run_ida("why?", client, "fake", tools=logs_registry(str))
+
+    assert result.stop_reason == "model_error"
+    assert "context length exceeded" in result.answer
+
+
+def test_tool_calls_in_a_cut_off_reply_do_not_run():
+    ran = []
+    tools = logs_registry(lambda service: ran.append(service) or "logs")
+    reply = tool_reply(logs_call("cart"))
+    reply.choices[0].finish_reason = "length"
+
+    result = run_ida("why?", FakeClient(reply), "fake", tools=tools)
+
+    assert result.stop_reason == "truncated"
+    assert ran == []
+
+
+def test_the_second_openai_request_carries_the_calls_and_their_results():
+    client = FakeClient(
+        tool_reply(logs_call("cart"), logs_call("redis")), text_reply("done")
+    )
+
+    run_ida("why?", client, "fake", tools=logs_registry(lambda service: service))
+
+    messages = client.requests[1]["messages"]
+    assert [m["role"] for m in messages] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "tool",
+    ]
+    assert messages[1]["content"] == "why?"
+    calls = messages[2]["tool_calls"]
+    assert [c["id"] for c in calls] == ["call_0", "call_1"]
+    assert [c["function"]["name"] for c in calls] == ["get_logs", "get_logs"]
+    assert [(m["tool_call_id"], m["content"]) for m in messages[3:]] == [
+        ("call_0", "cart"),
+        ("call_1", "redis"),
+    ]
