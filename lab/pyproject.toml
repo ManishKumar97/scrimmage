@@ -1,0 +1,25 @@
+[project]
+name = "faultline-lab"
+version = "0.1.0"
+description = "The test bed for faultline: a reference incident diagnosis agent and its incident runner."
+requires-python = ">=3.12"
+dependencies = [
+    "faultline",
+    "aiohttp>=3.14.5",
+    "anthropic>=1.17.0",
+    "kubernetes-asyncio>=36.1.0",
+    "mcp>=2.3.0",
+    "openai>=3.31.0",
+    "opentelemetry-exporter-otlp-proto-common>=1.45.1",
+    "opentelemetry-sdk>=1.45.1",
+    "pydantic>=2.14.1",
+    "pydantic-settings>=2.15.0",
+    "pyyaml>=6.0.3",
+]
+
+[tool.uv.sources]
+faultline = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.13.0,<0.14.0"]
+build-backend = "uv_build"
