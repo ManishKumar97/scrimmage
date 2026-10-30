@@ -1,25 +1,15 @@
 [project]
-name = "faultline"
+name = "faultline-workspace"
 version = "0.1.0"
-description = "Find the silent failures in an AI agent, prove the fix, and stop them from coming back."
-readme = "README.md"
+description = "Workspace root: the faultline product and the lab that tests it."
 requires-python = ">=3.12"
-dependencies = [
-    "aiohttp>=3.14.5",
-    "anthropic>=1.17.0",
-    "kubernetes-asyncio>=36.1.0",
-    "mcp>=2.3.0",
-    "openai>=3.31.0",
-    "opentelemetry-exporter-otlp-proto-common>=1.45.1",
-    "opentelemetry-sdk>=1.45.1",
-    "pydantic>=2.14.1",
-    "pydantic-settings>=2.15.0",
-    "pyyaml>=6.0.3",
-]
+dependencies = []
 
-[build-system]
-requires = ["uv_build>=0.13.0,<0.14.0"]
-build-backend = "uv_build"
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/faultline", "lab"]
 
 [dependency-groups]
 dev = [
@@ -29,11 +19,15 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["tests"]
-testpaths = ["tests"]
+pythonpath = ["lab/tests"]
+testpaths = ["packages/faultline/tests", "lab/tests"]
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["packages/faultline/src", "packages/faultline/tests", "lab/src", "lab/tests"]
 venvPath = "."
 venv = ".venv"
 typeCheckingMode = "standard"
+
+[tool.ruff]
+# First-party code for import sorting: the product and the lab.
+src = ["packages/faultline/src", "lab/src"]
