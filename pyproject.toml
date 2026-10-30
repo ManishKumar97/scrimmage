@@ -3,10 +3,15 @@ name = "faultline-workspace"
 version = "0.1.0"
 description = "Workspace root: the faultline product and the lab that tests it."
 requires-python = ">=3.12"
-dependencies = []
+# Both members, so a plain `uv sync` installs the product and the lab.
+dependencies = ["faultline", "faultline-lab"]
 
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+faultline = { workspace = true }
+faultline-lab = { workspace = true }
 
 [tool.uv.workspace]
 members = ["packages/faultline", "lab"]

@@ -453,6 +453,10 @@ requires-dist = [
 name = "faultline-workspace"
 version = "0.1.0"
 source = { virtual = "." }
+dependencies = [
+    { name = "faultline" },
+    { name = "faultline-lab" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -462,6 +466,10 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [
+    { name = "faultline", editable = "packages/faultline" },
+    { name = "faultline-lab", editable = "lab" },
+]
 
 [package.metadata.requires-dev]
 dev = [
