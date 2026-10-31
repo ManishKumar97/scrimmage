@@ -12,11 +12,14 @@ that restarts the server mid-run starts the count again.
 """
 
 import json
+import os
 import re
+import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from faultline.model import Run
 from faultline.proxy.truncate import truncated
 from faultline.runs import read_runs_many
 
@@ -252,11 +255,33 @@ class Stale(ToolInjector):
         super().__init__(fault, options)
         # The first successful result in this run for each set of arguments.
         self.first: dict[str, dict] = {}
-        self.earlier = (
-            earlier_results(options.stale_from, fault.tool)
-            if options.stale_from
-            else {}
-        )
+        self.earlier: dict[str, str] = {}
+        if options.stale_from:
+            self.earlier = self.load(options.stale_from)
+
+    def load(self, trace: Path) -> dict[str, str]:
+        """The earlier run's results for the tool. Never raises: a trace that cannot
+        be read is a warning, and the fault serves only results from this run."""
+        files, problems = span_files(trace)
+        for problem in problems:
+            warn(f"--stale-from {trace}: skipped {problem}")
+        try:
+            runs = read_runs_many(files).runs
+        except OSError as exc:
+            warn(f"--stale-from {trace}: cannot read it ({exc})")
+            runs = []
+        found = earlier_results(runs, self.fault.tool)
+        if not runs:
+            warn(
+                f"--stale-from {trace} holds no run; {self.fault.spec} serves only "
+                "results from this run"
+            )
+        elif not found:
+            warn(
+                f"--stale-from {trace} holds no successful result of "
+                f"{self.fault.tool}; {self.fault.spec} serves only results from this run"
+            )
+        return found
 
     def request(self, call: ToolRequest) -> Injection | None:
         if not self.targets(call):
@@ -359,14 +384,36 @@ def arguments_key(arguments: object) -> str:
     return json.dumps(arguments, sort_keys=True)
 
 
-def earlier_results(trace: Path, tool: str) -> dict[str, str]:
+def warn(message: str) -> None:
+    """A warning from a tool fault, on the MCP wrapper's stderr."""
+    print(f"faultline mcp-wrap: {message}", file=sys.stderr)
+
+
+def span_files(trace: Path) -> tuple[list[Path], list[str]]:
+    """The span files (*.jsonl) of a trace directory that can be opened, and why
+    each other one cannot, such as a directory or a symlink loop by that name."""
+    if not trace.is_dir() or not os.access(trace, os.R_OK | os.X_OK):
+        return [], [f"{trace} itself: not a readable directory"]
+    readable, problems = [], []
+    for path in sorted(trace.glob("*.jsonl")):
+        try:
+            with path.open("rb"):
+                pass
+        except OSError as exc:
+            problems.append(f"{path.name}: {exc.strerror or exc}")
+            continue
+        readable.append(path)
+    return readable, problems
+
+
+def earlier_results(runs: Iterable[Run], tool: str) -> dict[str, str]:
     """The tool's successful results in an earlier run's trace, by arguments.
 
     A result a fault made is left out: it is not what the tool said. The first
     result for the same arguments wins.
     """
     found: dict[str, str] = {}
-    for run in read_runs_many(sorted(trace.glob("*.jsonl"))).runs:
+    for run in runs:
         for call in run.tool_calls:
             if call.name == tool and call.error_type is None and not call.injected:
                 found.setdefault(arguments_key(call.arguments), call.result)

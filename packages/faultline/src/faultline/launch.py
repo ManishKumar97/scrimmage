@@ -27,7 +27,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from faultline.faults import FaultError, ModelFault, known, parse_all
+from faultline.faults import FaultError, ModelFault, known, parse_all, span_files
 from faultline.proxy.context import MAX_CONTENT, RunContext, publish, withdraw
 from faultline.proxy.record import DEFAULT_MAX_CONTENT, Recorder
 from faultline.relay import RELAYED, Relay, tied_to_parent
@@ -118,12 +118,21 @@ def run(args: argparse.Namespace) -> int:
     except FaultError as exc:
         print(f"faultline run: {exc}", file=sys.stderr)
         return 2
-    if args.stale_from is not None and not args.stale_from.is_dir():
-        print(
-            f"faultline run: --stale-from {args.stale_from} is not a directory",
-            file=sys.stderr,
-        )
-        return 2
+    if args.stale_from is not None:
+        if not args.stale_from.is_dir():
+            print(
+                f"faultline run: --stale-from {args.stale_from} is not a directory",
+                file=sys.stderr,
+            )
+            return 2
+        _, problems = span_files(args.stale_from)
+        for problem in problems:
+            print(
+                f"faultline run: --stale-from {args.stale_from}: cannot read {problem}",
+                file=sys.stderr,
+            )
+        if problems:
+            return 2
     # Names given on the command line come first: they say which variable this agent reads.
     names = list(dict.fromkeys([*args.base_url_env, *BASE_URL_ENVS]))
     upstreams = upstreams_of(args.upstream, names)

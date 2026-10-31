@@ -405,6 +405,78 @@ def test_stale_from_must_be_a_directory(tmp_path):
     assert "is not a directory" in result.stderr
 
 
+def broken_trace(trace: Path) -> None:
+    """Span files that cannot be read: a directory, a symlink loop, no permission."""
+    (trace / "a.jsonl").mkdir(parents=True)
+    (trace / "loop.jsonl").symlink_to(trace / "loop.jsonl")
+    locked = trace / "locked.jsonl"
+    locked.write_text("")
+    locked.chmod(0)
+
+
+def test_run_refuses_a_stale_from_dir_it_cannot_read(tmp_path):
+    broken_trace(tmp_path / "earlier")
+
+    result = subprocess.run(
+        [FAULTLINE, "run", "--stale-from", str(tmp_path / "earlier")]
+        + ["--upstream", "http://127.0.0.1:9", "--", "true"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "cannot read a.jsonl: Is a directory" in result.stderr
+    assert "cannot read locked.jsonl: Permission denied" in result.stderr
+    assert "cannot read loop.jsonl: Too many levels of symbolic links" in result.stderr
+
+
+def test_the_wrapper_skips_unreadable_span_files_and_says_so(tmp_path, capsys):
+    earlier = tmp_path / "earlier"
+    broken_trace(earlier)
+    earlier_run(earlier, ({"service": "ad"}, "old logs of ad"))
+    fault = parse("tool:get_logs:stale")
+    assert isinstance(fault, ToolFault)
+
+    injector = fault.injector(ToolOptions(stale_from=earlier))
+
+    injection = injector.request(ToolRequest(1, "get_logs", {"service": "ad"}, 1))
+    assert injection is not None and injection.answer is not None
+    assert injection.answer["result"]["content"][0]["text"] == "old logs of ad"
+    warned = capsys.readouterr().err
+    assert "skipped a.jsonl: Is a directory" in warned
+    assert "skipped loop.jsonl: Too many levels of symbolic links" in warned
+
+
+@pytest.mark.parametrize(
+    ("calls", "warning"),
+    [
+        ((), "holds no run; tool:get_logs:stale serves only results from this run"),
+        (
+            "metrics only",
+            (
+                "holds no successful result of get_logs; tool:get_logs:stale serves "
+                "only results from this run"
+            ),
+        ),
+    ],
+)
+def test_a_stale_from_dir_with_nothing_to_serve_says_so(
+    tmp_path, capsys, calls, warning
+):
+    earlier = tmp_path / "earlier"
+    earlier.mkdir()
+    if calls:
+        earlier_run(earlier)  # a run whose only get_logs result a fault made
+    fault = parse("tool:get_logs:stale")
+    assert isinstance(fault, ToolFault)
+
+    fault.injector(ToolOptions(stale_from=earlier))
+
+    assert warning in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     ("spec", "wrong"),
     [
