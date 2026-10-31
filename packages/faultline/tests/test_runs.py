@@ -2,6 +2,7 @@ import json
 import sys
 from pathlib import Path
 
+from faultline.config import Attributes
 from faultline.runs import any_value, cut, main, read_runs, show_run
 
 SECOND = 1_000_000_000
@@ -12,6 +13,14 @@ BASE = 1_700_000_000 * SECOND  # a zero time is left out of the OTLP JSON
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+# What the lab's agent calls these. Product tests say it here and never read the lab's file.
+MAPPED = Attributes(
+    question="faultline.question",
+    answer="faultline.answer",
+    stop_reason="faultline.stop_reason",
+)
+
+
 def fixture(name: str) -> Path:
     return FIXTURES / f"{name}.jsonl"
 
@@ -19,7 +28,7 @@ def fixture(name: str) -> Path:
 def test_a_normal_run_has_its_steps_and_tool_calls():
     path = fixture("normal_run")
 
-    reading = read_runs(path)
+    reading = read_runs(path, MAPPED)
 
     assert (reading.unreadable, reading.no_spans) == (0, 0)
     [run] = reading.runs
@@ -302,9 +311,35 @@ def test_question_and_answer_fall_back_to_the_messages():
 def test_faultline_attributes_win_over_the_message_fallback():
     path = fixture("extras_and_messages")
 
-    [run] = read_runs(path).runs
+    [run] = read_runs(path, MAPPED).runs
 
     assert (run.question, run.answer) == ("why?", "because")
+    assert run.stop_reason == "done"
+
+
+def test_without_a_mapping_the_attributes_are_ignored():
+    path = fixture("extras_and_messages")
+
+    [run] = read_runs(path).runs
+
+    assert (run.question, run.answer) == ("other", "last words")
+    assert run.stop_reason is None
+
+
+def test_a_mapped_attribute_the_span_lacks_falls_back_to_the_messages():
+    path = fixture("extras_and_messages")
+    absent = Attributes(question="no.such", answer="no.such", stop_reason="no.such")
+
+    [run] = read_runs(path, absent).runs
+
+    assert (run.question, run.answer) == ("other", "last words")
+    assert run.stop_reason is None
+
+
+def test_the_reader_holds_no_agent_specific_attribute_name():
+    source = (Path(__file__).parents[1] / "src/faultline/runs.py").read_text()
+
+    assert '"faultline.' not in source
 
 
 def test_narration_before_tool_calls_in_a_cut_run_is_not_the_answer():

@@ -2,7 +2,9 @@
 
 import argparse
 from collections.abc import Sequence
+from pathlib import Path
 
+from faultline.config import load_config
 from faultline.runs import show_reading
 from faultline.sources import parse_source
 
@@ -16,6 +18,9 @@ def add_parser(subparsers) -> None:
         metavar="SPEC",
         help="where traces come from, for example file:traces/ (repeatable)",
     )
+    parser.add_argument(
+        "--config", type=Path, help="TOML settings, default ./faultline.toml if present"
+    )
     parser.add_argument("files", nargs="*", help="shorthand for --source file:FILE")
     parser.set_defaults(handler=run)
 
@@ -26,8 +31,9 @@ def run(args: argparse.Namespace) -> int:
         print("faultline find: give --source SPEC or at least one file")
         return 2
     try:
-        sources = [parse_source(spec) for spec in specs]
-    except ValueError as error:
+        config = load_config(args.config)
+        sources = [parse_source(spec, config.attributes) for spec in specs]
+    except ValueError as error:  # includes ConfigError
         print(f"faultline find: {error}")
         return 2
     for source in sources:

@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Protocol
 
+from faultline.config import Attributes
 from faultline.model import Run
 from faultline.runs import Reading, read_runs
 
@@ -21,8 +22,9 @@ class TraceSource(Protocol):
 class FileSource:
     """One `.jsonl` span file, or every `*.jsonl` in a directory, sorted."""
 
-    def __init__(self, path: Path | str):
+    def __init__(self, path: Path | str, attributes: Attributes = Attributes()):
         self.path = Path(path)
+        self.attributes = attributes
         self.name = f"file:{path}"
 
     def files(self) -> list[Path]:
@@ -32,18 +34,18 @@ class FileSource:
 
     def readings(self) -> Iterator[tuple[str, Reading]]:
         for path in self.files():
-            yield str(path), read_runs(path)
+            yield str(path), read_runs(path, self.attributes)
 
     def runs(self) -> Iterator[Run]:
         for _, reading in self.readings():
             yield from reading.runs
 
 
-def parse_source(spec: str) -> TraceSource:
+def parse_source(spec: str, attributes: Attributes = Attributes()) -> TraceSource:
     """A source from `scheme:rest`, for example `file:traces/`."""
     scheme, _, rest = spec.partition(":")
     if scheme == "file" and rest:
-        return FileSource(rest)
+        return FileSource(rest, attributes)
     raise ValueError(
         f"unknown trace source {spec!r}; expected SCHEME:LOCATION, known schemes: file"
     )

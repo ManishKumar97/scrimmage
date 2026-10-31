@@ -45,6 +45,10 @@ typeCheckingMode = "standard"
 # First-party code for import sorting: the product and the lab.
 src = ["packages/faultline/src", "lab/src"]
 
+[tool.ruff.lint.flake8-bugbear]
+# Frozen, so a shared default is safe.
+extend-immutable-calls = ["faultline.config.Attributes"]
+
 # The CI gate on the product/lab split. The AST tests in each package are the fast local check.
 [tool.importlinter]
 root_packages = ["faultline", "faultline_lab"]
