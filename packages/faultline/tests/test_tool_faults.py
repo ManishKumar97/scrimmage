@@ -233,31 +233,67 @@ def answers_of(got: list[bytes]) -> dict:
     return {json.loads(line)["id"]: json.loads(line)["result"] for line in got}
 
 
+# get_logs on cart twice, then on ad: only the second cart call has an earlier result.
+CART_CART_AD = [
+    *OPENING,
+    call(2, "get_logs", service="cart"),
+    call(3, "get_metrics", service="cart"),
+    call(4, "get_logs", service="cart"),
+    call(5, "get_logs", service="ad"),
+]
+
+
 @pytest.mark.parametrize(
     ("spec", "stale"),
     [
-        ("tool:get_logs:stale", [4, 5]),  # every call after the first
+        ("tool:get_logs:stale", [4]),  # every call that has an earlier result
         ("tool:get_logs:stale@2", [4]),  # the second call only
     ],
 )
-def test_a_stale_result_is_the_tools_first_result_served_again(tmp_path, spec, stale):
-    got, server_saw, recorded = wrapped(tmp_path, THREE_LOGS, [spec], in_turn=True)
+def test_a_stale_result_is_the_first_result_for_the_same_arguments(
+    tmp_path, spec, stale
+):
+    got, server_saw, recorded = wrapped(tmp_path, CART_CART_AD, [spec], in_turn=True)
 
     answers = answers_of(got)
-    cart = echo({"service": "cart"})
-    # Call 4 asked about ad and got cart's result from call 2, as a success.
     assert [answers[i] for i in (2, 4, 5)] == [
-        cart,
-        cart if 4 in stale else echo({"service": "ad"}),
-        cart,
+        echo({"service": "cart"}),
+        echo({"service": "cart"}),  # served from call 2 when stale, else the server
+        echo({"service": "ad"}),  # never the result of another service
     ]
     assert server_saw == b"".join(
-        line for line in THREE_LOGS if json.loads(line).get("id") not in stale
+        line for line in CART_CART_AD if json.loads(line).get("id") not in stale
     )
     assert [s.get("faultline.injected") for s in recorded] == [
         spec if number in stale else None for number in (2, 3, 4, 5)
     ]
     assert [s.get("error.type") for s in recorded] == [None] * 4
+
+
+def test_a_stale_call_with_new_arguments_passes_and_says_so(tmp_path):
+    sent = [
+        *OPENING,
+        call(2, "get_logs", service="payment"),
+        call(3, "get_logs", service="payment"),
+        call(4, "get_logs", service="cart"),
+    ]
+
+    got, server_saw, recorded = wrapped(
+        tmp_path, sent, ["tool:get_logs:stale"], in_turn=True
+    )
+
+    answers = answers_of(got)
+    assert answers[4] == echo({"service": "cart"})  # not payment's result
+    assert server_saw == b"".join(sent[:4] + sent[5:])
+    assert [s.get("faultline.injected") for s in recorded] == [
+        None,
+        "tool:get_logs:stale",
+        None,
+    ]
+    assert recorded[2]["faultline.injected.skipped"] == (
+        "tool:get_logs:stale: no earlier result of get_logs for these arguments "
+        "in this run to serve"
+    )
 
 
 def test_a_targeted_call_with_nothing_earlier_passes_and_says_so(tmp_path):
@@ -268,7 +304,8 @@ def test_a_targeted_call_with_nothing_earlier_passes_and_says_so(tmp_path):
     first = recorded[0]
     assert first.get("faultline.injected") is None
     assert first["faultline.injected.skipped"] == (
-        "tool:get_logs:stale@1: no earlier result of get_logs in this run to serve"
+        "tool:get_logs:stale@1: no earlier result of get_logs for these arguments "
+        "in this run to serve"
     )
 
 
@@ -323,8 +360,8 @@ def test_a_stale_result_comes_from_an_earlier_run_for_the_same_arguments(tmp_pat
         "tool:get_logs:stale",
     ]
     assert recorded[0]["faultline.injected.skipped"] == (
-        "tool:get_logs:stale: no earlier result of get_logs in this run "
-        "or in the earlier run to serve"
+        "tool:get_logs:stale: no earlier result of get_logs for these arguments "
+        "in this run or in the earlier run to serve"
     )
 
 

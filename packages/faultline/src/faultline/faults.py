@@ -236,13 +236,13 @@ class Timeout(ToolInjector):
 class Stale(ToolInjector):
     """tool:NAME:stale, the tool answers with an old result, as a success.
 
-    From an earlier run when --stale-from names its trace: the result recorded there
-    for the same tool and arguments. Else from this run: the tool's first successful
-    result, remembered as it passed through, serves the later calls. A targeted call
-    with neither passes through, and its span says nothing was injected.
+    Always for the same tool and arguments. From an earlier run when --stale-from
+    names its trace: the result recorded there. Else from this run: the first
+    successful result for those arguments, remembered as it passed through. A
+    targeted call with neither passes through, and its span says nothing was injected.
 
-    A result counts once the server has answered it. Calls of the tool made at the
-    same moment as its first one find nothing remembered yet, and pass through.
+    A result counts once the server has answered it. Calls made at the same moment
+    as the first one with their arguments find nothing remembered yet, and pass through.
     A result the earlier run's trace cut to its content limit is served as cut.
     """
 
@@ -250,7 +250,8 @@ class Stale(ToolInjector):
         self, fault: "ToolFault", options: ToolOptions = ToolOptions()
     ) -> None:
         super().__init__(fault, options)
-        self.first: dict | None = None  # the first successful result in this run
+        # The first successful result in this run for each set of arguments.
+        self.first: dict[str, dict] = {}
         self.earlier = (
             earlier_results(options.stale_from, fault.tool)
             if options.stale_from
@@ -260,28 +261,27 @@ class Stale(ToolInjector):
     def request(self, call: ToolRequest) -> Injection | None:
         if not self.targets(call):
             return None
-        text = self.earlier.get(arguments_key(call.arguments))
+        asked = arguments_key(call.arguments)
+        text = self.earlier.get(asked)
         if text is not None:
             return Injection(answer=text_result(call, text))
-        if self.first is not None:
+        if asked in self.first:
+            result = self.first[asked]
             return Injection(
-                answer={"jsonrpc": "2.0", "id": call.request_id, "result": self.first}
+                answer={"jsonrpc": "2.0", "id": call.request_id, "result": result}
             )
         return None
 
     def response(self, call: ToolRequest, message: dict) -> Injection | None:
         result = message.get("result")
-        if (
-            self.first is None
-            and isinstance(result, dict)
-            and not result.get("isError")
-        ):
-            self.first = result
+        if isinstance(result, dict) and not result.get("isError"):
+            self.first.setdefault(arguments_key(call.arguments), result)
         if not self.targets(call):
             return None
         where = " or in the earlier run" if self.options.stale_from else ""
         return Injection(
-            skipped=f"no earlier result of {call.tool} in this run{where} to serve"
+            skipped=f"no earlier result of {call.tool} for these arguments "
+            f"in this run{where} to serve"
         )
 
 
