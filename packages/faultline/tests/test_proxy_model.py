@@ -8,7 +8,10 @@ from contextlib import closing, contextmanager
 import pytest
 from upstream import connect, upstream_server
 
+from faultline.faults import ModelFault, parse
 from faultline.proxy.model import ModelProxy, Steps, split_route
+
+NOWHERE = "http://127.0.0.1:9"  # nothing listens here
 
 
 def openai(upstream: str) -> ModelProxy:
@@ -210,3 +213,30 @@ def test_only_model_calls_are_steps():
         "/files",
     ]
     assert proxy.steps.number == 1
+
+
+def model_fault(spec: str) -> ModelFault:
+    fault = parse(spec)
+    assert isinstance(fault, ModelFault)
+    return fault
+
+
+def test_a_hung_call_ends_when_the_proxy_stops():
+    proxy = ModelProxy({"OPENAI_BASE_URL": NOWHERE}, [model_fault("model:timeout")])
+    got: list[tuple[int, bytes]] = []
+
+    def client(url: str) -> None:
+        with closing(connect(url)) as connection:
+            connection.timeout = 30
+            connection.request("POST", "/openai/chat/completions", b"{}")
+            response = connection.getresponse()
+            got.append((response.status, response.read()))
+
+    with running(proxy) as url:  # stopping must not wait for the hung call's client
+        thread = threading.Thread(target=client, args=(url,))
+        thread.start()
+        thread.join(1)
+        assert thread.is_alive()  # hung
+    thread.join(5)
+
+    assert got == [(504, b"faultline proxy: stopped")]

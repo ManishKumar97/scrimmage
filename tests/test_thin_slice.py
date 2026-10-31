@@ -40,7 +40,7 @@ def test_an_injected_429_reaches_the_sdk_agent_after_all_its_retries(tmp_path):
         check=False,
     )
 
-    assert result.stdout == "agent caught openai.RateLimitError: 429\n"
+    assert result.stdout == "agent caught openai.RateLimitError: 429 1\n"
     assert result.returncode == 3
     chats = [s for s in spans_of(trace) if s["name"].startswith("chat")]
     assert len(chats) == 1  # one step

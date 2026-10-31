@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +24,23 @@ class Settings(BaseSettings):
 
     # How often each model client retries a rate limit or an outage, with backoff.
     model_max_retries: int = 5
+    # Seconds each model call may take before the client gives up (env MODEL_TIMEOUT).
+    # None keeps each SDK's own default.
+    model_timeout_seconds: float | None = Field(
+        default=None,
+        validation_alias=AliasChoices("MODEL_TIMEOUT", "model_timeout_seconds"),
+    )
+    # Seconds one MCP tool call may take before the client gives up on it and the
+    # model gets a timeout error (env TOOL_TIMEOUT). None: only the run's own time
+    # budget ends a hung call.
+    tool_timeout_seconds: float | None = Field(
+        default=None,
+        validation_alias=AliasChoices("TOOL_TIMEOUT", "tool_timeout_seconds"),
+    )
+    # Seconds an MCP server has to start and list its tools (env MCP_START_TIMEOUT).
+    # A server is a new Python process that imports the MCP SDK, which takes many
+    # seconds on a loaded machine.
+    mcp_start_timeout: float = 60.0
     # A command the MCP servers start under, such as a wrapper, as a JSON list.
     # Each server then runs as prefix + [python, -m, module].
     mcp_command_prefix: list[str] = []

@@ -308,11 +308,14 @@ def make_model(settings: Settings) -> ModelClient:
     """Build the client for settings.provider. This is the only place that picks one."""
     # The SDKs retry rate limits and outages with backoff. The run's deadline
     # cancels those retries too, so they cannot push a run past its time budget.
+    # A timeout of None to an SDK means no timeout at all, so it is passed only when set.
+    limits: dict[str, Any] = {"max_retries": settings.model_max_retries}
+    if settings.model_timeout_seconds is not None:
+        limits["timeout"] = settings.model_timeout_seconds
     if settings.provider == "anthropic":
         return AnthropicModel(
             AsyncAnthropic(
-                api_key=settings.anthropic_api_key.get_secret_value(),
-                max_retries=settings.model_max_retries,
+                api_key=settings.anthropic_api_key.get_secret_value(), **limits
             ),
             settings.anthropic_model,
         )
@@ -320,7 +323,7 @@ def make_model(settings: Settings) -> ModelClient:
         AsyncOpenAI(
             api_key=settings.groq_api_key.get_secret_value(),
             base_url=settings.groq_base_url,
-            max_retries=settings.model_max_retries,
+            **limits,
         ),
         settings.groq_model,
         provider="groq",

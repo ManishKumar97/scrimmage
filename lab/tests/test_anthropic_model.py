@@ -4,6 +4,7 @@ from typing import cast
 
 import anthropic
 import httpx2
+import openai
 import pytest
 from fake_tools import logs_registry
 from pydantic import ValidationError
@@ -217,6 +218,7 @@ def clean_env(monkeypatch):
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_MODEL",
         "MODEL",
+        "MODEL_TIMEOUT",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -373,3 +375,21 @@ def test_both_clients_retry_as_often_as_the_setting_says(clean_env, monkeypatch)
 
     assert make_model(groq).client.max_retries == 2  # pyright: ignore
     assert make_model(claude).client.max_retries == 2  # pyright: ignore
+
+
+def test_both_clients_give_up_on_a_call_after_the_timeout_setting(
+    clean_env, monkeypatch
+):
+    monkeypatch.setenv("MODEL_TIMEOUT", "2.5")
+    groq = Settings(provider="groq", groq_api_key="g", _env_file=None)  # pyright: ignore
+    claude = Settings(provider="anthropic", anthropic_api_key="a", _env_file=None)  # pyright: ignore
+
+    assert make_model(groq).client.timeout == 2.5  # pyright: ignore
+    assert make_model(claude).client.timeout == 2.5  # pyright: ignore
+
+
+def test_without_a_timeout_setting_each_client_keeps_its_own_default(clean_env):
+    groq = Settings(provider="groq", groq_api_key="g", _env_file=None)  # pyright: ignore
+
+    assert groq.model_timeout_seconds is None
+    assert make_model(groq).client.timeout == openai.DEFAULT_TIMEOUT  # pyright: ignore

@@ -49,7 +49,7 @@ src = ["packages/faultline/src", "lab/src"]
 
 [tool.ruff.lint.flake8-bugbear]
 # Frozen, so a shared default is safe.
-extend-immutable-calls = ["faultline.config.Attributes"]
+extend-immutable-calls = ["faultline.config.Attributes", "faultline.faults.ToolOptions"]
 
 # The CI gate on the product/lab split. The AST tests in each package are the fast local check.
 [tool.importlinter]
@@ -84,6 +84,7 @@ source_modules = [
     "faultline.proxy.record",
     "faultline.proxy.mcp",
     "faultline.proxy.streams",
+    "faultline.proxy.truncate",
     "faultline.proxy.context",
     "faultline.relay",
     "faultline.faults",

@@ -14,6 +14,7 @@ from openai import AsyncOpenAI
 
 from faultline_lab import ida, mcp_client, mcp_logs
 from faultline_lab.models import OpenAIModel
+from faultline_lab.settings import Settings
 from faultline_lab.tools import Registry
 
 SERVER = StdioServerParameters(
@@ -159,6 +160,30 @@ def test_the_run_deadline_ends_an_mcp_tool_and_the_server():
     assert not alive(pids[0])
 
 
+def test_a_call_timeout_fails_one_hung_tool_call_and_the_run_goes_on():
+    async def use():
+        async with mcp_client.mcp_tools(SERVER, Registry(), call_timeout=0.5) as tools:
+            hung = await tools.call("hang", "{}")
+            after = await tools.call("echo", '{"text": "still here"}')
+            return hung, after
+
+    hung, after = asyncio.run(use())
+
+    assert hung == (
+        "Error: hang raised MCPError: Request 'tools/call' timed out",
+        False,
+    )
+    assert after == ("echo still here", True)
+
+
+def test_the_call_timeout_is_a_setting(monkeypatch):
+    monkeypatch.setenv("TOOL_TIMEOUT", "2.5")
+
+    settings = Settings(provider="groq", groq_api_key="g", _env_file=None)  # pyright: ignore
+
+    assert settings.tool_timeout_seconds == 2.5
+
+
 def test_get_logs_over_mcp_reports_cluster_errors_to_the_model(monkeypatch):
     cluster = fake_tools.fake_cluster(monkeypatch)
     cluster.add("cart", {"cart-a": "boom\n"})
@@ -195,6 +220,33 @@ def test_a_server_that_never_answers_fails_the_start(monkeypatch):
         assert "metrics MCP server did not start within 0.5s" in str(exc)
     else:
         raise AssertionError("the start did not time out")
+
+
+def test_the_caller_sets_the_start_timeout():
+    silent = StdioServerParameters(
+        command=sys.executable, args=["-c", "import time; time.sleep(60)"]
+    )
+
+    async def start():
+        async with mcp_client.mcp_tools(silent, Registry(), "logs MCP", None, 0.5):
+            pass
+
+    try:
+        asyncio.run(start())
+    except RuntimeError as exc:
+        assert "logs MCP server did not start within 0.5s" in str(exc)
+    else:
+        raise AssertionError("the start did not time out")
+
+
+def test_the_start_timeout_is_a_setting_with_room_for_a_loaded_machine(monkeypatch):
+    groq = {"provider": "groq", "groq_api_key": "g", "_env_file": None}
+    monkeypatch.delenv("MCP_START_TIMEOUT", raising=False)
+    assert Settings(**groq).mcp_start_timeout == 60  # pyright: ignore
+    assert mcp_client.START_TIMEOUT == 60
+
+    monkeypatch.setenv("MCP_START_TIMEOUT", "90")
+    assert Settings(**groq).mcp_start_timeout == 90  # pyright: ignore
 
 
 def test_the_server_gets_the_kube_config_path(monkeypatch):

@@ -1,7 +1,8 @@
 from dataclasses import replace
 
+from faultline.faults import parse
 from faultline.model import Run, RunVerdict, Step, ToolCall, Verdict
-from faultline.verdict import NO_REFERENCE, STREAMED, judge, line
+from faultline.verdict import NO_REFERENCE, STREAMED, judge, line, never_applied
 
 EMPTY_LOGS = ToolCall("get_logs", "", "{}", 0.1, "", injected="tool:get_logs:empty")
 RUN = Run(
@@ -83,3 +84,14 @@ def test_an_unread_streamed_answer_is_no_verdict_not_a_failure():
     assert line(judge(streamed, "t", 1, "cart", answer_unrecorded=True)).startswith(
         "verdict: failed_loudly (exit code 1"
     )
+
+
+def test_a_tool_fault_on_a_call_the_tool_never_reached_says_how_many_it_got():
+    missed = never_applied([parse("tool:get_logs:error@3")], RUN, wrapped=True)
+
+    assert missed == [
+        (
+            "tool:get_logs:error@3",
+            "the agent called get_logs 1 time(s), so there was no call 3",
+        )
+    ]

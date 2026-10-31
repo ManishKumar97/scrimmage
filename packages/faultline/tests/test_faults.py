@@ -7,11 +7,23 @@ from faultline.faults import (
     FaultShapeError,
     ModelFault,
     ToolFault,
+    ToolRequest,
     ToolSession,
     empty_value,
+    known,
     parse,
     parse_all,
 )
+
+
+def answer_of(
+    fault: ToolFault, request_id: object, session: ToolSession | None = None
+) -> dict:
+    """What the fault answers the tool's first call with."""
+    request = ToolRequest(request_id, fault.tool, {}, 1, session or ToolSession())
+    injection = fault.injector().request(request)
+    assert injection is not None and injection.answer is not None
+    return injection.answer
 
 
 def test_a_tool_fault_names_the_tool_and_the_kind():
@@ -36,8 +48,13 @@ def test_a_model_fault_is_on_step_one_unless_a_step_is_given():
 @pytest.mark.parametrize(
     "spec",
     [
-        "tool:get_logs:timeout",
+        "tool:get_logs:melt",
         "tool::empty",
+        "tool:get_logs:empty@0",
+        "tool:get_logs:empty@",
+        "tool:get_logs:wrong",
+        "tool:get_logs:wrong=",
+        "tool:get_logs:empty=cart",
         "tool:empty",
         "model:rate_limit@0",
         "model:rate_limit@x",
@@ -51,14 +68,16 @@ def test_an_unknown_spec_is_an_error_that_names_the_known_ones(spec):
     with pytest.raises(FaultError) as error:
         parse(spec)
 
-    assert "Known: tool:NAME:empty, model:rate_limit[@STEP]" in str(error.value)
+    assert str(error.value).endswith(f"Known: {', '.join(known())}")
+    assert "tool:NAME:empty[@CALL]" in known()
+    assert "model:rate_limit[@STEP]" in known()
 
 
 def test_the_empty_tool_result_is_a_valid_mcp_success_with_no_content():
     fault = parse_all(["tool:get_logs:empty"])[0]
     assert isinstance(fault, ToolFault)
 
-    assert fault.answer(7, ToolSession()) == {
+    assert answer_of(fault, 7) == {
         "jsonrpc": "2.0",
         "id": 7,
         "result": {"content": [], "isError": False},
@@ -77,7 +96,7 @@ def test_the_empty_result_fits_the_session_it_answers_in():
     fault = parse("tool:get_logs:empty")
     assert isinstance(fault, ToolFault)
 
-    answer = fault.answer("a", ToolSession(STRING_RESULT, tags_results=True))
+    answer = answer_of(fault, "a", ToolSession(STRING_RESULT, tags_results=True))
 
     assert answer["result"] == {
         "content": [],
@@ -116,19 +135,45 @@ def test_a_required_number_has_no_empty_value():
         empty_value(schema)
 
 
+LIMITED = "Rate limit reached. Injected by faultline."
+
+
 @pytest.mark.parametrize(
-    ("path", "error_type"),
-    [("/chat/completions", "requests"), ("/v1/messages", "rate_limit_error")],
+    ("path", "body"),
+    [
+        (
+            "/v1/chat/completions",
+            {
+                "error": {
+                    "message": LIMITED,
+                    "type": "requests",
+                    "param": None,
+                    "code": "rate_limit_exceeded",
+                }
+            },
+        ),
+        (
+            "/v1/messages",
+            {
+                "type": "error",
+                "error": {"type": "rate_limit_error", "message": LIMITED},
+            },
+        ),
+    ],
 )
-def test_a_rate_limit_is_a_429_in_the_providers_own_shape(path, error_type):
+def test_a_rate_limit_is_a_429_in_the_providers_own_shape(path, body):
     fault = parse("model:rate_limit")
     assert isinstance(fault, ModelFault)
+    assert fault.action.answer
 
-    answer = fault.answer(path)
+    answer = fault.action.answer(path)
 
     assert answer.status == 429
-    assert answer.headers["Retry-After"] == "1"
-    assert json.loads(answer.body)["error"]["type"] == error_type
+    assert answer.headers == {
+        "Content-Type": "application/json",
+        "retry-after": "1",
+    }
+    assert json.loads(answer.body) == body
 
 
 def test_local_references_are_followed_for_the_empty_value():
@@ -177,11 +222,105 @@ def test_an_empty_result_that_cannot_fit_the_schema_says_so_and_holds_an_answer(
     }
 
     with pytest.raises(FaultShapeError) as error:
-        fault.answer(1, ToolSession(schema, tags_results=True))
+        answer_of(fault, 1, ToolSession(schema, tags_results=True))
 
     assert "integer" in str(error.value)
     assert error.value.answer["result"] == {
         "content": [],
         "isError": False,
         "resultType": "complete",
+    }
+
+
+@pytest.mark.parametrize(
+    ("spec", "value", "call"),
+    [
+        ("tool:get_logs:wrong=payment", "payment", None),
+        ("tool:get_logs:wrong=payment@2", "payment", 2),
+        ("tool:get_logs:wrong=ns:payment", "ns:payment", None),  # a colon in it
+        ("tool:get_logs:wrong=ops@example.com", "ops@example.com", None),
+    ],
+)
+def test_a_value_is_everything_after_the_equals_sign(spec, value, call):
+    assert parse(spec) == ToolFault(spec, "get_logs", "wrong", call, value)
+
+
+@pytest.mark.parametrize("spec", ["tool:get_logs@2:empty", "tool:a@b:error"])
+def test_an_at_sign_in_a_tool_name_is_refused(spec):
+    with pytest.raises(FaultError) as error:
+        parse(spec)
+
+    assert "a tool name may not hold @. The call selector comes last" in str(
+        error.value
+    )
+
+
+def test_a_value_ending_in_at_digits_is_read_as_the_selector():
+    assert parse("tool:get_logs:wrong=payment@2") == ToolFault(
+        "tool:get_logs:wrong=payment@2", "get_logs", "wrong", 2, "payment"
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "named"),
+    [
+        ('a"b', "a double quote"),
+        ("a\\b", "a backslash"),
+        ("a\nb", "the control character '\\n'"),
+        ("a\x7fb", "the control character '\\x7f'"),
+    ],
+)
+def test_a_value_that_would_break_json_in_a_result_is_refused(value, named):
+    with pytest.raises(FaultError) as error:
+        parse(f"tool:get_logs:wrong={value}")
+
+    assert f"the value may not hold {named}" in str(error.value)
+    assert "would break JSON" in str(error.value)
+
+
+def test_a_tool_selector_names_the_nth_call_of_the_tool():
+    assert parse("tool:get_logs:error@2") == ToolFault(
+        "tool:get_logs:error@2", "get_logs", "error", 2
+    )
+    assert parse("tool:get_logs:error") == ToolFault(  # every call
+        "tool:get_logs:error", "get_logs", "error", None
+    )
+
+
+@pytest.mark.parametrize(("spec", "targeted"), [("@2", [2]), ("", [1, 2, 3])])
+def test_an_injector_targets_only_the_calls_its_selector_names(spec, targeted):
+    fault = parse(f"tool:get_logs:error{spec}")
+    assert isinstance(fault, ToolFault)
+    injector = fault.injector()
+
+    hit = [
+        n
+        for n in (1, 2, 3)
+        if injector.request(ToolRequest(n, "get_logs", {}, n)) is not None
+    ]
+
+    assert hit == targeted
+
+
+def test_a_tool_error_is_an_mcp_tool_error_the_model_can_read():
+    fault = parse("tool:get_logs:error")
+    assert isinstance(fault, ToolFault)
+
+    answer = answer_of(fault, 4, ToolSession(STRING_RESULT, tags_results=True))
+
+    # A tool error, not a protocol error: no structuredContent is required with it.
+    assert answer == {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Error executing tool get_logs: the backend did not "
+                    "respond (connection reset by peer)",
+                }
+            ],
+            "isError": True,
+            "resultType": "complete",
+        },
     }

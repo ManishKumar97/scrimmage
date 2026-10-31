@@ -27,7 +27,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from faultline.faults import FaultError, ModelFault, known, parse_all
+from faultline.faults import FaultError, ModelFault, known, parse_all, span_files
 from faultline.proxy.context import MAX_CONTENT, RunContext, publish, withdraw
 from faultline.proxy.record import DEFAULT_MAX_CONTENT, Recorder
 from faultline.relay import RELAYED, Relay, tied_to_parent
@@ -89,6 +89,13 @@ def add_parser(subparsers) -> None:
         help="where the run's spans go (default: a new temporary directory)",
     )
     parser.add_argument(
+        "--stale-from",
+        type=Path,
+        metavar="DIR",
+        help="the trace directory of an earlier run, for tool:NAME:stale to serve "
+        "the results that run recorded",
+    )
+    parser.add_argument(
         "--max-content",
         type=int,
         metavar="CHARS",
@@ -111,6 +118,21 @@ def run(args: argparse.Namespace) -> int:
     except FaultError as exc:
         print(f"faultline run: {exc}", file=sys.stderr)
         return 2
+    if args.stale_from is not None:
+        if not args.stale_from.is_dir():
+            print(
+                f"faultline run: --stale-from {args.stale_from} is not a directory",
+                file=sys.stderr,
+            )
+            return 2
+        _, problems = span_files(args.stale_from)
+        for problem in problems:
+            print(
+                f"faultline run: --stale-from {args.stale_from}: cannot read {problem}",
+                file=sys.stderr,
+            )
+        if problems:
+            return 2
     # Names given on the command line come first: they say which variable this agent reads.
     names = list(dict.fromkeys([*args.base_url_env, *BASE_URL_ENVS]))
     upstreams = upstreams_of(args.upstream, names)
@@ -140,7 +162,8 @@ def run(args: argparse.Namespace) -> int:
     )
     model_faults = [fault for fault in faults if isinstance(fault, ModelFault)]
     proxy = ModelProxy(upstreams, model_faults, recorder)
-    code = asyncio.run(launch(proxy, recorder, command, args.fault))
+    stale_from = str(args.stale_from.resolve()) if args.stale_from else None
+    code = asyncio.run(launch(proxy, recorder, command, args.fault, stale_from))
     # The verdict reads the run back from its trace, as Find reads any run.
     files = sorted(recorder.path.parent.glob("*.jsonl"))
     runs = [r for r in read_runs_many(files).runs if r.trace_id == recorder.trace_id]
@@ -181,6 +204,7 @@ async def launch(
     recorder: Recorder,
     command: Sequence[str],
     faults: Sequence[str],
+    stale_from: str | None = None,
 ) -> int:
     """Run the command under the proxy and return the exit code a shell would give."""
     url = await proxy.start()
@@ -193,6 +217,7 @@ async def launch(
         recorder.root_span_id,
         tuple(faults),
         recorder.max_content,
+        stale_from,
     )
     # Two ways to find the run: variables for the agent, and a file for children
     # started with a cleaned environment, such as MCP servers.

@@ -21,15 +21,32 @@ import sys
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
-from faultline.faults import FaultShapeError, ToolFault, ToolSession, parse_all
+from faultline.faults import (
+    FaultShapeError,
+    ToolFault,
+    ToolInjector,
+    ToolOptions,
+    ToolRequest,
+    ToolSession,
+    parse_all,
+)
 from faultline.model import ToolCall
 from faultline.proxy.context import find as find_run
-from faultline.proxy.record import Recorder
+from faultline.proxy.record import (
+    INJECTED_ARGUMENT,
+    INJECTED_SKIPPED,
+    INJECTED_VALUE,
+    Attributes,
+    Recorder,
+)
 from faultline.relay import RELAYED, Relay, tied_to_parent
 
 # The error type on the span of a faked result that does not fit the tool's schema.
 SHAPE_INVALID = "fault_shape_invalid"
+# The error type on the span of a call a fault never answered.
+TIMEOUT = "timeout"
 # The longest line, in bytes. A tool result can be large, such as many log lines.
 LINE_LIMIT = 128 * 1024 * 1024
 
@@ -59,7 +76,9 @@ def wrap(args: argparse.Namespace) -> int:
         return 2
     recorder = Recorder.for_run(run, f"mcp-{os.getpid()}.jsonl") if run else None
     tool_faults = [fault for fault in faults if isinstance(fault, ToolFault)]
-    calls = ToolCalls(recorder.tool_call if recorder else None, tool_faults)
+    stale_from = run.stale_from if run else None
+    options = ToolOptions(Path(stale_from) if stale_from else None)
+    calls = ToolCalls(recorder.tool_call if recorder else None, tool_faults, options)
     return asyncio.run(relay(command, calls))
 
 
@@ -69,6 +88,7 @@ class Pending:
     arguments: str
     started: int  # unix nanoseconds
     clock: float  # monotonic seconds, for the duration
+    request: ToolRequest | None = None  # what the injectors were asked about
 
 
 class ToolCalls:
@@ -76,23 +96,37 @@ class ToolCalls:
 
     def __init__(
         self,
-        on_call: Callable[[ToolCall], None] | None = None,
+        on_call: Callable[[ToolCall, Attributes], None] | None = None,
         faults: Sequence[ToolFault] = (),
+        options: ToolOptions = ToolOptions(),
     ) -> None:
         self.pending: dict[str, Pending] = {}
         self.calls: list[ToolCall] = []
         self.on_call = on_call
-        self.faults = {fault.tool: fault for fault in faults}
+        # Each fault's injector, by the tool it targets. A tool may have several,
+        # such as one fault on its first call and another on its second.
+        self.injectors: dict[str, list[ToolInjector]] = {}
+        for fault in faults:
+            self.injectors.setdefault(fault.tool, []).append(fault.injector(options))
+        self.counts: dict[str, int] = {}  # calls of each tool so far
+        # Calls a fault holds unanswered, and the fault's spec, by JSON-RPC id.
+        self.hung: dict[str, tuple[Pending, str]] = {}
         # What a faked result must hold to pass for the server's own, learned from it.
         self.listing: set[str] = set()  # ids of tools/list requests in flight
         self.schemas: dict[str, dict] = {}  # each tool's declared outputSchema
         self.tags_results = False  # results carry resultType (MCP 2026-07-28)
 
     def from_client(self, line: bytes) -> bytes | None:
-        """Watch a line to the server. Returns the answer when a fault answers instead."""
+        """Watch a line to the server. None sends it on.
+
+        Else the line stays from the server, and the bytes returned, if any, go back
+        to the client: a fault's answer, or nothing for a call a fault holds.
+        """
         message = parse(line)
         if message.get("method") == "tools/list" and "id" in message:
             self.listing.add(key(message["id"]))
+        if message.get("method") == "notifications/cancelled":
+            return self.cancelled(message)
         if message.get("method") != "tools/call" or "id" not in message:
             return None
         params = message.get("params")
@@ -103,30 +137,67 @@ class ToolCalls:
             started=time.time_ns(),
             clock=time.monotonic(),
         )
-        fault = self.faults.get(pending.name)
-        if fault is None:
-            self.pending[key(message["id"])] = pending
+        self.counts[pending.name] = self.counts.get(pending.name, 0) + 1
+        request = ToolRequest(
+            message["id"],
+            pending.name,
+            params.get("arguments", {}),
+            self.counts[pending.name],
+            ToolSession(self.schemas.get(pending.name), self.tags_results),
+        )
+        for injector in self.injectors.get(pending.name, []):
+            spec = injector.fault.spec
+            try:
+                injection = injector.request(request)
+            except FaultShapeError as exc:
+                # Sent anyway, so the run goes on, and marked so the trace says why.
+                print(
+                    f"faultline mcp-wrap: {spec} does not fit the output schema of "
+                    f"{pending.name} ({exc}); the client may reject it",
+                    file=sys.stderr,
+                )
+                return self.answered(pending, exc.answer, spec, SHAPE_INVALID)
+            if injection is not None and injection.answer is not None:
+                return self.answered(pending, injection.answer, spec)
+            if injection is not None and injection.hang:
+                self.hung[key(message["id"])] = (pending, spec)
+                return b""  # the server never sees it, the client never hears back
+        pending.request = request
+        self.pending[key(message["id"])] = pending
+        return None
+
+    def cancelled(self, message: dict) -> bytes | None:
+        """The client gave up on a call. One a fault held ends here, as a timeout.
+
+        The server never saw that call, so the cancel stays from it too.
+        """
+        params = message.get("params")
+        request_id = params.get("requestId") if isinstance(params, dict) else None
+        held = self.hung.pop(key(request_id), None)
+        if held is None:
             return None
-        session = ToolSession(self.schemas.get(pending.name), self.tags_results)
-        try:
-            answer = fault.answer(message["id"], session)
-            result, error_type = outcome(answer)
-        except FaultShapeError as exc:
-            # Sent anyway, so the run goes on, and marked so the trace says why.
-            print(
-                f"faultline mcp-wrap: {fault.spec} does not fit the output schema of "
-                f"{pending.name} ({exc}); the client may reject it",
-                file=sys.stderr,
-            )
-            answer, (result, _) = exc.answer, outcome(exc.answer)
-            error_type = SHAPE_INVALID
-        self.finish(pending, result, error_type, fault.spec)
+        pending, spec = held
+        self.finish(pending, "", TIMEOUT, spec)
+        return b""
+
+    def answered(
+        self,
+        pending: Pending,
+        answer: dict,
+        spec: str,
+        error_type: str | None = None,
+    ) -> bytes:
+        """Record a call a fault answered, and return the answer's line."""
+        result, kind = outcome(answer)
+        self.finish(pending, result, error_type or kind, spec)
         return (json.dumps(answer) + "\n").encode()
 
-    def from_server(self, line: bytes) -> None:
+    def from_server(self, line: bytes) -> bytes | None:
+        """Watch a line to the client. Returns the line to send instead, if a fault
+        changed it."""
         message = parse(line)
         if "id" not in message or not ("result" in message or "error" in message):
-            return
+            return None
         result = message.get("result")
         if isinstance(result, dict):
             self.tags_results = self.tags_results or "resultType" in result
@@ -135,9 +206,32 @@ class ToolCalls:
         self.listing.discard(key(message["id"]))
         pending = self.pending.pop(key(message["id"]), None)
         if pending is None:
-            return  # the answer to a request that is not a tool call
+            return None  # the answer to a request that is not a tool call
+        skipped = []  # faults that targeted the call but left it as it was, and why
+        request = pending.request
+        for injector in self.injectors.get(pending.name, []) if request else []:
+            assert request
+            injection = injector.response(request, message)
+            if injection is not None and injection.answer is not None:
+                extra: Attributes = {}
+                if injection.value is not None:
+                    extra[INJECTED_VALUE] = injection.value
+                if injection.argument is not None:
+                    extra[INJECTED_ARGUMENT] = injection.argument
+                result, error_type = outcome(injection.answer)
+                self.finish(pending, result, error_type, injector.fault.spec, extra)
+                return (json.dumps(injection.answer) + "\n").encode()
+            if injection is not None and injection.skipped:
+                skipped.append(f"{injector.fault.spec}: {injection.skipped}")
+                print(
+                    f"faultline mcp-wrap: call {request.number} of {pending.name} "
+                    f"passed unchanged ({skipped[-1]})",
+                    file=sys.stderr,
+                )
         result, error_type = outcome(message)
-        self.finish(pending, result, error_type)
+        extra = {INJECTED_SKIPPED: "; ".join(skipped)} if skipped else {}
+        self.finish(pending, result, error_type, extra=extra)
+        return None
 
     def learn_schemas(self, listed: dict) -> None:
         tools = listed.get("tools")
@@ -151,6 +245,7 @@ class ToolCalls:
         result: str,
         error_type: str | None,
         injected: str | None = None,
+        extra: Attributes | None = None,
     ) -> None:
         call = ToolCall(
             name=pending.name,
@@ -164,13 +259,16 @@ class ToolCalls:
         )
         self.calls.append(call)
         if self.on_call:
-            self.on_call(call)
+            self.on_call(call, extra or {})
 
     def close(self) -> None:
-        """Record the calls the server never answered."""
+        """Record the calls the server never answered, and those a fault held."""
         for pending in self.pending.values():
             self.finish(pending, "", "no_response")
         self.pending.clear()
+        for pending, spec in self.hung.values():
+            self.finish(pending, "", TIMEOUT, spec)
+        self.hung.clear()
 
 
 def parse(line: bytes) -> dict:
@@ -236,8 +334,9 @@ async def relay(command: Sequence[str], calls: ToolCalls) -> int:
             assert server.stdin
             try:
                 while line := await stdin.readline():
-                    if answer := calls.from_client(line):
-                        stdout.write(answer)  # the server never sees this call
+                    answer = calls.from_client(line)
+                    if answer is not None:  # the server never sees this line
+                        stdout.write(answer)
                         await stdout.drain()
                         continue
                     server.stdin.write(line)
@@ -251,8 +350,8 @@ async def relay(command: Sequence[str], calls: ToolCalls) -> int:
             assert server.stdout and server.stdin
             try:
                 while line := await server.stdout.readline():
-                    calls.from_server(line)
-                    stdout.write(line)
+                    changed = calls.from_server(line)
+                    stdout.write(line if changed is None else changed)
                     await stdout.drain()
             except (BrokenPipeError, ConnectionResetError):
                 server.stdin.close()  # the client is gone, so the server may stop
