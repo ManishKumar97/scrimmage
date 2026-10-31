@@ -7,9 +7,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from opentelemetry.context import Context
+from opentelemetry.semconv._incubating.attributes import gen_ai_attributes as gen_ai
 from opentelemetry.trace import Span, SpanKind
 
-from faultline import genai
 from faultline_lab import kube_tools
 from faultline_lab import tracing as spans
 from faultline_lab.mcp_client import LOGS_SERVER, METRICS_SERVER, mcp_tools
@@ -106,10 +106,10 @@ async def run(
     """Run the loop inside one root span. The span ends on every exit path."""
     tracing = tracing or Tracing()
     attributes = {
-        genai.GEN_AI_OPERATION_NAME: genai.INVOKE_AGENT,
-        spans.GEN_AI_AGENT_NAME: spans.AGENT_NAME,
-        spans.GEN_AI_PROVIDER_NAME: model.provider,
-        genai.GEN_AI_REQUEST_MODEL: model.model,
+        gen_ai.GEN_AI_OPERATION_NAME: spans.INVOKE_AGENT,
+        gen_ai.GEN_AI_AGENT_NAME: spans.AGENT_NAME,
+        gen_ai.GEN_AI_PROVIDER_NAME: model.provider,
+        gen_ai.GEN_AI_REQUEST_MODEL: model.model,
         "faultline.budget.max_steps": budget.max_steps,
         "faultline.budget.max_tokens": budget.max_tokens,
         "faultline.budget.max_seconds": budget.max_seconds,
@@ -225,9 +225,9 @@ async def complete(
     """One model call, in its own span."""
     attributes = spans.model_attributes(model.provider, model.model, step)
     specs = tools.specs()
-    attributes[spans.GEN_AI_SYSTEM_INSTRUCTIONS] = SYSTEM_PROMPT
-    attributes[genai.GEN_AI_INPUT_MESSAGES] = spans.messages_json(messages)
-    attributes[spans.GEN_AI_TOOL_DEFINITIONS] = json.dumps(
+    attributes[gen_ai.GEN_AI_SYSTEM_INSTRUCTIONS] = SYSTEM_PROMPT
+    attributes[gen_ai.GEN_AI_INPUT_MESSAGES] = spans.messages_json(messages)
+    attributes[gen_ai.GEN_AI_TOOL_DEFINITIONS] = json.dumps(
         [{"type": "function", **asdict(spec)} for spec in specs]
     )
     with tracing.span(
@@ -235,7 +235,7 @@ async def complete(
     ) as span:
         reply = await model.complete(SYSTEM_PROMPT, messages, specs)
         spans.record_reply(span, reply)
-        span.set_attribute(genai.GEN_AI_OUTPUT_MESSAGES, spans.output_json(reply))
+        span.set_attribute(gen_ai.GEN_AI_OUTPUT_MESSAGES, spans.output_json(reply))
         return reply
 
 
@@ -249,10 +249,10 @@ async def call_tool(
     The step number ties each tool span to the model call that asked for it.
     """
     attributes = spans.tool_attributes(call.name, call.id, step)
-    attributes[genai.GEN_AI_TOOL_CALL_ARGUMENTS] = call.arguments
+    attributes[gen_ai.GEN_AI_TOOL_CALL_ARGUMENTS] = call.arguments
     with tracing.span(f"execute_tool {call.name}", attributes, parent) as span:
         output, ok = await tools.call(call.name, call.arguments)
-        span.set_attribute(genai.GEN_AI_TOOL_CALL_RESULT, output)
+        span.set_attribute(gen_ai.GEN_AI_TOOL_CALL_RESULT, output)
         if not ok:
             tracing.fail(span, "tool_error", output)
         return output, ok

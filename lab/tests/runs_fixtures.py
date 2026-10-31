@@ -2,7 +2,7 @@
 
 Each builder writes one span file with the real exporter. Times are given, so order is fixed.
 The product's tests read committed copies, so they never import the lab.
-The lab's contract test rebuilds each file and checks the reader sees the same runs.
+The contract test in the root tests/ folder rebuilds each file and checks the reader sees the same runs.
 
 Regenerate the committed copies after a deliberate change to the tracer:
 
@@ -14,9 +14,10 @@ from collections.abc import Callable
 from pathlib import Path
 
 from opentelemetry import trace
+from opentelemetry.semconv._incubating.attributes import gen_ai_attributes as gen_ai
+from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 from opentelemetry.trace import Span, Status, StatusCode
 
-from faultline import genai
 from faultline_lab import tracing
 from faultline_lab.models import Message, Reply, ToolCall
 
@@ -42,8 +43,8 @@ class Writer:
         error: str | None = None,
     ) -> Span:
         attributes = {
-            genai.GEN_AI_OPERATION_NAME: genai.INVOKE_AGENT,
-            genai.GEN_AI_REQUEST_MODEL: "fake-model",
+            gen_ai.GEN_AI_OPERATION_NAME: tracing.INVOKE_AGENT,
+            gen_ai.GEN_AI_REQUEST_MODEL: "fake-model",
         }
         if extras:  # what only the IDA writes
             attributes["faultline.question"] = "why?"
@@ -56,7 +57,7 @@ class Writer:
             start_time=BASE + start,
         )
         if error:
-            span.set_attribute(genai.ERROR_TYPE, error)
+            span.set_attribute(ERROR_TYPE, error)
             span.set_status(Status(StatusCode.ERROR, "failed"))
         span.end(BASE + end)
         return span
@@ -90,15 +91,15 @@ class Writer:
         inputs = inputs or ([question] if question else [])
         if inputs:
             span.set_attribute(
-                genai.GEN_AI_INPUT_MESSAGES, tracing.messages_json(inputs)
+                gen_ai.GEN_AI_INPUT_MESSAGES, tracing.messages_json(inputs)
             )
         if error:  # a failed model call has no reply
-            span.set_attribute(genai.ERROR_TYPE, error)
+            span.set_attribute(ERROR_TYPE, error)
             span.set_status(Status(StatusCode.ERROR, "failed"))
             span.end(BASE + start + SECOND)
             return
         tracing.record_reply(span, reply)
-        span.set_attribute(genai.GEN_AI_OUTPUT_MESSAGES, tracing.output_json(reply))
+        span.set_attribute(gen_ai.GEN_AI_OUTPUT_MESSAGES, tracing.output_json(reply))
         span.end(BASE + start + SECOND)
 
     def tool(
@@ -110,16 +111,16 @@ class Writer:
         error: str | None = None,
     ) -> None:
         attributes = tracing.tool_attributes(name, call_id, 0)
-        attributes[genai.GEN_AI_TOOL_CALL_ARGUMENTS] = '{"service": "cart"}'
+        attributes[gen_ai.GEN_AI_TOOL_CALL_ARGUMENTS] = '{"service": "cart"}'
         span = self.tracer.start_span(
             "execute_tool",
             context=trace.set_span_in_context(parent),
             attributes=attributes,
             start_time=BASE + start,
         )
-        span.set_attribute(genai.GEN_AI_TOOL_CALL_RESULT, error or "lines")
+        span.set_attribute(gen_ai.GEN_AI_TOOL_CALL_RESULT, error or "lines")
         if error:
-            span.set_attribute(genai.ERROR_TYPE, "tool_error")
+            span.set_attribute(ERROR_TYPE, "tool_error")
             span.set_status(Status(StatusCode.ERROR, error))
         span.end(BASE + start + SECOND // 2)
 
