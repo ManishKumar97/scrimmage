@@ -1,11 +1,16 @@
-"""The IDA through the proxy gives the same diagnosis as without it."""
+"""The IDA through the proxy, model and MCP, gives the same diagnosis as without it."""
 
 import asyncio
+import json
+import sys
 import threading
+from pathlib import Path
 
 from ida_harness import fake_llm, ida, ida_env, needs_cluster, run
 
 from faultline.proxy.model import ModelProxy
+
+FAULTLINE = str(Path(sys.executable).parent / "faultline")
 
 
 @needs_cluster
@@ -32,3 +37,21 @@ def test_the_ida_answers_the_same_through_the_model_proxy(tmp_path):
     assert proxied.stdout == direct.stdout
     assert "ROOT CAUSE SERVICE: cart" in proxied.stdout
     assert proxy.steps.number == 2  # both model calls went through the proxy
+
+
+@needs_cluster
+def test_the_ida_answers_the_same_with_its_mcp_servers_wrapped(tmp_path):
+    wrap = json.dumps([FAULTLINE, "mcp-wrap", "--"])
+    with fake_llm(tmp_path) as upstream:
+        plain = run(ida(), ida_env(tmp_path, GROQ_BASE_URL=upstream), tmp_path)
+        wrapped = run(
+            ida(),
+            ida_env(tmp_path, GROQ_BASE_URL=upstream, MCP_COMMAND_PREFIX=wrap),
+            tmp_path,
+        )
+
+    assert plain.returncode == 0, plain.stderr
+    assert wrapped.returncode == 0, wrapped.stderr
+    assert "[tool] get_logs" in wrapped.stderr
+    assert "-> error" not in wrapped.stderr
+    assert wrapped.stdout == plain.stdout

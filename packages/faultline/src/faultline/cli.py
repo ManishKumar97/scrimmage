@@ -5,6 +5,7 @@ import sys
 from collections.abc import Sequence
 
 from faultline import find, launch, serve
+from faultline.proxy import mcp
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -13,6 +14,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     find.add_parser(subparsers)
     serve.add_parser(subparsers)
     launch.add_parser(subparsers)
+    mcp.add_parser(subparsers)
     args = parser.parse_args(argv)
     return args.handler(args)
 
