@@ -208,3 +208,81 @@ def test_faultline_test_makes_no_run_without_the_flag(tmp_path):
     assert "faultline test: a preview. No MCP tool under" in result.stderr
     assert not (tmp_path / "out").exists()
     assert result.stdout == ""
+
+
+# A stdio MCP server that waits DELAY seconds before it reads anything, then lists
+# one tool named after the delay. Its calls write to the side file.
+SLOW_SERVER = """
+import json, sys, time
+delay, side = float(sys.argv[1]), sys.argv[2]
+time.sleep(delay)
+for line in sys.stdin:
+    message = json.loads(line)
+    method = message.get("method")
+    if method == "initialize":
+        result = {"serverInfo": {"name": f"srv-{delay:g}"}}
+    elif method == "tools/list":
+        result = {"tools": [{"name": f"tool_{delay:g}"}]}
+    elif method == "tools/call":
+        open(side, "a").write("MCP TOOL RAN\\n")
+        result = {"content": [{"type": "text", "text": "done"}]}
+    else:
+        continue
+    print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}),
+          flush=True)
+"""
+# The reviewer's probe: one server listed, then a second started just before the
+# first model call, too late to list before it. `late` starts the second one
+# without waiting at all.
+SERVERS_AGENT = """
+import json, os, subprocess, sys, urllib.request
+faultline, server, side, mode = sys.argv[1:5]
+
+def start(delay):
+    process = subprocess.Popen(
+        [faultline, "mcp-wrap", "--", sys.executable, server, str(delay), side],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    def rpc(number, method):
+        message = {"jsonrpc": "2.0", "id": number, "method": method, "params": {}}
+        process.stdin.write(json.dumps(message) + "\\n")
+        process.stdin.flush()
+        return json.loads(process.stdout.readline())
+    return process, rpc
+
+first, rpc = start(0)
+rpc(1, "initialize")
+rpc(2, "tools/list")
+second, _ = start(4)
+body = json.dumps({"model": "m", "messages": [{"role": "user", "content": "hi"}]})
+request = urllib.request.Request(
+    os.environ["OPENAI_BASE_URL"] + "/chat/completions", body.encode(),
+    {"Content-Type": "application/json"})
+urllib.request.urlopen(request, timeout=60)
+"""
+
+
+def test_a_server_started_just_before_the_model_call_is_reported(tmp_path):
+    server = tmp_path / "server.py"
+    server.write_text(SLOW_SERVER)
+    side = tmp_path / "side.txt"
+    agent = [sys.executable, "-c", SERVERS_AGENT, FAULTLINE, str(server), str(side)]
+    with upstream_server() as upstream:
+        result = faultline(
+            "run", "--upstream", upstream.url, "--trace", str(tmp_path / "trace"),
+            "--", *agent, "slow",
+        )  # fmt: skip
+        seen = upstream.seen
+
+    assert result.returncode == 2, result.stderr
+    assert seen == []
+    assert not side.exists()
+    out = result.stderr[result.stderr.index(PREVIEW) :].splitlines()
+    assert out[1:6] == [
+        "These MCP tools would run for real:",
+        f"  srv-0 ({sys.executable} {server} 0 {side}):",
+        "    tool_0",
+        f"  {sys.executable} {server} 4 {side}:",
+        "    (started, tools not listed)",
+    ]
+    # Each wrapper has exited, so its list is final.
+    assert len(read_all(tmp_path / "trace")) == 2

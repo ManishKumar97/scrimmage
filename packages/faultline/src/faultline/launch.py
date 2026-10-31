@@ -69,6 +69,14 @@ NOT_APPLIED = 78
 BASE_URL_ENVS = ("OPENAI_BASE_URL", "ANTHROPIC_BASE_URL")
 # The exit code of a preview: the tools were listed, and nothing ran.
 PREVIEW = 2
+# After the first model call, seconds with no new or changed tool list before a
+# preview ends: a server started just before the call still gets seen. Longer when
+# a server has started but not listed its tools yet.
+SETTLE = 1.0
+SETTLE_UNLISTED = 5.0
+# Seconds a stopped preview waits for the agent's process group, its MCP wrappers
+# included, to exit, before it kills what is left.
+GROUP_GRACE = 10.0
 # Seconds a preview waits for the servers to list their tools.
 LIST_GRACE = "FAULTLINE_LIST_GRACE"
 DEFAULT_LIST_GRACE = 120.0  # an MCP server can take a minute to start on a busy machine
@@ -406,7 +414,9 @@ async def launch(
         trace = recorder.path.parent
         until = functools.partial(tools_listed, trace, proxy.called, list_grace())
     try:
-        code, interrupted = await supervise(command, env, streams, until)
+        code, interrupted = await supervise(
+            command, env, streams, until, own_group=preview
+        )
     finally:
         withdraw(published)
         # Whatever ended the run, the trace is finished: the last step and the root.
@@ -421,16 +431,19 @@ async def supervise(
     env: dict[str, str],
     streams: Streams | None = None,
     until: Callable[[], Awaitable[None]] | None = None,
+    own_group: bool = False,
 ) -> tuple[int, bool]:
     """Run the agent and pass signals on to it. Returns its exit code as a shell
     gives it, and whether a stop signal came during the run.
 
     When `until` returns before the agent exits, the agent gets SIGTERM, and SIGKILL
-    after the grace period.
+    after the grace period. With `own_group`, the agent leads its own process group:
+    signals go to the whole group, and this returns only once every process in it,
+    such as an MCP wrapper the agent started, has exited.
     """
     streams = streams or Streams()
     loop = asyncio.get_running_loop()
-    relay = Relay()
+    relay = Relay(group=own_group)
     for number in RELAYED:
         loop.add_signal_handler(number, relay.receive, number)
     try:
@@ -441,6 +454,7 @@ async def supervise(
                 stdin=streams.stdin,
                 stdout=streams.stdout,
                 stderr=streams.stderr,
+                process_group=0 if own_group else None,
             )
         except OSError as exc:
             print(
@@ -460,12 +474,31 @@ async def supervise(
             with contextlib.suppress(asyncio.CancelledError):
                 await stop
         code = await exited
+        if own_group:
+            await group_gone(child.pid)
     finally:
         relay.close()
         for number in RELAYED:
             loop.remove_signal_handler(number)
     # Killed by signal N: 128 + N.
     return (128 - code if code < 0 else code), relay.signalled
+
+
+async def group_gone(group: int) -> None:
+    """Wait for every process in a process group to exit. After GROUP_GRACE
+    seconds, kill what is left."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + GROUP_GRACE
+    while True:
+        try:
+            os.killpg(group, 0)
+        except ProcessLookupError:
+            return
+        if loop.time() > deadline:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(group, signal.SIGKILL)
+            deadline = loop.time() + GROUP_GRACE  # the kill takes a moment too
+        await asyncio.sleep(POLL)
 
 
 def list_grace() -> float:
@@ -476,19 +509,28 @@ def list_grace() -> float:
 
 
 async def tools_listed(trace: Path, called: asyncio.Event, grace: float) -> None:
-    """Return once the agent has asked the model for its first step and every MCP
-    server that started has listed its tools. Return after `grace` seconds in any case.
+    """Return once the agent has asked the model for its first step and the tool
+    lists have settled. Return after `grace` seconds in any case.
 
     The first model call is the sign the agent has set up its tools: it sends their
-    definitions with the call. A quiet spell is no such sign, as one server may start
-    only after another has listed its tools, seconds later on a loaded machine.
+    definitions with the call. A quiet spell before it is no such sign, as one server
+    may start only after another has listed its tools, seconds later on a loaded
+    machine. After it, the lists must stay unchanged for SETTLE seconds, so a server
+    started just before the call is still seen; SETTLE_UNLISTED when a server has
+    started but not listed. A server that lists only after the model replies never
+    lists in a preview: it is reported as started, tools not listed.
     """
     loop = asyncio.get_running_loop()
-    started = loop.time()
+    started = changed = loop.time()
+    seen: list[ServerTools] | None = None
     while loop.time() - started < grace:
+        servers = read_all(trace)
+        if servers != seen:
+            seen, changed = servers, loop.time()
         if called.is_set():
-            servers = read_all(trace)
-            if all(server.tools is not None for server in servers):
+            listed = all(server.tools is not None for server in servers)
+            quiet = SETTLE if listed else SETTLE_UNLISTED
+            if loop.time() - changed >= quiet:
                 return
         await asyncio.sleep(POLL)
 
@@ -516,9 +558,7 @@ def show_tools(
         named = f"{server.server} ({command})" if server.server else command
         lines.append(f"  {named}:")
         if server.tools is None:
-            lines.append(
-                "    (it never listed its tools before faultline stopped the agent)"
-            )
+            lines.append("    (started, tools not listed)")
         elif not server.tools:
             lines.append("    (no tools)")
         lines += [f"    {tool}" for tool in server.tools or []]

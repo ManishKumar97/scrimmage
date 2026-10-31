@@ -13,6 +13,7 @@ FAULTLINE_TERM_GRACE says otherwise, so a stop request always ends the run.
 """
 
 import asyncio
+import contextlib
 import os
 import signal
 import sys
@@ -52,9 +53,13 @@ class Relay:
 
     It is in place before the child starts. A signal that comes while the child is
     starting is held, then sent once the child runs.
+
+    With `group`, the child leads its own process group, and each signal goes to the
+    whole group: the agent and everything it started, such as its MCP servers.
     """
 
-    def __init__(self, grace: float | None = None) -> None:
+    def __init__(self, grace: float | None = None, group: bool = False) -> None:
+        self.group = group
         self.child: asyncio.subprocess.Process | None = None
         self.held: list[signal.Signals] = []
         self.grace = grace if grace is not None else grace_from_env()
@@ -63,7 +68,8 @@ class Relay:
 
     def receive(self, number: signal.Signals) -> None:
         self.signalled = True
-        if number in KEYBOARD and terminal_sent_it_to_the_child():
+        # A child in its own group is not in the terminal's foreground group.
+        if number in KEYBOARD and not self.group and terminal_sent_it_to_the_child():
             return  # the key press reached the whole foreground group, the child included
         if self.child is None:
             self.held.append(number)
@@ -78,7 +84,11 @@ class Relay:
 
     def send(self, number: signal.Signals) -> None:
         assert self.child
-        self.child.send_signal(number)
+        if self.group:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(self.child.pid, number)
+        else:
+            self.child.send_signal(number)
         if number == signal.SIGTERM and self.deadline is None:
             loop = asyncio.get_running_loop()
             self.deadline = loop.call_later(self.grace, self.kill)
@@ -90,7 +100,11 @@ class Relay:
                 f"faultline: the child ignored SIGTERM for {self.grace:g}s, killing it",
                 file=sys.stderr,
             )
-            self.child.kill()
+            if self.group:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(self.child.pid, signal.SIGKILL)
+            else:
+                self.child.kill()
 
     def close(self) -> None:
         if self.deadline:
