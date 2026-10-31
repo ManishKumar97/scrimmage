@@ -18,6 +18,7 @@ members = ["packages/faultline", "lab"]
 
 [dependency-groups]
 dev = [
+    "import-linter>=2.15",
     "opentelemetry-semantic-conventions>=0.66b1",
     "pyright>=1.1.414",
     "pytest>=9.1.1",
@@ -39,3 +40,19 @@ typeCheckingMode = "standard"
 [tool.ruff]
 # First-party code for import sorting: the product and the lab.
 src = ["packages/faultline/src", "lab/src"]
+
+# The CI gate on the product/lab split. The AST tests in each package are the fast local check.
+[tool.importlinter]
+root_packages = ["faultline", "faultline_lab"]
+
+[[tool.importlinter.contracts]]
+name = "The product never imports the lab"
+type = "forbidden"
+source_modules = ["faultline"]
+forbidden_modules = ["faultline_lab"]
+
+[[tool.importlinter.contracts]]
+name = "The lab never imports the product"
+type = "forbidden"
+source_modules = ["faultline_lab"]
+forbidden_modules = ["faultline"]
