@@ -112,5 +112,5 @@ def test_an_empty_tool_result_through_the_proxy_gets_a_verdict(tmp_path):
     )
     assert result.stderr.splitlines()[-1] == (
         'verdict: failed_silently (answer lacks "cart", compared with the expected '
-        "answer; injected tool:get_logs:empty)"
+        "answer, and says nothing of its own work falling short (heuristic); injected tool:get_logs:empty)"
     )

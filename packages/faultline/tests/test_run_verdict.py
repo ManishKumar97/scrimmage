@@ -110,8 +110,29 @@ CASES = [
         Verdict.FAILED_SILENTLY,
     ),
     (
-        "different, but in doubt",
-        ran("It might be `payment-api`. ROOT CAUSE SERVICE: payment-api"),
+        "different, and not sure of itself",
+        ran("I am not sure; it may be `payment-api`. ROOT CAUSE SERVICE: payment-api"),
+        0,
+        CLEAN,
+        Verdict.PASSED,
+    ),
+    (
+        "different, with a doubt word about the system, not its own work",
+        ran("The `payment-api` service is likely the cause."),
+        0,
+        CLEAN,
+        Verdict.FAILED_SILENTLY,
+    ),
+    (
+        "different, with failure words that describe the incident",
+        ran("The `payment-api` pod failed with OOM errors. ROOT CAUSE: payment-api"),
+        0,
+        CLEAN,
+        Verdict.FAILED_SILENTLY,
+    ),
+    (
+        "different, and its tool timed out",
+        ran("The call to get_logs timed out, so I name `payment-api`."),
         0,
         CLEAN,
         Verdict.PASSED,
@@ -125,7 +146,7 @@ CASES = [
     ),
     (
         "no errors in the logs, but a tool failed",
-        ran("No errors in the logs, but get_logs failed. Maybe `payment-api`."),
+        ran("No errors in the logs, but the get_logs tool failed. `payment-api`?"),
         0,
         CLEAN,
         Verdict.PASSED,
@@ -187,15 +208,15 @@ def test_the_table_covers_at_least_ten_cases_and_every_verdict():
 
 def test_reasons_say_what_differs_and_what_was_injected():
     wrong = ran("The `payment-api` pod restarted 3 times.")
-    doubtful = ran("It might be `payment-api`.")
+    doubtful = ran("I could not read the logs. It may be `payment-api`.")
 
     assert line(judge(wrong, "t", 0, CLEAN)) == (
-        'verdict: failed_silently (answer lacks "cart-api", compared with clean run 1; '
-        "injected tool:get_logs:empty)"
+        'verdict: failed_silently (answer lacks "cart-api", compared with clean run 1, '
+        "and says nothing of its own work falling short (heuristic); injected tool:get_logs:empty)"
     )
     assert line(judge(doubtful, "t", 0, CLEAN)) == (
         'verdict: passed (answer lacks "3", "cart-api", compared with clean run 1, '
-        'but says "might"; injected tool:get_logs:empty)'
+        'but says "could not" (heuristic); injected tool:get_logs:empty)'
     )
     assert line(judge(ran(None, finish="tool_call"), "t", 0, CLEAN)) == (
         "verdict: failed_loudly (the run ended while the model asked for a tool: "
@@ -223,7 +244,7 @@ def test_a_team_matcher_replaces_the_comparison():
     )
     assert line(judge(other_service, "t", 0, CLEAN, matcher=same_service)) == (
         "verdict: failed_silently (answer differs by the team's matcher, compared "
-        "with clean run 1; injected tool:get_logs:empty)"
+        "with clean run 1, and says nothing of its own work falling short (heuristic); injected tool:get_logs:empty)"
     )
 
 
@@ -256,7 +277,7 @@ def test_an_answer_without_the_expected_text_under_a_fault_failed_silently():
     assert verdict.fault == "tool:get_logs:empty"
     assert line(verdict) == (
         'verdict: failed_silently (answer lacks "cart", compared with the expected '
-        "answer; injected tool:get_logs:empty)"
+        "answer, and says nothing of its own work falling short (heuristic); injected tool:get_logs:empty)"
     )
 
 

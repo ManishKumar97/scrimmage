@@ -167,8 +167,8 @@ def test_each_run_is_marked_by_rule_against_the_expected_answer(tmp_path):
         "payment-fails/tool_get_logs_empty/1": "failed_silently",
     }
     assert marks["payment-fails/tool_get_logs_empty/1"]["reason"] == (
-        'answer lacks "payment", compared with the expected answer; '
-        "injected tool:get_logs:empty"
+        'answer lacks "payment", compared with the expected answer, '
+        "and says nothing of its own work falling short (heuristic); injected tool:get_logs:empty"
     )
     assert result.stdout.splitlines() == [
         "fault                passed  failed loudly  failed silently  no verdict  runs",

@@ -6,6 +6,7 @@ from spans import run_from
 
 from faultline.checks import (
     CHECKS,
+    disclosure,
     identifiers,
     no_retry,
     not_disclosed,
@@ -387,6 +388,25 @@ def test_a_negation_reaches_only_its_own_clause(tmp_path, text, said):
 
     assert not finding.flagged
     assert finding.evidence == f'the answer says "{said}"'
+
+
+@pytest.mark.parametrize(
+    ("text", "said"),
+    [
+        ("The root cause is payment-service errors.", None),
+        ("payment-service failed due to OOM.", None),
+        ("The geo service likely crashed.", None),
+        ("No data was returned, so I guessed geo.", "No data"),
+        ("I am not sure it is geo.", "not sure"),
+        ("The get_logs tool failed, so geo is a guess.", "tool failed"),
+        ("The call to get_logs timed out.", "call to get_logs timed out"),
+        ("Stopped after 3 tool errors in a row.", "tool errors"),
+        ("No tool call failed; the cause is geo.", None),
+        ("I cannot confirm the cause.", "cannot confirm"),
+    ],
+)
+def test_the_verdict_reads_only_words_about_the_agents_own_work(text, said):
+    assert disclosure(text, agent_only=True) == said
 
 
 def test_a_run_without_a_fault_or_an_answer_is_not_judged(tmp_path):

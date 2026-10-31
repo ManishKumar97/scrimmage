@@ -70,7 +70,7 @@ def test_an_empty_tool_result_is_answered_by_the_wrapper_and_judged(tmp_path):
     assert call.injected == "tool:get_logs:empty"
     assert result.stderr.splitlines()[-1] == (
         'verdict: failed_silently (answer lacks "checkout", compared with the '
-        "expected answer; injected tool:get_logs:empty)"
+        "expected answer, and says nothing of its own work falling short (heuristic); injected tool:get_logs:empty)"
     )
 
 

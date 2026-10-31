@@ -198,7 +198,8 @@ def test_a_faulted_answer_unlike_the_first_clean_one_failed_silently(tmp_path):
         "cart/tool_get_logs_empty/1": ("failed_silently", "clean run 1"),
     }
     assert saved["cart/tool_get_logs_empty/1"]["reason"] == (
-        'answer lacks "cart", compared with clean run 1; injected tool:get_logs:empty'
+        'answer lacks "cart", compared with clean run 1, '
+        "and says nothing of its own work falling short (heuristic); injected tool:get_logs:empty"
     )
     # The fault matrix: printed, and saved with each cell's runs.
     assert result.stdout == (
