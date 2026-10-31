@@ -248,12 +248,17 @@ def test_a_run_without_an_answer_or_content_is_not_judged(tmp_path):
     assert unsupported_value(stripped, (), CONFIG) == ()
 
 
-def test_a_finding_carries_the_runs_first_fault(tmp_path):
-    reply = answer("`made-up` failed")
+def test_checks_on_the_whole_run_carry_no_fault_even_when_the_run_had_one(tmp_path):
+    steps = [calls(FAILED), calls(*[LOGS] * 4), answer("`made-up` failed")]
+    run = run_from(tmp_path, *steps)
+    faults = detect(run, DetectConfig())
+    assert faults  # the run had a fault
 
-    [finding] = judge(unsupported_value, tmp_path, calls(FAILED), reply)
+    whole_run = [c for c in CHECKS if c.scope == "run"]
+    findings = [f for c in whole_run for f in c.judge(run, faults, CONFIG)]
 
-    assert finding.fault is not None and finding.fault.tool == "get_logs"
+    assert {f.check for f in findings} == {"unsupported_value", "repeated_call"}
+    assert all(f.fault is None for f in findings)
 
 
 LOGS = {"name": "get_logs", "arguments": '{"service": "cart"}'}

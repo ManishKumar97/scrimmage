@@ -2,8 +2,8 @@
 
 Each check is a plain function `(run, faults, config) -> findings`, registered in
 CHECKS with its name and certainty. A check that needs a fault returns one finding
-per fault it judged, flagged when the bad reaction happened. A check that needs no
-fault carries the run's first fault, or None on a run without one.
+per fault it judged, flagged when the bad reaction happened. A check that judges
+the whole run carries no fault: it is not about one.
 Evidence is one line a person can verify in the trace.
 """
 
@@ -34,10 +34,6 @@ class Check:
 
     def finding(self, fault: Fault | None, flagged: bool, evidence: str) -> Finding:
         return Finding(fault, self.name, self.certainty, flagged, evidence)
-
-
-def first(faults: tuple[Fault, ...]) -> Fault | None:
-    return faults[0] if faults else None
 
 
 def same_arguments(arguments: str) -> str:
@@ -195,7 +191,7 @@ def unsupported_value(
         evidence = f"all {len(named)} identifier(s) in the answer are in the trace"
     else:
         evidence = "the answer names no identifier"
-    return (UNSUPPORTED_VALUE.finding(first(faults), bool(missing), evidence),)
+    return (UNSUPPORTED_VALUE.finding(None, bool(missing), evidence),)
 
 
 UNSUPPORTED_VALUE = Check(
@@ -220,7 +216,7 @@ def repeated_call(
         if len(made) > limit:
             args = cut(made[0].arguments, EVIDENCE_LIMIT) or "no arguments"
             evidence = f"{name}({args}) called {len(made)} times, limit {limit}"
-            findings.append(REPEATED_CALL.finding(first(faults), True, evidence))
+            findings.append(REPEATED_CALL.finding(None, True, evidence))
     return tuple(findings)
 
 
