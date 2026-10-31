@@ -88,7 +88,9 @@ def context_path(pid: int) -> Path:
 
 def publish(context: RunContext) -> Path:
     """Write this process's run context. Remove it with withdraw() when the run ends."""
-    path = private_dir() / f"run-{os.getpid()}.json"
+    directory = private_dir()
+    prune(directory)
+    path = directory / f"run-{os.getpid()}.json"
     record = {**asdict(context), "pid": os.getpid(), "started": start_time(os.getpid())}
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(descriptor, "w") as file:
@@ -98,6 +100,18 @@ def publish(context: RunContext) -> Path:
 
 def withdraw(path: Path) -> None:
     path.unlink(missing_ok=True)
+
+
+def prune(directory: Path) -> None:
+    """Remove the files of runs that ended without withdraw(), such as on SIGKILL."""
+    for path in directory.glob("run-*.json"):
+        try:
+            record = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue  # being written, or unreadable: leave it
+        pid = record.get("pid")
+        if not isinstance(pid, int) or record.get("started") != start_time(pid):
+            path.unlink(missing_ok=True)  # that process is gone, or is another now
 
 
 def find(env: Mapping[str, str] = os.environ) -> RunContext | None:

@@ -73,3 +73,20 @@ def test_a_stale_file_from_a_reused_process_id_is_ignored():
 
     assert found == "None"
     assert context_path(os.getpid()) == path
+
+
+def test_a_new_run_removes_files_left_by_runs_that_were_killed():
+    dead = subprocess.run(
+        [sys.executable, "-c", "import os; print(os.getpid())"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    pid = int(dead.stdout)
+    left = runtime_dir() / f"run-{pid}.json"
+    left.write_text(json.dumps({**RUN.env(), "pid": pid, "started": "1"}))
+
+    path = publish(RUN)
+    withdraw(path)
+
+    assert not left.exists()
