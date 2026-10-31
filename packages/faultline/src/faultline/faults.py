@@ -11,6 +11,8 @@ import json
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
+from faultline.proxy.truncate import truncated
+
 
 class FaultError(ValueError):
     """A fault spec that names no known fault."""
@@ -185,10 +187,19 @@ class ModelKind:
 
     answer: the reply the agent gets instead. The upstream never sees the call.
     hang: the call is never answered. The agent's own timeout ends it.
+    rewrite: the call goes to the upstream, and the agent gets its successful reply
+        changed. It takes the request path and the reply body, and raises Unchanged
+        when it cannot apply.
     """
 
     answer: Callable[[str], ModelAnswer] | None = None  # from the request path
     hang: bool = False
+    rewrite: Callable[[str, bytes], bytes] | None = None
+
+
+def truncate(path: str, body: bytes) -> bytes:
+    """The reply cut to half its text, marked as stopped at the token limit."""
+    return truncated(body, anthropic=is_anthropic(path))
 
 
 # The fault kinds. A tool fault answers a tools/call by its JSON-RPC id.
@@ -197,6 +208,7 @@ MODEL_FAULTS: dict[str, ModelKind] = {
     "rate_limit": ModelKind(answer=rate_limit),
     "timeout": ModelKind(hang=True),
     "server_error": ModelKind(answer=server_error),
+    "truncated": ModelKind(rewrite=truncate),
 }
 
 

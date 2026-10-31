@@ -39,6 +39,9 @@ from faultline.semconv import (
 # Faultline's own attribute, on the span of a call it changed. Its value is the fault spec.
 # The run reader reads it: Faultline writes it, so no agent's names are involved.
 FAULTLINE_INJECTED = "faultline.injected"
+# On a call a fault targeted but could not change: the spec and why, such as
+# "model:truncated: the upstream answered 500". The call passed through as it was.
+INJECTED_SKIPPED = "faultline.injected.skipped"
 # The most characters of content a span records, so one huge prompt or tool
 # result cannot fill the disk. Over it, content is cut and the span marked.
 DEFAULT_MAX_CONTENT = 64 * 1024
@@ -79,6 +82,7 @@ class Exchange:
     encoding: str | None = None  # the reply's Content-Encoding
     injected: str | None = None  # the fault spec that made the reply
     error: str | None = None  # an error with no HTTP status, such as "timeout"
+    skipped: str | None = None  # a targeting fault that could not apply, and why
 
 
 @dataclass
@@ -238,6 +242,8 @@ class Recorder:
         injected = next((a.injected for a in attempts if a.injected), None)
         if injected:
             attributes[FAULTLINE_INJECTED] = injected
+        elif skipped := next((a.skipped for a in attempts if a.skipped), None):
+            attributes[INJECTED_SKIPPED] = skipped
         events = [
             {
                 "timeUnixNano": str(a.started),

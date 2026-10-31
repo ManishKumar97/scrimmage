@@ -24,6 +24,7 @@ import asyncio
 import contextlib
 import hashlib
 import socket
+import sys
 import time
 from collections.abc import Mapping, Sequence
 
@@ -32,7 +33,8 @@ from aiohttp import web
 from yarl import URL  # aiohttp's own URL type
 
 from faultline.faults import ModelFault
-from faultline.proxy.record import Exchange, Recorder
+from faultline.proxy.record import Exchange, Recorder, decoded
+from faultline.proxy.truncate import Unchanged
 
 # Headers that belong to one connection, not to the request (RFC 9110 section 7.6.1).
 # Host names the proxy, and the client library sets it again for the upstream.
@@ -206,6 +208,9 @@ class ModelProxy:
         status, chunks, encoding, error = 502, [], None, None
         response: web.StreamResponse | None = None
         fault = next((f for f in self.faults if model_call and f.step == step), None)
+        # A fault that answers or hangs always applies. A rewrite may not.
+        applied = bool(fault and not fault.action.rewrite)
+        skipped = None  # why a fault was not applied
         try:
             # Every attempt of the step gets the fault. The upstream never sees it.
             if fault and fault.action.answer:
@@ -229,6 +234,31 @@ class ModelProxy:
             ) as upstream:
                 status = upstream.status
                 encoding = upstream.headers.get("Content-Encoding")
+                if fault and fault.action.rewrite:
+                    # The whole reply is needed to change it, so it does not stream.
+                    whole = await upstream.read()
+                    try:
+                        changed = rewritten(fault, path, status, whole, encoding)
+                    except Unchanged as exc:
+                        skipped = str(exc)
+                        print(
+                            f"faultline proxy: {fault.spec} not applied to step "
+                            f"{step}: {skipped}",
+                            file=sys.stderr,
+                        )
+                        chunks = [whole]
+                        return web.Response(
+                            status=status,
+                            body=whole,
+                            headers=forwardable(upstream.headers),
+                        )
+                    applied, encoding, chunks = True, None, [changed]
+                    headers = [
+                        (name, value)
+                        for name, value in forwardable(upstream.headers)
+                        if name.lower() != "content-encoding"
+                    ]
+                    return web.Response(status=status, body=changed, headers=headers)
                 response = web.StreamResponse(
                     status=upstream.status,
                     reason=upstream.reason,
@@ -260,8 +290,9 @@ class ModelProxy:
                     started=started,
                     ended=time.time_ns(),
                     encoding=encoding,
-                    injected=fault.spec if fault else None,
+                    injected=fault.spec if fault and applied else None,
                     error=error,
+                    skipped=f"{fault.spec}: {skipped}" if fault and skipped else None,
                 )
                 self.recorder.exchange(exchange)
 
@@ -273,3 +304,16 @@ class ModelProxy:
                 return  # the client closed the connection: its timeout fired
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self.stopping.wait(), HANG_POLL)
+
+
+def rewritten(
+    fault: ModelFault, path: str, status: int, body: bytes, encoding: str | None
+) -> bytes:
+    """The upstream's reply as the fault changes it. Raises Unchanged when it cannot."""
+    assert fault.action.rewrite
+    if not 200 <= status < 300:
+        raise Unchanged(f"the upstream answered {status}")
+    plain = decoded(body, encoding)
+    if body and not plain:
+        raise Unchanged(f"the reply's {encoding} encoding cannot be read")
+    return fault.action.rewrite(path, plain)
