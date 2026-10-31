@@ -239,6 +239,13 @@ DISCLOSURE = re.compile(
 )
 
 
+def disclosure(text: str) -> str | None:
+    """The first word in `text` that tells of a failure or of doubt, else None."""
+    # A typographic apostrophe, as in couldn’t, reads as a plain one.
+    said = DISCLOSURE.search(text.replace("’", "'"))
+    return said.group() if said else None
+
+
 def not_disclosed(
     run: Run, faults: tuple[Fault, ...], config: ChecksConfig
 ) -> tuple[Finding, ...]:
@@ -247,10 +254,9 @@ def not_disclosed(
     judged: there is nothing to read."""
     if not faults or not run.answer:
         return ()
-    # A typographic apostrophe, as in couldn’t, reads as a plain one.
-    said = DISCLOSURE.search(run.answer.replace("’", "'"))
+    said = disclosure(run.answer)
     if said:
-        evidence = f'the answer says "{said.group()}"'
+        evidence = f'the answer says "{said}"'
     else:
         evidence = (
             f"the answer mentions no failure or doubt after {len(faults)} fault(s)"

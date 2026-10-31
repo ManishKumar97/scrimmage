@@ -19,11 +19,17 @@ is saved in its own directory:
     DIR/<task id>/<fault, filesystem-safe>/<n>/  a run under that fault
 
 Each holds `trace/` (the run's spans), `stdout.txt`, `stderr.txt` and `result.json`.
+
+Each run gets a verdict by the rules in `faultline.verdict`. A task's reference is
+its expected answer, else the answer of its first clean run that got past rule 1.
+`--matcher module:function` replaces the built-in comparison with the team's own.
 """
 
 import argparse
 import hashlib
+import importlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -44,7 +50,14 @@ from faultline.launch import (
     routed_upstreams,
 )
 from faultline.model import RunVerdict
-from faultline.verdict import judge, not_applied_line
+from faultline.verdict import (
+    Matcher,
+    Reference,
+    expected,
+    judge,
+    loud,
+    not_applied_line,
+)
 
 CLEAN = "clean"
 INPUT = "{input}"
@@ -195,18 +208,64 @@ class Result:
     planned: Planned
     outcome: Outcome
     verdict: RunVerdict | str
+    reference: Reference | None = None
 
 
-def verdict_of(planned: Planned, outcome: Outcome) -> RunVerdict | str:
+class References:
+    """Each task's reference: its expected answer, else the answer of its first clean
+    run that got past rule 1 of the verdict."""
+
+    def __init__(self) -> None:
+        self.found: dict[str, Reference] = {}
+
+    def of(self, task: Task) -> Reference | None:
+        if task.expected is not None:
+            return expected(task.expected)
+        return self.found.get(task.id)
+
+    def learn(self, planned: Planned, outcome: Outcome) -> None:
+        """Take a clean run's answer when its task has no reference yet."""
+        task, run = planned.task, outcome.run
+        if planned.fault or self.of(task) is not None or run is None:
+            return
+        if run.answer and loud(run, outcome.code) is None:
+            source = f"clean run {planned.number}"
+            self.found[task.id] = Reference(run.answer, False, source)
+
+
+def verdict_of(
+    outcome: Outcome, reference: Reference | None, matcher: Matcher | None = None
+) -> RunVerdict | str:
     if outcome.missed:
         return not_applied_line([spec for spec, _ in outcome.missed])
     return judge(
         outcome.run,
         outcome.trace_id,
         outcome.code,
-        planned.task.expected,
+        reference,
         outcome.answer_unrecorded,
+        matcher,
     )
+
+
+def load_matcher(spec: str) -> Matcher:
+    """The team's function from module:function. The working directory is importable,
+    so a matcher can live beside the tasks file. Raises ValueError saying why not."""
+    module_name, _, name = spec.partition(":")
+    if not module_name or not name:
+        raise ValueError(f"--matcher {spec}: write it as module:function")
+    if os.getcwd() not in sys.path:
+        sys.path.insert(0, os.getcwd())
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        raise ValueError(
+            f"--matcher {spec}: cannot import {module_name}: {exc}"
+        ) from None
+    function = getattr(module, name, None)
+    if callable(function):
+        return function
+    raise ValueError(f"--matcher {spec}: {module_name} has no function {name}")
 
 
 def result_json(result: Result) -> dict:
@@ -221,6 +280,7 @@ def result_json(result: Result) -> dict:
         "answer": outcome.run.answer if outcome.run else None,
         "verdict": verdict.verdict.value if judged else None,
         "reason": verdict.reason if judged else verdict,
+        "reference": result.reference.source if result.reference else None,
         "trace_id": outcome.trace_id,
     }
 
@@ -294,6 +354,12 @@ def add_parser(subparsers) -> None:
         help="expected answers, as [[task]] tables with id and expected; "
         "they win over the tasks file's",
     )
+    parser.add_argument(
+        "--matcher",
+        metavar="MODULE:FUNCTION",
+        help="your own comparison, called as FUNCTION(answer, reference) and "
+        "returning True when they say the same",
+    )
     add_upstream_arguments(parser)
     parser.add_argument("command", nargs=argparse.REMAINDER, metavar="-- CMD...")
     parser.set_defaults(handler=test)
@@ -313,7 +379,8 @@ def test(args: argparse.Namespace) -> int:
     try:
         faults = parse_all(args.fault)
         tasks = load_tasks(args.tasks, args.expect_from)
-    except (FaultError, TasksError) as exc:
+        matcher = load_matcher(args.matcher) if args.matcher else None
+    except (FaultError, TasksError, ValueError) as exc:
         return fail(str(exc))
     out = args.out or Path(tempfile.mkdtemp(prefix="faultline-test-"))
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
@@ -323,9 +390,13 @@ def test(args: argparse.Namespace) -> int:
         return 2
     planned = plan(tasks, faults, args.clean_runs, args.runs, out)
     print(f"faultline test: {len(planned)} runs, saved in {out}", file=sys.stderr)
+    references = References()
     for index, run in enumerate(planned, start=1):
         outcome = make(run, command, upstreams, args.max_content)
-        result = Result(run, outcome, verdict_of(run, outcome))
+        references.learn(run, outcome)
+        reference = references.of(run.task)
+        verdict = verdict_of(outcome, reference, matcher)
+        result = Result(run, outcome, verdict, reference)
         (run.directory / "result.json").write_text(
             json.dumps(result_json(result), indent=2) + "\n", encoding="utf-8"
         )

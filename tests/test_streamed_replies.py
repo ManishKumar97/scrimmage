@@ -177,4 +177,6 @@ def test_streamed_replies_from_both_sdks_read_back_as_steps(tmp_path):
     ]
     assert [(s.input_tokens, s.output_tokens) for s in run.steps] == [(6, 3), (8, 4)]
     assert run.answer == "the cart is down"
-    assert result.stderr.splitlines()[-1] == 'verdict: passed (answer has "cart")'
+    assert result.stderr.splitlines()[-1] == (
+        "verdict: passed (answer matches the expected answer)"
+    )

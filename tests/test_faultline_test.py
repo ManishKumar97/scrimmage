@@ -98,3 +98,58 @@ def test_each_task_runs_clean_and_under_the_fault_and_every_run_is_saved(tmp_pat
     stderr = (out / "checkout-slow/model_server_error/2/stderr.txt").read_text()
     assert "agent failed: InternalServerError" in stderr
     assert "[8/8] checkout-slow model:server_error #2: failed_loudly" in result.stderr
+
+
+# A stdlib agent from the product's tests: one get_logs call over MCP, its server
+# under faultline mcp-wrap, then the model's answer.
+TOOL_AGENT = Path(__file__).parents[1] / "packages/faultline/tests/tiny_agent.py"
+TOOL_SCRIPT = [
+    {"tool_calls": [{"name": "get_logs", "arguments": {"service": "cart"}}]},
+    {"text": ANSWER},
+]
+EXPECTED_TASKS = """
+[[task]]
+id = "cart-fails"
+input = "Customers report the cart fails. Why?"
+expected = "cart"
+
+[[task]]
+id = "payment-fails"
+input = "Payments fail. Why?"
+expected = "payment"
+"""
+
+
+def test_each_run_is_marked_by_rule_against_the_expected_answer(tmp_path):
+    tasks = tmp_path / "tasks.toml"
+    tasks.write_text(EXPECTED_TASKS)
+    agent = [sys.executable, str(TOOL_AGENT), str(tmp_path / "server.log")]
+    with fake_llm(tmp_path, TOOL_SCRIPT) as upstream:
+        result = subprocess.run(
+            [FAULTLINE, "test", "--tasks", str(tasks), "--out", str(tmp_path / "out")]
+            + ["--upstream", upstream, "--fault", "tool:get_logs:empty"]
+            + ["--runs", "1", "--clean-runs", "1", "--", *agent],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+
+    assert result.returncode == 0, result.stderr
+    marks = {
+        str(path.parent.relative_to(tmp_path / "out")): json.loads(path.read_text())
+        for path in (tmp_path / "out").glob("*/*/*/result.json")
+    }
+    # The scripted model says cart whatever the tool gave: right for the cart task,
+    # wrong for the payment task, and the team's expected answer says which.
+    assert {run: mark["verdict"] for run, mark in marks.items()} == {
+        "cart-fails/clean/1": "passed",
+        "cart-fails/tool_get_logs_empty/1": "passed",
+        "payment-fails/clean/1": "failed_silently",
+        "payment-fails/tool_get_logs_empty/1": "failed_silently",
+    }
+    assert marks["payment-fails/tool_get_logs_empty/1"]["reason"] == (
+        'answer lacks "payment", compared with the expected answer; '
+        "injected tool:get_logs:empty"
+    )

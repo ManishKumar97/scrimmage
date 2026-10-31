@@ -60,8 +60,8 @@ def test_an_empty_tool_result_is_answered_by_the_wrapper_and_judged(tmp_path):
     assert (call.result, call.error_type) == ("", None)
     assert call.injected == "tool:get_logs:empty"
     assert result.stderr.splitlines()[-1] == (
-        'verdict: failed_silently (answer lacks "checkout"; '
-        "injected tool:get_logs:empty)"
+        'verdict: failed_silently (answer lacks "checkout", compared with the '
+        "expected answer; injected tool:get_logs:empty)"
     )
 
 
@@ -86,7 +86,8 @@ def test_a_rate_limit_answers_the_step_without_reaching_the_upstream(tmp_path):
     assert run.steps[0].error_type == "429"
     assert run.steps[0].injected == "model:rate_limit"
     assert result.stderr.splitlines()[-1] == (
-        "verdict: failed_loudly (no answer; injected model:rate_limit)"
+        "verdict: failed_loudly (the last model call failed: 429; "
+        "injected model:rate_limit)"
     )
 
 
@@ -136,7 +137,7 @@ def test_without_expect_a_finished_run_has_no_reference(tmp_path):
         )
 
     assert result.stderr.splitlines()[-1] == (
-        "no reference: pass --expect or use faultline test (P3.4)"
+        "no reference: pass --expect or use faultline test"
     )
 
 

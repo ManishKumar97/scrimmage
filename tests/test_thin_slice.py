@@ -58,7 +58,8 @@ def test_an_injected_429_reaches_the_sdk_agent_after_all_its_retries(tmp_path):
 # Step 1 asks for the logs of cart. With them empty, the scripted model finds nothing.
 EMPTY_LOGS_SCRIPT = [
     {"tool_calls": [{"name": "get_logs", "arguments": {"service": "cart"}}]},
-    {"text": "The logs show no errors. No fault found.\nROOT CAUSE SERVICE: none"},
+    # No disclosure word, such as "errors": the verdict would read it as one.
+    {"text": "The logs look clean. No fault found.\nROOT CAUSE SERVICE: none"},
 ]
 
 
@@ -95,5 +96,6 @@ def test_an_empty_tool_result_through_the_proxy_gets_a_verdict(tmp_path):
         "tool:get_logs:empty",
     )
     assert result.stderr.splitlines()[-1] == (
-        'verdict: failed_silently (answer lacks "cart"; injected tool:get_logs:empty)'
+        'verdict: failed_silently (answer lacks "cart", compared with the expected '
+        "answer; injected tool:get_logs:empty)"
     )

@@ -266,6 +266,6 @@ def test_the_ida_gets_a_reply_cut_at_the_token_limit(tmp_path):
         ("length", "model:truncated@2"),
     ]
     assert result.stderr.splitlines()[-1] == (
-        'verdict: failed_silently (answer lacks "ROOT CAUSE SERVICE: cart"; '
+        "verdict: failed_loudly (the last reply stopped at the token limit; "
         "injected model:truncated@2)"
     )

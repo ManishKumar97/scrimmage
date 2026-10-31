@@ -164,5 +164,6 @@ def test_the_ida_sees_a_timeout_on_the_chosen_model_call(tmp_path):
     assert first["attrs"]["faultline.proxy.attempts"] == {"intValue": "1"}
     assert second["attrs"]["faultline.proxy.attempts"] == {"intValue": "2"}
     assert result.stderr.splitlines()[-1] == (
-        "verdict: failed_loudly (no answer; injected model:timeout@2)"
+        "verdict: failed_loudly (the last model call failed: timeout; "
+        "injected model:timeout@2)"
     )

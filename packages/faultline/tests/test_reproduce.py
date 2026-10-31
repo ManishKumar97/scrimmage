@@ -6,7 +6,8 @@ import sys
 from pathlib import Path
 
 import pytest
-from upstream import openai_reply, upstream_server
+from upstream import ANSWERS, openai_reply, upstream_server
+from upstream import ASKS as ASKS_FOR_LOGS
 
 from faultline.faults import parse
 from faultline.reproduce import (
@@ -19,9 +20,10 @@ from faultline.reproduce import (
     safe_names,
 )
 
+HERE = Path(__file__).parent
 FAULTLINE = str(Path(sys.executable).parent / "faultline")
 # Asks the model its one argument and prints the reply's text.
-ASKS = """
+ASKER = """
 import json, os, sys, urllib.request
 body = json.dumps({"model": "m", "messages": [{"role": "user", "content": sys.argv[1]}]})
 request = urllib.request.Request(
@@ -121,17 +123,105 @@ def test_the_plan_runs_a_tasks_clean_runs_before_its_faulted_ones(tmp_path):
     ]
 
 
-def faultline_test(tmp_path: Path, upstream: str, *flags: str):
-    tasks = tmp_path / "tasks.toml"
-    tasks.write_text(TWO_TASKS)
+def faultline_test(
+    tmp_path: Path,
+    upstream: str,
+    *flags: str,
+    tasks: str = TWO_TASKS,
+    agent: list[str] | None = None,
+):
+    path = tmp_path / "tasks.toml"
+    path.write_text(tasks)
     return subprocess.run(
-        [FAULTLINE, "test", "--tasks", str(tasks), "--upstream", upstream, *flags]
-        + ["--", sys.executable, "-c", ASKS],
+        [FAULTLINE, "test", "--tasks", str(path), "--upstream", upstream, *flags]
+        + ["--", *(agent or [sys.executable, "-c", ASKER])],
         capture_output=True,
         text=True,
         timeout=120,
         check=False,
+        cwd=tmp_path,  # where a --matcher module is found
     )
+
+
+ONE_TASK = '[[task]]\nid = "cart"\ninput = "Why does the cart fail?"\n'
+WRONG = openai_reply({"role": "assistant", "content": "payment is down"}, "stop")
+
+
+def tool_agent(tmp_path: Path) -> list[str]:
+    """The tiny agent: one get_logs call over MCP, then the model's answer."""
+    return [sys.executable, str(HERE / "tiny_agent.py"), str(tmp_path / "server.log")]
+
+
+def results(out: Path) -> dict[str, dict]:
+    return {
+        str(path.parent.relative_to(out)): json.loads(path.read_text())
+        for path in sorted(out.glob("*/*/*/result.json"))
+    }
+
+
+def test_a_faulted_answer_unlike_the_first_clean_one_failed_silently(tmp_path):
+    out = tmp_path / "out"
+    with upstream_server() as upstream:
+        # Two clean runs, then one under the fault: two requests each.
+        upstream.replies = [ASKS_FOR_LOGS, ANSWERS] * 2 + [ASKS_FOR_LOGS, WRONG]
+        result = faultline_test(
+            tmp_path,
+            upstream.url,
+            "--fault",
+            "tool:get_logs:empty",
+            "--runs",
+            "1",
+            "--clean-runs",
+            "2",
+            "--out",
+            str(out),
+            tasks=ONE_TASK,
+            agent=tool_agent(tmp_path),
+        )
+
+    assert result.returncode == 0, result.stderr
+    saved = results(out)
+    assert {run: (r["verdict"], r["reference"]) for run, r in saved.items()} == {
+        "cart/clean/1": ("passed", "clean run 1"),
+        "cart/clean/2": ("passed", "clean run 1"),
+        "cart/tool_get_logs_empty/1": ("failed_silently", "clean run 1"),
+    }
+    assert saved["cart/tool_get_logs_empty/1"]["reason"] == (
+        'answer lacks "cart", compared with clean run 1; injected tool:get_logs:empty'
+    )
+
+
+def test_a_team_matcher_decides_what_counts_as_the_same(tmp_path):
+    (tmp_path / "team_match.py").write_text(
+        "def anything_down(answer, reference):\n    return 'down' in answer\n"
+    )
+    out = tmp_path / "out"
+    with upstream_server() as upstream:
+        upstream.replies = [ASKS_FOR_LOGS, ANSWERS, ASKS_FOR_LOGS, WRONG]
+        result = faultline_test(
+            tmp_path,
+            upstream.url,
+            "--fault",
+            "tool:get_logs:empty",
+            "--runs",
+            "1",
+            "--clean-runs",
+            "1",
+            "--matcher",
+            "team_match:anything_down",
+            "--out",
+            str(out),
+            tasks=ONE_TASK,
+            agent=tool_agent(tmp_path),
+        )
+    missing = faultline_test(
+        tmp_path, "http://127.0.0.1:9", "--fault", "model:timeout", "--matcher", "x:y"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert results(out)["cart/tool_get_logs_empty/1"]["verdict"] == "passed"
+    assert missing.returncode == 2
+    assert "--matcher x:y: cannot import x" in missing.stderr
 
 
 def test_every_run_is_saved_with_its_output_trace_and_result(tmp_path):
