@@ -42,9 +42,16 @@ def call_faults(
         return fault(FaultKind.TOOL_TIMEOUT, timed_out)
     if call.error_type:
         return fault(FaultKind.TOOL_ERROR, call.error_type)
+    # Without recorded content every result reads as empty, which says nothing.
+    if not run.content_recorded:
+        return []
     error = error_in_result(call.result)
     if error:
         return fault(FaultKind.TOOL_ERROR, error)
+    if is_empty(call.result):
+        return fault(
+            FaultKind.EMPTY_RESULT, cut(call.result, DETAIL_LIMIT) or "(blank)"
+        )
     return []
 
 
@@ -82,3 +89,22 @@ def error_in_result(result: str) -> str | None:
     if value.get("isError") is True:
         return "isError"
     return None
+
+
+def is_empty(result: str) -> bool:
+    """True for a blank result or JSON that holds nothing: null, "", [], {}, or an
+    object whose every value is null or an empty string, list or object."""
+    text = result.strip()
+    if not text:
+        return True
+    value = parse_json(text)
+    if value is NOT_JSON:
+        return False
+    if isinstance(value, dict):
+        return all(blank(v) for v in value.values())
+    return blank(value)
+
+
+def blank(value) -> bool:
+    """None, or an empty string, list or object."""
+    return value is None or (isinstance(value, str | list | dict) and not value)

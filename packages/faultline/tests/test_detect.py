@@ -104,6 +104,60 @@ def test_a_call_at_the_limit_or_failing_fast_is_not_a_timeout(tmp_path):
     assert kinds_of(tmp_path, fast) == [FaultKind.TOOL_ERROR]
 
 
+@pytest.mark.parametrize(
+    "result",
+    [
+        "",
+        "   \n",
+        "null",
+        '""',
+        "[]",
+        "{}",
+        '{"items": []}',
+        '{"a": null, "b": {}, "c": ""}',
+    ],
+)
+def test_a_successful_call_with_nothing_in_the_result_is_an_empty_result(
+    tmp_path, result
+):
+    [fault] = faults_of(tmp_path, calls({"id": "q", "name": "query", "result": result}))
+
+    assert fault.kind is FaultKind.EMPTY_RESULT
+    assert (fault.step, fault.call_id, fault.tool) == (1, "q", "query")
+    assert fault.detail == (" ".join(result.split()) or "(blank)")
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        "0",
+        "false",
+        "[0]",
+        '{"count": 0}',
+        '{"a": null, "b": 1}',
+        '{"a": {"b": null}}',
+        "none",
+        "[]x",
+    ],
+)
+def test_a_result_with_something_in_it_is_not_an_empty_result(tmp_path, result):
+    assert kinds_of(tmp_path, calls({"result": result})) == []
+
+
+def test_a_failed_call_with_no_result_is_an_error_not_an_empty_result(tmp_path):
+    step = calls({"result": "", "error": "ConnectionError"})
+
+    assert kinds_of(tmp_path, step) == [FaultKind.TOOL_ERROR]
+
+
+def test_a_run_that_recorded_no_content_has_no_empty_results(tmp_path):
+    run = run_from(tmp_path, calls({"result": ""}))
+    unrecorded = dataclasses.replace(run, content_recorded=False)
+
+    assert detect(run, CONFIG)[0].kind is FaultKind.EMPTY_RESULT
+    assert detect(unrecorded, CONFIG) == ()
+
+
 def test_faults_come_in_the_order_they_happened(tmp_path):
     first = calls({"id": "a", "error": "E1"})
     second = calls({"id": "b", "result": json.dumps({"error": "E2"})})
