@@ -1,6 +1,6 @@
 """OpenTelemetry GenAI semantic convention names that the run reader reads.
 
-The names are written out here, not imported from the semconv package.
+The names are written out here, not imported from the opentelemetry-semantic-conventions package.
 Its constants for them are marked deprecated (the GenAI conventions are moving to their own
 repository) and sit in a private `_incubating` module.
 Names are from the GenAI semantic conventions as in opentelemetry-semantic-conventions 0.66b1.

@@ -10,7 +10,7 @@ from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
 )
 from opentelemetry.semconv.attributes import error_attributes
 
-from faultline import genai as semconv
+from faultline import semconv
 
 
 def opentelemetry_value(name: str) -> str | None:

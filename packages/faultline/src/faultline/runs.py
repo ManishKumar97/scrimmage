@@ -14,7 +14,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from faultline.genai import (
+from faultline.semconv import (
     CHAT,
     ERROR_TYPE,
     EXECUTE_TOOL,
