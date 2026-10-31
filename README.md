@@ -10,7 +10,9 @@ It holds two packages in one uv workspace.
   It has no runtime dependencies and imports nothing from the lab.
 - `lab` is the test bed, the `faultline-lab` package (module `faultline_lab`).
   It holds the reference agent that Faultline tests, an incident diagnosis agent for a microservice app on Kubernetes, and the runner that injects the incidents in `lab/incidents.yaml`.
-  The lab imports the product, never the reverse.
+  It imports nothing from the product: it is a customer that Faultline reads like any other agent.
+- Neither package imports the other; `lint-imports` checks both directions.
+  Only the root `tests/` folder imports both, for tests that cross the line.
 
 ## The diagnosis agent
 
@@ -66,6 +68,10 @@ uv run faultline find --source jaeger:http://localhost:16686 --service faultline
 Serve the same report as JSON over HTTP, for Grafana or a script.
 `GET /api/findings?since=1h` answers what `faultline find --json --since 1h` prints; `GET /api/health` answers `{"status": "ok"}`.
 It is read-only and listens on 127.0.0.1:8765 unless `--host` and `--port` say otherwise.
+
+`faultline serve` has no authentication and no TLS.
+Anyone who can reach its port can read every finding, and a finding's evidence quotes tool arguments and the agent's answers.
+Bind it only to loopback or to an address on a network you trust, such as the bridge between Grafana and the host; put a reverse proxy with authentication in front of it for anything wider.
 
 ```bash
 uv run faultline serve --source jaeger:http://localhost:16686 --service faultline-ida
