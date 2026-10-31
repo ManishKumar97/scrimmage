@@ -1,6 +1,8 @@
 import asyncio
 import json
 import re
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import cast
 
@@ -14,6 +16,9 @@ from fake_model import (
 )
 from fake_tools import logs_registry
 from openai import AsyncOpenAI
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
+    ExportTraceServiceRequest,
+)
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
@@ -350,3 +355,59 @@ def test_the_file_uses_hex_ids_and_integer_enums_as_otlp_json_requires(tmp_path:
         s for s in exported if s["name"].startswith("execute_tool") and s["status"]
     )
     assert failed["status"]["code"] == 2  # ERROR
+
+
+def test_with_an_otlp_endpoint_set_the_spans_also_go_there_over_http(
+    tmp_path: Path, monkeypatch
+):
+    received: list[bytes] = []
+
+    class Collector(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            received.append(self.rfile.read(int(self.headers["Content-Length"])))
+            assert self.path == "/v1/traces"
+            assert self.headers["Content-Type"] == "application/x-protobuf"
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, format: str, *args) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Collector)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", f"http://127.0.0.1:{port}")
+    path = tmp_path / "traces.jsonl"
+    try:
+        provider = tracing.file_provider(path)
+        model = OpenAIModel(cast(AsyncOpenAI, two_tool_run()), "fake-model")
+        asyncio.run(
+            ida.run(
+                "why?", model, tools=TOOLS, tracing=Tracing(provider.get_tracer("t"))
+            )
+        )
+        provider.shutdown()  # flushes the batch
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    sent = []
+    for body in received:
+        request = ExportTraceServiceRequest.FromString(body)
+        sent += [
+            span.span_id.hex()
+            for resource in request.resource_spans
+            for scope in resource.scope_spans
+            for span in scope.spans
+        ]
+    written = [
+        span["spanId"]
+        for line in path.read_text().splitlines()
+        for resource in json.loads(line)["resourceSpans"]
+        for scope in resource["scopeSpans"]
+        for span in scope["spans"]
+    ]
+    assert len(written) == 5
+    assert sorted(sent) == sorted(written)

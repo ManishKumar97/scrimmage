@@ -12,7 +12,7 @@ in the config. They are never required.
 
 import argparse
 import json
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -82,12 +82,29 @@ def read_runs_many(
         bad, empty = collect_spans(path, traces)
         unreadable += bad
         no_spans += empty
-    runs = [
+    return Reading(runs_of(traces, attributes), unreadable, no_spans)
+
+
+def read_requests(
+    requests: Iterable[object], attributes: Attributes = Attributes()
+) -> Reading:
+    """The runs in OTLP JSON export requests already parsed, for a source that is not
+    a file. Each request counts as one line would."""
+    traces: dict[str, list[dict]] = {}
+    unreadable = no_spans = 0
+    for request in requests:
+        bad, empty = add_request(request, traces)
+        unreadable += bad
+        no_spans += empty
+    return Reading(runs_of(traces, attributes), unreadable, no_spans)
+
+
+def runs_of(traces: dict[str, list[dict]], attributes: Attributes) -> list[Run]:
+    return [
         run
         for tid, spans in traces.items()
         if (run := build_run(tid, spans, attributes))
     ]
-    return Reading(runs, unreadable, no_spans)
 
 
 def collect_spans(path: Path, traces: dict[str, list[dict]]) -> tuple[int, int]:
@@ -102,20 +119,25 @@ def collect_spans(path: Path, traces: dict[str, list[dict]]) -> tuple[int, int]:
             except ValueError:  # includes a bad UTF-8 byte
                 unreadable += 1  # for example a cut final line after a crash
                 continue
-            if not isinstance(request, dict):
-                unreadable += 1
-                continue
-            if not request.get("resourceSpans"):
-                no_spans += 1
-                continue
-            try:
-                spans = spans_in(request)
-            except (TypeError, ValueError, KeyError, AttributeError):
-                unreadable += 1  # a span file shape this reader does not know
-                continue
-            for span in spans:
-                traces.setdefault(span["traceId"], []).append(span)
+            bad, empty = add_request(request, traces)
+            unreadable += bad
+            no_spans += empty
     return unreadable, no_spans
+
+
+def add_request(request: object, traces: dict[str, list[dict]]) -> tuple[int, int]:
+    """Add the spans in one export request to `traces`. Returns (unreadable, no_spans)."""
+    if not isinstance(request, dict):
+        return 1, 0
+    if not request.get("resourceSpans"):
+        return 0, 1
+    try:
+        spans = spans_in(request)
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return 1, 0  # a span file shape this reader does not know
+    for span in spans:
+        traces.setdefault(span["traceId"], []).append(span)
+    return 0, 0
 
 
 def spans_in(request: dict) -> list[dict]:

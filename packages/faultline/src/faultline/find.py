@@ -13,7 +13,7 @@ from faultline.config import Config, load_config
 from faultline.detect import detect
 from faultline.model import Certainty, Fault, FaultKind, Finding, Run
 from faultline.runs import show_run
-from faultline.sources import parse_source
+from faultline.sources import parse_since, parse_source
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,7 +211,16 @@ def add_parser(subparsers) -> None:
         action="append",
         default=[],
         metavar="SPEC",
-        help="where traces come from, for example file:traces/ (repeatable)",
+        help="where traces come from, for example file:traces/ or "
+        "jaeger:http://localhost:16686 (repeatable)",
+    )
+    parser.add_argument(
+        "--service", help="the traced service to read from a trace store like Jaeger"
+    )
+    parser.add_argument(
+        "--since",
+        metavar="DURATION",
+        help="only runs that started in this window before now, for example 1h",
     )
     parser.add_argument(
         "--config", type=Path, help="TOML settings, default ./faultline.toml if present"
@@ -239,12 +248,16 @@ def run(args: argparse.Namespace) -> int:
         return fail("give --source SPEC or at least one file")
     try:
         config = load_config(args.config)
-        sources = [parse_source(spec, config.attributes) for spec in specs]
+        since = None if args.since is None else parse_since(args.since)
+        sources = [
+            parse_source(spec, config.attributes, service=args.service, since=since)
+            for spec in specs
+        ]
     except ValueError as error:  # includes ConfigError
         return fail(str(error))
     out = sys.stderr if args.json else sys.stdout  # with --json, stdout is only JSON
     runs: list[Run] = []
-    files = 0
+    files = fetched = 0
     for source in sources:
         try:
             found = list(source.runs())
@@ -254,6 +267,7 @@ def run(args: argparse.Namespace) -> int:
             )
         stats = source.stats()
         files += stats.files
+        fetched += stats.traces
         runs += found
         if args.runs:
             print(*(show_run(r) for r in found), sep="\n", file=out)
@@ -264,11 +278,16 @@ def run(args: argparse.Namespace) -> int:
             )
         if stats.no_spans:
             print(f"{source.name}: {stats.no_spans} line(s) held no spans", file=out)
-    print(f"read {len(runs)} run(s) from {files} file(s)", file=out)
-    if files == 0:
-        return fail("no span files found")
+    inputs = [f"{files} file(s)"] if files or not fetched else []
+    inputs += [f"{fetched} fetched trace(s)"] if fetched else []
+    print(f"read {len(runs)} run(s) from {' and '.join(inputs)}", file=out)
+    if files == 0 and fetched == 0:
+        return fail("no span files found and no traces fetched")
     if not runs:
-        return fail("read the files but found no runs; are they OTLP GenAI span files?")
+        window = f" that started in the last {args.since}" if args.since else ""
+        return fail(
+            f"read the input but found no runs{window}; are they OTLP GenAI spans?"
+        )
     report = find(runs, config)
     if args.json:
         print(json.dumps(report.to_json(), indent=2))

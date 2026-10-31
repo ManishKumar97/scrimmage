@@ -29,14 +29,15 @@ It calls tools in a loop until it can name a cause, quoting the log lines that s
 ## Traces
 
 Every run writes OpenTelemetry spans to a local file.
-Nothing is sent over the network.
+Nothing is sent over the network unless a standard OTLP endpoint variable is set.
 
 - One root span per run (`invoke_agent`), one child span per model call (`chat <model>`) and one per tool call (`execute_tool <name>`).
 - Tool spans are children of the run span, not of a model call, because a reply's tool calls run at the same time. Each span has `faultline.step`, the number of the model call it belongs to.
 - Attribute names follow the OpenTelemetry GenAI semantic conventions: operation, provider, model, input and output tokens, finish reasons, tool name, tool call id.
 - The root span carries the stop reason, steps, tokens and budget. A tool error, a model API error and any stop reason other than `done` set the span status to ERROR with the error text.
 - Spans are written as OTLP JSON, one line per export, to `runs/traces.jsonl` (the `runs/` folder is git-ignored). `TRACE_FILE` changes the path.
-- Spans hold the system prompt, the messages, the tool definitions, tool arguments and results, the question and the answer, because a later replay needs them. They are written to a local file and go nowhere else.
+- Spans hold the system prompt, the messages, the tool definitions, tool arguments and results, the question and the answer, because a later replay needs them. They are written to a local file and go nowhere else by default.
+- When `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` is set, the spans also go to that endpoint over OTLP/HTTP, as from any instrumented service. The file is still written.
 
 ## Run it
 
@@ -52,6 +53,14 @@ Print the runs in span files with the product's reader:
 
 ```bash
 uv run python -m faultline.runs runs/traces.jsonl
+```
+
+Find the faults in the last hour of runs, from a file or from Jaeger's query API (v3).
+A Jaeger source needs the traced service and a window; give the base URL with Jaeger's base path, if it has one.
+
+```bash
+uv run faultline find --since 1h runs/traces.jsonl
+uv run faultline find --source jaeger:http://localhost:16686 --service faultline-ida --since 1h
 ```
 
 ## Pick a provider
