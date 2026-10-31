@@ -367,18 +367,21 @@ def reply_of(exchange: Exchange) -> tuple[dict, str | None]:
     return reply, "parsed" if reply else "unparsed"
 
 
-def tokens_of(exchange: Exchange) -> tuple[int, int]:
-    """The input and output tokens a successful reply reports. (0, 0) when it
-    reports none, or failed."""
+def tokens_of(exchange: Exchange) -> tuple[int, int] | None:
+    """The input and output tokens a reply reports. (0, 0) for a failed call, which
+    costs nothing. None for a successful reply that reports no usage, such as an
+    OpenAI stream without include_usage: its cost is unknown."""
     if not 200 <= exchange.status < 300:
         return 0, 0
     reply, _ = reply_of(exchange)
     try:
         attributes = reply_attributes(reply) if reply else {}
     except (AttributeError, TypeError, KeyError, IndexError):
-        return 0, 0
+        return None
     input_tokens = attributes.get(GEN_AI_USAGE_INPUT_TOKENS)
     output_tokens = attributes.get(GEN_AI_USAGE_OUTPUT_TOKENS)
+    if not isinstance(input_tokens, int) and not isinstance(output_tokens, int):
+        return None
     return (
         input_tokens if isinstance(input_tokens, int) else 0,
         output_tokens if isinstance(output_tokens, int) else 0,

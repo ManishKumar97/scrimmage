@@ -43,13 +43,41 @@ class Budget:
         self.cap = cap
         self.prices = prices
         self.spent = spent
+        self.blind = False  # a reply reported no usage, so the cap cannot be kept
 
-    def add(self, input_tokens: int, output_tokens: int) -> None:
-        self.spent += self.prices.cost(input_tokens, output_tokens)
+    def add(self, used: tuple[int, int] | None) -> None:
+        """Add one reply's tokens. None is a reply that reported no usage."""
+        if used is None:
+            self.blind = True
+        else:
+            self.spent += self.prices.cost(*used)
 
     @property
     def reached(self) -> bool:
-        return self.spent >= self.cap
+        """True once no more model calls may go: the cap is spent, or it cannot be
+        kept. Fails closed: an unknown cost counts as over the cap."""
+        return self.blind or self.spent >= self.cap
+
+
+NO_USAGE = "cannot enforce --max-cost: the replies report no token usage"
+
+
+# The error type the proxy gives a call it refused because a reply had no usage.
+COST_UNKNOWN = "cost_unknown"
+
+
+def unmetered(run: Run | None) -> bool:
+    """True when the run's cost could not be counted: a model call succeeded with
+    no token usage recorded, or the proxy refused a call for that reason."""
+    return run is not None and any(
+        step.error_type == COST_UNKNOWN
+        or (
+            step.error_type is None
+            and step.input_tokens is None
+            and step.output_tokens is None
+        )
+        for step in run.steps
+    )
 
 
 def dollars(amount: float) -> str:

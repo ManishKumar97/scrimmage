@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from sse import openai_chunk, sse
 from upstream import ANSWERS, ASKS, openai_reply, upstream_server
 
 from faultline.config import CostConfig
@@ -181,3 +182,83 @@ def test_a_cap_without_prices_is_refused_before_any_run(tmp_path):
     assert result.returncode == 2
     assert "--max-cost needs the prices" in result.stderr
     assert not (tmp_path / "out").exists()
+
+
+# Two model calls; asks for a stream when given a second argument.
+TWO_CALLS = """
+import json, os, sys, urllib.request
+for _ in range(2):  # the same request twice, as the reviewer's two_call.py probe
+    body = json.dumps({"model": "m", "stream": len(sys.argv) > 2,
+                       "messages": [{"role": "user", "content": sys.argv[1]}]})
+    request = urllib.request.Request(
+        os.environ["OPENAI_BASE_URL"] + "/chat/completions", body.encode(),
+        {"Content-Type": "application/json"})
+    with urllib.request.urlopen(request) as reply:
+        text = reply.read().decode()
+print(text[:40])
+"""
+NO_USAGE_REPLY = json.dumps(
+    {
+        "id": "r",
+        "model": "m",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "the cart"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+).encode()
+# An OpenAI stream as the SDK asks for it by default: no include_usage, no usage.
+NO_USAGE_STREAM = sse(
+    [
+        openai_chunk({"role": "assistant", "content": "the cart"}),
+        openai_chunk({}, "stop"),
+        (None, "[DONE]"),
+    ]
+)
+
+
+@pytest.mark.parametrize(
+    ("chunk", "kind", "stream"),
+    [
+        (NO_USAGE_REPLY, "application/json", []),
+        (NO_USAGE_STREAM, "text/event-stream", ["stream"]),
+    ],
+    ids=["plain reply", "stream without include_usage"],
+)
+def test_a_cap_fails_closed_when_the_replies_report_no_usage(
+    tmp_path, chunk, kind, stream
+):
+    with upstream_server() as upstream:
+        upstream.chunks = [chunk]
+        upstream.reply_headers = [("Content-Type", kind)]
+        result = faultline_test(
+            tmp_path,
+            upstream.url,
+            "--fault",
+            "model:rate_limit",
+            "--clean-runs",
+            "2",
+            "--runs",
+            "1",
+            *PRICES,
+            "--max-cost",
+            "100",
+            agent=[sys.executable, "-c", TWO_CALLS, "{input}", *stream],
+        )
+        calls = len(upstream.seen)
+
+    assert result.returncode == 3, result.stderr
+    assert (
+        "faultline test: cannot enforce --max-cost: the replies report no token "
+        "usage; stopped after 1 of 6 runs"
+    ) in result.stderr
+    # The first reply had no usage, so the proxy refused the run's second call.
+    assert calls == 1
+    run = tmp_path / "out" / "a" / "clean" / "1"
+    [read] = read_runs_many(sorted((run / "trace").glob("*.jsonl"))).runs
+    # One step: the refused call repeats the first, so it is attempt 2 of step 1.
+    assert [step.error_type for step in read.steps] == ["cost_unknown"]
+    assert "HTTP Error 402" in (run / "stderr.txt").read_text()

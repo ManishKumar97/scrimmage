@@ -32,7 +32,7 @@ import aiohttp
 from aiohttp import web
 from yarl import URL  # aiohttp's own URL type
 
-from faultline.cost import Budget, dollars
+from faultline.cost import COST_UNKNOWN, NO_USAGE, Budget, dollars
 from faultline.faults import ModelFault, provider_error
 from faultline.proxy.record import Exchange, Recorder, decoded, tokens_of
 from faultline.proxy.truncate import Unchanged
@@ -243,7 +243,8 @@ class ModelProxy:
                     status=answer.status, body=answer.body, headers=answer.headers
                 )
             if model_call and self.budget and self.budget.reached:
-                status, error, fault = 402, COST_CAP, None
+                status, fault = 402, None
+                error = COST_UNKNOWN if self.budget.blind else COST_CAP
                 answer = refused(path, self.budget)
                 chunks = [answer.body]
                 return web.Response(
@@ -334,7 +335,7 @@ class ModelProxy:
                 if self.recorder:
                     self.recorder.exchange(exchange)
                 if self.budget:
-                    self.budget.add(*tokens_of(exchange))
+                    self.budget.add(tokens_of(exchange))
 
     async def hang(self, request: web.Request) -> None:
         """Hold the call open until the client gives up on it or the proxy stops."""
@@ -348,10 +349,13 @@ class ModelProxy:
 
 def refused(path: str, budget: Budget):
     """HTTP 402 in the provider's error shape: the test's cost cap is reached."""
-    message = (
-        f"faultline: the cost cap of {dollars(budget.cap)} is reached "
-        f"(spent about {dollars(budget.spent)}); no more model calls in this test"
-    )
+    if budget.blind:
+        message = f"faultline: {NO_USAGE}; no more model calls in this test"
+    else:
+        message = (
+            f"faultline: the cost cap of {dollars(budget.cap)} is reached "
+            f"(spent about {dollars(budget.spent)}); no more model calls in this test"
+        )
     return provider_error(
         path, 402, message, ("insufficient_quota", COST_CAP), "billing_error"
     )

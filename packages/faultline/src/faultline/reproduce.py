@@ -52,7 +52,7 @@ from pathlib import Path
 
 from faultline import matrix
 from faultline.config import CostConfig, load_config
-from faultline.cost import Budget, Prices, dollars, tokens
+from faultline.cost import NO_USAGE, Budget, Prices, dollars, tokens, unmetered
 from faultline.faults import Fault, FaultError, parse_all
 from faultline.launch import (
     PREVIEW,
@@ -532,6 +532,15 @@ def test(args: argparse.Namespace) -> int:
             report(results, faults, out)
             return INTERRUPTED
         cap: float | None = args.max_cost
+        if cap is not None and unmetered(outcome.run):
+            # Fail closed: a cost that cannot be counted cannot be capped.
+            print(
+                f"faultline test: {NO_USAGE}; stopped after {index} of "
+                f"{len(planned)} runs",
+                file=sys.stderr,
+            )
+            report(results, faults, out)
+            return COST_CAP
         if cap is not None and spent >= cap and index < len(planned):
             print(
                 f"faultline test: stopped after {index} of {len(planned)} runs: "
