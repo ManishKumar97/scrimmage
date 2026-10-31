@@ -82,3 +82,29 @@ def test_a_chosen_tool_call_hangs_until_the_idas_own_timeout_fires(tmp_path):
         "timeout",
         "tool:get_logs:timeout",
     )
+
+
+@needs_cluster
+def test_the_ida_gets_the_result_an_earlier_run_got_as_a_success(tmp_path):
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    result, [then], _ = ida_run(first, SCRIPT)
+    assert result.returncode == 0, result.stderr
+
+    result, [now], read = ida_run(
+        second,
+        SCRIPT,
+        "--fault",
+        "tool:get_logs:stale",
+        "--stale-from",
+        str(first / "trace"),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert '[tool] get_logs({"service": "cart"})\n' in result.stderr  # no error
+    # The logs say the time they were read: the IDA got the earlier run's logs.
+    assert (now.result, now.error_type) == (then.result, None)
+    assert read is not None
+    [recorded] = read.tool_calls
+    assert recorded.injected == "tool:get_logs:stale"

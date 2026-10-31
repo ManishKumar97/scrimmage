@@ -25,6 +25,7 @@ TRACE_ID = "FAULTLINE_TRACE_ID"
 ROOT_SPAN_ID = "FAULTLINE_ROOT_SPAN_ID"
 FAULTS = "FAULTLINE_FAULTS"  # a JSON list of fault specs
 MAX_CONTENT = "FAULTLINE_MAX_CONTENT"
+STALE_FROM = "FAULTLINE_STALE_FROM"  # an earlier run's trace directory
 MAX_ANCESTORS = 32  # how far up the process tree to look
 
 
@@ -35,6 +36,7 @@ class RunContext:
     root_span_id: str
     faults: tuple[str, ...] = ()
     max_content: int | None = None
+    stale_from: str | None = None
 
     def env(self) -> dict[str, str]:
         """The run as environment variables, for the agent."""
@@ -46,6 +48,8 @@ class RunContext:
         }
         if self.max_content is not None:
             env[MAX_CONTENT] = str(self.max_content)
+        if self.stale_from is not None:
+            env[STALE_FROM] = self.stale_from
         return env
 
 
@@ -59,6 +63,7 @@ def from_env(env: Mapping[str, str]) -> RunContext | None:
         env[ROOT_SPAN_ID],
         tuple(json.loads(env.get(FAULTS) or "[]")),
         int(limit) if limit.isdigit() else None,
+        env.get(STALE_FROM) or None,
     )
 
 
@@ -133,6 +138,7 @@ def find(env: Mapping[str, str] = os.environ) -> RunContext | None:
             record["root_span_id"],
             tuple(record.get("faults") or ()),
             record.get("max_content"),
+            record.get("stale_from"),
         )
     return None
 

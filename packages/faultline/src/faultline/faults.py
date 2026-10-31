@@ -14,8 +14,10 @@ that restarts the server mid-run starts the count again.
 import json
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from pathlib import Path
 
 from faultline.proxy.truncate import truncated
+from faultline.runs import read_runs_many
 
 
 class FaultError(ValueError):
@@ -61,9 +63,17 @@ class Injection:
     """What a tool fault does to one call."""
 
     answer: dict | None = None  # the JSON-RPC message the client gets from the fault
-    hang: bool = (
-        False  # the client gets no answer at all; the server never sees the call
-    )
+    # The client gets no answer at all, and the server never sees the call.
+    hang: bool = False
+    # The fault targeted the call but left it as it was, and why.
+    skipped: str | None = None
+
+
+@dataclass(frozen=True)
+class ToolOptions:
+    """What `faultline run` tells every tool fault in the run."""
+
+    stale_from: Path | None = None  # the trace directory of an earlier run
 
 
 class ToolInjector:
@@ -73,8 +83,11 @@ class ToolInjector:
     A kind that keeps state, such as results it saw, keeps it on the instance.
     """
 
-    def __init__(self, fault: "ToolFault") -> None:
+    def __init__(
+        self, fault: "ToolFault", options: ToolOptions = ToolOptions()
+    ) -> None:
         self.fault = fault
+        self.options = options
 
     def targets(self, call: ToolRequest) -> bool:
         """The selector: the Nth call of the tool, or every call."""
@@ -82,6 +95,10 @@ class ToolInjector:
 
     def request(self, call: ToolRequest) -> Injection | None:
         """Before the server sees the call. None lets it through unchanged."""
+        return None
+
+    def response(self, call: ToolRequest, message: dict) -> Injection | None:
+        """After the server answered a call this injector let through."""
         return None
 
 
@@ -211,6 +228,120 @@ class Timeout(ToolInjector):
         return Injection(hang=True) if self.targets(call) else None
 
 
+class Stale(ToolInjector):
+    """tool:NAME:stale, the tool answers with an old result, as a success.
+
+    From an earlier run when --stale-from names its trace: the result recorded there
+    for the same tool and arguments. Else from this run: the tool's first successful
+    result, remembered as it passed through, serves the later calls. A targeted call
+    with neither passes through, and its span says nothing was injected.
+
+    A result counts once the server has answered it. Calls of the tool made at the
+    same moment as its first one find nothing remembered yet, and pass through.
+    A result the earlier run's trace cut to its content limit is served as cut.
+    """
+
+    def __init__(
+        self, fault: "ToolFault", options: ToolOptions = ToolOptions()
+    ) -> None:
+        super().__init__(fault, options)
+        self.first: dict | None = None  # the first successful result in this run
+        self.earlier = (
+            earlier_results(options.stale_from, fault.tool)
+            if options.stale_from
+            else {}
+        )
+
+    def request(self, call: ToolRequest) -> Injection | None:
+        if not self.targets(call):
+            return None
+        text = self.earlier.get(arguments_key(call.arguments))
+        if text is not None:
+            return Injection(answer=text_result(call, text))
+        if self.first is not None:
+            return Injection(
+                answer={"jsonrpc": "2.0", "id": call.request_id, "result": self.first}
+            )
+        return None
+
+    def response(self, call: ToolRequest, message: dict) -> Injection | None:
+        result = message.get("result")
+        if (
+            self.first is None
+            and isinstance(result, dict)
+            and not result.get("isError")
+        ):
+            self.first = result
+        if not self.targets(call):
+            return None
+        where = " or in the earlier run" if self.options.stale_from else ""
+        return Injection(
+            skipped=f"no earlier result of {call.tool} in this run{where} to serve"
+        )
+
+
+def arguments_key(arguments: object) -> str:
+    """Arguments as one string, the same whatever their key order or spacing."""
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except ValueError:
+            return arguments
+    return json.dumps(arguments, sort_keys=True)
+
+
+def earlier_results(trace: Path, tool: str) -> dict[str, str]:
+    """The tool's successful results in an earlier run's trace, by arguments.
+
+    A result a fault made is left out: it is not what the tool said. The first
+    result for the same arguments wins.
+    """
+    found: dict[str, str] = {}
+    for run in read_runs_many(sorted(trace.glob("*.jsonl"))).runs:
+        for call in run.tool_calls:
+            if call.name == tool and call.error_type is None and not call.injected:
+                found.setdefault(arguments_key(call.arguments), call.result)
+    return found
+
+
+def text_result(call: ToolRequest, text: str) -> dict:
+    """A success holding recorded text, in the shape the session expects.
+
+    Raises FaultShapeError, holding the answer without structuredContent, when the
+    tool's output schema cannot be filled from the text.
+    """
+    result: dict = {"content": [{"type": "text", "text": text}], "isError": False}
+    if call.session.tags_results:
+        result["resultType"] = "complete"
+    answer = {"jsonrpc": "2.0", "id": call.request_id, "result": result}
+    schema = call.session.output_schema
+    if schema is not None:
+        try:
+            result["structuredContent"] = structured_from_text(schema, text)
+        except ValueError as exc:
+            raise FaultShapeError(str(exc), answer) from None
+    return answer
+
+
+def structured_from_text(schema: dict, text: str) -> object:
+    """The structuredContent a tool with this output schema gives with this text.
+
+    Two shapes are known: one required string field, as MCP SDKs wrap a tool that
+    returns a string, and an object the text holds as JSON.
+    """
+    properties = schema.get("properties") or {}
+    required = schema.get("required") or []
+    if len(required) == 1 and properties.get(required[0], {}).get("type") == "string":
+        return {required[0]: text}
+    try:
+        value = json.loads(text)
+    except ValueError:
+        value = None
+    if isinstance(value, dict):
+        return value
+    raise ValueError("the recorded text does not fill the tool's output schema")
+
+
 def rate_limit(path: str) -> ModelAnswer:
     """HTTP 429 with the provider's own error body and a retry-after header.
 
@@ -292,6 +423,7 @@ TOOL_FAULTS: dict[str, type[ToolInjector]] = {
     "empty": Empty,
     "error": Error,
     "timeout": Timeout,
+    "stale": Stale,
 }
 MODEL_FAULTS: dict[str, ModelKind] = {
     "rate_limit": ModelKind(answer=rate_limit),
@@ -308,9 +440,9 @@ class ToolFault:
     kind: str
     call: int | None = None  # the Nth call of the tool, or None for every call
 
-    def injector(self) -> ToolInjector:
+    def injector(self, options: ToolOptions = ToolOptions()) -> ToolInjector:
         """A new injector for this fault, with no state yet."""
-        return TOOL_FAULTS[self.kind](self)
+        return TOOL_FAULTS[self.kind](self, options)
 
 
 @dataclass(frozen=True)

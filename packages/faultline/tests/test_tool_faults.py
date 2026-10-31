@@ -7,8 +7,12 @@ import sys
 from pathlib import Path
 
 import pytest
+from upstream import ASKS
 
+from faultline.faults import ToolFault, ToolOptions, ToolRequest, ToolSession, parse
+from faultline.model import ToolCall
 from faultline.proxy.context import RunContext
+from faultline.proxy.record import Exchange, Recorder
 
 FAULTLINE = str(Path(sys.executable).parent / "faultline")
 SERVER = str(Path(__file__).parent / "stdio_server.py")
@@ -35,23 +39,43 @@ OPENING = [
 
 
 def wrapped(
-    tmp_path: Path, sent: list[bytes], faults: list[str], timeout: float = 30
+    tmp_path: Path,
+    sent: list[bytes],
+    faults: list[str],
+    stale_from: Path | None = None,
+    in_turn: bool = False,
 ) -> tuple[list[bytes], bytes, list[dict]]:
-    """The lines the client got, the bytes the server got, and the run's trace."""
+    """The lines the client got, the bytes the server got, and the run's trace.
+
+    With `in_turn`, each request waits for its answer before the next line goes,
+    as an agent that calls one tool at a time does. Else all lines go at once.
+    """
     trace = tmp_path / "trace"
     log = tmp_path / "server.log"
+    tmp_path.mkdir(parents=True, exist_ok=True)
     log.unlink(missing_ok=True)
-    env = {**os.environ, **RunContext(str(trace), TRACE_ID, ROOT, tuple(faults)).env()}
-    result = subprocess.run(
-        [FAULTLINE, "mcp-wrap", "--", sys.executable, SERVER, str(log), "0"],
-        input=b"".join(sent),
-        env=env,
-        capture_output=True,
-        timeout=timeout,
-        check=False,
+    run = RunContext(
+        str(trace), TRACE_ID, ROOT, tuple(faults), None, stale_from and str(stale_from)
     )
-    assert result.returncode == 0, result.stderr
-    return result.stdout.splitlines(keepends=True), log.read_bytes(), spans(trace)
+    with subprocess.Popen(
+        [FAULTLINE, "mcp-wrap", "--", sys.executable, SERVER, str(log), "0"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={**os.environ, **run.env()},
+    ) as wrapper:
+        assert wrapper.stdin and wrapper.stdout and wrapper.stderr
+        got: list[bytes] = []
+        for message in sent:
+            wrapper.stdin.write(message)
+            wrapper.stdin.flush()
+            if in_turn and "id" in json.loads(message):
+                got.append(wrapper.stdout.readline())
+        wrapper.stdin.close()
+        got += wrapper.stdout.read().splitlines(keepends=True)
+        error = wrapper.stderr.read()
+        assert wrapper.wait(30) == 0, error
+    return got, log.read_bytes(), spans(trace)
 
 
 def spans(trace: Path) -> list[dict]:
@@ -197,3 +221,148 @@ def test_an_empty_result_answers_the_calls_its_selector_names(tmp_path, spec, em
     assert [s.get("faultline.injected") for s in recorded] == [
         spec if number in emptied else None for number in (2, 3, 4, 5)
     ]
+
+
+def echo(arguments: dict) -> dict:
+    """The stub server's own result for a call with these arguments."""
+    text = f"echo {json.dumps(arguments)}"
+    return {"content": [{"type": "text", "text": text}], "isError": False}
+
+
+def answers_of(got: list[bytes]) -> dict:
+    return {json.loads(line)["id"]: json.loads(line)["result"] for line in got}
+
+
+@pytest.mark.parametrize(
+    ("spec", "stale"),
+    [
+        ("tool:get_logs:stale", [4, 5]),  # every call after the first
+        ("tool:get_logs:stale@2", [4]),  # the second call only
+    ],
+)
+def test_a_stale_result_is_the_tools_first_result_served_again(tmp_path, spec, stale):
+    got, server_saw, recorded = wrapped(tmp_path, THREE_LOGS, [spec], in_turn=True)
+
+    answers = answers_of(got)
+    cart = echo({"service": "cart"})
+    # Call 4 asked about ad and got cart's result from call 2, as a success.
+    assert [answers[i] for i in (2, 4, 5)] == [
+        cart,
+        cart if 4 in stale else echo({"service": "ad"}),
+        cart,
+    ]
+    assert server_saw == b"".join(
+        line for line in THREE_LOGS if json.loads(line).get("id") not in stale
+    )
+    assert [s.get("faultline.injected") for s in recorded] == [
+        spec if number in stale else None for number in (2, 3, 4, 5)
+    ]
+    assert [s.get("error.type") for s in recorded] == [None] * 4
+
+
+def test_a_targeted_call_with_nothing_earlier_passes_and_says_so(tmp_path):
+    _, _, recorded = wrapped(
+        tmp_path, THREE_LOGS, ["tool:get_logs:stale@1"], in_turn=True
+    )
+
+    first = recorded[0]
+    assert first.get("faultline.injected") is None
+    assert first["faultline.injected.skipped"] == (
+        "tool:get_logs:stale@1: no earlier result of get_logs in this run to serve"
+    )
+
+
+def earlier_run(trace: Path, *calls: tuple[dict, str]) -> None:
+    """A run's trace with get_logs results from an earlier day."""
+    recorder = Recorder(trace / "model.jsonl", "ef" * 16, "12" * 8)
+    # A trace is a run when it holds a model call.
+    recorder.exchange(Exchange(1, 1, "/chat/completions", b"{}", 200, ASKS, 0, 1))
+    recorder.flush()
+    for arguments, result in calls:
+        recorder.tool_call(
+            ToolCall("get_logs", "", json.dumps(arguments), 0.1, result, started=1)
+        )
+    recorder.tool_call(  # a result a fault made is not one the tool gave
+        ToolCall(
+            "get_logs",
+            "",
+            '{"service": "cart"}',
+            0.1,
+            "",
+            started=1,
+            injected="tool:get_logs:empty",
+        )
+    )
+    recorder.root(1, 2, ["agent"], 0)
+
+
+def test_a_stale_result_comes_from_an_earlier_run_for_the_same_arguments(tmp_path):
+    earlier = tmp_path / "earlier"
+    earlier_run(earlier, ({"service": "ad"}, "old logs of ad"))
+
+    got, server_saw, recorded = wrapped(
+        tmp_path / "now",
+        THREE_LOGS,
+        ["tool:get_logs:stale"],
+        stale_from=earlier,
+        in_turn=True,
+    )
+
+    answers = answers_of(got)
+    assert answers[4] == {
+        "content": [{"type": "text", "text": "old logs of ad"}],
+        "isError": False,
+    }
+    # Cart has no result in the earlier run: call 2 passes, call 5 gets its result.
+    assert (answers[2], answers[5]) == (echo({"service": "cart"}),) * 2
+    assert server_saw == b"".join(THREE_LOGS[:5])
+    assert [s.get("faultline.injected") for s in recorded] == [
+        None,
+        None,
+        "tool:get_logs:stale",
+        "tool:get_logs:stale",
+    ]
+    assert recorded[0]["faultline.injected.skipped"] == (
+        "tool:get_logs:stale: no earlier result of get_logs in this run "
+        "or in the earlier run to serve"
+    )
+
+
+def test_a_stale_result_from_text_fills_a_string_output_schema(tmp_path):
+    fault = parse("tool:get_logs:stale")
+    assert isinstance(fault, ToolFault)
+    earlier = tmp_path / "earlier"
+    earlier_run(earlier, ({"service": "ad"}, "old logs of ad"))
+    injector = fault.injector(ToolOptions(stale_from=earlier))
+    schema = {
+        "type": "object",
+        "properties": {"result": {"type": "string"}},
+        "required": ["result"],
+    }
+    session = ToolSession(schema, tags_results=True)
+
+    injection = injector.request(
+        ToolRequest(9, "get_logs", {"service": "ad"}, 1, session)
+    )
+
+    assert injection is not None and injection.answer is not None
+    assert injection.answer["result"] == {
+        "content": [{"type": "text", "text": "old logs of ad"}],
+        "isError": False,
+        "resultType": "complete",
+        "structuredContent": {"result": "old logs of ad"},
+    }
+
+
+def test_stale_from_must_be_a_directory(tmp_path):
+    result = subprocess.run(
+        [FAULTLINE, "run", "--stale-from", str(tmp_path / "none")]
+        + ["--upstream", "http://127.0.0.1:9", "--", "true"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "is not a directory" in result.stderr

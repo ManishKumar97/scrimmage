@@ -21,18 +21,20 @@ import sys
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from faultline.faults import (
     FaultShapeError,
     ToolFault,
     ToolInjector,
+    ToolOptions,
     ToolRequest,
     ToolSession,
     parse_all,
 )
 from faultline.model import ToolCall
 from faultline.proxy.context import find as find_run
-from faultline.proxy.record import Recorder
+from faultline.proxy.record import INJECTED_SKIPPED, Attributes, Recorder
 from faultline.relay import RELAYED, Relay, tied_to_parent
 
 # The error type on the span of a faked result that does not fit the tool's schema.
@@ -68,7 +70,9 @@ def wrap(args: argparse.Namespace) -> int:
         return 2
     recorder = Recorder.for_run(run, f"mcp-{os.getpid()}.jsonl") if run else None
     tool_faults = [fault for fault in faults if isinstance(fault, ToolFault)]
-    calls = ToolCalls(recorder.tool_call if recorder else None, tool_faults)
+    stale_from = run.stale_from if run else None
+    options = ToolOptions(Path(stale_from) if stale_from else None)
+    calls = ToolCalls(recorder.tool_call if recorder else None, tool_faults, options)
     return asyncio.run(relay(command, calls))
 
 
@@ -78,6 +82,7 @@ class Pending:
     arguments: str
     started: int  # unix nanoseconds
     clock: float  # monotonic seconds, for the duration
+    request: ToolRequest | None = None  # what the injectors were asked about
 
 
 class ToolCalls:
@@ -85,8 +90,9 @@ class ToolCalls:
 
     def __init__(
         self,
-        on_call: Callable[[ToolCall], None] | None = None,
+        on_call: Callable[[ToolCall, Attributes], None] | None = None,
         faults: Sequence[ToolFault] = (),
+        options: ToolOptions = ToolOptions(),
     ) -> None:
         self.pending: dict[str, Pending] = {}
         self.calls: list[ToolCall] = []
@@ -95,7 +101,7 @@ class ToolCalls:
         # such as one fault on its first call and another on its second.
         self.injectors: dict[str, list[ToolInjector]] = {}
         for fault in faults:
-            self.injectors.setdefault(fault.tool, []).append(fault.injector())
+            self.injectors.setdefault(fault.tool, []).append(fault.injector(options))
         self.counts: dict[str, int] = {}  # calls of each tool so far
         # Calls a fault holds unanswered, and the fault's spec, by JSON-RPC id.
         self.hung: dict[str, tuple[Pending, str]] = {}
@@ -150,6 +156,7 @@ class ToolCalls:
             if injection is not None and injection.hang:
                 self.hung[key(message["id"])] = (pending, spec)
                 return b""  # the server never sees it, the client never hears back
+        pending.request = request
         self.pending[key(message["id"])] = pending
         return None
 
@@ -192,8 +199,21 @@ class ToolCalls:
         pending = self.pending.pop(key(message["id"]), None)
         if pending is None:
             return  # the answer to a request that is not a tool call
+        skipped = []  # faults that targeted the call but left it as it was, and why
+        request = pending.request
+        for injector in self.injectors.get(pending.name, []) if request else []:
+            assert request
+            injection = injector.response(request, message)
+            if injection is not None and injection.skipped:
+                skipped.append(f"{injector.fault.spec}: {injection.skipped}")
+                print(
+                    f"faultline mcp-wrap: call {request.number} of {pending.name} "
+                    f"passed unchanged ({skipped[-1]})",
+                    file=sys.stderr,
+                )
         result, error_type = outcome(message)
-        self.finish(pending, result, error_type)
+        extra: Attributes = {INJECTED_SKIPPED: "; ".join(skipped)} if skipped else {}
+        self.finish(pending, result, error_type, extra=extra)
 
     def learn_schemas(self, listed: dict) -> None:
         tools = listed.get("tools")
@@ -207,6 +227,7 @@ class ToolCalls:
         result: str,
         error_type: str | None,
         injected: str | None = None,
+        extra: Attributes | None = None,
     ) -> None:
         call = ToolCall(
             name=pending.name,
@@ -220,7 +241,7 @@ class ToolCalls:
         )
         self.calls.append(call)
         if self.on_call:
-            self.on_call(call)
+            self.on_call(call, extra or {})
 
     def close(self) -> None:
         """Record the calls the server never answered, and those a fault held."""

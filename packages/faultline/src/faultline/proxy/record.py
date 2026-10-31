@@ -267,7 +267,8 @@ class Recorder:
             events=events,
         )
 
-    def tool_call(self, call: ToolCall) -> None:
+    def tool_call(self, call: ToolCall, extra: Attributes | None = None) -> None:
+        """One execute_tool span. `extra` adds Faultline's own attributes."""
         attributes: Attributes = {
             GEN_AI_OPERATION_NAME: EXECUTE_TOOL,
             GEN_AI_TOOL_NAME: call.name,
@@ -277,6 +278,7 @@ class Recorder:
         self.cap(attributes)
         if call.injected:
             attributes[FAULTLINE_INJECTED] = call.injected
+        attributes.update(extra or {})
         ended = call.started + int(call.seconds * 1_000_000_000)
         self.write(
             self.span(
