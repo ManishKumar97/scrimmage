@@ -326,18 +326,22 @@ def show_run(run: Run) -> str:
     return "\n".join(lines)
 
 
+def show_reading(path: Path | str, reading: Reading) -> str:
+    """What `python -m faultline.runs` prints for one file."""
+    lines = [f"{path}: {len(reading.runs)} run(s)"]
+    lines += [show_run(run) for run in reading.runs]
+    if reading.unreadable:
+        lines.append(f"{path}: skipped {reading.unreadable} unreadable line(s)")
+    if reading.no_spans:
+        lines.append(f"{path}: {reading.no_spans} line(s) held no spans")
+    return "\n".join(lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Print the runs in OTLP span files.")
     parser.add_argument("files", nargs="+", type=Path)
     for path in parser.parse_args().files:
-        reading = read_runs(path)
-        print(f"{path}: {len(reading.runs)} run(s)")
-        for run in reading.runs:
-            print(show_run(run))
-        if reading.unreadable:
-            print(f"{path}: skipped {reading.unreadable} unreadable line(s)")
-        if reading.no_spans:
-            print(f"{path}: {reading.no_spans} line(s) held no spans")
+        print(show_reading(path, read_runs(path)))
 
 
 if __name__ == "__main__":
