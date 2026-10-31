@@ -38,7 +38,10 @@ def test_without_the_flag_the_tools_are_listed_and_none_runs(tmp_path):
     python = sys.executable
     # Every tool of both MCP servers, grouped by server.
     assert out.splitlines() == [
-        "faultline run: a preview. No tool ran: every tool call was blocked.",
+        (
+            "faultline run: a preview. No MCP tool under faultline mcp-wrap ran: "
+            "every call was blocked, and every model call was held."
+        ),
         "These MCP tools would run for real:",
         f"  {python} -m faultline_lab.mcp_logs:",
         "    get_logs",
@@ -48,6 +51,11 @@ def test_without_the_flag_the_tools_are_listed_and_none_runs(tmp_path):
         (
             "Tools in the agent's own code (function tools) never pass through "
             "faultline, so they are not listed. Check them yourself."
+        ),
+        *(
+            f"{name} was not set, so the agent's calls through it bypass "
+            "faultline and were not held."
+            for name in ("OPENAI_BASE_URL", "ANTHROPIC_BASE_URL")
         ),
         "Pass --allow-live-tools to run with these tools.",
     ]

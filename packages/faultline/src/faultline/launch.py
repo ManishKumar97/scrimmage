@@ -197,7 +197,10 @@ def run(args: argparse.Namespace) -> int:
             stale_from,
             preview=True,
         )
-        print(show_tools(outcome.servers, "faultline run"), file=sys.stderr)
+        print(
+            show_tools(outcome.servers, "faultline run", outcome.unrouted),
+            file=sys.stderr,
+        )
         return PREVIEW
     outcome = execute(command, faults, upstreams, trace, args.max_content, stale_from)
     for spec, reason in outcome.missed:
@@ -290,6 +293,9 @@ class Outcome:
     seconds: float
     interrupted: bool  # a stop signal reached faultline during the run
     servers: list[ServerTools]  # the MCP servers that ran, and the tools they listed
+    # Base URL variables with no upstream: the agent's calls through them bypass
+    # faultline.
+    unrouted: list[str]
 
 
 def execute(
@@ -349,6 +355,7 @@ def execute(
         seconds=seconds,
         interrupted=interrupted,
         servers=read_all(trace),
+        unrouted=[name for name, url in upstreams.items() if not url],
     )
 
 
@@ -486,9 +493,20 @@ async def tools_listed(trace: Path, called: asyncio.Event, grace: float) -> None
         await asyncio.sleep(POLL)
 
 
-def show_tools(servers: Sequence[ServerTools], label: str) -> str:
-    """What a preview found: every tool that would run for real, by server."""
-    lines = [f"{label}: a preview. No tool ran: every tool call was blocked."]
+def show_tools(
+    servers: Sequence[ServerTools], label: str, unrouted: Sequence[str] = ()
+) -> str:
+    """What a preview found: every tool that would run for real, by server.
+
+    It claims only what faultline sees: MCP calls under faultline mcp-wrap, and
+    model calls through the proxy's routes.
+    """
+    lines = [
+        (
+            f"{label}: a preview. No MCP tool under faultline mcp-wrap ran: "
+            "every call was blocked, and every model call was held."
+        )
+    ]
     if not servers:
         lines.append("No MCP server ran under faultline mcp-wrap.")
     else:
@@ -508,5 +526,10 @@ def show_tools(servers: Sequence[ServerTools], label: str) -> str:
         "Tools in the agent's own code (function tools) never pass through "
         "faultline, so they are not listed. Check them yourself."
     )
+    for name in unrouted:
+        lines.append(
+            f"{name} was not set, so the agent's calls through it bypass faultline "
+            "and were not held."
+        )
     lines.append("Pass --allow-live-tools to run with these tools.")
     return "\n".join(lines)

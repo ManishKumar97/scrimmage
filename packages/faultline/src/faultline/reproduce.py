@@ -565,7 +565,10 @@ def preview(
         streams=streams,
         preview=True,
     )
-    print(show_tools(outcome.servers, "faultline test"), file=sys.stderr)
+    print(
+        show_tools(outcome.servers, "faultline test", outcome.unrouted),
+        file=sys.stderr,
+    )
     return PREVIEW
 
 

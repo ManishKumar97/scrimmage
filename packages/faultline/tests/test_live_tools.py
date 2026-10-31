@@ -91,33 +91,104 @@ def test_in_block_mode_only_a_fault_answers_and_the_server_runs_no_tool(tmp_path
     assert [s["error.type"] for s in blocked] == ["blocked"]
 
 
+PREVIEW = (
+    "faultline run: a preview. No MCP tool under faultline mcp-wrap ran: every call "
+    "was blocked, and every model call was held."
+)
+FUNCTION_TOOLS = (
+    "Tools in the agent's own code (function tools) never pass through "
+    "faultline, so they are not listed. Check them yourself."
+)
+BYPASS = (
+    "ANTHROPIC_BASE_URL was not set, so the agent's calls through it bypass "
+    "faultline and were not held."
+)
+# An agent on the legacy completions API, a path the proxy does not know as a model
+# call. After the reply it runs a function tool with a side effect.
+LEGACY = """
+import json, os, sys, urllib.request
+body = json.dumps({"model": "m", "prompt": "hi"}).encode()
+request = urllib.request.Request(
+    os.environ["OPENAI_BASE_URL"] + "/completions", body,
+    {"Content-Type": "application/json"})
+reply = json.load(urllib.request.urlopen(request, timeout=30))
+open(sys.argv[1], "a").write("LIVE TOOL RAN\\n")
+print(reply["choices"][0]["text"])
+"""
+
+
+def env() -> dict[str, str]:
+    """No base URL variable from the shell, so only --upstream routes."""
+    return {k: v for k, v in os.environ.items() if not k.endswith("_BASE_URL")}
+
+
+def faultline(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [FAULTLINE, *args],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        env=env(),
+    )
+
+
 def test_without_the_flag_the_run_is_a_preview_and_no_model_call_leaves(tmp_path):
     # The tiny agent calls the model first and starts its MCP server only after.
     agent = [sys.executable, str(HERE / "tiny_agent.py"), str(tmp_path / "log")]
     with upstream_server() as upstream:
         upstream.replies = [ASKS]
-        result = subprocess.run(
-            [FAULTLINE, "run", "--upstream", upstream.url]
-            + ["--trace", str(tmp_path / "trace"), "--", *agent],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
+        result = faultline(
+            "run", "--upstream", upstream.url, "--trace", str(tmp_path / "trace"),
+            "--", *agent,
+        )  # fmt: skip
         seen = upstream.seen
 
     assert result.returncode == 2, result.stderr
     assert seen == []  # the proxy held the model call
     assert not (tmp_path / "log").exists()
-    assert result.stderr.splitlines()[-4:] == [
-        "faultline run: a preview. No tool ran: every tool call was blocked.",
+    assert result.stderr.splitlines()[-5:] == [
+        PREVIEW,
         "No MCP server ran under faultline mcp-wrap.",
-        (
-            "Tools in the agent's own code (function tools) never pass through "
-            "faultline, so they are not listed. Check them yourself."
-        ),
+        FUNCTION_TOOLS,
+        BYPASS,
         "Pass --allow-live-tools to run with these tools.",
     ]
+
+
+def test_a_call_on_a_path_the_proxy_does_not_know_is_held_too(tmp_path):
+    side = tmp_path / "side.txt"
+    with upstream_server() as upstream:
+        result = faultline(
+            "run", "--upstream", upstream.url, "--",
+            sys.executable, "-c", LEGACY, str(side),
+        )  # fmt: skip
+        seen = upstream.seen
+
+    assert result.returncode == 2, result.stderr
+    assert seen == []  # the legacy /completions call never left
+    assert not side.exists()  # so the function tool after it never ran
+    assert PREVIEW in result.stderr
+
+
+def test_under_a_cost_cap_a_call_the_proxy_cannot_count_is_refused(tmp_path):
+    tasks = tmp_path / "tasks.toml"
+    tasks.write_text('[[task]]\nid = "a"\ninput = "q"\n')
+    side = tmp_path / "side.txt"
+    with upstream_server() as upstream:
+        faultline(
+            "test", "--allow-live-tools", "--tasks", str(tasks),
+            "--fault", "model:timeout", "--runs", "1", "--clean-runs", "1",
+            "--price-in", "1", "--price-out", "1", "--max-cost", "1",
+            "--upstream", upstream.url, "--out", str(tmp_path / "out"),
+            "--", sys.executable, "-c", LEGACY, str(side),
+        )  # fmt: skip
+        seen = upstream.seen
+
+    assert seen == []
+    assert not side.exists()
+    stderr = (tmp_path / "out" / "a" / "clean" / "1" / "stderr.txt").read_text()
+    assert "HTTP Error 402" in stderr
 
 
 def test_faultline_test_makes_no_run_without_the_flag(tmp_path):
@@ -125,19 +196,15 @@ def test_faultline_test_makes_no_run_without_the_flag(tmp_path):
     tasks.write_text('[[task]]\nid = "a"\ninput = "q"\n')
     agent = [sys.executable, str(HERE / "tiny_agent.py"), str(tmp_path / "log")]
     with upstream_server() as upstream:
-        result = subprocess.run(
-            [FAULTLINE, "test", "--tasks", str(tasks), "--fault", "model:timeout"]
-            + ["--upstream", upstream.url, "--out", str(tmp_path / "out")]
-            + ["--", *agent],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
+        result = faultline(
+            "test", "--tasks", str(tasks), "--fault", "model:timeout",
+            "--upstream", upstream.url, "--out", str(tmp_path / "out"),
+            "--", *agent,
+        )  # fmt: skip
         seen = upstream.seen
 
     assert result.returncode == 2, result.stderr
     assert seen == []
-    assert "faultline test: a preview. No tool ran" in result.stderr
+    assert "faultline test: a preview. No MCP tool under" in result.stderr
     assert not (tmp_path / "out").exists()
     assert result.stdout == ""

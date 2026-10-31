@@ -225,11 +225,23 @@ class ModelProxy:
         applied = bool(fault and not fault.action.rewrite)
         skipped = None  # why a fault was not applied
         try:
-            if model_call and self.hold:
+            # A preview holds every request, model call or not: a call on a path
+            # this proxy does not know, such as the legacy /completions, could still
+            # make the agent run a tool.
+            if self.hold:
                 self.called.set()
                 status, error, fault = 0, HELD, None
                 await self.hang(request)
                 return web.Response(status=503, text="faultline proxy: stopped")
+            # Under a cost cap, only calls whose cost the proxy can count go on.
+            # A GET, such as listing models, costs nothing.
+            if self.budget and not model_call and request.method != "GET":
+                status, error = 402, COST_CAP
+                answer = uncounted(path)
+                chunks = [answer.body]
+                return web.Response(
+                    status=answer.status, body=answer.body, headers=answer.headers
+                )
             if model_call and self.budget and self.budget.reached:
                 status, error, fault = 402, COST_CAP, None
                 answer = refused(path, self.budget)
@@ -339,6 +351,18 @@ def refused(path: str, budget: Budget):
     message = (
         f"faultline: the cost cap of {dollars(budget.cap)} is reached "
         f"(spent about {dollars(budget.spent)}); no more model calls in this test"
+    )
+    return provider_error(
+        path, 402, message, ("insufficient_quota", COST_CAP), "billing_error"
+    )
+
+
+def uncounted(path: str):
+    """HTTP 402 for a call the cost cap cannot count, on a path that is not a known
+    model call."""
+    message = (
+        f"faultline: --max-cost can count only {', '.join(MODEL_CALL_PATHS)} calls, "
+        f"so {path} is refused"
     )
     return provider_error(
         path, 402, message, ("insufficient_quota", COST_CAP), "billing_error"
