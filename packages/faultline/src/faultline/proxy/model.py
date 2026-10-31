@@ -8,6 +8,16 @@ The reply streams back as it arrives.
 
 The proxy never rewrites a request. A provider's prompt cache matches the exact bytes
 of the request prefix, so one changed byte would make every later call pay full price.
+
+Steps. A model call (a chat completions, messages or responses request) is a step.
+Other requests, such as listing models, pass through and are not steps. A retry of a
+step is the same step, attempt n+1. The SDK says so in its x-stainless-retry-count
+header when it sends one. Otherwise a request with the same body as the one before
+is taken as a retry.
+
+Limit: the steps are numbered in the order requests arrive, for the whole run. That
+fits one agent making one model call at a time. Model calls made in parallel, or by
+several agents in one run, interleave, and their step numbers mean little.
 """
 
 import hashlib
@@ -55,27 +65,39 @@ def forwardable(headers) -> list[tuple[str, str]]:
     ]
 
 
-class Steps:
-    """Numbers the model calls of a run.
+# The paths of model calls: OpenAI chat completions and responses, Anthropic messages.
+MODEL_CALL_PATHS = ("/chat/completions", "/responses", "/messages")
+# How many times the request was retried, sent by the Stainless-built SDKs
+# (the openai and anthropic Python and TypeScript libraries). 0 on the first try.
+RETRY_COUNT = "x-stainless-retry-count"
 
-    A request is a step. A request with the same body as the one before it is the
-    same step sent again, as an SDK does after an error, so it is the next attempt.
-    """
+
+def is_model_call(path: str) -> bool:
+    return path.rstrip("/").endswith(MODEL_CALL_PATHS)
+
+
+class Steps:
+    """Numbers the model calls of a run, and the attempts of each."""
 
     def __init__(self) -> None:
         self.number = 0
         self.attempt = 0
         self.last: bytes | None = None
 
-    def count(self, body: bytes) -> tuple[int, int]:
-        """The step number and attempt number of a request with this body."""
+    def count(self, body: bytes, retries: str | None = None) -> tuple[int, int]:
+        """The step and attempt number of a request with this body and retry count."""
         digest = hashlib.sha256(body).digest()
-        if digest == self.last:
-            self.attempt += 1
+        retried = int(retries) if retries and retries.isdigit() else None
+        if retried is not None:
+            again = retried > 0 and self.number > 0
+        else:
+            again = digest == self.last
+        if again:
+            self.attempt = retried + 1 if retried else self.attempt + 1
         else:
             self.number += 1
             self.attempt = 1
-            self.last = digest
+        self.last = digest
         return self.number, self.attempt
 
 
@@ -170,10 +192,12 @@ class ModelProxy:
         path = rest.partition("?")[0]
         started = time.time_ns()
         body = await request.read()
-        step, attempt = self.steps.count(body)
+        step = attempt = 0  # not a step
+        if model_call := is_model_call(path):
+            step, attempt = self.steps.count(body, request.headers.get(RETRY_COUNT))
         status, chunks, encoding = 502, [], None
         response: web.StreamResponse | None = None
-        fault = next((f for f in self.faults if f.step == step), None)
+        fault = next((f for f in self.faults if model_call and f.step == step), None)
         try:
             if fault:
                 # Every attempt of the step gets the fault. The upstream never sees it.
@@ -213,7 +237,7 @@ class ModelProxy:
             chunks = [text.encode()]
             return web.Response(status=502, text=text)
         finally:
-            if self.recorder:
+            if self.recorder and model_call:
                 exchange = Exchange(
                     step=step,
                     attempt=attempt,

@@ -178,3 +178,35 @@ def test_a_route_without_an_upstream_is_a_bad_gateway_that_names_it(path, messag
     assert response.status == 502
     assert message in text
     assert proxy.steps.number == 0  # not a model call
+
+
+def test_the_sdk_retry_count_ties_a_retry_to_its_step_whatever_the_body():
+    steps = Steps()
+
+    counted = [
+        steps.count(b"a", "0"),
+        steps.count(b"a", "0"),  # the agent asked the same thing again: a new step
+        steps.count(b"b", "1"),  # a retry, even with a new body (a new request id)
+        steps.count(b"b", "2"),
+        steps.count(b"c", None),  # no header: the body decides
+        steps.count(b"c", None),
+    ]
+
+    assert counted == [(1, 1), (2, 1), (2, 2), (2, 3), (3, 1), (3, 2)]
+
+
+def test_only_model_calls_are_steps():
+    with upstream_server() as upstream:
+        proxy = openai(upstream.url)
+        with running(proxy) as url:
+            for path in ("/openai/models", "/openai/chat/completions", "/openai/files"):
+                with closing(connect(url)) as connection:
+                    connection.request("POST", path, b"{}")
+                    connection.getresponse().read()
+
+    assert [p for _, p, _, _ in upstream.seen] == [
+        "/models",
+        "/chat/completions",
+        "/files",
+    ]
+    assert proxy.steps.number == 1
