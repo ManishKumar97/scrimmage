@@ -1,8 +1,10 @@
+import dataclasses
 from pathlib import Path
 
+import pytest
 from spans import run_from
 
-from faultline.checks import CHECKS, no_retry
+from faultline.checks import CHECKS, identifiers, no_retry, unsupported_value
 from faultline.config import ChecksConfig, DetectConfig
 from faultline.detect import detect
 from faultline.model import Certainty, Finding
@@ -95,3 +97,88 @@ def test_a_model_fault_followed_by_another_step_is_not_flagged(tmp_path):
 
 def test_a_run_without_faults_gives_no_findings(tmp_path):
     assert judge(no_retry, tmp_path, calls({}), answer("ok")) == ()
+
+
+LISTED = {"name": "list_services", "arguments": "{}", "result": "cart, AD-Service"}
+
+
+def test_an_answer_naming_a_service_no_tool_returned_is_flagged(tmp_path):
+    reply = answer("The root cause is `payment-gateway`, not ad-service.")
+
+    [finding] = judge(unsupported_value, tmp_path, calls(LISTED), reply)
+
+    assert finding.flagged
+    assert finding.certainty is Certainty.HEURISTIC
+    assert finding.fault is None  # the run had no fault
+    assert finding.evidence == "answer names payment-gateway, found in no tool result"
+
+
+def test_an_answer_naming_only_what_the_trace_holds_is_not_flagged(tmp_path):
+    reply = answer("`ad-service` failed; see `checkout_v2` and list_services.")
+
+    [finding] = judge(
+        unsupported_value,
+        tmp_path,
+        calls({**LISTED, "arguments": '{"version": "checkout_v2"}'}),
+        reply,
+    )
+
+    assert not finding.flagged
+
+
+def test_the_question_supports_a_value(tmp_path):
+    reply = answer("It is `cart-api`.")
+
+    [finding] = judge(
+        unsupported_value, tmp_path, calls(LISTED), reply, question="Is cart-api slow?"
+    )
+
+    assert not finding.flagged
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "pod cart-7d9f8b6c4-x2x9z restarted",
+        "the ad.service host",
+        "checkout_v2 timed out",
+        "it called 10.0.3.7",
+        "trace 4bf92f3577b34da6a3ce929d0e0e4736",
+        "id 123e4567-e89b-12d3-a456-426614174000",
+        "the `cart-service` pod",
+    ],
+)
+def test_identifiers_of_every_kind_are_found(text):
+    assert identifiers(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "p95 is 8.1s over a 15-minute window, 3.3% errors, version 1.2.3",
+        "Plain words like checkout and payment are not identifiers.",
+        "gold-tier customers saw a crash-looping pod",
+        "It ends here. Next sentence.",
+        "deadbeef is a word, 12345678 a number",
+        "GetCartAsync and oteldemo.CartService are not lowercase names",
+    ],
+)
+def test_numbers_words_and_english_compounds_are_not_identifiers(text):
+    assert identifiers(text) == set()
+
+
+def test_a_run_without_an_answer_or_content_is_not_judged(tmp_path):
+    assert judge(unsupported_value, tmp_path, calls(LISTED)) == ()
+    run = run_from(tmp_path, answer("it is `made-up`"))
+    stripped = dataclasses.replace(run, content_recorded=False)
+
+    assert unsupported_value(run, (), CONFIG)  # judged
+    assert unsupported_value(stripped, (), CONFIG) == ()
+
+
+def test_a_finding_carries_the_runs_first_fault(tmp_path):
+    reply = answer("`made-up` failed")
+
+    [finding] = judge(unsupported_value, tmp_path, calls(FAILED), reply)
+
+    assert finding.fault is not None and finding.fault.tool == "get_logs"

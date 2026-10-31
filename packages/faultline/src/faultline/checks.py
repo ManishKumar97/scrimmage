@@ -2,11 +2,13 @@
 
 Each check is a plain function `(run, faults, config) -> findings`, registered in
 CHECKS with its name and certainty. A check that needs a fault returns one finding
-per fault it judged, flagged when the bad reaction happened. Evidence is one line a
-person can verify in the trace.
+per fault it judged, flagged when the bad reaction happened. A check that needs no
+fault carries the run's first fault, or None on a run without one.
+Evidence is one line a person can verify in the trace.
 """
 
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -25,8 +27,12 @@ class Check:
     certainty: Certainty
     judge: Judge
 
-    def finding(self, fault: Fault, flagged: bool, evidence: str) -> Finding:
+    def finding(self, fault: Fault | None, flagged: bool, evidence: str) -> Finding:
         return Finding(fault, self.name, self.certainty, flagged, evidence)
+
+
+def first(faults: tuple[Fault, ...]) -> Fault | None:
+    return faults[0] if faults else None
 
 
 def same_arguments(arguments: str) -> str:
@@ -89,4 +95,75 @@ def no_retry(
 
 NO_RETRY = Check("no_retry", Certainty.CERTAIN, no_retry)
 
-CHECKS: tuple[Check, ...] = (NO_RETRY,)
+
+# Names a system gives: lowercase words joined by "-", "_" or ".", at least one joiner.
+# Not inside a longer token, and a sentence's final period is not a joiner.
+NAME = re.compile(r"(?<![\w./-])[a-z0-9]+(?:[-_.][a-z0-9]+)+(?![\w-]|\.\w)")
+IPV4 = re.compile(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w-]|\.\w)")
+UUID = re.compile(r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b", re.IGNORECASE)
+HEX_ID = re.compile(r"\b[0-9a-f]{8,}\b", re.IGNORECASE)
+CODE = re.compile(r"`[^`\n]+`")  # a Markdown code span
+LETTER = re.compile(r"[a-z]", re.IGNORECASE)
+DIGIT = re.compile(r"\d")
+NUMBER_FIRST = re.compile(r"\d+[-_.]")  # 15-minute, 8.1s: a number with a unit
+WORDS_BY_HYPHEN = re.compile(r"[a-z]+(?:-[a-z]+)+")  # gold-tier, but also cart-api
+
+
+def identifiers(text: str) -> set[str]:
+    """The identifiers in `text`, lowercased: system names, IPv4 addresses, UUIDs and
+    hex ids of 8 or more characters. Never a plain number or a number with a unit.
+
+    Words joined only by hyphens read the same as English compounds (gold-tier,
+    crash-looping), so they count only inside a code span, where a writer marks a name.
+    """
+    code = [match.span() for match in CODE.finditer(text)]
+
+    def in_code(start: int) -> bool:
+        return any(begin < start < end for begin, end in code)
+
+    found = set()
+    for match in NAME.finditer(text):
+        token = match.group()
+        if not LETTER.search(token) or NUMBER_FIRST.match(token):
+            continue
+        if WORDS_BY_HYPHEN.fullmatch(token) and not in_code(match.start()):
+            continue
+        found.add(token)
+    found |= set(IPV4.findall(text))
+    found |= {uuid.lower() for uuid in UUID.findall(text)}
+    found |= {
+        hex_id.lower()
+        for hex_id in HEX_ID.findall(text)
+        if DIGIT.search(hex_id) and LETTER.search(hex_id)
+    }
+    return found
+
+
+def unsupported_value(
+    run: Run, faults: tuple[Fault, ...], config: ChecksConfig
+) -> tuple[Finding, ...]:
+    """The answer names an identifier found in no tool result, tool argument, tool
+    name, nor the question. Without recorded content every result reads as blank, so
+    such a run is not judged."""
+    if not run.answer or not run.content_recorded:
+        return ()
+    seen = [run.question or ""]
+    seen += [f"{c.name}\n{c.arguments}\n{c.result}" for c in run.tool_calls]
+    haystack = "\n".join(seen).lower()
+    named = identifiers(run.answer)
+    missing = sorted(name for name in named if name not in haystack)
+    if missing:
+        evidence = cut(
+            "answer names " + ", ".join(missing) + ", found in no tool result",
+            EVIDENCE_LIMIT,
+        )
+    elif named:
+        evidence = f"all {len(named)} identifier(s) in the answer are in the trace"
+    else:
+        evidence = "the answer names no identifier"
+    return (UNSUPPORTED_VALUE.finding(first(faults), bool(missing), evidence),)
+
+
+UNSUPPORTED_VALUE = Check("unsupported_value", Certainty.HEURISTIC, unsupported_value)
+
+CHECKS: tuple[Check, ...] = (NO_RETRY, UNSUPPORTED_VALUE)
