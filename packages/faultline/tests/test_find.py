@@ -19,16 +19,17 @@ def printed_by_runs_module(path: Path, monkeypatch, capsys) -> str:
 def test_find_prints_what_the_runs_module_prints(path, monkeypatch, capsys):
     expected = printed_by_runs_module(path, monkeypatch, capsys)
 
-    assert cli.main(["find", "--source", f"file:{path}"]) == 0
+    assert cli.main(["find", "--runs", "--source", f"file:{path}"]) == 0
 
-    assert capsys.readouterr().out == expected
+    # Then come the faults, which the runs module does not print.
+    assert capsys.readouterr().out.startswith(expected)
 
 
 def test_positional_files_are_shorthand_for_file_sources(capsys):
-    cli.main(["find", "--source", f"file:{FIXTURES[0]}"])
+    cli.main(["find", "--runs", "--source", f"file:{FIXTURES[0]}"])
     long_form = capsys.readouterr().out
 
-    cli.main(["find", str(FIXTURES[0])])
+    cli.main(["find", "--runs", str(FIXTURES[0])])
 
     assert capsys.readouterr().out == long_form
 

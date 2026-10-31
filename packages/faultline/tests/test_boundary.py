@@ -57,7 +57,8 @@ def test_product_code_imports_only_the_product_and_the_standard_library():
 
 def test_product_tests_import_only_the_product_the_standard_library_and_test_tools():
     files = sorted((PACKAGE / "tests").rglob("*.py"))
-    allowed = ALLOWED | TEST_TOOLS
+    helpers = {path.stem for path in (PACKAGE / "tests").glob("*.py")}  # spans.py
+    allowed = ALLOWED | TEST_TOOLS | helpers
 
     outside = {
         str(path.relative_to(PACKAGE)): sorted(imported_roots(path) - allowed)

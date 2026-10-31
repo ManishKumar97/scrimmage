@@ -1,0 +1,107 @@
+import dataclasses
+import json
+from pathlib import Path
+
+import pytest
+from spans import run_from, write_trace
+
+from faultline import cli
+from faultline.config import DetectConfig
+from faultline.detect import detect
+from faultline.model import FaultKind, Origin, Run
+
+CONFIG = DetectConfig()
+
+
+def calls(*calls: dict) -> dict:
+    return {"calls": list(calls)}
+
+
+def faults_of(tmp_path: Path, *steps: dict):
+    return detect(run_from(tmp_path, *steps), CONFIG)
+
+
+def kinds_of(tmp_path: Path, *steps: dict) -> list[FaultKind]:
+    return [fault.kind for fault in faults_of(tmp_path, *steps)]
+
+
+def test_a_tool_span_that_ended_in_error_is_a_tool_error(tmp_path):
+    step = calls({"id": "c1", "name": "get_logs", "error": "ConnectionError"})
+
+    [fault] = faults_of(tmp_path, step)
+
+    assert fault.kind is FaultKind.TOOL_ERROR
+    assert (fault.step, fault.call_id, fault.tool) == (1, "c1", "get_logs")
+    assert fault.detail == "ConnectionError"
+    assert fault.origin is Origin.OBSERVED
+
+
+@pytest.mark.parametrize(
+    ("result", "detail"),
+    [
+        ('{"error": "no such pod"}', "error: no such pod"),
+        ('{"error": {"code": 500}, "data": 1}', "error: {'code': 500}"),
+        ('{"isError": true, "content": "boom"}', "isError"),
+    ],
+)
+def test_a_result_that_reports_an_error_is_a_tool_error(tmp_path, result, detail):
+    [fault] = faults_of(tmp_path, calls({"result": result}))
+
+    assert fault.kind is FaultKind.TOOL_ERROR
+    assert fault.detail == detail
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        "ok",
+        "error: this is plain text, not a JSON object",
+        '{"error": null, "data": 1}',
+        '{"isError": false, "data": 1}',
+        '["error"]',
+        '"error"',
+        "{broken json",
+    ],
+)
+def test_a_result_that_is_not_an_error_is_not_a_tool_error(tmp_path, result):
+    assert kinds_of(tmp_path, calls({"result": result})) == []
+
+
+def test_faults_come_in_the_order_they_happened(tmp_path):
+    first = calls({"id": "a", "error": "E1"})
+    second = calls({"id": "b", "result": json.dumps({"error": "E2"})})
+
+    found = faults_of(tmp_path, first, second)
+
+    assert [(f.step, f.call_id) for f in found] == [(1, "a"), (2, "b")]
+
+
+def injected(run: Run) -> Run:
+    """The same run, with the proxy's mark on its first tool call."""
+    step = run.steps[0]
+    call = dataclasses.replace(step.tool_calls[0], injected="error")
+    marked = dataclasses.replace(step, tool_calls=(call,))
+    return dataclasses.replace(run, steps=(marked, *run.steps[1:]))
+
+
+def test_a_fault_is_injected_when_the_call_carries_the_proxys_mark(tmp_path):
+    run = run_from(tmp_path, calls({"id": "a", "error": "E"}))
+
+    [fault] = detect(injected(run), CONFIG)
+
+    assert fault.origin is Origin.INJECTED
+
+
+def test_find_prints_each_run_with_faults_and_a_summary(tmp_path, capsys):
+    path = tmp_path / "spans.jsonl"
+    step = calls({"id": "c1", "name": "get_logs", "error": "ConnectionError"})
+    write_trace(path, step)
+    write_trace(path, calls({"result": "ok"}), trace="clean")
+
+    assert cli.main(["find", str(path)]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        "run t1",
+        "  tool_error step 1 get_logs c1: ConnectionError",
+        "faults: tool_error=1",
+    ]

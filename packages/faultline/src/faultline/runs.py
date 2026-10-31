@@ -339,15 +339,21 @@ def show_run(run: Run) -> str:
     return "\n".join(lines)
 
 
+def skip_notes(path: Path | str, reading: Reading) -> list[str]:
+    """The lines of a file that gave nothing, as a report line each."""
+    notes = []
+    if reading.unreadable:
+        notes.append(f"{path}: skipped {reading.unreadable} unreadable line(s)")
+    if reading.no_spans:
+        notes.append(f"{path}: {reading.no_spans} line(s) held no spans")
+    return notes
+
+
 def show_reading(path: Path | str, reading: Reading) -> str:
     """What `python -m faultline.runs` prints for one file."""
     lines = [f"{path}: {len(reading.runs)} run(s)"]
     lines += [show_run(run) for run in reading.runs]
-    if reading.unreadable:
-        lines.append(f"{path}: skipped {reading.unreadable} unreadable line(s)")
-    if reading.no_spans:
-        lines.append(f"{path}: {reading.no_spans} line(s) held no spans")
-    return "\n".join(lines)
+    return "\n".join(lines + skip_notes(path, reading))
 
 
 def main() -> None:
