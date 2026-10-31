@@ -35,7 +35,7 @@ from faultline.proxy.record import (
     TRACE_ID,
     Recorder,
 )
-from faultline.relay import RELAYED, Relay
+from faultline.relay import RELAYED, Relay, tied_to_parent
 from faultline.runs import read_runs_many
 from faultline.verdict import judge, line
 
@@ -198,10 +198,14 @@ async def launch(
         )
     print(f"faultline: proxy {url}, spans in {recorder.path.parent}", file=sys.stderr)
     started = time.time_ns()
-    code = await supervise(command, env)
-    await proxy.stop()  # after the agent, so its last calls still go through
-    recorder.flush()
-    recorder.root(started, time.time_ns(), command, code)
+    code = 1  # what the root records if faultline itself fails mid-run
+    try:
+        code = await supervise(command, env)
+    finally:
+        # Whatever ended the run, the trace is finished: the last step and the root.
+        await proxy.stop()  # after the agent, so its last calls still go through
+        recorder.flush()
+        recorder.root(started, time.time_ns(), command, code)
     return code
 
 
@@ -213,7 +217,9 @@ async def supervise(command: Sequence[str], env: dict[str, str]) -> int:
         loop.add_signal_handler(number, relay.receive, number)
     try:
         try:
-            child = await asyncio.create_subprocess_exec(*command, env=env)
+            child = await asyncio.create_subprocess_exec(
+                *tied_to_parent(command, "faultline run"), env=env
+            )
         except OSError as exc:
             print(f"faultline run: cannot start {command[0]}: {exc}", file=sys.stderr)
             return 127 if isinstance(exc, FileNotFoundError) else 126

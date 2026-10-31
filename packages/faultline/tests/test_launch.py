@@ -5,9 +5,13 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
+import pytest
 from upstream import upstream_server
+
+from faultline.runs import read_runs_many
 
 FAULTLINE = str(Path(sys.executable).parent / "faultline")
 PYTHON = sys.executable
@@ -31,8 +35,8 @@ def stop(number, frame):
     urllib.request.urlopen(request).read()
     os.write(1, f"got {number}\\n".encode())
     sys.exit(7)
-signal.signal(signal.SIGTERM, stop)
-signal.signal(signal.SIGINT, stop)
+for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
+    signal.signal(number, stop)
 os.write(1, b"ready\\n")  # not print: a signal during its flush would re-enter it
 time.sleep(30)
 """
@@ -218,3 +222,80 @@ def test_upstream_flags_name_their_variable(tmp_path):
     assert sees["OPENAI_BASE_URL"] is None
     assert [s[1] for s in groq.seen] == ["/openai/v1/chat/completions"]
     assert anthropic.seen == []
+
+
+def test_sighup_and_sigquit_reach_the_agent_too():
+    for number in (signal.SIGHUP, signal.SIGQUIT):
+        code, said = signalled(number)
+
+        assert said == f"got {number.value}\n"
+        assert code == 7
+
+
+def gone(pid: int, seconds: float) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="PR_SET_PDEATHSIG is Linux only")
+def test_the_agent_dies_with_faultline_even_on_sigkill():
+    agent = "import os, time; print(os.getpid(), flush=True); time.sleep(60)"
+    with subprocess.Popen(
+        [FAULTLINE, "run", "--upstream", "http://127.0.0.1:9", "--"]
+        + [PYTHON, "-c", agent],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    ) as process:
+        assert process.stdout
+        pid = int(process.stdout.readline())
+        process.kill()  # SIGKILL: faultline gets no chance to pass anything on
+        process.wait(10)
+
+    died = gone(pid, 5)
+    if not died:
+        os.kill(pid, signal.SIGKILL)  # leave no orphan behind a failed test
+    assert died
+
+
+# One model call, then a wait. It exits on SIGHUP as a shell's child does on hangup.
+CALLS_THEN_WAITS = """
+import os, signal, sys, time, urllib.request
+signal.signal(signal.SIGHUP, lambda number, frame: sys.exit(5))
+request = urllib.request.Request(os.environ["OPENAI_BASE_URL"] + "/chat/completions", b"{}")
+urllib.request.urlopen(request).read()
+os.write(1, b"ready\\n")
+time.sleep(30)
+"""
+
+
+def test_a_hung_up_run_still_leaves_a_whole_trace(tmp_path):
+    trace = tmp_path / "trace"
+    with (
+        upstream_server() as upstream,
+        subprocess.Popen(
+            [FAULTLINE, "run", "--upstream", upstream.url, "--trace", str(trace)]
+            + ["--", PYTHON, "-c", CALLS_THEN_WAITS],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ) as process,
+    ):
+        assert process.stdout
+        assert process.stdout.readline() == "ready\n"
+        process.send_signal(signal.SIGHUP)
+        code = process.wait(30)
+
+    assert code == 5
+    [run] = read_runs_many(sorted(trace.glob("*.jsonl"))).runs
+    assert run.complete  # the root was written
+    assert len(run.steps) == 1  # and the step still open when the signal came
+    assert run.error_type == "exit 5"

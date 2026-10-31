@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from faultline.faults import ToolFault, ToolSession, parse_all
 from faultline.model import ToolCall
 from faultline.proxy.record import FAULTS, Recorder
-from faultline.relay import RELAYED, Relay
+from faultline.relay import RELAYED, Relay, tied_to_parent
 
 # The longest line, in bytes. A tool result can be large, such as many log lines.
 LINE_LIMIT = 128 * 1024 * 1024
@@ -204,7 +204,7 @@ async def relay(command: Sequence[str], calls: ToolCalls) -> int:
     try:
         try:
             server = await asyncio.create_subprocess_exec(
-                *command,
+                *tied_to_parent(command, "faultline mcp-wrap"),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 limit=LINE_LIMIT,
@@ -248,8 +248,8 @@ async def relay(command: Sequence[str], calls: ToolCalls) -> int:
         upward.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await upward
-        calls.close()
     finally:
+        calls.close()  # calls never answered are still recorded
         for number in RELAYED:
             loop.remove_signal_handler(number)
     return 128 - code if code < 0 else code
