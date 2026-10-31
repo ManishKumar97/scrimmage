@@ -198,6 +198,46 @@ def test_numbers_words_and_english_compounds_are_not_identifiers(text):
     assert identifiers(text) == set()
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "e.g. the cart",
+        "i.e. the cart",
+        "at 3 a.m. and 5 p.m.",
+        "cart vs. ad, logs etc.",
+        "version v1.2 of x.ab",
+    ],
+)
+def test_abbreviations_are_not_identifiers(text):
+    assert identifiers(text) == set()
+
+
+def test_the_parts_of_a_uuid_or_a_pod_name_are_not_ids_of_their_own():
+    uuid = "123e4567-e89b-12d3-a456-426614174000"
+
+    assert identifiers(f"id {uuid}") == {uuid}
+    assert identifiers("pod cart-7d9f8b6c4-x2x9z") == {"cart-7d9f8b6c4-x2x9z"}
+
+
+@pytest.mark.parametrize(
+    ("result", "flagged"),
+    [
+        ("deployment cart-api-v2 is up", True),  # a longer name is another name
+        ("GET http://cart-api:8080/cart", False),
+        ('{"service": "Cart-API"}', False),
+        ("see cart-api.", False),
+    ],
+)
+def test_identifiers_compare_as_whole_tokens(tmp_path, result, flagged):
+    listed = {"name": "list_services", "arguments": "{}", "result": result}
+
+    [finding] = judge(
+        unsupported_value, tmp_path, calls(listed), answer("It is `cart-api`.")
+    )
+
+    assert finding.flagged is flagged
+
+
 def test_a_run_without_an_answer_or_content_is_not_judged(tmp_path):
     assert judge(unsupported_value, tmp_path, calls(LISTED)) == ()
     (tmp_path / "2").mkdir()

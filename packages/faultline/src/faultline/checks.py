@@ -111,22 +111,33 @@ def no_retry(
 NO_RETRY = Check("no_retry", Certainty.CERTAIN, no_retry, "fault")
 
 
+# Every pattern matches a whole token: not preceded by a word character or a joiner,
+# not followed by one, and a sentence's final period is not a joiner.
+BEFORE = r"(?<![\w./-])"
+AFTER = r"(?![\w-]|\.\w)"
 # Names a system gives: lowercase words joined by "-", "_" or ".", at least one joiner.
-# Not inside a longer token, and a sentence's final period is not a joiner.
-NAME = re.compile(r"(?<![\w./-])[a-z0-9]+(?:[-_.][a-z0-9]+)+(?![\w-]|\.\w)")
-IPV4 = re.compile(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w-]|\.\w)")
-UUID = re.compile(r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b", re.IGNORECASE)
-HEX_ID = re.compile(r"\b[0-9a-f]{8,}\b", re.IGNORECASE)
+NAME = re.compile(BEFORE + r"[a-z0-9]+(?:[-_.][a-z0-9]+)+" + AFTER)
+IPV4 = re.compile(BEFORE + r"\d{1,3}(?:\.\d{1,3}){3}" + AFTER)
+UUID = re.compile(
+    BEFORE + r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}" + AFTER, re.IGNORECASE
+)
+# Whole tokens only, so the parts of a UUID or a pod name are not ids of their own.
+HEX_ID = re.compile(BEFORE + r"[0-9a-f]{8,}" + AFTER, re.IGNORECASE)
+# What the trace holds, as whole tokens: alphanumerics joined by "-", "_" or ".".
+TOKEN = re.compile(r"[a-z0-9]+(?:[-_.][a-z0-9]+)*")
 CODE = re.compile(r"`[^`\n]+`")  # a Markdown code span
 LETTER = re.compile(r"[a-z]", re.IGNORECASE)
 DIGIT = re.compile(r"\d")
 NUMBER_FIRST = re.compile(r"\d+[-_.]")  # 15-minute, 8.1s: a number with a unit
 WORDS_BY_HYPHEN = re.compile(r"[a-z]+(?:-[a-z]+)+")  # gold-tier, but also cart-api
+# A "." with fewer than 2 alphanumerics on a side: e.g, i.e, a.m, p.m, v1.2
+SHORT_DOT = re.compile(r"(?:^|[-_.])[a-z0-9]\.|\.[a-z0-9](?:$|[-_.])")
 
 
 def identifiers(text: str) -> set[str]:
     """The identifiers in `text`, lowercased: system names, IPv4 addresses, UUIDs and
-    hex ids of 8 or more characters. Never a plain number or a number with a unit.
+    hex ids of 8 or more characters. Never a plain number, a number with a unit, or
+    an abbreviation.
 
     Words joined only by hyphens read the same as English compounds (gold-tier,
     crash-looping), so they count only inside a code span, where a writer marks a name.
@@ -141,6 +152,8 @@ def identifiers(text: str) -> set[str]:
         token = match.group()
         if not LETTER.search(token) or NUMBER_FIRST.match(token):
             continue
+        if SHORT_DOT.search(token):
+            continue
         if WORDS_BY_HYPHEN.fullmatch(token) and not in_code(match.start()):
             continue
         found.add(token)
@@ -154,19 +167,25 @@ def identifiers(text: str) -> set[str]:
     return found
 
 
+def tokens(text: str) -> set[str]:
+    """Every whole token in `text`, lowercased, for comparing identifiers against."""
+    return set(TOKEN.findall(text.lower()))
+
+
 def unsupported_value(
     run: Run, faults: tuple[Fault, ...], config: ChecksConfig
 ) -> tuple[Finding, ...]:
     """The answer names an identifier found in no tool result, tool argument, tool
-    name, nor the question. Without recorded content every result reads as blank, so
-    such a run is not judged."""
+    name, nor the question. Identifiers compare as whole tokens, so cart-api is not
+    supported by cart-api-v2. Without recorded content every result reads as blank,
+    so such a run is not judged."""
     if not run.answer or not run.content_recorded:
         return ()
-    seen = [run.question or ""]
-    seen += [f"{c.name}\n{c.arguments}\n{c.result}" for c in run.tool_calls]
-    haystack = "\n".join(seen).lower()
+    texts = [run.question or ""]
+    texts += [f"{c.name}\n{c.arguments}\n{c.result}" for c in run.tool_calls]
+    seen = tokens("\n".join(texts))
     named = identifiers(run.answer)
-    missing = sorted(name for name in named if name not in haystack)
+    missing = sorted(named - seen)
     if missing:
         evidence = cut(
             "answer names " + ", ".join(missing) + ", found in no tool result",
