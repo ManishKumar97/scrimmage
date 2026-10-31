@@ -20,8 +20,9 @@ def test_the_ida_answers_the_same_through_the_model_proxy(tmp_path):
     thread = threading.Thread(target=loop.run_forever, daemon=True)
     thread.start()
     with fake_llm(tmp_path) as upstream:
-        proxy = ModelProxy(upstream)
-        url = asyncio.run_coroutine_threadsafe(proxy.start(), loop).result(5)
+        proxy = ModelProxy({"GROQ_BASE_URL": upstream})
+        asyncio.run_coroutine_threadsafe(proxy.start(), loop).result(5)
+        url = proxy.url_for("GROQ_BASE_URL")
         try:
             direct = run(ida(), ida_env(tmp_path, GROQ_BASE_URL=upstream), tmp_path)
             proxied = run(ida(), ida_env(tmp_path, GROQ_BASE_URL=url), tmp_path)

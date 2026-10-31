@@ -75,9 +75,14 @@ def test_the_agent_gets_the_proxy_url_and_its_calls_reach_the_upstream(tmp_path)
     assert result.returncode == 0, result.stderr
     seen, reply = result.stdout.splitlines()
     sees = json.loads(seen)
-    proxy = sees["GROQ_BASE_URL"]
-    assert proxy.startswith("http://127.0.0.1:")
-    assert sees["OPENAI_BASE_URL"] == sees["ANTHROPIC_BASE_URL"] == proxy
+    assert sees["GROQ_BASE_URL"].startswith("http://127.0.0.1:")
+    assert sees["GROQ_BASE_URL"].endswith("/groq")
+    # No upstream is known for these, so they are left as they were: unset.
+    assert sees["OPENAI_BASE_URL"] is None
+    assert sees["ANTHROPIC_BASE_URL"] is None
+    assert "faultline: OPENAI_BASE_URL not set, its calls do not go through" in (
+        result.stderr
+    )
     assert sees["FAULTLINE_TRACE_DIR"] == str(tmp_path.resolve())
     assert len(sees["FAULTLINE_TRACE_ID"]) == 32
     assert len(sees["FAULTLINE_ROOT_SPAN_ID"]) == 16
@@ -190,3 +195,26 @@ def test_an_agent_killed_by_a_signal_gives_128_plus_the_signal():
     )
 
     assert result.returncode == 128 + signal.SIGKILL.value
+
+
+def test_upstream_flags_name_their_variable(tmp_path):
+    with upstream_server() as groq, upstream_server() as anthropic:
+        result = faultline(
+            "run",
+            "--upstream",
+            f"GROQ_BASE_URL={groq.url}/openai/v1",
+            "--upstream",
+            f"ANTHROPIC_BASE_URL={anthropic.url}",
+            "--",
+            PYTHON,
+            "-c",
+            SEES,
+            env=clean_env(),
+        )
+
+    assert result.returncode == 0, result.stderr
+    sees = json.loads(result.stdout.splitlines()[0])
+    assert sees["ANTHROPIC_BASE_URL"].endswith("/anthropic")
+    assert sees["OPENAI_BASE_URL"] is None
+    assert [s[1] for s in groq.seen] == ["/openai/v1/chat/completions"]
+    assert anthropic.seen == []

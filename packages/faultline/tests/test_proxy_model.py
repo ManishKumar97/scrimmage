@@ -5,9 +5,14 @@ import threading
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
 
+import pytest
 from upstream import connect, upstream_server
 
-from faultline.proxy.model import ModelProxy, Steps
+from faultline.proxy.model import ModelProxy, Steps, split_route
+
+
+def openai(upstream: str) -> ModelProxy:
+    return ModelProxy({"OPENAI_BASE_URL": upstream})
 
 
 @contextmanager
@@ -39,10 +44,10 @@ def test_the_upstream_receives_the_bytes_the_client_sent():
     }
     with (
         upstream_server() as upstream,
-        running(ModelProxy(upstream.url + "/v1")) as url,
+        running(openai(upstream.url + "/v1")) as url,
         closing(connect(url)) as connection,
     ):
-        connection.request("POST", "/chat/completions?x=1&y=%2F", body, headers)
+        connection.request("POST", "/openai/chat/completions?x=1&y=%2F", body, headers)
         reply = connection.getresponse().read()
 
     method, path, seen_headers, seen_body = upstream.seen[0]
@@ -58,12 +63,12 @@ def test_the_upstream_receives_the_bytes_the_client_sent():
 
 
 def test_the_reply_comes_back_with_its_status_headers_and_bytes():
-    with upstream_server() as upstream, running(ModelProxy(upstream.url)) as url:
+    with upstream_server() as upstream, running(openai(upstream.url)) as url:
         upstream.status = 429
         upstream.reply_headers = [("Retry-After", "1"), ("Content-Encoding", "gzip")]
         upstream.chunks = [b"\x1f\x8b not really gzip"]
         with closing(connect(url)) as connection:
-            connection.request("POST", "/x", b"{}")
+            connection.request("POST", "/openai/x", b"{}")
             response = connection.getresponse()
             body = response.read()
 
@@ -74,11 +79,11 @@ def test_the_reply_comes_back_with_its_status_headers_and_bytes():
 
 
 def test_the_reply_streams_back_before_the_upstream_has_finished():
-    with upstream_server() as upstream, running(ModelProxy(upstream.url)) as url:
+    with upstream_server() as upstream, running(openai(upstream.url)) as url:
         upstream.chunks = [b"data: one\n\n", b"data: two\n\n"]
         upstream.between.clear()  # the second chunk waits until the first arrived
         with closing(connect(url)) as connection:
-            connection.request("POST", "/x", b"{}")
+            connection.request("POST", "/openai/x", b"{}")
             response = connection.getresponse()
             first = response.read(len(b"data: one\n\n"))
             upstream.between.set()
@@ -90,10 +95,10 @@ def test_the_reply_streams_back_before_the_upstream_has_finished():
 
 def test_an_unreachable_upstream_is_a_bad_gateway():
     with (
-        running(ModelProxy("http://127.0.0.1:9")) as url,
+        running(openai("http://127.0.0.1:9")) as url,
         closing(connect(url)) as connection,
     ):
-        connection.request("POST", "/x", b"{}")
+        connection.request("POST", "/openai/x", b"{}")
         response = connection.getresponse()
         text = response.read().decode()
 
@@ -107,3 +112,69 @@ def test_a_request_with_the_same_body_is_the_next_attempt_of_the_same_step():
     counted = [steps.count(body) for body in (b"a", b"a", b"a", b"b", b"a")]
 
     assert counted == [(1, 1), (1, 2), (1, 3), (2, 1), (3, 1)]
+
+
+@pytest.mark.parametrize(
+    ("raw", "split"),
+    [
+        ("/openai/v1/chat?a=/b", ("openai", "/v1/chat?a=/b")),
+        ("/anthropic", ("anthropic", "")),
+        ("/groq?x=1", ("groq", "?x=1")),
+        ("/", ("", "")),
+    ],
+)
+def test_a_path_splits_into_its_route_and_the_rest(raw, split):
+    assert split_route(raw) == split
+
+
+def test_each_route_goes_to_its_own_upstream_only():
+    with (
+        upstream_server() as openai_api,
+        upstream_server() as anthropic_api,
+        running(
+            ModelProxy(
+                {
+                    "OPENAI_BASE_URL": openai_api.url,
+                    "ANTHROPIC_BASE_URL": anthropic_api.url,
+                }
+            )
+        ) as url,
+    ):
+        for path, key in (("/anthropic/v1/messages", "a"), ("/openai/chat", "o")):
+            with closing(connect(url)) as connection:
+                connection.request("POST", path, b"{}", {"X-Api-Key": key})
+                connection.getresponse().read()
+
+    assert [(p, dict(h)["X-Api-Key"]) for _, p, h, _ in openai_api.seen] == [
+        ("/chat", "o")
+    ]
+    assert [(p, dict(h)["X-Api-Key"]) for _, p, h, _ in anthropic_api.seen] == [
+        ("/v1/messages", "a")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("path", "message"),
+    [
+        (
+            "/anthropic/v1/messages",
+            (
+                "no upstream for ANTHROPIC_BASE_URL (route /anthropic). "
+                "Pass --upstream ANTHROPIC_BASE_URL=URL"
+            ),
+        ),
+        ("/v1/chat/completions", "no route /v1. Routes: /openai, /anthropic"),
+    ],
+)
+def test_a_route_without_an_upstream_is_a_bad_gateway_that_names_it(path, message):
+    proxy = ModelProxy(
+        {"OPENAI_BASE_URL": "http://127.0.0.1:9", "ANTHROPIC_BASE_URL": None}
+    )
+    with running(proxy) as url, closing(connect(url)) as connection:
+        connection.request("POST", path, b"{}")
+        response = connection.getresponse()
+        text = response.read().decode()
+
+    assert response.status == 502
+    assert message in text
+    assert proxy.steps.number == 0  # not a model call

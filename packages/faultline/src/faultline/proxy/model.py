@@ -2,6 +2,7 @@
 
 The agent's SDK reads its base URL from an environment variable, so pointing that
 variable here puts the proxy in the path with no change to the agent's code.
+Each variable gets its own route on the proxy, mapped to its own upstream.
 Each request goes to the upstream with its method, path, query, headers and body as sent.
 The reply streams back as it arrives.
 
@@ -12,7 +13,7 @@ of the request prefix, so one changed byte would make every later call pay full 
 import hashlib
 import socket
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import aiohttp
 from aiohttp import web
@@ -78,27 +79,54 @@ class Steps:
         return self.number, self.attempt
 
 
-class ModelProxy:
-    """Forwards every request under its URL to the same path under `upstream`.
+def route_of(name: str) -> str:
+    """The proxy path for a base URL variable: OPENAI_BASE_URL is served at /openai."""
+    return name.lower().removesuffix("_base_url") or name.lower()
 
-    `upstream` is the base URL the agent would have used, such as
-    https://api.openai.com/v1, so a request for /chat/completions goes to
-    https://api.openai.com/v1/chat/completions.
+
+def split_route(raw_path: str) -> tuple[str, str]:
+    """The route and the rest of a raw path: /openai/v1/x?y is ("openai", "/v1/x?y")."""
+    head = raw_path.lstrip("/")
+    cut = min(
+        (i for i in (head.find("/"), head.find("?")) if i >= 0), default=len(head)
+    )
+    return head[:cut], head[cut:]  # the rest starts with / or ?, or is empty
+
+
+class ModelProxy:
+    """Forwards each request to the upstream of the route it came in on.
+
+    Each base URL variable gets its own route, so each provider's calls, and its API
+    key, go only to that provider's upstream. `upstreams` maps a variable name to the
+    base URL the agent would have used, or None when that is unknown. With
+    OPENAI_BASE_URL=https://api.openai.com/v1, a request for /openai/chat/completions
+    goes to https://api.openai.com/v1/chat/completions.
     """
 
     def __init__(
         self,
-        upstream: str,
+        upstreams: Mapping[str, str | None],
         faults: Sequence[ModelFault] = (),
         recorder: Recorder | None = None,
     ) -> None:
-        self.upstream = upstream.rstrip("/")
+        self.names = {route_of(name): name for name in upstreams}
+        self.upstreams = {
+            route_of(name): url.rstrip("/") if url else None
+            for name, url in upstreams.items()
+        }
         self.faults = faults
         self.recorder = recorder
         self.steps = Steps()
         self.url = ""
         self.runner: web.AppRunner | None = None
         self.session: aiohttp.ClientSession | None = None
+
+    def upstreams_by_name(self) -> dict[str, str | None]:
+        return {name: self.upstreams[route] for route, name in self.names.items()}
+
+    def url_for(self, name: str) -> str:
+        """The base URL to give the agent in variable `name`."""
+        return f"{self.url}/{route_of(name)}"
 
     async def start(self) -> str:
         """Listen on a free port on 127.0.0.1 and return the proxy's base URL."""
@@ -126,6 +154,20 @@ class ModelProxy:
 
     async def forward(self, request: web.Request) -> web.StreamResponse:
         assert self.session, "start the proxy first"
+        route, rest = split_route(request.raw_path)
+        upstream_url = self.upstreams.get(route)
+        if upstream_url is None:
+            if route in self.names:
+                name = self.names[route]
+                text = (
+                    f"faultline proxy: no upstream for {name} (route /{route}). "
+                    f"Pass --upstream {name}=URL or set {name} before faultline run."
+                )
+            else:
+                known = ", ".join(f"/{r}" for r in self.names)
+                text = f"faultline proxy: no route /{route}. Routes: {known}"
+            return web.Response(status=502, text=text)
+        path = rest.partition("?")[0]
         started = time.time_ns()
         body = await request.read()
         step, attempt = self.steps.count(body)
@@ -135,7 +177,7 @@ class ModelProxy:
         try:
             if fault:
                 # Every attempt of the step gets the fault. The upstream never sees it.
-                answer = fault.answer(request.path)
+                answer = fault.answer(path)
                 status, chunks = answer.status, [answer.body]
                 return web.Response(
                     status=answer.status, body=answer.body, headers=answer.headers
@@ -143,7 +185,7 @@ class ModelProxy:
             async with self.session.request(
                 request.method,
                 # As sent: a URL built from a plain string would be quoted again.
-                URL(self.upstream + request.raw_path, encoded=True),
+                URL(upstream_url + rest, encoded=True),
                 data=body,
                 headers=forwardable(request.headers),
                 skip_auto_headers=NO_AUTO_HEADERS,
@@ -167,7 +209,7 @@ class ModelProxy:
         except aiohttp.ClientError as exc:
             if response is not None and response.prepared:
                 raise  # cut mid-reply: the agent sees the same cut stream
-            text = f"faultline proxy: upstream {self.upstream} failed: {exc}"
+            text = f"faultline proxy: upstream {upstream_url} failed: {exc}"
             chunks = [text.encode()]
             return web.Response(status=502, text=text)
         finally:
@@ -175,7 +217,7 @@ class ModelProxy:
                 exchange = Exchange(
                     step=step,
                     attempt=attempt,
-                    path=request.path,
+                    path=path,
                     request=body,
                     status=status,
                     response=b"".join(chunks),

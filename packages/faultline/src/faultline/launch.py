@@ -5,8 +5,12 @@
 
 Model SDKs read their base URL from an environment variable. The agent gets the
 proxy's URL in those variables, so its model calls go through the proxy with no
-change to its code. The proxy sends them on to the upstream, the URL the agent
-would have used.
+change to its code. Each variable gets its own route on the proxy, sent on to its
+own upstream: the URL the agent would have used. So an Anthropic call, and its key,
+never go to the OpenAI upstream.
+
+A variable is pointed at the proxy only when its upstream is known: from
+--upstream NAME=URL, or from the variable's value before the run.
 """
 
 import argparse
@@ -56,9 +60,12 @@ def add_parser(subparsers) -> None:
     )
     parser.add_argument(
         "--upstream",
-        metavar="URL",
-        help="the model API base URL to forward to "
-        "(default: the value of the first base URL variable that is set)",
+        action="append",
+        default=[],
+        metavar="[NAME=]URL",
+        help="the model API base URL that variable NAME stands for (repeatable). "
+        "A bare URL is for the first --base-url-env, else OPENAI_BASE_URL. "
+        "Default: each variable's own value before the run",
     )
     parser.add_argument(
         "--base-url-env",
@@ -90,10 +97,8 @@ def run(args: argparse.Namespace) -> int:
         return 2
     # Names given on the command line come first: they say which variable this agent reads.
     names = list(dict.fromkeys([*args.base_url_env, *BASE_URL_ENVS]))
-    upstream = args.upstream or next(
-        (os.environ[name] for name in names if os.environ.get(name)), None
-    )
-    if not upstream:
+    upstreams = upstreams_of(args.upstream, names)
+    if not any(upstreams.values()):
         print(
             f"faultline run: no upstream. None of {', '.join(names)} is set; "
             "pass --upstream URL, the model API base URL the agent would use.",
@@ -115,8 +120,8 @@ def run(args: argparse.Namespace) -> int:
         trace.resolve() / "model.jsonl", secrets.token_hex(16), secrets.token_hex(8)
     )
     model_faults = [fault for fault in faults if isinstance(fault, ModelFault)]
-    proxy = ModelProxy(upstream, model_faults, recorder)
-    code = asyncio.run(launch(proxy, recorder, command, names, args.fault))
+    proxy = ModelProxy(upstreams, model_faults, recorder)
+    code = asyncio.run(launch(proxy, recorder, command, args.fault))
     # The verdict reads the run back from its trace, as Find reads any run.
     files = sorted(recorder.path.parent.glob("*.jsonl"))
     runs = [r for r in read_runs_many(files).runs if r.trace_id == recorder.trace_id]
@@ -125,17 +130,31 @@ def run(args: argparse.Namespace) -> int:
     return code
 
 
+def upstreams_of(flags: Sequence[str], names: list[str]) -> dict[str, str | None]:
+    """Each base URL variable and its upstream, None when unknown. Adds named ones."""
+    given: dict[str, str] = {}
+    for flag in flags:
+        name, sep, url = flag.partition("=")
+        if sep and name.isidentifier():
+            given[name] = url
+            if name not in names:
+                names.append(name)
+        else:
+            given[names[0]] = flag  # a bare URL, for the first variable
+    return {name: given.get(name) or os.environ.get(name) or None for name in names}
+
+
 async def launch(
     proxy: "ModelProxy",
     recorder: Recorder,
     command: Sequence[str],
-    names: Sequence[str],
     faults: Sequence[str],
 ) -> int:
     """Run the command under the proxy and return the exit code a shell would give."""
     url = await proxy.start()
     env = dict(os.environ)
-    env.update(dict.fromkeys(names, url))
+    routed = {name: up for name, up in proxy.upstreams_by_name().items() if up}
+    env.update({name: proxy.url_for(name) for name in routed})
     env.update(
         {
             TRACE_DIR: str(recorder.path.parent),
@@ -144,10 +163,13 @@ async def launch(
             FAULTS: json.dumps(list(faults)),
         }
     )
-    print(
-        f"faultline: proxy {url} -> {proxy.upstream}, spans in {recorder.path.parent}",
-        file=sys.stderr,
-    )
+    for name, upstream in routed.items():
+        print(f"faultline: {name}={proxy.url_for(name)} -> {upstream}", file=sys.stderr)
+    for name in proxy.upstreams_by_name().keys() - routed.keys():
+        print(
+            f"faultline: {name} not set, its calls do not go through", file=sys.stderr
+        )
+    print(f"faultline: proxy {url}, spans in {recorder.path.parent}", file=sys.stderr)
     started = time.time_ns()
     code = await supervise(command, env)
     await proxy.stop()  # after the agent, so its last calls still go through
