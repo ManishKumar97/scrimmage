@@ -130,6 +130,27 @@ SPAN = {"traceId": "ab" * 16, "spanId": "cd" * 8}
 TWELVE_BYTES = "QUJDREVGR0hJSktM"  # base64 of ABCDEFGHIJKL
 
 
+def test_a_run_that_straddles_the_window_start_is_left_out_of_both(tmp_path):
+    path = tmp_path / "s.jsonl"
+    # Steps are 100s apart from base: step 1 starts 50s before the window, step 2
+    # 50s inside it. Jaeger finds the trace by step 2; the run started at step 1.
+    straddling = time.time_ns() - 3600 * SECOND - 150 * SECOND
+    write_trace(
+        path, {"calls": [{}]}, {"text": "edge"}, trace="e" * 32, base=straddling
+    )
+    write_trace(path, {"text": "inside"}, trace="f" * 32, base=now() - 600 * SECOND)
+    with fake_jaeger() as jaeger:
+        jaeger.add(hexed(path))
+        source = JaegerSource(jaeger.url, "agent", HOUR)
+
+        from_jaeger = list(source.runs())
+
+    from_file = list(FileSource(path, since=HOUR).runs())
+    assert [run.answer for run in from_jaeger] == ["inside"]
+    assert [run.answer for run in from_file] == ["inside"]
+    assert source.stats().traces == 2  # Jaeger did return the straddling trace
+
+
 @pytest.mark.parametrize(
     ("status", "body", "message"),
     [

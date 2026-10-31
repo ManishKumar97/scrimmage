@@ -65,6 +65,13 @@ def started(run: Run) -> int:
     return min(item.started for item in (*run.steps, *run.unplaced))
 
 
+def started_since(runs: list[Run], since: timedelta, now: datetime) -> list[Run]:
+    """The runs that started in the window. One rule for every source, so a run that
+    straddles the window's start is left out of a file and of a trace store alike."""
+    cutoff = nanos(now - since)
+    return [run for run in runs if started(run) >= cutoff]
+
+
 class FileSource:
     """One `.jsonl` span file, or every `*.jsonl` in a directory, sorted.
     With `since`, only the runs that started in that window before now."""
@@ -94,8 +101,7 @@ class FileSource:
         if self.since is None:
             yield from reading.runs
             return
-        cutoff = nanos(datetime.now(UTC) - self.since)
-        yield from (run for run in reading.runs if started(run) >= cutoff)
+        yield from started_since(reading.runs, self.since, datetime.now(UTC))
 
     def stats(self) -> SourceStats:
         return self._stats
@@ -140,8 +146,10 @@ class JaegerSource:
         self._stats = SourceStats(
             unreadable=reading.unreadable, no_spans=reading.no_spans, traces=len(known)
         )
-        # Jaeger returns traces in no set order. Oldest first, as a file holds them.
-        yield from sorted(reading.runs, key=lambda run: (started(run), run.trace_id))
+        # Jaeger finds a trace by any span in the window, so drop the runs that
+        # started before it. Jaeger returns no set order: oldest first, as in a file.
+        runs = started_since(reading.runs, self.since, end)
+        yield from sorted(runs, key=lambda run: (started(run), run.trace_id))
 
     def stats(self) -> SourceStats:
         return self._stats
