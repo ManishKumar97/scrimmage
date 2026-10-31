@@ -1,10 +1,14 @@
 """Fault specs: what Reproduce breaks on purpose, written as short text.
 
-    tool:NAME:KIND       one tool's calls over MCP, such as tool:get_logs:empty
-    model:KIND[@STEP]    one model step, such as model:rate_limit@2 (default: step 1)
+    tool:NAME:KIND[@CALL]  one tool's calls over MCP, such as tool:get_logs:empty
+                           (default: every call; @2 is the tool's second call)
+    model:KIND[@STEP]      one model step, such as model:rate_limit@2 (default: step 1)
 
-Each kind is one entry in TOOL_FAULTS or MODEL_FAULTS. A new fault is a new entry:
-the parser, the proxy and the MCP wrapper do not change.
+Each kind is one entry in TOOL_FAULTS or MODEL_FAULTS plus its injection code. A new
+fault is a new entry: the parser does not change.
+
+Limit: a tool's calls are counted by the MCP wrapper in front of its server. An agent
+that restarts the server mid-run starts the count again.
 """
 
 import json
@@ -39,6 +43,43 @@ class ToolSession:
 
     output_schema: dict | None = None  # from tools/list
     tags_results: bool = False  # the server's results carry resultType
+
+
+@dataclass(frozen=True)
+class ToolRequest:
+    """One tools/call request, as the MCP wrapper saw it."""
+
+    request_id: object  # the JSON-RPC id
+    tool: str
+    arguments: object
+    number: int  # the call's number among this tool's calls, from 1
+    session: ToolSession = ToolSession()
+
+
+@dataclass(frozen=True)
+class Injection:
+    """What a tool fault does to one call."""
+
+    answer: dict | None = None  # the JSON-RPC message the client gets from the fault
+
+
+class ToolInjector:
+    """One tool fault's injection code, over one MCP server's life.
+
+    The wrapper makes one per fault and asks it about each call of the fault's tool.
+    A kind that keeps state, such as results it saw, keeps it on the instance.
+    """
+
+    def __init__(self, fault: "ToolFault") -> None:
+        self.fault = fault
+
+    def targets(self, call: ToolRequest) -> bool:
+        """The selector: the Nth call of the tool, or every call."""
+        return self.fault.call is None or self.fault.call == call.number
+
+    def request(self, call: ToolRequest) -> Injection | None:
+        """Before the server sees the call. None lets it through unchanged."""
+        return None
 
 
 class FaultShapeError(ValueError):
@@ -126,6 +167,37 @@ def empty_result(request_id: object, session: ToolSession) -> dict:
     return answer
 
 
+class Empty(ToolInjector):
+    """tool:NAME:empty, the tool ran and found nothing. The server never sees the call."""
+
+    def request(self, call: ToolRequest) -> Injection | None:
+        if self.targets(call):
+            return Injection(answer=empty_result(call.request_id, call.session))
+        return None
+
+
+class Error(ToolInjector):
+    """tool:NAME:error, the tool failed. The server never sees the call.
+
+    The answer is a tool error, as MCP sends one: a result with isError, so the
+    model reads the message. It is not a JSON-RPC protocol error.
+    """
+
+    def request(self, call: ToolRequest) -> Injection | None:
+        if not self.targets(call):
+            return None
+        text = (
+            f"Error executing tool {call.tool}: the backend did not respond "
+            "(connection reset by peer)"
+        )
+        result: dict = {"content": [{"type": "text", "text": text}], "isError": True}
+        if call.session.tags_results:
+            result["resultType"] = "complete"
+        return Injection(
+            answer={"jsonrpc": "2.0", "id": call.request_id, "result": result}
+        )
+
+
 def rate_limit(path: str) -> ModelAnswer:
     """HTTP 429 with the provider's own error body and a retry-after header.
 
@@ -202,8 +274,8 @@ def truncate(path: str, body: bytes) -> bytes:
     return truncated(body, anthropic=is_anthropic(path))
 
 
-# The fault kinds. A tool fault answers a tools/call by its JSON-RPC id.
-TOOL_FAULTS: dict[str, Callable[[object, ToolSession], dict]] = {"empty": empty_result}
+# The fault kinds. A tool kind is the injector the MCP wrapper asks about each call.
+TOOL_FAULTS: dict[str, type[ToolInjector]] = {"empty": Empty, "error": Error}
 MODEL_FAULTS: dict[str, ModelKind] = {
     "rate_limit": ModelKind(answer=rate_limit),
     "timeout": ModelKind(hang=True),
@@ -217,9 +289,11 @@ class ToolFault:
     spec: str
     tool: str
     kind: str
+    call: int | None = None  # the Nth call of the tool, or None for every call
 
-    def answer(self, request_id: object, session: ToolSession) -> dict:
-        return TOOL_FAULTS[self.kind](request_id, session)
+    def injector(self) -> ToolInjector:
+        """A new injector for this fault, with no state yet."""
+        return TOOL_FAULTS[self.kind](self)
 
 
 @dataclass(frozen=True)
@@ -237,21 +311,35 @@ type Fault = ToolFault | ModelFault
 
 
 def known() -> list[str]:
-    tools = [f"tool:NAME:{kind}" for kind in TOOL_FAULTS]
+    tools = [f"tool:NAME:{kind}[@CALL]" for kind in TOOL_FAULTS]
     return tools + [f"model:{kind}[@STEP]" for kind in MODEL_FAULTS]
+
+
+def selector(rest: str) -> tuple[str, int | None]:
+    """Split a trailing @N off a spec. Raises FaultError for an @ with no N of 1 or more."""
+    head, at, number = rest.rpartition("@")
+    if not at:
+        return rest, None
+    if number.isdigit() and int(number) >= 1:
+        return head, int(number)
+    raise FaultError(f"@{number} is not a step or call number (1 or more)")
 
 
 def parse(spec: str) -> Fault:
     """One fault from its spec. Raises FaultError naming the known faults."""
     target, _, rest = spec.partition(":")
+    try:
+        rest, number = selector(rest)
+    except FaultError as exc:
+        raise FaultError(
+            f"unknown fault {spec!r}: {exc}. Known: {', '.join(known())}"
+        ) from None
     if target == "tool":
         tool, _, kind = rest.rpartition(":")
         if tool and kind in TOOL_FAULTS:
-            return ToolFault(spec, tool, kind)
-    elif target == "model":
-        kind, at, step = rest.partition("@")
-        if kind in MODEL_FAULTS and (not at or (step.isdigit() and int(step) >= 1)):
-            return ModelFault(spec, kind, int(step) if at else 1)
+            return ToolFault(spec, tool, kind, number)
+    elif target == "model" and rest in MODEL_FAULTS:
+        return ModelFault(spec, rest, number or 1)
     raise FaultError(f"unknown fault {spec!r}. Known: {', '.join(known())}")
 
 

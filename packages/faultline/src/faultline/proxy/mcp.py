@@ -22,7 +22,14 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from faultline.faults import FaultShapeError, ToolFault, ToolSession, parse_all
+from faultline.faults import (
+    FaultShapeError,
+    ToolFault,
+    ToolInjector,
+    ToolRequest,
+    ToolSession,
+    parse_all,
+)
 from faultline.model import ToolCall
 from faultline.proxy.context import find as find_run
 from faultline.proxy.record import Recorder
@@ -82,7 +89,12 @@ class ToolCalls:
         self.pending: dict[str, Pending] = {}
         self.calls: list[ToolCall] = []
         self.on_call = on_call
-        self.faults = {fault.tool: fault for fault in faults}
+        # Each fault's injector, by the tool it targets. A tool may have several,
+        # such as one fault on its first call and another on its second.
+        self.injectors: dict[str, list[ToolInjector]] = {}
+        for fault in faults:
+            self.injectors.setdefault(fault.tool, []).append(fault.injector())
+        self.counts: dict[str, int] = {}  # calls of each tool so far
         # What a faked result must hold to pass for the server's own, learned from it.
         self.listing: set[str] = set()  # ids of tools/list requests in flight
         self.schemas: dict[str, dict] = {}  # each tool's declared outputSchema
@@ -103,24 +115,41 @@ class ToolCalls:
             started=time.time_ns(),
             clock=time.monotonic(),
         )
-        fault = self.faults.get(pending.name)
-        if fault is None:
-            self.pending[key(message["id"])] = pending
-            return None
-        session = ToolSession(self.schemas.get(pending.name), self.tags_results)
-        try:
-            answer = fault.answer(message["id"], session)
-            result, error_type = outcome(answer)
-        except FaultShapeError as exc:
-            # Sent anyway, so the run goes on, and marked so the trace says why.
-            print(
-                f"faultline mcp-wrap: {fault.spec} does not fit the output schema of "
-                f"{pending.name} ({exc}); the client may reject it",
-                file=sys.stderr,
-            )
-            answer, (result, _) = exc.answer, outcome(exc.answer)
-            error_type = SHAPE_INVALID
-        self.finish(pending, result, error_type, fault.spec)
+        self.counts[pending.name] = self.counts.get(pending.name, 0) + 1
+        request = ToolRequest(
+            message["id"],
+            pending.name,
+            params.get("arguments", {}),
+            self.counts[pending.name],
+            ToolSession(self.schemas.get(pending.name), self.tags_results),
+        )
+        for injector in self.injectors.get(pending.name, []):
+            spec = injector.fault.spec
+            try:
+                injection = injector.request(request)
+            except FaultShapeError as exc:
+                # Sent anyway, so the run goes on, and marked so the trace says why.
+                print(
+                    f"faultline mcp-wrap: {spec} does not fit the output schema of "
+                    f"{pending.name} ({exc}); the client may reject it",
+                    file=sys.stderr,
+                )
+                return self.answered(pending, exc.answer, spec, SHAPE_INVALID)
+            if injection is not None and injection.answer is not None:
+                return self.answered(pending, injection.answer, spec)
+        self.pending[key(message["id"])] = pending
+        return None
+
+    def answered(
+        self,
+        pending: Pending,
+        answer: dict,
+        spec: str,
+        error_type: str | None = None,
+    ) -> bytes:
+        """Record a call a fault answered, and return the answer's line."""
+        result, kind = outcome(answer)
+        self.finish(pending, result, error_type or kind, spec)
         return (json.dumps(answer) + "\n").encode()
 
     def from_server(self, line: bytes) -> None:

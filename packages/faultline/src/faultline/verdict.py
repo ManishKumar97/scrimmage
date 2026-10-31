@@ -87,6 +87,13 @@ def why_not(fault: Fault, run: Run | None, wrapped: bool) -> str:
         if fault.tool not in called:
             seen = ", ".join(called) or "none"
             return f"the agent never called {fault.tool}; MCP tools called: {seen}"
+        assert run  # the tool was called
+        times = sum(call.name == fault.tool for call in run.tool_calls)
+        if fault.call is not None and times < fault.call:
+            return (
+                f"the agent called {fault.tool} {times} time(s), "
+                f"so there was no call {fault.call}"
+            )
         return "the tool was called, but no call was answered by the fault"
     assert isinstance(fault, ModelFault)
     steps = len(run.steps) if run else 0
