@@ -19,7 +19,11 @@ members = ["packages/faultline", "lab"]
 [dependency-groups]
 dev = [
     "import-linter>=2.15",
+    "opentelemetry-exporter-otlp-proto-common>=1.45.1",
+    "opentelemetry-sdk>=1.45.1",
     "opentelemetry-semantic-conventions>=0.66b1",
+    "protobuf>=7.36.2",
+    "pydantic-ai-slim>=2.64.0",
     "pyright>=1.1.414",
     "pytest>=9.1.1",
     "ruff>=0.17.0",

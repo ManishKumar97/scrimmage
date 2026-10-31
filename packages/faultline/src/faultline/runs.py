@@ -168,16 +168,50 @@ def build_run(trace_id: str, spans: list[dict]) -> Run | None:
         error_type=error_type_of(root) if root else None,
         steps=tuple(steps),
         unplaced=tuple(unplaced),
+        content_recorded=any(carries_content(span) for span in spans),
     )
+
+
+def parts_of(messages: str | None) -> list[dict]:
+    """The parts of GenAI messages in JSON. Raises on a shape this reader does not know."""
+    return [
+        part
+        for message in json.loads(messages or "[]")
+        for part in message.get("parts", [])
+    ]
 
 
 def output_parts(span: dict) -> list[dict]:
     """The parts of the model's reply. Unreadable output gives no parts."""
     try:
-        messages = json.loads(span["attrs"].get(GEN_AI_OUTPUT_MESSAGES) or "[]")
-        return [part for message in messages for part in message.get("parts", [])]
+        return parts_of(span["attrs"].get(GEN_AI_OUTPUT_MESSAGES))
     except (ValueError, AttributeError, TypeError):
         return []
+
+
+# Message part fields that hold content: text, tool call arguments, tool results.
+# An agent that does not record content may still write the messages, with parts
+# that keep only their type, id and name.
+CONTENT_FIELDS = {"content", "arguments", "response"}
+
+
+def carries_content(span: dict) -> bool:
+    """True when the span records content, not only the shape of the messages."""
+    attrs = span["attrs"]
+    if GEN_AI_TOOL_CALL_ARGUMENTS in attrs or GEN_AI_TOOL_CALL_RESULT in attrs:
+        return True
+    for key in (GEN_AI_INPUT_MESSAGES, GEN_AI_OUTPUT_MESSAGES):
+        if key not in attrs:
+            continue
+        try:
+            parts = parts_of(attrs[key])
+            # No parts is an empty message, recorded as it was. Parts that all lack
+            # their content fields had the content stripped.
+            if not parts or any(CONTENT_FIELDS & part.keys() for part in parts):
+                return True
+        except (ValueError, AttributeError, TypeError):
+            return True  # something is there, in a shape this reader does not know
+    return False
 
 
 def is_final(step: Step) -> bool:
@@ -270,6 +304,8 @@ def show_run(run: Run) -> str:
     if run.error_type:
         head += f" ERROR {run.error_type}"
     lines = [head, f"  question: {cut(run.question, 300)}"]
+    if not run.content_recorded:
+        lines.append("  content: not recorded")
     for call in run.unplaced:
         lines.append("  before any step:")
         lines.append(show_call(call))
