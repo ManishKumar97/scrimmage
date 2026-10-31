@@ -1,0 +1,62 @@
+# The faults Faultline injects, one entry per kind, each with where it was seen.
+#
+# spec: the kind as `faultline run --fault` takes it.
+# boundary: where it is injected, "model" (the model proxy) or "tool" (the MCP wrapper).
+# origin: the failure seen for real, as one of
+#   "observed: <trace file>, trace <trace id>", a lab trace of the IDA on an
+#       AIOpsLab incident, or
+#   "incident: <URL>", a public status page or postmortem.
+
+[[fault]]
+spec = "model:rate_limit[@STEP]"
+boundary = "model"
+description = "The model API answers the step with HTTP 429, a retry-after header and the provider's rate limit body, on every attempt."
+origin = "incident: https://status.claude.com/incidents/6l0r96skc6cb"
+
+[[fault]]
+spec = "model:timeout[@STEP]"
+boundary = "model"
+description = "The model API never answers the step. The agent's own timeout ends each attempt."
+origin = "incident: https://status.claude.com/incidents/fvj2fgqrchsj"
+
+[[fault]]
+spec = "model:server_error[@STEP]"
+boundary = "model"
+description = "The model API answers the step with HTTP 500 and the provider's server error body, on every attempt."
+origin = "incident: https://status.claude.com/incidents/rw3gjsvcny0l"
+
+[[fault]]
+spec = "model:truncated[@STEP]"
+boundary = "model"
+description = "The model's reply keeps half its text, loses its tool calls and is marked as stopped at the token limit."
+origin = "incident: https://status.claude.com/incidents/ds175sjzk4y8"
+
+[[fault]]
+spec = "tool:NAME:empty[@CALL]"
+boundary = "tool"
+description = "The tool answers with a valid success that holds nothing."
+origin = "observed: ad_service_failure-3.jsonl, trace f7343a8a60b2f4cadc478c106b02f90c"
+
+[[fault]]
+spec = "tool:NAME:error[@CALL]"
+boundary = "tool"
+description = "The tool answers with an MCP tool error the model reads."
+origin = "observed: recommendation_service_cache_failure-3.jsonl, trace 648c353da92a217af93f26051fea660c"
+
+[[fault]]
+spec = "tool:NAME:timeout[@CALL]"
+boundary = "tool"
+description = "The tool never answers the call. The agent's own timeout ends it."
+origin = "incident: https://www.githubstatus.com/incidents/f1vvv30224wd"
+
+[[fault]]
+spec = "tool:NAME:stale[@CALL]"
+boundary = "tool"
+description = "The tool answers with a result it gave earlier, in this run or an earlier one, as a success."
+origin = "incident: https://status.claude.com/incidents/978mjkgw6mh7"
+
+[[fault]]
+spec = "tool:NAME:wrong=VALUE[@CALL]"
+boundary = "tool"
+description = "The tool answers with well-formed data about VALUE instead of what the call asked about, as a success."
+origin = "incident: https://store.steampowered.com/oldnews/19852"
