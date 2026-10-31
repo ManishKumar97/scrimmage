@@ -145,10 +145,24 @@ def rate_limit(path: str) -> ModelAnswer:
     return ModelAnswer(429, headers, json.dumps(error).encode())
 
 
+@dataclass(frozen=True)
+class ModelKind:
+    """What one model fault kind does to the call it targets. Set exactly one field.
+
+    answer: the reply the agent gets instead. The upstream never sees the call.
+    hang: the call is never answered. The agent's own timeout ends it.
+    """
+
+    answer: Callable[[str], ModelAnswer] | None = None  # from the request path
+    hang: bool = False
+
+
 # The fault kinds. A tool fault answers a tools/call by its JSON-RPC id.
-# A model fault answers a model request by its path.
 TOOL_FAULTS: dict[str, Callable[[object, ToolSession], dict]] = {"empty": empty_result}
-MODEL_FAULTS: dict[str, Callable[[str], ModelAnswer]] = {"rate_limit": rate_limit}
+MODEL_FAULTS: dict[str, ModelKind] = {
+    "rate_limit": ModelKind(answer=rate_limit),
+    "timeout": ModelKind(hang=True),
+}
 
 
 @dataclass(frozen=True)
@@ -167,8 +181,9 @@ class ModelFault:
     kind: str
     step: int
 
-    def answer(self, path: str) -> ModelAnswer:
-        return MODEL_FAULTS[self.kind](path)
+    @property
+    def action(self) -> ModelKind:
+        return MODEL_FAULTS[self.kind]
 
 
 type Fault = ToolFault | ModelFault

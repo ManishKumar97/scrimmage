@@ -123,8 +123,9 @@ def test_a_required_number_has_no_empty_value():
 def test_a_rate_limit_is_a_429_in_the_providers_own_shape(path, error_type):
     fault = parse("model:rate_limit")
     assert isinstance(fault, ModelFault)
+    assert fault.action.answer
 
-    answer = fault.answer(path)
+    answer = fault.action.answer(path)
 
     assert answer.status == 429
     assert answer.headers["Retry-After"] == "1"

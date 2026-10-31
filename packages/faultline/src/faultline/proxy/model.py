@@ -20,6 +20,8 @@ fits one agent making one model call at a time. Model calls made in parallel, or
 several agents in one run, interleave, and their step numbers mean little.
 """
 
+import asyncio
+import contextlib
 import hashlib
 import socket
 import time
@@ -67,6 +69,10 @@ def forwardable(headers) -> list[tuple[str, str]]:
 
 # The paths of model calls: OpenAI chat completions and responses, Anthropic messages.
 MODEL_CALL_PATHS = ("/chat/completions", "/responses", "/messages")
+# How often a hung call checks whether its client gave up, in seconds.
+HANG_POLL = 0.05
+# The error type on the step of a call that was never answered.
+TIMEOUT = "timeout"
 # How many times the request was retried, sent by the Stainless-built SDKs
 # (the openai and anthropic Python and TypeScript libraries). 0 on the first try.
 RETRY_COUNT = "x-stainless-retry-count"
@@ -142,6 +148,7 @@ class ModelProxy:
         self.url = ""
         self.runner: web.AppRunner | None = None
         self.session: aiohttp.ClientSession | None = None
+        self.stopping = asyncio.Event()  # set by stop(), ends every hung call
 
     def upstreams_by_name(self) -> dict[str, str | None]:
         return {name: self.upstreams[route] for route, name in self.names.items()}
@@ -169,6 +176,7 @@ class ModelProxy:
         return self.url
 
     async def stop(self) -> None:
+        self.stopping.set()
         if self.runner:
             await self.runner.cleanup()
         if self.session:
@@ -195,17 +203,21 @@ class ModelProxy:
         step = attempt = 0  # not a step
         if model_call := is_model_call(path):
             step, attempt = self.steps.count(body, request.headers.get(RETRY_COUNT))
-        status, chunks, encoding = 502, [], None
+        status, chunks, encoding, error = 502, [], None, None
         response: web.StreamResponse | None = None
         fault = next((f for f in self.faults if model_call and f.step == step), None)
         try:
-            if fault:
-                # Every attempt of the step gets the fault. The upstream never sees it.
-                answer = fault.answer(path)
+            # Every attempt of the step gets the fault. The upstream never sees it.
+            if fault and fault.action.answer:
+                answer = fault.action.answer(path)
                 status, chunks = answer.status, [answer.body]
                 return web.Response(
                     status=answer.status, body=answer.body, headers=answer.headers
                 )
+            if fault and fault.action.hang:
+                status, error = 0, TIMEOUT  # no status: nothing was ever sent
+                await self.hang(request)
+                return web.Response(status=504, text="faultline proxy: stopped")
             async with self.session.request(
                 request.method,
                 # As sent: a URL built from a plain string would be quoted again.
@@ -249,5 +261,15 @@ class ModelProxy:
                     ended=time.time_ns(),
                     encoding=encoding,
                     injected=fault.spec if fault else None,
+                    error=error,
                 )
                 self.recorder.exchange(exchange)
+
+    async def hang(self, request: web.Request) -> None:
+        """Hold the call open until the client gives up on it or the proxy stops."""
+        while not self.stopping.is_set():
+            transport = request.transport
+            if transport is None or transport.is_closing():
+                return  # the client closed the connection: its timeout fired
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self.stopping.wait(), HANG_POLL)

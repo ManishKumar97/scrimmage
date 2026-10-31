@@ -78,6 +78,7 @@ class Exchange:
     ended: int
     encoding: str | None = None  # the reply's Content-Encoding
     injected: str | None = None  # the fault spec that made the reply
+    error: str | None = None  # an error with no HTTP status, such as "timeout"
 
 
 @dataclass
@@ -242,10 +243,9 @@ class Recorder:
                 "timeUnixNano": str(a.started),
                 "name": "faultline.proxy.attempt",
                 "attributes": encode(
-                    {
-                        "faultline.proxy.attempt": a.attempt,
-                        "http.response.status_code": a.status,
-                    }
+                    {"faultline.proxy.attempt": a.attempt}
+                    | ({"http.response.status_code": a.status} if a.status else {})
+                    | ({ERROR_TYPE: a.error} if a.error else {})
                 ),
             }
             for a in attempts
@@ -257,7 +257,7 @@ class Recorder:
             attributes,
             parent=self.root_span_id,
             kind=SPAN_KIND_CLIENT,
-            error=str(last.status) if last.status >= 400 else None,
+            error=last.error or (str(last.status) if last.status >= 400 else None),
             events=events,
         )
 
