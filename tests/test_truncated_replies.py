@@ -187,7 +187,7 @@ def test_each_sdk_reads_a_cut_reply_as_stopped_at_the_token_limit(tmp_path):
     with serving() as url:
         env.update(OPENAI_BASE_URL=url + "/v1", ANTHROPIC_BASE_URL=url)
         result = subprocess.run(
-            [FAULTLINE, "run", *faults, "--trace", str(trace)]
+            [FAULTLINE, "run", "--allow-live-tools", *faults, "--trace", str(trace)]
             + ["--", sys.executable, "-c", AGENT],
             env=env,
             capture_output=True,
@@ -223,7 +223,15 @@ def test_a_reply_that_cannot_be_cut_passes_through_and_says_why(tmp_path):
     )
     with fake_llm(tmp_path, []) as upstream:  # an empty script answers 500
         result = subprocess.run(
-            [FAULTLINE, "run", "--fault", "model:truncated", "--trace", str(trace)]
+            [
+                FAULTLINE,
+                "run",
+                "--allow-live-tools",
+                "--fault",
+                "model:truncated",
+                "--trace",
+                str(trace),
+            ]
             + ["--upstream", upstream, "--", sys.executable, "-c", agent],
             env=env,
             capture_output=True,
@@ -248,7 +256,7 @@ def test_the_ida_gets_a_reply_cut_at_the_token_limit(tmp_path):
     trace = tmp_path / "trace"
     with fake_llm(tmp_path, SCRIPT) as upstream:
         result = run(
-            [FAULTLINE, "run", "--fault", "model:truncated@2"]
+            [FAULTLINE, "run", "--allow-live-tools", "--fault", "model:truncated@2"]
             + ["--expect", "ROOT CAUSE SERVICE: cart"]
             + ["--base-url-env", "GROQ_BASE_URL", "--upstream", upstream]
             + ["--trace", str(trace), "--", *ida()],

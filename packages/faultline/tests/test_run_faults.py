@@ -27,7 +27,16 @@ except urllib.error.HTTPError as error:
 def faultline_run(tmp_path: Path, upstream: str, *args: str):
     trace = tmp_path / "trace"
     result = subprocess.run(
-        [FAULTLINE, "run", "--upstream", upstream, "--trace", str(trace), *args],
+        [
+            FAULTLINE,
+            "run",
+            "--allow-live-tools",
+            "--upstream",
+            upstream,
+            "--trace",
+            str(trace),
+            *args,
+        ],
         capture_output=True,
         text=True,
         timeout=60,

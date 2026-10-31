@@ -63,6 +63,7 @@ def test_the_agent_gets_the_proxy_url_and_its_calls_reach_the_upstream(tmp_path)
     with upstream_server() as upstream:
         result = faultline(
             "run",
+            "--allow-live-tools",
             "--base-url-env",
             "GROQ_BASE_URL",
             "--trace",
@@ -100,6 +101,7 @@ def test_upstream_flag_wins_over_the_environment():
     with upstream_server() as upstream:
         result = faultline(
             "run",
+            "--allow-live-tools",
             "--upstream",
             upstream.url,
             "--base-url-env",
@@ -118,6 +120,7 @@ def test_upstream_flag_wins_over_the_environment():
 def test_the_agents_exit_code_is_faultlines():
     result = faultline(
         "run",
+        "--allow-live-tools",
         "--upstream",
         "http://127.0.0.1:9",
         "--",
@@ -130,7 +133,9 @@ def test_the_agents_exit_code_is_faultlines():
 
 
 def test_no_upstream_is_an_error_that_says_what_to_pass():
-    result = faultline("run", "--", PYTHON, "-c", "print('ran')", env=clean_env())
+    result = faultline(
+        "run", "--allow-live-tools", "--", PYTHON, "-c", "print('ran')", env=clean_env()
+    )
 
     assert result.returncode == 2
     assert "ran" not in result.stdout
@@ -139,14 +144,16 @@ def test_no_upstream_is_an_error_that_says_what_to_pass():
 
 
 def test_a_command_that_does_not_exist_exits_127():
-    result = faultline("run", "--upstream", "http://x", "--", "no-such-agent-cmd")
+    result = faultline(
+        "run", "--allow-live-tools", "--upstream", "http://x", "--", "no-such-agent-cmd"
+    )
 
     assert result.returncode == 127
     assert "cannot start no-such-agent-cmd" in result.stderr
 
 
 def test_no_command_is_an_error():
-    result = faultline("run", "--upstream", "http://x")
+    result = faultline("run", "--allow-live-tools", "--upstream", "http://x")
 
     assert result.returncode == 2
     assert "after --" in result.stderr
@@ -156,7 +163,17 @@ def signalled(number: signal.Signals) -> tuple[int, str]:
     with (
         upstream_server() as upstream,
         subprocess.Popen(
-            [FAULTLINE, "run", "--upstream", upstream.url, "--", PYTHON, "-c", WAITS],
+            [
+                FAULTLINE,
+                "run",
+                "--allow-live-tools",
+                "--upstream",
+                upstream.url,
+                "--",
+                PYTHON,
+                "-c",
+                WAITS,
+            ],
             stdin=subprocess.DEVNULL,  # no terminal, as under a CI runner or a script
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -191,6 +208,7 @@ def test_sigint_sent_to_faultline_alone_reaches_the_agent():
 def test_an_agent_killed_by_a_signal_gives_128_plus_the_signal():
     result = faultline(
         "run",
+        "--allow-live-tools",
         "--upstream",
         "http://x",
         "--",
@@ -206,6 +224,7 @@ def test_upstream_flags_name_their_variable(tmp_path):
     with upstream_server() as groq, upstream_server() as anthropic:
         result = faultline(
             "run",
+            "--allow-live-tools",
             "--upstream",
             f"GROQ_BASE_URL={groq.url}/openai/v1",
             "--upstream",
@@ -248,7 +267,14 @@ def gone(pid: int, seconds: float) -> bool:
 def test_the_agent_dies_with_faultline_even_on_sigkill():
     agent = "import os, time; print(os.getpid(), flush=True); time.sleep(60)"
     with subprocess.Popen(
-        [FAULTLINE, "run", "--upstream", "http://127.0.0.1:9", "--"]
+        [
+            FAULTLINE,
+            "run",
+            "--allow-live-tools",
+            "--upstream",
+            "http://127.0.0.1:9",
+            "--",
+        ]
         + [PYTHON, "-c", agent],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
@@ -282,7 +308,15 @@ def test_a_hung_up_run_still_leaves_a_whole_trace(tmp_path):
     with (
         upstream_server() as upstream,
         subprocess.Popen(
-            [FAULTLINE, "run", "--upstream", upstream.url, "--trace", str(trace)]
+            [
+                FAULTLINE,
+                "run",
+                "--allow-live-tools",
+                "--upstream",
+                upstream.url,
+                "--trace",
+                str(trace),
+            ]
             + ["--", PYTHON, "-c", CALLS_THEN_WAITS],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -308,7 +342,14 @@ def test_an_agent_that_ignores_sigterm_is_killed_after_the_grace_period():
         "os.write(1, b'ready\\n'); time.sleep(60)"
     )
     with subprocess.Popen(
-        [FAULTLINE, "run", "--upstream", "http://127.0.0.1:9", "--"]
+        [
+            FAULTLINE,
+            "run",
+            "--allow-live-tools",
+            "--upstream",
+            "http://127.0.0.1:9",
+            "--",
+        ]
         + [PYTHON, "-c", agent],
         env={**os.environ, "FAULTLINE_TERM_GRACE": "1"},
         stdin=subprocess.DEVNULL,

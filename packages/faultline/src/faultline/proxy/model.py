@@ -78,6 +78,8 @@ HANG_POLL = 0.05
 TIMEOUT = "timeout"
 # The error type on the step of a call refused because the cost cap was reached.
 COST_CAP = "cost_cap"
+# The error type on the step of a call held while faultline run lists the tools.
+HELD = "held_for_tool_list"
 # How many times the request was retried, sent by the Stainless-built SDKs
 # (the openai and anthropic Python and TypeScript libraries). 0 on the first try.
 RETRY_COUNT = "x-stainless-retry-count"
@@ -142,6 +144,7 @@ class ModelProxy:
         faults: Sequence[ModelFault] = (),
         recorder: Recorder | None = None,
         budget: Budget | None = None,
+        hold: bool = False,
     ) -> None:
         self.names = {route_of(name): name for name in upstreams}
         self.upstreams = {
@@ -152,6 +155,10 @@ class ModelProxy:
         self.recorder = recorder
         # Once spent, every new model call is refused; each reply's tokens add to it.
         self.budget = budget
+        # Hold every model call unanswered, and say one came: the agent has set up
+        # its tools. faultline run does this while it lists them, so it costs nothing.
+        self.hold = hold
+        self.called = asyncio.Event()
         self.steps = Steps()
         self.url = ""
         self.runner: web.AppRunner | None = None
@@ -218,6 +225,11 @@ class ModelProxy:
         applied = bool(fault and not fault.action.rewrite)
         skipped = None  # why a fault was not applied
         try:
+            if model_call and self.hold:
+                self.called.set()
+                status, error, fault = 0, HELD, None
+                await self.hang(request)
+                return web.Response(status=503, text="faultline proxy: stopped")
             if model_call and self.budget and self.budget.reached:
                 status, error, fault = 402, COST_CAP, None
                 answer = refused(path, self.budget)

@@ -26,6 +26,11 @@ tokens times every run, priced from the config's [cost] section or from --price-
 and --price-out. `--max-cost USD` stops starting runs once they cost that much, and
 exits 3. Mid-run, the proxy refuses model calls past the cap with HTTP 402.
 
+Live tools. Without --allow-live-tools, no run is made: the agent starts once on
+the first task as a preview, as `faultline run` does, its tools are listed, and
+faultline test exits 2. Reproduce reruns the agent many times, and no rerun may
+reach a live tool unless the team says so.
+
 Each run gets a verdict by the rules in `faultline.verdict`. A task's reference is
 its expected answer, else the answer of its first clean run that got past rule 1.
 `--matcher module:function` replaces the built-in comparison with the team's own.
@@ -50,13 +55,16 @@ from faultline.config import CostConfig, load_config
 from faultline.cost import Budget, Prices, dollars, tokens
 from faultline.faults import Fault, FaultError, parse_all
 from faultline.launch import (
+    PREVIEW,
     Outcome,
     Streams,
+    add_live_tools_argument,
     add_upstream_arguments,
     command_of,
     execute,
     proxy_ready,
     routed_upstreams,
+    show_tools,
 )
 from faultline.model import RunVerdict
 from faultline.verdict import (
@@ -445,6 +453,7 @@ def add_parser(subparsers) -> None:
         "also refuses model calls past it, mid-run",
     )
     add_upstream_arguments(parser)
+    add_live_tools_argument(parser)
     parser.add_argument("command", nargs=argparse.REMAINDER, metavar="-- CMD...")
     parser.set_defaults(handler=test)
 
@@ -474,12 +483,15 @@ def test(args: argparse.Namespace) -> int:
         )
     if args.max_cost is not None and args.max_cost <= 0:
         return fail("--max-cost must be above 0")
-    out = args.out or Path(tempfile.mkdtemp(prefix="faultline-test-"))
-    if out.exists() and (not out.is_dir() or any(out.iterdir())):
-        return fail(f"{out} is not an empty directory; runs are never mixed")
+    used = args.out and args.out.exists()
+    if used and (not args.out.is_dir() or any(args.out.iterdir())):
+        return fail(f"{args.out} is not an empty directory; runs are never mixed")
     upstreams = routed_upstreams(args, "faultline test")
     if upstreams is None or not proxy_ready("faultline test"):
         return 2
+    if not args.allow_live_tools:
+        return preview(command, tasks[0], upstreams, args.max_content)
+    out = args.out or Path(tempfile.mkdtemp(prefix="faultline-test-"))
     planned = plan(tasks, faults, args.clean_runs, args.runs, out)
     print(f"faultline test: {len(planned)} runs, saved in {out}", file=sys.stderr)
     references = References()
@@ -531,6 +543,30 @@ def test(args: argparse.Namespace) -> int:
             return COST_CAP
     report(results, faults, out)
     return 0
+
+
+def preview(
+    command: Sequence[str],
+    task: Task,
+    upstreams: dict[str, str | None],
+    max_content: int,
+) -> int:
+    """Start the agent on the first task with every tool blocked, list the tools
+    that would run for real, and make no run. Exits 2."""
+    trace = Path(tempfile.mkdtemp(prefix="faultline-preview-"))
+    # The agent's output goes to stderr, so stdout stays for the matrix.
+    streams = Streams(subprocess.DEVNULL, sys.stderr.fileno())
+    outcome = execute(
+        command_for(command, task.input),
+        [],
+        upstreams,
+        trace,
+        max_content,
+        streams=streams,
+        preview=True,
+    )
+    print(show_tools(outcome.servers, "faultline test"), file=sys.stderr)
+    return PREVIEW
 
 
 def report(results: Sequence[Result], faults: Sequence[Fault], out: Path) -> None:

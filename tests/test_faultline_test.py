@@ -33,7 +33,15 @@ def faultline_test(tmp_path: Path, upstream: str, *flags: str):
     env = {k: v for k, v in os.environ.items() if not k.startswith("OPENAI_")}
     env["OPENAI_API_KEY"] = "fake"
     return subprocess.run(
-        [FAULTLINE, "test", "--tasks", str(tasks), "--out", str(tmp_path / "out")]
+        [
+            FAULTLINE,
+            "test",
+            "--allow-live-tools",
+            "--tasks",
+            str(tasks),
+            "--out",
+            str(tmp_path / "out"),
+        ]
         + ["--upstream", upstream, *flags, "--", *AGENT],
         env=env,
         cwd=tmp_path,
@@ -127,7 +135,15 @@ def test_each_run_is_marked_by_rule_against_the_expected_answer(tmp_path):
     agent = [sys.executable, str(TOOL_AGENT), str(tmp_path / "server.log")]
     with fake_llm(tmp_path, TOOL_SCRIPT) as upstream:
         result = subprocess.run(
-            [FAULTLINE, "test", "--tasks", str(tasks), "--out", str(tmp_path / "out")]
+            [
+                FAULTLINE,
+                "test",
+                "--allow-live-tools",
+                "--tasks",
+                str(tasks),
+                "--out",
+                str(tmp_path / "out"),
+            ]
             + ["--upstream", upstream, "--fault", "tool:get_logs:empty"]
             + ["--runs", "1", "--clean-runs", "1", "--", *agent],
             cwd=tmp_path,

@@ -135,7 +135,16 @@ def faultline_test(
     path = tmp_path / "tasks.toml"
     path.write_text(tasks)
     return subprocess.run(
-        [FAULTLINE, "test", "--tasks", str(path), "--upstream", upstream, *flags]
+        [
+            FAULTLINE,
+            "test",
+            "--allow-live-tools",
+            "--tasks",
+            str(path),
+            "--upstream",
+            upstream,
+            *flags,
+        ]
         + ["--", *(agent or [sys.executable, "-c", ASKER])],
         capture_output=True,
         text=True,

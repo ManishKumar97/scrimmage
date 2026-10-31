@@ -106,7 +106,7 @@ def test_an_anthropic_key_never_reaches_the_openai_upstream(tmp_path):
             OPENAI_BASE_URL=openai_api.url + "/v1", ANTHROPIC_BASE_URL=claude_api.url
         )
         result = subprocess.run(
-            [FAULTLINE, "run", "--trace", str(tmp_path / "trace")]
+            [FAULTLINE, "run", "--allow-live-tools", "--trace", str(tmp_path / "trace")]
             + ["--", sys.executable, "-c", AGENT],
             env=env,
             capture_output=True,

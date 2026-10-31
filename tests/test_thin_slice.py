@@ -30,7 +30,15 @@ def test_an_injected_429_reaches_the_sdk_agent_after_all_its_retries(tmp_path):
     env["OPENAI_API_KEY"] = "fake"
     agent = [sys.executable, str(Path(__file__).parent / "openai_agent.py")]
     result = subprocess.run(
-        [FAULTLINE, "run", "--fault", "model:rate_limit", "--trace", str(trace)]
+        [
+            FAULTLINE,
+            "run",
+            "--allow-live-tools",
+            "--fault",
+            "model:rate_limit",
+            "--trace",
+            str(trace),
+        ]
         # Nothing listens here: the fault answers every attempt, so no call leaves.
         + ["--upstream", "http://127.0.0.1:9/v1", "--", *agent],
         env=env,
@@ -72,7 +80,15 @@ def test_an_empty_tool_result_through_the_proxy_gets_a_verdict(tmp_path):
     )
     with fake_llm(tmp_path, EMPTY_LOGS_SCRIPT) as upstream:
         result = run(
-            [FAULTLINE, "run", "--fault", "tool:get_logs:empty", "--expect", "cart"]
+            [
+                FAULTLINE,
+                "run",
+                "--allow-live-tools",
+                "--fault",
+                "tool:get_logs:empty",
+                "--expect",
+                "cart",
+            ]
             + ["--base-url-env", "GROQ_BASE_URL", "--upstream", upstream]
             + ["--trace", str(trace), "--", *ida()],
             env,

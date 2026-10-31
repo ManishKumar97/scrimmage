@@ -169,7 +169,15 @@ def test_faultline_run_writes_a_trace_that_python_m_faultline_runs_reads(tmp_pat
     with upstream_server() as upstream:
         upstream.replies = [ASKS, ANSWERS]
         agent = subprocess.run(
-            [FAULTLINE, "run", "--upstream", upstream.url, "--trace", str(trace)]
+            [
+                FAULTLINE,
+                "run",
+                "--allow-live-tools",
+                "--upstream",
+                upstream.url,
+                "--trace",
+                str(trace),
+            ]
             + [
                 "--",
                 sys.executable,
@@ -192,7 +200,10 @@ def test_faultline_run_writes_a_trace_that_python_m_faultline_runs_reads(tmp_pat
     assert agent.returncode == 0, agent.stderr
     assert agent.stdout == "cart is down\n"
     files = sorted(p.name for p in trace.iterdir())
-    assert files[0].startswith("mcp-") and files[1:] == ["model.jsonl"]
+    # The wrapper's spans, the proxy's spans, and the server's tool list.
+    [wrapper, model, tools] = files
+    assert wrapper.startswith("mcp-") and model == "model.jsonl"
+    assert tools == f"tools-{wrapper.removeprefix('mcp-').removesuffix('.jsonl')}.json"
     [run] = read_runs_many(sorted(trace.glob("*.jsonl"))).runs
     assert run.complete
     assert [len(step.tool_calls) for step in run.steps] == [1, 0]

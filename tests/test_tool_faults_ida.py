@@ -24,7 +24,14 @@ def ida_run(tmp_path: Path, script: list[dict], *flags: str, **settings: str):
     )
     with fake_llm(tmp_path, script) as upstream:
         result = run(
-            [FAULTLINE, "run", *flags, "--base-url-env", "GROQ_BASE_URL"]
+            [
+                FAULTLINE,
+                "run",
+                "--allow-live-tools",
+                *flags,
+                "--base-url-env",
+                "GROQ_BASE_URL",
+            ]
             + ["--upstream", upstream, "--trace", str(trace), "--", *ida()],
             env,
             tmp_path,

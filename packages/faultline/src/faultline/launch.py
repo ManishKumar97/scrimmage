@@ -15,17 +15,28 @@ A variable is pointed at the proxy only when its upstream is known: from
 Exit code: the agent's own, or 78 when a requested fault was never applied, such
 as a tool fault on a tool the agent never called. The verdict is then not_applied.
 
+Live tools. A run must not reach a tool that changes the world by default, so without
+--allow-live-tools the run is a preview: every MCP server under faultline mcp-wrap
+lists its tools, every tool call is blocked, and the proxy holds every model call.
+As soon as each server that started has listed its tools and the agent asks the
+model for its first step (or a short grace time passes), faultline stops the agent,
+prints every tool by server, and exits 2. Tools in the agent's own code never pass
+through faultline, so they cannot be listed.
+
 `execute()` is one run, for `faultline test` too: every run goes the same way.
 """
 
 import argparse
 import asyncio
+import contextlib
+import functools
 import os
 import secrets
+import signal
 import sys
 import tempfile
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, TextIO
@@ -41,6 +52,7 @@ from faultline.faults import (
 )
 from faultline.model import Run
 from faultline.proxy.context import MAX_CONTENT, RunContext, publish, withdraw
+from faultline.proxy.listing import ServerTools, read_all
 from faultline.proxy.record import DEFAULT_MAX_CONTENT, Recorder
 from faultline.relay import RELAYED, Relay, tied_to_parent
 from faultline.runs import read_runs_many
@@ -55,6 +67,12 @@ NOT_APPLIED = 78
 
 # The variables the OpenAI and Anthropic SDKs read their base URL from.
 BASE_URL_ENVS = ("OPENAI_BASE_URL", "ANTHROPIC_BASE_URL")
+# The exit code of a preview: the tools were listed, and nothing ran.
+PREVIEW = 2
+# Seconds a preview waits for the servers to list their tools.
+LIST_GRACE = "FAULTLINE_LIST_GRACE"
+DEFAULT_LIST_GRACE = 120.0  # an MCP server can take a minute to start on a busy machine
+POLL = 0.1
 
 
 def add_parser(subparsers) -> None:
@@ -78,6 +96,7 @@ def add_parser(subparsers) -> None:
         help="text the answer must contain for the run to pass",
     )
     add_upstream_arguments(parser)
+    add_live_tools_argument(parser)
     parser.add_argument(
         "--trace",
         type=Path,
@@ -125,6 +144,15 @@ def add_upstream_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_live_tools_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--allow-live-tools",
+        action="store_true",
+        help="let tool calls reach their MCP servers for real. Without it, faultline "
+        "lists the tools that would run, runs none, and exits 2",
+    )
+
+
 def command_of(args: argparse.Namespace) -> list[str]:
     return args.command[1:] if args.command[:1] == ["--"] else args.command
 
@@ -159,6 +187,18 @@ def run(args: argparse.Namespace) -> int:
         return 2
     trace = args.trace or Path(tempfile.mkdtemp(prefix="faultline-run-"))
     stale_from = args.stale_from.resolve() if args.stale_from else None
+    if not args.allow_live_tools:
+        outcome = execute(
+            command,
+            faults,
+            upstreams,
+            trace,
+            args.max_content,
+            stale_from,
+            preview=True,
+        )
+        print(show_tools(outcome.servers, "faultline run"), file=sys.stderr)
+        return PREVIEW
     outcome = execute(command, faults, upstreams, trace, args.max_content, stale_from)
     for spec, reason in outcome.missed:
         print(
@@ -249,6 +289,7 @@ class Outcome:
     answer_unrecorded: bool  # the last reply was a stream the proxy could not read
     seconds: float
     interrupted: bool  # a stop signal reached faultline during the run
+    servers: list[ServerTools]  # the MCP servers that ran, and the tools they listed
 
 
 def execute(
@@ -260,10 +301,13 @@ def execute(
     stale_from: Path | None = None,
     streams: Streams | None = None,
     budget: Budget | None = None,
+    preview: bool = False,
 ) -> Outcome:
     """Run the agent once through the proxy and read the run back from its trace.
 
-    With a budget, the proxy refuses model calls once it is spent.
+    With a budget, the proxy refuses model calls once it is spent. A preview blocks
+    every tool call and holds every model call, and stops the agent once its MCP
+    servers have listed their tools.
     Call proxy_ready() first: this loads the proxy.
     """
     from faultline.proxy.model import ModelProxy
@@ -276,7 +320,7 @@ def execute(
         max_content=max_content,
     )
     model_faults = [fault for fault in faults if isinstance(fault, ModelFault)]
-    proxy = ModelProxy(upstreams, model_faults, recorder, budget)
+    proxy = ModelProxy(upstreams, model_faults, recorder, budget, hold=preview)
     clock = time.monotonic()
     code, interrupted = asyncio.run(
         launch(
@@ -286,6 +330,7 @@ def execute(
             [fault.spec for fault in faults],
             str(stale_from) if stale_from else None,
             streams,
+            preview,
         )
     )
     seconds = time.monotonic() - clock
@@ -303,6 +348,7 @@ def execute(
         answer_unrecorded=recorder.last_unparsed,
         seconds=seconds,
         interrupted=interrupted,
+        servers=read_all(trace),
     )
 
 
@@ -313,6 +359,7 @@ async def launch(
     faults: Sequence[str],
     stale_from: str | None = None,
     streams: Streams | None = None,
+    preview: bool = False,
 ) -> tuple[int, bool]:
     """Run the command under the proxy. Returns the exit code a shell would give,
     and whether a stop signal reached faultline during the run."""
@@ -329,6 +376,7 @@ async def launch(
         tuple(faults),
         recorder.max_content,
         stale_from,
+        block_tools=preview,
     )
     # Two ways to find the run: variables for the agent, and a file for children
     # started with a cleaned environment, such as MCP servers.
@@ -342,8 +390,16 @@ async def launch(
     log.flush()  # before the agent writes, which may be to the same file
     started = time.time_ns()
     code, interrupted = 1, False  # what the root records if faultline fails mid-run
+    until = None
+    if preview:
+        print(
+            "faultline: preview, no tool runs for real: listing the tools first",
+            file=log,
+        )
+        trace = recorder.path.parent
+        until = functools.partial(tools_listed, trace, proxy.called, list_grace())
     try:
-        code, interrupted = await supervise(command, env, streams)
+        code, interrupted = await supervise(command, env, streams, until)
     finally:
         withdraw(published)
         # Whatever ended the run, the trace is finished: the last step and the root.
@@ -354,10 +410,17 @@ async def launch(
 
 
 async def supervise(
-    command: Sequence[str], env: dict[str, str], streams: Streams | None = None
+    command: Sequence[str],
+    env: dict[str, str],
+    streams: Streams | None = None,
+    until: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[int, bool]:
     """Run the agent and pass signals on to it. Returns its exit code as a shell
-    gives it, and whether a stop signal came during the run."""
+    gives it, and whether a stop signal came during the run.
+
+    When `until` returns before the agent exits, the agent gets SIGTERM, and SIGKILL
+    after the grace period.
+    """
     streams = streams or Streams()
     loop = asyncio.get_running_loop()
     relay = Relay()
@@ -380,10 +443,70 @@ async def supervise(
             code = 127 if isinstance(exc, FileNotFoundError) else 126
             return code, relay.signalled
         relay.attach(child)
-        code = await child.wait()
+        exited = asyncio.ensure_future(child.wait())
+        if until is not None:
+            stop = asyncio.ensure_future(until())
+            await asyncio.wait({exited, stop}, return_when=asyncio.FIRST_COMPLETED)
+            if stop.done() and not exited.done():
+                relay.send(signal.SIGTERM)
+            stop.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stop
+        code = await exited
     finally:
         relay.close()
         for number in RELAYED:
             loop.remove_signal_handler(number)
     # Killed by signal N: 128 + N.
     return (128 - code if code < 0 else code), relay.signalled
+
+
+def list_grace() -> float:
+    try:
+        return float(os.environ.get(LIST_GRACE) or DEFAULT_LIST_GRACE)
+    except ValueError:
+        return DEFAULT_LIST_GRACE
+
+
+async def tools_listed(trace: Path, called: asyncio.Event, grace: float) -> None:
+    """Return once the agent has asked the model for its first step and every MCP
+    server that started has listed its tools. Return after `grace` seconds in any case.
+
+    The first model call is the sign the agent has set up its tools: it sends their
+    definitions with the call. A quiet spell is no such sign, as one server may start
+    only after another has listed its tools, seconds later on a loaded machine.
+    """
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    while loop.time() - started < grace:
+        if called.is_set():
+            servers = read_all(trace)
+            if all(server.tools is not None for server in servers):
+                return
+        await asyncio.sleep(POLL)
+
+
+def show_tools(servers: Sequence[ServerTools], label: str) -> str:
+    """What a preview found: every tool that would run for real, by server."""
+    lines = [f"{label}: a preview. No tool ran: every tool call was blocked."]
+    if not servers:
+        lines.append("No MCP server ran under faultline mcp-wrap.")
+    else:
+        lines.append("These MCP tools would run for real:")
+    for server in servers:
+        command = " ".join(server.command)
+        named = f"{server.server} ({command})" if server.server else command
+        lines.append(f"  {named}:")
+        if server.tools is None:
+            lines.append(
+                "    (it never listed its tools before faultline stopped the agent)"
+            )
+        elif not server.tools:
+            lines.append("    (no tools)")
+        lines += [f"    {tool}" for tool in server.tools or []]
+    lines.append(
+        "Tools in the agent's own code (function tools) never pass through "
+        "faultline, so they are not listed. Check them yourself."
+    )
+    lines.append("Pass --allow-live-tools to run with these tools.")
+    return "\n".join(lines)
