@@ -37,12 +37,25 @@ def call_faults(
             Fault(kind, run.trace_id, step, call.call_id, call.name, detail, origin)
         ]
 
+    timed_out = timeout_detail(call, config)
+    if timed_out:  # a timeout is not also an error
+        return fault(FaultKind.TOOL_TIMEOUT, timed_out)
     if call.error_type:
         return fault(FaultKind.TOOL_ERROR, call.error_type)
     error = error_in_result(call.result)
     if error:
         return fault(FaultKind.TOOL_ERROR, error)
     return []
+
+
+def timeout_detail(call: ToolCall, config: DetectConfig) -> str | None:
+    """Why the call counts as a timeout: its error type says so, or it ran too long."""
+    lowered = (call.error_type or "").lower()
+    if "timeout" in lowered or "timedout" in lowered:
+        return call.error_type
+    if call.seconds > config.tool_timeout_seconds:
+        return f"ran {call.seconds:.1f}s, limit {config.tool_timeout_seconds:g}s"
+    return None
 
 
 def parse_json(text: str):

@@ -67,6 +67,43 @@ def test_a_result_that_is_not_an_error_is_not_a_tool_error(tmp_path, result):
     assert kinds_of(tmp_path, calls({"result": result})) == []
 
 
+@pytest.mark.parametrize("error", ["TimeoutError", "ReadTimedOut", "tool timeout"])
+def test_an_error_type_that_says_timeout_is_a_tool_timeout_and_not_an_error(
+    tmp_path, error
+):
+    [fault] = faults_of(tmp_path, calls({"error": error}))
+
+    assert fault.kind is FaultKind.TOOL_TIMEOUT
+    assert fault.detail == error
+
+
+def test_a_call_that_ran_past_the_limit_is_a_tool_timeout(tmp_path):
+    [fault] = faults_of(tmp_path, calls({"seconds": 41.2}))
+
+    assert fault.kind is FaultKind.TOOL_TIMEOUT
+    assert fault.detail == "ran 41.2s, limit 30s"
+
+
+def test_the_limit_comes_from_the_config(tmp_path):
+    run = run_from(tmp_path, calls({"seconds": 5}))
+
+    assert detect(run, DetectConfig(tool_timeout_seconds=10)) == ()
+    [fault] = detect(run, DetectConfig(tool_timeout_seconds=2.5))
+    assert fault.detail == "ran 5.0s, limit 2.5s"
+
+
+def test_a_slow_call_that_failed_is_one_timeout_not_two_faults(tmp_path):
+    step = calls({"seconds": 50, "error": "ConnectionError"})
+
+    assert kinds_of(tmp_path, step) == [FaultKind.TOOL_TIMEOUT]
+
+
+def test_a_call_at_the_limit_or_failing_fast_is_not_a_timeout(tmp_path):
+    assert kinds_of(tmp_path, calls({"seconds": 30})) == []
+    fast = calls({"seconds": 0.1, "error": "ConnectionError"})
+    assert kinds_of(tmp_path, fast) == [FaultKind.TOOL_ERROR]
+
+
 def test_faults_come_in_the_order_they_happened(tmp_path):
     first = calls({"id": "a", "error": "E1"})
     second = calls({"id": "b", "result": json.dumps({"error": "E2"})})
