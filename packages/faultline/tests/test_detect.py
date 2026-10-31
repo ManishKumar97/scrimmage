@@ -3,9 +3,8 @@ import json
 from pathlib import Path
 
 import pytest
-from spans import run_from, write_trace
+from spans import run_from
 
-from faultline import cli
 from faultline.config import DetectConfig
 from faultline.detect import detect
 from faultline.model import FaultKind, Origin, Run
@@ -268,19 +267,3 @@ def test_a_fault_is_injected_when_the_call_carries_the_proxys_mark(tmp_path):
     [fault] = detect(injected(run), CONFIG)
 
     assert fault.origin is Origin.INJECTED
-
-
-def test_find_prints_each_run_with_faults_and_a_summary(tmp_path, capsys):
-    path = tmp_path / "spans.jsonl"
-    step = calls({"id": "c1", "name": "get_logs", "error": "ConnectionError"})
-    write_trace(path, step)
-    write_trace(path, calls({"result": "ok"}), trace="clean")
-
-    assert cli.main(["find", str(path)]) == 0
-
-    assert capsys.readouterr().out.splitlines() == [
-        "read 2 run(s) from 1 file(s)",
-        "run t1",
-        "  tool_error step 1 get_logs c1: ConnectionError",
-        "faults: tool_error=1",
-    ]

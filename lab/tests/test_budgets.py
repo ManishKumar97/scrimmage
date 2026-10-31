@@ -114,22 +114,27 @@ def test_the_deadline_cancels_a_hanging_api_call(monkeypatch):
 
 def test_tool_calls_in_one_reply_run_at_the_same_time():
     tools = Registry()
+    # Opens only once all three calls are inside the tool at once. Run one at a time,
+    # the first call waits alone and says so after the timeout.
+    all_started = asyncio.Barrier(3)
 
     @tools.tool
     async def get_logs(service: str) -> str:
-        """Get logs, slowly."""
-        await asyncio.sleep(0.2)
+        """Get logs, once every call has started."""
+        try:
+            async with asyncio.timeout(5):
+                await all_started.wait()
+        except TimeoutError:
+            return f"{service} waited alone: the calls ran one at a time"
         return f"logs of {service}"
 
     client = FakeClient(
         tool_reply(logs_call("cart"), logs_call("checkout"), logs_call("frontend")),
         text_reply("done"),
     )
-    started = time.monotonic()
 
     run_ida("why?", client, "fake", tools=tools)
 
-    assert time.monotonic() - started < 0.4  # one at a time would take 0.6 s
     assert client.tool_results() == [
         "logs of cart",
         "logs of checkout",

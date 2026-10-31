@@ -100,7 +100,7 @@ class Fault:
 
 @dataclass(frozen=True, slots=True)
 class Finding:
-    fault: Fault
+    fault: Fault | None  # None for a check that needs no fault, on a run without one
     check: str  # the name of the check that flagged the reaction
     certainty: Certainty
     flagged: bool
