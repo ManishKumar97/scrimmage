@@ -20,7 +20,7 @@ PACKAGE = Path(__file__).parents[1]
 ALLOWED = set(sys.stdlib_module_names) | {"faultline"}
 TEST_TOOLS = {"pytest", "opentelemetry"}
 # The product's own test helpers in tests/.
-TEST_HELPERS = {"fake_jaeger", "spans", "upstream"}
+TEST_HELPERS = {"fake_jaeger", "spans", "sse", "upstream"}
 # The only module that may import a third-party package, and what it may import.
 PROXY = Path("src/faultline/proxy/model.py")
 PROXY_PACKAGES = {"aiohttp", "yarl"}  # yarl is the URL type aiohttp takes

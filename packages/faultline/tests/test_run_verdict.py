@@ -1,7 +1,7 @@
 from dataclasses import replace
 
-from faultline.model import Run, Step, ToolCall, Verdict
-from faultline.verdict import NO_REFERENCE, judge, line
+from faultline.model import Run, RunVerdict, Step, ToolCall, Verdict
+from faultline.verdict import NO_REFERENCE, STREAMED, judge, line
 
 EMPTY_LOGS = ToolCall("get_logs", "", "{}", 0.1, "", injected="tool:get_logs:empty")
 RUN = Run(
@@ -22,7 +22,8 @@ RUN = Run(
 def test_an_answer_without_the_expected_text_under_a_fault_failed_silently():
     verdict = judge(RUN, "t", 0, "cart")
 
-    assert verdict and verdict.verdict == Verdict.FAILED_SILENTLY
+    assert isinstance(verdict, RunVerdict)
+    assert verdict.verdict == Verdict.FAILED_SILENTLY
     assert verdict.fault == "tool:get_logs:empty"
     assert line(verdict) == (
         'verdict: failed_silently (answer lacks "cart"; injected tool:get_logs:empty)'
@@ -42,7 +43,8 @@ def test_a_clean_run_has_no_fault_in_its_verdict():
 
     verdict = judge(clean, "t", 0, "cart")
 
-    assert verdict and verdict.fault is None
+    assert isinstance(verdict, RunVerdict)
+    assert verdict.fault is None
     assert line(verdict) == 'verdict: passed (answer has "cart")'
 
 
@@ -68,5 +70,16 @@ def test_rule_one_comes_first_even_without_a_reference():
 
 
 def test_without_a_reference_there_is_no_verdict_past_rule_one():
-    assert judge(RUN, "t", 0, None) is None
-    assert line(None) == NO_REFERENCE
+    assert judge(RUN, "t", 0, None) == NO_REFERENCE
+    assert line(NO_REFERENCE) == NO_REFERENCE
+
+
+def test_an_unread_streamed_answer_is_no_verdict_not_a_failure():
+    streamed = replace(RUN, answer=None)
+
+    assert judge(streamed, "t", 0, "cart", answer_unrecorded=True) == STREAMED
+    assert line(STREAMED) == "no verdict: answer not recorded (streamed reply)"
+    # A crash is still a crash, stream or not.
+    assert line(judge(streamed, "t", 1, "cart", answer_unrecorded=True)).startswith(
+        "verdict: failed_loudly (exit code 1"
+    )

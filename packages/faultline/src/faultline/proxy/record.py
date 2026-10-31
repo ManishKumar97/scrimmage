@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from faultline.model import ToolCall
+from faultline.proxy.streams import is_stream, reply_from_stream
 from faultline.semconv import (
     CHAT,
     ERROR_TYPE,
@@ -44,6 +45,8 @@ TRACE_ID = "FAULTLINE_TRACE_ID"
 ROOT_SPAN_ID = "FAULTLINE_ROOT_SPAN_ID"
 FAULTS = "FAULTLINE_FAULTS"  # a JSON list of fault specs
 ATTEMPTS = "faultline.proxy.attempts"
+# On a streamed reply: "parsed", or "unparsed" when no known stream shape fit.
+STREAM = "faultline.proxy.stream"
 STATUS_ERROR = 2  # OTLP status code
 SPAN_KIND_INTERNAL, SPAN_KIND_CLIENT = 1, 3
 
@@ -84,6 +87,9 @@ class Recorder:
     trace_id: str
     root_span_id: str
     open: list[Exchange] = field(default_factory=list)  # the attempts of the last step
+    # True when the last step written was a streamed reply no known shape fits, so
+    # its answer is not in the trace.
+    last_unparsed: bool = False
 
     @classmethod
     def from_env(
@@ -173,15 +179,24 @@ class Recorder:
     def flush(self) -> None:
         """Write the open step's chat span, if there is one."""
         if self.open:
-            self.write(self.chat(self.open))
+            span = self.chat(self.open)
+            self.last_unparsed = any(
+                a["key"] == STREAM and a["value"] == {"stringValue": "unparsed"}
+                for a in span["attributes"]
+            )
+            self.write(span)
             self.open = []
 
     def chat(self, attempts: Sequence[Exchange]) -> dict:
         first, last = attempts[0], attempts[-1]
         request = loads(first.request)
-        reply = loads(decoded(last.response, last.encoding))
+        body = decoded(last.response, last.encoding)
+        reply = loads(body)
         anthropic = first.path.rstrip("/").endswith("/messages")
         attributes: Attributes = {GEN_AI_OPERATION_NAME: CHAT, ATTEMPTS: len(attempts)}
+        if not reply and is_stream(body):
+            reply = reply_from_stream(body) or {}
+            attributes[STREAM] = "parsed" if reply else "unparsed"
         model = request.get("model")
         if isinstance(model, str):
             attributes[GEN_AI_REQUEST_MODEL] = model

@@ -7,12 +7,14 @@ Rules, in order, with no model or person judging the run:
    answer that lacks it failed silently.
 
 Without an expected text there is no reference, so a run that gets past rule 1 has no
-verdict. A clean run as the reference comes with `faultline test`.
+verdict. Nor has a run whose last reply was a stream the proxy could not read: its
+answer is not in the trace, which is no fault of the agent's. A clean run as the reference comes with `faultline test`.
 """
 
 from faultline.model import Run, RunVerdict, Verdict
 
 NO_REFERENCE = "no reference: pass --expect or use faultline test (P3.4)"
+STREAMED = "no verdict: answer not recorded (streamed reply)"
 
 
 def injected(run: Run | None) -> list[str]:
@@ -25,9 +27,17 @@ def injected(run: Run | None) -> list[str]:
 
 
 def judge(
-    run: Run | None, trace_id: str, exit_code: int, expect: str | None
-) -> RunVerdict | None:
-    """The verdict, or None when the run got past rule 1 and there is no reference."""
+    run: Run | None,
+    trace_id: str,
+    exit_code: int,
+    expect: str | None,
+    answer_unrecorded: bool = False,
+) -> RunVerdict | str:
+    """The verdict, or why there is none.
+
+    `answer_unrecorded` says the last reply was a stream the proxy could not read,
+    so a missing answer is the proxy's gap, not the agent's failure.
+    """
     faults = injected(run)
     if exit_code:
         verdict, reason = Verdict.FAILED_LOUDLY, f"exit code {exit_code}"
@@ -35,10 +45,12 @@ def judge(
         verdict, reason = Verdict.FAILED_LOUDLY, "no model call recorded"
     elif run.error_type:
         verdict, reason = Verdict.FAILED_LOUDLY, f"error {run.error_type}"
+    elif not run.answer and answer_unrecorded:
+        return STREAMED
     elif not run.answer:
         verdict, reason = Verdict.FAILED_LOUDLY, "no answer"
     elif expect is None:
-        return None
+        return NO_REFERENCE
     elif expect in run.answer:
         verdict, reason = Verdict.PASSED, f'answer has "{expect}"'
     else:
@@ -48,8 +60,8 @@ def judge(
     return RunVerdict(trace_id, verdict, reason, ", ".join(faults) or None)
 
 
-def line(verdict: RunVerdict | None) -> str:
+def line(verdict: RunVerdict | str) -> str:
     """The one line `faultline run` prints after the agent exits."""
-    if verdict is None:
-        return NO_REFERENCE
+    if isinstance(verdict, str):
+        return verdict
     return f"verdict: {verdict.verdict.value} ({verdict.reason})"

@@ -125,7 +125,13 @@ def run(args: argparse.Namespace) -> int:
     # The verdict reads the run back from its trace, as Find reads any run.
     files = sorted(recorder.path.parent.glob("*.jsonl"))
     runs = [r for r in read_runs_many(files).runs if r.trace_id == recorder.trace_id]
-    verdict = judge(runs[0] if runs else None, recorder.trace_id, code, args.expect)
+    verdict = judge(
+        runs[0] if runs else None,
+        recorder.trace_id,
+        code,
+        args.expect,
+        recorder.last_unparsed,
+    )
     print(line(verdict), file=sys.stderr)
     return code
 

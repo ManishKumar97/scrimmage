@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from sse import UNKNOWN_STREAM
 from upstream import ANSWERS, ASKS, upstream_server
 
 from faultline.runs import read_runs_many
@@ -136,4 +137,34 @@ def test_without_expect_a_finished_run_has_no_reference(tmp_path):
 
     assert result.stderr.splitlines()[-1] == (
         "no reference: pass --expect or use faultline test (P3.4)"
+    )
+
+
+READS_A_STREAM = """
+import os, urllib.request
+request = urllib.request.Request(os.environ["OPENAI_BASE_URL"] + "/chat/completions", b"{}")
+print(len(urllib.request.urlopen(request).read()))
+"""
+
+
+def test_a_stream_the_proxy_cannot_read_is_no_verdict_not_a_failure(tmp_path):
+    with upstream_server() as upstream:
+        upstream.reply_headers = [("Content-Type", "text/event-stream")]
+        upstream.chunks = [UNKNOWN_STREAM]
+        result, [run] = faultline_run(
+            tmp_path,
+            upstream.url,
+            "--expect",
+            "cart",
+            "--",
+            sys.executable,
+            "-c",
+            READS_A_STREAM,
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"{len(UNKNOWN_STREAM)}\n"  # the agent got every byte
+    assert run.answer is None
+    assert result.stderr.splitlines()[-1] == (
+        "no verdict: answer not recorded (streamed reply)"
     )
