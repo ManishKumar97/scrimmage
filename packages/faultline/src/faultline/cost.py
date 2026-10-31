@@ -62,6 +62,8 @@ class Budget:
 NO_USAGE = "cannot enforce --max-cost: the replies report no token usage"
 
 
+# The error type the proxy gives a call it refused because the cap was reached.
+COST_CAP = "cost_cap"
 # The error type the proxy gives a call it refused because a reply had no usage.
 COST_UNKNOWN = "cost_unknown"
 

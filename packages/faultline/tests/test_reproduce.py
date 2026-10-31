@@ -359,6 +359,78 @@ def test_an_unknown_fault_or_a_bad_count_is_an_error_before_any_run(tmp_path):
     assert "must be 1 or more" in no_runs.stderr
 
 
+def test_a_fault_given_twice_is_refused_before_any_run(tmp_path):
+    result = faultline_test(
+        tmp_path, "http://127.0.0.1:9", "--allow-live-tools",
+        "--fault", "model:timeout", "--fault", "model:timeout",
+        "--out", str(tmp_path / "out"),
+    )  # fmt: skip
+
+    assert result.returncode == 2
+    assert "--fault model:timeout is given twice" in result.stderr
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("target", ["real", "missing"], ids=["link", "dangling link"])
+def test_a_symlinked_out_directory_is_refused(tmp_path, target):
+    (tmp_path / "real").mkdir()
+    (tmp_path / "out").symlink_to(tmp_path / target)
+
+    result = faultline_test(
+        tmp_path, "http://127.0.0.1:9", "--allow-live-tools",
+        "--fault", "model:timeout", "--out", str(tmp_path / "out"),
+    )  # fmt: skip
+
+    assert result.returncode == 2
+    assert "is a symbolic link" in result.stderr
+    assert not (tmp_path / "missing").exists()
+    assert list((tmp_path / "real").iterdir()) == []
+
+
+def test_task_ids_that_differ_only_in_case_are_refused():
+    with pytest.raises(TasksError, match="task ids Cart and cart differ only in case"):
+        parse_tasks(
+            "[[task]]\nid = 'Cart'\ninput = 'q'\n[[task]]\nid = 'cart'\ninput = 'r'\n"
+        )
+
+
+def test_the_help_says_the_cap_can_be_passed_by_one_call():
+    result = subprocess.run(
+        [FAULTLINE, "test", "--help"], capture_output=True, text=True, check=True
+    )
+
+    assert "passed by one model call" in " ".join(result.stdout.split())
+
+
+# The first run starts a process that sends SIGINT to faultline half a second after
+# the agent exits: between runs, or as the next one starts.
+INTERRUPTS = """
+import os, pathlib, subprocess, sys
+fired = pathlib.Path(sys.argv[1])
+if not fired.exists():
+    fired.write_text("")
+    kill = f"import os, signal, time; time.sleep(0.5); os.kill({os.getppid()}, signal.SIGINT)"
+    subprocess.Popen([sys.executable, "-c", kill], start_new_session=True)
+print("cart")
+"""
+
+
+def test_ctrl_c_between_runs_keeps_the_matrix_and_shows_no_traceback(tmp_path):
+    out = tmp_path / "out"
+    result = faultline_test(
+        tmp_path, "http://127.0.0.1:9", "--allow-live-tools",
+        "--fault", "model:timeout", "--runs", "3", "--clean-runs", "3",
+        "--out", str(out),
+        agent=[sys.executable, "-c", INTERRUPTS, str(tmp_path / "fired"), "{input}"],
+    )  # fmt: skip
+
+    assert result.returncode == 130, result.stderr
+    assert "Traceback" not in result.stderr
+    assert "faultline test: stopped by" in result.stderr
+    saved = json.loads((out / "matrix.json").read_text())
+    assert 1 <= sum(row["runs"] for row in saved["rows"]) < 12
+
+
 def test_every_run_lands_in_one_cell_of_its_row():
     marks = [
         matrix.Mark("clean", Verdict.PASSED, "a/clean/1"),

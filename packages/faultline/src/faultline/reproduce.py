@@ -52,7 +52,16 @@ from pathlib import Path
 
 from faultline import matrix
 from faultline.config import CostConfig, load_config
-from faultline.cost import NO_USAGE, Budget, Prices, dollars, tokens, unmetered
+from faultline.cost import (
+    COST_CAP,
+    COST_UNKNOWN,
+    NO_USAGE,
+    Budget,
+    Prices,
+    dollars,
+    tokens,
+    unmetered,
+)
 from faultline.faults import Fault, FaultError, parse_all
 from faultline.launch import (
     PREVIEW,
@@ -88,8 +97,10 @@ INTERRUPTED = 130
 # The verdict of the clean run whose answer is its task's reference: it was
 # compared with nothing, so it counts as no verdict.
 REFERENCE_RUN = "no verdict: reference run"
+# The verdict of a run the proxy cut short at the cost cap.
+STOPPED_BY_CAP = "no verdict: stopped by --max-cost"
 # The exit code when --max-cost stopped the test before its last run.
-COST_CAP = 3
+CAP_EXIT = 3
 
 
 class TasksError(ValueError):
@@ -138,6 +149,12 @@ def parse_tasks(text: str, need_input: bool = True) -> list[Task]:
     repeated = sorted({i for i in ids if ids.count(i) > 1})
     if repeated:
         raise TasksError(f"task id {repeated[0]} is used twice")
+    # A disk that ignores case, as macOS's does, would put both in one directory.
+    folded: dict[str, str] = {}
+    for task_id in ids:
+        other = folded.setdefault(task_id.lower(), task_id)
+        if other != task_id:
+            raise TasksError(f"task ids {other} and {task_id} differ only in case")
     return tasks
 
 
@@ -284,6 +301,10 @@ def verdict_of(
 ) -> RunVerdict | str:
     if outcome.missed:
         return not_applied_line([spec for spec, _ in outcome.missed])
+    steps = outcome.run.steps if outcome.run else ()
+    if any(step.error_type in (COST_CAP, COST_UNKNOWN) for step in steps):
+        # The proxy refused a model call: faultline ended the run, not the agent.
+        return STOPPED_BY_CAP
     return judge(
         outcome.run,
         outcome.trace_id,
@@ -477,7 +498,8 @@ def add_parser(subparsers) -> None:
         type=float,
         metavar="USD",
         help="stop once the runs have cost this much; needs the prices. The proxy "
-        "also refuses model calls past it, mid-run",
+        "also refuses model calls past it, mid-run. The cap can be passed by one "
+        "model call: a call's cost is known only once it is answered",
     )
     add_upstream_arguments(parser)
     add_live_tools_argument(parser)
@@ -510,6 +532,11 @@ def test(args: argparse.Namespace) -> int:
         )
     if args.max_cost is not None and args.max_cost <= 0:
         return fail("--max-cost must be above 0")
+    if len(set(args.fault)) != len(args.fault):
+        twice = sorted({spec for spec in args.fault if args.fault.count(spec) > 1})
+        return fail(f"--fault {twice[0]} is given twice")
+    if args.out and args.out.is_symlink():  # a dangling link too
+        return fail(f"--out {args.out} is a symbolic link; give a real directory")
     used = args.out and args.out.exists()
     if used and (not args.out.is_dir() or any(args.out.iterdir())):
         return fail(f"{args.out} is not an empty directory; runs are never mixed")
@@ -524,63 +551,73 @@ def test(args: argparse.Namespace) -> int:
     references = References(matcher)
     results: list[Result] = []
     spent = 0.0  # what the runs so far cost, from their traces
-    for index, run in enumerate(planned, start=1):
-        budget = (
-            Budget(args.max_cost, prices, spent)
-            if args.max_cost is not None and prices
-            else None
-        )
-        outcome = make(run, command, upstreams, args.max_content, budget)
-        used = tokens(outcome.run)
-        spent += prices.cost(*used) if prices else 0.0
-        references.learn(run, outcome)
-        reference = references.of(run.task)
-        verdict = (
-            REFERENCE_RUN
-            if references.is_reference(run) and not outcome.missed
-            else verdict_of(outcome, reference, matcher)
-        )
-        result = Result(run, outcome, verdict, reference)
-        results.append(result)
-        (run.directory / "result.json").write_text(
-            json.dumps(result_json(result), indent=2) + "\n", encoding="utf-8"
-        )
+    try:
+        for index, run in enumerate(planned, start=1):
+            budget = (
+                Budget(args.max_cost, prices, spent)
+                if args.max_cost is not None and prices
+                else None
+            )
+            outcome = make(run, command, upstreams, args.max_content, budget)
+            used = tokens(outcome.run)
+            spent += prices.cost(*used) if prices else 0.0
+            references.learn(run, outcome)
+            reference = references.of(run.task)
+            verdict = (
+                REFERENCE_RUN
+                if references.is_reference(run) and not outcome.missed
+                else verdict_of(outcome, reference, matcher)
+            )
+            result = Result(run, outcome, verdict, reference)
+            results.append(result)
+            (run.directory / "result.json").write_text(
+                json.dumps(result_json(result), indent=2) + "\n", encoding="utf-8"
+            )
+            print(
+                f"[{index}/{len(planned)}] {label(run)}: {describe(result.verdict)}",
+                file=sys.stderr,
+            )
+            if index == 1:  # the estimate, before the rest start
+                line = plan_line(
+                    len(tasks), len(faults), args.clean_runs, args.runs, used, prices
+                )
+                print(line, file=sys.stderr)
+            if outcome.interrupted:
+                print(
+                    f"faultline test: stopped by a signal after {index} of "
+                    f"{len(planned)} runs",
+                    file=sys.stderr,
+                )
+                report(results, faults, out)
+                return INTERRUPTED
+            cap: float | None = args.max_cost
+            if cap is not None and unmetered(outcome.run):
+                # Fail closed: a cost that cannot be counted cannot be capped.
+                print(
+                    f"faultline test: {NO_USAGE}; stopped after {index} of "
+                    f"{len(planned)} runs",
+                    file=sys.stderr,
+                )
+                report(results, faults, out)
+                return CAP_EXIT
+            if cap is not None and spent >= cap and index < len(planned):
+                print(
+                    f"faultline test: stopped after {index} of {len(planned)} runs: "
+                    f"they cost about {dollars(spent)}, and the --max-cost cap is "
+                    f"{dollars(cap)}",
+                    file=sys.stderr,
+                )
+                report(results, faults, out)
+                return CAP_EXIT
+    except KeyboardInterrupt:
+        # Ctrl-C between runs, when no run holds the signal: keep what was made.
         print(
-            f"[{index}/{len(planned)}] {label(run)}: {describe(result.verdict)}",
+            f"faultline test: stopped by Ctrl-C after {len(results)} of "
+            f"{len(planned)} runs",
             file=sys.stderr,
         )
-        if index == 1:  # the estimate, before the rest start
-            line = plan_line(
-                len(tasks), len(faults), args.clean_runs, args.runs, used, prices
-            )
-            print(line, file=sys.stderr)
-        if outcome.interrupted:
-            print(
-                f"faultline test: stopped by a signal after {index} of "
-                f"{len(planned)} runs",
-                file=sys.stderr,
-            )
-            report(results, faults, out)
-            return INTERRUPTED
-        cap: float | None = args.max_cost
-        if cap is not None and unmetered(outcome.run):
-            # Fail closed: a cost that cannot be counted cannot be capped.
-            print(
-                f"faultline test: {NO_USAGE}; stopped after {index} of "
-                f"{len(planned)} runs",
-                file=sys.stderr,
-            )
-            report(results, faults, out)
-            return COST_CAP
-        if cap is not None and spent >= cap and index < len(planned):
-            print(
-                f"faultline test: stopped after {index} of {len(planned)} runs: "
-                f"they cost about {dollars(spent)}, and the --max-cost cap is "
-                f"{dollars(cap)}",
-                file=sys.stderr,
-            )
-            report(results, faults, out)
-            return COST_CAP
+        report(results, faults, out)
+        return INTERRUPTED
     report(results, faults, out)
     return 0
 

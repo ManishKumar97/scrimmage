@@ -32,7 +32,7 @@ import aiohttp
 from aiohttp import web
 from yarl import URL  # aiohttp's own URL type
 
-from faultline.cost import COST_UNKNOWN, NO_USAGE, Budget, dollars
+from faultline.cost import COST_CAP, COST_UNKNOWN, NO_USAGE, Budget, dollars
 from faultline.faults import ModelFault, provider_error
 from faultline.proxy.record import Exchange, Recorder, decoded, tokens_of
 from faultline.proxy.truncate import Unchanged
@@ -76,8 +76,6 @@ MODEL_CALL_PATHS = ("/chat/completions", "/responses", "/messages")
 HANG_POLL = 0.05
 # The error type on the step of a call that was never answered.
 TIMEOUT = "timeout"
-# The error type on the step of a call refused because the cost cap was reached.
-COST_CAP = "cost_cap"
 # The error type on the step of a call held while faultline run lists the tools.
 HELD = "held_for_tool_list"
 # How many times the request was retried, sent by the Stainless-built SDKs

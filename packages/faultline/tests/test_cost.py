@@ -171,7 +171,10 @@ def test_the_proxy_refuses_model_calls_once_the_cap_is_passed_mid_run(tmp_path):
     ]
     assert "HTTP Error 402" in (run / "stderr.txt").read_text()
     saved = json.loads((run / "result.json").read_text())
-    assert saved["verdict"] == "failed_loudly"
+    assert (saved["verdict"], saved["reason"]) == (
+        None,
+        "no verdict: stopped by --max-cost",
+    )
 
 
 def test_a_cap_without_prices_is_refused_before_any_run(tmp_path):

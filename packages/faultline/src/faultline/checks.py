@@ -12,8 +12,12 @@ The verdict's rule 4 asks a narrower question, with `agent_only`: does the answe
 say the agent's own work fell short? Only words about its work or its certainty
 count there (could not, unable, no data, not sure, uncertain, cannot confirm, the
 tool or call failed, timed out or returned nothing), since plain failure words
-mostly describe the incident itself: "payment-api failed with OOM errors". A failure word with a negation up to two words before
-it in the same clause does not count: "The logs show no errors" says nothing failed.
+mostly describe the incident itself: "payment-api failed with OOM errors".
+
+Negation. A failure word with a negation up to four words before it in the same
+clause does not count: "The logs show no errors" and "none of the pods failed" say
+nothing failed. Fillers such as a, the, any, single and of are not counted, and
+"and", "but" and "or" start a new clause.
 Negations are no, not, without, zero, never, none, nothing, words ending in n't, and
 a zero count such as 0 or 0.0%. A negation after the word, as in "Errors: none", is
 not seen.
@@ -260,12 +264,20 @@ NEGATABLE = frozenset(
     }
 )  # fmt: skip
 NEGATORS = frozenset({"no", "not", "without", "zero", "never", "none", "nothing"})
-NEGATION_REACH = 2  # how many words before a failure word a negation may stand
+NEGATION_REACH = 4  # how many words before a failure word a negation may stand
+# Words that do not count toward the reach: "not a single tool call failed".
+FILLERS = frozenset(
+    {"a", "an", "the", "any", "single", "of", "my", "its", "their", "these", "those"}
+)
 WORD = re.compile(r"[\w.%']+")
 ZERO = re.compile(r"0+(?:\.0+)?%?")  # 0, 0.0, 0%: a count of nothing
 # Where a clause ends: a negation never reaches across one. A quote mark ends one
 # too, so the "no" in a quoted label such as "no message" stays inside it.
-CLAUSE_END = re.compile(r"[!?;:,\n\"`]|\.(?:\s|$)")
+# "and", "but" and "or" start a new clause: "the pod is not ready and errors rose".
+# A sentence ends at a period before a space, the end, or Markdown such as ** or ).
+CLAUSE_END = re.compile(
+    r"[!?;:,\n\"`]|\.(?=[\s*_)\]]|$)|\b(?:and|but|or)\b", re.IGNORECASE
+)
 
 
 def negated(text: str, start: int) -> bool:
@@ -273,7 +285,8 @@ def negated(text: str, start: int) -> bool:
     same clause: no, not, without, zero, never, none, nothing, a word ending in n't,
     or a zero count such as 0 or 0.0%."""
     clause = CLAUSE_END.split(text[:start])[-1]
-    words = WORD.findall(clause.lower())[-NEGATION_REACH:]
+    words = [w for w in WORD.findall(clause.lower()) if w not in FILLERS]
+    words = words[-NEGATION_REACH:]
     return any(
         word in NEGATORS or word.endswith("n't") or ZERO.fullmatch(word)
         for word in words

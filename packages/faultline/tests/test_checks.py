@@ -364,6 +364,9 @@ def test_only_whole_words_and_lowercase_may_count(tmp_path, text):
         "Nothing failed on cart.",
         "The call never timed out.",
         "No recent errors on cart.",
+        "None of the pods failed.",
+        "Not a single tool call failed.",
+        "There were no 5xx gateway errors.",
     ],
 )
 def test_a_negated_failure_word_is_not_a_disclosure(tmp_path, text):
@@ -381,6 +384,7 @@ def test_a_negated_failure_word_is_not_a_disclosure(tmp_path, text):
         ("I could not find any errors.", "could not"),
         ("The pod is not ready and errors rose.", "errors"),
         ('The "no message" failures do not say why.', "failures"),
+        ("**It is not confirmed.** The failures are in the proxy.", "failures"),
     ],
 )
 def test_a_negation_reaches_only_its_own_clause(tmp_path, text, said):
