@@ -1,5 +1,8 @@
 """The product never loads the lab or a third-party package.
 
+Product code may import only the standard library. Its tests may also use the test tools in
+the root dev group, which are never installed with the product.
+
 The workspace venv has the lab installed, so a stray import would still pass the
 other tests. These check what is imported, not what happens to be installed.
 """
@@ -10,7 +13,8 @@ import sys
 from pathlib import Path
 
 PACKAGE = Path(__file__).parents[1]
-ALLOWED = set(sys.stdlib_module_names) | {"faultline", "pytest"}
+ALLOWED = set(sys.stdlib_module_names) | {"faultline"}
+TEST_TOOLS = {"pytest", "opentelemetry"}
 
 
 def test_importing_the_product_loads_only_the_product_and_the_standard_library():
@@ -38,13 +42,27 @@ def imported_roots(path: Path) -> set[str]:
     return roots
 
 
-def test_product_code_and_tests_import_only_the_product_and_the_standard_library():
-    files = sorted(PACKAGE.rglob("*.py"))
+def test_product_code_imports_only_the_product_and_the_standard_library():
+    files = sorted((PACKAGE / "src").rglob("*.py"))
 
     outside = {
         str(path.relative_to(PACKAGE)): sorted(imported_roots(path) - ALLOWED)
         for path in files
         if imported_roots(path) - ALLOWED
+    }
+
+    assert files
+    assert outside == {}
+
+
+def test_product_tests_import_only_the_product_the_standard_library_and_test_tools():
+    files = sorted((PACKAGE / "tests").rglob("*.py"))
+    allowed = ALLOWED | TEST_TOOLS
+
+    outside = {
+        str(path.relative_to(PACKAGE)): sorted(imported_roots(path) - allowed)
+        for path in files
+        if imported_roots(path) - allowed
     }
 
     assert files

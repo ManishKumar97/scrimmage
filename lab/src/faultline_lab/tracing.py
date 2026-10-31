@@ -3,9 +3,8 @@
 Attribute names follow the OpenTelemetry GenAI semantic conventions.
 Anything Faultline adds sits under the `faultline.` prefix.
 
-The names the run reader reads come from `faultline.genai`, so the writer and the reader
-share one spelling. The names below are the ones only this agent writes, spelled out the
-same way and from the same convention version.
+The names come from OpenTelemetry's own package, as in any instrumented agent.
+The agent never takes them from Faultline: Faultline reads its traces as it reads any customer's.
 """
 
 import base64
@@ -27,33 +26,32 @@ from opentelemetry.sdk.trace.export import (
     SpanExporter,
     SpanExportResult,
 )
-from opentelemetry.trace import Span, SpanKind, Status, StatusCode, Tracer
-
-from faultline.genai import (
-    CHAT,
-    ERROR_TYPE,
-    EXECUTE_TOOL,
+from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GEN_AI_OPERATION_NAME,
+    GEN_AI_PROVIDER_NAME,
     GEN_AI_REQUEST_MODEL,
     GEN_AI_RESPONSE_FINISH_REASONS,
+    GEN_AI_RESPONSE_ID,
+    GEN_AI_RESPONSE_MODEL,
     GEN_AI_TOOL_CALL_ID,
     GEN_AI_TOOL_NAME,
+    GEN_AI_TOOL_TYPE,
+    GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
+    GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
     GEN_AI_USAGE_INPUT_TOKENS,
     GEN_AI_USAGE_OUTPUT_TOKENS,
+    GenAiOperationNameValues,
 )
+from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
+from opentelemetry.trace import Span, SpanKind, Status, StatusCode, Tracer
+
 from faultline_lab.models import Message, Reply, ToolResult
 
 AGENT_NAME = "faultline-ida"
 
-GEN_AI_AGENT_NAME = "gen_ai.agent.name"
-GEN_AI_PROVIDER_NAME = "gen_ai.provider.name"
-GEN_AI_RESPONSE_MODEL = "gen_ai.response.model"
-GEN_AI_RESPONSE_ID = "gen_ai.response.id"
-GEN_AI_USAGE_CACHE_READ_TOKENS = "gen_ai.usage.cache_read.input_tokens"
-GEN_AI_USAGE_CACHE_CREATION_TOKENS = "gen_ai.usage.cache_creation.input_tokens"
-GEN_AI_SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions"
-GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions"
-GEN_AI_TOOL_TYPE = "gen_ai.tool.type"
+CHAT = GenAiOperationNameValues.CHAT.value
+INVOKE_AGENT = GenAiOperationNameValues.INVOKE_AGENT.value
+EXECUTE_TOOL = GenAiOperationNameValues.EXECUTE_TOOL.value
 
 type Attributes = dict[str, str | int | float]
 
@@ -157,8 +155,8 @@ def record_reply(span: Span, reply: Reply) -> None:
     optional = {
         GEN_AI_USAGE_INPUT_TOKENS: reply.input_tokens,
         GEN_AI_USAGE_OUTPUT_TOKENS: reply.output_tokens,
-        GEN_AI_USAGE_CACHE_READ_TOKENS: reply.cache_read_tokens,
-        GEN_AI_USAGE_CACHE_CREATION_TOKENS: reply.cache_creation_tokens,
+        GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: reply.cache_read_tokens,
+        GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS: reply.cache_creation_tokens,
         GEN_AI_RESPONSE_MODEL: reply.response_model,
         GEN_AI_RESPONSE_ID: reply.response_id,
     }

@@ -18,6 +18,7 @@ members = ["packages/faultline", "lab"]
 
 [dependency-groups]
 dev = [
+    "opentelemetry-semantic-conventions>=0.66b1",
     "pyright>=1.1.414",
     "pytest>=9.1.1",
     "ruff>=0.17.0",
@@ -25,10 +26,12 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["lab/tests"]
-testpaths = ["packages/faultline/tests", "lab/tests"]
+testpaths = ["packages/faultline/tests", "lab/tests", "tests"]
 
 [tool.pyright]
-include = ["packages/faultline/src", "packages/faultline/tests", "lab/src", "lab/tests"]
+include = ["packages/faultline/src", "packages/faultline/tests", "lab/src", "lab/tests", "tests"]
+# The root contract test imports the span builder from the lab's tests.
+extraPaths = ["lab/tests"]
 venvPath = "."
 venv = ".venv"
 typeCheckingMode = "standard"

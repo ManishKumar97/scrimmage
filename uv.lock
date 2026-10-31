@@ -423,12 +423,12 @@ source = { editable = "lab" }
 dependencies = [
     { name = "aiohttp" },
     { name = "anthropic" },
-    { name = "faultline" },
     { name = "kubernetes-asyncio" },
     { name = "mcp" },
     { name = "openai" },
     { name = "opentelemetry-exporter-otlp-proto-common" },
     { name = "opentelemetry-sdk" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyyaml" },
@@ -438,12 +438,12 @@ dependencies = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.14.5" },
     { name = "anthropic", specifier = ">=1.17.0" },
-    { name = "faultline", editable = "packages/faultline" },
     { name = "kubernetes-asyncio", specifier = ">=36.1.0" },
     { name = "mcp", specifier = ">=2.3.0" },
     { name = "openai", specifier = ">=3.31.0" },
     { name = "opentelemetry-exporter-otlp-proto-common", specifier = ">=1.45.1" },
     { name = "opentelemetry-sdk", specifier = ">=1.45.1" },
+    { name = "opentelemetry-semantic-conventions", specifier = ">=0.66b1" },
     { name = "pydantic", specifier = ">=2.14.1" },
     { name = "pydantic-settings", specifier = ">=2.15.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
@@ -460,6 +460,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "opentelemetry-semantic-conventions" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "ruff" },
@@ -473,6 +474,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "opentelemetry-semantic-conventions", specifier = ">=0.66b1" },
     { name = "pyright", specifier = ">=1.1.414" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "ruff", specifier = ">=0.17.0" },
