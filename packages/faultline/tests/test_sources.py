@@ -279,6 +279,22 @@ def test_find_reads_jaeger_and_says_how_many_traces_it_fetched(tmp_path, capsys)
     assert sorted(from_jaeger["runs"], key=lambda run: run["trace_id"]) == by_trace
 
 
+def test_find_names_the_service_and_window_when_jaeger_has_no_traces(tmp_path, capsys):
+    path = write_trace(tmp_path / "s.jsonl", {"text": "x"}, base=now() - SECOND)
+    with fake_jaeger() as jaeger:
+        spec = f"jaeger:{jaeger.url}"
+        args = ["--source", spec, "--service", "cart", "--since", "1h"]
+
+        assert cli.main(["find", *args]) == 2
+        alone = capsys.readouterr()
+        assert cli.main(["find", *args, str(path)]) == 0
+        beside_a_file = capsys.readouterr()
+
+    expected = "no traces for service cart in the last 1h"
+    assert alone.err == f"faultline find: {expected}\n"
+    assert f"{spec}: {expected}" in beside_a_file.out
+
+
 def test_find_says_what_a_jaeger_source_is_missing(capsys):
     assert cli.main(["find", "--source", "jaeger", "--since", "1h"]) == 2
     assert "needs --service" in capsys.readouterr().err

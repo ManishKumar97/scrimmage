@@ -13,7 +13,7 @@ from faultline.config import Config, load_config
 from faultline.detect import detect
 from faultline.model import Certainty, Fault, FaultKind, Finding, Run
 from faultline.runs import show_run
-from faultline.sources import parse_since, parse_source
+from faultline.sources import JaegerSource, parse_since, parse_source
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,6 +242,10 @@ def fail(message: str) -> int:
     return 2
 
 
+def no_traces(args: argparse.Namespace) -> str:
+    return f"no traces for service {args.service} in the last {args.since}"
+
+
 def run(args: argparse.Namespace) -> int:
     specs: Sequence[str] = [*args.source, *(f"file:{f}" for f in args.files)]
     if not specs:
@@ -278,11 +282,15 @@ def run(args: argparse.Namespace) -> int:
             )
         if stats.no_spans:
             print(f"{source.name}: {stats.no_spans} line(s) held no spans", file=out)
+        if isinstance(source, JaegerSource) and not stats.traces:
+            print(f"{source.name}: {no_traces(args)}", file=out)
     inputs = [f"{files} file(s)"] if files or not fetched else []
     inputs += [f"{fetched} fetched trace(s)"] if fetched else []
     print(f"read {len(runs)} run(s) from {' and '.join(inputs)}", file=out)
     if files == 0 and fetched == 0:
-        return fail("no span files found and no traces fetched")
+        if any(isinstance(source, JaegerSource) for source in sources):
+            return fail(no_traces(args))  # a wrong service name, most often
+        return fail("no span files found")
     if not runs:
         window = f" that started in the last {args.since}" if args.since else ""
         return fail(
