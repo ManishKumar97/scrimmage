@@ -14,20 +14,24 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 PACKAGE = Path(__file__).parents[1]
 ALLOWED = set(sys.stdlib_module_names) | {"faultline"}
 TEST_TOOLS = {"pytest", "opentelemetry"}
 # The product's own test helpers in tests/.
-TEST_HELPERS = {"fake_jaeger", "spans"}
+TEST_HELPERS = {"fake_jaeger", "spans", "upstream"}
 # The only module that may import a third-party package, and what it may import.
 PROXY = Path("src/faultline/proxy/model.py")
 PROXY_PACKAGES = {"aiohttp", "yarl"}  # yarl is the URL type aiohttp takes
 
 
-def test_importing_the_product_loads_only_the_product_and_the_standard_library():
+# The command loads aiohttp only when it starts the proxy, so `find` runs without it.
+@pytest.mark.parametrize("module", ["faultline.runs", "faultline.cli"])
+def test_importing_the_product_loads_only_the_product_and_the_standard_library(module):
     # Only what the import adds: the interpreter and the venv load modules at start.
     code = (
-        "import sys; before = set(sys.modules); import faultline.runs; "
+        f"import sys; before = set(sys.modules); import {module}; "
         "print('\\n'.join(set(sys.modules) - before))"
     )
     loaded = subprocess.run(
