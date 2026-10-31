@@ -245,6 +245,22 @@ def test_a_value_is_everything_after_the_equals_sign(spec, value, call):
     assert parse(spec) == ToolFault(spec, "get_logs", "wrong", call, value)
 
 
+@pytest.mark.parametrize("spec", ["tool:get_logs@2:empty", "tool:a@b:error"])
+def test_an_at_sign_in_a_tool_name_is_refused(spec):
+    with pytest.raises(FaultError) as error:
+        parse(spec)
+
+    assert "a tool name may not hold @. The call selector comes last" in str(
+        error.value
+    )
+
+
+def test_a_value_ending_in_at_digits_is_read_as_the_selector():
+    assert parse("tool:get_logs:wrong=payment@2") == ToolFault(
+        "tool:get_logs:wrong=payment@2", "get_logs", "wrong", 2, "payment"
+    )
+
+
 @pytest.mark.parametrize(
     ("value", "named"),
     [

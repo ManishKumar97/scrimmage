@@ -4,6 +4,10 @@
                            (default: every call; @2 is the tool's second call)
     model:KIND[@STEP]      one model step, such as model:rate_limit@2 (default: step 1)
 
+The selector comes last. A NAME may not hold "@", and a VALUE, as in
+tool:get_logs:wrong=VALUE, may not end in @ and digits: they would be read as the
+selector. tool:get_logs:wrong=payment@2 is VALUE payment on the tool's second call.
+
 Each kind is one entry in TOOL_FAULTS or MODEL_FAULTS plus its injection code. A new
 fault is a new entry: the parser does not change.
 
@@ -623,6 +627,11 @@ def parse(spec: str) -> Fault:
         # The value comes after the first =, so it may hold a colon.
         named, has_value, value = rest.partition("=")
         tool, _, kind = named.rpartition(":")
+        if "@" in tool:
+            raise FaultError(
+                f"fault {spec!r}: a tool name may not hold @. The call selector "
+                f"comes last, as in tool:NAME:{kind or 'KIND'}@2"
+            )
         if (
             tool
             and kind in TOOL_FAULTS
