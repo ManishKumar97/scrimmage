@@ -27,11 +27,12 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def flags_by_score() -> dict[bool, list[str]]:
-    """The span files of flagged runs, by whether the run was scored correct."""
+def judge_by_score() -> tuple[dict[bool, int], dict[bool, list[str]]]:
+    """How many runs the check judged, and the span files of those it flagged, by
+    whether the run was scored correct."""
     config = load_config(ROOT / "lab/faultline.toml")
+    judged = {True: 0, False: 0}
     flagged: dict[bool, list[str]] = {True: [], False: []}
-    judged = 0
     for line in RECORDS.read_text().splitlines():
         record = json.loads(line)
         if not record["trace_file"]:
@@ -40,16 +41,21 @@ def flags_by_score() -> dict[bool, list[str]]:
         if not path.is_file():
             continue
         for run in FileSource(path, config.attributes).runs():
-            judged += 1
             faults = detect(run, config.detect)
-            if any(f.flagged for f in unsupported_value(run, faults, config.checks)):
+            findings = unsupported_value(run, faults, config.checks)
+            judged[record["correct"]] += len(findings)
+            if any(f.flagged for f in findings):
                 flagged[record["correct"]].append(path.name)
-    assert judged > 0
-    return flagged
+    return judged, flagged
 
 
 def test_no_run_scored_correct_is_flagged():
-    flagged = flags_by_score()
+    judged, flagged = judge_by_score()
 
-    print(f"flagged: {len(flagged[False])} wrong runs {flagged[False]}")
+    print(f"judged {judged}; flagged {len(flagged[False])} wrong: {flagged[False]}")
+    assert judged[True] == 14  # every correct run has an answer to judge
     assert flagged[True] == []
+    # Known, not a goal: on these runs the check finds nothing in the wrong runs
+    # either. A change here means the rule changed; look at which run moved.
+    assert judged[False] == 7
+    assert flagged[False] == []
