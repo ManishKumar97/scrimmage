@@ -27,6 +27,11 @@ def test_every_entry_names_a_trace_it_was_seen_in_or_a_public_incident():
         assert OBSERVED.match(origin) or INCIDENT.match(origin), entry["spec"]
 
 
+def test_every_entry_says_how_closely_its_origin_matches():
+    for entry in catalog():
+        assert entry.get("match") in ("direct", "analogous"), entry["spec"]
+
+
 def test_every_entry_has_its_boundary_and_a_description():
     for entry in catalog():
         assert entry["boundary"] == entry["spec"].partition(":")[0], entry["spec"]
