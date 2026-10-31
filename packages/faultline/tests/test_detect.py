@@ -158,6 +158,56 @@ def test_a_run_that_recorded_no_content_has_no_empty_results(tmp_path):
     assert detect(unrecorded, CONFIG) == ()
 
 
+@pytest.mark.parametrize(
+    "error", ["RateLimitError", "rate_limit_exceeded", "Rate Limit hit", "HTTP 429"]
+)
+def test_a_model_call_that_hit_a_rate_limit_is_a_model_rate_limit(tmp_path, error):
+    [fault] = faults_of(tmp_path, {"error": error})
+
+    assert fault.kind is FaultKind.MODEL_RATE_LIMIT
+    assert (fault.step, fault.call_id, fault.tool) == (1, None, None)
+    assert fault.detail == error
+
+
+def test_any_other_model_error_is_a_model_error(tmp_path):
+    [fault] = faults_of(tmp_path, {"error": "APIConnectionError"})
+
+    assert fault.kind is FaultKind.MODEL_ERROR
+    assert fault.detail == "APIConnectionError"
+
+
+@pytest.mark.parametrize("reason", ["length", "max_tokens", "max_output_tokens"])
+def test_a_reply_cut_off_by_the_token_limit_is_a_model_token_limit(tmp_path, reason):
+    [fault] = faults_of(tmp_path, {"finish": reason})
+
+    assert fault.kind is FaultKind.MODEL_TOKEN_LIMIT
+    assert fault.step == 1
+    assert fault.detail == f"finish {reason}"
+
+
+@pytest.mark.parametrize("reason", ["stop", "tool_calls", "end_turn", "content_filter"])
+def test_a_reply_that_ended_for_another_reason_is_not_a_fault(tmp_path, reason):
+    assert kinds_of(tmp_path, {"finish": reason}) == []
+
+
+def test_a_step_fault_comes_before_the_tool_faults_of_the_same_step(tmp_path):
+    step = {"finish": "length", "calls": [{"error": "E"}]}
+
+    assert kinds_of(tmp_path, step) == [
+        FaultKind.MODEL_TOKEN_LIMIT,
+        FaultKind.TOOL_ERROR,
+    ]
+
+
+def test_a_model_fault_is_injected_when_the_step_carries_the_proxys_mark(tmp_path):
+    run = run_from(tmp_path, {"error": "RateLimitError"})
+    marked = dataclasses.replace(run.steps[0], injected="rate_limit")
+
+    [fault] = detect(dataclasses.replace(run, steps=(marked,)), CONFIG)
+
+    assert fault.origin is Origin.INJECTED
+
+
 def test_faults_come_in_the_order_they_happened(tmp_path):
     first = calls({"id": "a", "error": "E1"})
     second = calls({"id": "b", "result": json.dumps({"error": "E2"})})

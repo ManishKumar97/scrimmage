@@ -7,9 +7,11 @@ Each function reads one run and does no I/O.
 import json
 
 from faultline.config import DetectConfig
-from faultline.model import Fault, FaultKind, Origin, Run, ToolCall
+from faultline.model import Fault, FaultKind, Origin, Run, Step, ToolCall
 from faultline.runs import cut
 
+RATE_LIMIT_WORDS = ("ratelimit", "rate_limit", "rate limit", "429")
+TOKEN_LIMIT_REASONS = ("length", "max_tokens", "max_output_tokens")
 DETAIL_LIMIT = 80
 
 
@@ -19,12 +21,29 @@ def detect(run: Run, config: DetectConfig) -> tuple[Fault, ...]:
     for call in run.unplaced:
         found += [(call.started, f) for f in call_faults(run, None, call, config)]
     for step in run.steps:
+        found += [(step.started, f) for f in step_faults(run, step)]
         for call in step.tool_calls:
             found += [
                 (call.started, f) for f in call_faults(run, step.number, call, config)
             ]
     found.sort(key=lambda item: item[0])
     return tuple(fault for _, fault in found)
+
+
+def step_faults(run: Run, step: Step) -> list[Fault]:
+    origin = Origin.INJECTED if step.injected else Origin.OBSERVED
+    kinds: list[tuple[FaultKind, str]] = []
+    if step.error_type:
+        lowered = step.error_type.lower()
+        limited = any(word in lowered for word in RATE_LIMIT_WORDS)
+        kind = FaultKind.MODEL_RATE_LIMIT if limited else FaultKind.MODEL_ERROR
+        kinds.append((kind, step.error_type))
+    if (step.finish_reason or "").lower() in TOKEN_LIMIT_REASONS:
+        kinds.append((FaultKind.MODEL_TOKEN_LIMIT, f"finish {step.finish_reason}"))
+    return [
+        Fault(kind, run.trace_id, step.number, None, None, detail, origin)
+        for kind, detail in kinds
+    ]
 
 
 def call_faults(
