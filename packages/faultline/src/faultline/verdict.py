@@ -31,6 +31,11 @@ Rules, in order, with no model or person judging the run:
 Failed silently says the answer is wrong. That is said only when we injected a
 fault in the run or the team gave the expected answer. A clean run that differs
 from another clean run has no verdict: two runs disagree, and neither is known right.
+Against a clean run's answer, a faulted run is failed silently only when every
+clean run of the task that got past rule 1 matched that answer. If the clean runs
+disagree, the faulted run has no verdict: "clean runs disagree". In faultline test,
+the clean run that is the reference has no verdict of its own: "reference run". It
+counts in the matrix's no verdict column, as it was judged against nothing.
 
 A run with no reference past rule 1 has no verdict. Nor has a run whose last reply
 was a stream the proxy could not read: its answer is not in the trace, which is no
@@ -81,6 +86,9 @@ class Reference:
     text: str
     expected: bool  # the team gave it. Else it is a clean run's answer
     source: str  # where it came from, for the reason: "the expected answer"
+    # For a clean run's answer: every other clean run of the task that got past
+    # rule 1 matched it. When they disagree, no answer is shown wrong against it.
+    agreed: bool = True
 
 
 def expected(text: str) -> Reference:
@@ -237,6 +245,9 @@ def judge(
             f"no verdict: {against}, with no fault injected and no expected answer, "
             "so neither answer is known right"
         )
+    if not reference.expected and not reference.agreed:
+        return f"no verdict: {against}, but the clean runs disagree"
+
     return verdict(
         Verdict.FAILED_SILENTLY,
         f"{against}, and says nothing of its own work falling short (heuristic)",

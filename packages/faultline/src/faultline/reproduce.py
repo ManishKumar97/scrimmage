@@ -47,7 +47,7 @@ import sys
 import tempfile
 import tomllib
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from faultline import matrix
@@ -70,6 +70,7 @@ from faultline.model import RunVerdict
 from faultline.verdict import (
     Matcher,
     Reference,
+    compare,
     expected,
     judge,
     loud,
@@ -84,6 +85,9 @@ TASK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 UNSAFE = re.compile(r"[^A-Za-z0-9._=-]")
 # The exit code after a stop signal: what a shell gives for Ctrl-C.
 INTERRUPTED = 130
+# The verdict of the clean run whose answer is its task's reference: it was
+# compared with nothing, so it counts as no verdict.
+REFERENCE_RUN = "no verdict: reference run"
 # The exit code when --max-cost stopped the test before its last run.
 COST_CAP = 3
 
@@ -234,22 +238,45 @@ class References:
     """Each task's reference: its expected answer, else the answer of its first clean
     run that got past rule 1 of the verdict."""
 
-    def __init__(self) -> None:
+    def __init__(self, matcher: Matcher | None = None) -> None:
         self.found: dict[str, Reference] = {}
+        self.runs: dict[str, int] = {}  # the clean run each reference came from
+        self.disagree: set[str] = set()  # tasks whose clean runs differ
+        self.matcher = matcher
 
     def of(self, task: Task) -> Reference | None:
         if task.expected is not None:
             return expected(task.expected)
-        return self.found.get(task.id)
+        found = self.found.get(task.id)
+        if found is None:
+            return None
+        return replace(found, agreed=task.id not in self.disagree)
+
+    def is_reference(self, planned: Planned) -> bool:
+        return planned.fault is None and self.runs.get(planned.task.id) == (
+            planned.number
+        )
 
     def learn(self, planned: Planned, outcome: Outcome) -> None:
-        """Take a clean run's answer when its task has no reference yet."""
+        """Take a clean run's answer when its task has no reference yet. Note a
+        later clean run that does not match it."""
         task, run = planned.task, outcome.run
-        if planned.fault or self.of(task) is not None or run is None:
+        if planned.fault or task.expected is not None or run is None:
             return
-        if run.answer and loud(run, outcome.code) is None:
+        if not run.answer or loud(run, outcome.code) is not None:
+            return  # a clean run that failed loudly is not judged
+        found = self.found.get(task.id)
+        if found is None:
             source = f"clean run {planned.number}"
             self.found[task.id] = Reference(run.answer, False, source)
+            self.runs[task.id] = planned.number
+            return
+        try:
+            same, _ = compare(run.answer, found.text, self.matcher)
+        except Exception:  # noqa: BLE001 - the matcher is the team's code
+            same = False  # the run's own verdict says the matcher raised
+        if not same:
+            self.disagree.add(task.id)
 
 
 def verdict_of(
@@ -494,7 +521,7 @@ def test(args: argparse.Namespace) -> int:
     out = args.out or Path(tempfile.mkdtemp(prefix="faultline-test-"))
     planned = plan(tasks, faults, args.clean_runs, args.runs, out)
     print(f"faultline test: {len(planned)} runs, saved in {out}", file=sys.stderr)
-    references = References()
+    references = References(matcher)
     results: list[Result] = []
     spent = 0.0  # what the runs so far cost, from their traces
     for index, run in enumerate(planned, start=1):
@@ -508,7 +535,11 @@ def test(args: argparse.Namespace) -> int:
         spent += prices.cost(*used) if prices else 0.0
         references.learn(run, outcome)
         reference = references.of(run.task)
-        verdict = verdict_of(outcome, reference, matcher)
+        verdict = (
+            REFERENCE_RUN
+            if references.is_reference(run) and not outcome.missed
+            else verdict_of(outcome, reference, matcher)
+        )
         result = Result(run, outcome, verdict, reference)
         results.append(result)
         (run.directory / "result.json").write_text(

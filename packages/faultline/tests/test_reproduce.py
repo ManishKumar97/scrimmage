@@ -193,7 +193,7 @@ def test_a_faulted_answer_unlike_the_first_clean_one_failed_silently(tmp_path):
     assert result.returncode == 0, result.stderr
     saved = results(out)
     assert {run: (r["verdict"], r["reference"]) for run, r in saved.items()} == {
-        "cart/clean/1": ("passed", "clean run 1"),
+        "cart/clean/1": (None, "clean run 1"),  # the reference run itself
         "cart/clean/2": ("passed", "clean run 1"),
         "cart/tool_get_logs_empty/1": ("failed_silently", "clean run 1"),
     }
@@ -204,7 +204,7 @@ def test_a_faulted_answer_unlike_the_first_clean_one_failed_silently(tmp_path):
     # The fault matrix: printed, and saved with each cell's runs.
     assert result.stdout == (
         "fault                passed  failed loudly  failed silently  no verdict  runs\n"
-        "clean                     2              0                0           0     2\n"
+        "clean                     1              0                0           1     2\n"
         "tool:get_logs:empty       0              0                1           0     1\n"
     )
     saved_matrix = json.loads((out / "matrix.json").read_text())
@@ -222,10 +222,39 @@ def test_a_faulted_answer_unlike_the_first_clean_one_failed_silently(tmp_path):
             "no_verdict": [],
         },
     }
-    assert saved_matrix["rows"][0]["cells"]["passed"] == [
-        "cart/clean/1",
-        "cart/clean/2",
-    ]
+    assert saved_matrix["rows"][0]["cells"]["passed"] == ["cart/clean/2"]
+    assert saved_matrix["rows"][0]["cells"]["no_verdict"] == ["cart/clean/1"]
+    assert saved["cart/clean/1"]["reason"] == "no verdict: reference run"
+
+
+def test_when_the_clean_runs_disagree_no_faulted_run_is_called_wrong(tmp_path):
+    out = tmp_path / "out"
+    with upstream_server() as upstream:
+        # Clean run 1 says cart, clean run 2 says payment, the faulted run payment.
+        upstream.replies = [ASKS_FOR_LOGS, ANSWERS] + [ASKS_FOR_LOGS, WRONG] * 2
+        result = faultline_test(
+            tmp_path,
+            upstream.url,
+            "--fault",
+            "tool:get_logs:empty",
+            "--runs",
+            "1",
+            "--clean-runs",
+            "2",
+            "--out",
+            str(out),
+            tasks=ONE_TASK,
+            agent=tool_agent(tmp_path),
+        )
+
+    assert result.returncode == 0, result.stderr
+    saved = results(out)
+    assert saved["cart/clean/1"]["reason"] == "no verdict: reference run"
+    assert saved["cart/tool_get_logs_empty/1"]["verdict"] is None
+    assert saved["cart/tool_get_logs_empty/1"]["reason"] == (
+        'no verdict: answer lacks "cart", compared with clean run 1, '
+        "but the clean runs disagree"
+    )
 
 
 def test_a_team_matcher_decides_what_counts_as_the_same(tmp_path):

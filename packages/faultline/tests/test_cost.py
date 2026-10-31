@@ -118,7 +118,7 @@ def test_the_estimate_comes_after_the_first_run_and_the_cap_stops_the_rest(tmp_p
     plan = lines.index(
         "plan: 2 tasks x (2 clean + 1 faulted) = 6 runs, about 342 tokens, about $0.34"
     )
-    assert lines[plan - 1].startswith("[1/6] a clean #1: passed")
+    assert lines[plan - 1] == "[1/6] a clean #1: no verdict: reference run"
     assert lines[plan + 1].startswith("[2/6] a clean #2: passed")
     # Two runs cost $0.114, past the $0.10 cap, so the third never starts.
     assert lines[plan + 2] == (
