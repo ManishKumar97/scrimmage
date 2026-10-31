@@ -1,0 +1,121 @@
+{
+  "uid": "faultline-findings",
+  "title": "Faultline findings",
+  "description": "The findings of faultline serve for the chosen window before now: how often each fault occurred and how the agent reacted.",
+  "tags": ["faultline"],
+  "timezone": "browser",
+  "editable": false,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": { "hidden": true },
+  "templating": {
+    "list": [
+      {
+        "name": "since",
+        "label": "Window",
+        "description": "How far back to read runs. Sent to faultline serve as since=.",
+        "type": "custom",
+        "query": "15m,1h,6h,24h,7d",
+        "current": { "selected": true, "text": "1h", "value": "1h" },
+        "options": [
+          { "selected": false, "text": "15m", "value": "15m" },
+          { "selected": true, "text": "1h", "value": "1h" },
+          { "selected": false, "text": "6h", "value": "6h" },
+          { "selected": false, "text": "24h", "value": "24h" },
+          { "selected": false, "text": "7d", "value": "7d" }
+        ],
+        "hide": 0,
+        "multi": false,
+        "includeAll": false
+      }
+    ]
+  },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "bargauge",
+      "title": "Faults per kind",
+      "description": "How many faults of each kind the runs in the window hit.",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 7 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "faultline" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "faultline" },
+          "type": "json",
+          "source": "url",
+          "parser": "backend",
+          "format": "table",
+          "url": "/api/findings",
+          "url_options": {
+            "method": "GET",
+            "params": [{ "key": "since", "value": "$since" }]
+          },
+          "root_selector": "$each(summary.faults, function($count, $kind) { {\"kind\": $kind, \"faults\": $count} })",
+          "columns": [
+            { "selector": "kind", "text": "Fault kind", "type": "string" },
+            { "selector": "faults", "text": "Faults", "type": "number" }
+          ]
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "reduceOptions": { "values": true, "calcs": [], "fields": "/^Faults$/" }
+      },
+      "fieldConfig": {
+        "defaults": { "min": 0, "decimals": 0, "color": { "mode": "fixed", "fixedColor": "red" } },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Findings",
+      "description": "One row per finding: the run, the fault it is about (empty for a check on the whole run), the check, whether it flagged the reaction, and how sure the check is. A heuristic finding means likely, not wrong.",
+      "gridPos": { "x": 0, "y": 7, "w": 24, "h": 16 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "faultline" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "faultline" },
+          "type": "json",
+          "source": "url",
+          "parser": "backend",
+          "format": "table",
+          "url": "/api/findings",
+          "url_options": {
+            "method": "GET",
+            "params": [{ "key": "since", "value": "$since" }]
+          },
+          "root_selector": "runs.findings[]",
+          "columns": [
+            { "selector": "trace_id", "text": "Run", "type": "string" },
+            { "selector": "fault.kind", "text": "Fault kind", "type": "string" },
+            { "selector": "check", "text": "Check", "type": "string" },
+            { "selector": "flagged", "text": "Flagged", "type": "boolean" },
+            { "selector": "certainty", "text": "Certainty", "type": "string" },
+            { "selector": "evidence", "text": "Evidence", "type": "string" }
+          ]
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Flagged", "desc": true }]
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Evidence" },
+            "properties": [{ "id": "custom.width", "value": 640 }]
+          }
+        ]
+      }
+    }
+  ]
+}

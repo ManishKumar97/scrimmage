@@ -72,6 +72,34 @@ uv run faultline serve --source jaeger:http://localhost:16686 --service faultlin
 curl 'http://127.0.0.1:8765/api/findings?since=1h'
 ```
 
+## Show the findings in Grafana
+
+`deploy/grafana/` holds a dashboard and a datasource for any Grafana 11 that can reach `faultline serve`.
+The dashboard lists every finding in a window before now (run, fault kind, check, flagged, certainty, evidence) and counts the faults per kind.
+It reads the JSON API through the [Infinity](https://grafana.com/grafana/plugins/yesoreyeram-infinity-datasource/) datasource plugin.
+
+1. Install the plugin, for example with `GF_INSTALL_PLUGINS=yesoreyeram-infinity-datasource` or `grafana cli plugins install yesoreyeram-infinity-datasource`.
+   Pin a release that supports your Grafana: 3.7.1 is the last one for Grafana 11.5.
+2. Copy `deploy/grafana/datasource.yaml` into Grafana's datasource provisioning folder, by default `/etc/grafana/provisioning/datasources/`.
+   Set `url` and `allowedHosts` to where `faultline serve` listens, as Grafana's server sees it.
+   Keep the uid `faultline`: the dashboard's panels name it.
+3. Add a file dashboard provider in `/etc/grafana/provisioning/dashboards/`, and put `deploy/grafana/faultline-dashboard.json` in the folder it reads:
+
+   ```yaml
+   apiVersion: 1
+   providers:
+     - name: faultline
+       type: file
+       folder: Faultline
+       options:
+         path: /var/lib/grafana/dashboards/faultline
+   ```
+
+4. Start `faultline serve` on an address Grafana can reach, then restart Grafana.
+   The dashboard asks for `/api/findings?since=` the window picked in its Window variable (15m to 7d).
+
+With the Grafana Helm chart the same files go in the `plugins`, `datasources`, `dashboardProviders` and `dashboardsConfigMaps` values, the dashboard in a ConfigMap.
+
 ## Pick a provider
 
 One setting picks the provider: `PROVIDER` in `.env` or the environment.
