@@ -299,3 +299,30 @@ def test_a_hung_up_run_still_leaves_a_whole_trace(tmp_path):
     assert run.complete  # the root was written
     assert len(run.steps) == 1  # and the step still open when the signal came
     assert run.error_type == "exit 5"
+
+
+def test_an_agent_that_ignores_sigterm_is_killed_after_the_grace_period():
+    agent = (
+        "import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "os.write(1, b'ready\\n'); time.sleep(60)"
+    )
+    with subprocess.Popen(
+        [FAULTLINE, "run", "--upstream", "http://127.0.0.1:9", "--"]
+        + [PYTHON, "-c", agent],
+        env={**os.environ, "FAULTLINE_TERM_GRACE": "1"},
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ) as process:
+        assert process.stdout and process.stderr
+        assert process.stdout.readline() == "ready\n"
+        started = time.monotonic()
+        process.send_signal(signal.SIGTERM)
+        code = process.wait(30)
+        waited = time.monotonic() - started
+        said = process.stderr.read()
+
+    assert code == 128 + signal.SIGKILL.value
+    assert 0.9 < waited < 10
+    assert "ignored SIGTERM for 1s, killing it" in said

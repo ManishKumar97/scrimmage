@@ -226,6 +226,7 @@ async def supervise(command: Sequence[str], env: dict[str, str]) -> int:
         relay.attach(child)
         code = await child.wait()
     finally:
+        relay.close()
         for number in RELAYED:
             loop.remove_signal_handler(number)
     return 128 - code if code < 0 else code  # killed by signal N: 128 + N

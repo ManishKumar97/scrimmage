@@ -249,6 +249,7 @@ async def relay(command: Sequence[str], calls: ToolCalls) -> int:
         with contextlib.suppress(asyncio.CancelledError):
             await upward
     finally:
+        signals.close()
         calls.close()  # calls never answered are still recorded
         for number in RELAYED:
             loop.remove_signal_handler(number)

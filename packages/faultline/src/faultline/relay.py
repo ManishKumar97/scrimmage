@@ -7,6 +7,9 @@ If faultline itself dies without a chance to pass anything on (SIGKILL, a crash)
 the child must not run on alone. On Linux the child starts through a small shim
 that asks the kernel to send it SIGTERM when its parent dies (PR_SET_PDEATHSIG),
 then becomes the child's own program. The setting survives the exec.
+
+A child that ignores SIGTERM gets SIGKILL after a grace period, 10 seconds unless
+FAULTLINE_TERM_GRACE says otherwise, so a stop request always ends the run.
 """
 
 import asyncio
@@ -18,6 +21,8 @@ from collections.abc import Sequence
 RELAYED = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)
 # The terminal sends these to the whole foreground process group, the child included.
 KEYBOARD = (signal.SIGINT, signal.SIGQUIT)
+TERM_GRACE = "FAULTLINE_TERM_GRACE"  # seconds from SIGTERM to SIGKILL
+DEFAULT_TERM_GRACE = 10.0
 
 # Runs in the child before its program. Exits 127 or 126 as a shell does when the
 # program cannot start.
@@ -49,9 +54,11 @@ class Relay:
     starting is held, then sent once the child runs.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, grace: float | None = None) -> None:
         self.child: asyncio.subprocess.Process | None = None
         self.held: list[signal.Signals] = []
+        self.grace = grace if grace is not None else grace_from_env()
+        self.deadline: asyncio.TimerHandle | None = None
 
     def receive(self, number: signal.Signals) -> None:
         if number in KEYBOARD and terminal_sent_it_to_the_child():
@@ -59,13 +66,40 @@ class Relay:
         if self.child is None:
             self.held.append(number)
         elif self.child.returncode is None:
-            self.child.send_signal(number)
+            self.send(number)
 
     def attach(self, child: asyncio.subprocess.Process) -> None:
         self.child = child
         for number in self.held:
-            child.send_signal(number)
+            self.send(number)
         self.held.clear()
+
+    def send(self, number: signal.Signals) -> None:
+        assert self.child
+        self.child.send_signal(number)
+        if number == signal.SIGTERM and self.deadline is None:
+            loop = asyncio.get_running_loop()
+            self.deadline = loop.call_later(self.grace, self.kill)
+
+    def kill(self) -> None:
+        """The child had its grace period after SIGTERM and is still running."""
+        if self.child and self.child.returncode is None:
+            print(
+                f"faultline: the child ignored SIGTERM for {self.grace:g}s, killing it",
+                file=sys.stderr,
+            )
+            self.child.kill()
+
+    def close(self) -> None:
+        if self.deadline:
+            self.deadline.cancel()
+
+
+def grace_from_env() -> float:
+    try:
+        return float(os.environ.get(TERM_GRACE) or DEFAULT_TERM_GRACE)
+    except ValueError:
+        return DEFAULT_TERM_GRACE
 
 
 def terminal_sent_it_to_the_child() -> bool:
