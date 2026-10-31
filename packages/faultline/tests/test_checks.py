@@ -48,7 +48,10 @@ def test_a_failed_call_never_made_again_is_flagged(tmp_path):
     assert (finding.check, finding.certainty) == ("no_retry", Certainty.CERTAIN)
     assert finding.flagged
     assert finding.fault is not None and finding.fault.tool == "get_logs"
-    assert "never called again" in finding.evidence
+    assert finding.evidence == (
+        'get_logs({"service": "cart"}) never retried with the same arguments; '
+        "never called again"
+    )
 
 
 def test_a_failed_call_made_again_with_the_same_arguments_is_not_flagged(tmp_path):
@@ -58,18 +61,28 @@ def test_a_failed_call_made_again_with_the_same_arguments_is_not_flagged(tmp_pat
 
     assert not finding.flagged
     assert finding.evidence == (
-        'get_logs({"service": "cart"}) called again 1 time(s), '
-        "1 with the same arguments, 0 with different"
+        'get_logs({"service": "cart"}) retried 1 time(s) with the same arguments'
     )
 
 
-def test_a_call_with_corrected_arguments_is_a_retry(tmp_path):
+def test_a_call_with_corrected_arguments_is_not_a_retry_but_is_shown(tmp_path):
     corrected = {**FAILED, "error": None, "arguments": '{"service": "ad"}'}
 
     [finding] = judge(no_retry, tmp_path, calls(FAILED), calls(corrected), answer("ok"))
 
-    assert not finding.flagged
-    assert finding.evidence.endswith("0 with the same arguments, 1 with different")
+    assert finding.flagged
+    assert finding.evidence == (
+        'get_logs({"service": "cart"}) never retried with the same arguments; '
+        "called again 1 time(s) with different arguments"
+    )
+
+
+def test_a_same_call_sent_in_the_same_reply_is_not_a_retry(tmp_path):
+    sibling = {**FAILED, "error": None}
+
+    [finding] = judge(no_retry, tmp_path, calls(FAILED, sibling), answer("ok"))
+
+    assert finding.flagged
 
 
 def test_a_call_of_another_tool_is_not_a_retry(tmp_path):
