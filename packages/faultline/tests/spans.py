@@ -3,8 +3,10 @@
     run_from(tmp_path, {"calls": [{"name": "get_logs", "error": "ConnectionError"}]})
 
 A step is {"finish": "stop", "error": None, "text": "", "calls": [...]}.
-A call is {"name": "t", "id": "c1", "result": "ok", "error": None, "seconds": 1.0}.
-Every key is optional. Steps run one after another, 100 seconds apart.
+A call is {"name": "t", "id": "c1", "arguments": "{}", "result": "ok", "error": None,
+"seconds": 1.0}. Every key is optional; arguments are not recorded unless given.
+A last step with text and no calls is the run's answer.
+Steps run one after another, 100 seconds apart.
 """
 
 import json
@@ -36,7 +38,9 @@ def span(trace: str, span_id: str, parent: str | None, start: int, end: int) -> 
     return span
 
 
-def spans_of(steps: list[dict], trace: str = "t1") -> list[dict]:
+def spans_of(
+    steps: list[dict], trace: str = "t1", question: str | None = None
+) -> list[dict]:
     root = span(trace, "root", None, BASE, BASE + (len(steps) + 1) * STEP_GAP)
     root["attributes"].append(string("gen_ai.operation.name", "invoke_agent"))
     spans = [root]
@@ -65,6 +69,11 @@ def spans_of(steps: list[dict], trace: str = "t1") -> list[dict]:
         if step.get("error"):
             chat["status"] = {"code": STATUS_ERROR}
             chat["attributes"].append(string("error.type", step["error"]))
+        if question is not None and number == 1:
+            asked = [{"role": "user", "parts": [{"type": "text", "content": question}]}]
+            chat["attributes"].append(
+                string("gen_ai.input.messages", json.dumps(asked))
+            )
         spans.append(chat)
         for i, call in enumerate(calls):
             begin = start + SECOND * (i + 1)
@@ -76,6 +85,10 @@ def spans_of(steps: list[dict], trace: str = "t1") -> list[dict]:
                 string("gen_ai.tool.call.id", call.get("id", f"c{number}.{i}")),
                 string("gen_ai.tool.call.result", call.get("result", "ok")),
             ]
+            if "arguments" in call:
+                tool["attributes"].append(
+                    string("gen_ai.tool.call.arguments", call["arguments"])
+                )
             if call.get("error"):
                 tool["status"] = {"code": STATUS_ERROR}
                 tool["attributes"].append(string("error.type", call["error"]))
@@ -83,18 +96,19 @@ def spans_of(steps: list[dict], trace: str = "t1") -> list[dict]:
     return spans
 
 
-def write_trace(path: Path, *steps: dict, trace: str = "t1") -> Path:
-    request = {
-        "resourceSpans": [{"scopeSpans": [{"spans": spans_of(list(steps), trace)}]}]
-    }
+def write_trace(
+    path: Path, *steps: dict, trace: str = "t1", question: str | None = None
+) -> Path:
+    spans = spans_of(list(steps), trace, question)
+    request = {"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]}
     with path.open("a") as file:
         file.write(json.dumps(request) + "\n")
     return path
 
 
-def run_from(tmp_path: Path, *steps: dict) -> Run:
+def run_from(tmp_path: Path, *steps: dict, question: str | None = None) -> Run:
     """The one run in a span file made from `steps`."""
-    path = write_trace(tmp_path / "spans.jsonl", *steps)
+    path = write_trace(tmp_path / "spans.jsonl", *steps, question=question)
     [run] = read_runs(path).runs
     return run
 
