@@ -388,9 +388,16 @@ def test_a_wrong_result_names_another_service_and_records_it(tmp_path, spec, wro
     }
     assert answers[3] == echo({"service": "cart"})  # get_metrics is untouched
     assert [
-        (s.get("faultline.injected"), s.get("faultline.injected.value"))
+        (
+            s.get("faultline.injected"),
+            s.get("faultline.injected.value"),
+            s.get("faultline.injected.argument"),
+        )
         for s in recorded
-    ] == [(spec, "payment") if n in wrong else (None, None) for n in (2, 3, 4, 5)]
+    ] == [
+        (spec, "payment", "service") if n in wrong else (None, None, None)
+        for n in (2, 3, 4, 5)
+    ]
     assert all(s.get("error.type") is None for s in recorded)
 
 
@@ -407,12 +414,10 @@ def test_a_wrong_result_with_nothing_to_replace_passes_and_says_so(tmp_path):
     )
 
 
-def test_every_occurrence_is_replaced_once_the_longest_first():
-    fault = parse("tool:get_logs:wrong=ad")
+def wrong_answer(spec: str, arguments: dict, text: str):
+    """What tool:...:wrong does to one successful result holding `text`."""
+    fault = parse(spec)
     assert isinstance(fault, ToolFault)
-    injector = fault.injector()
-    request = ToolRequest(1, "get_logs", {"service": "cart", "pod": "cartservice-1"}, 1)
-    text = "cartservice-1 failed; cart retries; cart"
     message = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -422,17 +427,50 @@ def test_every_occurrence_is_replaced_once_the_longest_first():
             "isError": False,
         },
     }
+    return fault.injector().response(ToolRequest(1, "get_logs", arguments, 1), message)
 
-    injection = injector.response(request, message)
+
+LOGS_OF_AD = "--- pod ad-5d9f7 (Ready)\nthread main: loaded 3 ads, header read\nerror"
+
+
+def test_wrong_replaces_the_service_as_a_whole_word_only():
+    injection = wrong_answer(
+        "tool:get_logs:wrong=payment",
+        {"level": "error", "service": "ad"},  # level comes first and is left alone
+        LOGS_OF_AD,
+    )
 
     assert injection is not None and injection.answer is not None
-    assert (
-        injection.answer["result"]["content"][0]["text"] == "ad failed; ad retries; ad"
+    expected = (
+        "--- pod payment-5d9f7 (Ready)\nthread main: loaded 3 ads, header read\nerror"
     )
-    assert injection.answer["result"]["structuredContent"] == {
-        "result": "ad failed; ad retries; ad"
-    }
-    assert injection.value == "ad"
+    result = injection.answer["result"]
+    assert result["content"][0]["text"] == expected
+    assert result["structuredContent"] == {"result": expected}
+    assert (injection.value, injection.argument) == ("payment", "service")
+
+
+def test_without_a_service_wrong_replaces_the_first_string_argument():
+    injection = wrong_answer(
+        "tool:get_logs:wrong=payment",
+        {"lines": 5, "deployment": "ad", "level": "error"},
+        LOGS_OF_AD,
+    )
+
+    assert injection is not None and injection.answer is not None
+    text = injection.answer["result"]["content"][0]["text"]
+    assert text.startswith("--- pod payment-5d9f7 (Ready)\n")
+    assert text.endswith("\nerror")  # the level argument's value is untouched
+    assert injection.argument == "deployment"
+
+
+def test_wrong_with_the_value_nowhere_as_a_word_passes_and_says_so():
+    injection = wrong_answer(
+        "tool:get_logs:wrong=payment", {"service": "ad"}, "loaded 3 ads, header read"
+    )
+
+    assert injection is not None and injection.answer is None
+    assert injection.skipped == "the service 'ad' is not in the result"
 
 
 def test_an_error_result_is_not_data_to_make_wrong():

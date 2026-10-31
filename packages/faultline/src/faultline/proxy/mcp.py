@@ -35,6 +35,7 @@ from faultline.faults import (
 from faultline.model import ToolCall
 from faultline.proxy.context import find as find_run
 from faultline.proxy.record import (
+    INJECTED_ARGUMENT,
     INJECTED_SKIPPED,
     INJECTED_VALUE,
     Attributes,
@@ -215,6 +216,8 @@ class ToolCalls:
                 extra: Attributes = {}
                 if injection.value is not None:
                     extra[INJECTED_VALUE] = injection.value
+                if injection.argument is not None:
+                    extra[INJECTED_ARGUMENT] = injection.argument
                 result, error_type = outcome(injection.answer)
                 self.finish(pending, result, error_type, injector.fault.spec, extra)
                 return (json.dumps(injection.answer) + "\n").encode()

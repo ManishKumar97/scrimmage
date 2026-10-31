@@ -44,6 +44,8 @@ FAULTLINE_INJECTED = "faultline.injected"
 INJECTED_SKIPPED = "faultline.injected.skipped"
 # The value a fault put in, such as the service tool:NAME:wrong=VALUE named.
 INJECTED_VALUE = "faultline.injected.value"
+# The argument of the call whose value the fault replaced, such as "service".
+INJECTED_ARGUMENT = "faultline.injected.argument"
 # The most characters of content a span records, so one huge prompt or tool
 # result cannot fill the disk. Over it, content is cut and the span marked.
 DEFAULT_MAX_CONTENT = 64 * 1024

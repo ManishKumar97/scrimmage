@@ -69,6 +69,7 @@ class Injection:
     # The fault targeted the call but left it as it was, and why.
     skipped: str | None = None
     value: str | None = None  # the value the fault put in, recorded with the call
+    argument: str | None = None  # the argument whose value it replaced
 
 
 @dataclass(frozen=True)
@@ -287,9 +288,13 @@ class Stale(ToolInjector):
 class Wrong(ToolInjector):
     """tool:NAME:wrong=VALUE, the tool answers about the wrong thing, as a success.
 
-    The call goes to the server for real. In its result, every occurrence of each
-    string the call passed as an argument, such as the service it asked about,
-    becomes VALUE. The data stays well formed: it now names another service.
+    The call goes to the server for real. One argument names what the call asked
+    about: the argument `service` when the call has a string one, else the call's
+    first string argument. In the result, each whole-word occurrence of that
+    argument's value becomes VALUE. A word here is letters, digits and underscores,
+    so "ad" in the pod name "ad-5d9f7" is replaced and "ad" in "loaded" or "ads" is
+    not. The data stays well formed: it now names another service. The span records
+    the value and the argument used.
     """
 
     takes_value = True
@@ -301,29 +306,36 @@ class Wrong(ToolInjector):
         if not isinstance(result, dict) or result.get("isError"):
             return Injection(skipped="the tool failed, so there was no data to change")
         value = self.fault.value or ""
-        asked = sorted(
-            {s for s in strings_in(call.arguments) if s and s != value},
-            key=len,
-            reverse=True,  # the longest first, so "cart" never cuts into "cartservice"
-        )
-        if not asked:
+        named = asked_about(call.arguments)
+        if named is None:
             return Injection(skipped="the call passed no string argument to replace")
-        pattern = re.compile("|".join(re.escape(s) for s in asked))
+        argument, asked = named
+        if asked == value:
+            return Injection(skipped=f"the call already asked about {value}")
+        pattern = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(asked)}(?![A-Za-z0-9_])")
         changed = replaced(result, pattern, value)
         if changed == result:
-            return Injection(skipped="no argument value of the call is in the result")
-        return Injection(answer={**message, "result": changed}, value=value)
+            return Injection(skipped=f"the {argument} {asked!r} is not in the result")
+        return Injection(
+            answer={**message, "result": changed}, value=value, argument=argument
+        )
 
 
-def strings_in(value: object) -> list[str]:
-    """Every string in a JSON value, at any depth."""
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, dict):
-        return [s for item in value.values() for s in strings_in(item)]
-    if isinstance(value, list):
-        return [s for item in value for s in strings_in(item)]
-    return []
+# The argument that names what a call asks about, when the call has it.
+ASKED_ABOUT = "service"
+
+
+def asked_about(arguments: object) -> tuple[str, str] | None:
+    """The name and value of the argument the call asks about, or None.
+
+    `service` when it is a non-empty string, else the first non-empty string argument.
+    """
+    if not isinstance(arguments, dict):
+        return None
+    strings = {k: v for k, v in arguments.items() if isinstance(v, str) and v}
+    if ASKED_ABOUT in strings:
+        return ASKED_ABOUT, strings[ASKED_ABOUT]
+    return next(iter(strings.items()), None)
 
 
 def replaced(value: object, pattern: re.Pattern[str], new: str) -> object:
