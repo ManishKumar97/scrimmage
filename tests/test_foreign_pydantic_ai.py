@@ -5,6 +5,7 @@ The reader must find the same steps and tool calls as the agent's own message lo
 with message content recorded and without it.
 """
 
+import asyncio
 import base64
 import json
 from collections.abc import Sequence
@@ -54,9 +55,14 @@ def run_traced(task: int, path: Path, include_content: bool) -> list[ModelMessag
         tracer_provider=provider, include_content=include_content
     )
     Agent.instrument_all(settings)
+    # run_sync looks for the current event loop. Give it its own, not a deprecated default.
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
         messages = make_agent().run_sync(prompt).all_messages()
     finally:
+        asyncio.set_event_loop(None)
+        loop.close()
         Agent.instrument_all(False)  # a global switch: leave it off for other tests
         provider.shutdown()
     return messages
