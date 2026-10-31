@@ -10,6 +10,7 @@ Every error is JSON too: {"error": "...", "status": 404}.
 import argparse
 import json
 import sys
+import traceback
 from collections.abc import Sequence
 from datetime import timedelta
 from http import HTTPStatus
@@ -37,6 +38,8 @@ class FindingsServer(ThreadingHTTPServer):
         self.specs = list(specs)
         self.service = service
         self.config = config
+        # A trace store source cannot read without a window; a file source can.
+        self.needs_window = not all(can_read_all(spec, service) for spec in specs)
 
     def report(self, since: timedelta | None) -> dict:
         """The report for the window, as `find --json` prints it.
@@ -51,20 +54,40 @@ class FindingsServer(ThreadingHTTPServer):
         return find(runs, self.config).to_json()
 
 
+def can_read_all(spec: str, service: str | None) -> bool:
+    try:
+        parse_source(spec, service=service)
+    except ValueError:
+        return False
+    return True
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
+        try:
+            self.route()
+        except Exception:  # noqa: BLE001 - last resort: a bug answers JSON, logs detail
+            traceback.print_exc(file=sys.stderr)
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal error")
+
+    def do_HEAD(self) -> None:
+        self.do_GET()  # the same status and headers, and no body (see send_json)
+
+    def route(self) -> None:
         url = urlsplit(self.path)
         if url.path == "/api/health":
             self.send_json(HTTPStatus.OK, {"status": "ok"})
         elif url.path == "/api/findings":
-            self.findings(parse_qs(url.query))
+            # Blank values kept, so ?since= is an error, not the same as no since.
+            self.findings(parse_qs(url.query, keep_blank_values=True))
         else:
             self.send_error(HTTPStatus.NOT_FOUND, f"no route {url.path}")
 
     def findings(self, query: dict[str, list[str]]) -> None:
+        server = cast(FindingsServer, self.server)
         try:
-            since = parse_since(query["since"][-1]) if "since" in query else None
-            report = cast(FindingsServer, self.server).report(since)
+            since = window(query, server.needs_window)
+            report = server.report(since)
         except ValueError as error:
             self.send_error(HTTPStatus.BAD_REQUEST, str(error))
         except OSError as error:
@@ -91,6 +114,24 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(data)
+
+
+def window(query: dict[str, list[str]], needed: bool) -> timedelta | None:
+    """The `since` parameter, None when absent. Raises ValueError worded for HTTP."""
+    if "since" not in query:
+        if needed:
+            raise ValueError(
+                "this server reads a trace store, which needs a window: "
+                "add ?since=, for example /api/findings?since=1h"
+            )
+        return None
+    text = query["since"][-1]
+    if not text:
+        raise ValueError("since= is empty; give a window, for example ?since=1h")
+    try:
+        return parse_since(text)
+    except ValueError as error:
+        raise ValueError(f"query parameter since: {error}") from error
 
 
 def add_parser(subparsers) -> None:

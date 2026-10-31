@@ -1,3 +1,4 @@
+import http.client
 import json
 import threading
 import time
@@ -91,7 +92,7 @@ def test_findings_from_jaeger_are_what_find_prints_for_jaeger(tmp_path, capsys):
     assert served == printed
     assert served["summary"]["faults"]["tool_error"] == 1
     assert missing == 400
-    assert "needs a window" in error["error"]
+    assert "needs a window: add ?since=" in error["error"]
 
 
 def test_health_answers_ok(tmp_path):
@@ -105,6 +106,8 @@ def test_health_answers_ok(tmp_path):
         ("/", "GET", 404),
         ("/api/finding", "GET", 404),
         ("/api/findings?since=soon", "GET", 400),
+        ("/api/findings?since=", "GET", 400),
+        ("/api/findings?since=99999d", "GET", 400),
         ("/api/findings", "POST", 501),
         ("/api/findings", "DELETE", 501),
     ],
@@ -116,6 +119,52 @@ def test_anything_else_is_an_error_in_json(tmp_path, path, method, status):
     assert (code, kind) == (status, "application/json")
     assert body["status"] == status
     assert body["error"]
+
+
+@pytest.mark.parametrize(
+    ("query", "message"),
+    [
+        ("since=", "since= is empty; give a window, for example ?since=1h"),
+        ("since", "since= is empty"),
+        ("since=soon", "query parameter since: bad duration 'soon'"),
+    ],
+)
+def test_a_bad_since_says_what_to_send(tmp_path, query, message):
+    with serving(f"file:{tmp_path}") as url:
+        status, _, body = get(f"{url}/api/findings?{query}")
+
+    assert status == 400
+    assert message in body["error"]
+
+
+def test_head_answers_the_status_and_headers_without_a_body(tmp_path):
+    with serving(f"file:{tmp_path}") as url:
+        host, port = url.removeprefix("http://").split(":")
+        answers = []
+        for path in ("/api/health", "/nope"):
+            connection = http.client.HTTPConnection(host, int(port), timeout=10)
+            connection.request("HEAD", path)
+            response = connection.getresponse()
+            answers.append((response.status, response.read()))
+            assert int(response.headers["Content-Length"]) > 0
+            connection.close()
+
+    assert answers == [(200, b""), (404, b"")]
+
+
+def test_an_unexpected_error_is_a_json_500_and_logged(tmp_path, monkeypatch, capsys):
+    def broken(self, since):
+        raise RuntimeError("a bug in the engine")
+
+    monkeypatch.setattr(FindingsServer, "report", broken)
+    with serving(f"file:{tmp_path}") as url:
+        status, kind, body = get(f"{url}/api/findings")
+        health = get(f"{url}/api/health")[0]
+
+    assert (status, kind) == (500, "application/json")
+    assert body == {"error": "internal error", "status": 500}
+    assert "RuntimeError: a bug in the engine" in capsys.readouterr().err
+    assert health == 200  # the server keeps answering
 
 
 def test_a_source_that_cannot_be_read_is_a_bad_gateway(tmp_path):
