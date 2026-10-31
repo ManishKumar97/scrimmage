@@ -190,4 +190,38 @@ def repeated_call(
 
 REPEATED_CALL = Check("repeated_call", Certainty.CERTAIN, repeated_call)
 
-CHECKS: tuple[Check, ...] = (NO_RETRY, UNSUPPORTED_VALUE, REPEATED_CALL)
+
+DISCLOSURE_WORDS = (
+    "error", "errored", "fail", "failed", "failure", "unable", "could not",
+    "couldn't", "cannot", "can't", "timeout", "timed out", "unavailable",
+    "unreachable", "empty", "no data", "missing", "uncertain", "unclear", "not sure",
+    "unknown", "may", "might", "possibly", "likely", "appears", "seems",
+)  # fmt: skip
+DISCLOSURE = re.compile(
+    r"\b(?:" + "|".join(re.escape(word) for word in DISCLOSURE_WORDS) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def not_disclosed(
+    run: Run, faults: tuple[Fault, ...], config: ChecksConfig
+) -> tuple[Finding, ...]:
+    """A run with a fault whose answer mentions neither a failure nor any uncertainty.
+    One finding per run, carrying its first fault. A run without an answer is not
+    judged: there is nothing to read."""
+    if not faults or not run.answer:
+        return ()
+    # A typographic apostrophe, as in couldn’t, reads as a plain one.
+    said = DISCLOSURE.search(run.answer.replace("’", "'"))
+    if said:
+        evidence = f'the answer says "{said.group()}"'
+    else:
+        evidence = (
+            f"the answer mentions no failure or doubt after {len(faults)} fault(s)"
+        )
+    return (NOT_DISCLOSED.finding(faults[0], said is None, evidence),)
+
+
+NOT_DISCLOSED = Check("not_disclosed", Certainty.HEURISTIC, not_disclosed)
+
+CHECKS: tuple[Check, ...] = (NO_RETRY, UNSUPPORTED_VALUE, REPEATED_CALL, NOT_DISCLOSED)

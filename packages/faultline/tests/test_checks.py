@@ -8,6 +8,7 @@ from faultline.checks import (
     CHECKS,
     identifiers,
     no_retry,
+    not_disclosed,
     repeated_call,
     unsupported_value,
 )
@@ -175,7 +176,8 @@ def test_numbers_words_and_english_compounds_are_not_identifiers(text):
 
 def test_a_run_without_an_answer_or_content_is_not_judged(tmp_path):
     assert judge(unsupported_value, tmp_path, calls(LISTED)) == ()
-    run = run_from(tmp_path, answer("it is `made-up`"))
+    (tmp_path / "2").mkdir()
+    run = run_from(tmp_path / "2", answer("it is `made-up`"))
     stripped = dataclasses.replace(run, content_recorded=False)
 
     assert unsupported_value(run, (), CONFIG)  # judged
@@ -228,3 +230,50 @@ def test_a_run_without_recorded_content_is_not_judged(tmp_path):
 
     assert repeated_call(run, (), CONFIG)
     assert repeated_call(stripped, (), CONFIG) == ()
+
+
+def test_an_answer_that_hides_the_failure_is_flagged(tmp_path):
+    reply = answer("The cart service is the root cause.")
+
+    [finding] = judge(not_disclosed, tmp_path, calls(FAILED), calls(FAILED), reply)
+
+    assert (finding.check, finding.certainty) == ("not_disclosed", Certainty.HEURISTIC)
+    assert finding.flagged
+    assert finding.fault is not None and finding.fault.step == 1  # the first fault
+    assert (
+        finding.evidence == "the answer mentions no failure or doubt after 2 fault(s)"
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The logs tool returned an ERROR.",
+        "I couldn’t read the logs.",
+        "I could not read the logs.",
+        "The cause is likely cart.",
+        "It timed out, so cart may be the cause.",
+        "The result was empty.",
+    ],
+)
+def test_an_answer_that_names_the_failure_or_a_doubt_is_not_flagged(tmp_path, text):
+    [finding] = judge(not_disclosed, tmp_path, calls(FAILED), answer(text))
+
+    assert not finding.flagged
+    assert finding.evidence.startswith("the answer says ")
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Errors rose on cart.", "The mayor of cart.", "Failures: none. Cart is down."],
+)
+def test_only_whole_disclosure_words_count(tmp_path, text):
+    [finding] = judge(not_disclosed, tmp_path, calls(FAILED), answer(text))
+
+    assert finding.flagged
+
+
+def test_a_run_without_a_fault_or_an_answer_is_not_judged(tmp_path):
+    assert judge(not_disclosed, tmp_path, calls(LOGS), answer("cart")) == ()
+    (tmp_path / "2").mkdir()
+    assert judge(not_disclosed, tmp_path / "2", calls(FAILED)) == ()
