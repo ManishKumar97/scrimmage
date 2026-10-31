@@ -360,13 +360,14 @@ def test_the_file_uses_hex_ids_and_integer_enums_as_otlp_json_requires(tmp_path:
 def test_with_an_otlp_endpoint_set_the_spans_also_go_there_over_http(
     tmp_path: Path, monkeypatch
 ):
-    received: list[bytes] = []
+    # (path, content type, body) of each request. Checked in the test's own thread:
+    # an assert in the handler's thread fails only that request, not the test.
+    received: list[tuple[str, str, bytes]] = []
 
     class Collector(BaseHTTPRequestHandler):
         def do_POST(self) -> None:
-            received.append(self.rfile.read(int(self.headers["Content-Length"])))
-            assert self.path == "/v1/traces"
-            assert self.headers["Content-Type"] == "application/x-protobuf"
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            received.append((self.path, self.headers["Content-Type"], body))
             self.send_response(200)
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -393,8 +394,12 @@ def test_with_an_otlp_endpoint_set_the_spans_also_go_there_over_http(
         server.shutdown()
         server.server_close()
 
+    assert received
+    assert {(path, kind) for path, kind, _ in received} == {
+        ("/v1/traces", "application/x-protobuf")
+    }
     sent = []
-    for body in received:
+    for _, _, body in received:
         request = ExportTraceServiceRequest.FromString(body)
         sent += [
             span.span_id.hex()
