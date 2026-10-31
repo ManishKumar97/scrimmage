@@ -15,7 +15,7 @@ from pathlib import Path
 PACKAGE = Path(__file__).parents[1]
 ALLOWED = set(sys.stdlib_module_names) | {"faultline"}
 TEST_TOOLS = {"pytest", "opentelemetry"}
-TEST_HELPERS = {"spans"}  # tests/spans.py, the product's own span-file builder
+TEST_HELPERS = {"spans", "fake_jaeger"}  # the product's own test helpers in tests/
 
 
 def test_importing_the_product_loads_only_the_product_and_the_standard_library():

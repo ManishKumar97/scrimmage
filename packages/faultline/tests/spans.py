@@ -6,7 +6,7 @@ A step is {"finish": "stop", "error": None, "text": "", "calls": [...]}.
 A call is {"name": "t", "id": "c1", "arguments": "{}", "result": "ok", "error": None,
 "seconds": 1.0}. Every key is optional; arguments are not recorded unless given.
 A last step with text and no calls is the run's answer.
-Steps run one after another, 100 seconds apart.
+Steps run one after another, 100 seconds apart, from `base` (unix nanoseconds).
 """
 
 import json
@@ -39,13 +39,16 @@ def span(trace: str, span_id: str, parent: str | None, start: int, end: int) -> 
 
 
 def spans_of(
-    steps: list[dict], trace: str = "t1", question: str | None = None
+    steps: list[dict],
+    trace: str = "t1",
+    question: str | None = None,
+    base: int = BASE,
 ) -> list[dict]:
-    root = span(trace, "root", None, BASE, BASE + (len(steps) + 1) * STEP_GAP)
+    root = span(trace, "root", None, base, base + (len(steps) + 1) * STEP_GAP)
     root["attributes"].append(string("gen_ai.operation.name", "invoke_agent"))
     spans = [root]
     for number, step in enumerate(steps, start=1):
-        start = BASE + number * STEP_GAP
+        start = base + number * STEP_GAP
         calls = step.get("calls", [])
         chat = span(trace, f"chat{number}", "root", start, start + SECOND)
         parts = [{"type": "text", "content": step.get("text", "")}]
@@ -97,9 +100,13 @@ def spans_of(
 
 
 def write_trace(
-    path: Path, *steps: dict, trace: str = "t1", question: str | None = None
+    path: Path,
+    *steps: dict,
+    trace: str = "t1",
+    question: str | None = None,
+    base: int = BASE,
 ) -> Path:
-    spans = spans_of(list(steps), trace, question)
+    spans = spans_of(list(steps), trace, question, base)
     request = {"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]}
     with path.open("a") as file:
         file.write(json.dumps(request) + "\n")

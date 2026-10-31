@@ -9,6 +9,7 @@ The agent never takes them from Faultline: Faultline reads its traces as it read
 
 import base64
 import json
+import os
 import threading
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -19,9 +20,11 @@ from google.protobuf.json_format import MessageToDict
 from opentelemetry import trace
 from opentelemetry.context import Context
 from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import (
+    BatchSpanProcessor,
     SimpleSpanProcessor,
     SpanExporter,
     SpanExportResult,
@@ -96,11 +99,26 @@ def hex_ids(node):
     return node
 
 
+# The standard OpenTelemetry variables that name an OTLP endpoint for traces.
+OTLP_ENDPOINT_VARIABLES = (
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+)
+
+
 def file_provider(path: Path) -> TracerProvider:
-    """A provider that writes every finished span to `path` at once, with no network."""
+    """A provider that writes every finished span to `path` at once.
+
+    When a standard OTLP endpoint variable is set, it also sends the spans there over
+    OTLP/HTTP, as any instrumented service does. The file is written either way.
+    """
     provider = TracerProvider(resource=Resource.create({"service.name": AGENT_NAME}))
     # Simple, not batch: a span is on disk when it ends, even if the process dies next.
     provider.add_span_processor(SimpleSpanProcessor(OtlpJsonFileExporter(path)))
+    if any(os.environ.get(name) for name in OTLP_ENDPOINT_VARIABLES):
+        # Batch for the network, as production does; shutdown() flushes what is left.
+        # The exporter reads the endpoint, headers and timeout from the same variables.
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     return provider
 
 

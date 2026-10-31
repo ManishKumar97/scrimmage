@@ -4,13 +4,14 @@ import argparse
 import sys
 from collections.abc import Sequence
 
-from faultline import find
+from faultline import find, serve
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="faultline")
     subparsers = parser.add_subparsers(dest="command", required=True)
     find.add_parser(subparsers)
+    serve.add_parser(subparsers)
     args = parser.parse_args(argv)
     return args.handler(args)
 

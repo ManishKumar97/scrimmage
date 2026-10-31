@@ -10,7 +10,9 @@ It holds two packages in one uv workspace.
   It has no runtime dependencies and imports nothing from the lab.
 - `lab` is the test bed, the `faultline-lab` package (module `faultline_lab`).
   It holds the reference agent that Faultline tests, an incident diagnosis agent for a microservice app on Kubernetes, and the runner that injects the incidents in `lab/incidents.yaml`.
-  The lab imports the product, never the reverse.
+  It imports nothing from the product: it is a customer that Faultline reads like any other agent.
+- Neither package imports the other; `lint-imports` checks both directions.
+  Only the root `tests/` folder imports both, for tests that cross the line.
 
 ## The diagnosis agent
 
@@ -29,14 +31,15 @@ It calls tools in a loop until it can name a cause, quoting the log lines that s
 ## Traces
 
 Every run writes OpenTelemetry spans to a local file.
-Nothing is sent over the network.
+Nothing is sent over the network unless a standard OTLP endpoint variable is set.
 
 - One root span per run (`invoke_agent`), one child span per model call (`chat <model>`) and one per tool call (`execute_tool <name>`).
 - Tool spans are children of the run span, not of a model call, because a reply's tool calls run at the same time. Each span has `faultline.step`, the number of the model call it belongs to.
 - Attribute names follow the OpenTelemetry GenAI semantic conventions: operation, provider, model, input and output tokens, finish reasons, tool name, tool call id.
 - The root span carries the stop reason, steps, tokens and budget. A tool error, a model API error and any stop reason other than `done` set the span status to ERROR with the error text.
 - Spans are written as OTLP JSON, one line per export, to `runs/traces.jsonl` (the `runs/` folder is git-ignored). `TRACE_FILE` changes the path.
-- Spans hold the system prompt, the messages, the tool definitions, tool arguments and results, the question and the answer, because a later replay needs them. They are written to a local file and go nowhere else.
+- Spans hold the system prompt, the messages, the tool definitions, tool arguments and results, the question and the answer, because a later replay needs them. They are written to a local file and go nowhere else by default.
+- When `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` is set, the spans also go to that endpoint over OTLP/HTTP, as from any instrumented service. The file is still written.
 
 ## Run it
 
@@ -53,6 +56,55 @@ Print the runs in span files with the product's reader:
 ```bash
 uv run python -m faultline.runs runs/traces.jsonl
 ```
+
+Find the faults in the last hour of runs, from a file or from Jaeger's query API (v3).
+A Jaeger source needs the traced service and a window; give the base URL with Jaeger's base path, if it has one.
+
+```bash
+uv run faultline find --since 1h runs/traces.jsonl
+uv run faultline find --source jaeger:http://localhost:16686 --service faultline-ida --since 1h
+```
+
+Serve the same report as JSON over HTTP, for Grafana or a script.
+`GET /api/findings?since=1h` answers what `faultline find --json --since 1h` prints; `GET /api/health` answers `{"status": "ok"}`.
+It is read-only and listens on 127.0.0.1:8765 unless `--host` and `--port` say otherwise.
+
+`faultline serve` has no authentication and no TLS.
+Anyone who can reach its port can read every finding, and a finding's evidence quotes tool arguments and the agent's answers.
+Bind it only to loopback or to an address on a network you trust, such as the bridge between Grafana and the host; put a reverse proxy with authentication in front of it for anything wider.
+
+```bash
+uv run faultline serve --source jaeger:http://localhost:16686 --service faultline-ida
+curl 'http://127.0.0.1:8765/api/findings?since=1h'
+```
+
+## Show the findings in Grafana
+
+`deploy/grafana/` holds a dashboard and a datasource for any Grafana 11 that can reach `faultline serve`.
+The dashboard lists every finding in a window before now (run, fault kind, check, flagged, certainty, evidence) and counts the faults per kind.
+It reads the JSON API through the [Infinity](https://grafana.com/grafana/plugins/yesoreyeram-infinity-datasource/) datasource plugin.
+
+1. Install the plugin, for example with `GF_INSTALL_PLUGINS=yesoreyeram-infinity-datasource` or `grafana cli plugins install yesoreyeram-infinity-datasource`.
+   Pin a release that supports your Grafana: 3.7.1 is the last one for Grafana 11.5.
+2. Copy `deploy/grafana/datasource.yaml` into Grafana's datasource provisioning folder, by default `/etc/grafana/provisioning/datasources/`.
+   Set `url` and `allowedHosts` to where `faultline serve` listens, as Grafana's server sees it.
+   Keep the uid `faultline`: the dashboard's panels name it.
+3. Add a file dashboard provider in `/etc/grafana/provisioning/dashboards/`, and put `deploy/grafana/faultline-dashboard.json` in the folder it reads:
+
+   ```yaml
+   apiVersion: 1
+   providers:
+     - name: faultline
+       type: file
+       folder: Faultline
+       options:
+         path: /var/lib/grafana/dashboards/faultline
+   ```
+
+4. Start `faultline serve` on an address Grafana can reach, then restart Grafana.
+   The dashboard asks for `/api/findings?since=` the window picked in its Window variable (15m to 7d).
+
+With the Grafana Helm chart the same files go in the `plugins`, `datasources`, `dashboardProviders` and `dashboardsConfigMaps` values, the dashboard in a ConfigMap.
 
 ## Pick a provider
 
