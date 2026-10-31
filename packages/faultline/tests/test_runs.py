@@ -34,7 +34,7 @@ def test_a_normal_run_has_its_steps_and_tool_calls():
     assert [c.name for c in run.steps[0].tool_calls] == ["get_logs", "list_pods"]
     assert run.steps[0].tool_calls[0].arguments == '{"service": "cart"}'
     assert run.steps[0].tool_calls[0].seconds == 0.5
-    assert run.steps[1].tool_calls == []
+    assert run.steps[1].tool_calls == ()
 
 
 def test_a_tool_call_belongs_to_the_step_that_asked_for_its_id():
@@ -43,7 +43,7 @@ def test_a_tool_call_belongs_to_the_step_that_asked_for_its_id():
     [run] = read_runs(path).runs
 
     assert [c.call_id for c in run.steps[0].tool_calls] == ["a"]
-    assert run.steps[1].tool_calls == []
+    assert run.steps[1].tool_calls == ()
 
 
 def test_a_tool_call_no_step_claims_goes_to_the_last_step_before_it():
@@ -51,7 +51,7 @@ def test_a_tool_call_no_step_claims_goes_to_the_last_step_before_it():
 
     [run] = read_runs(path).runs
 
-    assert run.steps[0].tool_calls == []
+    assert run.steps[0].tool_calls == ()
     assert [c.call_id for c in run.steps[1].tool_calls] == ["unknown"]
 
 
@@ -61,7 +61,7 @@ def test_a_tool_call_before_any_step_is_kept_on_the_run():
     [run] = read_runs(path).runs
 
     assert [c.call_id for c in run.unplaced] == ["early"]
-    assert run.steps[0].tool_calls == []
+    assert run.steps[0].tool_calls == ()
     assert len(run.tool_calls) == 1
     assert "before any step" in show_run(run)
 
@@ -277,7 +277,7 @@ def test_when_two_steps_ask_for_one_id_the_first_gets_the_call():
     [run] = read_runs(path).runs
 
     assert len(run.steps[0].tool_calls) == 1
-    assert run.steps[1].tool_calls == []
+    assert run.steps[1].tool_calls == ()
 
 
 def test_a_tool_call_that_starts_with_a_step_belongs_to_it():
@@ -285,7 +285,7 @@ def test_a_tool_call_that_starts_with_a_step_belongs_to_it():
 
     [run] = read_runs(path).runs
 
-    assert run.unplaced == []
+    assert run.unplaced == ()
     assert len(run.steps[0].tool_calls) == 1
 
 
@@ -321,7 +321,7 @@ def test_narration_is_not_the_answer_when_the_tool_spans_were_never_written():
 
     [run] = read_runs(path).runs
 
-    assert run.steps[0].tool_calls == []
+    assert run.steps[0].tool_calls == ()
     assert run.answer is None
 
 

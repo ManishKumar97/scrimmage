@@ -11,9 +11,10 @@ any agent that follows the convention reads the same way.
 
 import argparse
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, replace
 from pathlib import Path
 
+from faultline.model import Run, Step, ToolCall
 from faultline.semconv import (
     CHAT,
     ERROR_TYPE,
@@ -34,55 +35,6 @@ from faultline.semconv import (
 
 STATUS_ERROR = 2  # OTLP status code
 NANOS = 1_000_000_000
-
-
-@dataclass
-class ToolCall:
-    name: str
-    call_id: str
-    arguments: str
-    seconds: float
-    result: str
-    error_type: str | None = None  # None means the call succeeded
-    started: int = 0  # unix nanoseconds
-
-
-@dataclass
-class Step:
-    number: int
-    input_tokens: int | None
-    output_tokens: int | None
-    finish_reason: str | None
-    text: str
-    error_type: str | None = None  # None means the model call succeeded
-    started: int = 0
-    tool_calls: list[ToolCall] = field(default_factory=list)
-
-    @property
-    def tokens(self) -> int:
-        return (self.input_tokens or 0) + (self.output_tokens or 0)
-
-
-@dataclass
-class Run:
-    trace_id: str
-    model: str | None
-    stop_reason: str | None
-    question: str | None
-    answer: str | None
-    seconds: float | None  # None when the root span is missing
-    complete: bool  # False when the root span is missing: the process died first
-    error_type: str | None = None  # the root span ended in ERROR
-    steps: list[Step] = field(default_factory=list)
-    unplaced: list[ToolCall] = field(default_factory=list)  # before any step
-
-    @property
-    def tokens(self) -> int:
-        return sum(step.tokens for step in self.steps)
-
-    @property
-    def tool_calls(self) -> list[ToolCall]:
-        return [call for step in self.steps for call in step.tool_calls] + self.unplaced
 
 
 def any_value(value: dict):
@@ -179,35 +131,44 @@ def build_run(trace_id: str, spans: list[dict]) -> Run | None:
     candidates = parentless if len(parentless) == 1 else roots
     root = min(candidates, key=started) if candidates else None
     attrs = root["attrs"] if root else {}
-    run = Run(
+    steps = [step_of(number, span) for number, span in enumerate(chats, start=1)]
+    # Which step asked for each tool call id, from its output messages.
+    asked: dict[str, int] = {}
+    for index, span in enumerate(chats):
+        for call_id in asked_ids(span):
+            asked.setdefault(call_id, index)
+    # Collect each step's calls in lists, then freeze them into the steps.
+    placed: list[list[ToolCall]] = [[] for _ in steps]
+    unplaced: list[ToolCall] = []
+    tools = sorted((s for s in spans if operation(s) == EXECUTE_TOOL), key=started)
+    for span in tools:
+        call = tool_call_of(span)
+        index = asked.get(call.call_id)
+        if index is None:
+            index = last_started_before(steps, call.started)
+        (placed[index] if index is not None else unplaced).append(call)
+    steps = [
+        replace(step, tool_calls=tuple(calls))
+        for step, calls in zip(steps, placed, strict=True)
+    ]
+    answer = attrs.get("faultline.answer")
+    # Only a last reply that ends the turn is an answer. A run cut off mid-way ends in
+    # narration before tool calls, which is not one.
+    if answer is None and is_final(steps[-1]):
+        answer = steps[-1].text
+    return Run(
         trace_id=trace_id,
         model=attrs.get(GEN_AI_REQUEST_MODEL)
         or chats[0]["attrs"].get(GEN_AI_REQUEST_MODEL),
         stop_reason=attrs.get("faultline.stop_reason"),
         question=attrs.get("faultline.question") or first_user_text(chats[0]),
-        answer=attrs.get("faultline.answer"),
+        answer=answer,
         seconds=seconds_of(root) if root else None,
         complete=root is not None,
         error_type=error_type_of(root) if root else None,
+        steps=tuple(steps),
+        unplaced=tuple(unplaced),
     )
-    # Which tool call ids each step asked for, from its output messages.
-    asked: dict[str, Step] = {}
-    for number, span in enumerate(chats, start=1):
-        step = step_of(number, span)
-        run.steps.append(step)
-        for call_id in asked_ids(span):
-            asked.setdefault(call_id, step)
-    tools = sorted((s for s in spans if operation(s) == EXECUTE_TOOL), key=started)
-    for span in tools:
-        call = tool_call_of(span)
-        step = asked.get(call.call_id) or last_started_before(run.steps, call.started)
-        (step.tool_calls if step else run.unplaced).append(call)
-    final = run.steps[-1]
-    # Only a last reply that ends the turn is an answer. A run cut off mid-way ends in
-    # narration before tool calls, which is not one.
-    if run.answer is None and is_final(final):
-        run.answer = final.text
-    return run
 
 
 def output_parts(span: dict) -> list[dict]:
@@ -279,8 +240,9 @@ def tool_call_of(span: dict) -> ToolCall:
     )
 
 
-def last_started_before(steps: list[Step], time: int) -> Step | None:
-    before = [step for step in steps if step.started <= time]
+def last_started_before(steps: list[Step], time: int) -> int | None:
+    """The index of the last step that started at or before `time`, else None."""
+    before = [index for index, step in enumerate(steps) if step.started <= time]
     return before[-1] if before else None
 
 
