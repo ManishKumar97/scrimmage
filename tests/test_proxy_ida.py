@@ -103,6 +103,7 @@ def under_faultline(upstream: str, trace: Path, *flags: str) -> list[str]:
     return [
         FAULTLINE,
         "run",
+        "--allow-live-tools",
         "--base-url-env",
         "GROQ_BASE_URL",
         "--upstream",

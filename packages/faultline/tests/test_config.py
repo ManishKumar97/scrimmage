@@ -100,3 +100,14 @@ def test_find_reports_a_bad_config_and_exits_2(tmp_path, capsys):
     captured = capsys.readouterr()
     assert "attributes.questoin" in captured.err
     assert captured.out == ""
+
+
+def test_prices_are_optional_numbers_and_never_negative():
+    config = parse_config("[cost]\ninput_per_mtok = 3\noutput_per_mtok = 15.5\n")
+
+    assert (config.cost.input_per_mtok, config.cost.output_per_mtok) == (3.0, 15.5)
+    assert Config().cost.input_per_mtok is None  # no built-in price table
+    with pytest.raises(ConfigError, match="cost.input_per_mtok must be >= 0"):
+        parse_config("[cost]\ninput_per_mtok = -1\n")
+    with pytest.raises(ConfigError, match="cost.output_per_mtok has the wrong type"):
+        parse_config("[cost]\noutput_per_mtok = 'cheap'\n")

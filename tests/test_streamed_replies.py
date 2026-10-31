@@ -159,7 +159,15 @@ def test_streamed_replies_from_both_sdks_read_back_as_steps(tmp_path):
     with streaming() as server:
         env.update(OPENAI_BASE_URL=server.url + "/v1", ANTHROPIC_BASE_URL=server.url)
         result = subprocess.run(
-            [FAULTLINE, "run", "--expect", "cart", "--trace", str(trace)]
+            [
+                FAULTLINE,
+                "run",
+                "--allow-live-tools",
+                "--expect",
+                "cart",
+                "--trace",
+                str(trace),
+            ]
             + ["--", sys.executable, "-c", AGENT],
             env=env,
             capture_output=True,
@@ -177,4 +185,6 @@ def test_streamed_replies_from_both_sdks_read_back_as_steps(tmp_path):
     ]
     assert [(s.input_tokens, s.output_tokens) for s in run.steps] == [(6, 3), (8, 4)]
     assert run.answer == "the cart is down"
-    assert result.stderr.splitlines()[-1] == 'verdict: passed (answer has "cart")'
+    assert result.stderr.splitlines()[-1] == (
+        "verdict: passed (answer matches the expected answer)"
+    )

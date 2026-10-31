@@ -10,6 +10,12 @@ It watches each `tools/call` request and the response with the same JSON-RPC id,
 records the pair as a tool call. The server's stderr passes straight through.
 Under `faultline run`, each tool call becomes an `execute_tool` span in the run's trace,
 and a tool named in a `tool:NAME:KIND` fault is answered by the fault, not the server.
+The wrapper also writes the server's tool list to the trace directory.
+
+Block mode. Unless `faultline run` was given --allow-live-tools, the wrapper answers
+every tools/call no fault answers with an MCP error, "blocked by faultline: live
+tool", and the server never sees it. tools/list still passes through, so faultline
+run can show the team every tool that would run for real.
 """
 
 import argparse
@@ -34,6 +40,7 @@ from faultline.faults import (
 )
 from faultline.model import ToolCall
 from faultline.proxy.context import find as find_run
+from faultline.proxy.listing import ServerTools, path_for
 from faultline.proxy.record import (
     INJECTED_ARGUMENT,
     INJECTED_SKIPPED,
@@ -49,6 +56,11 @@ SHAPE_INVALID = "fault_shape_invalid"
 TIMEOUT = "timeout"
 # The longest line, in bytes. A tool result can be large, such as many log lines.
 LINE_LIMIT = 128 * 1024 * 1024
+# The answer to a tools/call in block mode, and the error type on its span.
+BLOCKED_MESSAGE = "blocked by faultline: live tool"
+BLOCKED = "blocked"
+# A JSON-RPC error code in the range left to the implementation (-32000 to -32099).
+BLOCKED_CODE = -32000
 
 
 def add_parser(subparsers) -> None:
@@ -78,7 +90,17 @@ def wrap(args: argparse.Namespace) -> int:
     tool_faults = [fault for fault in faults if isinstance(fault, ToolFault)]
     stale_from = run.stale_from if run else None
     options = ToolOptions(Path(stale_from) if stale_from else None)
-    calls = ToolCalls(recorder.tool_call if recorder else None, tool_faults, options)
+    listing = None
+    if run:
+        listing = ServerTools(list(command), path=path_for(run.trace_dir, os.getpid()))
+        listing.write()  # so faultline run knows this server started
+    calls = ToolCalls(
+        recorder.tool_call if recorder else None,
+        tool_faults,
+        options,
+        block=bool(run and run.block_tools),
+        listing=listing,
+    )
     return asyncio.run(relay(command, calls))
 
 
@@ -99,7 +121,11 @@ class ToolCalls:
         on_call: Callable[[ToolCall, Attributes], None] | None = None,
         faults: Sequence[ToolFault] = (),
         options: ToolOptions = ToolOptions(),
+        block: bool = False,
+        listing: ServerTools | None = None,
     ) -> None:
+        self.block = block  # answer each call no fault answers with an error
+        self.listing_file = listing  # where the server's tool list is written
         self.pending: dict[str, Pending] = {}
         self.calls: list[ToolCall] = []
         self.on_call = on_call
@@ -162,6 +188,14 @@ class ToolCalls:
             if injection is not None and injection.hang:
                 self.hung[key(message["id"])] = (pending, spec)
                 return b""  # the server never sees it, the client never hears back
+        if self.block:
+            print(
+                f"faultline mcp-wrap: blocked {pending.name}: it would run for real, "
+                "and the run has no --allow-live-tools",
+                file=sys.stderr,
+            )
+            self.finish(pending, BLOCKED_MESSAGE, BLOCKED)
+            return (json.dumps(blocked(message["id"])) + "\n").encode()
         pending.request = request
         self.pending[key(message["id"])] = pending
         return None
@@ -203,6 +237,10 @@ class ToolCalls:
             self.tags_results = self.tags_results or "resultType" in result
             if key(message["id"]) in self.listing:
                 self.learn_schemas(result)
+                self.learn_tools(result)
+            info = result.get("serverInfo")
+            if self.listing_file and isinstance(info, dict) and info.get("name"):
+                self.listing_file.named(str(info["name"]))
         self.listing.discard(key(message["id"]))
         pending = self.pending.pop(key(message["id"]), None)
         if pending is None:
@@ -232,6 +270,13 @@ class ToolCalls:
         extra = {INJECTED_SKIPPED: "; ".join(skipped)} if skipped else {}
         self.finish(pending, result, error_type, extra=extra)
         return None
+
+    def learn_tools(self, listed: dict) -> None:
+        tools = listed.get("tools")
+        if self.listing_file and isinstance(tools, list):
+            self.listing_file.add(
+                [str(t["name"]) for t in tools if isinstance(t, dict) and "name" in t]
+            )
 
     def learn_schemas(self, listed: dict) -> None:
         tools = listed.get("tools")
@@ -278,6 +323,12 @@ def parse(line: bytes) -> dict:
     except ValueError:
         return {}
     return message if isinstance(message, dict) else {}
+
+
+def blocked(request_id: object) -> dict:
+    """The JSON-RPC error a blocked tools/call gets."""
+    error = {"code": BLOCKED_CODE, "message": BLOCKED_MESSAGE}
+    return {"jsonrpc": "2.0", "id": request_id, "error": error}
 
 
 def key(request_id: object) -> str:

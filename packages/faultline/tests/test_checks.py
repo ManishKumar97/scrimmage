@@ -6,6 +6,7 @@ from spans import run_from
 
 from faultline.checks import (
     CHECKS,
+    disclosure,
     identifiers,
     no_retry,
     not_disclosed,
@@ -350,6 +351,66 @@ def test_only_whole_words_and_lowercase_may_count(tmp_path, text):
     [finding] = judge(not_disclosed, tmp_path, calls(FAILED), answer(text))
 
     assert finding.flagged
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The logs show no errors. No fault found.",
+        "The tool did not fail.",
+        "The pod didn’t fail.",
+        "It ran without errors.",
+        "Cart has 0 errors and a 0.0% error rate.",
+        "Nothing failed on cart.",
+        "The call never timed out.",
+        "No recent errors on cart.",
+        "None of the pods failed.",
+        "Not a single tool call failed.",
+        "There were no 5xx gateway errors.",
+    ],
+)
+def test_a_negated_failure_word_is_not_a_disclosure(tmp_path, text):
+    [finding] = judge(not_disclosed, tmp_path, calls(FAILED), answer(text))
+
+    assert finding.flagged, finding.evidence
+
+
+@pytest.mark.parametrize(
+    ("text", "said"),
+    [
+        ("No errors in the logs, but get_logs failed.", "failed"),
+        ("No errors. The result was empty.", "empty"),
+        ("No errors, so cart is likely fine.", "likely"),
+        ("I could not find any errors.", "could not"),
+        ("The pod is not ready and errors rose.", "errors"),
+        ('The "no message" failures do not say why.', "failures"),
+        ("**It is not confirmed.** The failures are in the proxy.", "failures"),
+    ],
+)
+def test_a_negation_reaches_only_its_own_clause(tmp_path, text, said):
+    [finding] = judge(not_disclosed, tmp_path, calls(FAILED), answer(text))
+
+    assert not finding.flagged
+    assert finding.evidence == f'the answer says "{said}"'
+
+
+@pytest.mark.parametrize(
+    ("text", "said"),
+    [
+        ("The root cause is payment-service errors.", None),
+        ("payment-service failed due to OOM.", None),
+        ("The geo service likely crashed.", None),
+        ("No data was returned, so I guessed geo.", "No data"),
+        ("I am not sure it is geo.", "not sure"),
+        ("The get_logs tool failed, so geo is a guess.", "tool failed"),
+        ("The call to get_logs timed out.", "call to get_logs timed out"),
+        ("Stopped after 3 tool errors in a row.", "tool errors"),
+        ("No tool call failed; the cause is geo.", None),
+        ("I cannot confirm the cause.", "cannot confirm"),
+    ],
+)
+def test_the_verdict_reads_only_words_about_the_agents_own_work(text, said):
+    assert disclosure(text, agent_only=True) == said
 
 
 def test_a_run_without_a_fault_or_an_answer_is_not_judged(tmp_path):

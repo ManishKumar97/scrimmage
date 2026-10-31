@@ -45,7 +45,15 @@ def sdk_agent(
     env[f"{sdk.upper()}_API_KEY"] = "fake"
     agent = str(Path(__file__).parent / f"{sdk}_agent.py")
     result = subprocess.run(
-        [FAULTLINE, "run", "--fault", fault, "--trace", str(trace)]
+        [
+            FAULTLINE,
+            "run",
+            "--allow-live-tools",
+            "--fault",
+            fault,
+            "--trace",
+            str(trace),
+        ]
         + ["--upstream", f"{sdk.upper()}_BASE_URL={upstream}"]
         + ["--", sys.executable, agent, *args],
         env=env,
@@ -118,7 +126,15 @@ def test_the_ida_gets_a_server_error_on_the_chosen_model_call(tmp_path):
     env = ida_env(tmp_path, MODEL_MAX_RETRIES="1")
     with fake_llm(tmp_path, SCRIPT) as upstream:
         result = run(
-            [FAULTLINE, "run", "--fault", "model:server_error@2", "--expect", "cart"]
+            [
+                FAULTLINE,
+                "run",
+                "--allow-live-tools",
+                "--fault",
+                "model:server_error@2",
+                "--expect",
+                "cart",
+            ]
             + ["--base-url-env", "GROQ_BASE_URL", "--upstream", upstream]
             + ["--trace", str(trace), "--", *ida()],
             env,
@@ -144,7 +160,15 @@ def test_the_ida_sees_a_timeout_on_the_chosen_model_call(tmp_path):
     env = ida_env(tmp_path, MODEL_TIMEOUT="1", MODEL_MAX_RETRIES="1")
     with fake_llm(tmp_path, SCRIPT) as upstream:
         result = run(
-            [FAULTLINE, "run", "--fault", "model:timeout@2", "--expect", "cart"]
+            [
+                FAULTLINE,
+                "run",
+                "--allow-live-tools",
+                "--fault",
+                "model:timeout@2",
+                "--expect",
+                "cart",
+            ]
             + ["--base-url-env", "GROQ_BASE_URL", "--upstream", upstream]
             + ["--trace", str(trace), "--", *ida()],
             env,
@@ -164,5 +188,6 @@ def test_the_ida_sees_a_timeout_on_the_chosen_model_call(tmp_path):
     assert first["attrs"]["faultline.proxy.attempts"] == {"intValue": "1"}
     assert second["attrs"]["faultline.proxy.attempts"] == {"intValue": "2"}
     assert result.stderr.splitlines()[-1] == (
-        "verdict: failed_loudly (no answer; injected model:timeout@2)"
+        "verdict: failed_loudly (the last model call failed: timeout; "
+        "injected model:timeout@2)"
     )

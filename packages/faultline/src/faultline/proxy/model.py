@@ -32,8 +32,9 @@ import aiohttp
 from aiohttp import web
 from yarl import URL  # aiohttp's own URL type
 
-from faultline.faults import ModelFault
-from faultline.proxy.record import Exchange, Recorder, decoded
+from faultline.cost import COST_CAP, COST_UNKNOWN, NO_USAGE, Budget, dollars
+from faultline.faults import ModelFault, provider_error
+from faultline.proxy.record import Exchange, Recorder, decoded, tokens_of
 from faultline.proxy.truncate import Unchanged
 
 # Headers that belong to one connection, not to the request (RFC 9110 section 7.6.1).
@@ -75,6 +76,8 @@ MODEL_CALL_PATHS = ("/chat/completions", "/responses", "/messages")
 HANG_POLL = 0.05
 # The error type on the step of a call that was never answered.
 TIMEOUT = "timeout"
+# The error type on the step of a call held while faultline run lists the tools.
+HELD = "held_for_tool_list"
 # How many times the request was retried, sent by the Stainless-built SDKs
 # (the openai and anthropic Python and TypeScript libraries). 0 on the first try.
 RETRY_COUNT = "x-stainless-retry-count"
@@ -138,6 +141,8 @@ class ModelProxy:
         upstreams: Mapping[str, str | None],
         faults: Sequence[ModelFault] = (),
         recorder: Recorder | None = None,
+        budget: Budget | None = None,
+        hold: bool = False,
     ) -> None:
         self.names = {route_of(name): name for name in upstreams}
         self.upstreams = {
@@ -146,6 +151,12 @@ class ModelProxy:
         }
         self.faults = faults
         self.recorder = recorder
+        # Once spent, every new model call is refused; each reply's tokens add to it.
+        self.budget = budget
+        # Hold every model call unanswered, and say one came: the agent has set up
+        # its tools. faultline run does this while it lists them, so it costs nothing.
+        self.hold = hold
+        self.called = asyncio.Event()
         self.steps = Steps()
         self.url = ""
         self.runner: web.AppRunner | None = None
@@ -212,6 +223,31 @@ class ModelProxy:
         applied = bool(fault and not fault.action.rewrite)
         skipped = None  # why a fault was not applied
         try:
+            # A preview holds every request, model call or not: a call on a path
+            # this proxy does not know, such as the legacy /completions, could still
+            # make the agent run a tool.
+            if self.hold:
+                self.called.set()
+                status, error, fault = 0, HELD, None
+                await self.hang(request)
+                return web.Response(status=503, text="faultline proxy: stopped")
+            # Under a cost cap, only calls whose cost the proxy can count go on.
+            # A GET, such as listing models, costs nothing.
+            if self.budget and not model_call and request.method != "GET":
+                status, error = 402, COST_CAP
+                answer = uncounted(path)
+                chunks = [answer.body]
+                return web.Response(
+                    status=answer.status, body=answer.body, headers=answer.headers
+                )
+            if model_call and self.budget and self.budget.reached:
+                status, fault = 402, None
+                error = COST_UNKNOWN if self.budget.blind else COST_CAP
+                answer = refused(path, self.budget)
+                chunks = [answer.body]
+                return web.Response(
+                    status=answer.status, body=answer.body, headers=answer.headers
+                )
             # Every attempt of the step gets the fault. The upstream never sees it.
             if fault and fault.action.answer:
                 answer = fault.action.answer(path)
@@ -279,7 +315,7 @@ class ModelProxy:
             chunks = [text.encode()]
             return web.Response(status=502, text=text)
         finally:
-            if self.recorder and model_call:
+            if model_call:
                 exchange = Exchange(
                     step=step,
                     attempt=attempt,
@@ -294,7 +330,10 @@ class ModelProxy:
                     error=error,
                     skipped=f"{fault.spec}: {skipped}" if fault and skipped else None,
                 )
-                self.recorder.exchange(exchange)
+                if self.recorder:
+                    self.recorder.exchange(exchange)
+                if self.budget:
+                    self.budget.add(tokens_of(exchange))
 
     async def hang(self, request: web.Request) -> None:
         """Hold the call open until the client gives up on it or the proxy stops."""
@@ -304,6 +343,32 @@ class ModelProxy:
                 return  # the client closed the connection: its timeout fired
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self.stopping.wait(), HANG_POLL)
+
+
+def refused(path: str, budget: Budget):
+    """HTTP 402 in the provider's error shape: the test's cost cap is reached."""
+    if budget.blind:
+        message = f"faultline: {NO_USAGE}; no more model calls in this test"
+    else:
+        message = (
+            f"faultline: the cost cap of {dollars(budget.cap)} is reached "
+            f"(spent about {dollars(budget.spent)}); no more model calls in this test"
+        )
+    return provider_error(
+        path, 402, message, ("insufficient_quota", COST_CAP), "billing_error"
+    )
+
+
+def uncounted(path: str):
+    """HTTP 402 for a call the cost cap cannot count, on a path that is not a known
+    model call."""
+    message = (
+        f"faultline: --max-cost can count only {', '.join(MODEL_CALL_PATHS)} calls, "
+        f"so {path} is refused"
+    )
+    return provider_error(
+        path, 402, message, ("insufficient_quota", COST_CAP), "billing_error"
+    )
 
 
 def rewritten(

@@ -26,6 +26,8 @@ ROOT_SPAN_ID = "FAULTLINE_ROOT_SPAN_ID"
 FAULTS = "FAULTLINE_FAULTS"  # a JSON list of fault specs
 MAX_CONTENT = "FAULTLINE_MAX_CONTENT"
 STALE_FROM = "FAULTLINE_STALE_FROM"  # an earlier run's trace directory
+# "1" when the MCP wrapper must block every tool call no fault answers.
+BLOCK_TOOLS = "FAULTLINE_BLOCK_TOOLS"
 MAX_ANCESTORS = 32  # how far up the process tree to look
 
 
@@ -37,6 +39,7 @@ class RunContext:
     faults: tuple[str, ...] = ()
     max_content: int | None = None
     stale_from: str | None = None
+    block_tools: bool = False  # no tool runs for real: faultline run lists them first
 
     def env(self) -> dict[str, str]:
         """The run as environment variables, for the agent."""
@@ -50,6 +53,8 @@ class RunContext:
             env[MAX_CONTENT] = str(self.max_content)
         if self.stale_from is not None:
             env[STALE_FROM] = self.stale_from
+        if self.block_tools:
+            env[BLOCK_TOOLS] = "1"
         return env
 
 
@@ -64,6 +69,7 @@ def from_env(env: Mapping[str, str]) -> RunContext | None:
         tuple(json.loads(env.get(FAULTS) or "[]")),
         int(limit) if limit.isdigit() else None,
         env.get(STALE_FROM) or None,
+        env.get(BLOCK_TOOLS) == "1",
     )
 
 
@@ -139,6 +145,7 @@ def find(env: Mapping[str, str] = os.environ) -> RunContext | None:
             tuple(record.get("faults") or ()),
             record.get("max_content"),
             record.get("stale_from"),
+            record.get("block_tools") is True,
         )
     return None
 

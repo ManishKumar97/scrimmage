@@ -393,7 +393,7 @@ def test_a_stale_result_from_text_fills_a_string_output_schema(tmp_path):
 
 def test_stale_from_must_be_a_directory(tmp_path):
     result = subprocess.run(
-        [FAULTLINE, "run", "--stale-from", str(tmp_path / "none")]
+        [FAULTLINE, "run", "--allow-live-tools", "--stale-from", str(tmp_path / "none")]
         + ["--upstream", "http://127.0.0.1:9", "--", "true"],
         capture_output=True,
         text=True,
