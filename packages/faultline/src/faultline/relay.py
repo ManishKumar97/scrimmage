@@ -59,8 +59,10 @@ class Relay:
         self.held: list[signal.Signals] = []
         self.grace = grace if grace is not None else grace_from_env()
         self.deadline: asyncio.TimerHandle | None = None
+        self.signalled = False  # a stop signal came, so the caller starts nothing more
 
     def receive(self, number: signal.Signals) -> None:
+        self.signalled = True
         if number in KEYBOARD and terminal_sent_it_to_the_child():
             return  # the key press reached the whole foreground group, the child included
         if self.child is None:
