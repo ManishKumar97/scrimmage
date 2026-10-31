@@ -66,8 +66,7 @@ def test_an_injected_429_reaches_the_sdk_agent_after_all_its_retries(tmp_path):
 # Step 1 asks for the logs of cart. With them empty, the scripted model finds nothing.
 EMPTY_LOGS_SCRIPT = [
     {"tool_calls": [{"name": "get_logs", "arguments": {"service": "cart"}}]},
-    # No disclosure word, such as "errors": the verdict would read it as one.
-    {"text": "The logs look clean. No fault found.\nROOT CAUSE SERVICE: none"},
+    {"text": "The logs show no errors. No fault found.\nROOT CAUSE SERVICE: none"},
 ]
 
 
