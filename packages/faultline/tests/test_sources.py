@@ -293,6 +293,8 @@ def test_find_names_the_service_and_window_when_jaeger_has_no_traces(tmp_path, c
     expected = "no traces for service cart in the last 1h"
     assert alone.err == f"faultline find: {expected}\n"
     assert f"{spec}: {expected}" in beside_a_file.out
+    # Jaeger's empty answer is not reported as a line that held no spans.
+    assert "held no spans" not in alone.out + beside_a_file.out
 
 
 def test_find_says_what_a_jaeger_source_is_missing(capsys):

@@ -173,7 +173,9 @@ class JaegerSource:
             self.search(middle, end, requests, known)
             return
         new = found - known  # a trace on both sides of a split comes back twice
-        requests += [keep_traces(result, new) for result in results]
+        kept = [keep_traces(result, new) for result in results]
+        # An empty window is {"result": {}}: no spans, but not a line that held none.
+        requests += [request for request in kept if request["resourceSpans"]]
         known |= new
 
     def fetch(self, start: datetime, end: datetime) -> list[dict]:
