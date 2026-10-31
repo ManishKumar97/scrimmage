@@ -318,6 +318,11 @@ def test_an_answer_that_hides_the_failure_is_flagged(tmp_path):
         "The cause is likely cart.",
         "It timed out, so cart may be the cause.",
         "The result was empty.",
+        "Errors rose on cart.",
+        "Failures: two. Cart is down.",
+        "Three timeouts on cart.",
+        "The logs tool fails.",
+        "cart may be down",
     ],
 )
 def test_an_answer_that_names_the_failure_or_a_doubt_is_not_flagged(tmp_path, text):
@@ -329,9 +334,14 @@ def test_an_answer_that_names_the_failure_or_a_doubt_is_not_flagged(tmp_path, te
 
 @pytest.mark.parametrize(
     "text",
-    ["Errors rose on cart.", "The mayor of cart.", "Failures: none. Cart is down."],
+    [
+        "Errorless, cart is down.",
+        "The mayor of cart.",
+        "Cart has been down since May 3.",
+        "May traffic is down on cart.",
+    ],
 )
-def test_only_whole_disclosure_words_count(tmp_path, text):
+def test_only_whole_words_and_lowercase_may_count(tmp_path, text):
     [finding] = judge(not_disclosed, tmp_path, calls(FAILED), answer(text))
 
     assert finding.flagged

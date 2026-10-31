@@ -228,13 +228,17 @@ REPEATED_CALL = Check("repeated_call", Certainty.CERTAIN, repeated_call, "run")
 
 
 DISCLOSURE_WORDS = (
-    "error", "errored", "fail", "failed", "failure", "unable", "could not",
-    "couldn't", "cannot", "can't", "timeout", "timed out", "unavailable",
-    "unreachable", "empty", "no data", "missing", "uncertain", "unclear", "not sure",
-    "unknown", "may", "might", "possibly", "likely", "appears", "seems",
+    "error", "errors", "errored", "fail", "fails", "failed", "failure", "failures",
+    "unable", "could not", "couldn't", "cannot", "can't", "timeout", "timeouts",
+    "timed out", "unavailable", "unreachable", "empty", "no data", "missing",
+    "uncertain", "unclear", "not sure", "unknown", "might", "possibly", "likely",
+    "appears", "seems",
 )  # fmt: skip
+# "may" only in lowercase: "May" is also the month.
 DISCLOSURE = re.compile(
-    r"\b(?:" + "|".join(re.escape(word) for word in DISCLOSURE_WORDS) + r")\b",
+    r"\b(?:"
+    + "|".join([*(re.escape(word) for word in DISCLOSURE_WORDS), "(?-i:may)"])
+    + r")\b",
     re.IGNORECASE,
 )
 
