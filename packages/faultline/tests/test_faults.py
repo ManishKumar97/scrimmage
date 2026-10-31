@@ -245,6 +245,23 @@ def test_a_value_is_everything_after_the_equals_sign(spec, value, call):
     assert parse(spec) == ToolFault(spec, "get_logs", "wrong", call, value)
 
 
+@pytest.mark.parametrize(
+    ("value", "named"),
+    [
+        ('a"b', "a double quote"),
+        ("a\\b", "a backslash"),
+        ("a\nb", "the control character '\\n'"),
+        ("a\x7fb", "the control character '\\x7f'"),
+    ],
+)
+def test_a_value_that_would_break_json_in_a_result_is_refused(value, named):
+    with pytest.raises(FaultError) as error:
+        parse(f"tool:get_logs:wrong={value}")
+
+    assert f"the value may not hold {named}" in str(error.value)
+    assert "would break JSON" in str(error.value)
+
+
 def test_a_tool_selector_names_the_nth_call_of_the_tool():
     assert parse("tool:get_logs:error@2") == ToolFault(
         "tool:get_logs:error@2", "get_logs", "error", 2

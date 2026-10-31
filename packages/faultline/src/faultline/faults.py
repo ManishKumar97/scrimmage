@@ -551,6 +551,18 @@ def selector(rest: str) -> tuple[str, int | None]:
     raise FaultError(f"@{number} is not a step or call number (1 or more)")
 
 
+def unsafe_in(value: str) -> str | None:
+    """The first character a fault value may not hold, described, or None."""
+    for char in value:
+        if char == '"':
+            return "a double quote"
+        if char == "\\":
+            return "a backslash"
+        if ord(char) < 32 or ord(char) == 127:
+            return f"the control character {char!r}"
+    return None
+
+
 def parse(spec: str) -> Fault:
     """One fault from its spec. Raises FaultError naming the known faults."""
     target, _, rest = spec.partition(":")
@@ -570,6 +582,12 @@ def parse(spec: str) -> Fault:
             and TOOL_FAULTS[kind].takes_value == bool(has_value)
             and (value or not has_value)
         ):
+            if unsafe := unsafe_in(value):
+                raise FaultError(
+                    f"fault {spec!r}: the value may not hold {unsafe}. It goes into "
+                    "tool results as it is, where a quote, a backslash or a control "
+                    "character would break JSON the tool wrote as text"
+                )
             return ToolFault(spec, tool, kind, number, value or None)
     elif target == "model" and rest in MODEL_FAULTS:
         return ModelFault(spec, rest, number or 1)
