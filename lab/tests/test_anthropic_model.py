@@ -364,3 +364,12 @@ def test_cached_input_counts_against_the_token_budget():
 
     assert result.stop_reason == "token_limit"
     assert result.tokens == 70_015
+
+
+def test_both_clients_retry_as_often_as_the_setting_says(clean_env, monkeypatch):
+    monkeypatch.setenv("MODEL_MAX_RETRIES", "2")
+    groq = Settings(provider="groq", groq_api_key="g", _env_file=None)  # pyright: ignore
+    claude = Settings(provider="anthropic", anthropic_api_key="a", _env_file=None)  # pyright: ignore
+
+    assert make_model(groq).client.max_retries == 2  # pyright: ignore
+    assert make_model(claude).client.max_retries == 2  # pyright: ignore

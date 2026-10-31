@@ -7,7 +7,11 @@ any agent that follows the convention reads the same way.
 The question, answer and stop reason may come from span attributes the user names
 in the config. They are never required.
 
-    python -m faultline.runs [--config PATH] FILE [FILE...]
+    python -m faultline.runs [--config PATH] FILE_OR_DIR [FILE_OR_DIR...]
+
+A directory is read as one set of span files, so a trace split across its files,
+as `faultline run` writes one, is one run.
+`faultline.injected`, the fault spec Faultline's proxy applied, is read from its spans.
 """
 
 import argparse
@@ -18,6 +22,7 @@ from pathlib import Path
 
 from faultline.config import Attributes, ConfigError, load_config
 from faultline.model import Run, Step, ToolCall
+from faultline.proxy.record import FAULTLINE_INJECTED
 from faultline.semconv import (
     CHAT,
     ERROR_TYPE,
@@ -315,6 +320,7 @@ def step_of(number: int, span: dict) -> Step:
         text=text,
         error_type=error_type_of(span),
         started=started(span),
+        injected=attrs.get(FAULTLINE_INJECTED),
     )
 
 
@@ -328,6 +334,7 @@ def tool_call_of(span: dict) -> ToolCall:
         result=attrs.get(GEN_AI_TOOL_CALL_RESULT, ""),
         error_type=error_type_of(span),
         started=started(span),
+        injected=attrs.get(FAULTLINE_INJECTED),
     )
 
 
@@ -347,6 +354,8 @@ def cut(text: str | None, limit: int) -> str:
 
 def show_call(call: ToolCall) -> str:
     status = "ok" if call.error_type is None else f"error {call.error_type}"
+    if call.injected:
+        status += f" INJECTED {call.injected}"
     return (
         f"    tool {call.name}({cut(call.arguments, 100)}) {status}, "
         f"{call.seconds:.2f}s -> {cut(call.result, 100)}"
@@ -371,6 +380,8 @@ def show_run(run: Run) -> str:
         line += f" finish={step.finish_reason}"
         if step.error_type:
             line += f" ERROR {step.error_type}"
+        if step.injected:
+            line += f" INJECTED {step.injected}"
         lines.append(line)
         if step.text:
             lines.append(f"    says: {cut(step.text, 200)}")
@@ -401,14 +412,17 @@ def main() -> None:
     parser.add_argument(
         "--config", type=Path, help="TOML file, default ./faultline.toml"
     )
-    parser.add_argument("files", nargs="+", type=Path)
+    parser.add_argument(
+        "files", nargs="+", type=Path, help="a span file, or a directory of them"
+    )
     args = parser.parse_args()
     try:
         attributes = load_config(args.config).attributes
     except ConfigError as error:
         parser.exit(2, f"runs: {error}\n")
     for path in args.files:
-        print(show_reading(path, read_runs(path, attributes)))
+        files = sorted(path.glob("*.jsonl")) if path.is_dir() else [path]
+        print(show_reading(path, read_runs_many(files, attributes)))
 
 
 if __name__ == "__main__":

@@ -312,7 +312,7 @@ def make_model(settings: Settings) -> ModelClient:
         return AnthropicModel(
             AsyncAnthropic(
                 api_key=settings.anthropic_api_key.get_secret_value(),
-                max_retries=5,
+                max_retries=settings.model_max_retries,
             ),
             settings.anthropic_model,
         )
@@ -320,7 +320,7 @@ def make_model(settings: Settings) -> ModelClient:
         AsyncOpenAI(
             api_key=settings.groq_api_key.get_secret_value(),
             base_url=settings.groq_base_url,
-            max_retries=5,
+            max_retries=settings.model_max_retries,
         ),
         settings.groq_model,
         provider="groq",

@@ -1,7 +1,9 @@
-"""The product never loads the lab or a third-party package.
+"""The product never loads the lab, and loads a third-party package in one place only.
 
-Product code may import only the standard library. Its tests may also use the test tools in
-the root dev group, which are never installed with the product.
+Product code may import only the standard library. The one exception is the model proxy,
+which needs an async HTTP server and client: aiohttp, from the `proxy` extra.
+Its tests may also use the test tools in the root dev group, which are never installed
+with the product.
 
 The workspace venv has the lab installed, so a stray import would still pass the
 other tests. These check what is imported, not what happens to be installed.
@@ -12,16 +14,24 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 PACKAGE = Path(__file__).parents[1]
 ALLOWED = set(sys.stdlib_module_names) | {"faultline"}
 TEST_TOOLS = {"pytest", "opentelemetry"}
-TEST_HELPERS = {"spans", "fake_jaeger"}  # the product's own test helpers in tests/
+# The product's own test helpers in tests/.
+TEST_HELPERS = {"fake_jaeger", "spans", "sse", "upstream"}
+# The only module that may import a third-party package, and what it may import.
+PROXY = Path("src/faultline/proxy/model.py")
+PROXY_PACKAGES = {"aiohttp", "yarl"}  # yarl is the URL type aiohttp takes
 
 
-def test_importing_the_product_loads_only_the_product_and_the_standard_library():
+# The command loads aiohttp only when it starts the proxy, so `find` runs without it.
+@pytest.mark.parametrize("module", ["faultline.runs", "faultline.cli"])
+def test_importing_the_product_loads_only_the_product_and_the_standard_library(module):
     # Only what the import adds: the interpreter and the venv load modules at start.
     code = (
-        "import sys; before = set(sys.modules); import faultline.runs; "
+        f"import sys; before = set(sys.modules); import {module}; "
         "print('\\n'.join(set(sys.modules) - before))"
     )
     loaded = subprocess.run(
@@ -43,17 +53,29 @@ def imported_roots(path: Path) -> set[str]:
     return roots
 
 
+def allowed_in(path: Path) -> set[str]:
+    return ALLOWED | PROXY_PACKAGES if path == PACKAGE / PROXY else ALLOWED
+
+
 def test_product_code_imports_only_the_product_and_the_standard_library():
     files = sorted((PACKAGE / "src").rglob("*.py"))
 
     outside = {
-        str(path.relative_to(PACKAGE)): sorted(imported_roots(path) - ALLOWED)
+        str(path.relative_to(PACKAGE)): sorted(imported_roots(path) - allowed_in(path))
         for path in files
-        if imported_roots(path) - ALLOWED
+        if imported_roots(path) - allowed_in(path)
     }
 
-    assert files
+    assert PACKAGE / PROXY in files
     assert outside == {}
+
+
+def test_only_the_model_proxy_imports_aiohttp():
+    files = sorted((PACKAGE / "src").rglob("*.py"))
+
+    importing = [path for path in files if imported_roots(path) & PROXY_PACKAGES]
+
+    assert importing == [PACKAGE / PROXY]
 
 
 def test_product_tests_import_only_the_product_the_standard_library_and_test_tools():

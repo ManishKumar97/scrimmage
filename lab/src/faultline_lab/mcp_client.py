@@ -3,7 +3,7 @@
 import asyncio
 import os
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 
 from mcp import Client
@@ -18,6 +18,19 @@ LOGS_SERVER = StdioServerParameters(
 METRICS_SERVER = StdioServerParameters(
     command=sys.executable, args=["-m", "faultline_lab.mcp_metrics"]
 )
+
+
+def launched(
+    server: StdioServerParameters, prefix: Sequence[str], pass_env: Sequence[str]
+) -> StdioServerParameters:
+    """The server started under a command prefix, with the named variables passed on."""
+    passed = {name: os.environ[name] for name in pass_env if name in os.environ}
+    update: dict[str, object] = {"env": {**passed, **(server.env or {})}}
+    if prefix:
+        update.update(
+            command=prefix[0], args=[*prefix[1:], server.command, *server.args]
+        )
+    return server.model_copy(update=update)
 
 
 @asynccontextmanager

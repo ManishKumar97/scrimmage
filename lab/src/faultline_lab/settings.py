@@ -22,6 +22,15 @@ class Settings(BaseSettings):
     # Where each run writes its spans (OTLP JSON, one line per export).
     trace_file: Path = Path("runs/traces.jsonl")
 
+    # How often each model client retries a rate limit or an outage, with backoff.
+    model_max_retries: int = 5
+    # A command the MCP servers start under, such as a wrapper, as a JSON list.
+    # Each server then runs as prefix + [python, -m, module].
+    mcp_command_prefix: list[str] = []
+    # Names of variables the MCP servers get from this process's environment, as a
+    # JSON list. The MCP SDK passes a server only a few variables (PATH, HOME, ...).
+    mcp_pass_env: list[str] = []
+
     @model_validator(mode="after")
     def key_for_provider(self) -> "Settings":
         key = {"groq": self.groq_api_key, "anthropic": self.anthropic_api_key}

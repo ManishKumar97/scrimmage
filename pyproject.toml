@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Workspace root: the faultline product and the lab that tests it."
 requires-python = ">=3.12"
 # Both members, so a plain `uv sync` installs the product and the lab.
-dependencies = ["faultline", "faultline-lab"]
+dependencies = ["faultline[proxy]", "faultline-lab"]
 
 [tool.uv]
 package = false
@@ -32,6 +32,8 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["lab/tests"]
 testpaths = ["packages/faultline/tests", "lab/tests", "tests"]
+# Any warning fails the run, so a leaked socket or a deprecation cannot slip in.
+filterwarnings = ["error"]
 
 [tool.pyright]
 include = ["packages/faultline/src", "packages/faultline/tests", "lab/src", "lab/tests", "tests"]
@@ -52,6 +54,8 @@ extend-immutable-calls = ["faultline.config.Attributes"]
 # The CI gate on the product/lab split. The AST tests in each package are the fast local check.
 [tool.importlinter]
 root_packages = ["faultline", "faultline_lab"]
+# So a contract can name a third-party package, such as aiohttp below.
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "The product never imports the lab"
@@ -64,3 +68,25 @@ name = "The lab never imports the product"
 type = "forbidden"
 source_modules = ["faultline_lab"]
 forbidden_modules = ["faultline"]
+
+[[tool.importlinter.contracts]]
+name = "Only the model proxy loads aiohttp"
+type = "forbidden"
+source_modules = [
+    "faultline.model",
+    "faultline.runs",
+    "faultline.semconv",
+    "faultline.config",
+    "faultline.detect",
+    "faultline.find",
+    "faultline.checks",
+    "faultline.sources",
+    "faultline.proxy.record",
+    "faultline.proxy.mcp",
+    "faultline.proxy.streams",
+    "faultline.proxy.context",
+    "faultline.relay",
+    "faultline.faults",
+    "faultline.verdict",
+]
+forbidden_modules = ["aiohttp", "yarl"]

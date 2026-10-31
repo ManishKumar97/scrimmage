@@ -12,7 +12,7 @@ from opentelemetry.trace import Span, SpanKind
 
 from faultline_lab import kube_tools
 from faultline_lab import tracing as spans
-from faultline_lab.mcp_client import LOGS_SERVER, METRICS_SERVER, mcp_tools
+from faultline_lab.mcp_client import LOGS_SERVER, METRICS_SERVER, launched, mcp_tools
 from faultline_lab.models import (
     BadToolCall,
     Message,
@@ -268,11 +268,14 @@ async def diagnose_async(question: str, *, trace_file: Path | None = None) -> Ru
     model = make_model(settings)
     provider = spans.file_provider(trace_file or settings.trace_file)
     tracing = Tracing(provider.get_tracer("faultline"))
+    prefix, pass_env = settings.mcp_command_prefix, settings.mcp_pass_env
+    logs = launched(LOGS_SERVER, prefix, pass_env)
+    metrics = launched(METRICS_SERVER, prefix, pass_env)
     try:
         # The logs and metrics tools come from MCP servers. They live for this one run.
         async with (
-            mcp_tools(LOGS_SERVER, kube_tools.registry, "logs MCP") as with_logs,
-            mcp_tools(METRICS_SERVER, with_logs, "metrics MCP") as tools,
+            mcp_tools(logs, kube_tools.registry, "logs MCP") as with_logs,
+            mcp_tools(metrics, with_logs, "metrics MCP") as tools,
         ):
             return await run(question, model, tools=tools, tracing=tracing)
     finally:
