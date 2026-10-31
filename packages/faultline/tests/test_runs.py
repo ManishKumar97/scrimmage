@@ -356,3 +356,80 @@ def test_a_reply_followed_by_a_tool_call_is_not_the_answer():
     [run] = read_runs(path).runs
 
     assert run.answer is None
+
+
+def string_attributes(attrs: dict[str, str]) -> list[dict]:
+    return [{"key": k, "value": {"stringValue": v}} for k, v in attrs.items()]
+
+
+def read_one_run(path: Path, chat: dict[str, str], tool: dict[str, str] | None = None):
+    """The run from one chat span with `chat` attributes and, if given, one tool span."""
+    spans = [raw_span("chat", 0, SECOND, span_id="c")]
+    spans[0]["attributes"] += string_attributes(chat)
+    if tool is not None:
+        spans.append(raw_span("execute_tool", SECOND, 2 * SECOND, span_id="t"))
+        spans[1]["attributes"] += string_attributes(tool)
+    write_raw(path, spans)
+    [run] = read_runs(path).runs
+    return run
+
+
+def messages(*parts: dict) -> str:
+    return json.dumps([{"role": "assistant", "parts": list(parts)}])
+
+
+def test_content_only_in_tool_attributes_is_recorded(tmp_path):
+    tool = {"gen_ai.tool.call.result": "3 pods"}
+
+    run = read_one_run(tmp_path / "s.jsonl", {}, tool=tool)
+
+    assert run.content_recorded is True
+
+
+def test_message_parts_stripped_of_their_content_are_not_recorded(tmp_path):
+    stripped = messages({"type": "text"}, {"type": "tool_call", "id": "a", "name": "f"})
+    chat = {"gen_ai.input.messages": stripped, "gen_ai.output.messages": stripped}
+
+    run = read_one_run(tmp_path / "s.jsonl", chat)
+
+    assert run.content_recorded is False
+    assert "  content: not recorded" in show_run(run).splitlines()
+
+
+def test_a_message_with_an_empty_parts_list_is_recorded(tmp_path):
+    run = read_one_run(tmp_path / "s.jsonl", {"gen_ai.output.messages": messages()})
+
+    assert run.content_recorded is True
+    assert "content: not recorded" not in show_run(run)
+
+
+def test_an_unparseable_messages_attribute_is_recorded(tmp_path):
+    run = read_one_run(tmp_path / "s.jsonl", {"gen_ai.output.messages": "not json"})
+
+    assert run.content_recorded is True
+
+
+def test_content_fields_that_are_empty_or_null_are_not_recorded(tmp_path):
+    empty = messages(
+        {"type": "text", "content": ""},
+        {"type": "tool_call", "id": "a", "name": "f", "arguments": None},
+    )
+
+    run = read_one_run(tmp_path / "s.jsonl", {"gen_ai.output.messages": empty})
+
+    assert run.content_recorded is False
+
+
+def test_a_part_with_only_a_uri_is_recorded(tmp_path):
+    uri = messages({"type": "uri", "uri": "https://example.com/a.png"})
+
+    run = read_one_run(tmp_path / "s.jsonl", {"gen_ai.input.messages": uri})
+
+    assert run.content_recorded is True
+
+
+def test_fixtures_with_no_genai_content_attributes_are_not_recorded():
+    for name in ("failed_last_step", "model_error"):
+        [run] = read_runs(fixture(name)).runs
+
+        assert run.content_recorded is False, name

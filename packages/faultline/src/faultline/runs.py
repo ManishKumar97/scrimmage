@@ -189,10 +189,14 @@ def output_parts(span: dict) -> list[dict]:
         return []
 
 
-# Message part fields that hold content: text, tool call arguments, tool results.
-# An agent that does not record content may still write the messages, with parts
-# that keep only their type, id and name.
-CONTENT_FIELDS = {"content", "arguments", "response"}
+# Message part fields that hold content: text, tool call arguments, tool results,
+# and a file by uri or id. An agent that does not record content may still write the
+# messages, with parts that keep only their type, id and name, or empty fields.
+CONTENT_FIELDS = ("content", "arguments", "response", "uri", "file_id")
+
+
+def holds_content(part: dict) -> bool:
+    return any(part.get(field) not in (None, "") for field in CONTENT_FIELDS)
 
 
 def carries_content(span: dict) -> bool:
@@ -207,7 +211,7 @@ def carries_content(span: dict) -> bool:
             parts = parts_of(attrs[key])
             # No parts is an empty message, recorded as it was. Parts that all lack
             # their content fields had the content stripped.
-            if not parts or any(CONTENT_FIELDS & part.keys() for part in parts):
+            if not parts or any(holds_content(part) for part in parts):
                 return True
         except (ValueError, AttributeError, TypeError):
             return True  # something is there, in a shape this reader does not know
