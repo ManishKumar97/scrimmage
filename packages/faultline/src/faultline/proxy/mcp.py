@@ -22,12 +22,14 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from faultline.faults import ToolFault, ToolSession, parse_all
+from faultline.faults import FaultShapeError, ToolFault, ToolSession, parse_all
 from faultline.model import ToolCall
 from faultline.proxy.context import find as find_run
 from faultline.proxy.record import Recorder
 from faultline.relay import RELAYED, Relay, tied_to_parent
 
+# The error type on the span of a faked result that does not fit the tool's schema.
+SHAPE_INVALID = "fault_shape_invalid"
 # The longest line, in bytes. A tool result can be large, such as many log lines.
 LINE_LIMIT = 128 * 1024 * 1024
 
@@ -106,8 +108,18 @@ class ToolCalls:
             self.pending[key(message["id"])] = pending
             return None
         session = ToolSession(self.schemas.get(pending.name), self.tags_results)
-        answer = fault.answer(message["id"], session)
-        result, error_type = outcome(answer)
+        try:
+            answer = fault.answer(message["id"], session)
+            result, error_type = outcome(answer)
+        except FaultShapeError as exc:
+            # Sent anyway, so the run goes on, and marked so the trace says why.
+            print(
+                f"faultline mcp-wrap: {fault.spec} does not fit the output schema of "
+                f"{pending.name} ({exc}); the client may reject it",
+                file=sys.stderr,
+            )
+            answer, (result, _) = exc.answer, outcome(exc.answer)
+            error_type = SHAPE_INVALID
         self.finish(pending, result, error_type, fault.spec)
         return (json.dumps(answer) + "\n").encode()
 

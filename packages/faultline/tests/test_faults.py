@@ -4,6 +4,7 @@ import pytest
 
 from faultline.faults import (
     FaultError,
+    FaultShapeError,
     ModelFault,
     ToolFault,
     ToolSession,
@@ -128,3 +129,59 @@ def test_a_rate_limit_is_a_429_in_the_providers_own_shape(path, error_type):
     assert answer.status == 429
     assert answer.headers["Retry-After"] == "1"
     assert json.loads(answer.body)["error"]["type"] == error_type
+
+
+def test_local_references_are_followed_for_the_empty_value():
+    schema = {
+        "type": "object",
+        "properties": {"rows": {"$ref": "#/$defs/Rows"}, "note": {"type": "string"}},
+        "required": ["rows", "note"],
+        "$defs": {
+            "Rows": {"type": "array", "items": {"$ref": "#/$defs/Row"}},
+            "Row": {"type": "object"},
+        },
+    }
+
+    assert empty_value(schema) == {"rows": [], "note": ""}
+
+
+def test_the_first_branch_with_an_empty_value_is_taken():
+    schema = {
+        "anyOf": [{"type": "integer"}, {"$ref": "#/definitions/Text"}],
+        "definitions": {"Text": {"type": "string"}},
+    }
+
+    assert empty_value(schema) == ""
+
+
+@pytest.mark.parametrize(
+    ("schema", "problem"),
+    [
+        ({"$ref": "#/$defs/Missing"}, "points at nothing"),
+        ({"$ref": "https://example.com/schema.json"}, "non-local reference"),
+        ({"$ref": "#"}, "refers to itself"),
+    ],
+)
+def test_a_reference_that_cannot_be_followed_has_no_empty_value(schema, problem):
+    with pytest.raises(ValueError, match=problem):
+        empty_value(schema)
+
+
+def test_an_empty_result_that_cannot_fit_the_schema_says_so_and_holds_an_answer():
+    fault = parse("tool:count:empty")
+    assert isinstance(fault, ToolFault)
+    schema = {
+        "type": "object",
+        "properties": {"n": {"type": "integer"}},
+        "required": ["n"],
+    }
+
+    with pytest.raises(FaultShapeError) as error:
+        fault.answer(1, ToolSession(schema, tags_results=True))
+
+    assert "integer" in str(error.value)
+    assert error.value.answer["result"] == {
+        "content": [],
+        "isError": False,
+        "resultType": "complete",
+    }

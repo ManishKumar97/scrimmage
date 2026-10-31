@@ -39,11 +39,40 @@ class ToolSession:
     tags_results: bool = False  # the server's results carry resultType
 
 
-def empty_value(schema: dict) -> object:
+class FaultShapeError(ValueError):
+    """The fault cannot take a shape the client will accept. Holds the best answer."""
+
+    def __init__(self, message: str, answer: dict) -> None:
+        super().__init__(message)
+        self.answer = answer
+
+
+MAX_REF_DEPTH = 32  # a schema that refers to itself forever has no empty value
+
+
+def empty_value(schema: dict, root: dict | None = None, depth: int = 0) -> object:
     """The empty instance of a JSON schema: "", [], {} with each required field empty.
 
+    Local references ($ref to #/$defs/... or #/definitions/...) are followed, and
+    the first anyOf or oneOf branch with an empty instance is taken.
     Raises ValueError for a schema with no empty instance, such as a required number.
     """
+    root = schema if root is None else root
+    if depth > MAX_REF_DEPTH:
+        raise ValueError("the schema refers to itself with no end")
+    if "$ref" in schema:
+        return empty_value(resolve(schema["$ref"], root), root, depth + 1)
+    for key in ("anyOf", "oneOf"):
+        if key in schema:
+            problems = []
+            for branch in schema[key]:
+                try:
+                    return empty_value(branch, root, depth + 1)
+                except ValueError as exc:
+                    problems.append(str(exc))
+            raise ValueError(
+                f"no {key} branch has an empty value ({'; '.join(problems)})"
+            )
     kind = schema.get("type", "object" if "properties" in schema else None)
     kinds = kind if isinstance(kind, list) else [kind]
     if "null" in kinds:
@@ -56,23 +85,43 @@ def empty_value(schema: dict) -> object:
         case "object":
             properties = schema.get("properties", {})
             return {
-                name: empty_value(properties.get(name, {}))
+                name: empty_value(properties.get(name, {}), root, depth + 1)
                 for name in schema.get("required", [])
             }
     raise ValueError(f"no empty value for a {kind} field")
 
 
+def resolve(ref: str, root: dict) -> dict:
+    """A local JSON pointer reference, such as #/$defs/Row."""
+    if not ref.startswith("#"):
+        raise ValueError(f"cannot follow a non-local reference {ref}")
+    node: object = root
+    for token in ref.removeprefix("#").strip("/").split("/") if ref != "#" else []:
+        token = token.replace("~1", "/").replace("~0", "~")
+        if not isinstance(node, dict) or token not in node:
+            raise ValueError(f"reference {ref} points at nothing")
+        node = node[token]
+    if isinstance(node, dict):
+        return node
+    raise ValueError(f"reference {ref} is not a schema")
+
+
 def empty_result(request_id: object, session: ToolSession) -> dict:
-    """A valid MCP success with nothing in it: the tool ran and found nothing."""
+    """A valid MCP success with nothing in it: the tool ran and found nothing.
+
+    Raises FaultShapeError, holding the answer without structuredContent, when the
+    tool's output schema has no empty instance: the client is then likely to reject it.
+    """
     result: dict = {"content": [], "isError": False}
+    if session.tags_results:
+        result["resultType"] = "complete"
+    answer = {"jsonrpc": "2.0", "id": request_id, "result": result}
     if session.output_schema is not None:
         try:
             result["structuredContent"] = empty_value(session.output_schema)
-        except ValueError:
-            pass  # no empty instance exists, so the client will reject the result
-    if session.tags_results:
-        result["resultType"] = "complete"
-    return {"jsonrpc": "2.0", "id": request_id, "result": result}
+        except ValueError as exc:
+            raise FaultShapeError(str(exc), answer) from None
+    return answer
 
 
 def rate_limit(path: str) -> ModelAnswer:

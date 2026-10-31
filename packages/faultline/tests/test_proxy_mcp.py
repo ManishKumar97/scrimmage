@@ -160,3 +160,33 @@ def test_a_faked_result_takes_the_shape_the_server_taught_the_wrapper():
     }
     [recorded] = calls.calls
     assert (recorded.result, recorded.injected) == ("", "tool:get_logs:empty")
+
+
+def test_a_faked_result_that_cannot_fit_the_schema_is_sent_and_marked(capsys):
+    calls = ToolCalls(faults=[ToolFault("tool:count:empty", "count", "empty")])
+    schema = {
+        "type": "object",
+        "properties": {"n": {"type": "integer"}},
+        "required": ["n"],
+    }
+
+    calls.from_client(line({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+    calls.from_server(
+        line(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"tools": [{"name": "count", "outputSchema": schema}]},
+            }
+        )
+    )
+    answer = calls.from_client(call(2, "count"))
+
+    assert answer is not None
+    assert json.loads(answer)["result"] == {"content": [], "isError": False}
+    [recorded] = calls.calls
+    assert recorded.error_type == "fault_shape_invalid"
+    assert recorded.injected == "tool:count:empty"
+    assert "tool:count:empty does not fit the output schema of count" in (
+        capsys.readouterr().err
+    )
