@@ -4,7 +4,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from fake_jaeger import fake_jaeger
+from fake_jaeger import fake_jaeger, hexed, shifted
 from spans import write_trace
 
 from faultline import cli
@@ -45,44 +45,10 @@ def fixture_spans() -> list[dict]:
     return spans
 
 
-def shifted(spans: list[dict], start: int) -> list[dict]:
-    """The spans moved in time so the earliest starts at `start`."""
-    earliest = min(int(s.get("startTimeUnixNano", 0)) for s in spans)
-    moved = []
-    for span in spans:
-        span = json.loads(json.dumps(span))
-        for key in ("startTimeUnixNano", "endTimeUnixNano"):
-            span[key] = str(int(span.get(key, 0)) - earliest + start)
-        moved.append(span)
-    return moved
-
-
 def write_spans(path: Path, spans: list[dict]) -> Path:
     request = {"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]}
     path.write_text(json.dumps(request) + "\n")
     return path
-
-
-def hexed(path: Path) -> list[dict]:
-    """The spans of a file written by spans.py, with every id in hex as Jaeger needs.
-    The file keeps its own ids; the runs differ only in their trace ids."""
-    ids: dict[str, str] = {}
-
-    def to_hex(value: str, width: int) -> str:
-        if len(value) == width and all(c in "0123456789abcdef" for c in value):
-            return value
-        return ids.setdefault(value, f"{len(ids) + 1:0{width}x}")
-
-    spans = []
-    for line in path.read_text().splitlines():
-        for span in json.loads(line)["resourceSpans"][0]["scopeSpans"][0]["spans"]:
-            span["traceId"] = to_hex(span["traceId"], 32)
-            # spans.py reuses span names across traces, so key them by trace too.
-            for key in ("spanId", "parentSpanId"):
-                if key in span:
-                    span[key] = to_hex(f"{span['traceId']}/{span[key]}", 16)
-            spans.append(span)
-    return spans
 
 
 def shown(runs) -> list[str]:

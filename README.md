@@ -63,6 +63,15 @@ uv run faultline find --since 1h runs/traces.jsonl
 uv run faultline find --source jaeger:http://localhost:16686 --service faultline-ida --since 1h
 ```
 
+Serve the same report as JSON over HTTP, for Grafana or a script.
+`GET /api/findings?since=1h` answers what `faultline find --json --since 1h` prints; `GET /api/health` answers `{"status": "ok"}`.
+It is read-only and listens on 127.0.0.1:8765 unless `--host` and `--port` say otherwise.
+
+```bash
+uv run faultline serve --source jaeger:http://localhost:16686 --service faultline-ida
+curl 'http://127.0.0.1:8765/api/findings?since=1h'
+```
+
 ## Pick a provider
 
 One setting picks the provider: `PROVIDER` in `.env` or the environment.
