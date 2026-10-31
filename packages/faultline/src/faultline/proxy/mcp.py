@@ -34,7 +34,12 @@ from faultline.faults import (
 )
 from faultline.model import ToolCall
 from faultline.proxy.context import find as find_run
-from faultline.proxy.record import INJECTED_SKIPPED, Attributes, Recorder
+from faultline.proxy.record import (
+    INJECTED_SKIPPED,
+    INJECTED_VALUE,
+    Attributes,
+    Recorder,
+)
 from faultline.relay import RELAYED, Relay, tied_to_parent
 
 # The error type on the span of a faked result that does not fit the tool's schema.
@@ -186,10 +191,12 @@ class ToolCalls:
         self.finish(pending, result, error_type or kind, spec)
         return (json.dumps(answer) + "\n").encode()
 
-    def from_server(self, line: bytes) -> None:
+    def from_server(self, line: bytes) -> bytes | None:
+        """Watch a line to the client. Returns the line to send instead, if a fault
+        changed it."""
         message = parse(line)
         if "id" not in message or not ("result" in message or "error" in message):
-            return
+            return None
         result = message.get("result")
         if isinstance(result, dict):
             self.tags_results = self.tags_results or "resultType" in result
@@ -198,12 +205,19 @@ class ToolCalls:
         self.listing.discard(key(message["id"]))
         pending = self.pending.pop(key(message["id"]), None)
         if pending is None:
-            return  # the answer to a request that is not a tool call
+            return None  # the answer to a request that is not a tool call
         skipped = []  # faults that targeted the call but left it as it was, and why
         request = pending.request
         for injector in self.injectors.get(pending.name, []) if request else []:
             assert request
             injection = injector.response(request, message)
+            if injection is not None and injection.answer is not None:
+                extra: Attributes = {}
+                if injection.value is not None:
+                    extra[INJECTED_VALUE] = injection.value
+                result, error_type = outcome(injection.answer)
+                self.finish(pending, result, error_type, injector.fault.spec, extra)
+                return (json.dumps(injection.answer) + "\n").encode()
             if injection is not None and injection.skipped:
                 skipped.append(f"{injector.fault.spec}: {injection.skipped}")
                 print(
@@ -212,8 +226,9 @@ class ToolCalls:
                     file=sys.stderr,
                 )
         result, error_type = outcome(message)
-        extra: Attributes = {INJECTED_SKIPPED: "; ".join(skipped)} if skipped else {}
+        extra = {INJECTED_SKIPPED: "; ".join(skipped)} if skipped else {}
         self.finish(pending, result, error_type, extra=extra)
+        return None
 
     def learn_schemas(self, listed: dict) -> None:
         tools = listed.get("tools")
@@ -332,8 +347,8 @@ async def relay(command: Sequence[str], calls: ToolCalls) -> int:
             assert server.stdout and server.stdin
             try:
                 while line := await server.stdout.readline():
-                    calls.from_server(line)
-                    stdout.write(line)
+                    changed = calls.from_server(line)
+                    stdout.write(line if changed is None else changed)
                     await stdout.drain()
             except (BrokenPipeError, ConnectionResetError):
                 server.stdin.close()  # the client is gone, so the server may stop

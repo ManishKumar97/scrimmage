@@ -42,6 +42,8 @@ FAULTLINE_INJECTED = "faultline.injected"
 # On a call a fault targeted but could not change: the spec and why, such as
 # "model:truncated: the upstream answered 500". The call passed through as it was.
 INJECTED_SKIPPED = "faultline.injected.skipped"
+# The value a fault put in, such as the service tool:NAME:wrong=VALUE named.
+INJECTED_VALUE = "faultline.injected.value"
 # The most characters of content a span records, so one huge prompt or tool
 # result cannot fill the disk. Over it, content is cut and the span marked.
 DEFAULT_MAX_CONTENT = 64 * 1024

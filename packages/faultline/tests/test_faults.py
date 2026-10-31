@@ -52,6 +52,9 @@ def test_a_model_fault_is_on_step_one_unless_a_step_is_given():
         "tool::empty",
         "tool:get_logs:empty@0",
         "tool:get_logs:empty@",
+        "tool:get_logs:wrong",
+        "tool:get_logs:wrong=",
+        "tool:get_logs:empty=cart",
         "tool:empty",
         "model:rate_limit@0",
         "model:rate_limit@x",
@@ -227,6 +230,19 @@ def test_an_empty_result_that_cannot_fit_the_schema_says_so_and_holds_an_answer(
         "isError": False,
         "resultType": "complete",
     }
+
+
+@pytest.mark.parametrize(
+    ("spec", "value", "call"),
+    [
+        ("tool:get_logs:wrong=payment", "payment", None),
+        ("tool:get_logs:wrong=payment@2", "payment", 2),
+        ("tool:get_logs:wrong=ns:payment", "ns:payment", None),  # a colon in it
+        ("tool:get_logs:wrong=ops@example.com", "ops@example.com", None),
+    ],
+)
+def test_a_value_is_everything_after_the_equals_sign(spec, value, call):
+    assert parse(spec) == ToolFault(spec, "get_logs", "wrong", call, value)
 
 
 def test_a_tool_selector_names_the_nth_call_of_the_tool():

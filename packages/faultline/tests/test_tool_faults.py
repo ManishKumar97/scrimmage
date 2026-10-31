@@ -366,3 +366,83 @@ def test_stale_from_must_be_a_directory(tmp_path):
 
     assert result.returncode == 2
     assert "is not a directory" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("spec", "wrong"),
+    [
+        ("tool:get_logs:wrong=payment", [2, 4, 5]),  # every call
+        ("tool:get_logs:wrong=payment@2", [4]),  # the second call only
+    ],
+)
+def test_a_wrong_result_names_another_service_and_records_it(tmp_path, spec, wrong):
+    got, server_saw, recorded = wrapped(tmp_path, THREE_LOGS, [spec])
+
+    answers = answers_of(got)
+    asked = {2: "cart", 4: "ad", 5: "cart"}
+    # The server answered every call. Each targeted answer now names payment.
+    assert server_saw == b"".join(THREE_LOGS)
+    assert {i: answers[i] for i in asked} == {
+        i: echo({"service": "payment" if i in wrong else service})
+        for i, service in asked.items()
+    }
+    assert answers[3] == echo({"service": "cart"})  # get_metrics is untouched
+    assert [
+        (s.get("faultline.injected"), s.get("faultline.injected.value"))
+        for s in recorded
+    ] == [(spec, "payment") if n in wrong else (None, None) for n in (2, 3, 4, 5)]
+    assert all(s.get("error.type") is None for s in recorded)
+
+
+def test_a_wrong_result_with_nothing_to_replace_passes_and_says_so(tmp_path):
+    sent = [*OPENING, call(2, "get_logs", lines=5)]  # no string argument
+
+    got, _, recorded = wrapped(tmp_path, sent, ["tool:get_logs:wrong=payment"])
+
+    assert answers_of(got)[2] == echo({"lines": 5})
+    [span] = recorded
+    assert span.get("faultline.injected") is None
+    assert span["faultline.injected.skipped"] == (
+        "tool:get_logs:wrong=payment: the call passed no string argument to replace"
+    )
+
+
+def test_every_occurrence_is_replaced_once_the_longest_first():
+    fault = parse("tool:get_logs:wrong=ad")
+    assert isinstance(fault, ToolFault)
+    injector = fault.injector()
+    request = ToolRequest(1, "get_logs", {"service": "cart", "pod": "cartservice-1"}, 1)
+    text = "cartservice-1 failed; cart retries; cart"
+    message = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "content": [{"type": "text", "text": text}],
+            "structuredContent": {"result": text},
+            "isError": False,
+        },
+    }
+
+    injection = injector.response(request, message)
+
+    assert injection is not None and injection.answer is not None
+    assert (
+        injection.answer["result"]["content"][0]["text"] == "ad failed; ad retries; ad"
+    )
+    assert injection.answer["result"]["structuredContent"] == {
+        "result": "ad failed; ad retries; ad"
+    }
+    assert injection.value == "ad"
+
+
+def test_an_error_result_is_not_data_to_make_wrong():
+    fault = parse("tool:get_logs:wrong=ad")
+    assert isinstance(fault, ToolFault)
+    message = {"jsonrpc": "2.0", "id": 1, "result": {"content": [], "isError": True}}
+
+    injection = fault.injector().response(
+        ToolRequest(1, "get_logs", {"service": "cart"}, 1), message
+    )
+
+    assert injection is not None and injection.answer is None
+    assert injection.skipped == "the tool failed, so there was no data to change"

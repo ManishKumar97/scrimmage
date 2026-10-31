@@ -108,3 +108,25 @@ def test_the_ida_gets_the_result_an_earlier_run_got_as_a_success(tmp_path):
     assert read is not None
     [recorded] = read.tool_calls
     assert recorded.injected == "tool:get_logs:stale"
+
+
+@needs_cluster
+def test_the_ida_gets_logs_that_name_the_wrong_service_as_a_success(tmp_path):
+    result, [seen], read = ida_run(
+        tmp_path, SCRIPT, "--fault", "tool:get_logs:wrong=payment"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert '[tool] get_logs({"service": "cart"})\n' in result.stderr  # no error
+    # The IDA asked about cart and got well-formed logs of pods named payment.
+    assert seen.error_type is None
+    assert "cart" not in seen.result
+    assert "--- pod payment-" in seen.result
+    assert read is not None
+    [recorded] = read.tool_calls
+    assert (recorded.result, recorded.injected) == (
+        seen.result,
+        "tool:get_logs:wrong=payment",
+    )
+    spans = (tmp_path / "trace").glob("mcp-*.jsonl")
+    assert any('"faultline.injected.value"' in p.read_text() for p in spans)

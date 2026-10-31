@@ -12,6 +12,7 @@ that restarts the server mid-run starts the count again.
 """
 
 import json
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,6 +68,7 @@ class Injection:
     hang: bool = False
     # The fault targeted the call but left it as it was, and why.
     skipped: str | None = None
+    value: str | None = None  # the value the fault put in, recorded with the call
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,8 @@ class ToolInjector:
     The wrapper makes one per fault and asks it about each call of the fault's tool.
     A kind that keeps state, such as results it saw, keeps it on the instance.
     """
+
+    takes_value = False  # the kind is written KIND=VALUE
 
     def __init__(
         self, fault: "ToolFault", options: ToolOptions = ToolOptions()
@@ -280,6 +284,59 @@ class Stale(ToolInjector):
         )
 
 
+class Wrong(ToolInjector):
+    """tool:NAME:wrong=VALUE, the tool answers about the wrong thing, as a success.
+
+    The call goes to the server for real. In its result, every occurrence of each
+    string the call passed as an argument, such as the service it asked about,
+    becomes VALUE. The data stays well formed: it now names another service.
+    """
+
+    takes_value = True
+
+    def response(self, call: ToolRequest, message: dict) -> Injection | None:
+        if not self.targets(call):
+            return None
+        result = message.get("result")
+        if not isinstance(result, dict) or result.get("isError"):
+            return Injection(skipped="the tool failed, so there was no data to change")
+        value = self.fault.value or ""
+        asked = sorted(
+            {s for s in strings_in(call.arguments) if s and s != value},
+            key=len,
+            reverse=True,  # the longest first, so "cart" never cuts into "cartservice"
+        )
+        if not asked:
+            return Injection(skipped="the call passed no string argument to replace")
+        pattern = re.compile("|".join(re.escape(s) for s in asked))
+        changed = replaced(result, pattern, value)
+        if changed == result:
+            return Injection(skipped="no argument value of the call is in the result")
+        return Injection(answer={**message, "result": changed}, value=value)
+
+
+def strings_in(value: object) -> list[str]:
+    """Every string in a JSON value, at any depth."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for item in value.values() for s in strings_in(item)]
+    if isinstance(value, list):
+        return [s for item in value for s in strings_in(item)]
+    return []
+
+
+def replaced(value: object, pattern: re.Pattern[str], new: str) -> object:
+    """A JSON value with every match in its strings replaced, in one pass."""
+    if isinstance(value, str):
+        return pattern.sub(lambda _: new, value)
+    if isinstance(value, dict):
+        return {key: replaced(item, pattern, new) for key, item in value.items()}
+    if isinstance(value, list):
+        return [replaced(item, pattern, new) for item in value]
+    return value
+
+
 def arguments_key(arguments: object) -> str:
     """Arguments as one string, the same whatever their key order or spacing."""
     if isinstance(arguments, str):
@@ -424,6 +481,7 @@ TOOL_FAULTS: dict[str, type[ToolInjector]] = {
     "error": Error,
     "timeout": Timeout,
     "stale": Stale,
+    "wrong": Wrong,
 }
 MODEL_FAULTS: dict[str, ModelKind] = {
     "rate_limit": ModelKind(answer=rate_limit),
@@ -439,6 +497,7 @@ class ToolFault:
     tool: str
     kind: str
     call: int | None = None  # the Nth call of the tool, or None for every call
+    value: str | None = None  # the VALUE of a kind written KIND=VALUE
 
     def injector(self, options: ToolOptions = ToolOptions()) -> ToolInjector:
         """A new injector for this fault, with no state yet."""
@@ -460,16 +519,22 @@ type Fault = ToolFault | ModelFault
 
 
 def known() -> list[str]:
-    tools = [f"tool:NAME:{kind}[@CALL]" for kind in TOOL_FAULTS]
+    tools = [
+        f"tool:NAME:{kind}{'=VALUE' if injector.takes_value else ''}[@CALL]"
+        for kind, injector in TOOL_FAULTS.items()
+    ]
     return tools + [f"model:{kind}[@STEP]" for kind in MODEL_FAULTS]
 
 
 def selector(rest: str) -> tuple[str, int | None]:
-    """Split a trailing @N off a spec. Raises FaultError for an @ with no N of 1 or more."""
+    """Split a trailing @N off a spec. Raises FaultError for @0.
+
+    An @ not followed by digits stays: it may be part of a value, as in wrong=a@b.
+    """
     head, at, number = rest.rpartition("@")
-    if not at:
+    if not at or not number.isdigit():
         return rest, None
-    if number.isdigit() and int(number) >= 1:
+    if int(number) >= 1:
         return head, int(number)
     raise FaultError(f"@{number} is not a step or call number (1 or more)")
 
@@ -484,9 +549,16 @@ def parse(spec: str) -> Fault:
             f"unknown fault {spec!r}: {exc}. Known: {', '.join(known())}"
         ) from None
     if target == "tool":
-        tool, _, kind = rest.rpartition(":")
-        if tool and kind in TOOL_FAULTS:
-            return ToolFault(spec, tool, kind, number)
+        # The value comes after the first =, so it may hold a colon.
+        named, has_value, value = rest.partition("=")
+        tool, _, kind = named.rpartition(":")
+        if (
+            tool
+            and kind in TOOL_FAULTS
+            and TOOL_FAULTS[kind].takes_value == bool(has_value)
+            and (value or not has_value)
+        ):
+            return ToolFault(spec, tool, kind, number, value or None)
     elif target == "model" and rest in MODEL_FAULTS:
         return ModelFault(spec, rest, number or 1)
     raise FaultError(f"unknown fault {spec!r}. Known: {', '.join(known())}")
