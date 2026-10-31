@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from faultline.proxy.context import RunContext
 
 FAULTLINE = str(Path(sys.executable).parent / "faultline")
@@ -160,4 +162,38 @@ def test_a_held_call_never_cancelled_is_a_timeout_when_the_server_ends(tmp_path)
     assert [json.loads(line)["id"] for line in got] == [0, 1]
     assert [(s.get("error.type"), s.get("faultline.injected")) for s in recorded] == [
         ("timeout", "tool:get_logs:timeout")
+    ]
+
+
+# Three calls of get_logs with one get_metrics call between them.
+THREE_LOGS = [
+    *OPENING,
+    call(2, "get_logs", service="cart"),
+    call(3, "get_metrics", service="cart"),
+    call(4, "get_logs", service="ad"),
+    call(5, "get_logs", service="cart"),
+]
+EMPTY = {"content": [], "isError": False}
+
+
+@pytest.mark.parametrize(
+    ("spec", "emptied"),
+    [
+        ("tool:get_logs:empty", [2, 4, 5]),  # every call of the tool
+        ("tool:get_logs:empty@2", [4]),  # its second call only
+        ("tool:get_logs:empty@4", []),  # no fourth call: nothing changes
+    ],
+)
+def test_an_empty_result_answers_the_calls_its_selector_names(tmp_path, spec, emptied):
+    got, server_saw, recorded = wrapped(tmp_path, THREE_LOGS, [spec])
+
+    answers = {json.loads(line)["id"]: json.loads(line)["result"] for line in got}
+    assert [i for i, result in answers.items() if result == EMPTY] == emptied
+    assert set(answers) == {0, 1, 2, 3, 4, 5}
+    # The server never saw an emptied call, and saw every other one.
+    assert server_saw == b"".join(
+        line for line in THREE_LOGS if json.loads(line).get("id") not in emptied
+    )
+    assert [s.get("faultline.injected") for s in recorded] == [
+        spec if number in emptied else None for number in (2, 3, 4, 5)
     ]
