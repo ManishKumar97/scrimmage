@@ -30,6 +30,13 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("MODEL_TIMEOUT", "model_timeout_seconds"),
     )
+    # Seconds one MCP tool call may take before the client gives up on it and the
+    # model gets a timeout error (env TOOL_TIMEOUT). None: only the run's own time
+    # budget ends a hung call.
+    tool_timeout_seconds: float | None = Field(
+        default=None,
+        validation_alias=AliasChoices("TOOL_TIMEOUT", "tool_timeout_seconds"),
+    )
     # A command the MCP servers start under, such as a wrapper, as a JSON list.
     # Each server then runs as prefix + [python, -m, module].
     mcp_command_prefix: list[str] = []

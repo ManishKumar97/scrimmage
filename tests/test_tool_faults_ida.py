@@ -55,3 +55,30 @@ def test_the_ida_gets_an_error_from_the_chosen_tool(tmp_path):
         "tool_error",
         "tool:get_logs:error",
     )
+
+
+@needs_cluster
+def test_a_chosen_tool_call_hangs_until_the_idas_own_timeout_fires(tmp_path):
+    result, seen, read = ida_run(
+        tmp_path,
+        SCRIPT,
+        "--fault",
+        "tool:get_logs:timeout",
+        "--expect",
+        "cart",
+        TOOL_TIMEOUT="2",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert '[tool] get_logs({"service": "cart"}) -> error\n' in result.stderr
+    [call] = seen
+    assert (
+        call.result == "Error: get_logs raised MCPError: Request 'tools/call' timed out"
+    )
+    assert call.seconds >= 2  # the IDA waited out its own timeout
+    assert read is not None
+    [recorded] = read.tool_calls
+    assert (recorded.error_type, recorded.injected) == (
+        "timeout",
+        "tool:get_logs:timeout",
+    )

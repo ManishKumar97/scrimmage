@@ -14,6 +14,7 @@ from openai import AsyncOpenAI
 
 from faultline_lab import ida, mcp_client, mcp_logs
 from faultline_lab.models import OpenAIModel
+from faultline_lab.settings import Settings
 from faultline_lab.tools import Registry
 
 SERVER = StdioServerParameters(
@@ -157,6 +158,30 @@ def test_the_run_deadline_ends_an_mcp_tool_and_the_server():
 
     assert result.stop_reason == "time_limit"
     assert not alive(pids[0])
+
+
+def test_a_call_timeout_fails_one_hung_tool_call_and_the_run_goes_on():
+    async def use():
+        async with mcp_client.mcp_tools(SERVER, Registry(), call_timeout=0.5) as tools:
+            hung = await tools.call("hang", "{}")
+            after = await tools.call("echo", '{"text": "still here"}')
+            return hung, after
+
+    hung, after = asyncio.run(use())
+
+    assert hung == (
+        "Error: hang raised MCPError: Request 'tools/call' timed out",
+        False,
+    )
+    assert after == ("echo still here", True)
+
+
+def test_the_call_timeout_is_a_setting(monkeypatch):
+    monkeypatch.setenv("TOOL_TIMEOUT", "2.5")
+
+    settings = Settings(provider="groq", groq_api_key="g", _env_file=None)  # pyright: ignore
+
+    assert settings.tool_timeout_seconds == 2.5
 
 
 def test_get_logs_over_mcp_reports_cluster_errors_to_the_model(monkeypatch):

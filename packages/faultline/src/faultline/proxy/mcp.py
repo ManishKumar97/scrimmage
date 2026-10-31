@@ -37,6 +37,8 @@ from faultline.relay import RELAYED, Relay, tied_to_parent
 
 # The error type on the span of a faked result that does not fit the tool's schema.
 SHAPE_INVALID = "fault_shape_invalid"
+# The error type on the span of a call a fault never answered.
+TIMEOUT = "timeout"
 # The longest line, in bytes. A tool result can be large, such as many log lines.
 LINE_LIMIT = 128 * 1024 * 1024
 
@@ -95,16 +97,24 @@ class ToolCalls:
         for fault in faults:
             self.injectors.setdefault(fault.tool, []).append(fault.injector())
         self.counts: dict[str, int] = {}  # calls of each tool so far
+        # Calls a fault holds unanswered, and the fault's spec, by JSON-RPC id.
+        self.hung: dict[str, tuple[Pending, str]] = {}
         # What a faked result must hold to pass for the server's own, learned from it.
         self.listing: set[str] = set()  # ids of tools/list requests in flight
         self.schemas: dict[str, dict] = {}  # each tool's declared outputSchema
         self.tags_results = False  # results carry resultType (MCP 2026-07-28)
 
     def from_client(self, line: bytes) -> bytes | None:
-        """Watch a line to the server. Returns the answer when a fault answers instead."""
+        """Watch a line to the server. None sends it on.
+
+        Else the line stays from the server, and the bytes returned, if any, go back
+        to the client: a fault's answer, or nothing for a call a fault holds.
+        """
         message = parse(line)
         if message.get("method") == "tools/list" and "id" in message:
             self.listing.add(key(message["id"]))
+        if message.get("method") == "notifications/cancelled":
+            return self.cancelled(message)
         if message.get("method") != "tools/call" or "id" not in message:
             return None
         params = message.get("params")
@@ -137,8 +147,25 @@ class ToolCalls:
                 return self.answered(pending, exc.answer, spec, SHAPE_INVALID)
             if injection is not None and injection.answer is not None:
                 return self.answered(pending, injection.answer, spec)
+            if injection is not None and injection.hang:
+                self.hung[key(message["id"])] = (pending, spec)
+                return b""  # the server never sees it, the client never hears back
         self.pending[key(message["id"])] = pending
         return None
+
+    def cancelled(self, message: dict) -> bytes | None:
+        """The client gave up on a call. One a fault held ends here, as a timeout.
+
+        The server never saw that call, so the cancel stays from it too.
+        """
+        params = message.get("params")
+        request_id = params.get("requestId") if isinstance(params, dict) else None
+        held = self.hung.pop(key(request_id), None)
+        if held is None:
+            return None
+        pending, spec = held
+        self.finish(pending, "", TIMEOUT, spec)
+        return b""
 
     def answered(
         self,
@@ -196,10 +223,13 @@ class ToolCalls:
             self.on_call(call)
 
     def close(self) -> None:
-        """Record the calls the server never answered."""
+        """Record the calls the server never answered, and those a fault held."""
         for pending in self.pending.values():
             self.finish(pending, "", "no_response")
         self.pending.clear()
+        for pending, spec in self.hung.values():
+            self.finish(pending, "", TIMEOUT, spec)
+        self.hung.clear()
 
 
 def parse(line: bytes) -> dict:
@@ -265,8 +295,9 @@ async def relay(command: Sequence[str], calls: ToolCalls) -> int:
             assert server.stdin
             try:
                 while line := await stdin.readline():
-                    if answer := calls.from_client(line):
-                        stdout.write(answer)  # the server never sees this call
+                    answer = calls.from_client(line)
+                    if answer is not None:  # the server never sees this line
+                        stdout.write(answer)
                         await stdout.drain()
                         continue
                     server.stdin.write(line)

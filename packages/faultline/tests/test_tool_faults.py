@@ -117,3 +117,47 @@ def test_a_tool_error_answers_the_chosen_call_and_no_other_byte_changes(tmp_path
         ("get_logs", "tool_error", "tool:get_logs:error@2"),
         ("get_logs", None, None),
     ]
+
+
+def cancel(request_id: object) -> bytes:
+    params = {"requestId": request_id, "reason": "timed out after 2.0s"}
+    return line(
+        {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": params}
+    )
+
+
+def test_a_tool_timeout_never_answers_the_chosen_call(tmp_path):
+    held = call(3, "get_logs", service="cart")
+    sent = [
+        *OPENING,
+        call(2, "get_logs", service="cart"),
+        held,
+        call(4, "get_metrics", service="cart"),
+        cancel(3),  # the client gave up on call 3
+    ]
+
+    got, server_saw, recorded = wrapped(tmp_path, sent, ["tool:get_logs:timeout@2"])
+
+    # Neither the call nor its cancel reached the server, and no answer came back.
+    assert server_saw == b"".join(sent[:4] + sent[5:6])
+    assert [json.loads(line)["id"] for line in got] == [0, 1, 2, 4]
+    assert [
+        (s["gen_ai.tool.name"], s.get("error.type"), s.get("faultline.injected"))
+        for s in recorded
+    ] == [
+        ("get_logs", None, None),
+        ("get_logs", "timeout", "tool:get_logs:timeout@2"),
+        ("get_metrics", None, None),
+    ]
+
+
+def test_a_held_call_never_cancelled_is_a_timeout_when_the_server_ends(tmp_path):
+    sent = [*OPENING, call(2, "get_logs", service="cart")]
+
+    got, server_saw, recorded = wrapped(tmp_path, sent, ["tool:get_logs:timeout"])
+
+    assert server_saw == b"".join(OPENING)
+    assert [json.loads(line)["id"] for line in got] == [0, 1]
+    assert [(s.get("error.type"), s.get("faultline.injected")) for s in recorded] == [
+        ("timeout", "tool:get_logs:timeout")
+    ]

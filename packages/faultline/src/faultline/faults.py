@@ -61,6 +61,9 @@ class Injection:
     """What a tool fault does to one call."""
 
     answer: dict | None = None  # the JSON-RPC message the client gets from the fault
+    hang: bool = (
+        False  # the client gets no answer at all; the server never sees the call
+    )
 
 
 class ToolInjector:
@@ -198,6 +201,16 @@ class Error(ToolInjector):
         )
 
 
+class Timeout(ToolInjector):
+    """tool:NAME:timeout, the tool hangs. The call is never answered.
+
+    The agent's own timeout for the call is what ends it, as with a stalled backend.
+    """
+
+    def request(self, call: ToolRequest) -> Injection | None:
+        return Injection(hang=True) if self.targets(call) else None
+
+
 def rate_limit(path: str) -> ModelAnswer:
     """HTTP 429 with the provider's own error body and a retry-after header.
 
@@ -275,7 +288,11 @@ def truncate(path: str, body: bytes) -> bytes:
 
 
 # The fault kinds. A tool kind is the injector the MCP wrapper asks about each call.
-TOOL_FAULTS: dict[str, type[ToolInjector]] = {"empty": Empty, "error": Error}
+TOOL_FAULTS: dict[str, type[ToolInjector]] = {
+    "empty": Empty,
+    "error": Error,
+    "timeout": Timeout,
+}
 MODEL_FAULTS: dict[str, ModelKind] = {
     "rate_limit": ModelKind(answer=rate_limit),
     "timeout": ModelKind(hang=True),
