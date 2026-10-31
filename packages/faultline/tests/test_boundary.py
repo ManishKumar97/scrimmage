@@ -15,6 +15,7 @@ from pathlib import Path
 PACKAGE = Path(__file__).parents[1]
 ALLOWED = set(sys.stdlib_module_names) | {"faultline"}
 TEST_TOOLS = {"pytest", "opentelemetry"}
+TEST_HELPERS = {"spans"}  # tests/spans.py, the product's own span-file builder
 
 
 def test_importing_the_product_loads_only_the_product_and_the_standard_library():
@@ -57,7 +58,7 @@ def test_product_code_imports_only_the_product_and_the_standard_library():
 
 def test_product_tests_import_only_the_product_the_standard_library_and_test_tools():
     files = sorted((PACKAGE / "tests").rglob("*.py"))
-    allowed = ALLOWED | TEST_TOOLS
+    allowed = ALLOWED | TEST_TOOLS | TEST_HELPERS
 
     outside = {
         str(path.relative_to(PACKAGE)): sorted(imported_roots(path) - allowed)

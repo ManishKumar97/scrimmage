@@ -4,16 +4,19 @@ A run is one execution of the agent on one task.
 A step is one model call plus the tool calls it asked for.
 Spans are classified by the GenAI `gen_ai.operation.name` attribute, so a file from
 any agent that follows the convention reads the same way.
-`faultline.*` attributes are read when present and are never required.
+The question, answer and stop reason may come from span attributes the user names
+in the config. They are never required.
 
-    python -m faultline.runs FILE [FILE...]
+    python -m faultline.runs [--config PATH] FILE [FILE...]
 """
 
 import argparse
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from faultline.config import Attributes, ConfigError, load_config
 from faultline.model import Run, Step, ToolCall
 from faultline.semconv import (
     CHAT,
@@ -65,8 +68,30 @@ class Reading:
     no_spans: int  # valid JSON with no resourceSpans, so probably not a span file
 
 
-def read_runs(path: Path) -> Reading:
+def read_runs(path: Path, attributes: Attributes = Attributes()) -> Reading:
+    return read_runs_many([path], attributes)
+
+
+def read_runs_many(
+    paths: Sequence[Path], attributes: Attributes = Attributes()
+) -> Reading:
+    """The runs in several span files. A trace split across files is one run."""
     traces: dict[str, list[dict]] = {}
+    unreadable = no_spans = 0
+    for path in paths:
+        bad, empty = collect_spans(path, traces)
+        unreadable += bad
+        no_spans += empty
+    runs = [
+        run
+        for tid, spans in traces.items()
+        if (run := build_run(tid, spans, attributes))
+    ]
+    return Reading(runs, unreadable, no_spans)
+
+
+def collect_spans(path: Path, traces: dict[str, list[dict]]) -> tuple[int, int]:
+    """Add the spans in one file to `traces`. Returns (unreadable, no_spans) counts."""
     unreadable = no_spans = 0
     with path.open("rb") as file:
         for raw in file:
@@ -90,8 +115,7 @@ def read_runs(path: Path) -> Reading:
                 continue
             for span in spans:
                 traces.setdefault(span["traceId"], []).append(span)
-    runs = [run for tid, spans in traces.items() if (run := build_run(tid, spans))]
-    return Reading(runs, unreadable, no_spans)
+    return unreadable, no_spans
 
 
 def spans_in(request: dict) -> list[dict]:
@@ -120,7 +144,9 @@ def seconds_of(span: dict) -> float:
     return (int(span["endTimeUnixNano"]) - started(span)) / NANOS
 
 
-def build_run(trace_id: str, spans: list[dict]) -> Run | None:
+def build_run(
+    trace_id: str, spans: list[dict], attributes: Attributes = Attributes()
+) -> Run | None:
     """One run from the spans of one trace. A trace with no model call is not a run."""
     chats = sorted((s for s in spans if operation(s) == CHAT), key=started)
     if not chats:
@@ -151,17 +177,17 @@ def build_run(trace_id: str, spans: list[dict]) -> Run | None:
         replace(step, tool_calls=tuple(calls))
         for step, calls in zip(steps, placed, strict=True)
     ]
-    answer = attrs.get("faultline.answer")
+    answer = mapped(attrs, attributes.answer)
     # Only a last reply that ends the turn is an answer. A run cut off mid-way ends in
     # narration before tool calls, which is not one.
-    if answer is None and is_final(steps[-1]):
+    if answer is None and is_final(steps[-1]) and steps[-1].text.strip():
         answer = steps[-1].text
     return Run(
         trace_id=trace_id,
         model=attrs.get(GEN_AI_REQUEST_MODEL)
         or chats[0]["attrs"].get(GEN_AI_REQUEST_MODEL),
-        stop_reason=attrs.get("faultline.stop_reason"),
-        question=attrs.get("faultline.question") or first_user_text(chats[0]),
+        stop_reason=mapped(attrs, attributes.stop_reason),
+        question=mapped(attrs, attributes.question) or first_user_text(chats[0]),
         answer=answer,
         seconds=seconds_of(root) if root else None,
         complete=root is not None,
@@ -170,6 +196,11 @@ def build_run(trace_id: str, spans: list[dict]) -> Run | None:
         unplaced=tuple(unplaced),
         content_recorded=any(carries_content(span) for span in spans),
     )
+
+
+def mapped(attrs: dict, name: str | None):
+    """The value of the attribute the user mapped, None when not mapped or not set."""
+    return attrs.get(name) if name else None
 
 
 def parts_of(messages: str | None) -> list[dict]:
@@ -326,18 +357,36 @@ def show_run(run: Run) -> str:
     return "\n".join(lines)
 
 
+def skip_notes(path: Path | str, reading: Reading) -> list[str]:
+    """The lines of a file that gave nothing, as a report line each."""
+    notes = []
+    if reading.unreadable:
+        notes.append(f"{path}: skipped {reading.unreadable} unreadable line(s)")
+    if reading.no_spans:
+        notes.append(f"{path}: {reading.no_spans} line(s) held no spans")
+    return notes
+
+
+def show_reading(path: Path | str, reading: Reading) -> str:
+    """What `python -m faultline.runs` prints for one file."""
+    lines = [f"{path}: {len(reading.runs)} run(s)"]
+    lines += [show_run(run) for run in reading.runs]
+    return "\n".join(lines + skip_notes(path, reading))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Print the runs in OTLP span files.")
+    parser.add_argument(
+        "--config", type=Path, help="TOML file, default ./faultline.toml"
+    )
     parser.add_argument("files", nargs="+", type=Path)
-    for path in parser.parse_args().files:
-        reading = read_runs(path)
-        print(f"{path}: {len(reading.runs)} run(s)")
-        for run in reading.runs:
-            print(show_run(run))
-        if reading.unreadable:
-            print(f"{path}: skipped {reading.unreadable} unreadable line(s)")
-        if reading.no_spans:
-            print(f"{path}: {reading.no_spans} line(s) held no spans")
+    args = parser.parse_args()
+    try:
+        attributes = load_config(args.config).attributes
+    except ConfigError as error:
+        parser.exit(2, f"runs: {error}\n")
+    for path in args.files:
+        print(show_reading(path, read_runs(path, attributes)))
 
 
 if __name__ == "__main__":
