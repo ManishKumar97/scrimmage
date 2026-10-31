@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, TextIO
 
+from faultline.cost import Budget
 from faultline.faults import (
     Fault,
     FaultError,
@@ -258,9 +259,11 @@ def execute(
     max_content: int = DEFAULT_MAX_CONTENT,
     stale_from: Path | None = None,
     streams: Streams | None = None,
+    budget: Budget | None = None,
 ) -> Outcome:
     """Run the agent once through the proxy and read the run back from its trace.
 
+    With a budget, the proxy refuses model calls once it is spent.
     Call proxy_ready() first: this loads the proxy.
     """
     from faultline.proxy.model import ModelProxy
@@ -273,7 +276,7 @@ def execute(
         max_content=max_content,
     )
     model_faults = [fault for fault in faults if isinstance(fault, ModelFault)]
-    proxy = ModelProxy(upstreams, model_faults, recorder)
+    proxy = ModelProxy(upstreams, model_faults, recorder, budget)
     clock = time.monotonic()
     code, interrupted = asyncio.run(
         launch(

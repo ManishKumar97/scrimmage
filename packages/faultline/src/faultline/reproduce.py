@@ -21,6 +21,11 @@ is saved in its own directory:
 Each holds `trace/` (the run's spans), `stdout.txt`, `stderr.txt` and `result.json`.
 At the end, the fault matrix is printed and written to DIR/matrix.json.
 
+Cost. After the first run, before the rest start, it prints an estimate: that run's
+tokens times every run, priced from the config's [cost] section or from --price-in
+and --price-out. `--max-cost USD` stops starting runs once they cost that much, and
+exits 3. Mid-run, the proxy refuses model calls past the cap with HTTP 402.
+
 Each run gets a verdict by the rules in `faultline.verdict`. A task's reference is
 its expected answer, else the answer of its first clean run that got past rule 1.
 `--matcher module:function` replaces the built-in comparison with the team's own.
@@ -41,6 +46,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from faultline import matrix
+from faultline.config import CostConfig, load_config
+from faultline.cost import Budget, Prices, dollars, tokens
 from faultline.faults import Fault, FaultError, parse_all
 from faultline.launch import (
     Outcome,
@@ -69,6 +76,8 @@ TASK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 UNSAFE = re.compile(r"[^A-Za-z0-9._=-]")
 # The exit code after a stop signal: what a shell gives for Ctrl-C.
 INTERRUPTED = 130
+# The exit code when --max-cost stopped the test before its last run.
+COST_CAP = 3
 
 
 class TasksError(ValueError):
@@ -292,6 +301,7 @@ def make(
     command: Sequence[str],
     upstreams: dict[str, str | None],
     max_content: int,
+    budget: Budget | None = None,
 ) -> Outcome:
     """Make one run and save its output in its directory."""
     planned.directory.mkdir(parents=True)
@@ -308,7 +318,54 @@ def make(
             planned.directory / "trace",
             max_content,
             streams=streams,
+            budget=budget,
         )
+
+
+def prices_of(args: argparse.Namespace, config: CostConfig) -> Prices | None:
+    """The prices from the flags, else from the config. None when not given.
+    Raises ValueError when only one of the two is known."""
+    price_in = args.price_in if args.price_in is not None else config.input_per_mtok
+    price_out = args.price_out if args.price_out is not None else config.output_per_mtok
+    if price_in is None and price_out is None:
+        return None
+    if price_in is None or price_out is None:
+        raise ValueError(
+            "give both prices: --price-in and --price-out, or [cost] "
+            "input_per_mtok and output_per_mtok"
+        )
+    if price_in < 0 or price_out < 0:
+        raise ValueError("a price cannot be negative")
+    return Prices(price_in, price_out)
+
+
+def plan_line(
+    tasks: int,
+    faults: int,
+    clean_runs: int,
+    runs: int,
+    first: tuple[int, int],
+    prices: Prices | None,
+) -> str:
+    """The plan and its estimate: the first clean run's tokens times every run.
+
+    plan: 2 tasks x (3 clean + 3 faulted) = 12 runs, about 48,000 tokens, about $0.19
+    """
+    total = tasks * (clean_runs + runs * faults)
+    faulted = f"{runs} faulted" if faults == 1 else f"{runs} faulted x {faults} faults"
+    head = (
+        f"plan: {tasks} task{'s' if tasks != 1 else ''} x "
+        f"({clean_runs} clean + {faulted}) = {total} runs"
+    )
+    if sum(first) == 0:
+        return f"{head}, tokens unknown (the first run recorded no token usage)"
+    head += f", about {sum(first) * total:,} tokens"
+    if prices is None:
+        return (
+            f"{head}, cost unknown (no price: set [cost] input_per_mtok and "
+            "output_per_mtok, or pass --price-in and --price-out)"
+        )
+    return f"{head}, about {dollars(prices.cost(*first) * total)}"
 
 
 def label(planned: Planned) -> str:
@@ -362,6 +419,31 @@ def add_parser(subparsers) -> None:
         help="your own comparison, called as FUNCTION(answer, reference) and "
         "returning True when they say the same",
     )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        metavar="FILE",
+        help="TOML settings, default ./faultline.toml if present; prices are in [cost]",
+    )
+    parser.add_argument(
+        "--price-in",
+        type=float,
+        metavar="USD",
+        help="US dollars per million input tokens (wins over [cost] input_per_mtok)",
+    )
+    parser.add_argument(
+        "--price-out",
+        type=float,
+        metavar="USD",
+        help="US dollars per million output tokens (wins over [cost] output_per_mtok)",
+    )
+    parser.add_argument(
+        "--max-cost",
+        type=float,
+        metavar="USD",
+        help="stop once the runs have cost this much; needs the prices. The proxy "
+        "also refuses model calls past it, mid-run",
+    )
     add_upstream_arguments(parser)
     parser.add_argument("command", nargs=argparse.REMAINDER, metavar="-- CMD...")
     parser.set_defaults(handler=test)
@@ -382,8 +464,16 @@ def test(args: argparse.Namespace) -> int:
         faults = parse_all(args.fault)
         tasks = load_tasks(args.tasks, args.expect_from)
         matcher = load_matcher(args.matcher) if args.matcher else None
-    except (FaultError, TasksError, ValueError) as exc:
+        prices = prices_of(args, load_config(args.config).cost)
+    except (FaultError, TasksError, ValueError) as exc:  # ConfigError too
         return fail(str(exc))
+    if args.max_cost is not None and prices is None:
+        return fail(
+            "--max-cost needs the prices: --price-in and --price-out, or [cost] "
+            "in the config"
+        )
+    if args.max_cost is not None and args.max_cost <= 0:
+        return fail("--max-cost must be above 0")
     out = args.out or Path(tempfile.mkdtemp(prefix="faultline-test-"))
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
         return fail(f"{out} is not an empty directory; runs are never mixed")
@@ -394,8 +484,16 @@ def test(args: argparse.Namespace) -> int:
     print(f"faultline test: {len(planned)} runs, saved in {out}", file=sys.stderr)
     references = References()
     results: list[Result] = []
+    spent = 0.0  # what the runs so far cost, from their traces
     for index, run in enumerate(planned, start=1):
-        outcome = make(run, command, upstreams, args.max_content)
+        budget = (
+            Budget(args.max_cost, prices, spent)
+            if args.max_cost is not None and prices
+            else None
+        )
+        outcome = make(run, command, upstreams, args.max_content, budget)
+        used = tokens(outcome.run)
+        spent += prices.cost(*used) if prices else 0.0
         references.learn(run, outcome)
         reference = references.of(run.task)
         verdict = verdict_of(outcome, reference, matcher)
@@ -408,6 +506,11 @@ def test(args: argparse.Namespace) -> int:
             f"[{index}/{len(planned)}] {label(run)}: {describe(result.verdict)}",
             file=sys.stderr,
         )
+        if index == 1:  # the estimate, before the rest start
+            line = plan_line(
+                len(tasks), len(faults), args.clean_runs, args.runs, used, prices
+            )
+            print(line, file=sys.stderr)
         if outcome.interrupted:
             print(
                 f"faultline test: stopped by a signal after {index} of "
@@ -416,6 +519,16 @@ def test(args: argparse.Namespace) -> int:
             )
             report(results, faults, out)
             return INTERRUPTED
+        cap: float | None = args.max_cost
+        if cap is not None and spent >= cap and index < len(planned):
+            print(
+                f"faultline test: stopped after {index} of {len(planned)} runs: "
+                f"they cost about {dollars(spent)}, and the --max-cost cap is "
+                f"{dollars(cap)}",
+                file=sys.stderr,
+            )
+            report(results, faults, out)
+            return COST_CAP
     report(results, faults, out)
     return 0
 

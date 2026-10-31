@@ -221,13 +221,11 @@ class Recorder:
     def chat(self, attempts: Sequence[Exchange]) -> dict:
         first, last = attempts[0], attempts[-1]
         request = loads(first.request)
-        body = decoded(last.response, last.encoding)
-        reply = loads(body)
+        reply, stream = reply_of(last)
         anthropic = first.path.rstrip("/").endswith("/messages")
         attributes: Attributes = {GEN_AI_OPERATION_NAME: CHAT, ATTEMPTS: len(attempts)}
-        if not reply and is_stream(body):
-            reply = reply_from_stream(body) or {}
-            attributes[STREAM] = "parsed" if reply else "unparsed"
+        if stream:
+            attributes[STREAM] = stream
         model = request.get("model")
         if isinstance(model, str):
             attributes[GEN_AI_REQUEST_MODEL] = model
@@ -356,6 +354,35 @@ def loads(body: bytes) -> dict:
     except ValueError:
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def reply_of(exchange: Exchange) -> tuple[dict, str | None]:
+    """The reply as a JSON object, read from a stream when it was one, else empty.
+    Also "parsed" or "unparsed" for a stream, None for a plain body."""
+    body = decoded(exchange.response, exchange.encoding)
+    reply = loads(body)
+    if reply or not is_stream(body):
+        return reply, None
+    reply = reply_from_stream(body) or {}
+    return reply, "parsed" if reply else "unparsed"
+
+
+def tokens_of(exchange: Exchange) -> tuple[int, int]:
+    """The input and output tokens a successful reply reports. (0, 0) when it
+    reports none, or failed."""
+    if not 200 <= exchange.status < 300:
+        return 0, 0
+    reply, _ = reply_of(exchange)
+    try:
+        attributes = reply_attributes(reply) if reply else {}
+    except (AttributeError, TypeError, KeyError, IndexError):
+        return 0, 0
+    input_tokens = attributes.get(GEN_AI_USAGE_INPUT_TOKENS)
+    output_tokens = attributes.get(GEN_AI_USAGE_OUTPUT_TOKENS)
+    return (
+        input_tokens if isinstance(input_tokens, int) else 0,
+        output_tokens if isinstance(output_tokens, int) else 0,
+    )
 
 
 def finish_reason(reason: object) -> str:

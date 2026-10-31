@@ -5,6 +5,7 @@ The model is the lab's scripted fake_llm, so no run calls a real model API.
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -158,3 +159,36 @@ def test_each_run_is_marked_by_rule_against_the_expected_answer(tmp_path):
         "clean                     1              0                1           0     2",
         "tool:get_logs:empty       1              0                1           0     2",
     ]
+
+
+def test_the_estimate_and_the_cap_use_the_prices_in_the_config(tmp_path):
+    # $1,000 per million tokens, so the fake model's few dozen tokens cost cents.
+    (tmp_path / "faultline.toml").write_text(
+        "[cost]\ninput_per_mtok = 1000\noutput_per_mtok = 1000\n"
+    )
+    with fake_llm(tmp_path, [{"text": ANSWER}]) as upstream:
+        result = faultline_test(
+            tmp_path,
+            upstream,
+            "--fault",
+            "model:server_error",
+            "--runs",
+            "1",
+            "--clean-runs",
+            "2",
+            "--max-cost",
+            "0.01",
+        )
+
+    assert result.returncode == 3, result.stderr
+    lines = result.stderr.splitlines()
+    plan = next(i for i, line in enumerate(lines) if line.startswith("plan: "))
+    assert re.fullmatch(
+        r"plan: 2 tasks x \(2 clean \+ 1 faulted\) = 6 runs, "
+        r"about \d+ tokens, about \$0\.\d\d",
+        lines[plan],
+    )
+    assert lines[plan + 1].startswith("faultline test: stopped after 1 of 6 runs: ")
+    assert lines[plan + 1].endswith("and the --max-cost cap is $0.01")
+    clean = tmp_path / "out" / "cart-fails" / "clean"
+    assert [path.name for path in clean.iterdir()] == ["1"]

@@ -90,5 +90,6 @@ source_modules = [
     "faultline.faults",
     "faultline.verdict",
     "faultline.matrix",
+    "faultline.cost",
 ]
 forbidden_modules = ["aiohttp", "yarl"]
