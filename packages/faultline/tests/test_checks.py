@@ -4,7 +4,13 @@ from pathlib import Path
 import pytest
 from spans import run_from
 
-from faultline.checks import CHECKS, identifiers, no_retry, unsupported_value
+from faultline.checks import (
+    CHECKS,
+    identifiers,
+    no_retry,
+    repeated_call,
+    unsupported_value,
+)
 from faultline.config import ChecksConfig, DetectConfig
 from faultline.detect import detect
 from faultline.model import Certainty, Finding
@@ -182,3 +188,43 @@ def test_a_finding_carries_the_runs_first_fault(tmp_path):
     [finding] = judge(unsupported_value, tmp_path, calls(FAILED), reply)
 
     assert finding.fault is not None and finding.fault.tool == "get_logs"
+
+
+LOGS = {"name": "get_logs", "arguments": '{"service": "cart"}'}
+
+
+def test_a_call_made_more_than_the_limit_is_flagged_once(tmp_path):
+    reordered = {**LOGS, "arguments": '{ "service":"cart" }'}
+    steps = [calls(LOGS), calls(LOGS, reordered), calls(LOGS, LOGS), answer("ok")]
+
+    [finding] = judge(repeated_call, tmp_path, *steps)
+
+    assert (finding.check, finding.certainty) == ("repeated_call", Certainty.CERTAIN)
+    assert finding.flagged and finding.fault is None
+    assert finding.evidence == 'get_logs({"service": "cart"}) called 5 times, limit 3'
+
+
+def test_a_call_made_exactly_the_limit_is_not_flagged(tmp_path):
+    run = run_from(tmp_path, calls(LOGS, LOGS, LOGS), answer("ok"))
+
+    assert repeated_call(run, (), CONFIG) == ()
+    [finding] = repeated_call(run, (), ChecksConfig(repeated_call_limit=2))
+    assert "called 3 times, limit 2" in finding.evidence
+
+
+def test_each_pair_over_the_limit_is_its_own_finding(tmp_path):
+    other_args = {**LOGS, "arguments": '{"service": "ad"}'}
+    other_tool = {**LOGS, "name": "get_metrics"}
+    steps = [calls(*[LOGS, other_args, other_tool] * 4), answer("ok")]
+
+    findings = judge(repeated_call, tmp_path, *steps)
+
+    assert len(findings) == 3
+
+
+def test_a_run_without_recorded_content_is_not_judged(tmp_path):
+    run = run_from(tmp_path, calls(*[LOGS] * 5), answer("ok"))
+    stripped = dataclasses.replace(run, content_recorded=False)
+
+    assert repeated_call(run, (), CONFIG)
+    assert repeated_call(stripped, (), CONFIG) == ()

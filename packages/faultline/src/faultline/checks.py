@@ -166,4 +166,28 @@ def unsupported_value(
 
 UNSUPPORTED_VALUE = Check("unsupported_value", Certainty.HEURISTIC, unsupported_value)
 
-CHECKS: tuple[Check, ...] = (NO_RETRY, UNSUPPORTED_VALUE)
+
+def repeated_call(
+    run: Run, faults: tuple[Fault, ...], config: ChecksConfig
+) -> tuple[Finding, ...]:
+    """The same tool called with the same arguments more than the limit allows. One
+    finding per (tool, arguments) pair over the limit. Without recorded content every
+    call reads as having no arguments, so such a run is not judged."""
+    if not run.content_recorded:
+        return ()
+    counts: dict[tuple[str, str], list[ToolCall]] = {}
+    for call in sorted(run.tool_calls, key=lambda c: c.started):
+        counts.setdefault((call.name, same_arguments(call.arguments)), []).append(call)
+    limit = config.repeated_call_limit
+    findings = []
+    for (name, _), made in counts.items():
+        if len(made) > limit:
+            args = cut(made[0].arguments, EVIDENCE_LIMIT) or "no arguments"
+            evidence = f"{name}({args}) called {len(made)} times, limit {limit}"
+            findings.append(REPEATED_CALL.finding(first(faults), True, evidence))
+    return tuple(findings)
+
+
+REPEATED_CALL = Check("repeated_call", Certainty.CERTAIN, repeated_call)
+
+CHECKS: tuple[Check, ...] = (NO_RETRY, UNSUPPORTED_VALUE, REPEATED_CALL)
