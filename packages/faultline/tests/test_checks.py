@@ -57,15 +57,26 @@ def test_a_failed_call_made_again_with_the_same_arguments_is_not_flagged(tmp_pat
     [finding] = judge(no_retry, tmp_path, calls(FAILED), calls(retry), answer("ok"))
 
     assert not finding.flagged
-    assert "called again 1 time(s)" in finding.evidence
+    assert finding.evidence == (
+        'get_logs({"service": "cart"}) called again 1 time(s), '
+        "1 with the same arguments, 0 with different"
+    )
 
 
-def test_a_call_with_other_arguments_or_another_tool_is_not_a_retry(tmp_path):
-    other_args = {**FAILED, "error": None, "arguments": '{"service": "ad"}'}
+def test_a_call_with_corrected_arguments_is_a_retry(tmp_path):
+    corrected = {**FAILED, "error": None, "arguments": '{"service": "ad"}'}
+
+    [finding] = judge(no_retry, tmp_path, calls(FAILED), calls(corrected), answer("ok"))
+
+    assert not finding.flagged
+    assert finding.evidence.endswith("0 with the same arguments, 1 with different")
+
+
+def test_a_call_of_another_tool_is_not_a_retry(tmp_path):
     other_tool = {**FAILED, "error": None, "name": "get_metrics"}
 
     [finding] = judge(
-        no_retry, tmp_path, calls(FAILED), calls(other_args, other_tool), answer("ok")
+        no_retry, tmp_path, calls(FAILED), calls(other_tool), answer("ok")
     )
 
     assert finding.flagged

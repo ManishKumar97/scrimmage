@@ -62,8 +62,8 @@ def faulted_call(run: Run, fault: Fault) -> ToolCall | None:
 def no_retry(
     run: Run, faults: tuple[Fault, ...], config: ChecksConfig
 ) -> tuple[Finding, ...]:
-    """A failed tool call never made again with the same arguments, or a failed model
-    call with no step after it."""
+    """A failed tool call whose tool is never called again, with any arguments, or a
+    failed model call with no step after it."""
     findings = []
     last_step = max((s.number for s in run.steps), default=None)
     for fault in faults:
@@ -82,18 +82,21 @@ def no_retry(
         if call is None:
             continue
         key = same_arguments(call.arguments)
+        # Any later call of the same tool is a retry: correcting a bad argument is one.
         again = [
             c
             for c in run.tool_calls
-            if c.started > call.started
-            and c.name == call.name
-            and same_arguments(c.arguments) == key
+            if c.started > call.started and c.name == call.name
         ]
+        same = sum(same_arguments(c.arguments) == key for c in again)
         args = cut(call.arguments, EVIDENCE_LIMIT) or "no arguments"
         if again:
-            evidence = f"{call.name}({args}) called again {len(again)} time(s)"
+            evidence = (
+                f"{call.name}({args}) called again {len(again)} time(s), "
+                f"{same} with the same arguments, {len(again) - same} with different"
+            )
         else:
-            evidence = f"{call.name}({args}) never called again with these arguments"
+            evidence = f"{call.name}({args}) never called again"
         findings.append(NO_RETRY.finding(fault, not again, evidence))
     return tuple(findings)
 
