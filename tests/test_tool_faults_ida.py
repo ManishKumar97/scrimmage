@@ -1,6 +1,7 @@
 """Tool faults on the lab's IDA: its real MCP servers run under faultline mcp-wrap."""
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -120,7 +121,8 @@ def test_the_ida_gets_logs_that_name_the_wrong_service_as_a_success(tmp_path):
     assert '[tool] get_logs({"service": "cart"})\n' in result.stderr  # no error
     # The IDA asked about cart and got well-formed logs of pods named payment.
     assert seen.error_type is None
-    assert "cart" not in seen.result
+    # Only whole words change: "cartstore" in a class name stays as it was.
+    assert not re.search(r"(?<![A-Za-z0-9_])cart(?![A-Za-z0-9_])", seen.result)
     assert "--- pod payment-" in seen.result
     assert read is not None
     [recorded] = read.tool_calls
