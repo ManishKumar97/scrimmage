@@ -8,7 +8,8 @@ The agent's MCP config starts this wrapper in front of the server's command:
 The wrapper runs the server as its child and relays every line both ways unchanged.
 It watches each `tools/call` request and the response with the same JSON-RPC id, and
 records the pair as a tool call. The server's stderr passes straight through.
-Under `faultline run`, each tool call becomes an `execute_tool` span in the run's trace.
+Under `faultline run`, each tool call becomes an `execute_tool` span in the run's trace,
+and a tool named in a `tool:NAME:KIND` fault is answered by the fault, not the server.
 """
 
 import argparse
@@ -21,8 +22,9 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+from faultline.faults import ToolFault, ToolSession, parse_all
 from faultline.model import ToolCall
-from faultline.proxy.record import Recorder
+from faultline.proxy.record import FAULTS, Recorder
 from faultline.relay import RELAYED, Relay
 
 # The longest line, in bytes. A tool result can be large, such as many log lines.
@@ -46,7 +48,13 @@ def wrap(args: argparse.Namespace) -> int:
         return 2
     # Started by `faultline run`, the wrapper writes its own span file. Else it only relays.
     recorder = Recorder.from_env(f"mcp-{os.getpid()}.jsonl")
-    calls = ToolCalls(recorder.tool_call if recorder else None)
+    try:
+        faults = parse_all(json.loads(os.environ.get(FAULTS, "[]")))
+    except (ValueError, TypeError) as exc:  # FaultError is a ValueError
+        print(f"faultline mcp-wrap: bad {FAULTS}: {exc}", file=sys.stderr)
+        return 2
+    tool_faults = [fault for fault in faults if isinstance(fault, ToolFault)]
+    calls = ToolCalls(recorder.tool_call if recorder else None, tool_faults)
     return asyncio.run(relay(command, calls))
 
 
@@ -61,35 +69,74 @@ class Pending:
 class ToolCalls:
     """Pairs each tools/call request with its response, by JSON-RPC id."""
 
-    def __init__(self, on_call: Callable[[ToolCall], None] | None = None) -> None:
+    def __init__(
+        self,
+        on_call: Callable[[ToolCall], None] | None = None,
+        faults: Sequence[ToolFault] = (),
+    ) -> None:
         self.pending: dict[str, Pending] = {}
         self.calls: list[ToolCall] = []
         self.on_call = on_call
+        self.faults = {fault.tool: fault for fault in faults}
+        # What a faked result must hold to pass for the server's own, learned from it.
+        self.listing: set[str] = set()  # ids of tools/list requests in flight
+        self.schemas: dict[str, dict] = {}  # each tool's declared outputSchema
+        self.tags_results = False  # results carry resultType (MCP 2026-07-28)
 
-    def from_client(self, line: bytes) -> None:
+    def from_client(self, line: bytes) -> bytes | None:
+        """Watch a line to the server. Returns the answer when a fault answers instead."""
         message = parse(line)
+        if message.get("method") == "tools/list" and "id" in message:
+            self.listing.add(key(message["id"]))
         if message.get("method") != "tools/call" or "id" not in message:
-            return
+            return None
         params = message.get("params")
         params = params if isinstance(params, dict) else {}
-        self.pending[key(message["id"])] = Pending(
+        pending = Pending(
             name=str(params.get("name", "?")),
             arguments=json.dumps(params.get("arguments", {})),
             started=time.time_ns(),
             clock=time.monotonic(),
         )
+        fault = self.faults.get(pending.name)
+        if fault is None:
+            self.pending[key(message["id"])] = pending
+            return None
+        session = ToolSession(self.schemas.get(pending.name), self.tags_results)
+        answer = fault.answer(message["id"], session)
+        result, error_type = outcome(answer)
+        self.finish(pending, result, error_type, fault.spec)
+        return (json.dumps(answer) + "\n").encode()
 
     def from_server(self, line: bytes) -> None:
         message = parse(line)
         if "id" not in message or not ("result" in message or "error" in message):
             return
+        result = message.get("result")
+        if isinstance(result, dict):
+            self.tags_results = self.tags_results or "resultType" in result
+            if key(message["id"]) in self.listing:
+                self.learn_schemas(result)
+        self.listing.discard(key(message["id"]))
         pending = self.pending.pop(key(message["id"]), None)
         if pending is None:
             return  # the answer to a request that is not a tool call
         result, error_type = outcome(message)
         self.finish(pending, result, error_type)
 
-    def finish(self, pending: Pending, result: str, error_type: str | None) -> None:
+    def learn_schemas(self, listed: dict) -> None:
+        tools = listed.get("tools")
+        for tool in tools if isinstance(tools, list) else []:
+            if isinstance(tool, dict) and isinstance(tool.get("outputSchema"), dict):
+                self.schemas[str(tool.get("name"))] = tool["outputSchema"]
+
+    def finish(
+        self,
+        pending: Pending,
+        result: str,
+        error_type: str | None,
+        injected: str | None = None,
+    ) -> None:
         call = ToolCall(
             name=pending.name,
             call_id="",  # the model's id for the call is not in the MCP request
@@ -98,6 +145,7 @@ class ToolCalls:
             result=result,
             error_type=error_type,
             started=pending.started,
+            injected=injected,
         )
         self.calls.append(call)
         if self.on_call:
@@ -173,7 +221,10 @@ async def relay(command: Sequence[str], calls: ToolCalls) -> int:
             assert server.stdin
             try:
                 while line := await stdin.readline():
-                    calls.from_client(line)
+                    if answer := calls.from_client(line):
+                        stdout.write(answer)  # the server never sees this call
+                        await stdout.drain()
+                        continue
                     server.stdin.write(line)
                     await server.stdin.drain()
             except (BrokenPipeError, ConnectionResetError):

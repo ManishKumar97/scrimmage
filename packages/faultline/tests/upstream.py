@@ -1,6 +1,7 @@
 """A plain standard-library HTTP server that records every byte it receives."""
 
 import http.client
+import json
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -66,3 +67,31 @@ def upstream_server() -> Iterator[Upstream]:
 def connect(url: str) -> http.client.HTTPConnection:
     parts = urlsplit(url)
     return http.client.HTTPConnection(parts.hostname or "", parts.port, timeout=5)
+
+
+# Chat completion replies of a two-step run: ask for get_logs, then answer.
+def openai_reply(message: dict, finish: str) -> bytes:
+    reply = {
+        "id": "r",
+        "model": "tiny-model",
+        "choices": [{"index": 0, "message": message, "finish_reason": finish}],
+        "usage": {"prompt_tokens": 50, "completion_tokens": 7, "total_tokens": 57},
+    }
+    return json.dumps(reply).encode()
+
+
+ASKS = openai_reply(
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_logs", "arguments": '{"service": "cart"}'},
+            }
+        ],
+    },
+    "tool_calls",
+)
+ANSWERS = openai_reply({"role": "assistant", "content": "cart is down"}, "stop")

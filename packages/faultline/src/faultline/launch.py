@@ -1,7 +1,7 @@
 """`faultline run`: start the proxy, run the agent through it, exit when the agent does.
 
-    faultline run [--fault SPEC]... [--upstream URL] [--base-url-env NAME]...
-                  [--trace DIR] -- CMD...
+    faultline run [--fault SPEC]... [--expect TEXT] [--upstream URL]
+                  [--base-url-env NAME]... [--trace DIR] -- CMD...
 
 Model SDKs read their base URL from an environment variable. The agent gets the
 proxy's URL in those variables, so its model calls go through the proxy with no
@@ -21,8 +21,11 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from faultline.proxy.record import ROOT_SPAN_ID, TRACE_DIR, TRACE_ID, Recorder
+from faultline.faults import FaultError, ModelFault, known, parse_all
+from faultline.proxy.record import FAULTS, ROOT_SPAN_ID, TRACE_DIR, TRACE_ID, Recorder
 from faultline.relay import RELAYED, Relay
+from faultline.runs import read_runs_many
+from faultline.verdict import judge, line
 
 if TYPE_CHECKING:
     from faultline.proxy.model import ModelProxy
@@ -42,7 +45,14 @@ def add_parser(subparsers) -> None:
         action="append",
         default=[],
         metavar="SPEC",
-        help="a fault to inject, such as tool:get_logs:empty (repeatable)",
+        help="a fault to inject (repeatable): "
+        f"{', '.join(known())}. A tool fault needs the MCP server started "
+        "under faultline mcp-wrap",
+    )
+    parser.add_argument(
+        "--expect",
+        metavar="TEXT",
+        help="text the answer must contain for the run to pass",
     )
     parser.add_argument(
         "--upstream",
@@ -73,6 +83,11 @@ def run(args: argparse.Namespace) -> int:
     if not command:
         print("faultline run: give the agent's command after --", file=sys.stderr)
         return 2
+    try:
+        faults = parse_all(args.fault)
+    except FaultError as exc:
+        print(f"faultline run: {exc}", file=sys.stderr)
+        return 2
     # Names given on the command line come first: they say which variable this agent reads.
     names = list(dict.fromkeys([*args.base_url_env, *BASE_URL_ENVS]))
     upstream = args.upstream or next(
@@ -99,8 +114,15 @@ def run(args: argparse.Namespace) -> int:
     recorder = Recorder(
         trace.resolve() / "model.jsonl", secrets.token_hex(16), secrets.token_hex(8)
     )
-    proxy = ModelProxy(upstream, recorder)
-    return asyncio.run(launch(proxy, recorder, command, names, args.fault))
+    model_faults = [fault for fault in faults if isinstance(fault, ModelFault)]
+    proxy = ModelProxy(upstream, model_faults, recorder)
+    code = asyncio.run(launch(proxy, recorder, command, names, args.fault))
+    # The verdict reads the run back from its trace, as Find reads any run.
+    files = sorted(recorder.path.parent.glob("*.jsonl"))
+    runs = [r for r in read_runs_many(files).runs if r.trace_id == recorder.trace_id]
+    verdict = judge(runs[0] if runs else None, recorder.trace_id, code, args.expect)
+    print(line(verdict), file=sys.stderr)
+    return code
 
 
 async def launch(
@@ -119,7 +141,7 @@ async def launch(
             TRACE_DIR: str(recorder.path.parent),
             TRACE_ID: recorder.trace_id,
             ROOT_SPAN_ID: recorder.root_span_id,
-            "FAULTLINE_FAULTS": json.dumps(list(faults)),
+            FAULTS: json.dumps(list(faults)),
         }
     )
     print(

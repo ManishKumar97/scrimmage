@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from upstream import upstream_server
+from upstream import ANSWERS, ASKS, upstream_server
 
 from faultline.model import ToolCall
 from faultline.proxy.record import Exchange, Recorder
@@ -18,31 +18,6 @@ TRACE_ID = "ab" * 16
 ROOT = "cd" * 8
 
 
-def openai_reply(message: dict, finish: str) -> bytes:
-    reply = {
-        "id": "r",
-        "model": "tiny-model",
-        "choices": [{"index": 0, "message": message, "finish_reason": finish}],
-        "usage": {"prompt_tokens": 50, "completion_tokens": 7, "total_tokens": 57},
-    }
-    return json.dumps(reply).encode()
-
-
-ASKS = openai_reply(
-    {
-        "role": "assistant",
-        "content": None,
-        "tool_calls": [
-            {
-                "id": "call_1",
-                "type": "function",
-                "function": {"name": "get_logs", "arguments": '{"service": "cart"}'},
-            }
-        ],
-    },
-    "tool_calls",
-)
-ANSWERS = openai_reply({"role": "assistant", "content": "cart is down"}, "stop")
 QUESTION = {"role": "user", "content": "Why does the cart fail?"}
 
 

@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from faultline.faults import ToolFault
 from faultline.proxy.mcp import ToolCalls
 
 FAULTLINE = str(Path(sys.executable).parent / "faultline")
@@ -127,3 +128,35 @@ def test_failed_and_unanswered_tool_calls_are_errors():
         ("bad", "no such tool", "mcp_error"),
         ("hang", "", "no_response"),
     ]
+
+
+def test_a_faked_result_takes_the_shape_the_server_taught_the_wrapper():
+    calls = ToolCalls(faults=[ToolFault("tool:get_logs:empty", "get_logs", "empty")])
+    schema = {
+        "type": "object",
+        "properties": {"result": {"type": "string"}},
+        "required": ["result"],
+    }
+    listed = {"tools": [{"name": "get_logs", "outputSchema": schema}]}
+
+    calls.from_client(line({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+    calls.from_server(
+        line(
+            {"jsonrpc": "2.0", "id": 1, "result": {**listed, "resultType": "complete"}}
+        )
+    )
+    answer = calls.from_client(call(2, "get_logs", service="cart"))
+
+    assert answer is not None
+    assert json.loads(answer) == {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+            "content": [],
+            "isError": False,
+            "structuredContent": {"result": ""},
+            "resultType": "complete",
+        },
+    }
+    [recorded] = calls.calls
+    assert (recorded.result, recorded.injected) == ("", "tool:get_logs:empty")

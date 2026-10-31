@@ -12,11 +12,13 @@ of the request prefix, so one changed byte would make every later call pay full 
 import hashlib
 import socket
 import time
+from collections.abc import Sequence
 
 import aiohttp
 from aiohttp import web
 from yarl import URL  # aiohttp's own URL type
 
+from faultline.faults import ModelFault
 from faultline.proxy.record import Exchange, Recorder
 
 # Headers that belong to one connection, not to the request (RFC 9110 section 7.6.1).
@@ -84,8 +86,14 @@ class ModelProxy:
     https://api.openai.com/v1/chat/completions.
     """
 
-    def __init__(self, upstream: str, recorder: Recorder | None = None) -> None:
+    def __init__(
+        self,
+        upstream: str,
+        faults: Sequence[ModelFault] = (),
+        recorder: Recorder | None = None,
+    ) -> None:
         self.upstream = upstream.rstrip("/")
+        self.faults = faults
         self.recorder = recorder
         self.steps = Steps()
         self.url = ""
@@ -123,7 +131,15 @@ class ModelProxy:
         step, attempt = self.steps.count(body)
         status, chunks, encoding = 502, [], None
         response: web.StreamResponse | None = None
+        fault = next((f for f in self.faults if f.step == step), None)
         try:
+            if fault:
+                # Every attempt of the step gets the fault. The upstream never sees it.
+                answer = fault.answer(request.path)
+                status, chunks = answer.status, [answer.body]
+                return web.Response(
+                    status=answer.status, body=answer.body, headers=answer.headers
+                )
             async with self.session.request(
                 request.method,
                 # As sent: a URL built from a plain string would be quoted again.
@@ -166,5 +182,6 @@ class ModelProxy:
                     started=started,
                     ended=time.time_ns(),
                     encoding=encoding,
+                    injected=fault.spec if fault else None,
                 )
                 self.recorder.exchange(exchange)

@@ -81,5 +81,7 @@ source_modules = [
     "faultline.proxy.record",
     "faultline.proxy.mcp",
     "faultline.relay",
+    "faultline.faults",
+    "faultline.verdict",
 ]
 forbidden_modules = ["aiohttp", "yarl"]
