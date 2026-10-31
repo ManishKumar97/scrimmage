@@ -145,6 +145,46 @@ def rate_limit(path: str) -> ModelAnswer:
     return ModelAnswer(429, headers, json.dumps(error).encode())
 
 
+def is_anthropic(path: str) -> bool:
+    """True for Anthropic's Messages API. Every other model call is OpenAI-shaped."""
+    return path.rstrip("/").endswith("/messages")
+
+
+def provider_error(
+    path: str,
+    status: int,
+    message: str,
+    openai: tuple[str, str | None],
+    anthropic: str,
+    headers: dict[str, str] | None = None,
+) -> ModelAnswer:
+    """An HTTP error in the provider's own body shape, so its SDK raises its own error.
+
+    `openai` is the error's type and code in the OpenAI shape, which OpenAI-compatible
+    providers share. `anthropic` is the error type in Anthropic's shape.
+    """
+    if is_anthropic(path):
+        error: dict = {
+            "type": "error",
+            "error": {"type": anthropic, "message": message},
+        }
+    else:
+        kind, code = openai
+        error = {
+            "error": {"message": message, "type": kind, "param": None, "code": code}
+        }
+    headers = {"Content-Type": "application/json", **(headers or {})}
+    return ModelAnswer(status, headers, json.dumps(error).encode())
+
+
+def server_error(path: str) -> ModelAnswer:
+    """HTTP 500, an outage on the provider's side. The SDKs retry it, then raise."""
+    message = (
+        "The server had an error while processing your request. Injected by faultline."
+    )
+    return provider_error(path, 500, message, ("server_error", None), "api_error")
+
+
 @dataclass(frozen=True)
 class ModelKind:
     """What one model fault kind does to the call it targets. Set exactly one field.
@@ -162,6 +202,7 @@ TOOL_FAULTS: dict[str, Callable[[object, ToolSession], dict]] = {"empty": empty_
 MODEL_FAULTS: dict[str, ModelKind] = {
     "rate_limit": ModelKind(answer=rate_limit),
     "timeout": ModelKind(hang=True),
+    "server_error": ModelKind(answer=server_error),
 }
 
 

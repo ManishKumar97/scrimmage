@@ -21,6 +21,9 @@ try:
 except openai.RateLimitError as error:
     print(f"agent caught openai.RateLimitError: {error.status_code}")
     raise SystemExit(3) from None
+except openai.InternalServerError as error:
+    print(f"agent caught openai.InternalServerError: {error.status_code} {error.body}")
+    raise SystemExit(5) from None
 except openai.APITimeoutError:
     print("agent caught openai.APITimeoutError")
     raise SystemExit(4) from None

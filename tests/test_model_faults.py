@@ -6,12 +6,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from ida_harness import SCRIPT, fake_llm, ida, ida_env, needs_cluster, run
 
 from faultline.runs import read_runs_many
 
 FAULTLINE = str(Path(sys.executable).parent / "faultline")
-AGENT = str(Path(__file__).parent / "openai_agent.py")
 # Nothing listens here. A fault that answers every attempt sends no call upstream.
 NOWHERE = "http://127.0.0.1:9/v1"
 
@@ -32,13 +32,22 @@ def chat_spans(trace: Path) -> list[dict]:
     return spans
 
 
-def sdk_agent(tmp_path: Path, fault: str, upstream: str, *args: str):
+def sdk_agent(
+    tmp_path: Path, fault: str, upstream: str, *args: str, sdk: str = "openai"
+):
+    """Run the tiny agent on `sdk` (openai or anthropic) under faultline run."""
     trace = tmp_path / "trace"
-    env = {k: v for k, v in os.environ.items() if not k.startswith("OPENAI_")}
-    env["OPENAI_API_KEY"] = "fake"
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith(("OPENAI_", "ANTHROPIC_"))
+    }
+    env[f"{sdk.upper()}_API_KEY"] = "fake"
+    agent = str(Path(__file__).parent / f"{sdk}_agent.py")
     result = subprocess.run(
         [FAULTLINE, "run", "--fault", fault, "--trace", str(trace)]
-        + ["--upstream", upstream, "--", sys.executable, AGENT, *args],
+        + ["--upstream", f"{sdk.upper()}_BASE_URL={upstream}"]
+        + ["--", sys.executable, agent, *args],
         env=env,
         capture_output=True,
         text=True,
@@ -62,6 +71,59 @@ def test_a_hung_call_reaches_the_sdk_agent_as_its_own_timeout(tmp_path):
     assert result.stderr.splitlines()[-1] == (
         "verdict: failed_loudly (exit code 4; injected model:timeout)"
     )
+
+
+OUTAGE = "The server had an error while processing your request. Injected by faultline."
+
+
+@pytest.mark.parametrize(
+    ("sdk", "body"),
+    [
+        # The openai SDK keeps the inner error object, the anthropic SDK the whole body.
+        (
+            "openai",
+            {"message": OUTAGE, "type": "server_error", "param": None, "code": None},
+        ),
+        (
+            "anthropic",
+            {"type": "error", "error": {"type": "api_error", "message": OUTAGE}},
+        ),
+    ],
+)
+def test_a_server_error_survives_every_sdk_retry(tmp_path, sdk, body):
+    result, trace = sdk_agent(tmp_path, "model:server_error", NOWHERE, sdk=sdk)
+
+    assert result.stdout == f"agent caught {sdk}.InternalServerError: 500 {body!r}\n"
+    assert result.returncode == 5
+    [chat] = chat_spans(trace)
+    assert chat["attrs"]["faultline.proxy.attempts"] == {"intValue": "3"}
+    assert chat["attrs"]["error.type"] == {"stringValue": "500"}
+
+
+@needs_cluster
+def test_the_ida_gets_a_server_error_on_the_chosen_model_call(tmp_path):
+    trace = tmp_path / "trace"
+    env = ida_env(tmp_path, MODEL_MAX_RETRIES="1")
+    with fake_llm(tmp_path, SCRIPT) as upstream:
+        result = run(
+            [FAULTLINE, "run", "--fault", "model:server_error@2", "--expect", "cart"]
+            + ["--base-url-env", "GROQ_BASE_URL", "--upstream", upstream]
+            + ["--trace", str(trace), "--", *ida()],
+            env,
+            tmp_path,
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("Model API failed: Error code: 500 - ")
+    assert "'type': 'server_error'" in result.stdout
+    [read] = read_runs_many(sorted(trace.glob("*.jsonl"))).runs
+    assert [(s.error_type, s.injected) for s in read.steps] == [
+        (None, None),
+        ("500", "model:server_error@2"),
+    ]
+    assert chat_spans(trace)[1]["attrs"]["faultline.proxy.attempts"] == {
+        "intValue": "2"
+    }
 
 
 @needs_cluster
