@@ -20,6 +20,7 @@ class Upstream(ThreadingHTTPServer):
         self.chunks = [b'{"ok": true}']
         self.between = threading.Event()  # set by a test to release the second chunk
         self.between.set()
+        self.replies: list[bytes] = []  # when set, request n gets reply n instead
 
     @property
     def url(self) -> str:
@@ -32,12 +33,14 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
         server.seen.append((self.command, self.path, self.headers.items(), body))
+        number = len(server.seen) - 1
+        chunks = [server.replies[number]] if server.replies else server.chunks
         self.send_response(server.status)
         for name, value in server.reply_headers:
             self.send_header(name, value)
-        self.send_header("Content-Length", str(sum(map(len, server.chunks))))
+        self.send_header("Content-Length", str(sum(map(len, chunks))))
         self.end_headers()
-        for number, chunk in enumerate(server.chunks):
+        for number, chunk in enumerate(chunks):
             if number:
                 server.between.wait(5)
             self.wfile.write(chunk)

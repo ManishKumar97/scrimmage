@@ -11,10 +11,13 @@ of the request prefix, so one changed byte would make every later call pay full 
 
 import hashlib
 import socket
+import time
 
 import aiohttp
 from aiohttp import web
 from yarl import URL  # aiohttp's own URL type
+
+from faultline.proxy.record import Exchange, Recorder
 
 # Headers that belong to one connection, not to the request (RFC 9110 section 7.6.1).
 # Host names the proxy, and the client library sets it again for the upstream.
@@ -81,8 +84,9 @@ class ModelProxy:
     https://api.openai.com/v1/chat/completions.
     """
 
-    def __init__(self, upstream: str) -> None:
+    def __init__(self, upstream: str, recorder: Recorder | None = None) -> None:
         self.upstream = upstream.rstrip("/")
+        self.recorder = recorder
         self.steps = Steps()
         self.url = ""
         self.runner: web.AppRunner | None = None
@@ -114,8 +118,10 @@ class ModelProxy:
 
     async def forward(self, request: web.Request) -> web.StreamResponse:
         assert self.session, "start the proxy first"
+        started = time.time_ns()
         body = await request.read()
-        self.steps.count(body)
+        step, attempt = self.steps.count(body)
+        status, chunks, encoding = 502, [], None
         response: web.StreamResponse | None = None
         try:
             async with self.session.request(
@@ -127,6 +133,8 @@ class ModelProxy:
                 skip_auto_headers=NO_AUTO_HEADERS,
                 allow_redirects=False,
             ) as upstream:
+                status = upstream.status
+                encoding = upstream.headers.get("Content-Encoding")
                 response = web.StreamResponse(
                     status=upstream.status,
                     reason=upstream.reason,
@@ -136,6 +144,7 @@ class ModelProxy:
                     response.content_length = upstream.content_length
                 await response.prepare(request)
                 async for chunk in upstream.content.iter_any():
+                    chunks.append(chunk)
                     await response.write(chunk)
                 await response.write_eof()
                 return response
@@ -143,4 +152,19 @@ class ModelProxy:
             if response is not None and response.prepared:
                 raise  # cut mid-reply: the agent sees the same cut stream
             text = f"faultline proxy: upstream {self.upstream} failed: {exc}"
+            chunks = [text.encode()]
             return web.Response(status=502, text=text)
+        finally:
+            if self.recorder:
+                exchange = Exchange(
+                    step=step,
+                    attempt=attempt,
+                    path=request.path,
+                    request=body,
+                    status=status,
+                    response=b"".join(chunks),
+                    started=started,
+                    ended=time.time_ns(),
+                    encoding=encoding,
+                )
+                self.recorder.exchange(exchange)

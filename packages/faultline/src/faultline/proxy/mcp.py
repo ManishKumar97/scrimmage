@@ -8,19 +8,22 @@ The agent's MCP config starts this wrapper in front of the server's command:
 The wrapper runs the server as its child and relays every line both ways unchanged.
 It watches each `tools/call` request and the response with the same JSON-RPC id, and
 records the pair as a tool call. The server's stderr passes straight through.
+Under `faultline run`, each tool call becomes an `execute_tool` span in the run's trace.
 """
 
 import argparse
 import asyncio
 import contextlib
 import json
+import os
 import sys
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from faultline.launch import RELAYED, Relay
 from faultline.model import ToolCall
+from faultline.proxy.record import Recorder
+from faultline.relay import RELAYED, Relay
 
 # The longest line, in bytes. A tool result can be large, such as many log lines.
 LINE_LIMIT = 128 * 1024 * 1024
@@ -41,7 +44,10 @@ def wrap(args: argparse.Namespace) -> int:
     if not command:
         print("faultline mcp-wrap: give the server's command after --", file=sys.stderr)
         return 2
-    return asyncio.run(relay(command, ToolCalls()))
+    # Started by `faultline run`, the wrapper writes its own span file. Else it only relays.
+    recorder = Recorder.from_env(f"mcp-{os.getpid()}.jsonl")
+    calls = ToolCalls(recorder.tool_call if recorder else None)
+    return asyncio.run(relay(command, calls))
 
 
 @dataclass

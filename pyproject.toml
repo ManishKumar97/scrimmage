@@ -70,5 +70,16 @@ forbidden_modules = ["faultline"]
 [[tool.importlinter.contracts]]
 name = "Only the model proxy loads aiohttp"
 type = "forbidden"
-source_modules = ["faultline.model", "faultline.runs", "faultline.semconv"]
+source_modules = [
+    "faultline.model",
+    "faultline.runs",
+    "faultline.semconv",
+    "faultline.config",
+    "faultline.detect",
+    "faultline.find",
+    "faultline.sources",
+    "faultline.proxy.record",
+    "faultline.proxy.mcp",
+    "faultline.relay",
+]
 forbidden_modules = ["aiohttp", "yarl"]

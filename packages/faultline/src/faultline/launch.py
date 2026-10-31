@@ -14,12 +14,15 @@ import asyncio
 import json
 import os
 import secrets
-import signal
 import sys
 import tempfile
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from faultline.proxy.record import ROOT_SPAN_ID, TRACE_DIR, TRACE_ID, Recorder
+from faultline.relay import RELAYED, Relay
 
 if TYPE_CHECKING:
     from faultline.proxy.model import ModelProxy
@@ -93,15 +96,18 @@ def run(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
-    proxy = ModelProxy(upstream)
-    return asyncio.run(launch(proxy, command, names, trace, args.fault))
+    recorder = Recorder(
+        trace.resolve() / "model.jsonl", secrets.token_hex(16), secrets.token_hex(8)
+    )
+    proxy = ModelProxy(upstream, recorder)
+    return asyncio.run(launch(proxy, recorder, command, names, args.fault))
 
 
 async def launch(
     proxy: "ModelProxy",
+    recorder: Recorder,
     command: Sequence[str],
     names: Sequence[str],
-    trace: Path,
     faults: Sequence[str],
 ) -> int:
     """Run the command under the proxy and return the exit code a shell would give."""
@@ -109,14 +115,27 @@ async def launch(
     env = dict(os.environ)
     env.update(dict.fromkeys(names, url))
     env.update(
-        FAULTLINE_TRACE_DIR=str(trace.resolve()),
-        FAULTLINE_TRACE_ID=secrets.token_hex(16),
-        FAULTLINE_ROOT_SPAN_ID=secrets.token_hex(8),
-        FAULTLINE_FAULTS=json.dumps(list(faults)),
+        {
+            TRACE_DIR: str(recorder.path.parent),
+            TRACE_ID: recorder.trace_id,
+            ROOT_SPAN_ID: recorder.root_span_id,
+            "FAULTLINE_FAULTS": json.dumps(list(faults)),
+        }
     )
     print(
-        f"faultline: proxy {url} -> {proxy.upstream}, spans in {trace}", file=sys.stderr
+        f"faultline: proxy {url} -> {proxy.upstream}, spans in {recorder.path.parent}",
+        file=sys.stderr,
     )
+    started = time.time_ns()
+    code = await supervise(command, env)
+    await proxy.stop()  # after the agent, so its last calls still go through
+    recorder.flush()
+    recorder.root(started, time.time_ns(), command, code)
+    return code
+
+
+async def supervise(command: Sequence[str], env: dict[str, str]) -> int:
+    """Run the agent, pass signals on to it, and return its exit code as a shell gives it."""
     loop = asyncio.get_running_loop()
     relay = Relay()
     for number in RELAYED:
@@ -132,42 +151,4 @@ async def launch(
     finally:
         for number in RELAYED:
             loop.remove_signal_handler(number)
-        await proxy.stop()  # after the agent, so its last calls still go through
     return 128 - code if code < 0 else code  # killed by signal N: 128 + N
-
-
-RELAYED = (signal.SIGINT, signal.SIGTERM)
-
-
-class Relay:
-    """Sends Ctrl-C and SIGTERM on to the agent. Faultline waits for the agent to exit.
-
-    It is in place before the agent starts. A signal that comes while the agent is
-    starting is held, then sent once the agent runs.
-    """
-
-    def __init__(self) -> None:
-        self.child: asyncio.subprocess.Process | None = None
-        self.held: list[signal.Signals] = []
-
-    def receive(self, number: signal.Signals) -> None:
-        if number == signal.SIGINT and terminal_sent_it_to_the_child():
-            return  # Ctrl-C reached the whole foreground group, the child included
-        if self.child is None:
-            self.held.append(number)
-        elif self.child.returncode is None:
-            self.child.send_signal(number)
-
-    def attach(self, child: asyncio.subprocess.Process) -> None:
-        self.child = child
-        for number in self.held:
-            child.send_signal(number)
-        self.held.clear()
-
-
-def terminal_sent_it_to_the_child() -> bool:
-    """True when we, and so the child, are the terminal's foreground process group."""
-    try:
-        return os.tcgetpgrp(sys.stdin.fileno()) == os.getpgrp()
-    except (OSError, ValueError):
-        return False  # no terminal: the signal was sent to faultline alone
