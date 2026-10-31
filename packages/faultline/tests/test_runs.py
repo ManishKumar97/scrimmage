@@ -2,6 +2,8 @@ import json
 import sys
 from pathlib import Path
 
+from spans import run_from
+
 from faultline.config import Attributes
 from faultline.runs import any_value, cut, main, read_runs, show_run
 
@@ -340,6 +342,14 @@ def test_the_reader_holds_no_agent_specific_attribute_name():
     source = (Path(__file__).parents[1] / "src/faultline/runs.py").read_text()
 
     assert '"faultline.' not in source
+
+
+def test_a_blank_final_reply_is_no_answer(tmp_path):
+    assert run_from(tmp_path, {"text": "  \n"}).answer is None
+
+
+def test_a_final_reply_with_text_is_the_answer(tmp_path):
+    assert run_from(tmp_path, {"text": "done"}).answer == "done"
 
 
 def test_narration_before_tool_calls_in_a_cut_run_is_not_the_answer():

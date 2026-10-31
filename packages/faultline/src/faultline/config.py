@@ -49,6 +49,11 @@ class Config:
     checks: ChecksConfig = field(default_factory=ChecksConfig)
 
 
+# (section, key): (limit, the value must be strictly above it)
+MINIMUMS = {
+    ("detect", "tool_timeout_seconds"): (0, True),
+    ("checks", "repeated_call_limit"): (1, False),
+}
 SECTIONS = {"attributes": Attributes, "detect": DetectConfig, "checks": ChecksConfig}
 
 
@@ -71,6 +76,11 @@ def section_of(cls, name: str, table: object):
             ok = isinstance(value, str)
         if not ok:
             raise ConfigError(f"{name}.{key} has the wrong type: {value!r}")
+        if (name, key) in MINIMUMS:
+            least, strict = MINIMUMS[name, key]
+            if value < least or (strict and value == least):
+                relation = ">" if strict else ">="
+                raise ConfigError(f"{name}.{key} must be {relation} {least}: {value!r}")
         values[key] = value
     return cls(**values)
 

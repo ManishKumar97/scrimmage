@@ -97,3 +97,11 @@ def run_from(tmp_path: Path, *steps: dict) -> Run:
     path = write_trace(tmp_path / "spans.jsonl", *steps)
     [run] = read_runs(path).runs
     return run
+
+
+def write_spans(path: Path, spans: list[dict]) -> Path:
+    """One request line holding exactly these spans."""
+    request = {"resourceSpans": [{"scopeSpans": [{"spans": spans}]}]}
+    with path.open("a") as file:
+        file.write(json.dumps(request) + "\n")
+    return path

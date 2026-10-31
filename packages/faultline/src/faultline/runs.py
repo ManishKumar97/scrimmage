@@ -12,6 +12,7 @@ in the config. They are never required.
 
 import argparse
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -68,7 +69,29 @@ class Reading:
 
 
 def read_runs(path: Path, attributes: Attributes = Attributes()) -> Reading:
+    return read_runs_many([path], attributes)
+
+
+def read_runs_many(
+    paths: Sequence[Path], attributes: Attributes = Attributes()
+) -> Reading:
+    """The runs in several span files. A trace split across files is one run."""
     traces: dict[str, list[dict]] = {}
+    unreadable = no_spans = 0
+    for path in paths:
+        bad, empty = collect_spans(path, traces)
+        unreadable += bad
+        no_spans += empty
+    runs = [
+        run
+        for tid, spans in traces.items()
+        if (run := build_run(tid, spans, attributes))
+    ]
+    return Reading(runs, unreadable, no_spans)
+
+
+def collect_spans(path: Path, traces: dict[str, list[dict]]) -> tuple[int, int]:
+    """Add the spans in one file to `traces`. Returns (unreadable, no_spans) counts."""
     unreadable = no_spans = 0
     with path.open("rb") as file:
         for raw in file:
@@ -92,12 +115,7 @@ def read_runs(path: Path, attributes: Attributes = Attributes()) -> Reading:
                 continue
             for span in spans:
                 traces.setdefault(span["traceId"], []).append(span)
-    runs = [
-        run
-        for tid, spans in traces.items()
-        if (run := build_run(tid, spans, attributes))
-    ]
-    return Reading(runs, unreadable, no_spans)
+    return unreadable, no_spans
 
 
 def spans_in(request: dict) -> list[dict]:
@@ -162,7 +180,7 @@ def build_run(
     answer = mapped(attrs, attributes.answer)
     # Only a last reply that ends the turn is an answer. A run cut off mid-way ends in
     # narration before tool calls, which is not one.
-    if answer is None and is_final(steps[-1]):
+    if answer is None and is_final(steps[-1]) and steps[-1].text.strip():
         answer = steps[-1].text
     return Run(
         trace_id=trace_id,

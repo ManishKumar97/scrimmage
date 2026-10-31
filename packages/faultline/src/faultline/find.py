@@ -1,14 +1,15 @@
 """`faultline find`: read traces and report the faults in them."""
 
 import argparse
+import sys
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 
 from faultline.config import load_config
 from faultline.detect import detect
-from faultline.model import Fault, FaultKind
-from faultline.runs import show_reading, skip_notes
+from faultline.model import Fault, FaultKind, Run
+from faultline.runs import show_run
 from faultline.sources import parse_source
 
 
@@ -46,26 +47,44 @@ def show_summary(faults: Sequence[Fault]) -> str:
     return "faults: " + (" ".join(shown) if shown else "none")
 
 
+def fail(message: str) -> int:
+    print(f"faultline find: {message}", file=sys.stderr)
+    return 2
+
+
 def run(args: argparse.Namespace) -> int:
     specs: Sequence[str] = [*args.source, *(f"file:{f}" for f in args.files)]
     if not specs:
-        print("faultline find: give --source SPEC or at least one file")
-        return 2
+        return fail("give --source SPEC or at least one file")
     try:
         config = load_config(args.config)
         sources = [parse_source(spec, config.attributes) for spec in specs]
     except ValueError as error:  # includes ConfigError
-        print(f"faultline find: {error}")
-        return 2
-    by_run = []
+        return fail(str(error))
+    runs: list[Run] = []
+    files = 0
     for source in sources:
-        for label, reading in source.readings():
-            if args.runs:
-                print(show_reading(label, reading))
-            else:
-                for note in skip_notes(label, reading):
-                    print(note)
-            by_run += [(r.trace_id, detect(r, config.detect)) for r in reading.runs]
+        try:
+            found = list(source.runs())
+        except OSError as error:
+            return fail(
+                f"cannot read {error.filename or source.name}: {error.strerror}"
+            )
+        stats = source.stats()
+        files += stats.files
+        runs += found
+        if args.runs:
+            print(*(show_run(r) for r in found), sep="\n")
+        if stats.unreadable:
+            print(f"{source.name}: skipped {stats.unreadable} unreadable line(s)")
+        if stats.no_spans:
+            print(f"{source.name}: {stats.no_spans} line(s) held no spans")
+    print(f"read {len(runs)} run(s) from {files} file(s)")
+    if files == 0:
+        return fail("no span files found")
+    if not runs:
+        return fail("read the files but found no runs; are they OTLP GenAI span files?")
+    by_run = [(r.trace_id, detect(r, config.detect)) for r in runs]
     faults = [fault for _, found in by_run for fault in found]
     width = max((len(fault.kind) for fault in faults), default=0)
     for trace_id, found in by_run:

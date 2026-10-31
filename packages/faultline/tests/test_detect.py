@@ -39,8 +39,8 @@ def test_a_tool_span_that_ended_in_error_is_a_tool_error(tmp_path):
 @pytest.mark.parametrize(
     ("result", "detail"),
     [
-        ('{"error": "no such pod"}', "error: no such pod"),
-        ('{"error": {"code": 500}, "data": 1}', "error: {'code': 500}"),
+        ('{"error": "no such pod"}', 'error: "no such pod"'),
+        ('{"error": {"code": 500}, "data": 1}', 'error: {"code": 500}'),
         ('{"isError": true, "content": "boom"}', "isError"),
     ],
 )
@@ -57,6 +57,11 @@ def test_a_result_that_reports_an_error_is_a_tool_error(tmp_path, result, detail
         "ok",
         "error: this is plain text, not a JSON object",
         '{"error": null, "data": 1}',
+        '{"error": false}',
+        '{"error": ""}',
+        '{"error": 0}',
+        '{"error": {}}',
+        '{"error": []}',
         '{"isError": false, "data": 1}',
         '["error"]',
         '"error"',
@@ -64,10 +69,21 @@ def test_a_result_that_reports_an_error_is_a_tool_error(tmp_path, result, detail
     ],
 )
 def test_a_result_that_is_not_an_error_is_not_a_tool_error(tmp_path, result):
-    assert kinds_of(tmp_path, calls({"result": result})) == []
+    # Some of these hold nothing at all, which is an empty result, not an error.
+    assert FaultKind.TOOL_ERROR not in kinds_of(tmp_path, calls({"result": result}))
 
 
-@pytest.mark.parametrize("error", ["TimeoutError", "ReadTimedOut", "tool timeout"])
+@pytest.mark.parametrize(
+    "error",
+    [
+        "TimeoutError",
+        "ReadTimedOut",
+        "tool timeout",
+        "DeadlineExceeded",
+        "Request Timed Out",
+        "timed_out",
+    ],
+)
 def test_an_error_type_that_says_timeout_is_a_tool_timeout_and_not_an_error(
     tmp_path, error
 ):
@@ -208,6 +224,27 @@ def test_a_model_fault_is_injected_when_the_step_carries_the_proxys_mark(tmp_pat
     assert fault.origin is Origin.INJECTED
 
 
+def test_faults_are_sorted_by_start_time_whatever_order_the_run_lists_them(tmp_path):
+    step = calls({"id": "a", "error": "E"}, {"id": "b", "error": "E"})
+    run = run_from(tmp_path, step)
+    shuffled = dataclasses.replace(
+        run.steps[0], tool_calls=tuple(reversed(run.steps[0].tool_calls))
+    )
+
+    found = detect(dataclasses.replace(run, steps=(shuffled,)), CONFIG)
+
+    assert [f.call_id for f in found] == ["a", "b"]
+
+
+def test_a_call_before_any_step_comes_first(tmp_path):
+    run = run_from(tmp_path, calls({"id": "a", "error": "E"}))
+    early = dataclasses.replace(run.steps[0].tool_calls[0], call_id="early", started=1)
+
+    found = detect(dataclasses.replace(run, unplaced=(early,)), CONFIG)
+
+    assert [(f.step, f.call_id) for f in found] == [(None, "early"), (1, "a")]
+
+
 def test_faults_come_in_the_order_they_happened(tmp_path):
     first = calls({"id": "a", "error": "E1"})
     second = calls({"id": "b", "result": json.dumps({"error": "E2"})})
@@ -242,6 +279,7 @@ def test_find_prints_each_run_with_faults_and_a_summary(tmp_path, capsys):
     assert cli.main(["find", str(path)]) == 0
 
     assert capsys.readouterr().out.splitlines() == [
+        "read 2 run(s) from 1 file(s)",
         "run t1",
         "  tool_error step 1 get_logs c1: ConnectionError",
         "faults: tool_error=1",

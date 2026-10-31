@@ -1,22 +1,32 @@
 """Where runs come from. Files first; a stream source can join later."""
 
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from faultline.config import Attributes
 from faultline.model import Run
-from faultline.runs import Reading, read_runs
+from faultline.runs import read_runs_many
+
+
+@dataclass(frozen=True, slots=True)
+class SourceStats:
+    """What a source read, for a report. Filled once `runs()` has been consumed."""
+
+    files: int = 0
+    unreadable: int = 0  # lines that were not a span file shape
+    no_spans: int = 0  # lines that were JSON but held no spans
 
 
 class TraceSource(Protocol):
     name: str
 
-    def runs(self) -> Iterator[Run]: ...
-
-    def readings(self) -> Iterator[tuple[str, Reading]]:
-        """The runs by origin, with the lines that gave nothing, for a report."""
+    def runs(self) -> Iterator[Run]:
+        """Every run. Raises OSError when the input cannot be read."""
         ...
+
+    def stats(self) -> SourceStats: ...
 
 
 class FileSource:
@@ -26,19 +36,22 @@ class FileSource:
         self.path = Path(path)
         self.attributes = attributes
         self.name = f"file:{path}"
+        self._stats = SourceStats()
 
     def files(self) -> list[Path]:
         if self.path.is_dir():
             return sorted(self.path.glob("*.jsonl"))
         return [self.path]
 
-    def readings(self) -> Iterator[tuple[str, Reading]]:
-        for path in self.files():
-            yield str(path), read_runs(path, self.attributes)
-
     def runs(self) -> Iterator[Run]:
-        for _, reading in self.readings():
-            yield from reading.runs
+        files = self.files()
+        # All files at once, so a trace split across files is still one run.
+        reading = read_runs_many(files, self.attributes)
+        self._stats = SourceStats(len(files), reading.unreadable, reading.no_spans)
+        yield from reading.runs
+
+    def stats(self) -> SourceStats:
+        return self._stats
 
 
 def parse_source(spec: str, attributes: Attributes = Attributes()) -> TraceSource:

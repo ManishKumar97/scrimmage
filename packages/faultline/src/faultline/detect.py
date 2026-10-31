@@ -10,6 +10,7 @@ from faultline.config import DetectConfig
 from faultline.model import Fault, FaultKind, Origin, Run, Step, ToolCall
 from faultline.runs import cut
 
+TIMEOUT_WORDS = ("timeout", "timedout", "timed out", "timed_out", "deadline")
 RATE_LIMIT_WORDS = ("ratelimit", "rate_limit", "rate limit", "429")
 TOKEN_LIMIT_REASONS = ("length", "max_tokens", "max_output_tokens")
 DETAIL_LIMIT = 80
@@ -77,7 +78,7 @@ def call_faults(
 def timeout_detail(call: ToolCall, config: DetectConfig) -> str | None:
     """Why the call counts as a timeout: its error type says so, or it ran too long."""
     lowered = (call.error_type or "").lower()
-    if "timeout" in lowered or "timedout" in lowered:
+    if any(word in lowered for word in TIMEOUT_WORDS):
         return call.error_type
     if call.seconds > config.tool_timeout_seconds:
         return f"ran {call.seconds:.1f}s, limit {config.tool_timeout_seconds:g}s"
@@ -103,8 +104,8 @@ def error_in_result(result: str) -> str | None:
     value = parse_json(result)
     if not isinstance(value, dict):
         return None
-    if value.get("error") is not None:
-        return cut(f"error: {value['error']}", DETAIL_LIMIT)
+    if value.get("error"):  # false, "", null, 0, {} and [] mean no error
+        return cut(f"error: {json.dumps(value['error'])}", DETAIL_LIMIT)
     if value.get("isError") is True:
         return "isError"
     return None

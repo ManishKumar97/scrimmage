@@ -50,6 +50,28 @@ def test_a_bad_key_or_value_is_an_error_that_names_it(text, named):
         parse_config(text)
 
 
+@pytest.mark.parametrize(
+    ("text", "named"),
+    [
+        ("[detect]\ntool_timeout_seconds = 0\n", "detect.tool_timeout_seconds"),
+        ("[detect]\ntool_timeout_seconds = -1.5\n", "detect.tool_timeout_seconds"),
+        ("[checks]\nrepeated_call_limit = 0\n", "checks.repeated_call_limit"),
+    ],
+)
+def test_a_limit_that_cannot_work_is_an_error_that_names_it(text, named):
+    with pytest.raises(ConfigError, match=named):
+        parse_config(text)
+
+
+def test_the_smallest_allowed_limits_are_accepted():
+    text = "[checks]\nrepeated_call_limit = 1\n[detect]\ntool_timeout_seconds = 0.1\n"
+
+    config = parse_config(text)
+
+    assert config.checks.repeated_call_limit == 1
+    assert config.detect.tool_timeout_seconds == 0.1
+
+
 def test_a_file_that_is_not_toml_is_an_error():
     with pytest.raises(ConfigError, match="not valid TOML"):
         parse_config("[attributes")
@@ -75,4 +97,6 @@ def test_find_reports_a_bad_config_and_exits_2(tmp_path, capsys):
 
     assert cli.main(["find", "--config", str(bad), str(bad)]) == 2
 
-    assert "attributes.questoin" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert "attributes.questoin" in captured.err
+    assert captured.out == ""
