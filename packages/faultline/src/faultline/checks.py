@@ -11,6 +11,7 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal
 
 from faultline.config import ChecksConfig
 from faultline.model import Certainty, Fault, Finding, Run, ToolCall
@@ -19,6 +20,9 @@ from faultline.runs import cut
 EVIDENCE_LIMIT = 80
 
 Judge = Callable[[Run, tuple[Fault, ...], ChecksConfig], tuple[Finding, ...]]
+# What one finding of a check is about, so a report can group them:
+# one fault, one run that had a fault, or any run.
+Scope = Literal["fault", "faulted_run", "run"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +30,7 @@ class Check:
     name: str
     certainty: Certainty
     judge: Judge
+    scope: Scope
 
     def finding(self, fault: Fault | None, flagged: bool, evidence: str) -> Finding:
         return Finding(fault, self.name, self.certainty, flagged, evidence)
@@ -93,7 +98,7 @@ def no_retry(
     return tuple(findings)
 
 
-NO_RETRY = Check("no_retry", Certainty.CERTAIN, no_retry)
+NO_RETRY = Check("no_retry", Certainty.CERTAIN, no_retry, "fault")
 
 
 # Names a system gives: lowercase words joined by "-", "_" or ".", at least one joiner.
@@ -164,7 +169,9 @@ def unsupported_value(
     return (UNSUPPORTED_VALUE.finding(first(faults), bool(missing), evidence),)
 
 
-UNSUPPORTED_VALUE = Check("unsupported_value", Certainty.HEURISTIC, unsupported_value)
+UNSUPPORTED_VALUE = Check(
+    "unsupported_value", Certainty.HEURISTIC, unsupported_value, "run"
+)
 
 
 def repeated_call(
@@ -188,7 +195,7 @@ def repeated_call(
     return tuple(findings)
 
 
-REPEATED_CALL = Check("repeated_call", Certainty.CERTAIN, repeated_call)
+REPEATED_CALL = Check("repeated_call", Certainty.CERTAIN, repeated_call, "run")
 
 
 DISCLOSURE_WORDS = (
@@ -222,6 +229,8 @@ def not_disclosed(
     return (NOT_DISCLOSED.finding(faults[0], said is None, evidence),)
 
 
-NOT_DISCLOSED = Check("not_disclosed", Certainty.HEURISTIC, not_disclosed)
+NOT_DISCLOSED = Check(
+    "not_disclosed", Certainty.HEURISTIC, not_disclosed, "faulted_run"
+)
 
 CHECKS: tuple[Check, ...] = (NO_RETRY, UNSUPPORTED_VALUE, REPEATED_CALL, NOT_DISCLOSED)

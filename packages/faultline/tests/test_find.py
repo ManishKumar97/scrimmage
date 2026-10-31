@@ -96,7 +96,11 @@ def test_find_always_says_how_many_runs_and_files_it_read(tmp_path, capsys):
     assert cli.main(["find", str(tmp_path)]) == 0
 
     lines = capsys.readouterr().out.splitlines()
-    assert lines == ["read 2 run(s) from 2 file(s)", "faults: none"]
+    assert lines[:2] == [
+        "read 2 run(s) from 2 file(s)",
+        "Faultline find: 2 runs, 0 with faults, 0 faults, 0 findings",
+    ]
+    assert "No faults found." in lines
 
 
 def test_a_directory_with_no_span_files_is_an_error(tmp_path, capsys):
