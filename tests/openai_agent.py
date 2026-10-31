@@ -19,7 +19,8 @@ try:
     )
     print(reply.choices[0].message.content)
 except openai.RateLimitError as error:
-    print(f"agent caught openai.RateLimitError: {error.status_code}")
+    retry_after = error.response.headers.get("retry-after")
+    print(f"agent caught openai.RateLimitError: {error.status_code} {retry_after}")
     raise SystemExit(3) from None
 except openai.InternalServerError as error:
     print(f"agent caught openai.InternalServerError: {error.status_code} {error.body}")

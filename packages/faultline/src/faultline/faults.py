@@ -125,24 +125,18 @@ def empty_result(request_id: object, session: ToolSession) -> dict:
 
 
 def rate_limit(path: str) -> ModelAnswer:
-    """HTTP 429 with the provider's own error body, so its SDK treats it as real."""
-    message = "Rate limit reached. Injected by faultline."
-    if path.rstrip("/").endswith("/messages"):  # Anthropic's Messages API
-        error = {
-            "type": "error",
-            "error": {"type": "rate_limit_error", "message": message},
-        }
-    else:  # the OpenAI shape, which OpenAI-compatible providers share
-        error = {
-            "error": {
-                "message": message,
-                "type": "requests",
-                "param": None,
-                "code": "rate_limit_exceeded",
-            }
-        }
-    headers = {"Content-Type": "application/json", "Retry-After": "1"}
-    return ModelAnswer(429, headers, json.dumps(error).encode())
+    """HTTP 429 with the provider's own error body and a retry-after header.
+
+    Both SDKs read retry-after to time their next attempt, so the retries come fast.
+    """
+    return provider_error(
+        path,
+        429,
+        "Rate limit reached. Injected by faultline.",
+        ("requests", "rate_limit_exceeded"),
+        "rate_limit_error",
+        {"retry-after": "1"},
+    )
 
 
 def is_anthropic(path: str) -> bool:

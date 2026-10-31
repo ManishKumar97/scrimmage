@@ -100,6 +100,18 @@ def test_a_server_error_survives_every_sdk_retry(tmp_path, sdk, body):
     assert chat["attrs"]["error.type"] == {"stringValue": "500"}
 
 
+@pytest.mark.parametrize("sdk", ["openai", "anthropic"])
+def test_a_rate_limit_reaches_each_sdk_with_its_retry_header(tmp_path, sdk):
+    result, trace = sdk_agent(tmp_path, "model:rate_limit", NOWHERE, sdk=sdk)
+
+    # The SDK read the body as its own rate limit error, and the header with it.
+    assert result.stdout == f"agent caught {sdk}.RateLimitError: 429 1\n"
+    assert result.returncode == 3
+    [chat] = chat_spans(trace)
+    assert chat["attrs"]["faultline.proxy.attempts"] == {"intValue": "3"}
+    assert chat["attrs"]["error.type"] == {"stringValue": "429"}
+
+
 @needs_cluster
 def test_the_ida_gets_a_server_error_on_the_chosen_model_call(tmp_path):
     trace = tmp_path / "trace"

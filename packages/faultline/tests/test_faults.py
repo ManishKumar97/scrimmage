@@ -116,11 +116,33 @@ def test_a_required_number_has_no_empty_value():
         empty_value(schema)
 
 
+LIMITED = "Rate limit reached. Injected by faultline."
+
+
 @pytest.mark.parametrize(
-    ("path", "error_type"),
-    [("/chat/completions", "requests"), ("/v1/messages", "rate_limit_error")],
+    ("path", "body"),
+    [
+        (
+            "/v1/chat/completions",
+            {
+                "error": {
+                    "message": LIMITED,
+                    "type": "requests",
+                    "param": None,
+                    "code": "rate_limit_exceeded",
+                }
+            },
+        ),
+        (
+            "/v1/messages",
+            {
+                "type": "error",
+                "error": {"type": "rate_limit_error", "message": LIMITED},
+            },
+        ),
+    ],
 )
-def test_a_rate_limit_is_a_429_in_the_providers_own_shape(path, error_type):
+def test_a_rate_limit_is_a_429_in_the_providers_own_shape(path, body):
     fault = parse("model:rate_limit")
     assert isinstance(fault, ModelFault)
     assert fault.action.answer
@@ -128,8 +150,11 @@ def test_a_rate_limit_is_a_429_in_the_providers_own_shape(path, error_type):
     answer = fault.action.answer(path)
 
     assert answer.status == 429
-    assert answer.headers["Retry-After"] == "1"
-    assert json.loads(answer.body)["error"]["type"] == error_type
+    assert answer.headers == {
+        "Content-Type": "application/json",
+        "retry-after": "1",
+    }
+    assert json.loads(answer.body) == body
 
 
 def test_local_references_are_followed_for_the_empty_value():
