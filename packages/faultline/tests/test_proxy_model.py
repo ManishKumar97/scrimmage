@@ -3,7 +3,7 @@
 import asyncio
 import threading
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 
 from upstream import connect, upstream_server
 
@@ -40,8 +40,8 @@ def test_the_upstream_receives_the_bytes_the_client_sent():
     with (
         upstream_server() as upstream,
         running(ModelProxy(upstream.url + "/v1")) as url,
+        closing(connect(url)) as connection,
     ):
-        connection = connect(url)
         connection.request("POST", "/chat/completions?x=1&y=%2F", body, headers)
         reply = connection.getresponse().read()
 
@@ -62,10 +62,10 @@ def test_the_reply_comes_back_with_its_status_headers_and_bytes():
         upstream.status = 429
         upstream.reply_headers = [("Retry-After", "1"), ("Content-Encoding", "gzip")]
         upstream.chunks = [b"\x1f\x8b not really gzip"]
-        connection = connect(url)
-        connection.request("POST", "/x", b"{}")
-        response = connection.getresponse()
-        body = response.read()
+        with closing(connect(url)) as connection:
+            connection.request("POST", "/x", b"{}")
+            response = connection.getresponse()
+            body = response.read()
 
     assert response.status == 429
     assert response.getheader("Retry-After") == "1"
@@ -77,20 +77,22 @@ def test_the_reply_streams_back_before_the_upstream_has_finished():
     with upstream_server() as upstream, running(ModelProxy(upstream.url)) as url:
         upstream.chunks = [b"data: one\n\n", b"data: two\n\n"]
         upstream.between.clear()  # the second chunk waits until the first arrived
-        connection = connect(url)
-        connection.request("POST", "/x", b"{}")
-        response = connection.getresponse()
-        first = response.read(len(b"data: one\n\n"))
-        upstream.between.set()
-        rest = response.read()
+        with closing(connect(url)) as connection:
+            connection.request("POST", "/x", b"{}")
+            response = connection.getresponse()
+            first = response.read(len(b"data: one\n\n"))
+            upstream.between.set()
+            rest = response.read()
 
     assert first == b"data: one\n\n"
     assert rest == b"data: two\n\n"
 
 
 def test_an_unreachable_upstream_is_a_bad_gateway():
-    with running(ModelProxy("http://127.0.0.1:9")) as url:
-        connection = connect(url)
+    with (
+        running(ModelProxy("http://127.0.0.1:9")) as url,
+        closing(connect(url)) as connection,
+    ):
         connection.request("POST", "/x", b"{}")
         response = connection.getresponse()
         text = response.read().decode()

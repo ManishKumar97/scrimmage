@@ -32,6 +32,8 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["lab/tests"]
 testpaths = ["packages/faultline/tests", "lab/tests", "tests"]
+# Any warning fails the run, so a leaked socket or a deprecation cannot slip in.
+filterwarnings = ["error"]
 
 [tool.pyright]
 include = ["packages/faultline/src", "packages/faultline/tests", "lab/src", "lab/tests", "tests"]
@@ -77,6 +79,7 @@ source_modules = [
     "faultline.config",
     "faultline.detect",
     "faultline.find",
+    "faultline.checks",
     "faultline.sources",
     "faultline.proxy.record",
     "faultline.proxy.mcp",

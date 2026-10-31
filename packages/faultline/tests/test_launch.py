@@ -143,14 +143,16 @@ def test_no_command_is_an_error():
 
 
 def signalled(number: signal.Signals) -> tuple[int, str]:
-    with upstream_server() as upstream:
-        process = subprocess.Popen(
+    with (
+        upstream_server() as upstream,
+        subprocess.Popen(
             [FAULTLINE, "run", "--upstream", upstream.url, "--", PYTHON, "-c", WAITS],
             stdin=subprocess.DEVNULL,  # no terminal, as under a CI runner or a script
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
-        )
+        ) as process,
+    ):
         assert process.stdout
         assert process.stdout.readline() == "ready\n"
         process.send_signal(number)
