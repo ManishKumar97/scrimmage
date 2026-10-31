@@ -201,3 +201,42 @@ def test_faultline_run_writes_a_trace_that_python_m_faultline_runs_reads(tmp_pat
     assert "steps=2" in shown and "complete" in shown
     assert 'tool get_logs({"service": "cart"}) ok' in shown
     assert "answer: cart is down" in shown
+
+
+def test_content_over_the_cap_is_cut_marked_and_still_readable(tmp_path):
+    record = Recorder(tmp_path / "model.jsonl", TRACE_ID, ROOT, max_content=1000)
+    huge = {"role": "user", "content": "q" * 50_000}
+
+    record.exchange(exchange(1, 1, {"messages": [huge]}, 200, ANSWERS))
+    record.flush()
+    record.tool_call(
+        ToolCall("get_logs", "", "{}", 0.1, "x" * 5000, started=1)  # before the step
+    )
+
+    lines = record.path.read_text().splitlines()
+    assert all(len(line) < 4000 for line in lines)
+    spans = [
+        json.loads(line)["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+        for line in lines
+    ]
+    for span in spans:
+        attributes = {a["key"]: a["value"] for a in span["attributes"]}
+        assert attributes["faultline.proxy.content_cut"] == {"boolValue": True}
+    [run] = read_runs(record.path).runs
+    assert run.question and run.question.endswith("[cut, 50000 chars]")
+    assert run.answer == "cart is down"  # under the cap, untouched
+    assert run.unplaced[0].result.endswith("[cut, 5000 chars]")
+
+
+def test_the_root_records_the_program_and_not_its_arguments(tmp_path):
+    record = recorder(tmp_path)
+
+    record.root(0, 1, ["python", "agent.py", "--token", "hunter2"], 0)
+
+    span = json.loads(record.path.read_text())["resourceSpans"][0]["scopeSpans"][0][
+        "spans"
+    ][0]
+    attributes = {a["key"]: a["value"] for a in span["attributes"]}
+    assert attributes["faultline.command"] == {"stringValue": "python"}
+    assert attributes["faultline.command.args"] == {"intValue": "3"}
+    assert "hunter2" not in record.path.read_text()

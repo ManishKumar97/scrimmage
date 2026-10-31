@@ -26,7 +26,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from faultline.faults import FaultError, ModelFault, known, parse_all
-from faultline.proxy.record import FAULTS, ROOT_SPAN_ID, TRACE_DIR, TRACE_ID, Recorder
+from faultline.proxy.record import (
+    DEFAULT_MAX_CONTENT,
+    FAULTS,
+    MAX_CONTENT,
+    ROOT_SPAN_ID,
+    TRACE_DIR,
+    TRACE_ID,
+    Recorder,
+)
 from faultline.relay import RELAYED, Relay
 from faultline.runs import read_runs_many
 from faultline.verdict import judge, line
@@ -81,6 +89,15 @@ def add_parser(subparsers) -> None:
         metavar="DIR",
         help="where the run's spans go (default: a new temporary directory)",
     )
+    parser.add_argument(
+        "--max-content",
+        type=int,
+        metavar="CHARS",
+        default=int(os.environ.get(MAX_CONTENT) or DEFAULT_MAX_CONTENT),
+        help="the most characters of message or tool content one span records; "
+        f"over it, content is cut and marked (default {DEFAULT_MAX_CONTENT}, "
+        f"or {MAX_CONTENT})",
+    )
     parser.add_argument("command", nargs=argparse.REMAINDER, metavar="-- CMD...")
     parser.set_defaults(handler=run)
 
@@ -117,7 +134,10 @@ def run(args: argparse.Namespace) -> int:
         )
         return 2
     recorder = Recorder(
-        trace.resolve() / "model.jsonl", secrets.token_hex(16), secrets.token_hex(8)
+        trace.resolve() / "model.jsonl",
+        secrets.token_hex(16),
+        secrets.token_hex(8),
+        max_content=args.max_content,
     )
     model_faults = [fault for fault in faults if isinstance(fault, ModelFault)]
     proxy = ModelProxy(upstreams, model_faults, recorder)
@@ -167,6 +187,7 @@ async def launch(
             TRACE_ID: recorder.trace_id,
             ROOT_SPAN_ID: recorder.root_span_id,
             FAULTS: json.dumps(list(faults)),
+            MAX_CONTENT: str(recorder.max_content),
         }
     )
     for name, upstream in routed.items():

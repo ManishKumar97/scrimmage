@@ -12,7 +12,6 @@ append to the same file: the proxy writes model.jsonl, each MCP wrapper mcp-<pid
 import json
 import os
 import secrets
-import shlex
 import zlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -44,6 +43,13 @@ FAULTLINE_INJECTED = "faultline.injected"
 TRACE_ID = "FAULTLINE_TRACE_ID"
 ROOT_SPAN_ID = "FAULTLINE_ROOT_SPAN_ID"
 FAULTS = "FAULTLINE_FAULTS"  # a JSON list of fault specs
+# The most characters of content a span records, so one huge prompt or tool
+# result cannot fill the disk. Over it, content is cut and the span marked.
+MAX_CONTENT = "FAULTLINE_MAX_CONTENT"
+DEFAULT_MAX_CONTENT = 64 * 1024
+CONTENT_CUT = "faultline.proxy.content_cut"
+# Message part fields that hold content, in the GenAI message shape.
+CONTENT_FIELDS = ("content", "response", "arguments")
 ATTEMPTS = "faultline.proxy.attempts"
 # On a streamed reply: "parsed", or "unparsed" when no known stream shape fit.
 STREAM = "faultline.proxy.stream"
@@ -60,7 +66,7 @@ FINISH_REASONS = {
     "max_tokens": "length",
 }
 
-type Attributes = dict[str, str | int | list[str]]
+type Attributes = dict[str, str | int | bool | list[str]]
 
 
 @dataclass(frozen=True)
@@ -90,6 +96,7 @@ class Recorder:
     # True when the last step written was a streamed reply no known shape fits, so
     # its answer is not in the trace.
     last_unparsed: bool = False
+    max_content: int = DEFAULT_MAX_CONTENT
 
     @classmethod
     def from_env(
@@ -99,7 +106,31 @@ class Recorder:
         if not all(env.get(name) for name in (TRACE_DIR, TRACE_ID, ROOT_SPAN_ID)):
             return None
         path = Path(env[TRACE_DIR]) / file_name
-        return cls(path, env[TRACE_ID], env[ROOT_SPAN_ID])
+        limit = env.get(MAX_CONTENT, "")
+        return cls(
+            path,
+            env[TRACE_ID],
+            env[ROOT_SPAN_ID],
+            max_content=int(limit) if limit.isdigit() else DEFAULT_MAX_CONTENT,
+        )
+
+    def cap(self, attributes: Attributes) -> None:
+        """Cut the content in a span's attributes to max_content, and mark the span."""
+        cut = False
+        for key in (GEN_AI_INPUT_MESSAGES, GEN_AI_OUTPUT_MESSAGES):
+            value = attributes.get(key)
+            if isinstance(value, str) and len(value) > self.max_content:
+                messages = json.loads(value)
+                cut_messages(messages, self.max_content)
+                attributes[key] = json.dumps(messages)
+                cut = True
+        for key in (GEN_AI_TOOL_CALL_ARGUMENTS, GEN_AI_TOOL_CALL_RESULT):
+            value = attributes.get(key)
+            if isinstance(value, str) and len(value) > self.max_content:
+                attributes[key] = cut_text(value, self.max_content)
+                cut = True
+        if cut:
+            attributes[CONTENT_CUT] = True
 
     def write(self, span: dict) -> None:
         line = json.dumps(
@@ -156,7 +187,9 @@ class Recorder:
         """The run's root span. Written last, when the agent has exited."""
         attributes: Attributes = {
             GEN_AI_OPERATION_NAME: INVOKE_AGENT,
-            "faultline.command": shlex.join(command),
+            # The program only: arguments can hold a prompt or a secret.
+            "faultline.command": command[0] if command else "",
+            "faultline.command.args": len(command) - 1,
             "faultline.exit_code": code,
         }
         self.write(
@@ -211,6 +244,7 @@ class Recorder:
                 attributes.update(reply_attributes(reply))
             except (AttributeError, TypeError, KeyError, IndexError):
                 pass
+        self.cap(attributes)
         injected = next((a.injected for a in attempts if a.injected), None)
         if injected:
             attributes[FAULTLINE_INJECTED] = injected
@@ -245,6 +279,7 @@ class Recorder:
             GEN_AI_TOOL_CALL_ARGUMENTS: call.arguments,
             GEN_AI_TOOL_CALL_RESULT: call.result,
         }
+        self.cap(attributes)
         if call.injected:
             attributes[FAULTLINE_INJECTED] = call.injected
         ended = call.started + int(call.seconds * 1_000_000_000)
@@ -274,6 +309,29 @@ def encode(attributes: Mapping[str, str | int | list[str]]) -> list[dict]:
             any_value = {"stringValue": value}
         encoded.append({"key": key, "value": any_value})
     return encoded
+
+
+def cut_text(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]} [cut, {len(text)} chars]"
+
+
+def cut_messages(messages: list[dict], limit: int) -> None:
+    """Cut the content fields of GenAI messages so they share `limit` characters.
+
+    The messages stay valid JSON in the same shape, so the reader still reads them.
+    """
+    fields = [
+        (part, key)
+        for message in messages
+        for part in message.get("parts", [])
+        for key in CONTENT_FIELDS
+        if isinstance(part.get(key), str)
+    ]
+    each = max(limit // max(len(fields), 1), 64)
+    for part, key in fields:
+        part[key] = cut_text(part[key], each)
 
 
 def decoded(body: bytes, encoding: str | None) -> bytes:
