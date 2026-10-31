@@ -11,11 +11,13 @@ never go to the OpenAI upstream.
 
 A variable is pointed at the proxy only when its upstream is known: from
 --upstream NAME=URL, or from the variable's value before the run.
+
+Exit code: the agent's own, or 78 when a requested fault was never applied, such
+as a tool fault on a tool the agent never called. The verdict is then not_applied.
 """
 
 import argparse
 import asyncio
-import json
 import os
 import secrets
 import sys
@@ -26,21 +28,18 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from faultline.faults import FaultError, ModelFault, known, parse_all
-from faultline.proxy.record import (
-    DEFAULT_MAX_CONTENT,
-    FAULTS,
-    MAX_CONTENT,
-    ROOT_SPAN_ID,
-    TRACE_DIR,
-    TRACE_ID,
-    Recorder,
-)
+from faultline.proxy.context import MAX_CONTENT, RunContext, publish, withdraw
+from faultline.proxy.record import DEFAULT_MAX_CONTENT, Recorder
 from faultline.relay import RELAYED, Relay, tied_to_parent
 from faultline.runs import read_runs_many
-from faultline.verdict import judge, line
+from faultline.verdict import judge, line, never_applied, not_applied_line
 
 if TYPE_CHECKING:
     from faultline.proxy.model import ModelProxy
+
+# The exit code when a requested fault was never applied: the run tested nothing
+# that was asked. 78 is EX_CONFIG from sysexits.h, a configuration error.
+NOT_APPLIED = 78
 
 # The variables the OpenAI and Anthropic SDKs read their base URL from.
 BASE_URL_ENVS = ("OPENAI_BASE_URL", "ANTHROPIC_BASE_URL")
@@ -145,12 +144,19 @@ def run(args: argparse.Namespace) -> int:
     # The verdict reads the run back from its trace, as Find reads any run.
     files = sorted(recorder.path.parent.glob("*.jsonl"))
     runs = [r for r in read_runs_many(files).runs if r.trace_id == recorder.trace_id]
+    run_read = runs[0] if runs else None
+    wrapped = any(f.name.startswith("mcp-") for f in files)
+    missed = never_applied(faults, run_read, wrapped)
+    for spec, reason in missed:
+        print(
+            f"faultline run: fault {spec} was never applied ({reason})", file=sys.stderr
+        )
+    if missed:
+        # The run did not test what was asked, so no passed or failed is honest.
+        print(not_applied_line([spec for spec, _ in missed]), file=sys.stderr)
+        return NOT_APPLIED
     verdict = judge(
-        runs[0] if runs else None,
-        recorder.trace_id,
-        code,
-        args.expect,
-        recorder.last_unparsed,
+        run_read, recorder.trace_id, code, args.expect, recorder.last_unparsed
     )
     print(line(verdict), file=sys.stderr)
     return code
@@ -181,15 +187,17 @@ async def launch(
     env = dict(os.environ)
     routed = {name: up for name, up in proxy.upstreams_by_name().items() if up}
     env.update({name: proxy.url_for(name) for name in routed})
-    env.update(
-        {
-            TRACE_DIR: str(recorder.path.parent),
-            TRACE_ID: recorder.trace_id,
-            ROOT_SPAN_ID: recorder.root_span_id,
-            FAULTS: json.dumps(list(faults)),
-            MAX_CONTENT: str(recorder.max_content),
-        }
+    run = RunContext(
+        str(recorder.path.parent),
+        recorder.trace_id,
+        recorder.root_span_id,
+        tuple(faults),
+        recorder.max_content,
     )
+    # Two ways to find the run: variables for the agent, and a file for children
+    # started with a cleaned environment, such as MCP servers.
+    env.update(run.env())
+    published = publish(run)
     for name, upstream in routed.items():
         print(f"faultline: {name}={proxy.url_for(name)} -> {upstream}", file=sys.stderr)
     for name in proxy.upstreams_by_name().keys() - routed.keys():
@@ -202,6 +210,7 @@ async def launch(
     try:
         code = await supervise(command, env)
     finally:
+        withdraw(published)
         # Whatever ended the run, the trace is finished: the last step and the root.
         await proxy.stop()  # after the agent, so its last calls still go through
         recorder.flush()

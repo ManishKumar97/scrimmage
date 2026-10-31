@@ -59,17 +59,6 @@ def test_the_ida_answers_the_same_with_its_mcp_servers_wrapped(tmp_path):
     assert wrapped.stdout == plain.stdout
 
 
-# What the IDA's MCP servers need, under `faultline run`, to write their spans.
-FAULTLINE_ENV = json.dumps(
-    [
-        "FAULTLINE_TRACE_DIR",
-        "FAULTLINE_TRACE_ID",
-        "FAULTLINE_ROOT_SPAN_ID",
-        "FAULTLINE_FAULTS",
-    ]
-)
-
-
 def under_faultline(upstream: str, trace: Path, *flags: str) -> list[str]:
     return [
         FAULTLINE,
@@ -88,7 +77,8 @@ def under_faultline(upstream: str, trace: Path, *flags: str) -> list[str]:
 
 def wrapped_env(tmp_path: Path) -> dict[str, str]:
     prefix = json.dumps([FAULTLINE, "mcp-wrap", "--"])
-    return ida_env(tmp_path, MCP_COMMAND_PREFIX=prefix, MCP_PASS_ENV=FAULTLINE_ENV)
+    # No MCP_PASS_ENV: the wrapper finds the run from its parent processes.
+    return ida_env(tmp_path, MCP_COMMAND_PREFIX=prefix)
 
 
 @needs_cluster

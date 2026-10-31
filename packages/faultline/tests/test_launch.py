@@ -76,7 +76,8 @@ def test_the_agent_gets_the_proxy_url_and_its_calls_reach_the_upstream(tmp_path)
             env=clean_env(GROQ_BASE_URL=upstream.url + "/openai/v1"),
         )
 
-    assert result.returncode == 0, result.stderr
+    # The fault is only passed on here: no MCP server ran, so it was never applied.
+    assert result.returncode == 78, result.stderr
     seen, reply = result.stdout.splitlines()
     sees = json.loads(seen)
     assert sees["GROQ_BASE_URL"].startswith("http://127.0.0.1:")

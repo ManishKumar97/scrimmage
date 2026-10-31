@@ -84,6 +84,7 @@ source_modules = [
     "faultline.proxy.record",
     "faultline.proxy.mcp",
     "faultline.proxy.streams",
+    "faultline.proxy.context",
     "faultline.relay",
     "faultline.faults",
     "faultline.verdict",

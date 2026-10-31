@@ -10,7 +10,6 @@ append to the same file: the proxy writes model.jsonl, each MCP wrapper mcp-<pid
 """
 
 import json
-import os
 import secrets
 import zlib
 from collections.abc import Mapping, Sequence
@@ -18,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from faultline.model import ToolCall
+from faultline.proxy.context import RunContext
 from faultline.proxy.streams import is_stream, reply_from_stream
 from faultline.semconv import (
     CHAT,
@@ -36,16 +36,11 @@ from faultline.semconv import (
     INVOKE_AGENT,
 )
 
-TRACE_DIR = "FAULTLINE_TRACE_DIR"
 # Faultline's own attribute, on the span of a call it changed. Its value is the fault spec.
 # The run reader reads it: Faultline writes it, so no agent's names are involved.
 FAULTLINE_INJECTED = "faultline.injected"
-TRACE_ID = "FAULTLINE_TRACE_ID"
-ROOT_SPAN_ID = "FAULTLINE_ROOT_SPAN_ID"
-FAULTS = "FAULTLINE_FAULTS"  # a JSON list of fault specs
 # The most characters of content a span records, so one huge prompt or tool
 # result cannot fill the disk. Over it, content is cut and the span marked.
-MAX_CONTENT = "FAULTLINE_MAX_CONTENT"
 DEFAULT_MAX_CONTENT = 64 * 1024
 CONTENT_CUT = "faultline.proxy.content_cut"
 # Message part fields that hold content, in the GenAI message shape.
@@ -99,19 +94,13 @@ class Recorder:
     max_content: int = DEFAULT_MAX_CONTENT
 
     @classmethod
-    def from_env(
-        cls, file_name: str, env: Mapping[str, str] = os.environ
-    ) -> "Recorder | None":
-        """A recorder for this process, or None when not started by `faultline run`."""
-        if not all(env.get(name) for name in (TRACE_DIR, TRACE_ID, ROOT_SPAN_ID)):
-            return None
-        path = Path(env[TRACE_DIR]) / file_name
-        limit = env.get(MAX_CONTENT, "")
+    def for_run(cls, run: RunContext, file_name: str) -> "Recorder":
+        """A recorder for this process's own file in the run's trace directory."""
         return cls(
-            path,
-            env[TRACE_ID],
-            env[ROOT_SPAN_ID],
-            max_content=int(limit) if limit.isdigit() else DEFAULT_MAX_CONTENT,
+            Path(run.trace_dir) / file_name,
+            run.trace_id,
+            run.root_span_id,
+            max_content=run.max_content or DEFAULT_MAX_CONTENT,
         )
 
     def cap(self, attributes: Attributes) -> None:

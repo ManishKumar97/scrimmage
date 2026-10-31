@@ -168,3 +168,74 @@ def test_a_stream_the_proxy_cannot_read_is_no_verdict_not_a_failure(tmp_path):
     assert result.stderr.splitlines()[-1] == (
         "no verdict: answer not recorded (streamed reply)"
     )
+
+
+def test_a_tool_fault_without_a_wrapped_server_is_not_applied(tmp_path):
+    with upstream_server() as upstream:
+        result, _ = faultline_run(
+            tmp_path,
+            upstream.url,
+            "--fault",
+            "tool:get_logs:empty",
+            "--",
+            sys.executable,
+            "-c",
+            ONE_CALL,
+        )
+
+    assert result.returncode == 78
+    assert result.stderr.splitlines()[-2:] == [
+        (
+            "faultline run: fault tool:get_logs:empty was never applied "
+            "(no MCP server ran under faultline mcp-wrap)"
+        ),
+        "verdict: not_applied (never applied: tool:get_logs:empty)",
+    ]
+
+
+def test_a_tool_fault_on_a_tool_never_called_is_not_applied(tmp_path):
+    with upstream_server() as upstream:
+        upstream.replies = [ASKS, ANSWERS]
+        result, _ = faultline_run(
+            tmp_path,
+            upstream.url,
+            "--fault",
+            "tool:get_metrics:empty",
+            "--fault",
+            "model:rate_limit@5",
+            "--",
+            sys.executable,
+            str(HERE / "tiny_agent.py"),
+            str(tmp_path / "log"),
+        )
+
+    assert result.returncode == 78
+    assert result.stderr.splitlines()[-3:] == [
+        (
+            "faultline run: fault tool:get_metrics:empty was never applied "
+            "(the agent never called get_metrics; MCP tools called: get_logs)"
+        ),
+        (
+            "faultline run: fault model:rate_limit@5 was never applied "
+            "(the run made 2 model call(s), so there was no step 5)"
+        ),
+        (
+            "verdict: not_applied (never applied: tool:get_metrics:empty, "
+            "model:rate_limit@5)"
+        ),
+    ]
+
+
+def test_a_server_started_with_a_cleaned_environment_still_gets_the_fault(tmp_path):
+    log = tmp_path / "server.log"
+    agent = [sys.executable, str(HERE / "tiny_agent.py"), str(log), "bare"]
+    with upstream_server() as upstream:
+        upstream.replies = [ASKS, ANSWERS]
+        result, [run] = faultline_run(
+            tmp_path, upstream.url, "--fault", "tool:get_logs:empty", "--", *agent
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert log.read_bytes() == b""
+    [call] = run.steps[0].tool_calls
+    assert call.injected == "tool:get_logs:empty"

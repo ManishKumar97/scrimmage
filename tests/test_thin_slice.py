@@ -11,12 +11,6 @@ from ida_harness import QUESTION, fake_llm, ida, ida_env, needs_cluster, run
 from faultline.runs import read_runs, read_runs_many
 
 FAULTLINE = str(Path(sys.executable).parent / "faultline")
-TRACE_NAMES = [
-    "FAULTLINE_TRACE_DIR",
-    "FAULTLINE_TRACE_ID",
-    "FAULTLINE_ROOT_SPAN_ID",
-    "FAULTLINE_FAULTS",
-]
 
 
 def spans_of(trace: Path) -> list[dict]:
@@ -74,7 +68,6 @@ def test_an_empty_tool_result_through_the_proxy_gets_a_verdict(tmp_path):
     env = ida_env(
         tmp_path,
         MCP_COMMAND_PREFIX=json.dumps([FAULTLINE, "mcp-wrap", "--"]),
-        MCP_PASS_ENV=json.dumps(TRACE_NAMES),
     )
     with fake_llm(tmp_path, EMPTY_LOGS_SCRIPT) as upstream:
         result = run(

@@ -24,7 +24,8 @@ from dataclasses import dataclass
 
 from faultline.faults import ToolFault, ToolSession, parse_all
 from faultline.model import ToolCall
-from faultline.proxy.record import FAULTS, Recorder
+from faultline.proxy.context import find as find_run
+from faultline.proxy.record import Recorder
 from faultline.relay import RELAYED, Relay, tied_to_parent
 
 # The longest line, in bytes. A tool result can be large, such as many log lines.
@@ -46,13 +47,15 @@ def wrap(args: argparse.Namespace) -> int:
     if not command:
         print("faultline mcp-wrap: give the server's command after --", file=sys.stderr)
         return 2
-    # Started by `faultline run`, the wrapper writes its own span file. Else it only relays.
-    recorder = Recorder.from_env(f"mcp-{os.getpid()}.jsonl")
+    # Under `faultline run`, the wrapper writes its own span file and applies the
+    # run's tool faults. Else it only relays.
     try:
-        faults = parse_all(json.loads(os.environ.get(FAULTS, "[]")))
-    except (ValueError, TypeError) as exc:  # FaultError is a ValueError
-        print(f"faultline mcp-wrap: bad {FAULTS}: {exc}", file=sys.stderr)
+        run = find_run()
+        faults = parse_all(run.faults if run else ())
+    except (OSError, ValueError, TypeError, KeyError) as exc:  # FaultError too
+        print(f"faultline mcp-wrap: cannot read the run: {exc}", file=sys.stderr)
         return 2
+    recorder = Recorder.for_run(run, f"mcp-{os.getpid()}.jsonl") if run else None
     tool_faults = [fault for fault in faults if isinstance(fault, ToolFault)]
     calls = ToolCalls(recorder.tool_call if recorder else None, tool_faults)
     return asyncio.run(relay(command, calls))

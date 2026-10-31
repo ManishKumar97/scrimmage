@@ -11,6 +11,9 @@ verdict. Nor has a run whose last reply was a stream the proxy could not read: i
 answer is not in the trace, which is no fault of the agent's. A clean run as the reference comes with `faultline test`.
 """
 
+from collections.abc import Sequence
+
+from faultline.faults import Fault, ModelFault, ToolFault
 from faultline.model import Run, RunVerdict, Verdict
 
 NO_REFERENCE = "no reference: pass --expect or use faultline test (P3.4)"
@@ -58,6 +61,42 @@ def judge(
     if faults:
         reason += f"; injected {', '.join(faults)}"
     return RunVerdict(trace_id, verdict, reason, ", ".join(faults) or None)
+
+
+def never_applied(
+    faults: Sequence[Fault], run: Run | None, wrapped: bool
+) -> list[tuple[str, str]]:
+    """Each requested fault the trace shows was never applied, with the likely reason.
+
+    `wrapped` says an MCP server ran under faultline mcp-wrap in this run.
+    """
+    applied = set(injected(run))
+    missed = []
+    for fault in faults:
+        if fault.spec in applied:
+            continue
+        missed.append((fault.spec, why_not(fault, run, wrapped)))
+    return missed
+
+
+def why_not(fault: Fault, run: Run | None, wrapped: bool) -> str:
+    if isinstance(fault, ToolFault):
+        if not wrapped:
+            return "no MCP server ran under faultline mcp-wrap"
+        called = sorted({call.name for call in run.tool_calls}) if run else []
+        if fault.tool not in called:
+            seen = ", ".join(called) or "none"
+            return f"the agent never called {fault.tool}; MCP tools called: {seen}"
+        return "the tool was called, but no call was answered by the fault"
+    assert isinstance(fault, ModelFault)
+    steps = len(run.steps) if run else 0
+    if steps < fault.step:
+        return f"the run made {steps} model call(s), so there was no step {fault.step}"
+    return "the step ran, but no call was answered by the fault"
+
+
+def not_applied_line(specs: Sequence[str]) -> str:
+    return f"verdict: not_applied (never applied: {', '.join(specs)})"
 
 
 def line(verdict: RunVerdict | str) -> str:

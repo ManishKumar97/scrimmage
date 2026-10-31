@@ -1,9 +1,10 @@
 """A two-step agent on the standard library alone: one tool call over MCP, then an answer.
 
-    python tiny_agent.py SERVER_LOG
+    python tiny_agent.py SERVER_LOG [bare]
 
 It reads its model base URL from OPENAI_BASE_URL and starts its MCP server, the
 stand-in stdio_server.py, under `faultline mcp-wrap`, as a team's MCP config would.
+With `bare`, the server gets only PATH and HOME, as many MCP clients give it.
 """
 
 import json
@@ -30,10 +31,13 @@ def chat(messages: list[dict]) -> dict:
 
 def call_tool(name: str, arguments: dict, log: str) -> str:
     server = [sys.executable, str(HERE / "stdio_server.py"), log, "0"]
+    bare = sys.argv[2:] == ["bare"]
+    env = {k: os.environ[k] for k in ("PATH", "HOME") if k in os.environ}
     with subprocess.Popen(
         [FAULTLINE, "mcp-wrap", "--", *server],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
+        env=env if bare else None,
     ) as process:
         assert process.stdin and process.stdout
         params = {"name": name, "arguments": arguments}
