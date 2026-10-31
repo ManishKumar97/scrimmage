@@ -40,18 +40,24 @@ class TraceSource(Protocol):
 
 
 UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-DURATION = re.compile(r"(\d+)([smhd])")
+# ASCII digits only: \d also matches digits of other scripts, which int() accepts.
+DURATION = re.compile(r"([0-9]+)([smhd])")
+LONGEST = timedelta(days=3650)  # far past any trace store's retention
 
 
 def parse_since(text: str) -> timedelta:
-    """A window length like `30m`, `1h` or `2d`."""
+    """A window length like `30m`, `1h` or `2d`, at most ten years."""
     match = DURATION.fullmatch(text.strip())
     if not match or int(match[1]) == 0:
         raise ValueError(
             f"bad duration {text!r}; expected a whole number and a unit "
             "(s, m, h or d), for example 30m, 1h or 2d"
         )
-    return timedelta(seconds=int(match[1]) * UNITS[match[2]])
+    seconds = int(match[1]) * UNITS[match[2]]
+    # Checked before timedelta, which overflows on a long enough number.
+    if seconds > LONGEST.total_seconds():
+        raise ValueError(f"duration {text!r} is longer than {LONGEST.days}d")
+    return timedelta(seconds=seconds)
 
 
 def started(run: Run) -> int:
@@ -223,10 +229,50 @@ def results_in(body: bytes, url: str) -> list[dict]:
         if not isinstance(chunk, dict):
             raise OSError(0, "Jaeger's answer is not a JSON object", url)
         if "error" in chunk:
-            message = chunk["error"].get("message", "no message")
-            raise OSError(0, f"Jaeger failed the search: {message}", url)
-        results.append(chunk.get("result") or {})
+            error = chunk["error"]
+            message = error.get("message") if isinstance(error, dict) else error
+            raise OSError(
+                0, f"Jaeger failed the search: {message or 'no message'}", url
+            )
+        result = chunk.get("result") or {}
+        problem = shape_problem(result)
+        if problem:
+            raise OSError(0, f"Jaeger's answer has an unknown shape: {problem}", url)
+        results.append(result)
     return results
+
+
+def shape_problem(result: object) -> str | None:
+    """What in one result is not the OTLP shape the reader walks, else None.
+    Checked once here, so the code after it can index without guarding."""
+    if not isinstance(result, dict):
+        return f"result is {type(result).__name__}, not an object"
+    resources = result.get("resourceSpans", [])
+    if not is_list_of_objects(resources):
+        return "resourceSpans is not a list of objects"
+    for resource in resources:
+        scopes = resource.get("scopeSpans", [])
+        if not is_list_of_objects(scopes):
+            return "scopeSpans is not a list of objects"
+        for scope in scopes:
+            spans = scope.get("spans", [])
+            if not is_list_of_objects(spans):
+                return "spans is not a list of objects"
+            for span in spans:
+                if not isinstance(span.get("traceId"), str) or not span["traceId"]:
+                    return "a span has no traceId"
+                for key in ("spanId", "parentSpanId"):
+                    if not isinstance(span.get(key, ""), str):
+                        return f"a span's {key} is not a string"
+                if not isinstance(span.get("status", {}), dict):
+                    return "a span's status is not an object"
+                if not is_list_of_objects(span.get("attributes", [])):
+                    return "a span's attributes are not a list of objects"
+    return None
+
+
+def is_list_of_objects(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(item, dict) for item in value)
 
 
 def spans_of(result: dict) -> list[dict]:
@@ -275,14 +321,18 @@ def otlp_json(result: dict) -> dict:
 
 
 def hex_id(value: str) -> str:
-    """A trace or span id in hex. Jaeger 1.x sends base64; hex passes through."""
+    """A span id (8 bytes) or trace id (16 bytes) in hex. Jaeger 1.x sends base64;
+    hex passes through."""
     if len(value) in (16, 32) and all(c in hexdigits for c in value):
         return value.lower()
+    message = f"Jaeger sent an id that is not 8 or 16 bytes in hex or base64: {value!r}"
     try:
-        return base64.b64decode(value, validate=True).hex()
+        raw = base64.b64decode(value, validate=True)
     except ValueError as error:  # binascii.Error is one
-        message = f"Jaeger sent an id that is neither hex nor base64: {value!r}"
         raise OSError(0, message) from error
+    if len(raw) not in (8, 16):
+        raise OSError(0, message)
+    return raw.hex()
 
 
 def as_array(value):

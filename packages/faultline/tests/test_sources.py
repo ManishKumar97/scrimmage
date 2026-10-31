@@ -120,19 +120,56 @@ def test_traces_before_the_window_are_left_out_of_jaeger_and_files(tmp_path):
     assert len(list(FileSource(path).runs())) == 2
 
 
+def spans_answer(*spans: object) -> bytes:
+    request = {"resourceSpans": [{"scopeSpans": [{"spans": list(spans)}]}]}
+    return json.dumps({"result": request}).encode()
+
+
+SPAN = {"traceId": "ab" * 16, "spanId": "cd" * 8}
+# 12 bytes in base64: neither a span id (8) nor a trace id (16).
+TWELVE_BYTES = "QUJDREVGR0hJSktM"  # base64 of ABCDEFGHIJKL
+
+
 @pytest.mark.parametrize(
     ("status", "body", "message"),
     [
         (500, b'{"error":{"httpCode":500,"message":"storage down"}}', "storage down"),
         (200, b"<!doctype html><html></html>", "base path"),
-        (200, b'{"error":{"httpCode":500,"message":"cut"}}', "failed the search"),
-        (
-            200,
-            b'{"result":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"!"}]}]}]}}',
-            "neither hex",
-        ),
+        (200, b'{"error":{"httpCode":500,"message":"cut"}}', "failed the search: cut"),
+        (200, b'{"error":"plain text"}', "failed the search: plain text"),
+        (200, b'{"error":null}', "failed the search: no message"),
+        (200, b'{"result":[{"resourceSpans":[]}]}', "result is list"),
+        (200, b'{"result":{"resourceSpans":{}}}', "resourceSpans is not a list"),
+        (200, b'{"result":{"resourceSpans":[{"scopeSpans":[1]}]}}', "scopeSpans"),
+        (200, spans_answer(None), "spans is not a list of objects"),
+        (200, spans_answer({"spanId": "cd" * 8}), "a span has no traceId"),
+        (200, spans_answer({**SPAN, "traceId": 7}), "a span has no traceId"),
+        (200, spans_answer({**SPAN, "spanId": 1}), "spanId is not a string"),
+        (200, spans_answer({**SPAN, "status": "bad"}), "status is not an object"),
+        (200, spans_answer({**SPAN, "attributes": {}}), "attributes are not a list"),
+        (200, spans_answer({**SPAN, "traceId": "!"}), "not 8 or 16 bytes"),
+        (200, spans_answer({**SPAN, "traceId": TWELVE_BYTES}), "not 8 or 16 bytes"),
+        (200, b"[]", "not a JSON object"),
     ],
-    ids=["http-error", "html", "error-chunk", "bad-id"],
+    ids=[
+        "http-error",
+        "html",
+        "error-chunk",
+        "error-text",
+        "error-null",
+        "result-list",
+        "resources-object",
+        "scope-not-object",
+        "span-null",
+        "no-trace-id",
+        "trace-id-number",
+        "span-id-number",
+        "status-text",
+        "attributes-object",
+        "bad-id",
+        "id-twelve-bytes",
+        "top-level-list",
+    ],
 )
 def test_a_bad_answer_from_jaeger_is_an_os_error_that_says_why(status, body, message):
     with fake_jaeger() as jaeger:
@@ -157,10 +194,23 @@ def test_since_reads_a_number_and_a_unit(text, seconds):
     assert parse_since(text) == timedelta(seconds=seconds)
 
 
-@pytest.mark.parametrize("text", ["", "1", "h", "0h", "1.5h", "-1h", "1w", "1h30m"])
+@pytest.mark.parametrize(
+    "text", ["", "1", "h", "0h", "1.5h", "-1h", "1w", "1h30m", "\u0661h", "\uff11h"]
+)
 def test_since_rejects_anything_else(text):
+    # The last two are an Arabic-Indic and a fullwidth one, which int() would read.
     with pytest.raises(ValueError, match="bad duration"):
         parse_since(text)
+
+
+@pytest.mark.parametrize("text", ["3651d", "87601h", "9" * 30 + "d"])
+def test_since_longer_than_ten_years_is_refused_not_an_overflow(text):
+    with pytest.raises(ValueError, match="longer than 3650d"):
+        parse_since(text)
+
+
+def test_since_of_exactly_ten_years_is_read():
+    assert parse_since("3650d") == timedelta(days=3650)
 
 
 def test_a_jaeger_spec_defaults_to_localhost():
