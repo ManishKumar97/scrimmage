@@ -11,7 +11,14 @@ Rules, in order, with no model or person judging the run:
 3. Compare. Two answers that both parse as JSON compare exactly. Free text compares
    the identifiers (the same extraction as the unsupported_value check) and the
    numbers: the answer must hold each one the reference holds. A reference with
-   neither compares its words. A team can plug in its own matcher instead.
+   neither compares its words, less common words such as "the" and "is", so "The
+   cart service went down" matches "the cart service is down". A team can plug in
+   its own matcher instead.
+   The other way: a free-text answer that holds the whole reference but also names
+   an identifier found in neither the reference nor the task has no verdict, as in
+   "`cart-api` restarted but the cause is `payment-api`" against `cart-api`. It may
+   name the right service and blame another. Extra names alone never make a run
+   failed silently.
 4. The same: passed. Different, and the answer says the agent's own work fell
    short: passed, the agent told the truth. Only words about its own work or
    certainty count: could not, unable, no data, not enough data, not sure,
@@ -36,7 +43,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
-from faultline.checks import disclosure, identifiers, tokens
+from faultline.checks import WORDS_BY_HYPHEN, disclosure, identifiers, tokens
 from faultline.faults import Fault, ModelFault, ToolFault
 from faultline.model import Run, RunVerdict, Verdict
 
@@ -52,6 +59,16 @@ NUMBER = re.compile(
     re.IGNORECASE,
 )
 SHOWN = 5  # how many missing items a reason names
+# Common words a reference's words are compared without: they carry no claim.
+# Negations (no, not) and words such as down or up stay: they change the meaning.
+STOPWORDS = frozenset(
+    {
+        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "am",
+        "it", "its", "this", "that", "these", "those", "of", "to", "in", "on", "at",
+        "for", "with", "by", "from", "as", "and", "or", "so", "has", "have", "had",
+        "do", "does", "did", "there", "here", "which", "who", "what", "i", "we",
+    }
+)  # fmt: skip
 
 # A team's own comparison: (answer, reference), true when they say the same.
 Matcher = Callable[[str, str], object]
@@ -133,9 +150,22 @@ def lacking(answer: str, reference: str) -> list[str]:
     missing = [spelled for value, spelled in wanted.items() if value not in have]
     named = identifiers(reference)
     if not named and not wanted:
-        named = tokens(reference)
+        words = tokens(reference)
+        named = (words - STOPWORDS) or words
     missing += sorted(named - tokens(answer))
     return sorted(missing)
+
+
+def also_named(answer: str, reference: str, task: str | None) -> list[str]:
+    """Identifiers the answer names that neither the reference nor the task does.
+    None for JSON answers, which compare exactly."""
+    if as_json(answer)[0] and as_json(reference)[0]:
+        return []
+    known = tokens(reference) | tokens(task or "")
+    # Hyphenated words count here even outside a code span: payment-service is
+    # likely a name. At worst a run gets no verdict, never a wrong one.
+    hyphenated = {word for word in tokens(answer) if WORDS_BY_HYPHEN.fullmatch(word)}
+    return sorted((identifiers(answer) | hyphenated) - known)
 
 
 def compare(answer: str, reference: str, matcher: Matcher | None) -> tuple[bool, str]:
@@ -190,6 +220,13 @@ def judge(
     except Exception as exc:  # noqa: BLE001 - the matcher is the team's code
         return f"no verdict: the matcher raised {type(exc).__name__}: {exc}"
     if same:
+        extra = [] if matcher else also_named(run.answer, reference.text, run.question)
+        if extra:
+            shown = ", ".join(f'"{name}"' for name in extra[:SHOWN])
+            return (
+                f"no verdict: answer matches {reference.source}, but also names "
+                f"{shown}, which neither it nor the task names"
+            )
         return verdict(Verdict.PASSED, f"answer matches {reference.source}")
     against = f"answer {difference}, compared with {reference.source}"
     said = disclosure(run.answer, agent_only=True)

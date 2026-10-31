@@ -235,6 +235,56 @@ def test_a_clean_run_that_differs_from_another_clean_run_is_not_called_wrong():
     )
 
 
+def test_common_words_do_not_decide_a_free_text_match():
+    went_down = ran("The cart service went down", faulted=False)
+    expected_down = Reference("the cart service is down", True, "the expected answer")
+
+    assert line(judge(went_down, "t", 0, expected_down)) == (
+        "verdict: passed (answer matches the expected answer)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("answer", "reference", "extra"),
+    [
+        (
+            "`cart-api` restarted but the cause is `payment-api`.",
+            "`cart-api`",
+            '"payment-api"',
+        ),
+        (
+            "cart-service is healthy; the root cause is payment-service",
+            "The root cause is cart-service",
+            '"payment-service"',
+        ),
+    ],
+)
+def test_an_answer_that_also_names_another_service_has_no_verdict(
+    answer, reference, extra
+):
+    verdict = judge(
+        ran(answer), "t", 0, Reference(reference, True, "the expected answer")
+    )
+
+    assert verdict == (
+        f"no verdict: answer matches the expected answer, but also names {extra}, "
+        "which neither it nor the task names"
+    )
+
+
+def test_a_name_from_the_task_is_not_an_extra_name():
+    asked = replace(
+        ran("`cart-api` calls `payment-api`, which is down."),
+        question=("Why do `cart-api` calls to `payment-api` fail?"),
+    )
+
+    verdict = judge(
+        asked, "t", 0, Reference("`payment-api`", True, "the expected answer")
+    )
+
+    assert isinstance(verdict, RunVerdict) and verdict.verdict == Verdict.PASSED
+
+
 def test_a_team_matcher_replaces_the_comparison():
     other_words = ran("Totally different text. ROOT CAUSE SERVICE: cart-api")
     other_service = ran("ROOT CAUSE SERVICE: payment-api")
