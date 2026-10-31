@@ -9,7 +9,9 @@ import pytest
 from upstream import ANSWERS, openai_reply, upstream_server
 from upstream import ASKS as ASKS_FOR_LOGS
 
+from faultline import matrix
 from faultline.faults import parse
+from faultline.model import Verdict
 from faultline.reproduce import (
     Task,
     TasksError,
@@ -189,6 +191,31 @@ def test_a_faulted_answer_unlike_the_first_clean_one_failed_silently(tmp_path):
     assert saved["cart/tool_get_logs_empty/1"]["reason"] == (
         'answer lacks "cart", compared with clean run 1; injected tool:get_logs:empty'
     )
+    # The fault matrix: printed, and saved with each cell's runs.
+    assert result.stdout == (
+        "fault                passed  failed loudly  failed silently  no verdict  runs\n"
+        "clean                     2              0                0           0     2\n"
+        "tool:get_logs:empty       0              0                1           0     1\n"
+    )
+    saved_matrix = json.loads((out / "matrix.json").read_text())
+    assert saved_matrix["rows"][1] == {
+        "fault": "tool:get_logs:empty",
+        "passed": 0,
+        "failed_loudly": 0,
+        "failed_silently": 1,
+        "no_verdict": 0,
+        "runs": 1,
+        "cells": {
+            "passed": [],
+            "failed_loudly": [],
+            "failed_silently": ["cart/tool_get_logs_empty/1"],
+            "no_verdict": [],
+        },
+    }
+    assert saved_matrix["rows"][0]["cells"]["passed"] == [
+        "cart/clean/1",
+        "cart/clean/2",
+    ]
 
 
 def test_a_team_matcher_decides_what_counts_as_the_same(tmp_path):
@@ -291,3 +318,23 @@ def test_an_unknown_fault_or_a_bad_count_is_an_error_before_any_run(tmp_path):
     assert "unknown fault 'model:nope'" in bad_fault.stderr
     assert no_runs.returncode == 2
     assert "must be 1 or more" in no_runs.stderr
+
+
+def test_every_run_lands_in_one_cell_of_its_row():
+    marks = [
+        matrix.Mark("clean", Verdict.PASSED, "a/clean/1"),
+        matrix.Mark("model:timeout", Verdict.FAILED_LOUDLY, "a/model_timeout/1"),
+        matrix.Mark("model:timeout", None, "a/model_timeout/2"),
+    ]
+
+    table = matrix.rows(marks, ["model:timeout", "tool:x:empty"])
+
+    assert [(row.name, row.runs) for row in table] == [
+        ("clean", 1),
+        ("model:timeout", 2),
+        ("tool:x:empty", 0),
+    ]
+    assert table[1].cells["no_verdict"] == ["a/model_timeout/2"]
+    assert matrix.show(table).splitlines()[2] == (
+        "model:timeout       0              1                0           1     2"
+    )

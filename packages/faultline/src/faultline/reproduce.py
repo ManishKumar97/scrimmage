@@ -19,6 +19,7 @@ is saved in its own directory:
     DIR/<task id>/<fault, filesystem-safe>/<n>/  a run under that fault
 
 Each holds `trace/` (the run's spans), `stdout.txt`, `stderr.txt` and `result.json`.
+At the end, the fault matrix is printed and written to DIR/matrix.json.
 
 Each run gets a verdict by the rules in `faultline.verdict`. A task's reference is
 its expected answer, else the answer of its first clean run that got past rule 1.
@@ -39,6 +40,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from faultline import matrix
 from faultline.faults import Fault, FaultError, parse_all
 from faultline.launch import (
     Outcome,
@@ -391,12 +393,14 @@ def test(args: argparse.Namespace) -> int:
     planned = plan(tasks, faults, args.clean_runs, args.runs, out)
     print(f"faultline test: {len(planned)} runs, saved in {out}", file=sys.stderr)
     references = References()
+    results: list[Result] = []
     for index, run in enumerate(planned, start=1):
         outcome = make(run, command, upstreams, args.max_content)
         references.learn(run, outcome)
         reference = references.of(run.task)
         verdict = verdict_of(outcome, reference, matcher)
         result = Result(run, outcome, verdict, reference)
+        results.append(result)
         (run.directory / "result.json").write_text(
             json.dumps(result_json(result), indent=2) + "\n", encoding="utf-8"
         )
@@ -410,5 +414,25 @@ def test(args: argparse.Namespace) -> int:
                 f"{len(planned)} runs",
                 file=sys.stderr,
             )
+            report(results, faults, out)
             return INTERRUPTED
+    report(results, faults, out)
     return 0
+
+
+def report(results: Sequence[Result], faults: Sequence[Fault], out: Path) -> None:
+    """Write DIR/matrix.json and print the matrix."""
+    marks = [
+        matrix.Mark(
+            result.planned.fault.spec if result.planned.fault else matrix.CLEAN,
+            result.verdict.verdict if isinstance(result.verdict, RunVerdict) else None,
+            str(result.planned.directory.relative_to(out)),
+        )
+        for result in results
+    ]
+    table = matrix.rows(marks, [fault.spec for fault in faults])
+    (out / "matrix.json").write_text(
+        json.dumps(matrix.to_json(table), indent=2) + "\n", encoding="utf-8"
+    )
+    print(matrix.show(table))
+    print(f"faultline test: runs and matrix.json in {out}", file=sys.stderr)
