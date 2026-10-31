@@ -37,17 +37,39 @@ class Report:
     def findings(self) -> tuple[Finding, ...]:
         return tuple(finding for result in self.runs for finding in result.findings)
 
-    def to_json(self) -> dict:
-        """The report as plain JSON values: lists of dicts, enum values as strings."""
+    def summary(self) -> dict:
+        """Counts for a dashboard. Every fault kind and every check has a key."""
         return {
+            "runs": len(self.runs),
+            "runs_with_faults": sum(1 for result in self.runs if result.faults),
+            "faults": {
+                kind.value: sum(f.kind == kind for f in self.faults)
+                for kind in FaultKind
+            },
+            "flagged": {
+                check.name: sum(
+                    f.check == check.name and f.flagged for f in self.findings
+                )
+                for check in CHECKS
+            },
+        }
+
+    def to_json(self) -> dict:
+        """The report as plain JSON values: lists of dicts, enum values as strings.
+        `version` changes when the shape does."""
+        return {
+            "version": 1,
+            "summary": self.summary(),
             "runs": [
                 {
                     "trace_id": result.run.trace_id,
                     "faults": [fault_json(fault) for fault in result.faults],
-                    "findings": [finding_json(f) for f in result.findings],
+                    "findings": [
+                        finding_json(f, result.run.trace_id) for f in result.findings
+                    ],
                 }
                 for result in self.runs
-            ]
+            ],
         }
 
 
@@ -63,9 +85,14 @@ def fault_json(fault: Fault) -> dict:
     }
 
 
-def finding_json(finding: Finding) -> dict:
+SCOPES = {check.name: check.scope for check in CHECKS}
+
+
+def finding_json(finding: Finding, trace_id: str) -> dict:
     return {
+        "trace_id": trace_id,
         "check": finding.check,
+        "scope": SCOPES[finding.check],
         "certainty": finding.certainty.value,
         "flagged": finding.flagged,
         "evidence": finding.evidence,
@@ -115,10 +142,10 @@ def show_kind(kind: FaultKind, report: Report) -> list[str]:
                 for f in r.findings
                 if f.check == check.name and f.fault and f.fault.kind == kind
             ]
-            unit = ""
+            unit, total = "", count
         elif check.scope == "faulted_run":  # one finding per run that had a fault
             judged = [f for r in hit for f in r.findings if f.check == check.name]
-            unit = " runs"
+            unit, total = " runs", len(hit)
         else:
             continue
         flagged = [f for f in judged if f.flagged]
@@ -127,7 +154,11 @@ def show_kind(kind: FaultKind, report: Report) -> list[str]:
             flagged_by_run.setdefault(finding.fault.trace_id, []).append(check.name)
         counted = f"flagged {len(flagged)} of {len(judged)}{unit}"
         note = certainty_note(check, len(flagged))
-        lines.append(f"  {check.name:<{WIDTH}}  {counted:<22}  {note}")
+        line = f"  {check.name:<{WIDTH}}  {counted:<22}  {note}"
+        # A fault the check could not place, or a run with no answer to read.
+        if total > len(judged):
+            line += f"; not judged: {total - len(judged)}"
+        lines.append(line)
     for trace_id, checks in flagged_by_run.items():
         lines.append(f"    {trace_id}  {', '.join(dict.fromkeys(checks))}")
     return lines
@@ -154,13 +185,12 @@ def show_across(report: Report) -> list[str]:
 
 
 def show_report(report: Report) -> str:
-    faulted = sum(1 for r in report.runs if r.faults)
-    flagged = sum(f.flagged for f in report.findings)
+    summary = report.summary()
     counts = [
-        plural(len(report.runs), "run"),
-        f"{faulted} with faults",
+        plural(summary["runs"], "run"),
+        f"{summary['runs_with_faults']} with faults",
         plural(len(report.faults), "fault"),
-        plural(flagged, "finding"),
+        f"{sum(summary['flagged'].values())} flagged",
     ]
     lines = ["Faultline find: " + ", ".join(counts)]
     kinds = [k for k in FaultKind if any(f.kind == k for f in report.faults)]

@@ -1,3 +1,4 @@
+import dataclasses
 import json
 from pathlib import Path
 
@@ -5,7 +6,7 @@ from spans import write_trace
 
 from faultline import cli
 from faultline.config import Config
-from faultline.find import find
+from faultline.find import find, show_report
 from faultline.runs import read_runs
 
 LOGS = {"name": "get_logs", "arguments": '{"service": "cart"}'}
@@ -45,7 +46,7 @@ def test_find_prints_each_fault_kind_and_how_the_agent_reacted(tmp_path, capsys)
     lines = report_lines(tmp_path, capsys)
 
     assert lines[1:] == [
-        "Faultline find: 3 runs, 2 with faults, 2 faults, 4 findings",
+        "Faultline find: 3 runs, 2 with faults, 2 faults, 4 flagged",
         "",
         "tool_error  1 fault in 1 run",
         "  no_retry           flagged 1 of 1          certain",
@@ -108,13 +109,68 @@ def test_to_json_holds_only_plain_values(tmp_path):
     assert type(a1["faults"][0]["kind"]) is str  # not the enum
     assert type(a1["faults"][0]["origin"]) is str
     first = a1["findings"][0]
-    assert set(first) == {"check", "certainty", "flagged", "evidence", "fault"}
+    assert set(first) == {
+        "trace_id",
+        "check",
+        "scope",
+        "certainty",
+        "flagged",
+        "evidence",
+        "fault",
+    }
+    assert (first["trace_id"], first["scope"]) == ("a1", "fault")
     assert type(first["certainty"]) is str
     assert first["fault"] == a1["faults"][0]
     [unsupported, repeated] = c3["findings"]
     assert unsupported["fault"] is None and repeated["check"] == "repeated_call"
+    assert (repeated["trace_id"], repeated["scope"]) == ("c3", "run")
     assert [f["check"] for f in b2["findings"]] == [
         "no_retry",
         "unsupported_value",
         "not_disclosed",
     ]
+
+
+def test_to_json_has_a_version_and_a_summary_with_every_key(tmp_path):
+    path = write_runs(tmp_path / "spans.jsonl")
+
+    data = find(read_runs(path).runs, Config()).to_json()
+
+    assert data["version"] == 1
+    assert data["summary"] == {
+        "runs": 3,
+        "runs_with_faults": 2,
+        "faults": {
+            "tool_error": 1,
+            "tool_timeout": 0,
+            "empty_result": 1,
+            "schema_mismatch": 0,
+            "model_error": 0,
+            "model_rate_limit": 0,
+            "model_token_limit": 0,
+        },
+        "flagged": {
+            "no_retry": 1,
+            "unsupported_value": 1,
+            "repeated_call": 1,
+            "not_disclosed": 1,
+        },
+    }
+
+
+def test_a_fault_or_run_a_check_could_not_judge_is_counted(tmp_path):
+    # A tool error with no answer: no_retry judges it, not_disclosed cannot.
+    path = write_trace(tmp_path / "spans.jsonl", {"calls": [FAILED]}, trace="d4")
+    report = find(read_runs(path).runs, Config())
+    [result] = report.runs
+    # And a fault no_retry cannot place: its call is not in the run.
+    lost = dataclasses.replace(result.faults[0], call_id="gone")
+    report = dataclasses.replace(
+        report, runs=(dataclasses.replace(result, faults=(*result.faults, lost)),)
+    )
+
+    lines = show_report(report).splitlines()
+
+    assert "  no_retry           flagged 1 of 1" in lines[3]
+    assert lines[3].endswith("certain; not judged: 1")
+    assert lines[4].endswith("heuristic; not judged: 1")
