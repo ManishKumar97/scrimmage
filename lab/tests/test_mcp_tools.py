@@ -222,6 +222,33 @@ def test_a_server_that_never_answers_fails_the_start(monkeypatch):
         raise AssertionError("the start did not time out")
 
 
+def test_the_caller_sets_the_start_timeout():
+    silent = StdioServerParameters(
+        command=sys.executable, args=["-c", "import time; time.sleep(60)"]
+    )
+
+    async def start():
+        async with mcp_client.mcp_tools(silent, Registry(), "logs MCP", None, 0.5):
+            pass
+
+    try:
+        asyncio.run(start())
+    except RuntimeError as exc:
+        assert "logs MCP server did not start within 0.5s" in str(exc)
+    else:
+        raise AssertionError("the start did not time out")
+
+
+def test_the_start_timeout_is_a_setting_with_room_for_a_loaded_machine(monkeypatch):
+    groq = {"provider": "groq", "groq_api_key": "g", "_env_file": None}
+    monkeypatch.delenv("MCP_START_TIMEOUT", raising=False)
+    assert Settings(**groq).mcp_start_timeout == 60  # pyright: ignore
+    assert mcp_client.START_TIMEOUT == 60
+
+    monkeypatch.setenv("MCP_START_TIMEOUT", "90")
+    assert Settings(**groq).mcp_start_timeout == 90  # pyright: ignore
+
+
 def test_the_server_gets_the_kube_config_path(monkeypatch):
     monkeypatch.setenv("KUBECONFIG", "/tmp/some-config")
     env_server = StdioServerParameters(

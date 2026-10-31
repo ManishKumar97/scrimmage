@@ -9,9 +9,11 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from mcp import Client
 from mcp.client.stdio import StdioServerParameters
 
+from faultline_lab.settings import Settings
 from faultline_lab.tools import Registry
 
-START_TIMEOUT = 15.0  # seconds to start the server and list its tools
+# Seconds to start a server and list its tools, when the caller gives none.
+START_TIMEOUT: float = Settings.model_fields["mcp_start_timeout"].default
 LOGS_SERVER = StdioServerParameters(
     command=sys.executable, args=["-m", "faultline_lab.mcp_logs"]
 )
@@ -39,6 +41,7 @@ async def mcp_tools(
     base: Registry,
     name: str = "MCP",
     call_timeout: float | None = None,
+    start_timeout: float | None = None,
 ) -> AsyncIterator[Registry]:
     """Start the server, add its tools to a copy of base, and stop it on every exit.
 
@@ -46,8 +49,10 @@ async def mcp_tools(
     block still closes the session and ends the process. An error from inside the
     block reaches the caller as itself, not wrapped in an ExceptionGroup.
     A tool call that takes over `call_timeout` seconds fails, and the SDK tells the
-    server it gave up on it.
+    server it gave up on it. A server that has not listed its tools after
+    `start_timeout` seconds (default START_TIMEOUT) fails the start.
     """
+    start_timeout = start_timeout or START_TIMEOUT
     registry = base.copy()
     # The SDK passes a child only a few variables. The kube client needs its config path.
     kube = {k: v for k, v in os.environ.items() if k.startswith("KUBE")}
@@ -55,12 +60,12 @@ async def mcp_tools(
     try:
         async with AsyncExitStack() as stack:
             try:
-                async with asyncio.timeout(START_TIMEOUT):
+                async with asyncio.timeout(start_timeout):
                     client = await stack.enter_async_context(Client(server))
                     listed = await client.list_tools()
             except TimeoutError:
                 raise RuntimeError(
-                    f"{name} server did not start within {START_TIMEOUT:g}s"
+                    f"{name} server did not start within {start_timeout:g}s"
                 ) from None
             for tool in listed.tools:
                 registry.remote(

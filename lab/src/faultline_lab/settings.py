@@ -37,6 +37,10 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("TOOL_TIMEOUT", "tool_timeout_seconds"),
     )
+    # Seconds an MCP server has to start and list its tools (env MCP_START_TIMEOUT).
+    # A server is a new Python process that imports the MCP SDK, which takes many
+    # seconds on a loaded machine.
+    mcp_start_timeout: float = 60.0
     # A command the MCP servers start under, such as a wrapper, as a JSON list.
     # Each server then runs as prefix + [python, -m, module].
     mcp_command_prefix: list[str] = []

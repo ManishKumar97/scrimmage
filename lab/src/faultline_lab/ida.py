@@ -270,13 +270,16 @@ async def diagnose_async(question: str, *, trace_file: Path | None = None) -> Ru
     tracing = Tracing(provider.get_tracer("faultline"))
     prefix, pass_env = settings.mcp_command_prefix, settings.mcp_pass_env
     timeout = settings.tool_timeout_seconds
+    start = settings.mcp_start_timeout
     logs = launched(LOGS_SERVER, prefix, pass_env)
     metrics = launched(METRICS_SERVER, prefix, pass_env)
     try:
         # The logs and metrics tools come from MCP servers. They live for this one run.
         async with (
-            mcp_tools(logs, kube_tools.registry, "logs MCP", timeout) as with_logs,
-            mcp_tools(metrics, with_logs, "metrics MCP", timeout) as tools,
+            mcp_tools(
+                logs, kube_tools.registry, "logs MCP", timeout, start
+            ) as with_logs,
+            mcp_tools(metrics, with_logs, "metrics MCP", timeout, start) as tools,
         ):
             return await run(question, model, tools=tools, tracing=tracing)
     finally:
