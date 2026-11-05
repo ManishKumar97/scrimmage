@@ -74,6 +74,6 @@ class FakeOpenAI:
                 self.wfile.write(reply)
 
             def log_message(self, format: str, *args: Any) -> None:
-                pass
+                del format, args  # keep test output quiet
 
         return Handler

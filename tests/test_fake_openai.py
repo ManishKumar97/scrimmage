@@ -5,10 +5,15 @@ from collections.abc import Callable
 
 import openai
 import pytest
+from openai.types.chat import (
+    ChatCompletionAssistantMessageParam,
+    ChatCompletionToolParam,
+    ChatCompletionUserMessageParam,
+)
 
 from fakes.openai_server import FakeOpenAI
 
-WEATHER_TOOL: openai.types.chat.ChatCompletionToolParam = {
+WEATHER_TOOL: ChatCompletionToolParam = {
     "type": "function",
     "function": {
         "name": "get_current_weather",
@@ -30,7 +35,10 @@ def test_chat_with_a_tool_call_then_an_answer(
 ) -> None:
     fake = fake_openai(["chat_tool_call", "chat_answer"])
     client = client_for(fake)
-    question = {"role": "user", "content": "What's the weather like in Boston today?"}
+    question: ChatCompletionUserMessageParam = {
+        "role": "user",
+        "content": "What's the weather like in Boston today?",
+    }
 
     first = client.chat.completions.create(
         model="gpt-4o-mini", messages=[question], tools=[WEATHER_TOOL]
@@ -41,11 +49,24 @@ def test_chat_with_a_tool_call_then_an_answer(
     assert call[0].function.name == "get_current_weather"
     assert json.loads(call[0].function.arguments) == {"location": "Boston, MA"}
 
+    asked: ChatCompletionAssistantMessageParam = {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": call[0].id,
+                "type": "function",
+                "function": {
+                    "name": call[0].function.name,
+                    "arguments": call[0].function.arguments,
+                },
+            }
+        ],
+    }
     second = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
             question,
-            first.choices[0].message.model_dump(exclude_none=True),  # type: ignore[arg-type]
+            asked,
             {"role": "tool", "tool_call_id": call[0].id, "content": "Sunny, 22 C"},
         ],
         tools=[WEATHER_TOOL],
