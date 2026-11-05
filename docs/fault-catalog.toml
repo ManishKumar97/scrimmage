@@ -1,0 +1,10 @@
+# Every fault Faultline can inject, and where it was seen.
+# A fault enters this file in the slice that builds it, never before.
+#
+# [[fault]]
+# name = "timeout"                 # the fault word a team writes in faultline.toml
+# origin = "public incident"       # "public incident" or "trace"
+# source = "https://..."           # the incident's public URL, or a description of
+#                                  # the trace with nothing private in it
+
+fault = []
