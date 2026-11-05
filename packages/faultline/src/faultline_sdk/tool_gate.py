@@ -128,7 +128,7 @@ def module_exists(name: str, extra: list[str]) -> bool:
 
 
 def targets(paths: Sequence[str]) -> dict[str, list[str]]:
-    """{"acme.tools": ["get_order", ...]} from ["acme.tools:get_order", ...]."""
+    """{"package.tools": ["name", ...]} from ["package.tools:name", ...]."""
     out: dict[str, list[str]] = {}
     for path in paths:
         module, _, name = path.partition(":")

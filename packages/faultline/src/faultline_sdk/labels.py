@@ -1,4 +1,4 @@
-"""Labels name a call, such as tool:get_order. This version knows only tool labels."""
+"""Labels name a call, as tool:<name>. This version knows only tool labels."""
 
 import re
 from dataclasses import dataclass
@@ -23,7 +23,7 @@ def parse(text: str, where: str, *, pattern: bool = False) -> Label:
     kind, sep, name = text.partition(":")
     if kind != "tool" or not sep or not name:
         raise ConfigError(
-            f"{where}: {text!r} is not a label such as 'tool:get_order'; see docs/configuration.md"
+            f"{where}: {text!r} is not a label of the form 'tool:<name>'; see docs/configuration.md"
         )
     if name == "*" and not pattern:
         raise ConfigError(f"{where}: 'tool:*' is allowed only under [agent] real")
@@ -33,6 +33,6 @@ def parse(text: str, where: str, *, pattern: bool = False) -> Label:
 
 
 def matches_real(real: list[str], label: str) -> bool:
-    """Whether a real entry, such as tool:get_order or tool:*, covers this label."""
+    """Whether a real entry, tool:<name> or tool:*, covers this label."""
     kind = label.partition(":")[0]
     return any(entry == label or entry == f"{kind}:*" for entry in real)

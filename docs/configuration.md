@@ -9,13 +9,13 @@ Anything this version does not support is rejected as unknown, with exit code 2.
 | Setting | What it does | Default |
 |---|---|---|
 | `function` | The agent, as `module:function`. Faultline calls it with the question and waits for it if it is async. Required. | none |
-| `tools` | The agent's own tools, as `module:function` import paths. Faultline swaps each one for a gate when your code imports its module. When the model sees a different name, write `{path = "acme.tools:lookup_order", name = "lookup-order"}`; labels use the name the model sees. | empty |
+| `tools` | The agent's own tools, as `module:function` import paths. Faultline swaps each one for a gate when your code imports its module. When the model sees a different name, write `{path = "package.tools:lookup_order", name = "lookup-order"}`; labels use the name the model sees. | empty |
 | `real` | Tool labels that are safe to run for real when a test does not mock them, such as `"tool:check_inventory"`, or `"tool:*"` for every tool. | empty |
 | `runs` | How many times each row runs. | 3 |
 | `parallel` | How many runs go at the same time. | 4 |
 | `run_timeout` | Seconds one run may take before it is stopped and marked "timed out". | 120 |
 
-Faultline imports only modules under your agent's own top-level packages, the ones `function` and `tools` name, such as `acme.`.
+Faultline imports only modules under your agent's own top-level packages, the ones `function` and `tools` name.
 
 ## [[test]]
 

@@ -148,7 +148,9 @@ def text(table: dict[str, object], key: str, where: str) -> str:
 
 def import_path(value: str, where: str) -> str:
     if not IMPORT_PATH.fullmatch(value):
-        raise ConfigError(f"{where}: {value!r} is not an import path such as 'acme.agent:answer'")
+        raise ConfigError(
+            f"{where}: {value!r} is not an import path of the form 'package.module:function'"
+        )
     return value
 
 
