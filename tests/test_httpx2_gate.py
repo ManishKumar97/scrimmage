@@ -191,6 +191,26 @@ def test_a_timeout_fault_on_the_async_path_is_httpx2s_own(gated: None) -> None:
         asyncio.run(go())
 
 
+@pytest.mark.design("budget.cancelled_reservation_given_back")
+def test_a_task_cancelled_while_it_reserves_gives_the_reservation_back(gated: None) -> None:
+    budget = Budget(limit=100.0, delay=0.2)
+    sink, _ = install(make_plan(budget=100.0), budget)
+
+    async def go() -> None:
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(answer)) as c:
+            task = asyncio.create_task(c.post(URL, json=BODY))
+            await asyncio.sleep(0.05)  # it is now waiting for the reservation
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            await asyncio.sleep(0.3)  # the thread gets its reservation with nobody to use it
+
+    asyncio.run(go())
+    assert sink.settles == [(1, 0.0)]
+    assert [str(x["error"]).split(":")[0] for x in sink.lines] == ["CancelledError"]
+    assert real_error(sink.lines[0]) is None  # cancelling is not the provider failing
+
+
 @pytest.mark.design("budget.unreachable_refuses")
 def test_an_unreachable_control_server_refuses_the_call(gated: None) -> None:
     dead = ControlClient("http://127.0.0.1:9", "t" * 64)

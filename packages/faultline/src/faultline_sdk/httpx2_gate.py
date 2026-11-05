@@ -161,8 +161,7 @@ def patch(module: ModuleType, ctx: Context) -> None:
         step, extra = prepared
         if step.decision.action == "fault":
             return fault(ctx, module, step, request, extra)
-        # The reservation is a request to the runner; wait for it without blocking the loop.
-        reservation = await asyncio.to_thread(reserve, ctx, step, request, extra)
+        reservation = await reserve_off_the_loop(ctx, step, request, extra)
         try:
             response = await async_send(self, request)
         except BaseException as exc:
@@ -364,6 +363,45 @@ def reserve(ctx: Context, step: Step, request: Any, extra: dict[str, object]) ->
             f"raise [agent] max_cost_usd above ${plan.budget_usd:g} if this is expected",
         )
     return reservation
+
+
+async def reserve_off_the_loop(
+    ctx: Context, step: Step, request: Any, extra: dict[str, object]
+) -> int | None:
+    """Reserve on a thread, so the loop keeps running while the runner answers.
+
+    If the task is cancelled meanwhile, the thread still gets its reservation, with nobody
+    left to use it. Whichever of the two finishes last gives it back.
+    """
+    lock = threading.Lock()
+    cancelled: list[bool] = []
+    held: list[int | None] = []
+
+    def work() -> int | None:
+        reservation = reserve(ctx, step, request, extra)
+        with lock:
+            held.append(reservation)
+            abandon = bool(cancelled)
+        if abandon:
+            abandoned(ctx, step, extra, reservation)
+        return reservation
+
+    try:
+        return await asyncio.to_thread(work)
+    except asyncio.CancelledError:
+        with lock:
+            cancelled.append(True)
+            done = list(held)
+        if done:
+            abandoned(ctx, step, extra, done[0])
+        raise
+
+
+def abandoned(ctx: Context, step: Step, extra: dict[str, object], reservation: int | None) -> None:
+    """The call was cancelled before it was sent, so it cost nothing."""
+    extra["cost_usd"] = 0.0
+    ctx.run.finish(step, error=asyncio.CancelledError("cancelled before it was sent"))
+    settle(ctx, reservation, 0.0)
 
 
 def off_host(ctx: Context, request: Any, response: Any) -> str | None:
