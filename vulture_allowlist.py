@@ -18,3 +18,5 @@ _.vanish  # tests/example/acme/slow.py: named by import path in a test's faultli
 _.echo  # tests/example/acme/slow.py: named by import path in a test's faultline.toml
 _.as_dict  # tests/starter_agents.py: named by import path in test_start.py
 _.as_async  # tests/starter_agents.py: named by import path in test_start.py
+_.pytest_sessionfinish  # tests/conftest.py: pytest calls hooks by name
+_.exitstatus  # tests/conftest.py: pytest reads it to set the exit code
