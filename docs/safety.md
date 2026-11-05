@@ -23,6 +23,21 @@ So the first refusal marks the whole run as refused: every later gated call fail
 
 If you have decided every tool is safe, write `real = ["tool:*"]`; the run table then says so in its header.
 
+## What a model request may do
+
+Model calls run for real, because they are what is being tested.
+Everything around them is checked:
+
+- A hosted MCP server can change data at the provider, where no gate can see it. A request that offers one is never sent unless you list it as `hosted:mcp/<label>` under `real`.
+- A tool of a type Faultline does not know stops the test, so a new provider feature costs a table update, never a safety gap.
+- A tool the model is offered that no gate sees could run for real unchecked, so the test stops before the second model call.
+- Any other POST to a model host, such as starting a fine-tuning job, is refused.
+
+## The budget
+
+A test has a budget, $5 unless you change it. When the runner cannot be reached to check it, the call is refused rather than sent.
+See [Failing the model, and keeping a budget](model-faults.md).
+
 ## A misspelled tool never runs ungated
 
 If `tools` names a function or a module that does not exist, the run stops as a mistake in the test.
@@ -43,5 +58,5 @@ A CI job that holds model API keys must not run `faultline test` on a pull reque
 
 ## Records
 
-Records stay on your machine, are readable only by you, and have known secret patterns removed.
+Records stay on your machine, are readable only by you, and have known secret patterns removed. Headers are never recorded, so your API key does not reach a record.
 The per-run `.log` file holds whatever your agent printed and is not cleaned, so keep it like any test log.

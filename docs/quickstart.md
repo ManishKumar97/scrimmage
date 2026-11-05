@@ -73,9 +73,10 @@ faultline test
 
 ```text
 faultline test: 1 test, 2 rows, 6 runs; records in faultline-runs/20261105T075653Z-e277a2
-test          row       fault                   runs  exercised  answered  crashed  timed out  refused call  infrastructure error
-order-status  baseline  -                       3     -          3         0        0          0             0
-order-status  fault 1   tool:get_order timeout  3     3          3         0        0          0             0
+test          row       fault                   runs  exercised  answered  crashed  timed out  refused call  budget reached  infrastructure error
+order-status  baseline  -                       3     -          3         0        0          0             0               0
+order-status  fault 1   tool:get_order timeout  3     3          3         0        0          0             0               0
+model calls cost $0.0003 of a budget of $5
 ```
 
 Faultline ran the test as two **rows**: a baseline with the mocks and no fault, and one row with the timeout.
@@ -87,6 +88,7 @@ In all three fault runs the timeout fired ("exercised"), and the bot still answe
 Each run has a record in `faultline-runs/`, one JSON object per line:
 
 ```json
+{"call": "model:openai", "action": "real", "model": "gpt-4o-mini", "status": 200, "cost_usd": 0.0000225, ...}
 {"call": "tool:get_order", "action": "fault", "fault": {"do": "timeout", "when": "always", "n": 1},
  "error": "TimeoutError: get_order timed out", ...}
 {"call": "tool:get_stock", "action": "mock", ...}
@@ -101,7 +103,7 @@ Judging answers against `expect` comes in a later version.
 | Code | Meaning |
 |---|---|
 | 0 | Every row produced a result |
-| 2 | A mistake in the test: a refused call, a fault that never fired, a mock that does not fit its type, a misspelled label |
-| 3 | An infrastructure error: a run whose record is incomplete, or a failure inside Faultline itself |
+| 2 | A mistake in the test: a refused call, a fault that never fired, a mock that does not fit its type, a misspelled label, a failed baseline, or a test the budget stopped |
+| 3 | An infrastructure error: a run whose record is incomplete, an error from the provider nobody injected, or a failure inside Faultline itself |
 
-Next: [Concepts](concepts.md).
+Next: [Failing the model, and keeping a budget](model-faults.md), or [Concepts](concepts.md).
