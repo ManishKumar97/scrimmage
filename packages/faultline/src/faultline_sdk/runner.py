@@ -150,7 +150,8 @@ class Runner:
             os.close(log)
         with self.lock:
             self.procs[run] = proc
-        if self.server.runs[run].refused:  # refused before the process was registered
+        # Refused, or the test was stopped, before this program was registered.
+        if self.server.runs[run].refused or self.cancelled:
             stop_group(proc)
         timed_out = False
         try:
@@ -362,7 +363,9 @@ def report(
     for test in config.tests:
         baseline = [r for r in results if r.row.test == test and r.row.fault is None]
         ran = [r for r in baseline if r.outcome != "stopped"]
-        if budget_on and ran and not any(r.model_calls for r in ran):
+        # A refused or broken run may never have reached a model call: that proves nothing.
+        ended = all(r.outcome in ("answered", "crashed", "timed out") for r in ran)
+        if budget_on and ran and ended and not any(r.model_calls for r in ran):
             mistakes.append(
                 f"{test.name}: no baseline run made a model call, so the budget is not working; "
                 "check for a cache in front of the model or a client Faultline does not gate"

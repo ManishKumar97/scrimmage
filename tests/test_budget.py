@@ -1,8 +1,11 @@
 """The budget: reservations before each call, real costs after it, one ledger per test."""
 
+import subprocess
 import threading
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -353,6 +356,43 @@ def test_the_no_model_call_check_is_per_test(project: Project, fake_openai: Fake
     assert result.code == 2
     assert "offline: no baseline run made a model call" in result.out
     assert "order-status: no baseline" not in result.out
+
+
+@pytest.mark.design("check.no_model_calls_only_when_it_means_something")
+def test_a_run_refused_before_its_first_model_call_says_nothing_about_the_budget(
+    project: Project,
+) -> None:
+    project.edit(
+        'function = "acme.agent:answer"', 'function = "acme.slow:refuse_then_hang"\nruns = 1'
+    )
+    project.edit(TOOL_FAULT, "")
+    result = project.test()
+    assert result.code == 2
+    assert "the budget is not working" not in result.out
+
+
+@pytest.mark.design("runner.stops_late_starters")
+def test_a_program_started_during_a_stop_is_stopped_too(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from faultline_sdk import config
+    from faultline_sdk.runner import Runner
+
+    project.edit('function = "acme.agent:answer"', 'function = "acme.slow:hang"\nruns = 1')
+    project.edit(TOOL_FAULT, "")
+    runner = Runner(config.load(project.toml))
+    real_popen = subprocess.Popen
+
+    def popen_then_cancel(*args: Any, **kwargs: Any) -> Any:
+        proc = real_popen(*args, **kwargs)
+        runner.cancelled = True  # the stop lands just after the program started
+        return proc
+
+    monkeypatch.setattr("faultline_sdk.runner.subprocess.Popen", popen_then_cancel)
+    started = time.monotonic()
+    results = runner.run_all()
+    assert time.monotonic() - started < 30  # not left hanging for run_timeout
+    assert [r.outcome for r in results] == ["stopped"]
 
 
 @pytest.mark.design("budget.overrun_visible")
