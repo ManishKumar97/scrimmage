@@ -1,0 +1,17 @@
+[project]
+name = "faultline"
+version = "0.0.0"
+description = "Fault injection for AI agents under test."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["faultline-marker"]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/faultline_sdk"]
+
+[tool.uv.sources]
+faultline-marker = { workspace = true }
