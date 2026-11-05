@@ -113,7 +113,7 @@
         },
         "call": {
           "type": "string",
-          "pattern": "^tool:[A-Za-z_][A-Za-z0-9_]*$"
+          "pattern": "^tool:[A-Za-z0-9_-]+$"
         },
         "kind": {
           "const": "tool"

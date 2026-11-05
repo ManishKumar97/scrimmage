@@ -1,8 +1,12 @@
 """Labels name a call, such as tool:get_order. This version knows only tool labels."""
 
+import re
 from dataclasses import dataclass
 
 from faultline_sdk.errors import ConfigError
+
+# The name the model sees. Providers allow hyphens, which a Python function cannot have.
+TOOL_NAME = re.compile(r"[A-Za-z0-9_-]+")
 
 
 @dataclass(frozen=True)
@@ -23,7 +27,7 @@ def parse(text: str, where: str, *, pattern: bool = False) -> Label:
         )
     if name == "*" and not pattern:
         raise ConfigError(f"{where}: 'tool:*' is allowed only under [agent] real")
-    if name != "*" and not name.isidentifier():
+    if name != "*" and not TOOL_NAME.fullmatch(name):
         raise ConfigError(f"{where}: {name!r} in {text!r} is not a tool name")
     return Label(kind, name)
 

@@ -55,6 +55,8 @@ class Agent:
     run_timeout: float
     tools: tuple[str, ...]
     real: tuple[str, ...]
+    # (import path, name the model sees), for a tool whose two names differ.
+    tool_names: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -64,7 +66,8 @@ class Config:
     root: Path
 
     def tool_names(self) -> list[str]:
-        return [path.rpartition(":")[2] for path in self.agent.tools]
+        renamed = dict(self.agent.tool_names)
+        return [renamed.get(path, path.rpartition(":")[2]) for path in self.agent.tools]
 
     def allowed_imports(self) -> list[str]:
         """Prefixes the agent's process may import from: function's and tools' packages."""
@@ -164,11 +167,15 @@ def read_agent(table: dict[str, object]) -> Agent:
     timeout = table.get("run_timeout", 120)
     if isinstance(timeout, bool) or not isinstance(timeout, int | float) or timeout <= 0:
         raise ConfigError(f"{where} run_timeout: expected a number of seconds, got {timeout!r}")
-    tools = [
-        import_path(str(t) if isinstance(t, str) else repr(t), f"{where} tools")
-        for t in as_list(table.get("tools", []), f"{where} tools")
-    ]
-    names = [t.rpartition(":")[2] for t in tools]
+    tools: list[str] = []
+    renamed: list[tuple[str, str]] = []
+    for entry in as_list(table.get("tools", []), f"{where} tools"):
+        path, name = read_tool(entry, f"{where} tools")
+        tools.append(path)
+        if name is not None:
+            renamed.append((path, name))
+    given = dict(renamed)
+    names = [given.get(t, t.rpartition(":")[2]) for t in tools]
     for name in names:
         if names.count(name) > 1:
             raise ConfigError(f"{where} tools: two tools are named {name!r}")
@@ -184,7 +191,20 @@ def read_agent(table: dict[str, object]) -> Agent:
         run_timeout=float(timeout),
         tools=tuple(tools),
         real=tuple(real),
+        tool_names=tuple(renamed),
     )
+
+
+def read_tool(entry: object, where: str) -> tuple[str, str | None]:
+    """A tools entry: an import path, or {path, name} when the model sees another name."""
+    if isinstance(entry, str):
+        return import_path(entry, where), None
+    table = as_table(entry, where)
+    check_keys(table, {"path", "name"}, where)
+    name = text(table, "name", where)
+    if not labels.TOOL_NAME.fullmatch(name):
+        raise ConfigError(f"{where} name: {name!r} is not a tool name")
+    return import_path(text(table, "path", where), where), name
 
 
 def read_test(table: dict[str, object], index: int) -> Test:

@@ -101,12 +101,19 @@
     "time_limit_s": {
       "type": "number",
       "exclusiveMinimum": 0
+    },
+    "tool_names": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]+$"
+      }
     }
   },
   "$defs": {
     "tool_label": {
       "type": "string",
-      "pattern": "^tool:[A-Za-z_][A-Za-z0-9_]*$"
+      "pattern": "^tool:[A-Za-z0-9_-]+$"
     },
     "import_path": {
       "type": "string",

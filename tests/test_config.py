@@ -102,6 +102,11 @@ def test_anything_this_version_does_not_support_is_rejected(
             "two tools",
         ),
         ('name     = "order-status"', "name = 3", "expected text"),
+        ('"acme.tools:get_stock"]', '{path = "acme.tools:get_stock"}]', "name: expected text"),
+        ('"acme.tools:get_stock"]', '{path = "a:b", name = "no spaces"}]', "is not a tool name"),
+        ('"acme.tools:get_stock"]', '{path = "a:b", name = "x", z = 1}]', "z: unknown setting"),
+        ('"acme.tools:get_stock"]', '{path = "a:b", name = "get_order"}]', "two tools"),
+        ('"acme.tools:get_stock"]', "3]", "expected a table"),
         ("[agent]\n", "[agent]\nruns = 0\n", "runs: expected a whole number"),
         (
             "[agent]\n",

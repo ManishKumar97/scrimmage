@@ -24,7 +24,7 @@ This version knows one kind of label:
 
 | Label | Means |
 |---|---|
-| `tool:<name>` | your agent's own Python tool with that name |
+| `tool:<name>` | your agent's own Python tool, by the name the model sees |
 | `tool:*` | every tool (only under `real`) |
 
 Model calls, web requests and MCP tools get their own labels in later versions.

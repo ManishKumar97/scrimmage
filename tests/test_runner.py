@@ -418,3 +418,15 @@ def test_the_table_says_how_runs_ended_before_the_fault_fired(project: Project) 
     assert (
         "note: order-status fault 1: not exercised, the fault did not fire: 2 crashed" in result.out
     )
+
+
+@pytest.mark.design("tools.model_name_differs")
+def test_a_tool_can_carry_the_name_the_model_sees(project: Project, fake_openai: Fake) -> None:
+    project.edit('"acme.tools:get_order"', '{path = "acme.tools:get_order", name = "lookup-order"}')
+    project.edit('call    = "tool:get_order"', 'call    = "tool:lookup-order"')
+    project.edit('call = "tool:get_order"', 'call = "tool:lookup-order"')
+    project.edit("[agent]\n", "[agent]\nruns = 1\n")
+    result = project.test(fake_openai(ACME))
+    assert result.code == 0, result.out + result.err
+    fault = next(lines for lines in result.records() if lines[-1]["row"] == "fault 1")
+    assert (fault[0]["call"], fault[0]["action"]) == ("tool:lookup-order", "fault")
