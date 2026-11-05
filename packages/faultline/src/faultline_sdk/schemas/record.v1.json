@@ -9,6 +9,9 @@
     },
     {
       "$ref": "#/$defs/summary"
+    },
+    {
+      "$ref": "#/$defs/notice"
     }
   ],
   "$defs": {
@@ -58,6 +61,12 @@
         "preview": {
           "type": "string",
           "maxLength": 200
+        },
+        "cut": {
+          "const": true
+        },
+        "unsaved": {
+          "const": true
         }
       }
     },
@@ -113,10 +122,14 @@
         },
         "call": {
           "type": "string",
-          "pattern": "^tool:[A-Za-z0-9_-]+$"
+          "pattern": "^(tool:[A-Za-z_][A-Za-z0-9_]*|model:[a-z*]+(/[a-z_]+)?|http:.+)$"
         },
         "kind": {
-          "const": "tool"
+          "enum": [
+            "tool",
+            "model",
+            "http"
+          ]
         },
         "action": {
           "enum": [
@@ -136,14 +149,12 @@
           ],
           "properties": {
             "do": {
-              "enum": [
-                "timeout"
-              ]
+              "type": "string",
+              "pattern": "^(timeout|status [45][0-9]{2})$"
             },
             "when": {
-              "enum": [
-                "always"
-              ]
+              "type": "string",
+              "pattern": "^(always|(first|requests) [1-9][0-9]*)$"
             },
             "n": {
               "type": "integer",
@@ -180,6 +191,75 @@
         "ms": {
           "type": "integer",
           "minimum": 0
+        },
+        "reason": {
+          "enum": [
+            "unlisted",
+            "poisoned",
+            "budget",
+            "no_price",
+            "hosted",
+            "unknown_tool_type",
+            "unseen_tool",
+            "model_host_write",
+            "control_unreachable"
+          ]
+        },
+        "provider": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "status": {
+          "type": "integer"
+        },
+        "retry": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stream": {
+          "type": "boolean"
+        },
+        "tokens": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "input",
+            "output"
+          ],
+          "properties": {
+            "input": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "output": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "cost_usd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cost_estimated": {
+          "type": "boolean"
+        },
+        "reply_incomplete": {
+          "const": true
+        },
+        "unseen_tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
@@ -207,7 +287,9 @@
             "outcome",
             "fault_fired",
             "calls",
-            "incomplete"
+            "incomplete",
+            "model_calls",
+            "cost_usd"
           ],
           "properties": {
             "answer": {
@@ -222,6 +304,7 @@
                 "crashed",
                 "timed out",
                 "refused call",
+                "budget reached",
                 "infrastructure error"
               ]
             },
@@ -261,8 +344,75 @@
             },
             "incomplete": {
               "type": "boolean"
+            },
+            "model_calls": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "cost_usd": {
+              "type": "number",
+              "minimum": 0
             }
           }
+        }
+      }
+    },
+    "notice": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/head"
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false,
+      "required": [
+        "seq",
+        "proc",
+        "notice",
+        "library",
+        "message"
+      ],
+      "properties": {
+        "v": true,
+        "run": true,
+        "test": true,
+        "row": true,
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "proc": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "host",
+            "pid",
+            "started"
+          ],
+          "properties": {
+            "host": {
+              "type": "string"
+            },
+            "pid": {
+              "type": "integer"
+            },
+            "started": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "notice": {
+          "enum": [
+            "structure",
+            "newer_version"
+          ]
+        },
+        "library": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
         }
       }
     }

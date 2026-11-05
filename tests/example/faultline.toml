@@ -2,6 +2,8 @@
 function = "acme.agent:answer"
 tools    = ["acme.tools:get_order", "acme.tools:check_inventory", "acme.tools:refund_order", "acme.tools:get_stock"]
 real     = ["tool:check_inventory"]
+# The fake model server in the tests, named the way a team names its gateway.
+model_hosts = [{host = "127.0.0.1", provider = "openai"}]
 
 [[test]]
 name     = "order-status"

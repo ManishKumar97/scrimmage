@@ -34,6 +34,8 @@ DESIGN_PLAN = {
     "tools": ["acme.tools:get_order", "acme.tools:check_inventory"],
     "real": ["tool:check_inventory"],
     "time_limit_s": 120,
+    "model_hosts": [],
+    "budget": {"limit_usd": 5.0, "reserve_output_tokens": 4096, "prices": {}},
 }
 DESIGN_LINE = {
     "v": 1,

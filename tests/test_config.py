@@ -58,11 +58,13 @@ def test_a_bad_value_names_its_table_and_key(tmp_path: Path) -> None:
     ("old", "new", "message"),
     [
         ('returns = "shipped, Oct 30"', 'returns = "${X}"', "placeholders are not read"),
-        ('do   = "timeout"', 'do   = "timeout"\nwhen = "first 2"', "'first 2' is not a schedule"),
-        ('do   = "timeout"', 'do   = "status 429"', "'status 429' is not a fault"),
-        ('call = "tool:get_order"\ndo', 'call = "model"\ndo', "'model' is not a label"),
-        ('call = "tool:get_order"\ndo', 'call = "model:x"\ndo', "'model:x' is not a label"),
-        ("[agent]\n", "[agent]\nmax_cost_usd = 1\n", "max_cost_usd: unknown setting; see docs"),
+        ('do   = "timeout"', 'do   = "timeout"\nwhen = "once"', "'once' is not a schedule"),
+        ('do   = "timeout"', 'do   = "slow 8s"', "'slow 8s' is not a fault"),
+        ('do   = "timeout"', 'do   = "status 429"', "works only on a model call"),
+        ('call = "tool:get_order"\ndo', 'call = "mcp:a/b"\ndo', "'mcp:a/b' is not a label"),
+        ('call = "tool:get_order"\ndo', 'call = "model:x"\ndo', "not a known provider"),
+        ('call = "tool:get_order"\ndo', 'call = "model:anthropic"\ndo', "not a known provider"),
+        ("[agent]\n", '[agent]\nanswer = "reply"\n', "answer: unknown setting; see docs"),
         ("[agent]\n", '[agent]\ncommand = "python bot.py"\n', "command: unknown setting"),
         ("[agent]\n", "[agent]\nrnus = 50\n", "rnus: unknown setting"),
         ('returns = "shipped, Oct 30"', 'returns_from = "acme.m:f"', "returns_from: unknown"),
@@ -159,3 +161,124 @@ def test_allowed_imports_are_the_agents_own_packages(tmp_path: Path) -> None:
 def test_a_date_in_a_mock_is_rejected_because_a_plan_cannot_carry_it(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="a datetime cannot be sent to the agent"):
         example(tmp_path, 'returns = "shipped, Oct 30"', "returns = 1979-05-27T07:32:00Z")
+
+
+def model_fault(do: str = "timeout", when: str = "always", call: str = "model") -> str:
+    return f'[[test.fault]]\ncall = "{call}"\ndo   = "{do}"\nwhen = "{when}"\n'
+
+
+FAULT = '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'
+
+
+@pytest.mark.design("config.model_settings")
+def test_the_model_settings_and_their_defaults(tmp_path: Path) -> None:
+    agent = example(
+        tmp_path, "[agent]\n", "[agent]\nmax_cost_usd = 2.5\nreserve_output_tokens = 100\n"
+    ).agent
+    assert (agent.max_cost_usd, agent.reserve_output_tokens) == (2.5, 100)
+    (tmp_path / "again").mkdir()
+    default = example(tmp_path / "again").agent
+    assert (default.max_cost_usd, default.reserve_output_tokens) == (5.0, 4096)
+
+
+@pytest.mark.design("config.budget_off")
+def test_the_budget_turns_off_on_purpose(tmp_path: Path) -> None:
+    assert (
+        example(tmp_path, "[agent]\n", '[agent]\nmax_cost_usd = "none"\n').agent.max_cost_usd
+        is None
+    )
+
+
+def test_prices_and_model_hosts_are_read(tmp_path: Path) -> None:
+    text = (
+        (EXAMPLE / "faultline.toml")
+        .read_text()
+        .replace(
+            "[[test]]\n",
+            "[agent.prices]\nacme-llama = {input = 0.6, output = 0.7}\n\n[[test]]\n",
+            1,
+        )
+    )
+    agent = load_text(tmp_path, text).agent
+    assert agent.prices == ((("acme-llama", config.Price(0.6, 0.7))),)
+    assert agent.model_hosts == (config.ModelHost("127.0.0.1", "openai"),)
+
+
+@pytest.mark.design("config.schedules")
+@pytest.mark.parametrize(
+    ("do", "when", "call"),
+    [
+        ("status 429", "first 3", "model"),
+        ("status 429", "requests 1", "model"),
+        ("timeout", "always", "model:openai"),
+        ("status 500", "always", "model:openai/embeddings"),
+        ("status 503", "always", "model:*/embeddings"),
+    ],
+)
+def test_model_faults_and_schedules_are_read(tmp_path: Path, do: str, when: str, call: str) -> None:
+    fault = example(tmp_path, FAULT, model_fault(do, when, call)).tests[0].faults[0]
+    assert (fault.call, fault.do, fault.when) == (call, do, when)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        (FAULT, model_fault("status 200"), "not an error status"),
+        (FAULT, model_fault("status 429", "first 0"), "not a schedule"),
+        (FAULT, model_fault("timeout", "requests 1", "tool:get_order"), "use 'first N' for a tool"),
+        (FAULT, model_fault("timeout", "always", "model:acme"), "not a known provider"),
+        (FAULT, model_fault("timeout", "always", "model:*"), "write 'model' for every provider"),
+        (FAULT, model_fault("timeout", "always", "model:"), "is not of the form"),
+        (FAULT, model_fault("timeout", "always", "hosted:mcp/orders"), "only under"),
+        ("[agent]\n", "[agent]\nmax_cost_usd = 0\n", "expected dollars above 0"),
+        ("[agent]\n", '[agent]\nmax_cost_usd = "lots"\n', "expected dollars above 0"),
+        ("[agent]\n", "[agent]\nmax_cost_usd = true\n", "expected dollars above 0"),
+        (
+            'model_hosts = [{host = "127.0.0.1", provider = "openai"}]',
+            'model_hosts = [{host = "x"}]',
+            "provider: expected text",
+        ),
+        (
+            'model_hosts = [{host = "127.0.0.1", provider = "openai"}]',
+            'model_hosts = [{host = "x", provider = "acme"}]',
+            "not a known provider",
+        ),
+        (
+            'model_hosts = [{host = "127.0.0.1", provider = "openai"}]',
+            'model_hosts = [{host = "x", provider = "openai", port = 1}]',
+            "port: unknown setting",
+        ),
+        (
+            'real     = ["tool:check_inventory"]',
+            'real = ["hosted:orders"]',
+            "is not of the form",
+        ),
+    ],
+)
+def test_bad_model_settings_are_rejected(tmp_path: Path, old: str, new: str, message: str) -> None:
+    with pytest.raises(ConfigError, match=message):
+        example(tmp_path, old, new)
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
+        'acme = {input = "x", output = 1}',
+        "acme = {input = 1}",
+        "acme = {input = -1, output = 1}",
+        "acme = {input = 1, output = 1, cached = 1}",
+    ],
+)
+def test_bad_prices_are_rejected(tmp_path: Path, table: str) -> None:
+    text = (
+        (EXAMPLE / "faultline.toml")
+        .read_text()
+        .replace("[[test]]\n", f"[agent.prices]\n{table}\n\n[[test]]\n", 1)
+    )
+    with pytest.raises(ConfigError, match=r"\[agent\]\.prices acme"):
+        load_text(tmp_path, text)
+
+
+def test_a_model_call_cannot_be_mocked(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="model cannot be mocked"):
+        example(tmp_path, 'call    = "tool:get_order"', 'call = "model"')

@@ -14,7 +14,9 @@
     "faults",
     "tools",
     "real",
-    "time_limit_s"
+    "time_limit_s",
+    "model_hosts",
+    "budget"
   ],
   "properties": {
     "v": {
@@ -64,17 +66,15 @@
         ],
         "properties": {
           "call": {
-            "$ref": "#/$defs/tool_label"
+            "$ref": "#/$defs/call_label"
           },
           "do": {
-            "enum": [
-              "timeout"
-            ]
+            "type": "string",
+            "pattern": "^(timeout|status [45][0-9]{2})$"
           },
           "when": {
-            "enum": [
-              "always"
-            ]
+            "type": "string",
+            "pattern": "^(always|(first|requests) [1-9][0-9]*)$"
           }
         }
       }
@@ -94,6 +94,10 @@
           },
           {
             "const": "tool:*"
+          },
+          {
+            "type": "string",
+            "pattern": "^hosted:mcp/[A-Za-z0-9_.-]+$"
           }
         ]
       }
@@ -108,6 +112,71 @@
         "type": "string",
         "pattern": "^[A-Za-z0-9_-]+$"
       }
+    },
+    "model_hosts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "host",
+          "provider"
+        ],
+        "properties": {
+          "host": {
+            "type": "string",
+            "minLength": 1
+          },
+          "provider": {
+            "enum": [
+              "openai"
+            ]
+          }
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "limit_usd",
+        "reserve_output_tokens",
+        "prices"
+      ],
+      "properties": {
+        "limit_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "reserve_output_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "prices": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "input",
+              "output"
+            ],
+            "properties": {
+              "input": {
+                "type": "number",
+                "minimum": 0
+              },
+              "output": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -118,6 +187,20 @@
     "import_path": {
       "type": "string",
       "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "model_label": {
+      "type": "string",
+      "pattern": "^model(:(openai|\\*)(/embeddings)?)?$"
+    },
+    "call_label": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/tool_label"
+        },
+        {
+          "$ref": "#/$defs/model_label"
+        }
+      ]
     }
   }
 }
