@@ -90,14 +90,16 @@ class Sender:
     from a complete one.
     """
 
-    def __init__(self, client: ControlClient, run: str) -> None:
+    def __init__(self, client: ControlClient, run: str, proc: object = None) -> None:
         self.client = client
         self.run = run
+        self.proc = proc  # this process, as its record lines name it
         self.queue: queue.Queue[dict[str, object]] = queue.Queue(QUEUE_SIZE)
         self.made = 0  # lines handed to put, dropped ones included
         self.dropped = 0
         self.unsent: list[dict[str, object]] = []
-        self._lock = threading.Lock()  # one batch in flight at a time
+        self._counts = threading.Lock()  # made and dropped; never held over the network
+        self._sending = threading.Lock()  # one batch in flight at a time
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name="faultline-sender", daemon=True)
 
@@ -105,8 +107,11 @@ class Sender:
         self._thread.start()
 
     def put(self, line: dict[str, object], *, keep: bool = False) -> None:
-        """Queue a line. keep: wait for room instead of dropping (refusals)."""
-        with self._lock:
+        """Queue a line. keep: wait for room instead of dropping (refusals).
+
+        Never waits for the network: a gate only takes a short lock to count the line.
+        """
+        with self._counts:
             self.made += 1
         if keep:
             self.queue.put(line)
@@ -114,7 +119,7 @@ class Sender:
         try:
             self.queue.put_nowait(line)
         except queue.Full:
-            with self._lock:
+            with self._counts:
                 self.dropped += 1
 
     def flush(self) -> None:
@@ -147,17 +152,20 @@ class Sender:
                     lines.append(self.queue.get_nowait())
             except queue.Empty:
                 break
-        with self._lock:
+        with self._sending:
             lines = self.unsent + lines
-            if len(lines) > QUEUE_SIZE:  # the server has been away a long time
-                self.dropped += len(lines) - QUEUE_SIZE
-                lines = lines[:QUEUE_SIZE]
-            dropped, self.dropped = self.dropped, 0
+            with self._counts:
+                if len(lines) > QUEUE_SIZE:  # the server has been away a long time
+                    self.dropped += len(lines) - QUEUE_SIZE
+                    lines = lines[:QUEUE_SIZE]
+                dropped, self.dropped = self.dropped, 0
+                made = self.made
             if not lines and not dropped and not final:
                 return False
             batch: dict[str, object] = {"run": self.run, "lines": lines, "dropped": dropped}
             if final:
-                batch["made"] = self.made
+                batch["made"] = made
+                batch["proc"] = self.proc
             try:
                 status, _ = self.client.request("POST", "/v1/records", batch)
             except ControlError:
@@ -166,5 +174,6 @@ class Sender:
                 self.unsent = []
                 return True
             self.unsent = lines
-            self.dropped += dropped
+            with self._counts:
+                self.dropped += dropped
             return False

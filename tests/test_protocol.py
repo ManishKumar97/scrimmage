@@ -13,7 +13,7 @@ import pytest
 
 from faultline_sdk import protocol
 from faultline_sdk.client import ControlClient, ControlError, Sender
-from faultline_sdk.control import ControlServer
+from faultline_sdk.control import ControlServer, proc_key
 from faultline_sdk.records import RecordStore
 
 TOKEN = "a" * 64
@@ -225,7 +225,8 @@ def test_the_sender_sends_every_line_and_reports_drops(server: ControlServer) ->
         sender.put(line(seq), keep=seq == 1)
     sender.flush()
     assert len(server.store.lines("run-1")) == 1200 and sender.unsent == []
-    assert server.runs["run-1"].made == 1200  # the closing batch says how many lines it made
+    # the closing batch says how many lines this process made
+    assert server.runs["run-1"].made == {proc_key(None): 1200}
     full = Sender(ControlClient(server.url, TOKEN), "run-1")
     full.queue.maxsize = 1
     full.put(line(5000))
@@ -242,7 +243,8 @@ def test_a_batch_that_fails_is_sent_again(server: ControlServer) -> None:
     assert sender.unsent == [line(1)]
     sender.client = ControlClient(server.url, TOKEN)
     sender.flush()
-    assert server.store.lines("run-1") == [line(1)] and server.runs["run-1"].made == 1
+    assert server.store.lines("run-1") == [line(1)]
+    assert server.runs["run-1"].made == {proc_key(None): 1}
 
 
 def test_a_server_away_for_long_keeps_a_bounded_backlog(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -284,6 +286,10 @@ def test_a_refused_line_tells_the_runner_once(tmp_path: Path) -> None:
                 "/v1/records",
                 {"run": "run-1", "lines": [{**line(seq), "action": "refused"}]},
             )
+        for _ in range(50):  # the runner is told on a thread of its own
+            if told:
+                break
+            time.sleep(0.05)
         assert told == ["run-1"]
     finally:
         control.stop()
@@ -334,3 +340,36 @@ def test_a_plan_that_cannot_be_sent_fails_when_the_run_opens(server: ControlServ
 
     with pytest.raises(TypeError):
         server.open_run("run-2", "baseline", {"v": 1, "when": datetime.date(2026, 1, 1)})
+
+
+def test_a_negative_made_count_is_refused(server: ControlServer) -> None:
+    client = ControlClient(server.url, TOKEN)
+    status, reply = client.request("POST", "/v1/records", {"run": "run-1", "lines": [], "made": -1})
+    assert (status, reply["error"]) == (400, "bad_batch")
+
+
+@pytest.mark.design("record.gate_never_waits")
+def test_queueing_a_line_never_waits_for_a_batch_in_flight() -> None:
+    class Slow(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            time.sleep(2)
+            self.send_response(500)
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    slow = ThreadingHTTPServer(("127.0.0.1", 0), Slow)
+    threading.Thread(target=slow.serve_forever, daemon=True).start()
+    try:
+        sender = Sender(ControlClient(f"http://127.0.0.1:{slow.server_address[1]}", TOKEN), "run-1")
+        sender.start()
+        sender.put(line(1))
+        time.sleep(0.5)  # the first batch is now waiting on the slow server
+        started = time.monotonic()
+        sender.put(line(2))
+        assert time.monotonic() - started < 0.1
+    finally:
+        slow.shutdown()
+        slow.server_close()

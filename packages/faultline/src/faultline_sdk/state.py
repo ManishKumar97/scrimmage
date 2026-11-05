@@ -4,6 +4,7 @@ A function or a script is one run per process, so the plan lives in one slot sha
 the whole process.
 """
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -103,6 +104,10 @@ class RunState:
             f'Mock it in the test, or add "{step.call.label}" to real if it is safe '
             "to run for real."
         )
+
+    def drop_faults(self) -> None:
+        self.plan = dataclasses.replace(self.plan, faults=())
+        self.counts = []
 
     def listed_tool_missing(self, name: str, message: str) -> None:
         """A tool under [agent] tools that does not exist: a mistake that ends the run.

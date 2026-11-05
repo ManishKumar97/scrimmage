@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -21,7 +22,7 @@ from typing import TextIO
 
 from faultline_sdk import plan as planner
 from faultline_sdk.config import Config
-from faultline_sdk.control import ControlServer
+from faultline_sdk.control import ControlServer, proc_key
 from faultline_sdk.mocks import allowed
 from faultline_sdk.records import RecordStore
 from faultline_sdk.redact import redact
@@ -99,6 +100,7 @@ class Runner:
 
     def env(self, run: str) -> dict[str, str]:
         env = dict(os.environ)
+        env.pop("FAULTLINE_ROOT_PID", None)  # faultline-run sets it for this run's program
         env.update(
             FAULTLINE_TOKEN=self.token,
             FAULTLINE_CONTROL_URL=self.control_url(self.server.url),
@@ -154,12 +156,12 @@ class Runner:
         answer_file = self.answers / f"{run}.txt"
         answer = answer_file.read_text() if answer_file.exists() else None
         ended_itself = not timed_out and not state.refused
-        # A program that ended by itself sent a last batch saying how many lines it made;
-        # a missing batch or a gap means the record is incomplete.
-        received = len(lines) + state.dropped
-        incomplete = bool(state.dropped) or (
-            ended_itself and (state.made is None or received < state.made)
-        )
+        # Every process that ended by itself sent a last batch saying how many lines it
+        # made. A missing batch, or fewer lines received from a process, is a gap.
+        per_proc = Counter(proc_key(line.get("proc")) for line in lines)
+        gap = any(per_proc[proc] < made for proc, made in state.made.items())
+        unfinished = not state.made or any(proc not in state.made for proc in per_proc)
+        incomplete = bool(state.dropped) or (ended_itself and (gap or unfinished))
         if not state.fetched or incomplete:
             outcome = "infrastructure error"
         elif state.refused:

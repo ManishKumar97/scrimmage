@@ -331,3 +331,29 @@ def test_errors_and_mistakes_are_redacted(lines: Lines) -> None:
     assert "sk-proj" not in str(lines.lines[0]["error"]) and "[secret removed]" in str(
         lines.lines[0]["error"]
     )
+
+
+@pytest.mark.design("boot.fork_no_faults")
+def test_a_forked_child_fires_no_faults(lines: Lines) -> None:
+    import os
+
+    run = install(
+        lines,
+        [Mock("tool:get_text", "mocked", None)],
+        [Fault("tool:get_text", "timeout", "always")],
+    )
+    os.register_at_fork(after_in_child=run.drop_faults)
+    read, write = os.pipe()
+    pid = os.fork()
+    if pid == 0:  # the child
+        try:
+            result = tool_gate.gate(get_text, "get_text")("1")
+        except BaseException as exc:
+            result = type(exc).__name__
+        os.write(write, str(result).encode())
+        os._exit(0)
+    os.close(write)
+    os.waitpid(pid, 0)
+    assert os.read(read, 100) == b"mocked"
+    with pytest.raises(TimeoutError):  # the parent still fires the fault
+        tool_gate.gate(get_text, "get_text")("1")

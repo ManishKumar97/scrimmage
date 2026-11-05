@@ -9,7 +9,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socket import socket
 from typing import Any
@@ -32,7 +32,8 @@ class Run:
     fetched: bool = False
     refused: bool = False
     dropped: int = 0
-    made: int | None = None  # lines the program said it made, from its last batch
+    # Lines each process said it made, from its last batch, keyed like proc_key.
+    made: dict[str, int] = field(default_factory=dict[str, int])
 
 
 class ControlServer:
@@ -109,6 +110,8 @@ class ControlServer:
             lines = [obj(line) for line in items(batch, "lines")]
             dropped = max(0, int(str(batch.get("dropped", 0))))
             made = None if batch.get("made") is None else int(str(batch["made"]))
+            if made is not None and made < 0:
+                raise ValueError("made is negative")
         except (ValueError, KeyError, TypeError):
             return 400, {"error": "bad_batch"}
         mine = [line for line in lines if line.get("run") == run]
@@ -118,13 +121,18 @@ class ControlServer:
                 return 409, {"error": "run_closed"}
             state.dropped += dropped
             if made is not None:
-                state.made = made
+                state.made[proc_key(batch.get("proc"))] = made
             accepted = self.store.add(run, mine)
             first = not state.refused and any(line.get("action") == "refused" for line in mine)
             state.refused = state.refused or first
-        if first:
-            self.on_refused(run)
+        if first:  # stop the program off this thread, so the reply is not held up
+            threading.Thread(target=self.on_refused, args=(run,), daemon=True).start()
         return 200, {"accepted": accepted}
+
+
+def proc_key(proc: object) -> str:
+    """One process, as record lines name it: host, pid and start time."""
+    return json.dumps(proc, sort_keys=True)
 
 
 class _Server(ThreadingHTTPServer):

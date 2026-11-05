@@ -48,10 +48,13 @@ def start() -> None:
         if not allowed(path, prefixes):
             stop(f"{path} is outside FAULTLINE_ALLOW_IMPORTS ({','.join(prefixes) or 'empty'})")
     sender = Sender(client, run)
+    run_state = state.RunState(plan, sender, prefixes)
+    sender.proc = run_state.proc
     sender.start()
     atexit.register(sender.flush)
-    run_state = state.RunState(plan, sender, prefixes)
     state.install(run_state)
+    # A forked child is a child too: it keeps the mocks and the safety rules, no faults.
+    os.register_at_fork(after_in_child=run_state.drop_faults)
     for module, names in tool_gate.targets(plan.tools).items():
         if not tool_gate.module_exists(module, [os.getcwd()]):
             message = f"{module} is listed under [agent] tools but cannot be found"

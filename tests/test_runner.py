@@ -330,3 +330,33 @@ def test_a_run_that_dropped_lines_is_an_infrastructure_error(
     result = project.test(fake_openai(ACME))
     assert result.code == 3
     assert {s["outcome"] for s in result.summaries()} == {"infrastructure error"}
+
+
+@pytest.mark.design("record.gap_per_process")
+def test_a_process_that_made_more_lines_than_arrived_is_an_infrastructure_error(
+    project: Project, fake_openai: Fake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from faultline_sdk.control import ControlServer
+
+    original = ControlServer.close_run
+
+    def one_line_missing(self: ControlServer, run: str):  # type: ignore[no-untyped-def]
+        state = original(self, run)
+        for proc in state.made:
+            state.made[proc] += 1  # as if one line from this process never arrived
+        return state
+
+    monkeypatch.setattr(ControlServer, "close_run", one_line_missing)
+    project.edit("[agent]\n", "[agent]\nruns = 1\n")
+    result = project.test(fake_openai(ACME))
+    assert result.code == 3
+    assert {s["incomplete"] for s in result.summaries()} == {True}
+
+
+def test_a_stale_root_pid_in_the_runners_environment_is_ignored(
+    project: Project, fake_openai: Fake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAULTLINE_ROOT_PID", "1")
+    project.edit("[agent]\n", "[agent]\nruns = 1\n")
+    result = project.test(fake_openai(ACME))
+    assert result.code == 0 and "  1     1  " in result.out  # the fault row was exercised
