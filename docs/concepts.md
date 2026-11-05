@@ -77,6 +77,7 @@ The last line is the run's summary: the answer, how the run ended, whether its f
 | timed out | the run passed `run_timeout` and was stopped |
 | refused call | the agent made a call the test does not allow |
 | budget reached | the budget could not cover a model call, so the test stopped |
-| infrastructure error | the record is incomplete, the agent's program never got its plan, or the provider returned an error nobody injected |
+| infrastructure error | the record is incomplete, the agent's program never got its plan, or a model call failed by itself with nobody injecting it |
+| stopped | another run stopped the whole test while this one was going, so it says nothing about this run |
 
 Records can hold secrets and customer data, so they are readable only by you, and known secret patterns such as API keys are removed.

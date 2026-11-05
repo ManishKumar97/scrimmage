@@ -1,7 +1,7 @@
 # Limits of this version
 
 - **One agent shape.** The agent must be a Python function. Scripts and web services come later.
-- **Tools and OpenAI model calls.** Faultline gates the tools you list under `tools`, and model calls the openai library sends. Other web requests and MCP tools pass untouched and are not recorded yet.
+- **Tools and OpenAI model calls.** Faultline gates the tools you list under `tools`, and model calls the openai library sends. Other web requests, writes included, and MCP tools pass untouched and are not recorded yet. See [Safety](safety.md).
 - **One provider.** OpenAI's Chat Completions, Responses and embeddings, and gateways that speak the same format. Other providers come later.
 - **One HTTP library.** The gate sits in httpx2, which current openai versions use. Older openai versions, which use httpx, are not gated yet; with a budget on, the test then fails because no model call was seen.
 - **A few faults.** `timeout`, and `status N` on model calls. Faults that change the model's reply come later.

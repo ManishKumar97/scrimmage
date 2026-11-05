@@ -73,9 +73,9 @@ faultline test
 
 ```text
 faultline test: 1 test, 2 rows, 6 runs; records in faultline-runs/20261105T075653Z-e277a2
-test          row       fault                   runs  exercised  answered  crashed  timed out  refused call  budget reached  infrastructure error
-order-status  baseline  -                       3     -          3         0        0          0             0               0
-order-status  fault 1   tool:get_order timeout  3     3          3         0        0          0             0               0
+test          row       fault                   runs  exercised  answered  crashed  timed out  refused call  budget reached  infrastructure error  stopped
+order-status  baseline  -                       3     -          3         0        0          0             0               0                     0
+order-status  fault 1   tool:get_order timeout  3     3          3         0        0          0             0               0                     0
 model calls cost $0.0003 of a budget of $5
 ```
 

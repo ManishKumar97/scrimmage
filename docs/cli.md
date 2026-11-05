@@ -17,7 +17,7 @@ It prints one table row per test row and what the model calls cost, writes each 
 |---|---|
 | 0 | Every row produced a result (answered, crashed and timed out are results) |
 | 2 | A mistake in the test, a failed baseline, or a test the budget stopped |
-| 3 | An infrastructure error, such as an error from the provider that nobody injected |
+| 3 | An infrastructure error, such as a model call that failed with nobody injecting it, or a library version Faultline cannot gate |
 
 Each run's own output, everything your agent printed, is in `faultline-runs/<time>/<run>.log`.
 

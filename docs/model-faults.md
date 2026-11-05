@@ -104,8 +104,8 @@ acme-llama-70b = {input = 0.6, output = 0.6}
 With a budget on, a model with no price stops the test at its first call, because it cannot be reserved for.
 With `max_cost_usd = "none"`, no price is needed, and tokens are still counted.
 
-When a reply carries no token counts, Faultline estimates the cost from the size of the request and the reply, and the record marks it `cost_estimated`.
-OpenAI's streamed replies carry counts only if your request sets `stream_options.include_usage`; Faultline does not add it, because that would change what your agent receives.
+A reply without usable token counts gets a rough cost, worked out from how many bytes went each way, and its record line has `cost_estimated` set.
+On Chat Completions a stream only carries counts if your request sets `stream_options.include_usage`. Faultline leaves your request as it is, so without that setting those costs are rough ones. The Responses API always sends counts in its last event.
 
 ## Use a gateway
 
@@ -118,16 +118,20 @@ model_hosts = [{host = "llm-gateway.acme.internal", provider = "openai"}]
 
 ## Tools the model is offered
 
-Every model request lists the tools the model may call, and Faultline reads that list.
+Faultline reads the tools in each model request before it goes out.
 
 | The request offers | What happens |
 |---|---|
-| a tool Faultline can see, or a provider tool that only reads, such as `web_search` | it goes ahead |
-| a hosted MCP server, which runs at the provider and can change data | the request is never sent, unless you list it: `real = ["hosted:mcp/orders"]` |
+| a tool Faultline can see | it goes ahead |
+| a provider tool that only reads, such as `web_search` | it goes ahead, the record notes it, and the table warns, because providers bill those per use and the budget cannot see that |
+| a hosted MCP server, which runs at the provider and can change data | the request is not sent unless you list it: `real = ["hosted:mcp/orders"]` |
 | a tool of a type Faultline does not know | the test stops and names the type |
-| your own tool, but no gate sees it | the test stops before the second model call, and names the tool to add under `tools` |
+| your own tool, but no gate sees it | the request is not sent and the test stops, naming the line to add under `tools` |
+
+A request body Faultline cannot read, such as a compressed one, is refused, because its tools cannot be checked.
 
 ## Calls that create something at the provider
 
-Only chat, responses and embedding calls count as model calls.
-Any other POST to a model host, such as starting a fine-tuning job, is refused, because it may create something that outlives the test or costs money the budget never sees.
+Chat and Responses calls are model calls. Embeddings, moderations and input-token counts only read or compute, so they run for real under their own labels, such as `model:openai/moderations`; the last two cost no tokens and need no price.
+
+Any other write to a model host, such as starting a fine-tuning job, is refused: it could leave a job or a file behind that nothing cleans up, at a cost the budget cannot see. Reads go through.

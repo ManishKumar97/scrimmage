@@ -33,7 +33,9 @@ The gate sits below the library's retries, so everything above it behaves as it 
 4. Otherwise it reserves the call's cost from the budget, which the runner keeps for the whole test, and sends the request.
 5. The reply passes through unchanged, while the gate reads its token counts as it goes by. When it ends, the real cost replaces the reservation and the call is recorded.
 
-Before swapping, the gate checks that the function exists and takes the arguments it expects. If a new version of the library changed it, the gate drops its faults, keeps refusing writes, and the test fails naming the library. A newer version that passes the check only gets a warning.
+Every hop of a redirect goes through the same function, so each is decided and budgeted by itself.
+
+Before swapping, the gate checks that the function exists and takes the arguments it expects. If a new version of the library changed it, nothing could be gated, so the program stops and the test ends at once with exit code 3, naming the library. If only what faults are built from has changed, the gate keeps refusing and budgeting without faults, and the test still fails. A newer version that passes the check only gets a warning.
 
 ## The plan and the secret
 

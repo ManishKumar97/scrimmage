@@ -15,7 +15,7 @@ Anything this version does not support is rejected as unknown, with exit code 2.
 | `parallel` | How many runs go at the same time. | 4 |
 | `run_timeout` | Seconds one run may take before it is stopped and marked "timed out". | 120 |
 | `max_cost_usd` | The most the whole test may spend on model calls, in dollars. `"none"` turns the budget off, on purpose. | 5 |
-| `model_hosts` | Extra hosts whose requests are model calls, such as a gateway, each with the format it speaks: `[{host = "llm-gateway.internal", provider = "openai"}]`. | empty |
+| `model_hosts` | Extra hosts whose requests are model calls, such as a gateway, each with the format it speaks: `[{host = "llm-gateway.internal", provider = "openai"}]`. A host name only, with no port. | empty |
 | `reserve_output_tokens` | The output tokens a budget reservation assumes when a request does not set `max_tokens`. | 4096 |
 | `prices` | Prices for other models, as the table below. | empty |
 
