@@ -28,9 +28,7 @@ def problems(catalog: dict[str, object]) -> list[str]:
         source = fault.get("source")
         if not isinstance(source, str) or not source.strip():
             found.append(f"{name}: source is empty")
-    found += [
-        f"{n}: listed twice" for n in sorted(set(map(str, names))) if names.count(n) > 1
-    ]
+    found += [f"{n}: listed twice" for n in sorted(set(map(str, names))) if names.count(n) > 1]
     return found
 
 
@@ -56,6 +54,4 @@ def test_a_fault_without_a_real_origin_is_rejected(entry: str, problem: str) -> 
 def test_a_misspelled_table_and_a_duplicate_are_rejected() -> None:
     entry = '[[fault]]\nname = "timeout"\norigin = "trace"\nsource = "x"\n'
     assert problems(tomllib.loads(entry * 2)) == ["timeout: listed twice"]
-    assert problems(tomllib.loads(entry.replace("fault]", "faults]"))) == [
-        "unknown table 'faults'"
-    ]
+    assert problems(tomllib.loads(entry.replace("fault]", "faults]"))) == ["unknown table 'faults'"]

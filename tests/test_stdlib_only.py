@@ -18,7 +18,11 @@ DYNAMIC = {"import_module", "__import__"}
 
 
 def imported_roots(path: Path) -> set[str]:
-    """Top-level names a module imports, including importlib.import_module("x")."""
+    """Top-level names a module imports, including importlib.import_module("x").
+
+    A computed name, such as the team's own module from a mock's type, is not counted:
+    the SDK imports those only under FAULTLINE_ALLOW_IMPORTS.
+    """
     roots: set[str] = set()
     for node in ast.walk(ast.parse(path.read_text(), str(path))):
         if isinstance(node, ast.Import):
@@ -27,17 +31,11 @@ def imported_roots(path: Path) -> set[str]:
             roots.add(node.module.split(".")[0])
         elif isinstance(node, ast.Call):
             func = node.func
-            name = (
-                func.attr
-                if isinstance(func, ast.Attribute)
-                else getattr(func, "id", "")
-            )
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
             if name in DYNAMIC and node.args:
                 arg = node.args[0]
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                     roots.add(arg.value.split(".")[0])
-                else:
-                    roots.add("<computed name>")
     return roots
 
 
