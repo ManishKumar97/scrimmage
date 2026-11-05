@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -12,6 +13,19 @@ from faultline_sdk.cli import main
 EXAMPLE = Path(__file__).parent / "example"
 # The S1 conversation: the bot asks for the order, then the stock, then answers.
 ACME = ["acme_get_order", "acme_get_stock", "acme_answer"]
+
+
+def pytest_sessionfinish(session: pytest.Session) -> None:
+    """In CI a skipped test fails the run: a safety check that did not run proves nothing.
+
+    A skip is fine on a laptop without Ubuntu's Python; CI must have everything.
+    """
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    skipped = reporter.stats.get("skipped", []) if reporter else []
+    if os.environ.get("CI") and skipped:
+        names = ", ".join(report.nodeid for report in skipped)
+        print(f"\nskipped tests are not allowed in CI: {names}")
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 @pytest.fixture
