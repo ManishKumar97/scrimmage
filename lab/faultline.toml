@@ -1,6 +1,0 @@
-# How the lab's agent names the facts about a run.
-# The product reads these names from here, so its own code holds none of them.
-[attributes]
-question = "faultline.question"
-answer = "faultline.answer"
-stop_reason = "faultline.stop_reason"
