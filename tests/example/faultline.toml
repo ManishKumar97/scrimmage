@@ -1,0 +1,21 @@
+[agent]
+function = "acme.agent:answer"
+tools    = ["acme.tools:get_order", "acme.tools:check_inventory", "acme.tools:refund_order", "acme.tools:get_stock"]
+real     = ["tool:check_inventory"]
+
+[[test]]
+name     = "order-status"
+question = "Where is order 1234?"
+expect   = ["shipped", "Oct 30"]
+
+[[test.mock]]
+call    = "tool:get_order"
+returns = "shipped, Oct 30"
+
+[[test.mock]]
+call    = "tool:get_stock"             # returns an acme.models.Stock object
+returns = {sku = "SKU-42", count = 12}
+
+[[test.fault]]
+call = "tool:get_order"
+do   = "timeout"

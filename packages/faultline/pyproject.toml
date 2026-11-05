@@ -6,6 +6,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["faultline-marker"]
 
+[project.scripts]
+faultline = "faultline_sdk.cli:main"
+faultline-run = "faultline_sdk.run_command:main"
+
 [build-system]
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"

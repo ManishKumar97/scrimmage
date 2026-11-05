@@ -84,7 +84,7 @@ def test_a_request_with_no_fixture_left_is_an_error() -> None:
             client_for(fake).chat.completions.create(model="gpt-4o-mini", messages=[])
     finally:
         fake.stop()
-    assert fake.errors == ["no reply left for request 1"]
+    assert fake.errors == ["no reply for turn 1"]
 
 
 def test_an_unknown_path_is_an_error() -> None:
@@ -92,9 +92,7 @@ def test_an_unknown_path_is_an_error() -> None:
     fake.start()
     try:
         with pytest.raises(openai.InternalServerError):
-            client_for(fake).embeddings.create(
-                model="text-embedding-3-small", input="hi"
-            )
+            client_for(fake).embeddings.create(model="text-embedding-3-small", input="hi")
     finally:
         fake.stop()
     assert fake.errors == ["no fixture serves /v1/embeddings"]
