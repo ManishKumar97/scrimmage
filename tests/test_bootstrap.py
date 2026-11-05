@@ -1,8 +1,10 @@
 """Getting in before the agent starts: the startup file, the token switch, chaining."""
 
 import os
+import socket
 import subprocess
 import sys
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -45,7 +47,7 @@ def control(tmp_path: Path) -> Iterator[ControlServer]:
 
 def plan(**changes: object) -> dict[str, object]:
     return {
-        "v": 1, "run": "run-1", "row": "baseline", "mocks": [], "faults": [],
+        "v": 1, "run": "run-1", "test": "t", "row": "baseline", "mocks": [], "faults": [],
         "tools": [], "real": [], "time_limit_s": 60, **changes,
     }  # fmt: skip
 
@@ -113,7 +115,7 @@ def test_with_the_token_the_sdk_says_it_is_active(control: ControlServer) -> Non
     control.open_run("run-1", "baseline", plan())
     result = python(GATES_LOADED, joined(control))
     assert result.stdout.strip() == "True True"
-    assert "faultline: active for run run-1 (baseline)" in result.stderr
+    assert "faultline: active for run run-1 (t, baseline);" in result.stderr
 
 
 @pytest.mark.design("boot.unreachable_stops_program")
@@ -161,3 +163,40 @@ def test_faultline_run_puts_its_folder_first() -> None:
         env={**env, "PYTHONPATH": "/somewhere"}, capture_output=True, text=True, timeout=60,
     )  # fmt: skip
     assert result.stdout.strip() == str(BOOT)
+
+
+@pytest.mark.design("boot.fails_closed")
+@pytest.mark.parametrize(
+    "reply", [b"garbage\r\n\r\n", b"HTTP/1.1 200 OK\r\nContent-Length: 50\r\n\r\nshort"]
+)
+def test_a_broken_control_reply_stops_the_program_instead_of_running_ungated(
+    control: ControlServer, reply: bytes, tmp_path: Path
+) -> None:
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+
+    def answer() -> None:
+        conn, _ = listener.accept()
+        conn.recv(65536)
+        conn.sendall(reply)
+        conn.close()
+
+    thread = threading.Thread(target=answer, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{listener.getsockname()[1]}"
+    result = python("print('REAL REFUND RAN')", joined(control, FAULTLINE_CONTROL_URL=url))
+    listener.close()
+    assert result.returncode == 1 and "REAL REFUND RAN" not in result.stdout
+    assert "the program stops" in result.stderr
+
+
+@pytest.mark.design("boot.children_no_faults")
+def test_a_child_process_keeps_the_mocks_but_fires_no_faults(control: ControlServer) -> None:
+    faults = [{"call": "tool:a", "do": "timeout", "when": "always"}]
+    control.open_run("run-1", "baseline", plan(faults=faults))
+    code = "import faultline_sdk.state as s; print(len(s.current().plan.faults))"
+    root = python(code, joined(control))  # FAULTLINE_ROOT_PID unset: this is the root
+    child = python(code, joined(control, FAULTLINE_ROOT_PID="1"))
+    assert (root.stdout.strip(), child.stdout.strip()) == ("1", "0")
+    assert "in a child process, without faults" in child.stderr

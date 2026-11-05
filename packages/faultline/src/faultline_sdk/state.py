@@ -71,7 +71,12 @@ class RunState:
         self._lock = threading.Lock()
 
     def begin(self, name: str, args: dict[str, object]) -> Step:
-        """Count the call and decide what it gets."""
+        """Count the call and decide what it gets.
+
+        The time limit counts from when this process took up the run. For a function
+        the runner stops the program at run_timeout first, so here it is a backstop;
+        it matters where one process outlives its runs.
+        """
         if time.monotonic() - self.began > self.plan.time_limit_s:
             raise FaultlineTimeLimit(
                 f"the run passed its time limit of {self.plan.time_limit_s:g}s"
@@ -99,6 +104,23 @@ class RunState:
             "to run for real."
         )
 
+    def listed_tool_missing(self, name: str, message: str) -> None:
+        """A tool under [agent] tools that does not exist: a mistake that ends the run.
+
+        The real function it was meant to gate, likely spelled differently, must never
+        run ungated, so the run is poisoned and the line is kept even on a full queue.
+        """
+        step = Step(
+            engine.Call("tool", f"tool:{name}", name),
+            engine.Decision("refused"),
+            {},
+            now_iso(),
+            time.monotonic(),
+        )
+        with self._lock:
+            self.refused = self.refused or step.call.label
+        self.finish(step, error=FaultlineRefused(message), mistake=message)
+
     def finish(
         self,
         step: Step,
@@ -114,6 +136,7 @@ class RunState:
         line: dict[str, object] = {
             "v": RECORD_VERSION,
             "run": self.plan.run,
+            "test": self.plan.test,
             "row": self.plan.row,
             "seq": seq,
             "proc": self.proc,
@@ -124,7 +147,7 @@ class RunState:
             "result": None
             if error is not None or decision.action == "refused"
             else content(result),
-            "error": None if error is None else f"{type(error).__name__}: {error}",
+            "error": None if error is None else redact(f"{type(error).__name__}: {error}"),
             "start": step.start,
             "ms": int((time.monotonic() - step.started) * 1000),
         }
@@ -132,7 +155,7 @@ class RunState:
             fault = self.plan.faults[decision.fault]
             line["fault"] = {"do": fault.do, "when": fault.when, "n": decision.n}
         if mistake is not None:
-            line["mistake"] = mistake
+            line["mistake"] = redact(mistake)
         self.sink.put(line, keep=decision.action == "refused")
 
 

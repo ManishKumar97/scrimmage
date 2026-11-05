@@ -19,7 +19,8 @@ from faultline_sdk.plan import items, obj
 from faultline_sdk.records import RecordStore
 
 MAX_CONNECTIONS = 64
-MAX_BODY = 50 * 1024 * 1024
+MAX_BODY = 4 * 1024 * 1024  # a batch of 500 lines is far smaller
+READ_TIMEOUT_S = 10.0  # a connection that sends nothing frees its slot
 PLAN_PATH = re.compile(r"/v1/plans/([A-Za-z0-9_-]{1,64})")
 
 
@@ -31,6 +32,7 @@ class Run:
     fetched: bool = False
     refused: bool = False
     dropped: int = 0
+    made: int | None = None  # lines the program said it made, from its last batch
 
 
 class ControlServer:
@@ -65,11 +67,13 @@ class ControlServer:
         self.thread.join()
 
     def open_run(self, run: str, row: str, plan: dict[str, object]) -> None:
+        json.dumps(plan)  # a plan that cannot be sent fails here, not in a handler
         self.store.open_run(run)
         with self.lock:
             self.runs[run] = Run(plan, row)
 
     def close_run(self, run: str) -> Run:
+        """No line or plan request is accepted for the run after this."""
         with self.lock:
             state = self.runs[run]
             state.open = False
@@ -103,22 +107,23 @@ class ControlServer:
             batch = obj(json.loads(body))
             run = str(batch["run"])
             lines = [obj(line) for line in items(batch, "lines")]
-            dropped = int(str(batch.get("dropped", 0)))
+            dropped = max(0, int(str(batch.get("dropped", 0))))
+            made = None if batch.get("made") is None else int(str(batch["made"]))
         except (ValueError, KeyError, TypeError):
             return 400, {"error": "bad_batch"}
-        with self.lock:
+        mine = [line for line in lines if line.get("run") == run]
+        with self.lock:  # one lock, so no line lands after the run's summary
             state = self.runs.get(run)
             if state is None or not state.open:
                 return 409, {"error": "run_closed"}
             state.dropped += dropped
-        mine = [line for line in lines if line.get("run") == run]
-        accepted = self.store.add(run, mine)
-        if any(line.get("action") == "refused" for line in mine):
-            with self.lock:
-                first = not state.refused
-                state.refused = True
-            if first:
-                self.on_refused(run)
+            if made is not None:
+                state.made = made
+            accepted = self.store.add(run, mine)
+            first = not state.refused and any(line.get("action") == "refused" for line in mine)
+            state.refused = state.refused or first
+        if first:
+            self.on_refused(run)
         return 200, {"accepted": accepted}
 
 
@@ -150,8 +155,14 @@ class _Server(ThreadingHTTPServer):
 
 def _handler(control: ControlServer) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
+        timeout = READ_TIMEOUT_S
+
         def _serve(self, method: str) -> None:
-            length = int(self.headers.get("Content-Length") or 0)
+            text = self.headers.get("Content-Length") or "0"
+            if not text.isdigit():
+                self.send_error(400)
+                return
+            length = int(text)
             if length > MAX_BODY:
                 self.send_error(413)
                 return

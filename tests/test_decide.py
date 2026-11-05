@@ -14,7 +14,7 @@ GET_ORDER = Call("tool", "tool:get_order", "get_order")
 def make(
     mocks: Sequence[Mock] = (), faults: Sequence[Fault] = (), real: Sequence[str] = ()
 ) -> Plan:
-    return Plan("run-1", "baseline", tuple(mocks), tuple(faults), (), tuple(real), 60.0)
+    return Plan("run-1", "t", "baseline", tuple(mocks), tuple(faults), (), tuple(real), 60.0)
 
 
 def run(p: Plan, call: Call = GET_ORDER) -> tuple[str, int]:

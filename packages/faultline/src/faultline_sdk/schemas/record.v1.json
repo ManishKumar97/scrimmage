@@ -3,99 +3,265 @@
   "$id": "https://faultline.dev/schemas/record.v1.json",
   "title": "Faultline record line, version 1",
   "description": "One line of a run's JSON Lines record: a call, or the summary that ends the record.",
-  "oneOf": [{"$ref": "#/$defs/call"}, {"$ref": "#/$defs/summary"}],
+  "oneOf": [
+    {
+      "$ref": "#/$defs/call"
+    },
+    {
+      "$ref": "#/$defs/summary"
+    }
+  ],
   "$defs": {
     "head": {
       "type": "object",
-      "required": ["v", "run", "row"],
+      "required": [
+        "v",
+        "run",
+        "test",
+        "row"
+      ],
       "properties": {
-        "v": {"const": 1},
-        "run": {"type": "string", "minLength": 1},
-        "row": {"type": "string", "minLength": 1}
+        "v": {
+          "const": 1
+        },
+        "run": {
+          "type": "string",
+          "minLength": 1
+        },
+        "test": {
+          "type": "string",
+          "minLength": 1
+        },
+        "row": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "content": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sha256", "bytes", "preview"],
+      "required": [
+        "sha256",
+        "bytes",
+        "preview"
+      ],
       "properties": {
-        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "bytes": {"type": "integer", "minimum": 0},
-        "preview": {"type": "string", "maxLength": 200}
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "preview": {
+          "type": "string",
+          "maxLength": 200
+        }
       }
     },
     "call": {
-      "allOf": [{"$ref": "#/$defs/head"}],
+      "allOf": [
+        {
+          "$ref": "#/$defs/head"
+        }
+      ],
       "type": "object",
       "unevaluatedProperties": false,
-      "required": ["seq", "proc", "call", "kind", "action", "args", "result", "error", "start", "ms"],
+      "required": [
+        "seq",
+        "proc",
+        "call",
+        "kind",
+        "action",
+        "args",
+        "result",
+        "error",
+        "start",
+        "ms"
+      ],
       "properties": {
         "v": true,
         "run": true,
+        "test": true,
         "row": true,
-        "seq": {"type": "integer", "minimum": 1},
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
         "proc": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["host", "pid", "started"],
+          "required": [
+            "host",
+            "pid",
+            "started"
+          ],
           "properties": {
-            "host": {"type": "string"},
-            "pid": {"type": "integer"},
-            "started": {"type": "string", "format": "date-time"}
+            "host": {
+              "type": "string"
+            },
+            "pid": {
+              "type": "integer"
+            },
+            "started": {
+              "type": "string",
+              "format": "date-time"
+            }
           }
         },
-        "call": {"type": "string", "pattern": "^tool:[A-Za-z_][A-Za-z0-9_]*$"},
-        "kind": {"const": "tool"},
-        "action": {"enum": ["real", "mock", "fault", "refused"]},
+        "call": {
+          "type": "string",
+          "pattern": "^tool:[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "kind": {
+          "const": "tool"
+        },
+        "action": {
+          "enum": [
+            "real",
+            "mock",
+            "fault",
+            "refused"
+          ]
+        },
         "fault": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["do", "when", "n"],
+          "required": [
+            "do",
+            "when",
+            "n"
+          ],
           "properties": {
-            "do": {"enum": ["timeout"]},
-            "when": {"enum": ["always"]},
-            "n": {"type": "integer", "minimum": 1}
+            "do": {
+              "enum": [
+                "timeout"
+              ]
+            },
+            "when": {
+              "enum": [
+                "always"
+              ]
+            },
+            "n": {
+              "type": "integer",
+              "minimum": 1
+            }
           }
         },
-        "args": {"$ref": "#/$defs/content"},
-        "result": {"anyOf": [{"$ref": "#/$defs/content"}, {"type": "null"}]},
-        "error": {"type": ["string", "null"]},
-        "mistake": {"type": "string"},
-        "start": {"type": "string", "format": "date-time"},
-        "ms": {"type": "integer", "minimum": 0}
+        "args": {
+          "$ref": "#/$defs/content"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/content"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mistake": {
+          "type": "string"
+        },
+        "start": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ms": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "summary": {
-      "allOf": [{"$ref": "#/$defs/head"}],
+      "allOf": [
+        {
+          "$ref": "#/$defs/head"
+        }
+      ],
       "type": "object",
       "unevaluatedProperties": false,
-      "required": ["summary"],
+      "required": [
+        "summary"
+      ],
       "properties": {
         "v": true,
         "run": true,
+        "test": true,
         "row": true,
         "summary": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["answer", "outcome", "fault_fired", "calls", "incomplete"],
+          "required": [
+            "answer",
+            "outcome",
+            "fault_fired",
+            "calls",
+            "incomplete"
+          ],
           "properties": {
-            "answer": {"type": ["string", "null"]},
-            "outcome": {
-              "enum": ["answered", "crashed", "timed out", "refused call", "infrastructure error"]
+            "answer": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
-            "fault_fired": {"type": ["boolean", "null"]},
+            "outcome": {
+              "enum": [
+                "answered",
+                "crashed",
+                "timed out",
+                "refused call",
+                "infrastructure error"
+              ]
+            },
+            "fault_fired": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "calls": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["real", "mock", "fault", "refused"],
+              "required": [
+                "real",
+                "mock",
+                "fault",
+                "refused"
+              ],
               "properties": {
-                "real": {"type": "integer", "minimum": 0},
-                "mock": {"type": "integer", "minimum": 0},
-                "fault": {"type": "integer", "minimum": 0},
-                "refused": {"type": "integer", "minimum": 0}
+                "real": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "mock": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "fault": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "refused": {
+                  "type": "integer",
+                  "minimum": 0
+                }
               }
             },
-            "incomplete": {"type": "boolean"}
+            "incomplete": {
+              "type": "boolean"
+            }
           }
         }
       }

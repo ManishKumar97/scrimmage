@@ -77,7 +77,9 @@ def install(
     real: Sequence[str] = (),
     limit: float = 60,
 ) -> state.RunState:
-    p = Plan("run-1", "fault 1", tuple(mocks), tuple(faults), (), tuple(real), limit)
+    p = Plan(
+        "run-1", "order-status", "fault 1", tuple(mocks), tuple(faults), (), tuple(real), limit
+    )
     run = state.RunState(p, lines, ["tests.", "test_tool_gate."])
     state.install(run)
     return run
@@ -165,7 +167,13 @@ def test_the_first_refusal_makes_every_later_call_fail(lines: Lines) -> None:
 
 @pytest.mark.design("refused.not_a_library_error")
 def test_the_refusal_error_is_faultlines_own() -> None:
-    assert FaultlineRefused.__mro__[1].__module__ == "faultline_sdk.errors"
+    # Every base is Faultline's own or Python's Exception itself, never a library's error.
+    bases = FaultlineRefused.__mro__[1:]
+    assert all(
+        b.__module__ == "faultline_sdk.errors" or b in (Exception, BaseException, object)
+        for b in bases
+    )
+    assert not issubclass(FaultlineRefused, (OSError, TimeoutError, ValueError, RuntimeError))
 
 
 def test_a_real_tool_runs_and_its_result_is_recorded(lines: Lines) -> None:
@@ -238,12 +246,11 @@ def test_the_hook_swaps_tools_when_their_module_is_imported(
     monkeypatch.syspath_prepend(str(folder))
     install(lines, [Mock("tool:ask", "mocked", None)])
     before = list(sys.meta_path)
-    tool_gate.install(["shopkit.tools:ask", "shopkit.tools:missing"])
+    tool_gate.install(["shopkit.tools:ask"])
     try:
         from shopkit import tools  # type: ignore[import-not-found]
 
         assert tools.ask("q") == "mocked"
-        assert "has no function missing" in capsys.readouterr().err
         tool_gate.swap(tools, ["ask"])  # a second swap does not wrap twice
         assert not hasattr(tools.ask.__wrapped__, tool_gate.GATED)
     finally:
@@ -271,3 +278,56 @@ def test_arguments_that_do_not_bind_are_still_recorded(lines: Lines) -> None:
     assert tool_gate.gate(get_text, "get_text")(1, 2, extra=3) == "m"
     args = lines.lines[0]["args"]
     assert isinstance(args, dict) and '"kwargs"' in str(args["preview"])
+
+
+@pytest.mark.design("tools.listed_missing_stops")
+def test_a_listed_tool_that_does_not_exist_fails_the_import_and_the_run(
+    lines: Lines, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pathlib import Path
+
+    folder = Path(str(tmp_path))
+    (folder / "shopkit2.py").write_text("def refund_order(o):\n    return 'REAL REFUND'\n")
+    monkeypatch.syspath_prepend(str(folder))
+    install(lines, real=["tool:*"])
+    before = list(sys.meta_path)
+    tool_gate.install(["shopkit2:refund_ordr"])
+    try:
+        with pytest.raises(
+            tool_gate.ListedToolMissing, match="shopkit2 has no function refund_ordr"
+        ):
+            import shopkit2  # type: ignore[import-not-found]  # noqa: F401
+        assert "shopkit2" not in sys.modules  # the real refund_order cannot be reached
+        assert lines.lines[0]["action"] == "refused" and "refund_ordr" in str(
+            lines.lines[0]["mistake"]
+        )
+    finally:
+        sys.meta_path[:] = before
+        sys.modules.pop("shopkit2", None)
+
+
+def test_module_exists_does_not_import(tmp_path: object) -> None:
+    from pathlib import Path
+
+    folder = Path(str(tmp_path))
+    (folder / "pkg_never").mkdir()
+    (folder / "pkg_never" / "__init__.py").write_text("raise SystemExit('imported')\n")
+    (folder / "pkg_never" / "tools.py").write_text("")
+    assert tool_gate.module_exists("pkg_never.tools", [str(folder)])
+    assert not tool_gate.module_exists("pkg_never.tool", [str(folder)])
+    assert not tool_gate.module_exists("no_such_pkg.tools", [str(folder)])
+    assert "pkg_never" not in sys.modules
+
+
+@pytest.mark.design("record.redacts_errors")
+def test_errors_and_mistakes_are_redacted(lines: Lines) -> None:
+    install(lines, real=["tool:*"])
+
+    def leaky() -> None:
+        raise ValueError("call failed with key sk-proj-" + "b" * 30)
+
+    with pytest.raises(ValueError):
+        tool_gate.gate(leaky, "leaky")()
+    assert "sk-proj" not in str(lines.lines[0]["error"]) and "[secret removed]" in str(
+        lines.lines[0]["error"]
+    )

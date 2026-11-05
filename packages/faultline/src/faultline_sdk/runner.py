@@ -6,6 +6,7 @@ call included; 3 for an infrastructure error.
 
 import os
 import secrets
+import shutil
 import signal
 import subprocess
 import sys
@@ -23,8 +24,10 @@ from faultline_sdk.config import Config
 from faultline_sdk.control import ControlServer
 from faultline_sdk.mocks import allowed
 from faultline_sdk.records import RecordStore
+from faultline_sdk.redact import redact
 
 OK, MISTAKE, INFRA = 0, 2, 3
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 KILL_GRACE_S = 5.0
 OUTCOMES = ("answered", "crashed", "timed out", "refused call", "infrastructure error")
 
@@ -83,6 +86,7 @@ class Runner:
         self.procs: dict[str, subprocess.Popen[bytes]] = {}
         self.stopped_rows: set[tuple[str, str]] = set()
         self.row_of: dict[str, planner.Row] = {}
+        self.cancelled = False
 
     def _refused(self, run: str) -> None:
         """The first refusal ends its run and its row."""
@@ -106,12 +110,15 @@ class Runner:
 
     def one(self, row: planner.Row) -> RunResult | None:
         with self.lock:
-            if (row.test.name, row.name) in self.stopped_rows:
+            if self.cancelled or (row.test.name, row.name) in self.stopped_rows:
                 return None
             run = f"run-{secrets.token_hex(6)}"
             self.row_of[run] = row
         plan = planner.plan_for(self.config, row, run)
         self.server.open_run(run, row.name, plan.to_json())
+        if self.cancelled:
+            self.server.close_run(run)
+            return None
         command = [
             sys.executable, "-m", "faultline_sdk.run_command",
             sys.executable, "-m", "faultline_sdk.start",
@@ -132,6 +139,8 @@ class Runner:
             os.close(log)
         with self.lock:
             self.procs[run] = proc
+        if self.server.runs[run].refused:  # refused before the process was registered
+            stop_group(proc)
         timed_out = False
         try:
             proc.wait(timeout=self.config.agent.run_timeout)
@@ -144,7 +153,14 @@ class Runner:
         lines = self.store.lines(run)
         answer_file = self.answers / f"{run}.txt"
         answer = answer_file.read_text() if answer_file.exists() else None
-        if not state.fetched or state.dropped:
+        ended_itself = not timed_out and not state.refused
+        # A program that ended by itself sent a last batch saying how many lines it made;
+        # a missing batch or a gap means the record is incomplete.
+        received = len(lines) + state.dropped
+        incomplete = bool(state.dropped) or (
+            ended_itself and (state.made is None or received < state.made)
+        )
+        if not state.fetched or incomplete:
             outcome = "infrastructure error"
         elif state.refused:
             outcome = "refused call"
@@ -161,27 +177,47 @@ class Runner:
         fired = None if row.fault is None else calls["fault"] > 0
         mistakes = [str(line["mistake"]) for line in lines if "mistake" in line]
         summary: dict[str, object] = {
-            "answer": answer,
+            "answer": None if answer is None else redact(answer),
             "outcome": outcome,
             "fault_fired": fired,
             "calls": calls,
-            "incomplete": bool(state.dropped),
+            "incomplete": incomplete,
         }
-        self.store.close_run(run, row.name, summary)
+        self.store.close_run(run, row.test.name, row.name, summary)
         return RunResult(run, row, outcome, answer, fired, calls, mistakes)
 
     def run_all(self) -> list[RunResult]:
         jobs = [row for row in planner.rows(self.config) for _ in range(self.config.agent.runs)]
         self.server.start()
+        previous = {sig: signal.signal(sig, self._interrupted) for sig in STOP_SIGNALS}
         try:
             with ThreadPoolExecutor(max_workers=self.config.agent.parallel) as pool:
                 results = list(pool.map(self.one, jobs))
         finally:
+            self.cancel()
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
             self.server.stop()
-            for leftover in self.answers.iterdir():
-                leftover.unlink()
-            self.answers.rmdir()
+            shutil.rmtree(self.answers, ignore_errors=True)
         return [r for r in results if r is not None]
+
+    def cancel(self) -> None:
+        """Start no more runs and stop every run still going, with its children."""
+        with self.lock:
+            self.cancelled = True
+            running = list(self.procs.values())
+        for proc in running:
+            stop_group(proc)
+
+    def _interrupted(self, signum: int, frame: object) -> None:
+        """The runner itself was told to stop, such as a cancelled CI job."""
+        del frame
+        self.cancel()
+        raise Interrupted(signal.Signals(signum).name)
+
+
+class Interrupted(Exception):
+    """faultline test got SIGTERM or SIGINT."""
 
 
 def stop_group(proc: subprocess.Popen[bytes]) -> None:
@@ -192,8 +228,10 @@ def stop_group(proc: subprocess.Popen[bytes]) -> None:
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL)
         proc.wait()
-    except ProcessLookupError:
-        pass
+    except ProcessLookupError:  # the group is gone; make sure the program is too
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
 
 
 def report(config: Config, results: list[RunResult], folder: Path, out: TextIO) -> int:

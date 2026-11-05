@@ -119,6 +119,11 @@ def load(path: Path) -> Config:
 
 
 def reject_placeholders(value: object, where: str) -> None:
+    """Reject ${...} placeholders, and values a plan cannot carry, such as TOML dates."""
+    if not isinstance(value, str | int | float | bool | list | dict):
+        raise ConfigError(
+            f"{where}: a {type(value).__name__} cannot be sent to the agent; write it as text"
+        )
     if isinstance(value, str) and "${" in value:
         raise NotSupportedYet(f"{where}: ${{...}} placeholders are not supported yet")
     if isinstance(value, dict):

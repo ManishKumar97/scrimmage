@@ -14,6 +14,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(p for p in (str(BOOT), env.get("PYTHONPATH")) if p)
+    # exec keeps this process id, so it names the program the runner started.
+    env.setdefault("FAULTLINE_ROOT_PID", str(os.getpid()))
     os.execvpe(args[0], args, env)
 
 

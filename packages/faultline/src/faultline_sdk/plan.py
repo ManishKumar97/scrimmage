@@ -11,6 +11,7 @@ PLAN_VERSION = 1
 @dataclass(frozen=True)
 class Plan:
     run: str
+    test: str
     row: str
     mocks: tuple[Mock, ...]
     faults: tuple[Fault, ...]
@@ -28,6 +29,7 @@ class Plan:
         return {
             "v": PLAN_VERSION,
             "run": self.run,
+            "test": self.test,
             "row": self.row,
             "mocks": mocks,
             "faults": [{"call": f.call, "do": f.do, "when": f.when} for f in self.faults],
@@ -55,6 +57,7 @@ class Plan:
             raise ValueError("plan time_limit_s is not a number")
         return Plan(
             run=string(doc, "run"),
+            test=string(doc, "test"),
             row=string(doc, "row"),
             mocks=mocks,
             faults=faults,
@@ -84,6 +87,7 @@ def rows(config: Config) -> list[Row]:
 def plan_for(config: Config, row: Row, run: str) -> Plan:
     return Plan(
         run=run,
+        test=row.test.name,
         row=row.name,
         mocks=row.test.mocks,
         faults=() if row.fault is None else (row.fault,),

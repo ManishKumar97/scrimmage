@@ -52,7 +52,7 @@ class RecordStore:
         with self._lock:
             return list(self._lines[run])
 
-    def close_run(self, run: str, row: str, summary: dict[str, object]) -> None:
-        line = {"v": RECORD_VERSION, "run": run, "row": row, "summary": summary}
+    def close_run(self, run: str, test: str, row: str, summary: dict[str, object]) -> None:
+        line = {"v": RECORD_VERSION, "run": run, "test": test, "row": row, "summary": summary}
         with self._lock, self.path(run).open("a") as out:
             out.write(json.dumps(line, sort_keys=True) + "\n")

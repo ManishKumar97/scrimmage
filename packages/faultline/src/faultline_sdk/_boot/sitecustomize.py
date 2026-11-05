@@ -21,11 +21,21 @@ def _chain() -> None:
     spec.loader.exec_module(module)
 
 
-if os.environ.get("FAULTLINE_TOKEN"):
+def _start() -> None:
     try:
         from faultline_sdk import bootstrap
-    except ImportError:
-        bootstrap = None  # another Python without Faultline: do nothing, say nothing
-    if bootstrap is not None:
-        bootstrap.start()
+    except ModuleNotFoundError as exc:
+        if exc.name == "faultline_sdk":
+            return  # another Python without Faultline: do nothing, say nothing
+        raise
+    bootstrap.start()
+
+
+if os.environ.get("FAULTLINE_TOKEN"):
+    try:
+        _start()
+    except BaseException as exc:  # fail closed: never run the agent without its gates
+        sys.stderr.write(f"faultline: could not switch on ({exc!r}); the program stops\n")
+        sys.stderr.flush()
+        os._exit(1)
 _chain()

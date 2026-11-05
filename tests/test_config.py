@@ -171,3 +171,8 @@ def test_bad_layouts_are_rejected(tmp_path: Path, text: str, message: str) -> No
 
 def test_allowed_imports_are_the_agents_own_packages(tmp_path: Path) -> None:
     assert example(tmp_path).allowed_imports() == ["acme."]
+
+
+def test_a_date_in_a_mock_is_rejected_because_a_plan_cannot_carry_it(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="a datetime cannot be sent to the agent"):
+        example(tmp_path, 'returns = "shipped, Oct 30"', "returns = 1979-05-27T07:32:00Z")

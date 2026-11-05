@@ -1,7 +1,12 @@
 """faultline test on Acme's bot, a function agent, against the fake OpenAI server."""
 
 import json
+import os
+import signal
 import stat
+import subprocess
+import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -184,3 +189,144 @@ def test_a_mock_that_does_not_fit_its_type_is_a_test_mistake(
     result = project.test(fake_openai(ACME))
     assert result.code == 2
     assert "the mock does not fit acme.models:Stock" in result.out
+
+
+def only_baseline(project: Project, function: str, extra: str = "") -> None:
+    project.edit('function = "acme.agent:answer"', f'function = "{function}"\nruns = 1{extra}')
+    project.edit(FAULT_BLOCK, "")
+
+
+@pytest.mark.design("runner.refused_kills_process")
+def test_a_refused_run_is_stopped_even_if_the_agent_carries_on(project: Project) -> None:
+    only_baseline(project, "acme.slow:refuse_then_hang", "\nrun_timeout = 60")
+    started = time.monotonic()
+    result = project.test()
+    assert time.monotonic() - started < 30  # stopped at the refusal, not at run_timeout
+    assert result.code == 2 and [s["outcome"] for s in result.summaries()] == ["refused call"]
+
+
+@pytest.mark.design("runner.sigkill_after_grace")
+def test_an_agent_that_ignores_sigterm_is_killed(project: Project) -> None:
+    only_baseline(project, "acme.slow:stubborn", "\nrun_timeout = 1")
+    started = time.monotonic()
+    result = project.test()
+    assert [s["outcome"] for s in result.summaries()] == ["timed out"]
+    assert time.monotonic() - started < 20  # 1 s, then SIGTERM, then SIGKILL 5 s later
+
+
+@pytest.mark.design("record.gap_is_infrastructure")
+def test_a_run_whose_last_batch_never_came_is_an_infrastructure_error(project: Project) -> None:
+    only_baseline(project, "acme.slow:vanish")
+    result = project.test()
+    assert result.code == 3
+    (summary,) = result.summaries()
+    assert summary["outcome"] == "infrastructure error" and summary["incomplete"] is True
+
+
+@pytest.mark.design("runner.no_shell")
+def test_the_question_reaches_the_agent_as_one_piece_of_text(project: Project) -> None:
+    only_baseline(project, "acme.slow:echo")
+    project.edit(
+        'question = "Where is order 1234?"', 'question = "Where is order 1234; rm -rf ~ $(id)"'
+    )
+    result = project.test()
+    assert [s["answer"] for s in result.summaries()] == ["Where is order 1234; rm -rf ~ $(id)"]
+
+
+@pytest.mark.design("tools.listed_missing_stops_run")
+@pytest.mark.parametrize(
+    ("entry", "message"),
+    [
+        ('"acme.tools:refund_ordr"', "acme.tools has no function refund_ordr"),
+        (
+            '"acme.toolz:refund_order"',
+            "acme.toolz is listed under [agent] tools but cannot be found",
+        ),
+    ],
+)
+def test_a_listed_tool_that_does_not_exist_ends_the_run_as_a_mistake(
+    project: Project, fake_openai: Fake, entry: str, message: str
+) -> None:
+    project.edit('"acme.tools:refund_order"', entry)
+    project.edit("[agent]\n", "[agent]\nruns = 1\nparallel = 1\n")
+    fake = FakeOpenAI(ACME)
+    fake.start()
+    try:
+        result = project.test(fake)
+    finally:
+        fake.stop()
+    assert result.code == 2, result.out
+    assert message in result.out
+    assert {s["outcome"] for s in result.summaries()} == {"refused call"}
+
+
+def test_a_failure_inside_the_runner_is_an_infrastructure_error(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(self: Runner) -> None:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(Runner, "run_all", broken)
+    result = project.test()
+    assert result.code == 3 and "infrastructure error in the runner" in result.err
+
+
+@pytest.mark.design("runner.stops_runs_when_stopped")
+def test_stopping_faultline_test_stops_every_run(project: Project) -> None:
+    only_baseline(project, "acme.slow:hang", "\nrun_timeout = 120")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("FAULTLINE_")}
+    runner = subprocess.Popen(
+        [sys.executable, "-m", "faultline_sdk.cli", "test", str(project.toml)],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )  # fmt: skip
+    pid = None
+    for _ in range(100):
+        time.sleep(0.1)
+        pid = agent_pid(project.root)
+        if pid:
+            break
+    assert pid, "the agent never started"
+    runner.send_signal(signal.SIGTERM)
+    _, err = runner.communicate(timeout=30)
+    assert runner.returncode == 3 and "stopped by SIGTERM" in err
+    time.sleep(0.5)
+    assert not alive(pid), "the agent outlived faultline test"
+
+
+def agent_pid(root: Path) -> int | None:
+    for proc in Path("/proc").iterdir():
+        if proc.name.isdigit():
+            try:
+                cmd = (proc / "cmdline").read_bytes().split(b"\0")
+            except OSError:
+                continue
+            if b"acme.slow:hang" in cmd and (proc / "cwd").resolve() == root:
+                return int(proc.name)
+    return None
+
+
+def alive(pid: int) -> bool:
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().split()[2]
+    except OSError:
+        return False
+    return state != "Z"
+
+
+def test_a_run_that_dropped_lines_is_an_infrastructure_error(
+    project: Project, fake_openai: Fake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from faultline_sdk.control import ControlServer
+
+    original = ControlServer.close_run
+
+    def dropped_one(self: ControlServer, run: str):  # type: ignore[no-untyped-def]
+        state = original(self, run)
+        state.dropped = 1  # as if the program's queue had been full once
+        return state
+
+    monkeypatch.setattr(ControlServer, "close_run", dropped_one)
+    project.edit("[agent]\n", "[agent]\nruns = 1\n")
+    result = project.test(fake_openai(ACME))
+    assert result.code == 3
+    assert {s["outcome"] for s in result.summaries()} == {"infrastructure error"}

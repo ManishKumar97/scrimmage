@@ -94,14 +94,35 @@ def gate(tool: Callable[..., Any], name: str) -> Callable[..., Any]:
     return sync_gate
 
 
+class ListedToolMissing(ImportError):
+    """A tool under [agent] tools is not in its module. The import fails on purpose."""
+
+
 def swap(module: ModuleType, names: list[str]) -> None:
     for name in names:
         tool = getattr(module, name, None)
         if not callable(tool):
-            print(f"faultline: {module.__name__} has no function {name}", file=sys.stderr)
-            continue
+            message = (
+                f"{module.__name__}:{name} is listed under [agent] tools, but "
+                f"{module.__name__} has no function {name}"
+            )
+            run = current()
+            if run is not None:
+                run.listed_tool_missing(name, message)
+            raise ListedToolMissing(message)
         if not getattr(tool, GATED, False):
             setattr(module, name, gate(tool, name))
+
+
+def module_exists(name: str, extra: list[str]) -> bool:
+    """Whether a module can be found, without importing it or its packages."""
+    path: list[str] | None = [*sys.path, *extra]
+    for part in name.split("."):
+        spec = importlib.machinery.PathFinder.find_spec(part, path)
+        if spec is None:
+            return False
+        path = list(spec.submodule_search_locations or [])
+    return True
 
 
 def targets(paths: Sequence[str]) -> dict[str, list[str]]:

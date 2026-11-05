@@ -27,6 +27,7 @@ def validator(name: str) -> jsonschema.Draft202012Validator:
 DESIGN_PLAN = {
     "v": 1,
     "run": "run-7f3a9c",
+    "test": "order-status",
     "row": "fault 1",
     "mocks": [{"call": "tool:get_order", "returns": "shipped, Oct 30"}],
     "faults": [{"call": "tool:get_order", "do": "timeout", "when": "always"}],
@@ -37,6 +38,7 @@ DESIGN_PLAN = {
 DESIGN_LINE = {
     "v": 1,
     "run": "run-17",
+    "test": "order-status",
     "row": "fault 1",
     "seq": 2,
     "proc": {"host": "acme-agent-7d9f", "pid": 4121, "started": "2026-11-04T10:00:01Z"},

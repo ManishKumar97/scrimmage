@@ -6,7 +6,7 @@ from pathlib import Path
 
 from faultline_sdk import config as settings
 from faultline_sdk.errors import ConfigError
-from faultline_sdk.runner import MISTAKE, Runner, check_labels, report
+from faultline_sdk.runner import INFRA, MISTAKE, Interrupted, Runner, check_labels, report
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -29,8 +29,20 @@ def main(argv: list[str] | None = None) -> int:
             print(f"faultline: {problem}", file=sys.stderr)
         print("faultline: the test stopped before the first run", file=sys.stderr)
         return MISTAKE
-    runner = Runner(config)
-    results = runner.run_all()
+    runner: Runner | None = None
+    try:
+        runner = Runner(config)
+        results = runner.run_all()
+    except Interrupted as exc:
+        print(f"faultline: stopped by {exc}; every run was stopped", file=sys.stderr)
+        return INFRA
+    except Exception as exc:  # the runner's own failure is never a result
+        print(f"faultline: infrastructure error in the runner: {exc!r}", file=sys.stderr)
+        return INFRA
+    finally:
+        if runner is not None:
+            runner.server.server.server_close()
+    assert runner is not None
     return report(config, results, runner.folder, sys.stdout)
 
 

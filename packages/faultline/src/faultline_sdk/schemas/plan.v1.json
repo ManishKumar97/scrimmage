@@ -5,21 +5,50 @@
   "description": "What the SDK does in one run. Data only.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["v", "run", "row", "mocks", "faults", "tools", "real", "time_limit_s"],
+  "required": [
+    "v",
+    "run",
+    "test",
+    "row",
+    "mocks",
+    "faults",
+    "tools",
+    "real",
+    "time_limit_s"
+  ],
   "properties": {
-    "v": {"const": 1},
-    "run": {"type": "string", "minLength": 1},
-    "row": {"type": "string", "minLength": 1},
+    "v": {
+      "const": 1
+    },
+    "run": {
+      "type": "string",
+      "minLength": 1
+    },
+    "test": {
+      "type": "string",
+      "minLength": 1
+    },
+    "row": {
+      "type": "string",
+      "minLength": 1
+    },
     "mocks": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["call", "returns"],
+        "required": [
+          "call",
+          "returns"
+        ],
         "properties": {
-          "call": {"$ref": "#/$defs/tool_label"},
+          "call": {
+            "$ref": "#/$defs/tool_label"
+          },
           "returns": {},
-          "type": {"$ref": "#/$defs/import_path"}
+          "type": {
+            "$ref": "#/$defs/import_path"
+          }
         }
       }
     },
@@ -28,23 +57,57 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["call", "do", "when"],
+        "required": [
+          "call",
+          "do",
+          "when"
+        ],
         "properties": {
-          "call": {"$ref": "#/$defs/tool_label"},
-          "do": {"enum": ["timeout"]},
-          "when": {"enum": ["always"]}
+          "call": {
+            "$ref": "#/$defs/tool_label"
+          },
+          "do": {
+            "enum": [
+              "timeout"
+            ]
+          },
+          "when": {
+            "enum": [
+              "always"
+            ]
+          }
         }
       }
     },
-    "tools": {"type": "array", "items": {"$ref": "#/$defs/import_path"}},
+    "tools": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/import_path"
+      }
+    },
     "real": {
       "type": "array",
-      "items": {"anyOf": [{"$ref": "#/$defs/tool_label"}, {"const": "tool:*"}]}
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/tool_label"
+          },
+          {
+            "const": "tool:*"
+          }
+        ]
+      }
     },
-    "time_limit_s": {"type": "number", "exclusiveMinimum": 0}
+    "time_limit_s": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
   },
   "$defs": {
-    "tool_label": {"type": "string", "pattern": "^tool:[A-Za-z_][A-Za-z0-9_]*$"},
+    "tool_label": {
+      "type": "string",
+      "pattern": "^tool:[A-Za-z_][A-Za-z0-9_]*$"
+    },
     "import_path": {
       "type": "string",
       "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*$"

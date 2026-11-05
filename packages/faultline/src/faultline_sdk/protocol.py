@@ -7,6 +7,7 @@ status and its body's hash, so a reply can answer only the request it was made f
 
 import hashlib
 import hmac
+import math
 import secrets
 import threading
 import time
@@ -88,6 +89,8 @@ def check_request(
     try:
         sent = float(stamp)
     except ValueError:
+        return "bad_signature"
+    if not math.isfinite(sent):
         return "bad_signature"
     if abs(now - sent) > WINDOW_S:
         return "clock"

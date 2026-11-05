@@ -15,16 +15,24 @@ ALLOWED = {
     PACKAGES / "faultline-marker" / "src" / "faultline": {"faultline"},
 }
 DYNAMIC = {"import_module", "__import__"}
+# The only places that import a computed name: the team's own module from a mock's
+# type, and the agent's function in the starter. Both are under FAULTLINE_ALLOW_IMPORTS.
+COMPUTED_ALLOWED = {("mocks.py", "import_object"), ("start.py", "main")}
 
 
 def imported_roots(path: Path) -> set[str]:
     """Top-level names a module imports, including importlib.import_module("x").
 
-    A computed name, such as the team's own module from a mock's type, is not counted:
-    the SDK imports those only under FAULTLINE_ALLOW_IMPORTS.
+    A computed name is allowed only in the functions named in COMPUTED_ALLOWED.
     """
     roots: set[str] = set()
-    for node in ast.walk(ast.parse(path.read_text(), str(path))):
+    tree = ast.parse(path.read_text(), str(path))
+    owner: dict[ast.AST, str] = {}
+    for func in ast.walk(tree):
+        if isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
+            for inner in ast.walk(func):
+                owner.setdefault(inner, func.name)
+    for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             roots.update(alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
@@ -36,6 +44,8 @@ def imported_roots(path: Path) -> set[str]:
                 arg = node.args[0]
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                     roots.add(arg.value.split(".")[0])
+                elif (path.name, owner.get(node, "")) not in COMPUTED_ALLOWED:
+                    roots.add(f"<computed name in {owner.get(node, 'module level')}>")
     return roots
 
 

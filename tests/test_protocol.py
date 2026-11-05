@@ -224,7 +224,8 @@ def test_the_sender_sends_every_line_and_reports_drops(server: ControlServer) ->
     for seq in range(1, 1201):
         sender.put(line(seq), keep=seq == 1)
     sender.flush()
-    assert len(server.store.lines("run-1")) == 1200 and not sender.failed
+    assert len(server.store.lines("run-1")) == 1200 and sender.unsent == []
+    assert server.runs["run-1"].made == 1200  # the closing batch says how many lines it made
     full = Sender(ControlClient(server.url, TOKEN), "run-1")
     full.queue.maxsize = 1
     full.put(line(5000))
@@ -233,11 +234,41 @@ def test_the_sender_sends_every_line_and_reports_drops(server: ControlServer) ->
     assert server.runs["run-1"].dropped == 1
 
 
-def test_a_sender_that_cannot_reach_the_server_marks_failure() -> None:
+@pytest.mark.design("record.resend")
+def test_a_batch_that_fails_is_sent_again(server: ControlServer) -> None:
     sender = Sender(ControlClient("http://127.0.0.1:9", TOKEN), "run-1")
     sender.put(line(1))
+    sender.flush()  # nobody listens: the line is kept, not lost
+    assert sender.unsent == [line(1)]
+    sender.client = ControlClient(server.url, TOKEN)
     sender.flush()
-    assert sender.failed
+    assert server.store.lines("run-1") == [line(1)] and server.runs["run-1"].made == 1
+
+
+def test_a_server_away_for_long_keeps_a_bounded_backlog(monkeypatch: pytest.MonkeyPatch) -> None:
+    import faultline_sdk.client as client_module
+
+    monkeypatch.setattr(client_module, "QUEUE_SIZE", 3)
+    sender = Sender(ControlClient("http://127.0.0.1:9", TOKEN), "run-1")
+    sender.unsent = [line(i) for i in range(1, 6)]
+    sender.flush()
+    assert len(sender.unsent) == 3 and sender.dropped == 2
+
+
+@pytest.mark.design("record.keep_refusals")
+def test_a_refusal_waits_for_room_instead_of_being_dropped(server: ControlServer) -> None:
+    sender = Sender(ControlClient(server.url, TOKEN), "run-1")
+    sender.queue.maxsize = 1
+    sender.put(line(1))
+    waiter = threading.Thread(target=sender.put, args=(line(2),), kwargs={"keep": True})
+    waiter.start()
+    time.sleep(0.2)
+    assert waiter.is_alive()  # the queue is full, so the refusal waits ...
+    sender.start()
+    waiter.join(timeout=5)
+    sender.flush()  # ... and is sent once there is room
+    assert [x["seq"] for x in server.store.lines("run-1")] == [1, 2]
+    assert server.runs["run-1"].dropped == 0
 
 
 def test_a_refused_line_tells_the_runner_once(tmp_path: Path) -> None:
@@ -256,3 +287,50 @@ def test_a_refused_line_tells_the_runner_once(tmp_path: Path) -> None:
         assert told == ["run-1"]
     finally:
         control.stop()
+
+
+@pytest.mark.design("protocol.window")
+def test_a_request_more_than_a_minute_off_is_refused(server: ControlServer) -> None:
+    for stamp in (time.time() - 120, float("nan")):
+        headers = protocol.request_headers(TOKEN, "GET", "/v1/plans/run-1", b"", 0)
+        headers[protocol.TIME] = f"{stamp:.3f}" if stamp == stamp else "nan"
+        headers[protocol.SIGNATURE] = protocol.sign_request(
+            TOKEN, "GET", "/v1/plans/run-1", headers[protocol.TIME], headers[protocol.NONCE], b""
+        )
+        error = raw(server, "GET", "/v1/plans/run-1", headers)[1]["error"]
+        assert error == ("clock" if stamp == stamp else "bad_signature")
+
+
+def test_a_bad_length_is_refused_and_an_idle_connection_is_let_go(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import socket
+
+    import faultline_sdk.control as control_module
+
+    monkeypatch.setattr(control_module, "READ_TIMEOUT_S", 0.5)
+    control = ControlServer(TOKEN, RecordStore(tmp_path / "r"))
+    control.start()
+    try:
+        for length in ("-1", "abc"):
+            assert raw_status(control, {"Content-Length": length}) == 400
+        host, port = control.server.server_address[:2]
+        idle = socket.create_connection((str(host), port))
+        time.sleep(1.0)
+        assert idle.recv(1) == b""  # the server closed the silent connection
+        idle.close()
+    finally:
+        control.stop()
+
+
+def test_a_negative_dropped_count_is_ignored(server: ControlServer) -> None:
+    client = ControlClient(server.url, TOKEN)
+    client.request("POST", "/v1/records", {"run": "run-1", "lines": [], "dropped": -5})
+    assert server.runs["run-1"].dropped == 0
+
+
+def test_a_plan_that_cannot_be_sent_fails_when_the_run_opens(server: ControlServer) -> None:
+    import datetime
+
+    with pytest.raises(TypeError):
+        server.open_run("run-2", "baseline", {"v": 1, "when": datetime.date(2026, 1, 1)})

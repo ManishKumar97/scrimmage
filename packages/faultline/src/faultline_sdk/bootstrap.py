@@ -5,6 +5,7 @@ ends here, so the agent never runs without its plan.
 """
 
 import atexit
+import dataclasses
 import os
 import sys
 from typing import NoReturn
@@ -35,6 +36,12 @@ def start() -> None:
         plan = Plan.from_json(client.fetch_plan(run))
     except (ControlError, ValueError) as exc:
         stop(f"cannot get the plan for {run} from {url}: {exc}")
+    root = os.environ.get("FAULTLINE_ROOT_PID", "")
+    child = root.isdigit() and int(root) != os.getpid()
+    if child:
+        # Each process counts its own calls, so faults fire only in the program the
+        # runner started. A child keeps the mocks and the safety rules.
+        plan = dataclasses.replace(plan, faults=())
     prefixes = [p for p in os.environ.get("FAULTLINE_ALLOW_IMPORTS", "").split(",") if p]
     paths = [*plan.tools, *(m.type for m in plan.mocks if m.type)]
     for path in paths:
@@ -43,9 +50,18 @@ def start() -> None:
     sender = Sender(client, run)
     sender.start()
     atexit.register(sender.flush)
-    state.install(state.RunState(plan, sender, prefixes))
+    run_state = state.RunState(plan, sender, prefixes)
+    state.install(run_state)
+    for module, names in tool_gate.targets(plan.tools).items():
+        if not tool_gate.module_exists(module, [os.getcwd()]):
+            message = f"{module} is listed under [agent] tools but cannot be found"
+            run_state.listed_tool_missing(names[0], message)
+            sender.flush()
+            stop(message)
     tool_gate.install(plan.tools)
+    where = " in a child process, without faults" if child else ""
     print(
-        f"faultline: active for run {run} ({plan.row}); calls follow this test's plan",
+        f"faultline: active for run {run} ({plan.test}, {plan.row}){where}; "
+        "calls follow this test's plan",
         file=sys.stderr,
     )
