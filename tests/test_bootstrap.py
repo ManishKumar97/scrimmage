@@ -89,6 +89,27 @@ def test_the_hidden_sitecustomize_still_runs(tmp_path: Path) -> None:
     assert result.stdout.strip() == "agent" and marker.read_text() == "yes"
 
 
+@pytest.mark.design("boot.chained_module_found_by_name")
+def test_the_hidden_sitecustomize_is_the_one_found_by_name(tmp_path: Path) -> None:
+    team = tmp_path / "team"
+    team.mkdir()
+    (team / "sitecustomize.py").write_text(
+        "import builtins, dataclasses\n"
+        "COMPANY_CA = '/etc/acme/ca.pem'\n"
+        "@dataclasses.dataclass\n"
+        "class Settings:\n"
+        "    region: str = 'us'\n"
+        "builtins.team_settings = Settings()\n"
+    )
+    code = (
+        "import builtins, pickle, sitecustomize\n"
+        "print(sitecustomize.COMPANY_CA)\n"
+        "print(pickle.loads(pickle.dumps(builtins.team_settings)).region)\n"
+    )
+    result = python(code, {"PYTHONPATH": f"{BOOT}{os.pathsep}{team}"})
+    assert result.stdout.split() == ["/etc/acme/ca.pem", "us"], result.stderr
+
+
 @pytest.mark.design("boot.chains_apport")
 @pytest.mark.skipif(
     not APPORT.exists(), reason="needs Ubuntu's Python and its apport sitecustomize"

@@ -18,6 +18,7 @@ def _chain() -> None:
     if spec is None or spec.loader is None:
         return
     module = importlib.util.module_from_spec(spec)
+    sys.modules["sitecustomize"] = module  # as a plain import of it would leave things
     spec.loader.exec_module(module)
 
 
