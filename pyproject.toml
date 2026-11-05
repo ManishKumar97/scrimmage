@@ -27,6 +27,9 @@ testpaths = ["tests"]
 pythonpath = ["tests"]
 addopts = ["--strict-markers"]
 filterwarnings = ["error"]
+markers = [
+    "design(tag): the design point this test proves, as a short public name",
+]
 
 [tool.ruff]
 target-version = "py311"

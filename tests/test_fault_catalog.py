@@ -3,6 +3,8 @@
 import tomllib
 from pathlib import Path
 
+import pytest
+
 CATALOG = Path(__file__).parents[1] / "docs" / "fault-catalog.toml"
 ORIGINS = {"public incident", "trace"}
 
@@ -11,6 +13,7 @@ def load() -> list[dict[str, object]]:
     return tomllib.loads(CATALOG.read_text())["fault"]
 
 
+@pytest.mark.design("catalog.origin")
 def test_every_fault_names_its_origin() -> None:
     for fault in load():
         assert set(fault) == {"name", "origin", "source"}, fault
