@@ -33,11 +33,15 @@ jobs:
         run: |
           uv run ruff check .
           uv run ruff format --check .
+      # The checks below run even after one fails, so a PR shows all its problems.
       - name: pyright
+        if: ${{ !cancelled() }}
         run: uv run pyright
       - name: vulture
+        if: ${{ !cancelled() }}
         run: uv run vulture
       - name: import-linter
+        if: ${{ !cancelled() }}
         run: uv run lint-imports
 
   tests:
