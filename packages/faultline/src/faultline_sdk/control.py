@@ -8,6 +8,7 @@ import base64
 import hashlib
 import json
 import re
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -221,6 +222,11 @@ class _Server(ThreadingHTTPServer):
         except BaseException:
             self.slots.release()
             raise
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        """A program killed mid-request is routine: no traceback on the runner's output."""
+        if not isinstance(sys.exc_info()[1], ConnectionError):
+            super().handle_error(request, client_address)
 
     def process_request_thread(
         self, request: socket | tuple[bytes, socket], client_address: Any

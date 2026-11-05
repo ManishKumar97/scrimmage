@@ -458,3 +458,20 @@ def test_a_settlement_is_never_crowded_out_and_survives_a_failed_send(tmp_path: 
         assert (ledger.reserved, ledger.spent) == (0.0, 0.1)
     finally:
         control.stop()
+
+
+@pytest.mark.design("control.quiet_on_dropped_clients")
+def test_a_client_that_drops_its_connection_prints_no_traceback(
+    server: ControlServer, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for error in (BrokenPipeError(), ConnectionResetError()):
+        try:
+            raise error
+        except ConnectionError:
+            server.server.handle_error(None, ("127.0.0.1", 1))
+    assert capsys.readouterr().err == ""
+    try:
+        raise ValueError("a real bug")
+    except ValueError:
+        server.server.handle_error(None, ("127.0.0.1", 1))
+    assert "a real bug" in capsys.readouterr().err
