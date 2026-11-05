@@ -499,7 +499,7 @@ def capture(
             extra["reply_incomplete"] = True
         usd = 0.0
         try:
-            usd = record(ctx, request, response, extra, b"".join(chunks), size[0])
+            usd = record(ctx, step, request, response, extra, b"".join(chunks), size[0])
         except Exception:  # the agent's own call must never fail because of the arithmetic
             extra.update(status=response.status_code, cost_usd=None, cost_estimated=False)
         ctx.run.finish(step)
@@ -521,6 +521,7 @@ def capture(
 
 def record(
     ctx: Context,
+    step: Step,
     request: Any,
     response: Any,
     extra: dict[str, object],
@@ -529,19 +530,20 @@ def record(
 ) -> float:
     """Put the reply, its tokens and its cost on the line. Returns the cost to settle."""
     body = decoded(raw, str(response.headers.get("content-encoding", "")))
-    used = openai_table.usage(body)
+    used = openai_table.usage(body, output_required=step.call.name == "chat")
     tokens_in, tokens_out = used.input, used.output
     if not used.known:
         tokens_in = len(body_of(request) or b"") // CHAR_PER_TOKEN
         tokens_out = len(body) // CHAR_PER_TOKEN
-    rates = prices_of(ctx, str(extra.get("model", "")))
+    free = step.call.name in openai_table.FREE_OPS
+    rates = (0.0, 0.0) if free else prices_of(ctx, str(extra.get("model", "")))
     usd = openai_table.cost(tokens_in, tokens_out, rates) if rates else None
     extra.update(
         status=response.status_code,
         result=blob(body, ctx.sender, total=size),
         tokens={"input": tokens_in, "output": tokens_out},
         cost_usd=None if usd is None else round(usd, 8),
-        cost_estimated=usd is not None and not used.known,
+        cost_estimated=usd is not None and not used.known and not free,
     )
     return usd or 0.0
 

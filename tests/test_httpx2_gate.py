@@ -628,6 +628,8 @@ def test_a_call_that_was_sent_but_got_no_reply_is_charged_its_input(gated: None)
         {"prompt_tokens": "9", "completion_tokens": 1},
         {"prompt_tokens": -5, "completion_tokens": 1},
         {"prompt_tokens": 10**400, "completion_tokens": 1},
+        {"prompt_tokens": 9},
+        {"prompt_tokens": 9, "completion_tokens": None},
     ],
 )
 def test_counts_that_make_no_sense_are_estimated(gated: None, usage: dict[str, object]) -> None:
@@ -661,6 +663,20 @@ def test_with_no_price_the_cost_is_null_not_zero(gated: None) -> None:
     sink, _ = install(make_plan())
     client().post(URL, json={**BODY, "model": "acme-llama-70b"})
     assert sink.lines[0]["cost_usd"] is None and sink.lines[0]["cost_estimated"] is False
+
+
+@pytest.mark.design("budget.reads_cost_nothing")
+def test_a_free_read_on_a_priced_model_records_no_cost(gated: None) -> None:
+    sink, _ = install(make_plan())
+    url = "https://api.openai.com/v1/responses/input_tokens"
+    client().post(url, json={"model": "gpt-4o-mini", "input": "hi"})
+    assert (sink.lines[0]["cost_usd"], sink.lines[0]["cost_estimated"]) == (0.0, False)
+
+
+def test_an_absurd_max_tokens_does_not_reach_the_agent(gated: None) -> None:
+    budget = Budget(limit=1000.0)
+    install(make_plan(budget=1000.0), budget)
+    assert client().post(URL, json={**BODY, "max_tokens": 10**400}).status_code == 200
 
 
 @pytest.mark.design("record.cut_size_true")

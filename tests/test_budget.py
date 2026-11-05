@@ -122,7 +122,8 @@ PRICES = (1_000_000.0 * 0.01, 1_000_000.0 * 0.02)  # 1 cent an input token, 2 an
 def test_fixed_replies_cost_what_a_hand_computed_table_says(
     fixture: str, tokens_in: int, tokens_out: int, dollars: float
 ) -> None:
-    used = table.usage((FIXTURES / fixture).read_bytes())
+    needs_output = fixture != "embedding.json"
+    used = table.usage((FIXTURES / fixture).read_bytes(), output_required=needs_output)
     assert (used.input, used.output, used.known) == (tokens_in, tokens_out, True)
     assert table.cost(used.input, used.output, PRICES) >= 0
     assert round(table.cost(used.input, used.output, PRICES), 2) == dollars
@@ -140,6 +141,18 @@ def test_a_stream_with_events_and_pings_is_read_from_its_data_lines() -> None:
     )
     used = table.usage(body)
     assert (used.input, used.output, used.known) == (3, 4, True)
+
+
+def test_a_line_separator_in_the_text_does_not_hide_the_counts() -> None:
+    body = (
+        'data: {"choices": [{"delta": {"content": "a\u2028data: b"}}]}\n\n'
+        'data: {"usage": {"prompt_tokens": 3, "completion_tokens": 4}}\n\n'
+    ).encode()
+    assert table.usage(body).known
+
+
+def test_counts_nested_too_deep_to_read_are_not_counts() -> None:
+    assert not table.usage(b"[" * 100_000).known
 
 
 def test_a_reply_that_is_not_json_has_no_counts() -> None:

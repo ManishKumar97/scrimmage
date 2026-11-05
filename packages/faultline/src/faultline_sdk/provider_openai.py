@@ -107,7 +107,7 @@ def request_fields(body: bytes) -> dict[str, object] | None:
 def max_output(fields: dict[str, object]) -> int | None:
     for key in ("max_completion_tokens", "max_tokens", "max_output_tokens"):
         value = fields.get(key)
-        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        if isinstance(value, int) and not isinstance(value, bool) and 0 < value <= MAX_TOKENS:
             return value
     return None
 
@@ -119,25 +119,29 @@ class Usage:
     known: bool = False
 
 
-def usage(body: bytes) -> Usage:
+def usage(body: bytes, *, output_required: bool = True) -> Usage:
     """Token counts from a reply: a JSON body, or the events of a streamed one.
 
     A stream's lines may start with "event:" or be a ": ping", so only "data:" lines are
-    read. Counts are trusted only when they are sensible whole numbers.
+    read. Counts are trusted only when they are sensible whole numbers. An embedding has
+    no output count; anything else without one has no usable counts.
     """
     text = body.decode("utf-8", "replace")
-    data = [line[5:].strip() for line in text.splitlines() if line.startswith("data:")]
+    # Split on newlines only: text in a reply can hold other line separators.
+    data = [line[5:].strip() for line in text.split("\n") if line.startswith("data:")]
     found = Usage()
     for doc in data or [text]:
         try:
             parsed = _obj(json.loads(doc))
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
         numbers = _obj(parsed.get("usage"))
         if not numbers:  # the Responses API puts it in its last event's response
             numbers = _obj(_obj(parsed.get("response")).get("usage"))
         tokens_in = _count(numbers, "prompt_tokens", "input_tokens")
         tokens_out = _count(numbers, "completion_tokens", "output_tokens")
+        if tokens_out is None and not output_required:
+            tokens_out = 0
         if tokens_in is not None and tokens_out is not None:
             found = Usage(tokens_in, tokens_out, True)
     return found
@@ -221,11 +225,8 @@ def _list(value: object) -> list[object]:
 
 
 def _count(numbers: dict[str, object], in_chat: str, in_responses: str) -> int | None:
-    """A token count, 0 when the reply has none, None when it is not a sensible number."""
+    """A token count, or None when the reply has none or it is not a sensible number."""
     value = numbers.get(in_chat, numbers.get(in_responses))
-    if value is None:
-        # An embedding has no output tokens; a reply with no input tokens has no counts.
-        return None if in_chat == "prompt_tokens" else 0
     if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_TOKENS:
         return None
     return value
