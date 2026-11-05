@@ -2,7 +2,7 @@
 
 One `faultline.toml` describes one agent and its tests.
 Faultline names the table and key of every bad value, such as `[agent] run_timeout: expected a number of seconds, got 'abc'`.
-A setting that a later version will build is rejected with "not supported yet", never silently ignored.
+Anything this version does not support is rejected as unknown, with exit code 2. Nothing is ever silently ignored.
 
 ## [agent]
 
@@ -41,10 +41,10 @@ Faultline imports only modules under your agent's own top-level packages, the on
 | `do` | The fault. This version has `"timeout"`. Required. |
 | `when` | When it fires. This version has `"always"`, the default. |
 
-## Not supported yet
+## Coming in later versions
 
-These are part of Faultline's design and come in later versions.
-Using one now stops the test with "not supported yet".
+These are part of Faultline's design but not of this version.
+Using one now stops the test: it is rejected as unknown.
 
 - Agent shapes: `command` (a script) and `service` (a web service).
 - Settings: `max_cost_usd`, `model_hosts`, `answer`, `body`, `headers`, `control`, `control_tls`, `reserve_output_tokens`, `[agent.prices]`, `records`, `record_grace_s`, `record_wait_s`.

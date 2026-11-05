@@ -19,7 +19,3 @@ class FaultlineMockError(FaultlineError):
 
 class ConfigError(FaultlineError):
     """A bad value in faultline.toml. The message names its table and key."""
-
-
-class NotSupportedYet(ConfigError):
-    """A setting or word the design has but this version does not build yet."""

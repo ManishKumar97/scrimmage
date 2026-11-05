@@ -2,10 +2,7 @@
 
 from dataclasses import dataclass
 
-from faultline_sdk.errors import ConfigError, NotSupportedYet
-
-# Every kind the design has. Only "tool" is built so far.
-KNOWN_KINDS = ("model", "tool", "mcp", "http", "auth", "hosted")
+from faultline_sdk.errors import ConfigError
 
 
 @dataclass(frozen=True)
@@ -20,10 +17,10 @@ class Label:
 def parse(text: str, where: str, *, pattern: bool = False) -> Label:
     """Parse a label. pattern allows tool:* (only under real)."""
     kind, sep, name = text.partition(":")
-    if text == "model" or (sep and kind in KNOWN_KINDS and kind != "tool"):
-        raise NotSupportedYet(f"{where}: the label {text!r} is not supported yet")
     if kind != "tool" or not sep or not name:
-        raise ConfigError(f"{where}: {text!r} is not a label such as 'tool:get_order'")
+        raise ConfigError(
+            f"{where}: {text!r} is not a label such as 'tool:get_order'; see docs/configuration.md"
+        )
     if name == "*" and not pattern:
         raise ConfigError(f"{where}: 'tool:*' is allowed only under [agent] real")
     if name != "*" and not name.isidentifier():

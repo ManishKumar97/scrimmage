@@ -360,3 +360,23 @@ def test_a_stale_root_pid_in_the_runners_environment_is_ignored(
     project.edit("[agent]\n", "[agent]\nruns = 1\n")
     result = project.test(fake_openai(ACME))
     assert result.code == 0 and "  1     1  " in result.out  # the fault row was exercised
+
+
+@pytest.mark.design("config.unknown_rejected_exit_2")
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("[agent]\n", "[agent]\nrnus = 50\n"),
+        ("[agent]\n", "[agent]\nmax_cost_usd = 1\n"),
+        ('do   = "timeout"', 'do   = "status 500"'),
+        ('do   = "timeout"', 'do   = "timeout"\nwhen = "once"'),
+        ('call = "tool:get_order"\ndo', 'call = "model:x"\ndo'),
+        ('returns = "shipped, Oct 30"', 'returns = "${ORDER_STATUS}"'),
+    ],
+)
+def test_faultline_test_exits_2_on_anything_unsupported(
+    project: Project, old: str, new: str
+) -> None:
+    project.edit(old, new)
+    result = project.test()
+    assert result.code == 2 and "faultline:" in result.err

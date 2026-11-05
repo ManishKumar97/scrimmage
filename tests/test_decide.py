@@ -5,7 +5,7 @@ from collections.abc import Sequence
 import pytest
 
 from faultline_sdk.config import Fault, Mock
-from faultline_sdk.decide import Call, count, decide, fires
+from faultline_sdk.decide import Call, count, decide
 from faultline_sdk.plan import Plan
 
 GET_ORDER = Call("tool", "tool:get_order", "get_order")
@@ -59,9 +59,3 @@ def test_a_fault_counts_only_calls_it_names() -> None:
     count(GET_ORDER, p, counts)
     count(GET_ORDER, p, counts)
     assert counts == [2]
-
-
-def test_only_always_is_built() -> None:
-    assert fires("always", 1)
-    with pytest.raises(ValueError, match="not supported yet"):
-        fires("first 2", 1)

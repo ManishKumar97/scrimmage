@@ -30,13 +30,6 @@ class Decision:
     n: int = 0  # the fault's count of matching calls, this one included
 
 
-def fires(when: str, n: int) -> bool:
-    """Whether a schedule fires on the n-th matching call. Only "always" is built."""
-    if when != "always":
-        raise ValueError(f"schedule {when!r} is not supported yet")
-    return n >= 1
-
-
 def count(call: Call, plan: Plan, counts: list[int]) -> None:
     """Add this call to the counter of every fault that names it exactly."""
     for i, fault in enumerate(plan.faults):
@@ -46,7 +39,7 @@ def count(call: Call, plan: Plan, counts: list[int]) -> None:
 
 def decide(call: Call, plan: Plan, counts: list[int]) -> Decision:
     for i, fault in enumerate(plan.faults):
-        if fault.call == call.label and fires(fault.when, counts[i]):
+        if fault.call == call.label:  # "always" is the only schedule, so it fires
             return Decision("fault", fault=i, n=counts[i])
     for i, mock in enumerate(plan.mocks):
         if mock.call == call.label:

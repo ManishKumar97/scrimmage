@@ -29,14 +29,6 @@ def test_every_setting_is_documented() -> None:
     assert not missing, f"settings with no entry in docs/configuration.md: {missing}"
 
 
-def test_every_setting_not_built_yet_is_listed() -> None:
-    text = page("configuration.md").split("## Not supported yet", 1)[1]
-    later = config.AGENT_LATER | config.MOCK_LATER | config.FAULT_LATER
-    names = {k for k in later if k != "prices"} | {"[agent.prices]"}
-    missing = sorted(k for k in names if not mentioned(text, k))
-    assert not missing, f"not-yet settings missing from the list: {missing}"
-
-
 def test_every_fault_and_outcome_is_documented() -> None:
     concepts = page("concepts.md")
     assert all(mentioned(concepts, f) for f in config.FAULTS)

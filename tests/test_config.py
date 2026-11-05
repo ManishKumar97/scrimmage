@@ -4,7 +4,7 @@ import pytest
 
 from conftest import EXAMPLE
 from faultline_sdk import config, plan
-from faultline_sdk.errors import ConfigError, NotSupportedYet
+from faultline_sdk.errors import ConfigError
 
 
 def load_text(tmp_path: Path, text: str) -> config.Config:
@@ -53,48 +53,26 @@ def test_a_bad_value_names_its_table_and_key(tmp_path: Path) -> None:
         example(tmp_path, "[agent]\n", '[agent]\nrun_timeout = "abc"\n')
 
 
-@pytest.mark.design("config.not_supported_yet")
+@pytest.mark.design("config.unknown_rejected")
 @pytest.mark.parametrize(
     ("old", "new", "message"),
     [
-        (
-            'returns = "shipped, Oct 30"',
-            'returns = "${X}"',
-            r"\$\{\.\.\.\} placeholders",
-        ),
-        (
-            'do   = "timeout"',
-            'do   = "timeout"\nwhen = "first 2"',
-            "'first 2' is not supported",
-        ),
-        ('do   = "timeout"', 'do   = "status 429"', "'status 429' is not supported"),
-        (
-            'call = "tool:get_order"\ndo',
-            'call = "model"\ndo',
-            "'model' is not supported",
-        ),
-        ("[agent]\n", "[agent]\nmax_cost_usd = 1\n", "max_cost_usd: not supported yet"),
-        (
-            "[agent]\n",
-            '[agent]\ncommand = "python bot.py"\n',
-            "command: not supported yet",
-        ),
-        (
-            'returns = "shipped, Oct 30"',
-            'returns_from = "acme.m:f"',
-            "returns_from: not supported",
-        ),
-        (
-            'do   = "timeout"',
-            'do   = "timeout"\nraises = "X"',
-            "raises: not supported yet",
-        ),
+        ('returns = "shipped, Oct 30"', 'returns = "${X}"', "placeholders are not read"),
+        ('do   = "timeout"', 'do   = "timeout"\nwhen = "first 2"', "'first 2' is not a schedule"),
+        ('do   = "timeout"', 'do   = "status 429"', "'status 429' is not a fault"),
+        ('call = "tool:get_order"\ndo', 'call = "model"\ndo', "'model' is not a label"),
+        ('call = "tool:get_order"\ndo', 'call = "model:x"\ndo', "'model:x' is not a label"),
+        ("[agent]\n", "[agent]\nmax_cost_usd = 1\n", "max_cost_usd: unknown setting; see docs"),
+        ("[agent]\n", '[agent]\ncommand = "python bot.py"\n', "command: unknown setting"),
+        ("[agent]\n", "[agent]\nrnus = 50\n", "rnus: unknown setting"),
+        ('returns = "shipped, Oct 30"', 'returns_from = "acme.m:f"', "returns_from: unknown"),
+        ('do   = "timeout"', 'do   = "timeout"\nraises = "X"', "raises: unknown setting"),
     ],
 )
-def test_what_is_not_built_yet_is_rejected(
+def test_anything_this_version_does_not_support_is_rejected(
     tmp_path: Path, old: str, new: str, message: str
 ) -> None:
-    with pytest.raises(NotSupportedYet, match=message):
+    with pytest.raises(ConfigError, match=message):
         example(tmp_path, old, new)
 
 

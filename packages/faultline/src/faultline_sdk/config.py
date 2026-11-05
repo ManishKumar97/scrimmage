@@ -1,7 +1,7 @@
 """Read faultline.toml. Every bad value is reported with its table and key.
 
-A setting, fault, schedule or placeholder the design has but this version does not
-build is rejected with "not supported yet", never read and ignored.
+Only what this version supports is accepted. Anything else is rejected, never read
+and ignored; docs/configuration.md lists what later versions add.
 """
 
 import re
@@ -11,36 +11,14 @@ from pathlib import Path
 from typing import cast
 
 from faultline_sdk import labels
-from faultline_sdk.errors import ConfigError, NotSupportedYet
+from faultline_sdk.errors import ConfigError
 
 AGENT_KEYS = {"function", "runs", "parallel", "run_timeout", "tools", "real"}
-AGENT_LATER = {
-    "command",
-    "service",
-    "max_cost_usd",
-    "model_hosts",
-    "answer",
-    "body",
-    "headers",
-    "control",
-    "control_tls",
-    "reserve_output_tokens",
-    "prices",
-    "records",
-    "record_grace_s",
-    "record_wait_s",
-}
 TEST_KEYS = {"name", "question", "expect", "mock", "fault"}
 MOCK_KEYS = {"call", "returns", "type"}
-MOCK_LATER = {"returns_from", "method", "path", "status", "json", "text", "headers"}
 FAULT_KEYS = {"call", "do", "when"}
-FAULT_LATER = {"raises", "method", "path", "append", "replace", "retry_after"}
 
-FAULTS_LATER = re.compile(
-    r"status \d{3}|error|slow \d+(\.\d+)?s|empty|refused|reset|dns|bad body|auth error"
-    r"|context too long|append|replace|garble|truncate|unknown tool|bad tool args|refuse"
-)
-WHEN_LATER = re.compile(r"once|call \d+|first \d+|requests \d+")
+DOCS = "docs/configuration.md"
 # The faults this version builds. Each one has an entry in docs/fault-catalog.toml.
 FAULTS = ("timeout",)
 IMPORT_PATH = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*:[A-Za-z_]\w*")
@@ -100,7 +78,7 @@ def load(path: Path) -> Config:
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"{path.name}: {exc}") from None
     reject_placeholders(data, path.name)
-    check_keys(data, {"agent", "test"}, set(), path.name)
+    check_keys(data, {"agent", "test"}, path.name)
     if "agent" not in data:
         raise ConfigError(f"{path.name}: [agent] is required")
     tests = as_list(data.get("test", []), f"{path.name} [[test]]")
@@ -125,7 +103,9 @@ def reject_placeholders(value: object, where: str) -> None:
             f"{where}: a {type(value).__name__} cannot be sent to the agent; write it as text"
         )
     if isinstance(value, str) and "${" in value:
-        raise NotSupportedYet(f"{where}: ${{...}} placeholders are not supported yet")
+        raise ConfigError(
+            f"{where}: ${{...}} placeholders are not read, so the text would reach the agent as is"
+        )
     if isinstance(value, dict):
         for key, item in as_table(cast(object, value), where).items():
             reject_placeholders(item, f"{where}.{key}")
@@ -146,12 +126,10 @@ def as_list(value: object, where: str) -> list[object]:
     return list(cast(list[object], value))
 
 
-def check_keys(table: dict[str, object], known: set[str], later: set[str], where: str) -> None:
+def check_keys(table: dict[str, object], known: set[str], where: str) -> None:
     for key in table:
-        if key in later:
-            raise NotSupportedYet(f"{where} {key}: not supported yet")
         if key not in known:
-            raise ConfigError(f"{where} {key}: unknown setting")
+            raise ConfigError(f"{where} {key}: unknown setting; see {DOCS}")
 
 
 def text(table: dict[str, object], key: str, where: str) -> str:
@@ -176,7 +154,7 @@ def whole(table: dict[str, object], key: str, default: int, where: str) -> int:
 
 def read_agent(table: dict[str, object]) -> Agent:
     where = "[agent]"
-    check_keys(table, AGENT_KEYS, AGENT_LATER, where)
+    check_keys(table, AGENT_KEYS, where)
     if "function" not in table:
         raise ConfigError(f"{where} function: required")
     timeout = table.get("run_timeout", 120)
@@ -207,7 +185,7 @@ def read_agent(table: dict[str, object]) -> Agent:
 
 def read_test(table: dict[str, object], index: int) -> Test:
     where = f"[[test]] {index}"
-    check_keys(table, TEST_KEYS, set(), where)
+    check_keys(table, TEST_KEYS, where)
     name = text(table, "name", where)
     where = f"[[test]] {name!r}"
     if "expect" not in table:
@@ -233,7 +211,7 @@ def read_test(table: dict[str, object], index: int) -> Test:
 
 
 def read_mock(table: dict[str, object], where: str) -> Mock:
-    check_keys(table, MOCK_KEYS, MOCK_LATER, where)
+    check_keys(table, MOCK_KEYS, where)
     call = str(labels.parse(text(table, "call", where), f"{where} call"))
     if "returns" not in table:
         raise ConfigError(f"{where} returns: required")
@@ -244,16 +222,12 @@ def read_mock(table: dict[str, object], where: str) -> Mock:
 
 
 def read_fault(table: dict[str, object], where: str) -> Fault:
-    check_keys(table, FAULT_KEYS, FAULT_LATER, where)
+    check_keys(table, FAULT_KEYS, where)
     call = str(labels.parse(text(table, "call", where), f"{where} call"))
     do = text(table, "do", where)
     if do not in FAULTS:
-        if FAULTS_LATER.fullmatch(do):
-            raise NotSupportedYet(f"{where} do: {do!r} is not supported yet")
-        raise ConfigError(f"{where} do: {do!r} is not a fault")
+        raise ConfigError(f"{where} do: {do!r} is not a fault; see {DOCS}")
     when = str(table.get("when", "always"))
     if when != "always":
-        if WHEN_LATER.fullmatch(when):
-            raise NotSupportedYet(f"{where} when: {when!r} is not supported yet")
-        raise ConfigError(f"{where} when: {when!r} is not a schedule")
+        raise ConfigError(f"{where} when: {when!r} is not a schedule; see {DOCS}")
     return Fault(call, do, when)
