@@ -32,7 +32,8 @@ def test_every_setting_is_documented() -> None:
 def test_every_fault_and_outcome_is_documented() -> None:
     concepts = page("concepts.md")
     assert all(mentioned(concepts, f) for f in config.FAULTS)
-    assert all(outcome in concepts for outcome in runner.OUTCOMES)
+    missing = [o for o in runner.OUTCOMES if f"| {o} |" not in concepts]
+    assert not missing, f"outcomes with no row in docs/concepts.md: {missing}"
 
 
 def test_exit_codes_match_the_runner() -> None:

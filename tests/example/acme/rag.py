@@ -6,6 +6,7 @@ offer tools Faultline must check.
 """
 
 import os
+import signal
 import threading
 import time
 
@@ -57,6 +58,19 @@ def answer_one_stops_the_rest(question: str) -> str:
         time.sleep(600)
         return "never"
     time.sleep(0.5)  # let the others start
+    return answer_priceless(question)
+
+
+def answer_one_stops_one_finishes(question: str) -> str:
+    """The first run stops the test; the other finishes properly when told to stop."""
+    try:
+        os.close(os.open("first-run", os.O_CREAT | os.O_EXCL))
+    except FileExistsError:
+        told = threading.Event()
+        signal.signal(signal.SIGTERM, lambda *_: told.set())
+        told.wait(60)
+        return "finished"
+    time.sleep(0.5)  # let the other start
     return answer_priceless(question)
 
 

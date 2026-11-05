@@ -1,5 +1,6 @@
 """The budget: reservations before each call, real costs after it, one ledger per test."""
 
+import json
 import subprocess
 import threading
 import time
@@ -7,8 +8,10 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
+import jsonschema
 import pytest
 
+import faultline_sdk
 from conftest import ACME, Project
 from fakes.openai_server import FIXTURES, FakeOpenAI
 from faultline_sdk import provider_openai as table
@@ -340,6 +343,29 @@ def test_runs_stopped_because_another_run_stopped_the_test_are_not_errors(projec
     outcomes = sorted(str(s["outcome"]) for s in result.summaries())
     assert outcomes == ["refused call", "stopped", "stopped"], result.out
     assert result.code == 2, result.out
+    schema = json.loads(
+        (Path(faultline_sdk.__file__).parent / "schemas" / "record.v1.json").read_text()
+    )
+    validator = jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker())
+    for lines in result.records():
+        for line in lines:
+            validator.validate(line)  # "stopped" is part of the record format
+
+
+@pytest.mark.design("runner.finished_run_keeps_its_outcome")
+def test_a_run_that_finishes_by_itself_during_a_stop_keeps_its_answer(project: Project) -> None:
+    project.edit(
+        'function = "acme.agent:answer"',
+        'function = "acme.rag:answer_one_stops_one_finishes"\nruns = 2\nparallel = 2',
+    )
+    project.edit(TOOL_FAULT, "")
+    fake = FakeOpenAI([])
+    fake.start()
+    try:
+        result = project.test(fake)
+    finally:
+        fake.stop()
+    assert sorted(str(s["outcome"]) for s in result.summaries()) == ["answered", "refused call"]
 
 
 @pytest.mark.design("check.no_model_calls_per_test")

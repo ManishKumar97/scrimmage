@@ -475,3 +475,20 @@ def test_a_client_that_drops_its_connection_prints_no_traceback(
     except ValueError:
         server.server.handle_error(None, ("127.0.0.1", 1))
     assert "a real bug" in capsys.readouterr().err
+
+
+def test_a_burst_of_settlements_all_arrive(tmp_path: Path) -> None:
+    ledger = Ledger(100.0)
+    control = ControlServer(TOKEN, RecordStore(tmp_path / "r"), ledger=ledger)
+    control.start()
+    control.open_run("run-1", "baseline", PLAN)
+    try:
+        sender = Sender(ControlClient(control.url, TOKEN), "run-1")
+        held = [ledger.reserve(0.5) for _ in range(200)]
+        for reservation in held:
+            assert reservation is not None
+            sender.put_settle(reservation, 0.5)
+        sender.flush()
+        assert (ledger.reserved, ledger.spent) == (0.0, 100.0)
+    finally:
+        control.stop()
