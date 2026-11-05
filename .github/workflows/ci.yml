@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.13.0"
+  # uv run never re-locks; a stale uv.lock fails the job.
+  UV_LOCKED: "1"
+
+jobs:
+  checks:
+    name: Lint, types, dead code, imports
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync
+      - name: ruff
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      # The checks below run even after one fails, so a PR shows all its problems.
+      - name: pyright
+        if: ${{ !cancelled() }}
+        run: uv run pyright
+      - name: vulture
+        if: ${{ !cancelled() }}
+        run: uv run vulture
+      - name: import-linter
+        if: ${{ !cancelled() }}
+        run: uv run lint-imports
+
+  tests:
+    name: Tests on Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    env:
+      # Without this, uv run reads .python-version and rebuilds the venv on 3.11.
+      UV_PYTHON: ${{ matrix.python }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync
+      - name: Check the job runs the Python it names
+        run: uv run python -c "import sys; v = '.'.join(map(str, sys.version_info[:2])); assert v == '${{ matrix.python }}', v"
+      - run: uv run pytest
