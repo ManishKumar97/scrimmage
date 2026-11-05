@@ -8,9 +8,26 @@ import openai
 from acme import tools
 from acme.models import Stock
 
+TOOLS = {
+    "get_order": ("Look up an order's status and delivery date.", "order_id"),
+    "check_inventory": ("Check how many of a product are in stock, as text.", "sku"),
+    "refund_order": ("Refund an order. This moves real money.", "order_id"),
+    "get_stock": ("Get the stock record for a product.", "sku"),
+}
 SPECS = [
-    {"type": "function", "function": {"name": name, "parameters": {"type": "object"}}}
-    for name in ("get_order", "check_inventory", "refund_order", "get_stock")
+    {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {argument: {"type": "string"}},
+                "required": [argument],
+            },
+        },
+    }
+    for name, (description, argument) in TOOLS.items()
 ]
 
 
