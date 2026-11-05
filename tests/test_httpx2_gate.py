@@ -437,8 +437,22 @@ class WrongSend:
         {"Client": httpx2.Client, "AsyncClient": NoSend},
         {"Client": WrongSend, "AsyncClient": httpx2.AsyncClient},
         {"Client": httpx2.Client, "AsyncClient": WrongSend},
+        {"Client": httpx2.Client, "AsyncClient": httpx2.AsyncClient},
+        {
+            "Client": httpx2.Client,
+            "AsyncClient": httpx2.AsyncClient,
+            "SyncByteStream": httpx2.SyncByteStream,
+        },
     ],
-    ids=["nothing", "sync gone", "async gone", "sync changed", "async changed"],
+    ids=[
+        "nothing",
+        "sync gone",
+        "async gone",
+        "sync changed",
+        "async changed",
+        "no stream types",
+        "no async stream type",
+    ],
 )
 def test_a_library_the_gate_cannot_replace_stops_the_program(
     gated: None, parts: dict[str, object]
@@ -455,7 +469,13 @@ def test_a_library_missing_only_what_faults_need_drops_faults_but_keeps_refusing
 ) -> None:
     plan = make_plan((Fault("model", "status 429", "always"),))
     sink, ctx, stops = gate_for(plan)
-    httpx2_gate.patch(bare_library(Client=httpx2.Client, AsyncClient=httpx2.AsyncClient), ctx)
+    library = bare_library(
+        Client=httpx2.Client,
+        AsyncClient=httpx2.AsyncClient,
+        SyncByteStream=httpx2.SyncByteStream,
+        AsyncByteStream=httpx2.AsyncByteStream,
+    )
+    httpx2_gate.patch(library, ctx)
     assert not ctx.faults and stops == [] and "faults do not" in str(sink.lines[0]["message"])
     assert client().post(URL, json=BODY).status_code == 200  # no fault: the call runs
     with pytest.raises(FaultlineRefused):  # and a write is still refused

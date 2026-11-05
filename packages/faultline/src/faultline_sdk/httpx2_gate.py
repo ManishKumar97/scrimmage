@@ -82,7 +82,8 @@ def gatable(module: ModuleType) -> bool:
         send = getattr(getattr(module, name, None), "_send_single_request", None)
         if send is None or params(send) != ["self", "request"]:
             return False
-    return True
+    # Without its stream types a reply cannot be watched, so it could not be budgeted.
+    return all(hasattr(module, name) for name in ("SyncByteStream", "AsyncByteStream"))
 
 
 def version(module: ModuleType) -> tuple[int, int] | None:
@@ -111,7 +112,7 @@ def patch(module: ModuleType, ctx: Context) -> None:
         ctx.run.notice("structure", LIBRARY, message)
         ctx.stop(message)
         return
-    if not all(hasattr(module, n) for n in ("Response", "ReadTimeout", "SyncByteStream")):
+    if not all(hasattr(module, n) for n in ("Response", "ReadTimeout")):
         ctx.run.notice(
             "structure",
             LIBRARY,

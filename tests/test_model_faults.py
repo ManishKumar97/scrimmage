@@ -231,7 +231,8 @@ def test_a_library_that_cannot_build_faults_fails_a_run_that_ended_cleanly(
 ) -> None:
     (project.root / "httpx2.py").write_text(
         "class Client:\n    def _send_single_request(self, request): ...\n\n\n"
-        "class AsyncClient:\n    async def _send_single_request(self, request): ...\n"
+        "class AsyncClient:\n    async def _send_single_request(self, request): ...\n\n\n"
+        "class SyncByteStream: ...\n\n\nclass AsyncByteStream: ...\n"
     )
     project.edit(
         'function = "acme.agent:answer"',
