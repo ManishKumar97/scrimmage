@@ -141,6 +141,7 @@ class RunState:
             "unseen_tool": detail,
             "unreadable_body": detail,
             "redirect_off_host": detail,
+            "unsupported_loop": detail,
         }
         return FaultlineRefused(messages.get(reason, f"{label} is refused: {detail}"))
 

@@ -38,6 +38,7 @@ MISTAKE_REASONS = (
     "model_host_write",
     "unreadable_body",
     "redirect_off_host",
+    "unsupported_loop",
 )
 
 
@@ -154,12 +155,23 @@ def patch(module: ModuleType, ctx: Context) -> None:
         return response
 
     async def async_gate(self: Any, request: Any) -> Any:
-        task = asyncio.current_task()
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:  # no asyncio loop: trio, or something else
+            task = None
         who = f"task-{id(task)}" if task is not None else f"thread-{threading.get_ident()}"
         prepared = prepare(ctx, request, who)
         if prepared is None:
             return await async_send(self, request)
         step, extra = prepared
+        if task is None:
+            ctx.run.refuse(step, "unsupported_loop")
+            refuse(
+                ctx.run,
+                step,
+                "this model call runs outside asyncio, such as under trio, which Faultline "
+                "does not support yet, so it could not be budgeted; run the agent on asyncio",
+            )
         if step.decision.action == "fault":
             return fault(ctx, module, step, request, extra)
         reservation = await reserve_off_the_loop(ctx, step, request, extra)
@@ -209,7 +221,7 @@ def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call | None:
     if op is None:
         return Call("http", f"http:{host}", path, provider, method)
     try:
-        retry = int(request.headers.get("x-stainless-retry-count", "0"))
+        retry = max(0, int(request.headers.get("x-stainless-retry-count", "0")))
     except ValueError:
         retry = 0
     label = f"model:{provider}" if op == "chat" else f"model:{provider}/{op}"

@@ -204,7 +204,8 @@
             "model_host_write",
             "control_unreachable",
             "unreadable_body",
-            "redirect_off_host"
+            "redirect_off_host",
+            "unsupported_loop"
           ]
         },
         "provider": {

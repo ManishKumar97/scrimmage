@@ -211,6 +211,22 @@ def test_a_task_cancelled_while_it_reserves_gives_the_reservation_back(gated: No
     assert real_error(sink.lines[0]) is None  # cancelling is not the provider failing
 
 
+@pytest.mark.design("gate.outside_asyncio_refused")
+def test_an_async_call_outside_asyncio_fails_closed(gated: None) -> None:
+    sink, _ = install(make_plan())
+    c = httpx2.AsyncClient(transport=httpx2.MockTransport(answer))
+    attempt = c._send_single_request(c.build_request("POST", URL, json=BODY))  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(FaultlineRefused, match="outside asyncio"):
+        attempt.send(None)  # driven by hand, as a loop other than asyncio would
+    assert sink.lines[0]["reason"] == "unsupported_loop"
+
+
+def test_a_negative_retry_header_counts_as_a_first_attempt(gated: None) -> None:
+    sink, _ = install(make_plan())
+    client().post(URL, json=BODY, headers={"x-stainless-retry-count": "-1"})
+    assert sink.lines[0]["retry"] == 0
+
+
 @pytest.mark.design("budget.unreachable_refuses")
 def test_an_unreachable_control_server_refuses_the_call(gated: None) -> None:
     dead = ControlClient("http://127.0.0.1:9", "t" * 64)
