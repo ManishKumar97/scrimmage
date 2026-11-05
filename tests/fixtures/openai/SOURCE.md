@@ -21,3 +21,15 @@ Only the tool name, its arguments, the call id and the answer text are changed; 
 | `acme_get_stock.json` | Functions | calls `get_stock` with `{"sku": "SKU-42"}` |
 | `acme_refund_order.json` | Functions | calls `refund_order` with `{"order_id": "1234"}` |
 | `acme_answer.json` | Default | the answer text |
+
+These come from the same spec, for model faults and the budget.
+Where the spec shows a placeholder, the placeholder is removed so the file is valid; nothing else changes unless the table says so.
+
+| File | Spec source | What changed |
+|---|---|---|
+| `chat_stream.sse` | Create chat completion, example Streaming | The three chunks shown, without the `....` line, framed as server-sent events and ending with `data: [DONE]` |
+| `chat_stream_usage.sse` | The same example, and the `usage` field of the chunk object | Adds the last chunk the spec describes for `stream_options.include_usage`: empty `choices`, then `usage` |
+| `embedding.json` | Create embeddings, example response | Without the `....` line and its trailing comma |
+| `response_text.json` | Create a model response, example Text input | Unchanged |
+| `error_429.json` | The `Error` object in `components/schemas`, and OpenAI's cookbook `How_to_handle_rate_limits` | The object's four fields; the message is the cookbook's, the code is from the spec's error code list, and the type is `requests` |
+| `error_500.json` | The `Error` object | The message OpenAI's API sends for a server error |
