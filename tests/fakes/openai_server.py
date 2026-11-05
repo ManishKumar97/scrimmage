@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-FIXTURES = Path(__file__).parent / "fixtures" / "openai"
+FIXTURES = Path(__file__).parents[1] / "fixtures" / "openai"
 CHAT_PATH = "/v1/chat/completions"
 
 
