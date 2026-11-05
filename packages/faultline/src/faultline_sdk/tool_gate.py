@@ -5,7 +5,6 @@ module, then swaps each named function in it before the agent's code can look it
 """
 
 import functools
-import importlib.abc
 import importlib.machinery
 import inspect
 import sys
@@ -13,7 +12,7 @@ from collections.abc import Callable, Sequence
 from types import ModuleType
 from typing import Any
 
-from faultline_sdk import mocks
+from faultline_sdk import hooks, mocks
 from faultline_sdk.errors import FaultlineMockError
 from faultline_sdk.state import RunState, Step, current
 
@@ -136,56 +135,7 @@ def targets(paths: Sequence[str]) -> dict[str, list[str]]:
     return out
 
 
-class _SwappingLoader(importlib.abc.Loader):
-    """Runs the real loader, then swaps the named tools in the new module."""
-
-    def __init__(
-        self, loader: importlib.abc.Loader, names: list[str], renamed: dict[str, str]
-    ) -> None:
-        self.loader = loader
-        self.names = names
-        self.renamed = renamed
-
-    def create_module(self, spec: importlib.machinery.ModuleSpec) -> ModuleType | None:
-        return self.loader.create_module(spec)
-
-    def exec_module(self, module: ModuleType) -> None:
-        self.loader.exec_module(module)
-        swap(module, self.names, self.renamed)
-
-    def __getattr__(self, attr: str) -> object:
-        return getattr(self.loader, attr)
-
-
-class ToolFinder(importlib.abc.MetaPathFinder):
-    def __init__(self, wanted: dict[str, list[str]], renamed: dict[str, str]) -> None:
-        self.wanted = wanted
-        self.renamed = renamed
-
-    def find_spec(
-        self,
-        fullname: str,
-        path: Sequence[str] | None,
-        target: ModuleType | None = None,
-    ) -> importlib.machinery.ModuleSpec | None:
-        names = self.wanted.get(fullname)
-        if names is None:
-            return None
-        for finder in sys.meta_path:
-            if finder is self or not hasattr(finder, "find_spec"):
-                continue
-            spec = finder.find_spec(fullname, path, target)
-            if spec is not None:
-                if spec.loader is not None:
-                    spec.loader = _SwappingLoader(spec.loader, names, self.renamed)
-                return spec
-        return None
-
-
 def install(paths: Sequence[str], renamed: dict[str, str] | None = None) -> None:
-    wanted = targets(paths)
     names_seen = renamed or {}
-    for module, names in wanted.items():
-        if module in sys.modules:  # already imported, such as by another sitecustomize
-            swap(sys.modules[module], names, names_seen)
-    sys.meta_path.insert(0, ToolFinder(wanted, names_seen))
+    for module, names in targets(paths).items():
+        hooks.on_import(module, functools.partial(swap, names=names, renamed=names_seen))

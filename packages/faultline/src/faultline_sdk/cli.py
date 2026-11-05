@@ -36,7 +36,7 @@ def main(argv: list[str] | None = None) -> int:
         if runner is not None:
             runner.server.server.server_close()
     assert runner is not None
-    return report(config, results, runner.folder, sys.stdout)
+    return report(config, results, runner.folder, sys.stdout, runner)
 
 
 if __name__ == "__main__":

@@ -20,3 +20,10 @@ _.as_dict  # tests/starter_agents.py: named by import path in test_start.py
 _.as_async  # tests/starter_agents.py: named by import path in test_start.py
 _.pytest_sessionfinish  # tests/conftest.py: pytest calls hooks by name
 _.exitstatus  # tests/conftest.py: pytest reads it to set the exit code
+_.answer_streamed  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
+_.answer_priceless  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
+_.answer_twice  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
+_.answer_tuning  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
+_.answer_hosted  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
+_.answer_odd_tool  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
+_.answer_unseen  # tests/example/acme/rag.py: named by import path in a test's faultline.toml

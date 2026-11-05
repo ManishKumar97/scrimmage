@@ -42,7 +42,10 @@ def run_tool(name: str, arguments: str) -> str:
 
 
 def answer(question: str) -> str:
-    client = openai.OpenAI(max_retries=0)
+    return loop(openai.OpenAI(max_retries=0), question)
+
+
+def loop(client: openai.OpenAI, question: str) -> str:
     messages: list[Any] = [{"role": "user", "content": question}]
     for _ in range(8):
         reply = client.chat.completions.create(

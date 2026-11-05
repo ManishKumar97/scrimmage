@@ -1,0 +1,269 @@
+"""The budget: reservations before each call, real costs after it, one ledger per test."""
+
+import threading
+from collections.abc import Callable, Iterator
+from pathlib import Path
+
+import pytest
+
+from conftest import ACME, Project
+from fakes.openai_server import FIXTURES, FakeOpenAI
+from faultline_sdk import provider_openai as table
+from faultline_sdk.budget import Ledger
+from faultline_sdk.client import ControlClient, ControlError
+from faultline_sdk.control import ControlServer
+from faultline_sdk.records import RecordStore
+
+Fake = Callable[..., FakeOpenAI]
+TOKEN = "e" * 64
+TOOL_FAULT = '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'
+RAG = 'function = "acme.rag:answer"\nruns = 1'
+
+
+def rag(project: Project, extra: str) -> None:
+    project.edit('function = "acme.agent:answer"', RAG + extra)
+    project.edit(TOOL_FAULT, "")
+
+
+@pytest.mark.design("budget.reservations_race")
+def test_four_calls_at_79_of_80_cents_reserve_one_and_refuse_three() -> None:
+    ledger = Ledger(0.80)
+    ledger.settle(ledger.reserve(0.79) or 0, 0.79)
+    results: list[int | None] = []
+    start = threading.Barrier(4)
+
+    def call() -> None:
+        start.wait()
+        results.append(ledger.reserve(0.01))
+
+    threads = [threading.Thread(target=call) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sum(r is not None for r in results) == 1
+    assert ledger.reached
+
+
+@pytest.mark.design("budget.real_cost_replaces_reservation")
+def test_the_real_cost_replaces_the_reservation() -> None:
+    ledger = Ledger(1.00)
+    held = ledger.reserve(0.60)
+    assert held is not None and ledger.reserve(0.60) is None
+    ledger.settle(held, 0.10)
+    assert (round(ledger.spent, 2), ledger.reserved) == (0.10, 0.0)
+    assert ledger.reserve(0.60) is not None
+
+
+def test_no_limit_means_every_reservation_passes() -> None:
+    assert Ledger(None).reserve(1_000_000.0) is not None
+
+
+@pytest.fixture
+def control(tmp_path: Path) -> Iterator[ControlServer]:
+    server = ControlServer(TOKEN, RecordStore(tmp_path / "r"), ledger=Ledger(0.80))
+    server.start()
+    server.open_run("run-1", "baseline", {"v": 1})
+    yield server
+    server.stop()
+
+
+@pytest.mark.design("budget.ledger_over_protocol")
+def test_the_ledger_works_through_the_signed_protocol(control: ControlServer) -> None:
+    client = ControlClient(control.url, TOKEN)
+    held = client.reserve("run-1", 0.79)
+    assert held is not None
+    client.settle("run-1", held, 0.79)
+    outcomes = [client.reserve("run-1", 0.01) for _ in range(2)]
+    assert outcomes[0] is not None and outcomes[1] is None
+    assert control.ledger.spent == pytest.approx(0.79)
+
+
+def test_a_reservation_for_a_closed_run_is_an_error(control: ControlServer) -> None:
+    client = ControlClient(control.url, TOKEN)
+    control.close_run("run-1")
+    with pytest.raises(ControlError, match="could not be checked"):
+        client.reserve("run-1", 0.01)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{"run": "run-1"}, {"run": "run-1", "usd": "x"}, {"run": "run-1", "usd": -1}],
+)
+def test_bad_budget_requests_are_refused(
+    control: ControlServer, payload: dict[str, object]
+) -> None:
+    client = ControlClient(control.url, TOKEN)
+    assert client.request("POST", "/v1/budget/reserve", payload)[0] == 400
+    assert client.request("POST", "/v1/budget/settle", {**payload, "reservation": "x"})[0] == 400
+    assert (
+        client.request("POST", "/v1/budget/settle", {"run": "r", "reservation": 1, "usd": -1})[0]
+        == 400
+    )
+
+
+# Dollars per million tokens, chosen so a few tokens make whole cents.
+PRICES = (1_000_000.0 * 0.01, 1_000_000.0 * 0.02)  # 1 cent an input token, 2 an output
+
+
+@pytest.mark.design("budget.costs_to_the_cent")
+@pytest.mark.parametrize(
+    ("fixture", "tokens_in", "tokens_out", "dollars"),
+    [
+        # By hand: tokens_in at $0.01 plus tokens_out at $0.02.
+        ("chat_tool_call.json", 82, 17, 1.16),
+        ("chat_answer.json", 19, 10, 0.39),
+        ("embedding.json", 8, 0, 0.08),
+        ("response_text.json", 36, 87, 2.10),
+        ("chat_stream_usage.sse", 9, 1, 0.11),
+    ],
+)
+def test_fixed_replies_cost_what_a_hand_computed_table_says(
+    fixture: str, tokens_in: int, tokens_out: int, dollars: float
+) -> None:
+    used = table.usage((FIXTURES / fixture).read_bytes())
+    assert (used.input, used.output, used.known) == (tokens_in, tokens_out, True)
+    assert round(table.cost(used.input, used.output, PRICES), 2) == dollars
+
+
+def test_a_stream_with_no_counts_says_so() -> None:
+    assert not table.usage((FIXTURES / "chat_stream.sse").read_bytes()).known
+
+
+def test_a_reply_that_is_not_json_has_no_counts() -> None:
+    assert not table.usage(b"<html>bad gateway</html>").known
+    assert table.request_fields(b"not json") == {}
+
+
+@pytest.mark.design("budget.price_lookup")
+def test_prices_come_from_the_team_then_the_table_then_the_family() -> None:
+    assert table.price("gpt-4o-mini", {}) == (0.15, 0.60)
+    assert table.price("gpt-4o-mini-2024-07-18", {}) == (0.15, 0.60)  # a dated snapshot
+    assert table.price("gpt-4o-mini", {"gpt-4o-mini": (9.0, 9.0)}) == (9.0, 9.0)
+    assert table.price("acme-llama-70b", {"acme-llama": (0.6, 0.6)}) == (0.6, 0.6)
+    assert table.price("nobody-knows-me", {}) is None
+
+
+def test_a_request_can_set_its_own_output_limit() -> None:
+    assert table.max_output({"max_tokens": 50}) == 50
+    assert table.max_output({"max_completion_tokens": 60, "max_tokens": 50}) == 60
+    assert table.max_output({"max_output_tokens": 70}) == 70
+    assert table.max_output({}) is None
+    assert table.max_output({"max_tokens": True}) is None
+
+
+@pytest.mark.design("budget.costs_reach_the_record")
+def test_a_runs_cost_is_summed_from_its_real_replies(project: Project, fake_openai: Fake) -> None:
+    rag(project, "\nmax_cost_usd = 1000")
+    project.edit(
+        "[[test]]\n",
+        "[agent.prices]\ngpt-4o-mini = {input = 10000, output = 20000}\n"
+        "text-embedding-3-small = {input = 10000, output = 0}\n\n[[test]]\n",
+    )
+    result = project.test(fake_openai(ACME, embedding="embedding"))
+    assert result.code == 0, result.out
+    # By hand: the embedding, 8 tokens, $0.08; two tool replies, 82 in and 17 out, $1.16
+    # each; the answer, 19 in and 10 out, $0.39.
+    assert result.summaries()[0]["cost_usd"] == pytest.approx(2.79)
+    assert "model calls cost $2.7900 of a budget of $1000" in result.out
+
+
+@pytest.mark.design("budget.stops_the_test")
+def test_a_budget_that_cannot_cover_a_call_stops_the_test(
+    project: Project, fake_openai: Fake
+) -> None:
+    rag(project, "\nmax_cost_usd = 0.00001")
+    fake = FakeOpenAI(ACME, embedding="embedding")
+    fake.start()
+    try:
+        result = project.test(fake)
+    finally:
+        fake.stop()
+    assert result.code == 2, result.out
+    assert fake.paths == ["/v1/embeddings"]  # the chat call, which cannot fit, never went
+    assert {s["outcome"] for s in result.summaries()} == {"budget reached"}
+    assert "the budget of $1e-05 was reached" in result.out
+
+
+@pytest.mark.design("budget.no_price")
+def test_a_model_with_no_price_fails_its_first_call_naming_the_setting(
+    project: Project, fake_openai: Fake
+) -> None:
+    project.edit(
+        'function = "acme.agent:answer"', 'function = "acme.rag:answer_priceless"\nruns = 1'
+    )
+    project.edit(TOOL_FAULT, "")
+    fake = FakeOpenAI([])
+    fake.start()
+    try:
+        result = project.test(fake)
+    finally:
+        fake.stop()
+    assert result.code == 2
+    assert fake.paths == []
+    assert "[agent.prices]" in result.out and "acme-llama-70b" in result.out
+
+
+@pytest.mark.design("budget.none_counts_tokens")
+def test_with_the_budget_off_there_is_no_price_rule_and_tokens_are_counted(
+    project: Project, fake_openai: Fake
+) -> None:
+    project.edit(
+        'function = "acme.agent:answer"',
+        'function = "acme.rag:answer_priceless"\nruns = 1\nmax_cost_usd = "none"',
+    )
+    project.edit(TOOL_FAULT, "")
+    result = project.test(fake_openai(["chat_answer"]))
+    assert result.code == 0, result.out
+    line = next(x for x in result.records()[0] if x.get("kind") == "model")
+    assert line["tokens"] == {"input": 19, "output": 10}
+    assert "of no budget" in result.out
+
+
+@pytest.mark.design("budget.estimates_without_counts")
+def test_a_stream_with_no_token_counts_is_estimated_and_says_so(
+    project: Project, fake_openai: Fake
+) -> None:
+    project.edit(
+        'function = "acme.agent:answer"', 'function = "acme.rag:answer_streamed"\nruns = 1'
+    )
+    project.edit(TOOL_FAULT, "")
+    result = project.test(fake_openai(["chat_stream"]))
+    line = next(x for x in result.records()[0] if x.get("kind") == "model")
+    assert line["cost_estimated"] is True and line["stream"] is True
+    assert result.summaries()[0]["answer"] == "Hello"
+
+
+@pytest.mark.design("budget.stream_counts")
+def test_a_stream_with_token_counts_is_read_as_it_goes_by(
+    project: Project, fake_openai: Fake
+) -> None:
+    project.edit(
+        'function = "acme.agent:answer"', 'function = "acme.rag:answer_streamed"\nruns = 1'
+    )
+    project.edit(TOOL_FAULT, "")
+    result = project.test(fake_openai(["chat_stream_usage"]))
+    line = next(x for x in result.records()[0] if x.get("kind") == "model")
+    assert line["cost_estimated"] is False and line["tokens"] == {"input": 9, "output": 1}
+
+
+@pytest.mark.design("check.no_model_calls")
+def test_with_a_budget_and_no_model_call_in_the_baseline_the_test_fails(project: Project) -> None:
+    project.edit('function = "acme.agent:answer"', 'function = "acme.slow:echo"\nruns = 1')
+    project.edit(TOOL_FAULT, "")
+    result = project.test()
+    assert result.code == 2
+    assert "no baseline run made a model call" in result.out
+    assert "answered with no model call" in result.out
+
+
+@pytest.mark.design("check.baseline_failed")
+def test_a_failed_baseline_skips_its_fault_rows(project: Project, fake_openai: Fake) -> None:
+    project.edit(
+        'function = "acme.agent:answer"',
+        'function = "acme.slow:crash"\nruns = 2\nmax_cost_usd = "none"',
+    )
+    result = project.test()
+    assert result.code == 2
+    assert len(result.records()) == 2  # the baseline's two runs, and no fault row
+    assert "baseline failed" in result.out
