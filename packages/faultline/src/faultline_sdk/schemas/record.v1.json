@@ -202,7 +202,8 @@
             "unknown_tool_type",
             "unseen_tool",
             "model_host_write",
-            "control_unreachable"
+            "control_unreachable",
+            "unreadable_body"
           ]
         },
         "provider": {
@@ -246,7 +247,10 @@
           }
         },
         "cost_usd": {
-          "type": "number",
+          "type": [
+            "number",
+            "null"
+          ],
           "minimum": 0
         },
         "cost_estimated": {
@@ -256,6 +260,12 @@
           "const": true
         },
         "unseen_tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "hosted_reads": {
           "type": "array",
           "items": {
             "type": "string"
@@ -305,7 +315,8 @@
                 "timed out",
                 "refused call",
                 "budget reached",
-                "infrastructure error"
+                "infrastructure error",
+                "stopped"
               ]
             },
             "fault_fired": {

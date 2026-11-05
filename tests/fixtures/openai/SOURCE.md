@@ -33,3 +33,6 @@ Where the spec shows a placeholder, the placeholder is removed so the file is va
 | `response_text.json` | Create a model response, example Text input | Unchanged |
 | `error_429.json` | The `Error` object in `components/schemas`, and OpenAI's cookbook `How_to_handle_rate_limits` | The object's four fields; the message is the cookbook's, the code is from the spec's error code list, and the type is `requests` |
 | `error_500.json` | The `Error` object | The message OpenAI's API sends for a server error |
+| `response_stream.sse` | Create a model response, example Streaming | Without the `...` line |
+
+The 401, 500 and 503 messages in Faultline's own error bodies are from OpenAI's error codes page, `examples/data/oai_docs/error-codes.txt` in the `openai/openai-cookbook` repository.

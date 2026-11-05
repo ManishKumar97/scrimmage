@@ -1,8 +1,10 @@
 """The httpx2 gate in one process, with lines kept in a list and a mock transport."""
 
 import asyncio
+import dataclasses
 import gzip
 import itertools
+import json
 import time
 import types
 import zlib
@@ -10,12 +12,14 @@ from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import httpx2
+import openai
 import pytest
 
-from faultline_sdk import httpx2_gate, state
+from faultline_sdk import httpx2_gate, provider_openai, state
 from faultline_sdk.budget import Ledger
 from faultline_sdk.client import ControlClient
 from faultline_sdk.config import Fault, ModelHost
+from faultline_sdk.decide import Counters
 from faultline_sdk.errors import FaultlineRefused
 from faultline_sdk.plan import Plan
 
@@ -28,7 +32,7 @@ class Sink:
     def __init__(self) -> None:
         self.lines: list[dict[str, object]] = []
         self.blobs: dict[str, bytes] = {}
-        self.posts: list[tuple[str, dict[str, object]]] = []
+        self.settles: list[tuple[int, float]] = []
 
     def put(self, line: dict[str, object], *, keep: bool = False) -> None:
         self.lines.append(line)
@@ -37,9 +41,8 @@ class Sink:
         self.blobs[sha] = data
         return True
 
-    def put_post(self, path: str, payload: dict[str, object]) -> bool:
-        self.posts.append((path, payload))
-        return True
+    def put_settle(self, reservation: int, usd: float) -> None:
+        self.settles.append((reservation, usd))
 
 
 class Budget:
@@ -71,11 +74,15 @@ def gated() -> Iterator[None]:
     state.install(None)
 
 
+def stopper(stops: list[str]) -> Any:
+    return stops.append
+
+
 def install(plan: Plan, client: Any = None) -> tuple[Sink, httpx2_gate.Context]:
     sink = Sink()
     run = state.RunState(plan, sink, [])
     state.install(run)
-    ctx = httpx2_gate.Context(run, client or Budget(), sink)
+    ctx = httpx2_gate.Context(run, client or Budget(), sink, stopper([]))
     httpx2_gate.patch(httpx2, ctx)
     return sink, ctx
 
@@ -197,8 +204,7 @@ def test_the_real_cost_is_settled_by_the_sender_not_the_agent(gated: None) -> No
     budget = Budget(limit=1.0)
     sink, _ = install(make_plan(budget=1.0), budget)
     client().post(URL, json=BODY)
-    path, payload = sink.posts[0]
-    assert path == "/v1/budget/settle" and payload["reservation"] == 1
+    assert sink.settles == [(1, pytest.approx(0.0000045))]  # 10 in, 5 out, at gpt-4o-mini prices
 
 
 @pytest.mark.design("budget.failed_call_gives_back")
@@ -211,7 +217,7 @@ def test_a_call_that_gets_no_reply_gives_its_reservation_back(gated: None) -> No
     with pytest.raises(httpx2.ConnectError):
         httpx2.Client(transport=httpx2.MockTransport(down)).post(URL, json=BODY)
     assert str(sink.lines[0]["error"]).startswith("ConnectError")
-    assert sink.posts[0][1]["usd"] == 0.0
+    assert sink.settles == [(1, 0.0)]
 
 
 def test_an_async_call_that_gets_no_reply_gives_its_reservation_back(gated: None) -> None:
@@ -227,7 +233,7 @@ def test_an_async_call_that_gets_no_reply_gives_its_reservation_back(gated: None
 
     with pytest.raises(httpx2.ConnectError):
         asyncio.run(go())
-    assert sink.posts[0][1]["usd"] == 0.0
+    assert sink.settles == [(1, 0.0)]
 
 
 @pytest.mark.design("budget.output_reserve")
@@ -235,7 +241,8 @@ def test_a_reservation_uses_max_tokens_or_the_default(gated: None) -> None:
     budget = Budget(limit=1000.0)
     install(make_plan(budget=1000.0, reserve_output_tokens=1000), budget)
     client().post(URL, json={**BODY, "max_tokens": 1})
-    small = budget.ledger.reserved
+    small = budget.ledger.spent + budget.ledger.reserved
+    assert small < 0.0001  # one output token, not a thousand
     client().post(URL, json=BODY)
     # 1000 output tokens at $0.60 a million is $0.0006 more than 1 output token would be.
     assert budget.ledger.reserved - small == pytest.approx(0.0006, abs=0.00002)
@@ -330,32 +337,56 @@ def test_a_reply_that_will_not_decompress_stays_as_it_is() -> None:
     assert httpx2_gate.decoded(b"not gzip", "gzip") == b"not gzip"
 
 
+def bare_library(**parts: object) -> types.ModuleType:
+    module = types.ModuleType("httpx2")
+    module.__dict__.update(parts)
+    return module
+
+
+def gate_for(plan: Plan) -> tuple[Sink, httpx2_gate.Context, list[str]]:
+    sink, stops = Sink(), []
+    run = state.RunState(plan, sink, [])
+    state.install(run)
+    return sink, httpx2_gate.Context(run, Budget(), sink, stopper(stops)), stops
+
+
+class NoSend:
+    pass
+
+
+class WrongSend:
+    def _send_single_request(self, request: object, extra: object) -> None: ...
+
+
 @pytest.mark.design("gate.structural_check")
-def test_a_library_without_the_gated_function_loses_faults_and_is_reported() -> None:
-    plan = make_plan((Fault("model", "status 429", "always"),))
-    sink = Sink()
-    ctx = httpx2_gate.Context(state.RunState(plan, sink, []), Budget(), sink)
-    broken = types.ModuleType("httpx2")
-    httpx2_gate.patch(broken, ctx)
-    assert sink.lines[0]["notice"] == "structure" and not ctx.faults
+@pytest.mark.parametrize(
+    "parts",
+    [
+        {},
+        {"Client": NoSend, "AsyncClient": httpx2.AsyncClient},
+        {"Client": httpx2.Client, "AsyncClient": NoSend},
+        {"Client": WrongSend, "AsyncClient": httpx2.AsyncClient},
+        {"Client": httpx2.Client, "AsyncClient": WrongSend},
+    ],
+    ids=["nothing", "sync gone", "async gone", "sync changed", "async changed"],
+)
+def test_a_library_the_gate_cannot_replace_stops_the_program(
+    gated: None, parts: dict[str, object]
+) -> None:
+    sink, ctx, stops = gate_for(make_plan())
+    httpx2_gate.patch(bare_library(**parts), ctx)
+    assert sink.lines[0]["notice"] == "structure"
+    assert len(stops) == 1 and "the program is stopped" in stops[0]
 
 
 @pytest.mark.design("gate.structural_keeps_refusals")
-def test_with_a_failed_check_the_gate_drops_faults_but_keeps_refusing(gated: None) -> None:
+def test_a_library_missing_only_what_faults_need_drops_faults_but_keeps_refusing(
+    gated: None,
+) -> None:
     plan = make_plan((Fault("model", "status 429", "always"),))
-    sink = Sink()
-    run = state.RunState(plan, sink, [])
-    state.install(run)
-    ctx = httpx2_gate.Context(run, Budget(), sink)
-    fake = types.ModuleType("httpx2")
-    fake.Client = httpx2.Client  # type: ignore[attr-defined]
-    fake.AsyncClient = httpx2.AsyncClient  # type: ignore[attr-defined]
-    fake.__version__ = httpx2.__version__  # type: ignore[attr-defined]
-    fake.Response = httpx2.Response  # type: ignore[attr-defined]
-    # No ReadTimeout or SyncByteStream: the check fails, the function is still there.
-    fake.SyncByteStream = httpx2.SyncByteStream  # type: ignore[attr-defined]
-    httpx2_gate.patch(fake, ctx)
-    assert not ctx.faults
+    sink, ctx, stops = gate_for(plan)
+    httpx2_gate.patch(bare_library(Client=httpx2.Client, AsyncClient=httpx2.AsyncClient), ctx)
+    assert not ctx.faults and stops == [] and "faults do not" in str(sink.lines[0]["message"])
     assert client().post(URL, json=BODY).status_code == 200  # no fault: the call runs
     with pytest.raises(FaultlineRefused):  # and a write is still refused
         client().post("https://api.openai.com/v1/fine_tuning/jobs", json={})
@@ -373,3 +404,223 @@ def test_a_newer_version_passes_with_a_warning(
 
 def test_a_version_it_cannot_read_is_not_a_warning() -> None:
     assert httpx2_gate.version(types.ModuleType("x")) is None
+
+
+def test_a_function_with_no_signature_cannot_be_gated() -> None:
+    assert httpx2_gate.params(print) is None or httpx2_gate.params(1) is None
+
+
+REDIRECT = "/v2/chat/completions"
+
+
+def redirecting(target: str) -> Any:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/v1/chat/completions":
+            return httpx2.Response(307, headers={"location": target})
+        return httpx2.Response(200, json=REPLY)
+
+    return httpx2.MockTransport(handler)
+
+
+@pytest.mark.design("gate.redirect_budgeted")
+def test_every_hop_of_a_redirect_is_budgeted(gated: None) -> None:
+    budget = Budget(limit=100.0)
+    sink, _ = install(make_plan(budget=100.0), budget)
+    c = httpx2.Client(transport=redirecting(REDIRECT), follow_redirects=True)
+    assert c.post(URL, json=BODY).status_code == 200
+    assert [x["call"] for x in sink.lines] == ["model:openai", "model:openai"]
+    assert len(sink.settles) == 2
+
+
+@pytest.mark.design("gate.redirect_refused")
+def test_a_redirect_to_a_write_on_a_model_host_is_refused(gated: None) -> None:
+    sink, _ = install(make_plan())
+    c = httpx2.Client(transport=redirecting("/v1/fine_tuning/jobs"), follow_redirects=True)
+    with pytest.raises(FaultlineRefused, match="/v1/fine_tuning/jobs"):
+        c.post(URL, json=BODY)
+    assert sink.lines[-1]["reason"] == "model_host_write"
+
+
+@pytest.mark.design("gate.resend_decided_again")
+def test_a_request_sent_again_is_decided_again(gated: None) -> None:
+    install(make_plan((Fault("model", "status 429", "always"),)))
+    c = client()
+    request = c.build_request("POST", URL, json=BODY)
+    assert [c.send(request).status_code for _ in range(3)] == [429, 429, 429]
+
+
+@pytest.mark.design("record.no_query_string")
+def test_a_query_string_never_reaches_the_record(gated: None) -> None:
+    sink, _ = install(make_plan())
+    with pytest.raises(FaultlineRefused):
+        client().post("https://api.openai.com/v1/fine_tuning/jobs?api_key=hunter2", json={})
+    assert "hunter2" not in json.dumps(sink.lines)
+
+
+@pytest.mark.design("gate.host_and_path")
+def test_a_chat_path_on_another_host_is_not_a_model_call(gated: None) -> None:
+    sink, _ = install(make_plan())
+    client().post("https://chat.acme.internal/v1/chat/completions", json=BODY)
+    assert sink.lines == []
+
+
+def test_a_get_on_a_chat_path_is_not_a_model_call(gated: None) -> None:
+    sink, _ = install(make_plan())
+    client().get(URL)
+    assert sink.lines[0]["kind"] == "http"
+
+
+@pytest.mark.design("budget.interrupted_call_costs")
+def test_a_call_that_was_sent_but_got_no_reply_is_charged_its_input(gated: None) -> None:
+    def hung(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ReadTimeout("slow", request=request)
+
+    sink, _ = install(make_plan(budget=1.0), Budget(limit=1.0))
+    with pytest.raises(httpx2.ReadTimeout):
+        httpx2.Client(transport=httpx2.MockTransport(hung)).post(URL, json=BODY)
+    assert sink.settles[0][1] > 0
+    assert sink.lines[0]["cost_estimated"] is True
+
+
+@pytest.mark.design("budget.bad_usage_estimated")
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"total_tokens": 10},
+        {"prompt_tokens": "9", "completion_tokens": 1},
+        {"prompt_tokens": -5, "completion_tokens": 1},
+        {"prompt_tokens": 10**400, "completion_tokens": 1},
+    ],
+)
+def test_counts_that_make_no_sense_are_estimated(gated: None, usage: dict[str, object]) -> None:
+    def odd(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, content=json.dumps({"usage": usage}).encode())
+
+    sink, _ = install(make_plan())
+    assert (
+        httpx2.Client(transport=httpx2.MockTransport(odd)).post(URL, json=BODY).status_code == 200
+    )
+    line = sink.lines[0]
+    assert line["cost_estimated"] is True
+    assert isinstance(line["cost_usd"], float) and line["cost_usd"] >= 0
+
+
+@pytest.mark.design("gate.cost_code_never_raises")
+def test_a_failure_in_the_cost_code_never_reaches_the_agent(
+    gated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(body: bytes) -> None:
+        raise ArithmeticError
+
+    sink, _ = install(make_plan())
+    monkeypatch.setattr(provider_openai, "usage", boom)
+    assert client().post(URL, json=BODY).status_code == 200
+    assert sink.lines[0]["cost_usd"] is None
+
+
+@pytest.mark.design("budget.no_price_is_null")
+def test_with_no_price_the_cost_is_null_not_zero(gated: None) -> None:
+    sink, _ = install(make_plan())
+    client().post(URL, json={**BODY, "model": "acme-llama-70b"})
+    assert sink.lines[0]["cost_usd"] is None and sink.lines[0]["cost_estimated"] is False
+
+
+@pytest.mark.design("record.cut_size_true")
+def test_a_huge_reply_records_its_true_size(gated: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(httpx2_gate, "BLOB_CAP", 10)
+    monkeypatch.setattr(state, "BLOB_CAP", 10)
+    sink, _ = install(make_plan())
+    response = httpx2.Client(transport=httpx2.MockTransport(streaming)).post(URL, json=BODY)
+    assert len(response.content) == 55
+    result = sink.lines[0]["result"]
+    assert isinstance(result, dict) and result["bytes"] == 55 and result["cut"] is True
+
+
+@pytest.mark.design("gate.unreadable_body_refused")
+@pytest.mark.parametrize("content", [gzip.compress(b'{"tools": []}'), b""])
+def test_a_chat_body_the_gate_cannot_read_is_refused(gated: None, content: bytes) -> None:
+    sink, _ = install(make_plan())
+    with pytest.raises(FaultlineRefused, match="cannot read"):
+        client().post(URL, content=content)
+    assert sink.lines[0]["reason"] == "unreadable_body"
+
+
+def test_a_streamed_chat_body_is_refused(gated: None) -> None:
+    install(make_plan())
+    with pytest.raises(FaultlineRefused, match="cannot read"):
+        client().post(URL, content=iter([b'{"tools": []}']))
+
+
+@pytest.mark.design("gate.exit_finishes_open_replies")
+def test_at_exit_a_reply_never_read_is_recorded_and_settled(gated: None) -> None:
+    budget = Budget(limit=1.0)
+    sink, ctx = install(make_plan(budget=1.0), budget)
+    c = httpx2.Client(transport=httpx2.MockTransport(streaming))
+    response = c.send(c.build_request("POST", URL, json=BODY), stream=True)
+    assert sink.lines == [] and len(ctx.open) == 1
+    ctx.close_open()
+    assert sink.lines[0]["reply_incomplete"] is True and len(sink.settles) == 1
+    assert ctx.open == set()
+    response.close()
+    assert len(sink.lines) == 1  # finished once
+
+
+@pytest.mark.design("gate.injected_reply_elapsed")
+def test_an_injected_reply_is_complete_for_the_code_reading_it(gated: None) -> None:
+    install(make_plan((Fault("model", "status 429", "always"),)))
+    response = client().post(URL, json=BODY)
+    assert response.elapsed.total_seconds() == 0
+
+
+@pytest.mark.design("model.error_body_reaches_agent")
+def test_the_library_reads_the_injected_body(gated: None) -> None:
+    install(make_plan((Fault("model", "status 429", "always"),)))
+    api = openai.OpenAI(api_key="test", max_retries=0, http_client=client())
+    with pytest.raises(openai.RateLimitError) as caught:
+        api.chat.completions.create(model="gpt-4o-mini", messages=[])
+    assert caught.value.code == "rate_limit_exceeded"
+    assert (
+        isinstance(caught.value.body, dict) and "Rate limit reached" in caught.value.body["message"]
+    )
+
+
+def two_calls() -> tuple[Any, Any]:
+    return httpx2.Request("POST", URL, json=BODY), httpx2.Request("POST", URL, json={"a": 1})
+
+
+@pytest.mark.design("schedule.key_names_the_sender")
+def test_identical_requests_from_two_senders_keep_their_own_numbers(gated: None) -> None:
+    _, ctx = install(make_plan())
+    request, _ = two_calls()
+    body = httpx2_gate.body_of(request) or b""
+    one, two = (httpx2_gate.describe(ctx, request, who, body) for who in ("sender-a", "sender-b"))
+    assert one is not None and two is not None and one.key != two.key
+
+
+@pytest.mark.design("schedule.key_names_the_body")
+def test_two_requests_from_one_sender_keep_their_own_numbers(gated: None) -> None:
+    plan = make_plan((Fault("model", "status 429", "requests 1"),))
+    _, ctx = install(plan)
+    first, second = two_calls()
+    first_body, second_body = (httpx2_gate.body_of(r) or b"" for r in (first, second))
+    counters = Counters(plan)
+    a = httpx2_gate.describe(ctx, first, "sender-a", first_body)
+    b = httpx2_gate.describe(ctx, second, "sender-a", second_body)
+    assert a is not None and b is not None
+    counters.note(a)
+    counters.note(b)
+    retry_of_a = dataclasses.replace(a, retry=1)
+    assert counters.note(retry_of_a) == [1]  # the first request's number, not the second's
+
+
+@pytest.mark.design("model.read_paths_free")
+def test_a_moderation_is_a_labelled_read_that_needs_no_price(gated: None) -> None:
+    budget = Budget(limit=1.0)
+    sink, _ = install(make_plan(budget=1.0), budget)
+    url = "https://api.openai.com/v1/moderations"
+    assert (
+        client().post(url, json={"model": "omni-moderation-latest", "input": "hi"}).status_code
+        == 200
+    )
+    assert sink.lines[0]["call"] == "model:openai/moderations"
+    assert budget.ledger.reserved == 0.0

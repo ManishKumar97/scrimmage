@@ -1,8 +1,8 @@
 """The budget for a whole test, kept in one place: the runner.
 
-The cost of a model call is known only after it ends, so before each call the SDK
-reserves what it could cost. Four calls at once cannot all pass at $0.79 of $0.80,
-because each reservation counts against the limit until the real cost replaces it.
+A call's price is only known once it finishes, so the SDK holds back the most it could
+be first. Each hold counts against the limit until the real price replaces it, so calls
+running at once cannot each see the same money as free.
 """
 
 import threading
@@ -13,7 +13,6 @@ class Ledger:
         self.limit_usd = limit_usd  # None: no budget, on purpose
         self.spent = 0.0
         self.reserved = 0.0
-        self.reached = False
         self._held: dict[int, float] = {}
         self._next = 0
         self._lock = threading.Lock()
@@ -22,7 +21,6 @@ class Ledger:
         """A reservation number, or None when the budget cannot cover the call."""
         with self._lock:
             if self.limit_usd is not None and self.spent + self.reserved + usd > self.limit_usd:
-                self.reached = True
                 return None
             self._next += 1
             self._held[self._next] = usd

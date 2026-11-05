@@ -190,7 +190,7 @@
     },
     "model_label": {
       "type": "string",
-      "pattern": "^model(:(openai|\\*)(/embeddings)?)?$"
+      "pattern": "^model(:(openai|\\*)(/(embeddings|moderations|input_tokens))?)?$"
     },
     "call_label": {
       "anyOf": [

@@ -5,7 +5,9 @@ model calls at once, a provider call that creates something, and model requests 
 offer tools Faultline must check.
 """
 
+import os
 import threading
+import time
 
 import openai
 
@@ -43,6 +45,55 @@ def answer_priceless(question: str) -> str:
     """A gateway's own model, with no public price."""
     reply = openai.OpenAI(max_retries=0).chat.completions.create(
         model="acme-llama-70b", messages=[{"role": "user", "content": question}]
+    )
+    return reply.choices[0].message.content or ""
+
+
+def answer_one_stops_the_rest(question: str) -> str:
+    """The first run makes a call that stops the test; the others are still working."""
+    try:
+        os.close(os.open("first-run", os.O_CREAT | os.O_EXCL))
+    except FileExistsError:
+        time.sleep(600)
+        return "never"
+    time.sleep(0.5)  # let the others start
+    return answer_priceless(question)
+
+
+def answer_short(question: str) -> str:
+    """Asks for one output token, and the reply may well use more."""
+    reply = openai.OpenAI(max_retries=0).chat.completions.create(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": question}], max_tokens=1
+    )
+    return reply.choices[0].message.content or "no text"
+
+
+def answer_if_asked(question: str) -> str:
+    """Goes to the model unless told not to, for a test with no model call."""
+    if "no model" in question:
+        return "offline"
+    reply = openai.OpenAI(max_retries=0).chat.completions.create(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": question}]
+    )
+    return reply.choices[0].message.content or ""
+
+
+def answer_web_search(question: str) -> str:
+    """Offers the provider's own web search, which only reads."""
+    reply = openai.OpenAI(max_retries=0).chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": question}],
+        web_search_options={},
+    )
+    return reply.choices[0].message.content or ""
+
+
+def answer_old_functions(question: str) -> str:
+    """Offers a tool the old way, as functions=[...]."""
+    reply = openai.OpenAI(max_retries=0).chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": question}],
+        functions=[{"name": "lookup_order", "parameters": {"type": "object"}}],
     )
     return reply.choices[0].message.content or ""
 
@@ -106,22 +157,18 @@ def answer_odd_tool(question: str) -> str:
 
 
 def answer_unseen(question: str) -> str:
-    """Offers the model a tool that is not under [agent] tools, then asks again."""
+    """Offers the model a tool that is not under [agent] tools."""
     client = openai.OpenAI(max_retries=0)
     spec = {
         "type": "function",
         "function": {"name": "lookup_order", "parameters": {"type": "object"}},
     }
-    messages: list[object] = [{"role": "user", "content": question}]
     try:
-        for _ in range(2):
-            reply = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,  # type: ignore[arg-type]
-                tools=[spec],  # type: ignore[list-item]
-            )
-            messages.append(reply.choices[0].message.model_dump(exclude_none=True))
-            messages.append({"role": "tool", "tool_call_id": "call_order1", "content": "ok"})
+        client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": question}],
+            tools=[spec],  # type: ignore[list-item]
+        )
     except openai.APIError as exc:
         return f"error: {type(exc).__name__}"
-    return "asked twice"
+    return "asked"

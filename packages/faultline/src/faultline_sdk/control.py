@@ -37,6 +37,7 @@ class Run:
     open: bool = True
     fetched: bool = False
     refused: bool = False
+    broken: bool = False  # a library its gate cannot work with
     dropped: int = 0
     # Lines each process said it made, from its last batch, keyed like proc_key.
     made: dict[str, int] = field(default_factory=dict[str, int])
@@ -189,8 +190,13 @@ class ControlServer:
             first = not state.refused and bool(reasons)
             state.refused = state.refused or first
             state.refusals += reasons
-        if first:  # stop the program off this thread, so the reply is not held up
+            broken = not state.broken and any(x.get("notice") == "structure" for x in mine)
+            state.broken = state.broken or broken
+        # Stop the program off this thread, so the reply is not held up.
+        if first:
             threading.Thread(target=self.on_refused, args=(run, reasons[0]), daemon=True).start()
+        if broken:
+            threading.Thread(target=self.on_refused, args=(run, "structure"), daemon=True).start()
         return 200, {"accepted": accepted}
 
 

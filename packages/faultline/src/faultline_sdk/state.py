@@ -30,11 +30,11 @@ class LineSink(Protocol):
 
 
 class BlobSink(Protocol):
-    """The sender: side-folder items and other requests it delivers off the agent's thread."""
+    """The sender: side-folder items and settlements it delivers off the agent's thread."""
 
     def put_blob(self, sha: str, data: bytes) -> bool: ...
 
-    def put_post(self, path: str, payload: dict[str, object]) -> bool: ...
+    def put_settle(self, reservation: int, usd: float) -> None: ...
 
 
 def now_iso() -> str:
@@ -73,7 +73,6 @@ class RunState:
         self.began = time.monotonic()
         self.counters = engine.Counters(plan)
         self.refused: str | None = None
-        self.unseen: list[str] = []  # tools the model was offered that no gate sees
         self.model_calls = 0
         self.proc = {
             "host": socket.gethostname(),
@@ -131,14 +130,16 @@ class RunState:
                 f'Mock it in the test, or add "{label}" to real if it is safe to run for real.'
             ),
             "model_host_write": (
-                f"{detail} goes to a model host but is not a model call or a read, so it is "
-                "refused; it may create something at the provider that outlives the test"
+                f"{detail} is a write to a model host and not a model call. Faultline "
+                "refuses it because it could leave something behind at the provider that no "
+                "test cleans up. No setting allows it yet; web-request labels come later."
             ),
             "budget": f"{label}: the test's budget cannot cover this call. {detail}",
             "no_price": detail,
             "hosted": detail,
             "unknown_tool_type": detail,
             "unseen_tool": detail,
+            "unreadable_body": detail,
         }
         return FaultlineRefused(messages.get(reason, f"{label} is refused: {detail}"))
 
@@ -223,15 +224,18 @@ class RunState:
         self.sink.put(line, keep=decision.action == "refused" or step.call.kind == "model")
 
 
-def blob(data: bytes, sink: BlobSink | None) -> dict[str, object]:
-    """Record a model request or reply: its full content goes to the side folder by hash."""
+def blob(data: bytes, sink: BlobSink | None, total: int | None = None) -> dict[str, object]:
+    """Record a model request or reply: its full content goes to the side folder by hash.
+
+    total is the true size when only part of the content was kept while it went by.
+    """
     text = redact(data.decode("utf-8", "replace"))
     raw = text.encode()
-    cut = len(raw) > BLOB_CAP
+    size = max(len(raw), total or 0)
     kept = raw[:BLOB_CAP]
     sha = hashlib.sha256(kept).hexdigest()
-    entry: dict[str, object] = {"sha256": sha, "bytes": len(raw), "preview": text[:PREVIEW]}
-    if cut:
+    entry: dict[str, object] = {"sha256": sha, "bytes": size, "preview": text[:PREVIEW]}
+    if size > BLOB_CAP:
         entry["cut"] = True
     if sink is not None and not sink.put_blob(sha, kept):
         entry["unsaved"] = True

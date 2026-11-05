@@ -27,3 +27,9 @@ _.answer_tuning  # tests/example/acme/rag.py: named by import path in a test's f
 _.answer_hosted  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
 _.answer_odd_tool  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
 _.answer_unseen  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
+_.answer_short  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
+_.answer_if_asked  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
+_.answer_web_search  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
+_.answer_old_functions  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
+_.use_httpx2  # tests/example/acme/slow.py: named by import path in a test's faultline.toml
+_.answer_one_stops_the_rest  # tests/example/acme/rag.py: named by import path in a test

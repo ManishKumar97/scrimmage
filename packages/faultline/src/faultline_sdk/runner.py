@@ -37,9 +37,12 @@ OUTCOMES = (
     "refused call",
     "budget reached",
     "infrastructure error",
+    "stopped",
 )
 # A refusal for one of these reasons stops the whole test, not only its row.
-STOP_TEST = ("budget", "no_price", "unknown_tool_type", "unseen_tool")
+STOP_TEST = ("budget", "no_price", "unknown_tool_type", "unseen_tool", "structure")
+# The agent's own cancellation is not a failure of the provider.
+NOT_A_FAILURE = ("CancelledError", "KeyboardInterrupt", "SystemExit", "GeneratorExit")
 # A baseline whose every run ended so cannot be compared with, so its faults are skipped.
 FAILED = ("crashed", "timed out", "refused call", "budget reached")
 
@@ -57,10 +60,11 @@ class RunResult:
     cost_usd: float = 0.0
     notices: list[dict[str, object]] = field(default_factory=list[dict[str, object]])
     real_errors: list[str] = field(default_factory=list[str])
+    hosted_reads: int = 0
 
     @property
     def exercised(self) -> bool:
-        return self.fault_fired is not False
+        return self.fault_fired is not False or self.outcome == "stopped"
 
 
 class Runner:
@@ -160,7 +164,12 @@ class Runner:
         lines = self.store.lines(run)
         answer_file = self.answers / f"{run}.txt"
         answer = answer_file.read_text() if answer_file.exists() else None
-        ended_itself = not timed_out and not state.refused
+        # Another run stopped the test and this run was stopped with it. That says
+        # nothing about this run, and it never got to send its last batch.
+        stopped = (
+            self.cancelled and not timed_out and not state.refused and not state.broken
+        ) and proc.returncode != 0
+        ended_itself = not timed_out and not state.refused and not stopped
         # Every process that ended by itself sent a last batch saying how many lines it
         # made. A missing batch, or fewer lines received from a process, is a gap.
         per_proc = Counter(proc_key(line.get("proc")) for line in lines)
@@ -169,15 +178,13 @@ class Runner:
         incomplete = bool(state.dropped) or (ended_itself and (gap or unfinished))
         model = [line for line in lines if line.get("kind") == "model"]
         notices = [line for line in lines if "notice" in line]
-        # A model error the gate did not inject, such as a real 429, is not the agent's.
         cost = sum(float(str(line.get("cost_usd") or 0)) for line in model)
-        real_errors = [
-            f"{line.get('call')} returned {line.get('status')}"
-            for line in model
-            if line.get("action") == "real" and int(str(line.get("status") or 0)) >= 400
-        ]
+        # The provider failing by itself says nothing about the agent.
+        real_errors = [e for e in map(real_error, model) if e is not None]
         broken = any(n.get("notice") == "structure" for n in notices)
-        if not state.fetched or incomplete or real_errors or broken:
+        if stopped:
+            outcome = "stopped"
+        elif not state.fetched or incomplete or real_errors or broken:
             outcome = "infrastructure error"
         elif state.refusals[:1] == ["budget"]:
             outcome = "budget reached"
@@ -217,6 +224,7 @@ class Runner:
             cost_usd=cost,
             notices=notices,
             real_errors=real_errors,
+            hosted_reads=sum(1 for line in model if "hosted_reads" in line),
         )
 
     def run_all(self) -> list[RunResult]:
@@ -263,6 +271,17 @@ class Runner:
         raise Interrupted(signal.Signals(signum).name)
 
 
+def real_error(line: dict[str, object]) -> str | None:
+    """How a model call the gate let through failed by itself, if it did."""
+    if line.get("action") != "real":
+        return None
+    error = str(line.get("error") or "")
+    if error and not error.startswith(NOT_A_FAILURE):
+        return f"{line.get('call')} failed with {error.split(':')[0]}"
+    status = int(str(line.get("status") or 0))
+    return f"{line.get('call')} returned {status}" if status >= 400 else None
+
+
 class Interrupted(Exception):
     """faultline test got SIGTERM or SIGINT."""
 
@@ -306,13 +325,14 @@ def report(
         mine = [r for r in results if r.row == row]
         counted = [r for r in mine if r.exercised]
         fault = "-" if row.fault is None else f"{row.fault.call} {row.fault.do}"
-        exercised = "-" if row.fault is None else str(len(counted))
+        exercised = "-" if row.fault is None else str(sum(bool(r.fault_fired) for r in mine))
         table.append(
             [row.test.name, row.name, fault, str(len(mine)), exercised]
             + [str(sum(1 for r in counted if r.outcome == o)) for o in OUTCOMES]
         )
         where = f"{row.test.name} {row.name}"
-        if row.fault is not None and mine and not counted:
+        ran = [r for r in mine if r.outcome != "stopped"]
+        if row.fault is not None and ran and not any(r.fault_fired for r in ran):
             mistakes.append(f"{where}: the fault never fired in any run, so the row tested nothing")
         ended = Counter(r.outcome for r in mine if not r.exercised)
         if ended:
@@ -339,12 +359,14 @@ def report(
             "rows without runs have no result"
         )
     budget_on = config.agent.max_cost_usd is not None
-    baseline = [r for r in results if r.row.fault is None]
-    if budget_on and baseline and not any(r.model_calls for r in baseline):
-        mistakes.append(
-            "no baseline run made a model call, so the budget is not working; check for a "
-            "cache in front of the model or a client Faultline does not gate"
-        )
+    for test in config.tests:
+        baseline = [r for r in results if r.row.test == test and r.row.fault is None]
+        ran = [r for r in baseline if r.outcome != "stopped"]
+        if budget_on and ran and not any(r.model_calls for r in ran):
+            mistakes.append(
+                f"{test.name}: no baseline run made a model call, so the budget is not working; "
+                "check for a cache in front of the model or a client Faultline does not gate"
+            )
     silent = [r for r in results if r.model_calls == 0 and r.outcome == "answered"]
     for r in results:
         for line in r.notices:
@@ -354,6 +376,7 @@ def report(
         for error in r.real_errors:
             code = INFRA
             mistakes.append(f"{r.row.test.name} {r.row.name}: {r.run}: {error}, not injected")
+    hosted = sum(r.hosted_reads for r in results)
     widths = [max(len(line[i]) for line in table) for i in range(len(head))]
     for line in table:
         print(
@@ -363,6 +386,18 @@ def report(
     spent = sum(r.cost_usd for r in results)
     limit = "no budget" if not budget_on else f"a budget of ${config.agent.max_cost_usd:g}"
     print(f"model calls cost ${spent:.4f} of {limit}", file=out)
+    if budget_on and spent > (config.agent.max_cost_usd or 0):
+        print(
+            f"warning: the test spent more than its budget of ${config.agent.max_cost_usd:g}, "
+            "because the last calls cost more than was reserved for them",
+            file=out,
+        )
+    if hosted:
+        print(
+            f"warning: {plural(hosted, 'model request')} offered provider tools that only read, "
+            "such as web search; providers bill those per use, outside the token budget",
+            file=out,
+        )
     for message in notes:
         print(f"note: {message}", file=out)
     if silent:

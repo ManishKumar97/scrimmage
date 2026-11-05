@@ -42,7 +42,6 @@ def test_four_calls_at_79_of_80_cents_reserve_one_and_refuse_three() -> None:
     for thread in threads:
         thread.join()
     assert sum(r is not None for r in results) == 1
-    assert ledger.reached
 
 
 @pytest.mark.design("budget.real_cost_replaces_reservation")
@@ -73,7 +72,8 @@ def test_the_ledger_works_through_the_signed_protocol(control: ControlServer) ->
     client = ControlClient(control.url, TOKEN)
     held = client.reserve("run-1", 0.79)
     assert held is not None
-    client.settle("run-1", held, 0.79)
+    payload = {"run": "run-1", "reservation": held, "usd": 0.79}
+    assert client.request("POST", "/v1/budget/settle", payload)[0] == 200
     outcomes = [client.reserve("run-1", 0.01) for _ in range(2)]
     assert outcomes[0] is not None and outcomes[1] is None
     assert control.ledger.spent == pytest.approx(0.79)
@@ -116,6 +116,7 @@ PRICES = (1_000_000.0 * 0.01, 1_000_000.0 * 0.02)  # 1 cent an input token, 2 an
         ("embedding.json", 8, 0, 0.08),
         ("response_text.json", 36, 87, 2.10),
         ("chat_stream_usage.sse", 9, 1, 0.11),
+        ("response_stream.sse", 37, 11, 0.59),
     ],
 )
 def test_fixed_replies_cost_what_a_hand_computed_table_says(
@@ -123,6 +124,7 @@ def test_fixed_replies_cost_what_a_hand_computed_table_says(
 ) -> None:
     used = table.usage((FIXTURES / fixture).read_bytes())
     assert (used.input, used.output, used.known) == (tokens_in, tokens_out, True)
+    assert table.cost(used.input, used.output, PRICES) >= 0
     assert round(table.cost(used.input, used.output, PRICES), 2) == dollars
 
 
@@ -130,9 +132,20 @@ def test_a_stream_with_no_counts_says_so() -> None:
     assert not table.usage((FIXTURES / "chat_stream.sse").read_bytes()).known
 
 
+@pytest.mark.design("budget.stream_events_scanned")
+def test_a_stream_with_events_and_pings_is_read_from_its_data_lines() -> None:
+    body = (
+        b": ping\n\nevent: response.completed\n"
+        b'data: {"response": {"usage": {"input_tokens": 3, "output_tokens": 4}}}\n\n'
+    )
+    used = table.usage(body)
+    assert (used.input, used.output, used.known) == (3, 4, True)
+
+
 def test_a_reply_that_is_not_json_has_no_counts() -> None:
     assert not table.usage(b"<html>bad gateway</html>").known
-    assert table.request_fields(b"not json") == {}
+    assert table.request_fields(b"not json") is None
+    assert table.request_fields(b"[1]") is None
 
 
 @pytest.mark.design("budget.price_lookup")
@@ -140,8 +153,16 @@ def test_prices_come_from_the_team_then_the_table_then_the_family() -> None:
     assert table.price("gpt-4o-mini", {}) == (0.15, 0.60)
     assert table.price("gpt-4o-mini-2024-07-18", {}) == (0.15, 0.60)  # a dated snapshot
     assert table.price("gpt-4o-mini", {"gpt-4o-mini": (9.0, 9.0)}) == (9.0, 9.0)
-    assert table.price("acme-llama-70b", {"acme-llama": (0.6, 0.6)}) == (0.6, 0.6)
+    assert table.price("acme-llama-70b", {"acme-llama-70b": (0.6, 0.6)}) == (0.6, 0.6)
     assert table.price("nobody-knows-me", {}) is None
+
+
+@pytest.mark.design("budget.only_dated_snapshots")
+@pytest.mark.parametrize(
+    "model", ["gpt-4o-audio-preview", "gpt-4o-realtime-preview", "gpt-4o-mini-tts", "gpt-4o-2024"]
+)
+def test_a_variant_is_not_priced_like_its_family(model: str) -> None:
+    assert table.price(model, {}) is None
 
 
 def test_a_request_can_set_its_own_output_limit() -> None:
@@ -183,6 +204,36 @@ def test_a_budget_that_cannot_cover_a_call_stops_the_test(
     assert fake.paths == ["/v1/embeddings"]  # the chat call, which cannot fit, never went
     assert {s["outcome"] for s in result.summaries()} == {"budget reached"}
     assert "the budget of $1e-05 was reached" in result.out
+
+
+@pytest.mark.design("budget.stop_with_parallel_runs")
+@pytest.mark.parametrize(
+    ("function", "extra", "fixtures", "message"),
+    [
+        ("acme.rag:answer", "max_cost_usd = 0.00001", {"embedding": "embedding"}, "was reached"),
+        ("acme.rag:answer_priceless", "", {}, "[agent.prices]"),
+        ("acme.rag:answer_odd_tool", "", {}, "a tool of type teleport"),
+        ("acme.rag:answer_unseen", "", {}, "lookup_order"),
+    ],
+    ids=["budget", "no price", "unknown tool type", "unseen tool"],
+)
+def test_a_stop_at_default_parallel_exits_2_not_3(
+    project: Project, function: str, extra: str, fixtures: dict[str, str], message: str
+) -> None:
+    project.edit(
+        'function = "acme.agent:answer"',
+        f'function = "{function}"\nruns = 8\nparallel = 4\n{extra}',
+    )
+    project.edit(TOOL_FAULT, "")
+    fake = FakeOpenAI(ACME, **fixtures)
+    fake.start()
+    try:
+        result = project.test(fake)
+    finally:
+        fake.stop()
+    assert result.code == 2, result.out
+    assert message in result.out
+    assert "infrastructure error" not in {s["outcome"] for s in result.summaries()}
 
 
 @pytest.mark.design("budget.no_price")
@@ -253,8 +304,55 @@ def test_with_a_budget_and_no_model_call_in_the_baseline_the_test_fails(project:
     project.edit(TOOL_FAULT, "")
     result = project.test()
     assert result.code == 2
-    assert "no baseline run made a model call" in result.out
+    assert "order-status: no baseline run made a model call" in result.out
     assert "answered with no model call" in result.out
+
+
+@pytest.mark.design("runner.siblings_stopped_not_errors")
+def test_runs_stopped_because_another_run_stopped_the_test_are_not_errors(project: Project) -> None:
+    project.edit(
+        'function = "acme.agent:answer"',
+        'function = "acme.rag:answer_one_stops_the_rest"\nruns = 3\nparallel = 3',
+    )
+    project.edit(TOOL_FAULT, "")
+    fake = FakeOpenAI([])
+    fake.start()
+    try:
+        result = project.test(fake)
+    finally:
+        fake.stop()
+    outcomes = sorted(str(s["outcome"]) for s in result.summaries())
+    assert outcomes == ["refused call", "stopped", "stopped"], result.out
+    assert result.code == 2, result.out
+
+
+@pytest.mark.design("check.no_model_calls_per_test")
+def test_the_no_model_call_check_is_per_test(project: Project, fake_openai: Fake) -> None:
+    project.edit(
+        'function = "acme.agent:answer"', 'function = "acme.rag:answer_if_asked"\nruns = 1'
+    )
+    project.edit(TOOL_FAULT, "")
+    project.toml.write_text(
+        project.toml.read_text()
+        + '\n[[test]]\nname = "offline"\nquestion = "no model please"\nexpect = ["x"]\n'
+    )
+    result = project.test(fake_openai(["chat_answer"]))
+    assert result.code == 2
+    assert "offline: no baseline run made a model call" in result.out
+    assert "order-status: no baseline" not in result.out
+
+
+@pytest.mark.design("budget.overrun_visible")
+def test_a_reply_that_costs_more_than_reserved_is_visible(
+    project: Project, fake_openai: Fake
+) -> None:
+    project.edit(
+        'function = "acme.agent:answer"',
+        'function = "acme.rag:answer_short"\nruns = 1\nmax_cost_usd = 0.00001',
+    )
+    project.edit(TOOL_FAULT, "")
+    result = project.test(fake_openai(["acme_get_order"]))  # 82 + 17 tokens, for max_tokens = 1
+    assert "spent more than its budget" in result.out
 
 
 @pytest.mark.design("check.baseline_failed")

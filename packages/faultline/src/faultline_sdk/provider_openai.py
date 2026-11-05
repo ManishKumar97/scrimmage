@@ -6,30 +6,34 @@ tokens and sort the tools the model is offered.
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import cast
 
 HOSTS = ("api.openai.com",)
 CHAT_PATHS = ("/chat/completions", "/responses")
-READ_PATHS = {"/embeddings": "embeddings"}  # provider calls that only read or compute
+# Provider calls that only read or compute: they run for real and are counted.
+READ_PATHS = {
+    "/embeddings": "embeddings",
+    "/moderations": "moderations",
+    "/responses/input_tokens": "input_tokens",
+}
+FREE_OPS = ("moderations", "input_tokens")  # no tokens billed, so nothing to reserve
 
-# The 429 body: the spec's Error object; the message as OpenAI's rate-limit cookbook
-# shows it; the code from the spec's error code list.
+# Every body is the spec's Error object. The 429 message is as OpenAI's rate-limit
+# cookbook shows it, its code from the spec's error code list; the others are from
+# OpenAI's error codes page. A status with no documented message gets a plain one.
 MESSAGES = {
-    400: "Invalid request.",
     401: "Incorrect API key provided.",
-    403: "You are not allowed to make this request.",
-    404: "The model does not exist or you do not have access to it.",
     429: (
         "Rate limit reached for default-codex in organization org-{id} on requests per "
         "min. Limit: 20.000000 / min. Current: 24.000000 / min. Contact support@openai.com "
         "if you continue to have issues or if you’d like to request an increase."  # noqa: RUF001  (OpenAI's own text)
     ),
     500: "The server had an error while processing your request. Sorry about that!",
-    502: "Bad gateway.",
     503: "The engine is currently overloaded, please try again later.",
 }
-TYPES = {429: "requests", 401: "invalid_request_error", 400: "invalid_request_error"}
+TYPES = {429: "requests"}
 CODES = {429: "rate_limit_exceeded", 401: "invalid_api_key"}
 
 # Dollars per million tokens: (input, output). Check against OpenAI's pricing page
@@ -64,10 +68,14 @@ RESPONSES_AGENT = {
     "computer_use_preview",
 }
 CHAT_AGENT = {"function", "custom"}
+DATED = re.compile(r"-\d{4}-\d{2}-\d{2}$")
+MAX_TOKENS = 1_000_000_000  # a larger count is not a count
 
 
-def op_for(path: str) -> str | None:
-    """ "chat" for a chat path, the read kind for a read path, else None."""
+def op_for(path: str, method: str) -> str | None:
+    """ "chat" for a chat path, the read kind for a read path, else None. Only a POST is."""
+    if method != "POST":
+        return None
     clean = path.split("?", 1)[0].rstrip("/")
     if clean.endswith(CHAT_PATHS):
         return "chat"
@@ -87,12 +95,13 @@ def error_body(status: int) -> bytes:
     return json.dumps({"error": error}).encode()
 
 
-def request_fields(body: bytes) -> dict[str, object]:
+def request_fields(body: bytes) -> dict[str, object] | None:
+    """A request's JSON fields, or None when the body cannot be read as a JSON object."""
     try:
-        value: object = json.loads(body) if body else {}
-    except ValueError:
-        return {}
-    return _obj(value)
+        value: object = json.loads(body)
+    except (ValueError, RecursionError):  # not JSON, not text, or empty
+        return None
+    return _obj(value) or None
 
 
 def max_output(fields: dict[str, object]) -> int | None:
@@ -111,13 +120,15 @@ class Usage:
 
 
 def usage(body: bytes) -> Usage:
-    """Token counts from a reply: a JSON body, or the chunks of a streamed one."""
+    """Token counts from a reply: a JSON body, or the events of a streamed one.
+
+    A stream's lines may start with "event:" or be a ": ping", so only "data:" lines are
+    read. Counts are trusted only when they are sensible whole numbers.
+    """
     text = body.decode("utf-8", "replace")
+    data = [line[5:].strip() for line in text.splitlines() if line.startswith("data:")]
     found = Usage()
-    docs: list[str] = [text] if not text.lstrip().startswith("data:") else []
-    if not docs:
-        docs = [line[5:].strip() for line in text.splitlines() if line.startswith("data:")]
-    for doc in docs:
+    for doc in data or [text]:
         try:
             parsed = _obj(json.loads(doc))
         except ValueError:
@@ -125,22 +136,24 @@ def usage(body: bytes) -> Usage:
         numbers = _obj(parsed.get("usage"))
         if not numbers:  # the Responses API puts it in its last event's response
             numbers = _obj(_obj(parsed.get("response")).get("usage"))
-        if numbers:
-            found.input = _int(numbers, "prompt_tokens", "input_tokens")
-            found.output = _int(numbers, "completion_tokens", "output_tokens")
-            found.known = True
+        tokens_in = _count(numbers, "prompt_tokens", "input_tokens")
+        tokens_out = _count(numbers, "completion_tokens", "output_tokens")
+        if tokens_in is not None and tokens_out is not None:
+            found = Usage(tokens_in, tokens_out, True)
     return found
 
 
 def price(model: str, overrides: dict[str, tuple[float, float]]) -> tuple[float, float] | None:
-    """The team's price first, then the built-in table; a dated snapshot uses its family."""
-    for table in (overrides, PRICES):
-        if model in table:
-            return table[model]
-    for table in (overrides, PRICES):
-        family = max((m for m in table if model.startswith(m + "-")), key=len, default=None)
-        if family is not None:
-            return table[family]
+    """The team's price first, then the built-in table.
+
+    A dated snapshot, such as gpt-4o-mini-2024-07-18, uses its family's price. Nothing
+    else does: gpt-4o-audio-preview is not priced like gpt-4o.
+    """
+    family = DATED.sub("", model)
+    for name in (model, family):
+        for table in (overrides, PRICES):
+            if name in table:
+                return table[name]
     return None
 
 
@@ -153,6 +166,7 @@ class Offered:
     """The tools a model request offers, sorted."""
 
     agent: list[str] = field(default_factory=list[str])  # names the agent runs itself
+    hosted_reads: list[str] = field(default_factory=list[str])  # provider tools that only read
     hosted_writes: list[str] = field(default_factory=list[str])  # MCP server labels
     unknown: list[str] = field(default_factory=list[str])  # tool types not in the table
 
@@ -160,6 +174,10 @@ class Offered:
 def offered(path: str, fields: dict[str, object]) -> Offered:
     found = Offered()
     responses = path.split("?", 1)[0].rstrip("/").endswith("/responses")
+    if not responses:
+        found.agent += [_name(_obj(f)) for f in _list(fields.get("functions"))]  # the old form
+        if fields.get("web_search_options") is not None:
+            found.hosted_reads.append("web_search")
     for raw in _list(fields.get("tools")):
         tool = _obj(raw)
         kind = str(tool.get("type", ""))
@@ -170,12 +188,15 @@ def offered(path: str, fields: dict[str, object]) -> Offered:
                 found.unknown.append(kind)
             continue
         if kind in RESPONSES_READ:
+            found.hosted_reads.append(kind)
             continue
         if kind == "mcp":
             found.hosted_writes.append(str(tool.get("server_label", "")))
         elif kind == "tool_search":
             if tool.get("execution") == "client":
                 found.agent.append(_name(tool))
+            else:
+                found.hosted_reads.append(kind)
         elif kind == "namespace":
             found.agent += [_name(_obj(inner)) for inner in _list(tool.get("tools"))]
         elif kind in RESPONSES_AGENT:
@@ -199,9 +220,12 @@ def _list(value: object) -> list[object]:
     return list(cast(list[object], value)) if isinstance(value, list) else []
 
 
-def _int(numbers: dict[str, object], *keys: str) -> int:
-    for key in keys:
-        value = numbers.get(key)
-        if isinstance(value, int) and not isinstance(value, bool):
-            return value
-    return 0
+def _count(numbers: dict[str, object], in_chat: str, in_responses: str) -> int | None:
+    """A token count, 0 when the reply has none, None when it is not a sensible number."""
+    value = numbers.get(in_chat, numbers.get(in_responses))
+    if value is None:
+        # An embedding has no output tokens; a reply with no input tokens has no counts.
+        return None if in_chat == "prompt_tokens" else 0
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_TOKENS:
+        return None
+    return value

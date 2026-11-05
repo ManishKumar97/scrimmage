@@ -11,6 +11,7 @@ import json
 import queue
 import threading
 import time
+from collections import deque
 from urllib.parse import urlsplit
 
 from faultline_sdk import protocol
@@ -91,12 +92,6 @@ class ControlClient:
             return None
         return int(str(reply["reservation"]))
 
-    def settle(self, run: str, reservation: int, usd: float) -> None:
-        payload = {"run": run, "reservation": reservation, "usd": usd}
-        status, reply = self.request("POST", "/v1/budget/settle", payload)
-        if status != 200:
-            raise ControlError(f"the cost could not be recorded: {reply.get('error')}")
-
 
 class Sender:
     """Sends record lines in the background, in batches.
@@ -115,10 +110,13 @@ class Sender:
         self.made = 0  # lines handed to put, dropped ones included
         self.dropped = 0
         self.unsent: list[dict[str, object]] = []
-        # Requests other than record lines, such as side-folder items and budget
-        # settlements, sent one at a time by this thread, kept and retried on failure.
+        # Side-folder items, sent one at a time by this thread, kept and retried on
+        # failure. Bounded, because each can be 10 MB.
         self.posts: queue.Queue[tuple[str, dict[str, object]]] = queue.Queue(BLOB_QUEUE)
         self.unsent_posts: list[tuple[str, dict[str, object]]] = []
+        # Settlements have their own line, with no limit: each is small, and losing one
+        # would leave money reserved for the rest of the test.
+        self.settles: deque[dict[str, object]] = deque()
         self._counts = threading.Lock()  # made and dropped; never held over the network
         self._sending = threading.Lock()  # one batch in flight at a time
         self._stop = threading.Event()
@@ -150,14 +148,15 @@ class Sender:
             "sha256": sha,
             "data": base64.b64encode(data).decode(),
         }
-        return self.put_post("/v1/blobs", payload)
-
-    def put_post(self, path: str, payload: dict[str, object]) -> bool:
         try:
-            self.posts.put_nowait((path, payload))
+            self.posts.put_nowait(("/v1/blobs", payload))
         except queue.Full:
             return False
         return True
+
+    def put_settle(self, reservation: int, usd: float) -> None:
+        """Queue the real cost of a call. Never dropped."""
+        self.settles.append({"run": self.run, "reservation": reservation, "usd": usd})
 
     def flush(self) -> None:
         """Send everything queued now, then the closing batch. Called at exit.
@@ -217,6 +216,14 @@ class Sender:
             return False
 
     def _send_posts(self) -> None:
+        while self.settles:
+            try:
+                status, _ = self.client.request("POST", "/v1/budget/settle", self.settles[0])
+            except ControlError:
+                break
+            if status != 200:
+                break
+            self.settles.popleft()
         pending = self.unsent_posts
         while True:
             try:

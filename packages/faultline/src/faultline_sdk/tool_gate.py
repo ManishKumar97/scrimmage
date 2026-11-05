@@ -33,7 +33,9 @@ def _apply(state: RunState, step: Step, tool: Callable[..., object]) -> object:
     decision = step.decision
     if decision.action == "refused":
         error = state.refusal(step)
-        state.finish(step, error=error)
+        # The message names the two fixes, so it belongs in the run table.
+        mistake = str(error) if decision.reason == "unlisted" else None
+        state.finish(step, error=error, mistake=mistake)
         raise error
     if decision.action == "fault":
         error = TimeoutError(f"{step.call.name} timed out")

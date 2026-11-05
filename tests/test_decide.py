@@ -126,6 +126,7 @@ def test_a_retry_with_no_first_attempt_counts_as_a_new_request() -> None:
     assert counters.note(chat(1, key=None)) == [2]
 
 
+@pytest.mark.design("labels.model_means_chat")
 @pytest.mark.parametrize(
     ("label", "call", "expected"),
     [

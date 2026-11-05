@@ -8,6 +8,7 @@ import pytest
 
 from conftest import ACME, Project, Result
 from fakes.openai_server import FakeOpenAI
+from faultline_sdk.runner import Runner
 
 Fake = Callable[..., FakeOpenAI]
 TOOL_FAULT = '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'
@@ -196,3 +197,48 @@ def test_the_model_request_and_reply_are_kept_in_the_side_folder(
     sent = json.loads((blobs / str(request["sha256"])).read_text())
     assert sent["messages"][0]["content"] == "Where is order 1234?"
     assert "get_order" in (blobs / str(reply["sha256"])).read_text()
+
+
+@pytest.mark.design("model.transport_error_is_infrastructure")
+def test_a_real_connection_failure_the_agent_swallows_is_infrastructure(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use(project, "acme.rag:answer_twice")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    result = project.test()
+    assert result.code == 3, result.out
+    assert "failed with ConnectError, not injected" in result.out
+
+
+@pytest.mark.design("gate.structural_stops_end_to_end")
+def test_a_library_that_changed_stops_the_test_at_once(project: Project) -> None:
+    (project.root / "httpx2.py").write_text('__version__ = "9.0.0"\n')
+    project.edit(
+        'function = "acme.agent:answer"',
+        'function = "acme.slow:use_httpx2"\nruns = 3\nparallel = 1\nmax_cost_usd = "none"',
+    )
+    result = project.test()
+    assert result.code == 3, result.out
+    assert "does not have the functions Faultline gates" in result.out
+    assert len(result.records()) == 1  # no other run started
+    assert result.summaries()[0]["outcome"] == "infrastructure error"
+
+
+@pytest.mark.design("gate.structural_notice_fails_the_test")
+def test_a_library_that_cannot_build_faults_fails_a_run_that_ended_cleanly(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (project.root / "httpx2.py").write_text(
+        "class Client:\n    def _send_single_request(self, request): ...\n\n\n"
+        "class AsyncClient:\n    async def _send_single_request(self, request): ...\n"
+    )
+    project.edit(
+        'function = "acme.agent:answer"',
+        'function = "acme.slow:use_httpx2"\nruns = 1\nmax_cost_usd = "none"',
+    )
+    project.edit(TOOL_FAULT, "")
+    monkeypatch.setattr(Runner, "_refused", lambda self, run, reason: None)  # let it finish
+    result = project.test()
+    assert result.summaries()[0]["outcome"] == "infrastructure error"
+    assert result.code == 3

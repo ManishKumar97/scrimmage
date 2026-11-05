@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from faultline_sdk import protocol
+from faultline_sdk.budget import Ledger
 from faultline_sdk.client import ControlClient, ControlError, Sender
 from faultline_sdk.control import ControlServer, proc_key
 from faultline_sdk.records import RecordStore
@@ -429,8 +430,31 @@ def test_the_sender_delivers_other_requests_and_retries_them(server: ControlServ
     assert len(list((server.store.folder / "blobs").iterdir())) == 1
 
 
-def test_a_full_post_queue_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_full_side_folder_queue_says_so() -> None:
     sender = Sender(ControlClient("http://127.0.0.1:9", TOKEN), "run-1")
     sender.posts.maxsize = 1
-    assert sender.put_post("/v1/x", {}) is True
-    assert sender.put_post("/v1/x", {}) is False
+    assert sender.put_blob("a" * 64, b"x") is True
+    assert sender.put_blob("b" * 64, b"x") is False
+
+
+@pytest.mark.design("budget.settles_never_dropped")
+def test_a_settlement_is_never_crowded_out_and_survives_a_failed_send(tmp_path: Path) -> None:
+    ledger = Ledger(1.0)
+    control = ControlServer(TOKEN, RecordStore(tmp_path / "r"), ledger=ledger)
+    control.start()
+    control.open_run("run-1", "baseline", PLAN)
+    try:
+        held = ledger.reserve(0.5)
+        assert held is not None
+        sender = Sender(ControlClient("http://127.0.0.1:9", TOKEN), "run-1")
+        sender.posts.maxsize = 1
+        sender.put_blob("a" * 64, b"x")  # the side-folder queue is full
+        sender.put_settle(held, 0.1)
+        sender.flush()  # nobody listens: the settlement is kept
+        assert len(sender.settles) == 1
+        sender.client = ControlClient(control.url, TOKEN)
+        sender.flush()
+        assert not sender.settles
+        assert (ledger.reserved, ledger.spent) == (0.0, 0.1)
+    finally:
+        control.stop()

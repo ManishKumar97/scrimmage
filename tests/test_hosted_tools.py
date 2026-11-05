@@ -31,7 +31,7 @@ def test_an_unlisted_hosted_mcp_server_is_never_sent(project: Project) -> None:
         fake.stop()
     assert fake.paths == []
     assert result.code == 2
-    assert 'add "hosted:mcp/orders" to [agent] real' in result.out or result.records()
+    assert 'add "hosted:mcp/orders" to [agent] real' in result.out
     refused = next(x for x in result.records()[0] if x.get("action") == "refused")
     assert refused["reason"] == "hosted"
 
@@ -64,21 +64,36 @@ def test_an_unknown_tool_type_stops_the_test_naming_it(project: Project) -> None
 
 
 @pytest.mark.design("hosted.unseen_tool_stops")
-def test_a_tool_no_gate_sees_stops_the_test_before_the_second_model_call(
-    project: Project,
+@pytest.mark.parametrize("function", ["acme.rag:answer_unseen", "acme.rag:answer_old_functions"])
+def test_a_tool_no_gate_sees_stops_the_test_before_any_model_call(
+    project: Project, function: str
 ) -> None:
-    use(project, "acme.rag:answer_unseen")
-    fake = FakeOpenAI(["chat_answer", "chat_answer"])
+    use(project, function)
+    fake = FakeOpenAI(["chat_answer"])
     fake.start()
     try:
         result = project.test(fake)
     finally:
         fake.stop()
-    assert fake.paths == ["/v1/chat/completions"]  # one call went; the second did not
+    assert fake.paths == []  # nothing reached the model
     assert result.code == 2
-    assert "lookup_order" in result.out and "[agent] tools" in result.out
-    first = next(x for x in result.records()[0] if x.get("kind") == "model")
-    assert first["unseen_tools"] == ["lookup_order"]
+    assert "test mistake" in result.out
+    assert (
+        "lookup_order" in result.out
+        and '[agent] tools, such as "<module>:lookup_order"' in result.out
+    )
+
+
+@pytest.mark.design("hosted.reads_noted")
+def test_a_provider_tool_that_only_reads_is_noted_and_warned_about(
+    project: Project, fake_openai: Fake
+) -> None:
+    use(project, "acme.rag:answer_web_search")
+    result = project.test(fake_openai(["chat_answer"]))
+    assert result.code == 0, result.out
+    line = next(x for x in result.records()[0] if x.get("kind") == "model")
+    assert line["hosted_reads"] == ["web_search"]
+    assert "1 model request offered provider tools that only read" in result.out
 
 
 def test_every_tool_the_gates_see_passes(project: Project, fake_openai: Fake) -> None:
@@ -128,19 +143,31 @@ def test_the_tool_table(
     assert (found.agent, found.hosted_writes, found.unknown) == (agent, writes, unknown)
 
 
+@pytest.mark.design("model.addresses")
 @pytest.mark.parametrize(
-    ("path", "op"),
+    ("path", "method", "op"),
     [
-        ("/v1/chat/completions", "chat"),
-        ("/openai/v1/chat/completions/", "chat"),
-        ("/v1/responses", "chat"),
-        ("/v1/embeddings", "embeddings"),
-        ("/v1/fine_tuning/jobs", None),
-        ("/v1/files", None),
+        ("/v1/chat/completions", "POST", "chat"),
+        ("/openai/v1/chat/completions/", "POST", "chat"),
+        ("/v1/responses", "POST", "chat"),
+        ("/v1/chat/completions", "GET", None),
+        ("/v1/embeddings", "POST", "embeddings"),
+        ("/v1/moderations", "POST", "moderations"),
+        ("/v1/responses/input_tokens", "POST", "input_tokens"),
+        ("/v1/fine_tuning/jobs", "POST", None),
+        ("/v1/files", "POST", None),
     ],
 )
-def test_model_addresses_match_by_path(path: str, op: str | None) -> None:
-    assert table.op_for(path) == op
+def test_model_addresses_match_by_path_and_method(path: str, method: str, op: str | None) -> None:
+    assert table.op_for(path, method) == op
+
+
+def test_web_search_options_and_old_functions_are_read_on_chat() -> None:
+    found = table.offered(
+        "/v1/chat/completions",
+        {"web_search_options": {}, "functions": [{"name": "old"}]},
+    )
+    assert (found.agent, found.hosted_reads) == (["old"], ["web_search"])
 
 
 def test_error_bodies_have_the_shape_the_library_reads() -> None:

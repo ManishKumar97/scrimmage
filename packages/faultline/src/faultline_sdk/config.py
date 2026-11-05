@@ -4,6 +4,7 @@ Only what this version supports is accepted. Anything else is rejected, never re
 and ignored; docs/configuration.md lists what later versions add.
 """
 
+import math
 import re
 import tomllib
 from dataclasses import dataclass
@@ -286,14 +287,22 @@ def read_model_hosts(value: object, where: str) -> tuple[ModelHost, ...]:
         check_keys(entry, MODEL_KEYS, item)
         provider = text(entry, "provider", item)
         labels.check_model(f"model:{provider}", f"{item} provider")
-        hosts.append(ModelHost(text(entry, "host", item).lower(), provider))
+        host = text(entry, "host", item).lower()
+        if ":" in host or "/" in host:
+            raise ConfigError(f"{item} host: {host!r} should be a host name, with no port or path")
+        hosts.append(ModelHost(host, provider))
     return tuple(hosts)
 
 
 def read_budget(value: object, where: str) -> float | None:
     if value == "none":
         return None
-    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not math.isfinite(value)
+        or value <= 0
+    ):
         raise ConfigError(
             f'{where} max_cost_usd: expected dollars above 0, or "none" to turn the budget '
             f"off, got {value!r}"
@@ -310,7 +319,12 @@ def read_prices(value: object, where: str) -> tuple[tuple[str, Price], ...]:
         parts: list[float] = []
         for key in ("input", "output"):
             number = entry.get(key)
-            if isinstance(number, bool) or not isinstance(number, int | float) or number < 0:
+            if (
+                isinstance(number, bool)
+                or not isinstance(number, int | float)
+                or not math.isfinite(number)
+                or number < 0
+            ):
                 raise ConfigError(f"{item} {key}: expected dollars per million tokens")
             parts.append(float(number))
         prices.append((model, Price(parts[0], parts[1])))

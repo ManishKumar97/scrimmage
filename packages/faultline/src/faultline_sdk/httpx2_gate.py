@@ -2,12 +2,14 @@
 """The gate at httpx2's single attempt, Client._send_single_request, sync and async.
 
 The openai library sends every attempt of every request through it, below its own
-retries, so an injected 429 is retried by the library exactly like a real one. The SDK
-never imports httpx2: the hook patches it when the agent imports it, and the gate finds
-httpx2's own classes through the request it is handed.
+retries, so an injected 429 is retried by the library exactly like a real one. Every
+hop of a redirect passes here too, so each is decided on its own. The SDK never imports
+httpx2: the hook patches it when the agent imports it.
 """
 
 import asyncio
+import atexit
+import datetime
 import hashlib
 import inspect
 import threading
@@ -19,14 +21,22 @@ from typing import Any, NoReturn, Protocol
 from faultline_sdk import hooks
 from faultline_sdk import provider_openai as openai_table
 from faultline_sdk.client import ControlError
-from faultline_sdk.decide import Call
+from faultline_sdk.decide import Call, Decision
 from faultline_sdk.state import BLOB_CAP, BlobSink, RunState, Step, blob, current
 
 LIBRARY = "httpx2"
 TESTED = ((2, 16), (2, 16))  # the minor versions this release was tested with
-HANDLED = "faultline_handled"  # a later gate lets a request with this mark straight through
-STOP_TEST = ("no_price", "unknown_tool_type", "unseen_tool")
+GATED = "__faultline_gate__"
 CHAR_PER_TOKEN = 4  # the rough size of a token, for estimates only
+# A refusal the team must act on: the message reaches the run table.
+MISTAKE_REASONS = (
+    "no_price",
+    "unknown_tool_type",
+    "unseen_tool",
+    "hosted",
+    "model_host_write",
+    "unreadable_body",
+)
 
 
 class Reserver(Protocol):
@@ -34,24 +44,43 @@ class Reserver(Protocol):
 
 
 class Context:
-    """What every gated request needs: the run, the way to the runner, the side folder."""
+    """What every gated request needs: the run, the way to the runner, the sender."""
 
-    def __init__(self, run: RunState, client: Reserver, blobs: BlobSink | None) -> None:
+    def __init__(
+        self,
+        run: RunState,
+        client: Reserver,
+        sender: BlobSink | None,
+        stop: Callable[[str], None],
+    ) -> None:
         self.run = run
         self.client = client
-        self.blobs = blobs
-        self.faults = True  # false when the library failed the structural check
+        self.sender = sender
+        self.stop = stop  # ends the program: a library that cannot be gated
+        self.faults = True  # false when the library has lost what faults are built from
         self.seen = {path.rpartition(":")[2] for path in run.plan.tools}
+        self.open: set[Callable[[bool], None]] = set()  # replies not read to their end
+
+    def close_open(self) -> None:
+        """At exit: a reply the agent never finished reading is still a call that was made."""
+        for finish in list(self.open):
+            finish(False)
 
 
-def structure_ok(module: ModuleType) -> bool:
+def params(function: object) -> list[str] | None:
+    try:
+        return list(inspect.signature(function).parameters)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def gatable(module: ModuleType) -> bool:
     """The functions the gate replaces exist and take the arguments it expects."""
     for name in ("Client", "AsyncClient"):
-        cls = getattr(module, name, None)
-        send = getattr(cls, "_send_single_request", None)
-        if send is None or list(inspect.signature(send).parameters) != ["self", "request"]:
+        send = getattr(getattr(module, name, None), "_send_single_request", None)
+        if send is None or params(send) != ["self", "request"]:
             return False
-    return all(hasattr(module, n) for n in ("Response", "ReadTimeout", "SyncByteStream"))
+    return True
 
 
 def version(module: ModuleType) -> tuple[int, int] | None:
@@ -62,21 +91,32 @@ def version(module: ModuleType) -> tuple[int, int] | None:
         return None
 
 
-def install(run: RunState, client: Reserver, blobs: BlobSink | None) -> None:
-    hooks.on_import(LIBRARY, lambda module: patch(module, Context(run, client, blobs)))
+def install(
+    run: RunState, client: Reserver, sender: BlobSink | None, stop: Callable[[str], None]
+) -> None:
+    ctx = Context(run, client, sender, stop)
+    atexit.register(ctx.close_open)  # registered after the sender's flush, so it runs first
+    hooks.on_import(LIBRARY, lambda module: patch(module, ctx))
 
 
 def patch(module: ModuleType, ctx: Context) -> None:
-    if not structure_ok(module):
+    named = f"{LIBRARY} {getattr(module, '__version__', '?')}"
+    if not gatable(module):
+        message = (
+            f"{named} does not have the functions Faultline gates, so its calls cannot be "
+            "checked or budgeted, and the program is stopped"
+        )
+        ctx.run.notice("structure", LIBRARY, message)
+        ctx.stop(message)
+        return
+    if not all(hasattr(module, n) for n in ("Response", "ReadTimeout", "SyncByteStream")):
         ctx.run.notice(
             "structure",
             LIBRARY,
-            f"{LIBRARY} {getattr(module, '__version__', '?')} does not have the functions "
-            "Faultline gates; its model calls get no faults, and writes are still refused",
+            f"{named} lacks what Faultline builds faults from; refusals and the budget "
+            "still apply, faults do not",
         )
         ctx.faults = False
-        if not hasattr(getattr(module, "Client", None), "_send_single_request"):
-            return
     found = version(module)
     if found is not None and found > TESTED[1]:
         ctx.run.notice(
@@ -86,8 +126,8 @@ def patch(module: ModuleType, ctx: Context) -> None:
             f"tested with ({TESTED[0][0]}.{TESTED[0][1]} to {TESTED[1][0]}.{TESTED[1][1]})",
         )
     sync_send = module.Client._send_single_request
-    async_send = getattr(getattr(module, "AsyncClient", None), "_send_single_request", None)
-    if getattr(sync_send, HANDLED, False):
+    async_send = module.AsyncClient._send_single_request
+    if getattr(sync_send, GATED, False):
         return
 
     def sync_gate(self: Any, request: Any) -> Any:
@@ -101,7 +141,7 @@ def patch(module: ModuleType, ctx: Context) -> None:
         try:
             response = sync_send(self, request)
         except BaseException as exc:
-            failed(ctx, step, reservation, exc)
+            failed(ctx, module, step, request, extra, reservation, exc)
             raise
         capture(ctx, module, step, request, response, extra, reservation, sync=True)
         return response
@@ -109,7 +149,6 @@ def patch(module: ModuleType, ctx: Context) -> None:
     async def async_gate(self: Any, request: Any) -> Any:
         task = asyncio.current_task()
         who = f"task-{id(task)}" if task is not None else f"thread-{threading.get_ident()}"
-        assert async_send is not None
         prepared = prepare(ctx, request, who)
         if prepared is None:
             return await async_send(self, request)
@@ -121,23 +160,26 @@ def patch(module: ModuleType, ctx: Context) -> None:
         try:
             response = await async_send(self, request)
         except BaseException as exc:
-            failed(ctx, step, reservation, exc)
+            failed(ctx, module, step, request, extra, reservation, exc)
             raise
         capture(ctx, module, step, request, response, extra, reservation, sync=False)
         return response
 
-    setattr(sync_gate, HANDLED, True)
+    setattr(sync_gate, GATED, True)
+    setattr(async_gate, GATED, True)
     module.Client._send_single_request = sync_gate
-    if async_send is not None:
-        setattr(async_gate, HANDLED, True)
-        module.AsyncClient._send_single_request = async_gate
+    module.AsyncClient._send_single_request = async_gate
 
 
-def body_of(request: Any) -> bytes:
+def body_of(request: Any) -> bytes | None:
+    """The request's body, or None for a streamed one, which has not been read yet."""
     try:
         return bytes(request.content)
-    except Exception:  # a streamed upload has no content to read yet
-        return b""
+    except Exception:
+        pass
+    # A redirect carries its body as httpx2's ByteStream: still in memory, safe to read.
+    held = getattr(request.stream, "_stream", None)  # httpx2 ByteStream._stream
+    return held if isinstance(held, bytes) else None
 
 
 def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call | None:
@@ -150,7 +192,7 @@ def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call | None:
         return None
     path = str(request.url.path)
     method = str(request.method).upper()
-    op = openai_table.op_for(path)
+    op = openai_table.op_for(path, method)
     if op is None:
         return Call("http", f"http:{host}", path, provider, method)
     try:
@@ -165,31 +207,40 @@ def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call | None:
 def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, object]] | None:
     """Decide the request. Raises FaultlineRefused after recording a refusal."""
     run = current()
-    if run is None or request.extensions.get(HANDLED):
+    if run is None:
         return None
     body = body_of(request)
-    call = describe(ctx, request, who, body)
+    call = describe(ctx, request, who, body or b"")
     if call is None:
         return None
-    request.extensions[HANDLED] = True
-    fields = openai_table.request_fields(body)
+    fields = openai_table.request_fields(body) if body else None
     extra: dict[str, object] = {
         "provider": call.provider,
         "method": call.method,
         "path": str(request.url.path),
-        "args": blob(body, ctx.blobs),
+        "args": blob(body or b"", ctx.sender),
     }
     if call.kind == "model":
-        extra.update(model=str(fields.get("model", "")), retry=call.retry)
-        extra["stream"] = fields.get("stream") is True
+        extra.update(model=str((fields or {}).get("model", "")), retry=call.retry)
+        extra["stream"] = (fields or {}).get("stream") is True
     step = run.decide(call, {})
     step.extra = extra
     if not ctx.faults and step.decision.action == "fault":
-        step.decision = type(step.decision)("real")
+        step.decision = Decision("real")
+    # The method and path only: a query string can hold a key, and this text is recorded.
+    where = f"{call.method} {request.url.path}"
     if step.decision.action == "refused":
-        refuse(run, step, f"{call.method} {request.url}")
+        refuse(run, step, where)
     if call.kind == "model" and call.name == "chat":
-        check_tools(ctx, run, step, call, fields, str(request.url.path))
+        if fields is None:
+            run.refuse(step, "unreadable_body")
+            refuse(
+                run,
+                step,
+                f"{where} has a body Faultline cannot read, such as a stream or a compressed "
+                "one, so the tools it offers cannot be checked; send it as plain JSON",
+            )
+        check_tools(ctx, run, step, fields, str(request.url.path))
     if call.kind == "http":
         run.finish(step, result=None)  # a read to a model host: recorded, then sent
         return None
@@ -198,21 +249,18 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
 
 def refuse(run: RunState, step: Step, detail: str) -> NoReturn:
     error = run.refusal(step, detail)
-    mistake = str(error) if step.decision.reason in STOP_TEST else None
+    mistake = str(error) if step.decision.reason in MISTAKE_REASONS else None
     run.finish(step, error=error, mistake=mistake)
     raise error
 
 
 def check_tools(
-    ctx: Context,
-    run: RunState,
-    step: Step,
-    call: Call,
-    fields: dict[str, object],
-    path: str,
+    ctx: Context, run: RunState, step: Step, fields: dict[str, object], path: str
 ) -> None:
-    """Hosted writes, unknown tool types and tools no gate sees."""
+    """Hosted writes, unknown tool types and tools no gate sees: all stop before sending."""
     tools = openai_table.offered(path, fields)
+    if tools.hosted_reads:
+        step.extra["hosted_reads"] = tools.hosted_reads
     if tools.unknown:
         kinds = ", ".join(sorted(set(tools.unknown)))
         run.refuse(step, "unknown_tool_type")
@@ -233,19 +281,16 @@ def check_tools(
                 "if it is safe",
             )
     unseen = sorted(name for name in set(tools.agent) if name not in ctx.seen)
-    if unseen and run.unseen and call.retry == 0:
-        names = ", ".join(run.unseen)
+    if unseen:
+        step.extra["unseen_tools"] = unseen
         run.refuse(step, "unseen_tool")
         refuse(
             run,
             step,
-            f"the model is offered {names}, which no gate sees, so a call to it could run "
-            "for real unchecked; add it to [agent] tools, such as "
-            f'"<module>:{run.unseen[0]}"',
+            f"the model would be offered {', '.join(unseen)}, which no gate sees, so a call to "
+            "it could run for real unchecked; add it to [agent] tools, such as "
+            f'"<module>:{unseen[0]}"',
         )
-    if unseen:
-        run.unseen = unseen
-        step.extra["unseen_tools"] = unseen
 
 
 def fault(
@@ -260,10 +305,12 @@ def fault(
         raise error
     status = int(plan_fault.do.split()[1])
     body = openai_table.error_body(status)
-    extra.update(status=status, result=blob(body, ctx.blobs))
+    extra.update(status=status, result=blob(body, ctx.sender))
     run.finish(step)
     headers = {"content-type": "application/json", "x-request-id": "req_faultline_injected"}
-    return module.Response(status, headers=headers, content=body, request=request)
+    response = module.Response(status, headers=headers, content=body, request=request)
+    response.elapsed = datetime.timedelta(0)  # a real reply has it; code may read it
+    return response
 
 
 def prices_of(ctx: Context, model: str) -> tuple[float, float] | None:
@@ -274,7 +321,7 @@ def prices_of(ctx: Context, model: str) -> tuple[float, float] | None:
 def reserve(ctx: Context, step: Step, request: Any, extra: dict[str, object]) -> int | None:
     """Reserve what this model call could cost, before it is sent."""
     plan = ctx.run.plan
-    if plan.budget_usd is None:
+    if plan.budget_usd is None or step.call.name in openai_table.FREE_OPS:
         return None
     model = str(extra.get("model", ""))
     rates = prices_of(ctx, model)
@@ -287,10 +334,10 @@ def reserve(ctx: Context, step: Step, request: Any, extra: dict[str, object]) ->
             f"add it under [agent.prices], such as {model} = {{input = 0.15, output = 0.60}} "
             '(dollars per million tokens), or set max_cost_usd = "none"',
         )
-    assert rates is not None
-    fields = openai_table.request_fields(body_of(request))
-    output = openai_table.max_output(fields) or plan.reserve_output_tokens
-    usd = openai_table.cost(len(body_of(request)) // CHAR_PER_TOKEN, output, rates)
+    body = body_of(request) or b""
+    fields = openai_table.request_fields(body) if body else None
+    output = openai_table.max_output(fields or {}) or plan.reserve_output_tokens
+    usd = openai_table.cost(len(body) // CHAR_PER_TOKEN, output, rates)
     try:
         reservation = ctx.client.reserve(plan.run, usd)
     except ControlError as exc:
@@ -306,11 +353,32 @@ def reserve(ctx: Context, step: Step, request: Any, extra: dict[str, object]) ->
     return reservation
 
 
-def failed(ctx: Context, step: Step, reservation: int | None, error: BaseException) -> None:
-    """The call never got a reply: record it and give the reservation back."""
+def failed(
+    ctx: Context,
+    module: ModuleType,
+    step: Step,
+    request: Any,
+    extra: dict[str, object],
+    reservation: int | None,
+    error: BaseException,
+) -> None:
+    """The call got no reply. If it never left, it costs nothing; if it did, it may cost."""
+    never_sent = (getattr(module, "ConnectError", ()), getattr(module, "ConnectTimeout", ()))
+    rates = prices_of(ctx, str(extra.get("model", "")))
+    usd: float | None = 0.0
+    if not isinstance(error, never_sent):
+        tokens = len(body_of(request) or b"") // CHAR_PER_TOKEN
+        usd = openai_table.cost(tokens, 0, rates) if rates else None
+        extra["cost_estimated"] = usd is not None
+    extra["cost_usd"] = usd
     ctx.run.finish(step, error=error)
-    if reservation is not None:
-        post_settle(ctx, reservation, 0.0)
+    settle(ctx, reservation, usd or 0.0)
+
+
+def settle(ctx: Context, reservation: int | None, usd: float) -> None:
+    """Replace the reservation, off the agent's thread or loop: the sender delivers it."""
+    if reservation is not None and ctx.sender is not None:
+        ctx.sender.put_settle(reservation, usd)
 
 
 def capture(
@@ -325,47 +393,66 @@ def capture(
     sync: bool,
 ) -> None:
     """Watch the reply's body go by, unchanged, and record the call when it ends."""
-    done = threading.Event()
+    lock = threading.Lock()
+    done: list[bool] = []
     chunks: list[bytes] = []
-    size = [0]
+    size = [0]  # every byte that went by; only the first 10 MB or so are kept
 
     def keep(chunk: bytes) -> None:
         if size[0] < BLOB_CAP:
             chunks.append(chunk)
-            size[0] += len(chunk)
+        size[0] += len(chunk)
 
     def finish(complete: bool) -> None:
-        if done.is_set():
-            return
-        done.set()
-        raw = b"".join(chunks)
-        body = decoded(raw, str(response.headers.get("content-encoding", "")))
-        used = openai_table.usage(body)
-        rates = prices_of(ctx, str(extra.get("model", "")))
-        tokens_in, tokens_out, estimated = used.input, used.output, not used.known
-        if estimated:
-            tokens_in = len(body_of(request)) // CHAR_PER_TOKEN
-            tokens_out = len(body) // CHAR_PER_TOKEN
-        usd = openai_table.cost(tokens_in, tokens_out, rates) if rates else 0.0
-        extra.update(
-            status=response.status_code,
-            result=blob(body, ctx.blobs),
-            tokens={"input": tokens_in, "output": tokens_out},
-            cost_usd=round(usd, 8),
-            cost_estimated=estimated,
-        )
+        with lock:
+            if done:
+                return
+            done.append(True)
+        ctx.open.discard(finish)
         if not complete:
             extra["reply_incomplete"] = True
+        usd = 0.0
+        try:
+            usd = record(ctx, request, response, extra, b"".join(chunks), size[0])
+        except Exception:  # the agent's own call must never fail because of the arithmetic
+            extra.update(status=response.status_code, cost_usd=None, cost_estimated=False)
         ctx.run.finish(step)
-        if reservation is not None:
-            post_settle(ctx, reservation, usd)
+        settle(ctx, reservation, usd)
 
     loaded = getattr(response, "_content", None)  # a reply already in memory has no stream
     if loaded is not None:
         keep(loaded)
         finish(True)
         return
+    ctx.open.add(finish)
     response.stream = wrap(module, response.stream, keep, finish, sync=sync)
+
+
+def record(
+    ctx: Context,
+    request: Any,
+    response: Any,
+    extra: dict[str, object],
+    raw: bytes,
+    size: int,
+) -> float:
+    """Put the reply, its tokens and its cost on the line. Returns the cost to settle."""
+    body = decoded(raw, str(response.headers.get("content-encoding", "")))
+    used = openai_table.usage(body)
+    tokens_in, tokens_out = used.input, used.output
+    if not used.known:
+        tokens_in = len(body_of(request) or b"") // CHAR_PER_TOKEN
+        tokens_out = len(body) // CHAR_PER_TOKEN
+    rates = prices_of(ctx, str(extra.get("model", "")))
+    usd = openai_table.cost(tokens_in, tokens_out, rates) if rates else None
+    extra.update(
+        status=response.status_code,
+        result=blob(body, ctx.sender, total=size),
+        tokens={"input": tokens_in, "output": tokens_out},
+        cost_usd=None if usd is None else round(usd, 8),
+        cost_estimated=usd is not None and not used.known,
+    )
+    return usd or 0.0
 
 
 def decoded(raw: bytes, encoding: str) -> bytes:
@@ -378,13 +465,6 @@ def decoded(raw: bytes, encoding: str) -> bytes:
     except zlib.error:
         return raw
     return raw
-
-
-def post_settle(ctx: Context, reservation: int, usd: float) -> None:
-    """Settle off the agent's thread or loop; the sender thread delivers it."""
-    payload: dict[str, object] = {"run": ctx.run.plan.run, "reservation": reservation, "usd": usd}
-    if ctx.blobs is not None:
-        ctx.blobs.put_post("/v1/budget/settle", payload)
 
 
 def wrap(
