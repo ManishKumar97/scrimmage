@@ -1,13 +1,8 @@
-"""OpenTelemetry GenAI semantic convention names that the run reader reads.
-
-The names are written out here, not imported from the opentelemetry-semantic-conventions package.
-Its constants for them are marked deprecated (the GenAI conventions are moving to their own
-repository) and sit in a private `_incubating` module.
-Names are from the GenAI semantic conventions as in opentelemetry-semantic-conventions 0.66b1.
-"""
+"""OpenTelemetry GenAI attribute names, copied from opentelemetry-semantic-conventions 0.66b1."""
 
 GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
 GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
+GEN_AI_RESPONSE_MODEL = "gen_ai.response.model"
 GEN_AI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons"
 GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
 GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
@@ -21,5 +16,6 @@ ERROR_TYPE = "error.type"
 
 # Values of gen_ai.operation.name.
 CHAT = "chat"
+GENERATE_CONTENT = "generate_content"  # Google's name for a model call
 INVOKE_AGENT = "invoke_agent"
 EXECUTE_TOOL = "execute_tool"

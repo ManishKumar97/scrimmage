@@ -2,7 +2,7 @@ import json
 import sys
 from pathlib import Path
 
-from spans import run_from
+from spans import run_from, span, string
 
 from faultline.config import Attributes
 from faultline.runs import any_value, cut, main, read_runs, show_run
@@ -478,3 +478,34 @@ def test_fixtures_with_no_genai_content_attributes_are_not_recorded():
         [run] = read_runs(fixture(name)).runs
 
         assert run.content_recorded is False, name
+
+
+def model_call_file(tmp_path: Path, operation: str, model: tuple[str, str]) -> Path:
+    """One trace with one model call span, as Google ADK or Traceloop write it."""
+    call = span("t1", "s1", None, BASE, BASE + SECOND)
+    call["attributes"] = [
+        string("gen_ai.operation.name", operation),
+        string(*model),
+    ]
+    request = {"resourceSpans": [{"scopeSpans": [{"spans": [call]}]}]}
+    path = tmp_path / "spans.jsonl"
+    path.write_text(json.dumps(request) + "\n")
+    return path
+
+
+def test_a_generate_content_span_is_a_model_call(tmp_path):
+    path = model_call_file(
+        tmp_path, "generate_content", ("gen_ai.request.model", "gemini-2.5-flash")
+    )
+
+    [run] = read_runs(path).runs
+
+    assert (len(run.steps), run.model) == (1, "gemini-2.5-flash")
+
+
+def test_the_model_falls_back_to_the_response_model(tmp_path):
+    path = model_call_file(tmp_path, "chat", ("gen_ai.response.model", "gpt-4o-mini"))
+
+    [run] = read_runs(path).runs
+
+    assert run.model == "gpt-4o-mini"

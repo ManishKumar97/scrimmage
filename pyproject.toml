@@ -42,6 +42,7 @@ extraPaths = ["lab/tests"]
 venvPath = "."
 venv = ".venv"
 typeCheckingMode = "standard"
+reportConstantRedefinition = "error"
 
 [tool.ruff]
 # First-party code for import sorting: the product and the lab.

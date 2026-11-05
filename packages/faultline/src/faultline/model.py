@@ -1,8 +1,4 @@
-"""The data model every stage shares: runs, steps, faults, findings and verdicts.
-
-A trace adapter builds runs. Checks read them and give findings. Reproduce gives verdicts.
-Every type is frozen and holds tuples, so a run a check reads cannot be changed under it.
-"""
+"""Data types every stage shares. All are frozen, so a check cannot change a run it reads."""
 
 from dataclasses import dataclass
 from enum import StrEnum

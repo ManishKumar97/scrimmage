@@ -32,15 +32,18 @@ from faultline.semconv import (
     GEN_AI_OUTPUT_MESSAGES,
     GEN_AI_REQUEST_MODEL,
     GEN_AI_RESPONSE_FINISH_REASONS,
+    GEN_AI_RESPONSE_MODEL,
     GEN_AI_TOOL_CALL_ARGUMENTS,
     GEN_AI_TOOL_CALL_ID,
     GEN_AI_TOOL_CALL_RESULT,
     GEN_AI_TOOL_NAME,
     GEN_AI_USAGE_INPUT_TOKENS,
     GEN_AI_USAGE_OUTPUT_TOKENS,
+    GENERATE_CONTENT,
     INVOKE_AGENT,
 )
 
+MODEL_CALLS = (CHAT, GENERATE_CONTENT)
 STATUS_ERROR = 2  # OTLP status code
 NANOS = 1_000_000_000
 
@@ -175,7 +178,7 @@ def build_run(
     trace_id: str, spans: list[dict], attributes: Attributes = Attributes()
 ) -> Run | None:
     """One run from the spans of one trace. A trace with no model call is not a run."""
-    chats = sorted((s for s in spans if operation(s) == CHAT), key=started)
+    chats = sorted((s for s in spans if operation(s) in MODEL_CALLS), key=started)
     if not chats:
         return None
     roots = [s for s in spans if operation(s) == INVOKE_AGENT]
@@ -212,7 +215,8 @@ def build_run(
     return Run(
         trace_id=trace_id,
         model=attrs.get(GEN_AI_REQUEST_MODEL)
-        or chats[0]["attrs"].get(GEN_AI_REQUEST_MODEL),
+        or chats[0]["attrs"].get(GEN_AI_REQUEST_MODEL)
+        or chats[0]["attrs"].get(GEN_AI_RESPONSE_MODEL),
         stop_reason=mapped(attrs, attributes.stop_reason),
         question=mapped(attrs, attributes.question) or first_user_text(chats[0]),
         answer=answer,
