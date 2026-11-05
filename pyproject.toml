@@ -66,3 +66,9 @@ name = "Product code never imports test support"
 type = "forbidden"
 source_modules = ["faultline_sdk", "faultline"]
 forbidden_modules = ["fakes", "conftest"]
+
+[[tool.importlinter.contracts]]
+name = "The marker works without the SDK installed"
+type = "forbidden"
+source_modules = ["faultline"]
+forbidden_modules = ["faultline_sdk"]
