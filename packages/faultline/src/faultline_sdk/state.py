@@ -13,7 +13,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Protocol, cast
 
 from faultline_sdk import decide as engine
 from faultline_sdk.errors import FaultlineRefused, FaultlineTimeLimit
@@ -221,8 +221,17 @@ class RunState:
             line["reason"] = decision.reason or "unlisted"
         if mistake is not None:
             line["mistake"] = redact(mistake)
-        line.update(step.extra)
+        line.update({key: scrub(value) for key, value in step.extra.items()})
         self.sink.put(line, keep=decision.action == "refused" or step.call.kind == "model")
+
+
+def scrub(value: object) -> object:
+    """Remove secrets from the text a gate puts on a line, such as a model name or a path."""
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, list):
+        return [scrub(item) for item in cast(list[object], value)]
+    return value
 
 
 def blob(data: bytes, sink: BlobSink | None, total: int | None = None) -> dict[str, object]:

@@ -356,6 +356,17 @@ def test_secrets_in_a_model_request_never_reach_the_side_folder() -> None:
     assert b"sk-proj" not in next(iter(sink.blobs.values()))
 
 
+@pytest.mark.design("record.redacts_gate_fields")
+def test_a_secret_in_the_path_or_the_model_name_never_reaches_a_line(gated: None) -> None:
+    secret = "sk-proj-" + "a" * 30
+    sink, _ = install(make_plan())
+    client().post(
+        f"https://api.openai.com/{secret}/chat/completions", json={**BODY, "model": secret}
+    )
+    assert secret not in json.dumps(sink.lines)
+    assert "[secret removed]" in str(sink.lines[0]["path"])
+
+
 def test_an_item_with_no_room_is_marked_unsaved() -> None:
     class Full(Sink):
         def put_blob(self, sha: str, data: bytes) -> bool:
