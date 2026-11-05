@@ -150,9 +150,10 @@ def test_a_stream_with_events_and_pings_is_read_from_its_data_lines() -> None:
 
 
 def test_a_line_separator_in_the_text_does_not_hide_the_counts() -> None:
+    separator = "\u2028"
     body = (
-        'data: {"choices": [{"delta": {"content": "a\u2028data: b"}}]}\n\n'
-        'data: {"usage": {"prompt_tokens": 3, "completion_tokens": 4}}\n\n'
+        f'data: {{"note": "a{separator}b", "usage": '
+        '{"prompt_tokens": 3, "completion_tokens": 4}}\n\n'
     ).encode()
     assert table.usage(body).known
 
