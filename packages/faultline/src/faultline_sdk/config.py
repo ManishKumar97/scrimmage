@@ -56,7 +56,17 @@ class Agent:
     tools: tuple[str, ...]
     real: tuple[str, ...]
     # (import path, name the model sees), for a tool whose two names differ.
-    tool_names: tuple[tuple[str, str], ...] = ()
+    renames: tuple[tuple[str, str], ...] = ()
+
+    def tool_names(self) -> list[str]:
+        """Every tool's final name: the one the model sees."""
+        renames = dict(self.renames)
+        return [renames.get(path, path.rpartition(":")[2]) for path in self.tools]
+
+    def allowed_imports(self) -> list[str]:
+        """Prefixes the agent's process may import from: function's and tools' packages."""
+        paths = [self.function, *self.tools]
+        return sorted({path.split(".")[0].split(":")[0] + "." for path in paths})
 
 
 @dataclass(frozen=True)
@@ -64,15 +74,6 @@ class Config:
     agent: Agent
     tests: tuple[Test, ...]
     root: Path
-
-    def tool_names(self) -> list[str]:
-        renamed = dict(self.agent.tool_names)
-        return [renamed.get(path, path.rpartition(":")[2]) for path in self.agent.tools]
-
-    def allowed_imports(self) -> list[str]:
-        """Prefixes the agent's process may import from: function's and tools' packages."""
-        paths = [self.agent.function, *self.agent.tools]
-        return sorted({path.split(".")[0].split(":")[0] + "." for path in paths})
 
 
 def load(path: Path) -> Config:
@@ -170,31 +171,31 @@ def read_agent(table: dict[str, object]) -> Agent:
     if isinstance(timeout, bool) or not isinstance(timeout, int | float) or timeout <= 0:
         raise ConfigError(f"{where} run_timeout: expected a number of seconds, got {timeout!r}")
     tools: list[str] = []
-    renamed: list[tuple[str, str]] = []
+    renames: list[tuple[str, str]] = []
     for entry in as_list(table.get("tools", []), f"{where} tools"):
         path, name = read_tool(entry, f"{where} tools")
         tools.append(path)
         if name is not None:
-            renamed.append((path, name))
-    given = dict(renamed)
-    names = [given.get(t, t.rpartition(":")[2]) for t in tools]
-    for name in names:
-        if names.count(name) > 1:
-            raise ConfigError(f"{where} tools: two tools are named {name!r}")
+            renames.append((path, name))
     real: list[str] = []
     for entry in as_list(table.get("real", []), f"{where} real"):
         if not isinstance(entry, str):
             raise ConfigError(f"{where} real: expected labels, got {entry!r}")
         real.append(str(labels.parse(entry, f"{where} real", pattern=True)))
-    return Agent(
+    agent = Agent(
         function=import_path(text(table, "function", where), f"{where} function"),
         runs=whole(table, "runs", 3, where),
         parallel=whole(table, "parallel", 4, where),
         run_timeout=float(timeout),
         tools=tuple(tools),
         real=tuple(real),
-        tool_names=tuple(renamed),
+        renames=tuple(renames),
     )
+    names = agent.tool_names()
+    for name in names:
+        if names.count(name) > 1:
+            raise ConfigError(f"{where} tools: two tools are named {name!r}")
+    return agent
 
 
 def read_tool(entry: object, where: str) -> tuple[str, str | None]:

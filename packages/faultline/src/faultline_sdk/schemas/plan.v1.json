@@ -102,7 +102,7 @@
       "type": "number",
       "exclusiveMinimum": 0
     },
-    "tool_names": {
+    "renames": {
       "type": "object",
       "additionalProperties": {
         "type": "string",

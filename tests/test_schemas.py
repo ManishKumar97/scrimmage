@@ -67,6 +67,14 @@ def test_the_designs_plan_fits_the_schema(tmp_path: Path) -> None:
     assert plan.Plan.from_json(DESIGN_PLAN).to_json() == DESIGN_PLAN
 
 
+def test_a_plan_with_a_renamed_tool_fits_the_schema_and_round_trips() -> None:
+    doc = {**DESIGN_PLAN, "renames": {"acme.tools:get_order": "lookup-order"}}
+    validator("plan").validate(doc)
+    assert plan.Plan.from_json(doc).to_json() == doc
+    with pytest.raises(jsonschema.ValidationError):  # only known keys, so no old spelling
+        validator("plan").validate({**DESIGN_PLAN, "renamed": {}})
+
+
 @pytest.mark.design("schema.record")
 def test_the_designs_record_line_fits_the_schema() -> None:
     validator("record").validate(DESIGN_LINE)

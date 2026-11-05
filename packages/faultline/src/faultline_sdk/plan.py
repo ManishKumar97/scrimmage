@@ -19,7 +19,7 @@ class Plan:
     real: tuple[str, ...]
     time_limit_s: float
     # import path -> the name the model sees, for tools whose two names differ
-    tool_names: tuple[tuple[str, str], ...] = ()
+    renames: tuple[tuple[str, str], ...] = ()
 
     def to_json(self) -> dict[str, object]:
         mocks: list[dict[str, object]] = []
@@ -39,8 +39,8 @@ class Plan:
             "real": list(self.real),
             "time_limit_s": self.time_limit_s,
         }
-        if self.tool_names:
-            doc["tool_names"] = dict(self.tool_names)
+        if self.renames:
+            doc["renames"] = dict(self.renames)
         return doc
 
     @staticmethod
@@ -69,7 +69,7 @@ class Plan:
             tools=tuple(str(t) for t in items(doc, "tools")),
             real=tuple(str(r) for r in items(doc, "real")),
             time_limit_s=float(limit),
-            tool_names=tuple((k, str(v)) for k, v in obj(doc.get("tool_names", {})).items()),
+            renames=tuple((k, str(v)) for k, v in obj(doc.get("renames", {})).items()),
         )
 
 
@@ -100,7 +100,7 @@ def plan_for(config: Config, row: Row, run: str) -> Plan:
         tools=config.agent.tools,
         real=config.agent.real,
         time_limit_s=config.agent.run_timeout,
-        tool_names=config.agent.tool_names,
+        renames=config.agent.renames,
     )
 
 

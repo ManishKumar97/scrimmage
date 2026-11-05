@@ -50,7 +50,7 @@ class RunResult:
 
 def check_labels(config: Config) -> list[str]:
     """Problems found before the first run, so a typo costs no model calls."""
-    names = config.tool_names()
+    names = config.agent.tool_names()
     problems: list[str] = []
     for test in config.tests:
         for entry in [*test.mocks, *test.faults]:
@@ -61,10 +61,10 @@ def check_labels(config: Config) -> list[str]:
                     f"the tools are {', '.join(names) or 'none'}"
                 )
         for mock in test.mocks:
-            if mock.type and not allowed(mock.type, config.allowed_imports()):
+            if mock.type and not allowed(mock.type, config.agent.allowed_imports()):
                 problems.append(
                     f"[[test]] {test.name!r}: type {mock.type} is outside the agent's packages "
-                    f"({', '.join(config.allowed_imports())}), so it is refused"
+                    f"({', '.join(config.agent.allowed_imports())}), so it is refused"
                 )
     for entry in config.agent.real:
         name = entry.partition(":")[2]
@@ -109,7 +109,7 @@ class Runner:
             FAULTLINE_CONTROL_URL=self.control_url(self.server.url),
             FAULTLINE_RUN=run,
             FAULTLINE_ANSWER_FILE=str(self.answers / f"{run}.txt"),
-            FAULTLINE_ALLOW_IMPORTS=",".join(self.config.allowed_imports()),
+            FAULTLINE_ALLOW_IMPORTS=",".join(self.config.agent.allowed_imports()),
         )
         return env
 

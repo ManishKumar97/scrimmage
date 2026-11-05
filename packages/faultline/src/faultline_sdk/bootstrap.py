@@ -61,7 +61,7 @@ def start() -> None:
             run_state.listed_tool_missing(names[0], message)
             sender.flush()
             stop(message)
-    tool_gate.install(plan.tools, dict(plan.tool_names))
+    tool_gate.install(plan.tools, dict(plan.renames))
     where = " in a child process, without faults" if child else ""
     print(
         f"faultline: active for run {run} ({plan.test}, {plan.row}){where}; "
