@@ -6,5 +6,5 @@
 # origin = "public incident"       # "public incident" or "trace"
 # source = "https://..."           # the incident's public URL, or a description of
 #                                  # the trace with nothing private in it
-
-fault = []
+#
+# The file has no entries yet.

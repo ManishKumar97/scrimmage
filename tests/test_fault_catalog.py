@@ -10,7 +10,12 @@ ORIGINS = {"public incident", "trace"}
 
 
 def load() -> list[dict[str, object]]:
-    return tomllib.loads(CATALOG.read_text())["fault"]
+    catalog = tomllib.loads(CATALOG.read_text())
+    # A misspelled table such as [[faults]] would otherwise read as an empty catalog.
+    assert set(catalog) <= {"fault"}, (
+        f"unknown tables: {sorted(set(catalog) - {'fault'})}"
+    )
+    return catalog.get("fault", [])
 
 
 @pytest.mark.design("catalog.origin")
