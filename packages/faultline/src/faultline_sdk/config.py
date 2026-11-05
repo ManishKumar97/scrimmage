@@ -41,6 +41,8 @@ FAULTS_LATER = re.compile(
     r"|context too long|append|replace|garble|truncate|unknown tool|bad tool args|refuse"
 )
 WHEN_LATER = re.compile(r"once|call \d+|first \d+|requests \d+")
+# The faults this version builds. Each one has an entry in docs/fault-catalog.toml.
+FAULTS = ("timeout",)
 IMPORT_PATH = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*:[A-Za-z_]\w*")
 
 
@@ -240,7 +242,7 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
     check_keys(table, FAULT_KEYS, FAULT_LATER, where)
     call = str(labels.parse(text(table, "call", where), f"{where} call"))
     do = text(table, "do", where)
-    if do != "timeout":
+    if do not in FAULTS:
         if FAULTS_LATER.fullmatch(do):
             raise NotSupportedYet(f"{where} do: {do!r} is not supported yet")
         raise ConfigError(f"{where} do: {do!r} is not a fault")
