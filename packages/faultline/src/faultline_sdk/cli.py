@@ -17,9 +17,6 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         config = settings.load(args.path.resolve())
-    except FileNotFoundError:
-        print(f"faultline: {args.path} not found", file=sys.stderr)
-        return MISTAKE
     except ConfigError as exc:
         print(f"faultline: {exc}", file=sys.stderr)
         return MISTAKE

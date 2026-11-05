@@ -74,9 +74,13 @@ class Config:
 
 def load(path: Path) -> Config:
     try:
-        data = tomllib.loads(path.read_text())
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"{path.name}: {exc}") from None
+    except UnicodeDecodeError:
+        raise ConfigError(f"{path.name}: the file is not UTF-8 text") from None
+    except OSError as exc:
+        raise ConfigError(f"{path.name}: cannot read it: {exc.strerror}") from None
     reject_placeholders(data, path.name)
     check_keys(data, {"agent", "test"}, path.name)
     if "agent" not in data:

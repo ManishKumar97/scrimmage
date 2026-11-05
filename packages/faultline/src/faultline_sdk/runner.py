@@ -78,8 +78,11 @@ class Runner:
         self.config = config
         self.control_url = control_url  # lets a test point the agent elsewhere
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        self.folder = config.root / "faultline-runs" / f"{stamp}-{secrets.token_hex(3)}"
+        runs = config.root / "faultline-runs"
+        self.folder = runs / f"{stamp}-{secrets.token_hex(3)}"
         self.store = RecordStore(self.folder)
+        # Records can hold customer data, so they stay out of the team's git repo.
+        (runs / ".gitignore").write_text("*\n")
         self.token = secrets.token_hex(32)
         self.server = ControlServer(self.token, self.store, on_refused=self._refused)
         self.answers = Path(tempfile.mkdtemp(prefix="faultline-answers-"))
@@ -249,6 +252,7 @@ def report(config: Config, results: list[RunResult], folder: Path, out: TextIO) 
     head = ["test", "row", "fault", "runs", "exercised", *OUTCOMES]
     table: list[list[str]] = [head]
     mistakes: list[str] = []
+    notes: list[str] = []
     code = OK
     for row in rows:
         mine = [r for r in results if r.row == row]
@@ -262,6 +266,10 @@ def report(config: Config, results: list[RunResult], folder: Path, out: TextIO) 
         where = f"{row.test.name} {row.name}"
         if row.fault is not None and mine and not counted:
             mistakes.append(f"{where}: the fault never fired in any run, so the row tested nothing")
+        ended = Counter(r.outcome for r in mine if not r.exercised)
+        if ended:
+            how = ", ".join(f"{n} {outcome}" for outcome, n in sorted(ended.items()))
+            notes.append(f"{where}: not exercised, the fault did not fire: {how}")
         for r in mine:
             if r.outcome == "refused call":
                 mistakes.append(
@@ -276,6 +284,8 @@ def report(config: Config, results: list[RunResult], folder: Path, out: TextIO) 
             "  ".join(cell.ljust(w) for cell, w in zip(line, widths, strict=True)).rstrip(),
             file=out,
         )
+    for message in notes:
+        print(f"note: {message}", file=out)
     for message in dict.fromkeys(mistakes):
         print(f"test mistake: {message}", file=out)
     if code == INFRA:

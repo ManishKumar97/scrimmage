@@ -380,3 +380,41 @@ def test_faultline_test_exits_2_on_anything_unsupported(
     project.edit(old, new)
     result = project.test()
     assert result.code == 2 and "faultline:" in result.err
+
+
+@pytest.mark.design("config.unreadable_file")
+@pytest.mark.parametrize("kind", ["folder", "not utf-8", "no access", "missing"])
+def test_a_config_file_that_cannot_be_read_is_a_mistake(project: Project, kind: str) -> None:
+    project.toml.unlink()
+    if kind == "folder":
+        project.toml.mkdir()
+    elif kind == "not utf-8":
+        project.toml.write_bytes(b"\xff\xfe[agent]")
+    elif kind == "no access":
+        project.toml.write_text("[agent]")
+        project.toml.chmod(0o000)
+    result = project.test()
+    if kind != "missing":
+        project.toml.chmod(0o700)
+    assert result.code == 2 and "faultline: faultline.toml:" in result.err
+
+
+@pytest.mark.design("record.ignored_by_git")
+def test_records_stay_out_of_the_teams_git_repo(project: Project, fake_openai: Fake) -> None:
+    project.edit("[agent]\n", "[agent]\nruns = 1\n")
+    project.test(fake_openai(ACME))
+    subprocess.run(["git", "init", "-q", str(project.root)], check=True)
+    status = subprocess.run(
+        ["git", "-C", str(project.root), "status", "--short"],
+        capture_output=True, text=True, check=True,
+    )  # fmt: skip
+    assert "faultline-runs" not in status.stdout
+
+
+@pytest.mark.design("report.not_exercised_says_why")
+def test_the_table_says_how_runs_ended_before_the_fault_fired(project: Project) -> None:
+    project.edit('function = "acme.agent:answer"', 'function = "acme.slow:crash"\nruns = 2')
+    result = project.test()
+    assert (
+        "note: order-status fault 1: not exercised, the fault did not fire: 2 crashed" in result.out
+    )
