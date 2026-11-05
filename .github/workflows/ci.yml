@@ -14,17 +14,21 @@ concurrency:
 
 env:
   UV_VERSION: "0.13.0"
+  # uv run never re-locks; a stale uv.lock fails the job.
+  UV_LOCKED: "1"
 
 jobs:
   checks:
     name: Lint, types, dead code, imports
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
         with:
           version: ${{ env.UV_VERSION }}
-      - run: uv sync --locked --python 3.11
+      - run: uv sync
       - name: ruff
         run: |
           uv run ruff check .
@@ -43,10 +47,17 @@ jobs:
       fail-fast: false
       matrix:
         python: ["3.11", "3.12", "3.13", "3.14"]
+    env:
+      # Without this, uv run reads .python-version and rebuilds the venv on 3.11.
+      UV_PYTHON: ${{ matrix.python }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
         with:
           version: ${{ env.UV_VERSION }}
-      - run: uv sync --locked --python ${{ matrix.python }}
+      - run: uv sync
+      - name: Check the job runs the Python it names
+        run: uv run python -c "import sys; v = '.'.join(map(str, sys.version_info[:2])); assert v == '${{ matrix.python }}', v"
       - run: uv run pytest
