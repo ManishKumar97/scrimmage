@@ -100,14 +100,40 @@ def test_ubuntus_apport_hook_still_installs() -> None:
     assert plain == behind and "apport" in plain
 
 
+@pytest.mark.design("boot.child_other_python_untouched")
 @pytest.mark.skipif(not UBUNTU_PYTHON.exists(), reason="needs a second Python without Faultline")
-def test_a_python_without_the_sdk_does_nothing_and_says_nothing() -> None:
-    result = python(
-        "print('ok')",
+def test_a_child_on_a_python_without_the_sdk_is_left_alone() -> None:
+    # Like the aws CLI started by the agent: it inherits the variables, but not Faultline.
+    env = {"PYTHONPATH": str(BOOT), "FAULTLINE_TOKEN": TOKEN, "FAULTLINE_ROOT_PID": "1"}
+    result = python("print('ok')", env, exe=str(UBUNTU_PYTHON))
+    assert (result.returncode, result.stdout.strip(), result.stderr) == (0, "ok", "")
+
+
+@pytest.mark.design("boot.root_other_python_stops")
+@pytest.mark.skipif(not UBUNTU_PYTHON.exists(), reason="needs a second Python without Faultline")
+def test_the_program_under_test_on_a_python_without_the_sdk_stops() -> None:
+    # The runner's own step: faultline-run sets FAULTLINE_ROOT_PID, then becomes the
+    # program, here a Python with no Faultline installed.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("FAULTLINE_")}
+    env["FAULTLINE_TOKEN"] = TOKEN
+    command = [
+        sys.executable,
+        "-m",
+        "faultline_sdk.run_command",
+        str(UBUNTU_PYTHON),
+        "-c",
+        "print('agent ran')",
+    ]
+    result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1 and "agent ran" not in result.stdout
+    assert "faultline is not installed for" in result.stderr
+    # Without faultline-run, as with PYTHONPATH set by hand, it is the program under test too.
+    by_hand = python(
+        "print('agent ran')",
         {"PYTHONPATH": str(BOOT), "FAULTLINE_TOKEN": TOKEN},
         exe=str(UBUNTU_PYTHON),
     )
-    assert (result.stdout.strip(), result.stderr) == ("ok", "")
+    assert by_hand.returncode == 1 and "agent ran" not in by_hand.stdout
 
 
 @pytest.mark.design("boot.startup_line")

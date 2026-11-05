@@ -21,13 +21,29 @@ def _chain() -> None:
     spec.loader.exec_module(module)
 
 
+def _is_root() -> bool:
+    """Whether this is the program the test started, not a child it started.
+
+    faultline-run sets FAULTLINE_ROOT_PID to its own process id and then becomes the
+    program, so only that program has a matching id. Unset means no faultline-run,
+    such as PYTHONPATH set by hand, which also starts the program under test.
+    """
+    root = os.environ.get("FAULTLINE_ROOT_PID", "")
+    return not root or root == str(os.getpid())
+
+
 def _start() -> None:
     try:
         from faultline_sdk import bootstrap
     except ModuleNotFoundError as exc:
-        if exc.name == "faultline_sdk":
-            return  # another Python without Faultline: do nothing, say nothing
-        raise
+        if exc.name != "faultline_sdk":
+            raise
+        if not _is_root():
+            return  # a child on another Python, such as the aws CLI: leave it alone
+        raise RuntimeError(
+            f"faultline is not installed for {sys.executable}, so the program under "
+            "test would run with no gates; run it on a Python with faultline installed"
+        ) from None
     bootstrap.start()
 
 
