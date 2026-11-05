@@ -22,6 +22,7 @@ from faultline_sdk import hooks
 from faultline_sdk import provider_openai as openai_table
 from faultline_sdk.client import ControlError
 from faultline_sdk.decide import Call, Decision
+from faultline_sdk.redact import redact
 from faultline_sdk.state import BLOB_CAP, BlobSink, RunState, Step, blob, current
 
 LIBRARY = "httpx2"
@@ -470,8 +471,13 @@ def capture(
         keep(loaded)
         finish(True)
         return
+
+    def broke(error: Exception) -> None:
+        extra["error"] = redact(f"{type(error).__name__}: {error}")
+        finish(False)
+
     ctx.open.add(finish)
-    response.stream = wrap(module, response.stream, keep, finish, sync=sync)
+    response.stream = wrap(module, response.stream, keep, finish, broke, sync=sync)
 
 
 def record(
@@ -518,23 +524,36 @@ def wrap(
     inner: Any,
     keep: Callable[[bytes], None],
     finish: Callable[[bool], None],
+    broke: Callable[[Exception], None],
     *,
     sync: bool,
 ) -> Any:
-    """A stream of httpx2's own kind that passes every chunk through unchanged."""
+    """A stream of httpx2's own kind that passes every chunk through unchanged.
+
+    A connection that drops halfway is the provider failing, so it goes on the record;
+    the error still reaches the agent exactly as it was raised.
+    """
     base = module.SyncByteStream if sync else module.AsyncByteStream
 
     class Watched(base):  # type: ignore[valid-type, misc]
         def __iter__(self) -> Iterator[bytes]:
-            for chunk in inner:
-                keep(chunk)
-                yield chunk
+            try:
+                for chunk in inner:
+                    keep(chunk)
+                    yield chunk
+            except Exception as exc:
+                broke(exc)
+                raise
             finish(True)
 
         async def __aiter__(self) -> Any:
-            async for chunk in inner:
-                keep(chunk)
-                yield chunk
+            try:
+                async for chunk in inner:
+                    keep(chunk)
+                    yield chunk
+            except Exception as exc:
+                broke(exc)
+                raise
             finish(True)
 
         def close(self) -> None:

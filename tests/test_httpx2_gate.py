@@ -22,6 +22,7 @@ from faultline_sdk.config import Fault, ModelHost
 from faultline_sdk.decide import Counters
 from faultline_sdk.errors import FaultlineRefused
 from faultline_sdk.plan import Plan
+from faultline_sdk.runner import real_error
 
 URL = "https://api.openai.com/v1/chat/completions"
 BODY = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
@@ -301,6 +302,44 @@ def test_an_async_reply_closed_early_is_recorded_too(gated: None) -> None:
 
     asyncio.run(go())
     assert sink.lines[0]["reply_incomplete"] is True
+
+
+class Dropped(httpx2.SyncByteStream, httpx2.AsyncByteStream):
+    """A connection that drops after the 200."""
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield b'{"partial":'
+        raise httpx2.ReadError("connection lost")
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b'{"partial":'
+        raise httpx2.ReadError("connection lost")
+
+
+def dropping(request: httpx2.Request) -> httpx2.Response:
+    return httpx2.Response(200, stream=Dropped())
+
+
+@pytest.mark.design("gate.stream_failure_recorded")
+def test_a_connection_dropped_midway_is_recorded_and_still_reaches_the_agent(gated: None) -> None:
+    sink, _ = install(make_plan())
+    with pytest.raises(httpx2.ReadError, match="connection lost"):
+        httpx2.Client(transport=httpx2.MockTransport(dropping)).post(URL, json=BODY)
+    line = sink.lines[0]
+    assert line["error"] == "ReadError: connection lost" and line["reply_incomplete"] is True
+    assert real_error(line) == "model:openai failed with ReadError"
+
+
+def test_a_connection_dropped_midway_on_the_async_path(gated: None) -> None:
+    sink, _ = install(make_plan())
+
+    async def go() -> None:
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(dropping)) as c:
+            await c.post(URL, json=BODY)
+
+    with pytest.raises(httpx2.ReadError):
+        asyncio.run(go())
+    assert sink.lines[0]["error"] == "ReadError: connection lost"
 
 
 @pytest.mark.design("record.side_folder_cap")
