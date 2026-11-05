@@ -36,6 +36,7 @@ MISTAKE_REASONS = (
     "hosted",
     "model_host_write",
     "unreadable_body",
+    "redirect_off_host",
 )
 
 
@@ -143,6 +144,10 @@ def patch(module: ModuleType, ctx: Context) -> None:
         except BaseException as exc:
             failed(ctx, module, step, request, extra, reservation, exc)
             raise
+        target = off_host(ctx, request, response)
+        if target is not None:
+            response.close()
+            redirected_away(ctx, step, request, extra, reservation, target)
         capture(ctx, module, step, request, response, extra, reservation, sync=True)
         return response
 
@@ -162,6 +167,10 @@ def patch(module: ModuleType, ctx: Context) -> None:
         except BaseException as exc:
             failed(ctx, module, step, request, extra, reservation, exc)
             raise
+        target = off_host(ctx, request, response)
+        if target is not None:
+            await response.aclose()
+            redirected_away(ctx, step, request, extra, reservation, target)
         capture(ctx, module, step, request, response, extra, reservation, sync=False)
         return response
 
@@ -182,12 +191,15 @@ def body_of(request: Any) -> bytes | None:
     return held if isinstance(held, bytes) else None
 
 
+def provider_of(ctx: Context, host: str) -> str | None:
+    named = next((h.provider for h in ctx.run.plan.model_hosts if h.host == host), None)
+    return named or ("openai" if host in openai_table.HOSTS else None)
+
+
 def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call | None:
     """The call this request is, or None for a host that is not a model host."""
     host = str(request.url.host).lower()
-    provider = next((h.provider for h in ctx.run.plan.model_hosts if h.host == host), None)
-    if provider is None and host in openai_table.HOSTS:
-        provider = "openai"
+    provider = provider_of(ctx, host)
     if provider is None:
         return None
     path = str(request.url.path)
@@ -351,6 +363,40 @@ def reserve(ctx: Context, step: Step, request: Any, extra: dict[str, object]) ->
             f"raise [agent] max_cost_usd above ${plan.budget_usd:g} if this is expected",
         )
     return reservation
+
+
+def off_host(ctx: Context, request: Any, response: Any) -> str | None:
+    """The host a redirect would take this model call to, if that is not a model host."""
+    if not response.has_redirect_location:
+        return None
+    host = str(request.url.join(response.headers["location"]).host).lower()
+    return None if provider_of(ctx, host) else host
+
+
+def redirected_away(
+    ctx: Context,
+    step: Step,
+    request: Any,
+    extra: dict[str, object],
+    reservation: int | None,
+    host: str,
+) -> NoReturn:
+    """Stop here: past this hop the gate would not see the call, so nothing could price it."""
+    rates = prices_of(ctx, str(extra.get("model", "")))
+    usd = (
+        openai_table.cost(len(body_of(request) or b"") // CHAR_PER_TOKEN, 0, rates)
+        if rates
+        else 0.0
+    )
+    settle(ctx, reservation, usd)
+    ctx.run.refuse(step, "redirect_off_host")
+    refuse(
+        ctx.run,
+        step,
+        f"the model host redirected {step.call.method} {request.url.path} to {host}, which is "
+        "not a model host, so that call could not be budgeted or checked; if it is one, add "
+        "it under [agent] model_hosts",
+    )
 
 
 def failed(

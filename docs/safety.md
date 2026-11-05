@@ -33,6 +33,7 @@ Everything around them is checked:
 - A tool the model is offered that no gate sees could run for real unchecked, so the request is not sent and the test stops.
 - A request body Faultline cannot read is refused, because the tools in it cannot be checked.
 - Any other write to a model host, such as starting a fine-tuning job, is refused.
+- A model call redirected to a host that is not a model host is refused, so it cannot leave the budget behind. If your gateway really does redirect to another host, name that host under `model_hosts`.
 
 ## A gap in this version
 

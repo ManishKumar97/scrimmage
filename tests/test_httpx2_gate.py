@@ -441,6 +441,54 @@ def test_a_redirect_to_a_write_on_a_model_host_is_refused(gated: None) -> None:
     assert sink.lines[-1]["reason"] == "model_host_write"
 
 
+def to_elsewhere(request: httpx2.Request) -> httpx2.Response:
+    if request.url.host == "api.openai.com":
+        return httpx2.Response(
+            307, headers={"location": "http://localhost:9000/v1/chat/completions"}
+        )
+    return httpx2.Response(200, json=REPLY)
+
+
+@pytest.mark.design("gate.redirect_off_host_refused")
+def test_a_redirect_off_the_model_hosts_is_refused_and_named(gated: None) -> None:
+    budget = Budget(limit=1.0)
+    sink, _ = install(make_plan(budget=1.0), budget)
+    c = httpx2.Client(transport=httpx2.MockTransport(to_elsewhere), follow_redirects=True)
+    with pytest.raises(FaultlineRefused, match="localhost, which is not a model host"):
+        c.post(URL, json=BODY)
+    line = sink.lines[0]
+    assert (line["action"], line["reason"]) == ("refused", "redirect_off_host")
+    assert "localhost" in str(line["mistake"])
+    assert budget.ledger.reserved > 0 and len(sink.settles) == 1
+
+
+@pytest.mark.design("gate.redirect_off_host_refused_async")
+def test_a_redirect_off_the_model_hosts_is_refused_on_the_async_path(gated: None) -> None:
+    sink, _ = install(make_plan())
+
+    async def go() -> None:
+        transport = httpx2.MockTransport(to_elsewhere)
+        async with httpx2.AsyncClient(transport=transport, follow_redirects=True) as c:
+            await c.post(URL, json=BODY)
+
+    with pytest.raises(FaultlineRefused, match="not a model host"):
+        asyncio.run(go())
+    assert sink.lines[0]["reason"] == "redirect_off_host"
+
+
+def test_a_redirect_to_a_named_gateway_is_followed(gated: None) -> None:
+    def to_gateway(request: httpx2.Request) -> httpx2.Response:
+        if request.url.host == "api.openai.com":
+            target = "https://gateway.acme.internal/v1/chat/completions"
+            return httpx2.Response(307, headers={"location": target})
+        return httpx2.Response(200, json=REPLY)
+
+    sink, _ = install(make_plan())
+    c = httpx2.Client(transport=httpx2.MockTransport(to_gateway), follow_redirects=True)
+    assert c.post(URL, json=BODY).status_code == 200
+    assert len(sink.lines) == 2
+
+
 @pytest.mark.design("gate.resend_decided_again")
 def test_a_request_sent_again_is_decided_again(gated: None) -> None:
     install(make_plan((Fault("model", "status 429", "always"),)))
