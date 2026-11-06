@@ -166,6 +166,21 @@ def runtime_in_the_schema(question: str) -> dict[str, Any]:
     return with_secret(get_order, question)
 
 
+class OrderArgs(BaseModel):
+    order_id: str
+
+
+def runtime_beside_the_schema(question: str) -> dict[str, Any]:
+    """The signature takes the runtime, and the schema does not mention it."""
+
+    @tool(args_schema=OrderArgs)
+    def get_order(order_id: str, runtime: ToolRuntime) -> str:
+        """Look up an order's status and delivery date."""
+        return str(len(runtime.state["messages"]))
+
+    return with_secret(get_order, question)
+
+
 def dict_schema(question: str) -> dict[str, Any]:
     @tool(
         args_schema={

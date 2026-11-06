@@ -93,3 +93,4 @@ _.runtime_in_the_schema  # tests/example/acme/graph.py: a test names it
 _.dict_schema  # tests/example/acme/graph.py: a test names it
 _.model_config  # tests/example/acme/graph.py: pydantic reads it
 _.args_schema  # tests/example/acme/graph.py: LangChain reads it
+_.runtime_beside_the_schema  # tests/example/acme/graph.py: a test names it

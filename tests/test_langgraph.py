@@ -1082,7 +1082,13 @@ def test_the_docs_say_a_test_is_not_a_sandbox() -> None:
 @pytest.mark.design("adapter.only_model_fields_recorded")
 @pytest.mark.parametrize(
     "function",
-    ["schema_on_the_decorator", "schema_on_the_class", "runtime_in_the_schema", "dict_schema"],
+    [
+        "schema_on_the_decorator",
+        "schema_on_the_class",
+        "runtime_in_the_schema",
+        "runtime_beside_the_schema",
+        "dict_schema",
+    ],
 )
 def test_only_what_the_model_supplies_reaches_the_record(
     project: Project, fake_openai: Fake, function: str
