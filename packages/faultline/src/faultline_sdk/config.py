@@ -4,6 +4,7 @@ Only what this version supports is accepted. Anything else is rejected, never re
 and ignored; docs/configuration.md lists what later versions add.
 """
 
+import math
 import re
 import tomllib
 from dataclasses import dataclass
@@ -14,14 +15,30 @@ from faultline_sdk import labels
 from faultline_sdk.errors import ConfigError
 from faultline_sdk.mocks import allowed
 
-AGENT_KEYS = {"function", "runs", "parallel", "run_timeout", "tools", "real"}
+AGENT_KEYS = {
+    "function",
+    "runs",
+    "parallel",
+    "run_timeout",
+    "tools",
+    "real",
+    "max_cost_usd",
+    "model_hosts",
+    "reserve_output_tokens",
+    "prices",
+}
 TEST_KEYS = {"name", "question", "expect", "mock", "fault"}
 MOCK_KEYS = {"call", "returns", "type"}
 FAULT_KEYS = {"call", "do", "when"}
 
 DOCS = "docs/configuration.md"
 # The faults this version builds. Each one has an entry in docs/fault-catalog.toml.
-FAULTS = ("timeout",)
+FAULTS = ("timeout", "status")
+STATUS = re.compile(r"status (?P<code>\d{3})")
+SCHEDULE = re.compile(r"always|(?:first|requests) (?P<n>[1-9]\d*)")
+MODEL_KEYS = {"host", "provider"}
+DEFAULT_BUDGET_USD = 5.0
+DEFAULT_RESERVE_OUTPUT_TOKENS = 4096
 IMPORT_PATH = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*:[A-Za-z_]\w*")
 
 
@@ -49,6 +66,22 @@ class Test:
 
 
 @dataclass(frozen=True)
+class ModelHost:
+    """A host whose requests are model calls, such as a gateway, and the format it speaks."""
+
+    host: str
+    provider: str
+
+
+@dataclass(frozen=True)
+class Price:
+    """Dollars per million tokens."""
+
+    input: float
+    output: float
+
+
+@dataclass(frozen=True)
 class Agent:
     function: str
     runs: int
@@ -58,11 +91,15 @@ class Agent:
     real: tuple[str, ...]
     # (import path, name the model sees), for a tool whose two names differ.
     renames: tuple[tuple[str, str], ...] = ()
+    model_hosts: tuple[ModelHost, ...] = ()
+    max_cost_usd: float | None = DEFAULT_BUDGET_USD  # None: the budget is off, on purpose
+    reserve_output_tokens: int = DEFAULT_RESERVE_OUTPUT_TOKENS
+    prices: tuple[tuple[str, Price], ...] = ()
 
     def tool_names(self) -> list[str]:
         """Every tool's final name: the one the model sees."""
         renames = dict(self.renames)
-        return [renames.get(path, path.rpartition(":")[2]) for path in self.tools]
+        return [labels.tool_name(path, renames) for path in self.tools]
 
     def allowed_imports(self) -> list[str]:
         """Prefixes the agent's process may import from: function's and tools' packages."""
@@ -114,7 +151,15 @@ def check_references(config: Config) -> list[str]:
     names = config.agent.tool_names()
     problems: list[str] = []
     for test in config.tests:
+        for mock in test.mocks:
+            if labels.kind_of(mock.call) == "model":
+                problems.append(
+                    f"[[test]] {test.name!r}: {mock.call} cannot be mocked; "
+                    "a model call is always real or a fault"
+                )
         for entry in [*test.mocks, *test.faults]:
+            if labels.kind_of(entry.call) != "tool":
+                continue  # a model label names a provider, checked when it is read
             name = entry.call.partition(":")[2]
             if name not in names:
                 problems.append(
@@ -128,8 +173,13 @@ def check_references(config: Config) -> list[str]:
                     f"({', '.join(config.agent.allowed_imports())}), so it is refused"
                 )
     for entry in config.agent.real:
+        if labels.kind_of(entry) == "model":
+            problems.append(
+                f"[agent] real: {entry} is not needed; a model call is always real "
+                "unless a fault names it"
+            )
         name = entry.partition(":")[2]
-        if name != "*" and name not in names:
+        if labels.kind_of(entry) == "tool" and name != "*" and name not in names:
             problems.append(f"[agent] real: {entry} names no tool in [agent] tools")
     return problems
 
@@ -220,12 +270,70 @@ def read_agent(table: dict[str, object]) -> Agent:
         tools=tuple(tools),
         real=tuple(real),
         renames=tuple(renames),
+        model_hosts=read_model_hosts(table.get("model_hosts", []), where),
+        max_cost_usd=read_budget(table.get("max_cost_usd", DEFAULT_BUDGET_USD), where),
+        reserve_output_tokens=whole(
+            table, "reserve_output_tokens", DEFAULT_RESERVE_OUTPUT_TOKENS, where
+        ),
+        prices=read_prices(table.get("prices", {}), f"{where}.prices"),
     )
     names = agent.tool_names()
     for name in names:
         if names.count(name) > 1:
             raise ConfigError(f"{where} tools: two tools are named {name!r}")
     return agent
+
+
+def read_model_hosts(value: object, where: str) -> tuple[ModelHost, ...]:
+    hosts: list[ModelHost] = []
+    for i, raw in enumerate(as_list(value, f"{where} model_hosts"), 1):
+        item = f"{where} model_hosts {i}"
+        entry = as_table(raw, item)
+        check_keys(entry, MODEL_KEYS, item)
+        provider = text(entry, "provider", item)
+        labels.check_model(f"model:{provider}", f"{item} provider")
+        host = text(entry, "host", item).lower()
+        if ":" in host or "/" in host:
+            raise ConfigError(f"{item} host: {host!r} should be a host name, with no port or path")
+        hosts.append(ModelHost(host, provider))
+    return tuple(hosts)
+
+
+def read_budget(value: object, where: str) -> float | None:
+    if value == "none":
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ConfigError(
+            f'{where} max_cost_usd: expected dollars above 0, or "none" to turn the budget '
+            f"off, got {value!r}"
+        )
+    return float(value)
+
+
+def read_prices(value: object, where: str) -> tuple[tuple[str, Price], ...]:
+    prices: list[tuple[str, Price]] = []
+    for model, raw in as_table(value, where).items():
+        item = f"{where} {model}"
+        entry = as_table(raw, item)
+        check_keys(entry, {"input", "output"}, item)
+        parts: list[float] = []
+        for key in ("input", "output"):
+            number = entry.get(key)
+            if (
+                isinstance(number, bool)
+                or not isinstance(number, int | float)
+                or not math.isfinite(number)
+                or number < 0
+            ):
+                raise ConfigError(f"{item} {key}: expected dollars per million tokens")
+            parts.append(float(number))
+        prices.append((model, Price(parts[0], parts[1])))
+    return tuple(prices)
 
 
 def read_tool(entry: object, where: str) -> tuple[str, str | None]:
@@ -281,10 +389,22 @@ def read_mock(table: dict[str, object], where: str) -> Mock:
 def read_fault(table: dict[str, object], where: str) -> Fault:
     check_keys(table, FAULT_KEYS, where)
     call = labels.check(text(table, "call", where), f"{where} call")
+    kind = labels.kind_of(call)
     do = text(table, "do", where)
-    if do not in FAULTS:
+    status = STATUS.fullmatch(do)
+    if status:
+        if kind != "model":
+            raise ConfigError(f"{where} do: {do!r} works only on a model call; see {DOCS}")
+        if not 400 <= int(status.group("code")) <= 599:
+            raise ConfigError(f"{where} do: {do!r} is not an error status (400 to 599)")
+    elif do not in FAULTS or do == "status":
         raise ConfigError(f"{where} do: {do!r} is not a fault; see {DOCS}")
     when = str(table.get("when", "always"))
-    if when != "always":
+    if not SCHEDULE.fullmatch(when):
         raise ConfigError(f"{where} when: {when!r} is not a schedule; see {DOCS}")
+    if when.startswith("requests") and kind != "model":
+        raise ConfigError(
+            f"{where} when: {when!r} counts model requests and their retries; "
+            "use 'first N' for a tool"
+        )
     return Fault(call, do, when)

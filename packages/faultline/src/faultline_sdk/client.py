@@ -2,14 +2,17 @@
 
 Record lines go to a queue and a sender thread sends them in batches, at least every
 100 ms and at exit, so a gate never waits for the network. A full queue drops a line
-and marks the record incomplete, except a refusal, which waits for room.
+and marks the record incomplete, except a refusal or a model call's line, which
+waits for room.
 """
 
+import base64
 import http.client
 import json
 import queue
 import threading
 import time
+from collections import deque
 from urllib.parse import urlsplit
 
 from faultline_sdk import protocol
@@ -19,6 +22,7 @@ QUEUE_SIZE = 10_000
 BATCH_LINES = 500
 BATCH_S = 0.1
 TIMEOUT_S = 10.0
+BLOB_QUEUE = 64  # side-folder items waiting to be sent; each is at most 10 MB
 
 
 class ControlError(Exception):
@@ -80,6 +84,15 @@ class ControlClient:
             raise ControlError(f"no plan for {run}: {reply.get('error')}")
         return reply.get("plan")
 
+    def reserve(self, run: str, usd: float) -> int | None:
+        """Reserve what a model call could cost; None when the budget cannot cover it."""
+        status, reply = self.request("POST", "/v1/budget/reserve", {"run": run, "usd": usd})
+        if status != 200:
+            raise ControlError(f"the budget could not be checked: {reply.get('error')}")
+        if reply.get("ok") is not True:
+            return None
+        return int(str(reply["reservation"]))
+
 
 class Sender:
     """Sends record lines in the background, in batches.
@@ -98,6 +111,13 @@ class Sender:
         self.made = 0  # lines handed to put, dropped ones included
         self.dropped = 0
         self.unsent: list[dict[str, object]] = []
+        # Side-folder items, sent one at a time by this thread, kept and retried on
+        # failure. Bounded, because each can be 10 MB.
+        self.posts: queue.Queue[tuple[str, dict[str, object]]] = queue.Queue(BLOB_QUEUE)
+        self.unsent_posts: list[tuple[str, dict[str, object]]] = []
+        # Settlements have their own line, with no limit: each is small, and losing one
+        # would leave money reserved for the rest of the test.
+        self.settles: deque[dict[str, object]] = deque()
         self._counts = threading.Lock()  # made and dropped; never held over the network
         self._sending = threading.Lock()  # one batch in flight at a time
         self._stop = threading.Event()
@@ -107,7 +127,7 @@ class Sender:
         self._thread.start()
 
     def put(self, line: dict[str, object], *, keep: bool = False) -> None:
-        """Queue a line. keep: wait for room instead of dropping (refusals).
+        """Queue a line. keep: wait for room instead of dropping (refusals, model calls).
 
         Never waits for the network: a gate only takes a short lock to count the line.
         """
@@ -121,6 +141,23 @@ class Sender:
         except queue.Full:
             with self._counts:
                 self.dropped += 1
+
+    def put_blob(self, sha: str, data: bytes) -> bool:
+        """Queue one side-folder item. False, and the line says so, when there is no room."""
+        payload: dict[str, object] = {
+            "run": self.run,
+            "sha256": sha,
+            "data": base64.b64encode(data).decode(),
+        }
+        try:
+            self.posts.put_nowait(("/v1/blobs", payload))
+        except queue.Full:
+            return False
+        return True
+
+    def put_settle(self, reservation: int, usd: float) -> None:
+        """Queue the real cost of a call. Never dropped."""
+        self.settles.append({"run": self.run, "reservation": reservation, "usd": usd})
 
     def flush(self) -> None:
         """Send everything queued now, then the closing batch. Called at exit.
@@ -153,6 +190,7 @@ class Sender:
             except queue.Empty:
                 break
         with self._sending:
+            self._send_posts()
             lines = self.unsent + lines
             with self._counts:
                 if len(lines) > QUEUE_SIZE:  # the server has been away a long time
@@ -177,3 +215,27 @@ class Sender:
             with self._counts:
                 self.dropped += dropped
             return False
+
+    def _send_posts(self) -> None:
+        while self.settles:
+            try:
+                status, _ = self.client.request("POST", "/v1/budget/settle", self.settles[0])
+            except ControlError:
+                break
+            if status != 200:
+                break
+            self.settles.popleft()
+        pending = self.unsent_posts
+        while True:
+            try:
+                pending.append(self.posts.get_nowait())
+            except queue.Empty:
+                break
+        self.unsent_posts = []
+        for path, payload in pending:
+            try:
+                status, _ = self.client.request("POST", path, payload)
+            except ControlError:
+                status = 0
+            if status != 200:
+                self.unsent_posts.append((path, payload))

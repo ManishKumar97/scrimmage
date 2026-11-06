@@ -11,3 +11,8 @@
 name = "timeout"
 origin = "public incident"
 source = "https://aws.amazon.com/message/101925/ (AWS us-east-1, 19-20 October 2025: DynamoDB endpoints stopped resolving and calls to dependent services timed out for hours)"
+
+[[fault]]
+name = "status"
+origin = "public incident"
+source = "https://status.openai.com/incidents/ctrsv3lwd797 (OpenAI status page, API, ChatGPT and Sora Facing Issues: the API returned elevated errors to every caller)"

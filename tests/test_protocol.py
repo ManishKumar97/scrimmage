@@ -1,5 +1,7 @@
 """The signed protocol between the SDK and the control server, and the record store."""
 
+import base64
+import hashlib
 import http.client
 import json
 import stat
@@ -12,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from faultline_sdk import protocol
+from faultline_sdk.budget import Ledger
 from faultline_sdk.client import ControlClient, ControlError, Sender
 from faultline_sdk.control import ControlServer, proc_key
 from faultline_sdk.records import RecordStore
@@ -275,7 +278,9 @@ def test_a_refusal_waits_for_room_instead_of_being_dropped(server: ControlServer
 
 def test_a_refused_line_tells_the_runner_once(tmp_path: Path) -> None:
     told: list[str] = []
-    control = ControlServer(TOKEN, RecordStore(tmp_path / "r"), on_refused=told.append)
+    control = ControlServer(
+        TOKEN, RecordStore(tmp_path / "r"), on_refused=lambda run, _: told.append(run)
+    )
     control.start()
     control.open_run("run-1", "baseline", PLAN)
     try:
@@ -373,3 +378,117 @@ def test_queueing_a_line_never_waits_for_a_batch_in_flight() -> None:
     finally:
         slow.shutdown()
         slow.server_close()
+
+
+@pytest.mark.design("record.side_folder_owner_only")
+def test_a_side_folder_item_is_stored_by_its_hash_for_its_owner(server: ControlServer) -> None:
+    data = b"the full model reply"
+    sha = hashlib.sha256(data).hexdigest()
+    payload = {"run": "run-1", "sha256": sha, "data": base64.b64encode(data).decode()}
+    client = ControlClient(server.url, TOKEN)
+    assert client.request("POST", "/v1/blobs", payload)[0] == 200
+    assert client.request("POST", "/v1/blobs", payload)[0] == 200  # the same item is kept once
+    stored = server.store.folder / "blobs" / sha
+    assert stored.read_bytes() == data
+    assert stat.S_IMODE(stored.stat().st_mode) == 0o600
+    assert stat.S_IMODE(stored.parent.stat().st_mode) == 0o700
+
+
+@pytest.mark.parametrize(
+    ("change", "code"),
+    [
+        ({"sha256": "0" * 64}, "bad_hash"),
+        ({"sha256": "not a hash"}, "bad_hash"),
+        ({"data": "not base64!"}, "bad_request"),
+        ({"run": "run-9"}, "run_closed"),
+    ],
+)
+def test_a_bad_side_folder_item_is_refused(
+    server: ControlServer, change: dict[str, str], code: str
+) -> None:
+    data = b"x"
+    payload = {
+        "run": "run-1",
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "data": base64.b64encode(data).decode(),
+        **change,
+    }
+    assert (
+        ControlClient(server.url, TOKEN).request("POST", "/v1/blobs", payload)[1]["error"] == code
+    )
+
+
+@pytest.mark.design("record.sender_delivers_settles")
+def test_the_sender_delivers_other_requests_and_retries_them(server: ControlServer) -> None:
+    sender = Sender(ControlClient("http://127.0.0.1:9", TOKEN), "run-1")
+    assert sender.put_blob(hashlib.sha256(b"x").hexdigest(), b"x")
+    sender.flush()  # nobody listens: the item is kept
+    assert len(sender.unsent_posts) == 1
+    sender.client = ControlClient(server.url, TOKEN)
+    sender.flush()
+    assert sender.unsent_posts == []
+    assert len(list((server.store.folder / "blobs").iterdir())) == 1
+
+
+def test_a_full_side_folder_queue_says_so() -> None:
+    sender = Sender(ControlClient("http://127.0.0.1:9", TOKEN), "run-1")
+    sender.posts.maxsize = 1
+    assert sender.put_blob("a" * 64, b"x") is True
+    assert sender.put_blob("b" * 64, b"x") is False
+
+
+@pytest.mark.design("budget.settles_never_dropped")
+def test_a_settlement_is_never_crowded_out_and_survives_a_failed_send(tmp_path: Path) -> None:
+    ledger = Ledger(1.0)
+    control = ControlServer(TOKEN, RecordStore(tmp_path / "r"), ledger=ledger)
+    control.start()
+    control.open_run("run-1", "baseline", PLAN)
+    try:
+        held = ledger.reserve(0.5)
+        assert held is not None
+        sender = Sender(ControlClient("http://127.0.0.1:9", TOKEN), "run-1")
+        sender.posts.maxsize = 1
+        sender.put_blob("a" * 64, b"x")  # the side-folder queue is full
+        sender.put_settle(held, 0.1)
+        sender.flush()  # nobody listens: the settlement is kept
+        assert len(sender.settles) == 1
+        sender.client = ControlClient(control.url, TOKEN)
+        sender.flush()
+        assert not sender.settles
+        assert (ledger.reserved, ledger.spent) == (0.0, 0.1)
+    finally:
+        control.stop()
+
+
+@pytest.mark.design("control.quiet_on_dropped_clients")
+def test_a_client_that_drops_its_connection_prints_no_traceback(
+    server: ControlServer, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for error in (BrokenPipeError(), ConnectionResetError()):
+        try:
+            raise error
+        except ConnectionError:
+            server.server.handle_error(None, ("127.0.0.1", 1))
+    assert capsys.readouterr().err == ""
+    try:
+        raise ValueError("a real bug")
+    except ValueError:
+        server.server.handle_error(None, ("127.0.0.1", 1))
+    assert "a real bug" in capsys.readouterr().err
+
+
+def test_a_burst_of_settlements_all_arrive(tmp_path: Path) -> None:
+    ledger = Ledger(100.0)
+    control = ControlServer(TOKEN, RecordStore(tmp_path / "r"), ledger=ledger)
+    control.start()
+    control.open_run("run-1", "baseline", PLAN)
+    try:
+        sender = Sender(ControlClient(control.url, TOKEN), "run-1")
+        held = [ledger.reserve(0.5) for _ in range(200)]
+        for reservation in held:
+            assert reservation is not None
+            sender.put_settle(reservation, 0.5)
+        sender.flush()
+        assert (ledger.reserved, ledger.spent) == (0.0, 100.0)
+    finally:
+        control.stop()

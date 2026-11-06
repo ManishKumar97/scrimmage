@@ -29,7 +29,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
 
 
 @pytest.fixture
-def fake_openai() -> Iterator[Callable[[list[str]], FakeOpenAI]]:
+def fake_openai() -> Iterator[Callable[..., FakeOpenAI]]:
     """Start a fake OpenAI API that serves the given fixtures, one per turn.
 
     At the end of the test it fails if the fake answered any request with an error or
@@ -37,8 +37,8 @@ def fake_openai() -> Iterator[Callable[[list[str]], FakeOpenAI]]:
     """
     started: list[FakeOpenAI] = []
 
-    def start(replies: list[str]) -> FakeOpenAI:
-        fake = FakeOpenAI(replies)
+    def start(replies: list[str], **fixtures: str) -> FakeOpenAI:
+        fake = FakeOpenAI(replies, **fixtures)
         fake.start()
         started.append(fake)
         return fake

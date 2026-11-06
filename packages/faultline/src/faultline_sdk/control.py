@@ -4,8 +4,11 @@ It serves each run's plan while the run is open and stores its record lines. It
 listens on the local machine only. Every request must be signed, and every reply is.
 """
 
+import base64
+import hashlib
 import json
 import re
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -15,11 +18,15 @@ from socket import socket
 from typing import Any
 
 from faultline_sdk import protocol
-from faultline_sdk.plan import items, obj
+from faultline_sdk.budget import Ledger
+from faultline_sdk.plan import items, number, obj
 from faultline_sdk.records import RecordStore
 
 MAX_CONNECTIONS = 64
 MAX_BODY = 4 * 1024 * 1024  # a batch of 500 lines is far smaller
+MAX_BLOB_BODY = 14 * 1024 * 1024  # one 10 MB side-folder item, base64 encoded
+BLOB_PATH = "/v1/blobs"
+SHA256 = re.compile(r"[0-9a-f]{64}")
 READ_TIMEOUT_S = 10.0  # a connection that sends nothing frees its slot
 PLAN_PATH = re.compile(r"/v1/plans/([A-Za-z0-9_-]{1,64})")
 
@@ -31,9 +38,11 @@ class Run:
     open: bool = True
     fetched: bool = False
     refused: bool = False
+    broken: bool = False  # a library its gate cannot work with
     dropped: int = 0
     # Lines each process said it made, from its last batch, keyed like proc_key.
     made: dict[str, int] = field(default_factory=dict[str, int])
+    refusals: list[str] = field(default_factory=list[str])  # the reason of each refusal
 
 
 class ControlServer:
@@ -41,12 +50,14 @@ class ControlServer:
         self,
         token: str,
         store: RecordStore,
-        on_refused: Callable[[str], None] = lambda run: None,
+        on_refused: Callable[[str, str], None] = lambda run, reason: None,
         clock: Callable[[], float] = time.time,
+        ledger: Ledger | None = None,
     ) -> None:
         self.token = token
         self.store = store
         self.on_refused = on_refused
+        self.ledger = ledger or Ledger(None)
         self.clock = clock
         self.nonces = protocol.NonceStore()
         self.runs: dict[str, Run] = {}
@@ -93,7 +104,58 @@ class ControlServer:
             return self._plan(plan_path.group(1))
         if method == "POST" and path == "/v1/records":
             return self._records(body)
+        if method == "POST" and path == "/v1/budget/reserve":
+            return self._reserve(body)
+        if method == "POST" and path == "/v1/budget/settle":
+            return self._settle(body)
+        if method == "POST" and path == BLOB_PATH:
+            return self._blob(body)
         return 404, {"error": "not_found"}
+
+    def _open(self, run: str) -> Run | None:
+        with self.lock:
+            state = self.runs.get(run)
+            return state if state is not None and state.open else None
+
+    def _reserve(self, body: bytes) -> tuple[int, dict[str, object]]:
+        try:
+            request = obj(json.loads(body))
+            run, usd = str(request["run"]), number(request, "usd")
+        except (ValueError, KeyError):
+            return 400, {"error": "bad_request"}
+        if usd < 0 or self._open(run) is None:
+            return 409 if usd >= 0 else 400, {"error": "run_closed" if usd >= 0 else "bad_request"}
+        reservation = self.ledger.reserve(usd)
+        if reservation is None:
+            return 200, {"ok": False}
+        return 200, {"ok": True, "reservation": reservation}
+
+    def _settle(self, body: bytes) -> tuple[int, dict[str, object]]:
+        try:
+            request = obj(json.loads(body))
+            usd = number(request, "usd")
+            reservation = int(str(request["reservation"]))
+        except (ValueError, KeyError):
+            return 400, {"error": "bad_request"}
+        if usd < 0:
+            return 400, {"error": "bad_request"}
+        # Money spent is spent: a settle is kept even if its run has just closed.
+        self.ledger.settle(reservation, usd)
+        return 200, {"ok": True}
+
+    def _blob(self, body: bytes) -> tuple[int, dict[str, object]]:
+        try:
+            request = obj(json.loads(body))
+            run, sha = str(request["run"]), str(request["sha256"])
+            data = base64.b64decode(str(request["data"]), validate=True)
+        except (ValueError, KeyError):
+            return 400, {"error": "bad_request"}
+        if not SHA256.fullmatch(sha) or hashlib.sha256(data).hexdigest() != sha:
+            return 400, {"error": "bad_hash"}
+        if self._open(run) is None:
+            return 409, {"error": "run_closed"}
+        self.store.add_blob(sha, data)
+        return 200, {"ok": True}
 
     def _plan(self, run: str) -> tuple[int, dict[str, object]]:
         with self.lock:
@@ -123,10 +185,19 @@ class ControlServer:
             if made is not None:
                 state.made[proc_key(batch.get("proc"))] = made
             accepted = self.store.add(run, mine)
-            first = not state.refused and any(line.get("action") == "refused" for line in mine)
+            reasons = [
+                str(x.get("reason", "unlisted")) for x in mine if x.get("action") == "refused"
+            ]
+            first = not state.refused and bool(reasons)
             state.refused = state.refused or first
-        if first:  # stop the program off this thread, so the reply is not held up
-            threading.Thread(target=self.on_refused, args=(run,), daemon=True).start()
+            state.refusals += reasons
+            broken = not state.broken and any(x.get("notice") == "structure" for x in mine)
+            state.broken = state.broken or broken
+        # Stop the program off this thread, so the reply is not held up.
+        if first:
+            threading.Thread(target=self.on_refused, args=(run, reasons[0]), daemon=True).start()
+        if broken:
+            threading.Thread(target=self.on_refused, args=(run, "structure"), daemon=True).start()
         return 200, {"accepted": accepted}
 
 
@@ -152,6 +223,11 @@ class _Server(ThreadingHTTPServer):
             self.slots.release()
             raise
 
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        """A program killed mid-request is routine: no traceback on the runner's output."""
+        if not isinstance(sys.exc_info()[1], ConnectionError):
+            super().handle_error(request, client_address)
+
     def process_request_thread(
         self, request: socket | tuple[bytes, socket], client_address: Any
     ) -> None:
@@ -171,7 +247,7 @@ def _handler(control: ControlServer) -> type[BaseHTTPRequestHandler]:
                 self.send_error(400)
                 return
             length = int(text)
-            if length > MAX_BODY:
+            if length > (MAX_BLOB_BODY if self.path == BLOB_PATH else MAX_BODY):
                 self.send_error(413)
                 return
             body = self.rfile.read(length) if length else b""

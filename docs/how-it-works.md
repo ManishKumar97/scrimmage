@@ -20,6 +20,23 @@ Faultline has two parts.
 
 Nothing on disk is edited. The swaps exist only in the memory of that one program.
 
+## Model calls
+
+The openai library hands every request to an HTTP library, httpx2, which sends each attempt through one function.
+When your code first imports httpx2, the SDK swaps that function for a gate. Faultline never imports httpx2 itself and does not depend on it, so it uses whatever version your agent has.
+
+The gate sits below the library's retries, so everything above it behaves as it would for real:
+
+1. A request reaches the gate. If its host and path are a model call, the gate labels it. Requests to other hosts pass through untouched.
+2. The gate reads the tools the request offers, and stops the request or the test if one is not allowed.
+3. If a fault fires, the gate builds the reply or error itself and nothing is sent.
+4. Otherwise it reserves the call's cost from the budget, which the runner keeps for the whole test, and sends the request.
+5. The reply passes through unchanged, while the gate reads its token counts as it goes by. When it ends, the real cost replaces the reservation and the call is recorded.
+
+Every hop of a redirect goes through the same function, so a hop to another model host is decided and budgeted by itself. A redirect to any other host is refused before it is followed, because past that point the gate could not see the call.
+
+Before swapping, the gate checks that the function exists, takes the arguments it expects, and that the library still has the stream types it needs to watch a reply. If a new version of the library changed it, nothing could be gated, so the program stops and the test ends at once with exit code 3, naming the library. If only what faults are built from has changed, the gate keeps refusing and budgeting without faults, and the test still fails. A newer version that passes the check only gets a warning.
+
 ## The plan and the secret
 
 The plan is data only: it cannot carry code.

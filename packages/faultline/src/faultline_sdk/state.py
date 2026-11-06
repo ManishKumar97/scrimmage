@@ -11,9 +11,9 @@ import os
 import socket
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Protocol, cast
 
 from faultline_sdk import decide as engine
 from faultline_sdk.errors import FaultlineRefused, FaultlineTimeLimit
@@ -22,10 +22,19 @@ from faultline_sdk.records import RECORD_VERSION
 from faultline_sdk.redact import redact
 
 PREVIEW = 200
+BLOB_CAP = 10 * 1024 * 1024  # a side-folder item keeps its first 10 MB and is marked cut
 
 
 class LineSink(Protocol):
     def put(self, line: dict[str, object], *, keep: bool = False) -> None: ...
+
+
+class BlobSink(Protocol):
+    """The sender: side-folder items and settlements it delivers off the agent's thread."""
+
+    def put_blob(self, sha: str, data: bytes) -> bool: ...
+
+    def put_settle(self, reservation: int, usd: float) -> None: ...
 
 
 def now_iso() -> str:
@@ -53,6 +62,7 @@ class Step:
     args: dict[str, object]
     start: str
     started: float
+    extra: dict[str, object] = field(default_factory=dict[str, object])
 
 
 class RunState:
@@ -61,8 +71,9 @@ class RunState:
         self.sink = sink
         self.allowed = allowed
         self.began = time.monotonic()
-        self.counts = [0] * len(plan.faults)
+        self.counters = engine.Counters(plan)
         self.refused: str | None = None
+        self.model_calls = 0
         self.proc = {
             "host": socket.gethostname(),
             "pid": os.getpid(),
@@ -71,43 +82,72 @@ class RunState:
         self._seq = 0
         self._lock = threading.Lock()
 
-    def begin(self, name: str, args: dict[str, object]) -> Step:
-        """Count the call and decide what it gets.
+    def check_time(self) -> None:
+        """The time limit counts from when this process took up the run.
 
-        The time limit counts from when this process took up the run. For a function
-        the runner stops the program at run_timeout first, so here it is a backstop;
-        it matters where one process outlives its runs.
+        For a function the runner stops the program at run_timeout first, so here it
+        is a backstop; it matters where one process outlives its runs.
         """
         if time.monotonic() - self.began > self.plan.time_limit_s:
             raise FaultlineTimeLimit(
                 f"the run passed its time limit of {self.plan.time_limit_s:g}s"
             )
-        call = engine.Call("tool", f"tool:{name}", name)
+
+    def decide(self, call: engine.Call, args: dict[str, object]) -> Step:
+        """Count the call and decide what it gets. A poisoned run refuses every call."""
+        self.check_time()
         with self._lock:
             if self.refused is not None:
-                decision = engine.Decision("refused")
+                decision = engine.Decision("refused", reason="poisoned")
             else:
-                engine.count(call, self.plan, self.counts)
-                decision = engine.decide(call, self.plan, self.counts)
+                numbers = self.counters.note(call)
+                decision = engine.decide(call, self.plan, numbers)
                 if decision.action == "refused":
                     self.refused = call.label
         return Step(call, decision, args, now_iso(), time.monotonic())
 
-    def refusal(self, step: Step) -> FaultlineRefused:
-        first = self.refused or step.call.label
-        if first != step.call.label:
+    def begin(self, name: str, args: dict[str, object]) -> Step:
+        return self.decide(engine.Call("tool", f"tool:{name}", name), args)
+
+    def refuse(self, step: Step, reason: str) -> Step:
+        """Turn a decided call into a refusal for a reason the gate found, and poison the run."""
+        with self._lock:
+            self.refused = self.refused or step.call.label
+        step.decision = engine.Decision("refused", reason=reason)
+        return step
+
+    def refusal(self, step: Step, detail: str = "") -> FaultlineRefused:
+        label = step.call.label
+        reason = step.decision.reason or "unlisted"
+        first = self.refused or label
+        if reason == "poisoned" or first != label:
             return FaultlineRefused(
-                f"{step.call.label}: this run already refused {first}, so every later call fails"
+                f"{label}: this run already refused {first}, so every later call fails"
             )
-        return FaultlineRefused(
-            f"{step.call.label} is neither mocked by this test nor listed under [agent] real. "
-            f'Mock it in the test, or add "{step.call.label}" to real if it is safe '
-            "to run for real."
-        )
+        messages = {
+            "unlisted": (
+                f"{label} is neither mocked by this test nor listed under [agent] real. "
+                f'Mock it in the test, or add "{label}" to real if it is safe to run for real.'
+            ),
+            "model_host_write": (
+                f"{detail} is a write to a model host and not a model call. Faultline "
+                "refuses it because it could leave something behind at the provider that no "
+                "test cleans up. No setting allows it yet; web-request labels come later."
+            ),
+            "budget": f"{label}: the test's budget cannot cover this call. {detail}",
+            "no_price": detail,
+            "hosted": detail,
+            "unknown_tool_type": detail,
+            "unseen_tool": detail,
+            "unreadable_body": detail,
+            "redirect_off_host": detail,
+            "unsupported_loop": detail,
+        }
+        return FaultlineRefused(messages.get(reason, f"{label} is refused: {detail}"))
 
     def drop_faults(self) -> None:
         self.plan = dataclasses.replace(self.plan, faults=())
-        self.counts = []
+        self.counters = engine.Counters(self.plan)
 
     def listed_tool_missing(self, name: str, message: str) -> None:
         """A tool under [agent] tools that does not exist: a mistake that ends the run.
@@ -117,7 +157,7 @@ class RunState:
         """
         step = Step(
             engine.Call("tool", f"tool:{name}", name),
-            engine.Decision("refused"),
+            engine.Decision("refused", reason="unlisted"),
             {},
             now_iso(),
             time.monotonic(),
@@ -125,6 +165,28 @@ class RunState:
         with self._lock:
             self.refused = self.refused or step.call.label
         self.finish(step, error=FaultlineRefused(message), mistake=message)
+
+    def next_seq(self) -> int:
+        with self._lock:
+            self._seq += 1
+            return self._seq
+
+    def notice(self, kind: str, library: str, message: str) -> None:
+        """A line that is not a call, such as a library version the gate cannot use."""
+        self.sink.put(
+            {
+                "v": RECORD_VERSION,
+                "run": self.plan.run,
+                "test": self.plan.test,
+                "row": self.plan.row,
+                "seq": self.next_seq(),
+                "proc": self.proc,
+                "notice": kind,
+                "library": library,
+                "message": message,
+            },
+            keep=True,
+        )
 
     def finish(
         self,
@@ -134,16 +196,13 @@ class RunState:
         error: BaseException | None = None,
         mistake: str | None = None,
     ) -> None:
-        with self._lock:
-            self._seq += 1
-            seq = self._seq
         decision = step.decision
         line: dict[str, object] = {
             "v": RECORD_VERSION,
             "run": self.plan.run,
             "test": self.plan.test,
             "row": self.plan.row,
-            "seq": seq,
+            "seq": self.next_seq(),
             "proc": self.proc,
             "call": step.call.label,
             "kind": step.call.kind,
@@ -159,9 +218,39 @@ class RunState:
         if decision.fault is not None:
             fault = self.plan.faults[decision.fault]
             line["fault"] = {"do": fault.do, "when": fault.when, "n": decision.n}
+        if decision.action == "refused":
+            line["reason"] = decision.reason or "unlisted"
         if mistake is not None:
             line["mistake"] = redact(mistake)
-        self.sink.put(line, keep=decision.action == "refused")
+        line.update({key: scrub(value) for key, value in step.extra.items()})
+        self.sink.put(line, keep=decision.action == "refused" or step.call.kind == "model")
+
+
+def scrub(value: object) -> object:
+    """Remove secrets from the text a gate puts on a line, such as a model name or a path."""
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, list):
+        return [scrub(item) for item in cast(list[object], value)]
+    return value
+
+
+def blob(data: bytes, sink: BlobSink | None, total: int | None = None) -> dict[str, object]:
+    """Record a model request or reply: its full content goes to the side folder by hash.
+
+    total is the true size when only part of the content was kept while it went by.
+    """
+    text = redact(data.decode("utf-8", "replace"))
+    raw = text.encode()
+    size = max(len(raw), total or 0)
+    kept = raw[:BLOB_CAP]
+    sha = hashlib.sha256(kept).hexdigest()
+    entry: dict[str, object] = {"sha256": sha, "bytes": size, "preview": text[:PREVIEW]}
+    if size > BLOB_CAP:
+        entry["cut"] = True
+    if sink is not None and not sink.put_blob(sha, kept):
+        entry["unsaved"] = True
+    return entry
 
 
 _current: RunState | None = None

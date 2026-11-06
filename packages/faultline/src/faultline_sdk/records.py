@@ -21,6 +21,18 @@ class RecordStore:
         self._seen: dict[str, set[tuple[object, ...]]] = {}
         self._lines: dict[str, list[dict[str, object]]] = {}
 
+    def add_blob(self, sha: str, data: bytes) -> None:
+        """Store one side-folder item, named by its hash; the same content is kept once."""
+        folder = self.folder / "blobs"
+        with self._lock:
+            folder.mkdir(mode=0o700, exist_ok=True)
+            target = folder / sha
+            if target.exists():
+                return
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as out:
+                out.write(data)
+
     def path(self, run: str) -> Path:
         return self.folder / f"{run}.jsonl"
 

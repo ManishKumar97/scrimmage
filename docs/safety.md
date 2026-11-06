@@ -3,7 +3,7 @@
 A test runs your agent many times.
 A tool that changes data, such as `refund_order`, must never run for real by accident.
 
-Which tools change data cannot be detected reliably, so Faultline does not guess.
+Nothing can reliably tell a read from a write by looking at a tool, so Faultline does not try.
 
 ## Every tool is refused unless the test allows it
 
@@ -18,10 +18,31 @@ Any tool can be mocked instead, write tools included, so a test can give `refund
 A refused call raises `FaultlineRefused`, an error of Faultline's own.
 Its message names the call and the two fixes: mock it, or add it to `real` if it is safe.
 
-A framework or your own code might catch that error and let the model try another tool, which could be another write.
-So the first refusal marks the whole run as refused: every later gated call fails at once, and the runner stops the program.
+Your code, or a framework, might swallow that error and carry on, and the next tool could be another write.
+So one refusal ends the run: Faultline fails every gated call after it, and the runner stops the program.
 
 If you have decided every tool is safe, write `real = ["tool:*"]`; the run table then says so in its header.
+
+## What a model request may do
+
+Model calls run for real, because they are what is being tested.
+Everything around them is checked:
+
+- A hosted MCP server can change data at the provider, where no gate can see it. A request that offers one is never sent unless you list it as `hosted:mcp/<label>` under `real`.
+- A tool of a type Faultline does not know stops the test, so a new provider feature costs a table update, never a safety gap.
+- A tool the model is offered that no gate sees could run for real unchecked, so the request is not sent and the test stops.
+- A request body Faultline cannot read is refused, because the tools in it cannot be checked.
+- Any other write to a model host, such as starting a fine-tuning job, is refused.
+- A model call redirected to a host that is not a model host is refused, so it cannot leave the budget behind. If your gateway really does redirect to another host, name that host under `model_hosts`.
+
+## A gap in this version
+
+A write to a host that is not a model host is **not** refused yet, even when it goes through httpx2. Only your listed tools guard it: a tool under `tools` that is neither mocked nor under `real` never runs, so the write inside it never happens. A write sent from code outside those tools passes. Web-request refusal comes in a later version.
+
+## The budget
+
+A test has a budget, $5 unless you change it. When the runner cannot be reached to check it, the call is refused rather than sent.
+See [Failing the model, and keeping a budget](model-faults.md).
 
 ## A misspelled tool never runs ungated
 
@@ -43,5 +64,5 @@ A CI job that holds model API keys must not run `faultline test` on a pull reque
 
 ## Records
 
-Records stay on your machine, are readable only by you, and have known secret patterns removed.
+Records stay on your machine, are readable only by you, and have known secret patterns removed. Headers are never recorded, so your API key does not reach a record.
 The per-run `.log` file holds whatever your agent printed and is not cleaned, so keep it like any test log.

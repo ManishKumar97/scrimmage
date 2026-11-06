@@ -11,7 +11,7 @@ For each call your agent makes, a test decides what it gets back:
 
 - **real**: the call runs as normal, if it is safe to;
 - **mock**: a fixed answer, so the real call never happens;
-- **fault**: a failure that looks exactly like a real one, such as a timeout.
+- **fault**: a failure that looks exactly like a real one, such as a timeout or a 429 from the model.
 
 Every call is written to a record, so you can see what the agent was given and what it did next.
 
@@ -23,6 +23,7 @@ Fault injection is an established practice; Faultline brings it inside any Pytho
 |---|---|
 | [Install](install.md) | Getting Faultline onto your machine |
 | [Quickstart](quickstart.md) | Your first test, in five minutes |
+| [Failing the model](model-faults.md) | Rate limits, timeouts, schedules and the budget |
 | [Concepts](concepts.md) | Rows, runs, labels, mocks, faults, records |
 | [Configuration](configuration.md) | Every setting in `faultline.toml` |
 | [Commands](cli.md) | `faultline test` and `faultline-run` |
@@ -33,5 +34,5 @@ Fault injection is an established practice; Faultline brings it inside any Pytho
 ## Status
 
 Faultline is at an early stage.
-This version tests an agent that is a Python function with its own loop, and fails or mocks the agent's own Python tools.
-Model calls, web requests, MCP tools and agent frameworks come in later versions.
+This version tests an agent that is a Python function with its own loop. It fails or mocks the agent's own Python tools, fails OpenAI model calls, and keeps a budget.
+Other providers, web requests, MCP tools and agent frameworks come in later versions.

@@ -19,7 +19,7 @@ UBUNTU_PYTHON = Path("/usr/bin/python3.12")
 APPORT = Path("/usr/lib/python3.12/sitecustomize.py")
 GATES_LOADED = (
     "import sys; print('faultline_sdk' in sys.modules, "
-    "any(type(f).__name__ == 'ToolFinder' for f in sys.meta_path))"
+    "any(type(f).__name__ == 'ImportHook' for f in sys.meta_path))"
 )
 
 
@@ -48,7 +48,8 @@ def control(tmp_path: Path) -> Iterator[ControlServer]:
 def plan(**changes: object) -> dict[str, object]:
     return {
         "v": 1, "run": "run-1", "test": "t", "row": "baseline", "mocks": [], "faults": [],
-        "tools": [], "real": [], "time_limit_s": 60, **changes,
+        "tools": [], "real": [], "time_limit_s": 60, "model_hosts": [],
+        "budget": {"limit_usd": None, "reserve_output_tokens": 4096, "prices": {}}, **changes,
     }  # fmt: skip
 
 

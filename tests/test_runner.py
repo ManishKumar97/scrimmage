@@ -42,13 +42,13 @@ def test_the_example_runs_six_times_and_the_fault_fires(
     for lines in records:
         by_row.setdefault(lines[-1]["row"], []).append(lines)
     for lines in by_row["fault 1"]:
-        assert [(x["call"], x["action"]) for x in lines[:-1]] == [
+        assert [(x["call"], x["action"]) for x in lines[:-1] if x["kind"] == "tool"] == [
             ("tool:get_order", "fault"),
             ("tool:get_stock", "mock"),
         ]
         assert lines[-1]["summary"]["fault_fired"] is True  # type: ignore[index]
     for lines in by_row["baseline"]:
-        assert [x["action"] for x in lines[:-1]] == ["mock", "mock"]
+        assert [x["action"] for x in lines[:-1] if x["kind"] == "tool"] == ["mock", "mock"]
         assert lines[-1]["summary"]["outcome"] == "answered"  # type: ignore[index]
     assert "order-status  fault 1   tool:get_order timeout  3     3" in result.out
 
@@ -56,8 +56,12 @@ def test_the_example_runs_six_times_and_the_fault_fires(
 @pytest.mark.design("record.owner_only_files")
 def test_every_record_file_is_owner_only(project: Project, fake_openai: Fake) -> None:
     project.test(fake_openai(ACME))
-    files = list((project.root / "faultline-runs").glob("*/*"))
+    found = list((project.root / "faultline-runs").rglob("*"))
+    files = [f for f in found if f.is_file() and f.name != ".gitignore"]  # holds no data
+    folders = [f for f in found if f.is_dir()]
     assert files and all(stat.S_IMODE(f.stat().st_mode) == 0o600 for f in files)
+    assert all(stat.S_IMODE(f.stat().st_mode) == 0o700 for f in folders)
+    assert any(f.parent.name == "blobs" for f in files)  # model requests and replies
 
 
 @pytest.mark.design("runner.refused_call")
@@ -71,8 +75,10 @@ def test_an_unlisted_write_tool_ends_its_run_as_refused(project: Project) -> Non
         fake.stop()
     assert result.code == 2, result.out
     summaries = result.summaries()
-    # parallel = 1, so after the first refusal no more runs of that row start.
-    assert len(summaries) == 2 and {s["outcome"] for s in summaries} == {"refused call"}
+    # parallel = 1, so after the first refusal no more runs of that row start, and a
+    # baseline that only refused leaves nothing to compare a fault row with.
+    assert len(summaries) == 1 and {s["outcome"] for s in summaries} == {"refused call"}
+    assert "baseline failed" in result.out
     refused = [x for lines in result.records() for x in lines if x.get("action") == "refused"]
     assert refused and refused[0]["call"] == "tool:refund_order"
     assert "made a call the test does not allow" in result.out
@@ -83,7 +89,7 @@ def test_an_unlisted_write_tool_ends_its_run_as_refused(project: Project) -> Non
 def test_a_hanging_run_ends_as_timed_out(project: Project) -> None:
     project.edit(
         'function = "acme.agent:answer"',
-        'function = "acme.slow:hang"\nrun_timeout = 1\nruns = 1',
+        'function = "acme.slow:hang"\nrun_timeout = 1\nruns = 1\nmax_cost_usd = "none"',
     )
     project.edit(FAULT_BLOCK, "")
     result = project.test()
@@ -92,7 +98,10 @@ def test_a_hanging_run_ends_as_timed_out(project: Project) -> None:
 
 
 def test_an_agent_that_raises_has_crashed(project: Project) -> None:
-    project.edit('function = "acme.agent:answer"', 'function = "acme.slow:crash"\nruns = 1')
+    project.edit(
+        'function = "acme.agent:answer"',
+        'function = "acme.slow:crash"\nruns = 1\nmax_cost_usd = "none"',
+    )
     project.edit(FAULT_BLOCK, "")
     result = project.test()
     assert (result.code, [s["outcome"] for s in result.summaries()]) == (0, ["crashed"])
@@ -192,7 +201,11 @@ def test_a_mock_that_does_not_fit_its_type_is_a_test_mistake(
 
 
 def only_baseline(project: Project, function: str, extra: str = "") -> None:
-    project.edit('function = "acme.agent:answer"', f'function = "{function}"\nruns = 1{extra}')
+    """An agent that makes no model call, so no budget either."""
+    project.edit(
+        'function = "acme.agent:answer"',
+        f'function = "{function}"\nruns = 1\nmax_cost_usd = "none"{extra}',
+    )
     project.edit(FAULT_BLOCK, "")
 
 
@@ -367,7 +380,7 @@ def test_a_stale_root_pid_in_the_runners_environment_is_ignored(
     ("old", "new"),
     [
         ("[agent]\n", "[agent]\nrnus = 50\n"),
-        ("[agent]\n", "[agent]\nmax_cost_usd = 1\n"),
+        ("[agent]\n", '[agent]\nanswer = "reply"\n'),
         ('do   = "timeout"', 'do   = "status 500"'),
         ('do   = "timeout"', 'do   = "timeout"\nwhen = "once"'),
         ('call = "tool:get_order"\ndo', 'call = "model:x"\ndo'),
@@ -412,11 +425,15 @@ def test_records_stay_out_of_the_teams_git_repo(project: Project, fake_openai: F
 
 
 @pytest.mark.design("report.not_exercised_says_why")
-def test_the_table_says_how_runs_ended_before_the_fault_fired(project: Project) -> None:
-    project.edit('function = "acme.agent:answer"', 'function = "acme.slow:crash"\nruns = 2')
-    result = project.test()
+def test_the_table_says_how_runs_ended_before_the_fault_fired(
+    project: Project, fake_openai: Fake
+) -> None:
+    project.edit('call = "tool:get_order"', 'call = "tool:refund_order"')
+    project.edit("[agent]\n", "[agent]\nruns = 2\n")
+    result = project.test(fake_openai(ACME * 4))
     assert (
-        "note: order-status fault 1: not exercised, the fault did not fire: 2 crashed" in result.out
+        "note: order-status fault 1: not exercised, the fault did not fire: 2 answered"
+        in result.out
     )
 
 
@@ -425,11 +442,16 @@ def test_a_tool_can_carry_the_name_the_model_sees(project: Project, fake_openai:
     project.edit('"acme.tools:get_order"', '{path = "acme.tools:get_order", name = "lookup-order"}')
     project.edit('call    = "tool:get_order"', 'call    = "tool:lookup-order"')
     project.edit('call = "tool:get_order"', 'call = "tool:lookup-order"')
-    project.edit("[agent]\n", "[agent]\nruns = 1\n")
-    result = project.test(fake_openai(ACME))
+    project.edit('function = "acme.agent:answer"', 'function = "acme.rag:answer_renamed"\nruns = 1')
+    result = project.test(fake_openai(["chat_answer", "chat_answer"]))
     assert result.code == 0, result.out + result.err
     fault = next(lines for lines in result.records() if lines[-1]["row"] == "fault 1")
-    assert (fault[0]["call"], fault[0]["action"]) == ("tool:lookup-order", "fault")
+    tool = next(x for x in fault if x.get("call") == "tool:lookup-order")
+    assert tool["action"] == "fault"
+    schema = json.loads(
+        (Path(faultline_sdk.__file__).parent / "schemas" / "record.v1.json").read_text()
+    )
+    jsonschema.Draft202012Validator(schema).validate(tool)
 
 
 @pytest.mark.design("config.references_checked_on_load")
@@ -467,3 +489,15 @@ def test_every_bad_reference_shows_on_its_own_line_in_one_run(project: Project) 
     assert any("tool:get_ordr names no tool" in line for line in lines)
     assert any("tool:check_inventry names no tool" in line for line in lines)
     assert all(line.startswith("faultline: ") for line in lines)
+
+
+@pytest.mark.design("boot.fork_no_faults")
+def test_the_program_drops_faults_in_a_forked_child(project: Project) -> None:
+    project.edit(
+        'function = "acme.agent:answer"',
+        'function = "acme.rag:answer_forked"\nruns = 1\nparallel = 1',
+    )
+    result = project.test()
+    assert any(lines[-1]["row"] == "fault 1" for lines in result.records()), result.out
+    seen = (project.root / "forked-child").read_text().splitlines()
+    assert seen == ["shipped, Oct 30", "shipped, Oct 30"]  # the mock, in both rows

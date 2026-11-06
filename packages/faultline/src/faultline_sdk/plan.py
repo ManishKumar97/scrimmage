@@ -3,7 +3,16 @@
 from dataclasses import dataclass
 from typing import cast
 
-from faultline_sdk.config import Config, Fault, Mock, Test
+from faultline_sdk import labels
+from faultline_sdk.config import (
+    DEFAULT_RESERVE_OUTPUT_TOKENS,
+    Config,
+    Fault,
+    Mock,
+    ModelHost,
+    Price,
+    Test,
+)
 
 PLAN_VERSION = 1
 
@@ -20,6 +29,15 @@ class Plan:
     time_limit_s: float
     # import path -> the name the model sees, for tools whose two names differ
     renames: tuple[tuple[str, str], ...] = ()
+    model_hosts: tuple[ModelHost, ...] = ()
+    budget_usd: float | None = None  # None: no budget, so no reservations
+    reserve_output_tokens: int = DEFAULT_RESERVE_OUTPUT_TOKENS
+    prices: tuple[tuple[str, Price], ...] = ()
+
+    def tool_names(self) -> list[str]:
+        """Every tool's final name: the one the model sees."""
+        renames = dict(self.renames)
+        return [labels.tool_name(path, renames) for path in self.tools]
 
     def to_json(self) -> dict[str, object]:
         mocks: list[dict[str, object]] = []
@@ -38,6 +56,12 @@ class Plan:
             "tools": list(self.tools),
             "real": list(self.real),
             "time_limit_s": self.time_limit_s,
+            "model_hosts": [{"host": h.host, "provider": h.provider} for h in self.model_hosts],
+            "budget": {
+                "limit_usd": self.budget_usd,
+                "reserve_output_tokens": self.reserve_output_tokens,
+                "prices": {m: {"input": p.input, "output": p.output} for m, p in self.prices},
+            },
         }
         if self.renames:
             doc["renames"] = dict(self.renames)
@@ -57,9 +81,18 @@ class Plan:
             Fault(string(f, "call"), string(f, "do"), string(f, "when"))
             for f in map(obj, items(doc, "faults"))
         )
-        limit = doc.get("time_limit_s")
-        if isinstance(limit, bool) or not isinstance(limit, int | float):
-            raise ValueError("plan time_limit_s is not a number")
+        limit = number(doc, "time_limit_s")
+        budget = obj(doc.get("budget", {}))
+        prices = tuple(
+            (model, Price(number(obj(p), "input"), number(obj(p), "output")))
+            for model, p in obj(budget.get("prices", {})).items()
+        )
+        hosts = tuple(
+            ModelHost(string(h, "host"), string(h, "provider"))
+            for h in map(obj, items(doc, "model_hosts"))
+        )
+        reserve = int(number(budget, "reserve_output_tokens"))
+        limit_usd = None if budget.get("limit_usd") is None else number(budget, "limit_usd")
         return Plan(
             run=string(doc, "run"),
             test=string(doc, "test"),
@@ -68,8 +101,12 @@ class Plan:
             faults=faults,
             tools=tuple(str(t) for t in items(doc, "tools")),
             real=tuple(str(r) for r in items(doc, "real")),
-            time_limit_s=float(limit),
+            time_limit_s=limit,
             renames=tuple((k, str(v)) for k, v in obj(doc.get("renames", {})).items()),
+            model_hosts=hosts,
+            budget_usd=limit_usd,
+            reserve_output_tokens=reserve,
+            prices=prices,
         )
 
 
@@ -101,6 +138,10 @@ def plan_for(config: Config, row: Row, run: str) -> Plan:
         real=config.agent.real,
         time_limit_s=config.agent.run_timeout,
         renames=config.agent.renames,
+        model_hosts=config.agent.model_hosts,
+        budget_usd=config.agent.max_cost_usd,
+        reserve_output_tokens=config.agent.reserve_output_tokens,
+        prices=config.agent.prices,
     )
 
 
@@ -122,6 +163,13 @@ def string(doc: dict[str, object], key: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"plan {key} is not text")
     return value
+
+
+def number(doc: dict[str, object], key: str) -> float:
+    value = doc.get(key)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"plan {key} is not a number")
+    return float(value)
 
 
 def optional(doc: dict[str, object], key: str) -> str | None:

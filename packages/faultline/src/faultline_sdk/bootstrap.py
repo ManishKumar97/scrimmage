@@ -10,7 +10,7 @@ import os
 import sys
 from typing import NoReturn
 
-from faultline_sdk import state, tool_gate
+from faultline_sdk import httpx2_gate, state, tool_gate
 from faultline_sdk.client import ControlClient, ControlError, Sender
 from faultline_sdk.mocks import allowed
 from faultline_sdk.plan import Plan
@@ -62,6 +62,12 @@ def start() -> None:
             sender.flush()
             stop(message)
     tool_gate.install(plan.tools, dict(plan.renames))
+
+    def cannot_gate(message: str) -> None:
+        sender.flush()
+        stop(message)
+
+    httpx2_gate.install(run_state, client, sender, cannot_gate)
     where = " in a child process, without faults" if child else ""
     print(
         f"faultline: active for run {run} ({plan.test}, {plan.row}){where}; "

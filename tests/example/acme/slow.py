@@ -40,3 +40,10 @@ def vanish(question: str) -> str:
 
 def echo(question: str) -> str:
     return question
+
+
+def use_httpx2(question: str) -> str:
+    """Brings in httpx2 by itself, for a test where the library has changed."""
+    import httpx2
+
+    return str(httpx2)
