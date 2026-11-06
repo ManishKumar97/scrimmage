@@ -550,6 +550,29 @@ def test_arguments_and_results_are_recorded_without_secrets(docs: Docs) -> None:
     assert all(b"aaaaaaaa" not in f.read_bytes() for f in files)
 
 
+@pytest.mark.design("mcp.real_line_kept")
+def test_a_reply_that_is_not_a_model_keeps_its_line() -> None:
+    class Odd:
+        def __repr__(self) -> str:
+            return "an odd reply"
+
+    class Broken(Odd):
+        def model_dump(self, **fields: object) -> object:
+            raise ValueError(fields)
+
+    for reply in (Odd(), Broken()):
+        sink = Sink()
+        run = state.RunState(a_plan(real=(LABEL,)), sink, [])
+        gate = mcp_gate.Gate(run, None, stopper([]))
+        step = run.decide(mcp_gate.call_for("docs", "search"), {})
+
+        async def sent(value: Odd = reply) -> Odd:
+            return value
+
+        assert asyncio.run(mcp_gate.carried(gate, run, step, sent())) is reply
+        assert "an odd reply" in str(cast(Any, sink.lines[0]["result"])["preview"])
+
+
 @pytest.mark.design("mcp.real_error_recorded")
 def test_a_real_protocol_error_is_on_the_line_and_reaches_the_agent(
     docs: Docs, monkeypatch: pytest.MonkeyPatch

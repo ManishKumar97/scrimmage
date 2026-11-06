@@ -317,13 +317,20 @@ async def carried(gate: Gate, run: RunState, step: Step, sent: Coroutine[Any, An
     """Wait for the reply, real or injected, and write the call's line."""
     try:
         reply = await sent
+        step.extra["result"] = record(gate, wire_form(reply))
     except BaseException as exc:
         run.finish(step, error=exc)
         raise
-    wire = reply.model_dump(by_alias=True, mode="json", exclude_none=True)
-    step.extra["result"] = record(gate, wire)
     run.finish(step)
     return reply
+
+
+def wire_form(reply: Any) -> object:
+    """A result as JSON. The call has happened, so nothing here may lose its line."""
+    try:
+        return reply.model_dump(by_alias=True, mode="json", exclude_none=True)
+    except Exception:
+        return repr(reply)
 
 
 class StandIn:
