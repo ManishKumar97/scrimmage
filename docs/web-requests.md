@@ -120,7 +120,8 @@ A web label has nothing to be checked against, so this is what catches a misspel
 
 The record holds the label, the method, the path, the status, and the bodies with known secrets removed.
 Headers, cookies, query strings and a password in the URL are never recorded.
-A URL quoted in any recorded text loses its query string, fragment and password.
+A URL quoted in any recorded text has its query string, fragment and password replaced by `[removed]`.
+Text joined to such a URL with no space, such as a list of URLs split by commas, can go with it.
 A failed web request records only the error's type, since a client's message can quote a header.
 A path is recorded as it was sent, with known secrets removed, so a key of an unknown shape in a path stays in the record.
 A body sent as a stream or as a multipart upload is recorded as 0 bytes, because reading it would use it up.

@@ -3,6 +3,7 @@
 import re
 
 REMOVED = "[secret removed]"
+URL_PART_REMOVED = "[removed]"
 PATTERNS = re.compile(
     "|".join(
         [
@@ -12,22 +13,31 @@ PATTERNS = re.compile(
             r"gh[pousr]_[A-Za-z0-9]{36,}",  # GitHub tokens
             r"xox[abpr]-[A-Za-z0-9-]{10,}",  # Slack tokens
             r"(?i:bearer)\s+[A-Za-z0-9._~+/=-]{16,}",  # bearer tokens
-            r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",  # JWTs
+            r"(?<![A-Za-z0-9])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",  # JWTs
             r"Illegal header (?:name|value) .*",  # h11 quotes the bad header
         ]
     )
 )
 
 
-URL = re.compile(r"(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{0,30}://[^\s'\"<>\\]+")
+# A query or a password may hold a raw ' or \, so only these end a URL. A quote or a bracket
+# that closes the URL is given back after the cut.
+URL = re.compile(r"(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{0,30}://[^\s\"<>]+")
+CLOSING = ")'\\,.;:"
 
 
 def plain_url(found: re.Match[str]) -> str:
-    """A URL without its query, fragment or credentials, which an error message may quote."""
-    scheme, _, rest = found.group().partition("://")
-    address, slash, path = re.split(r"[?#]", rest, maxsplit=1)[0].partition("/")
-    return f"{scheme}://{address.rpartition('@')[2]}{slash}{path}"
+    """A URL with its query, fragment and credentials marked as removed, not silently gone."""
+    text = found.group()
+    url = text.rstrip(CLOSING)
+    scheme, _, rest = url.partition("://")
+    kept, *cut = re.split(r"([?#])", rest, maxsplit=1)
+    address, slash, path = kept.partition("/")
+    login, at, host = address.rpartition("@")
+    credentials = f"{URL_PART_REMOVED}{at}" if login else ""
+    query = f"{cut[0]}{URL_PART_REMOVED}" if cut else ""
+    return f"{scheme}://{credentials}{host}{slash}{path}{query}{text[len(url) :]}"
 
 
 def redact(text: str) -> str:
-    return URL.sub(plain_url, PATTERNS.sub(REMOVED, text))
+    return PATTERNS.sub(REMOVED, URL.sub(plain_url, text))
