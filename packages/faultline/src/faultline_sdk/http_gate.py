@@ -10,6 +10,7 @@ imports either library: the hook patches one when the agent imports it.
 """
 
 import asyncio
+import contextlib
 import atexit
 import datetime
 import hashlib
@@ -157,7 +158,8 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
             raise
         target = off_host(ctx, step, request, response)
         if target is not None:
-            response.close()
+            with contextlib.suppress(Exception):  # the refusal says why it was dropped
+                response.close()
             redirected_away(ctx, step, request, extra, reservation, target)
         capture(ctx, module, step, request, response, extra, reservation, sync=True)
         return response

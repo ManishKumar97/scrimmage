@@ -712,6 +712,25 @@ def test_a_failed_close_of_an_off_host_reply_still_refuses(gated: None) -> None:
     assert sink.lines[-1]["reason"] == "redirect_off_host" and len(sink.settles) == 1
 
 
+def test_a_failed_close_of_an_off_host_reply_still_refuses_when_sync(gated: None) -> None:
+    class Failing(httpx2.SyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            yield b""
+
+        def close(self) -> None:
+            raise OSError("dropped")
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        headers = {"location": "http://localhost:9000/v1/chat/completions"}
+        return httpx2.Response(307, headers=headers, stream=Failing())
+
+    budget = Budget(limit=1.0)
+    sink, _ = install(make_plan(budget=1.0), budget)
+    with pytest.raises(FaultlineRefused, match="not a model host"):
+        httpx2.Client(transport=httpx2.MockTransport(answer)).post(URL, json=BODY)
+    assert sink.lines[-1]["reason"] == "redirect_off_host" and len(sink.settles) == 1
+
+
 @pytest.mark.design("gate.redirect_bad_location")
 def test_a_redirect_to_a_broken_address_keeps_its_line_and_httpx2_error(gated: None) -> None:
     def broken(request: httpx2.Request) -> httpx2.Response:
