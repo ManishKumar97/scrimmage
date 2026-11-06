@@ -1074,3 +1074,19 @@ def test_a_renamed_copy_of_a_safe_tool_does_not_stop_the_test(project: Project) 
 def test_the_docs_say_a_test_is_not_a_sandbox() -> None:
     text = (Path(__file__).parent.parent / "docs" / "safety.md").read_text()
     assert "## What the gates assume" in text and "a test is not a sandbox" in text
+
+
+@pytest.mark.design("adapter.only_model_fields_recorded")
+@pytest.mark.parametrize(
+    "function",
+    ["schema_on_the_decorator", "schema_on_the_class", "runtime_in_the_schema", "dict_schema"],
+)
+def test_only_what_the_model_supplies_reaches_the_record(
+    project: Project, fake_openai: Fake, function: str
+) -> None:
+    graph(project, function, "")
+    result = project.test(fake_openai(ACME))
+    assert tool_lines(result.records()[0]), result.out + result.err
+    args = tool_lines(result.records()[0])[0]["args"]
+    assert isinstance(args, dict)
+    assert args["preview"] == '{"order_id": "1234"}'

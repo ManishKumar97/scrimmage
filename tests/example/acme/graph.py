@@ -23,6 +23,7 @@ from langgraph.prebuilt import (
     tools_condition,
 )
 from langgraph.store.memory import InMemoryStore
+from pydantic import BaseModel, ConfigDict
 
 from acme.models import Stock
 
@@ -113,6 +114,71 @@ def answer_with_injected(question: str) -> dict[str, Any]:
 
     bot = build([get_order, get_stock], InMemoryStore())
     return bot.invoke({"messages": [("user", question)], "secret": "the hidden note"})
+
+
+class InjectedArgs(BaseModel):
+    """What the model supplies, beside what LangGraph fills in."""
+
+    order_id: str
+    note: Annotated[str, InjectedState("secret")]
+    ctx: Annotated[Any, InjectedStore()]
+
+
+class RuntimeArgs(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    order_id: str
+    runtime: ToolRuntime
+
+
+class SchemaClass(BaseTool):
+    name: str = "get_order"
+    description: str = "Look up an order's status and delivery date."
+    args_schema: type[BaseModel] = InjectedArgs  # type: ignore[assignment]
+
+    def _run(self, order_id: str, note: str, ctx: Any) -> str:
+        return note
+
+
+def with_secret(tool_object: BaseTool, question: str) -> dict[str, Any]:
+    bot = build([tool_object, get_stock], InMemoryStore())
+    return bot.invoke({"messages": [("user", question)], "secret": "the hidden note"})
+
+
+def schema_on_the_decorator(question: str) -> dict[str, Any]:
+    @tool(args_schema=InjectedArgs)
+    def get_order(order_id: str, note: str, ctx: Any) -> str:
+        """Look up an order's status and delivery date."""
+        return note
+
+    return with_secret(get_order, question)
+
+
+def schema_on_the_class(question: str) -> dict[str, Any]:
+    return with_secret(SchemaClass(), question)
+
+
+def runtime_in_the_schema(question: str) -> dict[str, Any]:
+    @tool(args_schema=RuntimeArgs)
+    def get_order(order_id: str, runtime: Any) -> str:
+        """Look up an order's status and delivery date."""
+        return str(len(runtime.state["messages"]))
+
+    return with_secret(get_order, question)
+
+
+def dict_schema(question: str) -> dict[str, Any]:
+    @tool(
+        args_schema={
+            "type": "object",
+            "properties": {"order_id": {"type": "string"}},
+            "required": ["order_id"],
+        }
+    )
+    def get_order(order_id: str) -> str:
+        """Look up an order's status and delivery date."""
+        return order_id
+
+    return with_secret(get_order, question)
 
 
 def answer_handled(question: str) -> dict[str, Any]:

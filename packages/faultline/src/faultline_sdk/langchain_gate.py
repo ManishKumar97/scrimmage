@@ -302,6 +302,19 @@ def arguments(
     return found
 
 
+def withheld(tool: Any) -> frozenset[str]:
+    """Arguments LangChain fills in itself and never shows the model.
+
+    Its own list reads only signatures, so one declared on an args_schema is found by
+    comparing that schema with what the model gets. A dict schema has no such fields.
+    """
+    names = set[str](getattr(tool, "_injected_args_keys", ()))
+    offered = getattr(getattr(tool, "tool_call_schema", None), "model_fields", None)
+    if offered is not None:
+        names |= set(tool.get_input_schema().model_fields) - set(offered)
+    return frozenset(names)
+
+
 def function_of(tool: Any, method: Callable[..., Any]) -> Callable[..., Any]:
     """The team's own function, whose return annotation a mock is built from."""
     return getattr(tool, "func", None) or getattr(tool, "coroutine", None) or method
@@ -335,11 +348,9 @@ def gate(method: Callable[..., Any], failure: type[Exception]) -> Callable[..., 
         if _inside.get(None) is tool:  # _arun delegating to _run on the same tool
             return None
         function = function_of(tool, method)
-        # get_type_hints drops Annotated, so LangChain's own list finds InjectedState and the store.
-        injected = getattr(tool, "_injected_args_keys", frozenset[str]())
         return tool_gate.Gated(
             tool.name,
-            arguments(tuple(rest), kwargs, (method, function), injected),
+            arguments(tuple(rest), kwargs, (method, function), withheld(tool)),
             function,
             failure,
             functools.partial(real_call, tool),

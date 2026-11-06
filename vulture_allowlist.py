@@ -87,3 +87,9 @@ _.override_with_no_init  # tests/example/acme/unsafe.py: a test names it
 _.__init_subclass__  # langchain_gate.py and tests: Python calls it
 _.answer_with_injected  # tests/example/acme/graph.py: a test names it
 _.renamed_copy  # tests/example/acme/unsafe.py: a test names it
+_.schema_on_the_decorator  # tests/example/acme/graph.py: a test names it
+_.schema_on_the_class  # tests/example/acme/graph.py: a test names it
+_.runtime_in_the_schema  # tests/example/acme/graph.py: a test names it
+_.dict_schema  # tests/example/acme/graph.py: a test names it
+_.model_config  # tests/example/acme/graph.py: pydantic reads it
+_.args_schema  # tests/example/acme/graph.py: LangChain reads it
