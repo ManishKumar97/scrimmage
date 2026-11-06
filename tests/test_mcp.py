@@ -452,6 +452,38 @@ def test_a_real_label_two_servers_match_stops_the_test_too(docs: Docs) -> None:
     assert docs.received() == []
 
 
+@pytest.mark.design("mcp.slash_in_a_tool")
+def test_a_tool_with_a_slash_is_not_taken_for_a_server_and_a_tool(docs: Docs) -> None:
+    docs.start("stdio")
+    result = docs.run("acme.docs_bot:answer_slashed_tool", "", f'real = ["{LABEL}"]')
+    assert result.code == 2, result.out
+    assert docs.received() == []
+    assert calls(result) == [("mcp:wiki/docs/search", "refused")]
+    listed = docs.run("acme.docs_bot:answer_slashed_tool", "", 'real = ["mcp:wiki/docs/search"]')
+    assert listed.code == 0, listed.out
+    assert docs.received() == ["docs/search refunds"]
+
+
+@pytest.mark.design("mcp.slash_in_a_tool")
+def test_a_tool_with_a_slash_has_no_short_label() -> None:
+    assert mcp_gate.call_for("wiki", "docs/search").short is None
+    assert mcp_gate.call_for("wiki", "search").short == "mcp:search"
+
+
+@pytest.mark.design("mcp.label_read_two_ways")
+@pytest.mark.parametrize("kind", ["real", "mock"])
+def test_a_label_that_reads_two_ways_stops_the_test(docs: Docs, kind: str) -> None:
+    docs.start("stdio")
+    label = "mcp:a/b/c"
+    mock = f'[[test.mock]]\ncall = "{label}"\nreturns = "x"\n'
+    body, extra = ("", f'real = ["{label}"]') if kind == "real" else (mock, "")
+    result = docs.run("acme.docs_bot:answer_two_readings", body, extra)
+    assert result.code == 2, result.out
+    assert docs.received() == []
+    assert "could mean any of the tools b/c, c" in result.out
+    assert result.records()[0][0]["reason"] == "ambiguous_label"
+
+
 @pytest.mark.design("mcp.unused_mock")
 def test_a_mock_no_call_used_is_a_test_mistake(docs: Docs) -> None:
     docs.start("stdio")

@@ -53,6 +53,10 @@ A refusal prints the exact label to write, so a test with no mocks is a quick wa
 If two servers both have `search`, `mcp:search` could mean either, so the test stops and asks you to name the server.
 It stops at the first call after both servers are known.
 
+A tool whose name holds a slash has no short label, because `docs/search` would read as the tool `search` on the server `docs`.
+Name it with its server, as `mcp:wiki/docs/search`.
+If one label can still be read two ways, such as tool `b/c` on server `a` and tool `c` on server `a/b`, the test stops the same way once both are known.
+
 A server of the 2026 protocol may give no name.
 Its tools can only be named `mcp:search`.
 

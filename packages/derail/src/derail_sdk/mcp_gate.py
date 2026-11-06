@@ -15,7 +15,7 @@ import importlib.metadata
 import json
 from collections.abc import AsyncIterator, Callable, Coroutine
 from types import ModuleType
-from typing import Any, NoReturn
+from typing import Any
 
 from derail_sdk import hooks
 from derail_sdk.decide import Call
@@ -67,6 +67,7 @@ class Gate:
         self.sender = sender
         self.stop = stop  # ends the program: a library that cannot be gated
         self.servers: dict[str, set[str]] = {}  # tool -> the labels that have it
+        self.tools: dict[str, set[str]] = {}  # label -> the tools it can be read as
         self.listed: set[str] = set()  # labels seen in a tools/list reply
         self.shaped: set[str] = set()  # labels whose listing declares an output schema
         self.read_only: set[str] = set()  # labels the server marks as read-only
@@ -76,7 +77,7 @@ class Gate:
         for tool in reply.model_dump(by_alias=True, mode="json", exclude_none=True)["tools"]:
             name = tool["name"]
             label = call_for(server, name).label
-            self.servers.setdefault(name, set()).add(label)
+            self.note(name, label)
             self.run.adapted.add(name)
             self.listed.add(label)
             if "outputSchema" in tool:
@@ -84,18 +85,35 @@ class Gate:
             if tool.get("annotations", {}).get("readOnlyHint") is True:
                 self.read_only.add(label)
 
-    def ambiguous(self, call: Call) -> list[str]:
-        """The labels of a short name the plan uses, if two servers have that tool."""
+    def note(self, tool: str, label: str) -> None:
+        self.servers.setdefault(tool, set()).add(label)
+        self.tools.setdefault(label, set()).add(tool)
+
+    def ambiguous(self, call: Call) -> str | None:
+        """Why a label the plan uses could mean two things, if it could."""
         plan = self.run.plan
         named = [*plan.real, *(entry.call for entry in (*plan.mocks, *plan.faults))]
         labels = self.servers.get(call.name, set())
-        return sorted(labels) if call.short in named and len(labels) > 1 else []
+        if call.short in named and len(labels) > 1:
+            return (
+                f"{call.short} matches a tool on more than one server, so the test stops; "
+                f"name the server, as {' or '.join(sorted(labels))}"
+            )
+        tools = self.tools.get(call.label, set())
+        if call.label in named and len(tools) > 1:
+            return (
+                f"{call.label} could mean any of the tools {', '.join(sorted(tools))}, because "
+                "a server name and a tool name can both hold a slash, so the test stops"
+            )
+        return None
 
 
 def call_for(server: str | None, tool: str) -> Call:
-    short = f"mcp:{tool}"
-    # A server of the 2026 era may give no name, so only the short label can name it.
-    return Call("mcp", f"mcp:{server}/{tool}" if server else short, tool, short=short)
+    """The label names the server. A server of the 2026 era may give no name, so then only
+    the tool can. A tool with a slash gets no short label, as it would read as server/tool."""
+    bare = f"mcp:{tool}"
+    short = None if "/" in tool else bare
+    return Call("mcp", f"mcp:{server}/{tool}" if server else bare, tool, short=short)
 
 
 def server_of(session: Any) -> str | None:
@@ -253,26 +271,16 @@ def patch_transport(module: ModuleType, gate: Gate) -> None:
 
 def decided(gate: Gate, run: RunState, call: Call, arguments: object) -> Step:
     """Count and decide one call. Raises DerailRefused after recording a refusal."""
-    labels = gate.servers.setdefault(call.name, set())
-    labels.add(call.label)
+    gate.note(call.name, call.label)
     step = run.decide(call, {})
     step.extra["args"] = record(gate, arguments)
     if step.decision.action == "refused":
         refuse(run, step, read_only_note(gate, call))
-    two = gate.ambiguous(call)
-    if two:
-        stop_ambiguous(run, step, two)
+    why = gate.ambiguous(call)
+    if why is not None:
+        run.refuse(step, "ambiguous_label")
+        refuse(run, step, why)
     return step
-
-
-def stop_ambiguous(run: RunState, step: Step, labels: list[str]) -> NoReturn:
-    run.refuse(step, "ambiguous_label")
-    refuse(
-        run,
-        step,
-        f"{step.call.short} matches a tool on more than one server, so the test stops; "
-        f"name the server, as {' or '.join(labels)}",
-    )
 
 
 def read_only_note(gate: Gate, call: Call) -> str:

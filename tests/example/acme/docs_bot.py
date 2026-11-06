@@ -159,6 +159,29 @@ def answer_two_servers(question: str) -> str:
     return asyncio.run(go())
 
 
+def answer_slashed_tool(question: str) -> str:
+    """Server wiki has a tool whose name reads like a tool on server docs."""
+
+    async def go() -> str:
+        async with over_stdio("wiki") as wiki:
+            await wiki.list_tools()
+            return described(await wiki.call_tool("docs/search", {"q": "refunds"}))
+
+    return asyncio.run(go())
+
+
+def answer_two_readings(question: str) -> str:
+    """Tool b/c on server a, and tool c on server a/b: one label, read two ways."""
+
+    async def go() -> str:
+        async with over_stdio("a") as first, over_stdio("a/b") as second:
+            await first.list_tools()
+            await second.list_tools()
+            return described(await second.call_tool("c", {"q": "refunds"}))
+
+    return asyncio.run(go())
+
+
 def answer_with_reads(question: str) -> str:
     """Requests that are not tool calls, though a server can act on them."""
 

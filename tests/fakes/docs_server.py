@@ -87,6 +87,16 @@ def serve(transport: str, name: str, log: str, mode: str, port: int = 0) -> None
         received("delete_doc", doc)
         return f"deleted {doc}"
 
+    # Names that collide with a label of the form server/tool.
+    awkward = {"wiki": "docs/search", "a": "b/c", "a/b": "c"}.get(name)
+    if awkward is not None:
+
+        def slashed(q: str) -> str:
+            received(awkward, q)
+            return "real"
+
+        server.add_tool(slashed, name=awkward, structured_output=False)
+
     # A schema with no model behind it is published but not enforced, so this server can
     # really send a reply that breaks its own schema.
     for tool in server._tool_manager.list_tools():
