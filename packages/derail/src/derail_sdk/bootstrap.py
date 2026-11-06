@@ -3,7 +3,7 @@
 The program the runner started fetches its plan before the team's code runs. If it cannot,
 the program ends here, so the agent never runs without its plan. A child process prints
 nothing and fetches its plan at its first gated call, so a short command costs nothing.
-A child whose plan cannot be fetched refuses every call.
+A child whose plan cannot be fetched refuses each call, and tries again for the next one.
 """
 
 import atexit
@@ -108,7 +108,7 @@ def start(*, child: bool = False, target: str | None = None) -> None:
         stop(f"{path} is outside DERAIL_ALLOW_IMPORTS ({','.join(prefixes) or 'empty'})")
 
     def load() -> Plan:
-        """A child's plan, at its first gated call. With no plan, every call is refused."""
+        """A child's plan, at its first gated call. With no plan, the call is refused."""
         try:
             fetched = Plan.from_json(client.fetch_plan(run))
         except (ControlError, ValueError) as exc:

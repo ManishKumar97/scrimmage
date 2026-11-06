@@ -28,6 +28,7 @@ from derail_sdk.redact import redact
 PREVIEW = 200
 BLOB_CAP = 10 * 1024 * 1024  # a side-folder item keeps its first 10 MB and is marked cut
 CLOSED = "a run that has ended"
+PLAN_RETRY_S = 1.0  # a failed plan fetch can take ten seconds, so not one per line
 COMMAND_CAP = 1000  # a process's line keeps this much of its command, which can hold a question
 
 
@@ -91,6 +92,8 @@ class RunState:
         self.child = plan is None
         self._plan: Plan | None = None
         self._load = load
+        self._missing: Plan | None = None  # why the last fetch failed, kept for a moment
+        self._try_again_at = 0.0
         self._plan_lock = threading.Lock()
         self.sink = sink
         self.listed = set(tools if plan is None else plan.tool_names())  # names gates will reach
@@ -114,8 +117,6 @@ class RunState:
         # different in each. Faults fire only in the program the runner started.
         if self.child and not plan.children:
             plan = dataclasses.replace(plan, faults=())
-        if plan.unavailable is not None:
-            self.refused = self.refused or "this run's plan"
         self._plan = plan
         self.counters = engine.Counters(plan)
         return plan
@@ -128,8 +129,15 @@ class RunState:
         with self._plan_lock:
             if self._plan is not None:
                 return self._plan
+            if self._missing is not None and time.monotonic() < self._try_again_at:
+                return self._missing
             assert self._load is not None
-            return self._take(self._load())
+            fetched = self._load()
+            if fetched.unavailable is None:
+                return self._take(fetched)
+            self._missing = fetched
+            self._try_again_at = time.monotonic() + PLAN_RETRY_S
+            return fetched
 
     @property
     def seen(self) -> set[str]:
@@ -158,6 +166,8 @@ class RunState:
         with self._lock:
             if self.refused is not None:
                 decision = engine.Decision("refused", reason="poisoned")
+            elif plan.unavailable is not None:
+                decision = engine.Decision("refused", reason="no_plan")
             else:
                 numbers = self.counters.note(call)
                 decision = engine.decide(call, plan, numbers)
@@ -186,9 +196,9 @@ class RunState:
 
     def refusal(self, step: Step, detail: str = "") -> DerailRefused:
         label = step.call.label
-        if self.plan.unavailable is not None:
+        if step.decision.reason == "no_plan":
             return DerailRefused(
-                f"{label}: this process has no plan for its run, so every call fails: "
+                f"{label}: this process could not get its run's plan, so the call is refused: "
                 f"{self.plan.unavailable}"
             )
         if self.refused == CLOSED:
@@ -234,6 +244,7 @@ class RunState:
         """
         self._lock = threading.Lock()
         self._plan_lock = threading.Lock()
+        self._missing = None
         self.child = True
         self.proc = this_process()
         self._seq = 0

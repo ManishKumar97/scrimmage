@@ -232,9 +232,10 @@ class Runner:
         # The provider failing by itself says nothing about the agent.
         real_errors = [e for e in map(real_error, model) if e is not None]
         broken = any(n.get("notice") == "structure" for n in notices)
+        no_plan = "no_plan" in state.refusals  # says nothing about the agent
         if stopped:
             outcome = "stopped"
-        elif not state.fetched or incomplete or real_errors or broken:
+        elif not state.fetched or incomplete or real_errors or broken or no_plan:
             outcome = "infrastructure error"
         elif state.refusals[:1] == ["budget"]:
             outcome = "budget reached"

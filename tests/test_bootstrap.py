@@ -278,7 +278,7 @@ def test_a_child_with_no_plan_refuses_every_call(control: ControlServer, tmp_pat
     )
     result = python(code, env, cwd=tmp_path)
     assert result.stdout.splitlines()[0] == "started"
-    assert "this process has no plan for its run" in result.stdout
+    assert "could not get its run's plan" in result.stdout
     assert "THE WRITE RAN" not in result.stdout
 
 

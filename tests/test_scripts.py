@@ -685,6 +685,19 @@ def test_a_childs_model_call_is_recorded_and_counts_against_the_budget(
     assert float(str(summary_of(result)["cost_usd"])) > 0
 
 
+@pytest.mark.design("child.no_plan_is_infrastructure")
+def test_a_child_that_cannot_get_its_plan_is_an_infrastructure_error(project: Project) -> None:
+    (project.root / "report.py").write_text(REPORT_REFUNDS)
+    code = (
+        "import os, subprocess, sys\n"
+        "env = {**os.environ, 'DERAIL_ALLOW_IMPORTS': ''}\n"  # the plan's tools are now refused
+        "subprocess.run([sys.executable, 'report.py'], env=env)\n"
+        "print('the answer')\n"
+    )
+    result = script(project, code)
+    assert result.code == 3 and summary_of(result)["outcome"] == "infrastructure error", result.out
+
+
 @pytest.mark.design("child.prints_nothing")
 def test_a_child_on_the_same_python_prints_nothing_extra(project: Project) -> None:
     code = (

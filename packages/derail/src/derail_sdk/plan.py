@@ -129,7 +129,7 @@ def tools_from(text: str) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]
 
 
 def no_plan(run: str, why: str) -> Plan:
-    """What a child holds when it cannot get its plan. RunState refuses every call on it."""
+    """What a child holds when it cannot get its plan. RunState refuses each call on it."""
     return Plan(run, "unknown", "unknown", (), (), (), (), math.inf, unavailable=why)
 
 

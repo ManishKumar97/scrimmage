@@ -17,7 +17,7 @@ from derail_sdk import protocol, state
 from derail_sdk.budget import Ledger
 from derail_sdk.client import ControlClient, ControlError, Sender
 from derail_sdk.control import ControlServer, proc_key
-from derail_sdk.plan import Plan
+from derail_sdk.plan import Plan, no_plan
 from derail_sdk.records import RecordStore
 
 TOKEN = "a" * 64
@@ -311,6 +311,25 @@ def test_a_call_stopped_and_then_ended_has_one_line() -> None:
     run.stop_open()
     run.finish(step, result="late")
     assert len(lines) == 1 and "DerailStopped" in str(lines[0]["error"])
+
+
+@pytest.mark.design("boot.plan_failure_is_not_for_life")
+def test_a_failed_plan_fetch_refuses_one_call_and_is_tried_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answers = [no_plan("run-1", "the server was busy"), a_plan()]
+
+    class Sink:
+        def put(self, line: dict[str, object], *, keep: bool = False) -> None:
+            del line, keep
+
+    monkeypatch.setattr(state, "PLAN_RETRY_S", 0.0)
+    run = state.RunState(None, Sink(), [], load=lambda: answers.pop(0))
+    first = run.begin("a", {})
+    assert first.decision.reason == "no_plan" and run.refused is None
+    assert "the server was busy" in str(run.refusal(first))
+    assert run.begin("a", {}).decision.action == "real"
+    assert not answers
 
 
 @pytest.mark.design("stop.daemon_poisoned")
