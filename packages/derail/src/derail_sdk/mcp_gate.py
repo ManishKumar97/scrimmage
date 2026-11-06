@@ -188,15 +188,7 @@ def patch(module: ModuleType, gate: Gate) -> None:
     if not gatable(module):
         broken(gate)
         return
-    found = version()
-    oldest, newest = TESTED
-    if found is not None and found > newest:
-        gate.run.notice(
-            "newer_version",
-            "mcp",
-            f"mcp {found[0]}.{found[1]} is newer than the versions this release was tested "
-            f"with ({oldest[0]}.{oldest[1]} to {newest[0]}.{newest[1]})",
-        )
+    gate.run.newer_version("mcp", version(), TESTED)
     send = module.ClientSession.send_request
     if getattr(send, GATED, False):
         return

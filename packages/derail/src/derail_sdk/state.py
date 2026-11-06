@@ -186,6 +186,22 @@ class RunState:
             self.refused = self.refused or step.call.label
         self.finish(step, error=DerailRefused(message), mistake=message)
 
+    def newer_version(
+        self,
+        library: str,
+        found: tuple[int, int] | None,
+        tested: tuple[tuple[int, int], tuple[int, int]],
+    ) -> None:
+        """Note a library newer than the versions this release was tested with."""
+        oldest, newest = tested
+        if found is not None and found > newest:
+            self.notice(
+                "newer_version",
+                library,
+                f"{library} {found[0]}.{found[1]} is newer than the versions this release was "
+                f"tested with ({oldest[0]}.{oldest[1]} to {newest[0]}.{newest[1]})",
+            )
+
     def next_seq(self) -> int:
         with self._lock:
             self._seq += 1

@@ -79,14 +79,7 @@ def patch(module: ModuleType, run: RunState, stop: Callable[[str], None]) -> Non
         run.notice("structure", LIBRARY, message)
         stop(message)
         return
-    found = version()
-    if found is not None and found > TESTED[1]:
-        run.notice(
-            "newer_version",
-            LIBRARY,
-            f"{LIBRARY} {found[0]}.{found[1]} is newer than the versions this release was "
-            f"tested with ({TESTED[0][0]}.{TESTED[0][1]} to {TESTED[1][0]}.{TESTED[1][1]})",
-        )
+    run.newer_version(LIBRARY, version(), TESTED)
     base = module.BaseTool
     failure = module.ToolException
     create = base.__init__

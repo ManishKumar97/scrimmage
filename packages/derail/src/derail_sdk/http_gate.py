@@ -137,15 +137,7 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
             "budget still apply, those do not",
         )
         ctx.faults = False
-    found = version(module)
-    oldest, newest = TESTED[library]
-    if found is not None and found > newest:
-        ctx.run.notice(
-            "newer_version",
-            library,
-            f"{library} {module.__version__} is newer than the versions this release was "
-            f"tested with ({oldest[0]}.{oldest[1]} to {newest[0]}.{newest[1]})",
-        )
+    ctx.run.newer_version(library, version(module), TESTED[library])
     sync_send = module.Client._send_single_request
     async_send = module.AsyncClient._send_single_request
     if getattr(sync_send, GATED, False):
