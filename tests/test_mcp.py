@@ -498,6 +498,11 @@ def test_a_tool_with_a_slash_has_no_short_label() -> None:
     assert mcp_gate.call_for("wiki", "search").short == "mcp:search"
 
 
+def test_a_tool_with_a_slash_on_a_nameless_server_does_not_read_as_a_server() -> None:
+    assert mcp_gate.call_for(None, "docs/search").label == "mcp:/docs/search"
+    assert mcp_gate.call_for(None, "search").label == "mcp:search"
+
+
 @pytest.mark.design("mcp.label_read_two_ways")
 @pytest.mark.parametrize("kind", ["real", "mock"])
 def test_a_label_that_reads_two_ways_stops_the_test(docs: Docs, kind: str) -> None:

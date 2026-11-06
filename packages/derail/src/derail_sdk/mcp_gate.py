@@ -116,10 +116,12 @@ class Gate:
 
 def call_for(server: str | None, tool: str) -> Call:
     """The label names the server. A server of the 2026 era may give no name, so then only
-    the tool can. A tool with a slash gets no short label, as it would read as server/tool."""
+    the tool can. A tool with a slash gets no short label, as it would read as server/tool,
+    and on a server with no name its label starts with the slash, for the same reason."""
     bare = f"mcp:{tool}"
     short = None if "/" in tool else bare
-    return Call("mcp", f"mcp:{server}/{tool}" if server else bare, tool, short=short)
+    label = f"mcp:{server or ''}/{tool}" if server or "/" in tool else bare
+    return Call("mcp", label, tool, short=short)
 
 
 def server_of(session: Any) -> str | None:
