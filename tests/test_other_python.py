@@ -14,6 +14,7 @@ from conftest import Project, Result
 from derail_sdk.control import ControlServer
 from derail_sdk.records import RecordStore
 from derail_sdk.run_command import BOOT
+from test_bootstrap import this_python
 from test_scripts import RECORD, calls, lines_of, script, summary_of, write_config
 
 ROOT = Path(__file__).parents[1]
@@ -87,6 +88,42 @@ def imported(python: Path) -> list[str]:
     return [str(python), "-c", code]
 
 
+SHELL_BOT = """#!/bin/sh
+{other} -c "print('tool ok')" > tool.out
+exec {python} bot.py "$1"
+"""
+
+
+@pytest.mark.design("claim.other_python_first")
+@pytest.mark.parametrize("which", ["other_version", "other_venv"])
+def test_a_python_before_the_bot_in_a_wrapper_does_not_take_the_run(
+    project: Project, request: pytest.FixtureRequest, which: str
+) -> None:
+    """With no SDK, or under a shell, it is a tool. The first Python with the SDK claims."""
+    python = cast(Path, request.getfixturevalue(which))
+    (project.root / "run.sh").write_text(SHELL_BOT.format(other=python, python=sys.executable))
+    (project.root / "bot.py").write_text("print('the answer')\n")
+    write_config(project, "sh run.sh {question}")
+    result = project.test()
+    if which == "other_version":
+        assert summary_of(result)["answer"] == "the answer", result.out
+        assert (project.root / "tool.out").read_text() == "tool ok\n"
+    else:  # it has the SDK, so it claims, and the bot on another Python is then not joined
+        assert (project.root / "tool.out").read_text() == "tool ok\n"
+        assert summary_of(result)["outcome"] == "answered", result.out
+
+
+@pytest.mark.design("claim.no_python_claimed")
+def test_a_wrapper_around_python_with_no_sdk_is_an_infrastructure_error(
+    project: Project, other_version: Path
+) -> None:
+    (project.root / "run.sh").write_text(f'#!/bin/sh\nexec {other_version} bot.py "$1"\n')
+    (project.root / "bot.py").write_text("print('the answer')\n")
+    write_config(project, "sh run.sh {question}")
+    result = project.test()
+    assert result.code == 3 and summary_of(result)["outcome"] == "infrastructure error"
+
+
 @pytest.mark.design("other.same_binary_is_another_python")
 def test_a_venv_on_the_same_binary_is_another_python_even_with_derail_installed(
     project: Project, other_venv: Path
@@ -130,6 +167,21 @@ def test_a_listed_tool_on_another_python_does_not_run_and_the_run_says_so(
     assert details["python"] == str(python) and "report.py" in str(details["command"])
     validator = jsonschema.Draft202012Validator(RECORD, format_checker=jsonschema.FormatChecker())
     validator.validate(line)
+
+
+@pytest.mark.design("main.tool_on_another_python")
+@pytest.mark.parametrize("how", ["script", "-m"])
+def test_a_tool_in_the_program_on_another_python_stops_it(
+    project: Project, other_version: Path, how: str
+) -> None:
+    (project.root / "pays.py").write_text("print('THE WRITE RAN')\ndef pay(order): ...\n")
+    run = ["pays.py"] if how == "script" else ["-m", "pays"]
+    (project.root / "bot.py").write_text(RUNS_OTHER.format(command=[str(other_version), *run]))
+    write_config(project, f"{sys.executable} bot.py {{question}}")
+    project.edit('"acme.tools:refund_order"]', '"acme.tools:refund_order", "pays:pay"]')
+    result = project.test()
+    assert result.code == 2 and summary_of(result)["outcome"] == "refused call", result.out
+    assert "THE WRITE RAN" not in str(summary_of(result)["answer"])
 
 
 def test_a_secret_on_another_pythons_command_line_is_not_recorded(
@@ -295,16 +347,7 @@ def test_joining_prints_nothing_to_a_stdio_servers_stream(tmp_path: Path) -> Non
             "    print(type(exc).__name__, file=sys.stderr)\n"
         )
         (tmp_path / "acme_tools.py").write_text("def write():\n    raise SystemExit(9)\n")
-        identity = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "import os, sys; print(os.path.realpath(sys.executable) + os.pathsep + sys.prefix)",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        ).stdout.strip()
+        identity = this_python()
         env = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
         env.update(
             PYTHONPATH=str(BOOT),

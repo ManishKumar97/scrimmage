@@ -270,6 +270,57 @@ def test_a_script_started_by_uv_run_is_still_the_program_under_test(project: Pro
     assert records["fault 1"][-1]["summary"]["answer"] == "True"  # type: ignore[index]
 
 
+RUN_SH = """#!/bin/sh
+{before}
+exec {python} bot.py "$1"
+"""
+
+
+def wrapped(project: Project, before: str, body: str = "") -> Result:
+    """The command is a shell script that runs something, then the bot."""
+    (project.root / "run.sh").write_text(RUN_SH.format(before=before, python=sys.executable))
+    write_config(project, "sh run.sh {question}", body=body)
+    return project.test()
+
+
+@pytest.mark.design("claim.shell_wrapper")
+def test_a_shell_wrapper_starts_the_program_under_test(project: Project) -> None:
+    (project.root / "bot.py").write_text("print('the answer')\n")
+    result = wrapped(project, "")
+    assert summary_of(result)["outcome"] == "answered", result.out
+    assert len(processes(result)) == 1
+
+
+@pytest.mark.design("claim.first_python_wins")
+def test_python_then_python_makes_the_second_a_child_with_no_faults(project: Project) -> None:
+    (project.root / "pre.py").write_text("from acme import tools\nprint(tools.get_order('1'))\n")
+    (project.root / "bot.py").write_text(
+        "from acme import tools\n"
+        "try:\n"
+        "    print(tools.get_order('1'))\n"
+        "except TimeoutError:\n"
+        "    print('bot timed out')\n"
+    )
+    pre = f"{sys.executable} pre.py"
+    result = wrapped(project, pre, ORDER_ROW + "")
+    rows = {str(lines[-1]["row"]): lines for lines in result.records()}
+    fired = [x for x in rows["fault 1"] if x.get("action") == "fault"]
+    assert len(fired) == 1, result.out  # in pre.py only; the bot is the second Python
+    assert rows["fault 1"][-1]["summary"]["answer"] == "m"  # type: ignore[index]
+
+
+@pytest.mark.design("claim.two_at_once")
+def test_two_pythons_started_at_once_make_one_root(project: Project) -> None:
+    (project.root / "bot.py").write_text("print('the answer')\n")
+    (project.root / "side.py").write_text("from acme import tools\ntools.check_inventory('1')\n")
+    (project.root / "side2.py").write_text("from acme import tools\ntools.check_inventory('2')\n")
+    before = f"{sys.executable} side.py &\n{sys.executable} side2.py &\nwait"
+    result = wrapped(project, before)
+    assert result.code == 0, result.out
+    stderr = next((project.root / "derail-runs").glob("*/*.log")).read_text()
+    assert stderr.count("derail: active") == 1
+
+
 def test_derail_run_in_front_of_the_script_changes_nothing(project: Project) -> None:
     (project.root / "bot.py").write_text("print('the answer')\n")
     command = f"{sys.executable} -m derail_sdk.run_command {sys.executable} bot.py {{question}}"

@@ -66,7 +66,7 @@ def joined(control: ControlServer, **extra: str) -> dict[str, str]:
 
 def this_python() -> str:
     """The value a run's first process sets for a child on the same Python."""
-    code = "import os, sys; print(os.path.realpath(sys.executable) + os.pathsep + sys.prefix)"
+    code = "import os, sys; print('{}{}{}.{}'.format(sys.prefix, os.pathsep, *sys.version_info))"
     return python(code, {}).stdout.strip()
 
 

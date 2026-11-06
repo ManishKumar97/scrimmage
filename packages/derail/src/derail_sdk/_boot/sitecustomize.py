@@ -4,14 +4,18 @@ It does nothing unless DERAIL_TOKEN is set; then it switches the SDK on. Either
 way it then runs the next sitecustomize.py on the path, which this one hid, so the
 program starts exactly as it would without Derail.
 
-Every Python program the agent starts runs this file too, so it uses only the standard
-library, and on a Python that is not the run's it prints nothing.
+Every Python program the agent starts runs this file too, on whatever version that is, so
+it uses only the standard library and syntax Python 3.8 can run, and on a Python that is
+not the run's it prints nothing.
 """
 
 import importlib.machinery
 import importlib.util
 import os
 import sys
+import time
+
+CLAIM_WAIT_S = 5.0
 
 
 def _chain() -> None:
@@ -26,24 +30,52 @@ def _chain() -> None:
 
 
 def _python() -> str:
-    """This Python: its binary and its environment.
+    """This Python: its environment and its version.
 
-    In one venv python and python3 are the same Python. Two venvs made from one binary
-    are not, because each has its own packages.
+    In one venv python and python3 are the same Python, even when --copies makes them two
+    files. Two venvs made from one binary are not, because each has its own packages.
     """
-    return os.path.realpath(sys.executable) + os.pathsep + sys.prefix
+    return "{}{}{}.{}".format(sys.prefix, os.pathsep, *sys.version_info[:2])
 
 
-def _is_root() -> bool:
-    """Whether this is the program the test started, not a child it started.
+def _is_program() -> bool:
+    """Whether this process is the one derail-run became, or one started by hand.
 
-    The first Python in a run claims it by setting DERAIL_PYTHON. It can have any process
-    id, as uv run starts Python as a child of its own. DERAIL_ROOT_PID is the id derail-run
-    gave the program, which it keeps through exec. Neither set means no derail-run, such as
-    PYTHONPATH set by hand, which also starts the program under test.
+    It is the program under test for certain. Through a wrapper it can only be the first
+    Python that claims the run.
     """
-    claimed = "DERAIL_PYTHON" in os.environ
-    return not claimed or os.environ.get("DERAIL_ROOT_PID") == str(os.getpid())
+    mine = str(os.getpid())
+    if "DERAIL_PYTHON" in os.environ:  # a root that execs itself keeps derail-run's id
+        return os.environ.get("DERAIL_ROOT_PID") == mine
+    return os.environ.get("DERAIL_ROOT_PID", mine) == mine
+
+
+def _claim() -> "str | None":
+    """Claim the run for this Python. None if it is the first, else the Python that was.
+
+    Each process has its own environment, so two siblings under a shell or uv cannot tell
+    each other anything there. A file beside the answer is shared, and O_EXCL lets one win.
+    """
+    answer = os.environ.get("DERAIL_ANSWER_FILE")
+    if not answer:
+        return None  # no run folder, as with PYTHONPATH set by hand
+    claim = answer + ".root"
+    try:
+        fd = os.open(claim, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        pass
+    else:
+        with os.fdopen(fd, "w") as out:
+            out.write(_python())
+        return None
+    deadline = time.monotonic() + CLAIM_WAIT_S
+    while time.monotonic() < deadline:  # the winner writes just after it creates the file
+        with open(claim) as claimed:
+            winner = claimed.read()
+        if winner:
+            return winner
+        time.sleep(0.001)
+    raise RuntimeError(f"the first Python of this run never finished its claim on {claim}")
 
 
 class _KeepOut:
@@ -52,7 +84,7 @@ class _KeepOut:
     The tool's write must not run with no gate, and no other program here is touched.
     """
 
-    def __init__(self, modules: set[str]) -> None:
+    def __init__(self, modules: "set[str]") -> None:
         self.modules = modules
 
     def find_spec(self, name: str, path: object = None, target: object = None) -> None:
@@ -86,25 +118,30 @@ def _keep_out_tools() -> None:
 
 
 def _start() -> None:
-    root = _is_root()
-    same = os.environ.get("DERAIL_PYTHON") == _python()
-    if not (root or same or os.environ.get("DERAIL_CHILDREN")):
-        _keep_out_tools()  # another Python, such as the aws CLI: leave it alone
-        return
-    try:
-        from derail_sdk import bootstrap
-    except ModuleNotFoundError as exc:
-        if exc.name != "derail_sdk":
-            raise
-        if not root:
-            _keep_out_tools()
-            return
+    has_sdk = importlib.util.find_spec("derail_sdk") is not None
+    theirs = os.environ.get("DERAIL_PYTHON")
+    program = _is_program()
+    if not has_sdk and program:
         raise RuntimeError(
             f"derail is not installed for {sys.executable}, so the program under "
             "test would run with no gates; run it on a Python with derail installed"
-        ) from None
-    if root:
-        os.environ["DERAIL_PYTHON"] = _python()
+        )
+    if not has_sdk:
+        _keep_out_tools()  # a tool, a build step or a cloud command: leave it alone
+        return
+    root = program and theirs is not None  # it execs itself and stays the root
+    if theirs is None:
+        theirs = _claim()
+        root = theirs is None
+    joins = root or theirs == _python() or os.environ.get("DERAIL_CHILDREN")
+    if not joins:
+        os.environ["DERAIL_PYTHON"] = str(theirs)
+        _keep_out_tools()  # another Python, such as the aws CLI: leave it alone
+        return
+    os.environ["DERAIL_PYTHON"] = str(theirs or _python())
+
+    from derail_sdk import bootstrap
+
     bootstrap.start(child=not root)
 
 
