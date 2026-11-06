@@ -53,7 +53,13 @@ STOP_TEST = (
     "ambiguous_label",
 )
 # The agent's own cancellation is not a failure of the provider.
-NOT_A_FAILURE = ("CancelledError", "KeyboardInterrupt", "SystemExit", "GeneratorExit")
+NOT_A_FAILURE = (
+    "CancelledError",
+    "KeyboardInterrupt",
+    "SystemExit",
+    "GeneratorExit",
+    "DerailStopped",
+)
 # A baseline whose every run ended so cannot be compared with, so its faults are skipped.
 FAILED = ("crashed", "timed out", "refused call", "budget reached")
 

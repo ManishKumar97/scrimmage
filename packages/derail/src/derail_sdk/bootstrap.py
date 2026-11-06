@@ -7,13 +7,21 @@ ends here, so the agent never runs without its plan.
 import atexit
 import dataclasses
 import os
+import signal
 import sys
+import threading
+from types import FrameType
 from typing import NoReturn
 
 from derail_sdk import http_gate, langchain_gate, mcp_gate, state, tool_gate
 from derail_sdk.client import ControlClient, ControlError, Sender
 from derail_sdk.mocks import allowed
-from derail_sdk.plan import Plan
+from derail_sdk.plan import Plan, no_plan, tools_from
+
+# Under the runner's five seconds before SIGKILL. A child sends as it goes, so it has
+# little to wait for, and its main thread may be the one holding the send.
+TERM_WAIT_S = 4.0
+CHILD_TERM_WAIT_S = 0.5
 
 
 def stop(message: str) -> NoReturn:
@@ -31,7 +39,50 @@ def report_tools(run_state: state.RunState) -> None:
     run_state.notice("tools_seen", "derail", "the tools the agent has", tools=tools)
 
 
-def start() -> None:
+def outside(plan: Plan, prefixes: list[str]) -> str | None:
+    """The first import path in the plan that DERAIL_ALLOW_IMPORTS does not cover."""
+    raises = [f.raises for f in plan.faults if f.raises and ":" in f.raises]
+    paths = [*plan.tools, *(m.type for m in plan.mocks if m.type), *raises]
+    return next((path for path in paths if not allowed(path, prefixes)), None)
+
+
+def script_folder() -> list[str]:
+    """Python adds a script's folder to its path after this file has run."""
+    script = sys.argv[0]
+    return [] if script in ("", "-c", "-m") else [os.path.dirname(os.path.abspath(script))]
+
+
+def handle_sigterm(run_state: state.RunState, sender: Sender, ctx: http_gate.Context) -> None:
+    """On SIGTERM send the last record lines, then end as Python would have with no handler.
+
+    The handler runs on the main thread, which may hold a lock the lines need, so a thread
+    does the sending and the wait for it has a limit. A program with a handler of its own
+    replaces this one. The sender thread has then sent all but the last 100 ms.
+    """
+    if signal.getsignal(signal.SIGTERM) is not signal.SIG_DFL:
+        return
+
+    def last_lines() -> None:
+        ctx.close_open()
+        run_state.stop_open()
+        sender.flush()
+
+    def on_term(signum: int, frame: FrameType | None) -> None:
+        del frame
+        signal.signal(signum, signal.SIG_IGN)  # the runner may send it twice
+        try:
+            worker = threading.Thread(target=last_lines, daemon=True)
+            worker.start()
+            worker.join(CHILD_TERM_WAIT_S if sender.eager else TERM_WAIT_S)
+        except RuntimeError:  # Python is already shutting down, so no new thread
+            pass
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    signal.signal(signal.SIGTERM, on_term)
+
+
+def start(*, child: bool = False) -> None:
     token = os.environ["DERAIL_TOKEN"]
     url = os.environ.get("DERAIL_CONTROL_URL", "")
     run = os.environ.get("DERAIL_RUN", "")
@@ -81,9 +132,17 @@ def start() -> None:
     http_gate.install(run_state, client, sender, cannot_gate)
     langchain_gate.install(run_state, cannot_gate)
     mcp_gate.install(run_state, sender, cannot_gate)
-    where = " in a child process, without faults" if child else ""
-    print(
-        f"derail: active for run {run} ({plan.test}, {plan.row}){where}; "
-        "calls follow this test's plan",
-        file=sys.stderr,
-    )
+
+    def forked() -> None:
+        run_state.forked()
+        sender.forked(run_state.proc)
+        ctx.open.clear()  # replies the parent is reading
+
+    os.register_at_fork(after_in_child=forked)
+    handle_sigterm(run_state, sender, ctx)
+    if plan is not None:
+        print(
+            f"derail: active for run {run} ({plan.test}, {plan.row}); "
+            "calls follow this test's plan",
+            file=sys.stderr,
+        )
