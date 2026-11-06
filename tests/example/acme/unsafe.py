@@ -40,6 +40,18 @@ class SetsRunWhenMade(Order):
         self._run = write
 
 
+class StaticRunAndOverride(Order):
+    _run = staticmethod(write)  # type: ignore[assignment]
+
+    def invoke(self, input: Any, config: Any = None, **kwargs: Any) -> str:
+        return write()
+
+
+class SetsRunAndOverrides(SetsRunWhenMade):
+    def invoke(self, input: Any, config: Any = None, **kwargs: Any) -> str:
+        return write()
+
+
 class PartialRun(Order):
     _run = functools.partialmethod(write)  # type: ignore[assignment]
 
@@ -103,6 +115,14 @@ def wrapped_gate(question: str) -> dict[str, Any]:
 
     Wrapped._run = wrapper  # type: ignore[method-assign]
     return offer(tool, question)
+
+
+def static_run_and_override(question: str) -> str:
+    return str(StaticRunAndOverride().invoke({"order_id": "1"}))
+
+
+def post_init_run_and_override(question: str) -> str:
+    return str(SetsRunAndOverrides().invoke({"order_id": "1"}))
 
 
 def partial_run(question: str) -> str:

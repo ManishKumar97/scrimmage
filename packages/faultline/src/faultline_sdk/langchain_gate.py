@@ -160,16 +160,17 @@ def refusal(run: RunState, name: str) -> Callable[..., Any]:
 def skips_gate(tool: Any, base: type, failure: type[Exception], run: RunState) -> str | None:
     """Why a call to this tool could run without passing a gate, if one could."""
     cls = type(tool)
-    if not gate_tool(cls, failure):
+    gated = gate_tool(cls, failure)
+    replaced = overrides(cls, base)
+    for name in replaced:  # before any return: a tool can have more than one problem
+        # On this class, not the owner: the owner can be a mixin other classes use too.
+        if not tool_gate.is_gate(getattr(cls, name)):
+            setattr(cls, name, refusal(run, name))
+    if not gated:
         return f"{tool.name} cannot be gated, because its _run is not a plain function"
     own = [n for n in (*METHODS, *CALLED) if n in vars(tool)]
     if own:  # the class's gate never sees a method set on the tool itself
         return f"{tool.name} cannot be gated, because {own[0]} is set on the tool itself"
-    replaced = overrides(cls, base)
-    for name in replaced:
-        # On this class, not the owner: the owner can be a mixin other classes use too.
-        if not tool_gate.is_gate(getattr(cls, name)):
-            setattr(cls, name, refusal(run, name))
     if replaced:
         return f"{tool.name} cannot be gated, because its class overrides {replaced[0]}"
     return None

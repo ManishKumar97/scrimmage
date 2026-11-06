@@ -78,3 +78,5 @@ _.answer_after_a_child  # tests/example/acme/graph.py: a test's faultline.toml n
 _.answer_with_runtime  # tests/example/acme/graph.py: a test's faultline.toml names it
 _.run_manager  # tests/example/acme/graph.py: LangChain passes it to the tool
 _.partial_run  # tests/example/acme/unsafe.py: a test's faultline.toml names it
+_.static_run_and_override  # tests/example/acme/unsafe.py: a test names it
+_.post_init_run_and_override  # tests/example/acme/unsafe.py: a test names it

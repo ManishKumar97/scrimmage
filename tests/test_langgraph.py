@@ -999,3 +999,13 @@ def test_listing_a_tool_object_no_adapter_sees_does_not_vouch_for_it(project: Pr
     result, fake = offered(project, "answer_other", "acme.listed")
     stopped_at_the_offer(result, fake)
     assert "offered other_tool, which no gate sees" in result.out
+
+
+@pytest.mark.design("adapter.override_refused")
+@pytest.mark.parametrize("function", ["static_run_and_override", "post_init_run_and_override"])
+def test_an_override_is_refused_when_the_tool_has_a_second_problem(
+    project: Project, function: str
+) -> None:
+    result, _ = offered(project, function)
+    assert result.code == 2, result.out + result.err
+    assert not wrote(result)
