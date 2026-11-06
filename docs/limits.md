@@ -6,6 +6,8 @@
 - **MCP through the official client or a client built on it, such as FastMCP's.** A client of your own that speaks the protocol by itself is not gated at the MCP gate. If it sends its own web requests, its POSTs meet the web gate. If it is built on `streamable_http_client` and writes its own JSON-RPC messages, they go out through the transport's marked requests, undecided and unrecorded. Over stdio nothing sees them.
 - **The old SSE transport for MCP.** Its web requests are not marked, so its first POST is refused by the web gate and the run stops. Use streamable HTTP or stdio.
 - **MCP tools under another name.** A tool the model sees under a name other than the server's, such as `docs_search`, is reported as a tool no gate sees, and the test stops.
+- **A hook that posts to the MCP endpoint.** An event hook on the MCP client that sends to the endpoint itself while a request is being sent passes the web gate unseen.
+- **A stdio server on mcp 1.x, started with your environment.** It joins the test as the agent does, so it stops with exit code 3 and says to install 2.x. Start it with a clean `env`.
 - **Only MCP tool calls are gated.** `resources/read`, `prompts/get` and the rest pass, and cannot be mocked or failed. A server can act on any of them. `resources/read`, `prompts/get`, `completion/complete` and `resources/subscribe` each leave a `real` line. See [Safety](safety.md#what-an-mcp-tool-may-do).
 - **Two MCP servers with one name.** Derail cannot tell them apart, and `mcp:docs/search` names both. Two servers that give no name are the same case.
 - **An MCP label that reads two ways.** Tool `b/c` on server `a` and tool `c` on server `a/b` share the label `mcp:a/b/c`. The test stops once both are known, and there is no way to name either one.

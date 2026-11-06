@@ -113,12 +113,12 @@ It lasts only while a request is being sent, and ends before the reply is read.
 So everything else is still a web request and meets the web gate:
 
 - a POST your own code sends to the same host, on another port or path;
-- a request from an event hook on your HTTP client;
+- a request from an event hook on your HTTP client, unless it goes to the endpoint itself while a request is being sent, which passes unseen;
 - a token request from an `httpx2.Auth` flow, even on the same host, which is refused unless `real` lists it, such as `"http:docs.acme.internal POST /token"`;
 - a request or a model call from a logging, progress or sampling callback, which a model call's budget covers as usual.
 
 A redirect to another path, such as from `/mcp/` to `/mcp`, leaves the endpoint, so the transport's next request is a web write too.
-Use the address the server redirects to, or list that path under `real`.
+Use the address the server redirects to, or list both `POST` and `DELETE` on that path under `real`.
 
 An `http:` mock or fault on the server's endpoint never fires, because the web gate does not decide those requests.
 Use an `mcp:` label instead.
