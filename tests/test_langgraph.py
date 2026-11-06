@@ -430,7 +430,11 @@ def test_an_async_tool_gets_an_async_gate(project: Project) -> None:
 @pytest.mark.design("adapter.artifact_mock")
 @pytest.mark.parametrize(
     ("returns", "answer", "code"),
-    [('["the report", {a = "b"}]', "the report", 0), ('"just text"', None, 2)],
+    [
+        ('["the report", {a = "b"}]', "the report", 0),
+        ('"just text"', None, 2),
+        ('["only the report"]', None, 2),
+    ],
 )
 def test_a_tool_with_an_artifact_is_mocked_with_a_list_of_two(
     project: Project, returns: str, answer: str | None, code: int
@@ -458,6 +462,8 @@ def test_langchains_own_arguments_are_left_out_of_the_record(project: Project) -
     assert args["preview"] == '{"sku": "SKU-42"}'
     named = calls["tool:named_config"]["args"]
     assert isinstance(named, dict) and named["preview"] == '{"config": "kept"}'
+    untyped = calls["tool:untyped_manager"]["args"]
+    assert isinstance(untyped, dict) and untyped["preview"] == '{"sku": "SKU-42"}'
 
 
 @pytest.mark.design("adapter.async_real_error_recorded")
@@ -921,3 +927,22 @@ def test_langgraphs_runtime_argument_is_left_out_of_the_record(
     args = tool_lines(result.records()[0])[0]["args"]
     assert isinstance(args, dict)
     assert args["preview"] == '{"order_id": "1234"}'
+
+
+@pytest.mark.design("adapter.not_a_function_refused")
+def test_the_async_entry_point_checks_the_tool_too() -> None:
+    run, sink = fresh_run()
+    state.install(run)
+    base = base_tool()
+    try:
+        langchain_gate.patch(module(BaseTool=base, ToolException=Exception), run, pytest.fail)
+
+        class Static(base):  # type: ignore[valid-type, misc]
+            _arun = staticmethod(lambda *a, **k: "REAL")  # type: ignore[assignment]
+
+        tool = Static(name="static")
+        with pytest.raises(FaultlineRefused, match="cannot be gated"):
+            asyncio.run(tool.arun({}))
+    finally:
+        state.install(None)
+    assert "cannot be gated" in str(sink.lines[0]["mistake"])

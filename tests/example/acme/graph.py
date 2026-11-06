@@ -204,8 +204,17 @@ class NamedConfig(BaseTool):
         return config
 
 
+class UntypedManager(BaseTool):
+    name: str = "untyped_manager"
+    description: str = "A tool that takes LangChain's run manager with no annotation."
+
+    def _run(self, sku: str, run_manager=None) -> str:  # type: ignore[no-untyped-def, override]
+        return sku
+
+
 def plumbing(question: str) -> str:
     takes_config.invoke({"sku": "SKU-42"}, {"configurable": {"secret": "hidden-value"}})
+    UntypedManager().invoke({"sku": "SKU-42"})
     return str(NamedConfig()._run(config="kept"))
 
 
