@@ -7,6 +7,7 @@ import itertools
 import json
 import threading
 import time
+import tomllib
 import types
 import zlib
 from collections.abc import AsyncIterator, Iterator
@@ -842,3 +843,13 @@ def test_a_moderation_is_a_labelled_read_that_needs_no_price(gated: None) -> Non
     )
     assert sink.lines[0]["call"] == "model:openai/moderations"
     assert budget.ledger.reserved == 0.0
+
+
+@pytest.mark.design("budget.price_line_is_toml")
+def test_the_suggested_price_line_is_valid_toml_for_a_gateway_name(gated: None) -> None:
+    install(make_plan(budget=1.0), Budget(limit=1.0))
+    model = "acme/llama-3.1"
+    with pytest.raises(FaultlineRefused) as refused:
+        client().post(URL, json={**BODY, "model": model})
+    line = str(refused.value).split("such as ")[1].split(" (dollars")[0]
+    assert tomllib.loads(line) == {model: {"input": 0.15, "output": 0.60}}

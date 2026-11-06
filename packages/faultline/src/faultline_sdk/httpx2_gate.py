@@ -12,6 +12,7 @@ import atexit
 import datetime
 import hashlib
 import inspect
+import json
 import threading
 import zlib
 from collections.abc import Callable, Iterator
@@ -356,7 +357,8 @@ def reserve(ctx: Context, step: Step, request: Any, extra: dict[str, object]) ->
             ctx.run,
             step,
             f"Faultline has no price for the model {model!r}, so it cannot keep the budget; "
-            f"add it under [agent.prices], such as {model} = {{input = 0.15, output = 0.60}} "
+            f"add it under [agent.prices], such as {json.dumps(model)} = "
+            "{input = 0.15, output = 0.60} "
             '(dollars per million tokens), or set max_cost_usd = "none"',
         )
     body = body_of(request) or b""
