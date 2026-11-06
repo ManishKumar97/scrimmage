@@ -6,6 +6,12 @@
 - **One HTTP library.** The gate sits in httpx2, which current openai versions use. Older openai versions, which use httpx, are not gated yet; with a budget on, the test then fails because no model call was seen.
 - **asyncio only for async agents.** An async model call outside asyncio, such as under trio, is refused and ends its run, because Faultline cannot budget it. Synchronous agents are not affected.
 - **One framework.** LangChain tools, which LangGraph runs, have an adapter. A tool on another framework is not gated, so offering it to the model stops the test.
+- **A tool's function called directly.** `my_tool.func(...)` skips the gate, so nothing refuses or records it.
+- **Tool names with no `tools` list.** They are not checked before the first run: a misspelled mock is refused when the agent calls the tool, and a misspelled fault never fires.
+- **An `_arun` that starts `_run` on the default executor itself** counts as two calls and two record lines. LangChain's own `_arun` counts as one.
+- **A tool renamed after it is made** is not seen, so offering it to the model stops the test.
+- **LangChain versions.** Tested with langchain-core 1.7. A newer one gets a notice; an older one gets none.
+- **A library that changes its tool functions** stops the program. Faults are not dropped with refusals kept, because the error type is part of what the gate relies on.
 - **A few faults.** `timeout` and `error` on tools, and `timeout` and `status N` on model calls. Faults that change the model's reply come later.
 - **Prices need checking.** The built-in price table is small; check it against your provider's pricing, and use `[agent.prices]` for anything else.
 - **Tools reached by import path.** A tool your code stores in a list or dictionary the moment it is defined keeps the original function, so the gate cannot reach it. A marker for those comes later.

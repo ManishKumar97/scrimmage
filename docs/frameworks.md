@@ -64,8 +64,9 @@ It is raised at the point your tool's own code would run, inside LangChain's err
 
 | Your tool | What happens |
 |---|---|
-| Sets `handle_tool_error` | LangChain turns the error into a tool message, and the model carries on |
-| Does not | The error ends the graph, and the run is marked "crashed" |
+| Sets `handle_tool_error` | LangChain turns a `ToolException` into a tool message, and the model carries on |
+| Builds `ToolNode(tools, handle_tool_errors=True)` | The tool node turns any error into a tool message, whatever its type |
+| Does neither | The error ends the graph, and the run is marked "crashed" |
 
 Both are real results. The second is what your agent does in production when a tool fails, unless you have added error handling.
 
@@ -79,7 +80,17 @@ raises = "ConnectionError"
 ```
 
 `raises` is a Python built-in exception, or `package.module:Class` from your agent's own packages.
-LangChain does not handle a `ConnectionError`, so it ends the graph even with `handle_tool_error` set, as a real one would.
+A tool's `handle_tool_error` handles only `ToolException`, so a `ConnectionError` ends the graph even with it set, as a real one would, unless the tool node handles every error.
+
+A tool built with `response_format = "content_and_artifact"` returns a pair, so its mock is a list of two items: `returns = ["the content", {a = "b"}]`.
+
+## Tools that cannot be gated
+
+Faultline gates what a tool really runs, wherever it comes from: a decorator, a class, a mixin, or a `_run` assigned later.
+
+- A `_run` that is not a plain function, such as a `staticmethod`, cannot hold a gate, so the call is refused and the test reports a mistake.
+- A class that overrides `invoke`, `ainvoke`, `run` or `arun` may never reach the gate, so offering it to the model stops the test.
+- Calling `my_tool.func(...)` yourself skips LangChain and the gate. Call the tool through `invoke`, or list the function under `tools`.
 
 ## Parallel tool calls
 

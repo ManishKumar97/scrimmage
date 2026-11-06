@@ -35,5 +35,5 @@ Fault injection is an established practice; Faultline brings it inside any Pytho
 ## Status
 
 Faultline is at an early stage.
-This version tests an agent that is a Python function with its own loop. It fails or mocks the agent's own Python tools, fails OpenAI model calls, and keeps a budget.
+This version tests an agent that is a Python function, with its own loop or on LangGraph. It fails or mocks the agent's own Python tools, fails OpenAI model calls, and keeps a budget.
 Other providers, web requests, MCP tools and more frameworks come in later versions.

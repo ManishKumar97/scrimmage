@@ -46,6 +46,8 @@ See [Failing the model, and keeping a budget](model-faults.md).
 
 ## A misspelled tool never runs ungated
 
+The rule covers every tool a gate reaches: the ones listed under `tools`, and LangChain tools, which need no list.
+
 If `tools` names a function or a module that does not exist, the run stops as a mistake in the test.
 Otherwise a typo such as `refund_ordr` would leave the real `refund_order` running with no gate.
 
