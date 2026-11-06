@@ -86,7 +86,7 @@ def patch(module: ModuleType, run: RunState, stop: Callable[[str], None]) -> Non
     def tracked_init(self: Any, *args: Any, **kwargs: Any) -> None:
         create(self, *args, **kwargs)
         if gate_tool(type(self), failure) and library_runs_it(type(self), base):
-            run.seen.add(self.name)  # offered to the model, it will reach a gate
+            run.adapted.add(self.name)  # offered to the model, it will reach a gate
 
     base.__init__ = tracked_init
     for name in ("run", "arun"):

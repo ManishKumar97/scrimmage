@@ -165,8 +165,12 @@ def swap(module: ModuleType, names: list[str], renamed: dict[str, str] | None = 
     """Swap each named function; its label uses the name the model sees."""
     for name in names:
         tool = getattr(module, name, None)
+        seen = (renamed or {}).get(f"{module.__name__}:{name}", name)
         if hasattr(tool, "invoke") and hasattr(tool, "_run"):
-            continue  # a framework's tool object: its adapter gates it
+            run = current()
+            if run is not None:  # a framework's tool object: only its adapter can vouch for it
+                run.listed.discard(seen)
+            continue
         if not callable(tool):
             message = (
                 f"{module.__name__}:{name} is listed under [agent] tools, but "
@@ -177,7 +181,6 @@ def swap(module: ModuleType, names: list[str], renamed: dict[str, str] | None = 
                 run.cannot_gate(name, message)
             raise ListedToolMissing(message)
         if not is_gate(tool):
-            seen = (renamed or {}).get(f"{module.__name__}:{name}", name)
             setattr(module, name, gate(tool, seen))
 
 

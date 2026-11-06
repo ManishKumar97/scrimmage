@@ -69,7 +69,8 @@ class RunState:
     def __init__(self, plan: Plan, sink: LineSink, allowed: list[str]) -> None:
         self.plan = plan
         self.sink = sink
-        self.seen = set(plan.tool_names())  # names a gate reaches, as the model sees them
+        self.listed = set(plan.tool_names())  # names the plan's gates will reach
+        self.adapted: set[str] = set()  # names a framework's adapter has checked
         self.allowed = allowed
         self.began = time.monotonic()
         self.counters = engine.Counters(plan)
@@ -82,6 +83,11 @@ class RunState:
         }
         self._seq = 0
         self._lock = threading.Lock()
+
+    @property
+    def seen(self) -> set[str]:
+        """Names a gate reaches, as the model sees them."""
+        return self.listed | self.adapted
 
     def check_time(self) -> None:
         """The time limit counts from when this process took up the run.

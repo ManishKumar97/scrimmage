@@ -5,10 +5,15 @@ from typing import Any
 from acme.graph import get_stock
 from acme.unsafe import OverridesInvoke, offer
 
-__all__ = ["answer", "get_order", "get_stock"]
+__all__ = ["answer", "get_stock", "write_order"]
 
-get_order = OverridesInvoke()
+
+class WriteOrder(OverridesInvoke):
+    name: str = "write_order"
+
+
+write_order = WriteOrder()
 
 
 def answer(question: str) -> dict[str, Any]:
-    return offer(get_order, question)
+    return offer(write_order, question)

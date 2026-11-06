@@ -784,3 +784,16 @@ def test_only_the_gate_itself_passes_for_a_gate(kind: str) -> None:
     shim = module(f=wrapper)
     tool_gate.swap(shim, ["f"])
     assert shim.f is not wrapper
+
+
+@pytest.mark.design("adapter.listed_tool_must_pass")
+def test_listing_a_tool_does_not_vouch_for_one_that_skips_the_gate(project: Project) -> None:
+    project.edit(
+        "[agent]\n", '[agent]\ntools = ["acme.listed:write_order", "acme.listed:get_stock"]\n'
+    )
+    project.edit('real     = ["tool:check_inventory"]', "real = []")
+    project.edit('call    = "tool:get_order"', 'call    = "tool:write_order"')
+    result, fake = offered(project, "answer", "acme.listed")
+    assert result.code == 2, result.out + result.err
+    assert not wrote(result) and fake.requests == []
+    assert "offered write_order, which no gate sees" in result.out
