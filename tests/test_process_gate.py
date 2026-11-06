@@ -187,6 +187,12 @@ def test_a_stdio_server_on_the_librarys_small_environment_still_starts(project: 
     assert summary_of(result)["answer"] == "real 1", result.out + result.err
 
 
+def test_a_shell_script_is_not_python(tmp_path: Path) -> None:
+    script_file = tmp_path / "tool"
+    script_file.write_text("#!/bin/sh\ntrue\n")
+    assert process_gate.interpreter(str(script_file), {}) is None
+
+
 def test_a_file_it_cannot_read_is_not_python(tmp_path: Path) -> None:
     assert process_gate.interpreter(str(tmp_path / "missing"), {}) is None
 

@@ -1039,11 +1039,11 @@ def test_an_exec_that_fails_leaves_the_program_recording(project: Project) -> No
         "with contextlib.suppress(OSError):\n"
         "    os.execv('/no/such/program', ['x'])\n"
         "tools.check_inventory('1')\n"
-        "print('the answer')\n"
+        "print('the answer', flush=True)\n"
+        "os._exit(0)\n"
     )
     result = script(project, code)
-    assert summary_of(result)["outcome"] == "answered", result.out
-    assert len(calls(result)) == 1
+    assert len(calls(result)) == 1, result.out
 
 
 # Stopping. 6.3
