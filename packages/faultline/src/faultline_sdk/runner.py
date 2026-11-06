@@ -18,11 +18,12 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TextIO
+from typing import TextIO, cast
 
+from faultline_sdk import labels
 from faultline_sdk import plan as planner
 from faultline_sdk.budget import Ledger
-from faultline_sdk.config import Config
+from faultline_sdk.config import Config, Test
 from faultline_sdk.control import ControlServer, proc_key
 from faultline_sdk.records import RecordStore
 from faultline_sdk.redact import redact
@@ -61,6 +62,8 @@ class RunResult:
     notices: list[dict[str, object]] = field(default_factory=list[dict[str, object]])
     real_errors: list[str] = field(default_factory=list[str])
     hosted_reads: int = 0
+    mocked: set[str] = field(default_factory=set[str])  # the mocks this run used
+    tools_seen: list[str] | None = None  # None: the run did not report them
 
     @property
     def exercised(self) -> bool:
@@ -90,6 +93,8 @@ class Runner:
         self.stopped_rows: set[tuple[str, str]] = set()
         self.row_of: dict[str, planner.Row] = {}
         self.cancelled = False
+        self.tools_seen: list[str] | None = None  # as the agent's process reported them
+        self.label_problems: list[str] = []
         self.stopped_by: str | None = None  # the reason a refusal stopped the whole test
         self.skipped: list[str] = []  # tests whose fault rows did not run: baseline failed
 
@@ -134,6 +139,7 @@ class Runner:
             sys.executable, "-m", "faultline_sdk.run_command",
             sys.executable, "-m", "faultline_sdk.start",
             self.config.agent.function, row.test.question,
+            *([self.config.agent.answer] if self.config.agent.answer else []),
         ]  # fmt: skip
         log = os.open(self.folder / f"{run}.log", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
@@ -213,7 +219,7 @@ class Runner:
             "cost_usd": round(cost, 8),
         }
         self.store.close_run(run, row.test.name, row.name, summary)
-        return RunResult(
+        result = RunResult(
             run,
             row,
             outcome,
@@ -226,7 +232,23 @@ class Runner:
             notices=notices,
             real_errors=real_errors,
             hosted_reads=sum(1 for line in model if "hosted_reads" in line),
+            mocked={str(line["call"]) for line in lines if line.get("action") == "mock"},
+            tools_seen=reported_tools(notices),
         )
+        self.check_labels(result)
+        return result
+
+    def check_labels(self, result: RunResult) -> None:
+        """With no tools list, compare the test's labels with the tools the agent has."""
+        with self.lock:
+            if result.tools_seen is None or self.tools_seen is not None:
+                return
+            self.tools_seen = result.tools_seen
+            self.label_problems = unknown_labels(self.config, result.tools_seen)
+            if not self.label_problems:
+                return
+            self.stopped_by = self.stopped_by or "unknown_label"
+        self.cancel()
 
     def run_all(self) -> list[RunResult]:
         """Every baseline first; then the fault rows of each test whose baseline worked."""
@@ -237,7 +259,11 @@ class Runner:
         try:
             with ThreadPoolExecutor(max_workers=self.config.agent.parallel) as pool:
                 base = [row for row in rows if row.fault is None for _ in range(runs)]
-                results = list(pool.map(self.one, base))
+                results: list[RunResult | None] = []
+                if not self.config.agent.tools and base:
+                    # One run alone first, so a misspelled label costs one run, not all.
+                    results.append(self.one(base.pop(0)))
+                results += list(pool.map(self.one, base))
                 for test in self.config.tests:
                     mine = [r for r in results if r is not None and r.row.test == test]
                     if test.faults and mine and all(r.outcome in FAILED for r in mine):
@@ -285,6 +311,46 @@ def real_error(line: dict[str, object]) -> str | None:
 
 class Interrupted(Exception):
     """faultline test got SIGTERM or SIGINT."""
+
+
+def reported_tools(notices: list[dict[str, object]]) -> list[str] | None:
+    for line in notices:
+        tools = line.get("tools")
+        if isinstance(tools, list):
+            return [str(t) for t in cast(list[object], tools)]
+    return None
+
+
+def tool_labels(test: Test) -> list[str]:
+    return [e.call for e in (*test.mocks, *test.faults) if labels.kind_of(e.call) == "tool"]
+
+
+def unknown_labels(config: Config, seen: list[str]) -> list[str]:
+    """Labels that name no tool the agent has. A misspelled mock or fault lands here."""
+    tools = ", ".join(seen) or "none"
+    return [
+        f"[[test]] {test.name!r}: {label} names no tool the agent has; the tools are {tools}"
+        for test in config.tests
+        for label in dict.fromkeys(tool_labels(test))
+        if label.partition(":")[2] not in seen
+    ]
+
+
+def unused_mocks(config: Config, results: list[RunResult]) -> list[str]:
+    """Mocks no run in any row used. The labels passed their check, so this is only a note."""
+    notes: list[str] = []
+    for test in config.tests:
+        mine = [r for r in results if r.row.test == test]
+        used = {call for r in mine for call in r.mocked}
+        if mine and not all(r.outcome in FAILED for r in mine):
+            notes += [
+                f"no run in test {test.name!r} called {mock.call.partition(':')[2]}, so its "
+                "mock was not used. The label is correct. Remove the mock, or ask a question "
+                "that needs the tool."
+                for mock in test.mocks
+                if mock.call not in used
+            ]
+    return notes
 
 
 def stop_group(proc: subprocess.Popen[bytes]) -> None:
@@ -348,6 +414,15 @@ def report(
             if r.outcome == "infrastructure error":
                 code = INFRA
     stopped_by = runner.stopped_by if runner is not None else None
+    if runner is not None and not config.agent.tools:
+        mistakes += runner.label_problems
+        if stopped_by is None and runner.tools_seen is not None:
+            notes += unused_mocks(config, results)
+        elif stopped_by is None and results and any(map(tool_labels, config.tests)):
+            mistakes.append(
+                "no run reported the agent's tools, so the tool labels in this file were not "
+                "checked; see the run logs"
+            )
     skipped = runner.skipped if runner is not None else []
     for name in skipped:
         mistakes.append(
@@ -366,10 +441,17 @@ def report(
         # A refused or broken run may never have reached a model call: that proves nothing.
         ended = all(r.outcome in ("answered", "crashed", "timed out") for r in ran)
         if budget_on and ran and ended and not any(r.model_calls for r in ran):
-            mistakes.append(
-                f"{test.name}: no baseline run made a model call, so the budget is not working; "
-                "check for a cache in front of the model or a client Faultline does not gate"
-            )
+            if any(r.outcome == "answered" for r in ran):
+                mistakes.append(
+                    f"{test.name}: no baseline run made a model call, so the budget is not "
+                    "working; check for a cache in front of the model or a client Faultline "
+                    "does not gate"
+                )
+            else:  # the agent never got that far, which says nothing about the budget
+                mistakes.append(
+                    f"{test.name}: every baseline run crashed or timed out before its first "
+                    "model call, so the test shows nothing; see the run logs"
+                )
     silent = [r for r in results if r.model_calls == 0 and r.outcome == "answered"]
     for r in results:
         for line in r.notices:

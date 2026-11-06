@@ -14,7 +14,7 @@ Faultline has two parts.
 5. The file sees the secret and switches the SDK on. The SDK fetches the plan, checks its signature, and gets ready to swap your tools. It prints one line saying Faultline is active.
 6. Then it runs any other `sitecustomize.py` your environment has, such as Ubuntu's crash reporter, so your program starts as it always does.
 7. Faultline's starter calls your function with the question.
-8. When your code imports a module named under `tools`, the SDK swaps each named function for a **gate**, a function of the same kind, sync or async.
+8. When your code imports a module named under `tools`, or makes a LangChain tool, the SDK puts a **gate** in front of the function that does the work, a function of the same kind, sync or async.
 9. Each tool call meets its gate. The gate decides fault, mock, real or refused, does it, and hands a record line to a background thread that sends lines in small batches.
 10. When the program ends, the runner reads the answer, closes the run, and writes the summary line.
 

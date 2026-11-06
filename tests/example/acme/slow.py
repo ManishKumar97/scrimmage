@@ -1,9 +1,11 @@
 """Agents that misbehave on purpose, for the runner's tests."""
 
 import contextlib
+import itertools
 import os
 import signal
 import time
+from pathlib import Path
 
 from acme import tools
 
@@ -47,3 +49,31 @@ def use_httpx2(question: str) -> str:
     import httpx2
 
     return str(httpx2)
+
+
+def claim(path: Path) -> bool:
+    """True for the one run that makes this file, however many try at once."""
+    try:
+        os.close(os.open(path, os.O_CREAT | os.O_EXCL))
+    except FileExistsError:
+        return False
+    return True
+
+
+def first_goes_quiet(question: str) -> str:
+    """Runs take a role in turn. Nothing here depends on how fast a run starts.
+
+    The first ends without reporting its tools. The second waits for the third to be
+    going, then answers. The third waits to be stopped.
+    """
+    marks = Path("marks")
+    marks.mkdir(exist_ok=True)
+    role = next(n for n in itertools.count(1) if claim(marks / str(n)))
+    if role == 1:
+        os._exit(0)
+    if role == 2:
+        while not (marks / "3").exists():
+            time.sleep(0.01)
+        return "done"
+    time.sleep(600)
+    return "never"

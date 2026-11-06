@@ -52,7 +52,7 @@ class Plan:
             "test": self.test,
             "row": self.row,
             "mocks": mocks,
-            "faults": [{"call": f.call, "do": f.do, "when": f.when} for f in self.faults],
+            "faults": [fault_json(f) for f in self.faults],
             "tools": list(self.tools),
             "real": list(self.real),
             "time_limit_s": self.time_limit_s,
@@ -78,7 +78,7 @@ class Plan:
             for m in map(obj, items(doc, "mocks"))
         )
         faults = tuple(
-            Fault(string(f, "call"), string(f, "do"), string(f, "when"))
+            Fault(string(f, "call"), string(f, "do"), string(f, "when"), optional(f, "raises"))
             for f in map(obj, items(doc, "faults"))
         )
         limit = number(doc, "time_limit_s")
@@ -117,6 +117,13 @@ class Row:
     test: Test
     name: str
     fault: Fault | None
+
+
+def fault_json(fault: Fault) -> dict[str, object]:
+    doc: dict[str, object] = {"call": fault.call, "do": fault.do, "when": fault.when}
+    if fault.raises is not None:
+        doc["raises"] = fault.raises
+    return doc
 
 
 def rows(config: Config) -> list[Row]:

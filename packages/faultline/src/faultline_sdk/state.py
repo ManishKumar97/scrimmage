@@ -11,6 +11,7 @@ import os
 import socket
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol, cast
@@ -69,6 +70,10 @@ class RunState:
     def __init__(self, plan: Plan, sink: LineSink, allowed: list[str]) -> None:
         self.plan = plan
         self.sink = sink
+        self.listed = set(plan.tool_names())  # names the plan's gates will reach
+        self.adapted: set[str] = set()  # names a framework's adapter has checked
+        self.blocked: dict[str, str] = {}  # names a call could skip a gate by, and why
+        self.rechecks: list[Callable[[], None]] = []  # an adapter's check of its tools
         self.allowed = allowed
         self.began = time.monotonic()
         self.counters = engine.Counters(plan)
@@ -81,6 +86,17 @@ class RunState:
         }
         self._seq = 0
         self._lock = threading.Lock()
+
+    @property
+    def seen(self) -> set[str]:
+        """Names a gate reaches, as the model sees them. A request carries only names, so
+        one tool that can skip its gate blocks every tool of that name."""
+        return (self.listed | self.adapted) - self.blocked.keys()
+
+    def recheck_tools(self) -> None:
+        """Bring the names up to date: a class can change after its tools were made."""
+        for recheck in self.rechecks:
+            recheck()
 
     def check_time(self) -> None:
         """The time limit counts from when this process took up the run.
@@ -149,11 +165,11 @@ class RunState:
         self.plan = dataclasses.replace(self.plan, faults=())
         self.counters = engine.Counters(self.plan)
 
-    def listed_tool_missing(self, name: str, message: str) -> None:
-        """A tool under [agent] tools that does not exist: a mistake that ends the run.
+    def cannot_gate(self, name: str, message: str) -> None:
+        """A tool no gate can reach: a mistake that ends the run.
 
-        The real function it was meant to gate, likely spelled differently, must never
-        run ungated, so the run is poisoned and the line is kept even on a full queue.
+        The real function must never run ungated, so the run is poisoned and the line is
+        kept even on a full queue.
         """
         step = Step(
             engine.Call("tool", f"tool:{name}", name),
@@ -171,22 +187,32 @@ class RunState:
             self._seq += 1
             return self._seq
 
-    def notice(self, kind: str, library: str, message: str) -> None:
+    def notice(
+        self,
+        kind: str,
+        library: str,
+        message: str,
+        *,
+        mistake: str | None = None,
+        tools: list[str] | None = None,
+    ) -> None:
         """A line that is not a call, such as a library version the gate cannot use."""
-        self.sink.put(
-            {
-                "v": RECORD_VERSION,
-                "run": self.plan.run,
-                "test": self.plan.test,
-                "row": self.plan.row,
-                "seq": self.next_seq(),
-                "proc": self.proc,
-                "notice": kind,
-                "library": library,
-                "message": message,
-            },
-            keep=True,
-        )
+        line: dict[str, object] = {
+            "v": RECORD_VERSION,
+            "run": self.plan.run,
+            "test": self.plan.test,
+            "row": self.plan.row,
+            "seq": self.next_seq(),
+            "proc": self.proc,
+            "notice": kind,
+            "library": library,
+            "message": message,
+        }
+        if mistake is not None:
+            line["mistake"] = redact(mistake)
+        if tools is not None:
+            line["tools"] = tools
+        self.sink.put(line, keep=True)
 
     def finish(
         self,

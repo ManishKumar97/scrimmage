@@ -16,3 +16,8 @@ source = "https://aws.amazon.com/message/101925/ (AWS us-east-1, 19-20 October 2
 name = "status"
 origin = "public incident"
 source = "https://status.openai.com/incidents/ctrsv3lwd797 (OpenAI status page, API, ChatGPT and Sora Facing Issues: the API returned elevated errors to every caller)"
+
+[[fault]]
+name = "error"
+origin = "public incident"
+source = "https://blog.cloudflare.com/18-november-2025-outage/ (Cloudflare, 18 November 2025: a bad configuration file made a core proxy module fail, so services behind it returned errors to their callers)"

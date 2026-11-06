@@ -25,12 +25,15 @@ dev = [
     "jsonschema>=4.26",
     "pytest-cov>=7.1",
     "coverage>=7.17",
+    "langgraph>=1.2",
+    "langchain-core>=1.7",
+    "langchain-openai>=1.7",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["tests"]
-addopts = ["--strict-markers"]
+addopts = ["--strict-markers", "-p", "no:langsmith_plugin"]
 filterwarnings = ["error"]
 markers = [
     "design(tag): the design point this test proves, as a short public name",

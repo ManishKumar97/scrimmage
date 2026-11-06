@@ -65,11 +65,10 @@ def test_a_bad_value_names_its_table_and_key(tmp_path: Path) -> None:
         ('call = "tool:get_order"\ndo', 'call = "model:x"\ndo', "not a known provider"),
         ('call = "tool:get_order"\ndo', 'call = "model:anthropic"\ndo', "not a known provider"),
         ('call = "tool:get_order"\ndo', 'call = "model:openai/images"\ndo', "not a model call"),
-        ("[agent]\n", '[agent]\nanswer = "reply"\n', "answer: unknown setting; see docs"),
+        ("[agent]\n", '[agent]\nservice = "x"\n', "service: unknown setting; see docs"),
         ("[agent]\n", '[agent]\ncommand = "python bot.py"\n', "command: unknown setting"),
         ("[agent]\n", "[agent]\nrnus = 50\n", "rnus: unknown setting"),
         ('returns = "shipped, Oct 30"', 'returns_from = "acme.m:f"', "returns_from: unknown"),
-        ('do   = "timeout"', 'do   = "timeout"\nraises = "X"', "raises: unknown setting"),
     ],
 )
 def test_anything_this_version_does_not_support_is_rejected(
@@ -153,6 +152,55 @@ def test_bad_files_are_rejected(tmp_path: Path, old: str, new: str, message: str
 def test_bad_layouts_are_rejected(tmp_path: Path, text: str, message: str) -> None:
     with pytest.raises(ConfigError, match=message):
         load_text(tmp_path, text)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        ('do   = "timeout"', 'do   = "timeout"\nraises = "ValueError"', "only with do = 'error'"),
+        ('do   = "timeout"', 'do   = "error"\nraises = "NotAnError"', "not a built-in exception"),
+        ('do   = "timeout"', 'do   = "error"\nraises = "print"', "not a built-in exception"),
+        ('do   = "timeout"', 'do   = "error"\nraises = "UnicodeDecodeError"', "not a built-in"),
+        ('do   = "timeout"', 'do   = "error"\nraises = "ExceptionGroup"', "not a built-in"),
+        (
+            'do   = "timeout"',
+            'do   = "error"\nraises = "other.m:E"',
+            "outside the agent's packages",
+        ),
+        (
+            'call = "tool:get_order"\ndo   = "timeout"',
+            'call = "model"\ndo = "error"',
+            "only on a tool",
+        ),
+        (
+            "[agent]\n",
+            '[agent]\nanswer = "messages[x]"\n',
+            r"answer: 'messages\[x\]' is not a path",
+        ),
+        ("[agent]\n", "[agent]\nanswer = 3\n", "answer: 3 is not a path"),
+    ],
+)
+def test_the_error_fault_and_the_answer_path_are_checked(
+    tmp_path: Path, old: str, new: str, message: str
+) -> None:
+    with pytest.raises(ConfigError, match=message):
+        example(tmp_path, old, new)
+
+
+@pytest.mark.design("config.error_raises_forms")
+def test_raises_takes_a_built_in_or_the_agents_own_class(tmp_path: Path) -> None:
+    built_in = example(tmp_path, 'do   = "timeout"', 'do   = "error"\nraises = "ConnectionError"')
+    assert built_in.tests[0].faults[0].raises == "ConnectionError"
+    own = example(tmp_path, 'do   = "timeout"', 'do   = "error"\nraises = "acme.errors:Down"')
+    assert own.tests[0].faults[0].raises == "acme.errors:Down"
+
+
+@pytest.mark.design("config.no_tools_list_defers_names")
+def test_without_a_tools_list_tool_names_are_left_to_the_run(tmp_path: Path) -> None:
+    text = (EXAMPLE / "faultline.toml").read_text()
+    line = next(x for x in text.splitlines() if x.startswith("tools "))
+    cfg = load_text(tmp_path, text.replace(line, "").replace("tool:get_order", "tool:anything"))
+    assert cfg.agent.tools == ()
 
 
 def test_allowed_imports_are_the_agents_own_packages(tmp_path: Path) -> None:

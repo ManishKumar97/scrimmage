@@ -56,6 +56,7 @@ If the tool returns its own type, Faultline builds that type from the mock:
 
 | Fault | What the agent sees |
 |---|---|
+| `error` | a tool raises an error: `ToolException` under LangChain, `RuntimeError` in a hand-written loop, or the type named by `raises` |
 | `timeout` | a tool raises `TimeoutError`; a model call raises the library's own timeout error, as if the other side never answered |
 | `status` | written `status 429`: a model call gets a real HTTP error reply, and the library raises its own error, such as `RateLimitError` |
 

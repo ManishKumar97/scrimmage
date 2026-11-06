@@ -198,6 +198,21 @@ def test_a_type_outside_the_allowed_prefixes_is_refused_before_import(
     assert "agent ran" not in result.stdout and not marker.exists()
 
 
+@pytest.mark.design("imports.raises_refused_before_import")
+def test_a_fault_type_outside_the_allowed_prefixes_is_refused_before_import(
+    control: ControlServer, tmp_path: Path
+) -> None:
+    marker = tmp_path / "imported"
+    (tmp_path / "evil.py").write_text(
+        f"open({str(marker)!r}, 'w').write('yes')\nclass E(Exception): pass\n"
+    )
+    fault = {"call": "tool:a", "do": "error", "when": "always", "raises": "evil:E"}
+    control.open_run("run-1", "baseline", plan(faults=[fault]))
+    result = python("print('agent ran')", joined(control), cwd=tmp_path)
+    assert "evil:E is outside FAULTLINE_ALLOW_IMPORTS (acme.)" in result.stderr
+    assert "agent ran" not in result.stdout and not marker.exists()
+
+
 def test_faultline_run_needs_a_command(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([]) == 2
     assert "usage" in capsys.readouterr().err
