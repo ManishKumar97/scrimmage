@@ -169,6 +169,10 @@ class Runner:
         with self.lock:
             del self.procs[run]
         state = self.server.close_run(run)
+        # The server stops a test on a thread of its own, which this run's end can overtake.
+        # Settle it here, so the next run sees it.
+        if state.broken or state.refusals:
+            self._refused(run, "structure" if state.broken else state.refusals[0])
         lines = self.store.lines(run)
         answer_file = self.answers / f"{run}.txt"
         answer = answer_file.read_text() if answer_file.exists() else None

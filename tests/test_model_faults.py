@@ -8,6 +8,7 @@ import pytest
 
 from conftest import ACME, Project, Result
 from fakes.openai_server import FakeOpenAI
+from faultline_sdk import config
 from faultline_sdk.runner import Runner
 
 Fake = Callable[..., FakeOpenAI]
@@ -223,6 +224,18 @@ def test_a_library_that_changed_stops_the_test_at_once(project: Project) -> None
     assert "does not have the functions Faultline gates" in result.out
     assert len(result.records()) == 1  # no other run started
     assert result.summaries()[0]["outcome"] == "infrastructure error"
+
+
+def test_no_run_starts_after_a_stop_however_late_the_servers_thread_is(project: Project) -> None:
+    (project.root / "httpx2.py").write_text('__version__ = "9.0.0"\n')
+    project.edit(
+        'function = "acme.agent:answer"',
+        'function = "acme.slow:use_httpx2"\nruns = 3\nparallel = 1\nmax_cost_usd = "none"',
+    )
+    project.monkeypatch.chdir(project.root)
+    runner = Runner(config.load(project.toml))
+    runner.server.on_refused = lambda run, reason: None  # that thread has not run yet
+    assert len(runner.run_all()) == 1
 
 
 @pytest.mark.design("gate.structural_notice_fails_the_test")
