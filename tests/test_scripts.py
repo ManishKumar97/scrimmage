@@ -604,6 +604,21 @@ def test_a_childs_refusal_arrives_before_a_child_that_skips_its_exit_steps(
     assert summary_of(result)["outcome"] == "refused call", result.out
 
 
+@pytest.mark.design("child.rerun_no_write")
+def test_a_rerun_never_reaches_a_write_through_a_child(project: Project) -> None:
+    (project.root / "acme" / "pays.py").write_text(
+        "from pathlib import Path\ndef pay(order):\n    Path('REAL WRITE').write_text(order)\n"
+    )
+    (project.root / "report.py").write_text("from acme import pays\npays.pay('1234')\n")
+    (project.root / "bot.py").write_text(GATED_CHILD)
+    write_config(project, f"{sys.executable} bot.py {{question}}")
+    project.edit("runs = 1", "runs = 3")
+    project.edit(TOOLS, '["acme.pays:pay"]')
+    project.edit('real = ["tool:check_inventory"]', "real = []")
+    result = project.test()
+    assert result.code == 2 and not (project.root / "REAL WRITE").exists(), result.out
+
+
 @pytest.mark.design("child.mocks_apply")
 def test_a_childs_mock_applies_and_its_line_is_in_the_record(project: Project) -> None:
     (project.root / "report.py").write_text("from acme import tools\nprint(tools.get_order('1'))\n")
