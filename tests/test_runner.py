@@ -448,6 +448,10 @@ def test_a_tool_can_carry_the_name_the_model_sees(project: Project, fake_openai:
     fault = next(lines for lines in result.records() if lines[-1]["row"] == "fault 1")
     tool = next(x for x in fault if x.get("call") == "tool:lookup-order")
     assert tool["action"] == "fault"
+    schema = json.loads(
+        (Path(faultline_sdk.__file__).parent / "schemas" / "record.v1.json").read_text()
+    )
+    jsonschema.Draft202012Validator(schema).validate(tool)
 
 
 @pytest.mark.design("config.references_checked_on_load")
