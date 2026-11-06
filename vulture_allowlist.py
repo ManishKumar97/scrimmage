@@ -77,3 +77,4 @@ _.run_set_on_the_tool_called_directly  # tests/example/acme/unsafe.py: a test na
 _.answer_after_a_child  # tests/example/acme/graph.py: a test's faultline.toml names it
 _.answer_with_runtime  # tests/example/acme/graph.py: a test's faultline.toml names it
 _.run_manager  # tests/example/acme/graph.py: LangChain passes it to the tool
+_.partial_run  # tests/example/acme/unsafe.py: a test's faultline.toml names it

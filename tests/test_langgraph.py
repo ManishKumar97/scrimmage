@@ -946,3 +946,13 @@ def test_the_async_entry_point_checks_the_tool_too() -> None:
     finally:
         state.install(None)
     assert "cannot be gated" in str(sink.lines[0]["mistake"])
+
+
+@pytest.mark.design("check.no_model_calls_only_when_it_means_something")
+def test_a_crash_before_the_first_model_call_is_not_called_a_budget_problem(
+    project: Project,
+) -> None:
+    result, _ = offered(project, "partial_run")
+    assert result.code == 2, result.out + result.err
+    assert "the budget is not working" not in result.out
+    assert "crashed or timed out before its first model call" in result.out

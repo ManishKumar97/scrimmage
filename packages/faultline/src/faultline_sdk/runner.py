@@ -436,10 +436,17 @@ def report(
         # A refused or broken run may never have reached a model call: that proves nothing.
         ended = all(r.outcome in ("answered", "crashed", "timed out") for r in ran)
         if budget_on and ran and ended and not any(r.model_calls for r in ran):
-            mistakes.append(
-                f"{test.name}: no baseline run made a model call, so the budget is not working; "
-                "check for a cache in front of the model or a client Faultline does not gate"
-            )
+            if any(r.outcome == "answered" for r in ran):
+                mistakes.append(
+                    f"{test.name}: no baseline run made a model call, so the budget is not "
+                    "working; check for a cache in front of the model or a client Faultline "
+                    "does not gate"
+                )
+            else:  # the agent never got that far, which says nothing about the budget
+                mistakes.append(
+                    f"{test.name}: every baseline run crashed or timed out before its first "
+                    "model call, so the test shows nothing; see the run logs"
+                )
     silent = [r for r in results if r.model_calls == 0 and r.outcome == "answered"]
     for r in results:
         for line in r.notices:

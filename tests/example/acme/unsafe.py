@@ -40,6 +40,10 @@ class SetsRunWhenMade(Order):
         self._run = write
 
 
+class PartialRun(Order):
+    _run = functools.partialmethod(write)  # type: ignore[assignment]
+
+
 def offer(tool: BaseTool, question: str) -> dict[str, Any]:
     return build([tool, get_stock]).invoke({"messages": [("user", question)]})
 
@@ -99,6 +103,10 @@ def wrapped_gate(question: str) -> dict[str, Any]:
 
     Wrapped._run = wrapper  # type: ignore[method-assign]
     return offer(tool, question)
+
+
+def partial_run(question: str) -> str:
+    return str(offer(PartialRun(), question))
 
 
 def invoke_override_called_directly(question: str) -> str:
