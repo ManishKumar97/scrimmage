@@ -144,6 +144,18 @@ def with_secret(tool_object: BaseTool, question: str) -> dict[str, Any]:
     return bot.invoke({"messages": [("user", question)], "secret": "the hidden note"})
 
 
+class OnlyInjected(BaseModel):
+    note: Annotated[str, InjectedState("secret")]
+
+
+def single_input_tool(question: str) -> dict[str, Any]:
+    """LangChain passes a single-input Tool's one value by position."""
+    return with_secret(
+        Tool(name="get_order", func=str, description="Look up.", args_schema=OnlyInjected),
+        question,
+    )
+
+
 def schema_on_the_decorator(question: str) -> dict[str, Any]:
     @tool(args_schema=InjectedArgs)
     def get_order(order_id: str, note: str, ctx: Any) -> str:

@@ -2,6 +2,7 @@
 
 import asyncio
 import functools
+import json
 import threading
 import time
 import types
@@ -1099,6 +1100,16 @@ def test_only_what_the_model_supplies_reaches_the_record(
     args = tool_lines(result.records()[0])[0]["args"]
     assert isinstance(args, dict)
     assert args["preview"] == '{"order_id": "1234"}'
+
+
+def test_an_injected_value_passed_by_position_stays_out_of_the_record(
+    project: Project, fake_openai: Fake
+) -> None:
+    graph(project, "single_input_tool", "")
+    result = project.test(fake_openai(ACME))
+    lines = tool_lines(result.records()[0])
+    assert lines, result.out + result.err
+    assert "hidden note" not in json.dumps(lines)
 
 
 @pytest.mark.design("adapter.any_override_refused")

@@ -304,7 +304,7 @@ def arguments(
     found: dict[str, object] = {
         k: v for k, v in kwargs.items() if k not in names and type(v).__name__ not in PLUMBING
     }
-    if args:
+    if args and not injected:  # a positional value has no name, so it could be an injected one
         found["args"] = list(args)
     return found
 
