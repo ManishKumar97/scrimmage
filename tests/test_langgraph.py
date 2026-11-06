@@ -12,7 +12,7 @@ import pytest
 
 from conftest import ACME, Project, Result
 from fakes.openai_server import FakeOpenAI
-from faultline_sdk import config, langchain_gate, plan, state, tool_gate
+from faultline_sdk import config, langchain_gate, mocks, plan, state, tool_gate
 from faultline_sdk.config import Fault
 from faultline_sdk.errors import FaultlineRefused
 from faultline_sdk.plan import Plan
@@ -900,3 +900,13 @@ def test_a_python_child_does_not_report_the_agents_tools(
     result = project.test(fake_openai(ACME))
     assert result.code == 0, result.out + result.err
     assert "names no tool" not in result.out
+
+
+@pytest.mark.design("mock.loose_annotation")
+@pytest.mark.parametrize("annotation", [Any, object])
+def test_a_tool_annotated_any_keeps_the_mock_as_written(annotation: object) -> None:
+    def tool() -> None:
+        pass
+
+    tool.__annotations__["return"] = annotation
+    assert mocks.build({"a": 1}, None, tool, []) == {"a": 1}

@@ -13,7 +13,8 @@ from collections.abc import Callable
 
 from faultline_sdk.errors import FaultlineMockError, FaultlineRefused
 
-PLAIN = (str, int, float, bool, list, dict, tuple, type(None))
+# Any is a class on 3.11 and later, and neither it nor object names a shape to build.
+PLAIN = (str, int, float, bool, list, dict, tuple, type(None), object, typing.Any)
 
 
 def allowed(path: str, prefixes: list[str]) -> bool:
