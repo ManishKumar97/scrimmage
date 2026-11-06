@@ -161,11 +161,21 @@ class ListedToolMissing(ImportError):
     """A tool under [agent] tools is not in its module. The import fails on purpose."""
 
 
-def swap(module: ModuleType, names: list[str], renamed: dict[str, str] | None = None) -> None:
-    """Swap each named function; its label uses the name the model sees."""
+def swap(
+    module: ModuleType,
+    names: list[str],
+    renamed: dict[str, str] | None = None,
+    listed: str | None = None,
+) -> None:
+    """Swap each named function; its label uses the name the model sees.
+
+    listed is the name the tools list gives this file, when it was imported by another.
+    """
     for name in names:
         tool = getattr(module, name, None)
-        seen = (renamed or {}).get(f"{module.__name__}:{name}", name)
+        if listed is not None and tool is None:
+            continue
+        seen = (renamed or {}).get(f"{listed or module.__name__}:{name}", name)
         if hasattr(tool, "invoke") and hasattr(tool, "_run"):
             run = current()
             if run is not None:  # a framework's tool object: only its adapter can vouch for it
@@ -209,3 +219,5 @@ def install(paths: Sequence[str], renamed: dict[str, str] | None = None) -> None
     names_seen = renamed or {}
     for module, names in targets(paths).items():
         hooks.on_import(module, functools.partial(swap, names=names, renamed=names_seen))
+        other = functools.partial(swap, names=names, renamed=names_seen, listed=module)
+        hooks.on_same_file(module, other)

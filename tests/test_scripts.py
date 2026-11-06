@@ -396,6 +396,59 @@ def test_a_tool_in_the_module_run_with_dash_m_stops_the_run(
     assert not (project.root / "REAL WRITE").exists()
 
 
+def deep_folder(project: Project) -> None:
+    folder = project.root / "deep"
+    folder.mkdir()
+    (folder / "tools.py").write_text(
+        "from pathlib import Path\ndef pay(order):\n    Path('REAL WRITE').write_text(order)\n"
+    )
+    (folder / "bot.py").write_text("import tools\nprint(tools.pay('1234'))\n")
+
+
+@pytest.mark.design("short_name.gated")
+def test_a_listed_tool_imported_by_a_shorter_name_is_gated(project: Project) -> None:
+    deep_folder(project)
+    write_config(project, f"{sys.executable} deep/bot.py {{question}}")
+    project.edit(TOOLS, '["deep.tools:pay"]')
+    project.edit('real = ["tool:check_inventory"]', "real = []")
+    result = project.test()
+    assert not (project.root / "REAL WRITE").exists()
+    assert summary_of(result)["outcome"] == "refused call", result.out
+    assert [x["call"] for x in calls(result)] == ["tool:pay"]
+
+
+def test_a_shorter_name_keeps_the_name_the_model_sees(project: Project) -> None:
+    deep_folder(project)
+    write_config(project, f"{sys.executable} deep/bot.py {{question}}")
+    project.edit(TOOLS, '[{path = "deep.tools:pay", name = "pay-back"}]')
+    project.edit('real = ["tool:check_inventory"]', "real = []")
+    assert [x["call"] for x in calls(project.test())] == ["tool:pay-back"]
+
+
+def test_a_longer_name_for_a_listed_short_one_is_gated(project: Project) -> None:
+    deep_folder(project)
+    (project.root / "deep" / "bot.py").write_text("import deep.tools\nprint(deep.tools.pay('1'))\n")
+    (project.root / "boot.py").write_text("import runpy\nrunpy.run_path('deep/bot.py')\n")
+    write_config(project, f"{sys.executable} boot.py {{question}}")
+    project.edit(TOOLS, '["tools:pay"]')
+    project.edit('real = ["tool:check_inventory"]', "real = []")
+    project.monkeypatch.setenv("PYTHONPATH", str(project.root / "deep"))
+    project.monkeypatch.chdir(project.root)
+    result = project.test()
+    assert not (project.root / "REAL WRITE").exists(), result.out
+
+
+def test_another_file_with_the_same_last_name_is_left_alone(project: Project) -> None:
+    deep_folder(project)
+    (project.root / "other").mkdir()
+    (project.root / "other" / "tools.py").write_text("def pay(order):\n    return 'not listed'\n")
+    (project.root / "other" / "bot.py").write_text("import tools\nprint(tools.pay('1'))\n")
+    write_config(project, f"{sys.executable} other/bot.py {{question}}")
+    project.edit(TOOLS, '["deep.tools:pay"]')
+    project.edit('real = ["tool:check_inventory"]', "real = []")
+    assert summary_of(project.test())["answer"] == "not listed"
+
+
 @pytest.mark.design("main.tool_in_a_childs_script")
 def test_a_tool_defined_in_a_childs_script_stops_the_child(project: Project) -> None:
     (project.root / "bot.py").write_text(GATED_CHILD)

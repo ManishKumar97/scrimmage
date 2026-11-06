@@ -169,6 +169,23 @@ def test_a_listed_tool_on_another_python_does_not_run_and_the_run_says_so(
     validator.validate(line)
 
 
+@pytest.mark.design("short_name.other_python")
+def test_a_shorter_name_for_a_listed_tool_is_kept_out_on_another_python(
+    project: Project, other_version: Path
+) -> None:
+    (project.root / "deep").mkdir()
+    (project.root / "deep" / "tools.py").write_text("print('THE WRITE RAN')\n")
+    (project.root / "deep" / "run.py").write_text("import tools\n")
+    (project.root / "bot.py").write_text(
+        RUNS_OTHER.format(command=[str(other_version), "deep/run.py"])
+    )
+    write_config(project, f"{sys.executable} bot.py {{question}}")
+    project.edit('"acme.tools:refund_order"]', '"deep.tools:pay"]')
+    result = project.test()
+    assert summary_of(result)["outcome"] == "refused call", result.out
+    assert "THE WRITE RAN" not in str(summary_of(result)["answer"])
+
+
 @pytest.mark.design("main.tool_on_another_python")
 @pytest.mark.parametrize("how", ["script", "-m"])
 def test_a_tool_in_the_program_on_another_python_stops_it(

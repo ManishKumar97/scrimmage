@@ -87,8 +87,18 @@ class _KeepOut:
     def __init__(self, modules: "set[str]") -> None:
         self.modules = modules
 
-    def find_spec(self, name: str, path: object = None, target: object = None) -> None:
+    def _means_a_tool(self, name: str, path: object) -> bool:
+        """A listed module by its own name, or its file by a shorter one."""
         if name in self.modules:
+            return True
+        last = name.rpartition(".")[2]
+        close = [m for m in self.modules if m.rpartition(".")[2] == last]
+        spec = importlib.machinery.PathFinder.find_spec(name, path) if close else None
+        origin = str(getattr(spec, "origin", ""))
+        return any(origin.endswith(os.sep + m.replace(".", os.sep) + ".py") for m in close)
+
+    def find_spec(self, name: str, path: object = None, target: object = None) -> None:
+        if self._means_a_tool(name, path):
             message = (
                 f"{name} holds a tool under [agent] tools, and {sys.executable} is not the "
                 "run's Python, so Derail cannot gate it"
