@@ -12,6 +12,7 @@ import contextvars
 import functools
 import importlib.metadata
 import inspect
+import typing
 from collections.abc import Callable, Iterator
 from types import ModuleType
 from typing import Any
@@ -27,7 +28,9 @@ TESTED = ((1, 7), (1, 7))  # the minor versions this release was tested with
 METHODS = ("_run", "_arun")
 ENTRIES = ("run", "arun")
 CALLED = ("run", "arun", "invoke", "ainvoke")
-PLUMBING = ("run_manager", "config", "callbacks")  # LangChain's, not the tool's input
+# LangChain's own, passed beside the tool's input. Told apart by type, since a tool can
+# have an input of the same name or call its config anything.
+PLUMBING = ("RunnableConfig", "CallbackManagerForToolRun", "AsyncCallbackManagerForToolRun")
 
 # The tool whose real call is in progress. _arun often delegates to _run on the same tool,
 # and that is one call, not two.
@@ -146,8 +149,26 @@ def checked(entry: Callable[..., Any], failure: type[Exception]) -> Callable[...
     return sync_checked
 
 
-def arguments(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, object]:
-    found: dict[str, object] = {k: v for k, v in kwargs.items() if k not in PLUMBING}
+def plumbing_names(function: Callable[..., Any]) -> set[str]:
+    """Parameters annotated with one of LangChain's own types."""
+    try:
+        hints = typing.get_type_hints(function)
+    except Exception:  # a forward reference that cannot be resolved
+        return set()
+    return {
+        name
+        for name, hint in hints.items()
+        if any(kind in repr(hint) or getattr(hint, "__name__", "") == kind for kind in PLUMBING)
+    }
+
+
+def arguments(
+    args: tuple[Any, ...], kwargs: dict[str, Any], functions: tuple[Callable[..., Any], ...]
+) -> dict[str, object]:
+    names: set[str] = set().union(*map(plumbing_names, functions))
+    found: dict[str, object] = {
+        k: v for k, v in kwargs.items() if k not in names and type(v).__name__ not in PLUMBING
+    }
     if args:
         found["args"] = list(args)
     return found
@@ -185,10 +206,11 @@ def gate(method: Callable[..., Any], failure: type[Exception]) -> Callable[..., 
         tool, *rest = args
         if _inside.get(None) is tool:  # _arun delegating to _run on the same tool
             return None
+        function = function_of(tool, method)
         return tool_gate.Gated(
             tool.name,
-            arguments(tuple(rest), kwargs),
-            function_of(tool, method),
+            arguments(tuple(rest), kwargs, (method, function)),
+            function,
             failure,
             functools.partial(real_call, tool),
             functools.partial(mock_shape, tool),

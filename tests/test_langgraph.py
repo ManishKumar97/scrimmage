@@ -303,6 +303,20 @@ def test_a_tool_with_an_artifact_is_mocked_with_a_list_of_two(
     assert result.summaries()[0]["answer"] == answer
 
 
+@pytest.mark.design("adapter.plumbing_not_recorded")
+def test_langchains_own_arguments_are_left_out_of_the_record(project: Project) -> None:
+    graph(project, "plumbing", "")
+    project.edit('answer   = "messages[-1].content"\n', "")
+    project.edit('real     = ["tool:check_inventory"]', 'real = ["tool:*"]')
+    (lines,) = project.test().records()
+    calls = {str(x["call"]): x for x in tool_lines(lines)}
+    args = calls["tool:takes_config"]["args"]
+    assert isinstance(args, dict)
+    assert args["preview"] == '{"sku": "SKU-42"}'
+    named = calls["tool:named_config"]["args"]
+    assert isinstance(named, dict) and named["preview"] == '{"config": "kept"}'
+
+
 @pytest.mark.design("adapter.one_call_one_line")
 def test_arun_delegating_to_run_is_one_call(project: Project) -> None:
     graph(project, "sync_tool_through_arun", "")

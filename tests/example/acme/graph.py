@@ -8,6 +8,7 @@ import asyncio
 from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import AnyMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, ToolException, tool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
@@ -168,6 +169,25 @@ def get_report(order_id: str) -> tuple[str, dict[str, str]]:
 
 def report_tool(question: str) -> str:
     return str(get_report.invoke({"order_id": "1"}))
+
+
+@tool
+def takes_config(sku: str, cfg: RunnableConfig) -> str:
+    """A tool that reads LangChain's config, whatever it calls it."""
+    return str(cfg.get("configurable", {}).get("secret", "none"))
+
+
+class NamedConfig(BaseTool):
+    name: str = "named_config"
+    description: str = "A tool with a real input called config."
+
+    def _run(self, config: str = "") -> str:  # type: ignore[override]
+        return config
+
+
+def plumbing(question: str) -> str:
+    takes_config.invoke({"sku": "SKU-42"}, {"configurable": {"secret": "hidden-value"}})
+    return str(NamedConfig()._run(config="kept"))
 
 
 def nested(question: str) -> str:
