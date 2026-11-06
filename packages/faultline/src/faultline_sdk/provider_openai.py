@@ -184,7 +184,7 @@ def offered(path: str, fields: dict[str, object]) -> Offered:
             found.hosted_reads.append("web_search")
     for raw in _list(fields.get("tools")):
         tool = _obj(raw)
-        kind = str(tool.get("type", ""))
+        kind = str(tool.get("type") or "(no type)")
         if not responses:
             if kind in CHAT_AGENT:
                 found.agent.append(_name(_obj(tool.get(kind)) or tool))
