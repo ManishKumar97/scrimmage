@@ -211,7 +211,8 @@ def offered(path: str, fields: dict[str, object]) -> Offered:
 
 
 def _name(tool: dict[str, object]) -> str:
-    return str(tool.get("name", ""))
+    """A built-in tool such as shell has no name of its own: its type is the name."""
+    return str(tool.get("name") or tool.get("type", ""))
 
 
 def _obj(value: object) -> dict[str, object]:

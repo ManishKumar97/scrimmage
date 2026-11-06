@@ -128,6 +128,9 @@ Faultline reads the tools in each model request before it goes out.
 | a tool of a type Faultline does not know | the test stops and names the type |
 | your own tool, but no gate sees it | the request is not sent and the test stops, naming the tool to add under `tools`; use `{path, name}` when the model sees another name |
 
+A built-in tool your code runs, such as `shell` or `apply_patch`, has no name of its own, so its type is the name.
+List the function that runs it, such as `{path = "package.module:run_shell", name = "shell"}`.
+
 A request body Faultline cannot read, such as a compressed one, is refused, because its tools cannot be checked.
 
 ## Calls that create something at the provider

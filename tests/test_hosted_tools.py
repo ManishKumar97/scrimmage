@@ -162,6 +162,10 @@ def test_every_tool_the_gates_see_passes(project: Project, fake_openai: Fake) ->
         ("/v1/responses", {"type": "mcp", "server_label": "orders"}, [], ["orders"], []),
         ("/v1/responses", {"type": "function", "name": "f"}, ["f"], [], []),
         ("/v1/responses", {"type": "computer", "name": "c"}, ["c"], [], []),
+        ("/v1/responses", {"type": "shell"}, ["shell"], [], []),
+        ("/v1/responses", {"type": "local_shell"}, ["local_shell"], [], []),
+        ("/v1/responses", {"type": "apply_patch"}, ["apply_patch"], [], []),
+        ("/v1/responses", {"type": "computer_use_preview"}, ["computer_use_preview"], [], []),
         (
             "/v1/responses",
             {"type": "namespace", "tools": [{"type": "function", "name": "inner"}]},
