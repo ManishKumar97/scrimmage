@@ -1,7 +1,7 @@
 """Labels name a call, such as tool:<name> or model.
 
-This version knows tool labels, model labels and, under [agent] real only, hosted MCP
-servers.
+This version knows tool labels, model labels, web labels and, under [agent] real only,
+hosted MCP servers.
 """
 
 import re
@@ -14,6 +14,9 @@ PROVIDERS = ("openai",)  # providers with a built-in address table
 MODEL_OPS = ("embeddings", "moderations", "input_tokens")  # calls that only read or compute
 MODEL = re.compile(r"model(?::(?P<provider>[a-z*][a-z0-9_-]*)(?:/(?P<op>[a-z_]+))?)?")
 HOSTED = re.compile(r"hosted:mcp/[A-Za-z0-9_.-]+")
+WEB_HOST = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
+WEB_METHOD = re.compile(r"[A-Za-z]+")
+WEB_PATH = re.compile(r"/[^\s?#]*")
 DOCS = "see docs/configuration.md"
 
 
@@ -37,15 +40,50 @@ def check(text: str, where: str, *, pattern: bool = False) -> str:
         if not HOSTED.fullmatch(text):
             raise ConfigError(f"{where}: {text!r} is not of the form 'hosted:mcp/<label>'")
         return text
+    if kind == "http" and sep:
+        return check_web(text, where, pattern=pattern)
     if kind != "tool" or not sep or not name:
         raise ConfigError(
-            f"{where}: {text!r} is not a label of the form 'tool:<name>' or 'model'; {DOCS}"
+            f"{where}: {text!r} is not a label of the form 'tool:<name>', 'http:<host>' "
+            f"or 'model'; {DOCS}"
         )
     if name == "*" and not pattern:
         raise ConfigError(f"{where}: 'tool:*' is allowed only under [agent] real")
     if name != "*" and not TOOL_NAME.fullmatch(name):
         raise ConfigError(f"{where}: {name!r} in {text!r} is not a tool name")
     return text
+
+
+def check_web(text: str, where: str, *, pattern: bool) -> str:
+    """http:<host>, and under [agent] real also http:<host> METHOD /path. Hosts are lowercase."""
+    parts = text.removeprefix("http:").split(" ")
+    host = parts[0].lower()
+    if not WEB_HOST.fullmatch(host):
+        raise ConfigError(f"{where}: {text!r} needs a host, of the form 'http:<host>'; {DOCS}")
+    if len(parts) == 1:
+        return f"http:{host}"
+    form = "'http:<host> METHOD /path'"
+    if not pattern:
+        raise ConfigError(f"{where}: name the method and path in their own settings, not here")
+    if len(parts) > 3 or not WEB_METHOD.fullmatch(parts[1]):
+        raise ConfigError(f"{where}: {text!r} is not of the form {form}")
+    if len(parts) == 2:
+        return f"http:{host} {parts[1].upper()}"
+    if not WEB_PATH.fullmatch(parts[2]):
+        raise ConfigError(f"{where}: {text!r} is not of the form {form}, with no query string")
+    return f"http:{host} {parts[1].upper()} {parts[2]}"
+
+
+def method_of(value: str, where: str) -> str:
+    if not WEB_METHOD.fullmatch(value):
+        raise ConfigError(f"{where} method: {value!r} is not an HTTP method")
+    return value.upper()
+
+
+def path_of(value: str, where: str) -> str:
+    if not WEB_PATH.fullmatch(value):
+        raise ConfigError(f"{where} path: {value!r} is not a path; a query string is not matched")
+    return value
 
 
 def check_model(text: str, where: str) -> str:
@@ -78,7 +116,14 @@ def matches(label: str, call: str) -> bool:
     return bool(op) and label == f"model:*/{op}"
 
 
-def matches_real(real: list[str], label: str) -> bool:
-    """Whether a real entry, tool:<name> or tool:*, covers this label."""
-    kind = kind_of(label)
-    return any(entry == label or entry == f"{kind}:*" for entry in real)
+def matches_real(
+    real: list[str], label: str, method: str | None = None, path: str | None = None
+) -> bool:
+    """Whether a real entry covers this call: tool:<name>, tool:*, or a web label.
+
+    A web label covers its host, or a method on it, or one method and path.
+    """
+    named = [label, f"{kind_of(label)}:*"]
+    if method is not None:
+        named += [f"{label} {method}", f"{label} {method} {path}"]
+    return any(entry in named for entry in real)
