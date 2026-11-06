@@ -36,3 +36,12 @@ Where the spec shows a placeholder, the placeholder is removed so the file is va
 | `response_stream.sse` | Create a model response, example Streaming | Without the `...` line |
 
 The 401, 500 and 503 messages in Faultline's own error bodies are from OpenAI's error codes page, `examples/data/oai_docs/error-codes.txt` in the `openai/openai-cookbook` repository.
+
+These are real replies, saved from the real-model check on 6 November 2026 with `gpt-4o-mini` and `text-embedding-3-small`.
+`tests/test_fixtures_match_real.py` keeps the fake's replies the same shape as them.
+
+| File | Reply to |
+|---|---|
+| `real_chat_tool_call.json` | The bot's first chat request |
+| `real_chat_answer.json` | The chat request after the tool result |
+| `real_embedding.json` | The bot's embedding request |

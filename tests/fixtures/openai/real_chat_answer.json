@@ -1,0 +1,36 @@
+{
+  "id": "chatcmpl-Eh2bg0DYhmTzitNH5rflQz0CmyAsV",
+  "object": "chat.completion",
+  "created": 1793926832,
+  "model": "gpt-4o-mini-2024-07-18",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Order 1234 has been shipped and is expected to arrive on October 30.",
+        "refusal": null,
+        "annotations": []
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 158,
+    "completion_tokens": 18,
+    "total_tokens": 176,
+    "prompt_tokens_details": {
+      "cached_tokens": 0,
+      "audio_tokens": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0,
+      "audio_tokens": 0,
+      "accepted_prediction_tokens": 0,
+      "rejected_prediction_tokens": 0
+    }
+  },
+  "service_tier": "default",
+  "system_fingerprint": "fp_9c7097be58"
+}
