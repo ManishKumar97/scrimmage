@@ -49,9 +49,9 @@ When your code first imports the library, the SDK swaps that method for a gate.
 2. A tool call is labelled with the server's name, which the connection's start gave. The gate decides fault, mock, real or refused.
 3. For a mock or a fault, the library's own `send_request` runs with a stand-in for its connection that hands back the reply. Nothing is sent, and the reply passes the same checks a server's reply does. `call_tool` then checks it against the tool's output schema as usual.
 
-Over streamable HTTP each message is also a web POST. The SDK wraps the transport's own methods so that everything they send carries a mark, and the web gate lets those requests through without deciding or counting them. See [MCP tools](mcp.md#over-streamable-http).
+Over streamable HTTP each message is also a web POST. The SDK wraps the functions the transport sends with, so each request carries a mark while it is being sent, and the web gate lets a marked request to that endpoint through without deciding or counting it. See [MCP tools](mcp.md#over-streamable-http).
 
-Before swapping, the gate checks what it relies on: that `call_tool` goes through `send_request`, and that `send_request` reaches the server through the connection the stand-in replaces. If a new version changed either, a mock could become a real call, so the program stops and the test ends with exit code 3.
+Before swapping, the gate checks what it relies on: that `call_tool` goes through `send_request`, that `send_request` reaches the server through the connection the stand-in replaces, and the names it reads. If a new version changed one of those, a mock could become a real call, so the program stops and the test ends with exit code 3. `mcp` 1.x stops the same way.
 
 ## The plan and the secret
 
