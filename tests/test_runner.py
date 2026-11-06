@@ -57,7 +57,7 @@ def test_the_example_runs_six_times_and_the_fault_fires(
 def test_every_record_file_is_owner_only(project: Project, fake_openai: Fake) -> None:
     project.test(fake_openai(ACME))
     found = list((project.root / "faultline-runs").rglob("*"))
-    files = [f for f in found if f.is_file()]
+    files = [f for f in found if f.is_file() and f.name != ".gitignore"]  # holds no data
     folders = [f for f in found if f.is_dir()]
     assert files and all(stat.S_IMODE(f.stat().st_mode) == 0o600 for f in files)
     assert all(stat.S_IMODE(f.stat().st_mode) == 0o700 for f in folders)
@@ -380,7 +380,7 @@ def test_a_stale_root_pid_in_the_runners_environment_is_ignored(
     ("old", "new"),
     [
         ("[agent]\n", "[agent]\nrnus = 50\n"),
-        ("[agent]\n", "[agent]\nmax_cost_usd = 1\n"),
+        ("[agent]\n", '[agent]\nanswer = "reply"\n'),
         ('do   = "timeout"', 'do   = "status 500"'),
         ('do   = "timeout"', 'do   = "timeout"\nwhen = "once"'),
         ('call = "tool:get_order"\ndo', 'call = "model:x"\ndo'),
@@ -425,11 +425,15 @@ def test_records_stay_out_of_the_teams_git_repo(project: Project, fake_openai: F
 
 
 @pytest.mark.design("report.not_exercised_says_why")
-def test_the_table_says_how_runs_ended_before_the_fault_fired(project: Project) -> None:
-    project.edit('function = "acme.agent:answer"', 'function = "acme.slow:crash"\nruns = 2')
-    result = project.test()
+def test_the_table_says_how_runs_ended_before_the_fault_fired(
+    project: Project, fake_openai: Fake
+) -> None:
+    project.edit('call = "tool:get_order"', 'call = "tool:refund_order"')
+    project.edit("[agent]\n", "[agent]\nruns = 2\n")
+    result = project.test(fake_openai(ACME * 4))
     assert (
-        "note: order-status fault 1: not exercised, the fault did not fire: 2 crashed" in result.out
+        "note: order-status fault 1: not exercised, the fault did not fire: 2 answered"
+        in result.out
     )
 
 
