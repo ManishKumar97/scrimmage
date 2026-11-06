@@ -23,7 +23,6 @@ from typing import TextIO
 from faultline_sdk import plan as planner
 from faultline_sdk.config import Config
 from faultline_sdk.control import ControlServer, proc_key
-from faultline_sdk.mocks import allowed
 from faultline_sdk.records import RecordStore
 from faultline_sdk.redact import redact
 
@@ -48,31 +47,6 @@ class RunResult:
         return self.fault_fired is not False
 
 
-def check_labels(config: Config) -> list[str]:
-    """Problems found before the first run, so a typo costs no model calls."""
-    names = config.agent.tool_names()
-    problems: list[str] = []
-    for test in config.tests:
-        for entry in [*test.mocks, *test.faults]:
-            name = entry.call.partition(":")[2]
-            if name not in names:
-                problems.append(
-                    f"[[test]] {test.name!r}: {entry.call} names no tool in [agent] tools; "
-                    f"the tools are {', '.join(names) or 'none'}"
-                )
-        for mock in test.mocks:
-            if mock.type and not allowed(mock.type, config.agent.allowed_imports()):
-                problems.append(
-                    f"[[test]] {test.name!r}: type {mock.type} is outside the agent's packages "
-                    f"({', '.join(config.agent.allowed_imports())}), so it is refused"
-                )
-    for entry in config.agent.real:
-        name = entry.partition(":")[2]
-        if name != "*" and name not in names:
-            problems.append(f"[agent] real: {entry} names no tool in [agent] tools")
-    return problems
-
-
 class Runner:
     def __init__(self, config: Config, control_url: Callable[[str], str] = lambda url: url) -> None:
         self.config = config
@@ -82,7 +56,9 @@ class Runner:
         self.folder = runs / f"{stamp}-{secrets.token_hex(3)}"
         self.store = RecordStore(self.folder)
         # Records can hold customer data, so they stay out of the team's git repo.
-        (runs / ".gitignore").write_text("*\n")
+        ignore = runs / ".gitignore"
+        if not ignore.exists():
+            ignore.write_text("*\n")
         self.token = secrets.token_hex(32)
         self.server = ControlServer(self.token, self.store, on_refused=self._refused)
         self.answers = Path(tempfile.mkdtemp(prefix="faultline-answers-"))

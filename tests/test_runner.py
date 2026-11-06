@@ -430,3 +430,40 @@ def test_a_tool_can_carry_the_name_the_model_sees(project: Project, fake_openai:
     assert result.code == 0, result.out + result.err
     fault = next(lines for lines in result.records() if lines[-1]["row"] == "fault 1")
     assert (fault[0]["call"], fault[0]["action"]) == ("tool:lookup-order", "fault")
+
+
+@pytest.mark.design("config.references_checked_on_load")
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        ('call    = "tool:get_order"', 'call    = "tool:get_ordr"', "tool:get_ordr names no tool"),
+        ('call = "tool:get_order"', 'call = "tool:get_ordr"', "tool:get_ordr names no tool"),
+        (
+            'real     = ["tool:check_inventory"]',
+            'real = ["tool:check_inventry"]',
+            "real: tool:check_inventry names no tool",
+        ),
+        (
+            'call    = "tool:get_stock"',
+            'call    = "tool:get_stock"\ntype    = "other.models:Stock"',
+            "outside the agent's packages",
+        ),
+    ],
+)
+def test_a_bad_reference_stops_the_test_before_any_run(
+    project: Project, old: str, new: str, message: str
+) -> None:
+    project.edit(old, new)
+    result = project.test()
+    assert result.code == 2 and message in result.err
+    assert "the test stopped before the first run" in result.err
+    assert not (project.root / "faultline-runs").exists()
+
+
+def test_every_bad_reference_shows_on_its_own_line_in_one_run(project: Project) -> None:
+    project.edit('call    = "tool:get_order"', 'call    = "tool:get_ordr"')
+    project.edit('real     = ["tool:check_inventory"]', 'real = ["tool:check_inventry"]')
+    lines = project.test().err.splitlines()
+    assert any("tool:get_ordr names no tool" in line for line in lines)
+    assert any("tool:check_inventry names no tool" in line for line in lines)
+    assert all(line.startswith("faultline: ") for line in lines)

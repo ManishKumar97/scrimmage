@@ -12,6 +12,7 @@ from typing import cast
 
 from faultline_sdk import labels
 from faultline_sdk.errors import ConfigError
+from faultline_sdk.mocks import allowed
 
 AGENT_KEYS = {"function", "runs", "parallel", "run_timeout", "tools", "real"}
 TEST_KEYS = {"name", "question", "expect", "mock", "fault"}
@@ -101,7 +102,36 @@ def load(path: Path) -> Config:
             raise ConfigError(f"[[test]] {test.name!r}: name is used twice")
         seen.add(test.name)
         parsed.append(test)
-    return Config(agent, tuple(parsed), path.parent)
+    config = Config(agent, tuple(parsed), path.parent)
+    problems = check_references(config)
+    if problems:
+        raise ConfigError(*problems)
+    return config
+
+
+def check_references(config: Config) -> list[str]:
+    """Compare values across the file, before the first run, so a typo costs no model calls."""
+    names = config.agent.tool_names()
+    problems: list[str] = []
+    for test in config.tests:
+        for entry in [*test.mocks, *test.faults]:
+            name = entry.call.partition(":")[2]
+            if name not in names:
+                problems.append(
+                    f"[[test]] {test.name!r}: {entry.call} names no tool in [agent] tools; "
+                    f"the tools are {', '.join(names) or 'none'}"
+                )
+        for mock in test.mocks:
+            if mock.type and not allowed(mock.type, config.agent.allowed_imports()):
+                problems.append(
+                    f"[[test]] {test.name!r}: type {mock.type} is outside the agent's packages "
+                    f"({', '.join(config.agent.allowed_imports())}), so it is refused"
+                )
+    for entry in config.agent.real:
+        name = entry.partition(":")[2]
+        if name != "*" and name not in names:
+            problems.append(f"[agent] real: {entry} names no tool in [agent] tools")
+    return problems
 
 
 def reject_placeholders(value: object, where: str) -> None:
@@ -181,7 +211,7 @@ def read_agent(table: dict[str, object]) -> Agent:
     for entry in as_list(table.get("real", []), f"{where} real"):
         if not isinstance(entry, str):
             raise ConfigError(f"{where} real: expected labels, got {entry!r}")
-        real.append(str(labels.parse(entry, f"{where} real", pattern=True)))
+        real.append(labels.check(entry, f"{where} real", pattern=True))
     agent = Agent(
         function=import_path(text(table, "function", where), f"{where} function"),
         runs=whole(table, "runs", 3, where),
@@ -239,7 +269,7 @@ def read_test(table: dict[str, object], index: int) -> Test:
 
 def read_mock(table: dict[str, object], where: str) -> Mock:
     check_keys(table, MOCK_KEYS, where)
-    call = str(labels.parse(text(table, "call", where), f"{where} call"))
+    call = labels.check(text(table, "call", where), f"{where} call")
     if "returns" not in table:
         raise ConfigError(f"{where} returns: required")
     kind = table.get("type")
@@ -250,7 +280,7 @@ def read_mock(table: dict[str, object], where: str) -> Mock:
 
 def read_fault(table: dict[str, object], where: str) -> Fault:
     check_keys(table, FAULT_KEYS, where)
-    call = str(labels.parse(text(table, "call", where), f"{where} call"))
+    call = labels.check(text(table, "call", where), f"{where} call")
     do = text(table, "do", where)
     if do not in FAULTS:
         raise ConfigError(f"{where} do: {do!r} is not a fault; see {DOCS}")

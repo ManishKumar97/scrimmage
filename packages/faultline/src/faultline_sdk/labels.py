@@ -1,7 +1,6 @@
 """Labels name a call, as tool:<name>. This version knows only tool labels."""
 
 import re
-from dataclasses import dataclass
 
 from faultline_sdk.errors import ConfigError
 
@@ -9,17 +8,8 @@ from faultline_sdk.errors import ConfigError
 TOOL_NAME = re.compile(r"[A-Za-z0-9_-]+")
 
 
-@dataclass(frozen=True)
-class Label:
-    kind: str
-    name: str
-
-    def __str__(self) -> str:
-        return f"{self.kind}:{self.name}"
-
-
-def parse(text: str, where: str, *, pattern: bool = False) -> Label:
-    """Parse a label. pattern allows tool:* (only under real)."""
+def check(text: str, where: str, *, pattern: bool = False) -> str:
+    """Check a label and return it. pattern allows tool:* (only under real)."""
     kind, sep, name = text.partition(":")
     if kind != "tool" or not sep or not name:
         raise ConfigError(
@@ -29,7 +19,7 @@ def parse(text: str, where: str, *, pattern: bool = False) -> Label:
         raise ConfigError(f"{where}: 'tool:*' is allowed only under [agent] real")
     if name != "*" and not TOOL_NAME.fullmatch(name):
         raise ConfigError(f"{where}: {name!r} in {text!r} is not a tool name")
-    return Label(kind, name)
+    return text
 
 
 def matches_real(real: list[str], label: str) -> bool:

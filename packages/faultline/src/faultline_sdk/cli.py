@@ -6,7 +6,7 @@ from pathlib import Path
 
 from faultline_sdk import config as settings
 from faultline_sdk.errors import ConfigError
-from faultline_sdk.runner import INFRA, MISTAKE, Interrupted, Runner, check_labels, report
+from faultline_sdk.runner import INFRA, MISTAKE, Interrupted, Runner, report
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -18,11 +18,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = settings.load(args.path.resolve())
     except ConfigError as exc:
-        print(f"faultline: {exc}", file=sys.stderr)
-        return MISTAKE
-    problems = check_labels(config)
-    if problems:
-        for problem in problems:
+        for problem in exc.problems:
             print(f"faultline: {problem}", file=sys.stderr)
         print("faultline: the test stopped before the first run", file=sys.stderr)
         return MISTAKE

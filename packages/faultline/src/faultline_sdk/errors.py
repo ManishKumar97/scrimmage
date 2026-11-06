@@ -18,4 +18,8 @@ class FaultlineMockError(FaultlineError):
 
 
 class ConfigError(FaultlineError):
-    """A bad value in faultline.toml. The message names its table and key."""
+    """Bad values in faultline.toml. Each problem names its table and key."""
+
+    def __init__(self, *problems: str) -> None:
+        super().__init__("\n".join(problems))
+        self.problems = problems
