@@ -438,11 +438,12 @@ def test_a_tool_can_carry_the_name_the_model_sees(project: Project, fake_openai:
     project.edit('"acme.tools:get_order"', '{path = "acme.tools:get_order", name = "lookup-order"}')
     project.edit('call    = "tool:get_order"', 'call    = "tool:lookup-order"')
     project.edit('call = "tool:get_order"', 'call = "tool:lookup-order"')
-    project.edit("[agent]\n", "[agent]\nruns = 1\n")
-    result = project.test(fake_openai(ACME))
+    project.edit('function = "acme.agent:answer"', 'function = "acme.rag:answer_renamed"\nruns = 1')
+    result = project.test(fake_openai(["chat_answer", "chat_answer"]))
     assert result.code == 0, result.out + result.err
     fault = next(lines for lines in result.records() if lines[-1]["row"] == "fault 1")
-    assert (fault[0]["call"], fault[0]["action"]) == ("tool:lookup-order", "fault")
+    tool = next(x for x in fault if x.get("call") == "tool:lookup-order")
+    assert tool["action"] == "fault"
 
 
 @pytest.mark.design("config.references_checked_on_load")

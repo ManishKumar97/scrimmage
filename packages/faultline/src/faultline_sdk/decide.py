@@ -49,7 +49,7 @@ def schedule(when: str) -> tuple[str, int]:
         return "always", 0
     kind, _, n = when.partition(" ")
     if kind not in ("first", "requests") or not n.isdigit():
-        raise ValueError(f"schedule {when!r} is not supported yet")
+        raise ValueError(f"schedule {when!r} is not a schedule")
     return kind, int(n)
 
 

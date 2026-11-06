@@ -98,7 +98,7 @@ For any other model, give the price in dollars per million tokens:
 
 ```toml
 [agent.prices]
-acme-llama-70b = {input = 0.6, output = 0.6}
+llama-70b = {input = 0.6, output = 0.6}
 ```
 
 With a budget on, a model with no price stops the test at its first call, because it cannot be reserved for.
@@ -113,7 +113,7 @@ If your model calls go through a gateway, such as a LiteLLM proxy, name its host
 
 ```toml
 [agent]
-model_hosts = [{host = "llm-gateway.acme.internal", provider = "openai"}]
+model_hosts = [{host = "llm-gateway.internal", provider = "openai"}]
 ```
 
 ## Tools the model is offered
@@ -126,7 +126,7 @@ Faultline reads the tools in each model request before it goes out.
 | a provider tool that only reads, such as `web_search` | it goes ahead, the record notes it, and the table warns, because providers bill those per use and the budget cannot see that |
 | a hosted MCP server, which runs at the provider and can change data | the request is not sent unless you list it: `real = ["hosted:mcp/orders"]` |
 | a tool of a type Faultline does not know | the test stops and names the type |
-| your own tool, but no gate sees it | the request is not sent and the test stops, naming the line to add under `tools` |
+| your own tool, but no gate sees it | the request is not sent and the test stops, naming the tool to add under `tools`; use `{path, name}` when the model sees another name |
 
 A request body Faultline cannot read, such as a compressed one, is refused, because its tools cannot be checked.
 

@@ -21,6 +21,11 @@ def kind_of(label: str) -> str:
     return label.partition(":")[0]
 
 
+def tool_name(path: str, renames: dict[str, str]) -> str:
+    """The name the model sees for a tool listed by import path."""
+    return renames.get(path, path.rpartition(":")[2])
+
+
 def check(text: str, where: str, *, pattern: bool = False) -> str:
     """Check a label and return it. pattern: an [agent] real entry, for tool:* and hosted:."""
     kind, sep, name = text.partition(":")

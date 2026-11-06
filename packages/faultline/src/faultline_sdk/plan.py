@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from typing import cast
 
+from faultline_sdk import labels
 from faultline_sdk.config import (
     DEFAULT_RESERVE_OUTPUT_TOKENS,
     Config,
@@ -32,6 +33,11 @@ class Plan:
     budget_usd: float | None = None  # None: no budget, so no reservations
     reserve_output_tokens: int = DEFAULT_RESERVE_OUTPUT_TOKENS
     prices: tuple[tuple[str, Price], ...] = ()
+
+    def tool_names(self) -> list[str]:
+        """Every tool's final name: the one the model sees."""
+        renames = dict(self.renames)
+        return [labels.tool_name(path, renames) for path in self.tools]
 
     def to_json(self) -> dict[str, object]:
         mocks: list[dict[str, object]] = []

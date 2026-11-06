@@ -61,7 +61,7 @@ class Context:
         self.sender = sender
         self.stop = stop  # ends the program: a library that cannot be gated
         self.faults = True  # false when the library has lost what faults are built from
-        self.seen = {path.rpartition(":")[2] for path in run.plan.tools}
+        self.seen = set(run.plan.tool_names())  # the names the model sees
         self.open: set[Callable[[bool], None]] = set()  # replies not read to their end
 
     def close_open(self) -> None:
@@ -313,8 +313,8 @@ def check_tools(
             run,
             step,
             f"the model would be offered {', '.join(unseen)}, which no gate sees, so a call to "
-            "it could run for real unchecked; add it to [agent] tools, such as "
-            f'"<module>:{unseen[0]}"',
+            'it could run for real unchecked; add it to [agent] tools as "package.module:'
+            'function", or as {path, name} when the model sees another name',
         )
 
 

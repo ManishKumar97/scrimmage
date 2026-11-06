@@ -99,7 +99,7 @@ class Agent:
     def tool_names(self) -> list[str]:
         """Every tool's final name: the one the model sees."""
         renames = dict(self.renames)
-        return [renames.get(path, path.rpartition(":")[2]) for path in self.tools]
+        return [labels.tool_name(path, renames) for path in self.tools]
 
     def allowed_imports(self) -> list[str]:
         """Prefixes the agent's process may import from: function's and tools' packages."""

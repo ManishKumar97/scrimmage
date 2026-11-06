@@ -78,10 +78,53 @@ def test_a_tool_no_gate_sees_stops_the_test_before_any_model_call(
     assert fake.paths == []  # nothing reached the model
     assert result.code == 2
     assert "test mistake" in result.out
-    assert (
-        "lookup_order" in result.out
-        and '[agent] tools, such as "<module>:lookup_order"' in result.out
+    assert "lookup_order" in result.out and '"package.module:function"' in result.out
+
+
+RENAMED = '{path = "acme.tools:get_order", name = "lookup-order"}'
+
+
+@pytest.mark.design("hosted.renamed_tool_is_seen")
+@pytest.mark.parametrize(
+    ("function", "reply", "path"),
+    [
+        ("acme.rag:answer_renamed", {}, "/v1/chat/completions"),
+        ("acme.rag:answer_renamed_responses", {"response": "response_text"}, "/v1/responses"),
+    ],
+)
+def test_a_renamed_tool_counts_as_seen(
+    project: Project, fake_openai: Fake, function: str, reply: dict[str, str], path: str
+) -> None:
+    project.edit(
+        'function = "acme.agent:answer"',
+        f'function = "{function}"\nruns = 1\nparallel = 1',
     )
+    project.edit('"acme.tools:get_order"', RENAMED)
+    project.edit('call    = "tool:get_order"', 'call    = "tool:lookup-order"')
+    project.edit('call = "tool:get_order"', 'call = "tool:lookup-order"')
+    fake = fake_openai([] if reply else ["chat_answer", "chat_answer"], **reply)
+    result = project.test(fake)
+    assert result.code == 0, result.out + result.err
+    assert path in fake.paths
+    fault = next(lines for lines in result.records() if lines[-1]["row"] == "fault 1")
+    tool = next(x for x in fault if x.get("call") == "tool:lookup-order")
+    assert tool["action"] == "fault"
+
+
+@pytest.mark.design("hosted.renamed_tool_is_seen")
+def test_the_old_name_of_a_renamed_tool_is_not_seen(project: Project) -> None:
+    project.edit('"acme.tools:get_order"', RENAMED)
+    project.edit('call    = "tool:get_order"', 'call    = "tool:lookup-order"')
+    project.edit('call = "tool:get_order"', 'call = "tool:lookup-order"')
+    project.edit("[agent]\n", "[agent]\nruns = 1\nparallel = 1\n")
+    fake = FakeOpenAI(ACME)
+    fake.start()
+    try:
+        result = project.test(fake)
+    finally:
+        fake.stop()
+    assert fake.paths == []
+    assert "the model would be offered get_order, which no gate sees" in result.out
 
 
 @pytest.mark.design("hosted.reads_noted")

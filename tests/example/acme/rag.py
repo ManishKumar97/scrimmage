@@ -12,7 +12,9 @@ import time
 
 import openai
 
-from acme import agent
+from acme import agent, tools
+
+RENAMED = {"name": "lookup-order", "parameters": {"type": "object"}}
 
 
 def embed(client: openai.OpenAI, text: str) -> int:
@@ -100,6 +102,33 @@ def answer_web_search(question: str) -> str:
         web_search_options={},
     )
     return reply.choices[0].message.content or ""
+
+
+def read_order() -> str:
+    try:
+        return tools.get_order("1234")
+    except TimeoutError:
+        return "the order lookup timed out"
+
+
+def answer_renamed(question: str) -> str:
+    """Offers get_order under another name on a chat request."""
+    openai.OpenAI(max_retries=0).chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": question}],
+        tools=[{"type": "function", "function": RENAMED}],  # type: ignore[list-item]
+    )
+    return read_order()
+
+
+def answer_renamed_responses(question: str) -> str:
+    """Offers get_order under another name on a Responses request."""
+    openai.OpenAI(max_retries=0).responses.create(
+        model="gpt-4o-mini",
+        input=question,
+        tools=[{"type": "function", **RENAMED}],  # type: ignore[list-item]
+    )
+    return read_order()
 
 
 def answer_old_functions(question: str) -> str:

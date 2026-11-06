@@ -146,5 +146,5 @@ def test_model_labels_match_as_written(label: str, call: str, expected: bool) ->
 def test_schedules() -> None:
     assert fires("always", 1) and fires("first 2", 2) and not fires("first 2", 3)
     assert fires("requests 1", 1) and not fires("requests 1", 2)
-    with pytest.raises(ValueError, match="not supported yet"):
+    with pytest.raises(ValueError, match="is not a schedule"):
         fires("once", 1)
