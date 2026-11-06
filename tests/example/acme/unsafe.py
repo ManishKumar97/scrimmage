@@ -4,6 +4,7 @@ Each one writes a file, so a test can tell whether the real work happened.
 """
 
 import functools
+import os
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +55,22 @@ class SetsRunAndOverrides(SetsRunWhenMade):
 
 class PartialRun(Order):
     _run = functools.partialmethod(write)  # type: ignore[assignment]
+
+
+class Ordinary(Order):
+    """What real tools do: none of it runs the tool, so none of it is refused."""
+
+    stream: bool = False  # type: ignore[assignment]  # a field, and a library method too
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+
+    def as_tool(self, *args: Any, **kwargs: Any) -> Any:
+        return self
+
+    @property
+    def args(self) -> dict[str, Any]:
+        return {"order_id": {"type": "string"}}
 
 
 def offer(tool: BaseTool, question: str) -> dict[str, Any]:
@@ -123,6 +140,16 @@ def static_run_and_override(question: str) -> str:
 
 def post_init_run_and_override(question: str) -> str:
     return str(SetsRunAndOverrides().invoke({"order_id": "1"}))
+
+
+def ordinary_tool(question: str) -> dict[str, Any]:
+    return offer(Ordinary(), question)
+
+
+def override_named_by_the_test(question: str) -> str:
+    name = os.environ["OVERRIDE"]
+    tool = type("Overrides", (Order,), {name: write, "__module__": __name__})()
+    return str(getattr(tool, name)({"order_id": "1"}))
 
 
 def partial_run(question: str) -> str:

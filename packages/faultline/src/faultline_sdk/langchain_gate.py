@@ -29,7 +29,11 @@ MODULE = "langchain_core.tools.base"
 TESTED = ((1, 7), (1, 7))  # the minor versions this release was tested with
 METHODS = ("_run", "_arun")
 ENTRIES = ("run", "arun")
-CALLED = ("run", "arun", "invoke", "ainvoke")
+# Overrides that are allowed. The gates sit at _run and _arun. model_post_init runs once as
+# a tool is made, and the check reads what it leaves. as_tool only builds another tool, and a
+# published tool overrides it. Of 237 published tool classes, these and __init__ were all
+# that any of them overrode.
+EXEMPT = ("_run", "_arun", "model_post_init", "as_tool")
 # LangChain's own, passed beside the tool's input. Told apart by type, since a tool can
 # have an input of the same name or call its config anything.
 PLUMBING = (
@@ -88,6 +92,7 @@ def patch(module: ModuleType, run: RunState, stop: Callable[[str], None]) -> Non
     base = module.BaseTool
     failure = module.ToolException
     create = base.__init__
+    entries = entry_points(base)
     # By id: a pydantic model has no hash, so a WeakSet cannot hold one.
     tools: weakref.WeakValueDictionary[int, Any] = weakref.WeakValueDictionary()
     lock = threading.Lock()
@@ -101,7 +106,7 @@ def patch(module: ModuleType, run: RunState, stop: Callable[[str], None]) -> Non
 
     def vet(tool: Any) -> str | None:
         """Record whether a call to this tool reaches a gate. Says why not, if it does not."""
-        reason = skips_gate(tool, base, failure, run)
+        reason = skips_gate(tool, base, entries, failure, run)
         if reason is None:
             run.adapted.add(tool.name)  # offered to the model, it will reach a gate
         else:
@@ -140,10 +145,34 @@ def gate_tool(cls: type, failure: type[Exception]) -> bool:
     return gatable_tool
 
 
-def overrides(cls: type, base: type) -> list[str]:
+def package_of(cls: type) -> str:
+    return cls.__module__.split(".")[0]
+
+
+def entry_points(base: type) -> tuple[str, ...]:
+    """What a call could go through: every function on the library's tool classes.
+
+    A rule and not a list, so a function a later version adds is covered. __call__ is by
+    hand: the library defines none, and a class that adds one makes the tool callable.
+    """
+    library = [c for c in base.__mro__ if package_of(c) == package_of(base)]
+    names = {
+        name
+        for cls in library
+        for name, value in vars(cls).items()
+        if inspect.isfunction(value) and not name.startswith("__")
+    }
+    return ("__call__", *sorted(names - set(EXEMPT)))
+
+
+def overrides(cls: type, base: type, entries: tuple[str, ...]) -> list[str]:
     """The entry points this class replaces. The library's own all reach the gate."""
-    package = base.__module__.split(".")[0]
-    return [n for n in CALLED if owner_of(cls, n).__module__.split(".")[0] != package]
+
+    def owner(name: str) -> type | None:
+        return next((c for c in cls.__mro__ if name in vars(c)), None)
+
+    found = [(name, owner(name)) for name in entries]
+    return [n for n, c in found if c is not None and package_of(c) != package_of(base)]
 
 
 def refusal(run: RunState, name: str) -> Callable[..., Any]:
@@ -157,18 +186,20 @@ def refusal(run: RunState, name: str) -> Callable[..., Any]:
     return tool_gate.mark(refuse)
 
 
-def skips_gate(tool: Any, base: type, failure: type[Exception], run: RunState) -> str | None:
+def skips_gate(
+    tool: Any, base: type, entries: tuple[str, ...], failure: type[Exception], run: RunState
+) -> str | None:
     """Why a call to this tool could run without passing a gate, if one could."""
     cls = type(tool)
     gated = gate_tool(cls, failure)
-    replaced = overrides(cls, base)
+    replaced = overrides(cls, base, entries)
     for name in replaced:  # before any return: a tool can have more than one problem
         # On this class, not the owner: the owner can be a mixin other classes use too.
         if not tool_gate.is_gate(getattr(cls, name)):
             setattr(cls, name, refusal(run, name))
     if not gated:
         return f"{tool.name} cannot be gated, because its _run is not a plain function"
-    own = [n for n in (*METHODS, *CALLED) if n in vars(tool)]
+    own = [n for n in (*METHODS, *entries) if callable(vars(tool).get(n))]
     if own:  # the class's gate never sees a method set on the tool itself
         return f"{tool.name} cannot be gated, because {own[0]} is set on the tool itself"
     if replaced:

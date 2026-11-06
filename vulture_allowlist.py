@@ -80,3 +80,6 @@ _.run_manager  # tests/example/acme/graph.py: LangChain passes it to the tool
 _.partial_run  # tests/example/acme/unsafe.py: a test's faultline.toml names it
 _.static_run_and_override  # tests/example/acme/unsafe.py: a test names it
 _.post_init_run_and_override  # tests/example/acme/unsafe.py: a test names it
+_.ordinary_tool  # tests/example/acme/unsafe.py: a test names it
+_.override_named_by_the_test  # tests/example/acme/unsafe.py: a test names it
+_.as_tool  # tests/example/acme/unsafe.py: an override the adapter must leave alone

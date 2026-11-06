@@ -1009,3 +1009,32 @@ def test_an_override_is_refused_when_the_tool_has_a_second_problem(
     result, _ = offered(project, function)
     assert result.code == 2, result.out + result.err
     assert not wrote(result)
+
+
+@pytest.mark.design("adapter.any_override_refused")
+@pytest.mark.parametrize(
+    "name",
+    [
+        "__call__",
+        "batch",
+        "abatch",
+        "stream",
+        "astream",
+        "transform",
+        "_parse_input",
+        "_to_args_and_kwargs",
+    ],
+)
+def test_an_override_of_any_library_function_is_refused(project: Project, name: str) -> None:
+    project.monkeypatch.setenv("OVERRIDE", name)
+    result, _ = offered(project, "override_named_by_the_test")
+    assert result.code == 2, result.out + result.err
+    assert not wrote(result)
+    assert f"get_order cannot be gated, because its class overrides {name}" in result.out
+
+
+@pytest.mark.design("adapter.ordinary_overrides_allowed")
+def test_what_real_tools_override_is_not_refused(project: Project) -> None:
+    result, _ = offered(project, "ordinary_tool")
+    assert result.code == 0, result.out + result.err
+    assert [x["action"] for x in tool_lines(result.records()[0])] == ["mock", "mock"]
