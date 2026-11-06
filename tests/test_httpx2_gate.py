@@ -5,10 +5,12 @@ import dataclasses
 import gzip
 import itertools
 import json
+import threading
 import time
 import types
 import zlib
 from collections.abc import AsyncIterator, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import httpx2
@@ -209,6 +211,34 @@ def test_a_task_cancelled_while_it_reserves_gives_the_reservation_back(gated: No
     assert sink.settles == [(1, 0.0)]
     assert [str(x["error"]).split(":")[0] for x in sink.lines] == ["CancelledError"]
     assert real_error(sink.lines[0]) is None  # cancelling is not the provider failing
+
+
+@pytest.mark.design("budget.cancelled_in_the_queue_is_recorded")
+def test_tasks_cancelled_before_a_thread_took_them_keep_their_lines(gated: None) -> None:
+    release = threading.Event()
+
+    class Held(Budget):
+        def reserve(self, run: str, usd: float) -> int | None:
+            release.wait(5)
+            return super().reserve(run, usd)
+
+    sink, _ = install(make_plan(budget=100.0), Held(limit=100.0))
+
+    async def go() -> None:
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(1))
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(answer)) as c:
+            tasks = [asyncio.create_task(c.post(URL, json=BODY)) for _ in range(5)]
+            await asyncio.sleep(0.05)  # one holds the only thread, four wait for it
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            release.set()
+            await asyncio.sleep(0.1)
+
+    asyncio.run(go())
+    assert [str(x["error"]).split(":")[0] for x in sink.lines] == ["CancelledError"] * 5
+    assert {x["cost_usd"] for x in sink.lines} == {0.0}
+    assert sink.settles == [(1, 0.0)]  # only the one that reached a thread reserved
 
 
 @pytest.mark.design("gate.outside_asyncio_refused")

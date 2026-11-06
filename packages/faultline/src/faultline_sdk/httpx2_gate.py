@@ -384,13 +384,20 @@ async def reserve_off_the_loop(
     """Reserve on a thread, so the loop keeps running while the runner answers.
 
     If the task is cancelled meanwhile, the thread still gets its reservation, with nobody
-    left to use it. Whichever of the two finishes last gives it back.
+    left to use it. Whichever of the two finishes last gives it back. A cancel can also
+    land while the work waits for a free thread, so it never runs: the call was already
+    counted, so the task writes its line instead.
     """
     lock = threading.Lock()
     cancelled: list[bool] = []
+    started: list[bool] = []
     held: list[int | None] = []
 
     def work() -> int | None:
+        with lock:
+            if cancelled:
+                return None
+            started.append(True)
         reservation = reserve(ctx, step, request, extra)
         with lock:
             held.append(reservation)
@@ -405,8 +412,9 @@ async def reserve_off_the_loop(
         with lock:
             cancelled.append(True)
             done = list(held)
-        if done:
-            abandoned(ctx, step, extra, done[0])
+            waiting = not started
+        if done or waiting:
+            abandoned(ctx, step, extra, done[0] if done else None)
         raise
 
 
