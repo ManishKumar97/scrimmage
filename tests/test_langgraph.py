@@ -346,6 +346,7 @@ def test_runs_stopped_by_a_bad_label_end_as_stopped(project: Project, fake_opena
     project.edit("parallel = 1", "parallel = 2\nrun_timeout = 2")
     project.edit('answer   = "messages[-1].content"\n', "")
     project.edit("[agent]\n", '[agent]\nmax_cost_usd = "none"\n')
+    project.edit("acme.graph:first_goes_quiet", "acme.slow:first_goes_quiet")  # imports fast
     result = project.test()
     assert result.code == 2, result.out + result.err
     outcomes = sorted(str(s["outcome"]) for s in result.summaries())

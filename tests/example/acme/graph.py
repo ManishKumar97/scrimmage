@@ -5,9 +5,6 @@ the same bot with a tool set up differently for one test each.
 """
 
 import asyncio
-import os
-import time
-from pathlib import Path
 from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import AnyMessage
@@ -225,16 +222,6 @@ def plain_tool(question: str) -> str:
         raise RuntimeError("the real orders system is not reachable from tests")
 
     return str(Tool(name="get_order", func=look_up, description="Look up an order.").invoke("1"))
-
-
-def first_goes_quiet(question: str) -> str:
-    """The first run hangs, so it reports nothing; the second ends; the third hangs."""
-    marks = Path("marks")
-    marks.mkdir(exist_ok=True)
-    (marks / str(os.getpid())).touch()
-    if len(list(marks.iterdir())) != 2:
-        time.sleep(600)
-    return "done"
 
 
 def nested(question: str) -> str:

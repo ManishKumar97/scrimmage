@@ -4,6 +4,7 @@ import contextlib
 import os
 import signal
 import time
+from pathlib import Path
 
 from acme import tools
 
@@ -47,3 +48,13 @@ def use_httpx2(question: str) -> str:
     import httpx2
 
     return str(httpx2)
+
+
+def first_goes_quiet(question: str) -> str:
+    """The first run hangs, so it reports nothing; the second ends; the third hangs."""
+    marks = Path("marks")
+    marks.mkdir(exist_ok=True)
+    (marks / str(os.getpid())).touch()
+    if len(list(marks.iterdir())) != 2:
+        time.sleep(600)
+    return "done"
