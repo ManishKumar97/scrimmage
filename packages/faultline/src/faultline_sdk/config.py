@@ -4,6 +4,7 @@ Only what this version supports is accepted. Anything else is rejected, never re
 and ignored; docs/configuration.md lists what later versions add.
 """
 
+import builtins
 import math
 import re
 import tomllib
@@ -26,19 +27,22 @@ AGENT_KEYS = {
     "model_hosts",
     "reserve_output_tokens",
     "prices",
+    "answer",
 }
 TEST_KEYS = {"name", "question", "expect", "mock", "fault"}
 MOCK_KEYS = {"call", "returns", "type"}
-FAULT_KEYS = {"call", "do", "when"}
+FAULT_KEYS = {"call", "do", "when", "raises"}
 
 DOCS = "docs/configuration.md"
 # The faults this version builds. Each one has an entry in docs/fault-catalog.toml.
-FAULTS = ("timeout", "status")
+FAULTS = ("timeout", "status", "error")
 STATUS = re.compile(r"status (?P<code>\d{3})")
 SCHEDULE = re.compile(r"always|(?:first|requests) (?P<n>[1-9]\d*)")
 MODEL_KEYS = {"host", "provider"}
 DEFAULT_BUDGET_USD = 5.0
 DEFAULT_RESERVE_OUTPUT_TOKENS = 4096
+# Where the answer is in what the agent returns, such as messages[-1].content.
+ANSWER_PATH = re.compile(r"[A-Za-z_]\w*(\[-?\d+\]|\.[A-Za-z_]\w*)*")
 IMPORT_PATH = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*:[A-Za-z_]\w*")
 
 
@@ -54,6 +58,7 @@ class Fault:
     call: str
     do: str
     when: str
+    raises: str | None = None  # for "error": a built-in name, or package.module:Class
 
 
 @dataclass(frozen=True)
@@ -95,6 +100,7 @@ class Agent:
     max_cost_usd: float | None = DEFAULT_BUDGET_USD  # None: the budget is off, on purpose
     reserve_output_tokens: int = DEFAULT_RESERVE_OUTPUT_TOKENS
     prices: tuple[tuple[str, Price], ...] = ()
+    answer: str | None = None  # where the answer is in what the agent returns
 
     def tool_names(self) -> list[str]:
         """Every tool's final name: the one the model sees."""
@@ -149,6 +155,9 @@ def load(path: Path) -> Config:
 def check_references(config: Config) -> list[str]:
     """Compare values across the file, before the first run, so a typo costs no model calls."""
     names = config.agent.tool_names()
+    # With no tools list a framework's adapter finds the tools when the agent runs, so
+    # their names cannot be compared here.
+    listed = bool(config.agent.tools)
     problems: list[str] = []
     for test in config.tests:
         for mock in test.mocks:
@@ -161,15 +170,16 @@ def check_references(config: Config) -> list[str]:
             if labels.kind_of(entry.call) != "tool":
                 continue  # a model label names a provider, checked when it is read
             name = entry.call.partition(":")[2]
-            if name not in names:
+            if listed and name not in names:
                 problems.append(
                     f"[[test]] {test.name!r}: {entry.call} names no tool in [agent] tools; "
                     f"the tools are {', '.join(names) or 'none'}"
                 )
-        for mock in test.mocks:
-            if mock.type and not allowed(mock.type, config.agent.allowed_imports()):
+        paths = [m.type for m in test.mocks] + [f.raises for f in test.faults]
+        for path in paths:
+            if path and ":" in path and not allowed(path, config.agent.allowed_imports()):
                 problems.append(
-                    f"[[test]] {test.name!r}: type {mock.type} is outside the agent's packages "
+                    f"[[test]] {test.name!r}: type {path} is outside the agent's packages "
                     f"({', '.join(config.agent.allowed_imports())}), so it is refused"
                 )
     for entry in config.agent.real:
@@ -179,7 +189,7 @@ def check_references(config: Config) -> list[str]:
                 "unless a fault names it"
             )
         name = entry.partition(":")[2]
-        if labels.kind_of(entry) == "tool" and name != "*" and name not in names:
+        if listed and labels.kind_of(entry) == "tool" and name != "*" and name not in names:
             problems.append(f"[agent] real: {entry} names no tool in [agent] tools")
     return problems
 
@@ -262,6 +272,9 @@ def read_agent(table: dict[str, object]) -> Agent:
         if not isinstance(entry, str):
             raise ConfigError(f"{where} real: expected labels, got {entry!r}")
         real.append(labels.check(entry, f"{where} real", pattern=True))
+    answer = table.get("answer")
+    if answer is not None and not (isinstance(answer, str) and ANSWER_PATH.fullmatch(answer)):
+        raise ConfigError(f"{where} answer: {answer!r} is not a path of the form 'field[-1].name'")
     agent = Agent(
         function=import_path(text(table, "function", where), f"{where} function"),
         runs=whole(table, "runs", 3, where),
@@ -276,6 +289,7 @@ def read_agent(table: dict[str, object]) -> Agent:
             table, "reserve_output_tokens", DEFAULT_RESERVE_OUTPUT_TOKENS, where
         ),
         prices=read_prices(table.get("prices", {}), f"{where}.prices"),
+        answer=answer,
     )
     names = agent.tool_names()
     for name in names:
@@ -399,6 +413,9 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
             raise ConfigError(f"{where} do: {do!r} is not an error status (400 to 599)")
     elif do not in FAULTS or do == "status":
         raise ConfigError(f"{where} do: {do!r} is not a fault; see {DOCS}")
+    if do == "error" and kind != "tool":
+        raise ConfigError(f"{where} do: 'error' works only on a tool; see {DOCS}")
+    raises = read_raises(table, do, where)
     when = str(table.get("when", "always"))
     if not SCHEDULE.fullmatch(when):
         raise ConfigError(f"{where} when: {when!r} is not a schedule; see {DOCS}")
@@ -407,4 +424,20 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
             f"{where} when: {when!r} counts model requests and their retries; "
             "use 'first N' for a tool"
         )
-    return Fault(call, do, when)
+    return Fault(call, do, when, raises)
+
+
+def read_raises(table: dict[str, object], do: str, where: str) -> str | None:
+    if "raises" not in table:
+        return None
+    if do != "error":
+        raise ConfigError(f"{where} raises: works only with do = 'error'; see {DOCS}")
+    raises = text(table, "raises", where)
+    built_in = getattr(builtins, raises, None)
+    is_error = isinstance(built_in, type) and issubclass(built_in, Exception)
+    if not is_error and not IMPORT_PATH.fullmatch(raises):
+        raise ConfigError(
+            f"{where} raises: {raises!r} is not a built-in exception or an import path "
+            "of the form 'package.module:Class'"
+        )
+    return raises

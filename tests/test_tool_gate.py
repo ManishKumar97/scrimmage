@@ -54,6 +54,10 @@ async def get_async(order_id: str) -> str:
     return "real async"
 
 
+class Refusal(Exception):
+    """A team's own error type."""
+
+
 class Lines:
     def __init__(self) -> None:
         self.lines: list[dict[str, object]] = []
@@ -152,6 +156,23 @@ def test_a_timeout_fault_raises_timeout_error_and_records_it(lines: Lines) -> No
         "n": 1,
     }
     assert line["error"] == "TimeoutError: get_text timed out" and line["result"] is None
+
+
+@pytest.mark.design("fault.error_tool")
+def test_an_error_fault_in_a_hand_written_loop_is_a_plain_error(lines: Lines) -> None:
+    install(lines, faults=[Fault("tool:get_text", "error", "always")])
+    with pytest.raises(RuntimeError, match="get_text failed"):
+        tool_gate.gate(get_text, "get_text")("1")
+
+
+@pytest.mark.parametrize(
+    ("raises", "kind"),
+    [("ConnectionError", ConnectionError), ("test_tool_gate:Refusal", Refusal)],
+)
+def test_an_error_fault_can_name_its_type(lines: Lines, raises: str, kind: type) -> None:
+    install(lines, faults=[Fault("tool:get_text", "error", "always", raises)])
+    with pytest.raises(kind, match="get_text failed"):
+        tool_gate.gate(get_text, "get_text")("1")
 
 
 @pytest.mark.design("refused.poisons_run")

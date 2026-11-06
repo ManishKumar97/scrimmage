@@ -4,6 +4,7 @@ The swap is made lazily: an import hook waits for the agent to import the tool's
 module, then swaps each named function in it before the agent's code can look it up.
 """
 
+import builtins
 import functools
 import importlib.machinery
 import inspect
@@ -13,6 +14,7 @@ from types import ModuleType
 from typing import Any
 
 from faultline_sdk import hooks, mocks
+from faultline_sdk.config import Fault
 from faultline_sdk.errors import FaultlineMockError
 from faultline_sdk.state import RunState, Step, current
 
@@ -28,7 +30,26 @@ def _arguments(
         return {"args": list(args), "kwargs": kwargs}
 
 
-def _apply(state: RunState, step: Step, tool: Callable[..., object]) -> object:
+def injected(state: RunState, fault: Fault, name: str, failure: type[Exception]) -> Exception:
+    """The error a fault raises. failure is the type the caller treats as a tool failure."""
+    if fault.do == "timeout":
+        return TimeoutError(f"{name} timed out")
+    if fault.raises is None:
+        return failure(f"{name} failed")
+    if ":" in fault.raises:
+        kind = mocks.import_object(fault.raises, state.allowed)
+    else:
+        kind = getattr(builtins, fault.raises)
+    assert isinstance(kind, type)
+    return kind(f"{name} failed")
+
+
+def apply(
+    state: RunState,
+    step: Step,
+    tool: Callable[..., object],
+    failure: type[Exception] = RuntimeError,
+) -> object:
     """Carry out a decision that does not run the real tool."""
     decision = step.decision
     if decision.action == "refused":
@@ -38,7 +59,8 @@ def _apply(state: RunState, step: Step, tool: Callable[..., object]) -> object:
         state.finish(step, error=error, mistake=mistake)
         raise error
     if decision.action == "fault":
-        error = TimeoutError(f"{step.call.name} timed out")
+        assert decision.fault is not None
+        error = injected(state, state.plan.faults[decision.fault], step.call.name, failure)
         state.finish(step, error=error)
         raise error
     assert decision.mock is not None
@@ -63,7 +85,7 @@ def gate(tool: Callable[..., Any], name: str) -> Callable[..., Any]:
                 return await tool(*args, **kwargs)
             step = state.begin(name, _arguments(tool, args, kwargs))
             if step.decision.action != "real":
-                return _apply(state, step, tool)
+                return apply(state, step, tool)
             try:
                 result = await tool(*args, **kwargs)
             except BaseException as exc:
@@ -82,7 +104,7 @@ def gate(tool: Callable[..., Any], name: str) -> Callable[..., Any]:
             return tool(*args, **kwargs)
         step = state.begin(name, _arguments(tool, args, kwargs))
         if step.decision.action != "real":
-            return _apply(state, step, tool)
+            return apply(state, step, tool)
         try:
             result = tool(*args, **kwargs)
         except BaseException as exc:

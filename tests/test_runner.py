@@ -380,7 +380,7 @@ def test_a_stale_root_pid_in_the_runners_environment_is_ignored(
     ("old", "new"),
     [
         ("[agent]\n", "[agent]\nrnus = 50\n"),
-        ("[agent]\n", '[agent]\nanswer = "reply"\n'),
+        ("[agent]\n", '[agent]\nservice = "x"\n'),
         ('do   = "timeout"', 'do   = "status 500"'),
         ('do   = "timeout"', 'do   = "timeout"\nwhen = "once"'),
         ('call = "tool:get_order"\ndo', 'call = "model:x"\ndo'),

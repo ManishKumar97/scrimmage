@@ -134,6 +134,7 @@ class Runner:
             sys.executable, "-m", "faultline_sdk.run_command",
             sys.executable, "-m", "faultline_sdk.start",
             self.config.agent.function, row.test.question,
+            *([self.config.agent.answer] if self.config.agent.answer else []),
         ]  # fmt: skip
         log = os.open(self.folder / f"{run}.log", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
