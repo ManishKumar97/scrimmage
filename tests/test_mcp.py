@@ -238,6 +238,23 @@ def test_a_mocks_text_is_written_as_a_real_server_writes_it(docs: Docs, transpor
     assert answer_of(mocked) == answer_of(real)
 
 
+class Listing:
+    def __init__(self, *tools: dict[str, object]) -> None:
+        self.tools = tools
+
+    def model_dump(self, **_: object) -> dict[str, object]:
+        return {"tools": list(self.tools)}
+
+
+@pytest.mark.design("mcp.mock_text")
+def test_a_shape_the_server_drops_is_forgotten() -> None:
+    gate = gate_for([])
+    gate.learn("docs", Listing({"name": "search", "outputSchema": {"type": "object"}}))
+    assert LABEL in gate.shaped
+    gate.learn("docs", Listing({"name": "search"}))
+    assert LABEL not in gate.shaped
+
+
 @pytest.mark.design("mcp.short_label")
 @pytest.mark.parametrize("label", ["mcp:search", LABEL])
 def test_a_tool_can_be_named_with_or_without_its_server(docs: Docs, label: str) -> None:

@@ -86,6 +86,8 @@ class Gate:
             self.listed.add(label)
             if "outputSchema" in tool:
                 self.shaped.add(label)
+            else:
+                self.shaped.discard(label)
             if tool.get("annotations", {}).get("readOnlyHint") is True:
                 self.read_only.add(label)
 
