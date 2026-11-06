@@ -602,6 +602,20 @@ def test_a_redirect_off_the_model_hosts_is_refused_and_named(gated: None) -> Non
     assert budget.ledger.reserved > 0 and len(sink.settles) == 1
 
 
+@pytest.mark.design("gate.redirect_bad_location")
+def test_a_redirect_to_a_broken_address_keeps_its_line_and_httpx2_error(gated: None) -> None:
+    def broken(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(307, headers={"location": "http://exa mple:notaport/x"})
+
+    budget = Budget(limit=1.0)
+    sink, _ = install(make_plan(budget=1.0), budget)
+    c = httpx2.Client(transport=httpx2.MockTransport(broken), follow_redirects=True)
+    with pytest.raises(httpx2.RemoteProtocolError):
+        c.post(URL, json=BODY)
+    assert sink.lines[0]["status"] == 307
+    assert len(sink.settles) == 1
+
+
 @pytest.mark.design("gate.redirect_off_host_refused_async")
 def test_a_redirect_off_the_model_hosts_is_refused_on_the_async_path(gated: None) -> None:
     sink, _ = install(make_plan())

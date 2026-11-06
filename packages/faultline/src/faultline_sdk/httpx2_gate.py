@@ -429,7 +429,10 @@ def off_host(ctx: Context, request: Any, response: Any) -> str | None:
     """The host a redirect would take this model call to, if that is not a model host."""
     if not response.has_redirect_location:
         return None
-    host = str(request.url.join(response.headers["location"]).host).lower()
+    try:
+        host = str(request.url.join(response.headers["location"]).host).lower()
+    except Exception:  # not a usable address: httpx2 raises its own error when it follows it
+        return None
     return None if provider_of(ctx, host) else host
 
 
