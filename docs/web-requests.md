@@ -46,6 +46,9 @@ Retries, redirects, cookies and response hooks all sit above it, so they treat a
 
 Other HTTP libraries, such as requests, urllib and aiohttp, are not gated. See [Limits](limits.md).
 
+A POST you did not write yourself goes through the same rule.
+An OAuth token request, a telemetry exporter, an MCP server over HTTP and another provider's SDK are all refused until mocked or listed, and a listed provider call is not budgeted. See [Limits](limits.md).
+
 ## The label
 
 A request's label is `http:` and the host in the request's own URL, in lower case, such as `http:inventory.acme.internal`.
@@ -117,4 +120,8 @@ A web label has nothing to be checked against, so this is what catches a misspel
 
 The record holds the label, the method, the path, the status, and the bodies with known secrets removed.
 Headers, cookies, query strings and a password in the URL are never recorded.
-A path is recorded as it is, with known secrets removed, so a key of an unknown shape in a path stays in the record.
+A URL quoted in any recorded text loses its query string, fragment and password.
+A failed web request records only the error's type, since a client's message can quote a header.
+A path is recorded as it was sent, with known secrets removed, so a key of an unknown shape in a path stays in the record.
+A body sent as a stream or as a multipart upload is recorded as 0 bytes, because reading it would use it up.
+The `.log` beside each run holds what your program printed, unchanged.

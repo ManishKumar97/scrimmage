@@ -74,7 +74,7 @@ Using one now stops the test: it is rejected as unknown.
 - Agent shapes: `command` (a script) and `service` (a web service).
 - Settings: `body`, `headers`, `control`, `control_tls`, `records`, `record_grace_s`, `record_wait_s`.
 - Labels: `mcp:`, `auth:`, and model providers other than OpenAI.
-- Faults: `slow`, `empty`, `refused`, `reset`, `dns`, `bad body`, `auth error`, `context too long`, `append`, `replace`, the model reply faults, and `status` on anything but a model call.
+- Faults: `slow`, `empty`, `refused`, `reset`, `dns`, `bad body`, `auth error`, `context too long`, `append`, `replace`, the model reply faults, and `status` on a tool.
 - Schedules: `once` (write `first 1`) and `call N`.
 - Fault options: `retry_after`, `append`, `replace`.
 - Mocks: `returns_from`.
