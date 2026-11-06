@@ -59,7 +59,7 @@ def start() -> None:
     for module, names in tool_gate.targets(plan.tools).items():
         if not tool_gate.module_exists(module, [os.getcwd()]):
             message = f"{module} is listed under [agent] tools but cannot be found"
-            run_state.listed_tool_missing(names[0], message)
+            run_state.cannot_gate(names[0], message)
             sender.flush()
             stop(message)
     tool_gate.install(plan.tools, dict(plan.renames))

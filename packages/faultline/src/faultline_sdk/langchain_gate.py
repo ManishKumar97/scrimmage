@@ -17,12 +17,16 @@ from types import ModuleType
 from typing import Any
 
 from faultline_sdk import hooks, tool_gate
-from faultline_sdk.state import RunState
+from faultline_sdk.errors import FaultlineRefused
+from faultline_sdk.httpx2_gate import params
+from faultline_sdk.state import RunState, current
 
 LIBRARY = "langchain-core"
 MODULE = "langchain_core.tools.base"
 TESTED = ((1, 7), (1, 7))  # the minor versions this release was tested with
 METHODS = ("_run", "_arun")
+ENTRIES = ("run", "arun")
+CALLED = ("run", "arun", "invoke", "ainvoke")
 PLUMBING = ("run_manager", "config", "callbacks")  # LangChain's, not the tool's input
 
 # The tool whose real call is in progress. _arun often delegates to _run on the same tool,
@@ -35,11 +39,15 @@ def install(run: RunState, stop: Callable[[str], None]) -> None:
 
 
 def gatable(module: ModuleType) -> bool:
-    """The functions the gate replaces exist where it expects them."""
+    """The functions the gate relies on exist and take the arguments it expects."""
     base = getattr(module, "BaseTool", None)
     if base is None or not hasattr(module, "ToolException"):
         return False
-    return all(n in vars(base) for n in ("__init__", "__init_subclass__", *METHODS))
+    if params(vars(base).get("__init__")) != ["self", "kwargs"]:
+        return False
+    if any(params(vars(base).get(n)) != ["self", "args", "kwargs"] for n in METHODS):
+        return False
+    return all((params(vars(base).get(n)) or [])[1:2] == ["tool_input"] for n in ENTRIES)
 
 
 def version() -> tuple[int, int] | None:
@@ -69,37 +77,73 @@ def patch(module: ModuleType, run: RunState, stop: Callable[[str], None]) -> Non
         )
     base = module.BaseTool
     failure = module.ToolException
-    subclass_hook = vars(base)["__init_subclass__"].__func__
-
-    def init_subclass(cls: type, **kwargs: Any) -> None:
-        subclass_hook(cls, **kwargs)
-        gate_class(cls, failure)
-
-    base.__init_subclass__ = classmethod(init_subclass)
     create = base.__init__
 
     @functools.wraps(create)
     def tracked_init(self: Any, *args: Any, **kwargs: Any) -> None:
         create(self, *args, **kwargs)
-        run.seen.add(self.name)  # the model may be offered it, and the gate will see it
+        if gate_tool(type(self), failure) and library_runs_it(type(self), base):
+            run.seen.add(self.name)  # offered to the model, it will reach a gate
 
     base.__init__ = tracked_init
-    for cls in subclasses(base):  # defined before the hook ran
-        gate_class(cls, failure)
+    for name in ("run", "arun"):
+        setattr(base, name, checked(vars(base)[name], failure))
 
 
-def subclasses(cls: type) -> list[type]:
-    found: list[type] = []
-    for sub in cls.__subclasses__():
-        found += [sub, *subclasses(sub)]
-    return found
+def owner_of(cls: type, name: str) -> type:
+    return next(c for c in cls.__mro__ if name in vars(c))
 
 
-def gate_class(cls: type, failure: type[Exception]) -> None:
+def gate_tool(cls: type, failure: type[Exception]) -> bool:
+    """Gate what this class really runs, wherever it comes from.
+
+    False if one of them is not a plain function, so no gate can sit there.
+    """
+    gatable_tool = True
     for name in METHODS:
-        method = vars(cls).get(name)
-        if inspect.isfunction(method) and not getattr(method, tool_gate.GATED, False):
-            setattr(cls, name, gate(method, failure))
+        owner = owner_of(cls, name)
+        method = vars(owner)[name]
+        if not inspect.isfunction(method):
+            gatable_tool = False
+        elif not getattr(method, tool_gate.GATED, False):
+            setattr(owner, name, gate(method, failure))
+    return gatable_tool
+
+
+def library_runs_it(cls: type, base: type) -> bool:
+    """Calls go through the library's own entry points, so they reach the gate."""
+    package = base.__module__.split(".")[0]
+    return all(owner_of(cls, n).__module__.split(".")[0] == package for n in CALLED)
+
+
+def checked(entry: Callable[..., Any], failure: type[Exception]) -> Callable[..., Any]:
+    """Gate a tool again as it is called, for _run assigned after the tool was made.
+
+    This only checks: an injected failure is raised at the gate, inside the error handling.
+    """
+
+    def check(tool: Any) -> None:
+        run = current()
+        if run is not None and not gate_tool(type(tool), failure):
+            message = f"{tool.name} cannot be gated, because its _run is not a plain function"
+            run.cannot_gate(tool.name, message)
+            raise FaultlineRefused(message)
+
+    if inspect.iscoroutinefunction(entry):
+
+        @functools.wraps(entry)
+        async def async_checked(self: Any, *args: Any, **kwargs: Any) -> Any:
+            check(self)
+            return await entry(self, *args, **kwargs)
+
+        return async_checked
+
+    @functools.wraps(entry)
+    def sync_checked(self: Any, *args: Any, **kwargs: Any) -> Any:
+        check(self)
+        return entry(self, *args, **kwargs)
+
+    return sync_checked
 
 
 def arguments(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, object]:

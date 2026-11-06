@@ -29,6 +29,8 @@ _.sync_tool_through_arun  # tests/example/acme/graph.py: a test's faultline.toml
 _.async_tool  # tests/example/acme/graph.py: a test's faultline.toml names it
 _.handle_tool_error  # tests/example/acme/graph.py: LangChain reads it on the tool
 _._arun  # tests/test_langgraph.py: a stand-in for LangChain's own, read by the structural check
+_.mixin_tool  # tests/example/acme/graph.py: a test's faultline.toml names it
+_.answer_overridden  # tests/example/acme/graph.py: a test's faultline.toml names it
 _.pytest_sessionfinish  # tests/conftest.py: pytest calls hooks by name
 _.exitstatus  # tests/conftest.py: pytest reads it to set the exit code
 _.answer_streamed  # tests/example/acme/rag.py: named by import path in a test's faultline.toml

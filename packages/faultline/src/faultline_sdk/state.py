@@ -150,11 +150,11 @@ class RunState:
         self.plan = dataclasses.replace(self.plan, faults=())
         self.counters = engine.Counters(self.plan)
 
-    def listed_tool_missing(self, name: str, message: str) -> None:
-        """A tool under [agent] tools that does not exist: a mistake that ends the run.
+    def cannot_gate(self, name: str, message: str) -> None:
+        """A tool no gate can reach: a mistake that ends the run.
 
-        The real function it was meant to gate, likely spelled differently, must never
-        run ungated, so the run is poisoned and the line is kept even on a full queue.
+        The real function must never run ungated, so the run is poisoned and the line is
+        kept even on a full queue.
         """
         step = Step(
             engine.Call("tool", f"tool:{name}", name),

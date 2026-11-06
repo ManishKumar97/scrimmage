@@ -129,6 +129,37 @@ def answer_unseen(question: str) -> str:
     return str(model.invoke(question).content)
 
 
+class RunsItself:
+    """A mixin holding the tool's work: it is defined on no BaseTool subclass."""
+
+    def _run(self, order_id: str = "1") -> str:
+        return "REAL WRITE RAN"
+
+
+class MixinTool(RunsItself, BaseTool):
+    name: str = "mixin_write"
+    description: str = "A write tool whose work is on a mixin."
+
+
+def mixin_tool(question: str) -> str:
+    return str(MixinTool().invoke({"order_id": "1"}))
+
+
+class OverridesInvoke(BaseTool):
+    name: str = "overrides_invoke"
+    description: str = "A tool that answers without passing through run."
+
+    def _run(self) -> str:
+        return "real"
+
+    def invoke(self, input: Any, config: Any = None, **kwargs: Any) -> str:
+        return "REAL WRITE RAN"
+
+
+def answer_overridden(question: str) -> dict[str, Any]:
+    return build([OverridesInvoke(), get_stock]).invoke({"messages": [("user", question)]})
+
+
 def nested(question: str) -> str:
     """A tool that calls another tool: both are calls the gate must see."""
 

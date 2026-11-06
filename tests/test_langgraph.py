@@ -12,6 +12,7 @@ from conftest import ACME, Project, Result
 from fakes.openai_server import FakeOpenAI
 from faultline_sdk import langchain_gate, state, tool_gate
 from faultline_sdk.config import Fault
+from faultline_sdk.errors import FaultlineRefused
 from faultline_sdk.plan import Plan
 from faultline_sdk.start import pick
 
@@ -231,6 +232,29 @@ def test_a_tool_written_as_a_class_is_gated(project: Project, fake_openai: Fake)
     assert [x["action"] for x in tool_lines(row(result, "baseline"))] == ["mock", "mock"]
 
 
+@pytest.mark.design("adapter.mixin_tool")
+def test_a_run_function_from_a_mixin_is_gated(project: Project) -> None:
+    graph(project, "mixin_tool", "")
+    project.edit('answer   = "messages[-1].content"\n', "")
+    result = project.test()
+    assert result.code == 2, result.out + result.err
+    assert {s["outcome"] for s in result.summaries()} == {"refused call"}
+    assert "REAL WRITE RAN" not in (result.summaries()[0]["answer"] or "")  # type: ignore[operator]
+
+
+@pytest.mark.design("adapter.invoke_override_stops")
+def test_a_tool_that_overrides_invoke_stops_the_test_if_offered(project: Project) -> None:
+    graph(project, "answer_overridden", "")
+    fake = FakeOpenAI(ACME)
+    fake.start()
+    try:
+        result = project.test(fake)
+    finally:
+        fake.stop()
+    assert result.code == 2 and fake.requests == []
+    assert "overrides_invoke" in result.out
+
+
 @pytest.mark.design("adapter.async_graph")
 def test_an_async_graph_is_gated_too(project: Project, fake_openai: Fake) -> None:
     graph(project, "answer_async")
@@ -303,18 +327,43 @@ def module(**names: object) -> types.ModuleType:
     return shim
 
 
-class WholeTool:
+class Shape:
+    """What the adapter expects of BaseTool."""
+
     def __init__(self, **kwargs: Any) -> None:
         self.name = str(kwargs.get("name", ""))
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
-
-    def _run(self) -> str:
+    def _run(self, *args: Any, **kwargs: Any) -> str:
         return "real"
 
-    async def _arun(self) -> str:
+    async def _arun(self, *args: Any, **kwargs: Any) -> str:
         return "real"
+
+    def run(self, tool_input: object) -> str:
+        return self._run(tool_input)
+
+    async def arun(self, tool_input: object) -> str:
+        return await self._arun(tool_input)
+
+    def invoke(self, tool_input: object) -> str:
+        return self.run(tool_input)
+
+    async def ainvoke(self, tool_input: object) -> str:
+        return await self.arun(tool_input)
+
+
+class Sink:
+    def __init__(self) -> None:
+        self.lines: list[dict[str, object]] = []
+
+    def put(self, line: dict[str, object], *, keep: bool = False) -> None:
+        del keep
+        self.lines.append(line)
+
+
+def fresh_run() -> tuple[state.RunState, Sink]:
+    sink = Sink()
+    return state.RunState(Plan("r", "t", "baseline", (), (), (), (), 60.0), sink, []), sink
 
 
 @pytest.mark.design("adapter.structural_check")
@@ -322,52 +371,104 @@ class WholeTool:
     "shim",
     [
         module(),
-        module(BaseTool=WholeTool),
+        module(BaseTool=Shape),
+        module(BaseTool=type("Empty", (), {}), ToolException=Exception),
         module(
-            BaseTool=type("NoRun", (), {"__init_subclass__": classmethod(lambda c: None)}),
+            BaseTool=type("BaseTool", (), {**dict(vars(Shape)), "_run": lambda self: "x"}),
+            ToolException=Exception,
+        ),
+        module(
+            BaseTool=type("BaseTool", (), {**dict(vars(Shape)), "run": lambda self, x: "x"}),
             ToolException=Exception,
         ),
     ],
 )
 def test_a_library_the_adapter_cannot_replace_stops_the_program(shim: types.ModuleType) -> None:
-    lines: list[dict[str, object]] = []
-
-    class Sink:
-        def put(self, line: dict[str, object], *, keep: bool = False) -> None:
-            del keep
-            lines.append(line)
-
-    run = state.RunState(Plan("r", "t", "baseline", (), (), (), (), 60.0), Sink(), [])
+    run, sink = fresh_run()
     stopped: list[str] = []
     langchain_gate.patch(shim, run, stopped.append)
     assert stopped and "the program is stopped" in stopped[0]
-    assert lines[0]["notice"] == "structure"
+    assert sink.lines[0]["notice"] == "structure"
+
+
+def base_tool() -> type:
+    return type("BaseTool", (), dict(vars(Shape)))
 
 
 def test_a_newer_library_gets_a_notice_and_still_works(monkeypatch: pytest.MonkeyPatch) -> None:
-    lines: list[dict[str, object]] = []
-
-    class Sink:
-        def put(self, line: dict[str, object], *, keep: bool = False) -> None:
-            del keep
-            lines.append(line)
-
-    vars_ = {k: v for k, v in vars(WholeTool).items() if k in ("__init__", "_run", "_arun")}
-    shim_base = type(
-        "BaseTool", (), {**vars_, "__init_subclass__": classmethod(lambda c, **k: None)}
-    )
     monkeypatch.setattr(langchain_gate, "version", lambda: (99, 0))
-    run = state.RunState(Plan("r", "t", "baseline", (), (), (), (), 60.0), Sink(), [])
-    langchain_gate.patch(module(BaseTool=shim_base, ToolException=Exception), run, pytest.fail)
-    assert lines[0]["notice"] == "newer_version"
+    run, sink = fresh_run()
+    base = base_tool()
+    langchain_gate.patch(module(BaseTool=base, ToolException=Exception), run, pytest.fail)
+    assert sink.lines[0]["notice"] == "newer_version"
 
-    class Later(shim_base):  # type: ignore[valid-type, misc]
-        def _run(self) -> str:
+    class Later(base):  # type: ignore[valid-type, misc]
+        def _run(self, *args: Any, **kwargs: Any) -> str:
             return "real"
 
-    assert getattr(Later._run, tool_gate.GATED)
     Later(name="later")
+    assert getattr(vars(Later)["_run"], tool_gate.GATED)
     assert "later" in run.seen
+
+
+@pytest.mark.design("adapter.tools_made_before_the_hook")
+def test_a_tool_made_before_the_hook_is_gated_when_it_is_called() -> None:
+    run, sink = fresh_run()
+    state.install(run)
+    base = base_tool()
+
+    class Early(base):  # type: ignore[valid-type, misc]
+        def _run(self, *args: Any, **kwargs: Any) -> str:
+            return "real"
+
+    early = Early(name="early")
+    try:
+        langchain_gate.patch(module(BaseTool=base, ToolException=Exception), run, pytest.fail)
+        with pytest.raises(FaultlineRefused):
+            early.run({})  # listed nowhere, so refused, not run
+    finally:
+        state.install(None)
+    assert sink.lines[0]["action"] == "refused"
+
+
+@pytest.mark.design("adapter.late_assignment")
+def test_a_run_function_assigned_later_is_still_gated() -> None:
+    run, sink = fresh_run()
+    state.install(run)
+    base = base_tool()
+    try:
+        langchain_gate.patch(module(BaseTool=base, ToolException=Exception), run, pytest.fail)
+
+        class Plain(base):  # type: ignore[valid-type, misc]
+            pass
+
+        tool = Plain(name="plain")
+        Plain._run = lambda self, *a, **k: "REAL"  # type: ignore[method-assign]
+        with pytest.raises(FaultlineRefused):
+            tool.run({})
+    finally:
+        state.install(None)
+    assert sink.lines[0]["action"] == "refused"
+
+
+@pytest.mark.design("adapter.not_a_function_refused")
+def test_a_run_that_is_not_a_plain_function_is_refused_and_never_seen() -> None:
+    run, sink = fresh_run()
+    state.install(run)
+    base = base_tool()
+    try:
+        langchain_gate.patch(module(BaseTool=base, ToolException=Exception), run, pytest.fail)
+
+        class Static(base):  # type: ignore[valid-type, misc]
+            _run = staticmethod(lambda *a, **k: "REAL")  # type: ignore[assignment]
+
+        tool = Static(name="static")
+        assert "static" not in run.seen
+        with pytest.raises(FaultlineRefused, match="cannot be gated"):
+            tool.run({})
+    finally:
+        state.install(None)
+    assert "cannot be gated" in str(sink.lines[0]["mistake"])
 
 
 @pytest.mark.parametrize(

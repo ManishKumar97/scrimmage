@@ -156,7 +156,7 @@ def swap(module: ModuleType, names: list[str], renamed: dict[str, str] | None = 
             )
             run = current()
             if run is not None:
-                run.listed_tool_missing(name, message)
+                run.cannot_gate(name, message)
             raise ListedToolMissing(message)
         if not getattr(tool, GATED, False):
             seen = (renamed or {}).get(f"{module.__name__}:{name}", name)
