@@ -55,6 +55,12 @@ def run_set_on_the_tool(question: str) -> dict[str, Any]:
     return offer(tool, question)
 
 
+def run_set_on_the_tool_called_directly(question: str) -> str:
+    tool = Order()
+    tool._run = write
+    return str(tool.invoke({"order_id": "1"}))
+
+
 def run_set_when_made(question: str) -> dict[str, Any]:
     return offer(SetsRunWhenMade(), question)
 

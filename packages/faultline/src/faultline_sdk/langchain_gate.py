@@ -132,6 +132,9 @@ def skips_gate(tool: Any, base: type, failure: type[Exception]) -> str | None:
     cls = type(tool)
     if not gate_tool(cls, failure):
         return f"{tool.name} cannot be gated, because its _run is not a plain function"
+    own = [n for n in (*METHODS, *CALLED) if n in vars(tool)]
+    if own:  # the class's gate never sees a method set on the tool itself
+        return f"{tool.name} cannot be gated, because {own[0]} is set on the tool itself"
     replaced = overrides(cls, base)
     if replaced:
         return f"{tool.name} cannot be gated, because its class overrides {replaced[0]}"

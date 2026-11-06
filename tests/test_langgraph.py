@@ -587,7 +587,8 @@ def test_a_library_the_adapter_cannot_replace_stops_the_program(shim: types.Modu
 
 
 def base_tool() -> type:
-    return type("BaseTool", (), dict(vars(Shape)))
+    own = {k: v for k, v in vars(Shape).items() if k not in ("__dict__", "__weakref__")}
+    return type("BaseTool", (), own)
 
 
 def test_a_newer_library_gets_a_notice_and_still_works(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -809,3 +810,15 @@ def test_a_gated_tool_does_not_vouch_for_a_second_tool_of_its_name(project: Proj
     result, fake = offered(project, "same_name_as_a_gated_tool")
     stopped_at_the_offer(result, fake)
     assert "get_order cannot be gated, because its class overrides invoke" in result.out
+
+
+@pytest.mark.design("adapter.run_on_the_tool_refused")
+@pytest.mark.parametrize(
+    "function",
+    ["run_set_on_the_tool", "run_set_on_the_tool_called_directly", "run_set_when_made"],
+)
+def test_a_run_function_set_on_the_tool_itself_never_runs(project: Project, function: str) -> None:
+    result, _ = offered(project, function)
+    assert result.code == 2, result.out + result.err
+    assert not wrote(result)
+    assert "_run is set on the tool itself" in result.out
