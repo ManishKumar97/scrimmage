@@ -113,6 +113,43 @@ def test_a_python_before_the_bot_in_a_wrapper_does_not_take_the_run(
         assert summary_of(result)["outcome"] == "answered", result.out
 
 
+@pytest.mark.design("claim.uv_build")
+def test_a_package_build_uv_starts_does_not_stop_the_run(project: Project) -> None:
+    """uv builds the project with a Python of its own before it starts the bot."""
+    packages = ROOT / "packages"
+    (project.root / "pyproject.toml").write_text(
+        f"""
+[project]
+name = "acme-bot"
+version = "0"
+requires-python = ">=3.11"
+dependencies = ["derail", "derail-marker"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["acme"]
+
+[tool.uv.sources]
+derail = {{path = "{packages / "derail"}", editable = true}}
+derail-marker = {{path = "{packages / "derail-marker"}", editable = true}}
+"""
+    )
+    (project.root / "bot.py").write_text("print('the answer')\n")
+    project.monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    project.monkeypatch.delenv("UV_PROJECT_ENVIRONMENT", raising=False)
+    project.monkeypatch.delenv("UV_LOCKED", raising=False)
+    version = "{}.{}".format(*sys.version_info)
+    write_config(
+        project, f"uv run --python {version} python bot.py {{question}}", "run_timeout = 90"
+    )
+    result = project.test()
+    assert summary_of(result)["outcome"] == "answered", result.out
+    assert summary_of(result)["answer"] == "the answer"
+
+
 @pytest.mark.design("claim.no_python_claimed")
 def test_a_wrapper_around_python_with_no_sdk_is_an_infrastructure_error(
     project: Project, other_version: Path
