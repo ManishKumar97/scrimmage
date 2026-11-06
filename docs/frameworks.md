@@ -55,7 +55,8 @@ A label uses the name the model sees, which LangChain takes from the tool.
 With no `tools` list, Faultline learns those names only when the agent runs, so it runs one baseline alone first:
 
 - a mock or fault naming a tool the agent does not have stops the test there, with exit 2 and a list of the real tools, so a typo costs one run;
-- at the end, a mock no run in any row used is a mistake in the test, so a mock on a tool the agent never calls does not pass silently.
+- at the end, a mock no run in any row used gets a note, because its label is correct and only the question did not need the tool; the exit code stays 0;
+- if no run reported its tools, the labels went unchecked, so the test fails with exit 2.
 
 A tool made only later in a run, after the first baseline ended, is not known to that check.
 

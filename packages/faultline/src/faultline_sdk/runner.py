@@ -336,21 +336,21 @@ def unknown_labels(config: Config, seen: list[str]) -> list[str]:
     ]
 
 
-def unused_mocks(config: Config, results: list[RunResult], seen: list[str]) -> list[str]:
-    """Mocks no run in any row used: a label cannot be checked sooner with no tools list."""
-    tools = ", ".join(seen) or "none"
-    problems: list[str] = []
+def unused_mocks(config: Config, results: list[RunResult]) -> list[str]:
+    """Mocks no run in any row used. The labels passed their check, so this is only a note."""
+    notes: list[str] = []
     for test in config.tests:
         mine = [r for r in results if r.row.test == test]
         used = {call for r in mine for call in r.mocked}
         if mine and not all(r.outcome in FAILED for r in mine):
-            problems += [
-                f"[[test]] {test.name!r}: the mock on {mock.call} was never used; "
-                f"the tools seen are {tools}"
+            notes += [
+                f"no run in test {test.name!r} called {mock.call.partition(':')[2]}, so its "
+                "mock was not used. The label is correct. Remove the mock, or ask a question "
+                "that needs the tool."
                 for mock in test.mocks
                 if mock.call not in used
             ]
-    return problems
+    return notes
 
 
 def stop_group(proc: subprocess.Popen[bytes]) -> None:
@@ -417,7 +417,12 @@ def report(
     if runner is not None and not config.agent.tools:
         mistakes += runner.label_problems
         if stopped_by is None and runner.tools_seen is not None:
-            mistakes += unused_mocks(config, results, runner.tools_seen)
+            notes += unused_mocks(config, results)
+        elif stopped_by is None and results and any(map(tool_labels, config.tests)):
+            mistakes.append(
+                "no run reported the agent's tools, so the tool labels in this file were not "
+                "checked; see the run logs"
+            )
     skipped = runner.skipped if runner is not None else []
     for name in skipped:
         mistakes.append(

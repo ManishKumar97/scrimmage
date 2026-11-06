@@ -334,12 +334,26 @@ def test_a_misspelled_mock_of_a_tool_under_real_stops_the_test(
 
 
 @pytest.mark.design("labels.never_used_mock")
-def test_a_mock_no_run_used_is_a_test_mistake(project: Project, fake_openai: Fake) -> None:
+def test_a_mock_no_run_used_is_a_note(project: Project, fake_openai: Fake) -> None:
     graph(project, fault="")
     result = project.test(fake_openai(["acme_get_order", "acme_answer"]))
+    assert result.code == 0, result.out + result.err
+    assert (
+        "note: no run in test 'order-status' called get_stock, so its mock was not used. "
+        "The label is correct. Remove the mock, or ask a question that needs the tool.\n"
+    ) in result.out
+
+
+@pytest.mark.design("labels.no_report_is_a_mistake")
+def test_a_test_where_no_run_reported_its_tools_fails(project: Project) -> None:
+    graph(project, "hang", "")
+    project.edit("acme.graph:hang", "acme.slow:hang")
+    project.edit("parallel = 1", "parallel = 1\nrun_timeout = 1")
+    project.edit('answer   = "messages[-1].content"\n', "")
+    project.edit("[agent]\n", '[agent]\nmax_cost_usd = "none"\n')
+    result = project.test()
     assert result.code == 2, result.out + result.err
-    assert "the mock on tool:get_stock was never used" in result.out
-    assert "the tools seen are check_inventory, get_order, " in result.out
+    assert "no run reported the agent's tools" in result.out
 
 
 @pytest.mark.design("labels.siblings_end_as_stopped")
