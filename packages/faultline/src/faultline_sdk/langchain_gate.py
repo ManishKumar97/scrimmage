@@ -7,21 +7,21 @@ tool's own code. The team writes no tools list. The SDK never imports LangChain:
 patches it when the agent imports it.
 """
 
+import contextlib
 import contextvars
 import functools
 import importlib.metadata
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from types import ModuleType
 from typing import Any
 
 from faultline_sdk import hooks, tool_gate
-from faultline_sdk.state import RunState, current
+from faultline_sdk.state import RunState
 
 LIBRARY = "langchain-core"
 MODULE = "langchain_core.tools.base"
 TESTED = ((1, 7), (1, 7))  # the minor versions this release was tested with
-GATED = "__faultline_gate__"
 METHODS = ("_run", "_arun")
 PLUMBING = ("run_manager", "config", "callbacks")  # LangChain's, not the tool's input
 
@@ -98,7 +98,7 @@ def subclasses(cls: type) -> list[type]:
 def gate_class(cls: type, failure: type[Exception]) -> None:
     for name in METHODS:
         method = vars(cls).get(name)
-        if inspect.isfunction(method) and not getattr(method, GATED, False):
+        if inspect.isfunction(method) and not getattr(method, tool_gate.GATED, False):
             setattr(cls, name, gate(method, failure))
 
 
@@ -114,50 +114,28 @@ def function_of(tool: Any, method: Callable[..., Any]) -> Callable[..., Any]:
     return getattr(tool, "func", None) or getattr(tool, "coroutine", None) or method
 
 
+@contextlib.contextmanager
+def real_call(tool: object) -> Iterator[None]:
+    token = _inside.set(tool)
+    try:
+        yield
+    finally:
+        _inside.reset(token)
+
+
 def gate(method: Callable[..., Any], failure: type[Exception]) -> Callable[..., Any]:
-    """A function of the same kind as _run or _arun, sync or async, that follows the plan."""
-    if inspect.iscoroutinefunction(method):
+    """A gate at _run or _arun, inside LangChain's error handling."""
 
-        @functools.wraps(method)
-        async def async_gate(self: Any, *args: Any, **kwargs: Any) -> Any:
-            run = current()
-            if run is None or _inside.get(None) is self:
-                return await method(self, *args, **kwargs)
-            step = run.begin(self.name, arguments(args, kwargs))
-            if step.decision.action != "real":
-                return tool_gate.apply(run, step, function_of(self, method), failure)
-            token = _inside.set(self)
-            try:
-                result = await method(self, *args, **kwargs)
-            except BaseException as exc:
-                run.finish(step, error=exc)
-                raise
-            finally:
-                _inside.reset(token)
-            run.finish(step, result=result)
-            return result
+    def describe(args: tuple[Any, ...], kwargs: dict[str, Any]) -> tool_gate.Gated | None:
+        tool, *rest = args
+        if _inside.get(None) is tool:  # _arun delegating to _run on the same tool
+            return None
+        return tool_gate.Gated(
+            tool.name,
+            arguments(tuple(rest), kwargs),
+            function_of(tool, method),
+            failure,
+            functools.partial(real_call, tool),
+        )
 
-        setattr(async_gate, GATED, True)
-        return async_gate
-
-    @functools.wraps(method)
-    def sync_gate(self: Any, *args: Any, **kwargs: Any) -> Any:
-        run = current()
-        if run is None or _inside.get(None) is self:
-            return method(self, *args, **kwargs)
-        step = run.begin(self.name, arguments(args, kwargs))
-        if step.decision.action != "real":
-            return tool_gate.apply(run, step, function_of(self, method), failure)
-        token = _inside.set(self)
-        try:
-            result = method(self, *args, **kwargs)
-        except BaseException as exc:
-            run.finish(step, error=exc)
-            raise
-        finally:
-            _inside.reset(token)
-        run.finish(step, result=result)
-        return result
-
-    setattr(sync_gate, GATED, True)
-    return sync_gate
+    return tool_gate.gate_with(method, describe)

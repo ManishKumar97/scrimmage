@@ -10,6 +10,8 @@ import importlib.machinery
 import inspect
 import sys
 from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager, nullcontext
+from dataclasses import dataclass
 from types import ModuleType
 from typing import Any
 
@@ -44,12 +46,21 @@ def injected(state: RunState, fault: Fault, name: str, failure: type[Exception])
     return kind(f"{name} failed")
 
 
-def apply(
-    state: RunState,
-    step: Step,
-    tool: Callable[..., object],
-    failure: type[Exception] = RuntimeError,
-) -> object:
+@dataclass(frozen=True)
+class Gated:
+    """What a gate needs to know about one call."""
+
+    name: str  # the name the model sees
+    arguments: dict[str, object]
+    tool: Callable[..., object]  # the team's function, whose return type a mock is built from
+    failure: type[Exception] = RuntimeError  # what the caller treats as a tool failure
+    during: Callable[[], AbstractContextManager[object]] = nullcontext  # around the real call
+
+
+Describe = Callable[[tuple[Any, ...], dict[str, Any]], Gated | None]
+
+
+def apply(state: RunState, step: Step, gated: Gated) -> object:
     """Carry out a decision that does not run the real tool."""
     decision = step.decision
     if decision.action == "refused":
@@ -60,13 +71,14 @@ def apply(
         raise error
     if decision.action == "fault":
         assert decision.fault is not None
-        error = injected(state, state.plan.faults[decision.fault], step.call.name, failure)
+        fault = state.plan.faults[decision.fault]
+        error = injected(state, fault, step.call.name, gated.failure)
         state.finish(step, error=error)
         raise error
     assert decision.mock is not None
     mock = state.plan.mocks[decision.mock]
     try:
-        value = mocks.build(mock.returns, mock.type, tool, state.allowed)
+        value = mocks.build(mock.returns, mock.type, gated.tool, state.allowed)
     except FaultlineMockError as exc:
         state.finish(step, error=exc, mistake=str(exc))
         raise
@@ -74,20 +86,25 @@ def apply(
     return value
 
 
-def gate(tool: Callable[..., Any], name: str) -> Callable[..., Any]:
-    """A function of the same kind as the tool, sync or async, that follows the plan."""
+def gate_with(tool: Callable[..., Any], describe: Describe) -> Callable[..., Any]:
+    """A function of the same kind as the tool, sync or async, that follows the plan.
+
+    describe says what this call is; None lets it straight through.
+    """
     if inspect.iscoroutinefunction(tool):
 
         @functools.wraps(tool)
         async def async_gate(*args: Any, **kwargs: Any) -> Any:
             state = current()
-            if state is None:
+            gated = None if state is None else describe(args, kwargs)
+            if state is None or gated is None:
                 return await tool(*args, **kwargs)
-            step = state.begin(name, _arguments(tool, args, kwargs))
+            step = state.begin(gated.name, gated.arguments)
             if step.decision.action != "real":
-                return apply(state, step, tool)
+                return apply(state, step, gated)
             try:
-                result = await tool(*args, **kwargs)
+                with gated.during():
+                    result = await tool(*args, **kwargs)
             except BaseException as exc:
                 state.finish(step, error=exc)
                 raise
@@ -100,13 +117,15 @@ def gate(tool: Callable[..., Any], name: str) -> Callable[..., Any]:
     @functools.wraps(tool)
     def sync_gate(*args: Any, **kwargs: Any) -> Any:
         state = current()
-        if state is None:
+        gated = None if state is None else describe(args, kwargs)
+        if state is None or gated is None:
             return tool(*args, **kwargs)
-        step = state.begin(name, _arguments(tool, args, kwargs))
+        step = state.begin(gated.name, gated.arguments)
         if step.decision.action != "real":
-            return apply(state, step, tool)
+            return apply(state, step, gated)
         try:
-            result = tool(*args, **kwargs)
+            with gated.during():
+                result = tool(*args, **kwargs)
         except BaseException as exc:
             state.finish(step, error=exc)
             raise
@@ -115,6 +134,11 @@ def gate(tool: Callable[..., Any], name: str) -> Callable[..., Any]:
 
     setattr(sync_gate, GATED, True)
     return sync_gate
+
+
+def gate(tool: Callable[..., Any], name: str) -> Callable[..., Any]:
+    """The gate for a plain function, by the name the model sees."""
+    return gate_with(tool, lambda args, kwargs: Gated(name, _arguments(tool, args, kwargs), tool))
 
 
 class ListedToolMissing(ImportError):

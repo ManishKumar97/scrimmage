@@ -10,7 +10,7 @@ import pytest
 
 from conftest import ACME, Project, Result
 from fakes.openai_server import FakeOpenAI
-from faultline_sdk import langchain_gate, state
+from faultline_sdk import langchain_gate, state, tool_gate
 from faultline_sdk.config import Fault
 from faultline_sdk.plan import Plan
 from faultline_sdk.start import pick
@@ -365,7 +365,7 @@ def test_a_newer_library_gets_a_notice_and_still_works(monkeypatch: pytest.Monke
         def _run(self) -> str:
             return "real"
 
-    assert getattr(Later._run, langchain_gate.GATED)
+    assert getattr(Later._run, tool_gate.GATED)
     Later(name="later")
     assert "later" in run.seen
 
