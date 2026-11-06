@@ -49,7 +49,8 @@ Other HTTP libraries, such as requests, urllib and aiohttp, are not gated. See [
 ## The label
 
 A request's label is `http:` and the host in the request's own URL, in lower case, such as `http:inventory.acme.internal`.
-The port, any password in the URL and any proxy are not part of it.
+The port, any password in the URL and any proxy are not part of it, and a label with a port is rejected.
+An IPv6 address is written `http:[::1]`.
 A request sent through a proxy is labelled by the host it asks for, not by the proxy.
 
 A mock or a fault can be narrowed with `method` and `path`.

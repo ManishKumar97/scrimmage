@@ -18,7 +18,7 @@ import jsonschema
 import pytest
 
 from conftest import Project, Result
-from faultline_sdk import config, http_gate, plan, state
+from faultline_sdk import config, http_gate, labels, plan, state
 from faultline_sdk.config import Fault, Mock
 from faultline_sdk.errors import ConfigError, FaultlineRefused
 from faultline_sdk.plan import Plan
@@ -832,6 +832,9 @@ def test_hosts_are_lowercase_and_real_forms_are_normalized(tmp_path: Path) -> No
         (f"[[test.mock]]\ncall = '{LABEL}'\npath = '/a?b=1'\n", "", "query string is not matched"),
         (f"[[test.mock]]\ncall = '{LABEL} GET /a'\n", "", "in their own settings"),
         ("[[test.mock]]\ncall = 'http:'\n", "", "needs a host"),
+        ("[[test.mock]]\ncall = 'http:localhost:8000'\n", "", "has a port"),
+        ("[[test.fault]]\ncall = 'http:a.b:8000'\ndo = 'timeout'\n", "", "has a port"),
+        ("", 'real = ["http:a.b:8000 POST"]', "has a port"),
         ("[[test.mock]]\ncall = 'http:*'\n", "", "needs a host"),
         (f"[[test.fault]]\ncall = '{LABEL}'\ndo = 'error'\n", "", "'error' works only"),
         (
@@ -857,6 +860,19 @@ def test_bad_web_settings_are_rejected(tmp_path: Path, body: str, agent: str, me
         load_mock(tmp_path, body, agent)
 
 
+@pytest.mark.design("web.ipv6_host")
+@pytest.mark.parametrize("written", ["http:[::1]", "http:::1"])
+def test_an_ipv6_host_can_be_named_and_matches_its_request(lib: Any, written: str) -> None:
+    label = labels.check(written, "x")
+    assert label == "http:::1"
+    doc = plan.mock_json(Mock(label, None, None, text="m"))
+    schema = json.loads((Path(plan.__file__).parent / "schemas" / "plan.v1.json").read_text())
+    jsonschema.Draft202012Validator(schema["$defs"]["web_label"]).validate(doc["call"])
+    gate(lib, mocks=(Mock(label, None, None, text="m"),))
+    with lib.Client() as client:
+        assert client.get("http://[::1]:9/x").text == "m"
+
+
 @pytest.mark.design("web.plan_schema")
 def test_a_plan_with_web_mocks_and_faults_fits_the_schema_and_round_trips(tmp_path: Path) -> None:
     body = (
@@ -865,7 +881,7 @@ def test_a_plan_with_web_mocks_and_faults_fits_the_schema_and_round_trips(tmp_pa
         )
         + f'[[test.fault]]\ncall = "{LABEL}"\nmethod = "GET"\npath = "/s"\ndo = "timeout"\n'
     )
-    loaded = load_mock(tmp_path, body, 'real = ["http:a POST /b"]')
+    loaded = load_mock(tmp_path, body, 'real = ["http:a POST /b", "http:[::1] POST /b"]')
     row_ = plan.rows(loaded)[1]
     doc = plan.plan_for(loaded, row_, "r").to_json()
     schema = json.loads((Path(plan.__file__).parent / "schemas" / "plan.v1.json").read_text())

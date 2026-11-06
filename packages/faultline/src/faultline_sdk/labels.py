@@ -4,6 +4,7 @@ This version knows tool labels, model labels, web labels and, under [agent] real
 hosted MCP servers.
 """
 
+import ipaddress
 import re
 
 from faultline_sdk.errors import ConfigError
@@ -14,7 +15,7 @@ PROVIDERS = ("openai",)  # providers with a built-in address table
 MODEL_OPS = ("embeddings", "moderations", "input_tokens")  # calls that only read or compute
 MODEL = re.compile(r"model(?::(?P<provider>[a-z*][a-z0-9_-]*)(?:/(?P<op>[a-z_]+))?)?")
 HOSTED = re.compile(r"hosted:mcp/[A-Za-z0-9_.-]+")
-WEB_HOST = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
+WEB_HOST = re.compile(r"[a-z0-9][a-z0-9._-]*")
 WEB_METHOD = re.compile(r"[A-Za-z]+")
 WEB_PATH = re.compile(r"/[^\s?#]*")
 DOCS = "see docs/configuration.md"
@@ -57,9 +58,7 @@ def check(text: str, where: str, *, pattern: bool = False) -> str:
 def check_web(text: str, where: str, *, pattern: bool) -> str:
     """http:<host>, and under [agent] real also http:<host> METHOD /path. Hosts are lowercase."""
     parts = text.removeprefix("http:").split(" ")
-    host = parts[0].lower()
-    if not WEB_HOST.fullmatch(host):
-        raise ConfigError(f"{where}: {text!r} needs a host, of the form 'http:<host>'; {DOCS}")
+    host = web_host(parts[0], text, where)
     if len(parts) == 1:
         return f"http:{host}"
     form = "'http:<host> METHOD /path'"
@@ -78,6 +77,24 @@ def method_of(value: str, where: str) -> str:
     if not WEB_METHOD.fullmatch(value):
         raise ConfigError(f"{where} method: {value!r} is not an HTTP method")
     return value.upper()
+
+
+def web_host(text: str, label: str, where: str) -> str:
+    """A host as a request's URL has it: lowercase, no port, an IPv6 address unbracketed."""
+    host = text.lower()
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    if ":" in host:
+        try:
+            ipaddress.IPv6Address(host)
+        except ValueError:
+            raise ConfigError(
+                f"{where}: {label!r} has a port; a label names the host only"
+            ) from None
+        return host
+    if not WEB_HOST.fullmatch(host):
+        raise ConfigError(f"{where}: {label!r} needs a host, of the form 'http:<host>'; {DOCS}")
+    return host
 
 
 def path_of(value: str, where: str) -> str:
