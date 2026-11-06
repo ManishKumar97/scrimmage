@@ -890,3 +890,13 @@ def test_an_async_override_is_refused_and_a_mixin_stays_as_it_was() -> None:
         state.install(None)
     assert asyncio.run(Mixin().ainvoke({})) == "REAL WRITE RAN"
     assert "overrides ainvoke" in str(sink.lines[0]["mistake"])
+
+
+@pytest.mark.design("labels.only_the_root_reports_tools")
+def test_a_python_child_does_not_report_the_agents_tools(
+    project: Project, fake_openai: Fake
+) -> None:
+    graph(project, "answer_after_a_child", "")
+    result = project.test(fake_openai(ACME))
+    assert result.code == 0, result.out + result.err
+    assert "names no tool" not in result.out

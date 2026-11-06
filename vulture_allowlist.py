@@ -74,3 +74,4 @@ _.run_override_called_directly  # tests/example/acme/unsafe.py: a test's faultli
 _.model_post_init  # tests/example/acme/unsafe.py: pydantic calls it
 _.context  # tests/example/acme/unsafe.py: pydantic passes it
 _.run_set_on_the_tool_called_directly  # tests/example/acme/unsafe.py: a test names it
+_.answer_after_a_child  # tests/example/acme/graph.py: a test's faultline.toml names it

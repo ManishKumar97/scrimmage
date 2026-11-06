@@ -59,8 +59,9 @@ def start() -> None:
     sender.proc = run_state.proc
     sender.start()
     atexit.register(sender.flush)
-    if not plan.tools:  # registered after the flush, so it runs first
+    if not plan.tools and not child:  # registered after the flush, so it runs first
         # With no tools list the runner cannot know the names; a framework's adapter does.
+        # A child made only some of the agent's tools, so it does not speak for them.
         atexit.register(lambda: report_tools(run_state))
     state.install(run_state)
     # A forked child is a child too: it keeps the mocks and the safety rules, no faults.

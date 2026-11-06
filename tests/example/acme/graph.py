@@ -5,6 +5,8 @@ the same bot with a tool set up differently for one test each.
 """
 
 import asyncio
+import subprocess
+import sys
 from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import AnyMessage
@@ -70,6 +72,12 @@ def answer(question: str) -> dict[str, Any]:
 
 async def answer_async(question: str) -> dict[str, Any]:
     return await build(TOOLS).ainvoke({"messages": [("user", question)]})
+
+
+def answer_after_a_child(question: str) -> dict[str, Any]:
+    """A Python child ends first and has none of the agent's tools."""
+    subprocess.run([sys.executable, "-c", "pass"], check=True)
+    return answer(question)
 
 
 def answer_handled(question: str) -> dict[str, Any]:
