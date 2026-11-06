@@ -172,6 +172,7 @@ def test_the_bot_answers_and_its_child_is_refused(project: Project, fake_openai:
     assert result.code == 2, result.out + result.err
     summary = summary_of(result)
     assert summary["outcome"] == "refused call"
+    assert summary["answer"] == "Order 1234 shipped on Oct 30. SKU-42 has 12 in stock."
     tools = {(x["call"], x["action"]) for x in calls(result) if x.get("kind") == "tool"}
     assert tools == {
         ("tool:get_order", "mock"),
@@ -208,6 +209,17 @@ def test_the_answer_file_wins_over_the_last_printed_line(project: Project) -> No
         "print('a printed line')\n"
     )
     assert summary_of(script(project, code))["answer"] == "from the file"
+
+
+@pytest.mark.design("script.child_prints_last")
+def test_a_child_that_prints_after_the_program_has_the_last_line(project: Project) -> None:
+    """The listed limit: all of a group's output is one file, so the answer file is the fix."""
+    code = (
+        "import subprocess, sys\n"
+        "print('the answer', flush=True)\n"
+        "subprocess.run([sys.executable, '-c', 'print(\"from the child\")'])\n"
+    )
+    assert summary_of(script(project, code))["answer"] == "from the child"
 
 
 def test_a_printed_secret_is_redacted_from_the_answer(project: Project) -> None:
