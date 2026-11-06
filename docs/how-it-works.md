@@ -35,7 +35,7 @@ The gate sits below the library's retries, so everything above it behaves as it 
 
 Every hop of a redirect goes through the same function, so a hop to another model host is decided and budgeted by itself. A redirect to any other host is refused before it is followed, because past that point the gate could not see the call.
 
-Before swapping, the gate checks that the function exists and takes the arguments it expects. If a new version of the library changed it, nothing could be gated, so the program stops and the test ends at once with exit code 3, naming the library. If only what faults are built from has changed, the gate keeps refusing and budgeting without faults, and the test still fails. A newer version that passes the check only gets a warning.
+Before swapping, the gate checks that the function exists, takes the arguments it expects, and that the library still has the stream types it needs to watch a reply. If a new version of the library changed it, nothing could be gated, so the program stops and the test ends at once with exit code 3, naming the library. If only what faults are built from has changed, the gate keeps refusing and budgeting without faults, and the test still fails. A newer version that passes the check only gets a warning.
 
 ## The plan and the secret
 

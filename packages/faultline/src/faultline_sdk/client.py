@@ -2,7 +2,8 @@
 
 Record lines go to a queue and a sender thread sends them in batches, at least every
 100 ms and at exit, so a gate never waits for the network. A full queue drops a line
-and marks the record incomplete, except a refusal, which waits for room.
+and marks the record incomplete, except a refusal or a model call's line, which
+waits for room.
 """
 
 import base64
@@ -126,7 +127,7 @@ class Sender:
         self._thread.start()
 
     def put(self, line: dict[str, object], *, keep: bool = False) -> None:
-        """Queue a line. keep: wait for room instead of dropping (refusals).
+        """Queue a line. keep: wait for room instead of dropping (refusals, model calls).
 
         Never waits for the network: a gate only takes a short lock to count the line.
         """
