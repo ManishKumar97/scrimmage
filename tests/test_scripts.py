@@ -189,6 +189,11 @@ def test_the_last_printed_line_is_the_answer(project: Project) -> None:
     assert summary_of(result)["outcome"] == "answered"
 
 
+def test_only_a_newline_ends_a_printed_line(project: Project) -> None:
+    code = "print('one\\x0btwo\\x85three\\x1cfour')\n"
+    assert summary_of(script(project, code))["answer"] == "one\x0btwo\x85three\x1cfour"
+
+
 @pytest.mark.design("script.stderr_is_not_the_answer")
 def test_what_goes_to_stderr_is_never_the_answer(project: Project) -> None:
     code = "import sys\nprint('the answer', flush=True)\nprint('a log line', file=sys.stderr)\n"

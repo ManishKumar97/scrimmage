@@ -527,7 +527,7 @@ def last_line(path: Path) -> str | None:
     with path.open("rb") as out:
         out.seek(max(0, path.stat().st_size - TAIL_BYTES))
         tail = out.read().decode("utf-8", "replace")
-    return next((line for line in reversed(tail.splitlines()) if line.strip()), None)
+    return next((line for line in reversed(tail.split("\n")) if line.strip()), None)
 
 
 def stop_group(proc: subprocess.Popen[bytes]) -> None:
