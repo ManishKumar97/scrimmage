@@ -21,6 +21,10 @@ TOOLS_LINE = (
     'tools    = ["acme.tools:get_order", "acme.tools:check_inventory", '
     '"acme.tools:refund_order", "acme.tools:get_stock"]\n'
 )
+STOCK_MOCK = (
+    '[[test.mock]]\ncall    = "tool:get_stock"             # returns an acme.models.Stock object\n'
+    'returns = {sku = "SKU-42", count = 12}\n'
+)
 TIMEOUT = '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'
 
 
@@ -293,6 +297,62 @@ def test_a_changed_library_stops_the_run_with_exit_3(project: Project) -> None:
     assert "does not have the functions Faultline gates" in result.out
 
 
+@pytest.mark.design("labels.fault_typo_costs_one_run")
+def test_a_misspelled_fault_stops_the_test_after_one_baseline_run(
+    project: Project, fake_openai: Fake
+) -> None:
+    graph(project, fault=TIMEOUT.replace("tool:get_order", "tool:get_ordr"), runs=3)
+    project.edit("parallel = 1", "parallel = 4")
+    fake = fake_openai(ACME)
+    result = project.test(fake)
+    assert result.code == 2, result.out + result.err
+    assert len(result.records()) == 1  # one baseline run, not six
+    assert "tool:get_ordr names no tool the agent has" in result.out
+    assert "the tools are check_inventory, get_order, " in result.out
+
+
+@pytest.mark.design("labels.mock_typo_on_real_tool")
+def test_a_misspelled_mock_of_a_tool_under_real_stops_the_test(
+    project: Project, fake_openai: Fake
+) -> None:
+    graph(project, fault="")
+    project.edit('call    = "tool:get_stock"', 'call    = "tool:check_inventry"')
+    project.edit('returns = {sku = "SKU-42", count = 12}', 'returns = "12 in stock"')
+    project.edit('real     = ["tool:check_inventory"]', 'real = ["tool:*"]')
+    fake = FakeOpenAI(ACME)
+    fake.start()
+    try:
+        result = project.test(fake)
+    finally:
+        fake.stop()
+    assert result.code == 2, result.out + result.err
+    assert len(result.records()) == 1
+    assert "tool:check_inventry names no tool the agent has" in result.out
+
+
+@pytest.mark.design("labels.never_used_mock")
+def test_a_mock_no_run_used_is_a_test_mistake(project: Project, fake_openai: Fake) -> None:
+    graph(project, fault="")
+    result = project.test(fake_openai(["acme_get_order", "acme_answer"]))
+    assert result.code == 2, result.out + result.err
+    assert "the mock on tool:get_stock was never used" in result.out
+    assert "the tools seen are check_inventory, get_order, " in result.out
+
+
+@pytest.mark.design("labels.siblings_end_as_stopped")
+def test_runs_stopped_by_a_bad_label_end_as_stopped(project: Project, fake_openai: Fake) -> None:
+    """The lone first run reports nothing, so the check falls to a run beside others."""
+    graph(project, "first_goes_quiet", TIMEOUT.replace("tool:get_order", "tool:get_ordr"), 3)
+    project.edit("parallel = 1", "parallel = 2\nrun_timeout = 2")
+    project.edit('answer   = "messages[-1].content"\n', "")
+    project.edit("[agent]\n", '[agent]\nmax_cost_usd = "none"\n')
+    result = project.test()
+    assert result.code == 2, result.out + result.err
+    outcomes = sorted(str(s["outcome"]) for s in result.summaries())
+    assert outcomes == ["answered", "stopped", "timed out"]
+    assert "tool:get_ordr names no tool the agent has" in result.out
+
+
 @pytest.mark.design("adapter.class_tool")
 def test_a_tool_written_as_a_class_is_gated(project: Project, fake_openai: Fake) -> None:
     graph(project, "answer_custom_class")
@@ -351,6 +411,7 @@ def test_a_tool_with_an_artifact_is_mocked_with_a_list_of_two(
 ) -> None:
     project.edit('returns = "shipped, Oct 30"', f"returns = {returns}")
     project.edit('call    = "tool:get_order"', 'call    = "tool:get_report"')
+    project.edit(STOCK_MOCK, "")
     graph(project, "report_tool", "")
     project.edit('answer   = "messages[-1].content"\n', "")
     project.edit("[agent]\n", '[agent]\nmax_cost_usd = "none"\n')

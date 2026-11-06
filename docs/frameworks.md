@@ -52,10 +52,12 @@ If the path does not fit, the run ends as crashed, and its `.log` file says whic
 ## Tool names
 
 A label uses the name the model sees, which LangChain takes from the tool.
-With no `tools` list, Faultline learns those names only when the agent runs, so it cannot check them before the first run:
+With no `tools` list, Faultline learns those names only when the agent runs, so it runs one baseline alone first:
 
-- a misspelled mock leaves the real tool unmocked, so the call is refused;
-- a misspelled fault never fires, so the row is reported as a mistake in the test.
+- a mock or fault naming a tool the agent does not have stops the test there, with exit 2 and a list of the real tools, so a typo costs one run;
+- at the end, a mock no run in any row used is a mistake in the test, so a mock on a tool the agent never calls does not pass silently.
+
+A tool made only later in a run, after the first baseline ended, is not known to that check.
 
 ## What the error fault does
 

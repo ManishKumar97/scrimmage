@@ -429,6 +429,12 @@
         },
         "mistake": {
           "type": "string"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     }

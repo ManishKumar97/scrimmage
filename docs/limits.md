@@ -7,7 +7,7 @@
 - **asyncio only for async agents.** An async model call outside asyncio, such as under trio, is refused and ends its run, because Faultline cannot budget it. Synchronous agents are not affected.
 - **One framework.** LangChain tools, which LangGraph runs, have an adapter. A tool on another framework is not gated, so offering it to the model stops the test.
 - **A tool's function called directly.** `my_tool.func(...)` skips the gate, so nothing refuses or records it.
-- **Tool names with no `tools` list.** They are not checked before the first run: a misspelled mock is refused when the agent calls the tool, and a misspelled fault never fires.
+- **Tool names with no `tools` list.** They are checked after one baseline run, not before it, so a typo costs that one run. A tool the agent makes only in some runs may be reported as unknown.
 - **An `_arun` that starts `_run` on the default executor itself** counts as two calls and two record lines. LangChain's own `_arun` counts as one.
 - **A tool renamed after it is made** is not seen, so offering it to the model stops the test.
 - **LangChain versions.** Tested with langchain-core 1.7. A newer one gets a notice; an older one gets none.

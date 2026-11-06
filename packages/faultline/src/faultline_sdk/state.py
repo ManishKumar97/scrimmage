@@ -172,7 +172,15 @@ class RunState:
             self._seq += 1
             return self._seq
 
-    def notice(self, kind: str, library: str, message: str, *, mistake: str | None = None) -> None:
+    def notice(
+        self,
+        kind: str,
+        library: str,
+        message: str,
+        *,
+        mistake: str | None = None,
+        tools: list[str] | None = None,
+    ) -> None:
         """A line that is not a call, such as a library version the gate cannot use."""
         line: dict[str, object] = {
             "v": RECORD_VERSION,
@@ -187,6 +195,8 @@ class RunState:
         }
         if mistake is not None:
             line["mistake"] = redact(mistake)
+        if tools is not None:
+            line["tools"] = tools
         self.sink.put(line, keep=True)
 
     def finish(

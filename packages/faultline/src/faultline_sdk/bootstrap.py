@@ -25,6 +25,12 @@ def stop(message: str) -> NoReturn:
     os._exit(1)
 
 
+def report_tools(run_state: state.RunState) -> None:
+    run_state.notice(
+        "tools_seen", "faultline", "the tools a gate reaches", tools=sorted(run_state.seen)
+    )
+
+
 def start() -> None:
     token = os.environ["FAULTLINE_TOKEN"]
     url = os.environ.get("FAULTLINE_CONTROL_URL", "")
@@ -53,6 +59,9 @@ def start() -> None:
     sender.proc = run_state.proc
     sender.start()
     atexit.register(sender.flush)
+    if not plan.tools:  # registered after the flush, so it runs first
+        # With no tools list the runner cannot know the names; a framework's adapter does.
+        atexit.register(lambda: report_tools(run_state))
     state.install(run_state)
     # A forked child is a child too: it keeps the mocks and the safety rules, no faults.
     os.register_at_fork(after_in_child=run_state.drop_faults)
