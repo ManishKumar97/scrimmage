@@ -418,6 +418,14 @@ def test_a_text_mock_an_empty_mock_and_its_headers(lib: Any) -> None:
     assert (two.status_code, two.content, two.headers.get("content-type")) == (204, b"", None)
 
 
+@pytest.mark.design("web.mock_header_wins")
+def test_a_mock_header_wins_whatever_its_case(lib: Any) -> None:
+    gate(lib, mocks=(web_mock(json={"a": 1}, headers=(("Content-Type", "text/csv"),)),))
+    with lib.Client() as client:
+        reply = client.get(URL)
+    assert reply.headers.get_list("content-type") == ["text/csv"]
+
+
 def test_a_status_with_no_standard_name_still_has_a_body(lib: Any) -> None:
     gate(lib, faults=(Fault(LABEL, "status 599", "always"),))
     with lib.Client() as client:

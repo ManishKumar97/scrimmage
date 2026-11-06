@@ -402,13 +402,16 @@ def mocked(
     """Build the test's fixed reply. Nothing is sent."""
     mock = ctx.run.plan.mocks[step.decision.mock or 0]
     headers = dict(mock.headers)
+    kind = None
     if mock.json is not None:
         body = json.dumps(mock.json).encode()
-        headers.setdefault("content-type", "application/json")
+        kind = "application/json"
     else:
         body = (mock.text or "").encode()
         if mock.text is not None:
-            headers.setdefault("content-type", "text/plain; charset=utf-8")
+            kind = "text/plain; charset=utf-8"
+    if kind is not None and "content-type" not in {name.lower() for name in headers}:
+        headers["content-type"] = kind
     extra.update(status=mock.status, result=blob(body, ctx.sender))
     ctx.run.finish(step)
     response = reply(module, mock.status, headers, body, request)
