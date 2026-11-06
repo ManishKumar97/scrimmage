@@ -910,3 +910,14 @@ def test_a_tool_annotated_any_keeps_the_mock_as_written(annotation: object) -> N
 
     tool.__annotations__["return"] = annotation
     assert mocks.build({"a": 1}, None, tool, []) == {"a": 1}
+
+
+@pytest.mark.design("adapter.plumbing_not_recorded")
+def test_langgraphs_runtime_argument_is_left_out_of_the_record(
+    project: Project, fake_openai: Fake
+) -> None:
+    graph(project, "answer_with_runtime", "")
+    result = project.test(fake_openai(ACME))
+    args = tool_lines(result.records()[0])[0]["args"]
+    assert isinstance(args, dict)
+    assert args["preview"] == '{"order_id": "1234"}'

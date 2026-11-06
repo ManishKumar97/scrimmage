@@ -15,7 +15,7 @@ from langchain_core.tools import BaseTool, Tool, ToolException, tool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.prebuilt import ToolNode, ToolRuntime, tools_condition
 
 from acme.models import Stock
 
@@ -78,6 +78,17 @@ def answer_after_a_child(question: str) -> dict[str, Any]:
     """A Python child ends first and has none of the agent's tools."""
     subprocess.run([sys.executable, "-c", "pass"], check=True)
     return answer(question)
+
+
+def answer_with_runtime(question: str) -> dict[str, Any]:
+    """get_order reads the conversation through LangGraph's runtime argument."""
+
+    @tool
+    def get_order(order_id: str, runtime: ToolRuntime) -> str:
+        """Look up an order's status and delivery date."""
+        return str(len(runtime.state["messages"]))
+
+    return build([get_order, get_stock]).invoke({"messages": [("user", question)]})
 
 
 def answer_handled(question: str) -> dict[str, Any]:
