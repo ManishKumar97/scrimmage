@@ -13,10 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from derail_sdk import protocol
+from derail_sdk import protocol, state
 from derail_sdk.budget import Ledger
 from derail_sdk.client import ControlClient, ControlError, Sender
 from derail_sdk.control import ControlServer, proc_key
+from derail_sdk.plan import Plan
 from derail_sdk.records import RecordStore
 
 TOKEN = "a" * 64
@@ -30,6 +31,10 @@ def server(tmp_path: Path) -> Iterator[ControlServer]:
     control.open_run("run-1", "baseline", PLAN)
     yield control
     control.stop()
+
+
+def a_plan() -> Plan:
+    return Plan("run-1", "t", "baseline", (), (), (), ("tool:a",), 60.0)
 
 
 def raw(
@@ -290,6 +295,22 @@ def test_a_forked_sender_starts_empty_with_new_locks(server: ControlServer) -> N
     sender.client = ControlClient(server.url, TOKEN)
     sender.put(line(2))
     assert server.store.lines("run-1") == [line(2)]
+
+
+@pytest.mark.design("stop.daemon_poisoned")
+def test_a_line_for_a_closed_run_poisons_the_process(server: ControlServer) -> None:
+    run = state.RunState(
+        a_plan(), Sender(ControlClient(server.url, TOKEN), "run-1", eager=True), []
+    )
+    run.sink.on_closed = run.run_closed  # type: ignore[attr-defined]
+    server.close_run("run-1")
+    run.begin("a", {})
+    step = run.begin("a", {})
+    run.finish(step)
+    assert run.refused == state.CLOSED
+    late = run.begin("a", {})
+    assert late.decision.reason == "poisoned"
+    assert "run has ended" in str(run.refusal(late))
 
 
 def test_a_server_away_for_long_keeps_a_bounded_backlog(monkeypatch: pytest.MonkeyPatch) -> None:

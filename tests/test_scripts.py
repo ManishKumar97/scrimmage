@@ -1182,21 +1182,38 @@ def test_a_double_fork_with_no_new_session_is_stopped_with_the_group(project: Pr
     assert not alive(pids_in(project.root / "pid")[0])
 
 
-@pytest.mark.design("stop.daemon_escapes")
-def test_a_daemon_with_a_new_session_escapes_but_its_write_stays_refused(project: Project) -> None:
-    """The listed limit: only the group is stopped. Its gates stay on, so writes stay refused."""
-    after = (
-        "\n        import contextlib\n"
-        "        from acme import tools\n"
-        "        while not os.path.exists('the run ended'):\n"
-        "            time.sleep(0.01)\n"
-        "        try:\n"
-        "            print(tools.refund_order('1'))\n"
-        "        except Exception as exc:\n"
-        "            open('result.tmp', 'w').write(type(exc).__name__)\n"
-        "            os.rename('result.tmp', 'result')\n"
-    )
-    code = DOUBLE_FORK.format(setsid_first="", setsid_second="os.setsid()", after=after)
+DAEMON_LOOP = """
+        from acme import tools
+        while not os.path.exists('the run ended'):
+            time.sleep(0.01)
+        try:
+            print(tools.refund_order('1'))
+        except Exception as exc:
+            open('result.tmp', 'w').write(type(exc).__name__)
+            os.rename('result.tmp', 'result')
+"""
+
+
+@pytest.mark.design("stop.daemon_found")
+def test_a_daemon_that_left_the_group_is_found_and_killed(project: Project) -> None:
+    code = DOUBLE_FORK.format(setsid_first="", setsid_second="os.setsid()", after="")
+    result = script(project, code)
+    pid = pids_in(project.root / "pid")[0]
+    assert not alive(pid), result.out
+    assert summary_of(result)["outcome"] == "answered"
+    line = next(x for x in lines_of(result) if x.get("notice") == "left_group")
+    assert str(pid) in str(line["message"])
+    assert "left the run's process group and was killed" in result.out
+    jsonschema.Draft202012Validator(RECORD).validate(line)
+
+
+@pytest.mark.design("stop.daemon_no_proc")
+def test_with_no_sweep_a_daemon_lives_on_and_its_write_stays_refused(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """As on a system with no /proc."""
+    monkeypatch.setattr(runner, "kill_those_who_left", lambda run, group: [])
+    code = DOUBLE_FORK.format(setsid_first="", setsid_second="os.setsid()", after=DAEMON_LOOP)
     result = script(project, code)
     pid = pids_in(project.root / "pid")[0]
     try:
@@ -1206,6 +1223,47 @@ def test_a_daemon_with_a_new_session_escapes_but_its_write_stays_refused(project
         assert wait_for(project.root / "result") == "DerailRefused"
     finally:
         os.kill(pid, signal.SIGKILL)
+
+
+WAIT = "import time; time.sleep(60)"
+
+
+@pytest.mark.design("stop.sweep_exact")
+def test_the_sweep_kills_only_the_exact_run(tmp_path: Path) -> None:
+    def sleeper(run: str) -> subprocess.Popen[bytes]:
+        env = {**os.environ, "DERAIL_RUN": run}
+        return subprocess.Popen([sys.executable, "-c", WAIT], env=env)
+
+    wanted, longer, shorter = sleeper("run-abc"), sleeper("run-abcd"), sleeper("run-ab")
+    env = {**os.environ, "NOT_DERAIL_RUN": "DERAIL_RUN=run-abc", "DERAIL_RUN": "x"}
+    other = subprocess.Popen([sys.executable, "-c", WAIT], env=env)
+    try:
+        while b"DERAIL_RUN=run-abc" not in Path(f"/proc/{wanted.pid}/environ").read_bytes():
+            time.sleep(0.01)  # until it has done its exec
+        killed = runner.kill_those_who_left("run-abc", -1)
+        assert [pid for pid, _ in killed] == [wanted.pid]
+        assert wanted.wait(timeout=10) == -signal.SIGKILL
+        assert longer.poll() is None and shorter.poll() is None and other.poll() is None
+    finally:
+        for proc in (wanted, longer, shorter, other):
+            proc.kill()
+            proc.wait()
+
+
+def test_the_sweep_leaves_a_member_of_the_group_to_the_group_stop() -> None:
+    env = {**os.environ, "DERAIL_RUN": "run-group"}
+    proc = subprocess.Popen([sys.executable, "-c", WAIT], env=env, start_new_session=True)
+    try:
+        assert runner.kill_those_who_left("run-group", proc.pid) == []
+        assert proc.poll() is None
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_a_system_with_no_proc_has_no_sweep(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "exists", lambda self: False)
+    assert runner.kill_those_who_left("run-1", 1) == []
 
 
 @pytest.mark.design("stop.exit_status_kept")

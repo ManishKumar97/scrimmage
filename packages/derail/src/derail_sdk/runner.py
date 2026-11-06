@@ -199,6 +199,7 @@ class Runner:
         except subprocess.TimeoutExpired:
             timed_out = True
         stop_group(proc)  # at the time limit, or a child that outlived the program
+        left = kill_those_who_left(run, proc.pid)
         with self.lock:
             del self.procs[run]
         state = self.server.close_run(run)
@@ -222,8 +223,9 @@ class Runner:
         gap = any(per_proc[proc] < made for proc, made in state.made.items())
         unfinished = not state.made or any(proc not in state.made for proc in per_proc)
         incomplete = bool(state.dropped) or (ended_itself and (gap or unfinished))
-        self.store.add(run, kept_out)
-        lines += kept_out
+        made = kept_out + [self.left_line(run, row, *entry) for entry in left]
+        self.store.add(run, made)
+        lines += made
         model = [line for line in lines if line.get("kind") == "model"]
         notices = [line for line in lines if "notice" in line]
         cost = sum(float(str(line.get("cost_usd") or 0)) for line in model)
@@ -292,6 +294,24 @@ class Runner:
             else None
         )
 
+    def line(self, run: str, row: planner.Row, seq: int, pid: object) -> dict[str, object]:
+        """A record line the runner writes itself, about a process that sent none."""
+        proc = {"host": socket.gethostname(), "pid": pid, "started": now_iso()}
+        return {
+            "v": RECORD_VERSION,
+            "run": run,
+            "test": row.test.name,
+            "row": row.name,
+            "seq": seq,
+            "proc": proc,
+            "library": "derail",
+        }
+
+    def left_line(self, run: str, row: planner.Row, pid: int, command: str) -> dict[str, object]:
+        text = redact(command)[:COMMAND_CAP]
+        message = f"process {pid} left the run's process group and was killed: {text}"
+        return {**self.line(run, row, 1, pid), "notice": "left_group", "message": message}
+
     def other_python_lines(self, run: str, row: planner.Row) -> list[dict[str, object]]:
         """A child on another Python tried to import a listed tool, and did not get it.
 
@@ -306,18 +326,8 @@ class Runner:
             process = cast(dict[str, object], report["process"])
             lines.append(
                 {
-                    "v": RECORD_VERSION,
-                    "run": run,
-                    "test": row.test.name,
-                    "row": row.name,
-                    "seq": number,
-                    "proc": {
-                        "host": socket.gethostname(),
-                        "pid": report["pid"],
-                        "started": now_iso(),
-                    },
+                    **self.line(run, row, number, report["pid"]),
                     "notice": "other_python",
-                    "library": "derail",
                     "message": redact(str(report["message"])),
                     "mistake": redact(str(report["message"])),
                     "process": {
@@ -469,6 +479,33 @@ def unused_mocks(config: Config, results: list[RunResult]) -> tuple[list[str], l
     return notes, mistakes
 
 
+def kill_those_who_left(run: str, group: int) -> list[tuple[int, str]]:
+    """SIGKILL any process that left the group but still holds this run, as (pid, command).
+
+    A process's own /proc environ is the only proof, and it must hold the exact variable.
+    A system with no /proc has no sweep.
+    """
+    if not Path("/proc/self/environ").exists():
+        return []
+    wanted = f"DERAIL_RUN={run}".encode()
+    killed: list[tuple[int, str]] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        pid = int(entry.name)
+        try:
+            if wanted not in (entry / "environ").read_bytes().split(b"\0"):
+                continue
+            if os.getpgid(pid) == group:
+                continue  # one SIGKILL has not finished yet
+            command = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+            os.kill(pid, signal.SIGKILL)
+        except OSError:  # another user's, or gone already
+            continue
+        killed.append((pid, command.strip()))
+    return killed
+
+
 def owner_only(path: Path) -> int:
     return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 
@@ -553,6 +590,12 @@ def report(
                     f"that tool makes this call, {row.fault.call} can never fire; "
                     "mock or fault one level, not both"
                 )
+        notes += [
+            f"{where}: {r.run}: {line['message']}"
+            for r in mine
+            for line in r.notices
+            if line.get("notice") == "left_group"
+        ]
         ended = Counter(r.outcome for r in mine if not r.exercised)
         if ended:
             how = ", ".join(f"{n} {outcome}" for outcome, n in sorted(ended.items()))

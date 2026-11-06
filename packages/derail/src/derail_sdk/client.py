@@ -16,6 +16,7 @@ import queue
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from urllib.parse import urlsplit
 
 from derail_sdk import protocol
@@ -113,6 +114,7 @@ class Sender:
         self.run = run
         self.proc = proc  # this process, as its record lines name it
         self.eager = eager  # send each line as it is made, with no thread
+        self.on_closed: Callable[[], None] = lambda: None  # the run has ended
         self._fresh()
 
     def _fresh(self) -> None:
@@ -253,6 +255,8 @@ class Sender:
             status = 0
         if status == 200:
             return True
+        if status == 409:
+            self.on_closed()
         with self._counts:
             self.unsent = lines + self.unsent
             self.dropped += dropped

@@ -122,6 +122,7 @@ def start(*, child: bool = False, target: str | None = None) -> None:
     sender = Sender(client, run, eager=child)
     run_state = state.RunState(plan, sender, prefixes, load=load, tools=names)
     sender.proc = run_state.proc
+    sender.on_closed = run_state.run_closed
     if plan is not None:
         tools, renames = plan.tools, plan.renames
         sender.start()

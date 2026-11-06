@@ -435,7 +435,8 @@
             "tools_seen",
             "answer_path",
             "process",
-            "other_python"
+            "other_python",
+            "left_group"
           ]
         },
         "process": {

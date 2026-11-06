@@ -27,6 +27,7 @@ from derail_sdk.redact import redact
 
 PREVIEW = 200
 BLOB_CAP = 10 * 1024 * 1024  # a side-folder item keeps its first 10 MB and is marked cut
+CLOSED = "a run that has ended"
 COMMAND_CAP = 1000  # a process's line keeps this much of its command, which can hold a question
 
 
@@ -190,6 +191,8 @@ class RunState:
                 f"{label}: this process has no plan for its run, so every call fails: "
                 f"{self.plan.unavailable}"
             )
+        if self.refused == CLOSED:
+            return DerailRefused(f"{label}: this process's run has ended, so every call fails")
         reason = step.decision.reason or "unlisted"
         first = self.refused or label
         if reason == "poisoned" or first != label:
@@ -219,6 +222,10 @@ class RunState:
             "blind_child": detail,
         }
         return DerailRefused(messages.get(reason, f"{label} is refused: {detail}"))
+
+    def run_closed(self) -> None:
+        """The run ended and this process lived on, so nothing it does can be recorded."""
+        self.refused = self.refused or CLOSED
 
     def forked(self) -> None:
         """This process is a copy of its parent, so nothing it holds about the process is true.
