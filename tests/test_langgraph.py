@@ -225,6 +225,18 @@ def test_a_real_toolexception_and_an_injected_error_are_handled_alike(
     assert tool_lines(injected_run)[0]["action"] == "fault"
 
 
+@pytest.mark.design("adapter.listed_framework_tool")
+def test_a_framework_tool_can_also_be_listed_under_tools(
+    project: Project, fake_openai: Fake
+) -> None:
+    graph(project, fault="")
+    project.edit("[agent]\n", '[agent]\ntools = ["acme.graph:get_order", "acme.graph:get_stock"]\n')
+    project.edit('real     = ["tool:check_inventory"]', "real = []")
+    result = project.test(fake_openai(ACME))
+    assert result.code == 0, result.out + result.err
+    assert [x["action"] for x in tool_lines(result.records()[0])] == ["mock", "mock"]
+
+
 @pytest.mark.design("adapter.class_tool")
 def test_a_tool_written_as_a_class_is_gated(project: Project, fake_openai: Fake) -> None:
     graph(project, "answer_custom_class")

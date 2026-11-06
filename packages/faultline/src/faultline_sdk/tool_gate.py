@@ -156,6 +156,8 @@ def swap(module: ModuleType, names: list[str], renamed: dict[str, str] | None = 
     """Swap each named function; its label uses the name the model sees."""
     for name in names:
         tool = getattr(module, name, None)
+        if hasattr(tool, "invoke") and hasattr(tool, "_run"):
+            continue  # a framework's tool object: its adapter gates it
         if not callable(tool):
             message = (
                 f"{module.__name__}:{name} is listed under [agent] tools, but "
