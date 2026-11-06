@@ -11,7 +11,7 @@ import pytest
 from conftest import Project, Result
 from derail_sdk import process_gate, python_args
 from test_other_python import other_version  # noqa: F401  # a fixture
-from test_scripts import RECORD, calls, lines_of, script, summary_of, write_config
+from test_scripts import RECORD, calls, script, summary_of, write_config
 
 WRITE = "from pathlib import Path\nPath('REAL WRITE').write_text('done')\n"
 STARTS = {

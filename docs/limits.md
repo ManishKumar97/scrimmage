@@ -36,7 +36,7 @@
 - **A blind child on another Python.** A Python that is not the run's, with its own `env`, passes the check and is not kept from a listed tool. That includes a venv elsewhere made from the same binary. The base binary of your venv counts as this Python, and is refused.
 - **multiprocessing after an edit of the environment.** `spawn` and `forkserver` start their workers through a call no audit event reports. A worker inherits `os.environ`, so it joins, unless your code removed `PYTHONPATH` or `DERAIL_TOKEN` from it first. Then it runs blind, with no refusal.
 - **Refusals that can surprise you.** Each is a `process:python` refusal, fixed by the message:
-  `pip install` of a source package on the run's Python, as pip starts Python with `-I` or a clean environment to build it;
+  `pip install` of a source package on the run's Python, as pip builds it under a `PYTHONPATH` of its own;
   `env={**os.environ, "PYTHONPATH": "..."}`, which replaces Derail's folder, so add to the value instead;
   a tool on the run's Python with a shebang such as `#!/usr/bin/python3 -Es`, as on a system venv.
 - **A tool in a file another program runs.** `python -m cProfile bot.py` and `runpy.run_path("bot.py")` run `bot.py` as `__main__` with a program Derail does not read as `bot.py`, so a listed tool defined in it is not stopped and writes for real, exit 0. Keep tools in a module.
