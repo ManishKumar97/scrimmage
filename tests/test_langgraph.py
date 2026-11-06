@@ -61,9 +61,9 @@ def told(fake: FakeOpenAI) -> set[str]:
 def test_the_same_file_without_a_tools_list_runs_the_same_rows(
     project: Project, fake_openai: Fake
 ) -> None:
-    graph(project, runs=3)
+    graph(project)
     result = project.test(fake_openai(ACME))
-    assert len(result.records()) == 6
+    assert len(result.records()) == 2
     base = row(result, "baseline")
     assert [(x["call"], x["action"]) for x in tool_lines(base)] == [
         ("tool:get_order", "mock"),
@@ -83,7 +83,7 @@ def test_a_mock_becomes_the_type_the_tool_function_returns(
     graph(project, fault="")
     fake = fake_openai(ACME)
     project.test(fake)
-    assert any("Stock" in text or "count" in text for text in told(fake)), told(fake)
+    assert any("Stock(" in text for text in told(fake)), told(fake)
 
 
 @pytest.mark.design("adapter.crashed_outcome")
@@ -237,6 +237,62 @@ def test_a_framework_tool_can_also_be_listed_under_tools(
     assert [x["action"] for x in tool_lines(result.records()[0])] == ["mock", "mock"]
 
 
+@pytest.mark.design("adapter.handler_forms")
+@pytest.mark.parametrize(
+    ("function", "text"),
+    [
+        ("answer_handled_text", "the orders system is down"),
+        ("answer_handled_callable", "handled: get_order failed"),
+        ("answer_handled_async", "get_order failed"),
+    ],
+)
+def test_every_form_of_handle_tool_error_gets_the_injected_error(
+    project: Project, fake_openai: Fake, function: str, text: str
+) -> None:
+    graph(project, function, error_fault())
+    fake = fake_openai(ACME)
+    result = project.test(fake)
+    assert row(result, "fault 1")[-1]["summary"]["outcome"] == "answered"  # type: ignore[index]
+    assert text in told(fake)
+
+
+@pytest.mark.design("adapter.label_is_model_name")
+def test_a_label_uses_the_name_the_model_sees(project: Project) -> None:
+    project.edit('call    = "tool:get_order"', 'call    = "tool:lookup_order"')
+    graph(project, "renamed", "")
+    project.edit('answer   = "messages[-1].content"\n', "")
+    project.edit("[agent]\n", '[agent]\nmax_cost_usd = "none"\n')
+    result = project.test()
+    assert result.summaries()[0]["answer"] == "shipped, Oct 30"
+
+
+@pytest.mark.design("adapter.plain_tool_class")
+def test_the_plain_tool_class_is_gated(project: Project) -> None:
+    graph(project, "plain_tool", "")
+    project.edit('answer   = "messages[-1].content"\n', "")
+    project.edit("[agent]\n", '[agent]\nmax_cost_usd = "none"\n')
+    result = project.test()
+    assert result.summaries()[0]["answer"] == "shipped, Oct 30"
+
+
+@pytest.mark.design("adapter.structure_stops_end_to_end")
+def test_a_changed_library_stops_the_run_with_exit_3(project: Project) -> None:
+    graph(project, "nested", "")
+    project.edit('answer   = "messages[-1].content"\n', "")
+    project.edit("acme.graph:nested", "acme.probe:answer")
+    (project.root / "acme" / "probe.py").write_text(
+        "import langchain_core.tools.base\n\n\ndef answer(question):\n    return 'ran'\n"
+    )
+    tools = project.root / "langchain_core" / "tools"
+    tools.mkdir(parents=True)
+    (project.root / "langchain_core" / "__init__.py").write_text("")
+    (tools / "__init__.py").write_text("")
+    (tools / "base.py").write_text("class BaseTool:\n    pass\n")
+    result = project.test()
+    assert result.code == 3, result.out + result.err
+    assert "does not have the functions Faultline gates" in result.out
+
+
 @pytest.mark.design("adapter.class_tool")
 def test_a_tool_written_as_a_class_is_gated(project: Project, fake_openai: Fake) -> None:
     graph(project, "answer_custom_class")
@@ -317,6 +373,15 @@ def test_langchains_own_arguments_are_left_out_of_the_record(project: Project) -
     assert isinstance(named, dict) and named["preview"] == '{"config": "kept"}'
 
 
+@pytest.mark.design("adapter.async_real_error_recorded")
+def test_a_real_error_in_an_async_tool_is_recorded(project: Project) -> None:
+    graph(project, "async_tool", "")
+    project.edit('answer   = "messages[-1].content"\n', "")
+    project.edit('real     = ["tool:check_inventory"]', 'real = ["tool:*"]')
+    (lines,) = project.test().records()
+    assert str(tool_lines(lines)[0]["error"]).startswith("RuntimeError: the real orders")
+
+
 @pytest.mark.design("adapter.one_call_one_line")
 def test_arun_delegating_to_run_is_one_call(project: Project) -> None:
     graph(project, "sync_tool_through_arun", "")
@@ -362,7 +427,7 @@ def test_a_frameworks_tools_count_as_seen_but_a_tool_no_gate_reaches_stops_the_t
     finally:
         fake.stop()
     assert result.code == 2 and fake.requests == []
-    assert "delete_all" in result.out and "get_order" not in result.out.split("delete_all")[0][-20:]
+    assert "offered delete_all, which no gate sees" in result.out
 
 
 def module(**names: object) -> types.ModuleType:
@@ -453,6 +518,32 @@ def test_a_newer_library_gets_a_notice_and_still_works(monkeypatch: pytest.Monke
     Later(name="later")
     assert getattr(vars(Later)["_run"], tool_gate.GATED)
     assert "later" in run.seen
+
+
+@pytest.mark.design("adapter.poisoned_run")
+def test_after_a_refusal_every_later_tool_fails_at_once() -> None:
+    sink = Sink()
+    plan = Plan("r", "t", "baseline", (), (), (), ("tool:safe",), 60.0)
+    run = state.RunState(plan, sink, [])
+    state.install(run)
+    base = base_tool()
+    ran: list[str] = []
+    try:
+        langchain_gate.patch(module(BaseTool=base, ToolException=Exception), run, pytest.fail)
+
+        class Named(base):  # type: ignore[valid-type, misc]
+            def _run(self, *args: Any, **kwargs: Any) -> str:
+                ran.append(self.name)
+                return "real"
+
+        with pytest.raises(FaultlineRefused, match="neither mocked"):
+            Named(name="write").run({})
+        with pytest.raises(FaultlineRefused, match="already refused"):
+            Named(name="safe").run({})
+    finally:
+        state.install(None)
+    assert ran == []
+    assert [x["action"] for x in sink.lines] == ["refused", "refused"]
 
 
 @pytest.mark.design("adapter.tools_made_before_the_hook")

@@ -9,7 +9,7 @@ from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import AnyMessage
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import BaseTool, ToolException, tool
+from langchain_core.tools import BaseTool, Tool, ToolException, tool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -188,6 +188,40 @@ class NamedConfig(BaseTool):
 def plumbing(question: str) -> str:
     takes_config.invoke({"sku": "SKU-42"}, {"configurable": {"secret": "hidden-value"}})
     return str(NamedConfig()._run(config="kept"))
+
+
+def answer_handled_text(question: str) -> dict[str, Any]:
+    """The team gave LangChain a fixed message for tool failures."""
+    get_order.handle_tool_error = "the orders system is down"
+    return answer(question)
+
+
+def answer_handled_callable(question: str) -> dict[str, Any]:
+    """The team gave LangChain a function for tool failures."""
+    get_order.handle_tool_error = lambda error: f"handled: {error}"
+    return answer(question)
+
+
+async def answer_handled_async(question: str) -> dict[str, Any]:
+    get_order.handle_tool_error = True
+    return await answer_async(question)
+
+
+@tool("lookup_order")
+def find_order(order_id: str) -> str:
+    """Look up an order, under another name for the model."""
+    raise RuntimeError("the real orders system is not reachable from tests")
+
+
+def renamed(question: str) -> str:
+    return str(find_order.invoke({"order_id": "1"}))
+
+
+def plain_tool(question: str) -> str:
+    def look_up(order_id: str) -> str:
+        raise RuntimeError("the real orders system is not reachable from tests")
+
+    return str(Tool(name="get_order", func=look_up, description="Look up an order.").invoke("1"))
 
 
 def nested(question: str) -> str:

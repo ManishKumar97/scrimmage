@@ -36,6 +36,11 @@ _.NotAnError  # tests/test_tool_gate.py: named by import path in a fault's raise
 _.TwoArguments  # tests/test_tool_gate.py: named by import path in a fault's raises
 _.a_function  # tests/test_tool_gate.py: named by import path in a fault's raises
 _.plumbing  # tests/example/acme/graph.py: a test's faultline.toml names it
+_.answer_handled_text  # tests/example/acme/graph.py: a test's faultline.toml names it
+_.answer_handled_callable  # tests/example/acme/graph.py: a test's faultline.toml names it
+_.answer_handled_async  # tests/example/acme/graph.py: a test's faultline.toml names it
+_.renamed  # tests/example/acme/graph.py: a test's faultline.toml names it
+_.plain_tool  # tests/example/acme/graph.py: a test's faultline.toml names it
 _.pytest_sessionfinish  # tests/conftest.py: pytest calls hooks by name
 _.exitstatus  # tests/conftest.py: pytest reads it to set the exit code
 _.answer_streamed  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
