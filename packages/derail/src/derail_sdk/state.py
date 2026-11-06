@@ -142,6 +142,7 @@ class RunState:
             "unlisted": (
                 f"{label} is neither mocked by this test nor listed under [agent] real. "
                 f'Mock it in the test, or add "{label}" to real if it is safe to run for real.'
+                f"{detail}"
             ),
             "web_write": (
                 f"{label} {detail} is a web request that can change data, and this test "
@@ -156,6 +157,7 @@ class RunState:
             "unreadable_body": detail,
             "redirect_off_host": detail,
             "unsupported_loop": detail,
+            "ambiguous_label": detail,
         }
         return DerailRefused(messages.get(reason, f"{label} is refused: {detail}"))
 
@@ -228,7 +230,7 @@ class RunState:
             "row": self.plan.row,
             "seq": self.next_seq(),
             "proc": self.proc,
-            "call": step.call.label,
+            "call": redact(step.call.label),  # a server names its own tools
             "kind": step.call.kind,
             "action": decision.action,
             "args": content(step.args),
@@ -250,6 +252,8 @@ class RunState:
             line["mistake"] = redact(mistake)
         line.update({key: scrub(value) for key, value in step.extra.items()})
         write = step.call.kind == "http" and step.call.method not in engine.READ_METHODS
+        # Nothing tells an MCP read from an MCP write, so a real one is kept as a write is.
+        write = write or (step.call.kind == "mcp" and decision.action == "real")
         keep = decision.action == "refused" or step.call.kind == "model" or write
         self.sink.put(line, keep=keep)
 

@@ -20,6 +20,7 @@ import json
 import threading
 import zlib
 from collections.abc import Callable, Iterator
+from contextvars import ContextVar
 from types import ModuleType
 from typing import Any, NoReturn, Protocol
 
@@ -45,7 +46,14 @@ MISTAKE_REASONS = (
     "unreadable_body",
     "redirect_off_host",
     "unsupported_loop",
+    "unlisted",
+    "ambiguous_label",
 )
+# The host of the MCP endpoint whose transport is sending now. Those messages were decided
+# at the MCP gate or are the connection's own, so the web gate does not decide them again.
+# It is a host, not a flag: an OAuth flow runs in the same context, and its requests to
+# another host are still web requests.
+MCP_TRANSPORT: ContextVar[str | None] = ContextVar("derail_mcp_transport", default=None)
 
 
 class Reserver(Protocol):
@@ -256,7 +264,7 @@ def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call:
 def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, object]] | None:
     """Decide the request; None with no run. Raises DerailRefused after recording one."""
     run = current()
-    if run is None:
+    if run is None or MCP_TRANSPORT.get() == host_of(request.url):
         return None
     body = body_of(request)
     call = describe(ctx, request, who, body or b"")
