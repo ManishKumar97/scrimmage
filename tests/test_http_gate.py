@@ -18,14 +18,14 @@ import httpx2
 import openai
 import pytest
 
-from faultline_sdk import http_gate, provider_openai, state
-from faultline_sdk.budget import Ledger
-from faultline_sdk.client import ControlClient
-from faultline_sdk.config import Fault, ModelHost
-from faultline_sdk.decide import Counters
-from faultline_sdk.errors import FaultlineRefused
-from faultline_sdk.plan import Plan
-from faultline_sdk.runner import real_error
+from derail_sdk import http_gate, provider_openai, state
+from derail_sdk.budget import Ledger
+from derail_sdk.client import ControlClient
+from derail_sdk.config import Fault, ModelHost
+from derail_sdk.decide import Counters
+from derail_sdk.errors import DerailRefused
+from derail_sdk.plan import Plan
+from derail_sdk.runner import real_error
 
 URL = "https://api.openai.com/v1/chat/completions"
 BODY = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
@@ -109,7 +109,7 @@ def test_without_a_run_the_gate_passes_the_request_through(gated: None) -> None:
 @pytest.mark.design("gate.other_hosts_gated")
 def test_a_write_to_a_host_that_is_not_a_model_host_is_refused(gated: None) -> None:
     sink, _ = install(make_plan())
-    with pytest.raises(FaultlineRefused, match="POST /refunds"):
+    with pytest.raises(DerailRefused, match="POST /refunds"):
         client().post("https://orders.acme.internal/refunds", json={})
     assert sink.lines[0]["call"] == "http:orders.acme.internal"
     assert sink.lines[0]["reason"] == "web_write"
@@ -296,7 +296,7 @@ def test_an_async_call_outside_asyncio_fails_closed(gated: None) -> None:
     sink, _ = install(make_plan())
     c = httpx2.AsyncClient(transport=httpx2.MockTransport(answer))
     attempt = c._send_single_request(c.build_request("POST", URL, json=BODY))  # pyright: ignore[reportPrivateUsage]
-    with pytest.raises(FaultlineRefused, match="outside asyncio"):
+    with pytest.raises(DerailRefused, match="outside asyncio"):
         attempt.send(None)  # driven by hand, as a loop other than asyncio would
     assert sink.lines[0]["reason"] == "unsupported_loop"
 
@@ -311,7 +311,7 @@ def test_a_negative_retry_header_counts_as_a_first_attempt(gated: None) -> None:
 def test_an_unreachable_control_server_refuses_the_call(gated: None) -> None:
     dead = ControlClient("http://127.0.0.1:9", "t" * 64)
     sink, _ = install(make_plan(budget=1.0), dead)
-    with pytest.raises(FaultlineRefused, match="could not be checked"):
+    with pytest.raises(DerailRefused, match="could not be checked"):
         client().post(URL, json=BODY)
     assert sink.lines[0]["reason"] == "control_unreachable"
 
@@ -578,7 +578,7 @@ def test_a_library_missing_only_what_faults_need_drops_faults_but_keeps_refusing
     http_gate.patch(library, ctx)
     assert not ctx.faults and stops == [] and "those do not" in str(sink.lines[0]["message"])
     assert client().post(URL, json=BODY).status_code == 200  # no fault: the call runs
-    with pytest.raises(FaultlineRefused):  # and a write is still refused
+    with pytest.raises(DerailRefused):  # and a write is still refused
         client().post("https://api.openai.com/v1/fine_tuning/jobs", json={})
 
 
@@ -626,7 +626,7 @@ def test_every_hop_of_a_redirect_is_budgeted(gated: None) -> None:
 def test_a_redirect_to_a_write_on_a_model_host_is_refused(gated: None) -> None:
     sink, _ = install(make_plan())
     c = httpx2.Client(transport=redirecting("/v1/fine_tuning/jobs"), follow_redirects=True)
-    with pytest.raises(FaultlineRefused, match="/v1/fine_tuning/jobs"):
+    with pytest.raises(DerailRefused, match="/v1/fine_tuning/jobs"):
         c.post(URL, json=BODY)
     assert sink.lines[-1]["reason"] == "web_write"
 
@@ -644,7 +644,7 @@ def test_a_redirect_off_the_model_hosts_is_refused_and_named(gated: None) -> Non
     budget = Budget(limit=1.0)
     sink, _ = install(make_plan(budget=1.0), budget)
     c = httpx2.Client(transport=httpx2.MockTransport(to_elsewhere), follow_redirects=True)
-    with pytest.raises(FaultlineRefused, match="localhost, which is not a model host"):
+    with pytest.raises(DerailRefused, match="localhost, which is not a model host"):
         c.post(URL, json=BODY)
     line = sink.lines[0]
     assert (line["action"], line["reason"]) == ("refused", "redirect_off_host")
@@ -707,7 +707,7 @@ def test_a_failed_close_of_an_off_host_reply_still_refuses(gated: None) -> None:
     async def go() -> None:
         await closing_redirect(Closing(OSError("dropped"))).post(URL, json=BODY)
 
-    with pytest.raises(FaultlineRefused, match="not a model host"):
+    with pytest.raises(DerailRefused, match="not a model host"):
         asyncio.run(go())
     assert sink.lines[-1]["reason"] == "redirect_off_host" and len(sink.settles) == 1
 
@@ -726,7 +726,7 @@ def test_a_failed_close_of_an_off_host_reply_still_refuses_when_sync(gated: None
 
     budget = Budget(limit=1.0)
     sink, _ = install(make_plan(budget=1.0), budget)
-    with pytest.raises(FaultlineRefused, match="not a model host"):
+    with pytest.raises(DerailRefused, match="not a model host"):
         httpx2.Client(transport=httpx2.MockTransport(answer)).post(URL, json=BODY)
     assert sink.lines[-1]["reason"] == "redirect_off_host" and len(sink.settles) == 1
 
@@ -754,7 +754,7 @@ def test_a_redirect_off_the_model_hosts_is_refused_on_the_async_path(gated: None
         async with httpx2.AsyncClient(transport=transport, follow_redirects=True) as c:
             await c.post(URL, json=BODY)
 
-    with pytest.raises(FaultlineRefused, match="not a model host"):
+    with pytest.raises(DerailRefused, match="not a model host"):
         asyncio.run(go())
     assert sink.lines[0]["reason"] == "redirect_off_host"
 
@@ -783,7 +783,7 @@ def test_a_request_sent_again_is_decided_again(gated: None) -> None:
 @pytest.mark.design("record.no_query_string")
 def test_a_query_string_never_reaches_the_record(gated: None) -> None:
     sink, _ = install(make_plan())
-    with pytest.raises(FaultlineRefused):
+    with pytest.raises(DerailRefused):
         client().post("https://api.openai.com/v1/fine_tuning/jobs?api_key=hunter2", json={})
     assert "hunter2" not in json.dumps(sink.lines)
 
@@ -791,7 +791,7 @@ def test_a_query_string_never_reaches_the_record(gated: None) -> None:
 @pytest.mark.design("gate.host_and_path")
 def test_a_chat_path_on_another_host_is_not_a_model_call(gated: None) -> None:
     sink, _ = install(make_plan())
-    with pytest.raises(FaultlineRefused):
+    with pytest.raises(DerailRefused):
         client().post("https://chat.acme.internal/v1/chat/completions", json=BODY)
     assert sink.lines[0]["call"] == "http:chat.acme.internal"
 
@@ -890,14 +890,14 @@ def test_a_huge_reply_records_its_true_size(gated: None, monkeypatch: pytest.Mon
 @pytest.mark.parametrize("content", [gzip.compress(b'{"tools": []}'), b""])
 def test_a_chat_body_the_gate_cannot_read_is_refused(gated: None, content: bytes) -> None:
     sink, _ = install(make_plan())
-    with pytest.raises(FaultlineRefused, match="cannot read"):
+    with pytest.raises(DerailRefused, match="cannot read"):
         client().post(URL, content=content)
     assert sink.lines[0]["reason"] == "unreadable_body"
 
 
 def test_a_streamed_chat_body_is_refused(gated: None) -> None:
     install(make_plan())
-    with pytest.raises(FaultlineRefused, match="cannot read"):
+    with pytest.raises(DerailRefused, match="cannot read"):
         client().post(URL, content=iter([b'{"tools": []}']))
 
 
@@ -980,7 +980,7 @@ def test_a_moderation_is_a_labelled_read_that_needs_no_price(gated: None) -> Non
 def test_the_suggested_price_line_is_valid_toml_for_a_gateway_name(gated: None) -> None:
     install(make_plan(budget=1.0), Budget(limit=1.0))
     model = "acme/llama-3.1"
-    with pytest.raises(FaultlineRefused) as refused:
+    with pytest.raises(DerailRefused) as refused:
         client().post(URL, json={**BODY, "model": model})
     line = str(refused.value).split("such as ")[1].split(" (dollars")[0]
     assert tomllib.loads(line) == {model: {"input": 0.15, "output": 0.60}}
@@ -990,7 +990,7 @@ def test_the_suggested_price_line_is_valid_toml_for_a_gateway_name(gated: None) 
 def test_a_secret_never_reaches_the_agent_in_a_refusal(gated: None) -> None:
     secret = "sk-proj-" + "a" * 30
     install(make_plan(budget=1.0), Budget(limit=1.0))
-    with pytest.raises(FaultlineRefused) as refused:
+    with pytest.raises(DerailRefused) as refused:
         client().post(URL, json={**BODY, "model": secret})
     assert secret not in str(refused.value)
 
@@ -1015,6 +1015,6 @@ def test_a_secret_in_a_list_on_a_line_is_removed(gated: None) -> None:
     secret = "sk-proj-" + "a" * 30
     sink, _ = install(make_plan())
     spec = {"type": "function", "function": {"name": secret, "parameters": {}}}
-    with pytest.raises(FaultlineRefused):
+    with pytest.raises(DerailRefused):
         client().post(URL, json={**BODY, "tools": [spec]})
     assert sink.lines[0]["unseen_tools"] == ["[secret removed]"]

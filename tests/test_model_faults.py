@@ -9,10 +9,10 @@ from collections.abc import Callable
 import pytest
 
 from conftest import ACME, Project, Result
+from derail_sdk import config
+from derail_sdk import runner as runner_module
+from derail_sdk.runner import Runner
 from fakes.openai_server import FakeOpenAI
-from faultline_sdk import config
-from faultline_sdk import runner as runner_module
-from faultline_sdk.runner import Runner
 
 Fake = Callable[..., FakeOpenAI]
 TOOL_FAULT = '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'
@@ -83,7 +83,7 @@ def test_a_real_429_and_the_injected_one_end_the_same_way(
     attempts = real_fake.paths.count("/v1/chat/completions")
 
     # Injected: the same run, with the gate answering every attempt.
-    shutil.rmtree(project.root / "faultline-runs")
+    shutil.rmtree(project.root / "derail-runs")
     project.toml.write_text(project.toml.read_text() + model_fault("status 429", "always"))
     injected = project.test(fake_openai([good]))
     injected_lines = row(injected, "fault 1")
@@ -195,7 +195,7 @@ def test_the_model_request_and_reply_are_kept_in_the_side_folder(
     use(project, "acme.rag:answer")
     result = project.test(fake_openai(ACME, embedding="embedding"))
     line = next(x for x in result.records()[0] if x.get("call") == "model:openai")
-    blobs = next((project.root / "faultline-runs").glob("*/blobs"))
+    blobs = next((project.root / "derail-runs").glob("*/blobs"))
     request, reply = line["args"], line["result"]
     assert isinstance(request, dict) and isinstance(reply, dict)
     sent = json.loads((blobs / str(request["sha256"])).read_text())
@@ -224,7 +224,7 @@ def test_a_library_that_changed_stops_the_test_at_once(project: Project) -> None
     )
     result = project.test()
     assert result.code == 3, result.out
-    assert "does not have the functions Faultline gates" in result.out
+    assert "does not have the functions Derail gates" in result.out
     assert len(result.records()) == 1  # no other run started
     assert result.summaries()[0]["outcome"] == "infrastructure error"
 

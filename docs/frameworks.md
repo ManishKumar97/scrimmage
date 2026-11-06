@@ -1,7 +1,7 @@
 # Agents on a framework
 
-If your agent uses a framework Faultline has an adapter for, you write no `tools` list and change no code.
-Faultline finds each tool when your code creates it.
+If your agent uses a framework Derail has an adapter for, you write no `tools` list and change no code.
+Derail finds each tool when your code creates it.
 
 This version has one adapter: LangChain tools, which LangGraph runs.
 
@@ -52,7 +52,7 @@ If the path does not fit, the run ends as crashed, and its `.log` file says whic
 ## Tool names
 
 A label uses the name the model sees, which LangChain takes from the tool.
-With no `tools` list, Faultline learns those names only when the agent runs, so it runs one baseline alone first:
+With no `tools` list, Derail learns those names only when the agent runs, so it runs one baseline alone first:
 
 - a mock or fault naming a tool the agent does not have stops the test there, with exit 2 and a list of the real tools, so a typo costs one run;
 - at the end, a mock no run in any row used gets a note, because its label is correct and only the question did not need the tool; the exit code stays 0;
@@ -89,8 +89,8 @@ A tool built with `response_format = "content_and_artifact"` returns a pair, so 
 
 ## Tools that cannot be gated
 
-Faultline gates what a tool really runs, wherever it comes from: a decorator, a class, a mixin, or a `_run` assigned to the class later.
-When Faultline finds that a call could skip the gate, the tool does not run: the test stops with exit 2, and the reason is in the output.
+Derail gates what a tool really runs, wherever it comes from: a decorator, a class, a mixin, or a `_run` assigned to the class later.
+When Derail finds that a call could skip the gate, the tool does not run: the test stops with exit 2, and the reason is in the output.
 This guards against mistakes in ordinary code, not code written to get around it; see [Safety](safety.md).
 
 - A `_run` that is not a plain function, such as a `staticmethod`, cannot hold a gate, so the call is refused and the test reports a mistake.

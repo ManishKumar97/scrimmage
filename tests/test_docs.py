@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from faultline_sdk import config, runner
+from derail_sdk import config, runner
 
 DOCS = Path(__file__).parents[1] / "docs"
 

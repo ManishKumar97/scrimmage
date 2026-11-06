@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from faultline_sdk.redact import redact
+from derail_sdk.redact import redact
 
 
 @pytest.mark.design("redact.urls")

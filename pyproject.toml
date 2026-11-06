@@ -1,8 +1,8 @@
 [project]
-name = "faultline-workspace"
+name = "derail-workspace"
 version = "0"
 requires-python = ">=3.11"
-dependencies = ["faultline", "faultline-marker"]
+dependencies = ["derail", "derail-marker"]
 
 [tool.uv]
 package = false
@@ -11,8 +11,8 @@ package = false
 members = ["packages/*"]
 
 [tool.uv.sources]
-faultline = { workspace = true }
-faultline-marker = { workspace = true }
+derail = { workspace = true }
+derail-marker = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -43,7 +43,7 @@ markers = [
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["packages/faultline/src", "packages/faultline-marker/src", "tests"]
+src = ["packages/derail/src", "packages/derail-marker/src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
@@ -53,38 +53,38 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
 "vulture_allowlist.py" = ["B018"]
 
 [tool.pyright]
-include = ["packages/faultline/src", "packages/faultline-marker/src", "tests"]
+include = ["packages/derail/src", "packages/derail-marker/src", "tests"]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
 # Product code is strict. A gate or adapter module, which reaches into a library's
 # private functions, drops to standard with a "# pyright: standard" line at its top.
-strict = ["packages/faultline/src", "packages/faultline-marker/src"]
+strict = ["packages/derail/src", "packages/derail-marker/src"]
 
 [tool.vulture]
-paths = ["packages/faultline/src", "packages/faultline-marker/src", "tests", "vulture_allowlist.py"]
+paths = ["packages/derail/src", "packages/derail-marker/src", "tests", "vulture_allowlist.py"]
 # 60, not 80: vulture rates every unused function and method at 60.
 min_confidence = 60
 
 [tool.importlinter]
-root_packages = ["faultline_sdk", "faultline"]
+root_packages = ["derail_sdk", "derail"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "Product code never imports test support"
 type = "forbidden"
-source_modules = ["faultline_sdk", "faultline"]
+source_modules = ["derail_sdk", "derail"]
 forbidden_modules = ["fakes", "conftest"]
 
 [[tool.importlinter.contracts]]
 name = "The marker works without the SDK installed"
 type = "forbidden"
-source_modules = ["faultline"]
-forbidden_modules = ["faultline_sdk"]
+source_modules = ["derail"]
+forbidden_modules = ["derail_sdk"]
 
 [tool.coverage.run]
 branch = true
 # The marker package is still empty; it is measured from the slice that builds it.
-source_pkgs = ["faultline_sdk"]
+source_pkgs = ["derail_sdk"]
 # The SDK runs inside each run's own program, so measure child processes too.
 patch = ["subprocess"]
 parallel = true

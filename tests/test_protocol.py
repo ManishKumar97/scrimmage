@@ -13,11 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from faultline_sdk import protocol
-from faultline_sdk.budget import Ledger
-from faultline_sdk.client import ControlClient, ControlError, Sender
-from faultline_sdk.control import ControlServer, proc_key
-from faultline_sdk.records import RecordStore
+from derail_sdk import protocol
+from derail_sdk.budget import Ledger
+from derail_sdk.client import ControlClient, ControlError, Sender
+from derail_sdk.control import ControlServer, proc_key
+from derail_sdk.records import RecordStore
 
 TOKEN = "a" * 64
 PLAN: dict[str, object] = {"v": 1}
@@ -251,7 +251,7 @@ def test_a_batch_that_fails_is_sent_again(server: ControlServer) -> None:
 
 
 def test_a_server_away_for_long_keeps_a_bounded_backlog(monkeypatch: pytest.MonkeyPatch) -> None:
-    import faultline_sdk.client as client_module
+    import derail_sdk.client as client_module
 
     monkeypatch.setattr(client_module, "QUEUE_SIZE", 3)
     sender = Sender(ControlClient("http://127.0.0.1:9", TOKEN), "run-1")
@@ -317,7 +317,7 @@ def test_a_bad_length_is_refused_and_an_idle_connection_is_let_go(
 ) -> None:
     import socket
 
-    import faultline_sdk.control as control_module
+    import derail_sdk.control as control_module
 
     monkeypatch.setattr(control_module, "READ_TIMEOUT_S", 0.5)
     control = ControlServer(TOKEN, RecordStore(tmp_path / "r"))

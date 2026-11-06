@@ -1,4 +1,4 @@
-"""faultline test on Acme's bot, a function agent, against the fake OpenAI server."""
+"""derail test on Acme's bot, a function agent, against the fake OpenAI server."""
 
 import json
 import os
@@ -13,16 +13,14 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-import faultline_sdk
+import derail_sdk
 from conftest import ACME, Project
+from derail_sdk import config
+from derail_sdk.runner import Runner, report
 from fakes.openai_server import FakeOpenAI
-from faultline_sdk import config
-from faultline_sdk.runner import Runner, report
 
 Fake = Callable[[list[str]], FakeOpenAI]
-RECORD = json.loads(
-    (Path(faultline_sdk.__file__).parent / "schemas" / "record.v1.json").read_text()
-)
+RECORD = json.loads((Path(derail_sdk.__file__).parent / "schemas" / "record.v1.json").read_text())
 FAULT_BLOCK = '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'
 
 
@@ -56,7 +54,7 @@ def test_the_example_runs_six_times_and_the_fault_fires(
 @pytest.mark.design("record.owner_only_files")
 def test_every_record_file_is_owner_only(project: Project, fake_openai: Fake) -> None:
     project.test(fake_openai(ACME))
-    found = list((project.root / "faultline-runs").rglob("*"))
+    found = list((project.root / "derail-runs").rglob("*"))
     files = [f for f in found if f.is_file() and f.name != ".gitignore"]  # holds no data
     folders = [f for f in found if f.is_dir()]
     assert files and all(stat.S_IMODE(f.stat().st_mode) == 0o600 for f in files)
@@ -105,7 +103,7 @@ def test_an_agent_that_raises_has_crashed(project: Project) -> None:
     project.edit(FAULT_BLOCK, "")
     result = project.test()
     assert (result.code, [s["outcome"] for s in result.summaries()]) == (0, ["crashed"])
-    log = next((project.root / "faultline-runs").glob("*/*.log")).read_text()
+    log = next((project.root / "derail-runs").glob("*/*.log")).read_text()
     assert "the bot crashed" in log
 
 
@@ -133,7 +131,7 @@ def test_a_misspelled_label_stops_the_test_before_any_model_call(
     assert result.code == 2 and fake.requests == []
     assert "tool:get_ordr names no tool in [agent] tools" in result.err
     assert "get_order, check_inventory, refund_order, get_stock" in result.err
-    assert not (project.root / "faultline-runs").exists()
+    assert not (project.root / "derail-runs").exists()
 
 
 @pytest.mark.parametrize(
@@ -285,11 +283,11 @@ def test_a_failure_inside_the_runner_is_an_infrastructure_error(
 
 
 @pytest.mark.design("runner.stops_runs_when_stopped")
-def test_stopping_faultline_test_stops_every_run(project: Project) -> None:
+def test_stopping_derail_test_stops_every_run(project: Project) -> None:
     only_baseline(project, "acme.slow:hang", "\nrun_timeout = 120")
-    env = {k: v for k, v in os.environ.items() if not k.startswith("FAULTLINE_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
     runner = subprocess.Popen(
-        [sys.executable, "-m", "faultline_sdk.cli", "test", str(project.toml)],
+        [sys.executable, "-m", "derail_sdk.cli", "test", str(project.toml)],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )  # fmt: skip
     pid = None
@@ -303,7 +301,7 @@ def test_stopping_faultline_test_stops_every_run(project: Project) -> None:
     _, err = runner.communicate(timeout=30)
     assert runner.returncode == 3 and "stopped by SIGTERM" in err
     time.sleep(0.5)
-    assert not alive(pid), "the agent outlived faultline test"
+    assert not alive(pid), "the agent outlived derail test"
 
 
 def agent_pid(root: Path) -> int | None:
@@ -329,7 +327,7 @@ def alive(pid: int) -> bool:
 def test_a_run_that_dropped_lines_is_an_infrastructure_error(
     project: Project, fake_openai: Fake, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from faultline_sdk.control import ControlServer
+    from derail_sdk.control import ControlServer
 
     original = ControlServer.close_run
 
@@ -349,7 +347,7 @@ def test_a_run_that_dropped_lines_is_an_infrastructure_error(
 def test_a_process_that_made_more_lines_than_arrived_is_an_infrastructure_error(
     project: Project, fake_openai: Fake, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from faultline_sdk.control import ControlServer
+    from derail_sdk.control import ControlServer
 
     original = ControlServer.close_run
 
@@ -369,7 +367,7 @@ def test_a_process_that_made_more_lines_than_arrived_is_an_infrastructure_error(
 def test_a_stale_root_pid_in_the_runners_environment_is_ignored(
     project: Project, fake_openai: Fake, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("FAULTLINE_ROOT_PID", "1")
+    monkeypatch.setenv("DERAIL_ROOT_PID", "1")
     project.edit("[agent]\n", "[agent]\nruns = 1\n")
     result = project.test(fake_openai(ACME))
     assert result.code == 0 and "  1     1  " in result.out  # the fault row was exercised
@@ -387,12 +385,10 @@ def test_a_stale_root_pid_in_the_runners_environment_is_ignored(
         ('returns = "shipped, Oct 30"', 'returns = "${ORDER_STATUS}"'),
     ],
 )
-def test_faultline_test_exits_2_on_anything_unsupported(
-    project: Project, old: str, new: str
-) -> None:
+def test_derail_test_exits_2_on_anything_unsupported(project: Project, old: str, new: str) -> None:
     project.edit(old, new)
     result = project.test()
-    assert result.code == 2 and "faultline:" in result.err
+    assert result.code == 2 and "derail:" in result.err
 
 
 @pytest.mark.design("config.unreadable_file")
@@ -409,7 +405,7 @@ def test_a_config_file_that_cannot_be_read_is_a_mistake(project: Project, kind: 
     result = project.test()
     if kind != "missing":
         project.toml.chmod(0o700)
-    assert result.code == 2 and "faultline: faultline.toml:" in result.err
+    assert result.code == 2 and "derail: derail.toml:" in result.err
 
 
 @pytest.mark.design("record.ignored_by_git")
@@ -421,7 +417,7 @@ def test_records_stay_out_of_the_teams_git_repo(project: Project, fake_openai: F
         ["git", "-C", str(project.root), "status", "--short"],
         capture_output=True, text=True, check=True,
     )  # fmt: skip
-    assert "faultline-runs" not in status.stdout
+    assert "derail-runs" not in status.stdout
 
 
 @pytest.mark.design("report.not_exercised_says_why")
@@ -449,7 +445,7 @@ def test_a_tool_can_carry_the_name_the_model_sees(project: Project, fake_openai:
     tool = next(x for x in fault if x.get("call") == "tool:lookup-order")
     assert tool["action"] == "fault"
     schema = json.loads(
-        (Path(faultline_sdk.__file__).parent / "schemas" / "record.v1.json").read_text()
+        (Path(derail_sdk.__file__).parent / "schemas" / "record.v1.json").read_text()
     )
     jsonschema.Draft202012Validator(schema).validate(tool)
 
@@ -479,7 +475,7 @@ def test_a_bad_reference_stops_the_test_before_any_run(
     result = project.test()
     assert result.code == 2 and message in result.err
     assert "the test stopped before the first run" in result.err
-    assert not (project.root / "faultline-runs").exists()
+    assert not (project.root / "derail-runs").exists()
 
 
 def test_every_bad_reference_shows_on_its_own_line_in_one_run(project: Project) -> None:
@@ -488,7 +484,7 @@ def test_every_bad_reference_shows_on_its_own_line_in_one_run(project: Project) 
     lines = project.test().err.splitlines()
     assert any("tool:get_ordr names no tool" in line for line in lines)
     assert any("tool:check_inventry names no tool" in line for line in lines)
-    assert all(line.startswith("faultline: ") for line in lines)
+    assert all(line.startswith("derail: ") for line in lines)
 
 
 @pytest.mark.design("boot.fork_no_faults")

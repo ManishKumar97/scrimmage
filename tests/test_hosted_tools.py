@@ -5,8 +5,8 @@ from collections.abc import Callable
 import pytest
 
 from conftest import ACME, Project
+from derail_sdk import provider_openai as table
 from fakes.openai_server import FakeOpenAI
-from faultline_sdk import provider_openai as table
 
 Fake = Callable[..., FakeOpenAI]
 TOOL_FAULT = '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'

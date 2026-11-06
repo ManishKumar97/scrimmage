@@ -6,11 +6,11 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-import faultline_sdk
+import derail_sdk
 from conftest import EXAMPLE
-from faultline_sdk import config, plan
+from derail_sdk import config, plan
 
-SCHEMAS = Path(faultline_sdk.__file__).parent / "schemas"
+SCHEMAS = Path(derail_sdk.__file__).parent / "schemas"
 
 
 def schema(name: str) -> dict[str, object]:
@@ -63,7 +63,7 @@ DESIGN_LINE = {
 @pytest.mark.design("schema.plan")
 def test_the_designs_plan_fits_the_schema(tmp_path: Path) -> None:
     validator("plan").validate(DESIGN_PLAN)
-    cfg = config.load(EXAMPLE / "faultline.toml")
+    cfg = config.load(EXAMPLE / "derail.toml")
     for row in plan.rows(cfg):
         validator("plan").validate(plan.plan_for(cfg, row, "run-1").to_json())
     assert plan.Plan.from_json(DESIGN_PLAN).to_json() == DESIGN_PLAN

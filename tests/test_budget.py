@@ -11,14 +11,14 @@ from typing import Any
 import jsonschema
 import pytest
 
-import faultline_sdk
+import derail_sdk
 from conftest import ACME, Project
+from derail_sdk import provider_openai as table
+from derail_sdk.budget import Ledger
+from derail_sdk.client import ControlClient, ControlError
+from derail_sdk.control import ControlServer
+from derail_sdk.records import RecordStore
 from fakes.openai_server import FIXTURES, FakeOpenAI
-from faultline_sdk import provider_openai as table
-from faultline_sdk.budget import Ledger
-from faultline_sdk.client import ControlClient, ControlError
-from faultline_sdk.control import ControlServer
-from faultline_sdk.records import RecordStore
 
 Fake = Callable[..., FakeOpenAI]
 TOKEN = "e" * 64
@@ -367,7 +367,7 @@ def test_runs_stopped_because_another_run_stopped_the_test_are_not_errors(
     assert outcomes == ["refused call", "stopped", "stopped"], result.out
     assert result.code == 2, result.out
     schema = json.loads(
-        (Path(faultline_sdk.__file__).parent / "schemas" / "record.v1.json").read_text()
+        (Path(derail_sdk.__file__).parent / "schemas" / "record.v1.json").read_text()
     )
     validator = jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker())
     for lines in result.records():
@@ -424,8 +424,8 @@ def test_a_run_refused_before_its_first_model_call_says_nothing_about_the_budget
 def test_a_program_started_during_a_stop_is_stopped_too(
     project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from faultline_sdk import config
-    from faultline_sdk.runner import Runner
+    from derail_sdk import config
+    from derail_sdk.runner import Runner
 
     project.edit('function = "acme.agent:answer"', 'function = "acme.slow:hang"\nruns = 1')
     project.edit(TOOL_FAULT, "")
@@ -437,7 +437,7 @@ def test_a_program_started_during_a_stop_is_stopped_too(
         runner.cancelled = True  # the stop lands just after the program started
         return proc
 
-    monkeypatch.setattr("faultline_sdk.runner.subprocess.Popen", popen_then_cancel)
+    monkeypatch.setattr("derail_sdk.runner.subprocess.Popen", popen_then_cancel)
     started = time.monotonic()
     results = runner.run_all()
     assert time.monotonic() - started < 30  # not left hanging for run_timeout

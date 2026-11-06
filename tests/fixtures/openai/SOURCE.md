@@ -36,7 +36,7 @@ Where the spec shows a placeholder, the placeholder is removed so the file is va
 | `error_500.json` | The `Error` object | The message OpenAI's API sends for a server error |
 | `response_stream.sse` | Create a model response, example Streaming | Without the `...` line |
 
-The 401, 500 and 503 messages in Faultline's own error bodies are from OpenAI's error codes page, `examples/data/oai_docs/error-codes.txt` in the `openai/openai-cookbook` repository.
+The 401, 500 and 503 messages in Derail's own error bodies are from OpenAI's error codes page, `examples/data/oai_docs/error-codes.txt` in the `openai/openai-cookbook` repository.
 
 These are real replies, saved from the real-model check on 6 November 2026 with `gpt-4o-mini` and `text-embedding-3-small`.
 `tests/test_fixtures_match_real.py` keeps the fake's replies the same shape as them.

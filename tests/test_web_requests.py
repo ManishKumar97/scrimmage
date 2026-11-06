@@ -19,10 +19,10 @@ import jsonschema
 import pytest
 
 from conftest import Project, Result
-from faultline_sdk import config, http_gate, labels, plan, provider_openai, state
-from faultline_sdk.config import Fault, Mock
-from faultline_sdk.errors import ConfigError, FaultlineRefused
-from faultline_sdk.plan import Plan
+from derail_sdk import config, http_gate, labels, plan, provider_openai, state
+from derail_sdk.config import Fault, Mock
+from derail_sdk.errors import ConfigError, DerailRefused
+from derail_sdk.plan import Plan
 
 HOST = "inventory.acme.internal"
 URL = f"https://{HOST}/stock/SKU-42"
@@ -152,7 +152,7 @@ def test_a_web_mock_shadowed_by_an_earlier_one_is_a_test_mistake(project: Projec
 def test_no_header_cookie_or_query_value_reaches_the_record(project: Project) -> None:
     result = run(project, "acme.web:answer_report", JSON_MOCK)
     assert result.code == 0, result.out + result.err
-    found = list((project.root / "faultline-runs").rglob("*"))
+    found = list((project.root / "derail-runs").rglob("*"))
     text = "".join(f.read_text(errors="replace") for f in found if f.is_file())
     assert "query-secret-value" not in text
     assert "header-secret-value" not in text
@@ -161,7 +161,7 @@ def test_no_header_cookie_or_query_value_reaches_the_record(project: Project) ->
 
 
 def recorded(project: Project) -> str:
-    found = (project.root / "faultline-runs").rglob("*")
+    found = (project.root / "derail-runs").rglob("*")
     return "".join(f.read_text(errors="replace") for f in found if f.is_file())
 
 
@@ -588,7 +588,7 @@ def test_get_and_head_run_for_real(lib: Any, web: Web) -> None:
 @pytest.mark.parametrize("verb", ["POST", "PUT", "PATCH", "DELETE", "PURGE", "post", "Options"])
 def test_every_method_but_get_and_head_is_refused(lib: Any, web: Web, verb: str) -> None:
     sink = gate(lib)
-    with lib.Client() as client, pytest.raises(FaultlineRefused, match="neither mocks it"):
+    with lib.Client() as client, pytest.raises(DerailRefused, match="neither mocks it"):
         client.request(verb, web.url("/fine"), content=b"x")
     assert web.hits == []
     assert sink.lines[0]["action"] == "refused" and sink.lines[0]["reason"] == "web_write"
@@ -601,7 +601,7 @@ def test_a_write_is_refused_on_an_async_client(lib: Any, web: Web) -> None:
         async with lib.AsyncClient() as client:
             await client.post(web.url("/fine"))
 
-    with pytest.raises(FaultlineRefused):
+    with pytest.raises(DerailRefused):
         asyncio.run(go())
     assert web.hits == []
 
@@ -626,7 +626,7 @@ def test_real_can_list_a_host_a_method_or_one_path(
         if allowed:
             assert client.post(web.url("/fine?x=1")).status_code == 200
         else:
-            with pytest.raises(FaultlineRefused):
+            with pytest.raises(DerailRefused):
                 client.post(web.url("/fine"))
     assert len(web.hits) == int(allowed)
 
@@ -670,9 +670,9 @@ def test_a_mocked_write_is_answered_and_never_sent(lib: Any, web: Web) -> None:
 def test_a_refusal_poisons_the_run_for_later_reads(lib: Any, web: Web) -> None:
     gate(lib)
     with lib.Client() as client:
-        with pytest.raises(FaultlineRefused):
+        with pytest.raises(DerailRefused):
             client.post(web.url("/fine"))
-        with pytest.raises(FaultlineRefused, match="already refused"):
+        with pytest.raises(DerailRefused, match="already refused"):
             client.get(web.url("/fine"))
     assert web.hits == []
 
@@ -702,7 +702,7 @@ def test_a_path_is_matched_as_it_was_sent(lib: Any) -> None:
 def test_a_refusal_suggests_an_entry_that_loads_and_allows_the_request(lib: Any, url: str) -> None:
     gate(lib)
     transport = lib.MockTransport(lambda request: lib.Response(200, text="sent"))
-    with lib.Client(transport=transport) as client, pytest.raises(FaultlineRefused) as found:
+    with lib.Client(transport=transport) as client, pytest.raises(DerailRefused) as found:
         client.post(url)
     entry = re.findall(r'add "([^"]+)" to real', str(found.value))[0]
     allowed = labels.check(entry, "real", pattern=True)
@@ -745,10 +745,10 @@ def test_a_mounted_transport_a_subclass_and_a_built_request_all_meet_the_gate(li
     gate(lib)
     transport = lib.MockTransport(answer)
     target = "https://orders.acme.internal/x"
-    with Own(mounts={"all://": transport}) as client, pytest.raises(FaultlineRefused):
+    with Own(mounts={"all://": transport}) as client, pytest.raises(DerailRefused):
         client.post(target)
     gate(lib)
-    with lib.Client(transport=transport) as client, pytest.raises(FaultlineRefused):
+    with lib.Client(transport=transport) as client, pytest.raises(DerailRefused):
         client.send(client.build_request("POST", target))
     assert hits == []
 
@@ -771,7 +771,7 @@ def test_a_host_in_capitals_matches_its_label(lib: Any) -> None:
 def test_each_hop_of_a_redirect_is_decided_on_its_own(lib: Any, web: Web) -> None:
     sink = gate(lib, real=("http:127.0.0.1 POST /to/fine",))
     # A 307 keeps the POST, and /fine is not listed.
-    with lib.Client(follow_redirects=True) as client, pytest.raises(FaultlineRefused):
+    with lib.Client(follow_redirects=True) as client, pytest.raises(DerailRefused):
         client.post(web.url("/to/fine"))
     assert web.hits == [("POST", "/to/fine")]
     assert [line["action"] for line in sink.lines] == ["real", "refused"]
@@ -826,7 +826,7 @@ def test_secrets_are_removed_from_a_body_and_a_path(lib: Any, web: Web) -> None:
 def test_a_secret_in_a_refused_path_does_not_reach_the_record(lib: Any, web: Web) -> None:
     secret = "sk-proj-" + "a" * 30
     sink = gate(lib)
-    with lib.Client() as client, pytest.raises(FaultlineRefused):
+    with lib.Client() as client, pytest.raises(DerailRefused):
         client.post(web.url(f"/fine/{secret}?token=query-value"))
     assert secret not in json.dumps(sink.lines) and "query-value" not in json.dumps(sink.lines)
 
@@ -912,7 +912,7 @@ def test_a_library_without_response_drops_mocks_and_keeps_refusing(lib: Any, web
     http_gate.patch(Bare, ctx, lib.__name__)  # type: ignore[arg-type]
     with lib.Client() as client:
         assert client.get(web.url("/fine")).json() == {"count": 12}  # a read runs for real
-        with pytest.raises(FaultlineRefused):
+        with pytest.raises(DerailRefused):
             client.post(web.url("/fine"))  # a write is never let through
     assert web.hits == [("GET", "/fine")]
 
@@ -921,7 +921,7 @@ def test_a_library_without_response_drops_mocks_and_keeps_refusing(lib: Any, web
 
 
 def load_mock(tmp_path: Path, body: str, agent: str = "") -> config.Config:
-    path = tmp_path / "faultline.toml"
+    path = tmp_path / "derail.toml"
     path.write_text(toml("acme.web:answer", body, agent))
     return config.load(path)
 

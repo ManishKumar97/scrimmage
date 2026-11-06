@@ -13,13 +13,13 @@ from typing import Any
 import pytest
 
 from conftest import ACME, Project, Result
+from derail_sdk import config, langchain_gate, mocks, plan, state, tool_gate
+from derail_sdk.config import Fault
+from derail_sdk.errors import DerailRefused
+from derail_sdk.plan import Plan
+from derail_sdk.runner import Runner, RunResult
+from derail_sdk.start import BadAnswerPath, pick
 from fakes.openai_server import FakeOpenAI
-from faultline_sdk import config, langchain_gate, mocks, plan, state, tool_gate
-from faultline_sdk.config import Fault
-from faultline_sdk.errors import FaultlineRefused
-from faultline_sdk.plan import Plan
-from faultline_sdk.runner import Runner, RunResult
-from faultline_sdk.start import BadAnswerPath, pick
 
 Fake = Callable[[list[str]], FakeOpenAI]
 TOOLS_LINE = (
@@ -299,7 +299,7 @@ def test_a_changed_library_stops_the_run_with_exit_3(project: Project) -> None:
     (tools / "base.py").write_text("class BaseTool:\n    pass\n")
     result = project.test()
     assert result.code == 3, result.out + result.err
-    assert "does not have the functions Faultline gates" in result.out
+    assert "does not have the functions Derail gates" in result.out
 
 
 @pytest.mark.design("labels.fault_typo_costs_one_run")
@@ -660,9 +660,9 @@ def test_after_a_refusal_every_later_tool_fails_at_once() -> None:
                 ran.append(self.name)
                 return "real"
 
-        with pytest.raises(FaultlineRefused, match="neither mocked"):
+        with pytest.raises(DerailRefused, match="neither mocked"):
             Named(name="write").run({})
-        with pytest.raises(FaultlineRefused, match="already refused"):
+        with pytest.raises(DerailRefused, match="already refused"):
             Named(name="safe").run({})
     finally:
         state.install(None)
@@ -683,7 +683,7 @@ def test_a_tool_made_before_the_hook_is_gated_when_it_is_called() -> None:
     early = Early(name="early")
     try:
         langchain_gate.patch(module(BaseTool=base, ToolException=Exception), run, pytest.fail)
-        with pytest.raises(FaultlineRefused):
+        with pytest.raises(DerailRefused):
             early.run({})  # listed nowhere, so refused, not run
     finally:
         state.install(None)
@@ -703,7 +703,7 @@ def test_a_run_function_assigned_later_is_still_gated() -> None:
 
         tool = Plain(name="plain")
         Plain._run = lambda self, *a, **k: "REAL"  # type: ignore[method-assign]
-        with pytest.raises(FaultlineRefused):
+        with pytest.raises(DerailRefused):
             tool.run({})
     finally:
         state.install(None)
@@ -723,7 +723,7 @@ def test_a_run_that_is_not_a_plain_function_is_refused_and_never_seen() -> None:
 
         tool = Static(name="static")
         assert "static" not in run.seen
-        with pytest.raises(FaultlineRefused, match="cannot be gated"):
+        with pytest.raises(DerailRefused, match="cannot be gated"):
             tool.run({})
     finally:
         state.install(None)
@@ -923,7 +923,7 @@ def test_an_async_override_is_refused_and_a_mixin_stays_as_it_was() -> None:
             pass
 
         tool = Writes(name="writes")  # type: ignore[call-arg]
-        with pytest.raises(FaultlineRefused, match="overrides ainvoke"):
+        with pytest.raises(DerailRefused, match="overrides ainvoke"):
             asyncio.run(tool.ainvoke({}))
     finally:
         state.install(None)
@@ -974,7 +974,7 @@ def test_the_async_entry_point_checks_the_tool_too() -> None:
             _arun = staticmethod(lambda *a, **k: "REAL")  # type: ignore[assignment]
 
         tool = Static(name="static")
-        with pytest.raises(FaultlineRefused, match="cannot be gated"):
+        with pytest.raises(DerailRefused, match="cannot be gated"):
             asyncio.run(tool.arun({}))
     finally:
         state.install(None)

@@ -39,7 +39,7 @@ One fault row gets a 503 and the other a `ReadTimeout`, and in both the code in 
 
 ## What is covered
 
-Faultline gates requests sent with httpx and httpx2, sync and async, from anywhere in the program.
+Derail gates requests sent with httpx and httpx2, sync and async, from anywhere in the program.
 The gate sits at the client's single attempt.
 Retries, redirects, cookies and response hooks all sit above it, so they treat an injected reply as a real one.
 `raise_for_status` in a response hook raises the same error on an injected 503 as on a real one.

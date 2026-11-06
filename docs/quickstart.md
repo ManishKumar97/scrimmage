@@ -25,12 +25,12 @@ def answer(question: str) -> str:
     ...
 ```
 
-Nothing in this code mentions Faultline.
+Nothing in this code mentions Derail.
 The full example is in the repository under `tests/example/`.
 
 ## 2. The test file
 
-Next to the code, write `faultline.toml`:
+Next to the code, write `derail.toml`:
 
 ```toml
 [agent]
@@ -68,24 +68,24 @@ This says:
 ## 3. Run it
 
 ```bash
-faultline test
+derail test
 ```
 
 ```text
-faultline test: 1 test, 2 rows, 6 runs; records in faultline-runs/20261105T075653Z-e277a2
+derail test: 1 test, 2 rows, 6 runs; records in derail-runs/20261105T075653Z-e277a2
 test          row       fault                   runs  exercised  answered  crashed  timed out  refused call  budget reached  infrastructure error  stopped
 order-status  baseline  -                       3     -          3         0        0          0             0               0                     0
 order-status  fault 1   tool:get_order timeout  3     3          3         0        0          0             0               0                     0
 model calls cost $0.0003 of a budget of $5
 ```
 
-Faultline ran the test as two **rows**: a baseline with the mocks and no fault, and one row with the timeout.
+Derail ran the test as two **rows**: a baseline with the mocks and no fault, and one row with the timeout.
 Each row ran three times, each time as a brand-new program.
 In all three fault runs the timeout fired ("exercised"), and the bot still answered.
 
 ## 4. Read what happened
 
-Each run has a record in `faultline-runs/`, one JSON object per line:
+Each run has a record in `derail-runs/`, one JSON object per line:
 
 ```json
 {"call": "model:openai", "action": "real", "model": "gpt-4o-mini", "status": 200, "cost_usd": 0.0000225, ...}
@@ -104,6 +104,6 @@ Judging answers against `expect` comes in a later version.
 |---|---|
 | 0 | Every row produced a result |
 | 2 | A mistake in the test: a refused call, a fault that never fired, a mock that does not fit its type, a misspelled label, a failed baseline, or a test the budget stopped |
-| 3 | An infrastructure error: a run whose record is incomplete, an error from the provider nobody injected, or a failure inside Faultline itself |
+| 3 | An infrastructure error: a run whose record is incomplete, an error from the provider nobody injected, or a failure inside Derail itself |
 
 Next: [Failing the model, and keeping a budget](model-faults.md), or [Concepts](concepts.md).
