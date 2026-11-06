@@ -171,6 +171,9 @@
         ]
       }
     },
+    "children": {
+      "type": "boolean"
+    },
     "time_limit_s": {
       "type": "number",
       "exclusiveMinimum": 0

@@ -7,6 +7,8 @@ and ignored; docs/configuration.md lists what later versions add.
 import builtins
 import math
 import re
+import shlex
+import shutil
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +20,8 @@ from derail_sdk.mocks import allowed
 
 AGENT_KEYS = {
     "function",
+    "command",
+    "children",
     "runs",
     "parallel",
     "run_timeout",
@@ -50,6 +54,7 @@ DEFAULT_RESERVE_OUTPUT_TOKENS = 4096
 # Where the answer is in what the agent returns, such as messages[-1].content.
 ANSWER_PATH = re.compile(r"[A-Za-z_]\w*(\[-?\d+\]|\.[A-Za-z_]\w*)*")
 IMPORT_PATH = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*:[A-Za-z_]\w*")
+QUESTION = "{question}"  # in a command; the only placeholder filled in
 
 
 @dataclass(frozen=True)
@@ -116,6 +121,8 @@ class Agent:
     reserve_output_tokens: int = DEFAULT_RESERVE_OUTPUT_TOKENS
     prices: tuple[tuple[str, Price], ...] = ()
     answer: str | None = None  # where the answer is in what the agent returns
+    command: tuple[str, ...] = ()  # a script's arguments; function is then empty
+    children: bool = False  # child processes fire faults, and join on any Python
 
     def tool_names(self) -> list[str]:
         """Every tool's final name: the one the model sees."""
@@ -124,7 +131,7 @@ class Agent:
 
     def allowed_imports(self) -> list[str]:
         """Prefixes the agent's process may import from: function's and tools' packages."""
-        paths = [self.function, *self.tools]
+        paths = [*([self.function] if self.function else []), *self.tools]
         return sorted({path.split(".")[0].split(":")[0] + "." for path in paths})
 
 
@@ -175,6 +182,8 @@ def check_references(config: Config) -> list[str]:
     # their names cannot be compared here.
     listed = bool(config.agent.tools)
     problems: list[str] = []
+    if config.agent.command and not can_start(config.agent.command[0], config.root):
+        problems.append(f"[agent] command: {config.agent.command[0]} is not a program it can find")
     for test in config.tests:
         for mock in test.mocks:
             if labels.kind_of(mock.call) == "model":
@@ -208,6 +217,11 @@ def check_references(config: Config) -> list[str]:
         if listed and labels.kind_of(entry) == "tool" and name != "*" and name not in names:
             problems.append(f"[agent] real: {entry} names no tool in [agent] tools")
     return problems
+
+
+def can_start(program: str, root: Path) -> bool:
+    """A program named with a path is found from the folder it runs in, others on PATH."""
+    return (root / program).exists() if "/" in program else shutil.which(program) is not None
 
 
 def reject_placeholders(value: object, where: str) -> None:
@@ -271,8 +285,8 @@ def whole(table: dict[str, object], key: str, default: int, where: str) -> int:
 def read_agent(table: dict[str, object]) -> Agent:
     where = "[agent]"
     check_keys(table, AGENT_KEYS, where)
-    if "function" not in table:
-        raise ConfigError(f"{where} function: required")
+    if ("function" in table) == ("command" in table):
+        raise ConfigError(f"{where}: give function or command, exactly one of them")
     timeout = table.get("run_timeout", 120)
     if isinstance(timeout, bool) or not isinstance(timeout, int | float) or timeout <= 0:
         raise ConfigError(f"{where} run_timeout: expected a number of seconds, got {timeout!r}")
@@ -291,8 +305,16 @@ def read_agent(table: dict[str, object]) -> Agent:
     answer = table.get("answer")
     if answer is not None and not (isinstance(answer, str) and ANSWER_PATH.fullmatch(answer)):
         raise ConfigError(f"{where} answer: {answer!r} is not a path of the form 'field[-1].name'")
+    if answer is not None and "command" in table:
+        raise ConfigError(f"{where} answer: works only with function; see {DOCS}")
+    children = table.get("children", False)
+    if not isinstance(children, bool):
+        raise ConfigError(f"{where} children: expected true or false, got {children!r}")
+    function = ""
+    if "function" in table:
+        function = import_path(text(table, "function", where), f"{where} function")
     agent = Agent(
-        function=import_path(text(table, "function", where), f"{where} function"),
+        function=function,
         runs=whole(table, "runs", 3, where),
         parallel=whole(table, "parallel", 4, where),
         run_timeout=float(timeout),
@@ -306,12 +328,25 @@ def read_agent(table: dict[str, object]) -> Agent:
         ),
         prices=read_prices(table.get("prices", {}), f"{where}.prices"),
         answer=answer,
+        command=read_command(table, where) if "command" in table else (),
+        children=children,
     )
     names = agent.tool_names()
     for name in names:
         if names.count(name) > 1:
             raise ConfigError(f"{where} tools: two tools are named {name!r}")
     return agent
+
+
+def read_command(table: dict[str, object], where: str) -> tuple[str, ...]:
+    """A command's arguments. It is split here, so a question can never change the split."""
+    try:
+        parts = tuple(shlex.split(text(table, "command", where)))
+    except ValueError as exc:
+        raise ConfigError(f"{where} command: {exc}") from None
+    if not any(QUESTION in part for part in parts):
+        raise ConfigError(f"{where} command: must hold {QUESTION}, or the agent gets no question")
+    return parts
 
 
 def read_model_hosts(value: object, where: str) -> tuple[ModelHost, ...]:

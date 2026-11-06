@@ -1,5 +1,6 @@
 """The plan: what the SDK does in one run. Data only, never code."""
 
+import math
 from dataclasses import dataclass
 from typing import cast
 
@@ -33,6 +34,8 @@ class Plan:
     budget_usd: float | None = None  # None: no budget, so no reservations
     reserve_output_tokens: int = DEFAULT_RESERVE_OUTPUT_TOKENS
     prices: tuple[tuple[str, Price], ...] = ()
+    children: bool = False  # child processes fire faults too
+    unavailable: str | None = None  # why a child has no plan; such a plan is never sent
 
     def tool_names(self) -> list[str]:
         """Every tool's final name: the one the model sees."""
@@ -49,6 +52,7 @@ class Plan:
             "faults": [fault_json(f) for f in self.faults],
             "tools": list(self.tools),
             "real": list(self.real),
+            "children": self.children,
             "time_limit_s": self.time_limit_s,
             "model_hosts": [{"host": h.host, "provider": h.provider} for h in self.model_hosts],
             "budget": {
@@ -105,7 +109,28 @@ class Plan:
             budget_usd=limit_usd,
             reserve_output_tokens=reserve,
             prices=prices,
+            children=doc.get("children") is True,
         )
+
+
+def tools_text(tools: tuple[str, ...], renames: tuple[tuple[str, str], ...]) -> str:
+    """The tools list for DERAIL_TOOLS: path, or path=name when the model sees another name."""
+    names = dict(renames)
+    return ",".join(f"{p}={names[p]}" if p in names else p for p in tools)
+
+
+def tools_from(text: str) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
+    """DERAIL_TOOLS back as a plan's tools and renames."""
+    entries = [entry.partition("=") for entry in text.split(",") if entry]
+    return (
+        tuple(path for path, _, _ in entries),
+        tuple((path, name) for path, _, name in entries if name),
+    )
+
+
+def no_plan(run: str, why: str) -> Plan:
+    """What a child holds when it cannot get its plan. RunState refuses every call on it."""
+    return Plan(run, "unknown", "unknown", (), (), (), (), math.inf, unavailable=why)
 
 
 @dataclass(frozen=True)
@@ -189,6 +214,7 @@ def plan_for(config: Config, row: Row, run: str) -> Plan:
         budget_usd=config.agent.max_cost_usd,
         reserve_output_tokens=config.agent.reserve_output_tokens,
         prices=config.agent.prices,
+        children=config.agent.children,
     )
 
 
