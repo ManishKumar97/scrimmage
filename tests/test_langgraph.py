@@ -1049,3 +1049,14 @@ def test_a_class_is_checked_when_it_is_made_not_only_its_tools(project: Project)
     assert result.code == 2, result.out + result.err
     assert not wrote(result)
     assert "get_order cannot be gated, because its class overrides invoke" in result.out
+
+
+@pytest.mark.design("adapter.plumbing_not_recorded")
+def test_injected_state_and_store_are_left_out_of_the_record(
+    project: Project, fake_openai: Fake
+) -> None:
+    graph(project, "answer_with_injected", "")
+    result = project.test(fake_openai(ACME))
+    args = tool_lines(result.records()[0])[0]["args"]
+    assert isinstance(args, dict)
+    assert args["preview"] == '{"order_id": "1234"}'

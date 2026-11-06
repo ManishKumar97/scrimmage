@@ -280,9 +280,12 @@ def plumbing_names(function: Callable[..., Any]) -> set[str]:
 
 
 def arguments(
-    args: tuple[Any, ...], kwargs: dict[str, Any], functions: tuple[Callable[..., Any], ...]
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    functions: tuple[Callable[..., Any], ...],
+    injected: frozenset[str],
 ) -> dict[str, object]:
-    names: set[str] = set().union(*map(plumbing_names, functions))
+    names: set[str] = set(injected).union(*map(plumbing_names, functions))
     found: dict[str, object] = {
         k: v for k, v in kwargs.items() if k not in names and type(v).__name__ not in PLUMBING
     }
@@ -324,9 +327,11 @@ def gate(method: Callable[..., Any], failure: type[Exception]) -> Callable[..., 
         if _inside.get(None) is tool:  # _arun delegating to _run on the same tool
             return None
         function = function_of(tool, method)
+        # get_type_hints drops Annotated, so LangChain's own list finds InjectedState and the store.
+        injected = getattr(tool, "_injected_args_keys", frozenset[str]())
         return tool_gate.Gated(
             tool.name,
-            arguments(tuple(rest), kwargs, (method, function)),
+            arguments(tuple(rest), kwargs, (method, function), injected),
             function,
             failure,
             functools.partial(real_call, tool),

@@ -7,7 +7,7 @@ the same bot with a tool set up differently for one test each.
 import asyncio
 import subprocess
 import sys
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, NotRequired, TypedDict
 
 from langchain_core.messages import AnyMessage
 from langchain_core.runnables import RunnableConfig
@@ -15,13 +15,21 @@ from langchain_core.tools import BaseTool, Tool, ToolException, tool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode, ToolRuntime, tools_condition
+from langgraph.prebuilt import (
+    InjectedState,
+    InjectedStore,
+    ToolNode,
+    ToolRuntime,
+    tools_condition,
+)
+from langgraph.store.memory import InMemoryStore
 
 from acme.models import Stock
 
 
 class State(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
+    secret: NotRequired[str]  # never sent to the model
 
 
 @tool
@@ -51,7 +59,7 @@ def get_stock(sku: str) -> Stock:
 TOOLS: list[BaseTool] = [get_order, check_inventory, refund_order, get_stock]
 
 
-def build(tools: list[BaseTool]) -> Any:
+def build(tools: list[BaseTool], store: Any = None) -> Any:
     model = ChatOpenAI(model="gpt-4o-mini", max_retries=0).bind_tools(tools)
 
     def think(state: State) -> dict[str, list[Any]]:
@@ -63,7 +71,7 @@ def build(tools: list[BaseTool]) -> Any:
     graph.add_edge(START, "think")
     graph.add_conditional_edges("think", tools_condition, {"tools": "tools", END: END})
     graph.add_edge("tools", "think")
-    return graph.compile()
+    return graph.compile(store=store)
 
 
 def answer(question: str) -> dict[str, Any]:
@@ -89,6 +97,22 @@ def answer_with_runtime(question: str) -> dict[str, Any]:
         return str(len(runtime.state["messages"]))
 
     return build([get_order, get_stock]).invoke({"messages": [("user", question)]})
+
+
+def answer_with_injected(question: str) -> dict[str, Any]:
+    """get_order takes a state field and the store, which LangGraph passes in."""
+
+    @tool
+    def get_order(
+        order_id: str,
+        note: Annotated[str, InjectedState("secret")],
+        store: Annotated[Any, InjectedStore()],
+    ) -> str:
+        """Look up an order's status and delivery date."""
+        return note
+
+    bot = build([get_order, get_stock], InMemoryStore())
+    return bot.invoke({"messages": [("user", question)], "secret": "the hidden note"})
 
 
 def answer_handled(question: str) -> dict[str, Any]:
