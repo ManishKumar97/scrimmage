@@ -98,7 +98,7 @@ A `Set-Cookie` header reaches the client's cookie jar, as it would from a real r
 
 `when` can be `always` or `first N`. `requests N` is for model calls only.
 
-## Two mistakes it catches
+## Mistakes it catches
 
 Mocking `tool:check_inventory` and failing `http:inventory.acme.internal` in the same test is a test mistake.
 The mock replaces the whole tool, so the request never happens and the fault never fires.
@@ -106,6 +106,9 @@ Mock or fail one level, not both.
 
 A real request to a host the test has mocks for, when none of them matched its method and path, gets a warning in the report.
 It usually means a path in the test does not match the one the code asks for.
+
+A web mock that no row used is a test mistake, exit code 2.
+A web label has nothing to be checked against, so this is what catches a misspelled host.
 
 ## What is recorded
 

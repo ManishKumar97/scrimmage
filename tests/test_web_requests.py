@@ -117,11 +117,26 @@ def test_a_real_request_to_a_mocked_host_is_a_warning(
 
 
 @pytest.mark.design("web.unused_narrow_mock")
-def test_a_mock_for_a_path_nothing_asked_for_gets_a_note(project: Project) -> None:
+def test_a_web_mock_nothing_used_is_a_test_mistake(project: Project) -> None:
     other = f'[[test.mock]]\ncall = "{LABEL}"\npath = "/never"\ntext = "x"\n'
     result = run(project, "acme.web:answer", JSON_MOCK + other)
-    assert result.code == 0, result.out
-    assert f"no request in test 'stock' matched the mock on {LABEL}" in result.out
+    assert result.code == 2, result.out
+    assert f"no request matched the mock on {LABEL}" in result.out
+    fits_the_schema(result)
+
+
+def test_a_misspelled_host_in_a_web_mock_is_a_test_mistake(project: Project) -> None:
+    typo = '[[test.mock]]\ncall = "http:inventory.acme.intenral"\ntext = "x"\n'
+    result = run(project, "acme.web:answer", JSON_MOCK + typo)
+    assert result.code == 2
+    assert "no request matched the mock on http:inventory.acme.intenral" in result.out
+
+
+def test_a_web_mock_shadowed_by_an_earlier_one_is_a_test_mistake(project: Project) -> None:
+    second = f'[[test.mock]]\ncall = "{LABEL}"\ntext = "x"\n'
+    result = run(project, "acme.web:answer", JSON_MOCK + second)
+    assert result.code == 2
+    assert "an earlier mock answered it first" in result.out
 
 
 @pytest.mark.design("web.record_clean")

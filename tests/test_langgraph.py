@@ -335,6 +335,17 @@ def test_a_misspelled_mock_of_a_tool_under_real_stops_the_test(
     assert "tool:check_inventry names no tool the agent has" in result.out
 
 
+def test_a_tool_mock_shadowed_by_an_earlier_one_is_a_note(
+    project: Project, fake_openai: Fake
+) -> None:
+    graph(project, fault="")
+    with project.toml.open("a") as toml:
+        toml.write('[[test.mock]]\ncall = "tool:get_order"\nreturns = "later"\n')
+    result = project.test(fake_openai(["acme_get_order", "acme_answer"]))
+    assert result.code == 0, result.out + result.err
+    assert "an earlier mock on get_order answers every call" in result.out
+
+
 @pytest.mark.design("labels.never_used_mock")
 def test_a_mock_no_run_used_is_a_note(project: Project, fake_openai: Fake) -> None:
     graph(project, fault="")

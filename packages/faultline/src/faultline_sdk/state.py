@@ -244,6 +244,8 @@ class RunState:
         if decision.fault is not None:
             fault = self.plan.faults[decision.fault]
             line["fault"] = {"do": fault.do, "when": fault.when, "n": decision.n}
+        if decision.mock is not None:
+            line["mock"] = decision.mock
         if decision.action == "refused":
             line["reason"] = decision.reason or "unlisted"
         if mistake is not None:

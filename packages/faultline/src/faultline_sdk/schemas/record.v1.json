@@ -230,6 +230,10 @@
         "near_mock": {
           "const": true
         },
+        "mock": {
+          "type": "integer",
+          "minimum": 0
+        },
         "stream": {
           "type": "boolean"
         },
