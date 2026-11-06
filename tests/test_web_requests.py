@@ -125,6 +125,14 @@ def test_a_web_mock_nothing_used_is_a_test_mistake(project: Project) -> None:
     fits_the_schema(result)
 
 
+def test_an_unused_web_mock_is_a_test_mistake_with_a_tools_list_too(project: Project) -> None:
+    typo = '[[test.mock]]\ncall = "http:inventory.acme.intenral"\ntext = "x"\n'
+    tools = 'tools = ["acme.web:check_inventory"]\nreal = ["tool:check_inventory"]'
+    result = run(project, "acme.web:answer", JSON_MOCK + typo, tools)
+    assert result.code == 2
+    assert "no request matched the mock on http:inventory.acme.intenral" in result.out
+
+
 def test_a_misspelled_host_in_a_web_mock_is_a_test_mistake(project: Project) -> None:
     typo = '[[test.mock]]\ncall = "http:inventory.acme.intenral"\ntext = "x"\n'
     result = run(project, "acme.web:answer", JSON_MOCK + typo)
