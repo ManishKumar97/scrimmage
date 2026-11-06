@@ -95,6 +95,7 @@ real = ["mcp:docs/search"]
 Only tool calls are gated.
 The connection's own messages pass, and so do requests that are not tool calls: `initialize`, `server/discover`, `ping`, `tools/list`, `prompts/list`, `prompts/get`, `resources/list`, `resources/templates/list`, `resources/read`, `resources/subscribe`, `resources/unsubscribe`, `subscriptions/listen`, `completion/complete` and `logging/setLevel`.
 Notifications pass too.
+`resources/read`, `prompts/get`, `completion/complete` and `resources/subscribe` also leave a `real` line in the record, labelled such as `mcp:docs/resources/read`, because a server can act on them. See [Safety](safety.md#what-an-mcp-tool-may-do).
 Any other request is treated as a tool call, so a request a newer protocol adds is refused until `real` lists it, as `mcp:docs/<method>`.
 
 ## Over streamable HTTP

@@ -65,6 +65,12 @@ The refusal says so.
 A refusal happens at the MCP gate, so over streamable HTTP the server never sees the call.
 Requests that are not tool calls, such as `tools/list`, pass; a request Derail does not know is refused. See [MCP tools](mcp.md).
 
+Some of the requests that pass can still do harm.
+`resources/read`, `prompts/get`, `completion/complete` and `resources/subscribe` run code on the server, and a server can do anything in that code, such as count a read or send an email.
+Derail does not stop them, because nothing marks which ones are safe.
+Each one leaves a line in the record with the action `real`, so you can see that it happened.
+If a stray one would do real harm, point the test at a server that cannot do it.
+
 If a label such as `mcp:search` could mean a tool on two servers, the test stops, so a read on one server cannot be taken for a write on another.
 
 ## The budget

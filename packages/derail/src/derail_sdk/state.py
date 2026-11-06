@@ -123,6 +123,10 @@ class RunState:
     def begin(self, name: str, args: dict[str, object]) -> Step:
         return self.decide(engine.Call("tool", f"tool:{name}", name), args)
 
+    def passed(self, call: engine.Call) -> Step:
+        """A call that is recorded but not decided, so it is not counted and cannot be refused."""
+        return Step(call, engine.Decision("real"), {}, now_iso(), time.monotonic())
+
     def refuse(self, step: Step, reason: str) -> Step:
         """Turn a decided call into a refusal for a reason the gate found, and poison the run."""
         with self._lock:

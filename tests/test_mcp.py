@@ -290,6 +290,33 @@ def test_a_swallowed_refusal_stops_every_later_tool_call(docs: Docs) -> None:
     ]
 
 
+@pytest.mark.design("mcp.reads_recorded")
+def test_a_request_a_server_could_act_on_passes_and_leaves_a_line(docs: Docs) -> None:
+    docs.start("stdio")
+    result = docs.run("acme.docs_bot:answer_with_reads", "")
+    assert result.code == 0, result.out
+    assert docs.received() == ["resources/read handbook", "prompts/get refunds"]
+    assert calls(result) == [
+        ("mcp:docs/resources/read", "real"),
+        ("mcp:docs/prompts/get", "real"),
+        ("mcp:docs/completion/complete", "real"),
+        ("mcp:docs/resources/subscribe", "real"),
+    ]
+    lines = row(result, "baseline")
+    assert "docs://handbook" in lines[0]["args"]["preview"]
+    assert "the handbook" in lines[0]["result"]["preview"]
+    fits_the_schema(result)
+
+
+@pytest.mark.design("mcp.reads_recorded")
+def test_a_recorded_read_is_a_kept_line_and_is_not_decided() -> None:
+    sink = Sink()
+    run = state.RunState(a_plan(), sink, [])
+    run.finish(run.passed(mcp_gate.call_for("docs", "resources/read")))
+    assert sink.lines[0]["keep"] is True
+    assert run.refused is None
+
+
 @pytest.mark.design("mcp.unknown_method")
 @BOTH
 def test_a_request_this_release_does_not_know_is_gated_not_passed(

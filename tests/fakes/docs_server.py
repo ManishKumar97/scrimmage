@@ -67,6 +67,16 @@ def serve(transport: str, name: str, log: str, mode: str, port: int = 0) -> None
             await ctx.session.create_message(params.messages, max_tokens=params.max_tokens)
         return "done"
 
+    @server.resource("docs://handbook")
+    def handbook() -> str:
+        received("resources/read", "handbook")
+        return "the handbook"
+
+    @server.prompt()
+    def summarise(topic: str) -> str:
+        received("prompts/get", topic)
+        return f"summarise {topic}"
+
     @server.tool()
     def title(q: str) -> str:
         received("title", q)

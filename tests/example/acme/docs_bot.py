@@ -18,7 +18,7 @@ from mcp import Client, ClientSession, MCPError, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
-from mcp.types import CreateMessageResult, EmptyResult, Request, TextContent
+from mcp.types import CreateMessageResult, EmptyResult, PromptReference, Request, TextContent
 
 LIMIT = float(os.environ.get("DOCS_TIMEOUT", "20"))
 TOOL = os.environ.get("DOCS_TOOL", "search")
@@ -155,6 +155,27 @@ def answer_two_servers(question: str) -> str:
             await docs.list_tools()
             await wiki.list_tools()
             return await search(docs)
+
+    return asyncio.run(go())
+
+
+def answer_with_reads(question: str) -> str:
+    """Requests that are not tool calls, though a server can act on them."""
+
+    async def go() -> str:
+        async with over_stdio() as session:
+            await session.read_resource("docs://handbook")
+            await session.get_prompt("summarise", {"topic": "refunds"})
+            reference = PromptReference(type="ref/prompt", name="summarise")
+            for attempt in (
+                session.complete(ref=reference, argument={"name": "topic", "value": "r"}),
+                session.subscribe_resource("docs://handbook"),
+            ):
+                try:
+                    await attempt
+                except MCPError as exc:
+                    print(f"the server said no: {exc.message}", file=sys.stderr)
+            return "read"
 
     return asyncio.run(go())
 

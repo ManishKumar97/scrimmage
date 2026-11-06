@@ -52,6 +52,9 @@ PASSES = (
     "completion/complete",
     "logging/setLevel",
 )
+# Of those, the ones a server can act on with data, whatever the protocol says. They still
+# pass, because a test could not run without them, but each one leaves a line.
+TRACED = ("resources/read", "prompts/get", "completion/complete", "resources/subscribe")
 # The functions the transport opens a web request with, and where each takes the address.
 OPENERS = {"stream_within_origin": 2, "sse_within_origin": 1}
 
@@ -176,6 +179,10 @@ def patch(module: ModuleType, gate: Gate) -> None:
         data = request.model_dump(by_alias=True, mode="json", exclude_none=True)
         method = data["method"]
         server = server_of(self)
+        if method in TRACED:
+            step = run.passed(call_for(server, method))
+            step.extra["args"] = record(gate, data.get("params", {}))
+            return await carried(gate, run, step, send(self, request, result_type, *args, **kw))
         if method in PASSES:
             reply = await send(self, request, result_type, *args, **kw)
             if method == "tools/list":
