@@ -16,7 +16,7 @@ MODEL_OPS = ("embeddings", "moderations", "input_tokens")  # calls that only rea
 MODEL = re.compile(r"model(?::(?P<provider>[a-z*][a-z0-9_-]*)(?:/(?P<op>[a-z_]+))?)?")
 HOSTED = re.compile(r"hosted:mcp/[A-Za-z0-9_.-]+")
 WEB_HOST = re.compile(r"[a-z0-9][a-z0-9._-]*")
-WEB_METHOD = re.compile(r"[A-Za-z]+")
+WEB_METHOD = re.compile(r"[A-Za-z][A-Za-z-]*")  # letters, and the hyphen of M-SEARCH
 WEB_PATH = re.compile(r"/(?:(?![?#])[\x21-\x7e])*")  # as sent: percent-encoded, no query
 DOCS = "see docs/configuration.md"
 

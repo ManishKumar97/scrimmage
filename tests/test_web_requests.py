@@ -918,6 +918,11 @@ def load_mock(tmp_path: Path, body: str, agent: str = "") -> config.Config:
     return config.load(path)
 
 
+def test_a_method_with_a_hyphen_can_be_named(tmp_path: Path) -> None:
+    body = f"[[test.mock]]\ncall = '{LABEL}'\nmethod = 'M-SEARCH'\n"
+    assert load_mock(tmp_path, body, 'real = ["http:a.b M-SEARCH /x"]')
+
+
 @pytest.mark.design("web.config")
 def test_a_web_mock_and_fault_are_read(tmp_path: Path) -> None:
     text = (
@@ -951,6 +956,8 @@ def test_hosts_are_lowercase_and_real_forms_are_normalized(tmp_path: Path) -> No
         (f"{MOCK}headers = {{content-encoding = 'gzip'}}\n", "", "written from the body"),
         (f"{MOCK}headers = {{Content-Length = '3'}}\n", "", "written from the body"),
         (f"{MOCK}headers = {{a = 1}}\n", "", "headers a: expected text"),
+        (f"{MOCK}headers = {{a = 'é'}}\n", "", "must be printable ASCII"),
+        (f'{MOCK}headers = {{a = "x\\ny"}}\n', "", "must be printable ASCII"),
         (f"[[test.mock]]\ncall = '{LABEL}'\nmethod = 'G T'\n", "", "not an HTTP method"),
         (f"[[test.mock]]\ncall = '{LABEL}'\npath = 'a'\n", "", "is not a path"),
         (f"[[test.mock]]\ncall = '{LABEL}'\npath = '/a?b=1'\n", "", "no query string"),

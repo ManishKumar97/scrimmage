@@ -436,6 +436,8 @@ def read_web_mock(table: dict[str, object], call: str, where: str) -> Mock:
             raise ConfigError(f"{where} headers {name}: expected text, got {value!r}")
         if name.lower() in BODY_HEADERS:
             raise ConfigError(f"{where} headers {name}: is written from the body")
+        if not f"{name}{value}".isascii() or not f"{name}{value}".isprintable():
+            raise ConfigError(f"{where} headers {name}: must be printable ASCII")
         headers.append((name, value))
     method, path = narrowing(table, where)
     body = text(table, "text", where) if "text" in table else None
