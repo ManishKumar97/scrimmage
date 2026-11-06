@@ -282,6 +282,19 @@ def test_a_child_with_no_plan_refuses_every_call(control: ControlServer, tmp_pat
     assert "THE WRITE RAN" not in result.stdout
 
 
+@pytest.mark.design("boot.child_has_no_plan_reads_too")
+def test_a_child_with_no_plan_refuses_a_read_as_well(control: ControlServer) -> None:
+    code = (
+        "import httpx\n"
+        "try:\n"
+        "    httpx.get('http://127.0.0.1:9/')\n"
+        "except Exception as exc:\n"
+        "    print(type(exc).__name__)\n"
+    )
+    result = python(code, as_child(control, DERAIL_RUN="not-a-run"))
+    assert result.stdout.strip() == "DerailRefused", result.stderr
+
+
 @pytest.mark.design("boot.child_plan_outside_imports")
 def test_a_child_refuses_a_plan_that_names_an_import_it_may_not_make(
     control: ControlServer, tmp_path: Path

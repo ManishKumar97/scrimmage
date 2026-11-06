@@ -352,6 +352,21 @@ def test_a_childs_write_is_refused_and_its_process_is_in_the_record(project: Pro
         validator.validate(line)
 
 
+@pytest.mark.design("child.refused_then_no_exit_steps")
+def test_a_childs_refusal_arrives_before_a_child_that_skips_its_exit_steps(
+    project: Project,
+) -> None:
+    (project.root / "report.py").write_text(
+        "import contextlib, os\n"
+        "from acme import tools\n"
+        "with contextlib.suppress(Exception):\n"
+        "    tools.refund_order('1234')\n"
+        "os._exit(0)\n"
+    )
+    result = script(project, GATED_CHILD)
+    assert summary_of(result)["outcome"] == "refused call", result.out
+
+
 @pytest.mark.design("child.mocks_apply")
 def test_a_childs_mock_applies_and_its_line_is_in_the_record(project: Project) -> None:
     (project.root / "report.py").write_text("from acme import tools\nprint(tools.get_order('1'))\n")
@@ -377,6 +392,7 @@ def test_a_child_started_as_python3_is_the_same_python(project: Project) -> None
     )
     result = script(project, code)
     assert summary_of(result)["outcome"] == "refused call", result.out
+    assert [x["call"] for x in calls(result)] == ["tool:refund_order"]  # refused by its gate
 
 
 @pytest.mark.design("child.tools_at_startup")
@@ -630,11 +646,18 @@ def test_a_fork_while_another_thread_holds_the_locks_does_not_hang(project: Proj
         "import derail_sdk.state as state\n"
         "from acme import tools\n"
         "run = state.current()\n"
-        "with run._lock, run.sink._counts, run.sink._sending:\n"
-        "    pid = os.fork()\n"
+        "held, done = threading.Event(), threading.Event()\n"
+        "def hold():\n"
+        "    with run._lock, run.sink._counts, run.sink._sending:\n"
+        "        held.set()\n"
+        "        done.wait()\n"
+        "threading.Thread(target=hold, daemon=True).start()\n"
+        "held.wait()\n"
+        "pid = os.fork()\n"
         "if pid == 0:\n"
         "    tools.check_inventory('child')\n"
         "    os._exit(0)\n"
+        "done.set()\n"
         "_, status = os.waitpid(pid, 0)\n"
         "print(status)\n"
     )
