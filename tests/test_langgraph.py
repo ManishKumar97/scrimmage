@@ -1093,3 +1093,9 @@ def test_only_what_the_model_supplies_reaches_the_record(
     args = tool_lines(result.records()[0])[0]["args"]
     assert isinstance(args, dict)
     assert args["preview"] == '{"order_id": "1234"}'
+
+
+@pytest.mark.design("adapter.any_override_refused")
+def test_the_docs_say_a_helper_of_the_same_name_is_refused() -> None:
+    text = (Path(__file__).parent.parent / "docs" / "frameworks.md").read_text()
+    assert "helper method that only shares a name" in text
