@@ -956,3 +956,9 @@ def test_a_crash_before_the_first_model_call_is_not_called_a_budget_problem(
     assert result.code == 2, result.out + result.err
     assert "the budget is not working" not in result.out
     assert "crashed or timed out before its first model call" in result.out
+
+
+@pytest.mark.design("labels.blocked_tool_is_known")
+def test_a_blocked_tool_is_not_called_a_misspelled_label(project: Project) -> None:
+    result, _ = offered(project, "partial_run")
+    assert "names no tool the agent has" not in result.out

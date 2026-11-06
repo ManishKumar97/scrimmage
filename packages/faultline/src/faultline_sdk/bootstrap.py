@@ -26,9 +26,9 @@ def stop(message: str) -> NoReturn:
 
 
 def report_tools(run_state: state.RunState) -> None:
-    run_state.notice(
-        "tools_seen", "faultline", "the tools a gate reaches", tools=sorted(run_state.seen)
-    )
+    # A blocked tool is still one the agent has: its label is spelled right.
+    tools = sorted(run_state.seen | run_state.blocked.keys())
+    run_state.notice("tools_seen", "faultline", "the tools the agent has", tools=tools)
 
 
 def start() -> None:
