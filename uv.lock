@@ -8,9 +8,9 @@ resolution-markers = [
 
 [manifest]
 members = [
-    "faultline",
-    "faultline-marker",
-    "faultline-workspace",
+    "derail",
+    "derail-marker",
+    "derail-workspace",
 ]
 
 [[package]]
@@ -354,28 +354,28 @@ wheels = [
 ]
 
 [[package]]
-name = "faultline"
+name = "derail"
 version = "0.0.0"
-source = { editable = "packages/faultline" }
+source = { editable = "packages/derail" }
 dependencies = [
-    { name = "faultline-marker" },
+    { name = "derail-marker" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "faultline-marker", editable = "packages/faultline-marker" }]
+requires-dist = [{ name = "derail-marker", editable = "packages/derail-marker" }]
 
 [[package]]
-name = "faultline-marker"
+name = "derail-marker"
 version = "0.0.0"
-source = { editable = "packages/faultline-marker" }
+source = { editable = "packages/derail-marker" }
 
 [[package]]
-name = "faultline-workspace"
+name = "derail-workspace"
 version = "0"
 source = { virtual = "." }
 dependencies = [
-    { name = "faultline" },
-    { name = "faultline-marker" },
+    { name = "derail" },
+    { name = "derail-marker" },
 ]
 
 [package.dev-dependencies]
@@ -397,8 +397,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "faultline", editable = "packages/faultline" },
-    { name = "faultline-marker", editable = "packages/faultline-marker" },
+    { name = "derail", editable = "packages/derail" },
+    { name = "derail-marker", editable = "packages/derail-marker" },
 ]
 
 [package.metadata.requires-dev]

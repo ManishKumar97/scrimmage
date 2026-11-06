@@ -1,0 +1,43 @@
+"""The derail command. This version has one command: derail test."""
+
+import argparse
+import sys
+from pathlib import Path
+
+from derail_sdk import config as settings
+from derail_sdk.errors import ConfigError
+from derail_sdk.runner import INFRA, MISTAKE, Interrupted, Runner, report
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="derail")
+    commands = parser.add_subparsers(dest="command", required=True)
+    test = commands.add_parser("test", help="run every test in derail.toml")
+    test.add_argument("path", nargs="?", default="derail.toml", type=Path)
+    args = parser.parse_args(argv)
+    try:
+        config = settings.load(args.path.resolve())
+    except ConfigError as exc:
+        for problem in exc.problems:
+            print(f"derail: {problem}", file=sys.stderr)
+        print("derail: the test stopped before the first run", file=sys.stderr)
+        return MISTAKE
+    runner: Runner | None = None
+    try:
+        runner = Runner(config)
+        results = runner.run_all()
+    except Interrupted as exc:
+        print(f"derail: stopped by {exc}; every run was stopped", file=sys.stderr)
+        return INFRA
+    except Exception as exc:  # the runner's own failure is never a result
+        print(f"derail: infrastructure error in the runner: {exc!r}", file=sys.stderr)
+        return INFRA
+    finally:
+        if runner is not None:
+            runner.server.server.server_close()
+    assert runner is not None
+    return report(config, results, runner.folder, sys.stdout, runner)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

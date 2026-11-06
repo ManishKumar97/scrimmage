@@ -46,7 +46,7 @@ def test_a_real_timeout_and_the_injected_one_reach_the_loop_the_same_way(
     fault_run = next(lines for lines in injected.records() if lines[-1]["row"] == "fault 1")
 
     # Real: get_order runs for real against a system that never answers.
-    shutil.rmtree(project.root / "faultline-runs")
+    shutil.rmtree(project.root / "derail-runs")
     project.edit(
         'real     = ["tool:check_inventory"]',
         'real     = ["tool:check_inventory", "tool:get_order"]',

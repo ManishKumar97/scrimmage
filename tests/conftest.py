@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from derail_sdk.cli import main
 from fakes.openai_server import FakeOpenAI
-from faultline_sdk.cli import main
 
 EXAMPLE = Path(__file__).parent / "example"
 # The S1 conversation: the bot asks for the order, then the stock, then answers.
@@ -61,7 +61,7 @@ class Result:
 
     def records(self) -> list[list[dict[str, object]]]:
         """Every run's record lines, one list per run."""
-        files = sorted((self.root / "faultline-runs").glob("*/*.jsonl"))
+        files = sorted((self.root / "derail-runs").glob("*/*.jsonl"))
         return [[json.loads(line) for line in f.read_text().splitlines()] for f in files]
 
     def summaries(self) -> list[dict[str, object]]:
@@ -76,7 +76,7 @@ class Project:
 
     @property
     def toml(self) -> Path:
-        return self.root / "faultline.toml"
+        return self.root / "derail.toml"
 
     def edit(self, old: str, new: str) -> None:
         text = self.toml.read_text()
@@ -97,7 +97,7 @@ class Project:
 def project(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> Project:
-    """A copy of Acme's example agent and its faultline.toml in a fresh folder."""
+    """A copy of Acme's example agent and its derail.toml in a fresh folder."""
     root = tmp_path / "acme-bot"
     shutil.copytree(EXAMPLE, root, ignore=shutil.ignore_patterns("__pycache__"))
     return Project(root, capsys, monkeypatch)

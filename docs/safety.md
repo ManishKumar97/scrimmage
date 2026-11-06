@@ -3,7 +3,7 @@
 A test runs your agent many times.
 A tool that changes data, such as `refund_order`, must never run for real by accident.
 
-Nothing can reliably tell a read from a write by looking at a tool, so Faultline does not try.
+Nothing can reliably tell a read from a write by looking at a tool, so Derail does not try.
 
 ## Every tool is refused unless the test allows it
 
@@ -15,11 +15,11 @@ Any tool can be mocked instead, write tools included, so a test can give `refund
 | `tool:check_inventory` | yes | Runs for real |
 | `tool:refund_order` | no | Refused; the run stops as "refused call" |
 
-A refused call raises `FaultlineRefused`, an error of Faultline's own.
+A refused call raises `DerailRefused`, an error of Derail's own.
 Its message names the call and the two fixes: mock it, or add it to `real` if it is safe.
 
 Your code, or a framework, might swallow that error and carry on, and the next tool could be another write.
-So one refusal ends the run: Faultline fails every gated call after it, and the runner stops the program.
+So one refusal ends the run: Derail fails every gated call after it, and the runner stops the program.
 
 If you have decided every tool is safe, write `real = ["tool:*"]`; the run table then says so in its header.
 
@@ -29,9 +29,9 @@ Model calls run for real, because they are what is being tested.
 Everything around them is checked:
 
 - A hosted MCP server can change data at the provider, where no gate can see it. A request that offers one is never sent unless you list it as `hosted:mcp/<label>` under `real`.
-- A tool of a type Faultline does not know stops the test, so a new provider feature costs a table update, never a safety gap.
+- A tool of a type Derail does not know stops the test, so a new provider feature costs a table update, never a safety gap.
 - A tool the model is offered that no gate sees could run for real unchecked, so the request is not sent and the test stops.
-- A request body Faultline cannot read is refused, because the tools in it cannot be checked.
+- A request body Derail cannot read is refused, because the tools in it cannot be checked.
 - Any other write to a model host, such as starting a fine-tuning job, is a web request, so it is refused unless `real` lists it.
 - A model call redirected to a host that is not a model host is refused, so it cannot leave the budget behind. If your gateway really does redirect to another host, name that host under `model_hosts`.
 
@@ -65,7 +65,7 @@ Otherwise a typo such as `refund_ordr` would leave the real `refund_order` runni
 
 ## What the gates assume
 
-Faultline stops ordinary code from running a write by accident.
+Derail stops ordinary code from running a write by accident.
 It runs inside your program, so it cannot stop code written to get around it.
 Code that deliberately works around a gate, or calls the plain function directly, is outside what it covers.
 So a test is not a sandbox.
@@ -73,16 +73,16 @@ If one stray call to a tool would do real harm, make that tool unreachable from 
 
 ## Staying out of production
 
-- Installing or importing Faultline never switches anything on.
-- The startup file is never on Python's default path; only `faultline-run` puts it there.
+- Installing or importing Derail never switches anything on.
+- The startup file is never on Python's default path; only `derail-run` puts it there.
 - The SDK switches on only when a test run gives it its secret, and then prints that it is active.
 
-In production you start your agent the usual way, and Faultline is never loaded.
+In production you start your agent the usual way, and Derail is never loaded.
 
-## faultline.toml runs code
+## derail.toml runs code
 
-`function` names code that runs, so treat `faultline.toml` like code.
-A CI job that holds model API keys must not run `faultline test` on a pull request from an outside contributor.
+`function` names code that runs, so treat `derail.toml` like code.
+A CI job that holds model API keys must not run `derail test` on a pull request from an outside contributor.
 
 ## Records
 

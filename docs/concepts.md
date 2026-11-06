@@ -3,7 +3,7 @@
 ## Test, row and run
 
 A **test** is one `[[test]]` block: one question for your agent.
-Faultline expands each test into **rows**:
+Derail expands each test into **rows**:
 
 | Row | Mocks | Fault |
 |---|---|---|
@@ -48,7 +48,7 @@ For every call, in this order:
 ## Mocks
 
 A mock's `returns` is written in TOML.
-If the tool returns its own type, Faultline builds that type from the mock:
+If the tool returns its own type, Derail builds that type from the mock:
 
 - the type is read from the tool's return annotation, such as `-> Stock`, or from the mock's `type`;
 - a pydantic model is built with `model_validate`, any other class with `Type(**returns)`;
@@ -68,8 +68,8 @@ A row where the fault never fired tested nothing, and is reported as a mistake i
 
 ## Records
 
-Every call is written to the run's record, a JSON Lines file in `faultline-runs/`.
-Each line says which call it was, what Faultline did (real, mock, fault or refused), a hash, size and short preview of the arguments and result, and any error.
+Every call is written to the run's record, a JSON Lines file in `derail-runs/`.
+Each line says which call it was, what Derail did (real, mock, fault or refused), a hash, size and short preview of the arguments and result, and any error.
 A model call's line also holds the provider, the model, the status, the retry number, the token counts and the cost; its full request and reply are kept once in a `blobs/` folder next to the record, named by their hash.
 The last line is the run's summary: the answer, how the run ended, whether its fault fired, and what the run cost.
 

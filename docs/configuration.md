@@ -1,15 +1,15 @@
-# Configuration: faultline.toml
+# Configuration: derail.toml
 
-One `faultline.toml` describes one agent and its tests.
-Faultline names the table and key of every bad value, such as `[agent] run_timeout: expected a number of seconds, got 'abc'`.
+One `derail.toml` describes one agent and its tests.
+Derail names the table and key of every bad value, such as `[agent] run_timeout: expected a number of seconds, got 'abc'`.
 Anything this version does not support is rejected as unknown, with exit code 2. Nothing is ever silently ignored.
 
 ## [agent]
 
 | Setting | What it does | Default |
 |---|---|---|
-| `function` | The agent, as `module:function`. Faultline calls it with the question and waits for it if it is async. Required. | none |
-| `tools` | The agent's own tools, as `module:function` import paths. Faultline swaps each one for a gate when your code imports its module. When the model sees a different name, write `{path = "package.tools:lookup_order", name = "lookup-order"}`; labels use the name the model sees. | empty |
+| `function` | The agent, as `module:function`. Derail calls it with the question and waits for it if it is async. Required. | none |
+| `tools` | The agent's own tools, as `module:function` import paths. Derail swaps each one for a gate when your code imports its module. When the model sees a different name, write `{path = "package.tools:lookup_order", name = "lookup-order"}`; labels use the name the model sees. | empty |
 | `real` | Calls that are safe to run for real when a test does not mock them, such as `"tool:check_inventory"`, `"tool:*"` for every tool, `"hosted:mcp/orders"` for a hosted MCP server, or a web write such as `"http:orders.acme.internal POST /refunds"`. Model calls are not listed: they are real unless a fault names them. | empty |
 | `runs` | How many times each row runs. | 3 |
 | `parallel` | How many runs go at the same time. | 4 |
@@ -29,7 +29,7 @@ Prices for models the built-in table does not know, in dollars per million token
 llama-70b = {input = 0.6, output = 0.6}
 ```
 
-Faultline imports only modules under your agent's own top-level packages, the ones `function` and `tools` name.
+Derail imports only modules under your agent's own top-level packages, the ones `function` and `tools` name.
 
 ## [[test]]
 
@@ -68,7 +68,7 @@ See [Web requests](web-requests.md).
 
 ## Coming in later versions
 
-These are part of Faultline's design but not of this version.
+These are part of Derail's design but not of this version.
 Using one now stops the test: it is rejected as unknown.
 
 - Agent shapes: `command` (a script) and `service` (a web service).

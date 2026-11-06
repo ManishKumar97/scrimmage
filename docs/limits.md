@@ -1,13 +1,13 @@
 # Limits of this version
 
 - **One agent shape.** The agent must be a Python function. Scripts and web services come later.
-- **Tools, web requests and OpenAI model calls.** Faultline gates the tools you list under `tools`, the LangChain tools it finds by itself, requests sent with httpx or httpx2, and model calls. See [Safety](safety.md).
+- **Tools, web requests and OpenAI model calls.** Derail gates the tools you list under `tools`, the LangChain tools it finds by itself, requests sent with httpx or httpx2, and model calls. See [Safety](safety.md).
 - **MCP tools.** They are not recognised yet. An MCP server reached over HTTP through httpx is a plain web request, so its POSTs are refused unless `real` lists the host.
 - **POSTs a library sends by itself.** Everything through httpx or httpx2 is gated, so these are refused too until listed: the SDK of another model provider, telemetry exporters, and credential requests such as an OAuth token POST.
 - **A provider that is not OpenAI.** Listing its host under `real` lets the calls through, but they are web requests, so the budget does not see them. Name a host that speaks OpenAI's format under `model_hosts` instead.
 - **One provider.** OpenAI's Chat Completions, Responses and embeddings, and gateways that speak the same format. Other providers come later.
 - **Two HTTP libraries.** The gate sits in the clients of httpx and httpx2. A request sent with requests, urllib, aiohttp or a raw socket, or handed to a transport object by your own code, is not seen, so nothing refuses or records it. Only the `tools` list guards such a write: a listed tool that is neither mocked nor under `real` never runs. The web gates stop accidental writes, not code written to get around them. See [Safety](safety.md#what-the-gates-assume).
-- **asyncio only for async agents.** An async model call outside asyncio, such as under trio, is refused and ends its run, because Faultline cannot budget it. Synchronous agents are not affected.
+- **asyncio only for async agents.** An async model call outside asyncio, such as under trio, is refused and ends its run, because Derail cannot budget it. Synchronous agents are not affected.
 - **One framework.** LangChain tools, which LangGraph runs, have an adapter. A tool on another framework is not gated, so offering it to the model stops the test.
 - **A tool's function called directly.** `my_tool.func(...)` or `my_tool.coroutine(...)` skips the gate, so nothing refuses or records it.
 - **Tool names with no `tools` list.** They are checked after one baseline run, not before it, so a typo costs that one run. A tool the agent makes only in some runs may be reported as unknown.

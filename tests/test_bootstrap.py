@@ -10,15 +10,15 @@ from pathlib import Path
 
 import pytest
 
-from faultline_sdk.control import ControlServer
-from faultline_sdk.records import RecordStore
-from faultline_sdk.run_command import BOOT, main
+from derail_sdk.control import ControlServer
+from derail_sdk.records import RecordStore
+from derail_sdk.run_command import BOOT, main
 
 TOKEN = "d" * 64
 UBUNTU_PYTHON = Path("/usr/bin/python3.12")
 APPORT = Path("/usr/lib/python3.12/sitecustomize.py")
 GATES_LOADED = (
-    "import sys; print('faultline_sdk' in sys.modules, "
+    "import sys; print('derail_sdk' in sys.modules, "
     "any(type(f).__name__ == 'ImportHook' for f in sys.meta_path))"
 )
 
@@ -26,7 +26,7 @@ GATES_LOADED = (
 def python(
     code: str, env: dict[str, str], cwd: Path | None = None, exe: str = sys.executable
 ) -> subprocess.CompletedProcess[str]:
-    clean = {k: v for k, v in os.environ.items() if not k.startswith("FAULTLINE_")}
+    clean = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
     return subprocess.run(
         [exe, "-c", code],
         env={**clean, **env},
@@ -56,10 +56,10 @@ def plan(**changes: object) -> dict[str, object]:
 def joined(control: ControlServer, **extra: str) -> dict[str, str]:
     return {
         "PYTHONPATH": str(BOOT),
-        "FAULTLINE_TOKEN": TOKEN,
-        "FAULTLINE_CONTROL_URL": control.url,
-        "FAULTLINE_RUN": "run-1",
-        "FAULTLINE_ALLOW_IMPORTS": "acme.",
+        "DERAIL_TOKEN": TOKEN,
+        "DERAIL_CONTROL_URL": control.url,
+        "DERAIL_RUN": "run-1",
+        "DERAIL_ALLOW_IMPORTS": "acme.",
         **extra,
     }
 
@@ -76,7 +76,7 @@ def test_without_the_token_nothing_is_imported_or_patched() -> None:
 
 @pytest.mark.design("boot.import_never_switches_on")
 def test_importing_the_sdk_never_switches_gates_on() -> None:
-    result = python("import faultline_sdk.tool_gate, faultline_sdk.bootstrap; " + GATES_LOADED, {})
+    result = python("import derail_sdk.tool_gate, derail_sdk.bootstrap; " + GATES_LOADED, {})
     assert result.stdout.strip() == "True False"
 
 
@@ -123,36 +123,36 @@ def test_ubuntus_apport_hook_still_installs() -> None:
 
 
 @pytest.mark.design("boot.child_other_python_untouched")
-@pytest.mark.skipif(not UBUNTU_PYTHON.exists(), reason="needs a second Python without Faultline")
+@pytest.mark.skipif(not UBUNTU_PYTHON.exists(), reason="needs a second Python without Derail")
 def test_a_child_on_a_python_without_the_sdk_is_left_alone() -> None:
-    # Like the aws CLI started by the agent: it inherits the variables, but not Faultline.
-    env = {"PYTHONPATH": str(BOOT), "FAULTLINE_TOKEN": TOKEN, "FAULTLINE_ROOT_PID": "1"}
+    # Like the aws CLI started by the agent: it inherits the variables, but not Derail.
+    env = {"PYTHONPATH": str(BOOT), "DERAIL_TOKEN": TOKEN, "DERAIL_ROOT_PID": "1"}
     result = python("print('ok')", env, exe=str(UBUNTU_PYTHON))
     assert (result.returncode, result.stdout.strip(), result.stderr) == (0, "ok", "")
 
 
 @pytest.mark.design("boot.root_other_python_stops")
-@pytest.mark.skipif(not UBUNTU_PYTHON.exists(), reason="needs a second Python without Faultline")
+@pytest.mark.skipif(not UBUNTU_PYTHON.exists(), reason="needs a second Python without Derail")
 def test_the_program_under_test_on_a_python_without_the_sdk_stops() -> None:
-    # The runner's own step: faultline-run sets FAULTLINE_ROOT_PID, then becomes the
-    # program, here a Python with no Faultline installed.
-    env = {k: v for k, v in os.environ.items() if not k.startswith("FAULTLINE_")}
-    env["FAULTLINE_TOKEN"] = TOKEN
+    # The runner's own step: derail-run sets DERAIL_ROOT_PID, then becomes the
+    # program, here a Python with no Derail installed.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
+    env["DERAIL_TOKEN"] = TOKEN
     command = [
         sys.executable,
         "-m",
-        "faultline_sdk.run_command",
+        "derail_sdk.run_command",
         str(UBUNTU_PYTHON),
         "-c",
         "print('agent ran')",
     ]
     result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode == 1 and "agent ran" not in result.stdout
-    assert "faultline is not installed for" in result.stderr
-    # Without faultline-run, as with PYTHONPATH set by hand, it is the program under test too.
+    assert "derail is not installed for" in result.stderr
+    # Without derail-run, as with PYTHONPATH set by hand, it is the program under test too.
     by_hand = python(
         "print('agent ran')",
-        {"PYTHONPATH": str(BOOT), "FAULTLINE_TOKEN": TOKEN},
+        {"PYTHONPATH": str(BOOT), "DERAIL_TOKEN": TOKEN},
         exe=str(UBUNTU_PYTHON),
     )
     assert by_hand.returncode == 1 and "agent ran" not in by_hand.stdout
@@ -163,7 +163,7 @@ def test_with_the_token_the_sdk_says_it_is_active(control: ControlServer) -> Non
     control.open_run("run-1", "baseline", plan())
     result = python(GATES_LOADED, joined(control))
     assert result.stdout.strip() == "True True"
-    assert "faultline: active for run run-1 (t, baseline);" in result.stderr
+    assert "derail: active for run run-1 (t, baseline);" in result.stderr
 
 
 @pytest.mark.design("boot.unreachable_stops_program")
@@ -172,8 +172,8 @@ def test_without_its_plan_the_program_ends_before_the_agent_runs(
 ) -> None:
     for env in (
         joined(control),
-        joined(control, FAULTLINE_CONTROL_URL="http://127.0.0.1:9"),
-        joined(control, FAULTLINE_RUN=""),
+        joined(control, DERAIL_CONTROL_URL="http://127.0.0.1:9"),
+        joined(control, DERAIL_RUN=""),
     ):
         result = python("print('agent ran')", env)
         assert result.returncode == 1 and "agent ran" not in result.stdout
@@ -194,7 +194,7 @@ def test_a_type_outside_the_allowed_prefixes_is_refused_before_import(
         plan(mocks=[{"call": "tool:a", "returns": 1, "type": "evil:Thing"}]),
     )
     result = python("print('agent ran')", joined(control), cwd=tmp_path)
-    assert "evil:Thing is outside FAULTLINE_ALLOW_IMPORTS (acme.)" in result.stderr
+    assert "evil:Thing is outside DERAIL_ALLOW_IMPORTS (acme.)" in result.stderr
     assert "agent ran" not in result.stdout and not marker.exists()
 
 
@@ -209,20 +209,20 @@ def test_a_fault_type_outside_the_allowed_prefixes_is_refused_before_import(
     fault = {"call": "tool:a", "do": "error", "when": "always", "raises": "evil:E"}
     control.open_run("run-1", "baseline", plan(faults=[fault]))
     result = python("print('agent ran')", joined(control), cwd=tmp_path)
-    assert "evil:E is outside FAULTLINE_ALLOW_IMPORTS (acme.)" in result.stderr
+    assert "evil:E is outside DERAIL_ALLOW_IMPORTS (acme.)" in result.stderr
     assert "agent ran" not in result.stdout and not marker.exists()
 
 
-def test_faultline_run_needs_a_command(capsys: pytest.CaptureFixture[str]) -> None:
+def test_derail_run_needs_a_command(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([]) == 2
     assert "usage" in capsys.readouterr().err
 
 
-def test_faultline_run_puts_its_folder_first() -> None:
+def test_derail_run_puts_its_folder_first() -> None:
     code = "import os, sys; print(os.environ['PYTHONPATH'].split(os.pathsep)[0])"
-    env = {k: v for k, v in os.environ.items() if not k.startswith("FAULTLINE_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
     result = subprocess.run(
-        [sys.executable, "-m", "faultline_sdk.run_command", sys.executable, "-c", code],
+        [sys.executable, "-m", "derail_sdk.run_command", sys.executable, "-c", code],
         env={**env, "PYTHONPATH": "/somewhere"}, capture_output=True, text=True, timeout=60,
     )  # fmt: skip
     assert result.stdout.strip() == str(BOOT)
@@ -248,7 +248,7 @@ def test_a_broken_control_reply_stops_the_program_instead_of_running_ungated(
     thread = threading.Thread(target=answer, daemon=True)
     thread.start()
     url = f"http://127.0.0.1:{listener.getsockname()[1]}"
-    result = python("print('REAL REFUND RAN')", joined(control, FAULTLINE_CONTROL_URL=url))
+    result = python("print('REAL REFUND RAN')", joined(control, DERAIL_CONTROL_URL=url))
     listener.close()
     assert result.returncode == 1 and "REAL REFUND RAN" not in result.stdout
     assert "the program stops" in result.stderr
@@ -258,8 +258,8 @@ def test_a_broken_control_reply_stops_the_program_instead_of_running_ungated(
 def test_a_child_process_keeps_the_mocks_but_fires_no_faults(control: ControlServer) -> None:
     faults = [{"call": "tool:a", "do": "timeout", "when": "always"}]
     control.open_run("run-1", "baseline", plan(faults=faults))
-    code = "import faultline_sdk.state as s; print(len(s.current().plan.faults))"
-    root = python(code, joined(control))  # FAULTLINE_ROOT_PID unset: this is the root
-    child = python(code, joined(control, FAULTLINE_ROOT_PID="1"))
+    code = "import derail_sdk.state as s; print(len(s.current().plan.faults))"
+    root = python(code, joined(control))  # DERAIL_ROOT_PID unset: this is the root
+    child = python(code, joined(control, DERAIL_ROOT_PID="1"))
     assert (root.stdout.strip(), child.stdout.strip()) == ("1", "0")
     assert "in a child process, without faults" in child.stderr

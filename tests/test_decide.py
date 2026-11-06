@@ -5,10 +5,10 @@ from collections.abc import Sequence
 
 import pytest
 
-from faultline_sdk.config import Fault, Mock
-from faultline_sdk.decide import Call, Counters, decide, fires
-from faultline_sdk.labels import matches
-from faultline_sdk.plan import Plan
+from derail_sdk.config import Fault, Mock
+from derail_sdk.decide import Call, Counters, decide, fires
+from derail_sdk.labels import matches
+from derail_sdk.plan import Plan
 
 GET_ORDER = Call("tool", "tool:get_order", "get_order")
 

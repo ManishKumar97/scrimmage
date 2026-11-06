@@ -13,7 +13,7 @@ do   = "status 429"
 when = "first 3"
 ```
 
-Faultline answers the model call with a real HTTP 429, without touching the network.
+Derail answers the model call with a real HTTP 429, without touching the network.
 The openai library reads it exactly as it would read a real one.
 
 Why `first 3`?
@@ -22,9 +22,9 @@ Each retry meets the gate again, so three failures are needed to get past the li
 
 | Attempt | What happens |
 |---|---|
-| 1 | Faultline answers 429; the library waits and retries |
-| 2 | Faultline answers 429; the library waits and retries |
-| 3 | Faultline answers 429; the library gives up and raises `RateLimitError` into your code |
+| 1 | Derail answers 429; the library waits and retries |
+| 2 | Derail answers 429; the library waits and retries |
+| 3 | Derail answers 429; the library gives up and raises `RateLimitError` into your code |
 
 With `first 1`, the first retry goes through and your agent never sees an error, which mainly tests the library.
 
@@ -53,7 +53,7 @@ Any status from 400 to 599 works.
 If your client sets its own `max_retries`, use `requests 1`: it fails the request and all its retries, whatever their number.
 
 Calls are counted per run.
-When two model calls run at once, such as a guardrail next to the main call, Faultline matches each retry to its request by the thread or task that sent it and the request's content, so each request keeps its own number.
+When two model calls run at once, such as a guardrail next to the main call, Derail matches each retry to its request by the thread or task that sent it and the request's content, so each request keeps its own number.
 
 ## Which model calls a label names
 
@@ -70,14 +70,14 @@ Model calls never need listing under `real`, and they cannot be mocked: the test
 
 ## Keep a budget
 
-Every test has a budget for the whole run of `faultline test`. It is $5 unless you change it:
+Every test has a budget for the whole run of `derail test`. It is $5 unless you change it:
 
 ```toml
 [agent]
 max_cost_usd = 0.50
 ```
 
-Before each model call, Faultline reserves what the call could cost: an estimate of its input, plus its `max_tokens` (or `reserve_output_tokens`, 4096 by default) at the output price.
+Before each model call, Derail reserves what the call could cost: an estimate of its input, plus its `max_tokens` (or `reserve_output_tokens`, 4096 by default) at the output price.
 After the call, the real cost from the reply replaces the reservation.
 So four calls at once cannot all slip past the limit.
 
@@ -92,7 +92,7 @@ max_cost_usd = "none"
 
 ### Prices
 
-Faultline ships prices for common OpenAI models.
+Derail ships prices for common OpenAI models.
 A dated model, such as `gpt-4o-mini-2024-07-18`, uses its family's price.
 For any other model, give the price in dollars per million tokens:
 
@@ -105,7 +105,7 @@ With a budget on, a model with no price stops the test at its first call, becaus
 With `max_cost_usd = "none"`, no price is needed, and tokens are still counted.
 
 A reply without usable token counts gets a rough cost, worked out from how many bytes went each way, and its record line has `cost_estimated` set.
-On Chat Completions a stream only carries counts if your request sets `stream_options.include_usage`. Faultline leaves your request as it is, so without that setting those costs are rough ones. The Responses API always sends counts in its last event.
+On Chat Completions a stream only carries counts if your request sets `stream_options.include_usage`. Derail leaves your request as it is, so without that setting those costs are rough ones. The Responses API always sends counts in its last event.
 
 ## Use a gateway
 
@@ -118,20 +118,20 @@ model_hosts = [{host = "llm-gateway.internal", provider = "openai"}]
 
 ## Tools the model is offered
 
-Faultline reads the tools in each model request before it goes out.
+Derail reads the tools in each model request before it goes out.
 
 | The request offers | What happens |
 |---|---|
-| a tool Faultline can see | it goes ahead |
+| a tool Derail can see | it goes ahead |
 | a provider tool that only reads, such as `web_search` | it goes ahead, the record notes it, and the table warns, because providers bill those per use and the budget cannot see that |
 | a hosted MCP server, which runs at the provider and can change data | the request is not sent unless you list it: `real = ["hosted:mcp/orders"]` |
-| a tool of a type Faultline does not know | the test stops and names the type |
+| a tool of a type Derail does not know | the test stops and names the type |
 | your own tool, but no gate sees it | the request is not sent and the test stops, naming the tool to add under `tools`; use `{path, name}` when the model sees another name |
 
 A built-in tool your code runs, such as `shell` or `apply_patch`, has no name of its own, so its type is the name.
 List the function that runs it, such as `{path = "package.module:run_shell", name = "shell"}`.
 
-A request body Faultline cannot read, such as a compressed one, is refused, because its tools cannot be checked.
+A request body Derail cannot read, such as a compressed one, is refused, because its tools cannot be checked.
 
 ## Calls that create something at the provider
 
