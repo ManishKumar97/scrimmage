@@ -5,6 +5,7 @@ import json
 import re
 import ssl
 import subprocess
+import sys
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -209,6 +210,13 @@ def test_a_real_web_failure_is_the_tools_to_handle_not_an_infrastructure_error(
 # The gate in one process, on both libraries, against a real local server.
 
 
+class QuietServer(ThreadingHTTPServer):
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        """A client hanging up is routine here, so it leaves no traceback in the output."""
+        if not isinstance(sys.exc_info()[1], ConnectionError):
+            super().handle_error(request, client_address)
+
+
 class Web:
     """A small real server that counts requests and answers by path."""
 
@@ -248,7 +256,7 @@ class Web:
             def log_message(self, format: str, *args: object) -> None:
                 del format, args
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server = QuietServer(("127.0.0.1", 0), Handler)
         self.scheme = "http"
         if tls is not None:
             self.server.socket = tls.wrap_socket(self.server.socket, server_side=True)
