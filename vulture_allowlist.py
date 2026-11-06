@@ -18,6 +18,16 @@ _.vanish  # tests/example/acme/slow.py: named by import path in a test's faultli
 _.echo  # tests/example/acme/slow.py: named by import path in a test's faultline.toml
 _.as_dict  # tests/starter_agents.py: named by import path in test_start.py
 _.as_async  # tests/starter_agents.py: named by import path in test_start.py
+_.answer_async  # tests/example/acme/graph.py: a test's faultline.toml names it
+_.answer_handled  # tests/example/acme/graph.py: a test's faultline.toml names it
+_.answer_custom_class  # tests/example/acme/graph.py: a test's faultline.toml names it
+_.answer_unseen  # tests/example/acme/graph.py: a test's faultline.toml names it
+_.real_failure  # tests/example/acme/graph.py: a test's faultline.toml names it
+_.real_failure_handled  # tests/example/acme/graph.py: a test's faultline.toml names it
+_.nested  # tests/example/acme/graph.py: a test's faultline.toml names it
+_.sync_tool_through_arun  # tests/example/acme/graph.py: a test's faultline.toml names it
+_.async_tool  # tests/example/acme/graph.py: a test's faultline.toml names it
+_.handle_tool_error  # tests/example/acme/graph.py: LangChain reads it on the tool
 _.pytest_sessionfinish  # tests/conftest.py: pytest calls hooks by name
 _.exitstatus  # tests/conftest.py: pytest reads it to set the exit code
 _.answer_streamed  # tests/example/acme/rag.py: named by import path in a test's faultline.toml

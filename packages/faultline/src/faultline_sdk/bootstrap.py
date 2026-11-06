@@ -10,7 +10,7 @@ import os
 import sys
 from typing import NoReturn
 
-from faultline_sdk import httpx2_gate, state, tool_gate
+from faultline_sdk import httpx2_gate, langchain_gate, state, tool_gate
 from faultline_sdk.client import ControlClient, ControlError, Sender
 from faultline_sdk.mocks import allowed
 from faultline_sdk.plan import Plan
@@ -43,7 +43,8 @@ def start() -> None:
         # runner started. A child keeps the mocks and the safety rules.
         plan = dataclasses.replace(plan, faults=())
     prefixes = [p for p in os.environ.get("FAULTLINE_ALLOW_IMPORTS", "").split(",") if p]
-    paths = [*plan.tools, *(m.type for m in plan.mocks if m.type)]
+    raises = [f.raises for f in plan.faults if f.raises and ":" in f.raises]
+    paths = [*plan.tools, *(m.type for m in plan.mocks if m.type), *raises]
     for path in paths:
         if not allowed(path, prefixes):
             stop(f"{path} is outside FAULTLINE_ALLOW_IMPORTS ({','.join(prefixes) or 'empty'})")
@@ -68,6 +69,7 @@ def start() -> None:
         stop(message)
 
     httpx2_gate.install(run_state, client, sender, cannot_gate)
+    langchain_gate.install(run_state, cannot_gate)
     where = " in a child process, without faults" if child else ""
     print(
         f"faultline: active for run {run} ({plan.test}, {plan.row}){where}; "

@@ -69,6 +69,7 @@ class RunState:
     def __init__(self, plan: Plan, sink: LineSink, allowed: list[str]) -> None:
         self.plan = plan
         self.sink = sink
+        self.seen = set(plan.tool_names())  # names a gate reaches, as the model sees them
         self.allowed = allowed
         self.began = time.monotonic()
         self.counters = engine.Counters(plan)

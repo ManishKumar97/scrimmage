@@ -21,6 +21,7 @@ Only the tool name, its arguments, the call id and the answer text are changed; 
 | `acme_get_stock.json` | Functions | calls `get_stock` with `{"sku": "SKU-42"}` |
 | `acme_refund_order.json` | Functions | calls `refund_order` with `{"order_id": "1234"}` |
 | `acme_answer.json` | Default | the answer text |
+| `acme_three_orders.json` | Functions | three `get_order` calls in one reply |
 
 These come from the same spec, for model faults and the budget.
 Where the spec shows a placeholder, the placeholder is removed so the file is valid; nothing else changes unless the table says so.

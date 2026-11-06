@@ -62,7 +62,6 @@ class Context:
         self.sender = sender
         self.stop = stop  # ends the program: a library that cannot be gated
         self.faults = True  # false when the library has lost what faults are built from
-        self.seen = set(run.plan.tool_names())  # the names the model sees
         self.open: set[Callable[[bool], None]] = set()  # replies not read to their end
 
     def close_open(self) -> None:
@@ -306,7 +305,7 @@ def check_tools(
                 f'the provider and can change data; add "hosted:mcp/{label}" to [agent] real '
                 "if it is safe",
             )
-    unseen = sorted(name for name in set(tools.agent) if name not in ctx.seen)
+    unseen = sorted(name for name in set(tools.agent) if name not in ctx.run.seen)
     if unseen:
         step.extra["unseen_tools"] = unseen
         run.refuse(step, "unseen_tool")
