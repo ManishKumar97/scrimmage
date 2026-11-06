@@ -28,7 +28,7 @@ from faultline_sdk.client import ControlError
 from faultline_sdk.decide import READ_METHODS, Call, Decision, names
 from faultline_sdk.errors import FaultlineRefused
 from faultline_sdk.redact import redact
-from faultline_sdk.state import BLOB_CAP, BlobSink, RunState, Step, blob, current
+from faultline_sdk.state import BLOB_CAP, BlobSink, RunState, Step, blob, current, error_text
 
 # The minor versions this release was tested with, per library.
 TESTED = {"httpx": ((0, 28), (0, 28)), "httpx2": ((2, 16), (2, 16))}
@@ -633,7 +633,7 @@ def capture(
         return
 
     def broke(error: Exception) -> None:
-        extra["error"] = redact(f"{type(error).__name__}: {error}")
+        extra["error"] = error_text(step.call, error)
         finish(False)
 
     ctx.open.add(finish)

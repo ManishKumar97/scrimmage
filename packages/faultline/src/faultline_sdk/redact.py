@@ -13,10 +13,21 @@ PATTERNS = re.compile(
             r"xox[abpr]-[A-Za-z0-9-]{10,}",  # Slack tokens
             r"(?i:bearer)\s+[A-Za-z0-9._~+/=-]{16,}",  # bearer tokens
             r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",  # JWTs
+            r"Illegal header (?:name|value) .*",  # h11 quotes the bad header
         ]
     )
 )
 
 
+URL = re.compile(r"(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{0,30}://[^\s'\"<>\\]+")
+
+
+def plain_url(found: re.Match[str]) -> str:
+    """A URL without its query, fragment or credentials, which an error message may quote."""
+    scheme, _, rest = found.group().partition("://")
+    address, slash, path = re.split(r"[?#]", rest, maxsplit=1)[0].partition("/")
+    return f"{scheme}://{address.rpartition('@')[2]}{slash}{path}"
+
+
 def redact(text: str) -> str:
-    return PATTERNS.sub(REMOVED, text)
+    return URL.sub(plain_url, PATTERNS.sub(REMOVED, text))

@@ -38,6 +38,37 @@ def answer(question: str) -> str:
     return check_inventory("SKU-42")
 
 
+def answer_with_its_error(question: str) -> str:
+    try:
+        httpx.get(
+            f"{BASE}/stock/SKU-42", params={"api_key": "query-secret-value"}
+        ).raise_for_status()
+    except httpx.HTTPError as exc:
+        return str(exc)
+    return "fine"
+
+
+def answer_with_a_bad_header(question: str) -> str:
+    try:
+        httpx.get(f"{BASE}/stock/SKU-42", headers={"x-key": "header-secret-value\n"})
+    except httpx.HTTPError as exc:
+        return str(exc)
+    return "fine"
+
+
+def strict_lookup(sku: str) -> str:
+    reply = httpx.get(f"{BASE}/stock/{sku}", params={"api_key": "query-secret-value"})
+    reply.raise_for_status()
+    return reply.text
+
+
+def answer_through_a_strict_tool(question: str) -> str:
+    try:
+        return strict_lookup("SKU-42")
+    except httpx.HTTPError:
+        return "failed"
+
+
 def answer_refund(question: str) -> str:
     return refund("1234")
 

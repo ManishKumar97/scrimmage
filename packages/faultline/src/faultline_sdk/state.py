@@ -237,7 +237,7 @@ class RunState:
             "result": None
             if error is not None or decision.action == "refused"
             else content(result),
-            "error": None if error is None else redact(f"{type(error).__name__}: {error}"),
+            "error": None if error is None else error_text(step.call, error),
             "start": step.start,
             "ms": int((time.monotonic() - step.started) * 1000),
         }
@@ -252,6 +252,13 @@ class RunState:
         write = step.call.kind == "http" and step.call.method not in engine.READ_METHODS
         keep = decision.action == "refused" or step.call.kind == "model" or write
         self.sink.put(line, keep=keep)
+
+
+def error_text(call: engine.Call, error: BaseException) -> str:
+    """A web client's message can quote the URL or a header, so a web line keeps its type."""
+    if call.kind == "http" and not isinstance(error, FaultlineRefused):
+        return type(error).__name__
+    return redact(f"{type(error).__name__}: {error}")
 
 
 def scrub(value: object) -> object:

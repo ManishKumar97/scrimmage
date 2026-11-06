@@ -95,6 +95,9 @@ _.model_config  # tests/example/acme/graph.py: pydantic reads it
 _.args_schema  # tests/example/acme/graph.py: LangChain reads it
 _.runtime_beside_the_schema  # tests/example/acme/graph.py: a test names it
 _.single_input_tool  # tests/example/acme/graph.py: a test names it
+_.answer_with_its_error  # tests/example/acme/web.py: named by import path in a test
+_.answer_with_a_bad_header  # tests/example/acme/web.py: named by import path in a test
+_.answer_through_a_strict_tool  # tests/example/acme/web.py: named by import path in a test
 _.answer_refund  # tests/example/acme/web.py: named by import path in a test's faultline.toml
 _.answer_report  # tests/example/acme/web.py: named by import path in a test
 _.answer_two_paths  # tests/example/acme/web.py: named by import path in a test

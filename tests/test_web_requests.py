@@ -136,6 +136,40 @@ def test_no_header_cookie_or_query_value_reaches_the_record(project: Project) ->
     assert result.records()[0][0]["path"] == "/stock/SKU-42"
 
 
+def recorded(project: Project) -> str:
+    found = (project.root / "faultline-runs").rglob("*")
+    return "".join(f.read_text(errors="replace") for f in found if f.is_file())
+
+
+@pytest.mark.design("web.error_text_clean")
+def test_a_query_in_an_error_reaches_no_record_through_the_answer(project: Project) -> None:
+    result = run(project, "acme.web:answer_with_its_error", OUTAGE)
+    assert result.code == 0, result.out + result.err
+    assert "/stock/SKU-42" in row(result, "fault 1")[-1]["summary"]["answer"]
+    assert "query-secret-value" not in recorded(project)
+
+
+@pytest.mark.design("web.error_text_clean")
+def test_a_query_in_an_error_reaches_no_record_through_a_tool_line(project: Project) -> None:
+    tools = 'tools = ["acme.web:strict_lookup"]\nreal = ["tool:strict_lookup"]'
+    result = run(project, "acme.web:answer_through_a_strict_tool", JSON_MOCK + OUTAGE, tools)
+    assert result.code == 0, result.out + result.err
+    tool_line = next(x for x in row(result, "fault 1") if x.get("kind") == "tool")
+    assert tool_line["error"].startswith("HTTPStatusError") and "/stock" in tool_line["error"]
+    assert "query-secret-value" not in recorded(project)
+
+
+@pytest.mark.design("web.error_text_clean")
+def test_a_bad_header_reaches_no_record(
+    project: Project, web: "Web", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("INVENTORY_URL", web.url(""))
+    result = run(project, "acme.web:answer_with_a_bad_header", "")
+    assert result.code == 0, result.out + result.err
+    assert result.records()[0][0]["error"] == "LocalProtocolError"
+    assert "header-secret-value" not in recorded(project)
+
+
 # The gate in one process, on both libraries, against a real local server.
 
 
@@ -666,6 +700,33 @@ def test_cancelling_a_real_request_is_recorded_as_it_was(lib: Any, web: Web) -> 
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(go())
     assert sink.lines[0]["error"].startswith("CancelledError")
+
+
+@pytest.mark.design("web.error_text_clean")
+def test_a_web_line_keeps_only_the_type_of_a_transport_error(lib: Any) -> None:
+    def fails(request: Any) -> Any:
+        raise lib.ConnectError(f"cannot reach {request.url}")
+
+    sink = gate(lib)
+    with lib.Client(transport=lib.MockTransport(fails)) as client, pytest.raises(lib.ConnectError):
+        client.get(URL, params={"api_key": "query-value"})
+    assert sink.lines[0]["error"] == "ConnectError"
+
+
+@pytest.mark.design("web.error_text_clean")
+def test_a_web_line_keeps_only_the_type_of_an_error_in_a_stream(lib: Any) -> None:
+    class Broken(lib.SyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            yield b"half"
+            raise lib.ReadError("lost https://h/p?token=query-value")
+
+    def half(request: Any) -> Any:
+        return lib.Response(200, stream=Broken())
+
+    sink = gate(lib)
+    with lib.Client(transport=lib.MockTransport(half)) as client, pytest.raises(lib.ReadError):
+        client.get(URL)
+    assert sink.lines[0]["error"] == "ReadError"
 
 
 @pytest.mark.design("web.no_headers_recorded")
