@@ -9,7 +9,9 @@
 - **A tool's function called directly.** `my_tool.func(...)` skips the gate, so nothing refuses or records it.
 - **Tool names with no `tools` list.** They are checked after one baseline run, not before it, so a typo costs that one run. A tool the agent makes only in some runs may be reported as unknown.
 - **An `_arun` that starts `_run` on the default executor itself** counts as two calls and two record lines. LangChain's own `_arun` counts as one.
-- **A tool renamed after it is made** is not seen, so offering it to the model stops the test.
+- **A tool changed after the last check.** Tools are checked when they are made, when they run through LangChain, and before each model request. A class whose `invoke` or `run` is assigned after that, and called with no later model request, runs unchecked.
+- **A tool that hides from Python itself.** A `__getattribute__` that returns a fake `_run` to the check and the real one to LangChain is not caught. No reasonable gate reaches that; a test is not a defence against code written to evade it.
+- **One unsafe tool blocks its whole name.** A second, gated tool of the same name stops the test too, even if only that one is offered.
 - **LangChain versions.** Tested with langchain-core 1.7. A newer one gets a notice; an older one gets none.
 - **A library that changes its tool functions** stops the program. Faults are not dropped with refusals kept, because the error type is part of what the gate relies on.
 - **A few faults.** `timeout` and `error` on tools, and `timeout` and `status N` on model calls. Faults that change the model's reply come later.

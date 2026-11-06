@@ -89,10 +89,15 @@ A tool built with `response_format = "content_and_artifact"` returns a pair, so 
 
 ## Tools that cannot be gated
 
-Faultline gates what a tool really runs, wherever it comes from: a decorator, a class, a mixin, or a `_run` assigned later.
+Faultline gates what a tool really runs, wherever it comes from: a decorator, a class, a mixin, or a `_run` assigned to the class later.
+A tool that a gate cannot reach never runs.
+It stops the test, with exit 2, and the reason is in the output.
 
 - A `_run` that is not a plain function, such as a `staticmethod`, cannot hold a gate, so the call is refused and the test reports a mistake.
-- A class that overrides `invoke`, `ainvoke`, `run` or `arun` may never reach the gate, so offering it to the model stops the test.
+- A `_run` or `_arun` set on the tool itself, not on its class, is refused the same way, including one set in `model_post_init`.
+- A class that overrides `invoke`, `ainvoke`, `run` or `arun` may never reach the gate. The override is replaced by a refusal, so its code does not run, whether the model is offered the tool or your code calls it.
+- A class changed after its tools were made is checked again before each model request.
+- Model requests carry only names, so one tool of a name that cannot be gated stops the test for every tool of that name.
 - Calling `my_tool.func(...)` yourself skips LangChain and the gate. Call the tool through `invoke`, or list the function under `tools`.
 
 ## Parallel tool calls
