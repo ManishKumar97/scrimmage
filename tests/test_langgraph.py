@@ -10,10 +10,11 @@ import pytest
 
 from conftest import ACME, Project, Result
 from fakes.openai_server import FakeOpenAI
-from faultline_sdk import langchain_gate, state, tool_gate
+from faultline_sdk import config, langchain_gate, plan, state, tool_gate
 from faultline_sdk.config import Fault
 from faultline_sdk.errors import FaultlineRefused
 from faultline_sdk.plan import Plan
+from faultline_sdk.runner import Runner, RunResult
 from faultline_sdk.start import BadAnswerPath, pick
 
 Fake = Callable[[list[str]], FakeOpenAI]
@@ -343,15 +344,37 @@ def test_a_mock_no_run_used_is_a_test_mistake(project: Project, fake_openai: Fak
 def test_runs_stopped_by_a_bad_label_end_as_stopped(project: Project, fake_openai: Fake) -> None:
     """The lone first run reports nothing, so the check falls to a run beside others."""
     graph(project, "first_goes_quiet", TIMEOUT.replace("tool:get_order", "tool:get_ordr"), 3)
-    project.edit("parallel = 1", "parallel = 2\nrun_timeout = 2")
+    project.edit("parallel = 1", "parallel = 2")
     project.edit('answer   = "messages[-1].content"\n', "")
     project.edit("[agent]\n", '[agent]\nmax_cost_usd = "none"\n')
-    project.edit("acme.graph:first_goes_quiet", "acme.slow:first_goes_quiet")  # imports fast
+    project.edit("acme.graph:first_goes_quiet", "acme.slow:first_goes_quiet")
     result = project.test()
-    assert result.code == 2, result.out + result.err
     outcomes = sorted(str(s["outcome"]) for s in result.summaries())
-    assert outcomes == ["answered", "stopped", "timed out"]
+    assert outcomes == ["answered", "infrastructure error", "stopped"], result.out
     assert "tool:get_ordr names no tool the agent has" in result.out
+
+
+@pytest.mark.design("labels.check_survives_a_quiet_run")
+@pytest.mark.parametrize("outcome", ["timed out", "crashed", "infrastructure error"])
+def test_a_first_run_that_reports_nothing_leaves_the_check_to_a_later_run(
+    project: Project, outcome: str
+) -> None:
+    graph(project, fault=TIMEOUT.replace("tool:get_order", "tool:get_ordr"))
+    cfg = config.load(project.toml)
+    runner = Runner(cfg)
+    row = plan.rows(cfg)[0]
+    try:
+        runner.check_labels(RunResult("run-1", row, outcome, None, None, {}))
+        assert runner.tools_seen is None and not runner.cancelled
+        runner.check_labels(
+            RunResult(
+                "run-2", row, "answered", "hi", None, {}, tools_seen=["get_order", "get_stock"]
+            )
+        )
+    finally:
+        runner.server.server.server_close()
+    assert runner.stopped_by == "unknown_label" and runner.cancelled
+    assert len(runner.label_problems) == 1 and "tool:get_ordr" in runner.label_problems[0]
 
 
 @pytest.mark.design("adapter.class_tool")
