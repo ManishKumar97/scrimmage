@@ -214,6 +214,28 @@ def test_a_task_cancelled_while_it_reserves_gives_the_reservation_back(gated: No
     assert real_error(sink.lines[0]) is None  # cancelling is not the provider failing
 
 
+@pytest.mark.design("budget.cancelled_reservation_given_back")
+def test_a_task_cancelled_just_after_it_reserved_gives_the_reservation_back(
+    gated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def done_then_cancelled(work: Any) -> None:
+        work()  # the thread finished, and the cancel lands before the task wakes
+        raise asyncio.CancelledError
+
+    budget = Budget(limit=100.0)
+    sink, _ = install(make_plan(budget=100.0), budget)
+    monkeypatch.setattr(httpx2_gate.asyncio, "to_thread", done_then_cancelled)
+
+    async def go() -> None:
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(answer)) as c:
+            with pytest.raises(asyncio.CancelledError):
+                await c.post(URL, json=BODY)
+
+    asyncio.run(go())
+    assert sink.settles == [(1, 0.0)]
+    assert [str(x["error"]).split(":")[0] for x in sink.lines] == ["CancelledError"]
+
+
 @pytest.mark.design("budget.cancelled_in_the_queue_is_recorded")
 def test_tasks_cancelled_before_a_thread_took_them_keep_their_lines(gated: None) -> None:
     release = threading.Event()
@@ -697,6 +719,8 @@ def test_a_call_that_was_sent_but_got_no_reply_is_charged_its_input(gated: None)
         {"prompt_tokens": 10**400, "completion_tokens": 1},
         {"prompt_tokens": 9},
         {"prompt_tokens": 9, "completion_tokens": None},
+        {"prompt_tokens": True, "completion_tokens": 1},
+        {"prompt_tokens": 9, "completion_tokens": True},
     ],
 )
 def test_counts_that_make_no_sense_are_estimated(gated: None, usage: dict[str, object]) -> None:
@@ -864,3 +888,28 @@ def test_a_secret_never_reaches_the_agent_in_a_refusal(gated: None) -> None:
     with pytest.raises(FaultlineRefused) as refused:
         client().post(URL, json={**BODY, "model": secret})
     assert secret not in str(refused.value)
+
+
+@pytest.mark.design("record.model_lines_kept")
+def test_a_model_line_waits_for_room_rather_than_being_dropped(gated: None) -> None:
+    kept: list[bool] = []
+
+    class Keeping(Sink):
+        def put(self, line: dict[str, object], *, keep: bool = False) -> None:
+            kept.append(keep)
+
+    run = state.RunState(make_plan(), Keeping(), [])
+    state.install(run)
+    httpx2_gate.patch(httpx2, httpx2_gate.Context(run, Budget(), Sink(), stopper([])))
+    client().post(URL, json=BODY)
+    assert kept == [True]
+
+
+@pytest.mark.design("gate.line_fields_scrubbed")
+def test_a_secret_in_a_list_on_a_line_is_removed(gated: None) -> None:
+    secret = "sk-proj-" + "a" * 30
+    sink, _ = install(make_plan())
+    spec = {"type": "function", "function": {"name": secret, "parameters": {}}}
+    with pytest.raises(FaultlineRefused):
+        client().post(URL, json={**BODY, "tools": [spec]})
+    assert sink.lines[0]["unseen_tools"] == ["[secret removed]"]

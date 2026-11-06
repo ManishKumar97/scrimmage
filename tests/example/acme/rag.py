@@ -9,6 +9,7 @@ import os
 import signal
 import threading
 import time
+from collections.abc import Callable
 
 import openai
 
@@ -52,7 +53,7 @@ def answer_priceless(question: str) -> str:
     return reply.choices[0].message.content or ""
 
 
-def answer_one_stops_the_rest(question: str) -> str:
+def first_stops_the_rest(stop: Callable[[str], str], question: str) -> str:
     """The first run makes a call that stops the test; the others are still working."""
     try:
         os.close(os.open("first-run", os.O_CREAT | os.O_EXCL))
@@ -60,7 +61,34 @@ def answer_one_stops_the_rest(question: str) -> str:
         time.sleep(600)
         return "never"
     time.sleep(0.5)  # let the others start
-    return answer_priceless(question)
+    return stop(question)
+
+
+def answer_one_stops_the_rest(question: str) -> str:
+    return first_stops_the_rest(answer_priceless, question)
+
+
+def answer_one_odd_tool_stops_the_rest(question: str) -> str:
+    return first_stops_the_rest(answer_odd_tool, question)
+
+
+def answer_one_unseen_stops_the_rest(question: str) -> str:
+    return first_stops_the_rest(answer_unseen, question)
+
+
+def answer_forked(question: str) -> str:
+    """A forked child calls a tool too: it must keep the mocks and fire no faults."""
+    pid = os.fork()
+    if pid == 0:
+        try:
+            text = tools.get_order("1234")
+        except BaseException as exc:
+            text = type(exc).__name__
+        with open("forked-child", "a") as seen:
+            seen.write(f"{text}\n")
+        os._exit(0)
+    os.waitpid(pid, 0)
+    return read_order()
 
 
 def answer_one_stops_one_finishes(question: str) -> str:

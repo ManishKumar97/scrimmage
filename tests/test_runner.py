@@ -489,3 +489,15 @@ def test_every_bad_reference_shows_on_its_own_line_in_one_run(project: Project) 
     assert any("tool:get_ordr names no tool" in line for line in lines)
     assert any("tool:check_inventry names no tool" in line for line in lines)
     assert all(line.startswith("faultline: ") for line in lines)
+
+
+@pytest.mark.design("boot.fork_no_faults")
+def test_the_program_drops_faults_in_a_forked_child(project: Project) -> None:
+    project.edit(
+        'function = "acme.agent:answer"',
+        'function = "acme.rag:answer_forked"\nruns = 1\nparallel = 1',
+    )
+    result = project.test()
+    assert any(lines[-1]["row"] == "fault 1" for lines in result.records()), result.out
+    seen = (project.root / "forked-child").read_text().splitlines()
+    assert seen == ["shipped, Oct 30", "shipped, Oct 30"]  # the mock, in both rows

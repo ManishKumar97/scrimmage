@@ -85,6 +85,17 @@ def test_the_ledger_works_through_the_signed_protocol(control: ControlServer) ->
     assert control.ledger.spent == pytest.approx(0.79)
 
 
+@pytest.mark.design("budget.settle_after_close")
+def test_money_spent_counts_even_when_the_run_has_just_closed(control: ControlServer) -> None:
+    client = ControlClient(control.url, TOKEN)
+    held = client.reserve("run-1", 0.5)
+    control.close_run("run-1")
+    payload = {"run": "run-1", "reservation": held, "usd": 0.25}
+    assert client.request("POST", "/v1/budget/settle", payload)[0] == 200
+    assert control.ledger.spent == pytest.approx(0.25)
+    assert control.ledger.reserved == pytest.approx(0.0)
+
+
 def test_a_reservation_for_a_closed_run_is_an_error(control: ControlServer) -> None:
     client = ControlClient(control.url, TOKEN)
     control.close_run("run-1")
@@ -329,10 +340,21 @@ def test_with_a_budget_and_no_model_call_in_the_baseline_the_test_fails(project:
 
 
 @pytest.mark.design("runner.siblings_stopped_not_errors")
-def test_runs_stopped_because_another_run_stopped_the_test_are_not_errors(project: Project) -> None:
+@pytest.mark.parametrize(
+    "function",
+    [
+        "acme.rag:answer_one_stops_the_rest",
+        "acme.rag:answer_one_odd_tool_stops_the_rest",
+        "acme.rag:answer_one_unseen_stops_the_rest",
+    ],
+    ids=["no price", "unknown tool type", "unseen tool"],
+)
+def test_runs_stopped_because_another_run_stopped_the_test_are_not_errors(
+    project: Project, function: str
+) -> None:
     project.edit(
         'function = "acme.agent:answer"',
-        'function = "acme.rag:answer_one_stops_the_rest"\nruns = 3\nparallel = 3',
+        f'function = "{function}"\nruns = 3\nparallel = 3',
     )
     project.edit(TOOL_FAULT, "")
     fake = FakeOpenAI([])
