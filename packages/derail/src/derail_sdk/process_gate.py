@@ -42,16 +42,23 @@ def command(event: str, args: tuple[Any, ...]) -> tuple[str, list[str], str, dic
 
 
 def is_this_python(path: str) -> bool:
-    """Another Python has its own packages, and runs untouched even with the environment."""
-    bin_folder = os.path.join(sys.prefix, "bin")
-    same_binary = os.path.realpath(path) == os.path.realpath(sys.executable)
-    return same_binary or os.path.dirname(os.path.abspath(path)) == bin_folder
+    """Another Python has its own packages, and runs untouched even with the environment.
+
+    A venv elsewhere is another Python, whatever binary it was made from. The binary with no
+    venv is this Python, as nothing shows it has other packages.
+    """
+    folder = os.path.dirname(os.path.abspath(path))
+    home = os.path.dirname(folder)
+    mine = os.path.realpath(home) == os.path.realpath(sys.prefix)
+    if not mine and os.path.exists(os.path.join(home, "pyvenv.cfg")):
+        return False
+    return mine or os.path.realpath(path) == os.path.realpath(sys.executable)
 
 
 def why_blind(env: dict[str, str], args: list[str]) -> str | None:
     folders = env.get("PYTHONPATH", "").split(os.pathsep)
     if "DERAIL_TOKEN" not in env or not any(folder.endswith(BOOT) for folder in folders):
-        return "its environment does not hold Derail's variables"
+        return "its environment does not hold Derail's variables and its PYTHONPATH folder"
     flag = python_args.skipping(args)
     return f"{flag} skips Derail's startup file" if flag else None
 
@@ -80,8 +87,9 @@ def refuse(run: RunState, python: str, argv: list[str], why: str) -> None:
         run.finish(step)
         return
     detail = (
-        f"{python} would run with no gates, because {why}. Pass env={{**os.environ}} so it joins "
-        f'the run, or add "{LABEL}" to [agent] real if it is safe.'
+        f"{python} would run with no gates, because {why}. Pass env={{**os.environ}}, and add to "
+        f'PYTHONPATH rather than replace it, so it joins the run, or add "{LABEL}" to [agent] '
+        "real if it is safe."
     )
     error = run.refusal(run.refuse(step, "blind_child"), detail)
     run.finish(step, error=error, mistake=str(error))

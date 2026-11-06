@@ -1,6 +1,7 @@
 """A Python child that would run with no gates is refused where it starts."""
 
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -8,7 +9,7 @@ import jsonschema
 import pytest
 
 from conftest import Project, Result
-from derail_sdk import python_args
+from derail_sdk import process_gate, python_args
 from test_other_python import other_version  # noqa: F401  # a fixture
 from test_scripts import RECORD, calls, lines_of, script, summary_of, write_config
 
@@ -120,6 +121,71 @@ def test_a_child_that_is_not_python_passes_with_a_clean_environment(
     assert calls(result) == []
 
 
+@pytest.mark.design("blind.replaced_pythonpath")
+def test_a_replaced_pythonpath_is_blind_and_the_message_says_so(project: Project) -> None:
+    start = "subprocess.run(CHILD, env={**os.environ, 'PYTHONPATH': '/somewhere'})"
+    result = blind_run(project, start)
+    assert not (project.root / "REAL WRITE").exists()
+    assert summary_of(result)["outcome"] == "refused call", result.out
+    assert "add to PYTHONPATH rather than replace it" in result.out
+
+
+@pytest.mark.design("blind.link_to_this_binary")
+def test_a_link_to_this_python_elsewhere_is_this_python(project: Project) -> None:
+    (project.root / "link").mkdir()
+    link = project.root / "link" / "python"
+    link.symlink_to(Path(sys.executable).resolve())
+    result = blind_run(project, f"subprocess.run([{str(link)!r}, 'report.py'], env=ENV)")
+    assert not (project.root / "REAL WRITE").exists()
+    assert summary_of(result)["outcome"] == "refused call", result.out
+
+
+@pytest.mark.design("blind.base_binary")
+def test_the_binary_this_venv_was_made_from_is_this_python(project: Project) -> None:
+    base = str(Path(sys.base_prefix) / "bin" / Path(sys.executable).resolve().name)
+    result = blind_run(project, f"subprocess.run([{base!r}, 'report.py'], env=ENV)")
+    assert not (project.root / "REAL WRITE").exists()
+    assert summary_of(result)["outcome"] == "refused call", result.out
+
+
+def test_this_venvs_bin_folder_is_this_python_whatever_the_file_is(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "bin").mkdir()
+    copy = tmp_path / "bin" / "python"
+    copy.write_text("")
+    monkeypatch.setattr(sys, "prefix", str(tmp_path))
+    assert process_gate.is_this_python(str(copy))
+
+
+@pytest.mark.design("blind.cwd")
+def test_a_relative_program_is_read_from_the_folder_it_starts_in(project: Project) -> None:
+    folder = project.root / "deep"
+    folder.mkdir()
+    tool = folder / "tool"
+    tool.write_text(f"#!{sys.executable}\n{WRITE}")
+    tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+    result = blind_run(project, "subprocess.run(['./tool'], cwd='deep', env=ENV)")
+    assert not (folder / "REAL WRITE").exists()
+    assert summary_of(result)["outcome"] == "refused call", result.out
+
+
+@pytest.mark.design("blind.venv_on_this_binary_passes")
+@pytest.mark.parametrize("copies", [[], ["--copies"]], ids=["links", "copies"])
+def test_a_venv_elsewhere_on_this_binary_is_another_python(
+    project: Project, copies: list[str]
+) -> None:
+    venv = project.root / "nv"
+    make = [sys.executable, "-m", "venv", "--without-pip", *copies, str(venv)]
+    subprocess.run(make, check=True, timeout=60, capture_output=True)
+    python = venv / "bin" / "python"
+    result = script(
+        project, PROGRAM.format(start=f"subprocess.run([{str(python)!r}, '-c', ''], env={{}})")
+    )
+    assert summary_of(result)["outcome"] == "answered", result.out
+    assert calls(result) == []
+
+
 @pytest.mark.design("blind.other_python_passes")
 def test_another_python_with_its_own_environment_runs(
     project: Project,
@@ -156,7 +222,10 @@ def test_a_child_that_joined_refuses_a_blind_grandchild(project: Project) -> Non
 def test_a_command_it_cannot_find_is_left_to_fail_as_usual(project: Project) -> None:
     start = "subprocess.run(['no-such-program-here'])"
     result = script(project, PROGRAM.format(start=start))
-    assert "FileNotFoundError" in str(lines_of(result)) or summary_of(result)["answer"]
+    assert summary_of(result)["outcome"] == "answered", result.out
+    assert calls(result) == []
+    out = next((project.root / "derail-runs").glob("*/*.out")).read_text()
+    assert "FileNotFoundError" in out
 
 
 @pytest.mark.design("blind.mcp_default_env")
