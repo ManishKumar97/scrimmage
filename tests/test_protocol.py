@@ -250,6 +250,48 @@ def test_a_batch_that_fails_is_sent_again(server: ControlServer) -> None:
     assert server.runs["run-1"].made == {proc_key(None): 1}
 
 
+@pytest.mark.design("record.child_sends_as_it_goes")
+def test_a_child_sends_each_line_as_it_is_made_and_needs_no_thread(server: ControlServer) -> None:
+    sender = Sender(ControlClient(server.url, TOKEN), "run-1", eager=True)
+    sender.put(line(1))
+    assert server.store.lines("run-1") == [line(1)]
+    assert server.runs["run-1"].made == {proc_key(None): 1}  # no last batch is needed
+    assert not sender._thread.is_alive()  # type: ignore[reportPrivateUsage]
+
+
+def test_a_child_that_made_no_lines_sends_nothing_at_exit() -> None:
+    sender = Sender(ControlClient("http://127.0.0.1:9", TOKEN), "run-1", eager=True)
+    sender.client.request = None  # type: ignore[method-assign, assignment]  # any send would fail
+    sender.flush()
+
+
+def test_a_child_sends_again_at_exit_what_failed_the_first_time(server: ControlServer) -> None:
+    sender = Sender(ControlClient("http://127.0.0.1:9", TOKEN), "run-1", eager=True)
+    sender.put(line(1))
+    assert sender.unsent == [line(1)]
+    sender.client = ControlClient(server.url, TOKEN)
+    sender.flush()
+    assert server.store.lines("run-1") == [line(1)] and sender.unsent == []
+
+
+def test_a_childs_settlement_goes_out_at_once(server: ControlServer) -> None:
+    held = server.ledger.reserve(1.0)
+    assert held is not None
+    sender = Sender(ControlClient(server.url, TOKEN), "run-1", eager=True)
+    sender.put_settle(held, 0.25)
+    assert not sender.settles
+
+
+def test_a_forked_sender_starts_empty_with_new_locks(server: ControlServer) -> None:
+    sender = Sender(ControlClient("http://127.0.0.1:9", TOKEN), "run-1", "the parent")
+    sender.put(line(1))
+    sender.forked("the fork")
+    assert sender.queue.empty() and sender.made == 0 and sender.eager and sender.proc == "the fork"
+    sender.client = ControlClient(server.url, TOKEN)
+    sender.put(line(2))
+    assert server.store.lines("run-1") == [line(2)]
+
+
 def test_a_server_away_for_long_keeps_a_bounded_backlog(monkeypatch: pytest.MonkeyPatch) -> None:
     import derail_sdk.client as client_module
 

@@ -395,7 +395,7 @@ def test_a_forked_child_fires_no_faults(lines: Lines) -> None:
         [Mock("tool:get_text", "mocked", None)],
         [Fault("tool:get_text", "timeout", "always")],
     )
-    os.register_at_fork(after_in_child=run.drop_faults)
+    os.register_at_fork(after_in_child=run.forked)
     read, write = os.pipe()
     pid = os.fork()
     if pid == 0:  # the child

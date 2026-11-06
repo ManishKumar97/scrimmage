@@ -432,8 +432,30 @@
             "structure",
             "newer_version",
             "tools_seen",
-            "answer_path"
+            "answer_path",
+            "process",
+            "other_python"
           ]
+        },
+        "process": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "python",
+            "command",
+            "parent"
+          ],
+          "properties": {
+            "python": {
+              "type": "string"
+            },
+            "command": {
+              "type": "string"
+            },
+            "parent": {
+              "type": "integer"
+            }
+          }
         },
         "library": {
           "type": "string"

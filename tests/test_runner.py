@@ -40,13 +40,13 @@ def test_the_example_runs_six_times_and_the_fault_fires(
     for lines in records:
         by_row.setdefault(lines[-1]["row"], []).append(lines)
     for lines in by_row["fault 1"]:
-        assert [(x["call"], x["action"]) for x in lines[:-1] if x["kind"] == "tool"] == [
+        assert [(x["call"], x["action"]) for x in lines[:-1] if x.get("kind") == "tool"] == [
             ("tool:get_order", "fault"),
             ("tool:get_stock", "mock"),
         ]
         assert lines[-1]["summary"]["fault_fired"] is True  # type: ignore[index]
     for lines in by_row["baseline"]:
-        assert [x["action"] for x in lines[:-1] if x["kind"] == "tool"] == ["mock", "mock"]
+        assert [x["action"] for x in lines[:-1] if x.get("kind") == "tool"] == ["mock", "mock"]
         assert lines[-1]["summary"]["outcome"] == "answered"  # type: ignore[index]
     assert "order-status  fault 1   tool:get_order timeout  3     3" in result.out
 

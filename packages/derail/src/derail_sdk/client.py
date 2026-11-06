@@ -4,6 +4,9 @@ Record lines go to a queue and a sender thread sends them in batches, at least e
 100 ms and at exit, so a gate never waits for the network. A full queue drops a line
 and marks the record incomplete, except a refusal or a model call's line, which
 waits for room.
+
+A child process has no thread and sends each line as it is made, because it may never
+reach its exit steps: multiprocessing ends a forked worker with os._exit.
 """
 
 import base64
@@ -103,10 +106,16 @@ class Sender:
     from a complete one.
     """
 
-    def __init__(self, client: ControlClient, run: str, proc: object = None) -> None:
+    def __init__(
+        self, client: ControlClient, run: str, proc: object = None, *, eager: bool = False
+    ) -> None:
         self.client = client
         self.run = run
         self.proc = proc  # this process, as its record lines name it
+        self.eager = eager  # send each line as it is made, with no thread
+        self._fresh()
+
+    def _fresh(self) -> None:
         self.queue: queue.Queue[dict[str, object]] = queue.Queue(QUEUE_SIZE)
         self.made = 0  # lines handed to put, dropped ones included
         self.dropped = 0
@@ -126,6 +135,13 @@ class Sender:
     def start(self) -> None:
         self._thread.start()
 
+    def forked(self, proc: object) -> None:
+        """This process is a copy of its parent. The lines waiting are the parent's to send,
+        no thread came across, and a lock another thread held would stay locked for good."""
+        self.proc = proc
+        self.eager = True
+        self._fresh()
+
     def put(self, line: dict[str, object], *, keep: bool = False) -> None:
         """Queue a line. keep: wait for room instead of dropping (refusals, model calls).
 
@@ -135,12 +151,17 @@ class Sender:
             self.made += 1
         if keep:
             self.queue.put(line)
-            return
-        try:
-            self.queue.put_nowait(line)
-        except queue.Full:
-            with self._counts:
-                self.dropped += 1
+        else:
+            try:
+                self.queue.put_nowait(line)
+            except queue.Full:
+                with self._counts:
+                    self.dropped += 1
+        self._send_now()
+
+    def _send_now(self) -> None:
+        if self.eager:
+            self._send_batch(block=False, final=True)
 
     def put_blob(self, sha: str, data: bytes) -> bool:
         """Queue one side-folder item. False, and the line says so, when there is no room."""
@@ -158,13 +179,21 @@ class Sender:
     def put_settle(self, reservation: int, usd: float) -> None:
         """Queue the real cost of a call. Never dropped."""
         self.settles.append({"run": self.run, "reservation": reservation, "usd": usd})
+        self._send_now()
 
     def flush(self) -> None:
         """Send everything queued now, then the closing batch. Called at exit.
 
         The sender thread may hold a batch it has taken from the queue but not sent, so
         wait for it to finish that batch before sending the rest.
+
+        A child has sent all it made, so it sends again only what failed the first time.
+        A child that made no lines sends nothing.
         """
+        if self.eager:
+            if self.unsent or self.unsent_posts or self.settles:
+                self._send_batch(block=False, final=True)
+            return
         self._stop.set()
         if self._thread.is_alive():
             self._thread.join(timeout=2 * TIMEOUT_S)

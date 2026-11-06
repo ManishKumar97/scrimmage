@@ -4,10 +4,12 @@ Exit codes: 0 when every row produced a result; 2 for a mistake in the test, a r
 call and a test the budget stopped included; 3 for an infrastructure error.
 """
 
+import json
 import os
 import secrets
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -26,8 +28,9 @@ from derail_sdk import plan as planner
 from derail_sdk.budget import Ledger
 from derail_sdk.config import QUESTION, Config, Test
 from derail_sdk.control import ControlServer, proc_key
-from derail_sdk.records import RecordStore
+from derail_sdk.records import RECORD_VERSION, RecordStore
 from derail_sdk.redact import redact
+from derail_sdk.state import COMMAND_CAP, now_iso
 
 OK, MISTAKE, INFRA = 0, 2, 3
 TAIL_BYTES = 1024 * 1024  # how much of a script's output is read to find its last line
@@ -131,15 +134,20 @@ class Runner:
             self.cancel()
 
     def env(self, run: str) -> dict[str, str]:
+        agent = self.config.agent
         env = dict(os.environ)
-        env.pop("DERAIL_ROOT_PID", None)  # derail-run sets it for this run's program
+        for name in ("DERAIL_ROOT_PID", "DERAIL_PYTHON", "DERAIL_CHILDREN"):
+            env.pop(name, None)  # the program sets the first two for itself
         env.update(
             DERAIL_TOKEN=self.token,
             DERAIL_CONTROL_URL=self.control_url(self.server.url),
             DERAIL_RUN=run,
             DERAIL_ANSWER_FILE=str(self.answers / f"{run}.txt"),
-            DERAIL_ALLOW_IMPORTS=",".join(self.config.agent.allowed_imports()),
+            DERAIL_ALLOW_IMPORTS=",".join(agent.allowed_imports()),
+            DERAIL_TOOLS=planner.tools_text(agent.tools, agent.renames),
         )
+        if agent.children:
+            env["DERAIL_CHILDREN"] = "1"
         return env
 
     def program(self, question: str) -> list[str]:
@@ -194,10 +202,12 @@ class Runner:
         with self.lock:
             del self.procs[run]
         state = self.server.close_run(run)
+        kept_out = self.other_python_lines(run, row)
         # The server stops a test on a thread of its own, which this run's end can overtake.
         # Settle it here, so the next run sees it.
-        if state.broken or state.refusals:
-            self._refused(run, "structure" if state.broken else state.refusals[0])
+        if state.broken or state.refusals or kept_out:
+            reason = "other_python" if kept_out else (state.refusals or ["structure"])[0]
+            self._refused(run, "structure" if state.broken else reason)
         lines = self.store.lines(run)
         answer = self.answer_of(run, proc.returncode)
         # Another run stopped the test and this run was stopped with it. That says
@@ -212,6 +222,8 @@ class Runner:
         gap = any(per_proc[proc] < made for proc, made in state.made.items())
         unfinished = not state.made or any(proc not in state.made for proc in per_proc)
         incomplete = bool(state.dropped) or (ended_itself and (gap or unfinished))
+        self.store.add(run, kept_out)
+        lines += kept_out
         model = [line for line in lines if line.get("kind") == "model"]
         notices = [line for line in lines if "notice" in line]
         cost = sum(float(str(line.get("cost_usd") or 0)) for line in model)
@@ -224,7 +236,7 @@ class Runner:
             outcome = "infrastructure error"
         elif state.refusals[:1] == ["budget"]:
             outcome = "budget reached"
-        elif state.refused:
+        elif state.refused or kept_out:
             outcome = "refused call"
         elif timed_out:
             outcome = "timed out"

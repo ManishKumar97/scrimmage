@@ -1,14 +1,17 @@
 """Run state: this process's plan, counters, record and the refused-run poison.
 
 A function or a script is one run per process, so the plan lives in one slot shared by
-the whole process.
+the whole process. A child process has no plan until its first gated call, so a short
+command that makes no calls costs nothing.
 """
 
 import dataclasses
 import hashlib
 import json
 import os
+import shlex
 import socket
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -17,13 +20,14 @@ from datetime import UTC, datetime
 from typing import Protocol, cast
 
 from derail_sdk import decide as engine
-from derail_sdk.errors import DerailRefused, DerailTimeLimit
+from derail_sdk.errors import DerailRefused, DerailStopped, DerailTimeLimit
 from derail_sdk.plan import Plan
 from derail_sdk.records import RECORD_VERSION
 from derail_sdk.redact import redact
 
 PREVIEW = 200
 BLOB_CAP = 10 * 1024 * 1024  # a side-folder item keeps its first 10 MB and is marked cut
+COMMAND_CAP = 1000  # a process's line keeps this much of its command, which can hold a question
 
 
 class LineSink(Protocol):
@@ -66,26 +70,65 @@ class Step:
     extra: dict[str, object] = field(default_factory=dict[str, object])
 
 
+def this_process() -> dict[str, object]:
+    return {"host": socket.gethostname(), "pid": os.getpid(), "started": now_iso()}
+
+
 class RunState:
-    def __init__(self, plan: Plan, sink: LineSink, allowed: list[str]) -> None:
-        self.plan = plan
+    counters: engine.Counters
+
+    def __init__(
+        self,
+        plan: Plan | None,
+        sink: LineSink,
+        allowed: list[str],
+        *,
+        load: Callable[[], Plan] | None = None,
+        tools: tuple[str, ...] = (),
+    ) -> None:
+        """A child passes no plan: load fetches it, and tools names its gates until then."""
+        self.child = plan is None
+        self._plan: Plan | None = None
+        self._load = load
+        self._plan_lock = threading.Lock()
         self.sink = sink
-        self.listed = set(plan.tool_names())  # names the plan's gates will reach
+        self.listed = set(tools if plan is None else plan.tool_names())  # names gates will reach
         self.adapted: set[str] = set()  # names a framework's adapter has checked
         self.blocked: dict[str, str] = {}  # names a call could skip a gate by, and why
         self.rechecks: list[Callable[[], None]] = []  # an adapter's check of its tools
         self.allowed = allowed
         self.began = time.monotonic()
-        self.counters = engine.Counters(plan)
         self.refused: str | None = None
         self.model_calls = 0
-        self.proc = {
-            "host": socket.gethostname(),
-            "pid": os.getpid(),
-            "started": now_iso(),
-        }
+        self.proc = this_process()
         self._seq = 0
         self._lock = threading.Lock()
+        self._unannounced = self.child  # a child says what it is on its first line
+        self.live: dict[int, Step] = {}  # calls decided and not yet finished
+        if plan is not None:
+            self._take(plan)
+
+    def _take(self, plan: Plan) -> Plan:
+        # Each process counts its own calls, so "the third call" would mean something
+        # different in each. Faults fire only in the program the runner started.
+        if self.child and not plan.children:
+            plan = dataclasses.replace(plan, faults=())
+        if plan.unavailable is not None:
+            self.refused = self.refused or "this run's plan"
+        self._plan = plan
+        self.counters = engine.Counters(plan)
+        return plan
+
+    @property
+    def plan(self) -> Plan:
+        plan = self._plan
+        if plan is not None:
+            return plan
+        with self._plan_lock:
+            if self._plan is not None:
+                return self._plan
+            assert self._load is not None
+            return self._take(self._load())
 
     @property
     def seen(self) -> set[str]:
@@ -110,22 +153,28 @@ class RunState:
     def decide(self, call: engine.Call, args: dict[str, object]) -> Step:
         """Count the call and decide what it gets. A poisoned run refuses every call."""
         self.check_time()
+        plan = self.plan
         with self._lock:
             if self.refused is not None:
                 decision = engine.Decision("refused", reason="poisoned")
             else:
                 numbers = self.counters.note(call)
-                decision = engine.decide(call, self.plan, numbers)
+                decision = engine.decide(call, plan, numbers)
                 if decision.action == "refused":
                     self.refused = call.label
-        return Step(call, decision, args, now_iso(), time.monotonic())
+            return self._going(Step(call, decision, args, now_iso(), time.monotonic()))
+
+    def _going(self, step: Step) -> Step:
+        self.live[id(step)] = step
+        return step
 
     def begin(self, name: str, args: dict[str, object]) -> Step:
         return self.decide(engine.Call("tool", f"tool:{name}", name), args)
 
     def passed(self, call: engine.Call) -> Step:
         """A call that is recorded but not decided, so it is not counted and cannot be refused."""
-        return Step(call, engine.Decision("real"), {}, now_iso(), time.monotonic())
+        with self._lock:
+            return self._going(Step(call, engine.Decision("real"), {}, now_iso(), time.monotonic()))
 
     def refuse(self, step: Step, reason: str) -> Step:
         """Turn a decided call into a refusal for a reason the gate found, and poison the run."""
@@ -136,6 +185,11 @@ class RunState:
 
     def refusal(self, step: Step, detail: str = "") -> DerailRefused:
         label = step.call.label
+        if self.plan.unavailable is not None:
+            return DerailRefused(
+                f"{label}: this process has no plan for its run, so every call fails: "
+                f"{self.plan.unavailable}"
+            )
         reason = step.decision.reason or "unlisted"
         first = self.refused or label
         if reason == "poisoned" or first != label:
@@ -165,9 +219,57 @@ class RunState:
         }
         return DerailRefused(messages.get(reason, f"{label} is refused: {detail}"))
 
-    def drop_faults(self) -> None:
-        self.plan = dataclasses.replace(self.plan, faults=())
-        self.counters = engine.Counters(self.plan)
+    def forked(self) -> None:
+        """This process is a copy of its parent, so nothing it holds about the process is true.
+
+        A lock another thread held at the fork would stay locked here for good.
+        """
+        self._lock = threading.Lock()
+        self._plan_lock = threading.Lock()
+        self.child = True
+        self.proc = this_process()
+        self._seq = 0
+        self.live = {}
+        self._unannounced = True
+        if self._plan is not None:
+            self._take(self._plan)
+
+    def announce(self) -> None:
+        """Say once what this process is: its Python, its command and its parent."""
+        self._unannounced = False
+        command = redact(shlex.join(sys.orig_argv))[:COMMAND_CAP]
+        line = self._head()
+        line.update(
+            notice="process",
+            library="derail",
+            message="a process joined the run",
+            process={"python": redact(sys.executable), "command": command, "parent": os.getppid()},
+        )
+        self.sink.put(line, keep=True)
+
+    def stop_open(self) -> None:
+        """A call going on when the run is stopped would leave no line, so it gets one here."""
+        with self._lock:
+            steps, self.live = list(self.live.values()), {}
+        for step in steps:
+            self.finish(step, error=DerailStopped("the run was stopped during this call"))
+
+    def _head(self) -> dict[str, object]:
+        plan = self.plan
+        return {
+            "v": RECORD_VERSION,
+            "run": plan.run,
+            "test": plan.test,
+            "row": plan.row,
+            "seq": self.next_seq(),
+            "proc": self.proc,
+        }
+
+    def _first_line(self) -> None:
+        with self._lock:
+            first, self._unannounced = self._unannounced, False
+        if first:
+            self.announce()
 
     def cannot_gate(self, name: str, message: str) -> None:
         """A tool no gate can reach: a mistake that ends the run.
@@ -217,17 +319,9 @@ class RunState:
         tools: list[str] | None = None,
     ) -> None:
         """A line that is not a call, such as a library version the gate cannot use."""
-        line: dict[str, object] = {
-            "v": RECORD_VERSION,
-            "run": self.plan.run,
-            "test": self.plan.test,
-            "row": self.plan.row,
-            "seq": self.next_seq(),
-            "proc": self.proc,
-            "notice": kind,
-            "library": library,
-            "message": message,
-        }
+        self._first_line()
+        line = self._head()
+        line.update(notice=kind, library=library, message=message)
         if mistake is not None:
             line["mistake"] = redact(mistake)
         if tools is not None:
@@ -243,24 +337,20 @@ class RunState:
         mistake: str | None = None,
     ) -> None:
         decision = step.decision
-        line: dict[str, object] = {
-            "v": RECORD_VERSION,
-            "run": self.plan.run,
-            "test": self.plan.test,
-            "row": self.plan.row,
-            "seq": self.next_seq(),
-            "proc": self.proc,
-            "call": redact(step.call.label),  # a server names its own tools
-            "kind": step.call.kind,
-            "action": decision.action,
-            "args": content(step.args),
-            "result": None
-            if error is not None or decision.action == "refused"
-            else content(result),
-            "error": None if error is None else error_text(step.call, error),
-            "start": step.start,
-            "ms": int((time.monotonic() - step.started) * 1000),
-        }
+        self._first_line()
+        with self._lock:
+            self.live.pop(id(step), None)
+        line = self._head()
+        line.update(
+            call=redact(step.call.label),  # a server names its own tools
+            kind=step.call.kind,
+            action=decision.action,
+            args=content(step.args),
+            result=None if error is not None or decision.action == "refused" else content(result),
+            error=None if error is None else error_text(step.call, error),
+            start=step.start,
+            ms=int((time.monotonic() - step.started) * 1000),
+        )
         if decision.fault is not None:
             fault = self.plan.faults[decision.fault]
             line["fault"] = {"do": fault.do, "when": fault.when, "n": decision.n}

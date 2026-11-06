@@ -64,6 +64,16 @@ def joined(control: ControlServer, **extra: str) -> dict[str, str]:
     }
 
 
+def this_python() -> str:
+    """The value a run's first process sets for a child on the same Python."""
+    code = "import os, sys; print(os.path.realpath(sys.executable) + os.pathsep + sys.prefix)"
+    return python(code, {}).stdout.strip()
+
+
+def as_child(control: ControlServer, **extra: str) -> dict[str, str]:
+    return joined(control, DERAIL_PYTHON=this_python(), **extra)
+
+
 def test_the_startup_folder_holds_exactly_one_file() -> None:
     assert sorted(p.name for p in BOOT.iterdir() if p.name != "__pycache__") == ["sitecustomize.py"]
 
@@ -126,7 +136,7 @@ def test_ubuntus_apport_hook_still_installs() -> None:
 @pytest.mark.skipif(not UBUNTU_PYTHON.exists(), reason="needs a second Python without Derail")
 def test_a_child_on_a_python_without_the_sdk_is_left_alone() -> None:
     # Like the aws CLI started by the agent: it inherits the variables, but not Derail.
-    env = {"PYTHONPATH": str(BOOT), "DERAIL_TOKEN": TOKEN, "DERAIL_ROOT_PID": "1"}
+    env = {"PYTHONPATH": str(BOOT), "DERAIL_TOKEN": TOKEN, "DERAIL_PYTHON": "the run's Python"}
     result = python("print('ok')", env, exe=str(UBUNTU_PYTHON))
     assert (result.returncode, result.stdout.strip(), result.stderr) == (0, "ok", "")
 
@@ -254,12 +264,43 @@ def test_a_broken_control_reply_stops_the_program_instead_of_running_ungated(
     assert "the program stops" in result.stderr
 
 
+@pytest.mark.design("boot.child_has_no_plan")
+def test_a_child_with_no_plan_refuses_every_call(control: ControlServer, tmp_path: Path) -> None:
+    (tmp_path / "held.py").write_text("def write():\n    print('THE WRITE RAN')\n")
+    env = as_child(control, DERAIL_TOOLS="held:write", DERAIL_RUN="not-a-run")
+    code = (
+        "import held\n"
+        "print('started')\n"
+        "try:\n"
+        "    held.write()\n"
+        "except Exception as exc:\n"
+        "    print(exc)\n"
+    )
+    result = python(code, env, cwd=tmp_path)
+    assert result.stdout.splitlines()[0] == "started"
+    assert "this process has no plan for its run" in result.stdout
+    assert "THE WRITE RAN" not in result.stdout
+
+
+@pytest.mark.design("boot.child_plan_outside_imports")
+def test_a_child_refuses_a_plan_that_names_an_import_it_may_not_make(
+    control: ControlServer, tmp_path: Path
+) -> None:
+    (tmp_path / "held.py").write_text("def write():\n    print('THE WRITE RAN')\n")
+    mock = {"call": "tool:write", "returns": 1, "type": "evil:Thing"}
+    control.open_run("run-1", "baseline", plan(mocks=[mock]))
+    code = "import held\ntry:\n    held.write()\nexcept Exception as exc:\n    print(exc)\n"
+    result = python(code, as_child(control, DERAIL_TOOLS="held:write"), cwd=tmp_path)
+    assert "evil:Thing is outside the allowed imports" in result.stdout
+    assert "THE WRITE RAN" not in result.stdout
+
+
 @pytest.mark.design("boot.children_no_faults")
 def test_a_child_process_keeps_the_mocks_but_fires_no_faults(control: ControlServer) -> None:
     faults = [{"call": "tool:a", "do": "timeout", "when": "always"}]
     control.open_run("run-1", "baseline", plan(faults=faults))
     code = "import derail_sdk.state as s; print(len(s.current().plan.faults))"
     root = python(code, joined(control))  # DERAIL_ROOT_PID unset: this is the root
-    child = python(code, joined(control, DERAIL_ROOT_PID="1"))
+    child = python(code, as_child(control))
     assert (root.stdout.strip(), child.stdout.strip()) == ("1", "0")
-    assert "in a child process, without faults" in child.stderr
+    assert child.stderr == ""
