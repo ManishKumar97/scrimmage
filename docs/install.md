@@ -7,8 +7,8 @@ It patches functions inside your agent's process, so it belongs where you test.
 
 ## From a clone (for now)
 
-Derail is not on PyPI yet, and another project already uses the name `derail` there.
-Install from the repository, and tell pip not to look at PyPI:
+Derail is not on PyPI yet.
+Build it from the repository, and install the result with pip looking only in that folder:
 
 ```bash
 git clone https://github.com/ManishKumar97/derail
@@ -16,8 +16,6 @@ cd derail
 uv build --all-packages --wheel -o dist
 pip install --no-index --find-links dist derail
 ```
-
-`--no-index` matters: without it, pip may install the unrelated PyPI package of the same name.
 
 ## Check it worked
 
