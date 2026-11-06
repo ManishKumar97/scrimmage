@@ -22,7 +22,7 @@ from typing import Any
 
 from faultline_sdk import hooks, tool_gate
 from faultline_sdk.errors import FaultlineMockError, FaultlineRefused
-from faultline_sdk.httpx2_gate import params
+from faultline_sdk.http_gate import params
 from faultline_sdk.state import RunState
 
 LIBRARY = "langchain-core"

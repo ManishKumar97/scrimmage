@@ -170,7 +170,7 @@ def test_a_call_that_creates_something_at_the_provider_is_refused(
     use(project, "acme.rag:answer_tuning", extra='\nmax_cost_usd = "none"')
     result = project.test(fake_openai([]))
     refused = [x for x in result.records()[0] if x.get("action") == "refused"]
-    assert refused[0]["call"] == "http:127.0.0.1" and refused[0]["reason"] == "model_host_write"
+    assert refused[0]["call"] == "http:127.0.0.1" and refused[0]["reason"] == "web_write"
     assert result.code == 2
 
 

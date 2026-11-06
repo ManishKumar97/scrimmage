@@ -9,6 +9,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Literal
 
+from faultline_sdk.config import Fault, Mock
 from faultline_sdk.labels import matches, matches_real
 from faultline_sdk.plan import Plan
 
@@ -22,7 +23,8 @@ class Call:
     """What a gate saw.
 
     For a model call, retry is the library's own attempt number (0 for a first attempt)
-    and key ties a retry to its first attempt: who sent it and what it sent.
+    and key ties a retry to its first attempt: who sent it and what it sent. For a web
+    request, name is the path.
     """
 
     kind: Kind
@@ -41,6 +43,15 @@ class Decision:
     mock: int | None = None  # index into plan.mocks
     n: int = 0  # the fault's number for this call: its attempt, or its request
     reason: str | None = None  # why a call was refused
+
+
+def names(entry: Mock | Fault, call: Call) -> bool:
+    """Whether a mock or fault names this call exactly as it is written."""
+    if not matches(entry.call, call.label):
+        return False
+    if entry.method is not None and entry.method != call.method:
+        return False
+    return entry.path is None or entry.path == call.name
 
 
 def schedule(when: str) -> tuple[str, int]:
@@ -84,7 +95,7 @@ class Counters:
         numbers = [0] * len(self.plan.faults)
         with self.lock:
             for i, fault in enumerate(self.plan.faults):
-                if not matches(fault.call, call.label):
+                if not names(fault, call):
                     continue
                 if schedule(fault.when)[0] != "requests":
                     self.attempts[i] += 1
@@ -103,17 +114,18 @@ class Counters:
 
 def decide(call: Call, plan: Plan, numbers: list[int]) -> Decision:
     for i, fault in enumerate(plan.faults):
-        if matches(fault.call, call.label) and fires(fault.when, numbers[i]):
+        if names(fault, call) and fires(fault.when, numbers[i]):
             return Decision("fault", fault=i, n=numbers[i])
     if call.kind == "model":
         return Decision("real")  # model calls are what is being tested; never mocked
+    for i, mock in enumerate(plan.mocks):
+        if names(mock, call):
+            return Decision("mock", mock=i)
+    path = call.name if call.kind == "http" else None
+    if matches_real(list(plan.real), call.label, call.method, path):
+        return Decision("real")
     if call.kind == "http":
         if call.method in READ_METHODS:
             return Decision("real")
-        return Decision("refused", reason="model_host_write")
-    for i, mock in enumerate(plan.mocks):
-        if mock.call == call.label:
-            return Decision("mock", mock=i)
-    if matches_real(list(plan.real), call.label):
-        return Decision("real")
+        return Decision("refused", reason="web_write")
     return Decision("refused", reason="unlisted")

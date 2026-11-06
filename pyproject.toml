@@ -20,6 +20,7 @@ dev = [
     "ruff>=0.17",
     "pyright>=1.1.414",
     "openai>=3.46",
+    "httpx>=0.28",
     "vulture>=2.16",
     "import-linter>=2.15",
     "jsonschema>=4.26",

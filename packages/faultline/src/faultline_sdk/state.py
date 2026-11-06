@@ -145,10 +145,10 @@ class RunState:
                 f"{label} is neither mocked by this test nor listed under [agent] real. "
                 f'Mock it in the test, or add "{label}" to real if it is safe to run for real.'
             ),
-            "model_host_write": (
-                f"{detail} is a write to a model host and not a model call. Faultline "
-                "refuses it because it could leave something behind at the provider that no "
-                "test cleans up. No setting allows it yet; web-request labels come later."
+            "web_write": (
+                f"{label} {detail} is a web request that can change data, and this test "
+                "neither mocks it nor lists it under [agent] real. Mock it in the test, or "
+                f'add "{label} {detail}" to real if it is safe to run for real.'
             ),
             "budget": f"{label}: the test's budget cannot cover this call. {detail}",
             "no_price": detail,
@@ -249,7 +249,9 @@ class RunState:
         if mistake is not None:
             line["mistake"] = redact(mistake)
         line.update({key: scrub(value) for key, value in step.extra.items()})
-        self.sink.put(line, keep=decision.action == "refused" or step.call.kind == "model")
+        write = step.call.kind == "http" and step.call.method not in engine.READ_METHODS
+        keep = decision.action == "refused" or step.call.kind == "model" or write
+        self.sink.put(line, keep=keep)
 
 
 def scrub(value: object) -> object:

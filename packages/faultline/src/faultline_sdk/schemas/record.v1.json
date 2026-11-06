@@ -201,7 +201,7 @@
             "hosted",
             "unknown_tool_type",
             "unseen_tool",
-            "model_host_write",
+            "web_write",
             "control_unreachable",
             "unreadable_body",
             "redirect_off_host",
@@ -226,6 +226,9 @@
         "retry": {
           "type": "integer",
           "minimum": 0
+        },
+        "near_mock": {
+          "const": true
         },
         "stream": {
           "type": "boolean"

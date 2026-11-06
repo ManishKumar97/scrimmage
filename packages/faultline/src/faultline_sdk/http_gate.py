@@ -1,16 +1,19 @@
 # pyright: standard
-"""The gate at httpx2's single attempt, Client._send_single_request, sync and async.
+"""The gate at a client's single attempt, Client._send_single_request, sync and async.
 
-The openai library sends every attempt of every request through it, below its own
-retries, so an injected 429 is retried by the library exactly like a real one. Every
-hop of a redirect passes here too, so each is decided on its own. The SDK never imports
-httpx2: the hook patches it when the agent imports it.
+httpx and httpx2 share this function. The openai library sends every attempt through
+httpx2's, and a tool's own web requests go through either. It sits below the client's
+retries, redirects and response hooks, so an injected 429 or 503 meets them exactly as a
+real one does, and each hop of a redirect is decided on its own. The host comes from the
+request's own URL, so a proxy or a mounted transport changes nothing. The SDK never
+imports either library: the hook patches one when the agent imports it.
 """
 
 import asyncio
 import atexit
 import datetime
 import hashlib
+import http
 import inspect
 import json
 import threading
@@ -22,12 +25,12 @@ from typing import Any, NoReturn, Protocol
 from faultline_sdk import hooks
 from faultline_sdk import provider_openai as openai_table
 from faultline_sdk.client import ControlError
-from faultline_sdk.decide import Call, Decision
+from faultline_sdk.decide import READ_METHODS, Call, Decision, names
 from faultline_sdk.redact import redact
 from faultline_sdk.state import BLOB_CAP, BlobSink, RunState, Step, blob, current
 
-LIBRARY = "httpx2"
-TESTED = ((2, 16), (2, 16))  # the minor versions this release was tested with
+# The minor versions this release was tested with, per library.
+TESTED = {"httpx": ((0, 28), (0, 28)), "httpx2": ((2, 16), (2, 16))}
 GATED = "__faultline_gate__"
 CHAR_PER_TOKEN = 4  # the rough size of a token, for estimates only
 # A refusal the team must act on: the message reaches the run table.
@@ -36,7 +39,7 @@ MISTAKE_REASONS = (
     "unknown_tool_type",
     "unseen_tool",
     "hosted",
-    "model_host_write",
+    "web_write",
     "unreadable_body",
     "redirect_off_host",
     "unsupported_loop",
@@ -100,34 +103,36 @@ def install(
 ) -> None:
     ctx = Context(run, client, sender, stop)
     atexit.register(ctx.close_open)  # registered after the sender's flush, so it runs first
-    hooks.on_import(LIBRARY, lambda module: patch(module, ctx))
+    for library in TESTED:
+        hooks.on_import(library, lambda module, name=library: patch(module, ctx, name))
 
 
-def patch(module: ModuleType, ctx: Context) -> None:
-    named = f"{LIBRARY} {getattr(module, '__version__', '?')}"
+def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
+    named = f"{library} {getattr(module, '__version__', '?')}"
     if not gatable(module):
         message = (
             f"{named} does not have the functions Faultline gates, so its calls cannot be "
             "checked or budgeted, and the program is stopped"
         )
-        ctx.run.notice("structure", LIBRARY, message)
+        ctx.run.notice("structure", library, message)
         ctx.stop(message)
         return
-    if not all(hasattr(module, n) for n in ("Response", "ReadTimeout")):
+    if not all(hasattr(module, n) for n in ("Response", "ByteStream", "ReadTimeout")):
         ctx.run.notice(
             "structure",
-            LIBRARY,
-            f"{named} lacks what Faultline builds faults from; refusals and the budget "
-            "still apply, faults do not",
+            library,
+            f"{named} lacks what Faultline builds faults and mocks from; refusals and the "
+            "budget still apply, those do not",
         )
         ctx.faults = False
     found = version(module)
-    if found is not None and found > TESTED[1]:
+    oldest, newest = TESTED[library]
+    if found is not None and found > newest:
         ctx.run.notice(
             "newer_version",
-            LIBRARY,
-            f"{LIBRARY} {module.__version__} is newer than the versions this release was "
-            f"tested with ({TESTED[0][0]}.{TESTED[0][1]} to {TESTED[1][0]}.{TESTED[1][1]})",
+            library,
+            f"{library} {module.__version__} is newer than the versions this release was "
+            f"tested with ({oldest[0]}.{oldest[1]} to {newest[0]}.{newest[1]})",
         )
     sync_send = module.Client._send_single_request
     async_send = module.AsyncClient._send_single_request
@@ -141,13 +146,15 @@ def patch(module: ModuleType, ctx: Context) -> None:
         step, extra = prepared
         if step.decision.action == "fault":
             return fault(ctx, module, step, request, extra)
+        if step.decision.action == "mock":
+            return mocked(ctx, module, self, step, request, extra)
         reservation = reserve(ctx, step, request, extra)
         try:
             response = sync_send(self, request)
         except BaseException as exc:
             failed(ctx, module, step, request, extra, reservation, exc)
             raise
-        target = off_host(ctx, request, response)
+        target = off_host(ctx, step, request, response)
         if target is not None:
             response.close()
             redirected_away(ctx, step, request, extra, reservation, target)
@@ -164,7 +171,7 @@ def patch(module: ModuleType, ctx: Context) -> None:
         if prepared is None:
             return await async_send(self, request)
         step, extra = prepared
-        if task is None:
+        if task is None and step.call.kind == "model":
             ctx.run.refuse(step, "unsupported_loop")
             refuse(
                 ctx.run,
@@ -174,13 +181,17 @@ def patch(module: ModuleType, ctx: Context) -> None:
             )
         if step.decision.action == "fault":
             return fault(ctx, module, step, request, extra)
-        reservation = await reserve_off_the_loop(ctx, step, request, extra)
+        if step.decision.action == "mock":
+            return mocked(ctx, module, self, step, request, extra)
+        reservation = None
+        if step.call.kind == "model":
+            reservation = await reserve_off_the_loop(ctx, step, request, extra)
         try:
             response = await async_send(self, request)
         except BaseException as exc:
             failed(ctx, module, step, request, extra, reservation, exc)
             raise
-        target = off_host(ctx, request, response)
+        target = off_host(ctx, step, request, response)
         if target is not None:
             await response.aclose()
             redirected_away(ctx, step, request, extra, reservation, target)
@@ -199,8 +210,8 @@ def body_of(request: Any) -> bytes | None:
         return bytes(request.content)
     except Exception:
         pass
-    # A redirect carries its body as httpx2's ByteStream: still in memory, safe to read.
-    held = getattr(request.stream, "_stream", None)  # httpx2 ByteStream._stream
+    # A redirect carries its body as the library's ByteStream: in memory, safe to read.
+    held = getattr(request.stream, "_stream", None)  # httpx and httpx2 ByteStream._stream
     return held if isinstance(held, bytes) else None
 
 
@@ -209,16 +220,14 @@ def provider_of(ctx: Context, host: str) -> str | None:
     return named or ("openai" if host in openai_table.HOSTS else None)
 
 
-def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call | None:
-    """The call this request is, or None for a host that is not a model host."""
+def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call:
+    """The call this request is: a model call, or a web request to its own host."""
     host = str(request.url.host).lower()
     provider = provider_of(ctx, host)
-    if provider is None:
-        return None
     path = str(request.url.path)
     method = str(request.method).upper()
-    op = openai_table.op_for(path, method)
-    if op is None:
+    op = openai_table.op_for(path, method) if provider is not None else None
+    if provider is None or op is None:
         return Call("http", f"http:{host}", path, provider, method)
     try:
         retry = max(0, int(request.headers.get("x-stainless-retry-count", "0")))
@@ -230,29 +239,28 @@ def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call | None:
 
 
 def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, object]] | None:
-    """Decide the request. Raises FaultlineRefused after recording a refusal."""
+    """Decide the request; None with no run. Raises FaultlineRefused after recording one."""
     run = current()
     if run is None:
         return None
     body = body_of(request)
     call = describe(ctx, request, who, body or b"")
-    if call is None:
-        return None
     fields = openai_table.request_fields(body) if body else None
+    # The method and path only: headers, cookies and a query string are never recorded.
     extra: dict[str, object] = {
-        "provider": call.provider,
         "method": call.method,
         "path": str(request.url.path),
         "args": blob(body or b"", ctx.sender),
     }
+    if call.provider is not None:
+        extra["provider"] = call.provider
     if call.kind == "model":
         extra.update(model=str((fields or {}).get("model", "")), retry=call.retry)
         extra["stream"] = (fields or {}).get("stream") is True
     step = run.decide(call, {})
     step.extra = extra
-    if not ctx.faults and step.decision.action == "fault":
-        step.decision = Decision("real")
-    # The method and path only: a query string can hold a key, and this text is recorded.
+    if not ctx.faults and step.decision.action in ("fault", "mock"):
+        without_faults(run, step)
     where = f"{call.method} {request.url.path}"
     if step.decision.action == "refused":
         refuse(run, step, where)
@@ -266,10 +274,24 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
                 "one, so the tools it offers cannot be checked; send it as plain JSON",
             )
         check_tools(ctx, run, step, fields, str(request.url.path))
-    if call.kind == "http":
-        run.finish(step, result=None)  # a read to a model host: recorded, then sent
-        return None
+    if call.kind == "http" and step.decision.action == "real" and near_a_mock(run, call):
+        extra["near_mock"] = True
     return step, extra
+
+
+def without_faults(run: RunState, step: Step) -> None:
+    """The library lost what faults and mocks are built from. A read or a model call runs
+    for real, because the safety rule does not stop it; a write never does."""
+    if step.call.kind == "http" and step.call.method not in READ_METHODS:
+        run.refuse(step, "web_write")
+    else:
+        step.decision = Decision("real")
+
+
+def near_a_mock(run: RunState, call: Call) -> bool:
+    """A real request to a host the test has mocks for, though none matched it."""
+    mocks = [m for m in run.plan.mocks if m.call == call.label]
+    return bool(mocks) and not any(names(m, call) for m in mocks)
 
 
 def refuse(run: RunState, step: Step, detail: str) -> NoReturn:
@@ -335,12 +357,58 @@ def fault(
         run.finish(step, error=error)
         raise error
     status = int(plan_fault.do.split()[1])
-    body = openai_table.error_body(status)
+    if step.call.kind == "model":
+        body = openai_table.error_body(status)
+        headers = {"content-type": "application/json", "x-request-id": "req_faultline_injected"}
+    else:
+        body = reason_phrase(status).encode()
+        headers = {"content-type": "text/plain; charset=utf-8"}
     extra.update(status=status, result=blob(body, ctx.sender))
     run.finish(step)
-    headers = {"content-type": "application/json", "x-request-id": "req_faultline_injected"}
-    response = module.Response(status, headers=headers, content=body, request=request)
+    return reply(module, status, headers, body, request)
+
+
+def reason_phrase(status: int) -> str:
+    try:
+        return http.HTTPStatus(status).phrase
+    except ValueError:
+        return f"Error {status}"
+
+
+def reply(
+    module: ModuleType, status: int, headers: dict[str, str], body: bytes, request: Any
+) -> Any:
+    """A reply the gate built, left unread as a real one is, so iter_raw works on it."""
+    if body:
+        headers = {**headers, "content-length": str(len(body))}
+    stream = module.ByteStream(body)
+    response = module.Response(status, headers=headers, stream=stream, request=request)
     response.elapsed = datetime.timedelta(0)  # a real reply has it; code may read it
+    return response
+
+
+def mocked(
+    ctx: Context,
+    module: ModuleType,
+    client: Any,
+    step: Step,
+    request: Any,
+    extra: dict[str, object],
+) -> Any:
+    """Build the test's fixed reply. Nothing is sent."""
+    mock = ctx.run.plan.mocks[step.decision.mock or 0]
+    headers = dict(mock.headers)
+    if mock.json is not None:
+        body = json.dumps(mock.json).encode()
+        headers.setdefault("content-type", "application/json")
+    else:
+        body = (mock.text or "").encode()
+        if mock.text is not None:
+            headers.setdefault("content-type", "text/plain; charset=utf-8")
+    extra.update(status=mock.status, result=blob(body, ctx.sender))
+    ctx.run.finish(step)
+    response = reply(module, mock.status, headers, body, request)
+    client.cookies.extract_cookies(response)  # the step a real reply goes through
     return response
 
 
@@ -352,7 +420,9 @@ def prices_of(ctx: Context, model: str) -> tuple[float, float] | None:
 def reserve(ctx: Context, step: Step, request: Any, extra: dict[str, object]) -> int | None:
     """Reserve what this model call could cost, before it is sent."""
     plan = ctx.run.plan
-    if plan.budget_usd is None or step.call.name in openai_table.FREE_OPS:
+    if step.call.kind != "model" or plan.budget_usd is None:
+        return None
+    if step.call.name in openai_table.FREE_OPS:
         return None
     model = str(extra.get("model", ""))
     rates = prices_of(ctx, model)
@@ -432,13 +502,13 @@ def abandoned(ctx: Context, step: Step, extra: dict[str, object], reservation: i
     settle(ctx, reservation, 0.0)
 
 
-def off_host(ctx: Context, request: Any, response: Any) -> str | None:
+def off_host(ctx: Context, step: Step, request: Any, response: Any) -> str | None:
     """The host a redirect would take this model call to, if that is not a model host.
 
     This refuses even a client that would not follow the redirect. The gate cannot tell,
     and a call wrongly refused is a visible mistake; one wrongly let through is unbudgeted.
     """
-    if not response.has_redirect_location:
+    if step.call.kind != "model" or not response.has_redirect_location:
         return None
     try:
         host = str(request.url.join(response.headers["location"]).host).lower()
@@ -481,6 +551,9 @@ def failed(
     error: BaseException,
 ) -> None:
     """The call got no reply. If it never left, it costs nothing; if it did, it may cost."""
+    if step.call.kind != "model":
+        ctx.run.finish(step, error=error)
+        return
     never_sent = (getattr(module, "ConnectError", ()), getattr(module, "ConnectTimeout", ()))
     rates = prices_of(ctx, str(extra.get("model", "")))
     usd: float | None = 0.0
@@ -562,6 +635,9 @@ def record(
 ) -> float:
     """Put the reply, its tokens and its cost on the line. Returns the cost to settle."""
     body = decoded(raw, str(response.headers.get("content-encoding", "")))
+    if step.call.kind != "model":
+        extra.update(status=response.status_code, result=blob(body, ctx.sender, total=size))
+        return 0.0
     used = openai_table.usage(body, output_required=step.call.name == "chat")
     tokens_in, tokens_out = used.input, used.output
     if not used.known:
