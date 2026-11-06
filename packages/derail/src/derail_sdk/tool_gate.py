@@ -184,15 +184,16 @@ def swap(module: ModuleType, names: list[str], renamed: dict[str, str] | None = 
             setattr(module, name, gate(tool, seen))
 
 
-def module_exists(name: str, extra: list[str]) -> bool:
-    """Whether a module can be found, without importing it or its packages."""
+def module_spec(name: str, extra: list[str]) -> importlib.machinery.ModuleSpec | None:
+    """Where a module is, without importing it or its packages."""
     path: list[str] | None = [*sys.path, *extra]
+    spec = None
     for part in name.split("."):
         spec = importlib.machinery.PathFinder.find_spec(part, path)
         if spec is None:
-            return False
+            return None
         path = list(spec.submodule_search_locations or [])
-    return True
+    return spec
 
 
 def targets(paths: Sequence[str]) -> dict[str, list[str]]:

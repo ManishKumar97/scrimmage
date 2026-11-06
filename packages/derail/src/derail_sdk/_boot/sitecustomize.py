@@ -110,11 +110,36 @@ def _tell_the_runner(message: str) -> None:
         pass  # the import still fails, so the write still does not run
 
 
+def _target() -> "str | None":
+    """The module of python -m, which the arguments here show only as -m."""
+    args = iter(getattr(sys, "orig_argv", [])[1:])
+    for arg in args:
+        if arg == "-m":
+            return next(args, None)
+        if arg in ("-W", "-X"):
+            next(args, None)
+        elif not arg.startswith("-"):
+            break
+    return None
+
+
 def _keep_out_tools() -> None:
     entries = os.environ.get("DERAIL_TOOLS", "").split(",")
     modules = {entry.partition(":")[0] for entry in entries if entry}
-    if modules:
-        sys.meta_path.insert(0, _KeepOut(modules))
+    if not modules:
+        return
+    sys.meta_path.insert(0, _KeepOut(modules))
+    # The program itself is never imported, so the finder cannot stop it.
+    script = os.path.abspath(sys.argv[0]).rpartition(".")[0].replace(os.sep, ".")
+    target = _target()
+    for module in modules:
+        if target in (module, module + ".__main__") or script.endswith("." + module):
+            message = (
+                f"{module} holds a tool under [agent] tools, and {sys.executable} is not the "
+                "run's Python, so Derail cannot gate it"
+            )
+            _tell_the_runner(message)
+            raise RuntimeError(message)
 
 
 def _start() -> None:
@@ -142,7 +167,7 @@ def _start() -> None:
 
     from derail_sdk import bootstrap
 
-    bootstrap.start(child=not root)
+    bootstrap.start(child=not root, target=_target())
 
 
 if os.environ.get("DERAIL_TOKEN"):

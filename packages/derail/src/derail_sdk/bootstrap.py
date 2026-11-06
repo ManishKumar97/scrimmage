@@ -56,6 +56,17 @@ def script_folder() -> list[str]:
     return [] if script in ("", "-c", "-m") else [os.path.dirname(os.path.abspath(script))]
 
 
+def runs_as_main(module: str, target: str | None, folders: list[str]) -> bool:
+    """Whether this module is the program itself, which runs as __main__ and is never
+    imported, so no import can put a gate on its tools. target is the -m module, if any."""
+    if target is not None:
+        return module in (target, f"{target}.__main__")
+    spec = tool_gate.module_spec(module, folders)
+    if spec is None or spec.origin is None or sys.argv[0] in ("", "-c"):
+        return False
+    return os.path.realpath(spec.origin) == os.path.realpath(sys.argv[0])
+
+
 def handle_sigterm(run_state: state.RunState, sender: Sender, ctx: http_gate.Context) -> None:
     """On SIGTERM send the last record lines, then end as Python would have with no handler.
 
@@ -86,7 +97,7 @@ def handle_sigterm(run_state: state.RunState, sender: Sender, ctx: http_gate.Con
     signal.signal(signal.SIGTERM, on_term)
 
 
-def start(*, child: bool = False) -> None:
+def start(*, child: bool = False, target: str | None = None) -> None:
     token = os.environ["DERAIL_TOKEN"]
     url = os.environ.get("DERAIL_CONTROL_URL", "")
     run = os.environ.get("DERAIL_RUN", "")
@@ -127,13 +138,20 @@ def start(*, child: bool = False) -> None:
         # With no tools list the runner cannot know the names; a framework's adapter does.
         atexit.register(lambda: report_tools(run_state))
     state.install(run_state)
-    if not child:
-        for module, tool_names in tool_gate.targets(tools).items():
-            if not tool_gate.module_exists(module, [os.getcwd(), *script_folder()]):
-                message = f"{module} is listed under [agent] tools but cannot be found"
-                run_state.cannot_gate(tool_names[0], message)
-                sender.flush()
-                stop(message)
+    folders = [os.getcwd(), *script_folder()]
+    for module, tool_names in tool_gate.targets(tools).items():
+        message = None
+        if runs_as_main(module, target, folders):
+            message = (
+                f"{module} is the program itself, so {tool_names[0]} cannot be gated. Move the "
+                "tool into a module the program imports"
+            )
+        elif not child and tool_gate.module_spec(module, folders) is None:
+            message = f"{module} is listed under [agent] tools but cannot be found"
+        if message is not None:
+            run_state.cannot_gate(tool_names[0], message)
+            sender.flush()
+            stop(message)
     tool_gate.install(tools, dict(renames))
 
     def cannot_gate(message: str) -> None:

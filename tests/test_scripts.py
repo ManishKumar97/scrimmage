@@ -351,6 +351,72 @@ def test_a_listed_module_that_does_not_exist_stops_a_script(project: Project) ->
     assert "acme.nothing is listed under [agent] tools but cannot be found" in result.out
 
 
+TOOL_IN_THE_SCRIPT = """
+from pathlib import Path
+
+
+def pay(order):
+    Path("REAL WRITE").write_text(order)
+
+
+pay("1234")
+print("the answer")
+"""
+
+
+@pytest.mark.design("main.tool_in_the_script")
+def test_a_tool_defined_in_the_script_stops_the_run_and_says_to_move_it(project: Project) -> None:
+    (project.root / "bot.py").write_text(TOOL_IN_THE_SCRIPT)
+    write_config(project, f"{sys.executable} bot.py {{question}}")
+    project.edit(TOOLS, '["bot:pay"]')
+    project.edit('real = ["tool:check_inventory"]', "real = []")
+    result = project.test()
+    assert result.code == 2, result.out + result.err
+    assert summary_of(result)["outcome"] == "refused call"
+    assert not (project.root / "REAL WRITE").exists()
+    assert "Move the tool into a module" in result.out
+
+
+@pytest.mark.design("main.tool_in_the_m_target")
+@pytest.mark.parametrize(("module", "run"), [("deep.bot", "deep.bot"), ("deep", "deep")])
+def test_a_tool_in_the_module_run_with_dash_m_stops_the_run(
+    project: Project, module: str, run: str
+) -> None:
+    folder = project.root / "deep"
+    folder.mkdir()
+    (folder / "__init__.py").write_text("")
+    (folder / "bot.py").write_text(TOOL_IN_THE_SCRIPT)
+    (folder / "__main__.py").write_text(TOOL_IN_THE_SCRIPT)
+    write_config(project, f"{sys.executable} -m {run} {{question}}")
+    listed = "deep.__main__:pay" if run == "deep" else f"{module}:pay"
+    project.edit(TOOLS, json.dumps([listed]))
+    project.edit('real = ["tool:check_inventory"]', "real = []")
+    result = project.test()
+    assert result.code == 2, result.out + result.err
+    assert not (project.root / "REAL WRITE").exists()
+
+
+@pytest.mark.design("main.tool_in_a_childs_script")
+def test_a_tool_defined_in_a_childs_script_stops_the_child(project: Project) -> None:
+    (project.root / "bot.py").write_text(GATED_CHILD)
+    (project.root / "report.py").write_text(TOOL_IN_THE_SCRIPT)
+    write_config(project, f"{sys.executable} bot.py {{question}}")
+    project.edit(TOOLS, '["report:pay"]')
+    project.edit('real = ["tool:check_inventory"]', "real = []")
+    result = project.test()
+    assert result.code == 2 and summary_of(result)["outcome"] == "refused call", result.out
+    assert not (project.root / "REAL WRITE").exists()
+
+
+def test_the_same_module_imported_as_a_module_is_gated_as_ever(project: Project) -> None:
+    (project.root / "bot.py").write_text("import helper\nprint(helper.lookup('1'))\n")
+    (project.root / "helper.py").write_text("def lookup(sku):\n    return 'real'\n")
+    write_config(project, f"{sys.executable} bot.py {{question}}")
+    project.edit(TOOLS, '["helper:lookup"]')
+    project.edit('real = ["tool:check_inventory"]', 'real = ["tool:lookup"]')
+    assert summary_of(project.test())["answer"] == "real"
+
+
 @pytest.mark.parametrize(
     "command",
     ["no-such-program {question}", "./no-such-script.py {question}"],
