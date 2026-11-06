@@ -61,7 +61,7 @@ def test_a_bad_value_names_its_table_and_key(tmp_path: Path) -> None:
         ('do   = "timeout"', 'do   = "timeout"\nwhen = "once"', "'once' is not a schedule"),
         ('do   = "timeout"', 'do   = "slow 8s"', "'slow 8s' is not a fault"),
         ('do   = "timeout"', 'do   = "status 429"', "works on a model call or a web request"),
-        ('call = "tool:get_order"\ndo', 'call = "mcp:a/b"\ndo', "'mcp:a/b' is not a label"),
+        ('call = "tool:get_order"\ndo', 'call = "auth:a"\ndo', "'auth:a' is not a label"),
         ('call = "tool:get_order"\ndo', 'call = "model:x"\ndo', "not a known provider"),
         ('call = "tool:get_order"\ndo', 'call = "model:anthropic"\ndo', "not a known provider"),
         ('call = "tool:get_order"\ndo', 'call = "model:openai/images"\ndo', "not a model call"),

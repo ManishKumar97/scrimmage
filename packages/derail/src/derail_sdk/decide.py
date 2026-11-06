@@ -14,7 +14,7 @@ from derail_sdk.labels import matches, matches_real
 from derail_sdk.plan import Plan
 
 Action = Literal["fault", "mock", "real", "refused"]
-Kind = Literal["tool", "model", "http"]
+Kind = Literal["tool", "model", "http", "mcp"]
 READ_METHODS = ("GET", "HEAD")
 
 
@@ -24,7 +24,8 @@ class Call:
 
     For a model call, retry is the library's own attempt number (0 for a first attempt)
     and key ties a retry to its first attempt: who sent it and what it sent. For a web
-    request, name is the path.
+    request, name is the path. For an MCP tool, the label names the server too and short
+    is the label without it.
     """
 
     kind: Kind
@@ -34,6 +35,7 @@ class Call:
     method: str | None = None
     retry: int = 0
     key: str | None = None
+    short: str | None = None
 
 
 @dataclass(frozen=True)
@@ -47,7 +49,7 @@ class Decision:
 
 def names(entry: Mock | Fault, call: Call) -> bool:
     """Whether a mock or fault names this call exactly as it is written."""
-    if not matches(entry.call, call.label):
+    if not matches(entry.call, call.label) and entry.call != call.short:
         return False
     if entry.method is not None and entry.method != call.method:
         return False
@@ -122,7 +124,7 @@ def decide(call: Call, plan: Plan, numbers: list[int]) -> Decision:
         if names(mock, call):
             return Decision("mock", mock=i)
     path = call.name if call.kind == "http" else None
-    if matches_real(list(plan.real), call.label, call.method, path):
+    if matches_real(list(plan.real), call.label, call.method, path) or call.short in plan.real:
         return Decision("real")
     if call.kind == "http":
         if call.method in READ_METHODS:

@@ -1,7 +1,7 @@
 """Labels name a call, such as tool:<name> or model.
 
-This version knows tool labels, model labels, web labels and, under [agent] real only,
-hosted MCP servers.
+This version knows tool labels, model labels, web labels, MCP labels and, under
+[agent] real only, hosted MCP servers.
 """
 
 import ipaddress
@@ -43,15 +43,27 @@ def check(text: str, where: str, *, pattern: bool = False) -> str:
         return text
     if kind == "http" and sep:
         return check_web(text, where, pattern=pattern)
+    if kind == "mcp" and sep:
+        return check_mcp(text, where)
     if kind != "tool" or not sep or not name:
         raise ConfigError(
-            f"{where}: {text!r} is not a label of the form 'tool:<name>', 'http:<host>' "
-            f"or 'model'; {DOCS}"
+            f"{where}: {text!r} is not a label of the form 'tool:<name>', 'mcp:<tool>', "
+            f"'http:<host>' or 'model'; {DOCS}"
         )
     if name == "*" and not pattern:
         raise ConfigError(f"{where}: 'tool:*' is allowed only under [agent] real")
     if name != "*" and not TOOL_NAME.fullmatch(name):
         raise ConfigError(f"{where}: {name!r} in {text!r} is not a tool name")
+    return text
+
+
+def check_mcp(text: str, where: str) -> str:
+    """mcp:<tool> or mcp:<server>/<tool>. A server chooses its own name, so any text will do."""
+    name = text.removeprefix("mcp:")
+    if not name or "*" in name or not name.isprintable() or name != name.strip(" /"):
+        raise ConfigError(
+            f"{where}: {text!r} is not of the form 'mcp:<tool>' or 'mcp:<server>/<tool>'; {DOCS}"
+        )
     return text
 
 

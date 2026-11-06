@@ -123,6 +123,10 @@ class RunState:
     def begin(self, name: str, args: dict[str, object]) -> Step:
         return self.decide(engine.Call("tool", f"tool:{name}", name), args)
 
+    def passed(self, call: engine.Call) -> Step:
+        """A call that is recorded but not decided, so it is not counted and cannot be refused."""
+        return Step(call, engine.Decision("real"), {}, now_iso(), time.monotonic())
+
     def refuse(self, step: Step, reason: str) -> Step:
         """Turn a decided call into a refusal for a reason the gate found, and poison the run."""
         with self._lock:
@@ -142,6 +146,7 @@ class RunState:
             "unlisted": (
                 f"{label} is neither mocked by this test nor listed under [agent] real. "
                 f'Mock it in the test, or add "{label}" to real if it is safe to run for real.'
+                f"{detail}"
             ),
             "web_write": (
                 f"{label} {detail} is a web request that can change data, and this test "
@@ -156,6 +161,7 @@ class RunState:
             "unreadable_body": detail,
             "redirect_off_host": detail,
             "unsupported_loop": detail,
+            "ambiguous_label": detail,
         }
         return DerailRefused(messages.get(reason, f"{label} is refused: {detail}"))
 
@@ -179,6 +185,22 @@ class RunState:
         with self._lock:
             self.refused = self.refused or step.call.label
         self.finish(step, error=DerailRefused(message), mistake=message)
+
+    def newer_version(
+        self,
+        library: str,
+        found: tuple[int, int] | None,
+        tested: tuple[tuple[int, int], tuple[int, int]],
+    ) -> None:
+        """Note a library newer than the versions this release was tested with."""
+        oldest, newest = tested
+        if found is not None and found > newest:
+            self.notice(
+                "newer_version",
+                library,
+                f"{library} {found[0]}.{found[1]} is newer than the versions this release was "
+                f"tested with ({oldest[0]}.{oldest[1]} to {newest[0]}.{newest[1]})",
+            )
 
     def next_seq(self) -> int:
         with self._lock:
@@ -228,7 +250,7 @@ class RunState:
             "row": self.plan.row,
             "seq": self.next_seq(),
             "proc": self.proc,
-            "call": step.call.label,
+            "call": redact(step.call.label),  # a server names its own tools
             "kind": step.call.kind,
             "action": decision.action,
             "args": content(step.args),
@@ -250,6 +272,8 @@ class RunState:
             line["mistake"] = redact(mistake)
         line.update({key: scrub(value) for key, value in step.extra.items()})
         write = step.call.kind == "http" and step.call.method not in engine.READ_METHODS
+        # Nothing tells an MCP read from an MCP write, so a real one is kept as a write is.
+        write = write or (step.call.kind == "mcp" and decision.action == "real")
         keep = decision.action == "refused" or step.call.kind == "model" or write
         self.sink.put(line, keep=keep)
 

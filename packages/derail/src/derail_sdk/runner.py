@@ -41,7 +41,14 @@ OUTCOMES = (
     "stopped",
 )
 # A refusal for one of these reasons stops the whole test, not only its row.
-STOP_TEST = ("budget", "no_price", "unknown_tool_type", "unseen_tool", "structure")
+STOP_TEST = (
+    "budget",
+    "no_price",
+    "unknown_tool_type",
+    "unseen_tool",
+    "structure",
+    "ambiguous_label",
+)
 # The agent's own cancellation is not a failure of the provider.
 NOT_A_FAILURE = ("CancelledError", "KeyboardInterrupt", "SystemExit", "GeneratorExit")
 # A baseline whose every run ended so cannot be compared with, so its faults are skipped.
@@ -347,8 +354,8 @@ def unknown_labels(config: Config, seen: list[str]) -> list[str]:
 def unused_mocks(config: Config, results: list[RunResult]) -> tuple[list[str], list[str]]:
     """Mocks no run in any row used, as (notes, mistakes).
 
-    A tool's label passed its check, so an unused tool mock is only a note. A web label has
-    no such check, so an unused web mock may be a misspelled host: that is a mistake.
+    A tool's label passed its check, so an unused tool mock is only a note. A web or MCP
+    label has no such check, so an unused one may be misspelled: that is a mistake.
     """
     notes: list[str] = []
     mistakes: list[str] = []
@@ -366,6 +373,11 @@ def unused_mocks(config: Config, results: list[RunResult]) -> tuple[list[str], l
                     f"[[test]] {test.name!r}: no request matched the mock on {mock.call}, or "
                     "an earlier mock answered it first. Check its host, method and path, or "
                     "remove it."
+                )
+            elif labels.kind_of(mock.call) == "mcp":
+                mistakes.append(
+                    f"[[test]] {test.name!r}: no call matched the mock on {mock.call}, or an "
+                    "earlier mock answered it first. Check its server and tool, or remove it."
                 )
             elif any(other.call == mock.call for other in test.mocks[:index]):
                 notes.append(
@@ -430,10 +442,10 @@ def report(
         if row.fault is not None and ran and not any(r.fault_fired for r in ran):
             mistakes.append(f"{where}: the fault never fired in any run, so the row tested nothing")
             mixed = [m.call for m in row.test.mocks if labels.kind_of(m.call) == "tool"]
-            if labels.kind_of(row.fault.call) == "http" and mixed:
+            if labels.kind_of(row.fault.call) in ("http", "mcp") and mixed:
                 mistakes.append(
                     f"{where}: the mock on {', '.join(mixed)} replaces the whole tool, so if "
-                    f"that tool makes this request, {row.fault.call} can never fire; "
+                    f"that tool makes this call, {row.fault.call} can never fire; "
                     "mock or fault one level, not both"
                 )
         ended = Counter(r.outcome for r in mine if not r.exercised)

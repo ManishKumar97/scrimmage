@@ -46,6 +46,16 @@ _.pytest_sessionfinish  # tests/conftest.py: pytest calls hooks by name
 _.exitstatus  # tests/conftest.py: pytest reads it to set the exit code
 _.answer_streamed  # tests/example/acme/rag.py: named by import path in a test's derail.toml
 _.answer_priceless  # tests/example/acme/rag.py: named by import path in a test's derail.toml
+_.answer_web_after_close  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_unknown_request  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_with_reads  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.handbook  # tests/fakes/docs_server.py: the MCP server calls its resources by name
+_.summarise  # tests/fakes/docs_server.py: the MCP server calls its prompts by name
+_.answer_slashed_tool  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_two_readings  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_fastmcp_two_servers  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_langchain  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_after_close  # tests/example/acme/docs_bot.py: a test's derail.toml names it
 _.answer_twice  # tests/example/acme/rag.py: named by import path in a test's derail.toml
 _.answer_tuning  # tests/example/acme/rag.py: named by import path in a test's derail.toml
 _.answer_hosted  # tests/example/acme/rag.py: named by import path in a test's derail.toml
@@ -104,3 +114,25 @@ _.answer_two_paths  # tests/example/acme/web.py: named by import path in a test
 _.protocol_version  # tests/test_web_requests.py: http.server reads it from the handler class
 _.do_HEAD  # tests/test_web_requests.py: http.server calls do_<METHOD> by name
 _.do_PUT  # tests/test_web_requests.py: http.server calls do_<METHOD> by name
+_.title  # tests/fakes/docs_server.py: the MCP server calls its tools by name
+_.answer_twice  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_through_a_tool  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_not_listed  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_with_the_runs_environment  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_swallows_refusal  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_keeps_a_secret  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_two_servers  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_web_after_mcp  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_web_in_a_hook  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_with_a_token  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_from_a_callback  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.async_auth_flow  # tests/example/acme/docs_bot.py: httpx2 calls it on an Auth object
+_.chatty  # tests/fakes/docs_server.py: the MCP server calls its tools by name
+_.answer_newer_protocol  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_sse  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_fastmcp  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_model  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.delete_doc  # tests/fakes/docs_server.py: the MCP server calls its tools by name
+_.output_model  # tests/fakes/docs_server.py: read by the MCP server's result check
+_._handle_resumption_request  # tests/test_mcp.py: a stand-in the MCP gate wraps by name
+_.handle_get_stream  # tests/test_mcp.py: a stand-in the MCP gate wraps by name

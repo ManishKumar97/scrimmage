@@ -2,8 +2,18 @@
 
 - **One agent shape.** The agent must be a Python function. Scripts and web services come later.
 - **Tools, web requests and OpenAI model calls.** Derail gates the tools you list under `tools`, the LangChain tools it finds by itself, requests sent with httpx or httpx2, and model calls. See [Safety](safety.md).
-- **MCP tools.** They are not recognised yet. An MCP server reached over HTTP through httpx is a plain web request, so its POSTs are refused unless `real` lists the host.
-- **POSTs a library sends by itself.** Everything through httpx or httpx2 is gated, so these are refused too until listed: the SDK of another model provider, telemetry exporters, and credential requests such as an OAuth token POST.
+- **mcp 2.x only, tested with 2.3.** A program that imports `mcp` 1.x stops with exit code 3, even if it never calls an MCP tool, because 1.x has no place for the gate. Install `mcp` 2.x in the test environment.
+- **MCP through the official client or a client built on it, such as FastMCP's.** A client of your own that speaks the protocol by itself is not gated at the MCP gate. If it sends its own web requests, its POSTs meet the web gate. If it is built on `streamable_http_client` and writes its own JSON-RPC messages, they go out through the transport's marked requests, undecided and unrecorded. Over stdio nothing sees them.
+- **The old SSE transport for MCP.** Its web requests are not marked, so its first POST is refused by the web gate and the run stops. Use streamable HTTP or stdio.
+- **MCP tools under another name.** A tool the model sees under a name other than the server's, such as `docs_search`, is reported as a tool no gate sees, and the test stops.
+- **A hook that posts to the MCP endpoint.** An event hook on the MCP client that sends to the endpoint itself while a request is being sent passes the web gate unseen.
+- **A stdio server on mcp 1.x, started with your environment.** It joins the test as the agent does, so it stops with exit code 3 and says to install 2.x. Start it with a clean `env`.
+- **Only MCP tool calls are gated.** `resources/read`, `prompts/get` and the rest pass, and cannot be mocked or failed. A server can act on any of them. `resources/read`, `prompts/get`, `completion/complete` and `resources/subscribe` each leave a `real` line. See [Safety](safety.md#what-an-mcp-tool-may-do).
+- **Two MCP servers with one name.** Derail cannot tell them apart, and `mcp:docs/search` names both. Two servers that give no name are the same case.
+- **An MCP label that reads two ways.** Tool `b/c` on server `a` and tool `c` on server `a/b` share the label `mcp:a/b/c`. The test stops once both are known, and there is no way to name either one.
+- **`mcp:search` before the second server is known.** The ambiguous-label check runs at each call, so a call made before the second server was listed or called goes by that label.
+- **A mock on a closed MCP session still answers.** A mock or a fault sends nothing, so it never finds out that the connection has gone.
+- **POSTs a library sends by itself.** Everything through httpx or httpx2 is gated, so these are refused too until listed: the SDK of another model provider, telemetry exporters, and credential requests such as an OAuth token POST, including one an MCP client sends, even to the MCP server's own host.
 - **A provider that is not OpenAI.** Listing its host under `real` lets the calls through, but they are web requests, so the budget does not see them. Name a host that speaks OpenAI's format under `model_hosts` instead.
 - **One provider.** OpenAI's Chat Completions, Responses and embeddings, and gateways that speak the same format. Other providers come later.
 - **Two HTTP libraries.** The gate sits in the clients of httpx and httpx2. A request sent with requests, urllib, aiohttp or a raw socket, or handed to a transport object by your own code, is not seen, so nothing refuses or records it. Only the `tools` list guards such a write: a listed tool that is neither mocked nor under `real` never runs. The web gates stop accidental writes, not code written to get around them. See [Safety](safety.md#what-the-gates-assume).
@@ -17,8 +27,8 @@
 - **A tool made with `model_construct`.** Its class is checked, but its name is not known, so offering it to the model stops the test.
 - **One unsafe tool blocks its whole name.** A second, gated tool of the same name stops the test too, even if only that one is offered.
 - **LangChain versions.** Tested with langchain-core 1.7. A newer one gets a notice; an older one gets none.
-- **A library that changes its tool functions** stops the program. Faults are not dropped with refusals kept, because the error type is part of what the gate relies on.
-- **A few faults.** `timeout` and `error` on tools, and `timeout` and `status N` on model calls and web requests. Faults that change the model's reply come later.
+- **A library that changes its tool functions** stops the program. Faults are not dropped with refusals kept, because the error type is part of what the gate relies on. The same goes for `mcp`: a mock must never become a real call.
+- **A few faults.** `timeout` and `error` on tools, `timeout` and `status N` on model calls and web requests, and `timeout`, `error` and `empty` on MCP tools. Faults that change the model's reply come later.
 - **Prices need checking.** The built-in price table is small; check it against your provider's pricing, and use `[agent.prices]` for anything else.
 - **Tools reached by import path.** A tool your code stores in a list or dictionary the moment it is defined keeps the original function, so the gate cannot reach it. A marker for those comes later.
 - **No judging.** The answer is recorded, not compared with `expect`.

@@ -32,8 +32,7 @@ This version knows these labels:
 | `model:openai/embeddings`, `model:*/embeddings` | embedding calls |
 | `hosted:mcp/<label>` | a hosted MCP server (only under `real`) |
 | `http:<host>` | a web request to that host. See [Web requests](web-requests.md) |
-
-MCP tools get their own labels in a later version.
+| `mcp:<server>/<tool>`, `mcp:<tool>` | a tool on an MCP server. See [MCP tools](mcp.md) |
 
 ## What a call can get
 
@@ -58,8 +57,9 @@ If the tool returns its own type, Derail builds that type from the mock:
 
 | Fault | What the agent sees |
 |---|---|
-| `error` | a tool raises an error: `ToolException` under LangChain, `RuntimeError` in a hand-written loop, or the type named by `raises` |
-| `timeout` | a tool raises `TimeoutError`; a model call or a web request raises the library's own timeout error, as if the other side never answered |
+| `error` | a tool raises an error: `ToolException` under LangChain, `RuntimeError` in a hand-written loop, or the type named by `raises`; an MCP tool returns a failed result, as a real server does |
+| `timeout` | a tool raises `TimeoutError`; a model call, a web request or an MCP tool raises the library's own timeout error, as if the other side never answered |
+| `empty` | an MCP tool returns a result with no content |
 | `status` | written `status 429`: a model call gets a real HTTP error reply, and the library raises its own error, such as `RateLimitError`; a web request gets a reply with that status |
 
 A fault fires on every call it names, unless `when` narrows it to the `first N` attempts or the first `requests N`. See [Failing the model](model-faults.md).

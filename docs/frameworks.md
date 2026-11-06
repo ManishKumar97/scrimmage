@@ -112,3 +112,13 @@ The order they arrive in can change between runs, so when a model may call a too
 
 The faults on model calls work under any framework, because they sit below it, in the HTTP library.
 A tool on a framework with no adapter is not gated, so offering it to the model stops the test with a message naming it.
+
+## A tool that calls an MCP server
+
+A LangChain tool that calls `session.call_tool` inside it meets two gates, the tool's first.
+
+- With no entry for `tool:<name>`, the tool is refused, and the MCP call never happens.
+- A mock on `tool:<name>` replaces the whole tool, so the MCP call never happens either.
+- With `tool:<name>` under `real`, the tool's code runs, and its MCP call is decided as usual by its `mcp:` label.
+
+See [MCP tools](mcp.md).

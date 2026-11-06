@@ -10,7 +10,7 @@ import os
 import sys
 from typing import NoReturn
 
-from derail_sdk import http_gate, langchain_gate, state, tool_gate
+from derail_sdk import http_gate, langchain_gate, mcp_gate, state, tool_gate
 from derail_sdk.client import ControlClient, ControlError, Sender
 from derail_sdk.mocks import allowed
 from derail_sdk.plan import Plan
@@ -80,6 +80,7 @@ def start() -> None:
 
     http_gate.install(run_state, client, sender, cannot_gate)
     langchain_gate.install(run_state, cannot_gate)
+    mcp_gate.install(run_state, sender, cannot_gate)
     where = " in a child process, without faults" if child else ""
     print(
         f"derail: active for run {run} ({plan.test}, {plan.row}){where}; "

@@ -20,6 +20,7 @@ import json
 import threading
 import zlib
 from collections.abc import Callable, Iterator
+from contextvars import ContextVar
 from types import ModuleType
 from typing import Any, NoReturn, Protocol
 
@@ -45,6 +46,15 @@ MISTAKE_REASONS = (
     "unreadable_body",
     "redirect_off_host",
     "unsupported_loop",
+    "unlisted",
+    "ambiguous_label",
+)
+# The MCP endpoint a transport is sending to, set only while it sends. Those messages were
+# decided at the MCP gate or are the connection's own, so the web gate does not decide them
+# again. It is the whole endpoint, not a flag: an event hook or an auth flow runs inside the
+# same send, and its requests are still web requests.
+MCP_TRANSPORT: ContextVar[tuple[object, ...] | None] = ContextVar(
+    "derail_mcp_transport", default=None
 )
 
 
@@ -127,15 +137,7 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
             "budget still apply, those do not",
         )
         ctx.faults = False
-    found = version(module)
-    oldest, newest = TESTED[library]
-    if found is not None and found > newest:
-        ctx.run.notice(
-            "newer_version",
-            library,
-            f"{library} {module.__version__} is newer than the versions this release was "
-            f"tested with ({oldest[0]}.{oldest[1]} to {newest[0]}.{newest[1]})",
-        )
+    ctx.run.newer_version(library, version(module), TESTED[library])
     sync_send = module.Client._send_single_request
     async_send = module.AsyncClient._send_single_request
     if getattr(sync_send, GATED, False):
@@ -236,6 +238,11 @@ def path_of(url: Any) -> str:
     return bytes(url.raw_path).decode("ascii").partition("?")[0]
 
 
+def endpoint_of(url: Any) -> tuple[object, ...]:
+    """Scheme, host, port and path, which a transport's own requests all share."""
+    return url.scheme, host_of(url), url.port, path_of(url)
+
+
 def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call:
     """The call this request is: a model call, or a web request to its own host."""
     host = host_of(request.url)
@@ -256,7 +263,7 @@ def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call:
 def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, object]] | None:
     """Decide the request; None with no run. Raises DerailRefused after recording one."""
     run = current()
-    if run is None:
+    if run is None or MCP_TRANSPORT.get() == endpoint_of(request.url):
         return None
     body = body_of(request)
     call = describe(ctx, request, who, body or b"")

@@ -60,6 +60,20 @@
             "additionalProperties": false,
             "required": [
               "call",
+              "returns"
+            ],
+            "properties": {
+              "call": {
+                "$ref": "#/$defs/mcp_label"
+              },
+              "returns": {}
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "call",
               "status"
             ],
             "properties": {
@@ -108,7 +122,7 @@
           },
           "do": {
             "type": "string",
-            "pattern": "^(timeout|error|status [45][0-9]{2})$"
+            "pattern": "^(timeout|error|empty|status [45][0-9]{2})$"
           },
           "when": {
             "type": "string",
@@ -142,6 +156,9 @@
           },
           {
             "const": "tool:*"
+          },
+          {
+            "$ref": "#/$defs/mcp_label"
           },
           {
             "type": "string",
@@ -254,8 +271,15 @@
         },
         {
           "$ref": "#/$defs/web_label"
+        },
+        {
+          "$ref": "#/$defs/mcp_label"
         }
       ]
+    },
+    "mcp_label": {
+      "type": "string",
+      "pattern": "^mcp:[^*]+$"
     },
     "web_label": {
       "type": "string",
