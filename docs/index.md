@@ -26,6 +26,7 @@ Fault injection is an established practice; Derail brings it inside any Python a
 | [Failing the model](model-faults.md) | Rate limits, timeouts, schedules and the budget |
 | [Agents on a framework](frameworks.md) | LangGraph, with no tools list |
 | [Web requests](web-requests.md) | Mocking and failing the request inside a tool |
+| [MCP tools](mcp.md) | Mocking and failing a tool on an MCP server |
 | [Concepts](concepts.md) | Rows, runs, labels, mocks, faults, records |
 | [Configuration](configuration.md) | Every setting in `derail.toml` |
 | [Commands](cli.md) | `derail test` and `derail-run` |
@@ -36,5 +37,5 @@ Fault injection is an established practice; Derail brings it inside any Python a
 ## Status
 
 Derail is at an early stage.
-This version tests an agent that is a Python function, with its own loop or on LangGraph. It fails or mocks the agent's own Python tools and the web requests inside them, fails OpenAI model calls, and keeps a budget.
-Other providers, MCP tools and more frameworks come in later versions.
+This version tests an agent that is a Python function, with its own loop or on LangGraph. It fails or mocks the agent's own Python tools, the web requests inside them and MCP tools, fails OpenAI model calls, and keeps a budget.
+Other providers and more frameworks come in later versions.

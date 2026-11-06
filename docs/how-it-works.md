@@ -14,7 +14,7 @@ Derail has two parts.
 5. The file sees the secret and switches the SDK on. The SDK fetches the plan, checks its signature, and gets ready to swap your tools. It prints one line saying Derail is active.
 6. Then it runs any other `sitecustomize.py` your environment has, such as Ubuntu's crash reporter, so your program starts as it always does.
 7. Derail's starter calls your function with the question.
-8. When your code imports a module named under `tools`, or makes a LangChain tool, the SDK puts a **gate** in front of the function that does the work, a function of the same kind, sync or async.
+8. When your code imports a module named under `tools`, or makes a LangChain tool, the SDK puts a **gate** in front of the function that does the work, a function of the same kind, sync or async. HTTP and MCP libraries get theirs when they are imported.
 9. Each tool call meets its gate. The gate decides fault, mock, real or refused, does it, and hands a record line to a background thread that sends lines in small batches.
 10. When the program ends, the runner reads the answer, closes the run, and writes the summary line.
 
@@ -38,6 +38,19 @@ The gate sits below the library's retries, so everything above it behaves as it 
 Every hop of a redirect goes through the same function, so a hop to another model host is decided and budgeted by itself. A redirect to any other host is refused before it is followed, because past that point the gate could not see the call.
 
 Before swapping, the gate checks that the function exists, takes the arguments it expects, and that the library still has the stream types it needs to watch a reply. If a new version of the library changed it, nothing could be gated, so the program stops and the test ends at once with exit code 3, naming the library. If only what faults are built from has changed, the gate keeps refusing and budgeting without faults, and the test still fails. A newer version that passes the check only gets a warning.
+
+## MCP tools
+
+The official MCP client sends every request through one method, `ClientSession.send_request`, on every transport, and FastMCP's client is built on it.
+When your code first imports the library, the SDK swaps that method for a gate.
+
+1. A request that is not a tool call goes straight through. From a `tools/list` reply the gate notes each tool's name, whether it declares an output schema, and whether the server marks it read-only.
+2. A tool call is labelled with the server's name, which the connection's start gave. The gate decides fault, mock, real or refused.
+3. For a mock or a fault, the library's own `send_request` runs with a stand-in for its connection that hands back the reply. Nothing is sent, and the reply passes the same checks a server's reply does. `call_tool` then checks it against the tool's output schema as usual.
+
+Over streamable HTTP each message is also a web POST. The SDK wraps the transport's own methods so that everything they send carries a mark, and the web gate lets those requests through without deciding or counting them. See [MCP tools](mcp.md#over-streamable-http).
+
+Before swapping, the gate checks what it relies on: that `call_tool` goes through `send_request`, and that `send_request` reaches the server through the connection the stand-in replaces. If a new version changed either, a mock could become a real call, so the program stops and the test ends with exit code 3.
 
 ## The plan and the secret
 

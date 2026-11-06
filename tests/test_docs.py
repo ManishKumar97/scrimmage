@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from derail_sdk import config, runner
+from derail_sdk import config, mcp_gate, runner
 
 DOCS = Path(__file__).parents[1] / "docs"
 
@@ -38,6 +38,16 @@ def test_every_web_setting_and_real_form_is_documented() -> None:
     web = page("web-requests.md")
     for form in ("`http:orders.acme.internal`", " POST`", " POST /refunds`"):
         assert form in web
+
+
+@pytest.mark.design("docs.mcp")
+def test_mcp_settings_faults_and_labels_are_documented() -> None:
+    text = page("mcp.md")
+    for word in ("timeout", "error", "empty", "mcp:docs/search", "mcp:search"):
+        assert mentioned(text, word), word
+    assert all(f"`{method}`" in text for method in mcp_gate.PASSES)
+    assert "`mcp:<server>/<tool>`" in page("concepts.md")
+    assert "`mcp:" not in page("configuration.md").split("## Coming in later versions")[1]
 
 
 def test_every_fault_and_outcome_is_documented() -> None:

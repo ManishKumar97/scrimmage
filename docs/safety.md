@@ -51,6 +51,22 @@ A refusal here ends the run, as it does for a tool.
 A `GET` that changes data, which some services allow, is not caught. Mock it.
 Other HTTP libraries are not gated. Only your listed tools guard a write sent with one: a tool under `tools` that is neither mocked nor under `real` never runs, so the write inside it never happens.
 
+## What an MCP tool may do
+
+An MCP tool call is refused unless a test mocks it or `real` lists it, like a Python tool.
+
+| MCP tool call, not mocked | Listed under `real` | What happens |
+|---|---|---|
+| `mcp:docs/search` | yes | Runs for real |
+| `mcp:docs/delete_doc` | no | Refused; the run stops as "refused call" |
+
+A tool the server marks as read-only is refused all the same, because that mark is only a hint from the server.
+The refusal says so.
+A refusal happens at the MCP gate, so over streamable HTTP the server never sees the call.
+Requests that are not tool calls, such as `tools/list`, pass; a request Derail does not know is refused. See [MCP tools](mcp.md).
+
+If a label such as `mcp:search` could mean a tool on two servers, the test stops, so a read on one server cannot be taken for a write on another.
+
 ## The budget
 
 A test has a budget, $5 unless you change it. When the runner cannot be reached to check it, the call is refused rather than sent.
