@@ -444,15 +444,19 @@ class WrongSend:
     def _send_single_request(self, request: object, extra: object) -> None: ...
 
 
+# Present in the cases about the send function, so only that function can fail the check.
+STREAMS = {"SyncByteStream": httpx2.SyncByteStream, "AsyncByteStream": httpx2.AsyncByteStream}
+
+
 @pytest.mark.design("gate.structural_check")
 @pytest.mark.parametrize(
     "parts",
     [
         {},
-        {"Client": NoSend, "AsyncClient": httpx2.AsyncClient},
-        {"Client": httpx2.Client, "AsyncClient": NoSend},
-        {"Client": WrongSend, "AsyncClient": httpx2.AsyncClient},
-        {"Client": httpx2.Client, "AsyncClient": WrongSend},
+        {**STREAMS, "Client": NoSend, "AsyncClient": httpx2.AsyncClient},
+        {**STREAMS, "Client": httpx2.Client, "AsyncClient": NoSend},
+        {**STREAMS, "Client": WrongSend, "AsyncClient": httpx2.AsyncClient},
+        {**STREAMS, "Client": httpx2.Client, "AsyncClient": WrongSend},
         {"Client": httpx2.Client, "AsyncClient": httpx2.AsyncClient},
         {
             "Client": httpx2.Client,
