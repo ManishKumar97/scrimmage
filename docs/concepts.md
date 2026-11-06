@@ -31,8 +31,9 @@ This version knows these labels:
 | `model:openai` | chat calls to OpenAI |
 | `model:openai/embeddings`, `model:*/embeddings` | embedding calls |
 | `hosted:mcp/<label>` | a hosted MCP server (only under `real`) |
+| `http:<host>` | a web request to that host. See [Web requests](web-requests.md) |
 
-Web requests and MCP tools get their own labels in later versions.
+MCP tools get their own labels in a later version.
 
 ## What a call can get
 
@@ -41,7 +42,8 @@ For every call, in this order:
 1. **Fault**: if a fault names the call, it fires. Faults win over mocks, because a fault row is the baseline plus one fault.
 2. **Mock**: if a mock names the call, the mock's value is returned and the real tool never runs.
 3. **Real**: if the call is listed under `real`, the real tool runs.
-4. **Refused**: anything else is refused. See [Safety](safety.md).
+4. **Reads**: a web `GET` or `HEAD` runs for real.
+5. **Refused**: anything else is refused. See [Safety](safety.md).
 
 ## Mocks
 
@@ -57,8 +59,8 @@ If the tool returns its own type, Faultline builds that type from the mock:
 | Fault | What the agent sees |
 |---|---|
 | `error` | a tool raises an error: `ToolException` under LangChain, `RuntimeError` in a hand-written loop, or the type named by `raises` |
-| `timeout` | a tool raises `TimeoutError`; a model call raises the library's own timeout error, as if the other side never answered |
-| `status` | written `status 429`: a model call gets a real HTTP error reply, and the library raises its own error, such as `RateLimitError` |
+| `timeout` | a tool raises `TimeoutError`; a model call or a web request raises the library's own timeout error, as if the other side never answered |
+| `status` | written `status 429`: a model call gets a real HTTP error reply, and the library raises its own error, such as `RateLimitError`; a web request gets a reply with that status |
 
 A fault fires on every call it names, unless `when` narrows it to the `first N` attempts or the first `requests N`. See [Failing the model](model-faults.md).
 If the agent never makes that call in a run, the run is **not exercised**: it was really a baseline run, so it is left out of the row's counts.

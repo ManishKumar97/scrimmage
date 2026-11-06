@@ -1,9 +1,9 @@
 # Limits of this version
 
 - **One agent shape.** The agent must be a Python function. Scripts and web services come later.
-- **Tools and OpenAI model calls.** Faultline gates the tools you list under `tools`, the LangChain tools it finds by itself, and model calls the openai library sends. Other web requests, writes included, and MCP tools pass untouched and are not recorded yet. See [Safety](safety.md).
+- **Tools, web requests and OpenAI model calls.** Faultline gates the tools you list under `tools`, the LangChain tools it finds by itself, requests sent with httpx or httpx2, and model calls. MCP tools pass untouched and are not recorded yet. See [Safety](safety.md).
 - **One provider.** OpenAI's Chat Completions, Responses and embeddings, and gateways that speak the same format. Other providers come later.
-- **One HTTP library.** The gate sits in httpx2, which current openai versions use. Older openai versions, which use httpx, are not gated yet; with a budget on, the test then fails because no model call was seen.
+- **Two HTTP libraries.** The gate sits in the clients of httpx and httpx2. A request sent with requests, urllib, aiohttp or a raw socket, or handed to a transport object by your own code, is not seen, so nothing refuses or records it. Only the `tools` list guards such a write: a listed tool that is neither mocked nor under `real` never runs. The web gates stop accidental writes, not code written to get around them. See [Safety](safety.md#what-the-gates-assume).
 - **asyncio only for async agents.** An async model call outside asyncio, such as under trio, is refused and ends its run, because Faultline cannot budget it. Synchronous agents are not affected.
 - **One framework.** LangChain tools, which LangGraph runs, have an adapter. A tool on another framework is not gated, so offering it to the model stops the test.
 - **A tool's function called directly.** `my_tool.func(...)` or `my_tool.coroutine(...)` skips the gate, so nothing refuses or records it.
@@ -15,7 +15,7 @@
 - **One unsafe tool blocks its whole name.** A second, gated tool of the same name stops the test too, even if only that one is offered.
 - **LangChain versions.** Tested with langchain-core 1.7. A newer one gets a notice; an older one gets none.
 - **A library that changes its tool functions** stops the program. Faults are not dropped with refusals kept, because the error type is part of what the gate relies on.
-- **A few faults.** `timeout` and `error` on tools, and `timeout` and `status N` on model calls. Faults that change the model's reply come later.
+- **A few faults.** `timeout` and `error` on tools, and `timeout` and `status N` on model calls and web requests. Faults that change the model's reply come later.
 - **Prices need checking.** The built-in price table is small; check it against your provider's pricing, and use `[agent.prices]` for anything else.
 - **Tools reached by import path.** A tool your code stores in a list or dictionary the moment it is defined keeps the original function, so the gate cannot reach it. A marker for those comes later.
 - **No judging.** The answer is recorded, not compared with `expect`.
