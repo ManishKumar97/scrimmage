@@ -115,7 +115,11 @@ _.answer_swallows_refusal  # tests/example/acme/docs_bot.py: a test's derail.tom
 _.answer_keeps_a_secret  # tests/example/acme/docs_bot.py: a test's derail.toml names it
 _.answer_two_servers  # tests/example/acme/docs_bot.py: a test's derail.toml names it
 _.answer_web_after_mcp  # tests/example/acme/docs_bot.py: a test's derail.toml names it
-_.answer_web_in_a_callback  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_web_in_a_hook  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_with_a_token  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_from_a_callback  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.async_auth_flow  # tests/example/acme/docs_bot.py: httpx2 calls it on an Auth object
+_.chatty  # tests/fakes/docs_server.py: the MCP server calls its tools by name
 _.answer_newer_protocol  # tests/example/acme/docs_bot.py: a test's derail.toml names it
 _.answer_sse  # tests/example/acme/docs_bot.py: a test's derail.toml names it
 _.answer_fastmcp  # tests/example/acme/docs_bot.py: a test's derail.toml names it

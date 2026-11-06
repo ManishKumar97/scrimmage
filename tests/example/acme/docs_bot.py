@@ -8,7 +8,7 @@ import asyncio
 import json
 import os
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
@@ -18,7 +18,7 @@ from mcp import Client, ClientSession, MCPError, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
-from mcp.types import EmptyResult, Request
+from mcp.types import CreateMessageResult, EmptyResult, Request, TextContent
 
 LIMIT = float(os.environ.get("DOCS_TIMEOUT", "20"))
 TOOL = os.environ.get("DOCS_TOOL", "search")
@@ -203,12 +203,12 @@ def answer_unknown_request(question: str) -> str:
     return asyncio.run(go())
 
 
-def answer_web_in_a_callback(question: str) -> str:
-    """Code that runs inside the transport's own context still meets the web gate."""
+def answer_web_in_a_hook(question: str) -> str:
+    """Code that runs inside the transport's own send still meets the web gate."""
 
     async def hook(response: Any) -> None:
         async with httpx2.AsyncClient() as other:
-            await other.post("https://payments.acme.internal/refunds")
+            await other.post(os.environ["DOCS_TARGET"])
 
     async def go() -> str:
         client = httpx2.AsyncClient(event_hooks={"response": [hook]})
@@ -219,6 +219,89 @@ def answer_web_in_a_callback(question: str) -> str:
         ):
             await session.initialize()
             return "connected"
+
+    return asyncio.run(go())
+
+
+class TokenAuth(httpx2.Auth):
+    """Fetches a token from a path of the MCP server's own host, inside the send."""
+
+    async def async_auth_flow(self, request: Any) -> AsyncGenerator[Any, Any]:
+        yield httpx2.Request("POST", os.environ["DOCS_TARGET"])
+        yield request
+
+
+def answer_with_a_token(question: str) -> str:
+    async def go() -> str:
+        client = httpx2.AsyncClient(auth=TokenAuth())
+        async with (
+            client,
+            streamable_http_client(os.environ["DOCS_URL"], http_client=client) as (read, write),
+            ClientSession(read, write) as session,
+        ):
+            await session.initialize()
+            await session.list_tools()
+            return await search(session)
+
+    return asyncio.run(go())
+
+
+async def write_from_a_callback() -> None:
+    async with httpx2.AsyncClient() as client:
+        await client.post(os.environ["DOCS_TARGET"])
+
+
+async def on_log(params: Any) -> None:
+    await write_from_a_callback()
+
+
+async def on_progress(progress: float, total: float | None, message: str | None) -> None:
+    del progress, total, message
+    await write_from_a_callback()
+
+
+async def on_sampling(context: Any, params: Any) -> Any:
+    await write_from_a_callback()
+    return CreateMessageResult(
+        role="assistant", content=TextContent(type="text", text="x"), model="m"
+    )
+
+
+async def on_sampling_ask_the_model(context: Any, params: Any) -> Any:
+    """A sampling callback is where a bot really calls its model."""
+    from openai import AsyncOpenAI
+
+    reply = await AsyncOpenAI().chat.completions.create(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": "x"}], max_tokens=5
+    )
+    text = reply.choices[0].message.content or ""
+    return CreateMessageResult(
+        role="assistant", content=TextContent(type="text", text=text), model="gpt-4o-mini"
+    )
+
+
+def answer_from_a_callback(question: str) -> str:
+    """The server answers on the POST's own stream, and the bot's callback writes."""
+    kind = os.environ["DOCS_CALLBACK"]
+
+    async def go() -> str:
+        async with streamable_http_client(os.environ["DOCS_URL"]) as (read, write):
+            options: dict[str, Any] = {}
+            if kind == "logging":
+                options["logging_callback"] = on_log
+            if kind == "sampling":
+                options["sampling_callback"] = on_sampling
+            if kind == "model":
+                options["sampling_callback"] = on_sampling_ask_the_model
+            async with ClientSession(read, write, **options) as session:
+                await session.initialize()
+                sample = kind in ("sampling", "model")
+                result = await session.call_tool(
+                    "chatty",
+                    {"q": "sample" if sample else "plain"},
+                    progress_callback=on_progress if kind == "progress" else None,
+                )
+                return described(result)
 
     return asyncio.run(go())
 

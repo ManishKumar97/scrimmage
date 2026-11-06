@@ -9,18 +9,17 @@ Over streamable HTTP each message is also a web request. The transport's own req
 carry a mark, so a message is decided here and never again at the web gate.
 """
 
+import contextlib
 import copy
-import functools
 import importlib.metadata
-import inspect
 import json
-from collections.abc import Callable, Coroutine
+from collections.abc import AsyncIterator, Callable, Coroutine
 from types import ModuleType
 from typing import Any, NoReturn
 
 from derail_sdk import hooks
 from derail_sdk.decide import Call
-from derail_sdk.http_gate import MCP_TRANSPORT, host_of, params, refuse
+from derail_sdk.http_gate import MCP_TRANSPORT, endpoint_of, params, refuse
 from derail_sdk.state import BlobSink, RunState, Step, blob, current
 
 SESSION = "mcp.client.session"
@@ -53,13 +52,8 @@ PASSES = (
     "completion/complete",
     "logging/setLevel",
 )
-# Every method of the transport that sends a web request.
-WEB_METHODS = (
-    "_handle_post_request",
-    "_handle_resumption_request",
-    "handle_get_stream",
-    "terminate_session",
-)
+# The functions the transport opens a web request with, and where each takes the address.
+OPENERS = {"stream_within_origin": 2, "sse_within_origin": 1}
 
 
 class Gate:
@@ -128,9 +122,8 @@ def gatable(module: ModuleType) -> bool:
 
 
 def web_gatable(module: ModuleType) -> bool:
-    transport = getattr(module, "StreamableHTTPTransport", None)
-    methods = [getattr(transport, name, None) for name in WEB_METHODS]
-    return all(inspect.iscoroutinefunction(method) for method in methods) and hasattr(
+    senders = (*OPENERS, "request_within_origin")
+    return all(callable(getattr(module, name, None)) for name in senders) and hasattr(
         getattr(module, "httpx2", None), "URL"
     )
 
@@ -207,32 +200,48 @@ def patch(module: ModuleType, gate: Gate) -> None:
 
 
 def patch_transport(module: ModuleType, gate: Gate) -> None:
-    """Mark every web request the transport sends, whoever caused it.
+    """Mark each web request the transport sends, for as long as it is being sent.
 
     The GET stream, the DELETE at close and a reply to the server pass through no
-    send_request, so the mark sits on the transport's own methods.
+    send_request, so the mark sits where the transport sends. It ends before the reply is
+    read: a message received here carries this task's context to the callback that handles
+    it, and that callback's requests are the agent's own.
     """
     if not web_gatable(module):
         broken(gate)
         return
-    transport = module.StreamableHTTPTransport
-    if getattr(transport.terminate_session, GATED, False):
+    if getattr(module.request_within_origin, GATED, False):
         return
+    url_type = module.httpx2.URL
 
-    def marked(method: Callable[..., Coroutine[Any, Any, Any]]) -> Callable[..., Any]:
-        @functools.wraps(method)
-        async def web_gate(self: Any, *args: Any, **kw: Any) -> Any:
-            token = MCP_TRANSPORT.set(host_of(module.httpx2.URL(self.url)))
+    def opened(opener: Callable[..., Any], place: int) -> Callable[..., Any]:
+        @contextlib.asynccontextmanager
+        async def web_gate(*args: Any, **kw: Any) -> AsyncIterator[Any]:
+            token = MCP_TRANSPORT.set(endpoint_of(url_type(args[place])))
             try:
-                return await method(self, *args, **kw)
+                async with opener(*args, **kw) as reply:
+                    MCP_TRANSPORT.reset(token)
+                    token = None
+                    yield reply
             finally:
-                MCP_TRANSPORT.reset(token)
+                if token is not None:
+                    MCP_TRANSPORT.reset(token)
 
-        setattr(web_gate, GATED, True)
         return web_gate
 
-    for name in WEB_METHODS:
-        setattr(transport, name, marked(getattr(transport, name)))
+    send = module.request_within_origin
+
+    async def request_gate(client: Any, method: str, url: Any, **kw: Any) -> Any:
+        token = MCP_TRANSPORT.set(endpoint_of(url_type(url)))
+        try:
+            return await send(client, method, url, **kw)
+        finally:
+            MCP_TRANSPORT.reset(token)
+
+    for name, place in OPENERS.items():
+        setattr(module, name, opened(getattr(module, name), place))
+    setattr(request_gate, GATED, True)
+    setattr(module, "request_within_origin", request_gate)  # noqa: B010
 
 
 def decided(gate: Gate, run: RunState, call: Call, arguments: object) -> Step:

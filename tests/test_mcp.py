@@ -5,16 +5,18 @@ tool call it really receives to a log, so "the server never saw it" is a fact, n
 """
 
 import asyncio
+import contextlib
 import dataclasses
 import importlib.metadata
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import time
 import types
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -522,12 +524,111 @@ def test_a_write_after_the_connection_closed_is_still_refused(docs: Docs) -> Non
     assert calls(result) == [("http:127.0.0.1", "refused")]
 
 
-@pytest.mark.design("mcp.mark_is_a_host")
-def test_a_write_to_another_host_inside_the_transport_is_still_refused(docs: Docs) -> None:
+def other_port(docs: Docs) -> str:
+    """The MCP server's host on a port nothing listens on. A sent POST would fail, not pass."""
+    return re.sub(r":\d+/.*", ":9/x", os.environ["DOCS_URL"])
+
+
+def other_path(docs: Docs) -> str:
+    return re.sub(r"/mcp$", "/orders", os.environ["DOCS_URL"])
+
+
+def the_endpoint(docs: Docs) -> str:
+    return os.environ["DOCS_URL"]
+
+
+TARGETS = [other_port, other_path]
+
+
+def refused_web_write(result: Result) -> bool:
+    return any(
+        x.get("kind") == "http" and x.get("reason") == "web_write"
+        for lines in result.records()
+        for x in lines
+    )
+
+
+@pytest.mark.design("mcp.mark_is_the_endpoint")
+@pytest.mark.parametrize("target", TARGETS)
+def test_a_post_from_an_event_hook_is_a_web_write(
+    docs: Docs, target: Callable[[Docs], str], monkeypatch: pytest.MonkeyPatch
+) -> None:
     docs.start("http")
-    result = docs.run("acme.docs_bot:answer_web_in_a_callback", "")
-    assert docs.received() == []
+    monkeypatch.setenv("DOCS_TARGET", target(docs))
+    result = docs.run("acme.docs_bot:answer_web_in_a_hook", "")
+    assert refused_web_write(result), result.out
+
+
+@pytest.mark.design("mcp.mark_is_the_endpoint")
+def test_a_post_to_another_host_from_an_event_hook_is_a_web_write(
+    docs: Docs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    docs.start("http")
+    monkeypatch.setenv("DOCS_TARGET", "https://payments.acme.internal/refunds")
+    result = docs.run("acme.docs_bot:answer_web_in_a_hook", "")
     assert ("http:payments.acme.internal", "refused") in calls(result), result.out
+
+
+@pytest.mark.design("mcp.mark_ends_with_the_send")
+@pytest.mark.parametrize("target", [*TARGETS, the_endpoint])
+@pytest.mark.parametrize("callback", ["logging", "progress", "sampling"])
+def test_a_post_from_a_callback_is_a_web_write(
+    docs: Docs, callback: str, target: Callable[[Docs], str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    docs.start("http")
+    monkeypatch.setenv("DOCS_TARGET", target(docs))
+    monkeypatch.setenv("DOCS_CALLBACK", callback)
+    result = docs.run("acme.docs_bot:answer_from_a_callback", "", 'real = ["mcp:docs/chatty"]')
+    assert refused_web_write(result), result.out
+
+
+@pytest.mark.design("mcp.mark_ends_with_the_send")
+def test_a_model_call_in_a_callback_gets_its_line_and_its_budget(
+    docs: Docs, fake_openai: Callable[..., FakeOpenAI], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    docs.start("http")
+    monkeypatch.setenv("DOCS_CALLBACK", "model")
+    fake = fake_openai(["acme_answer"])
+    extra = 'real = ["mcp:docs/chatty"]\nmodel_hosts = [{host = "127.0.0.1", provider = "openai"}]'
+    docs.project.toml.write_text(
+        toml("acme.docs_bot:answer_from_a_callback", "", extra).replace(
+            'max_cost_usd = "none"', "max_cost_usd = 1"
+        )
+    )
+    result = docs.project.test(fake)
+    assert result.code == 0, result.out
+    assert len(fake.requests) == 1
+    line = next(x for x in result.records()[0] if x.get("kind") == "model")
+    assert float(str(line["cost_usd"])) > 0
+    assert result.summaries()[0]["cost_usd"] == line["cost_usd"]
+
+
+@pytest.mark.design("mcp.token_request")
+def test_a_token_post_on_the_servers_host_is_refused_unless_listed(
+    docs: Docs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    docs.start("http")
+    monkeypatch.setenv("DOCS_TARGET", other_path(docs))
+    result = docs.run("acme.docs_bot:answer_with_a_token", MOCK)
+    assert refused_web_write(result), result.out
+    assert 'add "http:127.0.0.1 POST /orders" to real' in result.out
+    listed = docs.run(
+        "acme.docs_bot:answer_with_a_token", MOCK, 'real = ["http:127.0.0.1 POST /orders"]'
+    )
+    assert listed.code == 0, listed.out
+    assert ("http:127.0.0.1", "real") in calls(listed)
+    assert (LABEL, "mock") in calls(listed)
+
+
+@pytest.mark.design("mcp.redirect_fails_closed")
+def test_a_redirect_to_another_path_is_a_web_write(
+    docs: Docs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    docs.start("http")
+    monkeypatch.setenv("DOCS_URL", os.environ["DOCS_URL"] + "/")
+    result = docs.run("acme.docs_bot:answer", MOCK)
+    assert refused_web_write(result), result.out
+    assert docs.received() == []
 
 
 # Both protocol eras.
@@ -840,37 +941,77 @@ def test_with_no_run_the_gate_only_passes_the_call_through(
     assert asyncio.run(session.send_request("tools/call", None)) == "sent tools/call"
 
 
-def test_the_transport_mark_ends_with_the_call_and_is_set_once() -> None:
-    seen: list[str | None] = []
+def transport_library(seen: list[object]) -> types.ModuleType:
+    """A stand-in for mcp.client.streamable_http, to watch the mark come and go."""
 
-    class Transport:
-        url = "http://Docs.Acme.Internal:8000/mcp"
-
-        async def _handle_post_request(self) -> None:
-            seen.append(MCP_TRANSPORT.get())
-
-        async def _handle_resumption_request(self) -> None:
-            pass
-
-        async def handle_get_stream(self) -> None:
-            pass
-
-        async def terminate_session(self) -> None:
+    @contextlib.asynccontextmanager
+    async def stream_within_origin(client: Any, method: str, url: str) -> AsyncIterator[str]:
+        seen.append(MCP_TRANSPORT.get())
+        if client == "broken":
             raise OSError("down")
+        yield "reply"
+
+    @contextlib.asynccontextmanager
+    async def sse_within_origin(client: Any, url: str) -> AsyncIterator[str]:
+        seen.append(MCP_TRANSPORT.get())
+        yield "events"
+
+    async def request_within_origin(client: Any, method: str, url: str) -> str:
+        seen.append(MCP_TRANSPORT.get())
+        if client == "broken":
+            raise OSError("down")
+        return "reply"
 
     module = types.ModuleType("mcp.client.streamable_http")
-    module.StreamableHTTPTransport = Transport  # type: ignore[attr-defined]
+    module.stream_within_origin = stream_within_origin  # type: ignore[attr-defined]
+    module.sse_within_origin = sse_within_origin  # type: ignore[attr-defined]
+    module.request_within_origin = request_within_origin  # type: ignore[attr-defined]
     module.httpx2 = mcp_http.httpx2  # type: ignore[attr-defined]
+    return module
+
+
+URL = "http://Docs.Acme.Internal:8000/mcp"
+ENDPOINT = ("http", "docs.acme.internal", 8000, "/mcp")
+
+
+@pytest.mark.design("mcp.mark_ends_with_the_send")
+def test_the_mark_lasts_for_the_send_and_not_for_the_reply() -> None:
+    seen: list[object] = []
+    module = transport_library(seen)
     gate = gate_for([])
     mcp_gate.patch_transport(module, gate)
-    wrapped = Transport._handle_post_request
-    mcp_gate.patch_transport(module, gate)
-    assert Transport._handle_post_request is wrapped
-    asyncio.run(Transport()._handle_post_request())
-    assert seen == ["docs.acme.internal"]
-    with pytest.raises(OSError, match="down"):
-        asyncio.run(Transport().terminate_session())
-    assert MCP_TRANSPORT.get() is None
+    gated = module.request_within_origin
+    mcp_gate.patch_transport(module, gate)  # a second patch does not wrap twice
+    assert module.request_within_origin is gated
+
+    async def go() -> None:
+        async with module.stream_within_origin("client", "POST", URL) as reply:
+            assert reply == "reply"
+            assert MCP_TRANSPORT.get() is None
+        async with module.sse_within_origin("client", URL):
+            assert MCP_TRANSPORT.get() is None
+        assert await module.request_within_origin("client", "DELETE", URL) == "reply"
+        assert MCP_TRANSPORT.get() is None
+
+    asyncio.run(go())
+    assert seen == [ENDPOINT, ENDPOINT, ENDPOINT]
+
+
+@pytest.mark.design("mcp.mark_ends_with_the_send")
+def test_a_send_that_fails_leaves_no_mark() -> None:
+    module = transport_library([])
+    mcp_gate.patch_transport(module, gate_for([]))
+
+    async def go() -> None:
+        with pytest.raises(OSError, match="down"):
+            async with module.stream_within_origin("broken", "POST", URL):
+                pass
+        assert MCP_TRANSPORT.get() is None
+        with pytest.raises(OSError, match="down"):
+            await module.request_within_origin("broken", "DELETE", URL)
+        assert MCP_TRANSPORT.get() is None
+
+    asyncio.run(go())
 
 
 # Labels and settings.

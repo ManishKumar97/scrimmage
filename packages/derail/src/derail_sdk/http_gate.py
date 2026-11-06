@@ -49,11 +49,13 @@ MISTAKE_REASONS = (
     "unlisted",
     "ambiguous_label",
 )
-# The host of the MCP endpoint whose transport is sending now. Those messages were decided
-# at the MCP gate or are the connection's own, so the web gate does not decide them again.
-# It is a host, not a flag: an OAuth flow runs in the same context, and its requests to
-# another host are still web requests.
-MCP_TRANSPORT: ContextVar[str | None] = ContextVar("derail_mcp_transport", default=None)
+# The MCP endpoint a transport is sending to, set only while it sends. Those messages were
+# decided at the MCP gate or are the connection's own, so the web gate does not decide them
+# again. It is the whole endpoint, not a flag: an event hook or an auth flow runs inside the
+# same send, and its requests are still web requests.
+MCP_TRANSPORT: ContextVar[tuple[object, ...] | None] = ContextVar(
+    "derail_mcp_transport", default=None
+)
 
 
 class Reserver(Protocol):
@@ -244,6 +246,11 @@ def path_of(url: Any) -> str:
     return bytes(url.raw_path).decode("ascii").partition("?")[0]
 
 
+def endpoint_of(url: Any) -> tuple[object, ...]:
+    """Scheme, host, port and path, which a transport's own requests all share."""
+    return url.scheme, host_of(url), url.port, path_of(url)
+
+
 def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call:
     """The call this request is: a model call, or a web request to its own host."""
     host = host_of(request.url)
@@ -264,7 +271,7 @@ def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call:
 def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, object]] | None:
     """Decide the request; None with no run. Raises DerailRefused after recording one."""
     run = current()
-    if run is None or MCP_TRANSPORT.get() == host_of(request.url):
+    if run is None or MCP_TRANSPORT.get() == endpoint_of(request.url):
         return None
     body = body_of(request)
     call = describe(ctx, request, who, body or b"")

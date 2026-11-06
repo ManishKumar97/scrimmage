@@ -103,9 +103,20 @@ Each MCP message is also a web POST, which the web gate would refuse.
 So the transport's own requests are marked, and the web gate lets them through without deciding or counting them.
 The GET stream and the DELETE at the end of a session are marked the same way.
 
-The mark is the host of the MCP server.
-A request to another host made during those messages, such as an OAuth token request, is still a web request.
-A POST your own code sends to the server's host is not an MCP message, so it is refused like any other web write.
+The mark is the server's whole endpoint: scheme, host, port and path.
+It lasts only while a request is being sent, and ends before the reply is read.
+So everything else is still a web request and meets the web gate:
+
+- a POST your own code sends to the same host, on another port or path;
+- a request from an event hook on your HTTP client;
+- a token request from an `httpx2.Auth` flow, even on the same host, which is refused unless `real` lists it, such as `"http:docs.acme.internal POST /token"`;
+- a request or a model call from a logging, progress or sampling callback, which a model call's budget covers as usual.
+
+A redirect to another path, such as from `/mcp/` to `/mcp`, leaves the endpoint, so the transport's next request is a web write too.
+Use the address the server redirects to, or list that path under `real`.
+
+An `http:` mock or fault on the server's endpoint never fires, because the web gate does not decide those requests.
+Use an `mcp:` label instead.
 
 ## Offering tools to a model
 

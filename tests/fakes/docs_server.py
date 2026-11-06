@@ -11,8 +11,14 @@ import time
 from pathlib import Path
 from typing import TypedDict
 
-from mcp.server.mcpserver import MCPServer
-from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from mcp.server.mcpserver import Context, MCPServer
+from mcp.types import (
+    CallToolResult,
+    CreateMessageRequestParams,
+    SamplingMessage,
+    TextContent,
+    ToolAnnotations,
+)
 
 
 class Hits(TypedDict):
@@ -48,6 +54,18 @@ def serve(transport: str, name: str, log: str, mode: str, port: int = 0) -> None
     def note(q: str) -> list[TextContent]:
         received("note", q)
         return [] if mode == "empty" else [TextContent(type="text", text=f"real note {q}")]
+
+    @server.tool(structured_output=False)
+    async def chatty(q: str, ctx: Context) -> str:
+        """Sends the client what a callback handles, on this call's own reply stream."""
+        received("chatty", q)
+        await ctx.info("working")
+        await ctx.report_progress(1, 2)
+        if q == "sample":
+            message = SamplingMessage(role="user", content=TextContent(type="text", text=q))
+            params = CreateMessageRequestParams(messages=[message], max_tokens=5)
+            await ctx.session.create_message(params.messages, max_tokens=params.max_tokens)
+        return "done"
 
     @server.tool()
     def title(q: str) -> str:
