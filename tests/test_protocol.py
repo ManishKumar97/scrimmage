@@ -297,6 +297,22 @@ def test_a_forked_sender_starts_empty_with_new_locks(server: ControlServer) -> N
     assert server.store.lines("run-1") == [line(2)]
 
 
+@pytest.mark.design("stop.one_line_per_call")
+def test_a_call_stopped_and_then_ended_has_one_line() -> None:
+    lines: list[dict[str, object]] = []
+
+    class Sink:
+        def put(self, line: dict[str, object], *, keep: bool = False) -> None:
+            del keep
+            lines.append(line)
+
+    run = state.RunState(a_plan(), Sink(), [])
+    step = run.begin("a", {})
+    run.stop_open()
+    run.finish(step, result="late")
+    assert len(lines) == 1 and "DerailStopped" in str(lines[0]["error"])
+
+
 @pytest.mark.design("stop.daemon_poisoned")
 def test_a_line_for_a_closed_run_poisons_the_process(server: ControlServer) -> None:
     run = state.RunState(

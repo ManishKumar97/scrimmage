@@ -260,7 +260,7 @@ class RunState:
         with self._lock:
             steps, self.live = list(self.live.values()), {}
         for step in steps:
-            self.finish(step, error=DerailStopped("the run was stopped during this call"))
+            self._write(step, error=DerailStopped("the run was stopped during this call"))
 
     def _head(self) -> dict[str, object]:
         plan = self.plan
@@ -294,6 +294,7 @@ class RunState:
         )
         with self._lock:
             self.refused = self.refused or step.call.label
+            self._going(step)
         self.finish(step, error=DerailRefused(message), mistake=message)
 
     def newer_version(
@@ -344,10 +345,22 @@ class RunState:
         error: BaseException | None = None,
         mistake: str | None = None,
     ) -> None:
+        """Write a call's line, unless the run was stopped and it already has one."""
+        with self._lock:
+            going = self.live.pop(id(step), None) is not None
+        if going:
+            self._write(step, result=result, error=error, mistake=mistake)
+
+    def _write(
+        self,
+        step: Step,
+        *,
+        result: object = None,
+        error: BaseException | None = None,
+        mistake: str | None = None,
+    ) -> None:
         decision = step.decision
         self._first_line()
-        with self._lock:
-            self.live.pop(id(step), None)
         line = self._head()
         line.update(
             call=redact(step.call.label),  # a server names its own tools
