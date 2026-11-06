@@ -42,7 +42,7 @@ Faultline imports only modules under your agent's own top-level packages, the on
 
 | Setting | What it does |
 |---|---|
-| `call` | The label of the call to mock, such as `"tool:get_order"`. Required. |
+| `call` | The label of the tool call to mock, such as `"tool:get_order"`. A model call cannot be mocked: it is real or a fault. Required. |
 | `returns` | The value to return, in TOML: text, a number, true or false, a list or a table. Required. Dates and times are not allowed; write them as text. |
 | `type` | The type to build the value into, as `module:Class`. Optional; read from the tool's return annotation when left out. |
 

@@ -31,6 +31,8 @@ _.answer_short  # tests/example/acme/rag.py: named by import path in a test's fa
 _.answer_if_asked  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
 _.answer_web_search  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
 _.answer_old_functions  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
+_.answer_renamed  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
+_.answer_renamed_responses  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
 _.use_httpx2  # tests/example/acme/slow.py: named by import path in a test's faultline.toml
 _.answer_one_stops_the_rest  # tests/example/acme/rag.py: named by import path in a test
 _.answer_one_stops_one_finishes  # tests/example/acme/rag.py: named by import path in a test
