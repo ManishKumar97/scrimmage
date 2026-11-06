@@ -1303,6 +1303,24 @@ def test_a_system_with_no_proc_has_no_sweep(monkeypatch: pytest.MonkeyPatch) -> 
     assert runner.kill_those_who_left("run-1", 1) == []
 
 
+@pytest.mark.design("stop.daemon_thread_at_exit")
+def test_a_call_going_on_a_daemon_thread_at_exit_keeps_its_line(project: Project) -> None:
+    (project.root / "acme" / "waits.py").write_text(SLOW_TOOL)
+    (project.root / "bot.py").write_text(
+        "import os, threading, time\n"
+        "from acme import waits\n"
+        "threading.Thread(target=waits.wait_a_while, args=('1',), daemon=True).start()\n"
+        + UNTIL_THE_TOOL_RUNS
+        + "print('the answer')\n"
+    )
+    write_config(project, f"{sys.executable} bot.py {{question}}")
+    project.edit(TOOLS, '["acme.waits:wait_a_while"]')
+    project.edit('real = ["tool:check_inventory"]', 'real = ["tool:wait_a_while"]')
+    result = project.test()
+    assert summary_of(result)["outcome"] == "answered", result.out
+    assert "DerailStopped" in str(calls(result)[-1]["error"])
+
+
 @pytest.mark.design("stop.exit_status_kept")
 def test_sigterm_ends_the_program_as_it_would_without_derail(project: Project) -> None:
     (project.root / "bot.py").write_text(

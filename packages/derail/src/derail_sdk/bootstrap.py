@@ -128,6 +128,7 @@ def start(*, child: bool = False, target: str | None = None) -> None:
         sender.start()
         run_state.announce()
     atexit.register(sender.flush)
+    atexit.register(run_state.stop_open)  # a call on a daemon thread, after the replies below
     if not tools and not child:  # registered after the flush, so it runs first
         # With no tools list the runner cannot know the names; a framework's adapter does.
         atexit.register(lambda: report_tools(run_state))
