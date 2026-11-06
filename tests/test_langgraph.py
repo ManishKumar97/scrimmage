@@ -1,5 +1,6 @@
 """The order bot in LangGraph: the team writes no tools list, the adapter finds the tools."""
 
+import asyncio
 import functools
 import threading
 import time
@@ -849,3 +850,43 @@ def test_a_recheck_finds_the_name_a_tool_was_given_later() -> None:
     finally:
         state.install(None)
     assert run.seen == {"before", "after"}
+
+
+@pytest.mark.design("adapter.override_refused")
+@pytest.mark.parametrize(
+    ("function", "method"),
+    [("invoke_override_called_directly", "invoke"), ("run_override_called_directly", "run")],
+)
+def test_an_override_called_directly_is_refused(
+    project: Project, function: str, method: str
+) -> None:
+    result, _ = offered(project, function)
+    assert result.code == 2, result.out + result.err
+    assert not wrote(result)
+    assert f"get_order cannot be gated, because its class overrides {method}" in result.out
+
+
+@pytest.mark.design("adapter.override_refused")
+def test_an_async_override_is_refused_and_a_mixin_stays_as_it_was() -> None:
+    run, sink = fresh_run()
+    state.install(run)
+    base = base_tool()
+
+    class Mixin:
+        async def ainvoke(self, tool_input: object) -> str:
+            return "REAL WRITE RAN"
+
+    Mixin.__module__ = "the_team"  # base is in this file, so this file counts as the library
+    try:
+        langchain_gate.patch(module(BaseTool=base, ToolException=Exception), run, pytest.fail)
+
+        class Writes(Mixin, base):  # type: ignore[valid-type, misc]
+            pass
+
+        tool = Writes(name="writes")  # type: ignore[call-arg]
+        with pytest.raises(FaultlineRefused, match="overrides ainvoke"):
+            asyncio.run(tool.ainvoke({}))
+    finally:
+        state.install(None)
+    assert asyncio.run(Mixin().ainvoke({})) == "REAL WRITE RAN"
+    assert "overrides ainvoke" in str(sink.lines[0]["mistake"])

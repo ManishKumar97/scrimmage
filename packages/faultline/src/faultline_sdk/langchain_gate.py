@@ -96,7 +96,7 @@ def patch(module: ModuleType, run: RunState, stop: Callable[[str], None]) -> Non
 
     def vet(tool: Any) -> str | None:
         """Record whether a call to this tool reaches a gate. Says why not, if it does not."""
-        reason = skips_gate(tool, base, failure)
+        reason = skips_gate(tool, base, failure, run)
         if reason is None:
             run.adapted.add(tool.name)  # offered to the model, it will reach a gate
         else:
@@ -141,7 +141,18 @@ def overrides(cls: type, base: type) -> list[str]:
     return [n for n in CALLED if owner_of(cls, n).__module__.split(".")[0] != package]
 
 
-def skips_gate(tool: Any, base: type, failure: type[Exception]) -> str | None:
+def refusal(run: RunState, name: str) -> Callable[..., Any]:
+    """Stands in for an override that may never reach a gate, so its code never runs."""
+
+    def refuse(tool: Any, *args: Any, **kwargs: Any) -> None:
+        message = f"{tool.name} cannot be gated, because its class overrides {name}"
+        run.cannot_gate(tool.name, message)
+        raise FaultlineRefused(message)
+
+    return tool_gate.mark(refuse)
+
+
+def skips_gate(tool: Any, base: type, failure: type[Exception], run: RunState) -> str | None:
     """Why a call to this tool could run without passing a gate, if one could."""
     cls = type(tool)
     if not gate_tool(cls, failure):
@@ -150,6 +161,10 @@ def skips_gate(tool: Any, base: type, failure: type[Exception]) -> str | None:
     if own:  # the class's gate never sees a method set on the tool itself
         return f"{tool.name} cannot be gated, because {own[0]} is set on the tool itself"
     replaced = overrides(cls, base)
+    for name in replaced:
+        # On this class, not the owner: the owner can be a mixin other classes use too.
+        if not tool_gate.is_gate(getattr(cls, name)):
+            setattr(cls, name, refusal(run, name))
     if replaced:
         return f"{tool.name} cannot be gated, because its class overrides {replaced[0]}"
     return None
