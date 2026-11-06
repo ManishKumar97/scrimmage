@@ -1,7 +1,9 @@
 """A fake OpenAI API for tests.
 
-It answers only from fixture files, in the order the test lists them, and has no logic
-of its own. A request it has no reply for gets an error, and the error is kept, so a
+It answers only from fixture files and has no logic of its own. The test lists one
+fixture per turn of a conversation: a request that already holds n assistant messages
+gets the fixture at position n. So several runs at once each get the same scripted
+conversation. A request it has no reply for gets an error, and the error is kept, so a
 test cannot pass by accident. This is test support code; it is never in a wheel.
 """
 
@@ -16,13 +18,12 @@ CHAT_PATH = "/v1/chat/completions"
 
 
 class FakeOpenAI:
-    """Serves the listed fixtures, one per request, on a free local port."""
+    """Serves the listed fixtures, one per turn, on a free local port."""
 
     def __init__(self, replies: list[str]) -> None:
         # Read every file up front, so a missing fixture fails the test before it runs.
-        self._replies = [
-            (name, (FIXTURES / f"{name}.json").read_bytes()) for name in replies
-        ]
+        self._replies = [(name, (FIXTURES / f"{name}.json").read_bytes()) for name in replies]
+        self._used: set[int] = set()
         self._lock = threading.Lock()
         self.requests: list[dict[str, Any]] = []
         self.errors: list[str] = []
@@ -38,7 +39,7 @@ class FakeOpenAI:
     def unused(self) -> list[str]:
         """Fixtures the test listed that no request asked for."""
         with self._lock:
-            return [name for name, _ in self._replies]
+            return [n for i, (n, _) in enumerate(self._replies) if i not in self._used]
 
     def start(self) -> None:
         self._thread.start()
@@ -52,11 +53,14 @@ class FakeOpenAI:
         with self._lock:
             if path != CHAT_PATH:
                 error = f"no fixture serves {path}"
-            elif not self._replies:
-                error = f"no reply left for request {len(self.requests) + 1}"
             else:
-                self.requests.append(json.loads(body))
-                return 200, self._replies.pop(0)[1]
+                request = json.loads(body)
+                turn = sum(1 for m in request["messages"] if m.get("role") == "assistant")
+                if turn < len(self._replies):
+                    self.requests.append(request)
+                    self._used.add(turn)
+                    return 200, self._replies[turn][1]
+                error = f"no reply for turn {turn + 1}"
             self.errors.append(error)
         return 500, json.dumps({"error": {"message": error, "type": "fake"}}).encode()
 

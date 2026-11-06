@@ -22,6 +22,9 @@ dev = [
     "openai>=3.46",
     "vulture>=2.16",
     "import-linter>=2.15",
+    "jsonschema>=4.26",
+    "pytest-cov>=7.1",
+    "coverage>=7.17",
 ]
 
 [tool.pytest.ini_options]
@@ -35,6 +38,7 @@ markers = [
 
 [tool.ruff]
 target-version = "py311"
+line-length = 100
 src = ["packages/faultline/src", "packages/faultline-marker/src", "tests"]
 
 [tool.ruff.lint]
@@ -72,3 +76,17 @@ name = "The marker works without the SDK installed"
 type = "forbidden"
 source_modules = ["faultline"]
 forbidden_modules = ["faultline_sdk"]
+
+[tool.coverage.run]
+branch = true
+# The marker package is still empty; it is measured from the slice that builds it.
+source_pkgs = ["faultline_sdk"]
+# The SDK runs inside each run's own program, so measure child processes too.
+patch = ["subprocess"]
+parallel = true
+relative_files = true
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
+skip_covered = true

@@ -6,5 +6,8 @@
 # origin = "public incident"       # "public incident" or "trace"
 # source = "https://..."           # the incident's public URL, or a description of
 #                                  # the trace with nothing private in it
-#
-# The file has no entries yet.
+
+[[fault]]
+name = "timeout"
+origin = "public incident"
+source = "https://aws.amazon.com/message/101925/ (AWS us-east-1, 19-20 October 2025: DynamoDB endpoints stopped resolving and calls to dependent services timed out for hours)"
