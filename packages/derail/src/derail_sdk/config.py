@@ -33,13 +33,15 @@ TEST_KEYS = {"name", "question", "expect", "mock", "fault"}
 MOCK_KEYS = {"call", "returns", "type"}
 WEB_MOCK_KEYS = {"call", "method", "path", "status", "headers", "json", "text"}
 FAULT_KEYS = {"call", "do", "when", "raises"}
+MCP_MOCK_KEYS = {"call", "returns"}
+MCP_FAULT_KEYS = {"call", "do", "when"}
 WEB_FAULT_KEYS = {"call", "do", "when", "method", "path"}
 # A mock's body is sent as written, so these could only make the reply lie about it.
 BODY_HEADERS = {"content-length", "content-encoding", "transfer-encoding"}
 
 DOCS = "docs/configuration.md"
 # The faults this version builds. Each one has an entry in docs/fault-catalog.toml.
-FAULTS = ("timeout", "status", "error")
+FAULTS = ("timeout", "status", "error", "empty")
 STATUS = re.compile(r"status (?P<code>\d{3})")
 SCHEDULE = re.compile(r"always|(?:first|requests) (?P<n>[1-9]\d*)")
 MODEL_KEYS = {"host", "provider"}
@@ -182,7 +184,7 @@ def check_references(config: Config) -> list[str]:
                 )
         for entry in [*test.mocks, *test.faults]:
             if labels.kind_of(entry.call) != "tool":
-                continue  # a model or web label cannot be compared with anything yet
+                continue  # a model, web or MCP label cannot be compared with anything yet
             name = entry.call.partition(":")[2]
             if listed and name not in names:
                 problems.append(
@@ -448,7 +450,7 @@ def read_mock(table: dict[str, object], where: str) -> Mock:
     call = labels.check(text(table, "call", where), f"{where} call")
     if labels.kind_of(call) == "http":
         return read_web_mock(table, call, where)
-    check_keys(table, MOCK_KEYS, where)
+    check_keys(table, MCP_MOCK_KEYS if labels.kind_of(call) == "mcp" else MOCK_KEYS, where)
     if "returns" not in table:
         raise ConfigError(f"{where} returns: required")
     kind = table.get("type")
@@ -460,11 +462,12 @@ def read_mock(table: dict[str, object], where: str) -> Mock:
 def read_fault(table: dict[str, object], where: str) -> Fault:
     call = labels.check(text(table, "call", where), f"{where} call")
     kind = labels.kind_of(call)
-    check_keys(table, WEB_FAULT_KEYS if kind == "http" else FAULT_KEYS, where)
+    keys = {"http": WEB_FAULT_KEYS, "mcp": MCP_FAULT_KEYS}.get(kind, FAULT_KEYS)
+    check_keys(table, keys, where)
     do = text(table, "do", where)
     status = STATUS.fullmatch(do)
     if status:
-        if kind == "tool":
+        if kind in ("tool", "mcp"):
             raise ConfigError(
                 f"{where} do: {do!r} works on a model call or a web request; see {DOCS}"
             )
@@ -472,8 +475,10 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
             raise ConfigError(f"{where} do: {do!r} is not an error status (400 to 599)")
     elif do not in FAULTS or do == "status":
         raise ConfigError(f"{where} do: {do!r} is not a fault; see {DOCS}")
-    if do == "error" and kind != "tool":
+    if do == "error" and kind not in ("tool", "mcp"):
         raise ConfigError(f"{where} do: 'error' works only on a tool; see {DOCS}")
+    if do == "empty" and kind != "mcp":
+        raise ConfigError(f"{where} do: 'empty' works only on an MCP tool; see {DOCS}")
     raises = read_raises(table, do, where)
     when = str(table.get("when", "always"))
     if not SCHEDULE.fullmatch(when):
