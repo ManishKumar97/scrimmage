@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -32,6 +33,7 @@ OK, MISTAKE, INFRA = 0, 2, 3
 TAIL_BYTES = 1024 * 1024  # how much of a script's output is read to find its last line
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 KILL_GRACE_S = 5.0
+GROUP_POLL_S = 0.01
 OUTCOMES = (
     "answered",
     "crashed",
@@ -182,7 +184,7 @@ class Runner:
             proc.wait(timeout=self.config.agent.run_timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
-            stop_group(proc)
+        stop_group(proc)  # at the time limit, or a child that outlived the program
         with self.lock:
             del self.procs[run]
         state = self.server.close_run(run)
@@ -462,17 +464,34 @@ def last_line(path: Path) -> str | None:
 
 
 def stop_group(proc: subprocess.Popen[bytes]) -> None:
-    """SIGTERM to the run's process group, then SIGKILL after five seconds."""
+    """SIGTERM to the run's process group, then SIGKILL to what is left after five seconds.
+
+    It waits on the group, not on the program: a child can outlive the program, and can
+    ignore SIGTERM after the program has gone.
+    """
+    if signal_group(proc, signal.SIGTERM):
+        deadline = time.monotonic() + KILL_GRACE_S
+        while time.monotonic() < deadline:
+            proc.poll()  # a program that has ended stays in the group until it is reaped
+            if not signal_group(proc, 0):
+                break
+            time.sleep(GROUP_POLL_S)
+        else:
+            signal_group(proc, signal.SIGKILL)
+    if proc.poll() is None:  # it left the group by itself
+        proc.kill()
+    proc.wait()
+
+
+def signal_group(proc: subprocess.Popen[bytes], sig: int) -> bool:
+    """False when no process is left in the group."""
     try:
-        os.killpg(proc.pid, signal.SIGTERM)
-        proc.wait(timeout=KILL_GRACE_S)
-    except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)
-        proc.wait()
-    except ProcessLookupError:  # the group is gone; make sure the program is too
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait()
+        os.killpg(proc.pid, sig)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # macOS says this for a group of zombies
+        return False
+    return True
 
 
 def report(
