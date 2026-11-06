@@ -264,9 +264,8 @@ def answer_web_after_close(question: str) -> str:
     async def go() -> str:
         async with over_http() as session:
             await session.list_tools()
-        base = os.environ["DOCS_URL"].rsplit("/", 1)[0]
         async with httpx.AsyncClient() as client:
-            await client.post(f"{base}/orders", json={"order": 1})
+            await client.post(os.environ["DOCS_URL"], json={"order": 1})
         return "posted"
 
     return asyncio.run(go())

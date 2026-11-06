@@ -635,8 +635,8 @@ def test_a_write_after_the_connection_closed_is_still_refused(docs: Docs) -> Non
 
 
 def other_port(docs: Docs) -> str:
-    """The MCP server's host on a port nothing listens on. A sent POST would fail, not pass."""
-    return re.sub(r":\d+/.*", ":9/x", os.environ["DOCS_URL"])
+    """The endpoint's host and path on a port nothing listens on."""
+    return re.sub(r":\d+/", ":9/", os.environ["DOCS_URL"])
 
 
 def other_path(docs: Docs) -> str:
@@ -1090,6 +1090,7 @@ def test_mcp_1_stops_a_program_that_only_imports_it(docs: Docs) -> None:
     )
     result = docs.run("acme.stale:answer", "")
     assert result.code == 3, result.out + result.err
+    assert result.summaries()[0]["answer"] is None  # the agent never finished
     assert "mcp 1.30 does not have the functions Derail gates" in result.out
     assert "Derail supports mcp 2.x, tested with 2.3" in result.out
     assert "even if it never calls an MCP tool" in result.out
