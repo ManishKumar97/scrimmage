@@ -2,6 +2,8 @@
 
 import json
 import shutil
+import subprocess
+import time
 from collections.abc import Callable
 
 import pytest
@@ -9,6 +11,7 @@ import pytest
 from conftest import ACME, Project, Result
 from fakes.openai_server import FakeOpenAI
 from faultline_sdk import config
+from faultline_sdk import runner as runner_module
 from faultline_sdk.runner import Runner
 
 Fake = Callable[..., FakeOpenAI]
@@ -236,6 +239,25 @@ def test_no_run_starts_after_a_stop_however_late_the_servers_thread_is(project: 
     runner = Runner(config.load(project.toml))
     runner.server.on_refused = lambda run, reason: None  # that thread has not run yet
     assert len(runner.run_all()) == 1
+
+
+def test_no_run_starts_while_a_stop_is_still_stopping_a_program(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (project.root / "httpx2.py").write_text('__version__ = "9.0.0"\n')
+    project.edit(
+        'function = "acme.agent:answer"',
+        'function = "acme.slow:use_httpx2"\nruns = 3\nparallel = 1\nmax_cost_usd = "none"',
+    )
+    project.monkeypatch.chdir(project.root)
+    stop_group = runner_module.stop_group
+
+    def slow_stop(proc: subprocess.Popen[bytes]) -> None:
+        time.sleep(1)
+        stop_group(proc)
+
+    monkeypatch.setattr(runner_module, "stop_group", slow_stop)
+    assert len(Runner(config.load(project.toml)).run_all()) == 1
 
 
 @pytest.mark.design("gate.structural_notice_fails_the_test")

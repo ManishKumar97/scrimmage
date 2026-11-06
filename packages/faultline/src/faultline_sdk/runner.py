@@ -108,6 +108,7 @@ class Runner:
             stop_test = reason in STOP_TEST and self.stopped_by is None
             if stop_test:
                 self.stopped_by = reason
+                self.cancelled = True  # under this lock, so no run starts from here on
         if proc is not None:
             stop_group(proc)
         if stop_test:
