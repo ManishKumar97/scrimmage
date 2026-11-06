@@ -11,6 +11,7 @@ import os
 import socket
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol, cast
@@ -72,6 +73,7 @@ class RunState:
         self.listed = set(plan.tool_names())  # names the plan's gates will reach
         self.adapted: set[str] = set()  # names a framework's adapter has checked
         self.blocked: dict[str, str] = {}  # names a call could skip a gate by, and why
+        self.rechecks: list[Callable[[], None]] = []  # an adapter's check of its tools
         self.allowed = allowed
         self.began = time.monotonic()
         self.counters = engine.Counters(plan)
@@ -90,6 +92,11 @@ class RunState:
         """Names a gate reaches, as the model sees them. A request carries only names, so
         one tool that can skip its gate blocks every tool of that name."""
         return (self.listed | self.adapted) - self.blocked.keys()
+
+    def recheck_tools(self) -> None:
+        """Bring the names up to date: a class can change after its tools were made."""
+        for recheck in self.rechecks:
+            recheck()
 
     def check_time(self) -> None:
         """The time limit counts from when this process took up the run.

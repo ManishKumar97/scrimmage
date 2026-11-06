@@ -12,7 +12,9 @@ import contextvars
 import functools
 import importlib.metadata
 import inspect
+import threading
 import typing
+import weakref
 from collections.abc import Callable, Iterator
 from types import ModuleType
 from typing import Any
@@ -81,10 +83,15 @@ def patch(module: ModuleType, run: RunState, stop: Callable[[str], None]) -> Non
     base = module.BaseTool
     failure = module.ToolException
     create = base.__init__
+    # By id: a pydantic model has no hash, so a WeakSet cannot hold one.
+    tools: weakref.WeakValueDictionary[int, Any] = weakref.WeakValueDictionary()
+    lock = threading.Lock()
 
     @functools.wraps(create)
     def tracked_init(self: Any, *args: Any, **kwargs: Any) -> None:
         create(self, *args, **kwargs)
+        with lock:
+            tools[id(self)] = self
         vet(self)
 
     def vet(tool: Any) -> str | None:
@@ -96,6 +103,13 @@ def patch(module: ModuleType, run: RunState, stop: Callable[[str], None]) -> Non
             run.blocked[tool.name] = reason
         return reason
 
+    def recheck() -> None:
+        with lock:
+            live = list(tools.values())
+        for tool in live:
+            vet(tool)
+
+    run.rechecks.append(recheck)
     base.__init__ = tracked_init
     for name in ENTRIES:
         setattr(base, name, checked(vars(base)[name], run, vet))

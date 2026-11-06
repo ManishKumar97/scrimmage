@@ -822,3 +822,30 @@ def test_a_run_function_set_on_the_tool_itself_never_runs(project: Project, func
     assert result.code == 2, result.out + result.err
     assert not wrote(result)
     assert "_run is set on the tool itself" in result.out
+
+
+@pytest.mark.design("adapter.rechecked_each_request")
+@pytest.mark.parametrize(
+    "function",
+    ["invoke_set_on_the_class_later", "run_set_on_the_class_later", "run_set_on_the_tool"],
+)
+def test_a_tool_changed_after_it_was_made_stops_at_the_next_model_request(
+    project: Project, function: str
+) -> None:
+    result, fake = offered(project, function)
+    stopped_at_the_offer(result, fake)
+
+
+@pytest.mark.design("adapter.rechecked_each_request")
+def test_a_recheck_finds_the_name_a_tool_was_given_later() -> None:
+    run, _ = fresh_run()
+    state.install(run)
+    base = base_tool()
+    try:
+        langchain_gate.patch(module(BaseTool=base, ToolException=Exception), run, pytest.fail)
+        tool = base(name="before")
+        tool.name = "after"
+        run.recheck_tools()
+    finally:
+        state.install(None)
+    assert run.seen == {"before", "after"}

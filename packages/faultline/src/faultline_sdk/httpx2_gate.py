@@ -305,6 +305,7 @@ def check_tools(
                 f'the provider and can change data; add "hosted:mcp/{label}" to [agent] real '
                 "if it is safe",
             )
+    run.recheck_tools()
     seen = run.seen
     unseen = sorted(name for name in set(tools.agent) if name not in seen)
     if unseen:
