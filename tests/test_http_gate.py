@@ -654,6 +654,64 @@ def test_a_redirect_off_the_model_hosts_is_refused_and_named(gated: None) -> Non
     assert isinstance(line["cost_usd"], float) and line["cost_usd"] > 0
 
 
+class Closing(httpx2.AsyncByteStream):
+    """A reply body whose close hangs until cancelled, or fails."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.closing = asyncio.Event()
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b""
+
+    async def aclose(self) -> None:
+        self.closing.set()
+        if self.error is not None:
+            raise self.error
+        await asyncio.Event().wait()
+
+
+def closing_redirect(stream: Closing) -> httpx2.AsyncClient:
+    async def answer(request: httpx2.Request) -> httpx2.Response:
+        headers = {"location": "http://localhost:9000/v1/chat/completions"}
+        return httpx2.Response(307, headers=headers, stream=stream)
+
+    return httpx2.AsyncClient(transport=httpx2.MockTransport(answer))
+
+
+@pytest.mark.design("gate.redirect_cancel_while_closing")
+def test_a_cancel_while_closing_an_off_host_reply_keeps_its_line_and_settlement(
+    gated: None,
+) -> None:
+    budget = Budget(limit=1.0)
+    sink, _ = install(make_plan(budget=1.0), budget)
+
+    async def go() -> None:
+        stream = Closing()
+        task = asyncio.create_task(closing_redirect(stream).post(URL, json=BODY))
+        await stream.closing.wait()
+        task.cancel()
+        await task
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(go())
+    line = sink.lines[-1]
+    assert (line["action"], line["reason"]) == ("refused", "redirect_off_host")
+    assert len(sink.settles) == 1 and sink.settles[0][1] == line["cost_usd"]
+
+
+def test_a_failed_close_of_an_off_host_reply_still_refuses(gated: None) -> None:
+    budget = Budget(limit=1.0)
+    sink, _ = install(make_plan(budget=1.0), budget)
+
+    async def go() -> None:
+        await closing_redirect(Closing(OSError("dropped"))).post(URL, json=BODY)
+
+    with pytest.raises(FaultlineRefused, match="not a model host"):
+        asyncio.run(go())
+    assert sink.lines[-1]["reason"] == "redirect_off_host" and len(sink.settles) == 1
+
+
 @pytest.mark.design("gate.redirect_bad_location")
 def test_a_redirect_to_a_broken_address_keeps_its_line_and_httpx2_error(gated: None) -> None:
     def broken(request: httpx2.Request) -> httpx2.Response:

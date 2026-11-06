@@ -26,6 +26,7 @@ from faultline_sdk import hooks
 from faultline_sdk import provider_openai as openai_table
 from faultline_sdk.client import ControlError
 from faultline_sdk.decide import READ_METHODS, Call, Decision, names
+from faultline_sdk.errors import FaultlineRefused
 from faultline_sdk.redact import redact
 from faultline_sdk.state import BLOB_CAP, BlobSink, RunState, Step, blob, current
 
@@ -193,8 +194,11 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
             raise
         target = off_host(ctx, step, request, response)
         if target is not None:
-            await response.aclose()
-            redirected_away(ctx, step, request, extra, reservation, target)
+            cancel = await close_keeping_cancel(response)
+            try:
+                redirected_away(ctx, step, request, extra, reservation, target)
+            except FaultlineRefused as refusal:
+                raise (cancel or refusal) from None
         capture(ctx, module, step, request, response, extra, reservation, sync=False)
         return response
 
@@ -515,6 +519,18 @@ def off_host(ctx: Context, step: Step, request: Any, response: Any) -> str | Non
     except Exception:  # not a usable address: httpx2 raises its own error when it follows it
         return None
     return None if provider_of(ctx, host) else host
+
+
+async def close_keeping_cancel(response: Any) -> asyncio.CancelledError | None:
+    """Close a reply being refused. A cancel or a failed close must not lose its line or
+    settlement, so a cancel is handed back to raise once those are written."""
+    try:
+        await response.aclose()
+    except asyncio.CancelledError as cancel:
+        return cancel
+    except Exception:  # the reply is being dropped, and the refusal says why
+        return None
+    return None
 
 
 def redirected_away(
