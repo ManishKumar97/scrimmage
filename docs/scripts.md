@@ -32,6 +32,7 @@ The program runs in the folder that holds `derail.toml`.
 If that Python has no Derail installed, the program stops before your agent runs, and the run is an infrastructure error.
 
 A wrapper such as `uv run python bot.py {question}` or `sh run.sh {question}` is fine.
+A wrapper that is itself a Python program with no Derail is not: `poetry run python bot.py {question}` stops with exit code 3, because `derail-run` becomes poetry, which is then the program under test on a Python with no Derail. Put that line in a shell script and write `sh run.sh {question}`.
 The program under test is **the first Python in the run that has Derail installed**. It claims the run.
 A Python before it with no Derail, such as a tool in your shell script or a package build `uv run` starts, runs as usual.
 If no Python ever claims the run, nothing was tested, and the run is an infrastructure error.
@@ -40,6 +41,7 @@ Python after the claim is a child. So with `python pre.py; python bot.py` in a w
 Write that as `python bot.py` with `pre.py` started by `bot.py`, or run the step before `derail test`, or set `children = true`.
 
 Listed tools must live in a module your program imports. A tool defined in `bot.py` itself, or in the module of `python -m`, runs as `__main__`, is never imported and cannot be gated, so the run stops and says to move it.
+That check reads Python's own command line, so it does not see a file another program runs for you, such as `python -m cProfile bot.py` or `runpy.run_path("bot.py")`. Such a tool writes for real: see [Limits](limits.md).
 A tool's file is gated under any name it is imported by, so `tools` and `deep.tools` are the same tool.
 
 ## The answer
@@ -101,7 +103,8 @@ A start of this run's Python that would run blind is refused where it is made: `
 
 The message gives the fix. Pass `env={**os.environ, ...}` so the child joins, or list `"process:python"` under `real` if a blind child is safe. A listed one leaves a `real` line.
 
-A child that is not Python passes with any environment, and so does a Python elsewhere that has its own environment.
+A child that is not Python passes with any environment, and so does a Python elsewhere that has its own environment, such as a venv with its own `pyvenv.cfg`, even one made from the same binary.
+The binary your venv was made from, run directly, counts as this Python, so with a clean environment it is refused.
 A stdio MCP server started by the MCP library passes too, on the library's small default environment, because the MCP gate decides what it is asked.
 Only starts made from Python are seen. See [Limits](limits.md).
 
@@ -128,7 +131,8 @@ The same setting lets a child on another Python join, if it has Derail installed
 A forked child sends each record line as it makes it, so a line is not lost when `multiprocessing` ends its worker with no exit steps.
 Its refusal reaches the runner before the error reaches your code.
 
-The other start methods of `multiprocessing`, `spawn` and `forkserver`, start a new Python, which joins as a child.
+The other start methods of `multiprocessing`, `spawn` and `forkserver`, start a new Python with your program's environment, which joins as a child.
+They start it in a way no audit event reports, so if your code has removed `PYTHONPATH` from `os.environ`, that child runs blind. See [Limits](limits.md).
 
 ### MCP servers over stdio
 
