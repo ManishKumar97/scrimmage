@@ -185,6 +185,19 @@ def test_a_bad_header_reaches_no_record(
     assert "header-secret-value" not in recorded(project)
 
 
+@pytest.mark.design("web.real_failure_not_infrastructure")
+@pytest.mark.parametrize("path", ["/down", ""])
+def test_a_real_web_failure_is_the_tools_to_handle_not_an_infrastructure_error(
+    project: Project, web: "Web", monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    base = web.url(path) if path else "http://127.0.0.1:9"
+    monkeypatch.setenv("INVENTORY_URL", base)
+    result = run(project, "acme.web:answer", "")
+    assert result.code == 0, result.out + result.err
+    assert result.summaries()[0]["outcome"] == "answered"
+    assert "inventory unavailable" in str(result.summaries()[0]["answer"])
+
+
 # The gate in one process, on both libraries, against a real local server.
 
 
@@ -213,7 +226,7 @@ class Web:
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
-                status = 503 if path == "/down" else 200
+                status = 503 if path.startswith("/down") else 200
                 body = b"Service Unavailable" if status == 503 else b'{"count": 12}'
                 self.send_response(status)
                 self.send_header("Content-Length", str(len(body)))
@@ -282,9 +295,11 @@ class Sink:
     def __init__(self) -> None:
         self.lines: list[dict[str, Any]] = []
         self.blobs: dict[str, bytes] = {}
+        self.kept: list[bool] = []
 
     def put(self, line: dict[str, Any], *, keep: bool = False) -> None:
         self.lines.append(line)
+        self.kept.append(keep)
 
     def put_blob(self, sha: str, data: bytes) -> bool:
         self.blobs[sha] = data
@@ -528,6 +543,7 @@ def test_a_mocked_cookie_reaches_the_clients_cookie_jar(lib: Any) -> None:
 
 
 @pytest.mark.design("web.narrowing")
+@pytest.mark.design("web.when_per_match")
 def test_a_mock_and_a_fault_match_only_their_method_and_path(lib: Any, web: Web) -> None:
     host = "http:127.0.0.1"
     fault = Fault(host, "status 500", "first 1", None, "GET", "/one")
@@ -611,6 +627,22 @@ def test_a_web_body_is_not_parsed_as_a_model_body(
         assert client.post(web.url("/fine"), json={"a": 1}).status_code == 200
 
 
+@pytest.mark.design("web.fault_over_mock")
+def test_a_fault_wins_over_a_mock_until_it_is_spent(lib: Any) -> None:
+    gate(lib, mocks=(web_mock(text="m"),), faults=(Fault(LABEL, "status 503", "first 1"),))
+    with lib.Client() as client:
+        assert client.get(URL).status_code == 503
+        assert client.get(URL).text == "m"
+
+
+def test_a_real_write_is_kept_for_every_run_and_a_real_read_is_not(lib: Any, web: Web) -> None:
+    sink = gate(lib, real=("http:127.0.0.1",))
+    with lib.Client() as client:
+        client.get(web.url("/fine"))
+        client.post(web.url("/fine"))
+    assert sink.kept == [False, True]
+
+
 def test_a_mocked_write_is_answered_and_never_sent(lib: Any, web: Web) -> None:
     gate(lib, mocks=(Mock("http:127.0.0.1", None, None, "POST", text="done"),))
     with lib.Client() as client:
@@ -618,6 +650,7 @@ def test_a_mocked_write_is_answered_and_never_sent(lib: Any, web: Web) -> None:
     assert web.hits == []
 
 
+@pytest.mark.design("web.refusal_poisons")
 def test_a_refusal_poisons_the_run_for_later_reads(lib: Any, web: Web) -> None:
     gate(lib)
     with lib.Client() as client:
@@ -843,6 +876,7 @@ def test_no_header_or_cookie_of_a_real_call_is_recorded(lib: Any, web: Web) -> N
         assert value not in text
 
 
+@pytest.mark.design("gate.structural_keeps_refusals")
 def test_a_library_without_response_drops_mocks_and_keeps_refusing(lib: Any, web: Web) -> None:
     class Bare:
         __version__ = lib.__version__
@@ -907,6 +941,7 @@ def test_hosts_are_lowercase_and_real_forms_are_normalized(tmp_path: Path) -> No
         (f"{MOCK}status = true\n", "", "expected an HTTP status"),
         (f"{MOCK}headers = {{content-length = '3'}}\n", "", "written from the body"),
         (f"{MOCK}headers = {{content-encoding = 'gzip'}}\n", "", "written from the body"),
+        (f"{MOCK}headers = {{Content-Length = '3'}}\n", "", "written from the body"),
         (f"{MOCK}headers = {{a = 1}}\n", "", "headers a: expected text"),
         (f"[[test.mock]]\ncall = '{LABEL}'\nmethod = 'G T'\n", "", "not an HTTP method"),
         (f"[[test.mock]]\ncall = '{LABEL}'\npath = 'a'\n", "", "is not a path"),
