@@ -20,7 +20,7 @@ source = "https://status.openai.com/incidents/ctrsv3lwd797 (OpenAI status page, 
 [[fault]]
 name = "empty"
 origin = "public incident"
-source = "https://aws.amazon.com/message/101925/ (AWS us-east-1, 19-20 October 2025: a race in DynamoDB's DNS automation left an empty record for the regional endpoint, so lookups succeeded and returned nothing)"
+source = "https://aws.amazon.com/message/101925/ (AWS us-east-1, 19-20 October 2025: a race in DynamoDB's DNS automation left an incorrect empty DNS record for the regional endpoint, so clients found no address to connect to)"
 
 [[fault]]
 name = "error"
