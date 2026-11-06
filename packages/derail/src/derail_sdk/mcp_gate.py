@@ -158,10 +158,13 @@ def version() -> tuple[int, int] | None:
 
 
 def broken(gate: Gate) -> None:
+    """Importing the library is enough: from then on a tool call could not be checked."""
     named = f"mcp {'.'.join(map(str, version() or ('?',)))}"
+    tested = ".".join(map(str, TESTED[1]))
     message = (
-        f"{named} does not have the functions Derail gates, so its tool calls cannot be "
-        "checked, and the program is stopped"
+        f"{named} does not have the functions Derail gates. Derail supports mcp 2.x, tested "
+        f"with {tested}, so the program is stopped, even if it never calls an MCP tool. "
+        "Install mcp 2.x in the test environment, or remove mcp from it"
     )
     gate.run.notice("structure", "mcp", message)
     gate.stop(message)

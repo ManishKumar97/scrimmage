@@ -2,7 +2,8 @@
 
 - **One agent shape.** The agent must be a Python function. Scripts and web services come later.
 - **Tools, web requests and OpenAI model calls.** Derail gates the tools you list under `tools`, the LangChain tools it finds by itself, requests sent with httpx or httpx2, and model calls. See [Safety](safety.md).
-- **MCP through the official client, version 2.3, or a client built on it such as FastMCP's.** A client of your own that speaks the protocol by itself is not gated at the MCP gate. Over the web its POSTs meet the web gate; over stdio nothing sees them. An older `mcp`, which lacks what the gate relies on, stops the program with exit code 3.
+- **mcp 2.x only, tested with 2.3.** A program that imports `mcp` 1.x stops with exit code 3, even if it never calls an MCP tool, because 1.x has no place for the gate. Install `mcp` 2.x in the test environment.
+- **MCP through the official client or a client built on it, such as FastMCP's.** A client of your own that speaks the protocol by itself is not gated at the MCP gate. Over the web its POSTs meet the web gate; over stdio nothing sees them.
 - **The old SSE transport for MCP.** Its web requests are not marked, so its first POST is refused by the web gate and the run stops. Use streamable HTTP or stdio.
 - **MCP tools under another name.** A tool the model sees under a name other than the server's, such as `docs_search`, is reported as a tool no gate sees, and the test stops.
 - **Only MCP tool calls are gated.** `resources/read`, `prompts/get` and the rest pass, and cannot be mocked or failed. A server can act on any of them. `resources/read`, `prompts/get`, `completion/complete` and `resources/subscribe` each leave a `real` line. See [Safety](safety.md#what-an-mcp-tool-may-do).

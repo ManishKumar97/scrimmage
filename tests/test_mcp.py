@@ -943,19 +943,25 @@ def test_a_changed_transport_stops_the_program() -> None:
 
 
 @pytest.mark.design("mcp.structural")
-def test_a_changed_library_ends_the_test_as_an_infrastructure_error(docs: Docs) -> None:
+def test_mcp_1_stops_a_program_that_only_imports_it(docs: Docs) -> None:
     root = docs.project.root
     package = root / "mcp" / "client"
     package.mkdir(parents=True)
     (root / "mcp" / "__init__.py").write_text("")
     (package / "__init__.py").write_text("")
     (package / "session.py").write_text("class ClientSession:\n    pass\n")
+    info = root / "mcp-1.30.0.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text("Metadata-Version: 2.1\nName: mcp\nVersion: 1.30.0\n")
     (root / "acme" / "stale.py").write_text(
         "def answer(question):\n    import mcp.client.session\n    return 'ran'\n"
     )
     result = docs.run("acme.stale:answer", "")
     assert result.code == 3, result.out + result.err
-    assert "does not have the functions Derail gates" in result.out
+    assert "mcp 1.30 does not have the functions Derail gates" in result.out
+    assert "Derail supports mcp 2.x, tested with 2.3" in result.out
+    assert "even if it never calls an MCP tool" in result.out
+    assert "Install mcp 2.x in the test environment" in result.out
 
 
 def test_a_newer_version_warns_and_a_tested_one_does_not(monkeypatch: pytest.MonkeyPatch) -> None:
