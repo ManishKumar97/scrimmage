@@ -18,6 +18,7 @@ Anything this version does not support is rejected as unknown, with exit code 2.
 | `model_hosts` | Extra hosts whose requests are model calls, such as a gateway, each with the format it speaks: `[{host = "llm-gateway.internal", provider = "openai"}]`. A host name only, with no port. | empty |
 | `reserve_output_tokens` | The output tokens a budget reservation assumes when a request does not set `max_tokens`. | 4096 |
 | `prices` | Prices for other models, as the table below. | empty |
+| `answer` | Where the answer is in what the function returns, such as `"messages[-1].content"`. See [Agents on a framework](frameworks.md). | the whole value |
 
 ## [agent.prices]
 
@@ -51,7 +52,8 @@ Faultline imports only modules under your agent's own top-level packages, the on
 | Setting | What it does |
 |---|---|
 | `call` | The label of the call to fail, such as `"tool:get_order"` or `"model"`. Required. |
-| `do` | The fault: `"timeout"`, or on a model call `"status 429"` or any status from 400 to 599. Required. |
+| `do` | The fault: `"timeout"`; on a tool `"error"`; on a model call `"status 429"` or any status from 400 to 599. Required. |
+| `raises` | For `"error"`: the error to raise, a built-in such as `"ConnectionError"`, or `package.module:Class` from your agent's packages. Optional. |
 | `when` | When it fires: `"always"`, the default; `"first N"`, the first N attempts; or on a model call `"requests N"`, the first N requests and every retry of each. |
 
 ## Coming in later versions
@@ -60,10 +62,10 @@ These are part of Faultline's design but not of this version.
 Using one now stops the test: it is rejected as unknown.
 
 - Agent shapes: `command` (a script) and `service` (a web service).
-- Settings: `answer`, `body`, `headers`, `control`, `control_tls`, `records`, `record_grace_s`, `record_wait_s`.
+- Settings: `body`, `headers`, `control`, `control_tls`, `records`, `record_grace_s`, `record_wait_s`.
 - Labels: `mcp:`, `http:`, `auth:`, and model providers other than OpenAI.
-- Faults: `error`, `slow`, `empty`, `refused`, `reset`, `dns`, `bad body`, `auth error`, `context too long`, `append`, `replace`, the model reply faults, and `status` on anything but a model call.
+- Faults: `slow`, `empty`, `refused`, `reset`, `dns`, `bad body`, `auth error`, `context too long`, `append`, `replace`, the model reply faults, and `status` on anything but a model call.
 - Schedules: `once` (write `first 1`) and `call N`.
-- Fault options: `raises`, `retry_after`, `append`, `replace`, and `method` and `path` to narrow a web-request fault.
+- Fault options: `retry_after`, `append`, `replace`, and `method` and `path` to narrow a web-request fault.
 - Mocks: `returns_from`, and web-request mocks (`method`, `path`, `status`, `json`, `text`).
 - Placeholders: `${VAR}`.
