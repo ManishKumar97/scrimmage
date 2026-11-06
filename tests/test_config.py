@@ -160,6 +160,8 @@ def test_bad_layouts_are_rejected(tmp_path: Path, text: str, message: str) -> No
         ('do   = "timeout"', 'do   = "timeout"\nraises = "ValueError"', "only with do = 'error'"),
         ('do   = "timeout"', 'do   = "error"\nraises = "NotAnError"', "not a built-in exception"),
         ('do   = "timeout"', 'do   = "error"\nraises = "print"', "not a built-in exception"),
+        ('do   = "timeout"', 'do   = "error"\nraises = "UnicodeDecodeError"', "not a built-in"),
+        ('do   = "timeout"', 'do   = "error"\nraises = "ExceptionGroup"', "not a built-in"),
         (
             'do   = "timeout"',
             'do   = "error"\nraises = "other.m:E"',
@@ -189,8 +191,8 @@ def test_the_error_fault_and_the_answer_path_are_checked(
 def test_raises_takes_a_built_in_or_the_agents_own_class(tmp_path: Path) -> None:
     built_in = example(tmp_path, 'do   = "timeout"', 'do   = "error"\nraises = "ConnectionError"')
     assert built_in.tests[0].faults[0].raises == "ConnectionError"
-    own = example(tmp_path, 'do   = "timeout"', 'do   = "error"\nraises = "acme.models:Stock"')
-    assert own.tests[0].faults[0].raises == "acme.models:Stock"
+    own = example(tmp_path, 'do   = "timeout"', 'do   = "error"\nraises = "acme.errors:Down"')
+    assert own.tests[0].faults[0].raises == "acme.errors:Down"
 
 
 @pytest.mark.design("config.no_tools_list_defers_names")

@@ -427,6 +427,17 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
     return Fault(call, do, when, raises)
 
 
+def takes_a_message(kind: object) -> bool:
+    """An exception class that can be raised with a message alone."""
+    if not (isinstance(kind, type) and issubclass(kind, Exception)):
+        return False
+    try:
+        kind("message")
+    except Exception:  # such as UnicodeDecodeError, which needs five arguments
+        return False
+    return True
+
+
 def read_raises(table: dict[str, object], do: str, where: str) -> str | None:
     if "raises" not in table:
         return None
@@ -434,8 +445,7 @@ def read_raises(table: dict[str, object], do: str, where: str) -> str | None:
         raise ConfigError(f"{where} raises: works only with do = 'error'; see {DOCS}")
     raises = text(table, "raises", where)
     built_in = getattr(builtins, raises, None)
-    is_error = isinstance(built_in, type) and issubclass(built_in, Exception)
-    if not is_error and not IMPORT_PATH.fullmatch(raises):
+    if not takes_a_message(built_in) and not IMPORT_PATH.fullmatch(raises):
         raise ConfigError(
             f"{where} raises: {raises!r} is not a built-in exception or an import path "
             "of the form 'package.module:Class'"

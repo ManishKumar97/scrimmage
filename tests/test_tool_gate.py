@@ -175,6 +175,38 @@ def test_an_error_fault_can_name_its_type(lines: Lines, raises: str, kind: type)
         tool_gate.gate(get_text, "get_text")("1")
 
 
+class NotAnError:
+    pass
+
+
+class TwoArguments(Exception):
+    def __init__(self, first: str, second: str) -> None:
+        super().__init__(first, second)
+
+
+def a_function() -> None:
+    pass
+
+
+@pytest.mark.design("fault.bad_raises_is_a_mistake")
+@pytest.mark.parametrize(
+    "raises",
+    [
+        "test_tool_gate:NotAnError",
+        "test_tool_gate:TwoArguments",
+        "test_tool_gate:a_function",
+        "test_tool_gate:Missing",
+        "no_such_module_here:Thing",
+    ],
+)
+def test_a_fault_that_cannot_be_raised_is_a_mistake(lines: Lines, raises: str) -> None:
+    install(lines, faults=[Fault("tool:get_text", "error", "always", raises)])
+    state.current().allowed.append("no_such_module_here.")  # type: ignore[union-attr]
+    with pytest.raises(FaultlineMockError, match="the fault cannot raise"):
+        tool_gate.gate(get_text, "get_text")("1")
+    assert "the fault cannot raise" in str(lines.lines[0]["mistake"])
+
+
 @pytest.mark.design("refused.poisons_run")
 def test_the_first_refusal_makes_every_later_call_fail(lines: Lines) -> None:
     install(lines, real=["tool:get_text"])

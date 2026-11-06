@@ -42,7 +42,8 @@ def injected(state: RunState, fault: Fault, name: str, failure: type[Exception])
         kind = mocks.import_object(fault.raises, state.allowed)
     else:
         kind = getattr(builtins, fault.raises)
-    assert isinstance(kind, type)
+    if not (isinstance(kind, type) and issubclass(kind, Exception)):
+        raise TypeError(f"{kind!r} is not an exception class")
     return kind(f"{name} failed")
 
 
@@ -72,7 +73,12 @@ def apply(state: RunState, step: Step, gated: Gated) -> object:
     if decision.action == "fault":
         assert decision.fault is not None
         fault = state.plan.faults[decision.fault]
-        error = injected(state, fault, step.call.name, gated.failure)
+        try:
+            error = injected(state, fault, step.call.name, gated.failure)
+        except Exception as exc:  # a bad raises is a mistake in the test, not the agent's failure
+            problem = FaultlineMockError(f"the fault cannot raise {fault.raises}: {exc}")
+            state.finish(step, error=problem, mistake=str(problem))
+            raise problem from exc
         state.finish(step, error=error)
         raise error
     assert decision.mock is not None

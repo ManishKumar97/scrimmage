@@ -14,7 +14,7 @@ class FaultlineTimeLimit(FaultlineError):
 
 
 class FaultlineMockError(FaultlineError):
-    """A mock's value does not fit the tool's type. A mistake in the test."""
+    """A mock or a fault cannot be built as the test says. A mistake in the test."""
 
 
 class ConfigError(FaultlineError):
