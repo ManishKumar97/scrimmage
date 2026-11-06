@@ -14,9 +14,15 @@ import sys
 from collections.abc import Awaitable, Mapping, Sequence
 from typing import cast
 
+from faultline_sdk.state import current
+
 
 async def _wait(value: Awaitable[object]) -> object:
     return await value
+
+
+class BadAnswerPath(Exception):
+    """The path does not fit what the agent returned. A mistake in the test."""
 
 
 STEP = re.compile(r"\[(-?\d+)\]|\.?([A-Za-z_]\w*)")
@@ -34,10 +40,12 @@ def pick(value: object, path: str) -> object:
             else:
                 value = getattr(value, name)
         except (LookupError, TypeError, AttributeError) as exc:
-            raise SystemExit(
-                f"faultline: [agent] answer {path!r} does not fit what the agent returned: "
+            raise BadAnswerPath(
+                f"[agent] answer {path!r} does not fit what the agent returned: "
                 f"{step.group()!r} failed with {exc!r}"
             ) from None
+    if value is None or callable(value):
+        raise BadAnswerPath(f"[agent] answer {path!r} reaches {value!r}, which is not an answer")
     return value
 
 
@@ -54,7 +62,14 @@ def main(argv: list[str]) -> int:
     if inspect.isawaitable(result):
         result = asyncio.run(_wait(result))
     if len(argv) == 4:
-        result = pick(result, argv[3])
+        try:
+            result = pick(result, argv[3])
+        except BadAnswerPath as exc:
+            run = current()
+            if run is not None:
+                run.notice("answer_path", "faultline", str(exc), mistake=str(exc))
+            print(f"faultline: {exc}", file=sys.stderr)
+            return 1
     answer = result if isinstance(result, str) else json.dumps(result, default=str)
     path = os.environ.get("FAULTLINE_ANSWER_FILE")
     if path:

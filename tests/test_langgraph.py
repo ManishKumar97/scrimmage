@@ -14,7 +14,7 @@ from faultline_sdk import langchain_gate, state, tool_gate
 from faultline_sdk.config import Fault
 from faultline_sdk.errors import FaultlineRefused
 from faultline_sdk.plan import Plan
-from faultline_sdk.start import pick
+from faultline_sdk.start import BadAnswerPath, pick
 
 Fake = Callable[[list[str]], FakeOpenAI]
 TOOLS_LINE = (
@@ -487,7 +487,32 @@ def test_the_answer_path_reads_keys_indexes_and_attributes(
 
 
 @pytest.mark.design("start.answer_path")
-@pytest.mark.parametrize("path", ["reply", "messages[5]", "messages.nope"])
-def test_an_answer_path_that_does_not_fit_says_so(path: str) -> None:
-    with pytest.raises(SystemExit, match="does not fit what the agent returned"):
-        pick({"messages": ["a"]}, path)
+@pytest.mark.parametrize(
+    ("path", "message"),
+    [
+        ("reply", "does not fit what the agent returned"),
+        ("messages[5]", "does not fit what the agent returned"),
+        ("messages[0].nope", "does not fit what the agent returned"),
+        ("messages[0].upper", "which is not an answer"),
+        ("empty", "which is not an answer"),
+    ],
+)
+def test_an_answer_path_that_does_not_fit_says_so(path: str, message: str) -> None:
+    with pytest.raises(BadAnswerPath, match=message):
+        pick({"messages": ["a"], "empty": None}, path)
+
+
+@pytest.mark.design("start.answer_path_is_a_mistake")
+def test_a_wrong_answer_path_is_a_test_mistake_not_a_result(
+    project: Project, fake_openai: Fake
+) -> None:
+    graph(project, fault="")
+    project.edit('answer   = "messages[-1].content"', 'answer   = "messages[-1].nope"')
+    fake = FakeOpenAI(ACME)
+    fake.start()
+    try:
+        result = project.test(fake)
+    finally:
+        fake.stop()
+    assert result.code == 2, result.out + result.err
+    assert "does not fit what the agent returned" in result.out
