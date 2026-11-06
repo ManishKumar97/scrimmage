@@ -20,10 +20,7 @@ from derail_sdk.client import ControlClient, ControlError, Sender
 from derail_sdk.mocks import allowed
 from derail_sdk.plan import Plan, no_plan, tools_from
 
-# Under the runner's five seconds before SIGKILL. A child sends as it goes, so it has
-# little to wait for, and its main thread may be the one holding the send.
-TERM_WAIT_S = 4.0
-CHILD_TERM_WAIT_S = 0.5
+TERM_WAIT_S = 4.0  # under the runner's five seconds before SIGKILL
 
 
 def stop(message: str) -> NoReturn:
@@ -68,7 +65,7 @@ def runs_as_main(module: str, target: str | None, folders: list[str]) -> bool:
     return os.path.realpath(spec.origin) == os.path.realpath(sys.argv[0])
 
 
-def handle_sigterm(last_lines: Callable[[], None], wait: Callable[[], float]) -> None:
+def handle_sigterm(last_lines: Callable[[], None]) -> None:
     """On SIGTERM send the last record lines, then end as Python would have with no handler.
 
     The handler runs on the main thread, which may hold a lock the lines need, so a thread
@@ -84,7 +81,7 @@ def handle_sigterm(last_lines: Callable[[], None], wait: Callable[[], float]) ->
         try:
             worker = threading.Thread(target=last_lines, daemon=True)
             worker.start()
-            worker.join(wait())
+            worker.join(TERM_WAIT_S)
         except RuntimeError:  # Python is already shutting down, so no new thread
             pass
         signal.signal(signum, signal.SIG_DFL)
@@ -176,7 +173,7 @@ def start(*, child: bool = False, target: str | None = None) -> None:
         sender.eager = True
 
     process_gate.install(run_state, before_exec)
-    handle_sigterm(last_lines, lambda: CHILD_TERM_WAIT_S if sender.eager else TERM_WAIT_S)
+    handle_sigterm(last_lines)
     if plan is not None:
         print(
             f"derail: active for run {run} ({plan.test}, {plan.row}); "

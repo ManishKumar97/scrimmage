@@ -967,6 +967,30 @@ def test_a_childs_call_going_on_when_the_group_is_stopped_is_in_the_record(
     assert "DerailStopped" in str(calls(result)[-1]["error"]), result.out
 
 
+@pytest.mark.design("stop.refused_child_other_call")
+def test_a_refused_child_keeps_the_line_of_a_call_going_on_in_another_thread(
+    project: Project,
+) -> None:
+    (project.root / "acme" / "waits.py").write_text(SLOW_TOOL)
+    (project.root / "report.py").write_text(
+        "import os, threading, time\n"
+        "from acme import tools, waits\n"
+        "threading.Thread(target=waits.wait_a_while, args=('1',), daemon=True).start()\n"
+        + UNTIL_THE_TOOL_RUNS
+        + "tools.refund_order('1234')\n"
+    )
+    (project.root / "bot.py").write_text(GATED_CHILD)
+    write_config(project, f"{sys.executable} bot.py {{question}}")
+    project.edit(
+        '"acme.tools:refund_order"]', '"acme.tools:refund_order", "acme.waits:wait_a_while"]'
+    )
+    project.edit('real = ["tool:check_inventory"]', 'real = ["tool:wait_a_while"]')
+    result = project.test()
+    assert summary_of(result)["outcome"] == "refused call", result.out
+    stopped = [x for x in calls(result) if x["call"] == "tool:wait_a_while"]
+    assert len(stopped) == 1 and "DerailStopped" in str(stopped[0]["error"])
+
+
 @pytest.fixture
 def silent_model(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """A model host that takes a request and never answers."""
@@ -1216,7 +1240,7 @@ def test_the_handler_sends_the_last_lines_then_ends_the_program_by_the_signal(
     before = signal.getsignal(signal.SIGTERM)
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
     try:
-        bootstrap.handle_sigterm(lambda: done.append("last lines"), lambda: 1.0)
+        bootstrap.handle_sigterm(lambda: done.append("last lines"))
         handler = signal.getsignal(signal.SIGTERM)
         assert callable(handler)
         handler(signal.SIGTERM, None)
@@ -1239,7 +1263,7 @@ def test_the_handler_ends_the_program_when_python_cannot_start_a_thread(
     before = signal.getsignal(signal.SIGTERM)
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
     try:
-        bootstrap.handle_sigterm(lambda: None, lambda: 1.0)
+        bootstrap.handle_sigterm(lambda: None)
         handler = signal.getsignal(signal.SIGTERM)
         assert callable(handler)
         handler(signal.SIGTERM, None)
@@ -1250,7 +1274,6 @@ def test_the_handler_ends_the_program_when_python_cannot_start_a_thread(
 
 def test_the_sdks_wait_is_shorter_than_the_runners() -> None:
     assert bootstrap.TERM_WAIT_S < runner.KILL_GRACE_S
-    assert bootstrap.CHILD_TERM_WAIT_S < runner.KILL_GRACE_S
 
 
 def test_stop_group_returns_when_the_program_left_its_group() -> None:

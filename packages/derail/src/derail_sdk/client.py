@@ -218,32 +218,45 @@ class Sender:
                     lines.append(self.queue.get_nowait())
             except queue.Empty:
                 break
-        with self._sending:
-            self._send_posts()
-            lines = self.unsent + lines
-            with self._counts:
-                if len(lines) > QUEUE_SIZE:  # the server has been away a long time
-                    self.dropped += len(lines) - QUEUE_SIZE
-                    lines = lines[:QUEUE_SIZE]
-                dropped, self.dropped = self.dropped, 0
-                made = self.made
-            if not lines and not dropped and not final:
-                return False
-            batch: dict[str, object] = {"run": self.run, "lines": lines, "dropped": dropped}
-            if final:
-                batch["made"] = made
-                batch["proc"] = self.proc
+        if not self.eager:
+            with self._sending:
+                self._send_posts()
+                return self._post(lines, final=final)
+        # No lock over the network here: each send has its own connection and the store
+        # writes a line once. A main thread stopped inside a send must not hold up the line
+        # of a call stopped on another thread.
+        if self._sending.acquire(blocking=False):
             try:
-                status, _ = self.client.request("POST", "/v1/records", batch)
-            except ControlError:
-                status = 0
-            if status == 200:
-                self.unsent = []
-                return True
-            self.unsent = lines
-            with self._counts:
-                self.dropped += dropped
+                self._send_posts()
+            finally:
+                self._sending.release()
+        return self._post(lines, final=final)
+
+    def _post(self, lines: list[dict[str, object]], *, final: bool) -> bool:
+        with self._counts:
+            lines = self.unsent + lines
+            self.unsent = []
+            if len(lines) > QUEUE_SIZE:  # the server has been away a long time
+                self.dropped += len(lines) - QUEUE_SIZE
+                lines = lines[:QUEUE_SIZE]
+            dropped, self.dropped = self.dropped, 0
+            made = self.made
+        if not lines and not dropped and not final:
             return False
+        batch: dict[str, object] = {"run": self.run, "lines": lines, "dropped": dropped}
+        if final:
+            batch["made"] = made
+            batch["proc"] = self.proc
+        try:
+            status, _ = self.client.request("POST", "/v1/records", batch)
+        except ControlError:
+            status = 0
+        if status == 200:
+            return True
+        with self._counts:
+            self.unsent = lines + self.unsent
+            self.dropped += dropped
+        return False
 
     def _send_posts(self) -> None:
         while self.settles:
