@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from faultline_sdk import labels
+from faultline_sdk import labels, provider_openai
 from faultline_sdk.errors import ConfigError
 from faultline_sdk.mocks import allowed
 
@@ -154,6 +154,7 @@ def load(path: Path) -> Config:
     parsed: list[Test] = []
     for i, raw in enumerate(tests, 1):
         test = read_test(as_table(raw, f"[[test]] {i}"), i)
+        reject_model_mocks(test, agent)
         if test.name in seen:
             raise ConfigError(f"[[test]] {test.name!r}: name is used twice")
         seen.add(test.name)
@@ -400,6 +401,19 @@ def read_test(table: dict[str, object], index: int) -> Test:
         mocks=tuple(mocks),
         faults=tuple(faults),
     )
+
+
+def reject_model_mocks(test: Test, agent: Agent) -> None:
+    """A web mock on a model path would never answer: that request is a model call."""
+    hosts = {*provider_openai.HOSTS, *(h.host for h in agent.model_hosts)}
+    for mock in test.mocks:
+        host = mock.call.removeprefix("http:")
+        method = mock.method or "POST"
+        if host in hosts and mock.path and provider_openai.op_for(mock.path, method):
+            raise ConfigError(
+                f"[[test]] {test.name!r}: {mock.call} {mock.path} is a model call, which "
+                f"cannot be mocked: it is real or a fault; see {DOCS}"
+            )
 
 
 def narrowing(table: dict[str, object], where: str) -> tuple[str | None, str | None]:

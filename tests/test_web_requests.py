@@ -18,7 +18,7 @@ import jsonschema
 import pytest
 
 from conftest import Project, Result
-from faultline_sdk import config, http_gate, labels, plan, state
+from faultline_sdk import config, http_gate, labels, plan, provider_openai, state
 from faultline_sdk.config import Fault, Mock
 from faultline_sdk.errors import ConfigError, FaultlineRefused
 from faultline_sdk.plan import Plan
@@ -605,7 +605,7 @@ def test_a_web_body_is_not_parsed_as_a_model_body(
     def parsed(body: bytes) -> dict[str, object]:
         raise AssertionError("a web body was parsed")
 
-    monkeypatch.setattr(http_gate.openai_table, "request_fields", parsed)
+    monkeypatch.setattr(provider_openai, "request_fields", parsed)
     gate(lib, real=("http:127.0.0.1",))
     with lib.Client() as client:
         assert client.post(web.url("/fine"), json={"a": 1}).status_code == 200
@@ -954,6 +954,25 @@ def test_an_ipv6_host_can_be_named_and_matches_its_request(lib: Any, written: st
     gate(lib, mocks=(Mock(label, None, None, text="m"),))
     with lib.Client() as client:
         assert client.get("http://[::1]:9/x").text == "m"
+
+
+@pytest.mark.design("web.model_path_mock_rejected")
+@pytest.mark.parametrize(
+    ("host", "agent"),
+    [
+        ("api.openai.com", ""),
+        ("llm.acme.internal", 'model_hosts = [{host = "llm.acme.internal", provider = "openai"}]'),
+    ],
+)
+def test_a_mock_on_a_model_path_is_rejected(tmp_path: Path, host: str, agent: str) -> None:
+    body = f"[[test.mock]]\ncall = 'http:{host}'\npath = '/v1/chat/completions'\ntext = 'x'\n"
+    with pytest.raises(ConfigError, match="is a model call, which cannot be mocked"):
+        load_mock(tmp_path, body, agent)
+
+
+def test_a_mock_on_a_read_path_of_a_model_host_loads(tmp_path: Path) -> None:
+    body = "[[test.mock]]\ncall = 'http:api.openai.com'\npath = '/v1/files'\ntext = 'x'\n"
+    assert load_mock(tmp_path, body).tests[0].mocks[0].path == "/v1/files"
 
 
 @pytest.mark.design("web.plan_schema")
