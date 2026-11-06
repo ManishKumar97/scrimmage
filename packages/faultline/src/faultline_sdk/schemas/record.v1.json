@@ -418,7 +418,9 @@
         "notice": {
           "enum": [
             "structure",
-            "newer_version"
+            "newer_version",
+            "tools_seen",
+            "answer_path"
           ]
         },
         "library": {
