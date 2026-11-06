@@ -224,7 +224,7 @@ def test_a_task_cancelled_just_after_it_reserved_gives_the_reservation_back(
 
     budget = Budget(limit=100.0)
     sink, _ = install(make_plan(budget=100.0), budget)
-    monkeypatch.setattr(httpx2_gate.asyncio, "to_thread", done_then_cancelled)
+    monkeypatch.setattr(asyncio, "to_thread", done_then_cancelled)
 
     async def go() -> None:
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(answer)) as c:
@@ -248,7 +248,7 @@ def test_work_that_starts_after_the_cancel_does_nothing(
 
     budget = Budget(limit=100.0)
     sink, _ = install(make_plan(budget=100.0), budget)
-    monkeypatch.setattr(httpx2_gate.asyncio, "to_thread", cancelled_first)
+    monkeypatch.setattr(asyncio, "to_thread", cancelled_first)
 
     async def go() -> None:
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(answer)) as c:
