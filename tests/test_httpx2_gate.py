@@ -853,3 +853,12 @@ def test_the_suggested_price_line_is_valid_toml_for_a_gateway_name(gated: None) 
         client().post(URL, json={**BODY, "model": model})
     line = str(refused.value).split("such as ")[1].split(" (dollars")[0]
     assert tomllib.loads(line) == {model: {"input": 0.15, "output": 0.60}}
+
+
+@pytest.mark.design("gate.refusal_text_redacted")
+def test_a_secret_never_reaches_the_agent_in_a_refusal(gated: None) -> None:
+    secret = "sk-proj-" + "a" * 30
+    install(make_plan(budget=1.0), Budget(limit=1.0))
+    with pytest.raises(FaultlineRefused) as refused:
+        client().post(URL, json={**BODY, "model": secret})
+    assert secret not in str(refused.value)

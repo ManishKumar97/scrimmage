@@ -274,7 +274,7 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
 
 
 def refuse(run: RunState, step: Step, detail: str) -> NoReturn:
-    error = run.refusal(step, detail)
+    error = run.refusal(step, redact(detail))
     mistake = str(error) if step.decision.reason in MISTAKE_REASONS else None
     run.finish(step, error=error, mistake=mistake)
     raise error
