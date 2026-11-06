@@ -1060,3 +1060,10 @@ def test_injected_state_and_store_are_left_out_of_the_record(
     args = tool_lines(result.records()[0])[0]["args"]
     assert isinstance(args, dict)
     assert args["preview"] == '{"order_id": "1234"}'
+
+
+@pytest.mark.design("adapter.copy_is_tracked")
+def test_a_renamed_copy_of_a_safe_tool_does_not_stop_the_test(project: Project) -> None:
+    result, fake = offered(project, "renamed_copy")
+    assert result.code == 0, result.out + result.err
+    assert "which no gate sees" not in result.out and fake.requests != []

@@ -86,3 +86,4 @@ _.as_tool  # tests/example/acme/unsafe.py: an override the adapter must leave al
 _.override_with_no_init  # tests/example/acme/unsafe.py: a test names it
 _.__init_subclass__  # langchain_gate.py and tests: Python calls it
 _.answer_with_injected  # tests/example/acme/graph.py: a test names it
+_.renamed_copy  # tests/example/acme/unsafe.py: a test names it

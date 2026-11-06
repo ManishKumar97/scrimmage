@@ -104,9 +104,12 @@ def patch(module: ModuleType, run: RunState, stop: Callable[[str], None]) -> Non
     @functools.wraps(create)
     def tracked_init(self: Any, *args: Any, **kwargs: Any) -> None:
         create(self, *args, **kwargs)
+        track(self)
+
+    def track(tool: Any) -> None:
         with lock:
-            tools[id(self)] = self
-        vet(self)
+            tools[id(tool)] = tool
+        vet(tool)
 
     def tracked_subclass(cls: type, **kwargs: Any) -> None:
         made(cls, **kwargs)
@@ -129,6 +132,16 @@ def patch(module: ModuleType, run: RunState, stop: Callable[[str], None]) -> Non
 
     run.rechecks.append(recheck)
     base.__init__ = tracked_init
+    if "model_copy" in vars(base):  # a copy has no __init__; older versions lack this method
+        copied = vars(base)["model_copy"]
+
+        @functools.wraps(copied)
+        def tracked_copy(self: Any, *args: Any, **kwargs: Any) -> Any:
+            tool = copied(self, *args, **kwargs)
+            track(tool)
+            return tool
+
+        base.model_copy = tracked_copy
     base.__init_subclass__ = classmethod(tracked_subclass)
     for name in ENTRIES:
         setattr(base, name, checked(vars(base)[name], run, vet))

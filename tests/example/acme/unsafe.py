@@ -162,6 +162,11 @@ def override_with_no_init(question: str) -> str:
     return str(Constructed.model_construct().invoke({"order_id": "1"}))
 
 
+def renamed_copy(question: str) -> dict[str, Any]:
+    """model_copy makes a tool with no __init__, and this one is safe."""
+    return offer(Order().model_copy(update={"name": "get_order2"}), question)
+
+
 def partial_run(question: str) -> str:
     return str(offer(PartialRun(), question))
 
