@@ -123,6 +123,27 @@ Use the address the server redirects to, or list that path under `real`.
 An `http:` mock or fault on the server's endpoint never fires, because the web gate does not decide those requests.
 Use an `mcp:` label instead.
 
+## FastMCP's client for several servers
+
+`Client({"mcpServers": {...}})` with two or more servers starts a router inside your program, named `MCPRouter`, and joins the tool names with the server's, as in `docs_search`.
+Your code talks to the router, and the router talks to each server.
+So Derail sees two MCP calls for one of yours:
+
+| Call | Label |
+|---|---|
+| your code to the router | `mcp:MCPRouter/docs_search` |
+| the router to the server | `mcp:docs/search` |
+
+The first one is decided first, so a mock on `mcp:docs/search` alone is not enough: the call is refused at `mcp:MCPRouter/docs_search`.
+There are two ways to write the test:
+
+- Mock or fail `mcp:MCPRouter/docs_search`. The router never runs, and neither does the server.
+- List `mcp:MCPRouter/docs_search` under `real`, and mock, fail or list `mcp:docs/search`. The router really runs, and the second call is decided as usual.
+
+In the second way the router's line says `real`, and also has `forwarded_to`, the label of the call that was really decided.
+
+With one server, FastMCP's client talks to it directly, so there is only the one label.
+
 ## Offering tools to a model
 
 A tool in a `tools/list` reply counts as one a gate sees, so you can offer it to the model.

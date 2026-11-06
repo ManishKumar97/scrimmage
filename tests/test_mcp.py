@@ -813,6 +813,48 @@ def test_fastmcp_a_real_timeout_and_the_injected_one_look_the_same(
     assert answer_of(injected, "fault 1") == answer_of(real)
 
 
+ROUTER = "mcp:MCPRouter/docs_search"
+
+
+@pytest.mark.design("mcp.fastmcp_router")
+def test_fastmcps_router_fails_closed(docs: Docs) -> None:
+    docs.start("stdio")
+    result = docs.run("acme.docs_bot:answer_fastmcp_two_servers", MOCK)
+    assert result.code == 2, result.out
+    assert docs.received() == []
+    assert calls(result)[0] == (ROUTER, "refused")
+
+
+@pytest.mark.design("mcp.fastmcp_router")
+def test_fastmcps_router_can_be_mocked(docs: Docs) -> None:
+    docs.start("stdio")
+    mock = f'[[test.mock]]\ncall = "{ROUTER}"\nreturns = {{hits = ["mocked"], total = 1}}\n'
+    result = docs.run("acme.docs_bot:answer_fastmcp_two_servers", mock)
+    assert result.code == 0, result.out
+    assert docs.received() == []
+    assert calls(result) == [(ROUTER, "mock")]
+
+
+@pytest.mark.design("mcp.fastmcp_router")
+def test_a_forwarded_call_says_what_decided_it(docs: Docs) -> None:
+    docs.start("stdio")
+    result = docs.run("acme.docs_bot:answer_fastmcp_two_servers", MOCK, f'real = ["{ROUTER}"]')
+    assert result.code == 0, result.out
+    assert docs.received() == []
+    lines = {x["call"]: x for x in row(result, "baseline") if "call" in x}
+    assert lines[LABEL]["action"] == "mock"
+    assert lines[ROUTER]["forwarded_to"] == LABEL
+    fits_the_schema(result)
+
+
+@pytest.mark.design("mcp.fastmcp_router")
+def test_a_forwarded_call_that_is_refused_stops_at_the_server_label(docs: Docs) -> None:
+    docs.start("stdio")
+    result = docs.run("acme.docs_bot:answer_fastmcp_two_servers", "", f'real = ["{ROUTER}"]')
+    assert docs.received() == []
+    assert (LABEL, "refused") in calls(result)
+
+
 @pytest.mark.design("mcp.fastmcp_refused")
 def test_fastmcps_client_is_refused(docs: Docs) -> None:
     docs.start("http")

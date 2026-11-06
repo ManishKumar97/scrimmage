@@ -182,6 +182,23 @@ def answer_two_readings(question: str) -> str:
     return asyncio.run(go())
 
 
+def answer_fastmcp_two_servers(question: str) -> str:
+    """FastMCP's client for several servers: a router in this process that forwards."""
+    from fastmcp import Client as FastClient
+
+    def entry(name: str) -> dict[str, Any]:
+        return {"command": sys.executable, "args": stdio_args(name)}
+
+    async def go() -> str:
+        servers = {"mcpServers": {"docs": entry("docs"), "wiki": entry("wiki")}}
+        async with FastClient(servers) as client:
+            await client.list_tools()
+            result = await client.call_tool("docs_search", {"q": "refunds"})
+            return f"text={[b.text for b in result.content]}"  # type: ignore[union-attr]
+
+    return asyncio.run(go())
+
+
 def answer_with_reads(question: str) -> str:
     """Requests that are not tool calls, though a server can act on them."""
 

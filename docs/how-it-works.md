@@ -41,7 +41,8 @@ Before swapping, the gate checks that the function exists, takes the arguments i
 
 ## MCP tools
 
-The official MCP client sends every request through one method, `ClientSession.send_request`, on every transport, and FastMCP's client is built on it.
+The official MCP client sends every tool call through one method, `ClientSession.send_request`, on every transport, and FastMCP's client is built on it.
+Almost every other request goes through it too; the connection's own messages and notifications do not.
 When your code first imports the library, the SDK swaps that method for a gate.
 
 1. A request that is not a tool call goes straight through. From a `tools/list` reply the gate notes each tool's name, whether it declares an output schema, and whether the server marks it read-only.

@@ -14,6 +14,7 @@ import copy
 import importlib.metadata
 import json
 from collections.abc import AsyncIterator, Callable, Coroutine
+from contextvars import ContextVar
 from types import ModuleType
 from typing import Any
 
@@ -55,6 +56,9 @@ PASSES = (
 # Of those, the ones a server can act on with data, whatever the protocol says. They still
 # pass, because a test could not run without them, but each one leaves a line.
 TRACED = ("resources/read", "prompts/get", "completion/complete", "resources/subscribe")
+# The real call in flight here. A client that proxies, such as FastMCP's for several servers,
+# makes a second MCP call inside the first, which the gate decides by itself.
+FORWARDING: ContextVar[Step | None] = ContextVar("derail_mcp_forwarding", default=None)
 # The functions the transport opens a web request with, and where each takes the address.
 OPENERS = {"stream_within_origin": 2, "sse_within_origin": 1}
 
@@ -214,7 +218,12 @@ def patch(module: ModuleType, gate: Gate) -> None:
         call = call_for(server, fields["name"] if tool_call else method)
         step = decided(gate, run, call, fields.get("arguments") if tool_call else fields)
         if step.decision.action == "real":
-            return await carried(gate, run, step, send(self, request, result_type, *args, **kw))
+            token = FORWARDING.set(step)
+            try:
+                sent = send(self, request, result_type, *args, **kw)
+                return await carried(gate, run, step, sent)
+            finally:
+                FORWARDING.reset(token)
         if step.decision.action == "fault":
             reply = fault_reply(module, run, step, method)
         else:
@@ -276,6 +285,9 @@ def decided(gate: Gate, run: RunState, call: Call, arguments: object) -> Step:
     """Count and decide one call. Raises DerailRefused after recording a refusal."""
     gate.note(call.name, call.label)
     step = run.decide(call, {})
+    forwarding = FORWARDING.get()
+    if forwarding is not None:  # its real says only that it was passed on, so the line says so
+        forwarding.extra["forwarded_to"] = call.label
     step.extra["args"] = record(gate, arguments)
     if step.decision.action == "refused":
         refuse(run, step, read_only_note(gate, call))

@@ -53,6 +53,7 @@ _.handbook  # tests/fakes/docs_server.py: the MCP server calls its resources by 
 _.summarise  # tests/fakes/docs_server.py: the MCP server calls its prompts by name
 _.answer_slashed_tool  # tests/example/acme/docs_bot.py: a test's derail.toml names it
 _.answer_two_readings  # tests/example/acme/docs_bot.py: a test's derail.toml names it
+_.answer_fastmcp_two_servers  # tests/example/acme/docs_bot.py: a test's derail.toml names it
 _.answer_twice  # tests/example/acme/rag.py: named by import path in a test's derail.toml
 _.answer_tuning  # tests/example/acme/rag.py: named by import path in a test's derail.toml
 _.answer_hosted  # tests/example/acme/rag.py: named by import path in a test's derail.toml
