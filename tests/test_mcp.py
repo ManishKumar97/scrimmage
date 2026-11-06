@@ -205,7 +205,7 @@ def test_a_mock_is_text_or_json_and_fills_the_structured_result_only_for_a_shape
     assert answer_of(result) == "error=False blocks=1 text='mocked note' structured=None"
     table = '[[test.mock]]\ncall = "mcp:docs/note"\nreturns = {a = 1}\n'
     result = docs.run("acme.docs_bot:answer", table)
-    assert answer_of(result) == """error=False blocks=1 text='{"a": 1}' structured=None"""
+    assert answer_of(result) == """error=False blocks=1 text='{\\n  "a": 1\\n}' structured=None"""
 
 
 @pytest.mark.design("mcp.mock_text")
@@ -225,6 +225,17 @@ def test_a_wrapped_shape_takes_the_field_the_server_sends(docs: Docs) -> None:
     result = docs.run("acme.docs_bot:answer", mock)
     assert "structured={'result': 'mocked'}" in answer_of(result)
     assert "error=False" in answer_of(result)
+
+
+@pytest.mark.design("mcp.mock_text")
+@BOTH
+def test_a_mocks_text_is_written_as_a_real_server_writes_it(docs: Docs, transport: str) -> None:
+    docs.start(transport, "accent")
+    real = docs.run("acme.docs_bot:answer", "", f'real = ["{LABEL}"]')
+    mock = f'[[test.mock]]\ncall = "{LABEL}"\nreturns = {{hits = ["réal refunds"], total = 1}}\n'
+    mocked = docs.run("acme.docs_bot:answer", mock)
+    assert "réal" in answer_of(real)
+    assert answer_of(mocked) == answer_of(real)
 
 
 @pytest.mark.design("mcp.short_label")

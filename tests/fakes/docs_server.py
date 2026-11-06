@@ -48,7 +48,7 @@ def serve(transport: str, name: str, log: str, mode: str, port: int = 0) -> None
                 structured_content={"hits": "not a list"},
             )
             return bad  # type: ignore[return-value]
-        return {"hits": [f"real {q}"], "total": 1}
+        return {"hits": [f"réal {q}" if mode == "accent" else f"real {q}"], "total": 1}
 
     @server.tool(structured_output=False)
     def note(q: str) -> list[TextContent]:

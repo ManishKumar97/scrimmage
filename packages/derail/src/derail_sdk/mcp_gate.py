@@ -373,7 +373,7 @@ async def mock_reply(gate: Gate, run: RunState, step: Step, session: Any) -> dic
         except BaseException as exc:
             run.finish(step, error=exc)
             raise
-    text = value if isinstance(value, str) else json.dumps(value)
+    text = value if isinstance(value, str) else json.dumps(value, indent=2, ensure_ascii=False)
     reply = tool_result([{"type": "text", "text": text}])
     if step.call.label in gate.shaped:
         reply["structuredContent"] = value
