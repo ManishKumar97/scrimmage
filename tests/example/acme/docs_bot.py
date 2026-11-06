@@ -199,6 +199,29 @@ def answer_fastmcp_two_servers(question: str) -> str:
     return asyncio.run(go())
 
 
+def answer_langchain(question: str) -> str:
+    """A LangChain tool with an MCP call inside it."""
+    from langchain_core.tools import tool
+
+    @tool
+    async def lookup(q: str) -> str:
+        """Search the documents."""
+        async with over_stdio() as session:
+            await session.list_tools()
+            return described(await session.call_tool("search", {"q": q}))
+
+    return asyncio.run(lookup.ainvoke({"q": "refunds"}))
+
+
+def answer_after_close(question: str) -> str:
+    async def go() -> str:
+        async with over_stdio() as session:
+            await session.list_tools()
+        return await search(session)
+
+    return asyncio.run(go())
+
+
 def answer_with_reads(question: str) -> str:
     """Requests that are not tool calls, though a server can act on them."""
 

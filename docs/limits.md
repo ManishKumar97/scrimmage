@@ -3,13 +3,14 @@
 - **One agent shape.** The agent must be a Python function. Scripts and web services come later.
 - **Tools, web requests and OpenAI model calls.** Derail gates the tools you list under `tools`, the LangChain tools it finds by itself, requests sent with httpx or httpx2, and model calls. See [Safety](safety.md).
 - **mcp 2.x only, tested with 2.3.** A program that imports `mcp` 1.x stops with exit code 3, even if it never calls an MCP tool, because 1.x has no place for the gate. Install `mcp` 2.x in the test environment.
-- **MCP through the official client or a client built on it, such as FastMCP's.** A client of your own that speaks the protocol by itself is not gated at the MCP gate. Over the web its POSTs meet the web gate; over stdio nothing sees them.
+- **MCP through the official client or a client built on it, such as FastMCP's.** A client of your own that speaks the protocol by itself is not gated at the MCP gate. If it sends its own web requests, its POSTs meet the web gate. If it is built on `streamable_http_client` and writes its own JSON-RPC messages, they go out through the transport's marked requests, undecided and unrecorded. Over stdio nothing sees them.
 - **The old SSE transport for MCP.** Its web requests are not marked, so its first POST is refused by the web gate and the run stops. Use streamable HTTP or stdio.
 - **MCP tools under another name.** A tool the model sees under a name other than the server's, such as `docs_search`, is reported as a tool no gate sees, and the test stops.
 - **Only MCP tool calls are gated.** `resources/read`, `prompts/get` and the rest pass, and cannot be mocked or failed. A server can act on any of them. `resources/read`, `prompts/get`, `completion/complete` and `resources/subscribe` each leave a `real` line. See [Safety](safety.md#what-an-mcp-tool-may-do).
 - **Two MCP servers with one name.** Derail cannot tell them apart, and `mcp:docs/search` names both. Two servers that give no name are the same case.
 - **An MCP label that reads two ways.** Tool `b/c` on server `a` and tool `c` on server `a/b` share the label `mcp:a/b/c`. The test stops once both are known, and there is no way to name either one.
 - **`mcp:search` before the second server is known.** The ambiguous-label check runs at each call, so a call made before the second server was listed or called goes by that label.
+- **A mock on a closed MCP session still answers.** A mock or a fault sends nothing, so it never finds out that the connection has gone.
 - **POSTs a library sends by itself.** Everything through httpx or httpx2 is gated, so these are refused too until listed: the SDK of another model provider, telemetry exporters, and credential requests such as an OAuth token POST, including one an MCP client sends, even to the MCP server's own host.
 - **A provider that is not OpenAI.** Listing its host under `real` lets the calls through, but they are web requests, so the budget does not see them. Name a host that speaks OpenAI's format under `model_hosts` instead.
 - **One provider.** OpenAI's Chat Completions, Responses and embeddings, and gateways that speak the same format. Other providers come later.

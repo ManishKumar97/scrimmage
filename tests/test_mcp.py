@@ -749,6 +749,31 @@ def test_a_tool_the_server_lists_can_be_offered_to_the_model(
     assert any(text.startswith("tool failed: Error executing tool search") for text in told)
 
 
+# A framework's tool around an MCP call.
+
+
+@pytest.mark.design("mcp.tool_gate_first")
+def test_a_langchain_tool_meets_its_own_gate_first(docs: Docs) -> None:
+    docs.start("stdio")
+    function = "acme.docs_bot:answer_langchain"
+    refused = docs.run(function, MOCK)
+    assert calls(refused) == [("tool:lookup", "refused")]
+    mock = '[[test.mock]]\ncall = "tool:lookup"\nreturns = "mocked tool"\n'
+    mocked = docs.run(function, mock)
+    assert calls(mocked) == [("tool:lookup", "mock")]
+    listed = docs.run(function, MOCK, 'real = ["tool:lookup"]')
+    assert listed.code == 0, listed.out
+    assert calls(listed) == [(LABEL, "mock"), ("tool:lookup", "real")]
+    assert docs.received() == []
+
+
+@pytest.mark.design("mcp.mock_on_a_closed_session")
+def test_a_mock_on_a_closed_session_still_answers(docs: Docs) -> None:
+    docs.start("stdio")
+    result = docs.run("acme.docs_bot:answer_after_close", MOCK)
+    assert "'hits': ['mocked']" in answer_of(result), result.out
+
+
 # 5.3 FastMCP.
 
 

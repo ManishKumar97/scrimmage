@@ -71,7 +71,8 @@ Derail does not stop them, because nothing marks which ones are safe.
 Each one leaves a line in the record with the action `real`, so you can see that it happened.
 If a stray one would do real harm, point the test at a server that cannot do it.
 
-If a label such as `mcp:search` could mean a tool on two servers, the test stops, so a read on one server cannot be taken for a write on another.
+If a label such as `mcp:search` could mean a tool on two servers, the test stops at the first call after both servers are known, so from then on a read on one server cannot be taken for a write on another.
+A call made before the second server was listed or called goes by that label. See [Limits](limits.md).
 
 ## The budget
 
