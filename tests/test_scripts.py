@@ -731,6 +731,18 @@ def test_a_very_long_command_line_is_cut_on_the_record(project: Project) -> None
     assert len(str(processes(result)[0]["command"])) == 1000
 
 
+@pytest.mark.design("other.torn_report")
+@pytest.mark.parametrize("line", ['{"pid": 12, "mess', "[1]", '{"pid": 1}'])
+def test_a_torn_report_from_another_python_is_still_a_refusal(project: Project, line: str) -> None:
+    code = (
+        "import os\n"
+        f"open(os.environ['DERAIL_ANSWER_FILE'] + '.refused', 'w').write({line!r} + '\\n')\n"
+        "print('the answer')\n"
+    )
+    result = script(project, code)
+    assert result.code == 2 and summary_of(result)["outcome"] == "refused call", result.out
+
+
 # Forked children.
 
 

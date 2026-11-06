@@ -322,8 +322,7 @@ class Runner:
             return []
         lines: list[dict[str, object]] = []
         for number, text in enumerate(path.read_text(errors="replace").splitlines(), 1):
-            report = cast(dict[str, object], json.loads(text))
-            process = cast(dict[str, object], report["process"])
+            report, process = read_report(text)
             lines.append(
                 {
                     **self.line(run, row, number, report["pid"]),
@@ -477,6 +476,17 @@ def unused_mocks(config: Config, results: list[RunResult]) -> tuple[list[str], l
                     "tool."
                 )
     return notes, mistakes
+
+
+def read_report(text: str) -> tuple[dict[str, object], dict[str, object]]:
+    """A line a child left, and its process. A line it could not finish is still a refusal."""
+    try:
+        report = cast(dict[str, object], json.loads(text))
+        return report, cast(dict[str, object], report["process"])
+    except (ValueError, KeyError, TypeError):
+        message = "a program on another Python tried to import a listed tool"
+        process: dict[str, object] = {"python": "", "command": text, "parent": 0}
+        return {"pid": 0, "message": message}, process
 
 
 def kill_those_who_left(run: str, group: int) -> list[tuple[int, str]]:
