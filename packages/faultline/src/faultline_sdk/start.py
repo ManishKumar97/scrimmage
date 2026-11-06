@@ -39,7 +39,7 @@ def pick(value: object, path: str) -> object:
                 value = cast(Mapping[str, object], value)[name]
             else:
                 value = getattr(value, name)
-        except (LookupError, TypeError, AttributeError) as exc:
+        except Exception as exc:  # a property on the way can raise anything
             raise BadAnswerPath(
                 f"[agent] answer {path!r} does not fit what the agent returned: "
                 f"{step.group()!r} failed with {exc!r}"

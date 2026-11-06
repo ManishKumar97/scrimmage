@@ -962,3 +962,14 @@ def test_a_crash_before_the_first_model_call_is_not_called_a_budget_problem(
 def test_a_blocked_tool_is_not_called_a_misspelled_label(project: Project) -> None:
     result, _ = offered(project, "partial_run")
     assert "names no tool the agent has" not in result.out
+
+
+@pytest.mark.design("start.answer_path_is_a_mistake")
+def test_a_property_that_fails_on_the_answer_path_says_so() -> None:
+    class Reply:
+        @property
+        def content(self) -> str:
+            raise ValueError("no content yet")
+
+    with pytest.raises(BadAnswerPath, match="no content yet"):
+        pick(Reply(), "content")
