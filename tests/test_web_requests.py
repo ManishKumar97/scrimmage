@@ -588,6 +588,47 @@ def test_a_refusal_poisons_the_run_for_later_reads(lib: Any, web: Web) -> None:
     assert web.hits == []
 
 
+@pytest.mark.design("web.raw_path")
+def test_a_path_is_matched_as_it_was_sent(lib: Any) -> None:
+    mocks = (Mock(LABEL, None, None, path="/a%20b", text="spaced"),)
+    gate(lib, mocks=mocks, real=())
+    with lib.Client() as client:
+        assert client.get(f"https://{HOST}/a%20b").text == "spaced"
+        assert client.get(f"https://{HOST}/a b").text == "spaced"
+    gate(lib, mocks=(Mock(LABEL, None, None, path="/a/b", text="x"),))
+    transport = lib.MockTransport(lambda request: lib.Response(200, text="real"))
+    with lib.Client(transport=transport) as client:
+        assert client.get(f"https://{HOST}/a%2Fb").text == "real"
+
+
+@pytest.mark.design("web.refusal_suggests_a_loadable_entry")
+@pytest.mark.parametrize(
+    "url",
+    [
+        f"https://{HOST}/a%20b/c%2Fd?token=x",
+        "https://bücher.example/kaufen",
+        "http://[::1]:9/x",
+    ],
+)
+def test_a_refusal_suggests_an_entry_that_loads_and_allows_the_request(lib: Any, url: str) -> None:
+    gate(lib)
+    transport = lib.MockTransport(lambda request: lib.Response(200, text="sent"))
+    with lib.Client(transport=transport) as client, pytest.raises(FaultlineRefused) as found:
+        client.post(url)
+    entry = re.findall(r'add "([^"]+)" to real', str(found.value))[0]
+    allowed = labels.check(entry, "real", pattern=True)
+    gate(lib, real=(allowed,))
+    with lib.Client(transport=transport) as client:
+        assert client.post(url).text == "sent"
+
+
+@pytest.mark.design("web.xn_host")
+def test_an_international_host_is_named_by_its_xn_form(lib: Any) -> None:
+    gate(lib, mocks=(Mock("http:xn--bcher-kva.example", None, None, text="m"),))
+    with lib.Client() as client:
+        assert client.get("https://bücher.example/x").text == "m"
+
+
 @pytest.mark.design("web.host_from_request")
 def test_a_request_through_a_proxy_is_labelled_by_its_own_host(lib: Any, web: Web) -> None:
     sink = gate(lib)
@@ -829,7 +870,9 @@ def test_hosts_are_lowercase_and_real_forms_are_normalized(tmp_path: Path) -> No
         (f"{MOCK}headers = {{a = 1}}\n", "", "headers a: expected text"),
         (f"[[test.mock]]\ncall = '{LABEL}'\nmethod = 'G T'\n", "", "not an HTTP method"),
         (f"[[test.mock]]\ncall = '{LABEL}'\npath = 'a'\n", "", "is not a path"),
-        (f"[[test.mock]]\ncall = '{LABEL}'\npath = '/a?b=1'\n", "", "query string is not matched"),
+        (f"[[test.mock]]\ncall = '{LABEL}'\npath = '/a?b=1'\n", "", "no query string"),
+        (f"[[test.mock]]\ncall = '{LABEL}'\npath = '/a b'\n", "", "percent-encoded"),
+        (f"[[test.mock]]\ncall = '{LABEL}'\npath = '/é'\n", "", "percent-encoded"),
         (f"[[test.mock]]\ncall = '{LABEL} GET /a'\n", "", "in their own settings"),
         ("[[test.mock]]\ncall = 'http:'\n", "", "needs a host"),
         ("[[test.mock]]\ncall = 'http:localhost:8000'\n", "", "has a port"),

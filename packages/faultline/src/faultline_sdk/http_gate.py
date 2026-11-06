@@ -224,15 +224,24 @@ def provider_of(ctx: Context, host: str) -> str | None:
     return named or ("openai" if host in openai_table.HOSTS else None)
 
 
+def host_of(url: Any) -> str:
+    """The host as sent, so an international name is its xn-- form."""
+    return bytes(url.raw_host).decode("ascii").lower()
+
+
+def path_of(url: Any) -> str:
+    """The path as sent, without the query, so /a%2Fb stays apart from /a/b."""
+    return bytes(url.raw_path).decode("ascii").partition("?")[0]
+
+
 def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call:
     """The call this request is: a model call, or a web request to its own host."""
-    host = str(request.url.host).lower()
+    host = host_of(request.url)
     provider = provider_of(ctx, host)
-    path = str(request.url.path)
     method = str(request.method).upper()
-    op = openai_table.op_for(path, method) if provider is not None else None
+    op = openai_table.op_for(str(request.url.path), method) if provider is not None else None
     if provider is None or op is None:
-        return Call("http", f"http:{host}", path, provider, method)
+        return Call("http", f"http:{host}", path_of(request.url), provider, method)
     try:
         retry = max(0, int(request.headers.get("x-stainless-retry-count", "0")))
     except ValueError:
@@ -253,7 +262,7 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
     # The method and path only: headers, cookies and a query string are never recorded.
     extra: dict[str, object] = {
         "method": call.method,
-        "path": str(request.url.path),
+        "path": path_of(request.url),
         "args": blob(body or b"", ctx.sender),
     }
     if call.provider is not None:
@@ -265,7 +274,7 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
     step.extra = extra
     if not ctx.faults and step.decision.action in ("fault", "mock"):
         without_faults(run, step)
-    where = f"{call.method} {request.url.path}"
+    where = f"{call.method} {path_of(request.url)}"
     if step.decision.action == "refused":
         refuse(run, step, where)
     if call.kind == "model" and call.name == "chat":
@@ -518,7 +527,7 @@ def off_host(ctx: Context, step: Step, request: Any, response: Any) -> str | Non
     if step.call.kind != "model" or not response.has_redirect_location:
         return None
     try:
-        host = str(request.url.join(response.headers["location"]).host).lower()
+        host = host_of(request.url.join(response.headers["location"]))
     except Exception:  # not a usable address: httpx2 raises its own error when it follows it
         return None
     return None if provider_of(ctx, host) else host

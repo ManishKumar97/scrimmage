@@ -17,7 +17,7 @@ MODEL = re.compile(r"model(?::(?P<provider>[a-z*][a-z0-9_-]*)(?:/(?P<op>[a-z_]+)
 HOSTED = re.compile(r"hosted:mcp/[A-Za-z0-9_.-]+")
 WEB_HOST = re.compile(r"[a-z0-9][a-z0-9._-]*")
 WEB_METHOD = re.compile(r"[A-Za-z]+")
-WEB_PATH = re.compile(r"/[^\s?#]*")
+WEB_PATH = re.compile(r"/(?:(?![?#])[\x21-\x7e])*")  # as sent: percent-encoded, no query
 DOCS = "see docs/configuration.md"
 
 
@@ -99,7 +99,10 @@ def web_host(text: str, label: str, where: str) -> str:
 
 def path_of(value: str, where: str) -> str:
     if not WEB_PATH.fullmatch(value):
-        raise ConfigError(f"{where} path: {value!r} is not a path; a query string is not matched")
+        raise ConfigError(
+            f"{where} path: {value!r} is not a path as a URL writes it, percent-encoded and "
+            "with no query string"
+        )
     return value
 
 

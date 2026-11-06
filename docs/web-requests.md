@@ -54,7 +54,9 @@ An IPv6 address is written `http:[::1]`.
 A request sent through a proxy is labelled by the host it asks for, not by the proxy.
 
 A mock or a fault can be narrowed with `method` and `path`.
-A `path` is matched exactly, and never includes a query string.
+A `path` is matched exactly as the URL writes it, percent-encoded, and never includes a query string.
+So `/a%20b` matches a request for `/a b`, and `/a/b` does not match `/a%2Fb`.
+An international host is named by its `xn--` form.
 
 ## What a request gets
 
