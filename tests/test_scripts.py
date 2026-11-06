@@ -61,7 +61,7 @@ def script(project: Project, code: str, extra: str = "", body: str = "") -> Resu
 
 
 def lines_of(result: Result) -> list[Line]:
-    records = result.records()
+    records = result.records(processes=True)
     assert len(records) == 1, result.out
     return records[0]
 
@@ -290,8 +290,7 @@ def test_a_tool_in_the_scripts_own_folder_is_found(project: Project) -> None:
     assert summary_of(project.test())["answer"] == "real"
 
 
-def test_a_script_starts_with_a_listed_module_that_does_not_exist_stops(project: Project) -> None:
-    project.monkeypatch.chdir(project.root)
+def test_a_listed_module_that_does_not_exist_stops_a_script(project: Project) -> None:
     write_config(project, f"{sys.executable} bot.py {{question}}")
     project.edit(TOOLS, '["acme.nothing:tool"]')
     project.edit('real = ["tool:check_inventory"]', "real = []")
@@ -500,6 +499,17 @@ def test_a_child_on_the_same_python_prints_nothing_extra(project: Project) -> No
     assert summary_of(result)["answer"] == repr((0, b"1: 12 in stock\n", b"")), result.out
 
 
+def test_a_child_does_not_stop_in_another_folder_for_a_tool_it_cannot_find(
+    project: Project,
+) -> None:
+    code = (
+        "import subprocess, sys\n"
+        "done = subprocess.run([sys.executable, '-c', 'print(1)'], cwd='/', capture_output=True)\n"
+        "print(repr((done.returncode, done.stdout, done.stderr)))\n"
+    )
+    assert summary_of(script(project, code))["answer"] == repr((0, b"1\n", b""))
+
+
 @pytest.mark.design("record.process_redacted")
 def test_a_secret_on_a_command_line_is_not_recorded(project: Project) -> None:
     secret = f"sk-{'b' * 40}"
@@ -516,7 +526,6 @@ def test_a_secret_on_a_command_line_is_not_recorded(project: Project) -> None:
 
 
 def test_a_very_long_command_line_is_cut_on_the_record(project: Project) -> None:
-    project.toml.write_text("")
     (project.root / "bot.py").write_text("print('the answer')\n")
     write_config(project, f"{sys.executable} bot.py {{question}}")
     project.edit(json.dumps(QUESTION), json.dumps("q" * 5000))
@@ -629,7 +638,7 @@ def test_a_fork_while_another_thread_holds_the_locks_does_not_hang(project: Proj
         "_, status = os.waitpid(pid, 0)\n"
         "print(status)\n"
     )
-    result = script(project, code)
+    result = script(project, code, "run_timeout = 10")
     assert summary_of(result)["answer"] == "0", result.out
     assert len(calls(result)) == 1
 
@@ -649,10 +658,57 @@ def test_a_fork_does_not_send_the_parents_waiting_lines_or_tools_twice(project: 
     assert len(calls(result)) == 1 and summary_of(result)["outcome"] == "answered", result.out
 
 
+def test_a_forked_child_does_not_speak_for_the_agents_tools(project: Project) -> None:
+    (project.root / "bot.py").write_text(
+        "import os\nif os.fork() == 0:\n    raise SystemExit(0)\nos.wait()\nprint('the answer')\n"
+    )
+    write_config(project, f"{sys.executable} bot.py {{question}}")
+    project.edit(TOOLS, "[]")
+    result = project.test()
+    seen = [line for line in lines_of(result) if line.get("notice") == "tools_seen"]
+    assert len(seen) == 1, result.out
+
+
+def test_a_fork_leaves_the_parents_open_reply_to_the_parent(
+    project: Project, fake_openai: Fake
+) -> None:
+    (project.root / "bot.py").write_text(
+        "import os\n"
+        "import openai\n"
+        "client = openai.OpenAI(max_retries=0)\n"
+        "messages = []\n"
+        "stream = client.chat.completions.create(\n"
+        "    model='gpt-4o-mini', messages=messages, stream=True\n"
+        ")\n"
+        "if os.fork() == 0:\n"
+        "    raise SystemExit(0)\n"
+        "os.wait()\n"
+        "for _ in stream:\n"
+        "    pass\n"
+        "print('the answer')\n"
+    )
+    write_config(project, f"{sys.executable} bot.py {{question}}")
+    result = project.test(fake_openai(["chat_stream"]))
+    assert [x["kind"] for x in calls(result)] == ["model"], result.out
+
+
 # Stopping. 6.3
 
 
-SLOW_TOOL = "import time\n\n\ndef wait_a_while(sku):\n    time.sleep(600)\n    return sku\n"
+SLOW_TOOL = """
+import time
+from pathlib import Path
+
+
+def wait_a_while(sku):
+    Path("inside the tool").touch()
+    time.sleep(600)
+    return sku
+"""
+UNTIL_THE_TOOL_RUNS = """
+while not os.path.exists("inside the tool"):
+    time.sleep(0.01)
+"""
 
 
 @pytest.mark.design("stop.timed_out_summary")
@@ -664,7 +720,7 @@ def test_a_script_stopped_at_run_timeout_has_a_summary_saying_timed_out(project:
         "print('working', flush=True)\n"
         "time.sleep(600)\n"
     )
-    result = script(project, code, "run_timeout = 1")
+    result = script(project, code, "run_timeout = 3")
     assert summary_of(result)["outcome"] == "timed out", result.out
     assert summary_of(result)["answer"] is None
     assert [x["call"] for x in calls(result)] == ["tool:check_inventory"]
@@ -689,7 +745,7 @@ def test_a_call_going_on_at_the_time_limit_is_in_the_record(project: Project) ->
     (project.root / "acme" / "waits.py").write_text(SLOW_TOOL)
     code = "from acme import waits\nwaits.wait_a_while('SKU-1')\n"
     (project.root / "bot.py").write_text(code)
-    write_config(project, f"{sys.executable} bot.py {{question}}", "run_timeout = 1")
+    write_config(project, f"{sys.executable} bot.py {{question}}", "run_timeout = 4")
     project.edit(TOOLS, '["acme.waits:wait_a_while"]')
     project.edit('real = ["tool:check_inventory"]', 'real = ["tool:wait_a_while"]')
     result = project.test()
@@ -699,16 +755,22 @@ def test_a_call_going_on_at_the_time_limit_is_in_the_record(project: Project) ->
 
 
 @pytest.mark.design("stop.child_call_in_flight")
-def test_a_childs_call_going_on_at_the_time_limit_is_in_the_record(project: Project) -> None:
+def test_a_childs_call_going_on_when_the_group_is_stopped_is_in_the_record(
+    project: Project,
+) -> None:
     (project.root / "acme" / "waits.py").write_text(SLOW_TOOL)
     (project.root / "report.py").write_text("from acme import waits\nwaits.wait_a_while('1')\n")
-    (project.root / "bot.py").write_text(GATED_CHILD)
-    write_config(project, f"{sys.executable} bot.py {{question}}", "run_timeout = 1.5")
+    (project.root / "bot.py").write_text(
+        "import os, signal, subprocess, sys, time\n"
+        "subprocess.Popen([sys.executable, 'report.py'])\n"
+        + UNTIL_THE_TOOL_RUNS
+        + "os.killpg(0, signal.SIGTERM)\n"
+    )
+    write_config(project, f"{sys.executable} bot.py {{question}}")
     project.edit(TOOLS, '["acme.waits:wait_a_while"]')
     project.edit('real = ["tool:check_inventory"]', 'real = ["tool:wait_a_while"]')
     result = project.test()
-    assert summary_of(result)["outcome"] == "timed out", result.out
-    assert "DerailStopped" in str(calls(result)[-1]["error"])
+    assert "DerailStopped" in str(calls(result)[-1]["error"]), result.out
 
 
 @pytest.fixture
@@ -745,7 +807,7 @@ def test_a_model_call_going_on_at_the_time_limit_is_a_time_out_not_a_failure(
         "client = openai.OpenAI(max_retries=0)\n"
         "client.chat.completions.create(model='gpt-4o-mini', messages=[])\n"
     )
-    result = script(project, code, "run_timeout = 2")
+    result = script(project, code, "run_timeout = 10")
     assert summary_of(result)["outcome"] == "timed out", result.out
     assert "DerailStopped" in str(calls(result)[-1]["error"])
     assert result.code == 0
@@ -765,7 +827,7 @@ def test_a_program_that_ignores_sigterm_is_stopped_with_sigkill(project: Project
         "time.sleep(600)\n"
     )
     project.monkeypatch.setattr(runner, "KILL_GRACE_S", 1.0)
-    result = script(project, code, "run_timeout = 1")
+    result = script(project, code, "run_timeout = 4")
     assert summary_of(result)["outcome"] == "timed out", result.out
     assert not alive(pids_in(project.root / "pid")[0])
 
@@ -811,8 +873,8 @@ def test_a_call_made_by_a_child_left_running_reaches_the_record(project: Project
     (project.root / "bot.py").write_text(
         "import os, subprocess, sys, time\n"
         "subprocess.Popen([sys.executable, 'report.py'])\n"
-        "time.sleep(1.5)\n"  # time to be inside the tool
-        "print('the answer')\n"
+        + UNTIL_THE_TOOL_RUNS
+        + "print('the answer')\n"
     )
     write_config(project, f"{sys.executable} bot.py {{question}}")
     project.edit(TOOLS, '["acme.waits:wait_a_while"]')

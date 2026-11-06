@@ -364,10 +364,12 @@ def test_a_process_that_made_more_lines_than_arrived_is_an_infrastructure_error(
     assert {s["incomplete"] for s in result.summaries()} == {True}
 
 
-def test_a_stale_root_pid_in_the_runners_environment_is_ignored(
+def test_stale_run_variables_in_the_runners_environment_are_ignored(
     project: Project, fake_openai: Fake, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("DERAIL_ROOT_PID", "1")
+    monkeypatch.setenv("DERAIL_PYTHON", "a Python from another run")
+    monkeypatch.setenv("DERAIL_CHILDREN", "1")
     project.edit("[agent]\n", "[agent]\nruns = 1\n")
     result = project.test(fake_openai(ACME))
     assert result.code == 0 and "  1     1  " in result.out  # the fault row was exercised
