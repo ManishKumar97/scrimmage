@@ -10,8 +10,8 @@ imports either library: the hook patches one when the agent imports it.
 """
 
 import asyncio
-import contextlib
 import atexit
+import contextlib
 import datetime
 import hashlib
 import http
@@ -147,7 +147,7 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
             return sync_send(self, request)
         step, extra = prepared
         if step.decision.action == "fault":
-            return fault(ctx, module, step, request, extra)
+            return fault(ctx, module, self, step, request, extra)
         if step.decision.action == "mock":
             return mocked(ctx, module, self, step, request, extra)
         reservation = reserve(ctx, step, request, extra)
@@ -183,7 +183,7 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
                 "does not support yet, so it could not be budgeted; run the agent on asyncio",
             )
         if step.decision.action == "fault":
-            return fault(ctx, module, step, request, extra)
+            return fault(ctx, module, self, step, request, extra)
         if step.decision.action == "mock":
             return mocked(ctx, module, self, step, request, extra)
         reservation = None
@@ -362,7 +362,12 @@ def check_tools(
 
 
 def fault(
-    ctx: Context, module: ModuleType, step: Step, request: Any, extra: dict[str, object]
+    ctx: Context,
+    module: ModuleType,
+    client: Any,
+    step: Step,
+    request: Any,
+    extra: dict[str, object],
 ) -> Any:
     """Build the failure the library would see from a real outage. Nothing is sent."""
     run = ctx.run
@@ -378,9 +383,7 @@ def fault(
     else:
         body = reason_phrase(status).encode()
         headers = {"content-type": "text/plain; charset=utf-8"}
-    extra.update(status=status, result=blob(body, ctx.sender))
-    run.finish(step)
-    return reply(module, status, headers, body, request)
+    return reply(ctx, module, client, step, request, extra, (status, headers, body))
 
 
 def reason_phrase(status: int) -> str:
@@ -391,13 +394,29 @@ def reason_phrase(status: int) -> str:
 
 
 def reply(
-    module: ModuleType, status: int, headers: dict[str, str], body: bytes, request: Any
+    ctx: Context,
+    module: ModuleType,
+    client: Any,
+    step: Step,
+    request: Any,
+    extra: dict[str, object],
+    answer: tuple[int, dict[str, str], bytes],
 ) -> Any:
-    """A reply the gate built, left unread as a real one is, so iter_raw works on it."""
-    if body:
+    """Record and build a reply the gate made, left unread as a real one is, so iter_raw
+    works on it. Like a real server's, a HEAD reply states its length and has no body."""
+    status, headers, body = answer
+    sent = b"" if request.method == "HEAD" else body
+    extra.update(status=status, result=blob(sent, ctx.sender))
+    ctx.run.finish(step)
+    if status >= 200 and status not in (204, 304):
         headers = {**headers, "content-length": str(len(body))}
-    stream = module.ByteStream(body)
-    response = module.Response(status, headers=headers, stream=stream, request=request)
+    response = module.Response(
+        status,
+        headers=headers,
+        stream=module.ByteStream(sent),
+        request=request,
+        default_encoding=client._default_encoding,  # httpx and httpx2 BaseClient
+    )
     response.elapsed = datetime.timedelta(0)  # a real reply has it; code may read it
     return response
 
@@ -423,9 +442,8 @@ def mocked(
             kind = "text/plain; charset=utf-8"
     if kind is not None and "content-type" not in {name.lower() for name in headers}:
         headers["content-type"] = kind
-    extra.update(status=mock.status, result=blob(body, ctx.sender))
-    ctx.run.finish(step)
-    response = reply(module, mock.status, headers, body, request)
+    answer = (mock.status, headers, body)
+    response = reply(ctx, module, client, step, request, extra, answer)
     client.cookies.extract_cookies(response)  # the step a real reply goes through
     return response
 
@@ -530,7 +548,7 @@ def off_host(ctx: Context, step: Step, request: Any, response: Any) -> str | Non
         return None
     try:
         host = host_of(request.url.join(response.headers["location"]))
-    except Exception:  # not a usable address: httpx2 raises its own error when it follows it
+    except Exception:  # not a usable address: the library raises its own error on it
         return None
     return None if provider_of(ctx, host) else host
 
@@ -707,7 +725,7 @@ def wrap(
     *,
     sync: bool,
 ) -> Any:
-    """A stream of httpx2's own kind that passes every chunk through unchanged.
+    """A stream of the library's own kind that passes every chunk through unchanged.
 
     A connection that drops halfway is the provider failing, so it goes on the record;
     the error still reaches the agent exactly as it was raised.

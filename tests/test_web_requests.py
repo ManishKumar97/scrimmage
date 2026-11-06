@@ -433,6 +433,34 @@ def test_a_text_mock_an_empty_mock_and_its_headers(lib: Any) -> None:
     assert (two.status_code, two.content, two.headers.get("content-type")) == (204, b"", None)
 
 
+@pytest.mark.design("web.reply_like_real")
+def test_an_injected_reply_uses_the_clients_default_encoding(lib: Any) -> None:
+    headers = (("content-type", "text/plain"),)
+    gate(lib, mocks=(web_mock(text="é", headers=headers),))
+    with lib.Client(default_encoding="latin-1") as client:
+        assert client.get(URL).encoding == "latin-1"
+
+
+@pytest.mark.design("web.reply_like_real")
+def test_a_head_reply_states_its_length_and_has_no_body(lib: Any) -> None:
+    sink = gate(
+        lib, mocks=(web_mock(text="fixed"),), faults=(Fault(LABEL, "status 503", "first 1"),)
+    )
+    with lib.Client() as client:
+        down, fine = client.head(URL), client.head(URL)
+    assert (down.status_code, down.content) == (503, b"")
+    assert down.headers["content-length"] == str(len("Service Unavailable"))
+    assert (fine.content, fine.headers["content-length"]) == (b"", "5")
+    assert sink.lines[1]["result"]["bytes"] == 0
+
+
+@pytest.mark.design("web.reply_like_real")
+def test_an_empty_mock_says_its_length_is_zero(lib: Any) -> None:
+    gate(lib, mocks=(web_mock(),))
+    with lib.Client() as client:
+        assert client.get(URL).headers["content-length"] == "0"
+
+
 @pytest.mark.design("web.mock_header_wins")
 def test_a_mock_header_wins_whatever_its_case(lib: Any) -> None:
     gate(lib, mocks=(web_mock(json={"a": 1}, headers=(("Content-Type", "text/csv"),)),))
