@@ -72,9 +72,11 @@ Only a listed tool is kept from it: importing that tool's module fails, and the 
 
 Every Python program your agent starts inherits `PYTHONPATH`, so it runs Derail's startup file too.
 
-The first Python in a run sets `DERAIL_PYTHON` to what it is: its real binary and its environment.
-It is the first Python and not the one with a given process id, because a wrapper such as `uv run` starts Python as its own child.
-A later Python compares itself with that value. `python` and `python3` in one venv are the same Python. Two venvs on one binary are not, because each has its own packages.
+The first Python in a run that has the SDK claims the run. It creates a file beside the answer file with `O_CREAT | O_EXCL`, so of any number of Pythons one wins, even siblings under a shell that share no environment.
+It is not the process with a given id, because a wrapper such as `uv run` starts Python as its own child.
+The file and `DERAIL_PYTHON` hold what that Python is: its prefix and its version.
+A later Python compares itself with that value. `python` and `python3` in one venv are the same Python, even if `venv --copies` made them two files. Two venvs on one binary are not, because each has its own packages.
+A Python with no SDK cannot claim. It runs as usual, unless `derail-run` became it directly: then it is the program under test for certain, and it stops.
 
 A child on the same Python joins the run, in three steps:
 
@@ -82,7 +84,18 @@ A child on the same Python joins the run, in three steps:
 2. At its first gated call it fetches the plan. If it cannot, every call is refused. Unless `children` is set, it drops the plan's faults, because each process counts its own calls.
 3. It has no background thread. It sends each record line as it makes it, with the number of lines so far, so the record has no gap however the process ends.
 
+A child's lines are sent with no lock over the network, because each send has its own connection and the store writes a line once.
+
 A forked child starts at step 2 or 3, depending on whether its parent had the plan, with new locks and an empty queue, because the sender thread does not survive a fork. See [An agent run as a script](scripts.md#child-processes).
+
+## Child processes Derail cannot reach
+
+Each process that joined adds an audit hook, which Python calls for every event, and which ignores all but four: `subprocess.Popen`, `os.exec`, `os.posix_spawn` and `os.spawn`.
+For those it asks whether the target is this run's Python, by its name or its shebang, and whether it would run blind: no Derail variables in its environment, or a flag that skips the startup file.
+If so it decides a call labelled `process:python`, which is refused unless `real` lists it.
+An exception from an audit hook stops the operation, so the child never starts. The MCP gate marks its own start of a stdio server, so that one passes.
+
+`os.exec` ends the program with no exit steps, so the same hook sends the record lines first.
 
 ## Stopping a run
 
@@ -90,3 +103,5 @@ The runner stops a whole process group, and waits on the group, not on your prog
 
 SIGTERM reaches every process in the group. Each one that joined the run gives any call still going on a line, sends its lines, and then ends by the same signal, so the exit status is what it would have been without Derail.
 The handler runs on your program's main thread, so a thread does the sending, and the wait for it is limited to four seconds, under the five the runner gives before SIGKILL.
+
+Then the runner sweeps `/proc` for any process that left the group but still holds the exact `DERAIL_RUN` of this run in its own environment. It kills those and records each one. A process it misses gets a 409 on its next record line, which refuses all its later calls.

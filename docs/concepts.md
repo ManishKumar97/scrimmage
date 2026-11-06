@@ -33,6 +33,7 @@ This version knows these labels:
 | `hosted:mcp/<label>` | a hosted MCP server (only under `real`) |
 | `http:<host>` | a web request to that host. See [Web requests](web-requests.md) |
 | `mcp:<server>/<tool>`, `mcp:<tool>` | a tool on an MCP server. See [MCP tools](mcp.md) |
+| `process:python` | a Python child that would run with no gates (only under `real`). See [An agent run as a script](scripts.md#a-python-child-derail-cannot-reach) |
 
 ## What a call can get
 
@@ -83,7 +84,7 @@ The last line is the run's summary: the answer, how the run ended, whether its f
 | timed out | the run passed `run_timeout` and was stopped |
 | refused call | the agent or one of its child processes made a call the test does not allow, or a child on another Python imported a tool under `tools` |
 | budget reached | the budget could not cover a model call, so the test stopped |
-| infrastructure error | the record is incomplete, the agent's program never got its plan, or a model call failed by itself with nobody injecting it |
+| infrastructure error | the record is incomplete, the agent's program or a child never got its plan, no Python claimed the run, or a model call failed by itself with nobody injecting it |
 | stopped | another run stopped the whole test while this one was going, so it says nothing about this run |
 
 Records can hold secrets and customer data, so they are readable only by you, and known secret patterns such as API keys are removed.

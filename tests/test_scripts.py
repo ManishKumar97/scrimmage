@@ -172,7 +172,6 @@ def test_the_bot_answers_and_its_child_is_refused(project: Project, fake_openai:
     assert result.code == 2, result.out + result.err
     summary = summary_of(result)
     assert summary["outcome"] == "refused call"
-    assert summary["answer"] == "Order 1234 shipped on Oct 30. SKU-42 has 12 in stock."
     tools = {(x["call"], x["action"]) for x in calls(result) if x.get("kind") == "tool"}
     assert tools == {
         ("tool:get_order", "mock"),
@@ -180,6 +179,18 @@ def test_the_bot_answers_and_its_child_is_refused(project: Project, fake_openai:
         ("tool:refund_order", "refused"),
     }
     assert [line["kind"] for line in calls(result)].count("model") == 2
+
+
+@pytest.mark.design("script.example_answer")
+def test_the_sample_records_the_bots_own_answer(project: Project, fake_openai: Fake) -> None:
+    body = (
+        '[[test.mock]]\ncall = "tool:get_order"\nreturns = "shipped"\n'
+        '[[test.mock]]\ncall = "tool:refund_order"\nreturns = "refunded"\n'
+    )
+    write_config(project, f"{sys.executable} bot.py {{question}}", body=body)
+    result = project.test(fake_openai(ACME[:1] + ACME[2:]))
+    answer = summary_of(result)["answer"]
+    assert answer == "Order 1234 shipped on Oct 30. SKU-42 has 12 in stock.", result.out
 
 
 @pytest.mark.design("script.last_printed_line")

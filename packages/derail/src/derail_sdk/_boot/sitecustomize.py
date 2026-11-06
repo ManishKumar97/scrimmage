@@ -93,7 +93,8 @@ class _KeepOut:
             return True
         last = name.rpartition(".")[2]
         close = [m for m in self.modules if m.rpartition(".")[2] == last]
-        spec = importlib.machinery.PathFinder.find_spec(name, path) if close else None
+        finder = importlib.machinery.PathFinder
+        spec = finder.find_spec(name, path) if close else None  # type: ignore[arg-type]
         origin = str(getattr(spec, "origin", ""))
         return any(origin.endswith(os.sep + m.replace(".", os.sep) + ".py") for m in close)
 

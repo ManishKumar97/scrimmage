@@ -7,7 +7,7 @@ Nothing can reliably tell a read from a write by looking at a tool, so Derail do
 
 ## Every tool is refused unless the test allows it
 
-A tool call runs for real only if it is listed under `[agent] real`.
+A tool call runs for real only if it is listed under `[agent] real`, in your program or in a child process that joined the run.
 Any tool can be mocked instead, write tools included, so a test can give `refund_order` a fixed reply and see what the agent does next.
 
 | Tool call, not mocked | Listed under `real` | What happens |
@@ -78,10 +78,16 @@ A call made before the second server was listed or called goes by that label. Se
 
 The rules above reach every process that joined the run, so a child's `refund_order` is refused like your program's, and the refusal ends the run.
 A forked child's refusal reaches the runner before the error reaches your code, so it is not lost when the child ends with `os._exit`.
-A child that cannot get its plan refuses every call.
+A child that cannot get its plan refuses each call, and the run is an infrastructure error.
+
+A Python child that would not join, because it has its own environment or a flag such as `-I`, is refused where it starts, unless `real` lists `process:python`.
+Only a start made from Python is seen, so `sh -c 'python x'` is not. See [Limits](limits.md).
+
+So a rerun never reaches a write through a child: the child joins and is refused, or never starts.
+The exceptions are all in [Limits](limits.md).
 
 A program on another Python is not gated, and it may be something unrelated, such as `pip`, so it runs untouched.
-But it cannot import a module that holds a tool under `tools`: the import fails, and the run ends as "refused call".
+But it cannot import a module that holds a tool under `tools`, or run that file: the import fails or the program stops, and the run ends as "refused call".
 A web request or an MCP call from a program on another Python is not stopped. See [Limits](limits.md).
 
 ## The budget
