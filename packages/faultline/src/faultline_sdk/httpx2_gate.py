@@ -428,7 +428,11 @@ def abandoned(ctx: Context, step: Step, extra: dict[str, object], reservation: i
 
 
 def off_host(ctx: Context, request: Any, response: Any) -> str | None:
-    """The host a redirect would take this model call to, if that is not a model host."""
+    """The host a redirect would take this model call to, if that is not a model host.
+
+    This refuses even a client that would not follow the redirect. The gate cannot tell,
+    and a call wrongly refused is a visible mistake; one wrongly let through is unbudgeted.
+    """
     if not response.has_redirect_location:
         return None
     try:
