@@ -28,6 +28,8 @@ from faultline_sdk.redact import redact
         ("https://a.b/x?token=sk-" + "a" * 20 + " end", "https://a.b/x?[removed] end"),
         ("'https://a.b/c' and 'https://d.e/f'", "'https://a.b/c' and 'https://d.e/f'"),
         ("no url here? a=1", "no url here? a=1"),
+        ("1.https://u:SECRET@c.d/y?k=SECRET", "1.https://[removed]@c.d/y?[removed]"),
+        ("-ihttps://c.d/y?k=SECRET", "-ihttps://c.d/y?[removed]"),
         ("'https://a.b/x','https://u:SECRET@c.d/y'", "'https://a.b/x','https://[removed]@c.d/y'"),
         ("https://a.b/f/https://u:SECRET@c.d/y", "https://a.b/f/https://[removed]@c.d/y"),
         ("https://a.b,https://u:SECRET@c.d/y", "https://a.b,https://[removed]@c.d/y"),
@@ -53,6 +55,16 @@ def test_redacting_twice_changes_nothing_more() -> None:
 def test_a_jwt_is_removed_after_any_separator(before: str) -> None:
     jwt = "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.c2lnbmF0dXJlMTIz"
     assert redact(before + jwt) == before + "[secret removed]"
+
+
+def test_a_jwt_holding_a_key_shape_goes_whole() -> None:
+    jwt = "eyJhbGciOiJIUzI1.eyJzsk-aaaaaaaaaaaaaaaaaaaa.c2lnbmF0dXJlMTIz"
+    assert redact(jwt) == "[secret removed]"
+
+
+def test_every_dotted_part_after_a_jwt_goes_with_it() -> None:
+    jwt = "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.c2lnbmF0dXJlMTIz.dGFnZ2dnZ2c.cGFydA"
+    assert redact(f"eyJaaaaaaaaa.bbbbbbbbbb.{jwt}") == "[secret removed]"
 
 
 @pytest.mark.parametrize(

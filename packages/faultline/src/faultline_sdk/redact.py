@@ -23,11 +23,13 @@ PATTERNS = re.compile(
 # so a large base64 body stays linear. What comes before it, such as the n of an escaped
 # newline, is kept.
 TOKEN = "[A-Za-z0-9_-]"
-JWT = re.compile(rf"(?<!{TOKEN})((?>{TOKEN}*?eyJ)){TOKEN}{{8,}}+\.{TOKEN}{{8,}}+\.{TOKEN}{{8,}}+")
+JWT = re.compile(
+    rf"(?<!{TOKEN})((?>{TOKEN}*?eyJ)){TOKEN}{{8,}}+\.{TOKEN}{{8,}}+\.{TOKEN}{{8,}}+(?:\.{TOKEN}+)*+"
+)
 
 # A query or a password may hold a raw ' or \, so only these end a URL. A quote or a bracket
 # that closes the URL is given back after the cut.
-URL = re.compile(r"(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{0,30}://[^\s\"<>]+")
+URL = re.compile(r"(?<=[A-Za-z0-9+.-])://[^\s\"<>]+")
 CLOSING = ")'\\,.;:"
 LOGIN = re.compile(r"(?<=://)[^/?#\s]*@")
 
@@ -46,4 +48,4 @@ def no_jwt(found: re.Match[str]) -> str:
 
 
 def redact(text: str) -> str:
-    return JWT.sub(no_jwt, PATTERNS.sub(REMOVED, URL.sub(plain_url, text)))
+    return PATTERNS.sub(REMOVED, JWT.sub(no_jwt, URL.sub(plain_url, text)))
