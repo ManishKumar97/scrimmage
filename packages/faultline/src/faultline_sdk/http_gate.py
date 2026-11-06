@@ -260,7 +260,7 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
         return None
     body = body_of(request)
     call = describe(ctx, request, who, body or b"")
-    fields = openai_table.request_fields(body) if body else None
+    fields = openai_table.request_fields(body) if body and call.kind == "model" else None
     # The method and path only: headers, cookies and a query string are never recorded.
     extra: dict[str, object] = {
         "method": call.method,

@@ -599,6 +599,18 @@ def test_real_can_list_a_host_a_method_or_one_path(
     assert len(web.hits) == int(allowed)
 
 
+def test_a_web_body_is_not_parsed_as_a_model_body(
+    lib: Any, web: Web, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def parsed(body: bytes) -> dict[str, object]:
+        raise AssertionError("a web body was parsed")
+
+    monkeypatch.setattr(http_gate.openai_table, "request_fields", parsed)
+    gate(lib, real=("http:127.0.0.1",))
+    with lib.Client() as client:
+        assert client.post(web.url("/fine"), json={"a": 1}).status_code == 200
+
+
 def test_a_mocked_write_is_answered_and_never_sent(lib: Any, web: Web) -> None:
     gate(lib, mocks=(Mock("http:127.0.0.1", None, None, "POST", text="done"),))
     with lib.Client() as client:
