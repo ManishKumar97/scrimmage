@@ -29,6 +29,8 @@ dev = [
     "langgraph>=1.2",
     "langchain-core>=1.7",
     "langchain-openai>=1.7",
+    "mcp>=2.3.0",
+    "fastmcp>=4.1.6",
 ]
 
 [tool.pytest.ini_options]
