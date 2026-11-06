@@ -23,6 +23,17 @@ from faultline_sdk.state import RunState, Step, current
 GATED = "__faultline_gate__"
 
 
+def mark(function: Callable[..., Any]) -> Callable[..., Any]:
+    """Name a function as a gate. The flag holds the function itself, as functools.wraps
+    copies attributes: a wrapper around a gate gets the flag but does not pass is_gate."""
+    setattr(function, GATED, function)
+    return function
+
+
+def is_gate(function: object) -> bool:
+    return getattr(function, GATED, None) is function
+
+
 def _arguments(
     tool: Callable[..., object], args: tuple[Any, ...], kwargs: dict[str, Any]
 ) -> dict[str, object]:
@@ -118,8 +129,7 @@ def gate_with(tool: Callable[..., Any], describe: Describe) -> Callable[..., Any
             state.finish(step, result=result)
             return result
 
-        setattr(async_gate, GATED, True)
-        return async_gate
+        return mark(async_gate)
 
     @functools.wraps(tool)
     def sync_gate(*args: Any, **kwargs: Any) -> Any:
@@ -139,8 +149,7 @@ def gate_with(tool: Callable[..., Any], describe: Describe) -> Callable[..., Any
         state.finish(step, result=result)
         return result
 
-    setattr(sync_gate, GATED, True)
-    return sync_gate
+    return mark(sync_gate)
 
 
 def gate(tool: Callable[..., Any], name: str) -> Callable[..., Any]:
@@ -167,7 +176,7 @@ def swap(module: ModuleType, names: list[str], renamed: dict[str, str] | None = 
             if run is not None:
                 run.cannot_gate(name, message)
             raise ListedToolMissing(message)
-        if not getattr(tool, GATED, False):
+        if not is_gate(tool):
             seen = (renamed or {}).get(f"{module.__name__}:{name}", name)
             setattr(module, name, gate(tool, seen))
 

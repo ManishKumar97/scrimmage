@@ -108,7 +108,7 @@ def gate_tool(cls: type, failure: type[Exception]) -> bool:
         method = vars(owner)[name]
         if not inspect.isfunction(method):
             gatable_tool = False
-        elif not getattr(method, tool_gate.GATED, False):
+        elif not tool_gate.is_gate(method):
             setattr(owner, name, gate(method, failure))
     return gatable_tool
 

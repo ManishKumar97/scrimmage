@@ -1,5 +1,6 @@
 """The order bot in LangGraph: the team writes no tools list, the adapter finds the tools."""
 
+import functools
 import threading
 import time
 import types
@@ -736,3 +737,50 @@ def test_a_wrong_answer_path_is_a_test_mistake_not_a_result(
         fake.stop()
     assert result.code == 2, result.out + result.err
     assert "does not fit what the agent returned" in result.out
+
+
+def offered(
+    project: Project, function: str, module: str = "acme.unsafe"
+) -> tuple[Result, FakeOpenAI]:
+    """Run an agent from module against a model that calls both tools."""
+    graph(project, function, "")
+    project.edit(f"acme.graph:{function}", f"{module}:{function}")
+    fake = FakeOpenAI(ACME)
+    fake.start()
+    try:
+        return project.test(fake), fake
+    finally:
+        fake.stop()
+
+
+def wrote(result: Result) -> bool:
+    return (result.root / "wrote").exists()
+
+
+@pytest.mark.design("gate.wrapper_is_not_the_gate")
+def test_a_wrapper_copying_a_gates_attributes_is_gated_itself(project: Project) -> None:
+    result, _ = offered(project, "wrapped_gate")
+    assert result.code == 0, result.out + result.err
+    assert not wrote(result)
+    assert [x["action"] for x in tool_lines(result.records()[0])] == ["mock", "mock"]
+
+
+@pytest.mark.design("gate.wrapper_is_not_the_gate")
+@pytest.mark.parametrize("kind", ["sync", "async"])
+def test_only_the_gate_itself_passes_for_a_gate(kind: str) -> None:
+    def sync_tool() -> str:
+        return "real"
+
+    async def async_tool() -> str:
+        return "real"
+
+    gated = tool_gate.gate(sync_tool if kind == "sync" else async_tool, "t")
+
+    @functools.wraps(gated)
+    def wrapper() -> str:
+        return "wrote"
+
+    assert tool_gate.is_gate(gated) and not tool_gate.is_gate(wrapper)
+    shim = module(f=wrapper)
+    tool_gate.swap(shim, ["f"])
+    assert shim.f is not wrapper

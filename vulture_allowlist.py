@@ -63,3 +63,13 @@ _.answer_one_odd_tool_stops_the_rest  # tests/example/acme/rag.py: named by impo
 _.answer_one_unseen_stops_the_rest  # tests/example/acme/rag.py: named by import path in a test
 _.answer_forked  # tests/example/acme/rag.py: named by import path in a test
 _.answer_one_stops_one_finishes  # tests/example/acme/rag.py: named by import path in a test
+_.same_name_as_a_gated_tool  # tests/example/acme/unsafe.py: a test's faultline.toml names it
+_.run_set_on_the_tool  # tests/example/acme/unsafe.py: a test's faultline.toml names it
+_.run_set_when_made  # tests/example/acme/unsafe.py: a test's faultline.toml names it
+_.invoke_set_on_the_class_later  # tests/example/acme/unsafe.py: a test's faultline.toml names it
+_.run_set_on_the_class_later  # tests/example/acme/unsafe.py: a test's faultline.toml names it
+_.wrapped_gate  # tests/example/acme/unsafe.py: a test's faultline.toml names it
+_.invoke_override_called_directly  # tests/example/acme/unsafe.py: a test's faultline.toml names it
+_.run_override_called_directly  # tests/example/acme/unsafe.py: a test's faultline.toml names it
+_.model_post_init  # tests/example/acme/unsafe.py: pydantic calls it
+_.context  # tests/example/acme/unsafe.py: pydantic passes it
