@@ -173,6 +173,11 @@ def check_references(config: Config) -> list[str]:
                     f"({', '.join(config.agent.allowed_imports())}), so it is refused"
                 )
     for entry in config.agent.real:
+        if labels.kind_of(entry) == "model":
+            problems.append(
+                f"[agent] real: {entry} is not needed; a model call is always real "
+                "unless a fault names it"
+            )
         name = entry.partition(":")[2]
         if labels.kind_of(entry) == "tool" and name != "*" and name not in names:
             problems.append(f"[agent] real: {entry} names no tool in [agent] tools")

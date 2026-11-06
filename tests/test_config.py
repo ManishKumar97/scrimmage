@@ -293,3 +293,9 @@ def test_bad_prices_are_rejected(tmp_path: Path, table: str) -> None:
 def test_a_model_call_cannot_be_mocked(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="model cannot be mocked"):
         example(tmp_path, 'call    = "tool:get_order"', 'call = "model"')
+
+
+@pytest.mark.design("config.model_not_mockable")
+def test_a_model_call_is_not_listed_as_real(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="real: model is not needed"):
+        example(tmp_path, 'real     = ["tool:check_inventory"]', 'real = ["model"]')
