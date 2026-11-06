@@ -987,3 +987,15 @@ def test_a_property_that_fails_on_the_answer_path_says_so() -> None:
 
     with pytest.raises(BadAnswerPath, match="no content yet"):
         pick(Reply(), "content")
+
+
+@pytest.mark.design("adapter.listed_tool_must_pass")
+def test_listing_a_tool_object_no_adapter_sees_does_not_vouch_for_it(project: Project) -> None:
+    project.edit(
+        "[agent]\n", '[agent]\ntools = ["acme.listed:other_tool", "acme.listed:get_stock"]\n'
+    )
+    project.edit('real     = ["tool:check_inventory"]', "real = []")
+    project.edit('call    = "tool:get_order"', 'call    = "tool:other_tool"')
+    result, fake = offered(project, "answer_other", "acme.listed")
+    stopped_at_the_offer(result, fake)
+    assert "offered other_tool, which no gate sees" in result.out
