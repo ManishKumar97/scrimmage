@@ -37,12 +37,7 @@ ENTRIES = ("run", "arun")
 EXEMPT = ("_run", "_arun", "model_post_init", "as_tool")
 # LangChain's own, passed beside the tool's input. Told apart by type, since a tool can
 # have an input of the same name or call its config anything.
-PLUMBING = (
-    "RunnableConfig",
-    "CallbackManagerForToolRun",
-    "AsyncCallbackManagerForToolRun",
-    "ToolRuntime",  # it holds the whole conversation, which does not belong in the record
-)
+PLUMBING = ("RunnableConfig", "CallbackManagerForToolRun", "AsyncCallbackManagerForToolRun")
 
 # The tool whose real call is in progress. _arun often delegates to _run on the same tool,
 # and that is one call, not two.
