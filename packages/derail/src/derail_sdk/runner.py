@@ -498,7 +498,8 @@ def kill_those_who_left(run: str, group: int) -> list[tuple[int, str]]:
                 continue
             if os.getpgid(pid) == group:
                 continue  # one SIGKILL has not finished yet
-            command = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+            words = (entry / "cmdline").read_bytes().split(b"\0")
+            command = b" ".join(words).decode(errors="replace")
             os.kill(pid, signal.SIGKILL)
         except OSError:  # another user's, or gone already
             continue

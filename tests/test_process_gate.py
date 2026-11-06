@@ -4,12 +4,13 @@ import stat
 import sys
 from pathlib import Path
 
+import jsonschema
 import pytest
 
 from conftest import Project, Result
 from derail_sdk import process_gate
 from test_other_python import other_version  # noqa: F401  # a fixture
-from test_scripts import calls, lines_of, script, summary_of, write_config
+from test_scripts import RECORD, calls, lines_of, script, summary_of, write_config
 
 WRITE = "from pathlib import Path\nPath('REAL WRITE').write_text('done')\n"
 STARTS = {
@@ -53,6 +54,7 @@ def test_a_python_child_with_its_own_environment_is_refused(project: Project, ho
         "blind_child",
     )
     assert "Pass env={**os.environ}" in result.out and 'add "process:python"' in result.out
+    jsonschema.Draft202012Validator(RECORD).validate(line)
 
 
 @pytest.mark.design("blind.flags")

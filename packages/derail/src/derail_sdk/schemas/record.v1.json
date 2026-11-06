@@ -208,7 +208,9 @@
             "unreadable_body",
             "redirect_off_host",
             "unsupported_loop",
-            "ambiguous_label"
+            "ambiguous_label",
+            "blind_child",
+            "no_plan"
           ]
         },
         "provider": {
