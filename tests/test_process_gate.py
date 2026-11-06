@@ -262,6 +262,13 @@ def test_a_shell_script_is_not_python(tmp_path: Path) -> None:
     assert python_args.interpreter(str(script_file), {}) is None
 
 
+def test_any_derail_startup_folder_counts_and_nothing_else_does() -> None:
+    other = "/somewhere/venv/lib/python3.13/site-packages/derail_sdk/_boot"
+    assert process_gate.why_blind({"DERAIL_TOKEN": "x", "PYTHONPATH": f"/a:{other}"}, []) is None
+    assert process_gate.why_blind({"DERAIL_TOKEN": "x", "PYTHONPATH": "/a/_boot"}, [])
+    assert process_gate.why_blind({"PYTHONPATH": other}, [])
+
+
 def test_a_file_it_cannot_read_is_not_python(tmp_path: Path) -> None:
     assert python_args.interpreter(str(tmp_path / "missing"), {}) is None
 

@@ -48,7 +48,9 @@ def other_venv(tmp_path_factory: pytest.TempPathFactory) -> Path:
     uv("venv", "--no-project", "--python", str(base), "venv", cwd=folder)
     python = folder / "venv" / "bin" / "python"
     packages = [str(ROOT / "packages" / name) for name in ("derail", "derail-marker")]
-    uv("pip", "install", "--python", str(python), "mcp<2", *packages, cwd=folder)
+    # A built wheel is cached by the package's metadata, not by this code.
+    refresh = ["--refresh-package", "derail", "--reinstall-package", "derail"]
+    uv("pip", "install", *refresh, "--python", str(python), "mcp<2", *packages, cwd=folder)
     return python
 
 
