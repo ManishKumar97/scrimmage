@@ -1,7 +1,6 @@
 """What redact removes from a recorded text."""
 
 import base64
-import json
 import time
 
 import pytest
@@ -29,6 +28,9 @@ from faultline_sdk.redact import redact
         ("https://a.b/x?token=sk-" + "a" * 20 + " end", "https://a.b/x?[removed] end"),
         ("'https://a.b/c' and 'https://d.e/f'", "'https://a.b/c' and 'https://d.e/f'"),
         ("no url here? a=1", "no url here? a=1"),
+        ("'https://a.b/x','https://u:SECRET@c.d/y'", "'https://a.b/x','https://[removed]@c.d/y'"),
+        ("https://a.b/f/https://u:SECRET@c.d/y", "https://a.b/f/https://[removed]@c.d/y"),
+        ("https://a.b,https://u:SECRET@c.d/y", "https://a.b,https://[removed]@c.d/y"),
     ],
 )
 def test_a_url_keeps_its_place_but_not_its_query_or_credentials(text: str, kept: str) -> None:
@@ -45,15 +47,24 @@ def test_redacting_twice_changes_nothing_more() -> None:
     assert redact(once) == once
 
 
-@pytest.mark.parametrize("before", ["token=", "id_token_", "a-", ""])
+@pytest.mark.parametrize(
+    "before", ["token=", "id_token_", "a-", "", "line\\n", "x.", "api.example.com."]
+)
 def test_a_jwt_is_removed_after_any_separator(before: str) -> None:
     jwt = "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.c2lnbmF0dXJlMTIz"
     assert redact(before + jwt) == before + "[secret removed]"
 
 
-def test_a_large_base64_body_is_not_slow() -> None:
-    lines = b"\n".join(json.dumps({"n": n}).encode() for n in range(100_000))
-    body = base64.urlsafe_b64encode(lines).decode()
+@pytest.mark.parametrize(
+    "body",
+    [
+        base64.urlsafe_b64encode(b"\n".join(b'{"n": %d}' % n for n in range(100_000))).decode(),
+        base64.urlsafe_b64encode(b'~{"id":1}' * 200_000).decode(),
+        "-eyJ" * 500_000,
+    ],
+    ids=["json lines", "aligned records", "repeated starts"],
+)
+def test_a_large_base64_body_is_not_slow(body: str) -> None:
     started = time.monotonic()
     redact(body)
     assert time.monotonic() - started < 5
