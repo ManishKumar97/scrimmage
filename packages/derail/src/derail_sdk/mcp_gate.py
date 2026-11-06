@@ -140,6 +140,8 @@ def gatable(module: ModuleType) -> bool:
         return False
     if "send_request" not in names_in(getattr(session, "call_tool", None)):
         return False
+    if not (hasattr(session, "server_info") and hasattr(session, "list_tools")):
+        return False
     if not {"_dispatcher", "send_raw_request"} <= set(names_in(send)):
         return False
     timeout = getattr(getattr(module, "types", None), "REQUEST_TIMEOUT", None)

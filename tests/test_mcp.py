@@ -931,7 +931,13 @@ def library(**session: Any) -> types.ModuleType:
         return await self.send_request()
 
     module = types.ModuleType("mcp.client.session")
-    fields = {"send_request": send_request, "call_tool": call_tool, **session}
+    fields = {
+        "send_request": send_request,
+        "call_tool": call_tool,
+        "server_info": None,
+        "list_tools": None,
+        **session,
+    }
     module.ClientSession = type("ClientSession", (), fields)  # type: ignore[attr-defined]
     module.types = types.SimpleNamespace(REQUEST_TIMEOUT=-32001)  # type: ignore[attr-defined]
     module.MCPError = RuntimeError  # type: ignore[attr-defined]
@@ -988,6 +994,14 @@ def test_a_changed_library_stops_the_program(change: dict[str, Any]) -> None:
     assert stops and "does not have the functions Derail gates" in stops[0]
     assert cast(Sink, gate.run.sink).lines[0]["notice"] == "structure"
     assert not getattr(module.ClientSession.send_request, mcp_gate.GATED, False)
+
+
+@pytest.mark.design("mcp.structural")
+@pytest.mark.parametrize("name", ["server_info", "list_tools"])
+def test_a_library_that_renamed_what_the_gate_reads_stops_the_program(name: str) -> None:
+    module = library()
+    delattr(module.ClientSession, name)
+    assert not mcp_gate.gatable(module)
 
 
 def test_a_library_without_its_error_or_timeout_code_stops_the_program() -> None:
