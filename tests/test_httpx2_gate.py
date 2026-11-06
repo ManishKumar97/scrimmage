@@ -237,6 +237,31 @@ def test_a_task_cancelled_just_after_it_reserved_gives_the_reservation_back(
 
 
 @pytest.mark.design("budget.cancelled_in_the_queue_is_recorded")
+def test_work_that_starts_after_the_cancel_does_nothing(
+    gated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    late: list[Any] = []
+
+    async def cancelled_first(work: Any) -> None:
+        late.append(work)  # a thread picked it up, and the cancel got to the lock first
+        raise asyncio.CancelledError
+
+    budget = Budget(limit=100.0)
+    sink, _ = install(make_plan(budget=100.0), budget)
+    monkeypatch.setattr(httpx2_gate.asyncio, "to_thread", cancelled_first)
+
+    async def go() -> None:
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(answer)) as c:
+            with pytest.raises(asyncio.CancelledError):
+                await c.post(URL, json=BODY)
+
+    asyncio.run(go())
+    assert late[0]() is None
+    assert len(sink.lines) == 1 and sink.settles == []
+    assert budget.ledger.reserved == 0.0
+
+
+@pytest.mark.design("budget.cancelled_in_the_queue_is_recorded")
 def test_tasks_cancelled_before_a_thread_took_them_keep_their_lines(gated: None) -> None:
     release = threading.Event()
 
