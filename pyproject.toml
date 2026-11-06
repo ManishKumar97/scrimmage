@@ -33,7 +33,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["tests"]
-addopts = ["--strict-markers"]
+addopts = ["--strict-markers", "-p", "no:langsmith_plugin"]
 filterwarnings = ["error"]
 markers = [
     "design(tag): the design point this test proves, as a short public name",
