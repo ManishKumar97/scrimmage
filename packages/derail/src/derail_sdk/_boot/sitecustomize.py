@@ -122,15 +122,23 @@ def _tell_the_runner(message: str) -> None:
 
 
 def _target() -> "str | None":
-    """The module of python -m, which the arguments here show only as -m."""
+    """The module of python -m, which the arguments here show only as -m.
+
+    Python reads flags as bundles, so -um x and -mx are this too.
+    """
     args = iter(getattr(sys, "orig_argv", [])[1:])
     for arg in args:
-        if arg == "-m":
-            return next(args, None)
-        if arg in ("-W", "-X"):
-            next(args, None)
-        elif not arg.startswith("-"):
-            break
+        if not arg.startswith("-") or arg in ("-", "--"):
+            return None
+        for place, letter in enumerate("" if arg.startswith("--") else arg[1:], 2):
+            if letter == "c":
+                return None
+            if letter == "m":
+                return arg[place:] or next(args, None)
+            if letter in "WX":
+                if place == len(arg):
+                    next(args, None)
+                break
     return None
 
 

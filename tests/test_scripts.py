@@ -477,6 +477,32 @@ def test_another_file_with_the_same_last_name_is_left_alone(project: Project) ->
     assert summary_of(project.test())["answer"] == "not listed"
 
 
+@pytest.mark.design("main.dash_m_bundled")
+@pytest.mark.parametrize(
+    "form", ["-um deep.bot", "-mdeep.bot", "-W ignore -m deep.bot", "-Bum deep.bot"]
+)
+@pytest.mark.parametrize("where", ["root", "child"])
+def test_a_bundled_dash_m_is_read_as_dash_m(project: Project, form: str, where: str) -> None:
+    folder = project.root / "deep"
+    folder.mkdir()
+    (folder / "__init__.py").write_text("")
+    (folder / "bot.py").write_text(TOOL_IN_THE_SCRIPT)
+    if where == "root":
+        write_config(project, f"{sys.executable} {form} {{question}}")
+    else:
+        (project.root / "bot.py").write_text(
+            "import subprocess, sys\n"
+            f"subprocess.run([sys.executable, *{form.split()!r}])\n"
+            "print('the answer')\n"
+        )
+        write_config(project, f"{sys.executable} bot.py {{question}}")
+    project.edit(TOOLS, '["deep.bot:pay"]')
+    project.edit('real = ["tool:check_inventory"]', "real = []")
+    result = project.test()
+    assert not (project.root / "REAL WRITE").exists(), result.out
+    assert result.code == 2 and summary_of(result)["outcome"] == "refused call", result.out
+
+
 @pytest.mark.design("main.tool_in_a_childs_script")
 def test_a_tool_defined_in_a_childs_script_stops_the_child(project: Project) -> None:
     (project.root / "bot.py").write_text(GATED_CHILD)
