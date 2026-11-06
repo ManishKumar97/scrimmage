@@ -216,6 +216,7 @@ class RunState:
             "redirect_off_host": detail,
             "unsupported_loop": detail,
             "ambiguous_label": detail,
+            "blind_child": detail,
         }
         return DerailRefused(messages.get(reason, f"{label} is refused: {detail}"))
 
@@ -364,6 +365,7 @@ class RunState:
         write = step.call.kind == "http" and step.call.method not in engine.READ_METHODS
         # Nothing tells an MCP read from an MCP write, so a real one is kept as a write is.
         write = write or (step.call.kind == "mcp" and decision.action == "real")
+        write = write or step.call.kind == "process"
         keep = decision.action == "refused" or step.call.kind == "model" or write
         self.sink.put(line, keep=keep)
 

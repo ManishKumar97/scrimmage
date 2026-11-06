@@ -1,7 +1,7 @@
 """Labels name a call, such as tool:<name> or model.
 
 This version knows tool labels, model labels, web labels, MCP labels and, under
-[agent] real only, hosted MCP servers.
+[agent] real only, hosted MCP servers and process:python.
 """
 
 import ipaddress
@@ -18,6 +18,7 @@ HOSTED = re.compile(r"hosted:mcp/[A-Za-z0-9_.-]+")
 WEB_HOST = re.compile(r"[a-z0-9][a-z0-9._-]*")
 WEB_METHOD = re.compile(r"[A-Za-z][A-Za-z-]*")  # letters, and the hyphen of M-SEARCH
 WEB_PATH = re.compile(r"/(?:(?![?#])[\x21-\x7e])*")  # as sent: percent-encoded, no query
+PROCESS = "process:python"  # a Python child that would run with no gates
 DOCS = "see docs/configuration.md"
 
 
@@ -40,6 +41,10 @@ def check(text: str, where: str, *, pattern: bool = False) -> str:
             raise ConfigError(f"{where}: {text!r} is allowed only under [agent] real")
         if not HOSTED.fullmatch(text):
             raise ConfigError(f"{where}: {text!r} is not of the form 'hosted:mcp/<label>'")
+        return text
+    if text == PROCESS:
+        if not pattern:
+            raise ConfigError(f"{where}: {text!r} is allowed only under [agent] real")
         return text
     if kind == "http" and sep:
         return check_web(text, where, pattern=pattern)

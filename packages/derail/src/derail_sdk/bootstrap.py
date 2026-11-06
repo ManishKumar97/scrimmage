@@ -14,7 +14,7 @@ import threading
 from types import FrameType
 from typing import NoReturn
 
-from derail_sdk import http_gate, labels, langchain_gate, mcp_gate, state, tool_gate
+from derail_sdk import http_gate, labels, langchain_gate, mcp_gate, process_gate, state, tool_gate
 from derail_sdk.client import ControlClient, ControlError, Sender
 from derail_sdk.mocks import allowed
 from derail_sdk.plan import Plan, no_plan, tools_from
@@ -168,6 +168,7 @@ def start(*, child: bool = False, target: str | None = None) -> None:
         ctx.open.clear()  # replies the parent is reading
 
     os.register_at_fork(after_in_child=forked)
+    process_gate.install(run_state, lambda: None)
     handle_sigterm(run_state, sender, ctx)
     if plan is not None:
         print(

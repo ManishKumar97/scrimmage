@@ -158,6 +158,9 @@
             "const": "tool:*"
           },
           {
+            "const": "process:python"
+          },
+          {
             "$ref": "#/$defs/mcp_label"
           },
           {
