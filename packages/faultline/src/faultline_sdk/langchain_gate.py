@@ -205,11 +205,18 @@ def overrides(cls: type, library: Library) -> list[str]:
     return [name for name in library.entries if replaced(name)]
 
 
+def override_problem(tool: Any, name: str) -> str:
+    return (
+        f"{tool.name} cannot be gated, because its class overrides {name}; "
+        "move the work into _run or _arun"
+    )
+
+
 def refusal(run: RunState, name: str) -> Callable[..., Any]:
     """Stands in for an override that may never reach a gate, so its code never runs."""
 
     def refuse(tool: Any, *args: Any, **kwargs: Any) -> None:
-        message = f"{tool.name} cannot be gated, because its class overrides {name}"
+        message = override_problem(tool, name)
         run.cannot_gate(tool.name, message)
         raise FaultlineRefused(message)
 
@@ -239,7 +246,7 @@ def skips_gate(tool: Any, library: Library) -> str | None:
     if own:  # the class's gate never sees a method set on the tool itself
         return f"{tool.name} cannot be gated, because {own[0]} is set on the tool itself"
     if replaced:
-        return f"{tool.name} cannot be gated, because its class overrides {replaced[0]}"
+        return override_problem(tool, replaced[0])
     return None
 
 

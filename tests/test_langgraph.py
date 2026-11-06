@@ -887,7 +887,10 @@ def test_an_override_called_directly_is_refused(
     result, _ = offered(project, function)
     assert result.code == 2, result.out + result.err
     assert not wrote(result)
-    assert f"get_order cannot be gated, because its class overrides {method}" in result.out
+    assert (
+        f"get_order cannot be gated, because its class overrides {method}; "
+        "move the work into _run or _arun"
+    ) in result.out
 
 
 @pytest.mark.design("adapter.override_refused")
