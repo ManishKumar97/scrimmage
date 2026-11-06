@@ -1,5 +1,6 @@
 """Getting in before the agent starts: the startup file, the token switch, chaining."""
 
+import ast
 import os
 import socket
 import subprocess
@@ -72,6 +73,18 @@ def this_python() -> str:
 
 def as_child(control: ControlServer, **extra: str) -> dict[str, str]:
     return joined(control, DERAIL_PYTHON=this_python(), **extra)
+
+
+@pytest.mark.design("boot.old_python_syntax")
+def test_the_startup_file_parses_and_defines_on_python_3_8() -> None:
+    """Every Python the agent starts runs this file. Annotations must not need newer syntax."""
+    source = (BOOT / "sitecustomize.py").read_text()
+    tree = ast.parse(source, feature_version=(3, 8))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            marks = [node.returns, *(a.annotation for a in node.args.args)]
+            for mark in filter(None, marks):
+                assert not isinstance(mark, ast.Subscript | ast.BinOp), ast.unparse(mark)
 
 
 def test_the_startup_folder_holds_exactly_one_file() -> None:

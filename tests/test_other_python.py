@@ -124,6 +124,24 @@ def test_a_wrapper_around_python_with_no_sdk_is_an_infrastructure_error(
     assert result.code == 3 and summary_of(result)["outcome"] == "infrastructure error"
 
 
+@pytest.mark.design("other.copies_are_one_python")
+def test_python_and_python3_in_a_venv_of_copies_are_one_python(tmp_path: Path) -> None:
+    folder = tmp_path / "copies"
+    venv = [sys.executable, "-m", "venv", "--copies", "--without-pip", str(folder)]
+    subprocess.run(venv, check=True, timeout=60)
+    code = "import sitecustomize; print(sitecustomize._python())"
+    env = {"PYTHONPATH": str(BOOT)}
+
+    def identity(name: str) -> str:
+        done = subprocess.run(
+            [str(folder / "bin" / name), "-c", code], env=env, capture_output=True, text=True
+        )
+        return done.stdout
+
+    assert (folder / "bin" / "python").resolve() != (folder / "bin" / "python3").resolve()
+    assert identity("python") == identity("python3") != ""
+
+
 @pytest.mark.design("other.same_binary_is_another_python")
 def test_a_venv_on_the_same_binary_is_another_python_even_with_derail_installed(
     project: Project, other_venv: Path
