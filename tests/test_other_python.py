@@ -166,13 +166,18 @@ def test_python_and_python3_in_a_venv_of_copies_are_one_python(tmp_path: Path) -
     folder = tmp_path / "copies"
     venv = [sys.executable, "-m", "venv", "--copies", "--without-pip", str(folder)]
     subprocess.run(venv, check=True, timeout=60)
-    code = "import sitecustomize; print(sitecustomize._python())"
-    env = {"PYTHONPATH": str(BOOT)}
+    # By path, as a system Python's own sitecustomize takes the name once ours chains to it.
+    code = (
+        "import importlib.util as util, sys;"
+        "spec = util.spec_from_file_location('boot', sys.argv[1]);"
+        "boot = util.module_from_spec(spec); spec.loader.exec_module(boot);"
+        "print(boot._python())"
+    )
+    boot = str(BOOT / "sitecustomize.py")
 
     def identity(name: str) -> str:
-        done = subprocess.run(
-            [str(folder / "bin" / name), "-c", code], env=env, capture_output=True, text=True
-        )
+        command = [str(folder / "bin" / name), "-c", code, boot]
+        done = subprocess.run(command, env={}, capture_output=True, text=True)
         return done.stdout
 
     assert (folder / "bin" / "python").resolve() != (folder / "bin" / "python3").resolve()
