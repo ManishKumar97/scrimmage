@@ -6,6 +6,7 @@ import threading
 import time
 import types
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -1067,3 +1068,9 @@ def test_a_renamed_copy_of_a_safe_tool_does_not_stop_the_test(project: Project) 
     result, fake = offered(project, "renamed_copy")
     assert result.code == 0, result.out + result.err
     assert "which no gate sees" not in result.out and fake.requests != []
+
+
+@pytest.mark.design("safety.gates_assume")
+def test_the_docs_say_a_test_is_not_a_sandbox() -> None:
+    text = (Path(__file__).parent.parent / "docs" / "safety.md").read_text()
+    assert "## What the gates assume" in text and "a test is not a sandbox" in text

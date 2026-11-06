@@ -1,16 +1,17 @@
 # Limits of this version
 
 - **One agent shape.** The agent must be a Python function. Scripts and web services come later.
-- **Tools and OpenAI model calls.** Faultline gates the tools you list under `tools`, and model calls the openai library sends. Other web requests, writes included, and MCP tools pass untouched and are not recorded yet. See [Safety](safety.md).
+- **Tools and OpenAI model calls.** Faultline gates the tools you list under `tools`, the LangChain tools it finds by itself, and model calls the openai library sends. Other web requests, writes included, and MCP tools pass untouched and are not recorded yet. See [Safety](safety.md).
 - **One provider.** OpenAI's Chat Completions, Responses and embeddings, and gateways that speak the same format. Other providers come later.
 - **One HTTP library.** The gate sits in httpx2, which current openai versions use. Older openai versions, which use httpx, are not gated yet; with a budget on, the test then fails because no model call was seen.
 - **asyncio only for async agents.** An async model call outside asyncio, such as under trio, is refused and ends its run, because Faultline cannot budget it. Synchronous agents are not affected.
 - **One framework.** LangChain tools, which LangGraph runs, have an adapter. A tool on another framework is not gated, so offering it to the model stops the test.
-- **A tool's function called directly.** `my_tool.func(...)` skips the gate, so nothing refuses or records it.
+- **A tool's function called directly.** `my_tool.func(...)` or `my_tool.coroutine(...)` skips the gate, so nothing refuses or records it.
 - **Tool names with no `tools` list.** They are checked after one baseline run, not before it, so a typo costs that one run. A tool the agent makes only in some runs may be reported as unknown.
 - **An `_arun` that starts `_run` on the default executor itself** counts as two calls and two record lines. LangChain's own `_arun` counts as one.
-- **A tool changed after the last check.** Tools are checked when they are made, when they run through LangChain, and before each model request. A class whose `invoke` or `run` is assigned after that, and called with no later model request, runs unchecked.
-- **A tool that hides from Python itself.** A `__getattribute__` that returns a fake `_run` to the check and the real one to LangChain is not caught. No reasonable gate reaches that; a test is not a defence against code written to evade it.
+- **A tool changed after the last check.** Classes are checked when they are made, tools when they are made or copied and when they run through LangChain, and all of them before each model request. So a class whose `invoke` or `run` is assigned after that, between the model's reply and the call or with no model request at all, runs unchecked. A `_run` set on a tool in that gap is still refused.
+- **Code written to get around the gate.** None of these is caught: `object.__setattr__` on a copy, a false `__module__` on a class, `BaseTool.invoke = f` patching the library itself, a `__getattribute__` that shows the check a fake `_run`, and a gated tool offered for its schema while a custom node calls a plain function. See [Safety](safety.md#what-the-gates-assume).
+- **A tool made with `model_construct`.** Its class is checked, but its name is not known, so offering it to the model stops the test.
 - **One unsafe tool blocks its whole name.** A second, gated tool of the same name stops the test too, even if only that one is offered.
 - **LangChain versions.** Tested with langchain-core 1.7. A newer one gets a notice; an older one gets none.
 - **A library that changes its tool functions** stops the program. Faults are not dropped with refusals kept, because the error type is part of what the gate relies on.

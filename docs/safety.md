@@ -51,6 +51,14 @@ The rule covers every tool a gate reaches: the ones listed under `tools`, and La
 If `tools` names a function or a module that does not exist, the run stops as a mistake in the test.
 Otherwise a typo such as `refund_ordr` would leave the real `refund_order` running with no gate.
 
+## What the gates assume
+
+Faultline stops ordinary code from running a write by accident.
+It runs inside your program, so it cannot stop code written to get around it.
+Code that deliberately works around a gate, or calls the plain function directly, is outside what it covers.
+So a test is not a sandbox.
+If one stray call to a tool would do real harm, make that tool unreachable from the test environment, with test credentials or a network that cannot reach the real system.
+
 ## Staying out of production
 
 - Installing or importing Faultline never switches anything on.
