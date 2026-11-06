@@ -601,6 +601,8 @@ def test_a_redirect_off_the_model_hosts_is_refused_and_named(gated: None) -> Non
     assert (line["action"], line["reason"]) == ("refused", "redirect_off_host")
     assert "localhost" in str(line["mistake"])
     assert budget.ledger.reserved > 0 and len(sink.settles) == 1
+    assert sink.settles[0][1] == line["cost_usd"] and line["cost_estimated"] is True
+    assert isinstance(line["cost_usd"], float) and line["cost_usd"] > 0
 
 
 @pytest.mark.design("gate.redirect_bad_location")

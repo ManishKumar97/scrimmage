@@ -452,12 +452,10 @@ def redirected_away(
 ) -> NoReturn:
     """Stop here: past this hop the gate would not see the call, so nothing could price it."""
     rates = prices_of(ctx, str(extra.get("model", "")))
-    usd = (
-        openai_table.cost(len(body_of(request) or b"") // CHAR_PER_TOKEN, 0, rates)
-        if rates
-        else 0.0
-    )
-    settle(ctx, reservation, usd)
+    tokens = len(body_of(request) or b"") // CHAR_PER_TOKEN
+    usd = openai_table.cost(tokens, 0, rates) if rates else None
+    extra.update(cost_usd=usd, cost_estimated=usd is not None)
+    settle(ctx, reservation, usd or 0.0)
     ctx.run.refuse(step, "redirect_off_host")
     refuse(
         ctx.run,
