@@ -500,6 +500,45 @@ def test_a_program_that_cannot_be_found_is_a_mistake_in_the_test(
     assert not (project.root / "derail-runs").exists()
 
 
+@pytest.mark.design("config.program_runs")
+def test_a_program_that_is_not_an_executable_file_is_a_mistake_in_the_test(
+    project: Project,
+) -> None:
+    (project.root / "bot.py").write_text("print('the answer')\n")
+    (project.root / "folder").mkdir()
+    for program in ("./bot.py", "./folder"):
+        write_config(project, f"{program} {{question}}")
+        result = project.test()
+        assert result.code == 2 and "is not a program it can find" in result.err
+
+
+@pytest.mark.design("config.question_fits")
+@pytest.mark.parametrize(
+    "question", [json.dumps("a" * (128 * 1024)), '"one\\u0000two"'], ids=["long", "nul"]
+)
+@pytest.mark.parametrize("shape", ["command", "function"])
+def test_a_question_that_cannot_be_an_argument_is_a_mistake_in_the_test(
+    project: Project, question: str, shape: str
+) -> None:
+    write_config(project, f"{sys.executable} bot.py {{question}}")
+    if shape == "function":
+        project.edit(
+            f"command = {json.dumps(sys.executable + ' bot.py {question}')}",
+            'function = "acme.agent:answer"',
+        )
+    project.edit(json.dumps(QUESTION), question)
+    result = project.test()
+    assert result.code == 2 and "question" in result.err, result.err
+    assert not (project.root / "derail-runs").exists()
+
+
+def test_a_question_at_the_limit_runs(project: Project) -> None:
+    (project.root / "bot.py").write_text("import sys\nprint(len(sys.argv[1]))\n")
+    write_config(project, f"{sys.executable} bot.py {{question}}")
+    project.edit(json.dumps(QUESTION), json.dumps("a" * (128 * 1024 - 1)))
+    assert summary_of(project.test())["answer"] == str(128 * 1024 - 1)
+
+
 def test_derail_run_says_why_a_program_cannot_start(tmp_path: Path) -> None:
     def derail_run(program: str) -> subprocess.CompletedProcess[str]:
         command = [sys.executable, "-m", "derail_sdk.run_command", program]

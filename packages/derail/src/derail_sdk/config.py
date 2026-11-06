@@ -6,6 +6,7 @@ and ignored; docs/configuration.md lists what later versions add.
 
 import builtins
 import math
+import os
 import re
 import shlex
 import shutil
@@ -55,6 +56,7 @@ DEFAULT_RESERVE_OUTPUT_TOKENS = 4096
 ANSWER_PATH = re.compile(r"[A-Za-z_]\w*(\[-?\d+\]|\.[A-Za-z_]\w*)*")
 IMPORT_PATH = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*:[A-Za-z_]\w*")
 QUESTION = "{question}"  # in a command; the only placeholder filled in
+MAX_ARGUMENT = 128 * 1024  # Linux's limit on one argument, with its closing NUL
 
 
 @dataclass(frozen=True)
@@ -184,6 +186,7 @@ def check_references(config: Config) -> list[str]:
     problems: list[str] = []
     if config.agent.command and not can_start(config.agent.command[0], config.root):
         problems.append(f"[agent] command: {config.agent.command[0]} is not a program it can find")
+    problems += [p for test in config.tests if (p := bad_question(test, config.agent))]
     for test in config.tests:
         for mock in test.mocks:
             if labels.kind_of(mock.call) == "model":
@@ -219,9 +222,24 @@ def check_references(config: Config) -> list[str]:
     return problems
 
 
+def bad_question(test: Test, agent: Agent) -> str | None:
+    """A question goes as one argument, which a NUL ends and Linux limits."""
+    where = f"[[test]] {test.name!r} question"
+    if "\0" in test.question:
+        return f"{where}: holds a NUL, which cannot go in an argument"
+    parts = [part.replace(QUESTION, test.question) for part in agent.command] or [test.question]
+    if max(len(part.encode()) + 1 for part in parts) > MAX_ARGUMENT:
+        return f"{where}: is over the {MAX_ARGUMENT // 1024} KiB one argument can hold"
+    return None
+
+
 def can_start(program: str, root: Path) -> bool:
-    """A program named with a path is found from the folder it runs in, others on PATH."""
-    return (root / program).exists() if "/" in program else shutil.which(program) is not None
+    """A program named with a path is found from the folder it runs in, others on PATH.
+    It must be a file it can run, which a folder or a plain text file is not."""
+    if "/" not in program:
+        return shutil.which(program) is not None
+    path = root / program
+    return path.is_file() and os.access(path, os.X_OK)
 
 
 def reject_placeholders(value: object, where: str) -> None:
