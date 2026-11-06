@@ -12,7 +12,6 @@ import shutil
 import sys
 from collections.abc import Callable, Mapping
 from contextvars import ContextVar
-from pathlib import Path
 from typing import Any, cast
 
 from derail_sdk import python_args
@@ -20,7 +19,7 @@ from derail_sdk.decide import Call
 from derail_sdk.labels import PROCESS as LABEL
 from derail_sdk.state import RunState
 
-BOOT = str(Path(__file__).parent / "_boot")
+BOOT = os.path.join("derail_sdk", "_boot")  # the runner's, which may be in another venv
 EVENTS = ("subprocess.Popen", "os.exec", "os.posix_spawn")  # os.spawnv is exec here
 # The MCP gate decides a stdio server's calls, so its own start of the server is not blind.
 EXEMPT: ContextVar[bool] = ContextVar("derail_process_exempt", default=False)
@@ -50,7 +49,8 @@ def is_this_python(path: str) -> bool:
 
 
 def why_blind(env: dict[str, str], args: list[str]) -> str | None:
-    if "DERAIL_TOKEN" not in env or BOOT not in env.get("PYTHONPATH", "").split(os.pathsep):
+    folders = env.get("PYTHONPATH", "").split(os.pathsep)
+    if "DERAIL_TOKEN" not in env or not any(folder.endswith(BOOT) for folder in folders):
         return "its environment does not hold Derail's variables"
     flag = python_args.skipping(args)
     return f"{flag} skips Derail's startup file" if flag else None

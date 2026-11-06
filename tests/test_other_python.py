@@ -150,6 +150,43 @@ derail-marker = {{path = "{packages / "derail-marker"}", editable = true}}
     assert summary_of(result)["answer"] == "the answer"
 
 
+CROSS_BOT = """
+import subprocess, sys
+subprocess.run([sys.executable, "report.py"])
+print("the answer")
+"""
+
+
+@pytest.mark.design("other.bot_on_its_own_venv")
+@pytest.mark.parametrize("how", ["direct", "wrapper"])
+def test_a_bot_on_another_venv_with_derail_keeps_its_children(
+    project: Project, other_venv: Path, how: str
+) -> None:
+    """derail test runs here, so the folder on PYTHONPATH is not the bot's own Derail."""
+    (project.root / "bot.py").write_text(CROSS_BOT)
+    (project.root / "report.py").write_text("from acme import tools\ntools.check_inventory('1')\n")
+    (project.root / "run.sh").write_text(f'#!/bin/sh\nexec {other_venv} bot.py "$1"\n')
+    command = "sh run.sh {question}" if how == "wrapper" else f"{other_venv} bot.py {{question}}"
+    write_config(project, command)
+    result = project.test()
+    assert summary_of(result)["outcome"] == "answered", result.out
+    assert [x["call"] for x in calls(result)] == ["tool:check_inventory"]
+
+
+@pytest.mark.design("other.grandchildren_with_children_set")
+def test_with_children_set_grandchildren_across_venvs_stay_joined(
+    project: Project, other_venv: Path
+) -> None:
+    (project.root / "bot.py").write_text(CROSS_BOT)
+    (project.root / "report.py").write_text(
+        f"import subprocess\nsubprocess.run([{str(other_venv)!r}, 'grandchild.py'])\n"
+    )
+    (project.root / "grandchild.py").write_text(REPORT)
+    write_config(project, f"{sys.executable} bot.py {{question}}", "children = true")
+    result = project.test()
+    assert result.code == 2 and [x["call"] for x in calls(result)] == ["tool:refund_order"]
+
+
 @pytest.mark.design("claim.no_python_claimed")
 def test_a_wrapper_around_python_with_no_sdk_is_an_infrastructure_error(
     project: Project, other_version: Path
