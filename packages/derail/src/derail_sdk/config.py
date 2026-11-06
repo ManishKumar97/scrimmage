@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from derail_sdk import labels, provider_openai
+from derail_sdk import labels, provider_openai, python_args
 from derail_sdk.errors import ConfigError
 from derail_sdk.mocks import allowed
 
@@ -186,6 +186,11 @@ def check_references(config: Config) -> list[str]:
     problems: list[str] = []
     if config.agent.command and not can_start(config.agent.command[0], config.root):
         problems.append(f"[agent] command: {config.agent.command[0]} is not a program it can find")
+    if config.agent.command and (flag := skipping_flag(config.agent.command, config.root)):
+        problems.append(
+            f"[agent] command: {flag} keeps Python from running Derail's startup file, so the "
+            "program would run with no gates; remove it"
+        )
     problems += [p for test in config.tests if (p := bad_question(test, config.agent))]
     for test in config.tests:
         for mock in test.mocks:
@@ -231,6 +236,16 @@ def bad_question(test: Test, agent: Agent) -> str | None:
     if max(len(part.encode()) + 1 for part in parts) > MAX_ARGUMENT:
         return f"{where}: is over the {MAX_ARGUMENT // 1024} KiB one argument can hold"
     return None
+
+
+def skipping_flag(command: tuple[str, ...], root: Path) -> str | None:
+    """A flag on the command that skips the startup file. No gate exists yet to catch it."""
+    for place, word in enumerate(command):
+        if python_args.PYTHON.fullmatch(os.path.basename(word)):
+            return python_args.skipping(list(command[place + 1 :]))
+    program = str(root / command[0]) if "/" in command[0] else shutil.which(command[0])
+    target = python_args.interpreter(program, dict(os.environ)) if program else None
+    return python_args.skipping(target[1]) if target else None
 
 
 def can_start(program: str, root: Path) -> bool:

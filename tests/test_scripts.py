@@ -537,6 +537,38 @@ def test_a_program_that_cannot_be_found_is_a_mistake_in_the_test(
     assert not (project.root / "derail-runs").exists()
 
 
+@pytest.mark.design("config.flag_skips_the_gates")
+@pytest.mark.parametrize(
+    "flags", ["-E", "-S", "-I", "-BE", "-W ignore -S", "-Es", "--check-hash-based-pycs -I"]
+)
+def test_a_flag_that_skips_derail_on_the_command_is_a_mistake_in_the_test(
+    project: Project, flags: str
+) -> None:
+    (project.root / "bot.py").write_text("open('REAL WRITE', 'w').close()\n")
+    write_config(project, f"{sys.executable} {flags} bot.py {{question}}")
+    result = project.test()
+    assert result.code == 2 and "startup file" in result.err, result.out + result.err
+    assert not (project.root / "derail-runs").exists()
+    assert not (project.root / "REAL WRITE").exists()
+
+
+def test_a_flag_after_a_wrapper_or_in_a_shebang_is_read_too(project: Project) -> None:
+    write_config(project, f"env {sys.executable} -E bot.py {{question}}")
+    assert project.test().code == 2
+    tool = project.root / "tool"
+    tool.write_text(f"#!{sys.executable} -S\n")
+    tool.chmod(0o755)
+    write_config(project, "./tool {question}")
+    result = project.test()
+    assert result.code == 2 and "startup file" in result.err
+
+
+def test_a_harmless_flag_and_a_flag_of_the_script_pass(project: Project) -> None:
+    (project.root / "bot.py").write_text("import sys\nprint(sys.argv[1])\n")
+    write_config(project, f"{sys.executable} -B bot.py -E {{question}}")
+    assert summary_of(project.test())["answer"] == "-E"
+
+
 @pytest.mark.design("config.program_runs")
 def test_a_program_that_is_not_an_executable_file_is_a_mistake_in_the_test(
     project: Project,

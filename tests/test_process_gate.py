@@ -8,7 +8,7 @@ import jsonschema
 import pytest
 
 from conftest import Project, Result
-from derail_sdk import process_gate
+from derail_sdk import python_args
 from test_other_python import other_version  # noqa: F401  # a fixture
 from test_scripts import RECORD, calls, lines_of, script, summary_of, write_config
 
@@ -17,7 +17,7 @@ STARTS = {
     "subprocess": "subprocess.run([sys.executable, 'report.py'], env=ENV)",
     "popen": "subprocess.Popen([sys.executable, 'report.py'], env=ENV).wait()",
     "exec": "os.execve(sys.executable, CHILD, ENV)",
-    "spawn": "os.waitpid(os.spawnve(os.P_NOWAIT, sys.executable, CHILD, ENV), 0)",
+    "spawnve": "os.waitpid(os.spawnve(os.P_NOWAIT, sys.executable, CHILD, ENV), 0)",
     "posix_spawn": "os.waitpid(os.posix_spawn(sys.executable, CHILD, ENV), 0)",
     "asyncio": "asyncio.run(run())",
 }
@@ -190,15 +190,15 @@ def test_a_stdio_server_on_the_librarys_small_environment_still_starts(project: 
 def test_a_shell_script_is_not_python(tmp_path: Path) -> None:
     script_file = tmp_path / "tool"
     script_file.write_text("#!/bin/sh\ntrue\n")
-    assert process_gate.interpreter(str(script_file), {}) is None
+    assert python_args.interpreter(str(script_file), {}) is None
 
 
 def test_a_file_it_cannot_read_is_not_python(tmp_path: Path) -> None:
-    assert process_gate.interpreter(str(tmp_path / "missing"), {}) is None
+    assert python_args.interpreter(str(tmp_path / "missing"), {}) is None
 
 
 def test_a_flag_after_the_program_is_the_programs_own() -> None:
-    assert process_gate.flags(["bot.py", "-I"]) == set()
-    assert process_gate.flags(["-c", "-I"]) == set()
-    assert process_gate.flags(["--help", "-I"]) == {"I"}
-    assert process_gate.flags(["-Wignore", "-S"]) == {"S"}
+    assert python_args.flags(["bot.py", "-I"]) == set()
+    assert python_args.flags(["-c", "-I"]) == set()
+    assert python_args.flags(["--help", "-I"]) == {"I"}
+    assert python_args.flags(["-Wignore", "-S"]) == {"S"}

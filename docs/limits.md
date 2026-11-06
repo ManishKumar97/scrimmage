@@ -31,6 +31,7 @@
 - **Prices need checking.** The built-in price table is small; check it against your provider's pricing, and use `[agent.prices]` for anything else.
 - **Tools reached by import path.** A tool your code stores in a list or dictionary the moment it is defined keeps the original function, so the gate cannot reach it. A marker for those comes later.
 - **No judging.** The answer is recorded, not compared with `expect`.
+- **A command that clears Derail's path.** `env PYTHONPATH=. python bot.py` replaces the startup folder, so the program runs with no gates, its writes are real, and only then does the run read infrastructure error. Add to `PYTHONPATH` in the environment of `derail test` instead. A flag that does the same, `python -E`, is refused when the file is read.
 - **A blind child not started from Python.** A Python child with its own `env`, or with `-I`, `-E` or `-S`, is refused when your Python code starts it. Only those starts are seen, so `sh -c 'python x'`, `env -i python x`, `os.system`, and any exec from a program that is not Python, such as a shell script or a wrapper, are missed: the child runs with no gate and no line. A shell script that runs Python has the same gap if it clears the environment.
 - **A blind child on another Python.** A Python that is not the run's, with its own `env`, passes the check and is not kept from a listed tool.
 - **What a stdio server does by itself.** A server on the library's default environment does not join. The MCP gate decides every call to it, but a write the server makes is not gated.

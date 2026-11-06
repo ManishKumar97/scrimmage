@@ -62,7 +62,8 @@ So a fake server listening at the same address cannot hand your agent a plan, an
 ## Failing closed
 
 If the SDK cannot switch on fully, for any reason, the program stops before your agent's code runs.
-Your agent never runs in a test without its gates.
+A program that never runs the startup file cannot stop itself, so `command` is checked when the file is read: `python -E`, `-I` or `-S` there is a mistake in the test, exit 2, before any run.
+A program that reaches no gate some other way, such as `env PYTHONPATH=. python bot.py`, runs for real, and the run reads infrastructure error. See [Limits](limits.md).
 
 The one exception is a child program on a different Python, such as a cloud command-line tool your agent starts.
 It inherits the environment, but it is not the run's Python, so it is left to run as normal.
@@ -90,7 +91,7 @@ A forked child starts at step 2 or 3, depending on whether its parent had the pl
 
 ## Child processes Derail cannot reach
 
-Each process that joined adds an audit hook, which Python calls for every event, and which ignores all but four: `subprocess.Popen`, `os.exec`, `os.posix_spawn` and `os.spawn`.
+Each process that joined adds an audit hook, which Python calls for every event, and which ignores all but three: `subprocess.Popen`, `os.exec` and `os.posix_spawn`. `os.spawnv` is an exec in a forked child here.
 For those it asks whether the target is this run's Python, by its name or its shebang, and whether it would run blind: no Derail variables in its environment, or a flag that skips the startup file.
 If so it decides a call labelled `process:python`, which is refused unless `real` lists it.
 An exception from an audit hook stops the operation, so the child never starts. The MCP gate marks its own start of a stdio server, so that one passes.
