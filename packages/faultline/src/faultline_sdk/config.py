@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from faultline_sdk import labels
+from faultline_sdk import labels, provider_openai
 from faultline_sdk.errors import ConfigError
 from faultline_sdk.mocks import allowed
 
@@ -31,7 +31,11 @@ AGENT_KEYS = {
 }
 TEST_KEYS = {"name", "question", "expect", "mock", "fault"}
 MOCK_KEYS = {"call", "returns", "type"}
+WEB_MOCK_KEYS = {"call", "method", "path", "status", "headers", "json", "text"}
 FAULT_KEYS = {"call", "do", "when", "raises"}
+WEB_FAULT_KEYS = {"call", "do", "when", "method", "path"}
+# A mock's body is sent as written, so these could only make the reply lie about it.
+BODY_HEADERS = {"content-length", "content-encoding", "transfer-encoding"}
 
 DOCS = "docs/configuration.md"
 # The faults this version builds. Each one has an entry in docs/fault-catalog.toml.
@@ -51,6 +55,13 @@ class Mock:
     call: str
     returns: object
     type: str | None
+    # A web mock is one fixed reply, for a request narrowed by method and path if given.
+    method: str | None = None
+    path: str | None = None
+    status: int = 200
+    headers: tuple[tuple[str, str], ...] = ()
+    json: object = None
+    text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +70,8 @@ class Fault:
     do: str
     when: str
     raises: str | None = None  # for "error": a built-in name, or package.module:Class
+    method: str | None = None  # a web fault can be narrowed to one method and path
+    path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -141,6 +154,7 @@ def load(path: Path) -> Config:
     parsed: list[Test] = []
     for i, raw in enumerate(tests, 1):
         test = read_test(as_table(raw, f"[[test]] {i}"), i)
+        reject_model_mocks(test, agent)
         if test.name in seen:
             raise ConfigError(f"[[test]] {test.name!r}: name is used twice")
         seen.add(test.name)
@@ -168,7 +182,7 @@ def check_references(config: Config) -> list[str]:
                 )
         for entry in [*test.mocks, *test.faults]:
             if labels.kind_of(entry.call) != "tool":
-                continue  # a model label names a provider, checked when it is read
+                continue  # a model or web label cannot be compared with anything yet
             name = entry.call.partition(":")[2]
             if listed and name not in names:
                 problems.append(
@@ -389,9 +403,52 @@ def read_test(table: dict[str, object], index: int) -> Test:
     )
 
 
+def reject_model_mocks(test: Test, agent: Agent) -> None:
+    """A web mock on a model path would never answer: that request is a model call."""
+    hosts = {*provider_openai.HOSTS, *(h.host for h in agent.model_hosts)}
+    for mock in test.mocks:
+        host = mock.call.removeprefix("http:")
+        method = mock.method or "POST"
+        if host in hosts and mock.path and provider_openai.op_for(mock.path, method):
+            raise ConfigError(
+                f"[[test]] {test.name!r}: {mock.call} {mock.path} is a model call, which "
+                f"cannot be mocked: it is real or a fault; see {DOCS}"
+            )
+
+
+def narrowing(table: dict[str, object], where: str) -> tuple[str | None, str | None]:
+    """The method and path a web mock or fault is narrowed to, if any."""
+    method = labels.method_of(text(table, "method", where), where) if "method" in table else None
+    path = labels.path_of(text(table, "path", where), where) if "path" in table else None
+    return method, path
+
+
+def read_web_mock(table: dict[str, object], call: str, where: str) -> Mock:
+    check_keys(table, WEB_MOCK_KEYS, where)
+    if "json" in table and "text" in table:
+        raise ConfigError(f"{where}: give json or text, not both")
+    status = table.get("status", 200)
+    if isinstance(status, bool) or not isinstance(status, int) or not 100 <= status <= 599:
+        raise ConfigError(f"{where} status: expected an HTTP status, got {status!r}")
+    headers: list[tuple[str, str]] = []
+    for name, value in as_table(table.get("headers", {}), f"{where} headers").items():
+        if not isinstance(value, str):
+            raise ConfigError(f"{where} headers {name}: expected text, got {value!r}")
+        if name.lower() in BODY_HEADERS:
+            raise ConfigError(f"{where} headers {name}: is written from the body")
+        if not f"{name}{value}".isascii() or not f"{name}{value}".isprintable():
+            raise ConfigError(f"{where} headers {name}: must be printable ASCII")
+        headers.append((name, value))
+    method, path = narrowing(table, where)
+    body = text(table, "text", where) if "text" in table else None
+    return Mock(call, None, None, method, path, status, tuple(headers), table.get("json"), body)
+
+
 def read_mock(table: dict[str, object], where: str) -> Mock:
-    check_keys(table, MOCK_KEYS, where)
     call = labels.check(text(table, "call", where), f"{where} call")
+    if labels.kind_of(call) == "http":
+        return read_web_mock(table, call, where)
+    check_keys(table, MOCK_KEYS, where)
     if "returns" not in table:
         raise ConfigError(f"{where} returns: required")
     kind = table.get("type")
@@ -401,14 +458,16 @@ def read_mock(table: dict[str, object], where: str) -> Mock:
 
 
 def read_fault(table: dict[str, object], where: str) -> Fault:
-    check_keys(table, FAULT_KEYS, where)
     call = labels.check(text(table, "call", where), f"{where} call")
     kind = labels.kind_of(call)
+    check_keys(table, WEB_FAULT_KEYS if kind == "http" else FAULT_KEYS, where)
     do = text(table, "do", where)
     status = STATUS.fullmatch(do)
     if status:
-        if kind != "model":
-            raise ConfigError(f"{where} do: {do!r} works only on a model call; see {DOCS}")
+        if kind == "tool":
+            raise ConfigError(
+                f"{where} do: {do!r} works on a model call or a web request; see {DOCS}"
+            )
         if not 400 <= int(status.group("code")) <= 599:
             raise ConfigError(f"{where} do: {do!r} is not an error status (400 to 599)")
     elif do not in FAULTS or do == "status":
@@ -421,10 +480,10 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
         raise ConfigError(f"{where} when: {when!r} is not a schedule; see {DOCS}")
     if when.startswith("requests") and kind != "model":
         raise ConfigError(
-            f"{where} when: {when!r} counts model requests and their retries; "
-            "use 'first N' for a tool"
+            f"{where} when: {when!r} counts model requests and their retries; use 'first N' here"
         )
-    return Fault(call, do, when, raises)
+    method, path = narrowing(table, where) if kind == "http" else (None, None)
+    return Fault(call, do, when, raises, method, path)
 
 
 def takes_a_message(kind: object) -> bool:

@@ -29,6 +29,17 @@ def test_every_setting_is_documented() -> None:
     assert not missing, f"settings with no entry in docs/configuration.md: {missing}"
 
 
+@pytest.mark.design("docs.web_settings")
+def test_every_web_setting_and_real_form_is_documented() -> None:
+    text = page("configuration.md")
+    keys = config.WEB_MOCK_KEYS | config.WEB_FAULT_KEYS
+    missing = sorted(k for k in keys if not mentioned(text, k))
+    assert not missing, f"web settings with no entry in docs/configuration.md: {missing}"
+    web = page("web-requests.md")
+    for form in ("`http:orders.acme.internal`", " POST`", " POST /refunds`"):
+        assert form in web
+
+
 def test_every_fault_and_outcome_is_documented() -> None:
     concepts = page("concepts.md")
     assert all(mentioned(concepts, f) for f in config.FAULTS)

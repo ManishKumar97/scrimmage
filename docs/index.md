@@ -25,6 +25,7 @@ Fault injection is an established practice; Faultline brings it inside any Pytho
 | [Quickstart](quickstart.md) | Your first test, in five minutes |
 | [Failing the model](model-faults.md) | Rate limits, timeouts, schedules and the budget |
 | [Agents on a framework](frameworks.md) | LangGraph, with no tools list |
+| [Web requests](web-requests.md) | Mocking and failing the request inside a tool |
 | [Concepts](concepts.md) | Rows, runs, labels, mocks, faults, records |
 | [Configuration](configuration.md) | Every setting in `faultline.toml` |
 | [Commands](cli.md) | `faultline test` and `faultline-run` |
@@ -35,5 +36,5 @@ Fault injection is an established practice; Faultline brings it inside any Pytho
 ## Status
 
 Faultline is at an early stage.
-This version tests an agent that is a Python function, with its own loop or on LangGraph. It fails or mocks the agent's own Python tools, fails OpenAI model calls, and keeps a budget.
-Other providers, web requests, MCP tools and more frameworks come in later versions.
+This version tests an agent that is a Python function, with its own loop or on LangGraph. It fails or mocks the agent's own Python tools and the web requests inside them, fails OpenAI model calls, and keeps a budget.
+Other providers, MCP tools and more frameworks come in later versions.

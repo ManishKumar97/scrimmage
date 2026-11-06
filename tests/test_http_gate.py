@@ -18,7 +18,7 @@ import httpx2
 import openai
 import pytest
 
-from faultline_sdk import httpx2_gate, provider_openai, state
+from faultline_sdk import http_gate, provider_openai, state
 from faultline_sdk.budget import Ledger
 from faultline_sdk.client import ControlClient
 from faultline_sdk.config import Fault, ModelHost
@@ -82,12 +82,12 @@ def stopper(stops: list[str]) -> Any:
     return stops.append
 
 
-def install(plan: Plan, client: Any = None) -> tuple[Sink, httpx2_gate.Context]:
+def install(plan: Plan, client: Any = None) -> tuple[Sink, http_gate.Context]:
     sink = Sink()
     run = state.RunState(plan, sink, [])
     state.install(run)
-    ctx = httpx2_gate.Context(run, client or Budget(), sink, stopper([]))
-    httpx2_gate.patch(httpx2, ctx)
+    ctx = http_gate.Context(run, client or Budget(), sink, stopper([]))
+    http_gate.patch(httpx2, ctx)
     return sink, ctx
 
 
@@ -106,11 +106,13 @@ def test_without_a_run_the_gate_passes_the_request_through(gated: None) -> None:
     assert sink.lines == []
 
 
-@pytest.mark.design("gate.other_hosts_untouched")
-def test_a_host_that_is_not_a_model_host_is_left_alone(gated: None) -> None:
+@pytest.mark.design("gate.other_hosts_gated")
+def test_a_write_to_a_host_that_is_not_a_model_host_is_refused(gated: None) -> None:
     sink, _ = install(make_plan())
-    response = client().post("https://orders.acme.internal/refunds", json={})
-    assert response.status_code == 200 and sink.lines == []
+    with pytest.raises(FaultlineRefused, match="POST /refunds"):
+        client().post("https://orders.acme.internal/refunds", json={})
+    assert sink.lines[0]["call"] == "http:orders.acme.internal"
+    assert sink.lines[0]["reason"] == "web_write"
 
 
 @pytest.mark.design("gate.model_hosts_setting")
@@ -140,7 +142,7 @@ def test_the_agent_gets_the_reply_exactly_as_it_was_sent(gated: None) -> None:
 @pytest.mark.design("gate.handled_once")
 def test_a_request_is_decided_once(gated: None) -> None:
     sink, ctx = install(make_plan())
-    httpx2_gate.patch(httpx2, ctx)  # a second patch does not wrap twice
+    http_gate.patch(httpx2, ctx)  # a second patch does not wrap twice
     client().post(URL, json=BODY)
     assert len(sink.lines) == 1
 
@@ -494,11 +496,11 @@ def test_an_item_with_no_room_is_marked_unsaved() -> None:
     [(gzip.compress(b"hello"), "gzip"), (zlib.compress(b"hello"), "deflate"), (b"hello", "")],
 )
 def test_a_compressed_reply_is_read_for_its_counts(raw: bytes, encoding: str) -> None:
-    assert httpx2_gate.decoded(raw, encoding) == b"hello"
+    assert http_gate.decoded(raw, encoding) == b"hello"
 
 
 def test_a_reply_that_will_not_decompress_stays_as_it_is() -> None:
-    assert httpx2_gate.decoded(b"not gzip", "gzip") == b"not gzip"
+    assert http_gate.decoded(b"not gzip", "gzip") == b"not gzip"
 
 
 def bare_library(**parts: object) -> types.ModuleType:
@@ -507,11 +509,11 @@ def bare_library(**parts: object) -> types.ModuleType:
     return module
 
 
-def gate_for(plan: Plan) -> tuple[Sink, httpx2_gate.Context, list[str]]:
+def gate_for(plan: Plan) -> tuple[Sink, http_gate.Context, list[str]]:
     sink, stops = Sink(), []
     run = state.RunState(plan, sink, [])
     state.install(run)
-    return sink, httpx2_gate.Context(run, Budget(), sink, stopper(stops)), stops
+    return sink, http_gate.Context(run, Budget(), sink, stopper(stops)), stops
 
 
 class NoSend:
@@ -556,7 +558,7 @@ def test_a_library_the_gate_cannot_replace_stops_the_program(
     gated: None, parts: dict[str, object]
 ) -> None:
     sink, ctx, stops = gate_for(make_plan())
-    httpx2_gate.patch(bare_library(**parts), ctx)
+    http_gate.patch(bare_library(**parts), ctx)
     assert sink.lines[0]["notice"] == "structure"
     assert len(stops) == 1 and "the program is stopped" in stops[0]
 
@@ -573,8 +575,8 @@ def test_a_library_missing_only_what_faults_need_drops_faults_but_keeps_refusing
         SyncByteStream=httpx2.SyncByteStream,
         AsyncByteStream=httpx2.AsyncByteStream,
     )
-    httpx2_gate.patch(library, ctx)
-    assert not ctx.faults and stops == [] and "faults do not" in str(sink.lines[0]["message"])
+    http_gate.patch(library, ctx)
+    assert not ctx.faults and stops == [] and "those do not" in str(sink.lines[0]["message"])
     assert client().post(URL, json=BODY).status_code == 200  # no fault: the call runs
     with pytest.raises(FaultlineRefused):  # and a write is still refused
         client().post("https://api.openai.com/v1/fine_tuning/jobs", json={})
@@ -591,11 +593,11 @@ def test_a_newer_version_passes_with_a_warning(
 
 
 def test_a_version_it_cannot_read_is_not_a_warning() -> None:
-    assert httpx2_gate.version(types.ModuleType("x")) is None
+    assert http_gate.version(types.ModuleType("x")) is None
 
 
 def test_a_function_with_no_signature_cannot_be_gated() -> None:
-    assert httpx2_gate.params(print) is None or httpx2_gate.params(1) is None
+    assert http_gate.params(print) is None or http_gate.params(1) is None
 
 
 REDIRECT = "/v2/chat/completions"
@@ -626,7 +628,7 @@ def test_a_redirect_to_a_write_on_a_model_host_is_refused(gated: None) -> None:
     c = httpx2.Client(transport=redirecting("/v1/fine_tuning/jobs"), follow_redirects=True)
     with pytest.raises(FaultlineRefused, match="/v1/fine_tuning/jobs"):
         c.post(URL, json=BODY)
-    assert sink.lines[-1]["reason"] == "model_host_write"
+    assert sink.lines[-1]["reason"] == "web_write"
 
 
 def to_elsewhere(request: httpx2.Request) -> httpx2.Response:
@@ -650,6 +652,83 @@ def test_a_redirect_off_the_model_hosts_is_refused_and_named(gated: None) -> Non
     assert budget.ledger.reserved > 0 and len(sink.settles) == 1
     assert sink.settles[0][1] == line["cost_usd"] and line["cost_estimated"] is True
     assert isinstance(line["cost_usd"], float) and line["cost_usd"] > 0
+
+
+class Closing(httpx2.AsyncByteStream):
+    """A reply body whose close hangs until cancelled, or fails."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.closing = asyncio.Event()
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b""
+
+    async def aclose(self) -> None:
+        self.closing.set()
+        if self.error is not None:
+            raise self.error
+        await asyncio.Event().wait()
+
+
+def closing_redirect(stream: Closing) -> httpx2.AsyncClient:
+    async def answer(request: httpx2.Request) -> httpx2.Response:
+        headers = {"location": "http://localhost:9000/v1/chat/completions"}
+        return httpx2.Response(307, headers=headers, stream=stream)
+
+    return httpx2.AsyncClient(transport=httpx2.MockTransport(answer))
+
+
+@pytest.mark.design("gate.redirect_cancel_while_closing")
+def test_a_cancel_while_closing_an_off_host_reply_keeps_its_line_and_settlement(
+    gated: None,
+) -> None:
+    budget = Budget(limit=1.0)
+    sink, _ = install(make_plan(budget=1.0), budget)
+
+    async def go() -> None:
+        stream = Closing()
+        task = asyncio.create_task(closing_redirect(stream).post(URL, json=BODY))
+        await stream.closing.wait()
+        task.cancel()
+        await task
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(go())
+    line = sink.lines[-1]
+    assert (line["action"], line["reason"]) == ("refused", "redirect_off_host")
+    assert len(sink.settles) == 1 and sink.settles[0][1] == line["cost_usd"]
+
+
+def test_a_failed_close_of_an_off_host_reply_still_refuses(gated: None) -> None:
+    budget = Budget(limit=1.0)
+    sink, _ = install(make_plan(budget=1.0), budget)
+
+    async def go() -> None:
+        await closing_redirect(Closing(OSError("dropped"))).post(URL, json=BODY)
+
+    with pytest.raises(FaultlineRefused, match="not a model host"):
+        asyncio.run(go())
+    assert sink.lines[-1]["reason"] == "redirect_off_host" and len(sink.settles) == 1
+
+
+def test_a_failed_close_of_an_off_host_reply_still_refuses_when_sync(gated: None) -> None:
+    class Failing(httpx2.SyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            yield b""
+
+        def close(self) -> None:
+            raise OSError("dropped")
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        headers = {"location": "http://localhost:9000/v1/chat/completions"}
+        return httpx2.Response(307, headers=headers, stream=Failing())
+
+    budget = Budget(limit=1.0)
+    sink, _ = install(make_plan(budget=1.0), budget)
+    with pytest.raises(FaultlineRefused, match="not a model host"):
+        httpx2.Client(transport=httpx2.MockTransport(answer)).post(URL, json=BODY)
+    assert sink.lines[-1]["reason"] == "redirect_off_host" and len(sink.settles) == 1
 
 
 @pytest.mark.design("gate.redirect_bad_location")
@@ -712,8 +791,9 @@ def test_a_query_string_never_reaches_the_record(gated: None) -> None:
 @pytest.mark.design("gate.host_and_path")
 def test_a_chat_path_on_another_host_is_not_a_model_call(gated: None) -> None:
     sink, _ = install(make_plan())
-    client().post("https://chat.acme.internal/v1/chat/completions", json=BODY)
-    assert sink.lines == []
+    with pytest.raises(FaultlineRefused):
+        client().post("https://chat.acme.internal/v1/chat/completions", json=BODY)
+    assert sink.lines[0]["call"] == "http:chat.acme.internal"
 
 
 def test_a_get_on_a_chat_path_is_not_a_model_call(gated: None) -> None:
@@ -797,7 +877,7 @@ def test_an_absurd_max_tokens_does_not_reach_the_agent(gated: None) -> None:
 
 @pytest.mark.design("record.cut_size_true")
 def test_a_huge_reply_records_its_true_size(gated: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(httpx2_gate, "BLOB_CAP", 10)
+    monkeypatch.setattr(http_gate, "BLOB_CAP", 10)
     monkeypatch.setattr(state, "BLOB_CAP", 10)
     sink, _ = install(make_plan())
     response = httpx2.Client(transport=httpx2.MockTransport(streaming)).post(URL, json=BODY)
@@ -862,8 +942,8 @@ def two_calls() -> tuple[Any, Any]:
 def test_identical_requests_from_two_senders_keep_their_own_numbers(gated: None) -> None:
     _, ctx = install(make_plan())
     request, _ = two_calls()
-    body = httpx2_gate.body_of(request) or b""
-    one, two = (httpx2_gate.describe(ctx, request, who, body) for who in ("sender-a", "sender-b"))
+    body = http_gate.body_of(request) or b""
+    one, two = (http_gate.describe(ctx, request, who, body) for who in ("sender-a", "sender-b"))
     assert one is not None and two is not None and one.key != two.key
 
 
@@ -872,10 +952,10 @@ def test_two_requests_from_one_sender_keep_their_own_numbers(gated: None) -> Non
     plan = make_plan((Fault("model", "status 429", "requests 1"),))
     _, ctx = install(plan)
     first, second = two_calls()
-    first_body, second_body = (httpx2_gate.body_of(r) or b"" for r in (first, second))
+    first_body, second_body = (http_gate.body_of(r) or b"" for r in (first, second))
     counters = Counters(plan)
-    a = httpx2_gate.describe(ctx, first, "sender-a", first_body)
-    b = httpx2_gate.describe(ctx, second, "sender-a", second_body)
+    a = http_gate.describe(ctx, first, "sender-a", first_body)
+    b = http_gate.describe(ctx, second, "sender-a", second_body)
     assert a is not None and b is not None
     counters.note(a)
     counters.note(b)
@@ -925,7 +1005,7 @@ def test_a_model_line_waits_for_room_rather_than_being_dropped(gated: None) -> N
 
     run = state.RunState(make_plan(), Keeping(), [])
     state.install(run)
-    httpx2_gate.patch(httpx2, httpx2_gate.Context(run, Budget(), Sink(), stopper([])))
+    http_gate.patch(httpx2, http_gate.Context(run, Budget(), Sink(), stopper([])))
     client().post(URL, json=BODY)
     assert kept == [True]
 

@@ -40,18 +40,12 @@ class Plan:
         return [labels.tool_name(path, renames) for path in self.tools]
 
     def to_json(self) -> dict[str, object]:
-        mocks: list[dict[str, object]] = []
-        for m in self.mocks:
-            mock: dict[str, object] = {"call": m.call, "returns": m.returns}
-            if m.type is not None:
-                mock["type"] = m.type
-            mocks.append(mock)
         doc: dict[str, object] = {
             "v": PLAN_VERSION,
             "run": self.run,
             "test": self.test,
             "row": self.row,
-            "mocks": mocks,
+            "mocks": [mock_json(m) for m in self.mocks],
             "faults": [fault_json(f) for f in self.faults],
             "tools": list(self.tools),
             "real": list(self.real),
@@ -73,12 +67,16 @@ class Plan:
         doc = obj(data)
         if doc.get("v") != PLAN_VERSION:
             raise ValueError(f"plan version {doc.get('v')!r} is not {PLAN_VERSION}")
-        mocks = tuple(
-            Mock(string(m, "call"), m["returns"], optional(m, "type"))
-            for m in map(obj, items(doc, "mocks"))
-        )
+        mocks = tuple(mock_from(m) for m in map(obj, items(doc, "mocks")))
         faults = tuple(
-            Fault(string(f, "call"), string(f, "do"), string(f, "when"), optional(f, "raises"))
+            Fault(
+                string(f, "call"),
+                string(f, "do"),
+                string(f, "when"),
+                optional(f, "raises"),
+                optional(f, "method"),
+                optional(f, "path"),
+            )
             for f in map(obj, items(doc, "faults"))
         )
         limit = number(doc, "time_limit_s")
@@ -119,10 +117,52 @@ class Row:
     fault: Fault | None
 
 
+def mock_json(mock: Mock) -> dict[str, object]:
+    if labels.kind_of(mock.call) != "http":
+        doc: dict[str, object] = {"call": mock.call, "returns": mock.returns}
+        if mock.type is not None:
+            doc["type"] = mock.type
+        return doc
+    doc = {"call": mock.call, "status": mock.status}
+    for key, value in (
+        ("method", mock.method),
+        ("path", mock.path),
+        ("json", mock.json),
+        ("text", mock.text),
+    ):
+        if value is not None:
+            doc[key] = value
+    if mock.headers:
+        doc["headers"] = dict(mock.headers)
+    return doc
+
+
+def mock_from(doc: dict[str, object]) -> Mock:
+    call = string(doc, "call")
+    if labels.kind_of(call) != "http":
+        return Mock(call, doc["returns"], optional(doc, "type"))
+    return Mock(
+        call,
+        None,
+        None,
+        optional(doc, "method"),
+        optional(doc, "path"),
+        int(number(doc, "status")),
+        tuple((k, str(v)) for k, v in obj(doc.get("headers", {})).items()),
+        doc.get("json"),
+        optional(doc, "text"),
+    )
+
+
 def fault_json(fault: Fault) -> dict[str, object]:
     doc: dict[str, object] = {"call": fault.call, "do": fault.do, "when": fault.when}
-    if fault.raises is not None:
-        doc["raises"] = fault.raises
+    for key, value in (
+        ("raises", fault.raises),
+        ("method", fault.method),
+        ("path", fault.path),
+    ):
+        if value is not None:
+            doc[key] = value
     return doc
 
 

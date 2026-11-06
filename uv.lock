@@ -381,6 +381,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "coverage" },
+    { name = "httpx" },
     { name = "import-linter" },
     { name = "jsonschema" },
     { name = "langchain-core" },
@@ -403,6 +404,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "coverage", specifier = ">=7.17" },
+    { name = "httpx", specifier = ">=0.28" },
     { name = "import-linter", specifier = ">=2.15" },
     { name = "jsonschema", specifier = ">=4.26" },
     { name = "langchain-core", specifier = ">=1.7" },

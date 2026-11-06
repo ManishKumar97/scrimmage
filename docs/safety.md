@@ -32,12 +32,24 @@ Everything around them is checked:
 - A tool of a type Faultline does not know stops the test, so a new provider feature costs a table update, never a safety gap.
 - A tool the model is offered that no gate sees could run for real unchecked, so the request is not sent and the test stops.
 - A request body Faultline cannot read is refused, because the tools in it cannot be checked.
-- Any other write to a model host, such as starting a fine-tuning job, is refused.
+- Any other write to a model host, such as starting a fine-tuning job, is a web request, so it is refused unless `real` lists it.
 - A model call redirected to a host that is not a model host is refused, so it cannot leave the budget behind. If your gateway really does redirect to another host, name that host under `model_hosts`.
 
-## A gap in this version
+## What a web request may do
 
-A write to a host that is not a model host is **not** refused yet, even when it goes through httpx2. Only your listed tools guard it: a tool under `tools` that is neither mocked nor under `real` never runs, so the write inside it never happens. A write sent from code outside those tools passes. Web-request refusal comes in a later version.
+A web request through httpx or httpx2 is decided by its method, its path and the host in its own URL.
+
+| Web request, not mocked | Listed under `real` | What happens |
+|---|---|---|
+| `GET` or `HEAD` | either way | Runs for real |
+| `POST`, `PUT`, `PATCH`, `DELETE` or any other method | yes | Runs for real |
+| `POST`, `PUT`, `PATCH`, `DELETE` or any other method | no | Refused; the run stops as "refused call" |
+
+Each hop of a redirect is decided on its own, so a redirect cannot turn a read into a write that goes unchecked.
+A refusal here ends the run, as it does for a tool.
+
+A `GET` that changes data, which some services allow, is not caught. Mock it.
+Other HTTP libraries are not gated. Only your listed tools guard a write sent with one: a tool under `tools` that is neither mocked nor under `real` never runs, so the write inside it never happens.
 
 ## The budget
 

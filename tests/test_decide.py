@@ -70,11 +70,11 @@ def test_a_model_call_runs_for_real_unless_a_fault_fires() -> None:
     assert run(make(), chat()) == ("real", 0)
 
 
-@pytest.mark.design("decide.model_host_write_refused")
+@pytest.mark.design("decide.web_write_refused")
 def test_a_write_to_a_model_host_that_is_not_a_model_call_is_refused() -> None:
     tune = Call("http", "http:api.openai.com", "/v1/fine_tuning/jobs", "openai", "POST")
     listing = Call("http", "http:api.openai.com", "/v1/files", "openai", "GET")
-    assert decide(tune, make(), []).reason == "model_host_write"
+    assert decide(tune, make(), []).reason == "web_write"
     assert decide(listing, make(), []).action == "real"
 
 

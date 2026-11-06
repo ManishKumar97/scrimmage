@@ -62,8 +62,9 @@ class RunResult:
     notices: list[dict[str, object]] = field(default_factory=list[dict[str, object]])
     real_errors: list[str] = field(default_factory=list[str])
     hosted_reads: int = 0
-    mocked: set[str] = field(default_factory=set[str])  # the mocks this run used
+    mocked: set[int] = field(default_factory=set[int])  # the mocks this run used, by place
     tools_seen: list[str] | None = None  # None: the run did not report them
+    near_mocks: set[str] = field(default_factory=set[str])  # real, though the host had mocks
 
     @property
     def exercised(self) -> bool:
@@ -107,6 +108,7 @@ class Runner:
             stop_test = reason in STOP_TEST and self.stopped_by is None
             if stop_test:
                 self.stopped_by = reason
+                self.cancelled = True  # under this lock, so no run starts from here on
         if proc is not None:
             stop_group(proc)
         if stop_test:
@@ -168,6 +170,10 @@ class Runner:
         with self.lock:
             del self.procs[run]
         state = self.server.close_run(run)
+        # The server stops a test on a thread of its own, which this run's end can overtake.
+        # Settle it here, so the next run sees it.
+        if state.broken or state.refusals:
+            self._refused(run, "structure" if state.broken else state.refusals[0])
         lines = self.store.lines(run)
         answer_file = self.answers / f"{run}.txt"
         answer = answer_file.read_text() if answer_file.exists() else None
@@ -209,6 +215,7 @@ class Runner:
         }
         fired = None if row.fault is None else calls["fault"] > 0
         mistakes = [str(line["mistake"]) for line in lines if "mistake" in line]
+        near = {f"{x['call']} {x['method']} {x['path']}" for x in lines if x.get("near_mock")}
         summary: dict[str, object] = {
             "answer": None if answer is None else redact(answer),
             "outcome": outcome,
@@ -232,8 +239,9 @@ class Runner:
             notices=notices,
             real_errors=real_errors,
             hosted_reads=sum(1 for line in model if "hosted_reads" in line),
-            mocked={str(line["call"]) for line in lines if line.get("action") == "mock"},
+            mocked={int(str(line["mock"])) for line in lines if line.get("action") == "mock"},
             tools_seen=reported_tools(notices),
+            near_mocks=near,
         )
         self.check_labels(result)
         return result
@@ -336,21 +344,41 @@ def unknown_labels(config: Config, seen: list[str]) -> list[str]:
     ]
 
 
-def unused_mocks(config: Config, results: list[RunResult]) -> list[str]:
-    """Mocks no run in any row used. The labels passed their check, so this is only a note."""
+def unused_mocks(config: Config, results: list[RunResult]) -> tuple[list[str], list[str]]:
+    """Mocks no run in any row used, as (notes, mistakes).
+
+    A tool's label passed its check, so an unused tool mock is only a note. A web label has
+    no such check, so an unused web mock may be a misspelled host: that is a mistake.
+    """
     notes: list[str] = []
+    mistakes: list[str] = []
     for test in config.tests:
         mine = [r for r in results if r.row.test == test]
-        used = {call for r in mine for call in r.mocked}
-        if mine and not all(r.outcome in FAILED for r in mine):
-            notes += [
-                f"no run in test {test.name!r} called {mock.call.partition(':')[2]}, so its "
-                "mock was not used. The label is correct. Remove the mock, or ask a question "
-                "that needs the tool."
-                for mock in test.mocks
-                if mock.call not in used
-            ]
-    return notes
+        used = {index for r in mine for index in r.mocked}
+        if not mine or all(r.outcome in FAILED for r in mine):
+            continue
+        for index, mock in enumerate(test.mocks):
+            if index in used:
+                continue
+            name = mock.call.partition(":")[2]
+            if labels.kind_of(mock.call) == "http":
+                mistakes.append(
+                    f"[[test]] {test.name!r}: no request matched the mock on {mock.call}, or "
+                    "an earlier mock answered it first. Check its host, method and path, or "
+                    "remove it."
+                )
+            elif any(other.call == mock.call for other in test.mocks[:index]):
+                notes.append(
+                    f"in test {test.name!r} an earlier mock on {name} answers every call, so "
+                    "the later one was not used. Remove it."
+                )
+            else:
+                notes.append(
+                    f"no run in test {test.name!r} called {name}, so its mock was not used. "
+                    "The label is correct. Remove the mock, or ask a question that needs the "
+                    "tool."
+                )
+    return notes, mistakes
 
 
 def stop_group(proc: subprocess.Popen[bytes]) -> None:
@@ -401,6 +429,13 @@ def report(
         ran = [r for r in mine if r.outcome != "stopped"]
         if row.fault is not None and ran and not any(r.fault_fired for r in ran):
             mistakes.append(f"{where}: the fault never fired in any run, so the row tested nothing")
+            mixed = [m.call for m in row.test.mocks if labels.kind_of(m.call) == "tool"]
+            if labels.kind_of(row.fault.call) == "http" and mixed:
+                mistakes.append(
+                    f"{where}: the mock on {', '.join(mixed)} replaces the whole tool, so if "
+                    f"that tool makes this request, {row.fault.call} can never fire; "
+                    "mock or fault one level, not both"
+                )
         ended = Counter(r.outcome for r in mine if not r.exercised)
         if ended:
             how = ", ".join(f"{n} {outcome}" for outcome, n in sorted(ended.items()))
@@ -414,10 +449,12 @@ def report(
             if r.outcome == "infrastructure error":
                 code = INFRA
     stopped_by = runner.stopped_by if runner is not None else None
+    unused, wrong = unused_mocks(config, results) if stopped_by is None else ([], [])
+    mistakes += wrong
     if runner is not None and not config.agent.tools:
         mistakes += runner.label_problems
         if stopped_by is None and runner.tools_seen is not None:
-            notes += unused_mocks(config, results)
+            notes += unused
         elif stopped_by is None and results and any(map(tool_labels, config.tests)):
             mistakes.append(
                 "no run reported the agent's tools, so the tool labels in this file were not "
@@ -462,6 +499,7 @@ def report(
             code = INFRA
             mistakes.append(f"{r.row.test.name} {r.row.name}: {r.run}: {error}, not injected")
     hosted = sum(r.hosted_reads for r in results)
+    near_mocks = sorted({call for r in results for call in r.near_mocks})
     widths = [max(len(line[i]) for line in table) for i in range(len(head))]
     for line in table:
         print(
@@ -475,6 +513,12 @@ def report(
         print(
             f"warning: the test spent more than its budget of ${config.agent.max_cost_usd:g}, "
             "because the last calls cost more than was reserved for them",
+            file=out,
+        )
+    for call in near_mocks:
+        print(
+            f"warning: {call} ran for real, though the test has mocks for that host; "
+            "none matched its method and path",
             file=out,
         )
     if hosted:
