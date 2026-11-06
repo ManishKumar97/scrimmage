@@ -832,6 +832,60 @@ def test_a_fork_leaves_the_parents_open_reply_to_the_parent(
     assert [x["kind"] for x in calls(result)] == ["model"], result.out
 
 
+# exec ends the image with no exit steps.
+
+
+@pytest.mark.design("exec.refusal_arrives")
+@pytest.mark.parametrize(
+    "call",
+    [
+        "os.execv(sys.executable, [sys.executable, 'next.py'])",
+        "os.execve(sys.executable, [sys.executable, 'next.py'], dict(os.environ))",
+        "os.execl(sys.executable, sys.executable, 'next.py')",
+        "os.execvp(sys.executable, [sys.executable, 'next.py'])",
+    ],
+)
+def test_a_refusal_just_before_exec_is_not_lost(project: Project, call: str) -> None:
+    (project.root / "next.py").write_text("print('the answer')\n")
+    code = (
+        "import contextlib, os, sys\n"
+        "from acme import tools\n"
+        "with contextlib.suppress(Exception):\n"
+        "    tools.refund_order('1234')\n"
+        f"{call}\n"
+    )
+    result = script(project, code)
+    assert result.code == 2 and summary_of(result)["outcome"] == "refused call", result.out
+
+
+@pytest.mark.design("exec.other_program")
+def test_a_root_that_execs_another_program_keeps_its_lines(project: Project) -> None:
+    code = (
+        "import os\n"
+        "from acme import tools\n"
+        "tools.check_inventory('1')\n"
+        "os.execv('/bin/echo', ['echo', 'the answer'])\n"
+    )
+    result = script(project, code)
+    assert summary_of(result)["outcome"] == "answered", result.out
+    assert summary_of(result)["answer"] == "the answer"
+    assert len(calls(result)) == 1
+
+
+def test_an_exec_that_fails_leaves_the_program_recording(project: Project) -> None:
+    code = (
+        "import contextlib, os\n"
+        "from acme import tools\n"
+        "with contextlib.suppress(OSError):\n"
+        "    os.execv('/no/such/program', ['x'])\n"
+        "tools.check_inventory('1')\n"
+        "print('the answer')\n"
+    )
+    result = script(project, code)
+    assert summary_of(result)["outcome"] == "answered", result.out
+    assert len(calls(result)) == 1
+
+
 # Stopping. 6.3
 
 
@@ -1158,33 +1212,18 @@ def test_the_handler_sends_the_last_lines_then_ends_the_program_by_the_signal(
     """In its own process the handler ends in a signal, which leaves no coverage data."""
     done: list[str] = []
     sent: list[int] = []
-
-    class Sender:
-        eager = False
-
-        def flush(self) -> None:
-            done.append("flush")
-
-    class Run:
-        def stop_open(self) -> None:
-            done.append("stop_open")
-
-    class Context:
-        def close_open(self) -> None:
-            done.append("close_open")
-
     monkeypatch.setattr(os, "kill", lambda pid, sig: sent.append(sig))
     before = signal.getsignal(signal.SIGTERM)
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
     try:
-        bootstrap.handle_sigterm(Run(), Sender(), Context())  # type: ignore[arg-type]
+        bootstrap.handle_sigterm(lambda: done.append("last lines"), lambda: 1.0)
         handler = signal.getsignal(signal.SIGTERM)
         assert callable(handler)
         handler(signal.SIGTERM, None)
         assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL  # the second one kills
     finally:
         signal.signal(signal.SIGTERM, before)
-    assert done == ["close_open", "stop_open", "flush"] and sent == [signal.SIGTERM]
+    assert done == ["last lines"] and sent == [signal.SIGTERM]
 
 
 def test_the_handler_ends_the_program_when_python_cannot_start_a_thread(
@@ -1200,7 +1239,7 @@ def test_the_handler_ends_the_program_when_python_cannot_start_a_thread(
     before = signal.getsignal(signal.SIGTERM)
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
     try:
-        bootstrap.handle_sigterm(None, None, None)  # type: ignore[arg-type]
+        bootstrap.handle_sigterm(lambda: None, lambda: 1.0)
         handler = signal.getsignal(signal.SIGTERM)
         assert callable(handler)
         handler(signal.SIGTERM, None)

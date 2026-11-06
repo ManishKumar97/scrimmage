@@ -11,6 +11,7 @@ import os
 import signal
 import sys
 import threading
+from collections.abc import Callable
 from types import FrameType
 from typing import NoReturn
 
@@ -67,7 +68,7 @@ def runs_as_main(module: str, target: str | None, folders: list[str]) -> bool:
     return os.path.realpath(spec.origin) == os.path.realpath(sys.argv[0])
 
 
-def handle_sigterm(run_state: state.RunState, sender: Sender, ctx: http_gate.Context) -> None:
+def handle_sigterm(last_lines: Callable[[], None], wait: Callable[[], float]) -> None:
     """On SIGTERM send the last record lines, then end as Python would have with no handler.
 
     The handler runs on the main thread, which may hold a lock the lines need, so a thread
@@ -77,18 +78,13 @@ def handle_sigterm(run_state: state.RunState, sender: Sender, ctx: http_gate.Con
     if signal.getsignal(signal.SIGTERM) is not signal.SIG_DFL:
         return
 
-    def last_lines() -> None:
-        ctx.close_open()
-        run_state.stop_open()
-        sender.flush()
-
     def on_term(signum: int, frame: FrameType | None) -> None:
         del frame
         signal.signal(signum, signal.SIG_IGN)  # the runner may send it twice
         try:
             worker = threading.Thread(target=last_lines, daemon=True)
             worker.start()
-            worker.join(CHILD_TERM_WAIT_S if sender.eager else TERM_WAIT_S)
+            worker.join(wait())
         except RuntimeError:  # Python is already shutting down, so no new thread
             pass
         signal.signal(signum, signal.SIG_DFL)
@@ -168,8 +164,19 @@ def start(*, child: bool = False, target: str | None = None) -> None:
         ctx.open.clear()  # replies the parent is reading
 
     os.register_at_fork(after_in_child=forked)
-    process_gate.install(run_state, lambda: None)
-    handle_sigterm(run_state, sender, ctx)
+
+    def last_lines() -> None:
+        ctx.close_open()
+        run_state.stop_open()
+        sender.flush()
+
+    def before_exec() -> None:
+        """exec ends this image with no exit steps, and if it fails the program goes on."""
+        last_lines()
+        sender.eager = True
+
+    process_gate.install(run_state, before_exec)
+    handle_sigterm(last_lines, lambda: CHILD_TERM_WAIT_S if sender.eager else TERM_WAIT_S)
     if plan is not None:
         print(
             f"derail: active for run {run} ({plan.test}, {plan.row}); "
