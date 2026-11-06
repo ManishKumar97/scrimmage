@@ -106,4 +106,4 @@ Judging answers against `expect` comes in a later version.
 | 2 | A mistake in the test: a refused call, a fault that never fired, a mock that does not fit its type, a misspelled label, a failed baseline, or a test the budget stopped |
 | 3 | An infrastructure error: a run whose record is incomplete, an error from the provider nobody injected, or a failure inside Derail itself |
 
-Next: [Failing the model, and keeping a budget](model-faults.md), or [Concepts](concepts.md).
+Next: [Failing the model, and keeping a budget](model-faults.md), [An agent run as a script](scripts.md) if yours is a program and not a function, or [Concepts](concepts.md).
