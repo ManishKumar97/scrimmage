@@ -1,13 +1,12 @@
 # Limits of this version
 
-- **One agent shape.** The agent must be a Python function. Scripts and web services come later.
+- **Two agent shapes.** The agent is a Python function or a Python script. Web services come later.
 - **Tools, web requests and OpenAI model calls.** Derail gates the tools you list under `tools`, the LangChain tools it finds by itself, requests sent with httpx or httpx2, and model calls. See [Safety](safety.md).
 - **mcp 2.x only, tested with 2.3.** A program that imports `mcp` 1.x stops with exit code 3, even if it never calls an MCP tool, because 1.x has no place for the gate. Install `mcp` 2.x in the test environment.
 - **MCP through the official client or a client built on it, such as FastMCP's.** A client of your own that speaks the protocol by itself is not gated at the MCP gate. If it sends its own web requests, its POSTs meet the web gate. If it is built on `streamable_http_client` and writes its own JSON-RPC messages, they go out through the transport's marked requests, undecided and unrecorded. Over stdio nothing sees them.
 - **The old SSE transport for MCP.** Its web requests are not marked, so its first POST is refused by the web gate and the run stops. Use streamable HTTP or stdio.
 - **MCP tools under another name.** A tool the model sees under a name other than the server's, such as `docs_search`, is reported as a tool no gate sees, and the test stops.
 - **A hook that posts to the MCP endpoint.** An event hook on the MCP client that sends to the endpoint itself while a request is being sent passes the web gate unseen.
-- **A stdio server on mcp 1.x, started with your environment.** It joins the test as the agent does, so it stops with exit code 3 and says to install 2.x. Start it with a clean `env`.
 - **Only MCP tool calls are gated.** `resources/read`, `prompts/get` and the rest pass, and cannot be mocked or failed. A server can act on any of them. `resources/read`, `prompts/get`, `completion/complete` and `resources/subscribe` each leave a `real` line. See [Safety](safety.md#what-an-mcp-tool-may-do).
 - **Two MCP servers with one name.** Derail cannot tell them apart, and `mcp:docs/search` names both. Two servers that give no name are the same case.
 - **An MCP label that reads two ways.** Tool `b/c` on server `a` and tool `c` on server `a/b` share the label `mcp:a/b/c`. The test stops once both are known, and there is no way to name either one.
@@ -32,7 +31,14 @@
 - **Prices need checking.** The built-in price table is small; check it against your provider's pricing, and use `[agent.prices]` for anything else.
 - **Tools reached by import path.** A tool your code stores in a list or dictionary the moment it is defined keeps the original function, so the gate cannot reach it. A marker for those comes later.
 - **No judging.** The answer is recorded, not compared with `expect`.
-- **Child programs** on the same Python get the mocks and safety rules but no faults; a forked child's record lines are not sent yet.
+- **A child that does not inherit Derail's environment.** A child started with its own `env`, such as `env={"PATH": ...}`, or with `python -I`, `-E` or `-S`, never runs Derail's startup file. It is not gated and it leaves no line, so a write in it runs for real. The MCP library's default environment for a stdio server is such a case: the server is the other side of the MCP gate, so its tool calls are decided there, but what the server itself does is not gated.
+- **Programs on another Python.** They are not gated, so a web write or an MCP call from one is not stopped or recorded. Only a tool under `tools` is kept from them. A tool imported by another name, or a copy of its code, is not. With `children` set, one that has Derail installed joins, and a stdio server on `mcp` 1.x then stops with exit code 3.
+- **A daemon that starts its own session.** A child that calls `os.setsid`, or is started with `start_new_session=True`, leaves the run's process group, so it is not stopped with it and keeps running after the run ends. Nothing tracks it. Its gates stay on, but with the run closed its lines are lost: a write it already holds a plan for is still refused, and one that fetches its plan after the run is refused for having none. A write under `real` runs for real. A double fork with no new session stays in the group and is stopped.
+- **A last line of output shared with a child.** The last printed line is read from one file, so a child that prints after your program comes last. Use the answer file. See [An agent run as a script](scripts.md#the-answer).
+- **`first N` in children.** With `children` set each process counts its own calls, so `first 1` fires once per process.
+- **A child's gates wait for the control server.** A child has no sender thread, so each of its gated calls waits for its record line to be sent, and an async gate in a child holds up the event loop for that long.
+- **`os.fork` warns on Python 3.12 and later.** The SDK's sender thread makes your program multi-threaded, so Python prints a `DeprecationWarning` at `os.fork` in your own code, and raises it under `-W error`.
+- **Stopping needs Python to run.** A program stuck in native code that holds Python's lock cannot run the SIGTERM handler, so SIGKILL ends it at five seconds, and the lines of its last 100 ms are lost. The same goes for a program whose own handler does not exit.
 - **Python only.** The SDK must run inside the agent's own Python program.
 - **Request bodies that are not in memory.** A web request sent from a generator or as a multipart upload is decided as usual, but its body is recorded as 0 bytes.
 - **A library that loses what mocks are built from.** The test stops with exit code 3 and names the library. Until it stops, a mocked read runs for real and a mocked write is refused, which errs on the safe side.

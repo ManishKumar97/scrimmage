@@ -8,7 +8,9 @@ Anything this version does not support is rejected as unknown, with exit code 2.
 
 | Setting | What it does | Default |
 |---|---|---|
-| `function` | The agent, as `module:function`. Derail calls it with the question and waits for it if it is async. Required. | none |
+| `function` | The agent, as `module:function`. Derail calls it with the question and waits for it if it is async. Give this or `command`. | none |
+| `command` | The agent as a script, such as `"python bot.py {question}"`. It is split into arguments like a shell's words, and the question fills `{question}` as part of one argument, with no shell. Must hold `{question}`. Give this or `function`. See [An agent run as a script](scripts.md). | none |
+| `children` | `true` fires faults in child processes too, and lets a child on another Python join if it has Derail installed. See [Faults in children](scripts.md#faults-in-children). | `false` |
 | `tools` | The agent's own tools, as `module:function` import paths. Derail swaps each one for a gate when your code imports its module. When the model sees a different name, write `{path = "package.tools:lookup_order", name = "lookup-order"}`; labels use the name the model sees. | empty |
 | `real` | Calls that are safe to run for real when a test does not mock them, such as `"tool:check_inventory"`, `"tool:*"` for every tool, `"mcp:docs/search"` for a tool on an MCP server, `"hosted:mcp/orders"` for a hosted MCP server, or a web write such as `"http:orders.acme.internal POST /refunds"`. Model calls are not listed: they are real unless a fault names them. | empty |
 | `runs` | How many times each row runs. | 3 |
@@ -18,7 +20,7 @@ Anything this version does not support is rejected as unknown, with exit code 2.
 | `model_hosts` | Extra hosts whose requests are model calls, such as a gateway, each with the format it speaks: `[{host = "llm-gateway.internal", provider = "openai"}]`. A host name only, with no port. | empty |
 | `reserve_output_tokens` | The output tokens a budget reservation assumes when a request does not set `max_tokens`. | 4096 |
 | `prices` | Prices for other models, as the table below. | empty |
-| `answer` | Where the answer is in what the function returns, such as `"messages[-1].content"`. See [Agents on a framework](frameworks.md). | the whole value |
+| `answer` | Where the answer is in what the function returns, such as `"messages[-1].content"`. Only with `function`. See [Agents on a framework](frameworks.md). | the whole value |
 
 ## [agent.prices]
 
@@ -29,7 +31,7 @@ Prices for models the built-in table does not know, in dollars per million token
 llama-70b = {input = 0.6, output = 0.6}
 ```
 
-Derail imports only modules under your agent's own top-level packages, the ones `function` and `tools` name.
+Derail imports only modules under your agent's own top-level packages, the ones `function` and `tools` name. For a script, that is the ones `tools` names.
 
 ## [[test]]
 
@@ -71,7 +73,7 @@ See [Web requests](web-requests.md) and [MCP tools](mcp.md).
 These are part of Derail's design but not of this version.
 Using one now stops the test: it is rejected as unknown.
 
-- Agent shapes: `command` (a script) and `service` (a web service).
+- Agent shapes: `service` (a web service).
 - Settings: `body`, `headers`, `control`, `control_tls`, `records`, `record_grace_s`, `record_wait_s`.
 - Labels: `auth:`, and model providers other than OpenAI.
 - Faults: `slow`, `empty` on a tool or a web request, `refused`, `reset`, `dns`, `bad body`, `auth error`, `context too long`, `append`, `replace`, the model reply faults, and `status` on a tool.

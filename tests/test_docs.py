@@ -50,6 +50,16 @@ def test_mcp_settings_faults_and_labels_are_documented() -> None:
     assert "`mcp:" not in page("configuration.md").split("## Coming in later versions")[1]
 
 
+@pytest.mark.design("docs.scripts")
+def test_the_script_shape_its_children_and_its_stopping_are_documented() -> None:
+    text = page("scripts.md")
+    for word in ("{question}", "children", "DERAIL_ANSWER_FILE", "process", "other_python"):
+        assert f"`{word}`" in text or f"`{word} = true`" in text, word
+    assert "`command`" in page("configuration.md") and "`derail-run" in page("cli.md")
+    assert "`command`" not in page("configuration.md").split("## Coming in later versions")[1]
+    assert "mcp 1.x, started with your environment" not in page("limits.md")
+
+
 def test_every_fault_and_outcome_is_documented() -> None:
     concepts = page("concepts.md")
     assert all(mentioned(concepts, f) for f in config.FAULTS)

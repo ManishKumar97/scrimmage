@@ -21,6 +21,7 @@ It prints one table row per test row and what the model calls cost, writes each 
 | 3 | An infrastructure error, such as a model call that failed with nobody injecting it, or a library version Derail cannot gate |
 
 Each run's own output, everything your agent printed, is in `derail-runs/<time>/<run>.log`.
+For a script, what it printed to standard output is in `<run>.out` and its standard error in `<run>.log`.
 
 Stopping `derail test` (Ctrl-C, or a cancelled CI job) stops every run and every program it started, and exits 3.
 
@@ -30,6 +31,14 @@ Stopping `derail test` (Ctrl-C, or a cancelled CI job) stops every run and every
 derail-run <command> [args...]
 ```
 
-Runs a command with Derail's startup file first on Python's path.
-`derail test` uses it to start each run; you rarely run it yourself.
+Runs a command with Derail's startup file first on Python's path, then becomes that command, so it keeps its arguments, its process id and its exit code.
+`derail test` starts every run through it, and you can put it in front of a command yourself, in a script or a container's start line.
 On its own, without a test running, it changes nothing: the startup file does nothing unless a test switched Derail on.
+
+If the command cannot start, `derail-run` says why on standard error and exits with:
+
+| Code | Meaning |
+|---|---|
+| 2 | No command was given |
+| 126 | The command was found but cannot be run |
+| 127 | The command was not found |
