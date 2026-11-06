@@ -20,7 +20,7 @@ from typing import Any
 from faultline_sdk import hooks, tool_gate
 from faultline_sdk.errors import FaultlineMockError, FaultlineRefused
 from faultline_sdk.httpx2_gate import params
-from faultline_sdk.state import RunState, current
+from faultline_sdk.state import RunState
 
 LIBRARY = "langchain-core"
 MODULE = "langchain_core.tools.base"
@@ -85,12 +85,20 @@ def patch(module: ModuleType, run: RunState, stop: Callable[[str], None]) -> Non
     @functools.wraps(create)
     def tracked_init(self: Any, *args: Any, **kwargs: Any) -> None:
         create(self, *args, **kwargs)
-        if gate_tool(type(self), failure) and library_runs_it(type(self), base):
-            run.adapted.add(self.name)  # offered to the model, it will reach a gate
+        vet(self)
+
+    def vet(tool: Any) -> str | None:
+        """Record whether a call to this tool reaches a gate. Says why not, if it does not."""
+        reason = skips_gate(tool, base, failure)
+        if reason is None:
+            run.adapted.add(tool.name)  # offered to the model, it will reach a gate
+        else:
+            run.blocked[tool.name] = reason
+        return reason
 
     base.__init__ = tracked_init
-    for name in ("run", "arun"):
-        setattr(base, name, checked(vars(base)[name], failure))
+    for name in ENTRIES:
+        setattr(base, name, checked(vars(base)[name], run, vet))
 
 
 def owner_of(cls: type, name: str) -> type:
@@ -113,24 +121,36 @@ def gate_tool(cls: type, failure: type[Exception]) -> bool:
     return gatable_tool
 
 
-def library_runs_it(cls: type, base: type) -> bool:
-    """Calls go through the library's own entry points, so they reach the gate."""
+def overrides(cls: type, base: type) -> list[str]:
+    """The entry points this class replaces. The library's own all reach the gate."""
     package = base.__module__.split(".")[0]
-    return all(owner_of(cls, n).__module__.split(".")[0] == package for n in CALLED)
+    return [n for n in CALLED if owner_of(cls, n).__module__.split(".")[0] != package]
 
 
-def checked(entry: Callable[..., Any], failure: type[Exception]) -> Callable[..., Any]:
+def skips_gate(tool: Any, base: type, failure: type[Exception]) -> str | None:
+    """Why a call to this tool could run without passing a gate, if one could."""
+    cls = type(tool)
+    if not gate_tool(cls, failure):
+        return f"{tool.name} cannot be gated, because its _run is not a plain function"
+    replaced = overrides(cls, base)
+    if replaced:
+        return f"{tool.name} cannot be gated, because its class overrides {replaced[0]}"
+    return None
+
+
+def checked(
+    entry: Callable[..., Any], run: RunState, vet: Callable[[Any], str | None]
+) -> Callable[..., Any]:
     """Gate a tool again as it is called, for _run assigned after the tool was made.
 
     This only checks: an injected failure is raised at the gate, inside the error handling.
     """
 
     def check(tool: Any) -> None:
-        run = current()
-        if run is not None and not gate_tool(type(tool), failure):
-            message = f"{tool.name} cannot be gated, because its _run is not a plain function"
-            run.cannot_gate(tool.name, message)
-            raise FaultlineRefused(message)
+        reason = vet(tool)
+        if reason is not None:
+            run.cannot_gate(tool.name, reason)
+            raise FaultlineRefused(reason)
 
     if inspect.iscoroutinefunction(entry):
 

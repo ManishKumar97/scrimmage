@@ -305,16 +305,21 @@ def check_tools(
                 f'the provider and can change data; add "hosted:mcp/{label}" to [agent] real '
                 "if it is safe",
             )
-    unseen = sorted(name for name in set(tools.agent) if name not in ctx.run.seen)
+    seen = run.seen
+    unseen = sorted(name for name in set(tools.agent) if name not in seen)
     if unseen:
+        why = "; ".join(run.blocked[name] for name in unseen if name in run.blocked)
+        fix = (
+            'add it to [agent] tools as "package.module:function", or as {path, name} when '
+            "the model sees another name"
+        )
         step.extra["unseen_tools"] = unseen
         run.refuse(step, "unseen_tool")
         refuse(
             run,
             step,
             f"the model would be offered {', '.join(unseen)}, which no gate sees, so a call to "
-            'it could run for real unchecked; add it to [agent] tools as "package.module:'
-            'function", or as {path, name} when the model sees another name',
+            f"it could run for real unchecked; {why or fix}",
         )
 
 

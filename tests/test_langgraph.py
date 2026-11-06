@@ -797,3 +797,15 @@ def test_listing_a_tool_does_not_vouch_for_one_that_skips_the_gate(project: Proj
     assert result.code == 2, result.out + result.err
     assert not wrote(result) and fake.requests == []
     assert "offered write_order, which no gate sees" in result.out
+
+
+def stopped_at_the_offer(result: Result, fake: FakeOpenAI) -> None:
+    assert result.code == 2, result.out + result.err
+    assert not wrote(result) and fake.requests == []
+
+
+@pytest.mark.design("adapter.blocked_name_wins")
+def test_a_gated_tool_does_not_vouch_for_a_second_tool_of_its_name(project: Project) -> None:
+    result, fake = offered(project, "same_name_as_a_gated_tool")
+    stopped_at_the_offer(result, fake)
+    assert "get_order cannot be gated, because its class overrides invoke" in result.out
