@@ -152,6 +152,16 @@ def override_named_by_the_test(question: str) -> str:
     return str(getattr(tool, name)({"order_id": "1"}))
 
 
+def override_with_no_init(question: str) -> str:
+    """model_construct skips __init__, and this class has no other tool."""
+
+    class Constructed(Order):
+        def invoke(self, input: Any, config: Any = None, **kwargs: Any) -> str:
+            return write()
+
+    return str(Constructed.model_construct().invoke({"order_id": "1"}))
+
+
 def partial_run(question: str) -> str:
     return str(offer(PartialRun(), question))
 

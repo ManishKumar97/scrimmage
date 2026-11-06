@@ -16,6 +16,7 @@ import threading
 import typing
 import weakref
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from types import ModuleType
 from typing import Any
 
@@ -59,6 +60,8 @@ def gatable(module: ModuleType) -> bool:
         return False
     if params(vars(base).get("__init__")) != ["self", "kwargs"]:
         return False
+    if not isinstance(vars(base).get("__init_subclass__"), classmethod):
+        return False
     if any(params(vars(base).get(n)) != ["self", "args", "kwargs"] for n in METHODS):
         return False
     return all((params(vars(base).get(n)) or [])[1:2] == ["tool_input"] for n in ENTRIES)
@@ -92,7 +95,8 @@ def patch(module: ModuleType, run: RunState, stop: Callable[[str], None]) -> Non
     base = module.BaseTool
     failure = module.ToolException
     create = base.__init__
-    entries = entry_points(base)
+    library = Library(base, entry_points(base), failure, run)
+    made = vars(base)["__init_subclass__"].__func__
     # By id: a pydantic model has no hash, so a WeakSet cannot hold one.
     tools: weakref.WeakValueDictionary[int, Any] = weakref.WeakValueDictionary()
     lock = threading.Lock()
@@ -104,9 +108,13 @@ def patch(module: ModuleType, run: RunState, stop: Callable[[str], None]) -> Non
             tools[id(self)] = self
         vet(self)
 
+    def tracked_subclass(cls: type, **kwargs: Any) -> None:
+        made(cls, **kwargs)
+        guard_class(cls, library)  # model_construct makes a tool with no __init__
+
     def vet(tool: Any) -> str | None:
         """Record whether a call to this tool reaches a gate. Says why not, if it does not."""
-        reason = skips_gate(tool, base, entries, failure, run)
+        reason = skips_gate(tool, library)
         if reason is None:
             run.adapted.add(tool.name)  # offered to the model, it will reach a gate
         else:
@@ -121,6 +129,7 @@ def patch(module: ModuleType, run: RunState, stop: Callable[[str], None]) -> Non
 
     run.rechecks.append(recheck)
     base.__init__ = tracked_init
+    base.__init_subclass__ = classmethod(tracked_subclass)
     for name in ENTRIES:
         setattr(base, name, checked(vars(base)[name], run, vet))
 
@@ -165,14 +174,27 @@ def entry_points(base: type) -> tuple[str, ...]:
     return ("__call__", *sorted(names - set(EXEMPT)))
 
 
-def overrides(cls: type, base: type, entries: tuple[str, ...]) -> list[str]:
+@dataclass(frozen=True)
+class Library:
+    """What the checks need to know about the library and this run."""
+
+    base: type
+    entries: tuple[str, ...]
+    failure: type[Exception]
+    run: RunState
+
+
+def overrides(cls: type, library: Library) -> list[str]:
     """The entry points this class replaces. The library's own all reach the gate."""
 
-    def owner(name: str) -> type | None:
-        return next((c for c in cls.__mro__ if name in vars(c)), None)
+    def replaced(name: str) -> bool:
+        owner = next((c for c in cls.__mro__ if name in vars(c)), None)
+        if owner is None or package_of(owner) == package_of(library.base):
+            return False
+        value = vars(owner)[name]  # a field's default, still here as a class is made, is neither
+        return callable(value) or hasattr(value, "__get__")
 
-    found = [(name, owner(name)) for name in entries]
-    return [n for n, c in found if c is not None and package_of(c) != package_of(base)]
+    return [name for name in library.entries if replaced(name)]
 
 
 def refusal(run: RunState, name: str) -> Callable[..., Any]:
@@ -186,20 +208,26 @@ def refusal(run: RunState, name: str) -> Callable[..., Any]:
     return tool_gate.mark(refuse)
 
 
-def skips_gate(
-    tool: Any, base: type, entries: tuple[str, ...], failure: type[Exception], run: RunState
-) -> str | None:
-    """Why a call to this tool could run without passing a gate, if one could."""
-    cls = type(tool)
-    gated = gate_tool(cls, failure)
-    replaced = overrides(cls, base, entries)
-    for name in replaced:  # before any return: a tool can have more than one problem
+def guard_class(cls: type, library: Library) -> tuple[bool, list[str]]:
+    """Gate what this class runs and refuse what it replaces, before any other check.
+
+    Says whether the gates could go in, and which entry points the class replaces.
+    """
+    gated = gate_tool(cls, library.failure)
+    replaced = overrides(cls, library)
+    for name in replaced:
         # On this class, not the owner: the owner can be a mixin other classes use too.
         if not tool_gate.is_gate(getattr(cls, name)):
-            setattr(cls, name, refusal(run, name))
+            setattr(cls, name, refusal(library.run, name))
+    return gated, replaced
+
+
+def skips_gate(tool: Any, library: Library) -> str | None:
+    """Why a call to this tool could run without passing a gate, if one could."""
+    gated, replaced = guard_class(type(tool), library)
     if not gated:
         return f"{tool.name} cannot be gated, because its _run is not a plain function"
-    own = [n for n in (*METHODS, *entries) if callable(vars(tool).get(n))]
+    own = [n for n in (*METHODS, *library.entries) if callable(vars(tool).get(n))]
     if own:  # the class's gate never sees a method set on the tool itself
         return f"{tool.name} cannot be gated, because {own[0]} is set on the tool itself"
     if replaced:

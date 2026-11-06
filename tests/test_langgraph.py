@@ -546,6 +546,9 @@ def module(**names: object) -> types.ModuleType:
 class Shape:
     """What the adapter expects of BaseTool."""
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        pass
+
     def __init__(self, **kwargs: Any) -> None:
         self.name = str(kwargs.get("name", ""))
 
@@ -1038,3 +1041,11 @@ def test_what_real_tools_override_is_not_refused(project: Project) -> None:
     result, _ = offered(project, "ordinary_tool")
     assert result.code == 0, result.out + result.err
     assert [x["action"] for x in tool_lines(result.records()[0])] == ["mock", "mock"]
+
+
+@pytest.mark.design("adapter.class_checked_when_made")
+def test_a_class_is_checked_when_it_is_made_not_only_its_tools(project: Project) -> None:
+    result, _ = offered(project, "override_with_no_init")
+    assert result.code == 2, result.out + result.err
+    assert not wrote(result)
+    assert "get_order cannot be gated, because its class overrides invoke" in result.out
