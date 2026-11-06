@@ -1,4 +1,4 @@
-"""The runner for a function agent: one new program per run, the run table, exit codes.
+"""The runner: one new program per run, the run table, exit codes.
 
 Exit codes: 0 when every row produced a result; 2 for a mistake in the test, a refused
 call and a test the budget stopped included; 3 for an infrastructure error.
@@ -23,12 +23,13 @@ from typing import TextIO, cast
 from derail_sdk import labels
 from derail_sdk import plan as planner
 from derail_sdk.budget import Ledger
-from derail_sdk.config import Config, Test
+from derail_sdk.config import QUESTION, Config, Test
 from derail_sdk.control import ControlServer, proc_key
 from derail_sdk.records import RecordStore
 from derail_sdk.redact import redact
 
 OK, MISTAKE, INFRA = 0, 2, 3
+TAIL_BYTES = 1024 * 1024  # how much of a script's output is read to find its last line
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 KILL_GRACE_S = 5.0
 OUTCOMES = (
@@ -133,6 +134,15 @@ class Runner:
         )
         return env
 
+    def program(self, question: str) -> list[str]:
+        """What one run starts. A script's command was split when the file was read, so the
+        question stays one argument, and no shell ever sees it."""
+        agent = self.config.agent
+        if agent.command:
+            return [part.replace(QUESTION, question) for part in agent.command]
+        answer = [agent.answer] if agent.answer else []
+        return [sys.executable, "-m", "derail_sdk.start", agent.function, question, *answer]
+
     def one(self, row: planner.Row) -> RunResult | None:
         with self.lock:
             if self.cancelled or (row.test.name, row.name) in self.stopped_rows:
@@ -144,25 +154,24 @@ class Runner:
         if self.cancelled:
             self.server.close_run(run)
             return None
-        command = [
-            sys.executable, "-m", "derail_sdk.run_command",
-            sys.executable, "-m", "derail_sdk.start",
-            self.config.agent.function, row.test.question,
-            *([self.config.agent.answer] if self.config.agent.answer else []),
-        ]  # fmt: skip
-        log = os.open(self.folder / f"{run}.log", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        command = [sys.executable, "-m", "derail_sdk.run_command", *self.program(row.test.question)]
+        # A script's last printed line can be its answer, so what it prints stays apart.
+        log = owner_only(self.folder / f"{run}.log")
+        out = owner_only(self.folder / f"{run}.out") if self.config.agent.command else log
         try:
             proc = subprocess.Popen(
                 command,
                 cwd=self.config.root,
                 env=self.env(run),
                 stdin=subprocess.DEVNULL,
-                stdout=log,
+                stdout=out,
                 stderr=log,
                 start_new_session=True,  # its own process group, so every child stops too
             )
         finally:
             os.close(log)
+            if out != log:
+                os.close(out)
         with self.lock:
             self.procs[run] = proc
         # Refused, or the test was stopped, before this program was registered.
@@ -182,8 +191,7 @@ class Runner:
         if state.broken or state.refusals:
             self._refused(run, "structure" if state.broken else state.refusals[0])
         lines = self.store.lines(run)
-        answer_file = self.answers / f"{run}.txt"
-        answer = answer_file.read_text() if answer_file.exists() else None
+        answer = self.answer_of(run, proc.returncode)
         # Another run stopped the test and this run was stopped with it. That says
         # nothing about this run, and it never got to send its last batch.
         stopped = (
@@ -252,6 +260,54 @@ class Runner:
         )
         self.check_labels(result)
         return result
+
+    def answer_of(self, run: str, code: int) -> str | None:
+        """The answer file, or for a script that ended well its last printed line."""
+        answer_file = self.answers / f"{run}.txt"
+        if answer_file.exists():
+            return answer_file.read_text(errors="replace")
+        return (
+            last_line(self.folder / f"{run}.out")
+            if self.config.agent.command and not code
+            else None
+        )
+
+    def other_python_lines(self, run: str, row: planner.Row) -> list[dict[str, object]]:
+        """A child on another Python tried to import a listed tool, and did not get it.
+
+        That Python may not have the SDK, so it left its report beside the answer.
+        """
+        path = self.answers / f"{run}.txt.refused"
+        if not path.exists():
+            return []
+        lines: list[dict[str, object]] = []
+        for number, text in enumerate(path.read_text(errors="replace").splitlines(), 1):
+            report = cast(dict[str, object], json.loads(text))
+            process = cast(dict[str, object], report["process"])
+            lines.append(
+                {
+                    "v": RECORD_VERSION,
+                    "run": run,
+                    "test": row.test.name,
+                    "row": row.name,
+                    "seq": number,
+                    "proc": {
+                        "host": socket.gethostname(),
+                        "pid": report["pid"],
+                        "started": now_iso(),
+                    },
+                    "notice": "other_python",
+                    "library": "derail",
+                    "message": redact(str(report["message"])),
+                    "mistake": redact(str(report["message"])),
+                    "process": {
+                        "python": redact(str(process["python"])),
+                        "command": redact(str(process["command"]))[:COMMAND_CAP],
+                        "parent": process["parent"],
+                    },
+                }
+            )
+        return lines
 
     def check_labels(self, result: RunResult) -> None:
         """With no tools list, compare the test's labels with the tools the agent has."""
@@ -391,6 +447,18 @@ def unused_mocks(config: Config, results: list[RunResult]) -> tuple[list[str], l
                     "tool."
                 )
     return notes, mistakes
+
+
+def owner_only(path: Path) -> int:
+    return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+
+
+def last_line(path: Path) -> str | None:
+    """The last line of a script's output that is not blank."""
+    with path.open("rb") as out:
+        out.seek(max(0, path.stat().st_size - TAIL_BYTES))
+        tail = out.read().decode("utf-8", "replace")
+    return next((line for line in reversed(tail.splitlines()) if line.strip()), None)
 
 
 def stop_group(proc: subprocess.Popen[bytes]) -> None:

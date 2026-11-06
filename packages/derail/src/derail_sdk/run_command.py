@@ -16,7 +16,11 @@ def main(argv: list[str] | None = None) -> int:
     env["PYTHONPATH"] = os.pathsep.join(p for p in (str(BOOT), env.get("PYTHONPATH")) if p)
     # exec keeps this process id, so it names the program the runner started.
     env.setdefault("DERAIL_ROOT_PID", str(os.getpid()))
-    os.execvpe(args[0], args, env)
+    try:
+        os.execvpe(args[0], args, env)
+    except OSError as exc:
+        print(f"derail-run: cannot run {args[0]}: {exc.strerror}", file=sys.stderr)
+        return 127 if isinstance(exc, FileNotFoundError) else 126
 
 
 if __name__ == "__main__":
