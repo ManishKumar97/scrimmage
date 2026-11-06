@@ -160,6 +160,16 @@ def answer_overridden(question: str) -> dict[str, Any]:
     return build([OverridesInvoke(), get_stock]).invoke({"messages": [("user", question)]})
 
 
+@tool(response_format="content_and_artifact")
+def get_report(order_id: str) -> tuple[str, dict[str, str]]:
+    """Get an order's report and its raw data."""
+    raise RuntimeError("the real reports system is not reachable from tests")
+
+
+def report_tool(question: str) -> str:
+    return str(get_report.invoke({"order_id": "1"}))
+
+
 def nested(question: str) -> str:
     """A tool that calls another tool: both are calls the gate must see."""
 

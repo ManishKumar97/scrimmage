@@ -273,6 +273,24 @@ def test_an_async_tool_gets_an_async_gate(project: Project) -> None:
     assert lines[-1]["summary"]["answer"] == "mocked"  # type: ignore[index]
 
 
+@pytest.mark.design("adapter.artifact_mock")
+@pytest.mark.parametrize(
+    ("returns", "answer", "code"),
+    [('["the report", {a = "b"}]', "the report", 0), ('"just text"', None, 2)],
+)
+def test_a_tool_with_an_artifact_is_mocked_with_a_list_of_two(
+    project: Project, returns: str, answer: str | None, code: int
+) -> None:
+    project.edit('returns = "shipped, Oct 30"', f"returns = {returns}")
+    project.edit('call    = "tool:get_order"', 'call    = "tool:get_report"')
+    graph(project, "report_tool", "")
+    project.edit('answer   = "messages[-1].content"\n', "")
+    project.edit("[agent]\n", '[agent]\nmax_cost_usd = "none"\n')
+    result = project.test()
+    assert result.code == code, result.out + result.err
+    assert result.summaries()[0]["answer"] == answer
+
+
 @pytest.mark.design("adapter.one_call_one_line")
 def test_arun_delegating_to_run_is_one_call(project: Project) -> None:
     graph(project, "sync_tool_through_arun", "")

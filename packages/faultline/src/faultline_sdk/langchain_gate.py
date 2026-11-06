@@ -17,7 +17,7 @@ from types import ModuleType
 from typing import Any
 
 from faultline_sdk import hooks, tool_gate
-from faultline_sdk.errors import FaultlineRefused
+from faultline_sdk.errors import FaultlineMockError, FaultlineRefused
 from faultline_sdk.httpx2_gate import params
 from faultline_sdk.state import RunState, current
 
@@ -158,6 +158,17 @@ def function_of(tool: Any, method: Callable[..., Any]) -> Callable[..., Any]:
     return getattr(tool, "func", None) or getattr(tool, "coroutine", None) or method
 
 
+def mock_shape(tool: Any, value: object) -> object:
+    """A tool with an artifact returns a pair, which TOML writes as a list of two."""
+    if getattr(tool, "response_format", "content") != "content_and_artifact":
+        return value
+    if isinstance(value, list) and len(value) == 2:
+        return tuple(value)
+    raise FaultlineMockError(
+        f"the mock for {tool.name} must be a list of two items: its content and its artifact"
+    )
+
+
 @contextlib.contextmanager
 def real_call(tool: object) -> Iterator[None]:
     token = _inside.set(tool)
@@ -180,6 +191,7 @@ def gate(method: Callable[..., Any], failure: type[Exception]) -> Callable[..., 
             function_of(tool, method),
             failure,
             functools.partial(real_call, tool),
+            functools.partial(mock_shape, tool),
         )
 
     return tool_gate.gate_with(method, describe)

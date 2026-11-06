@@ -56,6 +56,7 @@ class Gated:
     tool: Callable[..., object]  # the team's function, whose return type a mock is built from
     failure: type[Exception] = RuntimeError  # what the caller treats as a tool failure
     during: Callable[[], AbstractContextManager[object]] = nullcontext  # around the real call
+    shape: Callable[[object], object] = lambda value: value  # a mock, as the caller expects it
 
 
 Describe = Callable[[tuple[Any, ...], dict[str, Any]], Gated | None]
@@ -84,7 +85,7 @@ def apply(state: RunState, step: Step, gated: Gated) -> object:
     assert decision.mock is not None
     mock = state.plan.mocks[decision.mock]
     try:
-        value = mocks.build(mock.returns, mock.type, gated.tool, state.allowed)
+        value = gated.shape(mocks.build(mock.returns, mock.type, gated.tool, state.allowed))
     except FaultlineMockError as exc:
         state.finish(step, error=exc, mistake=str(exc))
         raise

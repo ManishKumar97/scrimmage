@@ -31,6 +31,10 @@ _.handle_tool_error  # tests/example/acme/graph.py: LangChain reads it on the to
 _._arun  # tests/test_langgraph.py: a stand-in for LangChain's own, read by the structural check
 _.mixin_tool  # tests/example/acme/graph.py: a test's faultline.toml names it
 _.answer_overridden  # tests/example/acme/graph.py: a test's faultline.toml names it
+_.report_tool  # tests/example/acme/graph.py: a test's faultline.toml names it
+_.NotAnError  # tests/test_tool_gate.py: named by import path in a fault's raises
+_.TwoArguments  # tests/test_tool_gate.py: named by import path in a fault's raises
+_.a_function  # tests/test_tool_gate.py: named by import path in a fault's raises
 _.pytest_sessionfinish  # tests/conftest.py: pytest calls hooks by name
 _.exitstatus  # tests/conftest.py: pytest reads it to set the exit code
 _.answer_streamed  # tests/example/acme/rag.py: named by import path in a test's faultline.toml
