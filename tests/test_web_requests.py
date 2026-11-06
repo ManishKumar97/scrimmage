@@ -117,11 +117,11 @@ def test_a_real_request_to_a_mocked_host_is_a_warning(
 
 
 @pytest.mark.design("web.unused_narrow_mock")
-def test_a_mock_for_a_path_nothing_asked_for_is_a_test_mistake(project: Project) -> None:
+def test_a_mock_for_a_path_nothing_asked_for_gets_a_note(project: Project) -> None:
     other = f'[[test.mock]]\ncall = "{LABEL}"\npath = "/never"\ntext = "x"\n'
     result = run(project, "acme.web:answer", JSON_MOCK + other)
-    assert result.code == 2
-    assert f"the mock on {LABEL} was never used; no request matched it" in result.out
+    assert result.code == 0, result.out
+    assert f"no request in test 'stock' matched the mock on {LABEL}" in result.out
 
 
 @pytest.mark.design("web.record_clean")
