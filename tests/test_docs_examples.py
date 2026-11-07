@@ -131,3 +131,11 @@ def test_every_page_with_an_output_is_run() -> None:
     }
     assert pages == set(EXAMPLES)
 
+
+def test_the_landing_page_shows_the_function_agent_as_it_runs() -> None:
+    """The home page's example is not run itself, so it must be the function agent's, unchanged."""
+    shown = {lang: body for lang, _, body in FENCE.findall((DOCS / "index.md").read_text())}
+    page = {b.lang: b.body for b in blocks("examples/function-agent.md")}
+    output = next(b.body for b in blocks("examples/function-agent.md") if b.title == OUTPUT)
+    assert shown["toml"].removeprefix("# scrimmage.toml\n") == page["toml"]
+    assert shown["text"] == output
