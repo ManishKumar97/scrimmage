@@ -5,9 +5,9 @@ import pytest
 
 from scrimmage_core import credentials, http_gate
 from scrimmage_core.redact import redacted
-from test_record_lines import Server, Sink, gated, sink, web
+from test_record_lines import Server, Sink, gated, no_scrimmage_error, sink, web
 
-__all__ = ["sink", "web"]  # the fixtures, used by name
+__all__ = ["no_scrimmage_error", "sink", "web"]  # the fixtures, used by name
 
 
 @pytest.mark.design("record.credential_at_gate")
@@ -16,8 +16,8 @@ __all__ = ["sink", "web"]  # the fixtures, used by name
     [
         ("http://169.254.169.254/latest/api/token", "EC2 instance metadata"),
         ("https://sts.us-east-1.amazonaws.com/", "AWS STS"),
-        ("https://vault.acme.internal/v1/secret/data/db", "a HashiCorp Vault secret"),
-        ("https://login.acme.internal/oauth2/v2.0/token", "a token endpoint"),
+        ("https://vault.acme.internal/v1/secret/data/db", "credential path pattern (/v1/secret/*)"),
+        ("https://login.acme.internal/oauth2/v2.0/token", "credential path pattern (*/token)"),
         ("https://keys.vault.azure.net/secrets/db", "Azure Key Vault"),
     ],
 )
@@ -91,7 +91,9 @@ def test_every_spelling_of_a_credential_endpoint_is_found(url: str) -> None:
     "url",
     ["https://inventory.acme.internal/stock/SKU-42", "https://s3.us-east-1.amazonaws.com/b/k",
      "https://api.acme.internal/v1/orders", "https://api.acme.internal/tokens/list",
-     "http://169.254.169.25/x", "https://metadata.acme.internal/"],
+     "http://169.254.169.25/x", "https://metadata.acme.internal/",
+     "https://api.weather.acme/v1/stations/KSEA/data/latest",
+     "https://api.acme.internal/v1/shops/12/creds/list"],
 )  # fmt: skip
 def test_an_ordinary_endpoint_is_not_a_credential_one(url: str) -> None:
     parsed = httpx2.URL(url)

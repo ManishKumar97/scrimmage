@@ -27,8 +27,10 @@ AWS_HOSTS = tuple(
     for fips in ("", "-fips")
     for suffix in ("amazonaws.com", "amazonaws.com.cn")
 )
-# (host pattern, path pattern, what it is). "*" matches any run of characters, dots and
-# slashes included. Paths are compared without a trailing slash.
+# (host pattern, path pattern, what it is). In a host, "*" matches any run of characters,
+# dots included. In a path, "*" at either end matches any run, slashes included, and a "*"
+# between two slashes matches one segment. Paths are compared without a trailing slash. A
+# rule for any host has no name: it matches by its path alone, so it is named by that.
 ENDPOINTS: tuple[tuple[str, str, str], ...] = (
     ("sts.amazonaws.com", "*", "AWS STS"),
     ("sts.amazonaws.com.cn", "*", "AWS STS"),
@@ -48,14 +50,14 @@ ENDPOINTS: tuple[tuple[str, str, str], ...] = (
     ("*.vault.azure.cn", "*", "Azure Key Vault"),
     ("*.vault.usgovcloudapi.net", "*", "Azure Key Vault"),
     ("token.actions.githubusercontent.com", "*", "GitHub Actions OIDC tokens"),
-    ("*", "/v1/secret/*", "a HashiCorp Vault secret"),
-    ("*", "/v1/auth/*", "a HashiCorp Vault login"),
-    ("*", "/v1/sys/*", "the HashiCorp Vault system API"),
-    ("*", "/v1/identity/*", "a HashiCorp Vault identity"),
-    ("*", "/v1/*/data/*", "a HashiCorp Vault key-value secret on any mount"),
-    ("*", "/v1/*/creds/*", "HashiCorp Vault dynamic credentials on any mount"),
-    ("*", "*/token", "a token endpoint, such as OAuth 2.0's, Okta's or Azure's MSI"),
-    ("*", "*/login/oauth/access_token", "GitHub's OAuth token endpoint"),
+    ("*", "/v1/secret/*", ""),
+    ("*", "/v1/auth/*", ""),
+    ("*", "/v1/sys/*", ""),
+    ("*", "/v1/identity/*", ""),
+    ("*", "/v1/*/data/*", ""),
+    ("*", "/v1/*/creds/*", ""),
+    ("*", "*/token", ""),
+    ("*", "*/login/oauth/access_token", ""),
 )
 SLASHES = re.compile(r"/{2,}")
 NUMBER = re.compile(r"0x[0-9a-f]+|[0-9]+")  # an IPv4 address written as one number
@@ -76,10 +78,25 @@ def path_form(path: str) -> str:
     return SLASHES.sub("/", urllib.parse.unquote(path)).rstrip("/") or "/"
 
 
+def path_rule(pattern: str) -> re.Pattern[str]:
+    """A path pattern as a regex: a "*" at either end is any run, one inside is a segment."""
+    parts = pattern.split("*")
+    out: list[str] = []
+    for i, part in enumerate(parts):
+        out.append(re.escape(part))
+        if i < len(parts) - 1:
+            end = (i == 0 and not part) or (i == len(parts) - 2 and not parts[-1])
+            out.append(".*" if end else "[^/]+")
+    return re.compile("".join(out))
+
+
+RULES = tuple((host, path_rule(path), path, what) for host, path, what in ENDPOINTS)
+
+
 def credential(host: str, path: str) -> str | None:
     """What the endpoint is, if a request to it fetches a credential or a secret."""
     host, path = host_form(host), path_form(path)
-    for host_pattern, path_pattern, what in ENDPOINTS:
-        if fnmatch.fnmatchcase(host, host_pattern) and fnmatch.fnmatchcase(path, path_pattern):
-            return what
+    for host_pattern, rule, path_pattern, what in RULES:
+        if fnmatch.fnmatchcase(host, host_pattern) and rule.fullmatch(path):
+            return what or f"an endpoint that matches a credential path pattern ({path_pattern})"
     return None
