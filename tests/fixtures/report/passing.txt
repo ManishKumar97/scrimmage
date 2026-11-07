@@ -1,0 +1,7 @@
+exit 0
+derail test: 1 test, 2 rows, 6 runs; records in /records/derail-runs/20261107T101500Z-a1b2c3
+test          row       fault                   runs  fired  done  passed  rate  range    tools  cost     result
+order-status  baseline  -                       3     -      3     3/3     100%  44-100%  2.0    0.00036  pass
+order-status  fault 1   tool:get_order timeout  3     3      3     3/3     100%  44-100%  2.0    0.00036  pass
+range: a 95% Wilson interval, from these runs alone
+model calls cost $0.0007 of a budget of $5

@@ -1,0 +1,13 @@
+exit 2
+derail test: 1 test, 2 rows, 3 runs; records in /records/derail-runs/20261107T101500Z-a1b2c3
+test          row       fault                   runs  fired  done  passed  rate  range    tools  cost     result
+order-status  baseline  -                       2     -      1     1/1     100%  21-100%  2.0    0.00072  no result
+order-status  fault 1   tool:get_order timeout  1     1      1     1/1     100%  21-100%  2.0    0.00060  no result
+range: a 95% Wilson interval, from these runs alone
+model calls cost $0.0013 of a budget of $0.001
+warning: the test spent more than its budget of $0.001, because the last calls cost more than was reserved for them
+warning: run-baseline-1 ended with model:openai still holding $0.0003 of the budget, such as a call cut off when its run was killed; it stays held, as the call may have been sent
+note: order-status baseline: 1 not reserved
+test mistake: order-status baseline: no result: 1 of 3 runs were judged, and a result needs 2
+test mistake: order-status fault 1: no result: 1 of 3 runs were judged, and a result needs 2
+test mistake: a model call could not be reserved: it could cost up to $0.0004, $0.0009 was spent and $0.0003 was held by calls in flight (model:openai in run-baseline-1 $0.0003), of a budget of $0.001, after a wait of 30s for calls in flight, so the test stopped; set max_tokens on the call or lower [agent] reserve_output_tokens (4096) to hold less, lower [agent] parallel, or raise [agent] max_cost_usd; rows without runs have no result

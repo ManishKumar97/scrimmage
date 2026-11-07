@@ -1,0 +1,11 @@
+exit 3
+derail test: 1 test, 1 row, 4 runs; records in /records/derail-runs/20261107T101500Z-a1b2c3
+test          row       fault  runs  fired  done  passed  rate  range    tools  cost     result
+order-status  baseline  -      4     -      1     1/1     100%  21-100%  2.0    0.00048  no result
+range: a 95% Wilson interval, from these runs alone
+model calls cost $0.0005 of a budget of $5
+note: order-status baseline: 3 infrastructure error
+test mistake: order-status baseline: no result: 1 of 3 runs were judged, and a result needs 2
+test mistake: order-status baseline: run-baseline-1: model:openai returned 500, not injected
+test mistake: openai: openai 9.0 is newer than Derail can gate
+infrastructure error: see the runs marked so above, and their .log files
