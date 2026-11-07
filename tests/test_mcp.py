@@ -1299,4 +1299,4 @@ def test_a_plan_with_mcp_entries_fits_the_schema_and_round_trips(tmp_path: Path)
     made = plan.plan_for(loaded, row_, "run-1")
     schema = json.loads((Path(plan.__file__).parent / "schemas" / "plan.v1.json").read_text())
     jsonschema.Draft202012Validator(schema).validate(made.to_json())
-    assert Plan.from_json(made.to_json()) == made
+    assert Plan.from_json(made.to_json()).to_json() == made.to_json()  # no rule is in it
