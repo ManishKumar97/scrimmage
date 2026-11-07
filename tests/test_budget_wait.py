@@ -565,6 +565,7 @@ def test_a_hold_left_by_an_ended_run_refuses_at_once_and_is_named(gated: None) -
     assert time.monotonic() - started < 1  # waiting cannot help
     message = str(caught.value)
     assert "left by run-dead, which ended while still holding" in message
+    assert "waiting cannot help" in message and "waiting on itself" not in message
     assert "lower [agent] parallel" not in message
     line = sink.lines[0]
     assert line["reason"] == "budget"
