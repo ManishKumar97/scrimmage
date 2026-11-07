@@ -11,6 +11,7 @@ from conftest import EXAMPLE, Project
 from derail_sdk import cli, config, control, runner
 
 TESTS = Path(__file__).parent
+pytestmark = pytest.mark.usefixtures("signals_kept")
 
 
 class Reached(Exception):
