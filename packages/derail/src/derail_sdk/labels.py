@@ -20,7 +20,7 @@ WEB_METHOD = re.compile(r"[A-Za-z][A-Za-z-]*")  # letters, and the hyphen of M-S
 WEB_PATH = re.compile(r"/(?:(?![?#])[\x21-\x7e])*")  # as sent: percent-encoded, no query
 PROCESS = "process:python"  # a Python child that would run with no gates
 DOCS = "see docs/configuration.md"
-NAME_CAP = 80  # a model name comes from a request, so a line shows this much of it
+NAME_CAP = 200  # a model name comes from a request, so a line shows this much of it
 
 
 def kind_of(label: str) -> str:
@@ -125,9 +125,13 @@ def path_of(value: str, where: str) -> str:
 
 
 def shown_name(name: str) -> str:
-    """A model name as a line can show it: escaped, so it cannot forge a line, and cut."""
+    """A model name as a line can show it: escaped, so it cannot forge a line, and cut from the
+    middle, as two names often differ only at the end, such as a version."""
     text = repr(name)
-    return text if len(text) <= NAME_CAP else f"{text[:NAME_CAP]}..."
+    if len(text) <= NAME_CAP:
+        return text
+    kept = NAME_CAP - 3
+    return f"{text[: kept // 2]}...{text[-(kept - kept // 2) :]}"
 
 
 def model_name(value: object, where: str) -> str:

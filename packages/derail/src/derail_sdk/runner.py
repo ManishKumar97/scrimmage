@@ -701,7 +701,7 @@ def unused_model(fault: Fault, runs: list[RunResult]) -> str | None:
     refused run was stopped, perhaps just before this model, and may have lost its last line.
     """
     used = {name for run in runs for label, name in run.models if labels.matches(fault.call, label)}
-    wanted = labels.shown_name(fault.model or "")
+    wanted = repr(fault.model)  # from the file, which allows only printable text: never cut
     if fault.model in used:
         return (
             f"calls used the model {wanted}, yet the fault did not fire: a refused call fires "

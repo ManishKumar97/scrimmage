@@ -6,7 +6,7 @@ from collections.abc import Callable
 import pytest
 
 from conftest import Project, Result
-from derail_sdk import config
+from derail_sdk import config, labels
 from derail_sdk.plan import Row
 from derail_sdk.runner import RunResult, unused_model
 from fakes.openai_server import FakeOpenAI
@@ -357,7 +357,7 @@ def test_a_long_list_of_names_is_cut_with_a_count(project: Project, fake_openai:
 def test_a_very_long_name_is_cut(project: Project, fake_openai: Fake) -> None:
     result = send_raw(project, fake_openai, ["x" * 200_000])
     line = next(x for x in result.out.splitlines() if "no call used the model" in x)
-    assert len(line) < 300 and line.endswith("...")
+    assert len(line) < 300 and "..." in line and line.endswith("xxx'")
 
 
 @pytest.mark.design("model_name.full_name_covers_a_cut_cell")
@@ -375,3 +375,55 @@ def test_a_name_cut_from_the_table_is_on_its_full_name_line(
     assert not any(alias in line for line in table)  # the middle cut takes the name
     full = next(line for line in lines if line.startswith("full name:") and "fault 1" in line)
     assert f"model:openai {alias} status 429 first 3" in full
+
+
+ARN = (
+    "arn:aws:bedrock:us-east-1:123456789012:inference-profile/"
+    "us.acme.main-answer-model-2026-11-prod1"
+)
+ARN_V1, ARN_V2 = f"{ARN}-v1:0", f"{ARN}-v2:0"
+
+
+@pytest.mark.design("model_name.ends_of_a_name_kept")
+def test_two_long_names_that_differ_at_the_end_read_apart(
+    project: Project, fake_openai: Fake
+) -> None:
+    assert len(ARN_V2) == 101
+    bot(project, "raw", "sent")
+    project.edit("runs = 1", 'runs = 1\nmax_cost_usd = "none"')
+    (project.root / "names.json").write_text(json.dumps([ARN_V1]))
+    add_fault(project, ARN_V2, "first 3")
+    result = project.test(fake_openai(["chat_answer"]))
+    assert f"no call used the model {ARN_V2!r}; these calls used {ARN_V1!r}" in result.out
+
+
+@pytest.mark.design("model_name.cut_from_the_middle")
+def test_a_name_past_the_cap_keeps_both_ends() -> None:
+    one, two = "a" * 300 + "-v1:0", "a" * 300 + "-v2:0"
+    shown = labels.shown_name(one)
+    assert len(shown) == labels.NAME_CAP and "..." in shown
+    assert shown.startswith("'aaa") and shown.endswith("-v1:0'")
+    assert shown != labels.shown_name(two)
+
+
+@pytest.mark.design("model_name.faults_own_name_whole")
+def test_the_faults_own_name_is_never_cut(project: Project, fake_openai: Fake) -> None:
+    long = "team-gateway/" + "main-answer-model-" * 14 + "v2"
+    assert len(repr(long)) > labels.NAME_CAP
+    bot(project, "chat")
+    add_fault(project, long, "first 3")
+    result = project.test(fake_openai(["chat_answer"]))
+    assert f"no call used the model {long!r};" in result.out
+
+
+@pytest.mark.design("model_name.empty_price_key_end_to_end")
+def test_a_stored_prompt_runs_on_a_budget_when_the_empty_key_prices_it(
+    project: Project, fake_openai: Fake
+) -> None:
+    bot(project, "stored", "grove")
+    with project.toml.open("a") as toml:
+        toml.write('\n[agent.prices]\n"" = {input = 2.0, output = 8.0}\n')
+    result = project.test(fake_openai(["chat_answer"], response="response_text"))
+    assert result.code == 0, result.out
+    stored = model_lines(result, "baseline")[-1]
+    assert (stored["model"], stored["action"]) == ("", "real")
