@@ -245,6 +245,7 @@ def test_a_request_with_no_model_name_is_refused_and_not_sent_and_is_no_pass(
     # The refused call's name is unknown, so nothing may say this model was not used.
     assert "no call used the model" not in result.out
     assert "yet the fault did not fire" not in result.out
+    assert ": None" not in result.out
 
 
 @pytest.mark.design("model_name.stored_prompt_with_a_name")

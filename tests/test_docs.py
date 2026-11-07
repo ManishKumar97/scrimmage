@@ -113,7 +113,7 @@ def test_a_fault_on_one_model_and_its_limits_are_documented() -> None:
         assert "not the name a reply or a dashboard shows" in text
         assert "sent from a generator" in text
         assert "the openai library takes" in text.lower()
-        assert '`max_cost_usd = "none"`' in text
+        assert 'needs `max_cost_usd = "none"`' in text
         assert "streamed, multipart" not in text
     assert "a character that does not print" in guide
     assert "with the reply streamed or not" in guide
