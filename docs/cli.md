@@ -1,5 +1,7 @@
 # Commands
 
+`scrim` is a short name for `scrimmage`: `scrim test` and `scrimmage test` are the same command.
+
 ## scrimmage test
 
 ```bash
