@@ -103,7 +103,7 @@ The record never holds `self` or `cls`, only the arguments after them.
 | `headers` | On a web request: extra reply headers, as a table of text. |
 | `json` | On a web request: the body, as JSON. |
 | `text` | On a web request: the body, as text. |
-| `recorded` | `true` on a mock that `scrimmage record` wrote. Its only effect: if no run used it, the report gives a note, not a test mistake. `true` or `false`; `false` by default. |
+| `recorded` | `true` marks a mock written from a recorded run, not by hand. Its only effect: if no run used it, the report gives a note, not a test mistake. `true` or `false`; `false` by default. |
 | `args` | On a tool or MCP mock with `recorded = true`: the arguments it answers, as a table, such as `{order_id = "1234"}`. Allowed only with `recorded = true`. |
 
 See [Web requests](web-requests.md) and [MCP tools](mcp.md).
