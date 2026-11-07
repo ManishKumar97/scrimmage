@@ -19,6 +19,8 @@ NOT_FIRED = "the fault did not fire"
 TEST_MISTAKE = "a mistake in the test"
 REFUSED = "refused"
 Z_95 = 1.96
+FORMAT = "Cf"  # the Unicode category of characters that do not show
+COMBINING_DOT = "\u0307"
 # A crash or a time-out is a result about the agent. Every other ending with no answer
 # says nothing about it.
 ENDED_BADLY = ("crashed", "timed out")
@@ -72,9 +74,14 @@ class RowResult:
 
 
 def normal(text: str) -> str:
-    """Text as it is compared: one form for each character, no case, single spaces."""
+    """Text as it is compared: one form for each character, no case, single spaces.
+
+    Format characters such as a zero-width space leave no mark, so they cannot hide a word.
+    Casefold turns a dotted capital I into i and a dot of its own, which goes too.
+    """
     plain = unicodedata.normalize("NFKC", text).translate(PLAIN_FORMS)
-    return " ".join(plain.casefold().split())
+    shown = "".join(char for char in plain if unicodedata.category(char) != FORMAT)
+    return " ".join(shown.casefold().replace(COMBINING_DOT, "").split())
 
 
 def quoted(item: tuple[str, ...]) -> str:

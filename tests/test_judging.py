@@ -146,6 +146,10 @@ def test_every_broken_rule_is_named() -> None:
         ("Oct 28\u201330", "Oct 28-30"),
         ("\uff33hipped", "shipped"),  # a full-width letter
         ("STRASSE", "Stra\u00dfe"),  # casefold, which lower does not do
+        ("ship\u200bped", "shipped"),  # a zero-width space
+        ("ship\u00adped", "shipped"),  # a soft hyphen
+        ("\u0130stanbul", "istanbul"),  # casefold leaves a combining dot
+        ("2\u00b2", "22"),  # NFKC, which the docs warn about
     ],
 )
 def test_case_spaces_and_unicode_forms_do_not_decide_a_match(answer: str, rule: str) -> None:
@@ -291,6 +295,8 @@ EXPECT = 'expect   = ["shipped", ["Oct 30", "October 30"]]'
         (f'{EXPECT}\nforbid = "a"', "forbid: expected a list"),
         (f"{EXPECT}\nforbid = [1]", "forbid: expected text"),
         (f'{EXPECT}\nforbid = [""]', "forbid: expected text"),
+        (f'{EXPECT}\nforbid = ["\u200b"]', "forbid: expected text"),
+        ('expect = ["\u00ad "]', "expected text"),
         (f"{EXPECT}\npass_rate = 0", "pass_rate: expected a share"),
         (f"{EXPECT}\npass_rate = 1.5", "pass_rate: expected a share"),
         (f"{EXPECT}\npass_rate = 80", "pass_rate: expected a share"),

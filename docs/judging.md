@@ -28,6 +28,7 @@ The rule and the answer go through the same steps first:
 
 - case is ignored;
 - a non-breaking space, a full-width letter and other Unicode variants become the plain character;
+- characters that do not show, such as a zero-width space or a soft hyphen, are dropped, so they cannot hide a word from `forbid`;
 - curly quotes become straight, and the dash and non-breaking hyphen forms become `-`;
 - a run of spaces or new lines becomes one space.
 
@@ -35,7 +36,8 @@ Then the rule must appear in the answer as plain text. It is not a word match, s
 
 - `"shipped"` is found in "has not shipped"; add a `forbid` for what must not be said;
 - `"12"` is found in "123";
-- Markdown stays, so `"Oct 30"` is not found in `Oct **30**`.
+- Markdown stays, so `"Oct 30"` is not found in `Oct **30**`;
+- `2²` reads as `22`, because Unicode folds a superscript to its digit.
 
 Derail compares the answer your agent really gave. The answer in the record has secrets removed, so a rule can forbid a secret by its value and still find it.
 A rule goes through the same removal before it is printed or recorded. That catches only known shapes, such as an API key or a bearer token. A secret with no known shape, such as `hunter2-password`, prints as written, so keep such a rule out of a file you share.
