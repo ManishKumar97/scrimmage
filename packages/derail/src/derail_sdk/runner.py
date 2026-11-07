@@ -1,7 +1,8 @@
 """The runner: one new program per run, the run table, exit codes.
 
-Exit codes: 0 when every row produced a result; 2 for a mistake in the test, a refused
-call and a test the budget stopped included; 3 for an infrastructure error.
+Exit codes: 0 when every row passed; 1 when a row failed; 2 for a mistake in the test, a
+refused call and a test the budget stopped included; 3 for an infrastructure error. The
+higher code wins, as a mistake or an error makes the rates not worth trusting.
 """
 
 import json
@@ -23,7 +24,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TextIO, cast
 
-from derail_sdk import labels
+from derail_sdk import judge, labels
 from derail_sdk import plan as planner
 from derail_sdk.budget import Ledger
 from derail_sdk.config import QUESTION, Config, Test
@@ -32,7 +33,7 @@ from derail_sdk.records import RECORD_VERSION, RecordStore
 from derail_sdk.redact import redact
 from derail_sdk.state import COMMAND_CAP, now_iso
 
-OK, MISTAKE, INFRA = 0, 2, 3
+OK, ROW_FAILED, MISTAKE, INFRA = 0, 1, 2, 3
 TAIL_BYTES = 1024 * 1024  # how much of a script's output is read to find its last line
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 KILL_GRACE_S = 5.0
@@ -65,6 +66,22 @@ NOT_A_FAILURE = (
 )
 # A baseline whose every run ended so cannot be compared with, so its faults are skipped.
 FAILED = ("crashed", "timed out", "refused call", "budget reached")
+TABLE_WIDTH = 120
+HEAD = [
+    "test",
+    "row",
+    "fault",
+    "runs",
+    "fired",
+    "done",
+    "passed",
+    "rate",
+    "range",
+    "tools",
+    "cost",
+    "result",
+]
+TEST_COLUMN, FAULT_COLUMN = 0, 2
 
 
 @dataclass
@@ -84,6 +101,8 @@ class RunResult:
     mocked: set[int] = field(default_factory=set[int])  # the mocks this run used, by place
     tools_seen: list[str] | None = None  # None: the run did not report them
     near_mocks: set[str] = field(default_factory=set[str])  # real, though the host had mocks
+    tool_calls: int = 0
+    broken: list[str] | None = None  # the rules it broke; None: left out of every rate
 
     @property
     def exercised(self) -> bool:
@@ -254,16 +273,6 @@ class Runner:
         fired = None if row.fault is None else calls["fault"] > 0
         mistakes = [str(line["mistake"]) for line in lines if "mistake" in line]
         near = {f"{x['call']} {x['method']} {x['path']}" for x in lines if x.get("near_mock")}
-        summary: dict[str, object] = {
-            "answer": None if answer is None else redact(answer),
-            "outcome": outcome,
-            "fault_fired": fired,
-            "calls": calls,
-            "incomplete": incomplete,
-            "model_calls": len(model),
-            "cost_usd": round(cost, 8),
-        }
-        self.store.close_run(run, row.test.name, row.name, summary)
         result = RunResult(
             run,
             row,
@@ -280,7 +289,22 @@ class Runner:
             mocked={int(str(line["mock"])) for line in lines if line.get("action") == "mock"},
             tools_seen=reported_tools(notices),
             near_mocks=near,
+            tool_calls=sum(1 for line in lines if line.get("kind") in ("tool", "mcp")),
         )
+        # Here the raw answer is still at hand. The record only ever gets the redacted one.
+        result.broken = judge.judge_run(outcome, answer, result.exercised, row.rules)
+        summary: dict[str, object] = {
+            "answer": None if answer is None else redact(answer),
+            "outcome": outcome,
+            "fault_fired": fired,
+            "calls": calls,
+            "incomplete": incomplete,
+            "model_calls": len(model),
+            "cost_usd": round(cost, 8),
+            "judged": run_verdict(result.broken),
+            "broken_rules": result.broken or [],
+        }
+        self.store.close_run(run, row.test.name, row.name, summary)
         self.check_labels(result)
         return result
 
@@ -408,6 +432,12 @@ def real_error(line: dict[str, object]) -> str | None:
         return f"{line.get('call')} failed with {error.split(':')[0]}"
     status = int(str(line.get("status") or 0))
     return f"{line.get('call')} returned {status}" if status >= 400 else None
+
+
+def run_verdict(broken: list[str] | None) -> str:
+    if broken is None:
+        return judge.LEFT_OUT
+    return judge.FAIL if broken else judge.PASS
 
 
 class Interrupted(Exception):
@@ -561,6 +591,60 @@ def signal_group(proc: subprocess.Popen[bytes], sig: int) -> bool:
     return True
 
 
+def row_cells(row: planner.Row, mine: list[RunResult], result: judge.RowResult) -> list[str]:
+    fault = "-" if row.fault is None else f"{row.fault.call} {row.fault.do}"
+    fired = "-" if row.fault is None else str(sum(bool(r.fault_fired) for r in mine))
+    rate, span = "-", "-"
+    if result.judged:
+        low, high = judge.wilson(result.passed, result.judged)
+        rate, span = f"{result.passed / result.judged:.0%}", f"{low * 100:.0f}-{high:.0%}"
+    tools = sum(r.tool_calls for r in mine) / max(len(mine), 1)
+    return [
+        row.test.name,
+        row.name,
+        fault,
+        str(len(mine)),
+        fired,
+        str(sum(1 for r in mine if r.outcome == "answered")),
+        f"{result.passed}/{result.judged}",
+        rate,
+        span,
+        f"{tools:.1f}",
+        f"{sum(r.cost_usd for r in mine):.5f}",
+        result.verdict,
+    ]
+
+
+def fitted(table: list[list[str]]) -> list[int]:
+    """Column widths within TABLE_WIDTH. Only the test and fault names can be cut, as every
+    line under the table gives them in full; the shorter one keeps its width if it can."""
+    widths = [max(len(line[i]) for line in table) for i in range(len(HEAD))]
+    test, fault = widths[TEST_COLUMN], widths[FAULT_COLUMN]
+    room = TABLE_WIDTH - sum(widths) + test + fault - 2 * (len(HEAD) - 1)
+    if test + fault > room:
+        widths[TEST_COLUMN] = min(test, max(room // 2, room - fault))
+        widths[FAULT_COLUMN] = room - widths[TEST_COLUMN]
+    return widths
+
+
+def cut(text: str, width: int) -> str:
+    return text if len(text) <= width else f"{text[: width - 3]}..."
+
+
+def rule_lines(where: str, rate: float, mine: list[RunResult], row: judge.RowResult) -> list[str]:
+    """Which rules broke, and in how many runs. Empty when no run broke one."""
+    tally = Counter(rule for r in mine for rule in r.broken or [])
+    if not tally:
+        return []
+    word = "fail" if row.verdict == judge.FAIL else "note"
+    head = f"{word}: {where}: {row.passed}/{row.judged} passed, pass_rate is {rate:g}"
+    return [head, *(f"  {plural(n, 'run')}: {rule}" for rule, n in tally.most_common())]
+
+
+def counts(ended: Counter[str]) -> str:
+    return ", ".join(f"{n} {outcome}" for outcome, n in sorted(ended.items()))
+
+
 def report(
     config: Config,
     results: list[RunResult],
@@ -577,21 +661,37 @@ def report(
     )
     if "tool:*" in config.agent.real:
         print('every tool that is not mocked runs for real (real = ["tool:*"])', file=out)
-    head = ["test", "row", "fault", "runs", "exercised", *OUTCOMES]
-    table: list[list[str]] = [head]
+    table: list[list[str]] = [HEAD]
     mistakes: list[str] = []
     notes: list[str] = []
+    failures: list[str] = []
     code = OK
     for row in rows:
         mine = [r for r in results if r.row == row]
-        counted = [r for r in mine if r.exercised]
-        fault = "-" if row.fault is None else f"{row.fault.call} {row.fault.do}"
-        exercised = "-" if row.fault is None else str(sum(bool(r.fault_fired) for r in mine))
-        table.append(
-            [row.test.name, row.name, fault, str(len(mine)), exercised]
-            + [str(sum(1 for r in counted if r.outcome == o)) for o in OUTCOMES]
-        )
         where = f"{row.test.name} {row.name}"
+        refused = any(r.outcome == "refused call" for r in mine)
+        rate = row.rules.pass_rate
+        verdict = judge.judge_row([r.broken for r in mine], config.agent.runs, rate, refused)
+        table.append(row_cells(row, mine, verdict))
+        failures += rule_lines(where, rate, mine, verdict)
+        if verdict.verdict == judge.NO_RESULT and not refused:
+            mistakes.append(
+                f"{where}: no result: {verdict.judged} of {config.agent.runs} runs were judged, "
+                f"and a pass needs {verdict.needed}. Make the fault fire in every run, lower "
+                "pass_rate, or see the lines below"
+            )
+        if (
+            verdict.verdict == judge.PASS
+            and row.fault is not None
+            and row.fault.when == "always"
+            and row.fault.expect is None
+            and row.fault.forbid is None
+        ):
+            notes.append(
+                f"{where}: passed on the test's own rules with its fault firing on every call. "
+                "An agent can pass that from general knowledge, so give the fault its own "
+                "expect or forbid unless the agent has a real way around it"
+            )
         ran = [r for r in mine if r.outcome != "stopped"]
         if row.fault is not None and ran and not any(r.fault_fired for r in ran):
             mistakes.append(f"{where}: the fault never fired in any run, so the row tested nothing")
@@ -610,8 +710,10 @@ def report(
         ]
         ended = Counter(r.outcome for r in mine if not r.exercised)
         if ended:
-            how = ", ".join(f"{n} {outcome}" for outcome, n in sorted(ended.items()))
-            notes.append(f"{where}: not exercised, the fault did not fire: {how}")
+            notes.append(f"{where}: not exercised, the fault did not fire: {counts(ended)}")
+        ended = Counter(r.outcome for r in mine if r.exercised and r.outcome != "answered")
+        if ended:
+            notes.append(f"{where}: {counts(ended)}")
         for r in mine:
             if r.outcome == "refused call":
                 mistakes.append(
@@ -672,12 +774,15 @@ def report(
             mistakes.append(f"{r.row.test.name} {r.row.name}: {r.run}: {error}, not injected")
     hosted = sum(r.hosted_reads for r in results)
     near_mocks = sorted({call for r in results for call in r.near_mocks})
-    widths = [max(len(line[i]) for line in table) for i in range(len(head))]
+    widths = fitted(table)
     for line in table:
         print(
-            "  ".join(cell.ljust(w) for cell, w in zip(line, widths, strict=True)).rstrip(),
+            "  ".join(cut(cell, w).ljust(w) for cell, w in zip(line, widths, strict=True)).rstrip(),
             file=out,
         )
+    print("range: a 95% Wilson interval, from these runs alone", file=out)
+    for line in failures:
+        print(line, file=out)
     spent = sum(r.cost_usd for r in results)
     limit = "no budget" if not budget_on else f"a budget of ${config.agent.max_cost_usd:g}"
     print(f"model calls cost ${spent:.4f} of {limit}", file=out)
@@ -719,7 +824,9 @@ def report(
             file=out,
         )
         return INFRA
-    return MISTAKE if mistakes else OK
+    if mistakes:
+        return MISTAKE
+    return ROW_FAILED if any(line[-1] == judge.FAIL for line in table) else OK
 
 
 def plural(n: int, word: str) -> str:

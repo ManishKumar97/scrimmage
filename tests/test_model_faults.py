@@ -8,14 +8,14 @@ from collections.abc import Callable
 
 import pytest
 
-from conftest import ACME, Project, Result
+from conftest import ACME, EXAMPLE_FAULT, Project, Result
 from derail_sdk import config
 from derail_sdk import runner as runner_module
 from derail_sdk.runner import Runner
 from fakes.openai_server import FakeOpenAI
 
 Fake = Callable[..., FakeOpenAI]
-TOOL_FAULT = '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'
+TOOL_FAULT = EXAMPLE_FAULT
 
 
 def use(project: Project, function: str, fault: str = "", extra: str = "") -> None:
@@ -49,7 +49,7 @@ def test_first_3_outlasts_the_librarys_retries_and_the_agent_sees_rate_limit_err
     use(project, "acme.rag:answer", model_fault("status 429", "first 3"))
     fake = fake_openai(ACME, embedding="embedding")
     result = project.test(fake)
-    assert result.code == 0, result.out + result.err
+    assert result.finished, result.out + result.err
     lines = row(result, "fault 1")
     assert calls(lines) == [
         ("model:openai/embeddings", "real", 0),

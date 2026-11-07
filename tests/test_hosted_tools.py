@@ -4,12 +4,12 @@ from collections.abc import Callable
 
 import pytest
 
-from conftest import ACME, Project
+from conftest import ACME, EXAMPLE_FAULT, Project
 from derail_sdk import provider_openai as table
 from fakes.openai_server import FakeOpenAI
 
 Fake = Callable[..., FakeOpenAI]
-TOOL_FAULT = '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'
+TOOL_FAULT = EXAMPLE_FAULT
 
 
 def use(project: Project, function: str) -> None:
@@ -45,7 +45,7 @@ def test_a_listed_hosted_mcp_server_is_sent(project: Project, fake_openai: Fake)
     )
     fake = fake_openai([], response="response_text")
     result = project.test(fake)
-    assert result.code == 0, result.out
+    assert result.finished, result.out
     assert fake.paths == ["/v1/responses"]
 
 
@@ -104,7 +104,7 @@ def test_a_renamed_tool_counts_as_seen(
     project.edit('call = "tool:get_order"', 'call = "tool:lookup-order"')
     fake = fake_openai([] if reply else ["chat_answer", "chat_answer"], **reply)
     result = project.test(fake)
-    assert result.code == 0, result.out + result.err
+    assert result.finished, result.out + result.err
     assert path in fake.paths
     fault = next(lines for lines in result.records() if lines[-1]["row"] == "fault 1")
     tool = next(x for x in fault if x.get("call") == "tool:lookup-order")
@@ -133,7 +133,7 @@ def test_a_provider_tool_that_only_reads_is_noted_and_warned_about(
 ) -> None:
     use(project, "acme.rag:answer_web_search")
     result = project.test(fake_openai(["chat_answer"]))
-    assert result.code == 0, result.out
+    assert result.finished, result.out
     line = next(x for x in result.records()[0] if x.get("kind") == "model")
     assert line["hosted_reads"] == ["web_search"]
     assert "1 model request offered provider tools that only read" in result.out

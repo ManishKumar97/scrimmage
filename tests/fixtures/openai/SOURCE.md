@@ -21,6 +21,7 @@ Only the tool name, its arguments, the call id and the answer text are changed; 
 | `acme_get_stock.json` | Functions | calls `get_stock` with `{"sku": "SKU-42"}` |
 | `acme_refund_order.json` | Functions | calls `refund_order` with `{"order_id": "1234"}` |
 | `acme_answer.json` | Default | the answer text |
+| `acme_admits.json` | Default | the answer text, for a conversation where a tool failed |
 | `acme_three_orders.json` | Functions | three `get_order` calls in one reply |
 | `docs_search.json` | Functions | calls the MCP tool `search` with `{"q": "refunds"}` |
 

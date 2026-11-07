@@ -316,7 +316,9 @@
             "calls",
             "incomplete",
             "model_calls",
-            "cost_usd"
+            "cost_usd",
+            "judged",
+            "broken_rules"
           ],
           "properties": {
             "answer": {
@@ -380,6 +382,19 @@
             "cost_usd": {
               "type": "number",
               "minimum": 0
+            },
+            "judged": {
+              "enum": [
+                "pass",
+                "fail",
+                "left out"
+              ]
+            },
+            "broken_rules": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           }
         }
