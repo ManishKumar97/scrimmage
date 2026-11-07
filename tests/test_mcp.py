@@ -40,9 +40,9 @@ LABEL = "mcp:docs/search"
 READY = re.compile(r"running on (http://127\.0\.0\.1:\d+)")
 BOTH = pytest.mark.parametrize("transport", ["stdio", "http"])
 MOCK = f'[[test.mock]]\ncall = "{LABEL}"\nreturns = {{hits = ["mocked"], total = 1}}\n'
-ERROR = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "error"\n'
-EMPTY = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "empty"\n'
-TIMEOUT = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "timeout"\n'
+ERROR = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "error"\nforbid = ["never said"]\n'
+EMPTY = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "empty"\nforbid = ["never said"]\n'
+TIMEOUT = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "timeout"\nforbid = ["never said"]\n'
 
 
 def toml(function: str, body: str, extra: str = "") -> str:
@@ -414,7 +414,7 @@ def test_a_real_empty_reply_and_the_injected_one_on_a_tool_with_no_shape(
     real = docs.run(function, "", 'real = ["mcp:docs/note"]')
     docs.stop()
     docs.start(transport, "ok")
-    fault = '[[test.fault]]\ncall = "mcp:docs/note"\ndo = "empty"\n'
+    fault = '[[test.fault]]\ncall = "mcp:docs/note"\ndo = "empty"\nforbid = ["never said"]\n'
     mock = '[[test.mock]]\ncall = "mcp:docs/note"\nreturns = "x"\n'
     injected = docs.run(function, mock + fault)
     assert answer_of(real) == "error=False blocks=0 text='' structured=None"
@@ -529,7 +529,7 @@ def test_a_mock_no_call_used_is_a_test_mistake(docs: Docs) -> None:
 @pytest.mark.design("mcp.never_fired")
 def test_a_fault_no_call_met_is_a_test_mistake(docs: Docs) -> None:
     docs.start("stdio")
-    fault = '[[test.fault]]\ncall = "mcp:docs/other"\ndo = "error"\n'
+    fault = '[[test.fault]]\ncall = "mcp:docs/other"\ndo = "error"\nforbid = ["never said"]\n'
     result = docs.run("acme.docs_bot:answer", MOCK + fault)
     assert result.code == 2, result.out
     assert "the fault never fired" in result.out

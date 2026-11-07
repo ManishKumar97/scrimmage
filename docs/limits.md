@@ -32,7 +32,7 @@
 - **Tools reached by import path.** A tool your code stores in a list or dictionary the moment it is defined keeps the original function, so the gate cannot reach it. A marker for those comes later.
 - **Rules are plain text.** `expect` and `forbid` find text in the answer, with no word boundaries, numbers or meaning. "shipped" is found in "has not shipped", and Markdown stays in the answer. See [Judging an answer](judging.md).
 - **No model judges an answer, and there is no built-in list for "admits the failure".** You write the words.
-- **A rule cannot tell where a word came from.** An agent that answers from general knowledge can pass a rule that its tools should have earned. Give a fault that fires on every call its own rules.
+- **A rule cannot tell where a word came from.** An agent that answers from general knowledge can pass a rule that its tools should have earned. That is why a fault that fires on every call must have its own rules, and even those are only as good as the words you pick.
 - **A rate describes the runs that happened.** A few runs say little, the range shows how little, and neither is a promise about the next run.
 - **One `runs` for every row.** A row cannot run more times than another.
 - **A command that clears Derail's path.** `env PYTHONPATH=. python bot.py` replaces the startup folder, so the program runs with no gates, its writes are real, and only then does the run read infrastructure error. Add to `PYTHONPATH` in the environment of `derail test` instead. A flag that does the same, `python -E`, is refused when the file is read.

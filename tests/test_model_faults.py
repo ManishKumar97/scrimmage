@@ -25,7 +25,8 @@ def use(project: Project, function: str, fault: str = "", extra: str = "") -> No
 
 
 def model_fault(do: str, when: str, call: str = "model") -> str:
-    return f'[[test.fault]]\ncall = "{call}"\ndo   = "{do}"\nwhen = "{when}"\n'
+    block = f'[[test.fault]]\ncall = "{call}"\ndo   = "{do}"\nwhen = "{when}"\n'
+    return f'{block}forbid = ["never said"]\n'
 
 
 def row(result: Result, name: str) -> list[dict[str, object]]:

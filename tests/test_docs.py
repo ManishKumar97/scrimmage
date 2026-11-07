@@ -67,7 +67,7 @@ def test_the_rules_the_table_and_the_endings_are_documented() -> None:
         assert mentioned(text, word), word
     for result in (judge.PASS, judge.FAIL, judge.NO_RESULT):
         assert f"`{result}`" in text
-    assert all(f"| {outcome} |" in text for outcome in runner.OUTCOMES)
+    assert all(f"| {outcome}" in text for outcome in runner.OUTCOMES)
     assert judge.EMPTY in text
     assert "not a promise about the next one" in text
     assert "No judging" not in page("limits.md")

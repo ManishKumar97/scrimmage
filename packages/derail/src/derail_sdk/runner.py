@@ -743,18 +743,6 @@ def report(
             )
         elif verdict.judged < config.agent.runs:
             notes.append(f"{where}: {verdict.judged} of {config.agent.runs} runs judged")
-        if (
-            verdict.verdict == judge.PASS
-            and row.fault is not None
-            and row.fault.when == "always"
-            and row.fault.expect is None
-            and row.fault.forbid is None
-        ):
-            notes.append(
-                f"{where}: passed on the test's own rules with its fault firing on every call. "
-                "An agent can pass that from general knowledge, so give the fault its own "
-                "expect or forbid unless the agent has a real way around it"
-            )
         ran = [r for r in mine if r.outcome != "stopped"]
         if row.fault is not None and ran and not any(r.fault_fired for r in ran):
             mistakes.append(f"{where}: the fault never fired in any run, so the row tested nothing")

@@ -68,6 +68,7 @@ def answer(question):
     return step["answer"]
 '''
 FAULT = '[[test.fault]]\ncall = "tool:get_order"\ndo = "timeout"\n'
+ALWAYS = FAULT + 'forbid = ["never said"]\n'
 GOOD = "It shipped, and it arrives on October 30."
 BAD = "It shipped."
 
@@ -332,6 +333,7 @@ def test_a_row_no_answer_can_pass_costs_no_model_call(
 ) -> None:
     project.edit('expect = [["unable", "sorry", "try again"]]\n', "")
     project.edit('forbid = ["Oct 30", "October 30"]\n', "")
+    project.edit('do   = "timeout"\n', 'do   = "timeout"\nwhen = "first 1"\n')
     project.edit(old, new)
     fake = FakeOpenAI(ACME)
     fake.start()
@@ -422,24 +424,20 @@ def test_a_fault_with_no_expect_of_its_own_uses_the_tests(project: Project) -> N
     assert "general knowledge" not in result.out
 
 
-@pytest.mark.design("judge.always_fault_note")
-def test_a_full_failure_row_passing_on_the_tests_rules_gets_a_note(project: Project) -> None:
-    result = scripted(
-        project, [{"answer": GOOD}, {"answer": GOOD, "fired": True}], FAULT, "runs = 1"
-    )
-    assert result.code == 0, result.out
-    assert "order fault 1: passed on the test's own rules" in result.out
-    assert "general knowledge" in result.out
+@pytest.mark.design("config.always_fault_needs_own_rules")
+@pytest.mark.parametrize("rules", ["", "forbid = []\n", "pass_rate = 0.5\n", 'when = "always"\n'])
+def test_a_fault_on_every_call_needs_its_own_rules(project: Project, rules: str) -> None:
+    result = scripted(project, [{"answer": GOOD}], f"{FAULT}{rules}", "runs = 1")
+    assert result.code == 2 and not result.summaries()
+    assert "general knowledge" in result.err and "its own expect or forbid" in result.err
 
 
-def test_own_rules_silence_that_note(project: Project) -> None:
-    result = scripted(
-        project,
-        [{"answer": GOOD}, {"answer": GOOD, "fired": True}],
-        f'{FAULT}forbid = ["never said"]\n',
-        "runs = 1",
-    )
-    assert result.code == 0 and "general knowledge" not in result.out
+@pytest.mark.design("config.own_rules_on_an_always_fault")
+@pytest.mark.parametrize("rules", ['expect = ["sorry"]\n', 'forbid = ["shipped"]\n'])
+def test_own_expect_or_forbid_is_enough(project: Project, rules: str) -> None:
+    head = 'expect = [["delivered", "sorry"]]\n'
+    scripted(project, [{"answer": "sorry"}] * 2, f"{FAULT}{rules}", "runs = 1", head)
+    assert load(project).tests[0].faults[0].when == "always"
 
 
 @pytest.mark.design("judge.fault_forbid_replaces")
@@ -452,7 +450,7 @@ def test_a_faults_forbid_replaces_the_tests_and_an_empty_one_drops_it(project: P
             {"answer": "shipped, delayed", "fired": True},
             {"answer": "shipped, delayed", "fired": True},
         ],
-        f'{FAULT}forbid = []\n{FAULT}forbid = ["other"]\n',
+        f'{FAULT}when = "first 1"\nforbid = []\n{FAULT}forbid = ["other"]\n',
         "runs = 1",
         head,
     )
@@ -512,7 +510,7 @@ def test_a_faults_pass_rate_wins_over_the_tests_for_its_row(project: Project) ->
             {"answer": GOOD},
             *[{"answer": GOOD, "fired": True}, {"answer": BAD, "fired": True}] * 2,
         ],
-        f"{FAULT}pass_rate = 0.5\n{FAULT}",
+        f"{ALWAYS}pass_rate = 0.5\n{ALWAYS}",
         "runs = 2",
         'expect = ["shipped", ["Oct 30", "October 30"]]\npass_rate = 1\n',
     )
@@ -531,7 +529,7 @@ def test_a_tests_pass_rate_applies_to_a_fault_that_gives_none(project: Project) 
             {"answer": GOOD, "fired": True},
             {"answer": BAD, "fired": True},
         ],
-        FAULT,
+        ALWAYS,
         "runs = 2",
         'expect = ["shipped", ["Oct 30", "October 30"]]\npass_rate = 0.5\n',
     )
@@ -543,7 +541,7 @@ def test_a_run_where_the_fault_did_not_fire_counts_in_no_rate(project: Project) 
     result = scripted(
         project,
         [{"answer": GOOD}] * 5 + [{"answer": GOOD, "fired": True}] * 4 + [{"answer": BAD}],
-        f"{FAULT}pass_rate = 0.8\n",
+        f"{ALWAYS}pass_rate = 0.8\n",
         "runs = 5",
     )
     assert result.code == 0, result.out
@@ -560,7 +558,7 @@ def test_a_row_under_the_floor_has_no_result(project: Project) -> None:
     result = scripted(
         project,
         [{"answer": GOOD}] * 3 + [{"answer": GOOD, "fired": True}] + [{"answer": GOOD}] * 2,
-        f'{FAULT}forbid = ["never said"]\n',
+        ALWAYS,
         "runs = 3",
     )
     assert result.code == 2, result.out
@@ -574,7 +572,7 @@ def test_one_unfired_run_does_not_block_a_pass_and_gets_a_note(project: Project)
     result = scripted(
         project,
         [{"answer": GOOD}] * 5 + [{"answer": GOOD, "fired": True}] * 4 + [{"answer": GOOD}],
-        f'{FAULT}forbid = ["never said"]\n',
+        ALWAYS,
         "runs = 5",
     )
     assert result.code == 0, result.out
@@ -584,7 +582,7 @@ def test_one_unfired_run_does_not_block_a_pass_and_gets_a_note(project: Project)
 
 @pytest.mark.design("judge.no_judged_runs")
 def test_a_row_with_no_judged_runs_is_never_a_pass(project: Project) -> None:
-    result = scripted(project, [{"answer": GOOD}] * 4, FAULT, "runs = 2")
+    result = scripted(project, [{"answer": GOOD}] * 4, ALWAYS, "runs = 2")
     assert result.code == 2, result.out
     cells = table_row(result, "fault 1")
     assert "0/0" in cells and cells[-1] == "no result"
@@ -597,7 +595,7 @@ def test_a_crash_on_a_fault_row_fails_it(project: Project) -> None:
     result = scripted(
         project,
         [{"answer": GOOD}, {"answer": GOOD, "fired": True, "crash": True}],
-        FAULT,
+        ALWAYS,
         "runs = 1",
     )
     assert result.code == 1, result.out
@@ -612,7 +610,7 @@ def test_a_run_past_its_time_limit_fails_its_row(project: Project) -> None:
     result = scripted(
         project,
         [{"answer": GOOD}, {"answer": GOOD, "fired": True, "hang": True}],
-        FAULT,
+        ALWAYS,
         "runs = 1\nrun_timeout = 5",
     )
     assert result.code == 1, result.out
@@ -646,7 +644,7 @@ def test_a_refusal_on_a_fault_row_fails_at_any_rate_and_keeps_exit_2(project: Pr
             {"answer": GOOD, "fired": True},
             {"answer": GOOD, "fired": True, "refund": True},
         ],
-        f'{FAULT}forbid = ["never said"]\npass_rate = 0.5\n',
+        f"{ALWAYS}pass_rate = 0.5\n",
         "runs = 2",
     )
     assert result.code == 2, result.out
@@ -666,7 +664,7 @@ def test_a_refusal_before_the_fault_fired_stays_left_out(project: Project) -> No
     result = scripted(
         project,
         [{"answer": GOOD}, {"answer": GOOD, "refund": True}],
-        f'{FAULT}forbid = ["never said"]\n',
+        ALWAYS,
         "runs = 1",
     )
     assert result.code == 2, result.out
@@ -678,7 +676,7 @@ def test_a_refusal_before_the_fault_fired_stays_left_out(project: Project) -> No
 def test_a_test_mistake_keeps_exit_2_and_the_table_still_shows_the_failure(
     project: Project,
 ) -> None:
-    result = scripted(project, [{"answer": BAD}, {"answer": BAD}], FAULT, "runs = 1")
+    result = scripted(project, [{"answer": BAD}, {"answer": BAD}], ALWAYS, "runs = 1")
     assert result.code == 2, result.out
     assert table_row(result, "baseline")[-1] == "fail"
     assert "the fault never fired in any run" in result.out
@@ -726,7 +724,7 @@ def table_row_any(result: Result, start: str) -> str:
 @pytest.mark.design("judge.baseline_with_bad_answers_still_runs_faults")
 def test_a_baseline_that_answered_badly_still_runs_its_fault_rows(project: Project) -> None:
     result = scripted(
-        project, [{"answer": BAD}, {"answer": "unable", "fired": True}], FAULT, "runs = 1"
+        project, [{"answer": BAD}, {"answer": "unable", "fired": True}], ALWAYS, "runs = 1"
     )
     assert len(result.summaries()) == 2
     assert result.code == 1, result.out
@@ -734,7 +732,7 @@ def test_a_baseline_that_answered_badly_still_runs_its_fault_rows(project: Proje
 
 @pytest.mark.design("judge.failed_baseline_skips")
 def test_a_crashed_baseline_reads_fail_and_its_fault_rows_read_no_result(project: Project) -> None:
-    result = scripted(project, [{"answer": GOOD, "crash": True}], FAULT, "runs = 1")
+    result = scripted(project, [{"answer": GOOD, "crash": True}], ALWAYS, "runs = 1")
     assert result.code == 2, result.out
     assert table_row(result, "baseline")[-1] == "fail"
     assert table_row(result, "fault 1")[-1] == "no result"

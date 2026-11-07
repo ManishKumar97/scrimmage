@@ -47,6 +47,7 @@ WEB_FAULT_KEYS = {"call", "do", "when", "method", "path", *RULE_KEYS}
 BODY_HEADERS = {"content-length", "content-encoding", "transfer-encoding"}
 
 DOCS = "docs/configuration.md"
+JUDGING = "docs/judging.md"
 # The faults this version builds. Each one has an entry in docs/fault-catalog.toml.
 FAULTS = ("timeout", "status", "error", "empty")
 STATUS = re.compile(r"status (?P<code>\d{3})")
@@ -619,6 +620,12 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
         )
     method, path = narrowing(table, where) if kind == "http" else (None, None)
     expect, forbid = read_expect(table, where), read_forbid(table, where)
+    if when == "always" and expect is None and not forbid:
+        raise ConfigError(
+            f"{where}: this fault fires on every call, so the agent never gets the data, yet the "
+            "test's expect could still pass from general knowledge. Give the fault its own "
+            f"expect or forbid, or use when = 'first N' for a recovery; see {JUDGING}"
+        )
     rate = read_pass_rate(table, where)
     return Fault(call, do, when, raises, method, path, expect, forbid, rate)
 

@@ -45,7 +45,9 @@ def graph(project: Project, function: str = "answer", fault: str = TIMEOUT, runs
 
 
 def error_fault(extra: str = "") -> str:
-    return f'[[test.fault]]\ncall = "tool:get_order"\ndo   = "error"\n{extra}'
+    return (
+        f'[[test.fault]]\ncall = "tool:get_order"\ndo   = "error"\nforbid = ["never said"]\n{extra}'
+    )
 
 
 def row(result: Result, name: str) -> list[dict[str, object]]:

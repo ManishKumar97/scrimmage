@@ -57,10 +57,9 @@ Derail has no word list for "admits the failure". You write the words your agent
 
 `forbid = []` on a fault drops the test's list for that row.
 
-A fault with no `expect` of its own uses the test's.
-That is right for a recovery row, such as `when = "first 1"`, where the agent should retry and give the same answer as the baseline.
-It is not safe for a fault that fires on every call. An agent with no data can still write the expected words from general knowledge, and a rule cannot tell where the words came from.
-So when such a row passes on the test's rules alone, Derail prints a note. Give that row its own rules, unless the agent has a real way around the failure.
+A fault that fires on every call must have its own `expect` or a `forbid` with something in it.
+An agent with no data can still write the expected words from general knowledge, and a rule cannot tell where the words came from, so such a row would pass when it should not. Derail refuses the file, with exit code 2.
+A fault with `when = "first N"` or `"requests N"` may use the test's rules. That is right for a recovery row, where the agent should retry and give the same answer as the baseline.
 
 If a row's rules cannot both be met, such as a fault that forbids a word the test expects, the file is refused before the first run.
 
@@ -129,6 +128,7 @@ fail: order-status fault 1: 3/5 passed, pass_rate is 1
 
 | Column | Means |
 |---|---|
+| `runs` | runs that happened in this row |
 | `fired` | runs where the fault fired, `-` on a baseline |
 | `done` | runs that ended "answered" |
 | `passed` | passed runs of judged runs |

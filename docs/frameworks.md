@@ -43,6 +43,8 @@ returns = "shipped, Oct 30"
 [[test.fault]]
 call = "tool:get_order"
 do   = "error"
+expect = [["sorry", "unable"]]
+forbid = ["shipped"]
 ```
 
 A graph returns its state, not text, so `answer` says where the answer is in what your function returned.
@@ -80,6 +82,8 @@ To raise something else, name it:
 call   = "tool:get_order"
 do     = "error"
 raises = "ConnectionError"
+expect = [["sorry", "unable"]]
+forbid = ["shipped"]
 ```
 
 `raises` is a Python built-in exception, or `package.module:Class` from your agent's own packages.

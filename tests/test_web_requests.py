@@ -38,8 +38,8 @@ def toml(function: str, body: str, extra: str = "") -> str:
 
 MOCK = f'[[test.mock]]\ncall = "{LABEL}"\nmethod = "GET"\npath = "/stock/SKU-42"\n'
 JSON_MOCK = MOCK + "json = {sku = 'SKU-42', count = 12}\n"
-OUTAGE = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "status 503"\n'
-TIMEOUT = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "timeout"\n'
+OUTAGE = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "status 503"\nforbid = ["never said"]\n'
+TIMEOUT = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "timeout"\nforbid = ["never said"]\n'
 
 
 def run(project: Project, function: str, body: str, extra: str = "") -> Result:
@@ -1040,6 +1040,7 @@ def test_a_plan_with_web_mocks_and_faults_fits_the_schema_and_round_trips(tmp_pa
             'path = "/stock/SKU-42"\n', 'path = "/s"\nstatus = 201\nheaders = {a = "b"}\n'
         )
         + f'[[test.fault]]\ncall = "{LABEL}"\nmethod = "GET"\npath = "/s"\ndo = "timeout"\n'
+        + 'forbid = ["never said"]\n'
     )
     loaded = load_mock(tmp_path, body, 'real = ["http:a POST /b", "http:[::1] POST /b"]')
     row_ = plan.rows(loaded)[1]

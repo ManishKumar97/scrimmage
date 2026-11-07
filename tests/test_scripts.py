@@ -744,7 +744,7 @@ REPORT_ORDER = (
 )
 ORDER_ROW = (
     '[[test.mock]]\ncall = "tool:get_order"\nreturns = "m"\n'
-    '[[test.fault]]\ncall = "tool:get_order"\ndo = "timeout"\n'
+    '[[test.fault]]\ncall = "tool:get_order"\ndo = "timeout"\nforbid = ["never said"]\n'
 )
 
 
