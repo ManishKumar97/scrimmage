@@ -82,6 +82,7 @@ HEAD = [
     "result",
 ]
 TEST_COLUMN, FAULT_COLUMN = 0, 2
+NOT_JUDGED = judge.RunJudgement(left_out="not judged")
 
 
 @dataclass
@@ -102,7 +103,7 @@ class RunResult:
     tools_seen: list[str] | None = None  # None: the run did not report them
     near_mocks: set[str] = field(default_factory=set[str])  # real, though the host had mocks
     tool_calls: int = 0
-    broken: list[str] | None = None  # the rules it broke; None: left out of every rate
+    judgement: judge.RunJudgement = NOT_JUDGED
 
     @property
     def exercised(self) -> bool:
@@ -292,7 +293,7 @@ class Runner:
             tool_calls=sum(1 for line in lines if line.get("kind") in ("tool", "mcp")),
         )
         # Here the raw answer is still at hand. The record only ever gets the redacted one.
-        result.broken = judge.judge_run(outcome, answer, result.exercised, row.rules)
+        result.judgement = judge.judge_run(outcome, answer, result.exercised, row.rules)
         summary: dict[str, object] = {
             "answer": None if answer is None else redact(answer),
             "outcome": outcome,
@@ -301,8 +302,9 @@ class Runner:
             "incomplete": incomplete,
             "model_calls": len(model),
             "cost_usd": round(cost, 8),
-            "judged": run_verdict(result.broken),
-            "broken_rules": result.broken or [],
+            "judged": result.judgement.verdict,
+            "broken_rules": [{"kind": b.kind, "text": b.text} for b in result.judgement.broken],
+            "left_out": result.judgement.left_out,
         }
         self.store.close_run(run, row.test.name, row.name, summary)
         self.check_labels(result)
@@ -432,12 +434,6 @@ def real_error(line: dict[str, object]) -> str | None:
         return f"{line.get('call')} failed with {error.split(':')[0]}"
     status = int(str(line.get("status") or 0))
     return f"{line.get('call')} returned {status}" if status >= 400 else None
-
-
-def run_verdict(broken: list[str] | None) -> str:
-    if broken is None:
-        return judge.LEFT_OUT
-    return judge.FAIL if broken else judge.PASS
 
 
 class Interrupted(Exception):
@@ -591,7 +587,37 @@ def signal_group(proc: subprocess.Popen[bytes], sig: int) -> bool:
     return True
 
 
-def row_cells(row: planner.Row, mine: list[RunResult], result: judge.RowResult) -> list[str]:
+@dataclass(frozen=True)
+class RowReport:
+    """One row's runs and its result, which the table, the notes and the exit code all read."""
+
+    row: planner.Row
+    runs: list[RunResult]
+    result: judge.RowResult
+
+    @property
+    def where(self) -> str:
+        return f"{self.row.test.name} {self.row.name}"
+
+    @property
+    def refused(self) -> bool:
+        return any(r.outcome == "refused call" for r in self.runs)
+
+
+def row_reports(config: Config, results: list[RunResult]) -> list[RowReport]:
+    reports: list[RowReport] = []
+    for row in planner.rows(config):
+        mine = [r for r in results if r.row == row]
+        refused = any(r.outcome == "refused call" for r in mine)
+        result = judge.judge_row(
+            [r.judgement for r in mine], config.agent.runs, row.rules.pass_rate, refused
+        )
+        reports.append(RowReport(row, mine, result))
+    return reports
+
+
+def row_cells(report: RowReport) -> list[str]:
+    row, mine, result = report.row, report.runs, report.result
     fault = "-" if row.fault is None else f"{row.fault.call} {row.fault.do}"
     fired = "-" if row.fault is None else str(sum(bool(r.fault_fired) for r in mine))
     rate, span = "-", "-"
@@ -631,13 +657,14 @@ def cut(text: str, width: int) -> str:
     return text if len(text) <= width else f"{text[: width - 3]}..."
 
 
-def rule_lines(where: str, rate: float, mine: list[RunResult], row: judge.RowResult) -> list[str]:
+def rule_lines(report: RowReport) -> list[str]:
     """Which rules broke, and in how many runs. Empty when no run broke one."""
-    tally = Counter(rule for r in mine for rule in r.broken or [])
+    tally = Counter(b.text for r in report.runs for b in r.judgement.broken)
     if not tally:
         return []
+    row, rate = report.result, report.row.rules.pass_rate
     word = "fail" if row.verdict == judge.FAIL else "note"
-    head = f"{word}: {where}: {row.passed}/{row.judged} passed, pass_rate is {rate:g}"
+    head = f"{word}: {report.where}: {row.passed}/{row.judged} passed, pass_rate is {rate:g}"
     return [head, *(f"  {plural(n, 'run')}: {rule}" for rule, n in tally.most_common())]
 
 
@@ -652,29 +679,25 @@ def report(
     out: TextIO,
     runner: "Runner | None" = None,
 ) -> int:
-    rows = planner.rows(config)
+    reports = row_reports(config, results)
     print(
-        f"derail test: {plural(len(config.tests), 'test')}, {plural(len(rows), 'row')}, "
+        f"derail test: {plural(len(config.tests), 'test')}, {plural(len(reports), 'row')}, "
         f"{plural(len(results), 'run')}; "
         f"records in {folder}",
         file=out,
     )
     if "tool:*" in config.agent.real:
         print('every tool that is not mocked runs for real (real = ["tool:*"])', file=out)
-    table: list[list[str]] = [HEAD]
+    table = [HEAD, *map(row_cells, reports)]
     mistakes: list[str] = []
     notes: list[str] = []
     failures: list[str] = []
     code = OK
-    for row in rows:
-        mine = [r for r in results if r.row == row]
-        where = f"{row.test.name} {row.name}"
-        refused = any(r.outcome == "refused call" for r in mine)
-        rate = row.rules.pass_rate
-        verdict = judge.judge_row([r.broken for r in mine], config.agent.runs, rate, refused)
-        table.append(row_cells(row, mine, verdict))
-        failures += rule_lines(where, rate, mine, verdict)
-        if verdict.verdict == judge.NO_RESULT and not refused:
+    for entry in reports:
+        row, mine, where = entry.row, entry.runs, entry.where
+        verdict = entry.result
+        failures += rule_lines(entry)
+        if verdict.verdict == judge.NO_RESULT and not entry.refused:
             mistakes.append(
                 f"{where}: no result: {verdict.judged} of {config.agent.runs} runs were judged, "
                 f"and a pass needs {verdict.needed}. Make the fault fire in every run, lower "
@@ -826,7 +849,7 @@ def report(
         return INFRA
     if mistakes:
         return MISTAKE
-    return ROW_FAILED if any(line[-1] == judge.FAIL for line in table) else OK
+    return ROW_FAILED if any(r.result.verdict == judge.FAIL for r in reports) else OK
 
 
 def plural(n: int, word: str) -> str:

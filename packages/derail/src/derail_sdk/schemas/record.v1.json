@@ -318,7 +318,8 @@
             "model_calls",
             "cost_usd",
             "judged",
-            "broken_rules"
+            "broken_rules",
+            "left_out"
           ],
           "properties": {
             "answer": {
@@ -393,8 +394,33 @@
             "broken_rules": {
               "type": "array",
               "items": {
-                "type": "string"
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "text"
+                ],
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "expect",
+                      "forbid",
+                      "empty",
+                      "crashed",
+                      "timed out"
+                    ]
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                }
               }
+            },
+            "left_out": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         }

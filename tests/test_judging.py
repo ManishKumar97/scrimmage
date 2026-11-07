@@ -13,7 +13,17 @@ import derail_sdk
 from conftest import ACME, Project, Result
 from derail_sdk import config, judge, plan
 from derail_sdk.errors import ConfigError
-from derail_sdk.judge import Rules, broken_rules, judge_row, judge_run, needed_runs, normal, wilson
+from derail_sdk.judge import (
+    Broken,
+    Rules,
+    RunJudgement,
+    broken_rules,
+    judge_row,
+    judge_run,
+    needed_runs,
+    normal,
+    wilson,
+)
 from derail_sdk.runner import RunResult, report
 from fakes.openai_server import FakeOpenAI
 
@@ -62,6 +72,10 @@ GOOD = "It shipped, and it arrives on October 30."
 BAD = "It shipped."
 
 
+def broken_texts(answer: str, rules: Rules) -> list[str]:
+    return [broken.text for broken in broken_rules(answer, rules)]
+
+
 def scripted(
     project: Project,
     steps: Sequence[Mapping[str, object]],
@@ -100,18 +114,18 @@ def table_row(result: Result, row: str) -> list[str]:
 def test_every_item_must_match_and_a_list_item_on_any_alternative(
     answer: str, broken: list[str]
 ) -> None:
-    assert broken_rules(answer, RULES) == broken
+    assert broken_texts(answer, RULES) == broken
 
 
 @pytest.mark.design("judge.forbid")
 def test_an_answer_with_a_forbidden_text_fails() -> None:
     answer = "It shipped on Oct 30 and was REFUNDED."
-    assert broken_rules(answer, RULES) == ['forbid "refunded" found']
+    assert broken_texts(answer, RULES) == ['forbid "refunded" found']
 
 
 @pytest.mark.design("judge.every_broken_rule")
 def test_every_broken_rule_is_named() -> None:
-    assert broken_rules("It was refunded.", RULES) == [
+    assert broken_texts("It was refunded.", RULES) == [
         'expect "shipped" not found',
         'expect "Oct 30" or "October 30" not found',
         'forbid "refunded" found',
@@ -134,7 +148,7 @@ def test_every_broken_rule_is_named() -> None:
     ],
 )
 def test_case_spaces_and_unicode_forms_do_not_decide_a_match(answer: str, rule: str) -> None:
-    assert broken_rules(answer, Rules(((rule,),), (), 1.0)) == []
+    assert broken_texts(answer, Rules(((rule,),), (), 1.0)) == []
 
 
 def test_normal_touches_nothing_else() -> None:
@@ -143,13 +157,13 @@ def test_normal_touches_nothing_else() -> None:
 
 @pytest.mark.design("judge.substring")
 def test_a_rule_is_a_plain_substring() -> None:
-    assert broken_rules("It has not shipped.", Rules((("shipped",),), (), 1.0)) == []
+    assert broken_texts("It has not shipped.", Rules((("shipped",),), (), 1.0)) == []
 
 
 @pytest.mark.design("judge.empty_answer")
 @pytest.mark.parametrize("answer", ["", "  \n\t"])
 def test_an_empty_answer_fails_by_name(answer: str) -> None:
-    assert broken_rules(answer, RULES) == [judge.EMPTY]
+    assert broken_texts(answer, RULES) == [judge.EMPTY]
 
 
 @pytest.mark.design("judge.what_is_judged")
@@ -168,17 +182,22 @@ def test_an_empty_answer_fails_by_name(answer: str) -> None:
 def test_a_crash_or_a_time_out_fails_and_the_rest_are_left_out(
     outcome: str, broken: list[str] | None
 ) -> None:
-    assert judge_run(outcome, "It shipped, Oct 30.", True, RULES) == broken
+    judged = judge_run(outcome, "It shipped, Oct 30.", True, RULES)
+    if broken is None:
+        assert (judged.verdict, judged.left_out) == ("left out", outcome)
+    else:
+        assert [b.kind for b in judged.broken] == broken and judged.left_out is None
 
 
 @pytest.mark.design("judge.not_exercised_left_out")
 @pytest.mark.parametrize("outcome", ["answered", "crashed", "timed out"])
 def test_a_run_where_the_fault_did_not_fire_is_left_out_however_it_ended(outcome: str) -> None:
-    assert judge_run(outcome, "It shipped, Oct 30.", False, RULES) is None
+    assert judge_run(outcome, "It shipped, Oct 30.", False, RULES).left_out == judge.NOT_FIRED
 
 
-PASSED: list[str] = []
-FAILED_RUN = ["crashed"]
+PASSED = RunJudgement()
+FAILED_RUN = RunJudgement((Broken("crashed", "crashed"),))
+OUT = RunJudgement(left_out="stopped")
 
 
 @pytest.mark.design("judge.row_verdict")
@@ -189,19 +208,19 @@ FAILED_RUN = ["crashed"]
         ([PASSED] * 4 + [FAILED_RUN], 5, 1.0, False, "fail"),
         ([PASSED] * 4 + [FAILED_RUN], 5, 0.8, False, "pass"),
         ([PASSED] * 3 + [FAILED_RUN] * 2, 5, 0.8, False, "fail"),
-        ([PASSED] * 3 + [None] * 2, 5, 0.8, False, "no result"),  # too few to reach the rate
-        ([PASSED] * 4 + [None], 5, 0.8, False, "pass"),
-        ([PASSED] * 4 + [None], 5, 1.0, False, "no result"),
-        ([PASSED] + [None] * 4, 5, 1.0, False, "no result"),  # never a pass on one run
-        ([None] * 5, 5, 1.0, False, "no result"),
+        ([PASSED] * 3 + [OUT] * 2, 5, 0.8, False, "no result"),  # too few to reach the rate
+        ([PASSED] * 4 + [OUT], 5, 0.8, False, "pass"),
+        ([PASSED] * 4 + [OUT], 5, 1.0, False, "no result"),
+        ([PASSED] + [OUT] * 4, 5, 1.0, False, "no result"),  # never a pass on one run
+        ([OUT] * 5, 5, 1.0, False, "no result"),
         ([], 5, 1.0, False, "no result"),
-        ([FAILED_RUN] + [None] * 4, 5, 0.8, False, "fail"),  # below the line is proved
-        ([PASSED] * 4 + [None], 5, 0.8, True, "no result"),  # a refusal stops the row
-        ([FAILED_RUN, None], 5, 1.0, True, "fail"),
+        ([FAILED_RUN] + [OUT] * 4, 5, 0.8, False, "fail"),  # below the line is proved
+        ([PASSED] * 4 + [OUT], 5, 0.8, True, "no result"),  # a refusal stops the row
+        ([FAILED_RUN, OUT], 5, 1.0, True, "fail"),
     ],
 )
 def test_a_rows_verdict(
-    broken: list[list[str] | None], runs: int, rate: float, refused: bool, verdict: str
+    broken: list[RunJudgement], runs: int, rate: float, refused: bool, verdict: str
 ) -> None:
     assert judge_row(broken, runs, rate, refused).verdict == verdict
 
@@ -352,7 +371,9 @@ def test_the_raw_answer_is_compared_and_never_reaches_a_record(project: Project)
     assert result.code == 1, result.out
     summary = result.summaries()[0]
     assert summary["judged"] == "fail"
-    assert summary["broken_rules"] == ['forbid "[secret removed]" found']
+    assert summary["broken_rules"] == [
+        {"kind": "forbid", "text": 'forbid "[secret removed]" found'}
+    ]
     assert SECRET not in str(summary["answer"]) and "[secret removed]" in str(summary["answer"])
     assert SECRET not in result.out + result.err
     for path in (project.root / "derail-runs").rglob("*.jsonl"):
@@ -513,6 +534,7 @@ def test_a_run_where_the_fault_did_not_fire_counts_in_no_rate(project: Project) 
     assert "not exercised, the fault did not fire: 1 answered" in result.out
     judged = [s["judged"] for s in result.summaries()]
     assert judged.count("left out") == 1 and "fail" not in judged
+    assert [s["left_out"] for s in result.summaries() if s["left_out"]] == [judge.NOT_FIRED]
 
 
 @pytest.mark.design("judge.too_few_runs")
@@ -698,7 +720,7 @@ def test_every_summary_says_how_the_run_was_judged(project: Project, fake_openai
         validator.validate(lines[-1])
     summaries = result.summaries()
     assert {s["judged"] for s in summaries} == {"pass"}
-    assert all(s["broken_rules"] == [] for s in summaries)
+    assert all(s["broken_rules"] == [] and s["left_out"] is None for s in summaries)
 
 
 @pytest.mark.design("record.judged_required")
@@ -745,14 +767,14 @@ def test_the_table_shows_rate_range_tools_cost_and_result(
     assert costs[0] > 0 and sum(costs) == pytest.approx(spent, abs=0.00002)  # the whole row's
 
 
-def fabricated(cfg: config.Config, row: plan.Row, broken: list[str] | None) -> RunResult:
-    fired = None if row.fault is None else broken is not None
-    outcome = "answered" if broken is not None else "refused call"
+def fabricated(cfg: config.Config, row: plan.Row, judged: RunJudgement) -> RunResult:
+    fired = None if row.fault is None else judged.left_out is None
+    outcome = "answered" if judged.left_out is None else "refused call"
     mocked = set(range(len(cfg.tests[0].mocks)))
     result = RunResult(
         "run-1", row, outcome, "x", fired, {}, model_calls=1, mocked=mocked, tool_calls=2
     )
-    result.broken = broken
+    result.judgement = judged
     return result
 
 
@@ -765,7 +787,7 @@ def test_the_table_stays_within_120_columns_and_notes_keep_full_names(
     project.edit('call = "tool:get_order"', 'call = "http:inventory.warehouse.acme.internal"')
     project.edit('do   = "timeout"', 'do = "status 503"')
     cfg = load(project)
-    results = [fabricated(cfg, row, ["crashed"]) for row in plan.rows(cfg) for _ in range(3)]
+    results = [fabricated(cfg, row, FAILED_RUN) for row in plan.rows(cfg) for _ in range(3)]
     out = Capture()
     code = report(cfg, results, tmp_path, out)  # type: ignore[arg-type]
     assert code == 1
@@ -800,19 +822,19 @@ class Capture:
 
 
 @pytest.mark.design("exit.zero_only_when_every_row_passes")
-@pytest.mark.parametrize("first", [[], ["crashed"], None])
-@pytest.mark.parametrize("second", [[], ["crashed"], None])
+@pytest.mark.parametrize("first", [PASSED, FAILED_RUN, OUT])
+@pytest.mark.parametrize("second", [PASSED, FAILED_RUN, OUT])
 def test_exit_zero_only_when_every_row_passes(
-    project: Project, tmp_path: Path, first: list[str] | None, second: list[str] | None
+    project: Project, tmp_path: Path, first: RunJudgement, second: RunJudgement
 ) -> None:
     cfg = load(project)
     base, fault = plan.rows(cfg)
     results = [fabricated(cfg, base, first) for _ in range(3)]
     results += [fabricated(cfg, fault, second) for _ in range(3)]
     code = report(cfg, results, tmp_path, Capture())  # type: ignore[arg-type]
-    if first == second == []:
+    if first == second == PASSED:
         assert code == 0
-    elif None in (first, second):
+    elif OUT in (first, second):
         assert code == 2
     else:
         assert code == 1
