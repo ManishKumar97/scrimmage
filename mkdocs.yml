@@ -93,3 +93,4 @@ nav:
       - Limits: limits.md
   - Safety and security:
       - Safety: safety.md
+      - Security: security.md
