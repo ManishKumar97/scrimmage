@@ -64,6 +64,8 @@ jobs:
       - run: uv sync
       - name: Check the job runs the Python it names
         run: uv run python -c "import sys; v = '.'.join(map(str, sys.version_info[:2])); assert v == '${{ matrix.python }}', v"
+      # pytest runs one worker per CPU (-n auto in pyproject.toml). Coverage follows
+      # each worker and each child process; combine merges every data file.
       - name: Tests, measuring coverage in every process
         run: |
           uv run coverage run -m pytest
