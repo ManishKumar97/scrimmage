@@ -106,4 +106,18 @@ def test_a_fault_on_one_model_and_its_limits_are_documented() -> None:
     limits = page("limits.md")
     assert "**Two calls to one model.**" in limits
     assert "**A model name is compared whole.**" in limits
+    assert "**A fault with `model` needs a name it can read.**" in limits
+    assert "**Two `model` keys in one body.**" in limits
+    for text in (guide, limits):
+        assert "the row can pass, and nothing warns" in text
+        assert "not the name a reply or a dashboard shows" in text
+        assert "sent from a generator" in text
+        assert "the openai library takes" in text.lower()
+        assert '`max_cost_usd = "none"`' in text
+        assert "streamed, multipart" not in text
+    assert "a character that does not print" in guide
+    assert "with the reply streamed or not" in guide
+    safety = page("safety.md")
+    assert "`unreadable_model`" in safety and "- A chat request body" in safety
+    assert "- A request body Derail cannot read" not in safety
     assert "`model`" not in page("configuration.md").split("## Coming in later versions")[1]

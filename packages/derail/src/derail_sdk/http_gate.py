@@ -298,8 +298,9 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
             refuse(
                 run,
                 step,
-                f"{where} has a body Derail cannot read, such as a stream or a compressed "
-                "one, so the tools it offers cannot be checked; send it as plain JSON",
+                f"{where} has a body Derail cannot read, such as one sent from a generator or "
+                "a compressed one, so the tools it offers cannot be checked; send it as plain "
+                "JSON",
             )
         check_tools(ctx, run, step, fields, str(request.url.path))
     if call.kind == "http" and step.decision.action == "real" and near_a_mock(run, call):

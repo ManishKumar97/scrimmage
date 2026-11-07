@@ -357,3 +357,20 @@ def test_a_very_long_name_is_cut(project: Project, fake_openai: Fake) -> None:
     result = send_raw(project, fake_openai, ["x" * 200_000])
     line = next(x for x in result.out.splitlines() if "no call used the model" in x)
     assert len(line) < 300 and line.endswith("...")
+
+
+@pytest.mark.design("model_name.full_name_covers_a_cut_cell")
+def test_a_name_cut_from_the_table_is_on_its_full_name_line(
+    project: Project, fake_openai: Fake
+) -> None:
+    bot(project, "chat")
+    project.edit('name = "routed"', f'name = "{"routed-" * 16}"')
+    alias = "main-model-alias-from-the-team-gateway-used-for-answers"
+    add_fault(project, alias, "first 3", call="model:openai")
+    result = project.test(fake_openai(["chat_answer"]))
+    lines = result.out.splitlines()
+    table = [line for line in lines if " baseline " in line or " fault 1 " in line]
+    assert table and all(len(line) <= 120 for line in table)
+    assert not any(alias in line for line in table)  # the middle cut takes the name
+    full = next(line for line in lines if line.startswith("full name:") and "fault 1" in line)
+    assert f"model:openai {alias} status 429 first 3" in full

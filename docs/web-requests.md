@@ -129,5 +129,5 @@ Text joined to such a URL with no space, such as a list of URLs split by commas,
 A URL whose slashes are escaped, as in `https:\/\/`, is not seen as a URL.
 A failed web request records only the error's type, since a client's message can quote a header.
 A path is recorded as it was sent, with known secrets removed, so a key of an unknown shape in a path stays in the record.
-A body sent as a stream or as a multipart upload is recorded as 0 bytes, because reading it would use it up.
+A body sent from a generator or as a multipart upload is recorded as 0 bytes, because reading it would use it up.
 The `.log` beside each run holds what your program printed, unchanged.

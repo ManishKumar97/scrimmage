@@ -1132,7 +1132,7 @@ def test_an_async_call_with_no_readable_name_is_refused(gated: None) -> None:
 @pytest.mark.design("gate.no_name_chat")
 def test_a_chat_body_with_no_name_is_refused_for_that_reason(gated: None) -> None:
     sink, _ = install(make_plan((ON_MAIN,)))
-    with pytest.raises(DerailRefused, match="take model off the fault"):
+    with pytest.raises(DerailRefused, match=r"plain JSON with a model field.*has no price"):
         client().post(URL, json={"messages": []})
     assert sink.lines[0]["reason"] == "unreadable_model"
 

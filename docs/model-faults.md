@@ -92,7 +92,7 @@ A bot that routes with `gpt-4o-mini` and answers with `gpt-4.1` then gets this:
 | `gpt-4.1`, attempt 3 | Derail answers 429; the library raises `RateLimitError` into your code |
 
 `first N`, `requests N` and `always` count only the calls to that model, so a router call in between takes none of the count.
-It works on chat, Responses and embeddings, sync or async, streamed or not.
+It works on chat, Responses and embeddings, sync or async, with the reply streamed or not.
 For embeddings, name them in the label too:
 
 ```toml
@@ -105,7 +105,7 @@ On a record line, `call` stays `model:openai`, and the line's `model` field says
 
 ### The name is compared whole
 
-Write the name your code sends, case and all.
+Write the name your code sends, case and all, not the name a reply or a dashboard shows.
 There are no prefixes, because `gpt-4o` would then hit a router on `gpt-4o-mini` as well, and nothing would tell you.
 
 | `model` in the fault | Name in the request | Fires? |
@@ -118,14 +118,20 @@ There are no prefixes, because `gpt-4o` would then hit a router on `gpt-4o-mini`
 If your code sends a dated name such as `gpt-4o-mini-2024-07-18`, write the dated name.
 A gateway's alias works the same way: Derail sits in front of the gateway, so it sees the alias and never the name behind it.
 
-A wildcard is refused when the file is read, and so is a space at either end of the name.
+A wildcard is refused when the file is read, and so is a space at either end of the name or a character that does not print.
 
 A name no call used is a fault that never fired, so it is a test mistake with exit code 2 and the row has `no result`.
 It can never read as a pass, and the message says what the calls did use:
 
 ```
-test mistake: routed fault 1: no call used the model 'gpt-4.2'; these calls used gpt-4.1, gpt-4o-mini
+test mistake: routed fault 1: no call used the model 'gpt-4.2'; these calls used 'gpt-4.1', 'gpt-4o-mini'
 ```
+
+That catch needs no call to have sent the exact name.
+If your code sends both `gpt-4o-mini` and `gpt-4o-mini-2024-07-18`, a fault on the first fires on it alone, the dated call runs for real, the row can pass, and nothing warns.
+
+If the name was used and the fault still did not fire, the message says that instead: a refused call fires no fault, and nor does a call in a child process unless `children` is true.
+When the records cannot say, because a call had no readable name or a run was refused, the message is left out.
 
 ### A request with no name Derail can read
 
@@ -134,8 +140,16 @@ That reading changes nothing: the request goes out byte for byte as your code bu
 
 When a fault gives `model` and a call its label names has no such field, Derail cannot tell whether the fault is for that call.
 So the call is refused before it is sent, with the reason `unreadable_model`, and the test stops with exit code 2.
-That covers a body that is streamed, multipart or compressed, and a body with no `model` at all, such as a Responses call on a stored prompt.
+That covers a request body sent from a generator, a multipart or compressed body, and a body with no `model` at all, such as a Responses call on a stored prompt.
 Firing could hit the wrong call, and letting it through could spare the right one.
+
+For a stored prompt, send `model` on that call.
+The openai library takes `model` beside `prompt`, but Derail has not confirmed what the provider does when the stored prompt names another model.
+
+Taking `model` off the fault is the other way out, and it has two costs.
+The fault hits every call its label names again, such as the router.
+And with a budget on, a chat or an embedding with no name has no price, so it is refused in the baseline too and the fault row never runs.
+Such a test needs `max_cost_usd = "none"`.
 
 Calls the fault's label does not name go on as usual, and so does everything in a test with no `model` on its fault.
 

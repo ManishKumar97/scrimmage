@@ -31,7 +31,8 @@ Everything around them is checked:
 - A hosted MCP server can change data at the provider, where no gate can see it. A request that offers one is never sent unless you list it as `hosted:mcp/<label>` under `real`.
 - A tool of a type Derail does not know stops the test, so a new provider feature costs a table update, never a safety gap.
 - A tool the model is offered that no gate sees could run for real unchecked, so the request is not sent and the test stops.
-- A request body Derail cannot read is refused, because the tools in it cannot be checked.
+- A chat request body Derail cannot read is refused, because the tools in it cannot be checked.
+- When a fault names a model, a call its label names with no model name Derail can read is refused with `unreadable_model`, because the fault could hit the wrong call. See [Failing one model](model-faults.md#a-request-with-no-name-derail-can-read).
 - Any other write to a model host, such as starting a fine-tuning job, is a web request, so it is refused unless `real` lists it.
 - A model call redirected to a host that is not a model host is refused, so it cannot leave the budget behind. If your gateway really does redirect to another host, name that host under `model_hosts`.
 
