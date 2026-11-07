@@ -25,7 +25,16 @@ def test_the_example_expands_to_two_rows_and_six_runs(tmp_path: Path) -> None:
     rows = plan.rows(cfg)
     assert [(r.name, r.fault) for r in rows] == [
         ("baseline", None),
-        ("fault 1", config.Fault("tool:get_order", "timeout", "always")),
+        (
+            "fault 1",
+            config.Fault(
+                "tool:get_order",
+                "timeout",
+                "always",
+                expect=(("unable", "sorry", "try again"),),
+                forbid=("Oct 30", "October 30"),
+            ),
+        ),
     ]
     assert len(rows) * cfg.agent.runs == 6
 
@@ -110,8 +119,12 @@ def test_anything_this_version_does_not_support_is_rejected(
             "answer: works only with function",
         ),
         ("[agent]\n", '[agent]\nchildren = "yes"\n', "children: expected true or false"),
-        ('expect   = ["shipped", "Oct 30"]', "", "expect: required"),
-        ('expect   = ["shipped", "Oct 30"]', "expect = []", "expected a list of text"),
+        ('expect   = ["shipped", ["Oct 30", "October 30"]]', "", "expect: required"),
+        (
+            'expect   = ["shipped", ["Oct 30", "October 30"]]',
+            "expect = []",
+            "expected a list of text",
+        ),
         ('returns = "shipped, Oct 30"', "", "returns: required"),
         ('do   = "timeout"', 'do   = "explode"', "'explode' is not a fault"),
         ('do   = "timeout"', 'do   = "timeout"\nwhen = "sometimes"', "not a schedule"),

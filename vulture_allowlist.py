@@ -17,6 +17,7 @@ _.refuse_then_hang  # tests/example/acme/slow.py: named by import path in a test
 _.vanish  # tests/example/acme/slow.py: named by import path in a test's derail.toml
 _.echo  # tests/example/acme/slow.py: named by import path in a test's derail.toml
 _.as_dict  # tests/starter_agents.py: named by import path in test_start.py
+_.as_text_enum  # tests/starter_agents.py: named by import path in test_start.py
 _.as_async  # tests/starter_agents.py: named by import path in test_start.py
 _.answer_async  # tests/example/acme/graph.py: a test's derail.toml names it
 _.answer_handled  # tests/example/acme/graph.py: a test's derail.toml names it

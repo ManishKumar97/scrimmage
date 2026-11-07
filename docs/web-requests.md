@@ -28,10 +28,14 @@ json = {count = 12}
 [[test.fault]]
 call = "http:inventory.acme.internal"
 do = "status 503"
+expect = [["sorry", "unable"]]
+forbid = ["12"]
 
 [[test.fault]]
 call = "http:inventory.acme.internal"
 do = "timeout"
+expect = [["sorry", "unable"]]
+forbid = ["12"]
 ```
 
 The baseline row gets the mocked reply.

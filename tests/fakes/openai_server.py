@@ -6,7 +6,8 @@ gets the fixture at position n. So several runs at once each get the same script
 conversation, and a retry of a request gets the same reply as its first attempt.
 
 A fixture name may start with a status, such as "429:error_429", for a real error
-reply. A ".sse" fixture is sent as a stream of server-sent events. Embeddings and the
+reply. "a|b" serves a, or b to a conversation where a tool failed, as a model would
+change its answer. A ".sse" fixture is sent as a stream of server-sent events. Embeddings and the
 Responses API each have one fixture of their own. A request it has no reply for gets an
 error, and the error is kept, so a test cannot pass by accident. This is test support
 code; it is never in a wheel.
@@ -26,6 +27,8 @@ RESPONSES_PATH = "/v1/responses"
 
 class Reply:
     def __init__(self, name: str) -> None:
+        name, _, after_failure = name.partition("|")
+        self.after_failure = Reply(after_failure) if after_failure else None
         status, _, fixture = name.rpartition(":")
         self.name = name
         self.status = int(status) if status else 200
@@ -39,6 +42,11 @@ class Reply:
         # Read every file up front, so a missing fixture fails the test before it runs.
         self.body = path.read_bytes()
         self.stream = path.suffix == ".sse"
+
+
+def tool_failed(request: dict[str, Any]) -> bool:
+    tools = [m for m in request.get("messages", []) if m.get("role") == "tool"]
+    return any(str(m.get("content")).lower().startswith("error") for m in tools)
 
 
 class FakeOpenAI:
@@ -98,7 +106,7 @@ class FakeOpenAI:
                 return self._error(f"no fixture serves {path}")
             self.requests.append(request)
             self._used.add(reply.name)
-            return reply
+            return reply.after_failure if reply.after_failure and tool_failed(request) else reply
 
     def _error(self, error: str) -> str:
         self.errors.append(error)

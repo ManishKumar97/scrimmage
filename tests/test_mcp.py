@@ -40,9 +40,9 @@ LABEL = "mcp:docs/search"
 READY = re.compile(r"running on (http://127\.0\.0\.1:\d+)")
 BOTH = pytest.mark.parametrize("transport", ["stdio", "http"])
 MOCK = f'[[test.mock]]\ncall = "{LABEL}"\nreturns = {{hits = ["mocked"], total = 1}}\n'
-ERROR = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "error"\n'
-EMPTY = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "empty"\n'
-TIMEOUT = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "timeout"\n'
+ERROR = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "error"\nforbid = ["never said"]\n'
+EMPTY = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "empty"\nforbid = ["never said"]\n'
+TIMEOUT = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "timeout"\nforbid = ["never said"]\n'
 
 
 def toml(function: str, body: str, extra: str = "") -> str:
@@ -322,7 +322,7 @@ def test_a_swallowed_refusal_stops_every_later_tool_call(docs: Docs) -> None:
 def test_a_request_a_server_could_act_on_passes_and_leaves_a_line(docs: Docs) -> None:
     docs.start("stdio")
     result = docs.run("acme.docs_bot:answer_with_reads", "")
-    assert result.code == 0, result.out
+    assert result.finished, result.out
     assert docs.received() == ["resources/read handbook", "prompts/get refunds"]
     assert calls(result) == [
         ("mcp:docs/resources/read", "real"),
@@ -414,7 +414,7 @@ def test_a_real_empty_reply_and_the_injected_one_on_a_tool_with_no_shape(
     real = docs.run(function, "", 'real = ["mcp:docs/note"]')
     docs.stop()
     docs.start(transport, "ok")
-    fault = '[[test.fault]]\ncall = "mcp:docs/note"\ndo = "empty"\n'
+    fault = '[[test.fault]]\ncall = "mcp:docs/note"\ndo = "empty"\nforbid = ["never said"]\n'
     mock = '[[test.mock]]\ncall = "mcp:docs/note"\nreturns = "x"\n'
     injected = docs.run(function, mock + fault)
     assert answer_of(real) == "error=False blocks=0 text='' structured=None"
@@ -529,7 +529,7 @@ def test_a_mock_no_call_used_is_a_test_mistake(docs: Docs) -> None:
 @pytest.mark.design("mcp.never_fired")
 def test_a_fault_no_call_met_is_a_test_mistake(docs: Docs) -> None:
     docs.start("stdio")
-    fault = '[[test.fault]]\ncall = "mcp:docs/other"\ndo = "error"\n'
+    fault = '[[test.fault]]\ncall = "mcp:docs/other"\ndo = "error"\nforbid = ["never said"]\n'
     result = docs.run("acme.docs_bot:answer", MOCK + fault)
     assert result.code == 2, result.out
     assert "the fault never fired" in result.out
@@ -605,7 +605,7 @@ def test_a_real_protocol_error_is_on_the_line_and_reaches_the_agent(
     line = row(result, "baseline")[0]
     assert line["action"] == "real"
     assert line["error"].startswith("MCPError")
-    assert result.code == 0  # a real tool failure is the agent's world, not infrastructure
+    assert result.finished  # a real tool failure is the agent's world, not infrastructure
 
 
 @pytest.mark.design("mcp.record_redacted")
@@ -793,7 +793,7 @@ def test_a_tool_the_server_lists_can_be_offered_to_the_model(
         )
     )
     result = docs.project.test(fake)
-    assert result.code == 0, result.out
+    assert result.finished, result.out
     assert docs.received() == []
     told = [
         str(m["content"])
@@ -839,7 +839,7 @@ def test_fastmcps_client_is_mocked_and_faulted(docs: Docs, transport: str) -> No
     docs.start(transport)
     function = "acme.docs_bot:answer_fastmcp"
     result = docs.run(function, MOCK + ERROR + TIMEOUT)
-    assert result.code == 0, result.out
+    assert result.finished, result.out
     assert docs.received() == []
     assert calls(result) == [(LABEL, "mock")]
     assert "hits=['mocked']" in answer_of(result)
@@ -1299,4 +1299,4 @@ def test_a_plan_with_mcp_entries_fits_the_schema_and_round_trips(tmp_path: Path)
     made = plan.plan_for(loaded, row_, "run-1")
     schema = json.loads((Path(plan.__file__).parent / "schemas" / "plan.v1.json").read_text())
     jsonschema.Draft202012Validator(schema).validate(made.to_json())
-    assert Plan.from_json(made.to_json()) == made
+    assert Plan.from_json(made.to_json()).to_json() == made.to_json()  # no rule is in it

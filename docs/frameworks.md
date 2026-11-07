@@ -43,10 +43,14 @@ returns = "shipped, Oct 30"
 [[test.fault]]
 call = "tool:get_order"
 do   = "error"
+expect = [["sorry", "unable"]]
+forbid = ["shipped"]
 ```
 
 A graph returns its state, not text, so `answer` says where the answer is in what your function returned.
 A path can use field names, dots and indexes.
+It must lead to the answer, as text or a number. A path to a list or a table is a test mistake, because tool results in it could pass a rule.
+A LangChain message can hold a list of content blocks, so use `messages[-1].text`, which joins them, rather than `messages[-1].content`.
 If the path does not fit, the run ends as crashed, and its `.log` file says which step failed.
 
 ## Tool names
@@ -80,6 +84,8 @@ To raise something else, name it:
 call   = "tool:get_order"
 do     = "error"
 raises = "ConnectionError"
+expect = [["sorry", "unable"]]
+forbid = ["shipped"]
 ```
 
 `raises` is a Python built-in exception, or `package.module:Class` from your agent's own packages.

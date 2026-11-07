@@ -8,7 +8,7 @@ model_hosts = [{host = "127.0.0.1", provider = "openai"}]
 [[test]]
 name     = "order-status"
 question = "Where is order 1234?"
-expect   = ["shipped", "Oct 30"]
+expect   = ["shipped", ["Oct 30", "October 30"]]
 
 [[test.mock]]
 call    = "tool:get_order"
@@ -21,3 +21,5 @@ returns = {sku = "SKU-42", count = 12}
 [[test.fault]]
 call = "tool:get_order"
 do   = "timeout"
+expect = [["unable", "sorry", "try again"]]
+forbid = ["Oct 30", "October 30"]

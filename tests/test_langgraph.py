@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from conftest import ACME, Project, Result
+from conftest import ACME, EXAMPLE_FAULT, Project, Result
 from derail_sdk import config, langchain_gate, mocks, plan, state, tool_gate
 from derail_sdk.config import Fault
 from derail_sdk.errors import DerailRefused
@@ -30,7 +30,7 @@ STOCK_MOCK = (
     '[[test.mock]]\ncall    = "tool:get_stock"             # returns an acme.models.Stock object\n'
     'returns = {sku = "SKU-42", count = 12}\n'
 )
-TIMEOUT = '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'
+TIMEOUT = EXAMPLE_FAULT
 
 
 def graph(project: Project, function: str = "answer", fault: str = TIMEOUT, runs: int = 1) -> None:
@@ -45,7 +45,9 @@ def graph(project: Project, function: str = "answer", fault: str = TIMEOUT, runs
 
 
 def error_fault(extra: str = "") -> str:
-    return f'[[test.fault]]\ncall = "tool:get_order"\ndo   = "error"\n{extra}'
+    return (
+        f'[[test.fault]]\ncall = "tool:get_order"\ndo   = "error"\nforbid = ["never said"]\n{extra}'
+    )
 
 
 def row(result: Result, name: str) -> list[dict[str, object]]:
@@ -106,7 +108,7 @@ def test_an_error_fault_with_no_handler_ends_the_graph_as_crashed(
         result = project.test(fake)
     finally:
         fake.stop()
-    assert result.code == 0, result.out + result.err
+    assert result.finished, result.out + result.err
     fault = row(result, "fault 1")
     assert fault[-1]["summary"]["outcome"] == "crashed"  # type: ignore[index]
     assert str(tool_lines(fault)[0]["error"]).startswith("ToolException: get_order failed")
@@ -458,7 +460,7 @@ def test_an_async_tool_gets_an_async_gate(project: Project) -> None:
 @pytest.mark.parametrize(
     ("returns", "answer", "code"),
     [
-        ('["the report", {a = "b"}]', "the report", 0),
+        ('["the report", {a = "b"}]', "the report", 1),
         ('"just text"', None, 2),
         ('["only the report"]', None, 2),
     ],
@@ -1081,7 +1083,7 @@ def test_injected_state_and_store_are_left_out_of_the_record(
 @pytest.mark.design("adapter.copy_is_tracked")
 def test_a_renamed_copy_of_a_safe_tool_does_not_stop_the_test(project: Project) -> None:
     result, fake = offered(project, "renamed_copy")
-    assert result.code == 0, result.out + result.err
+    assert result.finished, result.out + result.err
     assert "which no gate sees" not in result.out and fake.requests != []
 
 
@@ -1127,3 +1129,14 @@ def test_an_injected_value_passed_by_position_stays_out_of_the_record(
 def test_the_docs_say_a_helper_of_the_same_name_is_refused() -> None:
     text = (Path(__file__).parent.parent / "docs" / "frameworks.md").read_text()
     assert "helper method that only shares a name" in text
+
+
+class CallableText(str):
+    """Text that can also be called, as LangChain's message.text is."""
+
+    def __call__(self) -> str:
+        return str(self)
+
+
+def test_an_answer_path_may_end_on_text_that_can_be_called() -> None:
+    assert pick({"text": CallableText("shipped")}, "text") == "shipped"

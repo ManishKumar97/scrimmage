@@ -20,7 +20,7 @@ Anything this version does not support is rejected as unknown, with exit code 2.
 | `model_hosts` | Extra hosts whose requests are model calls, such as a gateway, each with the format it speaks: `[{host = "llm-gateway.internal", provider = "openai"}]`. A host name only, with no port. | empty |
 | `reserve_output_tokens` | The output tokens a budget reservation assumes when a request does not set `max_tokens`. | 4096 |
 | `prices` | Prices for other models, as the table below. | empty |
-| `answer` | Where the answer is in what the function returns, such as `"messages[-1].content"`. Only with `function`. See [Agents on a framework](frameworks.md). | the whole value |
+| `answer` | Where the answer is in what the function returns, such as `"messages[-1].content"`. Only with `function`. Required when the function returns anything but text, as the whole value would hold tool results too. See [Agents on a framework](frameworks.md). | the returned text |
 
 ## [agent.prices]
 
@@ -39,7 +39,9 @@ Derail imports only modules under your agent's own top-level packages, the ones 
 |---|---|
 | `name` | A name for the test, unique in the file. Required. |
 | `question` | The question the agent gets. Required. |
-| `expect` | A list of text the answer should contain. Required; used for judging in a later version. |
+| `expect` | What the answer must hold: a list, every item must match, and an item is a text or a list of texts of which any one is enough. `["shipped", ["Oct 30", "October 30"]]`. Required. See [Judging an answer](judging.md). |
+| `forbid` | A list of texts the answer must not hold. Optional. |
+| `pass_rate` | The share of judged runs that must pass, above 0 and up to 1, such as `0.8`. Every judged run by default. More than half the planned runs must be judged for any result. |
 
 ## [[test.mock]]
 
@@ -67,6 +69,9 @@ See [Web requests](web-requests.md) and [MCP tools](mcp.md).
 | `when` | When it fires: `"always"`, the default; `"first N"`, the first N attempts; or on a model call `"requests N"`, the first N requests and every retry of each. |
 | `method` | On a web request: fail only this method. |
 | `path` | On a web request: fail only this exact path, with no query string. |
+| `expect` | Replaces the test's for this row. A fault that fires on every call needs this or `forbid`; with `first N` it can use the test's. See [Judging an answer](judging.md). |
+| `forbid` | Replaces the test's for this row. `[]` drops the test's list. |
+| `pass_rate` | Replaces the test's for this row. |
 
 ## Coming in later versions
 

@@ -8,11 +8,17 @@ from pathlib import Path
 import pytest
 
 from derail_sdk.cli import main
+from derail_sdk.runner import OK, ROW_FAILED
 from fakes.openai_server import FakeOpenAI
 
 EXAMPLE = Path(__file__).parent / "example"
-# The S1 conversation: the bot asks for the order, then the stock, then answers.
-ACME = ["acme_get_order", "acme_get_stock", "acme_answer"]
+# The S1 conversation: the bot asks for the order, then the stock, then answers, or says it
+# could not if a tool failed.
+ACME = ["acme_get_order", "acme_get_stock", "acme_answer|acme_admits"]
+EXAMPLE_FAULT = (
+    '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'
+    'expect = [["unable", "sorry", "try again"]]\nforbid = ["Oct 30", "October 30"]\n'
+)
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:
@@ -60,6 +66,11 @@ class Result:
     out: str
     err: str
     root: Path
+
+    @property
+    def finished(self) -> bool:
+        """Every row gave a result, passed or failed: for a test about anything but the answer."""
+        return self.code in (OK, ROW_FAILED)
 
     def records(self, *, processes: bool = False) -> list[list[dict[str, object]]]:
         """Every run's record lines, one list per run. Each process's own line is left out

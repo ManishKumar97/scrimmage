@@ -38,8 +38,8 @@ def toml(function: str, body: str, extra: str = "") -> str:
 
 MOCK = f'[[test.mock]]\ncall = "{LABEL}"\nmethod = "GET"\npath = "/stock/SKU-42"\n'
 JSON_MOCK = MOCK + "json = {sku = 'SKU-42', count = 12}\n"
-OUTAGE = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "status 503"\n'
-TIMEOUT = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "timeout"\n'
+OUTAGE = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "status 503"\nforbid = ["never said"]\n'
+TIMEOUT = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "timeout"\nforbid = ["never said"]\n'
 
 
 def run(project: Project, function: str, body: str, extra: str = "") -> Result:
@@ -73,7 +73,7 @@ def test_every_notice_the_product_writes_fits_the_schema() -> None:
 @pytest.mark.design("web.use_case")
 def test_a_mocked_reply_a_503_and_a_timeout_reach_the_tools_own_handling(project: Project) -> None:
     result = run(project, "acme.web:answer", JSON_MOCK + OUTAGE + TIMEOUT)
-    assert result.code == 0, result.out + result.err
+    assert result.finished, result.out + result.err
     assert row(result, "baseline")[-1]["summary"]["answer"] == "12 in stock"
     assert row(result, "baseline")[0]["action"] == "mock"
     outage = row(result, "fault 1")
@@ -168,7 +168,7 @@ def recorded(project: Project) -> str:
 @pytest.mark.design("web.error_text_clean")
 def test_a_query_in_an_error_reaches_no_record_through_the_answer(project: Project) -> None:
     result = run(project, "acme.web:answer_with_its_error", OUTAGE)
-    assert result.code == 0, result.out + result.err
+    assert result.finished, result.out + result.err
     assert "/stock/SKU-42" in row(result, "fault 1")[-1]["summary"]["answer"]
     assert "query-secret-value" not in recorded(project)
 
@@ -177,7 +177,7 @@ def test_a_query_in_an_error_reaches_no_record_through_the_answer(project: Proje
 def test_a_query_in_an_error_reaches_no_record_through_a_tool_line(project: Project) -> None:
     tools = 'tools = ["acme.web:strict_lookup"]\nreal = ["tool:strict_lookup"]'
     result = run(project, "acme.web:answer_through_a_strict_tool", JSON_MOCK + OUTAGE, tools)
-    assert result.code == 0, result.out + result.err
+    assert result.finished, result.out + result.err
     tool_line = next(x for x in row(result, "fault 1") if x.get("kind") == "tool")
     assert tool_line["error"].startswith("HTTPStatusError") and "/stock" in tool_line["error"]
     assert "query-secret-value" not in recorded(project)
@@ -189,7 +189,7 @@ def test_a_bad_header_reaches_no_record(
 ) -> None:
     monkeypatch.setenv("INVENTORY_URL", web.url(""))
     result = run(project, "acme.web:answer_with_a_bad_header", "")
-    assert result.code == 0, result.out + result.err
+    assert result.finished, result.out + result.err
     assert result.records()[0][0]["error"] == "LocalProtocolError"
     assert "header-secret-value" not in recorded(project)
 
@@ -202,7 +202,7 @@ def test_a_real_web_failure_is_the_tools_to_handle_not_an_infrastructure_error(
     base = web.url(path) if path else "http://127.0.0.1:9"
     monkeypatch.setenv("INVENTORY_URL", base)
     result = run(project, "acme.web:answer", "")
-    assert result.code == 0, result.out + result.err
+    assert result.finished, result.out + result.err
     assert result.summaries()[0]["outcome"] == "answered"
     assert "inventory unavailable" in str(result.summaries()[0]["answer"])
 
@@ -1040,6 +1040,7 @@ def test_a_plan_with_web_mocks_and_faults_fits_the_schema_and_round_trips(tmp_pa
             'path = "/stock/SKU-42"\n', 'path = "/s"\nstatus = 201\nheaders = {a = "b"}\n'
         )
         + f'[[test.fault]]\ncall = "{LABEL}"\nmethod = "GET"\npath = "/s"\ndo = "timeout"\n'
+        + 'forbid = ["never said"]\n'
     )
     loaded = load_mock(tmp_path, body, 'real = ["http:a POST /b", "http:[::1] POST /b"]')
     row_ = plan.rows(loaded)[1]

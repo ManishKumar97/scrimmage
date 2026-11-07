@@ -125,7 +125,7 @@ def test_a_question_reaches_the_script_as_one_argument_with_no_shell(project: Pr
         project,
         "import json, sys\nprint(json.dumps(sys.argv[1:]))\n",
     )
-    assert result.code == 0, result.out + result.err
+    assert result.finished, result.out + result.err
     assert summary_of(result)["answer"] == json.dumps([QUESTION])
 
 
@@ -143,7 +143,7 @@ def test_nothing_in_a_question_is_read_by_a_shell(project: Project, question: st
     write_config(project, f"{sys.executable} bot.py {{question}}")
     project.edit(json.dumps(QUESTION), json.dumps(question))
     result = project.test()
-    assert result.code == 0, result.out + result.err
+    assert result.finished, result.out + result.err
     assert summary_of(result)["answer"] == json.dumps([question])
     assert not (project.root / "pwned").exists()
 
@@ -344,7 +344,7 @@ def test_two_pythons_started_at_once_make_one_root(project: Project) -> None:
     (project.root / "side2.py").write_text("from acme import tools\ntools.check_inventory('2')\n")
     before = f"{sys.executable} side.py &\n{sys.executable} side2.py &\nwait"
     result = wrapped(project, before)
-    assert result.code == 0, result.out
+    assert result.finished, result.out
     stderr = next((project.root / "derail-runs").glob("*/*.log")).read_text()
     assert stderr.count("derail: active") == 1
 
@@ -686,7 +686,7 @@ def test_a_childs_mock_applies_and_its_line_is_in_the_record(project: Project) -
         "print(done.stdout.strip())\n"
     )
     result = script(project, code, body='[[test.mock]]\ncall = "tool:get_order"\nreturns = "m"\n')
-    assert result.code == 0, result.out
+    assert result.finished, result.out
     assert summary_of(result)["answer"] == "m"
     assert [x["action"] for x in calls(result)] == ["mock"]
 
@@ -744,7 +744,7 @@ REPORT_ORDER = (
 )
 ORDER_ROW = (
     '[[test.mock]]\ncall = "tool:get_order"\nreturns = "m"\n'
-    '[[test.fault]]\ncall = "tool:get_order"\ndo = "timeout"\n'
+    '[[test.fault]]\ncall = "tool:get_order"\ndo = "timeout"\nforbid = ["never said"]\n'
 )
 
 
@@ -763,7 +763,7 @@ def test_with_children_set_a_fault_fires_in_a_child(project: Project) -> None:
     result = script(project, CHILD_CALLS_ORDER, "children = true", ORDER_ROW)
     rows = {str(lines[-1]["row"]): lines for lines in result.records()}
     assert [x["action"] for x in rows["fault 1"] if "call" in x] == ["fault"], result.out
-    assert result.code == 0, result.out
+    assert result.finished, result.out
 
 
 @pytest.mark.design("child.lazy_plan")
@@ -788,7 +788,7 @@ def test_a_child_that_makes_no_calls_costs_nothing(
 
     monkeypatch.setattr(ControlServer, "_records", posted)
     result = script(project, CHILD_CALLS_ORDER)
-    assert result.code == 0, result.out
+    assert result.finished, result.out
     assert len(served) == 1  # the program's own
     assert len(processes(result)) == 1
     pids = {json.loads(body)["proc"]["pid"] for body in posts if json.loads(body).get("proc")}
@@ -1136,7 +1136,7 @@ def test_a_script_stopped_at_run_timeout_has_a_summary_saying_timed_out(project:
     assert summary_of(result)["outcome"] == "timed out", result.out
     assert summary_of(result)["answer"] is None
     assert [x["call"] for x in calls(result)] == ["tool:check_inventory"]
-    assert result.code == 0
+    assert result.finished
 
 
 @pytest.mark.design("stop.last_line_flushed")
@@ -1246,7 +1246,7 @@ def test_a_model_call_going_on_at_the_time_limit_is_a_time_out_not_a_failure(
     result = script(project, code, "run_timeout = 10")
     assert summary_of(result)["outcome"] == "timed out", result.out
     assert "DerailStopped" in str(calls(result)[-1]["error"])
-    assert result.code == 0
+    assert result.finished
 
 
 def pids_in(path: Path) -> list[int]:

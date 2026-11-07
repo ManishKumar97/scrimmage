@@ -42,7 +42,7 @@ real     = ["tool:check_inventory"]
 [[test]]
 name     = "order-status"
 question = "Where is order 1234?"
-expect   = ["shipped", "Oct 30"]
+expect   = ["shipped", ["Oct 30", "October 30"]]
 
 [[test.mock]]
 call    = "tool:get_order"
@@ -55,6 +55,8 @@ returns = {sku = "SKU-42", count = 12}   # becomes an acme.models.Stock
 [[test.fault]]
 call = "tool:get_order"
 do   = "timeout"
+expect = [["unable", "sorry", "try again"]]
+forbid = ["Oct 30", "October 30"]
 ```
 
 This says:
@@ -63,7 +65,8 @@ This says:
 - `get_order` returns "shipped, Oct 30", and `get_stock` returns a `Stock` with 12 in stock, instead of calling real systems;
 - `check_inventory` is safe to run for real;
 - `refund_order` is neither mocked nor safe, so if the agent calls it, the call is refused;
-- then try the same test again with `get_order` timing out.
+- the answer must say "shipped" and give the date, in either spelling;
+- then try the same test again with `get_order` timing out. There the answer must admit the failure and give no date.
 
 ## 3. Run it
 
@@ -73,15 +76,18 @@ derail test
 
 ```text
 derail test: 1 test, 2 rows, 6 runs; records in derail-runs/20261105T075653Z-e277a2
-test          row       fault                   runs  exercised  answered  crashed  timed out  refused call  budget reached  infrastructure error  stopped
-order-status  baseline  -                       3     -          3         0        0          0             0               0                     0
-order-status  fault 1   tool:get_order timeout  3     3          3         0        0          0             0               0                     0
+test          row       fault                   runs  fired  done  passed  rate  range    tools  cost     result
+order-status  baseline  -                       3     -      3     3/3     100%  44-100%  2.0    0.00015  pass
+order-status  fault 1   tool:get_order timeout  3     3      3     3/3     100%  44-100%  2.0    0.00015  pass
+range: a 95% Wilson interval, from these runs alone
 model calls cost $0.0003 of a budget of $5
 ```
 
 Derail ran the test as two **rows**: a baseline with the mocks and no fault, and one row with the timeout.
 Each row ran three times, each time as a brand-new program.
-In all three fault runs the timeout fired ("exercised"), and the bot still answered.
+In all three fault runs the timeout fired, and the bot admitted it, so both rows pass.
+The rate and its range say what happened in these three runs, not what the next run will do.
+If a row fails, the lines under the table name the rule that broke. See [Judging an answer](judging.md).
 
 ## 4. Read what happened
 
@@ -92,18 +98,18 @@ Each run has a record in `derail-runs/`, one JSON object per line:
 {"call": "tool:get_order", "action": "fault", "fault": {"do": "timeout", "when": "always", "n": 1},
  "error": "TimeoutError: get_order timed out", ...}
 {"call": "tool:get_stock", "action": "mock", ...}
-{"summary": {"outcome": "answered", "answer": "...", "fault_fired": true, ...}}
+{"summary": {"outcome": "answered", "answer": "...", "fault_fired": true, "judged": "pass", ...}}
 ```
 
-The answer is in the summary line, so you can see whether the bot admitted the outage or made something up.
-Judging answers against `expect` comes in a later version.
+The answer is in the summary line, so you can read what the bot said, and `judged` says how that run counted.
 
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
-| 0 | Every row produced a result |
-| 2 | A mistake in the test: a refused call, a fault that never fired, a mock that does not fit its type, a misspelled label, a failed baseline, or a test the budget stopped |
+| 0 | Every row passed |
+| 1 | A row failed |
+| 2 | A mistake in the test: a refused call, a fault that never fired, a mock that does not fit its type, a misspelled label, a failed baseline, a row with no result, or a test the budget stopped |
 | 3 | An infrastructure error: a run whose record is incomplete, an error from the provider nobody injected, or a failure inside Derail itself |
 
 Next: [Failing the model, and keeping a budget](model-faults.md), [An agent run as a script](scripts.md) if yours is a program and not a function, or [Concepts](concepts.md).

@@ -29,10 +29,14 @@ returns = {hits = ["Refunds take five days."], total = 1}
 [[test.fault]]
 call = "mcp:docs/search"
 do = "error"
+expect = [["sorry", "unable"]]
+forbid = ["five days"]
 
 [[test.fault]]
 call = "mcp:docs/search"
 do = "timeout"
+expect = [["sorry", "unable"]]
+forbid = ["five days"]
 ```
 
 The baseline row gets the mocked result.

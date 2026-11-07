@@ -316,7 +316,10 @@
             "calls",
             "incomplete",
             "model_calls",
-            "cost_usd"
+            "cost_usd",
+            "judged",
+            "broken_rules",
+            "left_out"
           ],
           "properties": {
             "answer": {
@@ -380,6 +383,45 @@
             "cost_usd": {
               "type": "number",
               "minimum": 0
+            },
+            "judged": {
+              "enum": [
+                "pass",
+                "fail",
+                "left out"
+              ]
+            },
+            "broken_rules": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "text"
+                ],
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "expect",
+                      "forbid",
+                      "empty",
+                      "crashed",
+                      "timed out",
+                      "refused"
+                    ]
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "left_out": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         }
