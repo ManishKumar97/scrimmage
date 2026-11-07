@@ -124,3 +124,15 @@ def test_a_fault_on_one_model_and_its_limits_are_documented() -> None:
     assert "`unreadable_model`" in safety and "- A chat request body" in safety
     assert "- A request body Derail cannot read" not in safety
     assert "`model`" not in page("configuration.md").split("## Coming in later versions")[1]
+
+
+@pytest.mark.design("docs.cached_input")
+def test_cached_input_prices_and_their_default_are_documented() -> None:
+    text = page("configuration.md")
+    assert all(mentioned(text, key) for key in config.PRICE_KEYS)
+    assert "cached tokens cost the full `input` price" in text
+    guide = page("model-faults.md")
+    for word in ("prompt_tokens_details.cached_tokens", "input_tokens_details.cached_tokens"):
+        assert word in guide, word
+    assert "`tokens.cached`" in guide and "the safe overestimate" in guide
+    assert "**Cached input on OpenAI only.**" in page("limits.md")

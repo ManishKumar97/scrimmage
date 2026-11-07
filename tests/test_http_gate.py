@@ -21,10 +21,11 @@ import pytest
 from derail_sdk import http_gate, provider_openai, state
 from derail_sdk.budget import Ledger
 from derail_sdk.client import ControlClient
-from derail_sdk.config import Fault, ModelHost, Price
+from derail_sdk.config import Fault, ModelHost
 from derail_sdk.decide import Counters
 from derail_sdk.errors import DerailRefused
 from derail_sdk.plan import Plan
+from derail_sdk.provider_openai import Rates as Price
 from derail_sdk.runner import real_error
 
 URL = "https://api.openai.com/v1/chat/completions"
@@ -135,7 +136,7 @@ def test_the_agent_gets_the_reply_exactly_as_it_was_sent(gated: None) -> None:
     response = client().post(URL, json=BODY)
     assert response.json() == REPLY
     line = sink.lines[0]
-    assert line["tokens"] == {"input": 10, "output": 5} and line["status"] == 200
+    assert line["tokens"] == {"input": 10, "output": 5, "cached": 0} and line["status"] == 200
     assert line["cost_estimated"] is False
 
 
@@ -386,7 +387,7 @@ def test_a_reply_in_pieces_is_passed_on_unchanged_and_read_as_it_goes_by(gated: 
     sink, _ = install(make_plan())
     response = httpx2.Client(transport=httpx2.MockTransport(streaming)).post(URL, json=BODY)
     assert response.json()["usage"]["completion_tokens"] == 4
-    assert sink.lines[0]["tokens"] == {"input": 3, "output": 4}
+    assert sink.lines[0]["tokens"] == {"input": 3, "output": 4, "cached": 0}
 
 
 def test_a_reply_in_pieces_on_the_async_path(gated: None) -> None:
@@ -397,7 +398,7 @@ def test_a_reply_in_pieces_on_the_async_path(gated: None) -> None:
             await c.post(URL, json=BODY)
 
     asyncio.run(go())
-    assert sink.lines[0]["tokens"] == {"input": 3, "output": 4}
+    assert sink.lines[0]["tokens"] == {"input": 3, "output": 4, "cached": 0}
 
 
 @pytest.mark.design("gate.reply_cut_short")

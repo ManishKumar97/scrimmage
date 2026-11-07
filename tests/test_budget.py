@@ -120,7 +120,7 @@ def test_bad_budget_requests_are_refused(
 
 
 # Dollars per million tokens, chosen so a few tokens make whole cents.
-PRICES = (1_000_000.0 * 0.01, 1_000_000.0 * 0.02)  # 1 cent an input token, 2 an output
+PRICES = table.Rates(1_000_000.0 * 0.01, 1_000_000.0 * 0.02)  # 1 cent an input token, 2 an output
 
 
 @pytest.mark.design("budget.costs_to_the_cent")
@@ -181,10 +181,13 @@ def test_a_reply_that_is_not_json_has_no_counts() -> None:
 
 @pytest.mark.design("budget.price_lookup")
 def test_prices_come_from_the_team_then_the_table_then_the_family() -> None:
-    assert table.price("gpt-4o-mini", {}) == (0.15, 0.60)
-    assert table.price("gpt-4o-mini-2024-07-18", {}) == (0.15, 0.60)  # a dated snapshot
-    assert table.price("gpt-4o-mini", {"gpt-4o-mini": (9.0, 9.0)}) == (9.0, 9.0)
-    assert table.price("acme-llama-70b", {"acme-llama-70b": (0.6, 0.6)}) == (0.6, 0.6)
+    mini = table.Rates(0.15, 0.60, 0.075)
+    assert table.price("gpt-4o-mini", {}) == mini
+    assert table.price("gpt-4o-mini-2024-07-18", {}) == mini  # a dated snapshot
+    team = table.Rates(9.0, 9.0)
+    assert table.price("gpt-4o-mini", {"gpt-4o-mini": team}) == team  # whole, no cached rate
+    llama = table.Rates(0.6, 0.6)
+    assert table.price("acme-llama-70b", {"acme-llama-70b": llama}) == llama
     assert table.price("nobody-knows-me", {}) is None
 
 
@@ -298,7 +301,7 @@ def test_with_the_budget_off_there_is_no_price_rule_and_tokens_are_counted(
     result = project.test(fake_openai(["chat_answer"]))
     assert result.finished, result.out
     line = next(x for x in result.records()[0] if x.get("kind") == "model")
-    assert line["tokens"] == {"input": 19, "output": 10}
+    assert line["tokens"] == {"input": 19, "output": 10, "cached": 0}
     assert "of no budget" in result.out
 
 
@@ -326,7 +329,11 @@ def test_a_stream_with_token_counts_is_read_as_it_goes_by(
     project.edit(TOOL_FAULT, "")
     result = project.test(fake_openai(["chat_stream_usage"]))
     line = next(x for x in result.records()[0] if x.get("kind") == "model")
-    assert line["cost_estimated"] is False and line["tokens"] == {"input": 9, "output": 1}
+    assert line["cost_estimated"] is False and line["tokens"] == {
+        "input": 9,
+        "output": 1,
+        "cached": 0,
+    }
 
 
 @pytest.mark.design("check.no_model_calls")

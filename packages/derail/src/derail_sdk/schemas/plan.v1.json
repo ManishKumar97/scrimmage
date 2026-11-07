@@ -251,6 +251,10 @@
               "output": {
                 "type": "number",
                 "minimum": 0
+              },
+              "cached_input": {
+                "type": "number",
+                "minimum": 0
               }
             }
           }

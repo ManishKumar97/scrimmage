@@ -36,16 +36,27 @@ MESSAGES = {
 TYPES = {429: "requests"}
 CODES = {429: "rate_limit_exceeded", 401: "invalid_api_key"}
 
-# Dollars per million tokens: (input, output). Check against OpenAI's pricing page
-# before each release; a team overrides or adds a model under [agent.prices].
-PRICES: dict[str, tuple[float, float]] = {
-    "gpt-4o": (2.50, 10.00),
-    "gpt-4o-mini": (0.15, 0.60),
-    "gpt-4.1": (2.00, 8.00),
-    "gpt-4.1-mini": (0.40, 1.60),
-    "gpt-4.1-nano": (0.10, 0.40),
-    "text-embedding-3-small": (0.02, 0.0),
-    "text-embedding-3-large": (0.13, 0.0),
+
+@dataclass(frozen=True)
+class Rates:
+    """Dollars per million tokens. With no cached rate, cached tokens cost the full input
+    rate: a price that guesses must guess high, or the budget could let through more."""
+
+    input: float
+    output: float
+    cached_input: float | None = None
+
+
+# Checked against OpenAI's pricing page on 7 November 2026, standard tier; check again
+# before each release. A team overrides or adds a model under [agent.prices].
+PRICES: dict[str, Rates] = {
+    "gpt-4o": Rates(2.50, 10.00, 1.25),
+    "gpt-4o-mini": Rates(0.15, 0.60, 0.075),
+    "gpt-4.1": Rates(2.00, 8.00, 0.50),
+    "gpt-4.1-mini": Rates(0.40, 1.60, 0.10),
+    "gpt-4.1-nano": Rates(0.10, 0.40, 0.025),
+    "text-embedding-3-small": Rates(0.02, 0.0),
+    "text-embedding-3-large": Rates(0.13, 0.0),
 }
 
 # Tool types, per API: run at the provider and only read; run at the provider and can
@@ -123,6 +134,7 @@ class Usage:
     input: int = 0
     output: int = 0
     known: bool = False
+    cached: int = 0  # input tokens the provider served from its prompt cache
 
 
 def usage(body: bytes, *, output_required: bool = True) -> Usage:
@@ -130,7 +142,8 @@ def usage(body: bytes, *, output_required: bool = True) -> Usage:
 
     A stream's lines may start with "event:" or be a ": ping", so only "data:" lines are
     read. Counts are trusted only when they are sensible whole numbers. An embedding has
-    no output count; anything else without one has no usable counts.
+    no output count; anything else without one has no usable counts. A cached count that
+    is not a sensible number up to the input count is read as 0, which prices it high.
     """
     text = body.decode("utf-8", "replace")
     # Split on newlines only: text in a reply can hold other line separators.
@@ -149,12 +162,19 @@ def usage(body: bytes, *, output_required: bool = True) -> Usage:
         if tokens_out is None and not output_required:
             tokens_out = 0
         if tokens_in is not None and tokens_out is not None:
-            found = Usage(tokens_in, tokens_out, True)
+            found = Usage(tokens_in, tokens_out, True, cached_count(numbers, tokens_in))
     return found
 
 
-def price(model: str, overrides: dict[str, tuple[float, float]]) -> tuple[float, float] | None:
-    """The team's price first, then the built-in table.
+def cached_count(numbers: dict[str, object], tokens_in: int) -> int:
+    """Chat names the block prompt_tokens_details, Responses input_tokens_details."""
+    details = _obj(numbers.get("prompt_tokens_details", numbers.get("input_tokens_details")))
+    cached = _count(details, "cached_tokens", "cached_tokens")
+    return cached if cached is not None and cached <= tokens_in else 0
+
+
+def price(model: str, overrides: dict[str, Rates]) -> Rates | None:
+    """The team's price first, whole, then the built-in table.
 
     A dated snapshot, such as gpt-4o-mini-2024-07-18, uses its family's price. Nothing
     else does: gpt-4o-audio-preview is not priced like gpt-4o.
@@ -167,8 +187,11 @@ def price(model: str, overrides: dict[str, tuple[float, float]]) -> tuple[float,
     return None
 
 
-def cost(tokens_in: int, tokens_out: int, rates: tuple[float, float]) -> float:
-    return (tokens_in * rates[0] + tokens_out * rates[1]) / 1_000_000
+def cost(tokens_in: int, tokens_out: int, rates: Rates, cached: int = 0) -> float:
+    """What a call costs. cached is the part of tokens_in served from the prompt cache."""
+    cached_rate = rates.input if rates.cached_input is None else rates.cached_input
+    full = (tokens_in - cached) * rates.input + cached * cached_rate
+    return (full + tokens_out * rates.output) / 1_000_000
 
 
 @dataclass

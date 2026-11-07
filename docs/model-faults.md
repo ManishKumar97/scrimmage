@@ -162,8 +162,9 @@ Every test has a budget for the whole run of `derail test`. It is $5 unless you 
 max_cost_usd = 0.50
 ```
 
-Before each model call, Derail reserves what the call could cost: an estimate of its input, plus its `max_tokens` (or `reserve_output_tokens`, 4096 by default) at the output price.
+Before each model call, Derail reserves what the call could cost: an estimate of its input at the full input price, plus its `max_tokens` (or `reserve_output_tokens`, 4096 by default) at the output price.
 After the call, the real cost from the reply replaces the reservation.
+The real cost prices the input tokens the provider served from its prompt cache at the cached price, as OpenAI bills them.
 So four calls at once cannot all slip past the limit.
 
 When the budget cannot cover a call, the call is not made, that run ends as "budget reached", and the test stops with exit code 2.
@@ -177,14 +178,29 @@ max_cost_usd = "none"
 
 ### Prices
 
-Derail ships prices for common OpenAI models.
+Derail ships prices for common OpenAI models, cached input included, checked against OpenAI's pricing page on 7 November 2026.
 A dated model, such as `gpt-4o-mini-2024-07-18`, uses its family's price.
 For any other model, give the price in dollars per million tokens:
 
 ```toml
 [agent.prices]
 llama-70b = {input = 0.6, output = 0.6}
+acme-gpt = {input = 2.0, cached_input = 0.5, output = 8.0}
 ```
+
+### Cached input
+
+OpenAI caches a prompt over 1024 tokens that repeats, and bills the cached part at a lower price.
+Derail reads the cached count from each reply's usage: `prompt_tokens_details.cached_tokens` on Chat Completions, `input_tokens_details.cached_tokens` on Responses, streamed or not.
+The record line shows it as `tokens.cached`, and `cost_usd` uses it, so the cost column matches the bill.
+
+| Reply | Price of each input token |
+|---|---|
+| 2048 input tokens, 1536 of them cached, on `gpt-4o-mini` | 512 at $0.15 and 1536 at $0.075 per million |
+| a price under `[agent.prices]` with no `cached_input` | every input token at `input`, the safe overestimate |
+| a cached count above the input count, or not a whole number | every input token at `input` |
+
+The reservation before a call still counts every input token at the full price, since Derail cannot know what the provider will serve from its cache.
 
 A call that sends no model name, such as a Responses call on a stored prompt, is priced by the key `""`:
 

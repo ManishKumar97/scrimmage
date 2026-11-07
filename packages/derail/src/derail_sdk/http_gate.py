@@ -463,9 +463,8 @@ def mocked(
     return response
 
 
-def prices_of(ctx: Context, model: str) -> tuple[float, float] | None:
-    team = {m: (p.input, p.output) for m, p in ctx.run.plan.prices}
-    return openai_table.price(model, team)
+def prices_of(ctx: Context, model: str) -> openai_table.Rates | None:
+    return openai_table.price(model, dict(ctx.run.plan.prices))
 
 
 def no_price(model: str) -> str:
@@ -717,17 +716,17 @@ def record(
         extra.update(status=response.status_code, result=blob(body, ctx.sender, total=size))
         return 0.0
     used = openai_table.usage(body, output_required=step.call.name == "chat")
-    tokens_in, tokens_out = used.input, used.output
+    tokens_in, tokens_out, cached = used.input, used.output, used.cached
     if not used.known:
         tokens_in = len(body_of(request) or b"") // CHAR_PER_TOKEN
         tokens_out = len(body) // CHAR_PER_TOKEN
     free = step.call.name in openai_table.FREE_OPS
-    rates = (0.0, 0.0) if free else prices_of(ctx, str(extra.get("model", "")))
-    usd = openai_table.cost(tokens_in, tokens_out, rates) if rates else None
+    rates = openai_table.Rates(0.0, 0.0) if free else prices_of(ctx, str(extra.get("model", "")))
+    usd = openai_table.cost(tokens_in, tokens_out, rates, cached) if rates else None
     extra.update(
         status=response.status_code,
         result=blob(body, ctx.sender, total=size),
-        tokens={"input": tokens_in, "output": tokens_out},
+        tokens={"input": tokens_in, "output": tokens_out, "cached": cached},
         cost_usd=None if usd is None else round(usd, 8),
         cost_estimated=usd is not None and not used.known and not free,
     )

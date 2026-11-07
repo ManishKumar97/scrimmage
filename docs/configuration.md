@@ -29,7 +29,16 @@ Prices for models the built-in table does not know, in dollars per million token
 ```toml
 [agent.prices]
 llama-70b = {input = 0.6, output = 0.6}
+acme-gpt = {input = 2.0, cached_input = 0.5, output = 8.0}
 ```
+
+| Key | What it is |
+|---|---|
+| `input` | The price of an input token. Required. |
+| `output` | The price of an output token. Required. |
+| `cached_input` | The price of an input token the provider served from its prompt cache. Optional, and at most `input`. Without it, cached tokens cost the full `input` price, which can only overstate the cost. |
+
+A price here replaces the built-in one whole: `gpt-4o = {input = 2.5, output = 10}` has no cached price, even though the built-in table has one.
 
 Derail imports only modules under your agent's own top-level packages, the ones `function` and `tools` name. For a script, that is the ones `tools` names.
 

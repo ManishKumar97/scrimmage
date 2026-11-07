@@ -19,6 +19,7 @@ from derail_sdk import labels, provider_openai, python_args
 from derail_sdk.errors import ConfigError
 from derail_sdk.judge import Rules, impossible, normal
 from derail_sdk.mocks import allowed
+from derail_sdk.provider_openai import Rates
 from derail_sdk.redact import redact
 
 AGENT_KEYS = {
@@ -55,7 +56,9 @@ FAULTS = ("timeout", "status", "error", "empty")
 STATUS = re.compile(r"status (?P<code>\d{3})")
 SCHEDULE = re.compile(r"always|(?:first|requests) (?P<n>[1-9]\d*)")
 MODEL_KEYS = {"host", "provider"}
+PRICE_KEYS = {"input", "output", "cached_input"}
 DEFAULT_BUDGET_USD = 5.0
+Price = Rates  # a team's price under [agent.prices] is a row like the built-in ones
 DEFAULT_RESERVE_OUTPUT_TOKENS = 4096
 # Where the answer is in what the agent returns, such as messages[-1].content.
 ANSWER_PATH = re.compile(r"[A-Za-z_]\w*(\[-?\d+\]|\.[A-Za-z_]\w*)*")
@@ -125,14 +128,6 @@ class ModelHost:
 
     host: str
     provider: str
-
-
-@dataclass(frozen=True)
-class Price:
-    """Dollars per million tokens."""
-
-    input: float
-    output: float
 
 
 @dataclass(frozen=True)
@@ -449,20 +444,28 @@ def read_prices(value: object, where: str) -> tuple[tuple[str, Price], ...]:
     for model, raw in as_table(value, where).items():
         item = f"{where} {model}"
         entry = as_table(raw, item)
-        check_keys(entry, {"input", "output"}, item)
-        parts: list[float] = []
-        for key in ("input", "output"):
-            number = entry.get(key)
-            if (
-                isinstance(number, bool)
-                or not isinstance(number, int | float)
-                or not math.isfinite(number)
-                or number < 0
-            ):
-                raise ConfigError(f"{item} {key}: expected dollars per million tokens")
-            parts.append(float(number))
-        prices.append((model, Price(parts[0], parts[1])))
+        check_keys(entry, PRICE_KEYS, item)
+        rate, output = dollars(entry, "input", item), dollars(entry, "output", item)
+        cached = dollars(entry, "cached_input", item) if "cached_input" in entry else None
+        if cached is not None and cached > rate:
+            raise ConfigError(
+                f"{item} cached_input: {cached:g} is above input, {rate:g}; a cached token "
+                "costs at most a full one"
+            )
+        prices.append((model, Price(rate, output, cached)))
     return tuple(prices)
+
+
+def dollars(entry: dict[str, object], key: str, item: str) -> float:
+    number = entry.get(key)
+    if (
+        isinstance(number, bool)
+        or not isinstance(number, int | float)
+        or not math.isfinite(number)
+        or number < 0
+    ):
+        raise ConfigError(f"{item} {key}: expected dollars per million tokens")
+    return float(number)
 
 
 def read_tool(entry: object, where: str) -> tuple[str, str | None]:
