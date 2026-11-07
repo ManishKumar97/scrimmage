@@ -28,8 +28,6 @@ import json
 import pathlib
 import time
 
-import openai
-
 from acme import tools
 
 HERE = pathlib.Path(__file__).parent
@@ -48,6 +46,8 @@ def answer(question):
     if step.get("refund"):
         tools.refund_order("1234")
     if step.get("model"):
+        import openai
+
         openai.OpenAI(max_retries=0).chat.completions.create(
             model="gpt-4o-mini", messages=[{"role": "user", "content": question}]
         )
@@ -560,7 +560,7 @@ def test_a_run_past_its_time_limit_fails_its_row(project: Project) -> None:
         project,
         [{"answer": GOOD}, {"answer": GOOD, "fired": True, "hang": True}],
         FAULT,
-        "runs = 1\nrun_timeout = 2",
+        "runs = 1\nrun_timeout = 5",
     )
     assert result.code == 1, result.out
     assert "1 run: timed out" in result.out
@@ -741,8 +741,8 @@ def test_the_table_shows_rate_range_tools_cost_and_result(
     assert base[-1] == "pass"
     assert "range: a 95% Wilson interval, from these runs alone" in lines
     costs = [float(line.split()[-2]) for line in lines[head + 1 : head + 3]]
-    total = float(next(x for x in lines if x.startswith("model calls")).split("$")[1].split()[0])
-    assert sum(costs) == pytest.approx(total, abs=0.0001)
+    spent = sum(float(str(s["cost_usd"])) for s in result.summaries())
+    assert costs[0] > 0 and sum(costs) == pytest.approx(spent, abs=0.00002)  # the whole row's
 
 
 def fabricated(cfg: config.Config, row: plan.Row, broken: list[str] | None) -> RunResult:
