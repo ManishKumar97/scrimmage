@@ -33,6 +33,9 @@ dev = [
     "fastmcp>=4.1.6",
     "pytest-xdist>=3.8.0",
 ]
+docs = [
+    "mkdocs-material>=9.8.1",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

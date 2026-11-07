@@ -44,6 +44,22 @@ jobs:
         if: ${{ !cancelled() }}
         run: uv run lint-imports
 
+  docs:
+    name: Docs site, built strict
+    runs-on: ubuntu-latest
+    env:
+      # Material for MkDocs prints a notice about its successor on every build.
+      NO_MKDOCS_2_WARNING: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
+        with:
+          version: ${{ env.UV_VERSION }}
+      # Strict: a broken link, a missing anchor or a page left out of the nav fails the job.
+      - run: uv run --group docs mkdocs build --strict
+
   system-python:
     name: Startup tests on Ubuntu's Python
     runs-on: ubuntu-latest
