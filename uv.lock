@@ -2683,6 +2683,7 @@ dev = [
     { name = "vulture" },
 ]
 docs = [
+    { name = "mkdocs" },
     { name = "mkdocs-material" },
 ]
 
@@ -2711,7 +2712,10 @@ dev = [
     { name = "ruff", specifier = ">=0.17" },
     { name = "vulture", specifier = ">=2.16" },
 ]
-docs = [{ name = "mkdocs-material", specifier = ">=9.8.1" }]
+docs = [
+    { name = "mkdocs", specifier = ">=1.6.1,<2" },
+    { name = "mkdocs-material", specifier = ">=9.8.1,<10" },
+]
 
 [[package]]
 name = "sniffio"

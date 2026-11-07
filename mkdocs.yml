@@ -1,5 +1,11 @@
 # The product website. Build it with: uv run --group docs mkdocs build --strict
-# The product name is written once, in site_name. Pages write it out in their text.
+# The site's title is site_name. The pages write the name out in their text, over 300
+# times, so a rename is a case-preserving find-and-replace across docs/; --strict then
+# catches any link or anchor the replace broke.
+#
+# Material for MkDocs reaches end of life on 5 May 2027; its team's successor is Zensical.
+# Move to Zensical before then. Until that move, keep the theme as it is and the schemas
+# hook thin, so there is little to port.
 site_name: Scrimmage
 site_description: An in-process fault injector for AI agents under test.
 repo_url: https://github.com/ManishKumar97/faultline
@@ -69,13 +75,16 @@ nav:
       - Quickstart: quickstart.md
   - Examples:
       - examples/index.md
-      - A function agent: examples/function-agent.md
-      - A script and its child process: examples/script-agent.md
-      - LangGraph tools: examples/langgraph.md
-      - MCP tools: examples/mcp.md
-      - A web request inside a tool: examples/web-request.md
-      - Judging an answer: examples/judging.md
-      - A fault on one model: examples/one-model.md
+      - "Example: a function agent": examples/function-agent.md
+      - "Example: a script and its child process": examples/script-agent.md
+      - "Example: LangGraph tools": examples/langgraph.md
+      - "Example: MCP tools": examples/mcp.md
+      - "Example: a web request inside a tool": examples/web-request.md
+      - "Example: judging an answer": examples/judging.md
+      - "Example: a fault on one model": examples/one-model.md
+  - Concepts:
+      - Concepts: concepts.md
+      - How it works: how-it-works.md
   - Guides:
       - Failing the model: model-faults.md
       - Agents on a framework: frameworks.md
@@ -83,9 +92,6 @@ nav:
       - Web requests: web-requests.md
       - MCP tools: mcp.md
       - Judging an answer: judging.md
-  - Concepts:
-      - Concepts: concepts.md
-      - How it works: how-it-works.md
   - Reference:
       - Commands: cli.md
       - Configuration: configuration.md

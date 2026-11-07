@@ -34,7 +34,8 @@ dev = [
     "pytest-xdist>=3.8.0",
 ]
 docs = [
-    "mkdocs-material>=9.8.1",
+    "mkdocs>=1.6.1,<2",
+    "mkdocs-material>=9.8.1,<10",
 ]
 
 [tool.pytest.ini_options]

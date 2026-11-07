@@ -47,9 +47,6 @@ jobs:
   docs:
     name: Docs site, built strict
     runs-on: ubuntu-latest
-    env:
-      # Material for MkDocs prints a notice about its successor on every build.
-      NO_MKDOCS_2_WARNING: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
