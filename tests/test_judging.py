@@ -18,9 +18,9 @@ from derail_sdk.judge import (
     Rules,
     RunJudgement,
     broken_rules,
+    floor_runs,
     judge_row,
     judge_run,
-    needed_runs,
     normal,
     wilson,
 )
@@ -208,15 +208,18 @@ OUT = RunJudgement(left_out="stopped")
         ([PASSED] * 4 + [FAILED_RUN], 5, 1.0, False, "fail"),
         ([PASSED] * 4 + [FAILED_RUN], 5, 0.8, False, "pass"),
         ([PASSED] * 3 + [FAILED_RUN] * 2, 5, 0.8, False, "fail"),
-        ([PASSED] * 3 + [OUT] * 2, 5, 0.8, False, "no result"),  # too few to reach the rate
-        ([PASSED] * 4 + [OUT], 5, 0.8, False, "pass"),
-        ([PASSED] * 4 + [OUT], 5, 1.0, False, "no result"),
+        ([PASSED] * 4 + [OUT], 5, 1.0, False, "pass"),  # one unfired run does not block a pass
+        ([PASSED] * 3 + [OUT] * 2, 5, 1.0, False, "pass"),  # at the floor
+        ([PASSED] * 2 + [OUT] * 3, 5, 1.0, False, "no result"),  # under the floor
         ([PASSED] + [OUT] * 4, 5, 1.0, False, "no result"),  # never a pass on one run
+        ([PASSED] * 2 + [FAILED_RUN] + [OUT] * 2, 5, 0.8, False, "fail"),  # 2/3, over judged runs
+        ([FAILED_RUN] + [OUT] * 4, 5, 0.8, False, "no result"),  # the floor comes first
         ([OUT] * 5, 5, 1.0, False, "no result"),
         ([], 5, 1.0, False, "no result"),
-        ([FAILED_RUN] + [OUT] * 4, 5, 0.8, False, "fail"),  # below the line is proved
+        ([PASSED], 1, 1.0, False, "pass"),
+        ([PASSED], 2, 1.0, False, "no result"),
         ([PASSED] * 4 + [OUT], 5, 0.8, True, "no result"),  # a refusal stops the row
-        ([FAILED_RUN, OUT], 5, 1.0, True, "fail"),
+        ([PASSED] * 2 + [FAILED_RUN], 5, 1.0, True, "fail"),
     ],
 )
 def test_a_rows_verdict(
@@ -225,13 +228,10 @@ def test_a_rows_verdict(
     assert judge_row(broken, runs, rate, refused).verdict == verdict
 
 
-@pytest.mark.design("judge.needed_runs")
-@pytest.mark.parametrize(
-    ("rate", "runs", "needed"),
-    [(1.0, 5, 5), (0.8, 5, 4), (0.8, 3, 3), (0.07, 100, 7), (0.01, 3, 1), (0.5, 4, 2)],
-)
-def test_the_runs_a_row_needs(rate: float, runs: int, needed: int) -> None:
-    assert needed_runs(rate, runs) == needed
+@pytest.mark.design("judge.floor")
+@pytest.mark.parametrize(("runs", "floor"), [(1, 1), (2, 2), (3, 2), (4, 3), (5, 3), (100, 51)])
+def test_a_row_needs_more_than_half_its_runs_judged(runs: int, floor: int) -> None:
+    assert floor_runs(runs) == floor
 
 
 @pytest.mark.design("judge.wilson_range")
@@ -538,17 +538,30 @@ def test_a_run_where_the_fault_did_not_fire_counts_in_no_rate(project: Project) 
 
 
 @pytest.mark.design("judge.too_few_runs")
-def test_a_row_with_too_few_judged_runs_has_no_result(project: Project) -> None:
+def test_a_row_under_the_floor_has_no_result(project: Project) -> None:
     result = scripted(
         project,
-        [{"answer": GOOD}] * 3 + [{"answer": GOOD, "fired": True}] * 2 + [{"answer": GOOD}],
-        FAULT,
+        [{"answer": GOOD}] * 3 + [{"answer": GOOD, "fired": True}] + [{"answer": GOOD}] * 2,
+        f'{FAULT}forbid = ["never said"]\n',
         "runs = 3",
     )
     assert result.code == 2, result.out
     cells = table_row(result, "fault 1")
-    assert "2/2" in cells and cells[-1] == "no result"
-    assert "order fault 1: no result: 2 of 3 runs were judged, and a pass needs 3" in result.out
+    assert "1/1" in cells and cells[-1] == "no result"
+    assert "order fault 1: no result: 1 of 3 runs were judged, and a result needs 2" in result.out
+
+
+@pytest.mark.design("judge.unfired_run_does_not_block")
+def test_one_unfired_run_does_not_block_a_pass_and_gets_a_note(project: Project) -> None:
+    result = scripted(
+        project,
+        [{"answer": GOOD}] * 5 + [{"answer": GOOD, "fired": True}] * 4 + [{"answer": GOOD}],
+        f'{FAULT}forbid = ["never said"]\n',
+        "runs = 5",
+    )
+    assert result.code == 0, result.out
+    assert table_row(result, "fault 1")[-1] == "pass"
+    assert "note: order fault 1: 4 of 5 runs judged" in result.out
 
 
 @pytest.mark.design("judge.no_judged_runs")
@@ -624,15 +637,15 @@ def test_an_infrastructure_error_keeps_exit_3_and_is_not_held_against_the_agent(
     project.monkeypatch.setenv("OPENAI_API_KEY", "test")
     result = scripted(
         project,
-        [{"answer": BAD}, {"answer": GOOD, "model": True}],
+        [{"answer": BAD}, {"answer": BAD}, {"answer": GOOD, "model": True}],
         "",
-        'runs = 2\nmodel_hosts = [{host = "127.0.0.1", provider = "openai"}]',
+        'runs = 3\nmodel_hosts = [{host = "127.0.0.1", provider = "openai"}]',
     )
     assert result.code == 3, result.out
     cells = table_row(result, "baseline")
-    assert cells[-1] == "fail" and "0/1" in cells
+    assert cells[-1] == "fail" and "0/2" in cells
     summaries = result.summaries()
-    assert sorted(str(s["judged"]) for s in summaries) == ["fail", "left out"]
+    assert sorted(str(s["judged"]) for s in summaries) == ["fail", "fail", "left out"]
 
 
 @pytest.mark.design("judge.budget_left_out")

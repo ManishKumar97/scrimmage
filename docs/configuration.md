@@ -20,7 +20,7 @@ Anything this version does not support is rejected as unknown, with exit code 2.
 | `model_hosts` | Extra hosts whose requests are model calls, such as a gateway, each with the format it speaks: `[{host = "llm-gateway.internal", provider = "openai"}]`. A host name only, with no port. | empty |
 | `reserve_output_tokens` | The output tokens a budget reservation assumes when a request does not set `max_tokens`. | 4096 |
 | `prices` | Prices for other models, as the table below. | empty |
-| `answer` | Where the answer is in what the function returns, such as `"messages[-1].content"`. Only with `function`. See [Agents on a framework](frameworks.md). | the whole value |
+| `answer` | Where the answer is in what the function returns, such as `"messages[-1].content"`. Only with `function`. Required when the function returns anything but text, as the whole value would hold tool results too. See [Agents on a framework](frameworks.md). | the returned text |
 
 ## [agent.prices]
 
@@ -41,7 +41,7 @@ Derail imports only modules under your agent's own top-level packages, the ones 
 | `question` | The question the agent gets. Required. |
 | `expect` | What the answer must hold: a list, every item must match, and an item is a text or a list of texts of which any one is enough. `["shipped", ["Oct 30", "October 30"]]`. Required. See [Judging an answer](judging.md). |
 | `forbid` | A list of texts the answer must not hold. Optional. |
-| `pass_rate` | The share of runs that must pass, above 0 and up to 1, such as `0.8`. Every run by default. |
+| `pass_rate` | The share of judged runs that must pass, above 0 and up to 1, such as `0.8`. Every judged run by default. More than half the planned runs must be judged for any result. |
 
 ## [[test.mock]]
 

@@ -67,7 +67,7 @@ class RowResult:
     verdict: str
     passed: int
     judged: int
-    needed: int  # the judged runs this row needs for a pass
+    floor: int  # the judged runs this row needs for any verdict
 
 
 def normal(text: str) -> str:
@@ -113,26 +113,25 @@ def judge_run(
     return RunJudgement(broken_rules(answer or "", rules))
 
 
-def needed_runs(pass_rate: float, runs: int) -> int:
-    """The fewest of `runs` that reach the rate. The same sum as the verdict's, so a share
-    such as 0.07 of 100 does not land on 8 from a rounding error in a product."""
-    return next(n for n in range(1, runs + 1) if n / runs >= pass_rate)
+def floor_runs(runs: int) -> int:
+    """More than half the planned runs. Fewer judged runs mean the test did not test."""
+    return runs // 2 + 1
 
 
 def judge_row(
     runs_judged: Sequence[RunJudgement], runs: int, pass_rate: float, refused: bool
 ) -> RowResult:
-    """A row's verdict. A rate below the line fails at once; a pass needs enough runs."""
+    """A row's verdict: enough judged runs first, then the rate over those runs."""
     judged = [run for run in runs_judged if run.left_out is None]
     passed = sum(1 for run in judged if not run.broken)
-    needed = needed_runs(pass_rate, runs)
-    if not judged:
+    floor = floor_runs(runs)
+    if len(judged) < floor:
         verdict = NO_RESULT
     elif passed / len(judged) < pass_rate:
         verdict = FAIL
     else:
-        verdict = NO_RESULT if refused or len(judged) < needed else PASS
-    return RowResult(verdict, passed, len(judged), needed)
+        verdict = NO_RESULT if refused else PASS
+    return RowResult(verdict, passed, len(judged), floor)
 
 
 def wilson(passed: int, judged: int) -> tuple[float, float]:

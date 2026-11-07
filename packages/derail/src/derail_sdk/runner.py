@@ -702,9 +702,11 @@ def report(
         if verdict.verdict == judge.NO_RESULT and not entry.refused:
             mistakes.append(
                 f"{where}: no result: {verdict.judged} of {config.agent.runs} runs were judged, "
-                f"and a pass needs {verdict.needed}. Make the fault fire in every run, lower "
+                f"and a result needs {verdict.floor}. Make the fault fire in every run, lower "
                 "pass_rate, or see the lines below"
             )
+        elif verdict.judged < config.agent.runs:
+            notes.append(f"{where}: {verdict.judged} of {config.agent.runs} runs judged")
         if (
             verdict.verdict == judge.PASS
             and row.fault is not None

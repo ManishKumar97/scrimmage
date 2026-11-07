@@ -91,18 +91,25 @@ A row passes when all its runs pass.
 pass_rate = 0.8
 ```
 
+The rate is over the runs that were judged, not the runs planned.
+Derail reads a row in this order:
+
 | Result | When |
 |---|---|
-| `pass` | passed runs divided by judged runs reaches `pass_rate`, and enough runs were judged |
+| `no result` | fewer than half the planned runs were judged: under the floor below |
 | `fail` | passed runs divided by judged runs is below `pass_rate` |
-| `no result` | no run was judged; too few were judged; or a run was refused |
+| `no result` | a baseline run was refused |
+| `pass` | anything else |
 
-"Enough" is the share of `runs` that `pass_rate` asks for, rounded up.
-With `runs = 5` and `pass_rate = 0.8`, a row needs 4 judged runs. 4 of 5 passes, and 3 of 5 fails.
-With `runs = 3`, 0.8 means all three, as 2 of 3 is below it.
-At the default every run must be judged, so a run where the fault did not fire keeps the row from passing, even though it is not in the rate. Make the fault fire in every run, or lower `pass_rate`.
+The floor is `runs // 2 + 1` judged runs, whatever `pass_rate` is: 3 of 5, 2 of 3, 1 of 1.
+Under it the test did not test, so a row never passes on one run out of five.
+At or above it the rate decides, and a note says how many runs counted, such as `note: order-status fault 1: 4 of 5 runs judged`.
+A run where the fault did not fire does not block a row, unless so many are missing that the row falls under the floor.
 
-`no result` is a mistake in the test, not a failure of the agent, so it exits with code 2.
+With `runs = 5` and `pass_rate = 0.8`, 4 of 5 passes and 3 of 5 fails.
+With `runs = 3`, 0.8 means all judged runs, as 2 of 3 is below it.
+
+`no result` means the test did not test, so it exits with code 2, or 3 if an infrastructure error caused it.
 
 Runs of a row whose baseline answered badly still happen. Only a baseline that crashed, timed out, was refused or reached the budget in every run skips its fault rows.
 
