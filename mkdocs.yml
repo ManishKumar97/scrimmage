@@ -7,6 +7,12 @@ edit_uri: ""
 
 docs_dir: docs
 site_dir: site
+exclude_docs: |
+  hooks/
+
+hooks:
+  - docs/hooks/schemas.py
+
 # In strict mode, each of these warnings fails the build.
 validation:
   omitted_files: warn
@@ -74,6 +80,7 @@ nav:
   - Reference:
       - Commands: cli.md
       - Configuration: configuration.md
+      - Schemas: schemas.md
       - Limits: limits.md
   - Safety and security:
       - Safety: safety.md
