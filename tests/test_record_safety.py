@@ -230,3 +230,20 @@ def test_a_saved_value_over_the_cap_is_cut_and_named_by_what_is_stored(
     assert entry["sha256"] == hashlib.sha256(b'"0123456').hexdigest()
     assert state.kept_blob(b"1", Refusing())["unsaved"] is True
     assert state.kept_blob(b"1", None)["unsaved"] is True
+
+
+@pytest.mark.design("record.never_fails_the_call")
+def test_a_failure_inside_mcp_recording_is_listed_never_raised(
+    sink: Sink, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*_: object) -> dict[str, object]:
+        raise KeyError("a bug in Scrimmage")
+
+    monkeypatch.setattr(capture, "mcp_value", broken)
+    got, run = mcp_call(sink, text_result("found"), {"q": "a"}, Session())
+    assert cast(Reply, got).doc == text_result("found")
+    assert sink.calls()[0]["recorded"] == {
+        "code": "unsavable",
+        "why": "Scrimmage could not record it: KeyError",
+    }
+    assert run.live == {}
