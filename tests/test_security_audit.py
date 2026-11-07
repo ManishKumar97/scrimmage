@@ -3,9 +3,12 @@ program each run starts, and the agent.
 
 Each process loads a sitecustomize from a folder on PYTHONPATH. In the agent's process
 Scrimmage's own startup file runs first and then chains to it, so the hook sees everything
-after Scrimmage switched on, though not the plan fetch at its start; every later call to the
-control server goes through the same client. The hook logs every connection, every
-process start and every byte sent with http.client, which is the SDK's only client.
+after Scrimmage switched on. The hook logs every connection, every process start and every
+byte sent with http.client, which is the SDK's only client.
+
+The control server's side is watched too: the runner logs every request it receives,
+the plan fetch at the agent's start included. What Scrimmage's start-up itself does before
+the hook is installed is covered by a source scan, in test_security_claims.py.
 """
 
 import json
@@ -77,17 +80,28 @@ HOOK = textwrap.dedent(
 RUNNER = textwrap.dedent(
     """
     import json, os, sys
-    from scrimmage_core import runner
+    from scrimmage_core import protocol, runner
     from scrimmage_core.cli import main
+
+    def log(record):
+        with open(os.environ["AUDIT_LOG"], "a") as out:
+            out.write(json.dumps(record) + "\\n")
 
     made = runner.Runner.__init__
 
     def init(self, *args, **kwargs):
         made(self, *args, **kwargs)
-        with open(os.environ["AUDIT_LOG"], "a") as out:
-            out.write(json.dumps({"event": "runner", "token": self.token}) + "\\n")
+        log({"event": "runner", "token": self.token})
+
+    checked = protocol.check_request
+
+    def check(token, nonces, method, path, headers, body, now):
+        log({"event": "received", "method": method, "path": path,
+             "headers": dict(headers), "body": bytes(body).decode("latin-1")})
+        return checked(token, nonces, method, path, headers, body, now)
 
     runner.Runner.__init__ = init
+    protocol.check_request = check
     sys.exit(main(["test"]))
     """
 )
@@ -136,6 +150,14 @@ def test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_
     # The token itself never leaves a process, in a header or a body.
     assert not [data for data in sent if token in data]
 
+    # Nor does it reach the control server in any request it received, from the plan fetch
+    # at each agent's start, before that agent's hook was installed, to the last record.
+    received = [e for e in events if e["event"] == "received"]
+    plans = [e for e in received if e["path"].startswith("/v1/plans/")]
+    runs = [e for e in agents if e["argv"][1:3] == ["-m", "scrimmage_core.start"]]
+    assert len(plans) == len(runs) > 0 and len(received) > len(plans)
+    assert not [e for e in received if token in json.dumps(e["headers"]) + e["body"]]
+
     # Every connection goes to 127.0.0.1: the control server or the fake model server.
     control_ports = {e["control"].rsplit(":", 1)[1] for e in agents}
     model_port = fake.base_url.split(":")[2].split("/")[0]
@@ -144,16 +166,15 @@ def test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_
     assert all(isinstance(a, list) and a[0] == "127.0.0.1" for a in connects), connects
     assert {a[1] for a in connects} <= control_ports | {model_port}
 
-    # The only processes Scrimmage starts are the runs: the runner starts scrimmage-run, which
-    # becomes the agent's own program. What the agent's libraries start, such as the
-    # `uname -p` that Python's platform module runs for the openai library, is theirs.
-    scrimmage = f"{os.sep}scrimmage_core{os.sep}"
-    starts = [e for e in events if "origin" in e and scrimmage in e["origin"]]
-    assert {e["event"] for e in starts} == {"subprocess.Popen", "os.exec"}
-    for start in starts:
-        args = start["args"]
-        assert start["program"] == sys.executable, start
-        assert args[1:3] in (["-m", "scrimmage_core.run_command"], ["-m", "scrimmage_core.start"]), start
+    # Every process any of them starts, from any thread, at exit or through any library, is
+    # one a clean run starts: the runner starts scrimmage-run, which becomes the agent's own
+    # program, and Python's platform module runs `uname -p` for the openai library.
+    starts = {(e["event"], e["program"], *e["args"][1:3]) for e in events if "program" in e}
+    ours = {
+        ("subprocess.Popen", sys.executable, "-m", "scrimmage_core.run_command"),
+        ("os.exec", sys.executable, "-m", "scrimmage_core.start"),
+    }
+    assert ours <= starts <= ours | {("subprocess.Popen", "uname", "-p")}, starts
 
     # Nothing written for the run holds the token or the agent's environment.
     files = [f for f in (project.root / "scrimmage-runs").rglob("*") if f.is_file()]
