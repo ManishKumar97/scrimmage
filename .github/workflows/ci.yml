@@ -44,6 +44,22 @@ jobs:
         if: ${{ !cancelled() }}
         run: uv run lint-imports
 
+  system-python:
+    name: Startup tests on Ubuntu's Python
+    runs-on: ubuntu-latest
+    env:
+      # A distribution's Python has its own sitecustomize, which Derail must chain to.
+      UV_PYTHON: /usr/bin/python3.12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync
+      - run: uv run pytest tests/test_other_python.py tests/test_bootstrap.py tests/test_process_gate.py
+
   tests:
     name: Tests on Python ${{ matrix.python }}
     runs-on: ubuntu-latest
@@ -54,6 +70,8 @@ jobs:
     env:
       # Without this, uv run reads .python-version and rebuilds the venv on 3.11.
       UV_PYTHON: ${{ matrix.python }}
+      # Ubuntu's own 3.12 starts each process far more slowly than uv's build.
+      UV_PYTHON_PREFERENCE: only-managed
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
