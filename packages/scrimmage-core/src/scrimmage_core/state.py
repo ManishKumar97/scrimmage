@@ -55,9 +55,17 @@ def now_iso() -> str:
 
 
 def content(value: object) -> dict[str, object]:
-    """Hash, size and preview of a recorded value, with secrets removed first."""
-    text = value if isinstance(value, str) else json.dumps(value, default=repr, sort_keys=True)
-    text = redact(text)
+    """Hash, size and preview of a recorded value, with secrets removed first.
+
+    The call is only observed, so no value may fail it: one that holds itself, is nested
+    deeper than the stack, or holds a lone surrogate is still recorded, as far as it can be.
+    """
+    try:
+        text = value if isinstance(value, str) else json.dumps(value, default=repr, sort_keys=True)
+    except (ValueError, RecursionError) as exc:  # a value that holds itself, or nests too deep
+        text = f"<a {type(value).__name__} Scrimmage could not write as JSON: {type(exc).__name__}>"
+    # A lone surrogate, such as an undecodable byte in a file name, has no UTF-8 form.
+    text = redact(text).encode("utf-8", "backslashreplace").decode()
     data = text.encode()
     return {
         "sha256": hashlib.sha256(data).hexdigest(),
@@ -213,12 +221,22 @@ class RunState:
     def begin(self, name: str, args: dict[str, object]) -> Step:
         return self.decide(self.with_args(engine.Call("tool", f"tool:{name}", name), args), args)
 
+    def recorded(self, find: Callable[[], dict[str, object]]) -> dict[str, object]:
+        """A recorded field for a line. Recording only observes the call, so no failure in
+        it, Scrimmage's own included, may reach the agent: it is listed as unsavable."""
+        try:
+            return self.save(find())
+        except Exception as exc:
+            return capture.unsaved(
+                capture.UNSAVABLE, f"Scrimmage could not record it: {type(exc).__name__}"
+            )
+
     def save(self, doc: dict[str, object]) -> dict[str, object]:
         """A recorded field for a line: the value and arguments go to the side folder."""
         out = dict(doc)
         for key in ("value", "args"):
             if key in out:
-                text = json.dumps(out[key], ensure_ascii=False)
+                text = json.dumps(out[key], ensure_ascii=False)  # plain refused surrogates
                 out[key] = kept_blob(text.encode(), self.blobs)
         return out
 
@@ -458,7 +476,11 @@ def error_text(call: engine.Call, error: BaseException) -> str:
     """A web client's message can quote the URL or a header, so a web line keeps its type."""
     if call.kind == "http" and not isinstance(error, ScrimmageRefused):
         return type(error).__name__
-    return redact(f"{type(error).__name__}: {error}")
+    try:
+        message = str(error)
+    except Exception:  # an error whose own __str__ fails must not fail the call it observed
+        message = "its message could not be read"
+    return redact(f"{type(error).__name__}: {message}").encode("utf-8", "backslashreplace").decode()
 
 
 def scrub(value: object) -> object:
@@ -491,12 +513,13 @@ def blob(data: bytes, sink: BlobSink | None, total: int | None = None) -> dict[s
 def kept_blob(data: bytes, sink: BlobSink | None) -> dict[str, object]:
     """A side-folder item whose every string is already cleaned, so it is kept exactly:
     redacting the JSON text again could change what a mock built from it gives back."""
-    text = data.decode()
-    sha = hashlib.sha256(data).hexdigest()
-    entry: dict[str, object] = {"sha256": sha, "bytes": len(data), "preview": text[:PREVIEW]}
+    kept = data[:BLOB_CAP]
+    sha = hashlib.sha256(kept).hexdigest()  # the name of what is stored, as blob does
+    preview = data[: PREVIEW * 4].decode("utf-8", "ignore")[:PREVIEW]
+    entry: dict[str, object] = {"sha256": sha, "bytes": len(data), "preview": preview}
     if len(data) > BLOB_CAP:
         entry["cut"] = True
-    if sink is None or not sink.put_blob(sha, data[:BLOB_CAP]):
+    if sink is None or not sink.put_blob(sha, kept):
         entry["unsaved"] = True
     return entry
 

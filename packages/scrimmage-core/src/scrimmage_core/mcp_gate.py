@@ -9,6 +9,7 @@ Over streamable HTTP each message is also a web request. The transport's own req
 carry a mark, so a message is decided here and never again at the web gate.
 """
 
+import asyncio
 import contextlib
 import copy
 import importlib.metadata
@@ -347,16 +348,31 @@ async def carried(
     sent: Coroutine[Any, Any, Any],
     keep: Kept | None = None,
 ) -> Any:
-    """Wait for the reply, real or injected, and write the call's line."""
+    """Wait for the reply, real or injected, and write the call's line.
+
+    A recording run then saves the result. The call has succeeded by then, so a cancel that
+    arrives while it is saved is raised only after the line says it succeeded.
+    """
     try:
         reply = await sent
         step.extra["result"] = record(gate, wire_form(reply))
-        if keep is not None:
-            step.extra["recorded"] = run.save(await saved(gate, step, keep, reply))
     except BaseException as exc:
         run.finish(step, error=exc)
         raise
+    cancel = None
+    if keep is not None:
+        try:
+            found = await saved(gate, step, keep, reply)
+        except asyncio.CancelledError as exc:
+            found, cancel = capture.unsaved(capture.UNSAVABLE, "the run was cancelled"), exc
+        except Exception as exc:  # recording only observes the call, so it never fails it
+            found = capture.unsaved(
+                capture.UNSAVABLE, f"Scrimmage could not record it: {type(exc).__name__}"
+            )
+        step.extra["recorded"] = run.recorded(lambda: found)
     run.finish(step)
+    if cancel is not None:
+        raise cancel
     return reply
 
 
@@ -364,8 +380,13 @@ async def saved(gate: Gate, step: Step, keep: Kept, reply: Any) -> dict[str, obj
     """C.J3.34: the result is saved only if a mock built from it gives the same result.
 
     The mock is built as scrimmage test builds it, which lists the server's tools first when
-    the agent never did, so this does too.
+    the agent never did, so this does too. A failed result needs no listing: it is never
+    saved, so it sends nothing more to the server.
     """
+    real = wire_form(reply)
+    failed = capture.failed_result(real)
+    if failed is not None:
+        return failed
     if step.call.label not in gate.listed:
         try:
             await keep.session.list_tools()
@@ -379,7 +400,7 @@ async def saved(gate: Gate, step: Step, keep: Kept, reply: Any) -> dict[str, obj
         # The library reads every reply with this pydantic TypeAdapter, as it reads a mock's.
         return wire_form(keep.result_type.validate_python(mock_result(value, shaped)))
 
-    return capture.mcp_value(wire_form(reply), keep.arguments, rebuild)
+    return capture.mcp_value(real, keep.arguments, rebuild)
 
 
 def wire_form(reply: Any) -> object:

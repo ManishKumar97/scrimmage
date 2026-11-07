@@ -5,6 +5,8 @@ from collections.abc import Callable
 import pytest
 
 from conftest import ACME, EXAMPLE_FAULT, Project, Result
+from scrimmage_core.config import Mock
+from scrimmage_core.runner import recorded_call
 from fakes.openai_server import FakeOpenAI
 
 Fake = Callable[[list[str]], FakeOpenAI]
@@ -79,3 +81,10 @@ def test_a_call_no_recorded_mock_matches_falls_through_to_the_normal_rule(
     # get_order("1234") matched no mock, so it ran for real, as it is under real.
     assert all(("tool:get_order", "real") in run for run in tool_lines(project))
     assert "recorded mock on tool:get_order with" in result.out
+
+
+def test_a_recorded_mock_is_named_by_its_label_its_arguments_or_its_request() -> None:
+    assert recorded_call(Mock("tool:get_order", "x", None, recorded=True)) == "tool:get_order"
+    long = Mock("tool:get_order", "x", None, recorded=True, args={"q": "a" * 300})
+    assert recorded_call(long).endswith("...") and len(recorded_call(long)) < 240
+    assert recorded_call(Mock("http:a.acme", None, None, recorded=True)) == "http:a.acme"

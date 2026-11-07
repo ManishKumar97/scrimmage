@@ -121,8 +121,11 @@ def apply(state: RunState, step: Step, gated: Gated) -> object:
 def ended(state: RunState, step: Step, gated: Gated, result: object) -> None:
     """Write a real call's line. A recording run keeps what a mock of it needs, or why not."""
     if state.recording:
-        found = capture.tool_value(result, gated.arguments, gated.tool, gated.shape, state.allowed)
-        step.extra["recorded"] = state.save(found)
+        step.extra["recorded"] = state.recorded(
+            lambda: capture.tool_value(
+                result, gated.arguments, gated.tool, gated.shape, state.allowed
+            )
+        )
     state.finish(step, result=result)
 
 
