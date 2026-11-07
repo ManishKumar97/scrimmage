@@ -9,12 +9,9 @@ another type. The original value goes back to the agent untouched.
 """
 
 import dataclasses
-import itertools
-import json
 import math
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from typing import Any, cast
 
 from scrimmage_core import mocks
@@ -22,7 +19,6 @@ from scrimmage_core.config import IMPORT_PATH
 from scrimmage_core.redact import REMOVED, redacted
 
 INT64 = (-(2**63), 2**63 - 1)  # TOML integers are 64 bits
-SHOWN = 60  # how much of a value a "differs" message quotes
 # A string value under a key with one of these whole word parts is a secret by its name.
 SECRET_WORDS = frozenset(
     {
@@ -40,6 +36,17 @@ SECRET_WORDS = frozenset(
     }
 )
 SECRET_PAIRS = frozenset({("api", "key"), ("private", "key"), ("access", "key")})
+# A pair written as one word, as in PRIVATEKEY or apikey.
+SECRET_JOINED = frozenset(a + b for a, b in SECRET_PAIRS)
+# A secret word followed by one of these names something about the secret, not the secret:
+# session_id, token_count, auth_type. A session or paging tool takes these as arguments, and
+# any removal from arguments means the call can never be recorded.
+ABOUT = frozenset({"id", "count", "total", "type", "mode", "used", "left", "remaining", "limit"})
+# A secret word after one of these counts it: max_tokens, num_tokens.
+COUNTING = frozenset({"max", "min", "num", "total"})
+# A token after one of these is a cursor for the next page, not a credential: page_token,
+# next_page_token, next_token (AWS's NextToken), continuation_token.
+PAGING = frozenset({"page", "next", "continuation", "pagination", "sync", "cursor"})
 # Word parts: a run of capitals before a capitalised word (API in APIKey), a word, or a run
 # of capitals. Anything that is not a letter, such as _, -, ., a space or a digit, splits.
 WORD = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+")
@@ -58,9 +65,14 @@ def kind_of(value: object) -> str:
     return type(value).__name__
 
 
-def shown(value: object) -> str:
-    text = repr(value)
-    return f"{kind_of(value)} {text if len(text) <= SHOWN else text[:SHOWN] + '...'}"
+def text_problem(text: str) -> str | None:
+    """Why a text cannot be saved: a lone surrogate, such as a file name's undecodable byte,
+    has no UTF-8 form, so neither JSON nor TOML can hold it."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return "a text with a lone surrogate, which has no UTF-8 form"
+    return None
 
 
 def plain(value: object, place: str) -> object:
@@ -68,24 +80,36 @@ def plain(value: object, place: str) -> object:
 
     A subclass, such as a StrEnum, an IntEnum or a defaultdict, is not its base: the mock
     would give back the base, so it raises Unsavable. A tuple becomes a list; whether the
-    tool gives back a tuple is for the round trip to decide.
+    tool gives back a tuple is for the round trip to decide. A value that holds itself, or
+    is nested too deep for Python's stack, is Unsavable too.
     """
+    try:
+        return walk_plain(value, place)
+    except RecursionError:
+        raise Unsavable(f"{place}: nested too deep, or holds itself") from None
+
+
+def walk_plain(value: object, place: str) -> object:
     kind = type(value)
     if kind is int:
         if not INT64[0] <= cast(int, value) <= INT64[1]:
             raise Unsavable(f"{place}: an integer beyond 64 bits, which TOML cannot hold")
         return value
+    if kind is str and (why := text_problem(cast(str, value))):
+        raise Unsavable(f"{place}: {why}")
     if value is None or kind in (str, bool, float):
         return value
     if kind is list or kind is tuple:
         items = cast(list[object], value)
-        return [plain(item, f"{place}[{i}]") for i, item in enumerate(items)]
+        return [walk_plain(item, f"{place}[{i}]") for i, item in enumerate(items)]
     if kind is dict:
         out: dict[str, object] = {}
         for key, item in cast(dict[object, object], value).items():
             if type(key) is not str:
-                raise Unsavable(f"{place}: a key that is not text, {shown(key)}")
-            out[key] = plain(item, f"{place}.{key}")
+                raise Unsavable(f"{place}: a key that is not text, a {kind_of(key)}")
+            if why := text_problem(key):
+                raise Unsavable(f"{place}: a key that is {why}")
+            out[key] = walk_plain(item, f"{place}.{key}")
         return out
     raise Unsavable(f"{place}: a {kind_of(value)}, which a mock cannot hold")
 
@@ -143,16 +167,16 @@ def differ(real: object, built: object, place: str) -> str | None:
 
     The types must be the same at every level, so True is not 1, 1 is not 1.0 and a list
     is not a tuple. Containers and classes with fields are compared part by part; anything
-    else by ==.
+    else by ==. The message names places and types, never a value, as a value can be a
+    secret and the message goes on the record line.
     """
     if type(real) is not type(built):
-        return f"{place}: {shown(real)}, got {shown(built)}"
+        return f"{place}: {kind_of(real)}, got {kind_of(built)}"
     if isinstance(real, dict):
         a, b = cast(dict[object, object], real), cast(dict[object, object], built)
         if a.keys() != b.keys():
-            gone = sorted(map(repr, a.keys() - b.keys())) or ["none"]
-            extra = sorted(map(repr, b.keys() - a.keys())) or ["none"]
-            return f"{place}: keys differ, missing {', '.join(gone)}, added {', '.join(extra)}"
+            gone, extra = len(a.keys() - b.keys()), len(b.keys() - a.keys())
+            return f"{place}: keys differ, {gone} missing and {extra} added"
         return next((d for k in a if (d := differ(a[k], b[k], f"{place}.{k}"))), None)
     if isinstance(real, list | tuple):
         a_items, b_items = cast(tuple[object, ...], real), cast(tuple[object, ...], built)
@@ -184,25 +208,47 @@ def differ(real: object, built: object, place: str) -> str | None:
         )
     if isinstance(real, float) and math.isnan(real) and math.isnan(cast(float, built)):
         return None
-    return None if real == built else f"{place}: {shown(real)}, got {shown(built)}"
+    return None if real == built else f"{place}: the {kind_of(real)} differs"
+
+
+# Words a final s is dropped from, so tokens is token and api_keys holds the pair api key.
+PLURALS = SECRET_WORDS | SECRET_JOINED | {word for pair in SECRET_PAIRS for word in pair}
+
+
+def singular(part: str) -> str:
+    """A word part in lower case, without the s of a plural, so access stays access."""
+    part = part.lower()
+    return part[:-1] if part.endswith("s") and part[:-1] in PLURALS else part
 
 
 def secret_key(key: str) -> bool:
     """Whether a key names a secret by a whole word part, as a heuristic.
 
-    access_token, apiKey and X-Auth-Token do; author, authority and max_tokens do not.
+    access_token, apiKey, refresh_tokens and PRIVATEKEY do; author, max_tokens, session_id,
+    token_count and next_page_token do not. A plural matches as its singular.
     """
-    parts = [part.lower() for part in WORD.findall(key)]
-    pairs = itertools.pairwise(parts)
-    return any(part in SECRET_WORDS for part in parts) or any(p in SECRET_PAIRS for p in pairs)
+    parts = ["", *map(singular, WORD.findall(key)), "", ""]
+    for i in range(1, len(parts) - 2):
+        last, part, then, later = parts[i - 1 : i + 3]
+        word = part in SECRET_WORDS or part in SECRET_JOINED
+        if (
+            word
+            and then not in ABOUT
+            and last not in COUNTING
+            and not (part == "token" and last in PAGING)
+        ):
+            return True
+        if (part, then) in SECRET_PAIRS and later not in ABOUT:  # access_key_id is an id
+            return True
+    return False
 
 
 def clean(value: object) -> tuple[object, list[Removed]]:
     """The value with secrets removed, and one entry per removal.
 
-    Every string, keys included, goes through the existing patterns. A string value under a
-    secret-like key is replaced whole, by the key-name heuristic. A number is never a secret,
-    so token_count = 412 is kept.
+    Every string, keys included, goes through the existing patterns. A string under a
+    secret-like key, or anywhere in a list under one, is replaced whole, by the key-name
+    heuristic. A number is never a secret, so token_count = 412 is kept.
     """
     removed: list[Removed] = []
 
@@ -211,24 +257,24 @@ def clean(value: object) -> tuple[object, list[Removed]]:
         removed.extend({"key": key, "rule": PATTERN} for _ in range(count))
         return kept
 
-    def walk(item: object, key: str | None) -> object:
+    def walk(item: object, key: str | None, secret: bool) -> object:
         if isinstance(item, str):
+            if secret:
+                removed.append({"key": key, "rule": KEY_NAME})
+                return REMOVED
             return text(item, key)
         if isinstance(item, list):
-            return [walk(x, key) for x in cast(list[object], item)]
+            return [walk(x, key, secret) for x in cast(list[object], item)]
         if isinstance(item, dict):
             out: dict[str, object] = {}
             for name, inner in cast(dict[str, object], item).items():
                 name = text(name, key)
-                if isinstance(inner, str) and secret_key(name):
-                    out[name] = REMOVED
-                    removed.append({"key": name, "rule": KEY_NAME})
-                else:
-                    out[name] = walk(inner, name)
+                listed = isinstance(inner, str | list)
+                out[name] = walk(inner, name, listed and secret_key(name))
             return out
         return item
 
-    return walk(value, None), removed
+    return walk(value, None, False), removed
 
 
 def unsaved(code: str, why: str) -> dict[str, object]:
@@ -286,7 +332,8 @@ def tool_value(
     except Unsavable as exc:
         return unsaved(UNSAVABLE, str(exc))
     except Exception as exc:  # the team's class, its __eq__ or its validation
-        return unsaved(UNSAVABLE, f"returns: a mock built from it fails: {kind_of(exc)}: {exc}")
+        # The error's type only: its message, such as pydantic's, can quote the value.
+        return unsaved(UNSAVABLE, f"returns: a mock built from it fails with {kind_of(exc)}")
     if where is not None:
         return unsaved(UNSAVABLE, where)
     args, problem = saved_arguments(arguments)
@@ -299,7 +346,7 @@ def tool_value(
         except Exception as exc:
             return unsaved(
                 SECRET_CHANGED_SHAPE,
-                f"returns: with its secrets removed it no longer fits: {kind_of(exc)}: {exc}",
+                f"returns: with its secrets removed it no longer fits, {kind_of(exc)}",
             )
     doc: dict[str, object] = {"value": cleaned, "args": args, "removed": removed}
     if kind is not None:
@@ -321,70 +368,44 @@ def mcp_returns(real: dict[str, object]) -> object:
     return content[0].get("text")
 
 
+def failed_result(real: object) -> dict[str, object] | None:
+    """Why a result is never saved before anything else is tried: it is no JSON, or the
+    server failed, as isError says, which a mock must not copy, as a 5xx is not."""
+    if not isinstance(real, dict):
+        return unsaved(UNSAVABLE, "result: the reply could not be read as JSON")
+    if cast(dict[str, object], real).get("isError") is True:
+        return unsaved(STATUS, "the result has isError, which is the server failing, as a 5xx is")
+    return None
+
+
 def mcp_value(
     real: object, arguments: object, rebuild: Callable[[object], object]
 ) -> dict[str, object]:
     """What a real MCP call's line records. rebuild makes the result a mock of these returns
     would give, in its JSON form, as the client would read it."""
-    if not isinstance(real, dict):
-        return unsaved(UNSAVABLE, "result: the reply could not be read as JSON")
+    failed = failed_result(real)
+    if failed is not None:
+        return failed
     result = cast(dict[str, object], real)
-    if result.get("isError") is True:
-        return unsaved(STATUS, "the result has isError, which is the server failing, as a 5xx is")
     try:
         fields = plain(mcp_returns(result), "returns")
         where = differ(result, rebuild(fields), "result")
     except Unsavable as exc:
         return unsaved(UNSAVABLE, str(exc))
     except Exception as exc:  # the library's own validation of the reply
-        return unsaved(UNSAVABLE, f"result: a mock built from it fails: {kind_of(exc)}: {exc}")
+        return unsaved(UNSAVABLE, f"result: a mock built from it fails with {kind_of(exc)}")
     if where is not None:
         return unsaved(UNSAVABLE, where)
     args, problem = saved_arguments(arguments if arguments is not None else {})
     if problem is not None:
         return problem
     cleaned, removed = clean(fields)
+    if removed:
+        try:
+            rebuild(cleaned)
+        except Exception as exc:
+            return unsaved(
+                SECRET_CHANGED_SHAPE,
+                f"result: with its secrets removed it no longer fits, {kind_of(exc)}",
+            )
     return {"value": cleaned, "args": args, "removed": removed}
-
-
-def holds_in_toml(value: object) -> bool:
-    """Whether every part of a JSON value has a TOML form: no null, no huge integer."""
-    if value is None:
-        return False
-    if isinstance(value, bool | float | str):
-        return True
-    if isinstance(value, int):
-        return INT64[0] <= value <= INT64[1]
-    if isinstance(value, list):
-        return all(map(holds_in_toml, cast(list[object], value)))
-    return all(map(holds_in_toml, cast(dict[str, object], value).values()))
-
-
-@dataclass(frozen=True)
-class WebBody:
-    """How a web reply's body is written: as json, as exact text, or not at all (code)."""
-
-    form: str | None  # "json" or "text"; None when it cannot be written
-    value: object
-    removed: list[Removed] = field(default_factory=list[Removed])
-    code: str | None = None
-
-
-def web_body(body: str, removed_at_gate: list[Removed]) -> WebBody:
-    """C.J3.12: the key-name rule runs on a JSON body first, then the form is chosen.
-
-    body is the line's result, which the existing patterns cleaned at the gate; their
-    removals come in removed_at_gate. A body that parses as JSON is cleaned by key name
-    whatever its content type says, so a secret field is never kept by choosing text.
-    """
-    try:
-        parsed = json.loads(body)
-    except ValueError:
-        return WebBody("text", body, list(removed_at_gate))
-    cleaned, removed = clean(parsed)
-    removed = [*removed_at_gate, *removed]
-    if holds_in_toml(cleaned):
-        return WebBody("json", cleaned, removed)
-    if removed:  # exact text cannot be cleaned and stay exact
-        return WebBody(None, None, removed, SECRET_CHANGED_SHAPE)
-    return WebBody("text", body)

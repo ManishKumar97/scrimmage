@@ -318,7 +318,7 @@ def test_a_generator_is_still_unread_when_the_agent_gets_it(sink: Sink) -> None:
 @pytest.mark.design("record.strict_equal")
 def test_a_pydantic_field_holding_1_0_that_comes_back_1_is_unsavable(sink: Sink) -> None:
     assert capture.differ(Rounded(value=1.0), Rounded.model_construct(value=1), "r") == (
-        "r.value: float 1.0, got int 1"
+        "r.value: float, got int"
     )
 
     def get_rounded(n: str) -> Rounded:
@@ -327,7 +327,7 @@ def test_a_pydantic_field_holding_1_0_that_comes_back_1_is_unsavable(sink: Sink)
     recording(sink)
     gated(get_rounded)(n="1")
     found = recorded_of(sink, "tool:get_rounded")
-    assert found == {"code": "unsavable", "why": "returns.value: float 1.0, got int 1"}
+    assert found == {"code": "unsavable", "why": "returns.value: float, got int"}
 
 
 def get_secrets(order_id: str) -> dict[str, object]:
