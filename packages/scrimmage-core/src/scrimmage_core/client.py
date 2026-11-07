@@ -39,7 +39,7 @@ class ControlClient:
     def __init__(self, url: str, token: str) -> None:
         parts = urlsplit(url)
         if parts.scheme != "http" or not parts.hostname:
-            raise ControlError(f"DERAIL_CONTROL_URL {url!r} is not http://host:port")
+            raise ControlError(f"SCRIMMAGE_CONTROL_URL {url!r} is not http://host:port")
         self.host = parts.hostname
         self.port = parts.port or 80
         self.token = token
@@ -161,7 +161,7 @@ class Sender:
         self._counts = threading.Lock()  # made and dropped; never held over the network
         self._sending = threading.Lock()  # one batch in flight at a time
         self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._loop, name="derail-sender", daemon=True)
+        self._thread = threading.Thread(target=self._loop, name="scrimmage-sender", daemon=True)
 
     def start(self) -> None:
         self._thread.start()

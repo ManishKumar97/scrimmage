@@ -1,8 +1,8 @@
-"""Derail's startup file. derail-run puts this folder first on PYTHONPATH.
+"""Scrimmage's startup file. scrimmage-run puts this folder first on PYTHONPATH.
 
-It does nothing unless DERAIL_TOKEN is set; then it switches the SDK on. Either
+It does nothing unless SCRIMMAGE_TOKEN is set; then it switches the SDK on. Either
 way it then runs the next sitecustomize.py on the path, which this one hid, so the
-program starts exactly as it would without Derail.
+program starts exactly as it would without Scrimmage.
 
 Every Python program the agent starts runs this file too, on whatever version that is, so
 it uses only the standard library and syntax Python 3.8 can run, and on a Python that is
@@ -39,15 +39,15 @@ def _python() -> str:
 
 
 def _is_program() -> bool:
-    """Whether this process is the one derail-run became, or one started by hand.
+    """Whether this process is the one scrimmage-run became, or one started by hand.
 
     It is the program under test for certain. Through a wrapper it can only be the first
     Python that claims the run.
     """
     mine = str(os.getpid())
-    if "DERAIL_PYTHON" in os.environ:  # a root that execs itself keeps derail-run's id
-        return os.environ.get("DERAIL_ROOT_PID") == mine
-    return os.environ.get("DERAIL_ROOT_PID", mine) == mine
+    if "SCRIMMAGE_PYTHON" in os.environ:  # a root that execs itself keeps scrimmage-run's id
+        return os.environ.get("SCRIMMAGE_ROOT_PID") == mine
+    return os.environ.get("SCRIMMAGE_ROOT_PID", mine) == mine
 
 
 def _claim() -> "str | None":
@@ -56,7 +56,7 @@ def _claim() -> "str | None":
     Each process has its own environment, so two siblings under a shell or uv cannot tell
     each other anything there. A file beside the answer is shared, and O_EXCL lets one win.
     """
-    answer = os.environ.get("DERAIL_ANSWER_FILE")
+    answer = os.environ.get("SCRIMMAGE_ANSWER_FILE")
     if not answer:
         return None  # no run folder, as with PYTHONPATH set by hand
     claim = answer + ".root"
@@ -102,10 +102,10 @@ class _KeepOut:
         if self._means_a_tool(name, path):
             message = (
                 f"{name} holds a tool under [agent] tools, and {sys.executable} is not the "
-                "run's Python, so Derail cannot gate it"
+                "run's Python, so Scrimmage cannot gate it"
             )
             _tell_the_runner(message)
-            raise ImportError(f"derail: {message}")
+            raise ImportError(f"scrimmage: {message}")
 
 
 def _tell_the_runner(message: str) -> None:
@@ -115,7 +115,7 @@ def _tell_the_runner(message: str) -> None:
     process = {"python": sys.executable, "command": " ".join(sys.argv), "parent": os.getppid()}
     line = json.dumps({"pid": os.getpid(), "message": message, "process": process})
     try:
-        with open(os.environ["DERAIL_ANSWER_FILE"] + ".refused", "a") as out:
+        with open(os.environ["SCRIMMAGE_ANSWER_FILE"] + ".refused", "a") as out:
             out.write(line + "\n")
     except (KeyError, OSError):
         pass  # the import still fails, so the write still does not run
@@ -146,7 +146,7 @@ def _target() -> "str | None":
 
 
 def _keep_out_tools() -> None:
-    entries = os.environ.get("DERAIL_TOOLS", "").split(",")
+    entries = os.environ.get("SCRIMMAGE_TOOLS", "").split(",")
     modules = {entry.partition(":")[0] for entry in entries if entry}
     if not modules:
         return
@@ -158,7 +158,7 @@ def _keep_out_tools() -> None:
         if target in (module, module + ".__main__") or script.endswith("." + module):
             message = (
                 f"{module} holds a tool under [agent] tools, and {sys.executable} is not the "
-                "run's Python, so Derail cannot gate it"
+                "run's Python, so Scrimmage cannot gate it"
             )
             _tell_the_runner(message)
             raise RuntimeError(message)
@@ -166,12 +166,12 @@ def _keep_out_tools() -> None:
 
 def _start() -> None:
     has_sdk = importlib.util.find_spec("scrimmage_core") is not None
-    theirs = os.environ.get("DERAIL_PYTHON")
+    theirs = os.environ.get("SCRIMMAGE_PYTHON")
     program = _is_program()
     if not has_sdk and program:
         raise RuntimeError(
-            f"derail is not installed for {sys.executable}, so the program under "
-            "test would run with no gates; run it on a Python with derail installed"
+            f"scrimmage-core is not installed for {sys.executable}, so the program under "
+            "test would run with no gates; run it on a Python with scrimmage-core installed"
         )
     if not has_sdk:
         _keep_out_tools()  # a tool, a build step or a cloud command: leave it alone
@@ -180,23 +180,23 @@ def _start() -> None:
     if theirs is None:
         theirs = _claim()
         root = theirs is None
-    joins = root or theirs == _python() or os.environ.get("DERAIL_CHILDREN")
+    joins = root or theirs == _python() or os.environ.get("SCRIMMAGE_CHILDREN")
     if not joins:
-        os.environ["DERAIL_PYTHON"] = str(theirs)
+        os.environ["SCRIMMAGE_PYTHON"] = str(theirs)
         _keep_out_tools()  # another Python, such as the aws CLI: leave it alone
         return
-    os.environ["DERAIL_PYTHON"] = str(theirs or _python())
+    os.environ["SCRIMMAGE_PYTHON"] = str(theirs or _python())
 
     from scrimmage_core import bootstrap
 
     bootstrap.start(child=not root, target=_target())
 
 
-if os.environ.get("DERAIL_TOKEN"):
+if os.environ.get("SCRIMMAGE_TOKEN"):
     try:
         _start()
     except BaseException as exc:  # fail closed: never run the agent without its gates
-        sys.stderr.write(f"derail: could not switch on ({exc!r}); the program stops\n")
+        sys.stderr.write(f"scrimmage: could not switch on ({exc!r}); the program stops\n")
         sys.stderr.flush()
         os._exit(1)
 _chain()

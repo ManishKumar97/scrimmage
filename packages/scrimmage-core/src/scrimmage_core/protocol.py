@@ -12,9 +12,9 @@ import secrets
 import threading
 import time
 
-TIME = "X-Derail-Time"
-NONCE = "X-Derail-Nonce"
-SIGNATURE = "X-Derail-Signature"
+TIME = "X-Scrimmage-Time"
+NONCE = "X-Scrimmage-Nonce"
+SIGNATURE = "X-Scrimmage-Signature"
 WINDOW_S = 60.0  # how far a request's time may be from the server's clock
 NONCE_KEEP_S = 2 * WINDOW_S
 
@@ -28,11 +28,11 @@ def _mac(token: str, *parts: str) -> str:
 
 
 def sign_request(token: str, method: str, path: str, stamp: str, nonce: str, body: bytes) -> str:
-    return _mac(token, "derail-request-v1", method, path, stamp, nonce, digest(body))
+    return _mac(token, "scrimmage-request-v1", method, path, stamp, nonce, digest(body))
 
 
 def sign_reply(token: str, request_signature: str, status: int, body: bytes) -> str:
-    return _mac(token, "derail-reply-v1", request_signature, str(status), digest(body))
+    return _mac(token, "scrimmage-reply-v1", request_signature, str(status), digest(body))
 
 
 def request_headers(token: str, method: str, path: str, body: bytes, now: float) -> dict[str, str]:

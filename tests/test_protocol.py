@@ -310,7 +310,7 @@ def test_a_call_stopped_and_then_ended_has_one_line() -> None:
     step = run.begin("a", {})
     run.stop_open()
     run.finish(step, result="late")
-    assert len(lines) == 1 and "DerailStopped" in str(lines[0]["error"])
+    assert len(lines) == 1 and "ScrimmageStopped" in str(lines[0]["error"])
 
 
 @pytest.mark.design("boot.plan_failure_is_not_for_life")

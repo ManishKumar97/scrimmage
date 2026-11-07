@@ -1,6 +1,6 @@
 """The gate for child processes, on Python's audit events.
 
-A child on the run's Python that does not inherit Derail's environment, or that is told to
+A child on the run's Python that does not inherit Scrimmage's environment, or that is told to
 skip the startup file, would run its writes with no gate and leave no line. Python reports
 every process start to an audit hook, which can refuse it. Only starts made from Python are
 seen: sh -c 'python x', env -i python and an exec from another program are not.
@@ -22,7 +22,7 @@ from scrimmage_core.state import RunState
 BOOT = os.path.join("scrimmage_core", "_boot")  # the runner's, which may be in another venv
 EVENTS = ("subprocess.Popen", "os.exec", "os.posix_spawn")  # os.spawnv is exec here
 # The MCP gate decides a stdio server's calls, so its own start of the server is not blind.
-EXEMPT: ContextVar[bool] = ContextVar("derail_process_exempt", default=False)
+EXEMPT: ContextVar[bool] = ContextVar("scrimmage_process_exempt", default=False)
 
 
 def command(event: str, args: tuple[Any, ...]) -> tuple[str, list[str], str, dict[str, str]]:
@@ -56,7 +56,7 @@ def is_this_python(path: str) -> bool:
 
 
 def is_boot(folder: str) -> bool:
-    """Any Derail's startup folder, since the runner's can differ from this process's own."""
+    """Any Scrimmage's startup folder, since the runner's can differ from this process's own."""
     return folder.endswith(os.sep + BOOT) and os.path.isfile(
         os.path.join(folder, "sitecustomize.py")
     )
@@ -64,10 +64,10 @@ def is_boot(folder: str) -> bool:
 
 def why_blind(env: dict[str, str], args: list[str]) -> str | None:
     folders = env.get("PYTHONPATH", "").split(os.pathsep)
-    if "DERAIL_TOKEN" not in env or not any(map(is_boot, folders)):
-        return "its environment does not hold Derail's variables and its PYTHONPATH folder"
+    if "SCRIMMAGE_TOKEN" not in env or not any(map(is_boot, folders)):
+        return "its environment does not hold Scrimmage's variables and its PYTHONPATH folder"
     flag = python_args.skipping(args)
-    return f"{flag} skips Derail's startup file" if flag else None
+    return f"{flag} skips Scrimmage's startup file" if flag else None
 
 
 def install(run: RunState, before_exec: Callable[[], None]) -> None:

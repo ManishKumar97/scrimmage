@@ -16,7 +16,7 @@ ALLOWED = {
 }
 DYNAMIC = {"import_module", "__import__"}
 # The only places that import a computed name: the team's own module from a mock's
-# type, and the agent's function in the starter. Both are under DERAIL_ALLOW_IMPORTS.
+# type, and the agent's function in the starter. Both are under SCRIMMAGE_ALLOW_IMPORTS.
 COMPUTED_ALLOWED = {("mocks.py", "import_object"), ("start.py", "main")}
 
 

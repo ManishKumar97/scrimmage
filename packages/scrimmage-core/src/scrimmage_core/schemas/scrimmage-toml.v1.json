@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:derail:schema:derail-toml:v1",
-  "title": "derail.toml, version 1",
-  "description": "The shape of derail.toml, for an editor: keys, types, label forms, schedules and fault words. It cannot check what needs the whole file, the folder or the machine, such as a tool name against [agent] tools. derail check decides.",
+  "$id": "urn:scrimmage:schema:scrimmage-toml:v1",
+  "title": "scrimmage.toml, version 1",
+  "description": "The shape of scrimmage.toml, for an editor: keys, types, label forms, schedules and fault words. It cannot check what needs the whole file, the folder or the machine, such as a tool name against [agent] tools. scrimmage check decides.",
   "type": "object",
   "additionalProperties": false,
   "required": [

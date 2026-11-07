@@ -31,7 +31,7 @@ from scrimmage_core import provider_openai as openai_table
 from scrimmage_core.budget import Held, Shortfall
 from scrimmage_core.client import ControlError
 from scrimmage_core.decide import READ_METHODS, Call, Decision, names
-from scrimmage_core.errors import DerailRefused
+from scrimmage_core.errors import ScrimmageRefused
 from scrimmage_core.labels import shown_name
 from scrimmage_core.plan import Plan
 from scrimmage_core.redact import redact
@@ -39,7 +39,7 @@ from scrimmage_core.state import BLOB_CAP, BlobSink, RunState, Step, blob, curre
 
 # The minor versions this release was tested with, per library.
 TESTED = {"httpx": ((0, 28), (0, 28)), "httpx2": ((2, 16), (2, 16))}
-GATED = "__derail_gate__"
+GATED = "__scrimmage_gate__"
 CHAR_PER_TOKEN = 4  # the rough size of a token, for estimates only
 PRICE_KEY_CAP = 300  # a longer name is not shown whole as a price key to paste
 BUDGET_WAIT_S = 30.0  # the longest a call waits for calls in flight to free the budget
@@ -65,7 +65,7 @@ MISTAKE_REASONS = (
 # again. It is the whole endpoint, not a flag: an event hook or an auth flow runs inside the
 # same send, and its requests are still web requests.
 MCP_TRANSPORT: ContextVar[tuple[object, ...] | None] = ContextVar(
-    "derail_mcp_transport", default=None
+    "scrimmage_mcp_transport", default=None
 )
 
 
@@ -139,7 +139,7 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
     named = f"{library} {getattr(module, '__version__', '?')}"
     if not gatable(module):
         message = (
-            f"{named} does not have the functions Derail gates, so its calls cannot be "
+            f"{named} does not have the functions Scrimmage gates, so its calls cannot be "
             "checked or budgeted, and the program is stopped"
         )
         ctx.run.notice("structure", library, message)
@@ -149,7 +149,7 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
         ctx.run.notice(
             "structure",
             library,
-            f"{named} lacks what Derail builds faults and mocks from; refusals and the "
+            f"{named} lacks what Scrimmage builds faults and mocks from; refusals and the "
             "budget still apply, those do not",
         )
         ctx.faults = False
@@ -197,7 +197,7 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
             refuse(
                 ctx.run,
                 step,
-                "this model call runs outside asyncio, such as under trio, which Derail "
+                "this model call runs outside asyncio, such as under trio, which Scrimmage "
                 "does not support yet, so it could not be budgeted; run the agent on asyncio",
             )
         if step.decision.action == "fault":
@@ -217,7 +217,7 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
             cancel = await close_keeping_cancel(response)
             try:
                 redirected_away(ctx, step, request, extra, reservation, target)
-            except DerailRefused as refusal:
+            except ScrimmageRefused as refusal:
                 raise (cancel or refusal) from None
         capture(ctx, module, step, request, response, extra, reservation, sync=False)
         return response
@@ -277,7 +277,7 @@ def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call:
 
 
 def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, object]] | None:
-    """Decide the request; None with no run. Raises DerailRefused after recording one."""
+    """Decide the request; None with no run. Raises ScrimmageRefused after recording one."""
     run = current()
     if run is None or MCP_TRANSPORT.get() == endpoint_of(request.url):
         return None
@@ -310,7 +310,7 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
             refuse(
                 run,
                 step,
-                f"{where} has a body Derail cannot read, such as one sent from a generator or "
+                f"{where} has a body Scrimmage cannot read, such as one sent from a generator or "
                 "a compressed one, so the tools it offers cannot be checked; send it as plain "
                 "JSON",
             )
@@ -355,8 +355,8 @@ def check_tools(
         refuse(
             run,
             step,
-            f"the model request offers a tool of type {kinds}, which Derail does not "
-            "know, so the test stops; a newer Derail may know it",
+            f"the model request offers a tool of type {kinds}, which Scrimmage does not "
+            "know, so the test stops; a newer Scrimmage may know it",
         )
     for label in tools.hosted_writes:
         if f"hosted:mcp/{label}" not in run.plan.real:
@@ -406,7 +406,7 @@ def fault(
     status = int(plan_fault.do.split()[1])
     if step.call.kind == "model":
         body = openai_table.error_body(status)
-        headers = {"content-type": "application/json", "x-request-id": "req_derail_injected"}
+        headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
     else:
         body = reason_phrase(status).encode()
         headers = {"content-type": "text/plain; charset=utf-8"}
@@ -485,18 +485,18 @@ def no_price(model: str) -> str:
     off = 'or set max_cost_usd = "none"'
     if not model:
         return (
-            "this model call sends no model name, so Derail has no price for it and cannot keep "
+            "this model call sends no model name, so Scrimmage has no price for it and cannot keep "
             'the budget; send model on the call, or price calls with no name as "" = '
             f"{rate} under [agent.prices], {off}"
         )
     if len(model) > PRICE_KEY_CAP:
         return (
-            f"Derail has no price for the model {shown_name(model)}, so it cannot keep the "
+            f"Scrimmage has no price for the model {shown_name(model)}, so it cannot keep the "
             f"budget; the name is too long to show whole here, so add it under [agent.prices] "
             f"from your code, {off}"
         )
     return (
-        f"Derail has no price for the model {shown_name(model)}, so it cannot keep the budget; "
+        f"Scrimmage has no price for the model {shown_name(model)}, so it cannot keep the budget; "
         f"add it under [agent.prices], such as {json.dumps(model)} = {rate}, {off}"
     )
 
@@ -619,7 +619,7 @@ def shortfall_text(short: Shortfall, waited: float, plan: Plan, own: bool) -> st
         more = len(short.holds) - SHOWN_HOLDS
         text += f" ({', '.join(named)}{f' and {more} more' if more > 0 else ''})"
     if short.why == "held":
-        text += f"; Derail waited {waited:.0f}s for them to finish"
+        text += f"; Scrimmage waited {waited:.0f}s for them to finish"
     if short.why == "left":
         return (
             f"{text}. A run that ended while still holding can never give its hold back, so "

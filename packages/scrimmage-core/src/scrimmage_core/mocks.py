@@ -11,7 +11,7 @@ import inspect
 import typing
 from collections.abc import Callable
 
-from scrimmage_core.errors import DerailMockError, DerailRefused
+from scrimmage_core.errors import ScrimmageMockError, ScrimmageRefused
 
 # Any is a class on 3.11 and later, and neither it nor object names a shape to build.
 PLAIN = (str, int, float, bool, list, dict, tuple, type(None), object, typing.Any)
@@ -25,8 +25,8 @@ def allowed(path: str, prefixes: list[str]) -> bool:
 def import_object(path: str, prefixes: list[str]) -> object:
     """Import module:attr, only under an allowed prefix, checked before importing."""
     if not allowed(path, prefixes):
-        raise DerailRefused(
-            f"{path} is outside DERAIL_ALLOW_IMPORTS ({', '.join(prefixes) or 'empty'}), "
+        raise ScrimmageRefused(
+            f"{path} is outside SCRIMMAGE_ALLOW_IMPORTS ({', '.join(prefixes) or 'empty'}), "
             "so it is not imported"
         )
     module, _, attr = path.partition(":")
@@ -57,5 +57,5 @@ def build(
         if isinstance(returns, target):
             return returns
     except (TypeError, ValueError) as exc:  # pydantic's ValidationError is a ValueError
-        raise DerailMockError(f"the mock does not fit {name}: {exc}") from exc
-    raise DerailMockError(f"the mock does not fit {name}: expected a table of its fields")
+        raise ScrimmageMockError(f"the mock does not fit {name}: {exc}") from exc
+    raise ScrimmageMockError(f"the mock does not fit {name}: expected a table of its fields")

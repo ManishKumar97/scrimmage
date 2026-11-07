@@ -1,4 +1,4 @@
-"""Judging: the rules, the rates, the table and the exit codes, on real runs of derail test."""
+"""Judging: the rules, the rates, the table and the exit codes, on real runs of scrimmage test."""
 
 import json
 import re
@@ -99,7 +99,7 @@ def scripted(
     agent: str = "",
     head: str = 'expect = ["shipped", ["Oct 30", "October 30"]]\n',
 ) -> Result:
-    """derail test on an agent that plays `steps`, one per run, baselines first."""
+    """scrimmage test on an agent that plays `steps`, one per run, baselines first."""
     (project.root / "canned.py").write_text(AGENT)
     (project.root / "script.json").write_text(json.dumps(steps))
     project.toml.write_text(
@@ -430,7 +430,7 @@ def test_the_raw_answer_is_compared_and_never_reaches_a_record(project: Project)
     ]
     assert SECRET not in str(summary["answer"]) and "[secret removed]" in str(summary["answer"])
     assert SECRET not in result.out + result.err
-    for path in (project.root / "derail-runs").rglob("*.jsonl"):
+    for path in (project.root / "scrimmage-runs").rglob("*.jsonl"):
         assert SECRET not in path.read_text()
 
 
@@ -533,7 +533,7 @@ def test_pass_rate_passes_four_of_five_and_fails_three_of_five(
 def test_a_failed_rule_names_its_runs_and_stops_at_three(project: Project) -> None:
     result = scripted(project, [{"answer": BAD}] * 4, "", "runs = 4")
     assert result.code == 1, result.out
-    names = {path.stem for path in (project.root / "derail-runs").glob("*/*.jsonl")}
+    names = {path.stem for path in (project.root / "scrimmage-runs").glob("*/*.jsonl")}
     line = next(x for x in result.out.splitlines() if x.startswith("  4 runs: expect"))
     shown = re.findall(r"run-[0-9a-f]+", line)
     assert len(shown) == 3 and set(shown) <= names and line.endswith(" and 1 more")
@@ -848,7 +848,7 @@ def test_only_a_scripts_last_line_is_judged(project: Project) -> None:
 def test_a_scripts_answer_file_is_judged_whole(project: Project) -> None:
     source = (
         "import os\n"
-        'open(os.environ["DERAIL_ANSWER_FILE"], "w").write("line one shipped\\nline two")\n'
+        'open(os.environ["SCRIMMAGE_ANSWER_FILE"], "w").write("line one shipped\\nline two")\n'
     )
     result = script_project(project, source, 'expect = ["shipped", "line two"]')
     assert result.code == 0, result.out
@@ -862,7 +862,7 @@ def test_a_script_that_prints_nothing_fails_as_crashed(project: Project) -> None
 
 
 def returns(project: Project, value: str, extra: str = "", body: str = "") -> Result:
-    """derail test on an agent that returns a value, with one row and one run."""
+    """scrimmage test on an agent that returns a value, with one row and one run."""
     (project.root / "shaped.py").write_text(f"def answer(question):\n    return {value}\n")
     project.toml.write_text(
         '[agent]\nfunction = "shaped:answer"\nruns = 1\nmax_cost_usd = "none"\n'

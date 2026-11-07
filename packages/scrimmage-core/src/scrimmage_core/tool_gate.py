@@ -17,10 +17,10 @@ from typing import Any, NoReturn
 
 from scrimmage_core import hooks, mocks
 from scrimmage_core.config import Fault
-from scrimmage_core.errors import DerailMockError
+from scrimmage_core.errors import ScrimmageMockError
 from scrimmage_core.state import RunState, Step, current
 
-GATED = "__derail_gate__"
+GATED = "__scrimmage_gate__"
 
 
 def mark(function: Callable[..., Any]) -> Callable[..., Any]:
@@ -102,7 +102,7 @@ def apply(state: RunState, step: Step, gated: Gated) -> object:
         try:
             error = injected(state, fault, step.call.name, gated.failure)
         except Exception as exc:  # a bad raises is a mistake in the test, not the agent's failure
-            problem = DerailMockError(f"the fault cannot raise {fault.raises}: {exc}")
+            problem = ScrimmageMockError(f"the fault cannot raise {fault.raises}: {exc}")
             state.finish(step, error=problem, mistake=str(problem))
             raise problem from exc
         state.finish(step, error=error)
@@ -111,7 +111,7 @@ def apply(state: RunState, step: Step, gated: Gated) -> object:
     mock = state.plan.mocks[decision.mock]
     try:
         value = gated.shape(mocks.build(mock.returns, mock.type, gated.tool, state.allowed))
-    except DerailMockError as exc:
+    except ScrimmageMockError as exc:
         state.finish(step, error=exc, mistake=str(exc))
         raise
     state.finish(step, result=value)
@@ -276,7 +276,7 @@ def swap_method(
         for name in sorted(aliases | {method}):
             setattr(owner, name, gated)
     except (TypeError, AttributeError) as exc:  # a metaclass that refuses new attributes
-        cannot_gate(seen, f"{where} its class does not let Derail set the gate on it: {exc}")
+        cannot_gate(seen, f"{where} its class does not let Scrimmage set the gate on it: {exc}")
 
 
 def module_spec(name: str, extra: list[str]) -> importlib.machinery.ModuleSpec | None:

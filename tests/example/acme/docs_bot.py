@@ -113,7 +113,7 @@ def answer_not_listed(question: str) -> str:
 
 
 def answer_with_the_runs_environment(question: str) -> str:
-    """The server inherits everything, Derail's own variables too."""
+    """The server inherits everything, Scrimmage's own variables too."""
 
     async def go() -> str:
         async with over_stdio(env=dict(os.environ)) as session:

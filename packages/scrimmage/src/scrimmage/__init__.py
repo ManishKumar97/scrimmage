@@ -1,1 +1,1 @@
-"""The marker: @derail.tool and derail.run. Built in a later slice."""
+"""The marker: @scrimmage.tool and scrimmage.run. Built in a later slice."""

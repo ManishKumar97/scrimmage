@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from typing import Protocol, cast
 
 from scrimmage_core import decide as engine
-from scrimmage_core.errors import DerailRefused, DerailStopped, DerailTimeLimit
+from scrimmage_core.errors import ScrimmageRefused, ScrimmageStopped, ScrimmageTimeLimit
 from scrimmage_core.plan import Plan
 from scrimmage_core.records import RECORD_VERSION
 from scrimmage_core.redact import redact
@@ -157,7 +157,8 @@ class RunState:
         is a backstop; it matters where one process outlives its runs.
         """
         if time.monotonic() - self.began > self.plan.time_limit_s:
-            raise DerailTimeLimit(f"the run passed its time limit of {self.plan.time_limit_s:g}s")
+            limit = self.plan.time_limit_s
+            raise ScrimmageTimeLimit(f"the run passed its time limit of {limit:g}s")
 
     def decide(self, call: engine.Call, args: dict[str, object]) -> Step:
         """Count the call and decide what it gets. A poisoned run refuses every call."""
@@ -194,19 +195,19 @@ class RunState:
         step.decision = engine.Decision("refused", reason=reason)
         return step
 
-    def refusal(self, step: Step, detail: str = "") -> DerailRefused:
+    def refusal(self, step: Step, detail: str = "") -> ScrimmageRefused:
         label = step.call.label
         if step.decision.reason == "no_plan":
-            return DerailRefused(
+            return ScrimmageRefused(
                 f"{label}: this process could not get its run's plan, so the call is refused: "
                 f"{self.plan.unavailable}"
             )
         if self.refused == CLOSED:
-            return DerailRefused(f"{label}: this process's run has ended, so every call fails")
+            return ScrimmageRefused(f"{label}: this process's run has ended, so every call fails")
         reason = step.decision.reason or "unlisted"
         first = self.refused or label
         if reason == "poisoned" or first != label:
-            return DerailRefused(
+            return ScrimmageRefused(
                 f"{label}: this run already refused {first}, so every later call fails"
             )
         messages = {
@@ -229,7 +230,7 @@ class RunState:
             "unreadable_body": detail,
             "unreadable_model": (
                 f"{label}: a fault in this test names a model, but {detail} has no model name "
-                "Derail can read, so it cannot tell whether the fault is for this call. Send "
+                "Scrimmage can read, so it cannot tell whether the fault is for this call. Send "
                 "this call as plain JSON with a model field. Taking model off the fault would "
                 "hit every call its label names, and with a budget any model call with no name "
                 'needs a price, as "" under [agent.prices]; see docs/model-faults.md'
@@ -239,7 +240,7 @@ class RunState:
             "ambiguous_label": detail,
             "blind_child": detail,
         }
-        return DerailRefused(messages.get(reason, f"{label} is refused: {detail}"))
+        return ScrimmageRefused(messages.get(reason, f"{label} is refused: {detail}"))
 
     def run_closed(self) -> None:
         """The run ended and this process lived on, so nothing it does can be recorded."""
@@ -268,7 +269,7 @@ class RunState:
         line = self._head()
         line.update(
             notice="process",
-            library="derail",
+            library="scrimmage",
             message="a process joined the run",
             process={"python": redact(sys.executable), "command": command, "parent": os.getppid()},
         )
@@ -279,7 +280,7 @@ class RunState:
         with self._lock:
             steps, self.live = list(self.live.values()), {}
         for step in steps:
-            self._write(step, error=DerailStopped("the run was stopped during this call"))
+            self._write(step, error=ScrimmageStopped("the run was stopped during this call"))
 
     def _head(self) -> dict[str, object]:
         plan = self.plan
@@ -314,7 +315,7 @@ class RunState:
         with self._lock:
             self.refused = self.refused or step.call.label
             self._going(step)
-        self.finish(step, error=DerailRefused(message), mistake=message)
+        self.finish(step, error=ScrimmageRefused(message), mistake=message)
 
     def newer_version(
         self,
@@ -411,7 +412,7 @@ class RunState:
 
 def error_text(call: engine.Call, error: BaseException) -> str:
     """A web client's message can quote the URL or a header, so a web line keeps its type."""
-    if call.kind == "http" and not isinstance(error, DerailRefused):
+    if call.kind == "http" and not isinstance(error, ScrimmageRefused):
         return type(error).__name__
     return redact(f"{type(error).__name__}: {error}")
 

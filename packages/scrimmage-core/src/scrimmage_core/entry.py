@@ -1,7 +1,7 @@
-"""The derail command's entry point. With --json, it takes SIGINT and SIGTERM first.
+"""The scrimmage command's entry point. With --json, it takes SIGINT and SIGTERM first.
 
-Derail's own modules take a few hundred milliseconds to import, which is most of a
-`derail check`. A signal in that time must still end in one JSON document, so this module
+Scrimmage's own modules take a few hundred milliseconds to import, which is most of a
+`scrimmage check`. A signal in that time must still end in one JSON document, so this module
 imports only the standard library, notes a signal that arrives while the rest loads, and
 leaves it to scrimmage_core.cli, which stops at once with the document.
 """

@@ -1,4 +1,4 @@
-"""Reading a command that runs Python: its interpreter and the flags that skip Derail."""
+"""Reading a command that runs Python: its interpreter and the flags that skip Scrimmage."""
 
 import os
 import re
@@ -47,6 +47,6 @@ def flags(args: list[str]) -> set[str]:
 
 
 def skipping(args: list[str]) -> str | None:
-    """The first flag that keeps Python from running Derail's startup file."""
+    """The first flag that keeps Python from running Scrimmage's startup file."""
     skipped = sorted(flags(args) & SKIPS)
     return f"-{skipped[0]}" if skipped else None

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:derail:schema:plan:v1",
-  "title": "Derail plan, version 1",
+  "$id": "urn:scrimmage:schema:plan:v1",
+  "title": "Scrimmage plan, version 1",
   "description": "What the SDK does in one run. Data only.",
   "type": "object",
   "additionalProperties": false,

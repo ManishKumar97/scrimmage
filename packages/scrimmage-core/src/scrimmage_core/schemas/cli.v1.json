@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:derail:schema:cli:v1",
-  "title": "Derail --json output, version 1",
-  "description": "The one JSON document a derail command prints with --json. Every command's document starts with the same envelope. Within version 1, fields and enum values are only added, so this schema is open: an unknown field, and an unknown value of a field that lists its values, both fit. A reader ignores a field it does not know and reads such a value as other.",
+  "$id": "urn:scrimmage:schema:cli:v1",
+  "title": "Scrimmage --json output, version 1",
+  "description": "The one JSON document a scrimmage command prints with --json. Every command's document starts with the same envelope. Within version 1, fields and enum values are only added, so this schema is open: an unknown field, and an unknown value of a field that lists its values, both fit. A reader ignores a field it does not know and reads such a value as other.",
   "allOf": [
     {
       "$ref": "#/$defs/envelope"
@@ -51,10 +51,10 @@
         "$ref": "#/$defs/message"
       }
     },
-    "derail": {
+    "scrimmage": {
       "type": "string",
       "minLength": 1,
-      "description": "The installed Derail version."
+      "description": "The installed Scrimmage version."
     },
     "exit": {
       "type": "integer",
@@ -70,7 +70,7 @@
       "type": "object",
       "required": [
         "v",
-        "derail",
+        "scrimmage",
         "command",
         "exit",
         "status",
@@ -90,8 +90,8 @@
         "v": {
           "const": 1
         },
-        "derail": {
-          "$ref": "#/$defs/derail"
+        "scrimmage": {
+          "$ref": "#/$defs/scrimmage"
         },
         "command": {
           "enum": [
@@ -470,7 +470,7 @@
       "type": "object",
       "required": [
         "v",
-        "derail",
+        "scrimmage",
         "command",
         "exit",
         "status",
@@ -485,8 +485,8 @@
         "v": {
           "const": 1
         },
-        "derail": {
-          "$ref": "#/$defs/derail"
+        "scrimmage": {
+          "$ref": "#/$defs/scrimmage"
         },
         "command": {
           "enum": [
@@ -577,7 +577,7 @@
       "type": "object",
       "required": [
         "v",
-        "derail",
+        "scrimmage",
         "command",
         "exit",
         "status",
@@ -591,8 +591,8 @@
         "v": {
           "const": 1
         },
-        "derail": {
-          "$ref": "#/$defs/derail"
+        "scrimmage": {
+          "$ref": "#/$defs/scrimmage"
         },
         "command": {
           "anyOf": [

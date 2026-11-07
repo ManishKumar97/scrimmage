@@ -67,7 +67,7 @@ NOT_A_FAILURE = (
     "KeyboardInterrupt",
     "SystemExit",
     "GeneratorExit",
-    "DerailStopped",
+    "ScrimmageStopped",
 )
 # The agent chose this call. Under a fault that is what it did about the failure.
 CHOSEN_CALLS = ("unlisted", "web_write", "blind_child")
@@ -147,7 +147,7 @@ class Runner:
         self.config = config
         self.control_url = control_url  # lets a test point the agent elsewhere
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        runs = config.root / "derail-runs"
+        runs = config.root / "scrimmage-runs"
         self.folder = runs / f"{stamp}-{secrets.token_hex(3)}"
         self.store = RecordStore(self.folder)
         # Records can hold customer data, so they stay out of the team's git repo.
@@ -159,7 +159,7 @@ class Runner:
         self.server = ControlServer(
             self.token, self.store, on_refused=self._refused, ledger=self.ledger
         )
-        self.answers = Path(tempfile.mkdtemp(prefix="derail-answers-"))
+        self.answers = Path(tempfile.mkdtemp(prefix="scrimmage-answers-"))
         self.lock = threading.Lock()
         self.procs: dict[str, subprocess.Popen[bytes]] = {}
         self.stopped_rows: set[tuple[str, str]] = set()
@@ -194,18 +194,18 @@ class Runner:
     def env(self, run: str) -> dict[str, str]:
         agent = self.config.agent
         env = dict(os.environ)
-        for name in ("DERAIL_ROOT_PID", "DERAIL_PYTHON", "DERAIL_CHILDREN"):
+        for name in ("SCRIMMAGE_ROOT_PID", "SCRIMMAGE_PYTHON", "SCRIMMAGE_CHILDREN"):
             env.pop(name, None)  # the program sets the first two for itself
         env.update(
-            DERAIL_TOKEN=self.token,
-            DERAIL_CONTROL_URL=self.control_url(self.server.url),
-            DERAIL_RUN=run,
-            DERAIL_ANSWER_FILE=str(self.answers / f"{run}.txt"),
-            DERAIL_ALLOW_IMPORTS=",".join(agent.allowed_imports()),
-            DERAIL_TOOLS=planner.tools_text(agent.tools, agent.renames),
+            SCRIMMAGE_TOKEN=self.token,
+            SCRIMMAGE_CONTROL_URL=self.control_url(self.server.url),
+            SCRIMMAGE_RUN=run,
+            SCRIMMAGE_ANSWER_FILE=str(self.answers / f"{run}.txt"),
+            SCRIMMAGE_ALLOW_IMPORTS=",".join(agent.allowed_imports()),
+            SCRIMMAGE_TOOLS=planner.tools_text(agent.tools, agent.renames),
         )
         if agent.children:
-            env["DERAIL_CHILDREN"] = "1"
+            env["SCRIMMAGE_CHILDREN"] = "1"
         return env
 
     def program(self, question: str) -> list[str]:
@@ -389,7 +389,7 @@ class Runner:
             "row": row.name,
             "seq": seq,
             "proc": proc,
-            "library": "derail",
+            "library": "scrimmage",
         }
 
     def left_line(self, run: str, row: planner.Row, pid: int, command: str) -> dict[str, object]:
@@ -442,7 +442,7 @@ class Runner:
         self.server.start()
         self.wake_read, self.wake = os.pipe()
         os.set_blocking(self.wake, False)  # set_wakeup_fd needs it, and a full pipe is fine
-        watcher = threading.Thread(target=self._watch, name="derail-stop", daemon=True)
+        watcher = threading.Thread(target=self._watch, name="scrimmage-stop", daemon=True)
         watcher.start()
         previous = {sig: signal.signal(sig, self._interrupted) for sig in STOP_SIGNALS}
         old_wakeup = signal.set_wakeup_fd(self.wake)
@@ -521,7 +521,7 @@ def real_error(line: dict[str, object]) -> str | None:
 
 
 class Interrupted(Exception):
-    """derail test got SIGTERM or SIGINT."""
+    """scrimmage test got SIGTERM or SIGINT."""
 
 
 def reported_tools(notices: list[dict[str, object]]) -> list[str] | None:
@@ -608,7 +608,7 @@ def kill_those_who_left(run: str, group: int) -> list[tuple[int, str]]:
     """
     if not Path("/proc/self/environ").exists():
         return []
-    wanted = f"DERAIL_RUN={run}".encode()
+    wanted = f"SCRIMMAGE_RUN={run}".encode()
     killed: list[tuple[int, str]] = []
     for entry in Path("/proc").iterdir():
         if not entry.name.isdigit() or int(entry.name) == os.getpid():
@@ -832,7 +832,7 @@ def counts(ended: Counter[str]) -> str:
 
 @dataclass(frozen=True)
 class Report:
-    """What derail test found, once. The text and the JSON are two renderings of it."""
+    """What scrimmage test found, once. The text and the JSON are two renderings of it."""
 
     config: Config
     results: list[RunResult]
@@ -945,7 +945,7 @@ def build_report(
             if any(r.outcome == "answered" for r in ran):
                 mistakes.append(
                     f"{test.name}: no baseline run made a model call, so the budget is not "
-                    "working; check for a cache in front of the model or a client Derail "
+                    "working; check for a cache in front of the model or a client Scrimmage "
                     "does not gate"
                 )
             else:  # the agent never got that far, which says nothing about the budget
@@ -1030,7 +1030,7 @@ def print_report(found: Report, out: TextIO) -> int:
     """The report as text: the table, the lines under it, and one line per message."""
     config = found.config
     print(
-        f"derail test: {plural(len(config.tests), 'test')}, {plural(len(found.rows), 'row')}, "
+        f"scrimmage test: {plural(len(config.tests), 'test')}, {plural(len(found.rows), 'row')}, "
         f"{plural(len(found.results), 'run')}; "
         f"records in {found.folder}",
         file=out,
@@ -1070,7 +1070,7 @@ def report(
 
 
 def report_json(found: Report) -> dict[str, object]:
-    """The fields `derail test --json` adds to the envelope. Its lists come from messages."""
+    """The fields `scrimmage test --json` adds to the envelope. Its lists come from messages."""
     return {
         "records": str(found.folder),
         "tests": len(found.config.tests),

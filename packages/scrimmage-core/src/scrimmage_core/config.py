@@ -1,4 +1,4 @@
-"""Read derail.toml. Every bad value is reported with its table and key.
+"""Read scrimmage.toml. Every bad value is reported with its table and key.
 
 Only what this version supports is accepted. Anything else is rejected, never read
 and ignored; docs/configuration.md lists what later versions add.
@@ -210,7 +210,7 @@ def check_references(config: Config) -> list[str]:
         problems.append(f"[agent] command: {config.agent.command[0]} is not a program it can find")
     if config.agent.command and (flag := skipping_flag(config.agent.command, config.root)):
         problems.append(
-            f"[agent] command: {flag} keeps Python from running Derail's startup file, so the "
+            f"[agent] command: {flag} keeps Python from running Scrimmage's startup file, so the "
             "program would run with no gates; remove it"
         )
     problems += [p for test in config.tests if (p := bad_question(test, config.agent))]

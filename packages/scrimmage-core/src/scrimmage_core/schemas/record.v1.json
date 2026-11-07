@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:derail:schema:record:v1",
-  "title": "Derail record line, version 1",
+  "$id": "urn:scrimmage:schema:record:v1",
+  "title": "Scrimmage record line, version 1",
   "description": "One line of a run's JSON Lines record: a call, or the summary that ends the record.",
   "oneOf": [
     {

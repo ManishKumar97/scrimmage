@@ -1,6 +1,6 @@
 # JSON output
 
-`derail test --json` and `derail check --json` print one JSON document on standard output and nothing else.
+`scrimmage test --json` and `scrimmage check --json` print one JSON document on standard output and nothing else.
 They are for a coding agent or a CI step that reads the result, not the table.
 Read the document with one `json.loads` of standard output, then act on its fields and their stable values, never on message text.
 
@@ -17,11 +17,11 @@ Every command's document starts with the same fields:
 ```json
 {
   "v": 1,
-  "derail": "0.4.0",
+  "scrimmage": "0.4.0",
   "command": "test",
   "exit": 1,
   "status": "failed",
-  "config": "derail.toml",
+  "config": "scrimmage.toml",
   "mistakes": [{"message": "order-status fault 1: the fault never fired in any run, so the row tested nothing"}],
   "notes": [],
   "warnings": [],
@@ -32,7 +32,7 @@ Every command's document starts with the same fields:
 | Field | Meaning |
 |---|---|
 | `v` | The version of this format, 1. |
-| `derail` | The installed Derail version, so a document can be traced to the release that made it. `unknown` when Derail runs with no package metadata, such as from a source tree. |
+| `scrimmage` | The installed Scrimmage version, so a document can be traced to the release that made it. `unknown` when Scrimmage runs with no package metadata, such as from a source tree. |
 | `command` | `test` or `check`. |
 | `exit` | The process's exit code. Always equal to it. |
 | `status` | A word for the exit code, per command; see below. |
@@ -40,7 +40,7 @@ Every command's document starts with the same fields:
 | `mistakes` | One item per line the text prints after `test mistake:`, or per problem in the file. |
 | `notes` | One item per line the text prints after `note:`. |
 | `warnings` | One item per line the text prints after `warning:`. With `real = ["tool:*"]` the first one says that every tool that is not mocked runs for real; the text prints it above the table. |
-| `infra` | One item per line the text prints after `infrastructure error:`, and the reason Derail itself stopped, such as `stopped by SIGTERM`. When a run failed by itself, it points at the runs whose `outcome` is `infrastructure error`, in `run_details`. |
+| `infra` | One item per line the text prints after `infrastructure error:`, and the reason Scrimmage itself stopped, such as `stopped by SIGTERM`. When a run failed by itself, it points at the runs whose `outcome` is `infrastructure error`, in `run_details`. |
 
 Each item is an object with one field, `message`, the line's text: `{"message": "..."}`.
 It is an object so a later version can add a field to it, such as a code, without changing its type.
@@ -51,12 +51,12 @@ The text of a message can change in any release.
 | `test` | `passed` | `failed` | `mistake` | `infra` |
 | `check` | `valid` | | `mistake` | `infra` |
 
-## derail test --json
+## scrimmage test --json
 
 ```json
 {
-  "v": 1, "derail": "0.4.0", "command": "test", "exit": 1, "status": "failed", "config": "derail.toml",
-  "records": "/home/acme/bot/derail-runs/20261107T101500Z-a1b2c3",
+  "v": 1, "scrimmage": "0.4.0", "command": "test", "exit": 1, "status": "failed", "config": "scrimmage.toml",
+  "records": "/home/acme/bot/scrimmage-runs/20261107T101500Z-a1b2c3",
   "tests": 1,
   "rows": [
     {
@@ -91,7 +91,7 @@ The text of a message can change in any release.
 |---|---|
 | `records` | The folder that holds this test's records, as the text's first line names it. `null` when the file did not load, so no folder was made. |
 | `tests` | How many `[[test]]` tables the file has. |
-| `rows` | One object per table row, in the table's order. Empty when the file did not load, when a signal stopped the test, or when Derail itself failed. A test a refusal stopped, such as for the budget, still has every row, and the rows that did not run have `runs` 0. |
+| `rows` | One object per table row, in the table's order. Empty when the file did not load, when a signal stopped the test, or when Scrimmage itself failed. A test a refusal stopped, such as for the budget, still has every row, and the rows that did not run have `runs` 0. |
 | `cost_usd` | What the model calls cost, in dollars. |
 | `budget_usd` | `max_cost_usd`, or `null` when the budget is off. |
 | `stopped_by` | The reason a refusal stopped the whole test, such as `budget`, or `null`. |
@@ -130,18 +130,18 @@ Each run in `run_details`:
 | `answer_preview` | The answer with secrets removed, cut at 200 characters, as a record's preview is. The full answer is in the record. `null` with no answer. |
 
 A file that does not load gives the envelope with `rows: []`, `records: null` and each problem in `mistakes`, with exit 2.
-With `--json`, once Derail has started, Ctrl-C or SIGTERM while Derail loads, while the file is read or while runs go stops the command with `status` `infra`, exit 3, `rows: []` and the reason in `infra`, such as `stopped by SIGTERM`.
+With `--json`, once Scrimmage has started, Ctrl-C or SIGTERM while Scrimmage loads, while the file is read or while runs go stops the command with `status` `infra`, exit 3, `rows: []` and the reason in `infra`, such as `stopped by SIGTERM`.
 Runs that were going are stopped first. `records` names the records folder if the test had made one.
-A failure of Derail itself gives the same, with the error in `infra`.
-Derail has started from the moment its entry point runs, a few tens of milliseconds after Python does; a signal before that ends the process with no document.
+A failure of Scrimmage itself gives the same, with the error in `infra`.
+Scrimmage has started from the moment its entry point runs, a few tens of milliseconds after Python does; a signal before that ends the process with no document.
 Once the result is settled, a signal is ignored until the process exits, so its exit code always equals the document's `exit`.
 SIGKILL cannot be caught, so it leaves no document.
 
-## derail check --json
+## scrimmage check --json
 
 ```json
 {
-  "v": 1, "derail": "0.4.0", "command": "check", "exit": 0, "status": "valid", "config": "derail.toml",
+  "v": 1, "scrimmage": "0.4.0", "command": "check", "exit": 0, "status": "valid", "config": "scrimmage.toml",
   "summary": {"tests": 2, "rows": 5, "runs": 15, "tools": 4, "budget_usd": 5.0},
   "mistakes": [], "notes": [], "warnings": [], "infra": []
 }

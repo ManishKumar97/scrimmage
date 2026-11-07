@@ -1,7 +1,7 @@
 """The starter for a function agent: python -m scrimmage_core.start module:function question.
 
 It calls the function with the question, waits for it if it is async, and writes the
-answer to DERAIL_ANSWER_FILE, so the agent's own prints cannot mix with it.
+answer to SCRIMMAGE_ANSWER_FILE, so the agent's own prints cannot mix with it.
 """
 
 import asyncio
@@ -80,12 +80,12 @@ def main(argv: list[str]) -> int:
     except BadAnswerPath as exc:
         run = current()
         if run is not None:
-            run.notice("answer_path", "derail", str(exc), mistake=str(exc))
-        print(f"derail: {exc}", file=sys.stderr)
+            run.notice("answer_path", "scrimmage", str(exc), mistake=str(exc))
+        print(f"scrimmage: {exc}", file=sys.stderr)
         return 1
     # str() of a text enum is its name, not its value.
     answer = result if isinstance(result, str) else str(result)
-    path = os.environ.get("DERAIL_ANSWER_FILE")
+    path = os.environ.get("SCRIMMAGE_ANSWER_FILE")
     if path:
         with open(path, "w", encoding="utf-8", errors="replace") as out:
             out.write(answer)

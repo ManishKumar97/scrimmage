@@ -1,4 +1,4 @@
-"""The derail command: derail test, derail check and derail schema.
+"""The scrimmage command: scrimmage test, scrimmage check and scrimmage schema.
 
 With --json, standard output holds one JSON document and nothing else. Every command's
 document starts with the same envelope; schemas/cli.v1.json describes it.
@@ -22,7 +22,7 @@ from scrimmage_core.runner import INFRA, MISTAKE, OK, Interrupted, Runner, plura
 
 SCHEMAS = Path(__file__).parent / "schemas"
 ENVELOPE_VERSION = 1
-UNKNOWN_VERSION = "unknown"  # Derail runs from a source tree with no package metadata
+UNKNOWN_VERSION = "unknown"  # Scrimmage runs from a source tree with no package metadata
 LISTS = (running.MISTAKES, running.NOTES, running.WARNINGS, running.INFRA_ERRORS)
 # The word for each exit code, per command. A command never gives a code it has no word for.
 STATUS = {
@@ -35,7 +35,7 @@ STOP_SIGNALS = entry.STOP_SIGNALS
 
 
 class Stopped(BaseException):
-    """derail test or check got SIGINT or SIGTERM outside the runs, with --json.
+    """scrimmage test or check got SIGINT or SIGTERM outside the runs, with --json.
 
     The signal handler never raises it: it only notes the signal, and stop_point raises it
     in plain code. An exception raised in a handler that fires inside a __del__, a weakref
@@ -44,22 +44,22 @@ class Stopped(BaseException):
 
 
 def main(argv: list[str] | None = None, *, process: bool = False) -> int:
-    """The derail command. process: this is the derail process itself, which exits on the
+    """The scrimmage command. process: this is the scrimmage process itself, which exits on the
     code returned, so signals stay ignored after the document is printed."""
     # No abbreviations: entry.py looks for --json itself, so --js would skip its handlers.
-    parser = argparse.ArgumentParser(prog="derail", allow_abbrev=False)
+    parser = argparse.ArgumentParser(prog="scrimmage", allow_abbrev=False)
     commands = parser.add_subparsers(dest="command", required=True)
-    test = commands.add_parser("test", help="run every test in derail.toml", allow_abbrev=False)
+    test = commands.add_parser("test", help="run every test in scrimmage.toml", allow_abbrev=False)
     check = commands.add_parser(
-        "check", help="check derail.toml without running anything", allow_abbrev=False
+        "check", help="check scrimmage.toml without running anything", allow_abbrev=False
     )
     for command in (test, check):
-        command.add_argument("path", nargs="?", default="derail.toml", type=Path)
+        command.add_argument("path", nargs="?", default="scrimmage.toml", type=Path)
         command.add_argument("--json", action="store_true", help="print one JSON document")
-    commands.add_parser("schema", help="print the JSON Schema of derail.toml")
+    commands.add_parser("schema", help="print the JSON Schema of scrimmage.toml")
     args = parser.parse_args(argv)
     if args.command == "schema":
-        sys.stdout.write((SCHEMAS / "derail-toml.v1.json").read_text())
+        sys.stdout.write((SCHEMAS / "scrimmage-toml.v1.json").read_text())
         return OK
     run = run_test if args.command == "test" else run_check
     if not args.json:
@@ -78,7 +78,7 @@ def settle() -> None:
     entry.pending.clear()
 
 
-# With --json, a signal is noted, as while Derail loads, and acted on at the next stop point.
+# With --json, a signal is noted, as while Scrimmage loads, and acted on at the next stop point.
 stop = entry.note
 
 
@@ -92,30 +92,30 @@ def as_json(
     command: str, path: Path, run: Callable[[Path, "Found | None"], int], process: bool
 ) -> int:
     """Run a command for --json: one document on standard output, whatever happens."""
-    version = derail_version()
+    version = scrimmage_version()
     found = Found(command, str(path))
     previous = {sig: signal.getsignal(sig) for sig in STOP_SIGNALS}
     try:
         try:
             for sig in STOP_SIGNALS:
                 signal.signal(sig, stop)
-            stop_point()  # a signal that came while Derail was still loading
+            stop_point()  # a signal that came while Scrimmage was still loading
             code = run(path, found)
             stop_point()  # one that came after the last stop point inside the command
         except (Stopped, KeyboardInterrupt) as exc:
             code = found.fail(f"stopped by {str(exc) or 'SIGINT'}")  # Ctrl-C has no name
-        except Exception as exc:  # Derail's own failure still gives a document
-            code = found.fail(f"derail {command} failed: {exc!r}")
+        except Exception as exc:  # Scrimmage's own failure still gives a document
+            code = found.fail(f"scrimmage {command} failed: {exc!r}")
         settle()
         text = json.dumps(envelope(command, code, found, version), indent=2)
     except Exception as exc:  # the document itself could not be built
         settle()
         code = INFRA
         bare = Found(command, str(path))
-        bare.fail(f"derail {command} could not write its document: {exc!r}")
+        bare.fail(f"scrimmage {command} could not write its document: {exc!r}")
         text = json.dumps(envelope(command, code, bare, version), indent=2)
     print(text, flush=True)
-    # The derail process exits on this code with signals still ignored. A caller in the
+    # The scrimmage process exits on this code with signals still ignored. A caller in the
     # same process, such as a test, gets its own handlers back.
     if not process:
         for sig, handler in previous.items():
@@ -124,7 +124,7 @@ def as_json(
     return code
 
 
-def derail_version() -> str:
+def scrimmage_version() -> str:
     try:
         return importlib.metadata.version("scrimmage-core")
     except importlib.metadata.PackageNotFoundError:
@@ -183,7 +183,7 @@ def document(
     """The fields every command's document starts with, then its own, then its messages."""
     doc: dict[str, object] = {
         "v": ENVELOPE_VERSION,
-        "derail": version,
+        "scrimmage": version,
         "command": command,
         "exit": code,
         "status": STATUS[command][code],
@@ -196,7 +196,7 @@ def document(
 
 
 def read(path: Path) -> tuple[settings.Config | None, list[str]]:
-    """The file, or its problems: the one reading both derail test and derail check do."""
+    """The file, or its problems: the one reading both scrimmage test and scrimmage check do."""
     try:
         return settings.load(path.resolve()), []
     except ConfigError as exc:
@@ -205,30 +205,30 @@ def read(path: Path) -> tuple[settings.Config | None, list[str]]:
 
 def say(problems: list[str], err: TextIO) -> None:
     for problem in problems:
-        print(f"derail: {problem}", file=err)
+        print(f"scrimmage: {problem}", file=err)
 
 
 def unreadable(command: str, exc: Exception, found: Found | None) -> int:
-    """Reading the file failed inside Derail, as a parser that runs out of stack does."""
-    message = f"infrastructure error in derail {command}: {exc!r}"
+    """Reading the file failed inside Scrimmage, as a parser that runs out of stack does."""
+    message = f"infrastructure error in scrimmage {command}: {exc!r}"
     if found is not None:
         return found.fail(message)
-    print(f"derail: {message}", file=sys.stderr)
+    print(f"scrimmage: {message}", file=sys.stderr)
     last = "the file was not checked" if command == "check" else "the test did not start"
-    print(f"derail {command}: {last}; nothing was run")
+    print(f"scrimmage {command}: {last}; nothing was run")
     return INFRA
 
 
 def run_test(path: Path, found: Found | None) -> int:
     try:
         config, problems = read(path)
-    except Exception as exc:  # Derail's own failure, not a mistake in the file
+    except Exception as exc:  # Scrimmage's own failure, not a mistake in the file
         return unreadable("test", exc, found)
     stop_point()
     if config is None:
         if found is None:
             say(problems, sys.stderr)
-            print("derail: the test stopped before the first run", file=sys.stderr)
+            print("scrimmage: the test stopped before the first run", file=sys.stderr)
         else:
             found.messages += [(running.MISTAKES, problem) for problem in problems]
         return MISTAKE
@@ -252,7 +252,7 @@ def run_test(path: Path, found: Found | None) -> int:
             runner.server.server.server_close()
     if stopped is not None:
         if found is None:
-            print(f"derail: {stopped}", file=sys.stderr)
+            print(f"scrimmage: {stopped}", file=sys.stderr)
             return INFRA
         return found.fail(stopped)
     assert runner is not None
@@ -265,10 +265,10 @@ def run_test(path: Path, found: Found | None) -> int:
 
 
 def run_check(path: Path, found: Found | None) -> int:
-    """The checks derail test makes before its first run. It starts nothing."""
+    """The checks scrimmage test makes before its first run. It starts nothing."""
     try:
         config, problems = read(path)
-    except Exception as exc:  # Derail's own failure, not a mistake in the file
+    except Exception as exc:  # Scrimmage's own failure, not a mistake in the file
         return unreadable("check", exc, found)
     stop_point()
     if config is None:
@@ -276,7 +276,7 @@ def run_check(path: Path, found: Found | None) -> int:
             found.messages += [(running.MISTAKES, problem) for problem in problems]
             return MISTAKE
         say(problems, sys.stderr)
-        print(f"derail check: {plural(len(problems), 'problem')}; nothing was run")
+        print(f"scrimmage check: {plural(len(problems), 'problem')}; nothing was run")
         return MISTAKE
     agent = config.agent
     rows = len(planner.rows(config))
@@ -293,7 +293,7 @@ def run_check(path: Path, found: Found | None) -> int:
     tools = plural(len(agent.tools), "tool") if agent.tools else "no tools list"
     budget = "no budget" if agent.max_cost_usd is None else f"a budget of ${agent.max_cost_usd:g}"
     print(
-        f"derail check: {path} is valid: {plural(len(config.tests), 'test')}, "
+        f"scrimmage check: {path} is valid: {plural(len(config.tests), 'test')}, "
         f"{plural(rows, 'row')}, {plural(rows * agent.runs, 'run')}, {tools}, {budget}"
     )
     return OK

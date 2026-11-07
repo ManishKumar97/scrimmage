@@ -25,12 +25,12 @@ def answer(question: str) -> str:
     ...
 ```
 
-Nothing in this code mentions Derail.
+Nothing in this code mentions Scrimmage.
 The full example is in the repository under `tests/example/`.
 
 ## 2. The test file
 
-Next to the code, write `derail.toml`:
+Next to the code, write `scrimmage.toml`:
 
 ```toml
 [agent]
@@ -73,21 +73,21 @@ This says:
 First check the file. This runs nothing and costs nothing:
 
 ```bash
-derail check
+scrimmage check
 ```
 
 ```text
-derail check: derail.toml is valid: 1 test, 2 rows, 6 runs, 4 tools, a budget of $5
+scrimmage check: scrimmage.toml is valid: 1 test, 2 rows, 6 runs, 4 tools, a budget of $5
 ```
 
 Then run the test:
 
 ```bash
-derail test
+scrimmage test
 ```
 
 ```text
-derail test: 1 test, 2 rows, 6 runs; records in derail-runs/20261105T075653Z-e277a2
+scrimmage test: 1 test, 2 rows, 6 runs; records in scrimmage-runs/20261105T075653Z-e277a2
 test          row       fault                   runs  fired  done  passed  rate  range    tools  cost     result
 order-status  baseline  -                       3     -      3     3/3     100%  44-100%  2.0    0.00015  pass
 order-status  fault 1   tool:get_order timeout  3     3      3     3/3     100%  44-100%  2.0    0.00015  pass
@@ -95,7 +95,7 @@ range: a 95% Wilson interval, from these runs alone
 model calls cost $0.0003 of a budget of $5
 ```
 
-Derail ran the test as two **rows**: a baseline with the mocks and no fault, and one row with the timeout.
+Scrimmage ran the test as two **rows**: a baseline with the mocks and no fault, and one row with the timeout.
 Each row ran three times, each time as a brand-new program.
 In all three fault runs the timeout fired, and the bot admitted it, so both rows pass.
 The rate and its range say what happened in these three runs, not what the next run will do.
@@ -103,7 +103,7 @@ If a row fails, the lines under the table name the rule that broke. See [Judging
 
 ## 4. Read what happened
 
-Each run has a record in `derail-runs/`, one JSON object per line:
+Each run has a record in `scrimmage-runs/`, one JSON object per line:
 
 ```json
 {"call": "model:openai", "action": "real", "model": "gpt-4o-mini", "status": 200, "cost_usd": 0.0000225, ...}
@@ -122,6 +122,6 @@ The answer is in the summary line, so you can read what the bot said, and `judge
 | 0 | Every row passed |
 | 1 | A row failed |
 | 2 | A mistake in the test: a refused call, a fault that never fired, a mock that does not fit its type, a misspelled label, a failed baseline, a row with no result, or a test the budget stopped |
-| 3 | An infrastructure error: a run whose record is incomplete, an error from the provider nobody injected, or a failure inside Derail itself |
+| 3 | An infrastructure error: a run whose record is incomplete, an error from the provider nobody injected, or a failure inside Scrimmage itself |
 
 Next: [Failing the model, and keeping a budget](model-faults.md), [An agent run as a script](scripts.md) if yours is a program and not a function, or [Concepts](concepts.md).

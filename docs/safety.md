@@ -3,7 +3,7 @@
 A test runs your agent many times.
 A tool that changes data, such as `refund_order`, must never run for real by accident.
 
-Nothing can reliably tell a read from a write by looking at a tool, so Derail does not try.
+Nothing can reliably tell a read from a write by looking at a tool, so Scrimmage does not try.
 
 ## Every tool is refused unless the test allows it
 
@@ -15,11 +15,11 @@ Any tool can be mocked instead, write tools included, so a test can give `refund
 | `tool:check_inventory` | yes | Runs for real |
 | `tool:refund_order` | no | Refused; the run stops as "refused call" |
 
-A refused call raises `DerailRefused`, an error of Derail's own.
+A refused call raises `ScrimmageRefused`, an error of Scrimmage's own.
 Its message names the call and the two fixes: mock it, or add it to `real` if it is safe.
 
 Your code, or a framework, might swallow that error and carry on, and the next tool could be another write.
-So one refusal ends the run: Derail fails every gated call after it, and the runner stops the program.
+So one refusal ends the run: Scrimmage fails every gated call after it, and the runner stops the program.
 
 If you have decided every tool is safe, write `real = ["tool:*"]`; the run table then says so in its header.
 
@@ -29,10 +29,10 @@ Model calls run for real, because they are what is being tested.
 Everything around them is checked:
 
 - A hosted MCP server can change data at the provider, where no gate can see it. A request that offers one is never sent unless you list it as `hosted:mcp/<label>` under `real`.
-- A tool of a type Derail does not know stops the test, so a new provider feature costs a table update, never a safety gap.
+- A tool of a type Scrimmage does not know stops the test, so a new provider feature costs a table update, never a safety gap.
 - A tool the model is offered that no gate sees could run for real unchecked, so the request is not sent and the test stops.
-- A chat request body Derail cannot read is refused, because the tools in it cannot be checked.
-- When a fault names a model, a call its label names with no model name Derail can read is refused with `unreadable_model`, because the fault could hit the wrong call. See [Failing one model](model-faults.md#a-request-with-no-name-derail-can-read).
+- A chat request body Scrimmage cannot read is refused, because the tools in it cannot be checked.
+- When a fault names a model, a call its label names with no model name Scrimmage can read is refused with `unreadable_model`, because the fault could hit the wrong call. See [Failing one model](model-faults.md#a-request-with-no-name-scrimmage-can-read).
 - Any other write to a model host, such as starting a fine-tuning job, is a web request, so it is refused unless `real` lists it.
 - A model call redirected to a host that is not a model host is refused, so it cannot leave the budget behind. If your gateway really does redirect to another host, name that host under `model_hosts`.
 
@@ -64,11 +64,11 @@ An MCP tool call is refused unless a test mocks it or `real` lists it, like a Py
 A tool the server marks as read-only is refused all the same, because that mark is only a hint from the server.
 The refusal says so.
 A refusal happens at the MCP gate, so over streamable HTTP the server never sees the call.
-Requests that are not tool calls, such as `tools/list`, pass; a request Derail does not know is refused. See [MCP tools](mcp.md).
+Requests that are not tool calls, such as `tools/list`, pass; a request Scrimmage does not know is refused. See [MCP tools](mcp.md).
 
 Some of the requests that pass can still do harm.
 `resources/read`, `prompts/get`, `completion/complete` and `resources/subscribe` run code on the server, and a server can do anything in that code, such as count a read or send an email.
-Derail does not stop them, because nothing marks which ones are safe.
+Scrimmage does not stop them, because nothing marks which ones are safe.
 Each one leaves a line in the record with the action `real`, so you can see that it happened.
 If a stray one would do real harm, point the test at a server that cannot do it.
 
@@ -105,7 +105,7 @@ Otherwise a typo such as `refund_ordr` would leave the real `refund_order` runni
 
 ## What the gates assume
 
-Derail stops ordinary code from running a write by accident.
+Scrimmage stops ordinary code from running a write by accident.
 It runs inside your program, so it cannot stop code written to get around it.
 Code that deliberately works around a gate, or calls the plain function directly, is outside what it covers.
 So a test is not a sandbox.
@@ -113,16 +113,16 @@ If one stray call to a tool would do real harm, make that tool unreachable from 
 
 ## Staying out of production
 
-- Installing or importing Derail never switches anything on.
-- The startup file is never on Python's default path; only `derail-run` puts it there.
+- Installing or importing Scrimmage never switches anything on.
+- The startup file is never on Python's default path; only `scrimmage-run` puts it there.
 - The SDK switches on only when a test run gives it its secret, and then prints that it is active. A child process that joins prints nothing, and the record lists it.
 
-In production you start your agent the usual way, and Derail is never loaded.
+In production you start your agent the usual way, and Scrimmage is never loaded.
 
-## derail.toml runs code
+## scrimmage.toml runs code
 
-`function` names code that runs, so treat `derail.toml` like code.
-A CI job that holds model API keys must not run `derail test` on a pull request from an outside contributor.
+`function` names code that runs, so treat `scrimmage.toml` like code.
+A CI job that holds model API keys must not run `scrimmage test` on a pull request from an outside contributor.
 
 ## Records
 

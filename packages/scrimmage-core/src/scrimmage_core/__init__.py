@@ -1,1 +1,1 @@
-"""The Derail SDK. Built slice by slice."""
+"""The Scrimmage SDK. Built slice by slice."""

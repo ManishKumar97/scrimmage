@@ -7,8 +7,9 @@ requires-python = ">=3.11"
 dependencies = ["scrimmage"]
 
 [project.scripts]
-derail = "scrimmage_core.entry:main"
-derail-run = "scrimmage_core.run_command:main"
+scrimmage = "scrimmage_core.entry:main"
+scrim = "scrimmage_core.entry:main"
+scrimmage-run = "scrimmage_core.run_command:main"
 
 [build-system]
 requires = ["hatchling>=1.27"]

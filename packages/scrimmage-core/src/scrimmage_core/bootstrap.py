@@ -1,4 +1,4 @@
-"""Switch the SDK on in a program derail-run started with DERAIL_TOKEN set.
+"""Switch the SDK on in a program scrimmage-run started with SCRIMMAGE_TOKEN set.
 
 The program the runner started fetches its plan before the team's code runs. If it cannot,
 the program ends here, so the agent never runs without its plan. A child process prints
@@ -33,7 +33,7 @@ TERM_WAIT_S = 4.0  # under the runner's five seconds before SIGKILL
 
 def stop(message: str) -> NoReturn:
     print(
-        f"derail: {message}; the program stops before the agent runs",
+        f"scrimmage: {message}; the program stops before the agent runs",
         file=sys.stderr,
     )
     sys.stderr.flush()
@@ -46,11 +46,11 @@ def report_tools(run_state: state.RunState) -> None:
         return
     # A blocked tool is still one the agent has: its label is spelled right.
     tools = sorted(run_state.seen | run_state.blocked.keys())
-    run_state.notice("tools_seen", "derail", "the tools the agent has", tools=tools)
+    run_state.notice("tools_seen", "scrimmage", "the tools the agent has", tools=tools)
 
 
 def outside(plan: Plan, prefixes: list[str]) -> str | None:
-    """The first import path in the plan that DERAIL_ALLOW_IMPORTS does not cover."""
+    """The first import path in the plan that SCRIMMAGE_ALLOW_IMPORTS does not cover."""
     raises = [f.raises for f in plan.faults if f.raises and ":" in f.raises]
     paths = [*plan.tools, *(m.type for m in plan.mocks if m.type), *raises]
     return next((path for path in paths if not allowed(path, prefixes)), None)
@@ -99,12 +99,12 @@ def handle_sigterm(last_lines: Callable[[], None]) -> None:
 
 
 def start(*, child: bool = False, target: str | None = None) -> None:
-    token = os.environ["DERAIL_TOKEN"]
-    url = os.environ.get("DERAIL_CONTROL_URL", "")
-    run = os.environ.get("DERAIL_RUN", "")
+    token = os.environ["SCRIMMAGE_TOKEN"]
+    url = os.environ.get("SCRIMMAGE_CONTROL_URL", "")
+    run = os.environ.get("SCRIMMAGE_RUN", "")
     if not url or not run:
-        stop("DERAIL_CONTROL_URL and DERAIL_RUN must be set")
-    prefixes = [p for p in os.environ.get("DERAIL_ALLOW_IMPORTS", "").split(",") if p]
+        stop("SCRIMMAGE_CONTROL_URL and SCRIMMAGE_RUN must be set")
+    prefixes = [p for p in os.environ.get("SCRIMMAGE_ALLOW_IMPORTS", "").split(",") if p]
     plan: Plan | None = None
     try:
         client = ControlClient(url, token)
@@ -113,7 +113,7 @@ def start(*, child: bool = False, target: str | None = None) -> None:
     except (ControlError, ValueError) as exc:
         stop(f"cannot get the plan for {run} from {url}: {exc}")
     if plan is not None and (path := outside(plan, prefixes)) is not None:
-        stop(f"{path} is outside DERAIL_ALLOW_IMPORTS ({','.join(prefixes) or 'empty'})")
+        stop(f"{path} is outside SCRIMMAGE_ALLOW_IMPORTS ({','.join(prefixes) or 'empty'})")
 
     def load() -> Plan:
         """A child's plan, at its first gated call. With no plan, the call is refused."""
@@ -125,7 +125,7 @@ def start(*, child: bool = False, target: str | None = None) -> None:
         return fetched if path is None else no_plan(run, f"{path} is outside the allowed imports")
 
     # G2: a child's code imports its tools before any plan could arrive.
-    tools, renames = tools_from(os.environ.get("DERAIL_TOOLS", ""))
+    tools, renames = tools_from(os.environ.get("SCRIMMAGE_TOOLS", ""))
     names = tuple(labels.tool_name(path, dict(renames)) for path in tools)
     sender = Sender(client, run, eager=child)
     run_state = state.RunState(plan, sender, prefixes, load=load, tools=names)
@@ -186,7 +186,7 @@ def start(*, child: bool = False, target: str | None = None) -> None:
     handle_sigterm(last_lines)
     if plan is not None:
         print(
-            f"derail: active for run {run} ({plan.test}, {plan.row}); "
+            f"scrimmage: active for run {run} ({plan.test}, {plan.row}); "
             "calls follow this test's plan",
             file=sys.stderr,
         )

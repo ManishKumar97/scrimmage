@@ -21,7 +21,7 @@ from types import ModuleType
 from typing import Any
 
 from scrimmage_core import hooks, tool_gate
-from scrimmage_core.errors import DerailMockError, DerailRefused
+from scrimmage_core.errors import ScrimmageMockError, ScrimmageRefused
 from scrimmage_core.http_gate import params
 from scrimmage_core.state import RunState
 
@@ -41,7 +41,7 @@ PLUMBING = ("RunnableConfig", "CallbackManagerForToolRun", "AsyncCallbackManager
 
 # The tool whose real call is in progress. _arun often delegates to _run on the same tool,
 # and that is one call, not two.
-_inside: contextvars.ContextVar[object] = contextvars.ContextVar("derail_inside")
+_inside: contextvars.ContextVar[object] = contextvars.ContextVar("scrimmage_inside")
 
 
 def install(run: RunState, stop: Callable[[str], None]) -> None:
@@ -73,7 +73,7 @@ def version() -> tuple[int, int] | None:
 def patch(module: ModuleType, run: RunState, stop: Callable[[str], None]) -> None:
     if not gatable(module):
         message = (
-            f"{LIBRARY} does not have the functions Derail gates, so its tools cannot be "
+            f"{LIBRARY} does not have the functions Scrimmage gates, so its tools cannot be "
             "checked, and the program is stopped"
         )
         run.notice("structure", LIBRARY, message)
@@ -211,7 +211,7 @@ def refusal(run: RunState, name: str) -> Callable[..., Any]:
     def refuse(tool: Any, *args: Any, **kwargs: Any) -> None:
         message = override_problem(tool, name)
         run.cannot_gate(tool.name, message)
-        raise DerailRefused(message)
+        raise ScrimmageRefused(message)
 
     return tool_gate.mark(refuse)
 
@@ -255,7 +255,7 @@ def checked(
         reason = vet(tool)
         if reason is not None:
             run.cannot_gate(tool.name, reason)
-            raise DerailRefused(reason)
+            raise ScrimmageRefused(reason)
 
     if inspect.iscoroutinefunction(entry):
 
@@ -326,7 +326,7 @@ def mock_shape(tool: Any, value: object) -> object:
         return value
     if isinstance(value, list) and len(value) == 2:
         return tuple(value)
-    raise DerailMockError(
+    raise ScrimmageMockError(
         f"the mock for {tool.name} must be a list of two items: its content and its artifact"
     )
 

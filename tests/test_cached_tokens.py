@@ -162,8 +162,8 @@ def test_a_stream_priced_from_the_built_in_table_uses_its_cached_rate(
 
 
 def priced(tmp_path: Path, entry: str) -> config.Config:
-    text = (Path(__file__).parent / "example" / "derail.toml").read_text()
-    path = tmp_path / "derail.toml"
+    text = (Path(__file__).parent / "example" / "scrimmage.toml").read_text()
+    path = tmp_path / "scrimmage.toml"
     path.write_text(text.replace("[[test]]\n", f"[agent.prices]\nacme = {entry}\n\n[[test]]\n", 1))
     return config.load(path)
 

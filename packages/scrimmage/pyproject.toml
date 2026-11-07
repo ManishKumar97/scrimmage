@@ -1,7 +1,7 @@
 [project]
 name = "scrimmage"
 version = "0.0.0"
-description = "Marks tools and runs for Derail. Does nothing unless derail is installed."
+description = "Marks tools and runs for Scrimmage. Does nothing unless scrimmage-core is installed."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []

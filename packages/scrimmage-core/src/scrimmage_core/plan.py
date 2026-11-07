@@ -127,13 +127,13 @@ def price_from(doc: dict[str, object]) -> Rates:
 
 
 def tools_text(tools: tuple[str, ...], renames: tuple[tuple[str, str], ...]) -> str:
-    """The tools list for DERAIL_TOOLS: path, or path=name when the model sees another name."""
+    """The tools list for SCRIMMAGE_TOOLS: path, or path=name when the model sees another name."""
     names = dict(renames)
     return ",".join(f"{p}={names[p]}" if p in names else p for p in tools)
 
 
 def tools_from(text: str) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
-    """DERAIL_TOOLS back as a plan's tools and renames."""
+    """SCRIMMAGE_TOOLS back as a plan's tools and renames."""
     entries = [entry.partition("=") for entry in text.split(",") if entry]
     return (
         tuple(path for path, _, _ in entries),

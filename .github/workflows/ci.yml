@@ -48,7 +48,7 @@ jobs:
     name: Startup tests on Ubuntu's Python
     runs-on: ubuntu-latest
     env:
-      # A distribution's Python has its own sitecustomize, which Derail must chain to.
+      # A distribution's Python has its own sitecustomize, which Scrimmage must chain to.
       UV_PYTHON: /usr/bin/python3.12
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4

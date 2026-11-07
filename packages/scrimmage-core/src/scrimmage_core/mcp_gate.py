@@ -29,7 +29,7 @@ TRANSPORT = "mcp.client.streamable_http"
 STDIO = "mcp.client.stdio"
 STARTS_THE_SERVER = "_create_platform_compatible_process"
 TESTED = ((2, 3), (2, 3))  # the oldest and newest minor versions this release was tested with
-GATED = "__derail_gate__"
+GATED = "__scrimmage_gate__"
 SEND_ARGUMENTS = [
     "self",
     "request",
@@ -61,7 +61,7 @@ PASSES = (
 TRACED = ("resources/read", "prompts/get", "completion/complete", "resources/subscribe")
 # The real call in flight here. A client that proxies, such as FastMCP's for several servers,
 # makes a second MCP call inside the first, which the gate decides by itself.
-FORWARDING: ContextVar[Step | None] = ContextVar("derail_mcp_forwarding", default=None)
+FORWARDING: ContextVar[Step | None] = ContextVar("scrimmage_mcp_forwarding", default=None)
 # The functions the transport opens a web request with, and where each takes the address.
 OPENERS = {"stream_within_origin": 2, "sse_within_origin": 1}
 
@@ -175,7 +175,7 @@ def broken(gate: Gate) -> None:
     named = f"mcp {'.'.join(map(str, version() or ('?',)))}"
     tested = ".".join(map(str, TESTED[1]))
     message = (
-        f"{named} does not have the functions Derail gates. Derail supports mcp 2.x, tested "
+        f"{named} does not have the functions Scrimmage gates. Scrimmage supports mcp 2.x, tested "
         f"with {tested}, so the program is stopped, even if it never calls an MCP tool. "
         "Install mcp 2.x in the test environment, or remove mcp from it"
     )
@@ -299,7 +299,7 @@ def patch_transport(module: ModuleType, gate: Gate) -> None:
 
 
 def decided(gate: Gate, run: RunState, call: Call, arguments: object) -> Step:
-    """Count and decide one call. Raises DerailRefused after recording a refusal."""
+    """Count and decide one call. Raises ScrimmageRefused after recording a refusal."""
     gate.note(call.name, call.label)
     step = run.decide(call, {})
     forwarding = FORWARDING.get()

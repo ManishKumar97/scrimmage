@@ -2,7 +2,7 @@
 
 The other functions are the same bot set up for one test each: a streamed reply, two
 model calls at once, a provider call that creates something, and model requests that
-offer tools Derail must check.
+offer tools Scrimmage must check.
 """
 
 import asyncio
@@ -270,7 +270,7 @@ def answer_hosted(question: str) -> str:
 
 
 def answer_odd_tool(question: str) -> str:
-    """Offers a tool of a type Derail has never heard of."""
+    """Offers a tool of a type Scrimmage has never heard of."""
     client = openai.OpenAI(max_retries=0)
     try:
         client.chat.completions.create(

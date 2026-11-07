@@ -31,7 +31,7 @@ from conftest import Project, Result
 from fakes.openai_server import FakeOpenAI
 from scrimmage_core import config, decide, labels, mcp_gate, plan, state
 from scrimmage_core.config import Fault, Mock
-from scrimmage_core.errors import ConfigError, DerailRefused
+from scrimmage_core.errors import ConfigError, ScrimmageRefused
 from scrimmage_core.http_gate import MCP_TRANSPORT
 from scrimmage_core.plan import Plan
 
@@ -89,13 +89,13 @@ class Docs:
         return self.log.read_text().splitlines() if self.log.exists() else []
 
     def run(self, function: str, body: str, extra: str = "") -> Result:
-        """One derail test. Its records move aside, so a Result reads only its own."""
+        """One scrimmage test. Its records move aside, so a Result reads only its own."""
         self.project.toml.write_text(toml(function, body, extra))
         result = self.project.test()
         self.runs += 1
         kept = self.log.parent / f"records-{self.runs}"
         kept.mkdir()
-        shutil.move(self.project.root / "derail-runs", kept / "derail-runs")
+        shutil.move(self.project.root / "scrimmage-runs", kept / "scrimmage-runs")
         return dataclasses.replace(result, root=kept)
 
 
@@ -566,7 +566,7 @@ def test_arguments_and_results_are_recorded_without_secrets(docs: Docs) -> None:
     line = row(result, "baseline")[0]
     assert "aaaaaaaa" not in json.dumps(line)
     assert "[secret removed]" in line["args"]["preview"]
-    folder = next((result.root / "derail-runs").glob("*/blobs"), None)
+    folder = next((result.root / "scrimmage-runs").glob("*/blobs"), None)
     files = list(folder.iterdir()) if folder else []
     assert files, "the side folder holds the full arguments and result"
     assert all(b"aaaaaaaa" not in f.read_bytes() for f in files)
@@ -613,7 +613,7 @@ def test_a_label_a_server_made_up_is_recorded_without_secrets() -> None:
     sink = Sink()
     run = state.RunState(a_plan(), sink, [])
     gate = mcp_gate.Gate(run, None, stopper([]))
-    with pytest.raises(DerailRefused):
+    with pytest.raises(ScrimmageRefused):
         mcp_gate.decided(gate, run, mcp_gate.call_for("docs", "sk-" + "a" * 40), {})
     assert "aaaaaaaa" not in str(sink.lines[0])
 
@@ -1047,7 +1047,7 @@ def test_a_changed_library_stops_the_program(change: dict[str, Any]) -> None:
     stops: list[str] = []
     gate = gate_for(stops)
     mcp_gate.patch(module, gate)
-    assert stops and "does not have the functions Derail gates" in stops[0]
+    assert stops and "does not have the functions Scrimmage gates" in stops[0]
     assert cast(Sink, gate.run.sink).lines[0]["notice"] == "structure"
     assert not getattr(module.ClientSession.send_request, mcp_gate.GATED, False)
 
@@ -1096,8 +1096,8 @@ def test_mcp_1_stops_a_program_that_only_imports_it(docs: Docs) -> None:
     result = docs.run("acme.stale:answer", "")
     assert result.code == 3, result.out + result.err
     assert result.summaries()[0]["answer"] is None  # the agent never finished
-    assert "mcp 1.30 does not have the functions Derail gates" in result.out
-    assert "Derail supports mcp 2.x, tested with 2.3" in result.out
+    assert "mcp 1.30 does not have the functions Scrimmage gates" in result.out
+    assert "Scrimmage supports mcp 2.x, tested with 2.3" in result.out
     assert "even if it never calls an MCP tool" in result.out
     assert "Install mcp 2.x in the test environment" in result.out
 
@@ -1283,7 +1283,7 @@ def test_a_server_with_no_name_has_only_the_short_label() -> None:
 def test_bad_mcp_settings_are_rejected_with_the_reason(
     tmp_path: Path, body: str, problem: str
 ) -> None:
-    path = tmp_path / "derail.toml"
+    path = tmp_path / "scrimmage.toml"
     path.write_text(toml("acme.docs_bot:answer", body))
     with pytest.raises(ConfigError, match=problem):
         config.load(path)
@@ -1291,7 +1291,7 @@ def test_bad_mcp_settings_are_rejected_with_the_reason(
 
 @pytest.mark.design("mcp.plan_schema")
 def test_a_plan_with_mcp_entries_fits_the_schema_and_round_trips(tmp_path: Path) -> None:
-    path = tmp_path / "derail.toml"
+    path = tmp_path / "scrimmage.toml"
     body = MOCK + EMPTY
     path.write_text(toml("acme.docs_bot:answer", body, f'real = ["mcp:note", "{LABEL}"]'))
     loaded = config.load(path)

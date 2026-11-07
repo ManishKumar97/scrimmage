@@ -28,7 +28,8 @@ Fake = Callable[..., FakeOpenAI]
 pytestmark = pytest.mark.usefixtures("signals_kept")
 SCHEMAS = Path(scrimmage_core.__file__).parent / "schemas"
 CLI_SCHEMA = json.loads((SCHEMAS / "cli.v1.json").read_text())
-DERAIL = str(Path(sys.executable).parent / "derail")
+SCRIMMAGE = str(Path(sys.executable).parent / "scrimmage")
+SCRIM = str(Path(sys.executable).parent / "scrim")
 LISTS = ("mistakes", "notes", "warnings", "infra")
 PREFIXES = {
     "mistakes": "test mistake: ",
@@ -90,11 +91,13 @@ def validate(doc: object) -> None:
         jsonschema.Draft202012Validator(schema).validate(doc)
 
 
-def derail(*args: str, env: dict[str, str] | None = None, cwd: Path | None = None) -> Done:
-    """The derail command, as a team runs it: its own process, its own streams."""
-    clean = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
+def scrimmage(
+    *args: str, env: dict[str, str] | None = None, cwd: Path | None = None, command: str = SCRIMMAGE
+) -> Done:
+    """The scrimmage command, as a team runs it: its own process, its own streams."""
+    clean = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
     proc = subprocess.run(
-        [DERAIL, *args],
+        [command, *args],
         env={**clean, **(env or {})},
         cwd=cwd,
         capture_output=True,
@@ -124,24 +127,24 @@ def messages(doc: dict[str, object], key: str) -> list[str]:
 
 
 def runs_of_test(project: Project, fake_openai: Fake) -> dict[int, Done]:
-    """One `derail test --json` per exit code."""
+    """One `scrimmage test --json` per exit code."""
     toml = str(project.toml)
-    done = {0: derail("test", "--json", toml, env=model_env(fake_openai(ACME)))}
+    done = {0: scrimmage("test", "--json", toml, env=model_env(fake_openai(ACME)))}
     project.edit('expect   = ["shipped", ', 'expect   = ["refunded", ')
-    done[1] = derail("test", "--json", toml, env=model_env(fake_openai(ACME)))
+    done[1] = scrimmage("test", "--json", toml, env=model_env(fake_openai(ACME)))
     project.edit('expect   = ["refunded", ', 'expect   = ["shipped", ')
     project.edit("[agent]\n", "[agent]\nruns = 1\n")
     failing = fake_openai(["500:error_500"])
-    done[3] = derail("test", "--json", toml, env=model_env(failing))
+    done[3] = scrimmage("test", "--json", toml, env=model_env(failing))
     project.edit("[agent]\n", "[agent]\nbogus = 1\n")
-    done[2] = derail("test", "--json", toml)
+    done[2] = scrimmage("test", "--json", toml)
     return done
 
 
 def check_runs(project: Project) -> dict[int, Done]:
-    """One `derail check --json` per exit code; 3 by making the file's reader raise."""
+    """One `scrimmage check --json` per exit code; 3 by making the file's reader raise."""
     toml = str(project.toml)
-    done = {0: derail("check", "--json", toml)}
+    done = {0: scrimmage("check", "--json", toml)}
     broken = (
         "import sys; from scrimmage_core import cli, config\n"
         "def boom(path): raise RuntimeError('the reader broke')\n"
@@ -153,7 +156,7 @@ def check_runs(project: Project) -> dict[int, Done]:
     )
     done[3] = Done(proc.returncode, proc.stdout, proc.stderr)
     project.edit('name     = "order-status"', 'name     = ""')
-    done[2] = derail("check", "--json", toml)
+    done[2] = scrimmage("check", "--json", toml)
     return done
 
 
@@ -186,9 +189,16 @@ def test_each_command_prints_one_document_for_each_exit_code(
 
 @pytest.mark.design("json.version")
 def test_the_envelope_names_the_installed_version(project: Project) -> None:
-    doc = one_document(derail("check", "--json", str(project.toml)), "check")
-    assert doc["derail"] == importlib.metadata.version("scrimmage-core")
+    doc = one_document(scrimmage("check", "--json", str(project.toml)), "check")
+    assert doc["scrimmage"] == importlib.metadata.version("scrimmage-core")
     assert doc["v"] == 1 and doc["config"] == str(project.toml)
+
+
+def test_scrim_is_the_same_command_under_a_short_name(project: Project) -> None:
+    scripts = importlib.metadata.entry_points(group="console_scripts")
+    assert scripts["scrim"].value == scripts["scrimmage"].value
+    doc = one_document(scrimmage("check", "--json", str(project.toml), command=SCRIM), "check")
+    assert doc["exit"] == 0
 
 
 @pytest.mark.design("json.message_objects")
@@ -235,9 +245,9 @@ def test_sigint_during_a_test_still_prints_one_document(
     project.edit(project.toml.read_text().split("[[test.fault]]")[1], "")
     project.edit("[[test.fault]]", "")
     fake = fake_openai(["chat_answer"])
-    env = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
     proc = subprocess.Popen(
-        [DERAIL, "test", "--json", str(project.toml)],
+        [SCRIMMAGE, "test", "--json", str(project.toml)],
         env={**env, **model_env(fake)}, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )  # fmt: skip
     for _ in range(300):
@@ -272,7 +282,7 @@ def test_ctrl_c_outside_the_runs_is_still_one_document(
     assert captured.err == "" and messages(doc, "infra") == ["stopped by SIGINT"]
 
 
-def test_a_failure_of_derail_itself_is_still_one_document(
+def test_a_failure_of_scrimmage_itself_is_still_one_document(
     project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     def broken(self: Runner) -> None:
@@ -296,7 +306,7 @@ def test_a_failure_of_derail_itself_is_still_one_document(
     validate(doc)
     assert "the report broke" in messages(doc, "infra")[0]
     # The runner had started, so the document still names its records and the test.
-    assert str(doc["records"]).startswith(str(project.root / "derail-runs"))
+    assert str(doc["records"]).startswith(str(project.root / "scrimmage-runs"))
     assert doc["tests"] == 1 and doc["cost_usd"] == 0.0
 
 
@@ -462,7 +472,7 @@ def text_head(doc: dict[str, object], folder: Path) -> list[str]:
     runs = sum(cast(int, row["runs"]) for row in rows)
     tests = cast(int, doc["tests"])
     lines = [
-        f"derail test: {runner.plural(tests, 'test')}, {runner.plural(len(rows), 'row')}, "
+        f"scrimmage test: {runner.plural(tests, 'test')}, {runner.plural(len(rows), 'row')}, "
         f"{runner.plural(runs, 'run')}; records in {doc['records']}"
     ]
     warnings = messages(doc, "warnings")
@@ -516,7 +526,8 @@ def render(case_config: config.Config, results: list[runner.RunResult], folder: 
     rep = build_report(case_config, results, folder, run)  # type: ignore[arg-type]
     out = io.StringIO()
     code = print_report(rep, out)
-    doc = cli.document("test", code, "derail.toml", rep.every_message, "0.0.0", **report_json(rep))
+    found = rep.every_message
+    doc = cli.document("test", code, "scrimmage.toml", found, "0.0.0", **report_json(rep))
     validate(doc)
     return out.getvalue(), doc, rep
 
@@ -652,7 +663,7 @@ def test_the_shipped_schema_takes_what_a_later_release_adds() -> None:
     later["notes"] = [{"message": "a note", "code": "N001"}]
     cast(list[dict[str, object]], later["rows"])[0]["outcome_counts"] = {"answered": 3}
     jsonschema.Draft202012Validator(CLI_SCHEMA).validate(later)
-    record = {**doc, "command": "record", "out": "derail.recorded.toml"}
+    record = {**doc, "command": "record", "out": "scrimmage.recorded.toml"}
     jsonschema.Draft202012Validator(CLI_SCHEMA).validate(record)  # a command it does not know
     closed = jsonschema.Draft202012Validator(closed_schema())
     for changed in (later, record, {**doc, "status": "flaky"}, {**doc, "extra": 1}):
@@ -665,7 +676,7 @@ def test_the_version_comes_from_the_package_or_is_unknown(
 ) -> None:
     monkeypatch.setattr(importlib.metadata, "version", lambda name: f"sentinel-{name}")
     assert cli.main(["check", "--json", str(project.toml)]) == 0
-    assert json.loads(capsys.readouterr().out)["derail"] == "sentinel-scrimmage-core"
+    assert json.loads(capsys.readouterr().out)["scrimmage"] == "sentinel-scrimmage-core"
 
     def missing(name: str) -> str:
         raise importlib.metadata.PackageNotFoundError(name)
@@ -674,7 +685,7 @@ def test_the_version_comes_from_the_package_or_is_unknown(
     assert cli.main(["check", "--json", str(project.toml)]) == 0
     doc = json.loads(capsys.readouterr().out)
     validate(doc)
-    assert doc["derail"] == "unknown"
+    assert doc["scrimmage"] == "unknown"
 
 
 def test_a_document_that_cannot_be_written_still_gives_one(
@@ -769,7 +780,7 @@ def test_a_signal_inside_a_del_while_the_file_is_read_still_stops(
     assert done.code == 3, done.out + done.err
     doc = one_document(done, command)  # standard error is empty: nothing was dropped
     assert messages(doc, "infra") == ["stopped by SIGTERM"]
-    assert not (project.root / "derail-runs").exists()  # it stopped before a runner was made
+    assert not (project.root / "scrimmage-runs").exists()  # it stopped before a runner was made
 
 
 IN_RUNNER = (
@@ -793,7 +804,7 @@ def test_a_signal_as_the_runner_is_made_stops_before_any_run(project: Project) -
     doc = one_document(done, "test")
     assert messages(doc, "infra") == ["stopped by SIGTERM"]  # not "every run was stopped"
     assert doc["records"] is not None
-    assert not list((project.root / "derail-runs").glob("*/*.log")), "a run was started"
+    assert not list((project.root / "scrimmage-runs").glob("*/*.log")), "a run was started"
 
 
 # Blocks the stop signals in the main thread once the pool exists, so the kernel must give
@@ -813,8 +824,8 @@ runner.ThreadPoolExecutor = pool
 @pytest.mark.design("json.stops_fast")
 def test_a_signal_on_another_thread_still_stops_the_runs(project: Project) -> None:
     hang(project)
-    clean = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
-    code = f"import sys\nsys.argv = ['derail', 'test', '--json', {str(project.toml)!r}]\n"
+    clean = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
+    code = f"import sys\nsys.argv = ['scrimmage', 'test', '--json', {str(project.toml)!r}]\n"
     code += MAIN_THREAD_DEAF + "from scrimmage_core import entry\nentry.main()\n"
     proc = subprocess.Popen(
         [sys.executable, "-c", code],
@@ -822,7 +833,7 @@ def test_a_signal_on_another_thread_still_stops_the_runs(project: Project) -> No
     )  # fmt: skip
     for _ in range(300):
         time.sleep(0.1)
-        if list((project.root / "derail-runs").glob("*/*.log")):
+        if list((project.root / "scrimmage-runs").glob("*/*.log")):
             break
     time.sleep(0.5)
     sent = time.monotonic()
@@ -869,14 +880,14 @@ def test_a_signal_inside_a_del_while_runs_go_still_stops_them(project: Project) 
 @pytest.mark.design("json.stops_fast")
 def test_a_long_run_stops_within_seconds_of_each_of_two_signals(project: Project) -> None:
     hang(project)
-    env = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
     proc = subprocess.Popen(
-        [DERAIL, "test", "--json", str(project.toml)],
+        [SCRIMMAGE, "test", "--json", str(project.toml)],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )  # fmt: skip
     for _ in range(300):
         time.sleep(0.1)
-        if list((project.root / "derail-runs").glob("*/*.log")):
+        if list((project.root / "scrimmage-runs").glob("*/*.log")):
             break
     time.sleep(0.5)  # the agent is in its sleep, inside the runner's wait
     sent = time.monotonic()
@@ -908,9 +919,9 @@ def test_a_shortened_json_flag_is_a_usage_error(
 
 
 def run_entry(script: str, *argv: str) -> Done:
-    """derail's entry point in its own process, after a script that sets up a hook."""
-    clean = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
-    code = f"import sys\nsys.argv = ['derail', *{list(argv)!r}]\n{script}\n"
+    """scrimmage's entry point in its own process, after a script that sets up a hook."""
+    clean = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
+    code = f"import sys\nsys.argv = ['scrimmage', *{list(argv)!r}]\n{script}\n"
     code += "from scrimmage_core import entry\nentry.main()\n"
     proc = subprocess.run(
         [sys.executable, "-c", code], env=clean, capture_output=True, text=True, timeout=120
@@ -918,8 +929,8 @@ def run_entry(script: str, *argv: str) -> Done:
     return Done(proc.returncode, proc.stdout, proc.stderr)
 
 
-# Sends the signal as the first of Derail's heavy modules is imported, so it lands while
-# Derail loads, the window before cli can set its own handlers.
+# Sends the signal as the first of Scrimmage's heavy modules is imported, so it lands while
+# Scrimmage loads, the window before cli can set its own handlers.
 SIGNAL_WHILE_LOADING = """
 import importlib.abc, os, signal, time
 
@@ -954,14 +965,14 @@ sys.stdout = Out(sys.stdout.detach(), encoding="utf-8", line_buffering=False)
 @pytest.mark.design("json.sigterm")
 @pytest.mark.parametrize("sig", ["SIGTERM", "SIGINT"])
 @pytest.mark.parametrize("command", ["check", "test"])
-def test_a_signal_while_derail_loads_still_gives_one_document(
+def test_a_signal_while_scrimmage_loads_still_gives_one_document(
     project: Project, sig: str, command: str
 ) -> None:
     done = run_entry(SIGNAL_WHILE_LOADING.format(sig=sig), command, "--json", str(project.toml))
     assert done.code == 3, done.out + done.err
     doc = one_document(done, command)
     assert messages(doc, "infra") == [f"stopped by {sig}"]
-    assert not (project.root / "derail-runs").exists()  # it stopped before any run
+    assert not (project.root / "scrimmage-runs").exists()  # it stopped before any run
 
 
 @pytest.mark.design("json.exit_matches")
@@ -971,7 +982,7 @@ def test_a_signal_after_the_document_does_not_change_the_exit(project: Project) 
     project.edit("[agent]\n", "[agent]\nbogus = 1\n")
     bad = run_entry(SIGNAL_AFTER_PRINT, "check", "--json", str(project.toml))
     assert (bad.code, one_document(bad, "check")["exit"]) == (2, 2), bad.err
-    # The derail process itself keeps ignoring signals after main returns, until it exits.
+    # The scrimmage process itself keeps ignoring signals after main returns, until it exits.
     late = subprocess.run(
         [sys.executable, "-c", SIGNAL_AFTER_MAIN, "check", "--json", str(project.toml)],
         capture_output=True, text=True, timeout=120, check=False,
@@ -994,7 +1005,7 @@ def test_the_entry_point_without_json_sets_no_handler(
     project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     before = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
-    monkeypatch.setattr(sys, "argv", ["derail", "check", str(project.toml)])
+    monkeypatch.setattr(sys, "argv", ["scrimmage", "check", str(project.toml)])
     with pytest.raises(SystemExit) as end:
         entry.main()
     assert end.value.code == 0 and "is valid" in capsys.readouterr().out
@@ -1006,7 +1017,7 @@ def test_the_tool_star_line_is_the_first_warning_end_to_end(
     project: Project, fake_openai: Fake
 ) -> None:
     project.edit('real     = ["tool:check_inventory"]', 'real     = ["tool:*"]')
-    done = derail("test", "--json", str(project.toml), env=model_env(fake_openai(ACME)))
+    done = scrimmage("test", "--json", str(project.toml), env=model_env(fake_openai(ACME)))
     doc = one_document(done, "test")
     assert messages(doc, "warnings")[0] == runner.TOOL_STAR_LINE
 
@@ -1018,19 +1029,19 @@ NESTED = "[agent]\nfunction = 'acme.agent:answer'\nx = " + "[" * 5000 + "]" * 50
 def test_a_crash_while_reading_the_file_is_exit_3_with_or_without_json(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    path = tmp_path / "derail.toml"
+    path = tmp_path / "scrimmage.toml"
     path.write_text(NESTED)
     codes: dict[str, int] = {}
     for command in ("test", "check"):
         codes[command] = cli.main([command, str(path)])
         captured = capsys.readouterr()
-        if codes[command] == 3:  # a parser that recurses runs out of stack: Derail's failure
-            assert f"derail: infrastructure error in derail {command}: RecursionError" in (
+        if codes[command] == 3:  # a parser that recurses runs out of stack: Scrimmage's failure
+            assert f"scrimmage: infrastructure error in scrimmage {command}: RecursionError" in (
                 captured.err
             )
             assert captured.out.endswith("; nothing was run\n")
         else:  # a parser with a depth limit calls it a mistake in the file
-            assert codes[command] == 2 and "derail: derail.toml:" in captured.err
+            assert codes[command] == 2 and "scrimmage: scrimmage.toml:" in captured.err
         assert cli.main([command, "--json", str(path)]) == codes[command]
         validate(json.loads(capsys.readouterr().out))
     assert codes["test"] == codes["check"]

@@ -237,7 +237,7 @@ def test_a_request_with_no_model_name_is_refused_and_not_sent_and_is_no_pass(
         ("refused", "unreadable_model"),
     ]
     assert fake.paths.count("/v1/responses") == 1  # the baseline's, none from the fault row
-    assert "has no model name Derail can read" in result.out
+    assert "has no model name Scrimmage can read" in result.out
     summary = summary_of(result)
     assert (summary["outcome"], summary["judged"]) == ("refused call", "left out")
     row = next(line for line in result.out.splitlines() if " fault 1 " in line)

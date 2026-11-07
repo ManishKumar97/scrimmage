@@ -12,9 +12,9 @@ import pytest
 from scrimmage_core import state, tool_gate
 from scrimmage_core.config import Fault, Mock
 from scrimmage_core.errors import (
-    DerailMockError,
-    DerailRefused,
-    DerailTimeLimit,
+    ScrimmageMockError,
+    ScrimmageRefused,
+    ScrimmageTimeLimit,
 )
 from scrimmage_core.plan import Plan
 
@@ -113,14 +113,14 @@ def test_a_pydantic_style_type_is_built_with_model_validate(lines: Lines) -> Non
 @pytest.mark.parametrize("returns", [{"sku": "SKU-42"}, "not a table"])
 def test_a_mock_that_does_not_fit_is_a_mistake(lines: Lines, returns: object) -> None:
     install(lines, [Mock("tool:get_stock", returns, None)])
-    with pytest.raises(DerailMockError, match="does not fit"):
+    with pytest.raises(ScrimmageMockError, match="does not fit"):
         tool_gate.gate(get_stock, "get_stock")("SKU-42")
     assert "does not fit" in str(lines.lines[0]["mistake"])
 
 
 def test_a_validation_error_is_a_mistake(lines: Lines) -> None:
     install(lines, [Mock("tool:get_validated", {"count": 1}, None)])
-    with pytest.raises(DerailMockError, match="sku is required"):
+    with pytest.raises(ScrimmageMockError, match="sku is required"):
         tool_gate.gate(get_validated, "get_validated")("SKU-42")
 
 
@@ -134,7 +134,7 @@ def test_a_type_outside_the_allowed_prefixes_is_refused_before_import(
     lines: Lines,
 ) -> None:
     install(lines, [Mock("tool:get_text", {"a": 1}, "never_imported_module:Thing")])
-    with pytest.raises(DerailRefused, match="outside DERAIL_ALLOW_IMPORTS"):
+    with pytest.raises(ScrimmageRefused, match="outside SCRIMMAGE_ALLOW_IMPORTS"):
         tool_gate.gate(get_text, "get_text")("1")
     assert "never_imported_module" not in sys.modules
 
@@ -202,7 +202,7 @@ def a_function() -> None:
 def test_a_fault_that_cannot_be_raised_is_a_mistake(lines: Lines, raises: str) -> None:
     install(lines, faults=[Fault("tool:get_text", "error", "always", raises)])
     state.current().allowed.append("no_such_module_here.")  # type: ignore[union-attr]
-    with pytest.raises(DerailMockError, match="the fault cannot raise"):
+    with pytest.raises(ScrimmageMockError, match="the fault cannot raise"):
         tool_gate.gate(get_text, "get_text")("1")
     assert "the fault cannot raise" in str(lines.lines[0]["mistake"])
 
@@ -210,23 +210,23 @@ def test_a_fault_that_cannot_be_raised_is_a_mistake(lines: Lines, raises: str) -
 @pytest.mark.design("refused.poisons_run")
 def test_the_first_refusal_makes_every_later_call_fail(lines: Lines) -> None:
     install(lines, real=["tool:get_text"])
-    with pytest.raises(DerailRefused, match="neither mocked by this test nor listed"):
+    with pytest.raises(ScrimmageRefused, match="neither mocked by this test nor listed"):
         tool_gate.gate(get_stock, "get_stock")("A")
-    with pytest.raises(DerailRefused, match="already refused tool:get_stock"):
+    with pytest.raises(ScrimmageRefused, match="already refused tool:get_stock"):
         tool_gate.gate(get_text, "get_text")("1")  # listed under real, but the run is poisoned
     assert [line["action"] for line in lines.lines] == ["refused", "refused"]
     assert lines.kept == [True, True]  # refusals are never dropped
 
 
 @pytest.mark.design("refused.not_a_library_error")
-def test_the_refusal_error_is_derails_own() -> None:
-    # Every base is Derail's own or Python's Exception itself, never a library's error.
-    bases = DerailRefused.__mro__[1:]
+def test_the_refusal_error_is_scrimmages_own() -> None:
+    # Every base is Scrimmage's own or Python's Exception itself, never a library's error.
+    bases = ScrimmageRefused.__mro__[1:]
     assert all(
         b.__module__ == "scrimmage_core.errors" or b in (Exception, BaseException, object)
         for b in bases
     )
-    assert not issubclass(DerailRefused, (OSError, TimeoutError, ValueError, RuntimeError))
+    assert not issubclass(ScrimmageRefused, (OSError, TimeoutError, ValueError, RuntimeError))
 
 
 def test_a_real_tool_runs_and_its_result_is_recorded(lines: Lines) -> None:
@@ -279,7 +279,7 @@ def test_an_async_real_tool_error_is_recorded(lines: Lines) -> None:
 def test_a_gate_stops_a_call_once_the_time_limit_has_passed(lines: Lines) -> None:
     run = install(lines, real=["tool:*"], limit=5)
     run.began -= 6
-    with pytest.raises(DerailTimeLimit, match="time limit of 5s"):
+    with pytest.raises(ScrimmageTimeLimit, match="time limit of 5s"):
         tool_gate.gate(get_text, "get_text")("1")
 
 

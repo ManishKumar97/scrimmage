@@ -9,13 +9,13 @@ from scrimmage_core.provider_openai import Rates
 
 
 def load_text(tmp_path: Path, text: str) -> config.Config:
-    path = tmp_path / "derail.toml"
+    path = tmp_path / "scrimmage.toml"
     path.write_text(text)
     return config.load(path)
 
 
 def example(tmp_path: Path, old: str = "", new: str = "") -> config.Config:
-    text = (EXAMPLE / "derail.toml").read_text()
+    text = (EXAMPLE / "scrimmage.toml").read_text()
     assert old in text
     return load_text(tmp_path, text.replace(old, new, 1) if old else text)
 
@@ -167,7 +167,7 @@ def test_bad_files_are_rejected(tmp_path: Path, old: str, new: str, message: str
 @pytest.mark.parametrize(
     ("text", "message"),
     [
-        ("[agent", "derail.toml"),
+        ("[agent", "scrimmage.toml"),
         (
             '[[test]]\nname = "a"\nquestion = "q"\nexpect = ["x"]',
             r"\[agent\] is required",
@@ -233,7 +233,7 @@ def test_raises_takes_a_built_in_or_the_agents_own_class(tmp_path: Path) -> None
 
 @pytest.mark.design("config.no_tools_list_defers_names")
 def test_without_a_tools_list_tool_names_are_left_to_the_run(tmp_path: Path) -> None:
-    text = (EXAMPLE / "derail.toml").read_text()
+    text = (EXAMPLE / "scrimmage.toml").read_text()
     line = next(x for x in text.splitlines() if x.startswith("tools "))
     cfg = load_text(tmp_path, text.replace(line, "").replace("tool:get_order", "tool:anything"))
     assert cfg.agent.tools == ()
@@ -276,7 +276,7 @@ def test_the_budget_turns_off_on_purpose(tmp_path: Path) -> None:
 
 def test_prices_and_model_hosts_are_read(tmp_path: Path) -> None:
     text = (
-        (EXAMPLE / "derail.toml")
+        (EXAMPLE / "scrimmage.toml")
         .read_text()
         .replace(
             "[[test]]\n",
@@ -365,7 +365,7 @@ def test_bad_model_settings_are_rejected(tmp_path: Path, old: str, new: str, mes
 )
 def test_bad_prices_are_rejected(tmp_path: Path, table: str) -> None:
     text = (
-        (EXAMPLE / "derail.toml")
+        (EXAMPLE / "scrimmage.toml")
         .read_text()
         .replace("[[test]]\n", f"[agent.prices]\n{table}\n\n[[test]]\n", 1)
     )
@@ -395,7 +395,7 @@ when = "first 3"
 
 
 def with_fault(tmp_path: Path, text: str) -> config.Config:
-    return load_text(tmp_path, (EXAMPLE / "derail.toml").read_text() + text)
+    return load_text(tmp_path, (EXAMPLE / "scrimmage.toml").read_text() + text)
 
 
 @pytest.mark.design("config.model_on_model_labels")

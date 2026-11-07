@@ -13,7 +13,7 @@ do   = "status 429"
 when = "first 3"
 ```
 
-Derail answers the model call with a real HTTP 429, without touching the network.
+Scrimmage answers the model call with a real HTTP 429, without touching the network.
 The openai library reads it exactly as it would read a real one.
 
 Why `first 3`?
@@ -22,9 +22,9 @@ Each retry meets the gate again, so three failures are needed to get past the li
 
 | Attempt | What happens |
 |---|---|
-| 1 | Derail answers 429; the library waits and retries |
-| 2 | Derail answers 429; the library waits and retries |
-| 3 | Derail answers 429; the library gives up and raises `RateLimitError` into your code |
+| 1 | Scrimmage answers 429; the library waits and retries |
+| 2 | Scrimmage answers 429; the library waits and retries |
+| 3 | Scrimmage answers 429; the library gives up and raises `RateLimitError` into your code |
 
 With `first 1`, the first retry goes through and your agent never sees an error, which mainly tests the library.
 
@@ -53,7 +53,7 @@ Any status from 400 to 599 works.
 If your client sets its own `max_retries`, use `requests 1`: it fails the request and all its retries, whatever their number.
 
 Calls are counted per run.
-When two model calls run at once, such as a guardrail next to the main call, Derail matches each retry to its request by the thread or task that sent it and the request's content, so each request keeps its own number.
+When two model calls run at once, such as a guardrail next to the main call, Scrimmage matches each retry to its request by the thread or task that sent it and the request's content, so each request keeps its own number.
 
 ## Which model calls a label names
 
@@ -87,9 +87,9 @@ A bot that routes with `gpt-4o-mini` and answers with `gpt-4.1` then gets this:
 | Call | What happens |
 |---|---|
 | `gpt-4o-mini` | runs for real and is not counted |
-| `gpt-4.1`, attempt 1 | Derail answers 429; the library retries |
-| `gpt-4.1`, attempt 2 | Derail answers 429; the library retries |
-| `gpt-4.1`, attempt 3 | Derail answers 429; the library raises `RateLimitError` into your code |
+| `gpt-4.1`, attempt 1 | Scrimmage answers 429; the library retries |
+| `gpt-4.1`, attempt 2 | Scrimmage answers 429; the library retries |
+| `gpt-4.1`, attempt 3 | Scrimmage answers 429; the library raises `RateLimitError` into your code |
 
 `first N`, `requests N` and `always` count only the calls to that model, so a router call in between takes none of the count.
 It works on chat, Responses and embeddings, sync or async, with the reply streamed or not.
@@ -116,7 +116,7 @@ There are no prefixes, because `gpt-4o` would then hit a router on `gpt-4o-mini`
 | `smart`, a gateway's alias | `smart` | yes |
 
 If your code sends a dated name such as `gpt-4o-mini-2024-07-18`, write the dated name.
-A gateway's alias works the same way: Derail sits in front of the gateway, so it sees the alias and never the name behind it.
+A gateway's alias works the same way: Scrimmage sits in front of the gateway, so it sees the alias and never the name behind it.
 
 A wildcard is refused when the file is read, and so is a space at either end of the name or a character that does not print.
 
@@ -133,18 +133,18 @@ If your code sends both `gpt-4o-mini` and `gpt-4o-mini-2024-07-18`, a fault on t
 If the name was used and the fault still did not fire, the message says that instead: a refused call fires no fault, and nor does a call in a child process unless `children` is true.
 When the records cannot say, because a call had no readable name or a run was refused, the message is left out.
 
-### A request with no name Derail can read
+### A request with no name Scrimmage can read
 
-Derail reads the name from the `model` field of the request body.
+Scrimmage reads the name from the `model` field of the request body.
 That reading changes nothing: the request goes out byte for byte as your code built it, so the provider's prompt cache is not disturbed.
 
-When a fault gives `model` and a call its label names has no such field, Derail cannot tell whether the fault is for that call.
+When a fault gives `model` and a call its label names has no such field, Scrimmage cannot tell whether the fault is for that call.
 So the call is refused before it is sent, with the reason `unreadable_model`, and the test stops with exit code 2.
 That covers a request body sent from a generator, a multipart or compressed body, and a body with no `model` at all, such as a Responses call on a stored prompt.
 Firing could hit the wrong call, and letting it through could spare the right one.
 
 For a stored prompt, send `model` on that call.
-The openai library takes `model` beside `prompt`, but Derail has not confirmed what the provider does when the stored prompt names another model.
+The openai library takes `model` beside `prompt`, but Scrimmage has not confirmed what the provider does when the stored prompt names another model.
 
 Taking `model` off the fault is the other way out, and it has two costs.
 The fault hits every call its label names again, such as the router.
@@ -155,14 +155,14 @@ Calls the fault's label does not name go on as usual, and so does everything in 
 
 ## Keep a budget
 
-Every test has a budget for the whole run of `derail test`. It is $5 unless you change it:
+Every test has a budget for the whole run of `scrimmage test`. It is $5 unless you change it:
 
 ```toml
 [agent]
 max_cost_usd = 0.50
 ```
 
-Before each model call, Derail reserves what the call could cost: an estimate of its input at the full input price, plus its `max_tokens` (or `reserve_output_tokens`, 4096 by default) at the output price.
+Before each model call, Scrimmage reserves what the call could cost: an estimate of its input at the full input price, plus its `max_tokens` (or `reserve_output_tokens`, 4096 by default) at the output price.
 After the call, the real cost from the reply replaces the reservation.
 So four calls at once cannot all slip past the limit.
 The real cost prices the input tokens the provider served from its prompt cache at the cached price, as OpenAI bills them.
@@ -226,7 +226,7 @@ To hold less, set `max_tokens` on the call, lower `reserve_output_tokens`, or lo
 
 ### Prices
 
-Derail ships prices for common OpenAI models, cached input included, checked against OpenAI's pricing page on 7 November 2026.
+Scrimmage ships prices for common OpenAI models, cached input included, checked against OpenAI's pricing page on 7 November 2026.
 A dated model, such as `gpt-4o-mini-2024-07-18`, uses its family's price.
 For any other model, give the price in dollars per million tokens:
 
@@ -239,7 +239,7 @@ acme-gpt = {input = 2.0, cached_input = 0.5, output = 8.0}
 ### Cached input
 
 OpenAI caches a prompt over 1024 tokens that repeats, and bills the cached part at a lower price.
-Derail reads the cached count from each reply's usage: `prompt_tokens_details.cached_tokens` on Chat Completions, `input_tokens_details.cached_tokens` on Responses, streamed or not.
+Scrimmage reads the cached count from each reply's usage: `prompt_tokens_details.cached_tokens` on Chat Completions, `input_tokens_details.cached_tokens` on Responses, streamed or not.
 The record line shows it as `tokens.cached`, and `cost_usd` uses it, so the cost column matches the bill.
 
 | Reply | Price of each input token |
@@ -248,7 +248,7 @@ The record line shows it as `tokens.cached`, and `cost_usd` uses it, so the cost
 | a price under `[agent.prices]` with no `cached_input` | every input token at `input`, the safe overestimate |
 | a cached count above the input count, or not a whole number | every input token at `input` |
 
-The reservation before a call still counts every input token at the full price, since Derail cannot know what the provider will serve from its cache.
+The reservation before a call still counts every input token at the full price, since Scrimmage cannot know what the provider will serve from its cache.
 
 A call that sends no model name, such as a Responses call on a stored prompt, is priced by the key `""`:
 
@@ -261,7 +261,7 @@ With a budget on, a model with no price stops the test at its first call, becaus
 With `max_cost_usd = "none"`, no price is needed, and tokens are still counted.
 
 A reply without usable token counts gets a rough cost, worked out from how many bytes went each way, and its record line has `cost_estimated` set.
-On Chat Completions a stream only carries counts if your request sets `stream_options.include_usage`. Derail leaves your request as it is, so without that setting those costs are rough ones. The Responses API always sends counts in its last event.
+On Chat Completions a stream only carries counts if your request sets `stream_options.include_usage`. Scrimmage leaves your request as it is, so without that setting those costs are rough ones. The Responses API always sends counts in its last event.
 
 ## Use a gateway
 
@@ -274,20 +274,20 @@ model_hosts = [{host = "llm-gateway.internal", provider = "openai"}]
 
 ## Tools the model is offered
 
-Derail reads the tools in each model request before it goes out.
+Scrimmage reads the tools in each model request before it goes out.
 
 | The request offers | What happens |
 |---|---|
-| a tool Derail can see | it goes ahead |
+| a tool Scrimmage can see | it goes ahead |
 | a provider tool that only reads, such as `web_search` | it goes ahead, the record notes it, and the table warns, because providers bill those per use and the budget cannot see that |
 | a hosted MCP server, which runs at the provider and can change data | the request is not sent unless you list it: `real = ["hosted:mcp/orders"]` |
-| a tool of a type Derail does not know | the test stops and names the type |
+| a tool of a type Scrimmage does not know | the test stops and names the type |
 | your own tool, but no gate sees it | the request is not sent and the test stops, naming the tool to add under `tools`; use `{path, name}` when the model sees another name |
 
 A built-in tool your code runs, such as `shell` or `apply_patch`, has no name of its own, so its type is the name.
 List the function that runs it, such as `{path = "package.module:run_shell", name = "shell"}`.
 
-A chat request body Derail cannot read, such as a compressed one, is refused, because its tools cannot be checked.
+A chat request body Scrimmage cannot read, such as a compressed one, is refused, because its tools cannot be checked.
 
 ## Calls that create something at the provider
 

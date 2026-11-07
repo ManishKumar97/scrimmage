@@ -23,7 +23,7 @@ from scrimmage_core.budget import Ledger, Shortfall
 from scrimmage_core.client import ControlClient
 from scrimmage_core.config import Fault, ModelHost
 from scrimmage_core.decide import Counters
-from scrimmage_core.errors import DerailRefused
+from scrimmage_core.errors import ScrimmageRefused
 from scrimmage_core.plan import Plan
 from scrimmage_core.provider_openai import Rates
 from scrimmage_core.runner import real_error
@@ -120,7 +120,7 @@ def test_without_a_run_the_gate_passes_the_request_through(gated: None) -> None:
 @pytest.mark.design("gate.other_hosts_gated")
 def test_a_write_to_a_host_that_is_not_a_model_host_is_refused(gated: None) -> None:
     sink, _ = install(make_plan())
-    with pytest.raises(DerailRefused, match="POST /refunds"):
+    with pytest.raises(ScrimmageRefused, match="POST /refunds"):
         client().post("https://orders.acme.internal/refunds", json={})
     assert sink.lines[0]["call"] == "http:orders.acme.internal"
     assert sink.lines[0]["reason"] == "web_write"
@@ -309,7 +309,7 @@ def test_an_async_call_outside_asyncio_fails_closed(gated: None) -> None:
     sink, _ = install(make_plan())
     c = httpx2.AsyncClient(transport=httpx2.MockTransport(answer))
     attempt = c._send_single_request(c.build_request("POST", URL, json=BODY))  # pyright: ignore[reportPrivateUsage]
-    with pytest.raises(DerailRefused, match="outside asyncio"):
+    with pytest.raises(ScrimmageRefused, match="outside asyncio"):
         attempt.send(None)  # driven by hand, as a loop other than asyncio would
     assert sink.lines[0]["reason"] == "unsupported_loop"
 
@@ -324,7 +324,7 @@ def test_a_negative_retry_header_counts_as_a_first_attempt(gated: None) -> None:
 def test_an_unreachable_control_server_refuses_the_call(gated: None) -> None:
     dead = ControlClient("http://127.0.0.1:9", "t" * 64)
     sink, _ = install(make_plan(budget=1.0), dead)
-    with pytest.raises(DerailRefused, match="could not be checked"):
+    with pytest.raises(ScrimmageRefused, match="could not be checked"):
         client().post(URL, json=BODY)
     assert sink.lines[0]["reason"] == "control_unreachable"
 
@@ -595,7 +595,7 @@ def test_a_library_missing_only_what_faults_need_drops_faults_but_keeps_refusing
     http_gate.patch(library, ctx)
     assert not ctx.faults and stops == [] and "those do not" in str(sink.lines[0]["message"])
     assert client().post(URL, json=BODY).status_code == 200  # no fault: the call runs
-    with pytest.raises(DerailRefused):  # and a write is still refused
+    with pytest.raises(ScrimmageRefused):  # and a write is still refused
         client().post("https://api.openai.com/v1/fine_tuning/jobs", json={})
 
 
@@ -643,7 +643,7 @@ def test_every_hop_of_a_redirect_is_budgeted(gated: None) -> None:
 def test_a_redirect_to_a_write_on_a_model_host_is_refused(gated: None) -> None:
     sink, _ = install(make_plan())
     c = httpx2.Client(transport=redirecting("/v1/fine_tuning/jobs"), follow_redirects=True)
-    with pytest.raises(DerailRefused, match="/v1/fine_tuning/jobs"):
+    with pytest.raises(ScrimmageRefused, match="/v1/fine_tuning/jobs"):
         c.post(URL, json=BODY)
     assert sink.lines[-1]["reason"] == "web_write"
 
@@ -661,7 +661,7 @@ def test_a_redirect_off_the_model_hosts_is_refused_and_named(gated: None) -> Non
     budget = Budget(limit=1.0)
     sink, _ = install(make_plan(budget=1.0), budget)
     c = httpx2.Client(transport=httpx2.MockTransport(to_elsewhere), follow_redirects=True)
-    with pytest.raises(DerailRefused, match="localhost, which is not a model host"):
+    with pytest.raises(ScrimmageRefused, match="localhost, which is not a model host"):
         c.post(URL, json=BODY)
     line = sink.lines[0]
     assert (line["action"], line["reason"]) == ("refused", "redirect_off_host")
@@ -724,7 +724,7 @@ def test_a_failed_close_of_an_off_host_reply_still_refuses(gated: None) -> None:
     async def go() -> None:
         await closing_redirect(Closing(OSError("dropped"))).post(URL, json=BODY)
 
-    with pytest.raises(DerailRefused, match="not a model host"):
+    with pytest.raises(ScrimmageRefused, match="not a model host"):
         asyncio.run(go())
     assert sink.lines[-1]["reason"] == "redirect_off_host" and len(sink.settles) == 1
 
@@ -743,7 +743,7 @@ def test_a_failed_close_of_an_off_host_reply_still_refuses_when_sync(gated: None
 
     budget = Budget(limit=1.0)
     sink, _ = install(make_plan(budget=1.0), budget)
-    with pytest.raises(DerailRefused, match="not a model host"):
+    with pytest.raises(ScrimmageRefused, match="not a model host"):
         httpx2.Client(transport=httpx2.MockTransport(answer)).post(URL, json=BODY)
     assert sink.lines[-1]["reason"] == "redirect_off_host" and len(sink.settles) == 1
 
@@ -771,7 +771,7 @@ def test_a_redirect_off_the_model_hosts_is_refused_on_the_async_path(gated: None
         async with httpx2.AsyncClient(transport=transport, follow_redirects=True) as c:
             await c.post(URL, json=BODY)
 
-    with pytest.raises(DerailRefused, match="not a model host"):
+    with pytest.raises(ScrimmageRefused, match="not a model host"):
         asyncio.run(go())
     assert sink.lines[0]["reason"] == "redirect_off_host"
 
@@ -800,7 +800,7 @@ def test_a_request_sent_again_is_decided_again(gated: None) -> None:
 @pytest.mark.design("record.no_query_string")
 def test_a_query_string_never_reaches_the_record(gated: None) -> None:
     sink, _ = install(make_plan())
-    with pytest.raises(DerailRefused):
+    with pytest.raises(ScrimmageRefused):
         client().post("https://api.openai.com/v1/fine_tuning/jobs?api_key=hunter2", json={})
     assert "hunter2" not in json.dumps(sink.lines)
 
@@ -808,7 +808,7 @@ def test_a_query_string_never_reaches_the_record(gated: None) -> None:
 @pytest.mark.design("gate.host_and_path")
 def test_a_chat_path_on_another_host_is_not_a_model_call(gated: None) -> None:
     sink, _ = install(make_plan())
-    with pytest.raises(DerailRefused):
+    with pytest.raises(ScrimmageRefused):
         client().post("https://chat.acme.internal/v1/chat/completions", json=BODY)
     assert sink.lines[0]["call"] == "http:chat.acme.internal"
 
@@ -907,14 +907,14 @@ def test_a_huge_reply_records_its_true_size(gated: None, monkeypatch: pytest.Mon
 @pytest.mark.parametrize("content", [gzip.compress(b'{"tools": []}', mtime=0), b""])
 def test_a_chat_body_the_gate_cannot_read_is_refused(gated: None, content: bytes) -> None:
     sink, _ = install(make_plan())
-    with pytest.raises(DerailRefused, match="cannot read"):
+    with pytest.raises(ScrimmageRefused, match="cannot read"):
         client().post(URL, content=content)
     assert sink.lines[0]["reason"] == "unreadable_body"
 
 
 def test_a_streamed_chat_body_is_refused(gated: None) -> None:
     install(make_plan())
-    with pytest.raises(DerailRefused, match="cannot read"):
+    with pytest.raises(ScrimmageRefused, match="cannot read"):
         client().post(URL, content=iter([b'{"tools": []}']))
 
 
@@ -997,7 +997,7 @@ def test_a_moderation_is_a_labelled_read_that_needs_no_price(gated: None) -> Non
 def test_the_suggested_price_line_is_valid_toml_for_a_gateway_name(gated: None) -> None:
     install(make_plan(budget=1.0), Budget(limit=1.0))
     model = "acme/llama-3.1"
-    with pytest.raises(DerailRefused) as refused:
+    with pytest.raises(ScrimmageRefused) as refused:
         client().post(URL, json={**BODY, "model": model})
     line = str(refused.value).split("such as ")[1].split(" (dollars")[0]
     assert tomllib.loads(line) == {model: {"input": 0.15, "output": 0.60}}
@@ -1007,7 +1007,7 @@ def test_the_suggested_price_line_is_valid_toml_for_a_gateway_name(gated: None) 
 def test_a_secret_never_reaches_the_agent_in_a_refusal(gated: None) -> None:
     secret = "sk-proj-" + "a" * 30
     install(make_plan(budget=1.0), Budget(limit=1.0))
-    with pytest.raises(DerailRefused) as refused:
+    with pytest.raises(ScrimmageRefused) as refused:
         client().post(URL, json={**BODY, "model": secret})
     assert secret not in str(refused.value)
 
@@ -1032,7 +1032,7 @@ def test_a_secret_in_a_list_on_a_line_is_removed(gated: None) -> None:
     secret = "sk-proj-" + "a" * 30
     sink, _ = install(make_plan())
     spec = {"type": "function", "function": {"name": secret, "parameters": {}}}
-    with pytest.raises(DerailRefused):
+    with pytest.raises(ScrimmageRefused):
         client().post(URL, json={**BODY, "tools": [spec]})
     assert sink.lines[0]["unseen_tools"] == ["[secret removed]"]
 
@@ -1111,7 +1111,7 @@ def test_a_call_with_no_readable_name_is_refused_and_never_sent(
 ) -> None:
     sink, _ = install(make_plan((ON_EMBEDDING,)))
     seen: list[httpx2.Request] = []
-    with pytest.raises(DerailRefused, match="has no model name Derail can read"):
+    with pytest.raises(ScrimmageRefused, match="has no model name Scrimmage can read"):
         sends(seen).post(EMBEDDINGS, **send)
     assert seen == []
     assert sink.lines[0]["reason"] == "unreadable_model"
@@ -1122,7 +1122,7 @@ def test_a_call_with_no_readable_name_is_refused_and_never_sent(
 def test_a_streamed_body_is_refused_and_is_not_used_up(gated: None) -> None:
     sink, _ = install(make_plan((ON_EMBEDDING,)))
     body = generated()
-    with pytest.raises(DerailRefused, match="has no model name Derail can read"):
+    with pytest.raises(ScrimmageRefused, match="has no model name Scrimmage can read"):
         client().post(EMBEDDINGS, content=body)
     assert sink.lines[0]["reason"] == "unreadable_model"
     assert next(body, None) is not None  # the gate left it as it found it
@@ -1137,7 +1137,7 @@ def test_an_async_call_with_no_readable_name_is_refused(gated: None) -> None:
         async with httpx2.AsyncClient(transport=transport) as async_client:
             await async_client.post(EMBEDDINGS, content=gzip.compress(b"{}", mtime=0))
 
-    with pytest.raises(DerailRefused, match="has no model name Derail can read"):
+    with pytest.raises(ScrimmageRefused, match="has no model name Scrimmage can read"):
         asyncio.run(send())
     assert sink.lines[0]["reason"] == "unreadable_model"
 
@@ -1146,7 +1146,7 @@ def test_an_async_call_with_no_readable_name_is_refused(gated: None) -> None:
 def test_a_chat_body_with_no_name_is_refused_for_that_reason(gated: None) -> None:
     sink, _ = install(make_plan((ON_MAIN,)))
     with pytest.raises(
-        DerailRefused, match=r'plain JSON with a model field.*needs a price, as "" under'
+        ScrimmageRefused, match=r'plain JSON with a model field.*needs a price, as "" under'
     ):
         client().post(URL, json={"messages": []})
     assert sink.lines[0]["reason"] == "unreadable_model"
@@ -1194,7 +1194,7 @@ def test_the_budget_refuses_a_call_with_no_name_as_having_no_price(
     gated: None, value: object
 ) -> None:
     sink, _ = install(make_plan(budget=1.0))
-    with pytest.raises(DerailRefused, match="this model call sends no model name"):
+    with pytest.raises(ScrimmageRefused, match="this model call sends no model name"):
         client().post(EMBEDDINGS, json={"model": value, "input": "hi"})
     assert sink.lines[0]["reason"] == "no_price"
 
@@ -1212,7 +1212,7 @@ def test_a_named_call_still_reserves_at_its_price(gated: None) -> None:
 def test_the_no_price_message_cannot_forge_a_line_or_run_on(gated: None) -> None:
     sink, _ = install(make_plan(budget=1.0))
     name = "a\n\x1b[31m" + "x" * 200_000
-    with pytest.raises(DerailRefused) as caught:
+    with pytest.raises(ScrimmageRefused) as caught:
         client().post(URL, json={**BODY, "model": name})
     message = str(caught.value)
     assert len(message) < 500 and "\n" not in message and "\x1b" not in message
@@ -1222,14 +1222,14 @@ def test_the_no_price_message_cannot_forge_a_line_or_run_on(gated: None) -> None
 @pytest.mark.design("gate.no_price_keeps_a_short_name")
 def test_the_no_price_message_keeps_a_short_name_whole(gated: None) -> None:
     install(make_plan(budget=1.0))
-    with pytest.raises(DerailRefused, match=r"model 'llama-70b'.*such as \"llama-70b\" ="):
+    with pytest.raises(ScrimmageRefused, match=r"model 'llama-70b'.*such as \"llama-70b\" ="):
         client().post(URL, json={**BODY, "model": "llama-70b"})
 
 
 @pytest.mark.design("gate.no_price_for_no_name")
 def test_a_call_with_no_name_is_told_to_send_one_or_price_the_empty_key(gated: None) -> None:
     install(make_plan(budget=1.0))
-    with pytest.raises(DerailRefused) as caught:
+    with pytest.raises(ScrimmageRefused) as caught:
         client().post(URL, json={"messages": []})
     message = str(caught.value)
     assert "sends no model name" in message and "send model on the call" in message
@@ -1241,7 +1241,7 @@ def test_a_call_with_no_name_is_told_to_send_one_or_price_the_empty_key(gated: N
 def test_a_name_under_the_cap_is_given_whole_as_its_price_key(gated: None) -> None:
     install(make_plan(budget=1.0))
     name = "arn:aws:bedrock:us-east-1:123456789012:" + "x" * 240
-    with pytest.raises(DerailRefused) as caught:
+    with pytest.raises(ScrimmageRefused) as caught:
         client().post(URL, json={**BODY, "model": name})
     assert f'such as "{name}" = ' in str(caught.value)
 
@@ -1249,7 +1249,7 @@ def test_a_name_under_the_cap_is_given_whole_as_its_price_key(gated: None) -> No
 @pytest.mark.design("gate.no_price_too_long")
 def test_a_name_over_the_cap_gets_no_cut_key(gated: None) -> None:
     install(make_plan(budget=1.0))
-    with pytest.raises(DerailRefused) as caught:
+    with pytest.raises(ScrimmageRefused) as caught:
         client().post(URL, json={**BODY, "model": "y" * (http_gate.PRICE_KEY_CAP + 1)})
     message = str(caught.value)
     assert "too long to show whole" in message and "such as" not in message

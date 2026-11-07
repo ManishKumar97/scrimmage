@@ -1,28 +1,28 @@
-"""Derail's own errors. None of them subclasses a library's error."""
+"""Scrimmage's own errors. None of them subclasses a library's error."""
 
 
-class DerailError(Exception):
-    """The base of every error Derail raises."""
+class ScrimmageError(Exception):
+    """The base of every error Scrimmage raises."""
 
 
-class DerailRefused(DerailError):
+class ScrimmageRefused(ScrimmageError):
     """A call the test neither mocks nor lists as safe to run for real."""
 
 
-class DerailTimeLimit(DerailError):
+class ScrimmageTimeLimit(ScrimmageError):
     """The run passed its time limit, so the gate stops the call."""
 
 
-class DerailStopped(DerailError):
+class ScrimmageStopped(ScrimmageError):
     """The run was stopped while a call was going on. It is what the call's line says."""
 
 
-class DerailMockError(DerailError):
+class ScrimmageMockError(ScrimmageError):
     """A mock or a fault cannot be built as the test says. A mistake in the test."""
 
 
-class ConfigError(DerailError):
-    """Bad values in derail.toml. Each problem names its table and key."""
+class ConfigError(ScrimmageError):
+    """Bad values in scrimmage.toml. Each problem names its table and key."""
 
     def __init__(self, *problems: str) -> None:
         super().__init__("\n".join(problems))

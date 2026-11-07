@@ -74,7 +74,7 @@ The reply then goes through the library's own checks, so a mock of the wrong sha
 Write the value as the server sends it.
 A tool whose declared schema has one `result` field, as FastMCP makes for a tool that returns text, needs `returns = {result = "text"}`.
 
-If your code never listed the tools, Derail lists them first, as the library's check does.
+If your code never listed the tools, Scrimmage lists them first, as the library's check does.
 That one `tools/list` request reaches the real server.
 
 ## Faults
@@ -131,7 +131,7 @@ Use an `mcp:` label instead.
 
 `Client({"mcpServers": {...}})` with two or more servers starts a router inside your program, named `MCPRouter`, and joins the tool names with the server's, as in `docs_search`.
 Your code talks to the router, and the router talks to each server.
-So Derail sees two MCP calls for one of yours:
+So Scrimmage sees two MCP calls for one of yours:
 
 | Call | Label |
 |---|---|
@@ -162,7 +162,7 @@ A real MCP call's line is never dropped, because it could be a write.
 
 ## A stdio server and the run
 
-A stdio server you start with `env={**os.environ}` inherits Derail's environment.
+A stdio server you start with `env={**os.environ}` inherits Scrimmage's environment.
 On your agent's Python it joins the run like any child process, and prints nothing to the stream that carries the protocol.
 On another Python it runs untouched, on any version of `mcp`.
 A server started with the library's default environment does not join, and what it does by itself is not gated. Its start is not refused as a blind child, because this gate decides every call to it.
