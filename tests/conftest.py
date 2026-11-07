@@ -19,6 +19,8 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     """In CI a skipped test fails the run: a safety check that did not run proves nothing.
 
     A skip is fine on a laptop without Ubuntu's Python; CI must have everything.
+    Under xdist only the controller has a terminal reporter, and it gets every worker's
+    skips, so the check runs there and a worker's session does nothing.
     """
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     skipped = reporter.stats.get("skipped", []) if reporter else []

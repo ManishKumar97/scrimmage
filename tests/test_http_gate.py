@@ -493,7 +493,11 @@ def test_an_item_with_no_room_is_marked_unsaved() -> None:
 
 @pytest.mark.parametrize(
     ("raw", "encoding"),
-    [(gzip.compress(b"hello"), "gzip"), (zlib.compress(b"hello"), "deflate"), (b"hello", "")],
+    [
+        (gzip.compress(b"hello", mtime=0), "gzip"),
+        (zlib.compress(b"hello"), "deflate"),
+        (b"hello", ""),
+    ],
 )
 def test_a_compressed_reply_is_read_for_its_counts(raw: bytes, encoding: str) -> None:
     assert http_gate.decoded(raw, encoding) == b"hello"
@@ -887,7 +891,7 @@ def test_a_huge_reply_records_its_true_size(gated: None, monkeypatch: pytest.Mon
 
 
 @pytest.mark.design("gate.unreadable_body_refused")
-@pytest.mark.parametrize("content", [gzip.compress(b'{"tools": []}'), b""])
+@pytest.mark.parametrize("content", [gzip.compress(b'{"tools": []}', mtime=0), b""])
 def test_a_chat_body_the_gate_cannot_read_is_refused(gated: None, content: bytes) -> None:
     sink, _ = install(make_plan())
     with pytest.raises(DerailRefused, match="cannot read"):

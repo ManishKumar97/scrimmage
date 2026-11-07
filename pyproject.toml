@@ -31,12 +31,13 @@ dev = [
     "langchain-openai>=1.7",
     "mcp>=2.3.0",
     "fastmcp>=4.1.6",
+    "pytest-xdist>=3.8.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["tests"]
-addopts = ["--strict-markers", "-p", "no:langsmith_plugin"]
+addopts = ["--strict-markers", "-p", "no:langsmith_plugin", "-n", "auto"]
 filterwarnings = ["error"]
 markers = [
     "design(tag): the design point this test proves, as a short public name",
