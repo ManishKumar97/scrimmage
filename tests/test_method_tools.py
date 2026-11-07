@@ -11,10 +11,10 @@ from typing import Any
 import pytest
 
 from conftest import ACME, Project
-from derail_sdk import config, labels, state, tool_gate
-from derail_sdk.config import Fault, Mock
-from derail_sdk.errors import ConfigError
 from fakes.openai_server import FakeOpenAI
+from scrimmage_core import config, labels, state, tool_gate
+from scrimmage_core.config import Fault, Mock
+from scrimmage_core.errors import ConfigError
 from test_tool_gate import Lines, install
 
 Fake = Callable[..., FakeOpenAI]

@@ -1,4 +1,4 @@
-"""The starter for a function agent: python -m derail_sdk.start module:function question.
+"""The starter for a function agent: python -m scrimmage_core.start module:function question.
 
 It calls the function with the question, waits for it if it is async, and writes the
 answer to DERAIL_ANSWER_FILE, so the agent's own prints cannot mix with it.
@@ -13,7 +13,7 @@ import sys
 from collections.abc import Awaitable, Mapping, Sequence
 from typing import cast
 
-from derail_sdk.state import current
+from scrimmage_core.state import current
 
 
 async def _wait(value: Awaitable[object]) -> object:
@@ -61,7 +61,7 @@ def pick(value: object, path: str) -> object:
 def main(argv: list[str]) -> int:
     if len(argv) not in (3, 4):
         print(
-            "usage: python -m derail_sdk.start module:function question [answer path]",
+            "usage: python -m scrimmage_core.start module:function question [answer path]",
             file=sys.stderr,
         )
         return 2

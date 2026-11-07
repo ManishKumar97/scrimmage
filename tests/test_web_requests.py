@@ -19,10 +19,10 @@ import jsonschema
 import pytest
 
 from conftest import Project, Result
-from derail_sdk import config, http_gate, labels, plan, provider_openai, state
-from derail_sdk.config import Fault, Mock
-from derail_sdk.errors import ConfigError, DerailRefused
-from derail_sdk.plan import Plan
+from scrimmage_core import config, http_gate, labels, plan, provider_openai, state
+from scrimmage_core.config import Fault, Mock
+from scrimmage_core.errors import ConfigError, DerailRefused
+from scrimmage_core.plan import Plan
 
 HOST = "inventory.acme.internal"
 URL = f"https://{HOST}/stock/SKU-42"

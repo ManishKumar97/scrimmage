@@ -18,11 +18,11 @@ from contextvars import ContextVar
 from types import ModuleType
 from typing import Any
 
-from derail_sdk import hooks
-from derail_sdk.decide import Call
-from derail_sdk.http_gate import MCP_TRANSPORT, endpoint_of, params, refuse
-from derail_sdk.process_gate import EXEMPT
-from derail_sdk.state import BlobSink, RunState, Step, blob, current
+from scrimmage_core import hooks
+from scrimmage_core.decide import Call
+from scrimmage_core.http_gate import MCP_TRANSPORT, endpoint_of, params, refuse
+from scrimmage_core.process_gate import EXEMPT
+from scrimmage_core.state import BlobSink, RunState, Step, blob, current
 
 SESSION = "mcp.client.session"
 TRANSPORT = "mcp.client.streamable_http"

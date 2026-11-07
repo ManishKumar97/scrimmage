@@ -11,7 +11,7 @@ import inspect
 import typing
 from collections.abc import Callable
 
-from derail_sdk.errors import DerailMockError, DerailRefused
+from scrimmage_core.errors import DerailMockError, DerailRefused
 
 # Any is a class on 3.11 and later, and neither it nor object names a shape to build.
 PLAIN = (str, int, float, bool, list, dict, tuple, type(None), object, typing.Any)

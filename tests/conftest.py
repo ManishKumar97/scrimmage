@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from derail_sdk.cli import main
-from derail_sdk.runner import OK, ROW_FAILED
 from fakes.openai_server import FakeOpenAI
+from scrimmage_core.cli import main
+from scrimmage_core.runner import OK, ROW_FAILED
 
 EXAMPLE = Path(__file__).parent / "example"
 # The S1 conversation: the bot asks for the order, then the stock, then answers, or says it

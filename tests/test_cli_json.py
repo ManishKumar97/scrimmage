@@ -17,16 +17,16 @@ from typing import cast
 import jsonschema
 import pytest
 
-import derail_sdk
+import scrimmage_core
 from conftest import ACME, Project
-from derail_sdk import cli, config, entry, judge, runner
-from derail_sdk.runner import Runner, build_report, print_report, report_json
 from fakes.openai_server import FakeOpenAI
 from report_cases import CASES, FOLDER, GOLDEN
+from scrimmage_core import cli, config, entry, judge, runner
+from scrimmage_core.runner import Runner, build_report, print_report, report_json
 
 Fake = Callable[..., FakeOpenAI]
 pytestmark = pytest.mark.usefixtures("signals_kept")
-SCHEMAS = Path(derail_sdk.__file__).parent / "schemas"
+SCHEMAS = Path(scrimmage_core.__file__).parent / "schemas"
 CLI_SCHEMA = json.loads((SCHEMAS / "cli.v1.json").read_text())
 DERAIL = str(Path(sys.executable).parent / "derail")
 LISTS = ("mistakes", "notes", "warnings", "infra")
@@ -143,7 +143,7 @@ def check_runs(project: Project) -> dict[int, Done]:
     toml = str(project.toml)
     done = {0: derail("check", "--json", toml)}
     broken = (
-        "import sys; from derail_sdk import cli, config\n"
+        "import sys; from scrimmage_core import cli, config\n"
         "def boom(path): raise RuntimeError('the reader broke')\n"
         "config.load = boom\n"
         f"sys.exit(cli.main(['check', '--json', {toml!r}]))\n"
@@ -187,7 +187,7 @@ def test_each_command_prints_one_document_for_each_exit_code(
 @pytest.mark.design("json.version")
 def test_the_envelope_names_the_installed_version(project: Project) -> None:
     doc = one_document(derail("check", "--json", str(project.toml)), "check")
-    assert doc["derail"] == importlib.metadata.version("derail")
+    assert doc["derail"] == importlib.metadata.version("scrimmage-core")
     assert doc["v"] == 1 and doc["config"] == str(project.toml)
 
 
@@ -665,7 +665,7 @@ def test_the_version_comes_from_the_package_or_is_unknown(
 ) -> None:
     monkeypatch.setattr(importlib.metadata, "version", lambda name: f"sentinel-{name}")
     assert cli.main(["check", "--json", str(project.toml)]) == 0
-    assert json.loads(capsys.readouterr().out)["derail"] == "sentinel-derail"
+    assert json.loads(capsys.readouterr().out)["derail"] == "sentinel-scrimmage-core"
 
     def missing(name: str) -> str:
         raise importlib.metadata.PackageNotFoundError(name)
@@ -737,7 +737,7 @@ def go_off():
 IN_READ = (
     SIGNAL_IN_DEL
     + """
-from derail_sdk import config
+from scrimmage_core import config
 real_load = config.load
 def load(path):
     go_off()
@@ -775,7 +775,7 @@ def test_a_signal_inside_a_del_while_the_file_is_read_still_stops(
 IN_RUNNER = (
     SIGNAL_IN_DEL
     + """
-from derail_sdk import runner
+from scrimmage_core import runner
 real_init = runner.Runner.__init__
 def init(self, *args, **kwargs):
     real_init(self, *args, **kwargs)
@@ -800,7 +800,7 @@ def test_a_signal_as_the_runner_is_made_stops_before_any_run(project: Project) -
 # a signal to another thread, as it may at any time under load.
 MAIN_THREAD_DEAF = """
 import signal
-from derail_sdk import runner
+from scrimmage_core import runner
 real_pool = runner.ThreadPoolExecutor
 def pool(*args, **kwargs):
     made = real_pool(*args, **kwargs)
@@ -815,7 +815,7 @@ def test_a_signal_on_another_thread_still_stops_the_runs(project: Project) -> No
     hang(project)
     clean = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
     code = f"import sys\nsys.argv = ['derail', 'test', '--json', {str(project.toml)!r}]\n"
-    code += MAIN_THREAD_DEAF + "from derail_sdk import entry\nentry.main()\n"
+    code += MAIN_THREAD_DEAF + "from scrimmage_core import entry\nentry.main()\n"
     proc = subprocess.Popen(
         [sys.executable, "-c", code],
         env=clean, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -845,7 +845,7 @@ class Bomb:
         for _ in range(200_000):  # the runner's handler runs here, inside __del__
             pass
 
-from derail_sdk import runner
+from scrimmage_core import runner
 real_pool = runner.ThreadPoolExecutor
 def pool(*args, **kwargs):
     Bomb()  # made and dropped on the main thread, with the runner's handlers set
@@ -911,7 +911,7 @@ def run_entry(script: str, *argv: str) -> Done:
     """derail's entry point in its own process, after a script that sets up a hook."""
     clean = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
     code = f"import sys\nsys.argv = ['derail', *{list(argv)!r}]\n{script}\n"
-    code += "from derail_sdk import entry\nentry.main()\n"
+    code += "from scrimmage_core import entry\nentry.main()\n"
     proc = subprocess.run(
         [sys.executable, "-c", code], env=clean, capture_output=True, text=True, timeout=120
     )
@@ -925,7 +925,7 @@ import importlib.abc, os, signal, time
 
 class Signal(importlib.abc.MetaPathFinder):
     def find_spec(self, name, path, target=None):
-        if name == "derail_sdk.runner":
+        if name == "scrimmage_core.runner":
             sys.meta_path.remove(self)
             os.kill(os.getpid(), signal.{sig})
             time.sleep(0.2)
@@ -982,7 +982,7 @@ def test_a_signal_after_the_document_does_not_change_the_exit(project: Project) 
 # Sends SIGTERM after cli.main has returned, while the process lingers before it exits.
 SIGNAL_AFTER_MAIN = """
 import os, signal, sys, time
-from derail_sdk import cli
+from scrimmage_core import cli
 code = cli.main(sys.argv[1:], process=True)
 os.kill(os.getpid(), signal.SIGTERM)
 time.sleep(0.3)

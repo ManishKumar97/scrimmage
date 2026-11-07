@@ -13,14 +13,16 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-import derail_sdk
+import scrimmage_core
 from conftest import ACME, EXAMPLE_FAULT, Project
-from derail_sdk import config
-from derail_sdk.runner import INFRA_LINE, Runner, report
 from fakes.openai_server import FakeOpenAI
+from scrimmage_core import config
+from scrimmage_core.runner import INFRA_LINE, Runner, report
 
 Fake = Callable[[list[str]], FakeOpenAI]
-RECORD = json.loads((Path(derail_sdk.__file__).parent / "schemas" / "record.v1.json").read_text())
+RECORD = json.loads(
+    (Path(scrimmage_core.__file__).parent / "schemas" / "record.v1.json").read_text()
+)
 FAULT_BLOCK = EXAMPLE_FAULT
 
 
@@ -287,7 +289,7 @@ def test_stopping_derail_test_stops_every_run(project: Project) -> None:
     only_baseline(project, "acme.slow:hang", "\nrun_timeout = 120")
     env = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
     runner = subprocess.Popen(
-        [sys.executable, "-m", "derail_sdk.cli", "test", str(project.toml)],
+        [sys.executable, "-m", "scrimmage_core.cli", "test", str(project.toml)],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )  # fmt: skip
     pid = None
@@ -327,7 +329,7 @@ def alive(pid: int) -> bool:
 def test_a_run_that_dropped_lines_is_an_infrastructure_error(
     project: Project, fake_openai: Fake, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from derail_sdk.control import ControlServer
+    from scrimmage_core.control import ControlServer
 
     original = ControlServer.close_run
 
@@ -347,7 +349,7 @@ def test_a_run_that_dropped_lines_is_an_infrastructure_error(
 def test_a_process_that_made_more_lines_than_arrived_is_an_infrastructure_error(
     project: Project, fake_openai: Fake, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from derail_sdk.control import ControlServer
+    from scrimmage_core.control import ControlServer
 
     original = ControlServer.close_run
 
@@ -447,7 +449,7 @@ def test_a_tool_can_carry_the_name_the_model_sees(project: Project, fake_openai:
     tool = next(x for x in fault if x.get("call") == "tool:lookup-order")
     assert tool["action"] == "fault"
     schema = json.loads(
-        (Path(derail_sdk.__file__).parent / "schemas" / "record.v1.json").read_text()
+        (Path(scrimmage_core.__file__).parent / "schemas" / "record.v1.json").read_text()
     )
     jsonschema.Draft202012Validator(schema).validate(tool)
 

@@ -11,10 +11,10 @@ Derail is not on PyPI yet.
 Build it from the repository, and install the result with pip looking only in that folder:
 
 ```bash
-git clone https://github.com/ManishKumar97/derail
-cd derail
+git clone https://github.com/ManishKumar97/faultline
+cd faultline
 uv build --all-packages --wheel -o dist
-pip install --no-index --find-links dist derail
+pip install --no-index --find-links dist scrimmage-core
 ```
 
 ## Check it worked
@@ -28,7 +28,7 @@ Two packages are installed:
 
 | Package | Import name | What it is |
 |---|---|---|
-| `derail` | `derail_sdk` | The runner, the commands and the code that runs inside your agent |
-| `derail-marker` | `derail` | A tiny package with no dependencies, for markers in your own code (later versions) |
+| `scrimmage-core` | `scrimmage_core` | The runner, the commands and the code that runs inside your agent |
+| `scrimmage` | `derail` | A tiny package with no dependencies, for markers in your own code (later versions) |
 
 Derail depends on nothing outside Python's standard library, so installing it never changes the versions of the libraries your agent uses.

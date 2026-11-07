@@ -11,10 +11,10 @@ import jsonschema
 import pytest
 
 from conftest import Project, Result
-from derail_sdk import python_args
-from derail_sdk.control import ControlServer
-from derail_sdk.records import RecordStore
-from derail_sdk.run_command import BOOT
+from scrimmage_core import python_args
+from scrimmage_core.control import ControlServer
+from scrimmage_core.records import RecordStore
+from scrimmage_core.run_command import BOOT
 from test_bootstrap import this_python
 from test_scripts import RECORD, calls, lines_of, script, summary_of, write_config
 
@@ -48,9 +48,9 @@ def other_venv(tmp_path_factory: pytest.TempPathFactory) -> Path:
     base = Path(sys.base_prefix) / "bin" / "python3"
     uv("venv", "--no-project", "--python", str(base), "venv", cwd=folder)
     python = folder / "venv" / "bin" / "python"
-    packages = [str(ROOT / "packages" / name) for name in ("derail", "derail-marker")]
+    packages = [str(ROOT / "packages" / name) for name in ("scrimmage-core", "scrimmage")]
     # A built wheel is cached by the package's metadata, not by this code.
-    refresh = ["--refresh-package", "derail", "--reinstall-package", "derail"]
+    refresh = ["--refresh-package", "scrimmage-core", "--reinstall-package", "scrimmage-core"]
     uv("pip", "install", *refresh, "--python", str(python), "mcp<2", *packages, cwd=folder)
     return python
 
@@ -87,7 +87,7 @@ def test_with_children_set_a_python_with_no_derail_still_runs_untouched(
 
 
 def imported(python: Path) -> list[str]:
-    code = "import sys; print('derail_sdk' in sys.modules, flush=True)"
+    code = "import sys; print('scrimmage_core' in sys.modules, flush=True)"
     return [str(python), "-c", code]
 
 
@@ -126,7 +126,7 @@ def test_a_package_build_uv_starts_does_not_stop_the_run(project: Project) -> No
 name = "acme-bot"
 version = "0"
 requires-python = ">=3.11"
-dependencies = ["derail", "derail-marker"]
+dependencies = ["scrimmage-core", "scrimmage"]
 
 [build-system]
 requires = ["hatchling"]
@@ -136,8 +136,8 @@ build-backend = "hatchling.build"
 packages = ["acme"]
 
 [tool.uv.sources]
-derail = {{path = "{packages / "derail"}", editable = true}}
-derail-marker = {{path = "{packages / "derail-marker"}", editable = true}}
+scrimmage-core = {{path = "{packages / "scrimmage-core"}", editable = true}}
+scrimmage = {{path = "{packages / "scrimmage"}", editable = true}}
 """
     )
     (project.root / "bot.py").write_text("print('the answer')\n")

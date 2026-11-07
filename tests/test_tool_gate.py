@@ -9,14 +9,14 @@ from dataclasses import dataclass
 
 import pytest
 
-from derail_sdk import state, tool_gate
-from derail_sdk.config import Fault, Mock
-from derail_sdk.errors import (
+from scrimmage_core import state, tool_gate
+from scrimmage_core.config import Fault, Mock
+from scrimmage_core.errors import (
     DerailMockError,
     DerailRefused,
     DerailTimeLimit,
 )
-from derail_sdk.plan import Plan
+from scrimmage_core.plan import Plan
 
 
 @dataclass
@@ -223,7 +223,7 @@ def test_the_refusal_error_is_derails_own() -> None:
     # Every base is Derail's own or Python's Exception itself, never a library's error.
     bases = DerailRefused.__mro__[1:]
     assert all(
-        b.__module__ == "derail_sdk.errors" or b in (Exception, BaseException, object)
+        b.__module__ == "scrimmage_core.errors" or b in (Exception, BaseException, object)
         for b in bases
     )
     assert not issubclass(DerailRefused, (OSError, TimeoutError, ValueError, RuntimeError))

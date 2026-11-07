@@ -165,7 +165,7 @@ def _keep_out_tools() -> None:
 
 
 def _start() -> None:
-    has_sdk = importlib.util.find_spec("derail_sdk") is not None
+    has_sdk = importlib.util.find_spec("scrimmage_core") is not None
     theirs = os.environ.get("DERAIL_PYTHON")
     program = _is_program()
     if not has_sdk and program:
@@ -187,7 +187,7 @@ def _start() -> None:
         return
     os.environ["DERAIL_PYTHON"] = str(theirs or _python())
 
-    from derail_sdk import bootstrap
+    from scrimmage_core import bootstrap
 
     bootstrap.start(child=not root, target=_target())
 

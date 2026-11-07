@@ -4,8 +4,8 @@ import io
 
 import pytest
 
-from derail_sdk.runner import report
 from report_cases import CASES, FOLDER, GOLDEN
+from scrimmage_core.runner import report
 
 
 @pytest.mark.design("json.text_unchanged")

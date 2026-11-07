@@ -26,16 +26,16 @@ from contextvars import ContextVar
 from types import ModuleType
 from typing import Any, NoReturn, Protocol
 
-from derail_sdk import hooks
-from derail_sdk import provider_openai as openai_table
-from derail_sdk.budget import Held, Shortfall
-from derail_sdk.client import ControlError
-from derail_sdk.decide import READ_METHODS, Call, Decision, names
-from derail_sdk.errors import DerailRefused
-from derail_sdk.labels import shown_name
-from derail_sdk.plan import Plan
-from derail_sdk.redact import redact
-from derail_sdk.state import BLOB_CAP, BlobSink, RunState, Step, blob, current, error_text
+from scrimmage_core import hooks
+from scrimmage_core import provider_openai as openai_table
+from scrimmage_core.budget import Held, Shortfall
+from scrimmage_core.client import ControlError
+from scrimmage_core.decide import READ_METHODS, Call, Decision, names
+from scrimmage_core.errors import DerailRefused
+from scrimmage_core.labels import shown_name
+from scrimmage_core.plan import Plan
+from scrimmage_core.redact import redact
+from scrimmage_core.state import BLOB_CAP, BlobSink, RunState, Step, blob, current, error_text
 
 # The minor versions this release was tested with, per library.
 TESTED = {"httpx": ((0, 28), (0, 28)), "httpx2": ((2, 16), (2, 16))}

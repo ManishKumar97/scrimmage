@@ -20,9 +20,9 @@ from collections import deque
 from collections.abc import Callable
 from urllib.parse import urlsplit
 
-from derail_sdk import protocol
-from derail_sdk.budget import Held, Shortfall
-from derail_sdk.plan import items, number, obj
+from scrimmage_core import protocol
+from scrimmage_core.budget import Held, Shortfall
+from scrimmage_core.plan import items, number, obj
 
 QUEUE_SIZE = 10_000
 BATCH_LINES = 500

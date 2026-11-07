@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from derail_sdk.config import FAULTS
+from scrimmage_core.config import FAULTS
 
 CATALOG = Path(__file__).parents[1] / "docs" / "fault-catalog.toml"
 ORIGINS = {"public incident", "trace"}

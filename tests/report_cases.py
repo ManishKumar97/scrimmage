@@ -10,9 +10,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from derail_sdk import config, judge, plan
-from derail_sdk.budget import Held
-from derail_sdk.runner import RunResult
+from scrimmage_core import config, judge, plan
+from scrimmage_core.budget import Held
+from scrimmage_core.runner import RunResult
 
 FOLDER = Path("/records/derail-runs/20261107T101500Z-a1b2c3")
 GOLDEN = Path(__file__).parent / "fixtures" / "report"

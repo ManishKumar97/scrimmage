@@ -18,10 +18,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socket import socket
 from typing import Any
 
-from derail_sdk import protocol
-from derail_sdk.budget import Ledger, Shortfall
-from derail_sdk.plan import items, number, obj
-from derail_sdk.records import RecordStore
+from scrimmage_core import protocol
+from scrimmage_core.budget import Ledger, Shortfall
+from scrimmage_core.plan import items, number, obj
+from scrimmage_core.records import RecordStore
 
 MAX_CONNECTIONS = 64
 MAX_BODY = 4 * 1024 * 1024  # a batch of 500 lines is far smaller

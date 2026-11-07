@@ -18,15 +18,15 @@ import httpx2
 import openai
 import pytest
 
-from derail_sdk import http_gate, provider_openai, state
-from derail_sdk.budget import Ledger, Shortfall
-from derail_sdk.client import ControlClient
-from derail_sdk.config import Fault, ModelHost
-from derail_sdk.decide import Counters
-from derail_sdk.errors import DerailRefused
-from derail_sdk.plan import Plan
-from derail_sdk.provider_openai import Rates
-from derail_sdk.runner import real_error
+from scrimmage_core import http_gate, provider_openai, state
+from scrimmage_core.budget import Ledger, Shortfall
+from scrimmage_core.client import ControlClient
+from scrimmage_core.config import Fault, ModelHost
+from scrimmage_core.decide import Counters
+from scrimmage_core.errors import DerailRefused
+from scrimmage_core.plan import Plan
+from scrimmage_core.provider_openai import Rates
+from scrimmage_core.runner import real_error
 
 URL = "https://api.openai.com/v1/chat/completions"
 BODY = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}

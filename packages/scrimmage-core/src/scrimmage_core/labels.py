@@ -7,7 +7,7 @@ This version knows tool labels, model labels, web labels, MCP labels and, under
 import ipaddress
 import re
 
-from derail_sdk.errors import ConfigError
+from scrimmage_core.errors import ConfigError
 
 # The name the model sees. Providers allow hyphens, which a Python function cannot have.
 TOOL_NAME = re.compile(r"[A-Za-z0-9_-]+")

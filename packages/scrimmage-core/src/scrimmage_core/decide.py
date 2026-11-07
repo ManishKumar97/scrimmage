@@ -9,9 +9,9 @@ import threading
 from dataclasses import dataclass, field
 from typing import Literal
 
-from derail_sdk.config import Fault, Mock
-from derail_sdk.labels import matches, matches_real
-from derail_sdk.plan import Plan
+from scrimmage_core.config import Fault, Mock
+from scrimmage_core.labels import matches, matches_real
+from scrimmage_core.plan import Plan
 
 Action = Literal["fault", "mock", "real", "refused"]
 Kind = Literal["tool", "model", "http", "mcp", "process"]

@@ -15,10 +15,18 @@ from collections.abc import Callable
 from types import FrameType
 from typing import NoReturn
 
-from derail_sdk import http_gate, labels, langchain_gate, mcp_gate, process_gate, state, tool_gate
-from derail_sdk.client import ControlClient, ControlError, Sender
-from derail_sdk.mocks import allowed
-from derail_sdk.plan import Plan, no_plan, tools_from
+from scrimmage_core import (
+    http_gate,
+    labels,
+    langchain_gate,
+    mcp_gate,
+    process_gate,
+    state,
+    tool_gate,
+)
+from scrimmage_core.client import ControlClient, ControlError, Sender
+from scrimmage_core.mocks import allowed
+from scrimmage_core.plan import Plan, no_plan, tools_from
 
 TERM_WAIT_S = 4.0  # under the runner's five seconds before SIGKILL
 

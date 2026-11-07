@@ -20,10 +20,10 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import Any
 
-from derail_sdk import hooks, tool_gate
-from derail_sdk.errors import DerailMockError, DerailRefused
-from derail_sdk.http_gate import params
-from derail_sdk.state import RunState
+from scrimmage_core import hooks, tool_gate
+from scrimmage_core.errors import DerailMockError, DerailRefused
+from scrimmage_core.http_gate import params
+from scrimmage_core.state import RunState
 
 LIBRARY = "langchain-core"
 MODULE = "langchain_core.tools.base"

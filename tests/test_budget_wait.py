@@ -16,14 +16,14 @@ from pathlib import Path
 import pytest
 
 from conftest import EXAMPLE_FAULT, Project, Result
-from derail_sdk import http_gate
-from derail_sdk.budget import STALE_S, Held, Ledger, Shortfall
-from derail_sdk.client import ControlClient, ControlError
-from derail_sdk.config import Agent
-from derail_sdk.control import ControlServer
-from derail_sdk.errors import DerailRefused
-from derail_sdk.records import RecordStore
 from fakes.openai_server import FakeOpenAI
+from scrimmage_core import http_gate
+from scrimmage_core.budget import STALE_S, Held, Ledger, Shortfall
+from scrimmage_core.client import ControlClient, ControlError
+from scrimmage_core.config import Agent
+from scrimmage_core.control import ControlServer
+from scrimmage_core.errors import DerailRefused
+from scrimmage_core.records import RecordStore
 from test_http_gate import BODY, URL, Budget, client, gated, install, make_plan
 
 Fake = Callable[..., FakeOpenAI]
@@ -205,7 +205,7 @@ def test_a_budget_reply_without_its_numbers_is_a_control_error(server: ControlSe
 
 WAITER = """
 import sys, time
-from derail_sdk.client import ControlClient
+from scrimmage_core.client import ControlClient
 talk, ticket = ControlClient(sys.argv[1], sys.argv[2]), None
 while True:
     answer = talk.reserve("run-1", 0.06, "model:openai", ticket)
@@ -622,7 +622,7 @@ def test_waiters_ahead_that_would_fit_are_served_together_in_order() -> None:
 
 @pytest.mark.design("wait.report_says_reached_only_when_spent")
 def test_the_report_says_reached_only_when_money_spent_reached_the_limit() -> None:
-    from derail_sdk.runner import budget_line, reached
+    from scrimmage_core.runner import budget_line, reached
 
     agent_ = config_agent(parallel=4)
     numbers: dict[str, object] = {
@@ -649,7 +649,7 @@ def test_the_report_says_reached_only_when_money_spent_reached_the_limit() -> No
 @pytest.mark.design("wait.report_advice_fits")
 @pytest.mark.parametrize("parallel", [1, 2])
 def test_the_reports_advice_fits_the_case_and_the_parallel_setting(parallel: int) -> None:
-    from derail_sdk.runner import budget_line
+    from scrimmage_core.runner import budget_line
 
     base: dict[str, object] = {"usd": 0.03, "spent": 0.0, "held": 0.08, "limit": 0.1}
     hold = {"run": "run-7", "label": LABEL, "usd": 0.08, "ended": False}
@@ -665,7 +665,7 @@ def test_the_reports_advice_fits_the_case_and_the_parallel_setting(parallel: int
 
 
 def config_agent(parallel: int) -> Agent:
-    from derail_sdk import config
+    from scrimmage_core import config
 
     loaded = config.load(Path(__file__).parent / "example" / "derail.toml").agent
     return dataclasses.replace(loaded, parallel=parallel)
@@ -673,7 +673,7 @@ def config_agent(parallel: int) -> Agent:
 
 @pytest.mark.design("wait.numbers_from_the_stopping_run")
 def test_the_report_takes_its_numbers_from_the_run_that_stopped_the_test() -> None:
-    from derail_sdk.runner import RunResult, budget_refusal, stop_numbers
+    from scrimmage_core.runner import RunResult, budget_refusal, stop_numbers
 
     def result(reason: str, spent: float) -> RunResult:
         made = RunResult("run", None, "not reserved", None, None, {})  # type: ignore[arg-type]

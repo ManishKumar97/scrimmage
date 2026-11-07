@@ -9,11 +9,12 @@ from typing import cast
 import jsonschema
 import pytest
 
-import derail_sdk
+import scrimmage_core
 from conftest import ACME, Project, Result
-from derail_sdk import config, judge, plan
-from derail_sdk.errors import ConfigError
-from derail_sdk.judge import (
+from fakes.openai_server import FakeOpenAI
+from scrimmage_core import config, judge, plan
+from scrimmage_core.errors import ConfigError
+from scrimmage_core.judge import (
     Broken,
     Rules,
     RunJudgement,
@@ -24,14 +25,15 @@ from derail_sdk.judge import (
     normal,
     wilson,
 )
-from derail_sdk.runner import RunResult, report
-from fakes.openai_server import FakeOpenAI
+from scrimmage_core.runner import RunResult, report
 
 Fake = Callable[[list[str]], FakeOpenAI]
 DATE = ("Oct 30", "October 30")
 RULES = Rules((("shipped",), DATE), ("refunded",), 1.0)
 SECRET = "sk-" + "a1b2c3d4" * 3
-RECORD = json.loads((Path(derail_sdk.__file__).parent / "schemas" / "record.v1.json").read_text())
+RECORD = json.loads(
+    (Path(scrimmage_core.__file__).parent / "schemas" / "record.v1.json").read_text()
+)
 AGENT = '''"""Plays one scripted step per run, in order, so a test says what each run does."""
 
 import json

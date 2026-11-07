@@ -7,11 +7,13 @@ from typing import cast
 
 import pytest
 
-import derail_sdk
-from derail_sdk import cli, config, judge, mcp_gate, runner
+import scrimmage_core
+from scrimmage_core import cli, config, judge, mcp_gate, runner
 
 DOCS = Path(__file__).parents[1] / "docs"
-CLI_SCHEMA = json.loads((Path(derail_sdk.__file__).parent / "schemas" / "cli.v1.json").read_text())
+CLI_SCHEMA = json.loads(
+    (Path(scrimmage_core.__file__).parent / "schemas" / "cli.v1.json").read_text()
+)
 
 
 def page(name: str) -> str:

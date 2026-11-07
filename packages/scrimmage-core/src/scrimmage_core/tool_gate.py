@@ -15,10 +15,10 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import Any, NoReturn
 
-from derail_sdk import hooks, mocks
-from derail_sdk.config import Fault
-from derail_sdk.errors import DerailMockError
-from derail_sdk.state import RunState, Step, current
+from scrimmage_core import hooks, mocks
+from scrimmage_core.config import Fault
+from scrimmage_core.errors import DerailMockError
+from scrimmage_core.state import RunState, Step, current
 
 GATED = "__derail_gate__"
 

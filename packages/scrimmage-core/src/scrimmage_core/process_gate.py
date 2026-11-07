@@ -14,12 +14,12 @@ from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from typing import Any, cast
 
-from derail_sdk import python_args
-from derail_sdk.decide import Call
-from derail_sdk.labels import PROCESS as LABEL
-from derail_sdk.state import RunState
+from scrimmage_core import python_args
+from scrimmage_core.decide import Call
+from scrimmage_core.labels import PROCESS as LABEL
+from scrimmage_core.state import RunState
 
-BOOT = os.path.join("derail_sdk", "_boot")  # the runner's, which may be in another venv
+BOOT = os.path.join("scrimmage_core", "_boot")  # the runner's, which may be in another venv
 EVENTS = ("subprocess.Popen", "os.exec", "os.posix_spawn")  # os.spawnv is exec here
 # The MCP gate decides a stdio server's calls, so its own start of the server is not blind.
 EXEMPT: ContextVar[bool] = ContextVar("derail_process_exempt", default=False)

@@ -13,13 +13,13 @@ from typing import Any
 import pytest
 
 from conftest import ACME, EXAMPLE_FAULT, Project, Result
-from derail_sdk import config, langchain_gate, mocks, plan, state, tool_gate
-from derail_sdk.config import Fault
-from derail_sdk.errors import DerailRefused
-from derail_sdk.plan import Plan
-from derail_sdk.runner import Runner, RunResult
-from derail_sdk.start import BadAnswerPath, pick
 from fakes.openai_server import FakeOpenAI
+from scrimmage_core import config, langchain_gate, mocks, plan, state, tool_gate
+from scrimmage_core.config import Fault
+from scrimmage_core.errors import DerailRefused
+from scrimmage_core.plan import Plan
+from scrimmage_core.runner import Runner, RunResult
+from scrimmage_core.start import BadAnswerPath, pick
 
 Fake = Callable[[list[str]], FakeOpenAI]
 TOOLS_LINE = (

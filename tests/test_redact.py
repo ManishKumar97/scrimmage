@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from derail_sdk.redact import redact
+from scrimmage_core.redact import redact
 
 
 @pytest.mark.design("redact.urls")

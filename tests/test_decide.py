@@ -6,10 +6,10 @@ from collections.abc import Sequence
 
 import pytest
 
-from derail_sdk.config import Fault, Mock
-from derail_sdk.decide import Call, Counters, decide, fires, names
-from derail_sdk.labels import matches
-from derail_sdk.plan import Plan
+from scrimmage_core.config import Fault, Mock
+from scrimmage_core.decide import Call, Counters, decide, fires, names
+from scrimmage_core.labels import matches
+from scrimmage_core.plan import Plan
 
 GET_ORDER = Call("tool", "tool:get_order", "get_order")
 

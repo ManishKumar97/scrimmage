@@ -16,16 +16,18 @@ from typing import cast
 import jsonschema
 import pytest
 
-import derail_sdk
+import scrimmage_core
 from conftest import ACME, Project, Result
-from derail_sdk import bootstrap, runner
-from derail_sdk.control import ControlServer
-from derail_sdk.runner import stop_group
 from fakes.openai_server import FakeOpenAI
+from scrimmage_core import bootstrap, runner
+from scrimmage_core.control import ControlServer
+from scrimmage_core.runner import stop_group
 
 Fake = Callable[[list[str]], FakeOpenAI]
 Line = dict[str, object]
-RECORD = json.loads((Path(derail_sdk.__file__).parent / "schemas" / "record.v1.json").read_text())
+RECORD = json.loads(
+    (Path(scrimmage_core.__file__).parent / "schemas" / "record.v1.json").read_text()
+)
 TOOLS = """["acme.tools:get_order", "acme.tools:check_inventory", "acme.tools:get_stock",
     "acme.tools:refund_order"]"""
 QUESTION = "Where is order 1234; rm -rf ~"
@@ -351,7 +353,7 @@ def test_two_pythons_started_at_once_make_one_root(project: Project) -> None:
 
 def test_derail_run_in_front_of_the_script_changes_nothing(project: Project) -> None:
     (project.root / "bot.py").write_text("print('the answer')\n")
-    command = f"{sys.executable} -m derail_sdk.run_command {sys.executable} bot.py {{question}}"
+    command = f"{sys.executable} -m scrimmage_core.run_command {sys.executable} bot.py {{question}}"
     write_config(project, command)
     assert summary_of(project.test())["answer"] == "the answer"
 
@@ -610,7 +612,7 @@ def test_a_question_at_the_limit_runs(project: Project) -> None:
 
 def test_derail_run_says_why_a_program_cannot_start(tmp_path: Path) -> None:
     def derail_run(program: str) -> subprocess.CompletedProcess[str]:
-        command = [sys.executable, "-m", "derail_sdk.run_command", program]
+        command = [sys.executable, "-m", "scrimmage_core.run_command", program]
         return subprocess.run(command, capture_output=True, text=True, timeout=60)
 
     missing = derail_run(str(tmp_path / "missing"))
@@ -711,7 +713,7 @@ def test_a_child_that_binds_a_tool_at_import_is_gated_before_any_plan_arrives(
 ) -> None:
     (project.root / "report.py").write_text(
         "from acme.tools import refund_order\n"
-        "import derail_sdk.state as state\n"
+        "import scrimmage_core.state as state\n"
         "assert state.current()._plan is None\n"
         "refund_order('1234')\n"
     )
@@ -978,7 +980,7 @@ def test_a_forked_child_fires_no_fault_unless_children_is_set(project: Project) 
 def test_a_fork_while_another_thread_holds_the_locks_does_not_hang(project: Project) -> None:
     code = (
         "import os, threading\n"
-        "import derail_sdk.state as state\n"
+        "import scrimmage_core.state as state\n"
         "from acme import tools\n"
         "run = state.current()\n"
         "held, done = threading.Event(), threading.Event()\n"
@@ -1004,7 +1006,7 @@ def test_a_fork_while_another_thread_holds_the_locks_does_not_hang(project: Proj
 def test_a_fork_does_not_send_the_parents_waiting_lines_or_tools_twice(project: Project) -> None:
     code = (
         "import os\n"
-        "import derail_sdk.state as state\n"
+        "import scrimmage_core.state as state\n"
         "from acme import tools\n"
         "tools.check_inventory('parent')\n"
         "if os.fork() == 0:\n"

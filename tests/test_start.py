@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from derail_sdk import mocks
-from derail_sdk.start import main
+from scrimmage_core import mocks
+from scrimmage_core.start import main
 
 
 @pytest.mark.design("start.waits_for_async")

@@ -10,7 +10,7 @@ import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from derail_sdk.redact import redact
+from scrimmage_core.redact import redact
 
 PASS, FAIL, NO_RESULT = "pass", "fail", "no result"
 LEFT_OUT = "left out"

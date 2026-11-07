@@ -24,14 +24,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TextIO, cast
 
-from derail_sdk import judge, labels
-from derail_sdk import plan as planner
-from derail_sdk.budget import Ledger
-from derail_sdk.config import QUESTION, Agent, Config, Fault, Test
-from derail_sdk.control import ControlServer, proc_key
-from derail_sdk.records import RECORD_VERSION, RecordStore
-from derail_sdk.redact import redact
-from derail_sdk.state import COMMAND_CAP, PREVIEW, now_iso
+from scrimmage_core import judge, labels
+from scrimmage_core import plan as planner
+from scrimmage_core.budget import Ledger
+from scrimmage_core.config import QUESTION, Agent, Config, Fault, Test
+from scrimmage_core.control import ControlServer, proc_key
+from scrimmage_core.records import RECORD_VERSION, RecordStore
+from scrimmage_core.redact import redact
+from scrimmage_core.state import COMMAND_CAP, PREVIEW, now_iso
 
 OK, ROW_FAILED, MISTAKE, INFRA = 0, 1, 2, 3
 END = b"\x00"  # ends the stop watcher; no signal has the number 0
@@ -215,7 +215,7 @@ class Runner:
         if agent.command:
             return [part.replace(QUESTION, question) for part in agent.command]
         answer = [agent.answer] if agent.answer else []
-        return [sys.executable, "-m", "derail_sdk.start", agent.function, question, *answer]
+        return [sys.executable, "-m", "scrimmage_core.start", agent.function, question, *answer]
 
     def one(self, row: planner.Row) -> RunResult | None:
         with self.lock:
@@ -228,7 +228,12 @@ class Runner:
         if self.cancelled:
             self.server.close_run(run)
             return None
-        command = [sys.executable, "-m", "derail_sdk.run_command", *self.program(row.test.question)]
+        command = [
+            sys.executable,
+            "-m",
+            "scrimmage_core.run_command",
+            *self.program(row.test.question),
+        ]
         # A script's last printed line can be its answer, so what it prints stays apart.
         log = owner_only(self.folder / f"{run}.log")
         out = owner_only(self.folder / f"{run}.out") if self.config.agent.command else log

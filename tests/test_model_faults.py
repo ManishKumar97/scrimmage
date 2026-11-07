@@ -9,10 +9,10 @@ from collections.abc import Callable
 import pytest
 
 from conftest import ACME, EXAMPLE_FAULT, Project, Result
-from derail_sdk import config
-from derail_sdk import runner as runner_module
-from derail_sdk.runner import Runner
 from fakes.openai_server import FakeOpenAI
+from scrimmage_core import config
+from scrimmage_core import runner as runner_module
+from scrimmage_core.runner import Runner
 
 Fake = Callable[..., FakeOpenAI]
 TOOL_FAULT = EXAMPLE_FAULT

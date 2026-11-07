@@ -6,10 +6,10 @@ from collections.abc import Callable
 import pytest
 
 from conftest import Project, Result
-from derail_sdk import config, labels
-from derail_sdk.plan import Row
-from derail_sdk.runner import RunResult, unused_model
 from fakes.openai_server import FakeOpenAI
+from scrimmage_core import config, labels
+from scrimmage_core.plan import Row
+from scrimmage_core.runner import RunResult, unused_model
 
 Fake = Callable[..., FakeOpenAI]
 ROUTER, MAIN = "gpt-4o-mini", "gpt-4.1"

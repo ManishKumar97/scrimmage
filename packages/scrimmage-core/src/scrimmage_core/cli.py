@@ -13,12 +13,12 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TextIO
 
-from derail_sdk import config as settings
-from derail_sdk import entry
-from derail_sdk import plan as planner
-from derail_sdk import runner as running
-from derail_sdk.errors import ConfigError
-from derail_sdk.runner import INFRA, MISTAKE, OK, Interrupted, Runner, plural
+from scrimmage_core import config as settings
+from scrimmage_core import entry
+from scrimmage_core import plan as planner
+from scrimmage_core import runner as running
+from scrimmage_core.errors import ConfigError
+from scrimmage_core.runner import INFRA, MISTAKE, OK, Interrupted, Runner, plural
 
 SCHEMAS = Path(__file__).parent / "schemas"
 ENVELOPE_VERSION = 1
@@ -126,7 +126,7 @@ def as_json(
 
 def derail_version() -> str:
     try:
-        return importlib.metadata.version("derail")
+        return importlib.metadata.version("scrimmage-core")
     except importlib.metadata.PackageNotFoundError:
         return UNKNOWN_VERSION
 

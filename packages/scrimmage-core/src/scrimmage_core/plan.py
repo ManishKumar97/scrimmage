@@ -4,8 +4,8 @@ import math
 from dataclasses import dataclass
 from typing import cast
 
-from derail_sdk import labels
-from derail_sdk.config import (
+from scrimmage_core import labels
+from scrimmage_core.config import (
     DEFAULT_RESERVE_OUTPUT_TOKENS,
     Config,
     Fault,
@@ -13,8 +13,8 @@ from derail_sdk.config import (
     ModelHost,
     Test,
 )
-from derail_sdk.judge import Rules
-from derail_sdk.provider_openai import Rates
+from scrimmage_core.judge import Rules
+from scrimmage_core.provider_openai import Rates
 
 PLAN_VERSION = 1
 

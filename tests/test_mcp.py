@@ -28,12 +28,12 @@ import pytest
 
 import fakes
 from conftest import Project, Result
-from derail_sdk import config, decide, labels, mcp_gate, plan, state
-from derail_sdk.config import Fault, Mock
-from derail_sdk.errors import ConfigError, DerailRefused
-from derail_sdk.http_gate import MCP_TRANSPORT
-from derail_sdk.plan import Plan
 from fakes.openai_server import FakeOpenAI
+from scrimmage_core import config, decide, labels, mcp_gate, plan, state
+from scrimmage_core.config import Fault, Mock
+from scrimmage_core.errors import ConfigError, DerailRefused
+from scrimmage_core.http_gate import MCP_TRANSPORT
+from scrimmage_core.plan import Plan
 
 SERVER = Path(fakes.__file__).parent / "docs_server.py"
 LABEL = "mcp:docs/search"

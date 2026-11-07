@@ -15,12 +15,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from derail_sdk import labels, provider_openai, python_args
-from derail_sdk.errors import ConfigError
-from derail_sdk.judge import Rules, impossible, normal
-from derail_sdk.mocks import allowed
-from derail_sdk.provider_openai import Rates
-from derail_sdk.redact import redact
+from scrimmage_core import labels, provider_openai, python_args
+from scrimmage_core.errors import ConfigError
+from scrimmage_core.judge import Rules, impossible, normal
+from scrimmage_core.mocks import allowed
+from scrimmage_core.provider_openai import Rates
+from scrimmage_core.redact import redact
 
 AGENT_KEYS = {
     "function",

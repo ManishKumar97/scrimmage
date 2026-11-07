@@ -3,9 +3,9 @@ from pathlib import Path
 import pytest
 
 from conftest import EXAMPLE
-from derail_sdk import config, plan
-from derail_sdk.errors import ConfigError
-from derail_sdk.provider_openai import Rates
+from scrimmage_core import config, plan
+from scrimmage_core.errors import ConfigError
+from scrimmage_core.provider_openai import Rates
 
 
 def load_text(tmp_path: Path, text: str) -> config.Config:
@@ -480,7 +480,7 @@ def test_a_row_no_answer_can_pass_is_named_with_its_model(tmp_path: Path) -> Non
 
 @pytest.mark.design("budget.snapshot_prices")
 def test_a_snapshot_priced_apart_from_its_family_has_its_own_row() -> None:
-    from derail_sdk import provider_openai as table
+    from scrimmage_core import provider_openai as table
 
     assert table.price("gpt-4o-2024-05-13", {}) == Rates(5.00, 15.00)  # not gpt-4o's $2.50
     for snapshot in ("gpt-4o-2024-08-06", "gpt-4o-2024-11-20"):

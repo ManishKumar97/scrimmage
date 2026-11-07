@@ -11,13 +11,13 @@ from typing import cast
 import jsonschema
 import pytest
 
-import derail_sdk
+import scrimmage_core
 from config_cases import AGENT, BAD, GOOD, MINIMAL, TEST, Bad
 from conftest import EXAMPLE
-from derail_sdk import cli, config, plan
-from derail_sdk.errors import ConfigError
+from scrimmage_core import cli, config, plan
+from scrimmage_core.errors import ConfigError
 
-SCHEMAS = Path(derail_sdk.__file__).parent / "schemas"
+SCHEMAS = Path(scrimmage_core.__file__).parent / "schemas"
 TESTS = Path(__file__).parent
 DOCS = TESTS.parent / "docs"
 
