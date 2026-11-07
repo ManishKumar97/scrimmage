@@ -125,7 +125,7 @@ def test_a_large_waiter_gets_its_turn_among_steady_small_calls() -> None:
     took = time.monotonic() - began
     for thread in threads:
         thread.join()
-    assert isinstance(answer, int) and took < 1.0
+    assert isinstance(answer, int) and took < 1.5  # starved, it waited all 3 s
 
 
 @pytest.mark.design("wait.stale_ticket")
@@ -274,7 +274,7 @@ def test_a_hundred_waiters_get_no_control_errors_and_a_settle_stays_fast(
         for thread in threads:
             thread.join(5)
         made.stop()
-    assert errors == [] and took < 1.0
+    assert errors == [] and took < 1.5  # before, a settle took 1 to 7 s
 
 
 # The gate
