@@ -735,6 +735,8 @@ def test_every_call_the_agent_chose_fails_a_fault_row(
     assert result.code == 2, result.out
     assert table_row(result, "fault 1")[-1] == "fail"
     assert f"1 run: refused {shown}" in result.out
+    assert ("Mocking it would hide this" in result.out) == (step == "post")
+    assert ("{**os.environ" in result.out) == (step == "blind")
 
 
 @pytest.mark.design("judge.refused_unfired_left_out")

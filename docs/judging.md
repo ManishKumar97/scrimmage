@@ -84,6 +84,7 @@ If a row's rules cannot both be met, such as a fault that forbids a word the tes
 
 A crash or a time-out is a real result about your agent, so it fails.
 A refusal under a fault is the worst result there is: the tool failed, and the agent reached for a call the test does not allow, such as a refund. So its row reads `fail`, and the test still exits with code 2. Do not mock that call to make it pass: that hides what the agent did. Fix the agent.
+A child started with no gate cannot be mocked, so its line says how to let it join.
 On a baseline a refusal usually means the test forgot a mock, so it is left out.
 The rest say nothing about your agent, so they are left out of every rate.
 A script's answer is what [An agent run as a script](scripts.md#the-answer) says it is: the answer file, or the last line printed. Earlier lines are not read, and a last line over 1 MiB is judged on its final 1 MiB.

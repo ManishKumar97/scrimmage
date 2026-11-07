@@ -66,6 +66,7 @@ NOT_A_FAILURE = (
 )
 # The agent chose this call. Under a fault that is what it did about the failure.
 CHOSEN_CALLS = ("unlisted", "web_write", "blind_child")
+PROCESS_LABEL = "process:python"
 # A baseline whose every run ended so cannot be compared with, so its faults are skipped.
 FAILED = ("crashed", "timed out", "refused call", "budget reached")
 TABLE_WIDTH = 120
@@ -713,9 +714,10 @@ def rule_lines(report: RowReport, folder: Path) -> list[str]:
     calls = [b.text for r in report.runs for b in r.judgement.broken if b.kind == judge.REFUSED]
     if calls:
         call = calls[0].removeprefix(f"{judge.REFUSED} ")
+        advice = "See the line below" if call == PROCESS_LABEL else "Mocking it would hide this"
         head = (
             f"fail: {report.where}: under this fault the agent called {call}, which the test "
-            "does not allow. Mocking it would hide this"
+            f"does not allow. {advice}"
         )
     most = sorted(tally.items(), key=lambda item: -len(item[1]))
     return [
@@ -787,8 +789,12 @@ def report(
                 mistakes.append(
                     f"{where}: {r.run} made a call the test does not allow; see its record"
                 )
-            refused = any(b.kind == judge.REFUSED for b in r.judgement.broken)
-            mistakes += [f"{where}: {r.run}: {m}" for m in r.mistakes if not refused]
+            # "Mock it" would silence a refused call. A blind child's line holds its fix.
+            shown = not any(
+                b.kind == judge.REFUSED and not b.text.endswith(PROCESS_LABEL)
+                for b in r.judgement.broken
+            )
+            mistakes += [f"{where}: {r.run}: {m}" for m in r.mistakes if shown]
             if r.outcome == "infrastructure error":
                 code = INFRA
     stopped_by = runner.stopped_by if runner is not None else None
