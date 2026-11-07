@@ -494,10 +494,10 @@ def no_price(model: str) -> str:
     )
 
 
-def budget_wait(plan: Plan) -> float:
-    """How long a call waits for calls in flight to free the budget. Half the run's time
-    limit leaves the call time to run, and a deadlock ends in a refusal, not a time-out."""
-    return min(BUDGET_WAIT_S, plan.time_limit_s / 2)
+def budget_wait(plan: Plan, elapsed: float = 0.0) -> float:
+    """How long a call waits for calls in flight to free the budget: half the time the run
+    has left, so the call has time to run and a deadlock ends in a refusal, not a time-out."""
+    return max(0.0, min(BUDGET_WAIT_S, (plan.time_limit_s - elapsed) / 2))
 
 
 def reserve(
@@ -527,7 +527,7 @@ def reserve(
     output = openai_table.max_output(fields or {}) or plan.reserve_output_tokens
     usd = openai_table.cost(len(body) // CHAR_PER_TOKEN, output, rates)
     started = time.monotonic()
-    deadline = started + budget_wait(plan)
+    deadline = started + budget_wait(plan, started - ctx.run.began)
     while True:
         left = max(0.0, deadline - time.monotonic())
         try:

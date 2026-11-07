@@ -153,7 +153,7 @@ def test_tools_that_are_methods_and_their_limits_are_documented() -> None:
 def test_the_wait_for_calls_in_flight_and_its_report_are_documented() -> None:
     guide = page("model-faults.md")
     assert "### When calls in flight hold the budget" in guide
-    assert "A call waits at most 30 seconds, or half of `run_timeout`" in guide
+    assert "A call waits at most 30 seconds, or half the time its run has left" in guide
     for line in ("was reached: $0.1003 was spent", "a model call could not be reserved"):
         assert line in guide, line
     assert "after a wait of 30s for calls in flight" in guide

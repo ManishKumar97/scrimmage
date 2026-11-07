@@ -1,6 +1,7 @@
 """A call that only holds keep out waits for them; spent money alone refuses at once."""
 
 import asyncio
+import re
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -210,6 +211,8 @@ def test_the_wait_is_never_more_than_thirty_seconds() -> None:
 
     assert http_gate.budget_wait(make_plan(time_limit_s=120.0)) == 30.0
     assert http_gate.budget_wait(make_plan(time_limit_s=10.0)) == 5.0
+    assert http_gate.budget_wait(make_plan(time_limit_s=10.0), elapsed=4.0) == 3.0  # time left
+    assert http_gate.budget_wait(make_plan(time_limit_s=10.0), elapsed=11.0) == 0.0
 
 
 @pytest.mark.design("wait.gate_refuses_spent")
@@ -304,7 +307,7 @@ def test_a_stream_held_open_across_a_second_call_ends_in_a_clear_stop(project: P
     agent(
         project,
         "acme.rag:answer_holding_a_stream",
-        "runs = 1\nrun_timeout = 4\nmax_cost_usd = 0.004",
+        "runs = 1\nrun_timeout = 6\nmax_cost_usd = 0.004",
     )
     fake = FakeOpenAI(["chat_stream_usage"])
     fake.start()
@@ -317,7 +320,8 @@ def test_a_stream_held_open_across_a_second_call_ends_in_a_clear_stop(project: P
     assert result.code == 2, result.out
     assert [s["outcome"] for s in result.summaries()] == ["budget held"]
     assert "test mistake: a model call could not be reserved" in result.out
-    assert "was held by calls in flight" in result.out and "after a wait of 2s" in result.out
+    assert "was held by calls in flight" in result.out
+    assert re.search(r"after a wait of [123]s for calls in flight", result.out), result.out
     assert "was reached" not in result.out
 
 

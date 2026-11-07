@@ -185,7 +185,7 @@ A call that needs room then waits for the others to finish and give back what th
 | within the limit | within the limit | the call goes ahead |
 | within the limit | over the limit | the call waits for calls in flight to finish, then goes ahead |
 
-A call waits at most 30 seconds, or half of `run_timeout` if that is less.
+A call waits at most 30 seconds, or half the time its run has left under `run_timeout` if that is less.
 If it is still held out then, it is refused, that run ends as "budget held", and the test stops with exit code 2.
 That happens when a hold cannot end while the call waits: the agent keeps a stream open, or another thread or task of the same run waits on this call.
 The refusal says what the call could cost, what was spent, what calls in flight held and how long it waited.
