@@ -971,8 +971,9 @@ def test_the_fault_cell_shows_a_schedule(project: Project, tmp_path: Path) -> No
     project.edit('do   = "timeout"', 'do   = "timeout"\nwhen = "first 1"')
     out = Capture()
     report(load(project), [], tmp_path, out)  # type: ignore[arg-type]
-    table = out.text.split("range:")[0]
-    assert "first 1" in table and "full name: order-status fault 1" in table
+    row = next(line for line in out.text.splitlines() if line.startswith("order-status  fault 1"))
+    assert "..." in row and "first 1" in row
+    assert "full name: order-status fault 1: tool:get_order timeout first 1" in out.text
     project.edit('name     = "order-status"', 'name = "o"')
     out = Capture()
     report(load(project), [], tmp_path, out)  # type: ignore[arg-type]
