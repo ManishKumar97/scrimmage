@@ -26,7 +26,7 @@ from contextvars import ContextVar
 from types import ModuleType
 from typing import Any, NoReturn, Protocol
 
-from scrimmage_core import hooks
+from scrimmage_core import credentials, hooks
 from scrimmage_core import provider_openai as openai_table
 from scrimmage_core.budget import Held, Shortfall
 from scrimmage_core.client import ControlError
@@ -34,7 +34,7 @@ from scrimmage_core.decide import READ_METHODS, Call, Decision, names
 from scrimmage_core.errors import ScrimmageRefused
 from scrimmage_core.labels import shown_name
 from scrimmage_core.plan import Plan
-from scrimmage_core.redact import redact
+from scrimmage_core.redact import redact, redacted
 from scrimmage_core.state import BLOB_CAP, BlobSink, RunState, Step, blob, current, error_text
 
 # The minor versions this release was tested with, per library.
@@ -877,9 +877,12 @@ def record(
     size: int,
 ) -> float:
     """Put the reply, its tokens and its cost on the line. Returns the cost to settle."""
-    body = decoded(raw, str(response.headers.get("content-encoding", "")))
+    encoding = str(response.headers.get("content-encoding", ""))
+    body = decoded(raw, encoding)
     if step.call.kind != "model":
         extra.update(status=response.status_code, result=blob(body, ctx.sender, total=size))
+        if ctx.run.recording and step.call.provider is None:  # a model host is never recorded
+            extra["recorded"] = web_recorded(request, response, body, encoding)
         return 0.0
     used = openai_table.usage(body, output_required=step.call.name == "chat")
     tokens_in, tokens_out, cached = used.input, used.output, used.cached
@@ -897,6 +900,32 @@ def record(
         cost_estimated=usd is not None and not used.known and not free,
     )
     return usd or 0.0
+
+
+def web_recorded(request: Any, response: Any, body: bytes, encoding: str) -> dict[str, object]:
+    """What a mock of a real web request needs beyond its line, in a recording run.
+
+    The body is the line's result. The query string is never recorded, only its hash, so
+    two requests that differ by query alone can be told apart. A path the patterns change
+    could never match the real request again.
+    """
+    host, path = host_of(request.url), path_of(request.url)
+    what = credentials.credential(host, path)
+    if what is not None:
+        return {"code": "credential", "why": f"a request to {what} is never recorded"}
+    unpacked = encoding.strip().lower() in ("", "identity", "gzip", "deflate")
+    try:
+        found = redacted(body.decode("utf-8"))[1]
+    except UnicodeDecodeError:
+        unpacked, found = False, 0
+    kind = response.headers.get("content-type")
+    return {
+        "content_type": None if kind is None else redact(str(kind)),
+        "utf8": unpacked,
+        "query_sha256": hashlib.sha256(bytes(request.url.query)).hexdigest(),
+        "path_changed": redact(path) != path,
+        "removed": [{"key": None, "rule": "pattern"} for _ in range(found)],
+    }
 
 
 def decoded(raw: bytes, encoding: str) -> bytes:

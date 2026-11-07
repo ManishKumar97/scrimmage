@@ -29,7 +29,7 @@ import pytest
 import fakes
 from conftest import Project, Result
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import config, decide, labels, mcp_gate, plan, state
+from scrimmage_core import config, decide, labels, mcp_gate, plan, state, toml_write
 from scrimmage_core.config import Fault, Mock
 from scrimmage_core.errors import ConfigError, ScrimmageRefused
 from scrimmage_core.http_gate import MCP_TRANSPORT
@@ -1300,3 +1300,78 @@ def test_a_plan_with_mcp_entries_fits_the_schema_and_round_trips(tmp_path: Path)
     schema = json.loads((Path(plan.__file__).parent / "schemas" / "plan.v1.json").read_text())
     jsonschema.Draft202012Validator(schema).validate(made.to_json())
     assert Plan.from_json(made.to_json()).to_json() == made.to_json()  # no rule is in it
+
+
+# J3b1: what a recording run saves from a real MCP call.
+
+
+def recording(docs: Docs) -> Callable[[], None]:
+    """Make the next runs recording runs, as scrimmage record will; returns the way back."""
+    made = plan.plan_for
+
+    def record_too(*args: Any) -> Plan:
+        return dataclasses.replace(made(*args), record=True)
+
+    docs.project.monkeypatch.setattr(plan, "plan_for", record_too)
+    return lambda: docs.project.monkeypatch.setattr(plan, "plan_for", made)
+
+
+def recorded_line(result: Result, label: str = LABEL) -> dict[str, Any]:
+    return next(x for x in row(result, "baseline") if x.get("call") == label)["recorded"]
+
+
+def saved(result: Result, entry: dict[str, Any]) -> object:
+    (found,) = result.root.glob(f"scrimmage-runs/*/blobs/{entry['sha256']}")
+    return json.loads(found.read_text())
+
+
+@pytest.mark.design("record.mcp_round_trip")
+@pytest.mark.parametrize(("tool", "label"), [("search", LABEL), ("note", "mcp:docs/note")])
+def test_a_saved_mcp_result_comes_back_as_the_same_result_from_its_mock(
+    docs: Docs, tool: str, label: str
+) -> None:
+    docs.start("stdio")
+    docs.project.monkeypatch.setenv("DOCS_TOOL", tool)
+    back = recording(docs)
+    real = docs.run("acme.docs_bot:answer", "", f'real = ["{label}"]')
+    back()
+    found = recorded_line(real, label)
+    assert set(found) == {"value", "args", "removed"}, found
+    fields = {"call": label, "recorded": True, "args": saved(real, found["args"])}
+    fields["returns"] = saved(real, found["value"])
+    assert fields["args"] == {"q": "refunds"}
+    mocked = docs.run("acme.docs_bot:answer", toml_write.mock(fields))
+    assert docs.received() == [f"{tool} refunds"]  # only the recording reached the server
+    assert calls(mocked) == [(label, "mock")]
+    assert answer_of(mocked) == answer_of(real)
+    fits_the_schema(real)
+
+
+@pytest.mark.design("record.mcp_round_trip")
+def test_a_tool_the_agent_never_listed_is_listed_before_its_result_is_saved(docs: Docs) -> None:
+    docs.start("stdio")
+    recording(docs)
+    result = docs.run("acme.docs_bot:answer_not_listed", "", f'real = ["{LABEL}"]')
+    found = recorded_line(result)
+    assert saved(result, found["value"]) == {"hits": ["real refunds"], "total": 1}
+
+
+@pytest.mark.design("record.mcp_unsavable")
+@pytest.mark.parametrize(("mode", "why"), [("two", "2 items"), ("image", "a image item")])
+def test_an_mcp_result_no_mock_can_give_is_unsavable(docs: Docs, mode: str, why: str) -> None:
+    docs.start("stdio", mode)
+    docs.project.monkeypatch.setenv("DOCS_TOOL", "note")
+    recording(docs)
+    result = docs.run("acme.docs_bot:answer", "", 'real = ["mcp:docs/note"]')
+    found = recorded_line(result, "mcp:docs/note")
+    assert found["code"] == "unsavable" and why in found["why"], found
+
+
+@pytest.mark.design("record.mcp_is_error")
+def test_an_mcp_result_with_is_error_is_listed_as_status(docs: Docs) -> None:
+    docs.start("stdio", "fail")
+    recording(docs)
+    result = docs.run("acme.docs_bot:answer", "", f'real = ["{LABEL}"]')
+    assert "error=True" in answer_of(result)
+    assert recorded_line(result)["code"] == "status"
+    fits_the_schema(result)

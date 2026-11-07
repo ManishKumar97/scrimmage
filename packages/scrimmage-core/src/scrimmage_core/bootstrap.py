@@ -128,7 +128,7 @@ def start(*, child: bool = False, target: str | None = None) -> None:
     tools, renames = tools_from(os.environ.get("SCRIMMAGE_TOOLS", ""))
     names = tuple(labels.tool_name(path, dict(renames)) for path in tools)
     sender = Sender(client, run, eager=child)
-    run_state = state.RunState(plan, sender, prefixes, load=load, tools=names)
+    run_state = state.RunState(plan, sender, prefixes, load=load, tools=names, blobs=sender)
     sender.proc = run_state.proc
     sender.on_closed = run_state.run_closed
     if plan is not None:

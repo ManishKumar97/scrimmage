@@ -275,6 +275,9 @@
           }
         }
       }
+    },
+    "record": {
+      "type": "boolean"
     }
   },
   "$defs": {

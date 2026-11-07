@@ -37,6 +37,7 @@ class Plan:
     prices: tuple[tuple[str, Rates], ...] = ()
     children: bool = False  # child processes fire faults too
     unavailable: str | None = None  # why a child has no plan; such a plan is never sent
+    record: bool = False  # scrimmage record: real calls' lines carry what a mock needs
 
     def tool_names(self) -> list[str]:
         """Every tool's final name: the one the model sees."""
@@ -64,6 +65,8 @@ class Plan:
         }
         if self.renames:
             doc["renames"] = dict(self.renames)
+        if self.record:
+            doc["record"] = True
         return doc
 
     @staticmethod
@@ -111,6 +114,7 @@ class Plan:
             reserve_output_tokens=reserve,
             prices=prices,
             children=doc.get("children") is True,
+            record=doc.get("record") is True,
         )
 
 

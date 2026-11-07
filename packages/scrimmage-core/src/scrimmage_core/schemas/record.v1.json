@@ -358,6 +358,17 @@
           "items": {
             "type": "string"
           }
+        },
+        "call_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "parent": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "recorded": {
+          "$ref": "#/$defs/recorded"
         }
       }
     },
@@ -591,6 +602,130 @@
           }
         }
       }
+    },
+    "recorded": {
+      "oneOf": [
+        {
+          "description": "A real tool or MCP call's value and arguments, cleaned.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "value",
+            "args",
+            "removed"
+          ],
+          "properties": {
+            "value": {
+              "$ref": "#/$defs/content"
+            },
+            "args": {
+              "$ref": "#/$defs/content"
+            },
+            "type": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][\\w.]*:[A-Za-z_]\\w*$"
+            },
+            "removed": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "key",
+                  "rule"
+                ],
+                "properties": {
+                  "key": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "rule": {
+                    "enum": [
+                      "pattern",
+                      "key_name"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "description": "A real web request: the body is the line's result.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "content_type",
+            "utf8",
+            "query_sha256",
+            "path_changed",
+            "removed"
+          ],
+          "properties": {
+            "content_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "utf8": {
+              "type": "boolean"
+            },
+            "query_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "path_changed": {
+              "type": "boolean"
+            },
+            "removed": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "key",
+                  "rule"
+                ],
+                "properties": {
+                  "key": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "rule": {
+                    "enum": [
+                      "pattern",
+                      "key_name"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "description": "Why no mock can be written from this call.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "why"
+          ],
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "why": {
+              "type": "string"
+            }
+          }
+        }
+      ]
     }
   }
 }

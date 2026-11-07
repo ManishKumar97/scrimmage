@@ -15,6 +15,7 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import (
     CallToolResult,
     CreateMessageRequestParams,
+    ImageContent,
     SamplingMessage,
     TextContent,
     ToolAnnotations,
@@ -51,8 +52,12 @@ def serve(transport: str, name: str, log: str, mode: str, port: int = 0) -> None
         return {"hits": [f"réal {q}" if mode == "accent" else f"real {q}"], "total": 1}
 
     @server.tool(structured_output=False)
-    def note(q: str) -> list[TextContent]:
+    def note(q: str) -> list[TextContent | ImageContent]:
         received("note", q)
+        if mode == "two":
+            return [TextContent(type="text", text="one"), TextContent(type="text", text="two")]
+        if mode == "image":
+            return [ImageContent(type="image", data="iVBORw0KGgo=", mime_type="image/png")]
         return [] if mode == "empty" else [TextContent(type="text", text=f"real note {q}")]
 
     @server.tool(structured_output=False)
