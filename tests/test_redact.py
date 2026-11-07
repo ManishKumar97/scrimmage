@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from scrimmage_core.redact import redact
+from scrimmage_core.redact import redact, redacted
 
 
 @pytest.mark.design("redact.urls")
@@ -80,3 +80,10 @@ def test_a_large_base64_body_is_not_slow(body: str) -> None:
     started = time.monotonic()
     redact(body)
     assert time.monotonic() - started < 5
+
+
+@pytest.mark.design("record.secret_in_reply")
+def test_redacted_counts_each_place_it_removed_and_gives_the_same_text() -> None:
+    text = "key sk-proj-a1B2c3D4e5F6g7H8i9J0 at https://a.b/c?token=x and https://a.b/plain"
+    assert redacted(text) == (redact(text), 2)
+    assert redacted("nothing here") == ("nothing here", 0)

@@ -47,5 +47,21 @@ def no_jwt(found: re.Match[str]) -> str:
     return found.group(1).removesuffix("eyJ") + REMOVED
 
 
+def redacted(text: str) -> tuple[str, int]:
+    """The text with secrets removed, and how many places were removed."""
+    count = 0
+
+    def url(found: re.Match[str]) -> str:
+        nonlocal count
+        kept = plain_url(found)
+        count += kept != found.group()
+        return kept
+
+    text = URL.sub(url, text)
+    text, jwts = JWT.subn(no_jwt, text)
+    text, keys = PATTERNS.subn(REMOVED, text)
+    return text, count + jwts + keys
+
+
 def redact(text: str) -> str:
-    return PATTERNS.sub(REMOVED, JWT.sub(no_jwt, URL.sub(plain_url, text)))
+    return redacted(text)[0]
