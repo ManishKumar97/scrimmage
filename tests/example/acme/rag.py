@@ -5,6 +5,7 @@ model calls at once, a provider call that creates something, and model requests 
 offer tools Derail must check.
 """
 
+import asyncio
 import os
 import signal
 import threading
@@ -65,14 +66,32 @@ def answer_holding_a_stream(question: str) -> str:
     return reply.choices[0].message.content or ""
 
 
-def answer_holding_until_killed(question: str) -> str:
-    """Holds a stream open and ignores SIGTERM, so the runner ends it with SIGKILL."""
-    signal.signal(signal.SIGTERM, lambda *_: None)
+def answer_killed_holding(question: str) -> str:
+    """Opens a stream, which holds money, and is killed before it can give it back."""
     openai.OpenAI(max_retries=0).chat.completions.create(
         model="gpt-4o-mini", messages=[{"role": "user", "content": question}], stream=True
     )
-    time.sleep(600)
+    os.kill(os.getpid(), signal.SIGKILL)  # once the hold is taken, whatever the machine's load
     return "never"
+
+
+async def slow_stream(client: openai.AsyncOpenAI, question: str) -> str:
+    stream = await client.chat.completions.create(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": question}], stream=True
+    )
+    await asyncio.sleep(1.0)  # the hold stays while the stream is open
+    return "".join([c.choices[0].delta.content or "" async for c in stream if c.choices])
+
+
+def answer_many_async(question: str) -> str:
+    """Sixteen calls at once to a host by name, which asyncio looks up on its threads."""
+    base = os.environ["OPENAI_BASE_URL"].replace("127.0.0.1", "localhost")
+
+    async def many() -> list[str]:
+        client = openai.AsyncOpenAI(base_url=base, max_retries=0)
+        return await asyncio.gather(*(slow_stream(client, question) for _ in range(16)))
+
+    return " ".join(asyncio.run(many()))
 
 
 def answer_priceless(question: str) -> str:

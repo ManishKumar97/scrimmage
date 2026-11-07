@@ -27,7 +27,7 @@ from typing import TextIO, cast
 from derail_sdk import judge, labels
 from derail_sdk import plan as planner
 from derail_sdk.budget import Ledger
-from derail_sdk.config import QUESTION, Config, Fault, Test
+from derail_sdk.config import QUESTION, Agent, Config, Fault, Test
 from derail_sdk.control import ControlServer, proc_key
 from derail_sdk.records import RECORD_VERSION, RecordStore
 from derail_sdk.redact import redact
@@ -113,7 +113,7 @@ class RunResult:
     tool_calls: int = 0
     models: set[tuple[str, str]] = field(default_factory=set[tuple[str, str]])  # label, name
     budget: dict[str, object] | None = None  # the numbers of its first refusal, if for the budget
-    first_refusal: str = ""  # the reason of the run's first refusal
+    budget_reason: str = ""  # the reason of its first refusal for the budget
     judgement: judge.RunJudgement = NOT_JUDGED
 
     @property
@@ -265,14 +265,8 @@ class Runner:
         broken = any(n.get("notice") == "structure" for n in notices)
         no_plan = "no_plan" in state.refusals  # says nothing about the agent
         first = (state.refusals or [""])[0]
-        numbers = next(
-            (
-                cast(dict[str, object], x["budget"])
-                for x in lines
-                if "budget" in x and x.get("reason") == first
-            ),
-            None,
-        )
+        refusal = budget_refusal(lines)
+        numbers = None if refusal is None else cast(dict[str, object], refusal["budget"])
         if stopped:
             outcome = "stopped"
         elif not state.fetched or incomplete or real_errors or broken or no_plan:
@@ -313,7 +307,7 @@ class Runner:
             tool_calls=sum(1 for line in lines if line.get("kind") in ("tool", "mcp")),
             models={(str(line["call"]), str(line.get("model") or "")) for line in model},
             budget=numbers,
-            first_refusal=first,
+            budget_reason="" if refusal is None else str(refusal["reason"]),
         )
         # Here the raw answer is still at hand. The record only ever gets the redacted one.
         chose = row.fault is not None and (state.refusals or [""])[0] in CHOSEN_CALLS
@@ -860,7 +854,7 @@ def report(
     if stopped_by in BUDGET_REASONS:
         numbers = stop_numbers(results, stopped_by)
         line = (
-            budget_line(stopped_by, numbers, config.agent.reserve_output_tokens)
+            budget_line(stopped_by, numbers, config.agent)
             if numbers is not None
             else f"the budget of ${config.agent.max_cost_usd:g} stopped the test"
         )
@@ -962,9 +956,9 @@ def report(
     return ROW_FAILED if any(r.result.verdict == judge.FAIL for r in reports) else OK
 
 
-def budget_line(reason: str, numbers: dict[str, object], reserve_tokens: int) -> str:
-    """Why the budget stopped the test. "Reached" only when money spent reached the limit:
-    a call can be refused while most of the budget is only held by calls in flight."""
+def budget_line(reason: str, numbers: dict[str, object], agent: Agent) -> str:
+    """Why the budget stopped the test, with the fix that fits. "Reached" only when money
+    spent reached the limit: a call can be refused while most of the budget is only held."""
     usd, spent, held, limit, waited = (
         float(str(numbers.get(key, 0))) for key in ("usd", "spent", "held", "limit", "waited_s")
     )
@@ -973,21 +967,40 @@ def budget_line(reason: str, numbers: dict[str, object], reserve_tokens: int) ->
     wait = f", after a wait of {waited:.0f}s for calls in flight" if reason == "budget_held" else ""
     holds = [planner.obj(h) for h in cast(list[object], numbers.get("holds") or [])]
     who = ", ".join(
-        f"{h.get('label')} in {h.get('run')} ${planner.number(h, 'usd'):.4f}" for h in holds
+        f"{h.get('label')} in {h.get('run')} ${planner.number(h, 'usd'):.4f}"
+        + (f", left by {h.get('run')}, which ended while still holding" if h.get("ended") else "")
+        for h in holds
     )
-    return (
+    text = (
         f"a model call could not be reserved: it could cost up to ${usd:.4f}, ${spent:.4f} was "
         f"spent and ${held:.4f} was held by calls in flight{f' ({who})' if who else ''}, of a "
-        f"budget of ${limit:g}{wait}, so the test stopped; set max_tokens on the call or lower "
-        f"[agent] reserve_output_tokens ({reserve_tokens}) to hold less, lower [agent] parallel, "
-        "close a stream before the next call, or raise [agent] max_cost_usd"
+        f"budget of ${limit:g}{wait}, so the test stopped"
     )
+    hold_less = (
+        f"set max_tokens on the call or lower [agent] reserve_output_tokens "
+        f"({agent.reserve_output_tokens}) to hold less"
+    )
+    if any(h.get("ended") for h in holds):
+        return f"{text}; a run killed during a call left its hold, which never comes back: " + (
+            "see that run's log, or raise [agent] max_cost_usd"
+        )
+    if numbers.get("own") is True:
+        return f"{text}; the run's own calls held the room, so close a stream before the next " + (
+            f"call, or {hold_less}"
+        )
+    fewer = ", lower [agent] parallel" if agent.parallel > 1 else ""
+    return f"{text}; {hold_less}{fewer}, or raise [agent] max_cost_usd"
+
+
+def budget_refusal(lines: list[dict[str, object]]) -> dict[str, object] | None:
+    """The run's first refusal for the budget, even if another refusal came first."""
+    return next((x for x in lines if "budget" in x and x.get("reason") in BUDGET_REASONS), None)
 
 
 def stop_numbers(results: list[RunResult], stopped_by: str) -> dict[str, object] | None:
     """The numbers of the refusal that stopped the test, not another run's, refused for
     another reason while the test was being stopped."""
-    return next((r.budget for r in results if r.first_refusal == stopped_by and r.budget), None)
+    return next((r.budget for r in results if r.budget_reason == stopped_by and r.budget), None)
 
 
 def reached(numbers: dict[str, object]) -> bool:

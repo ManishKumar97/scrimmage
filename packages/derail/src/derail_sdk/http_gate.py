@@ -28,7 +28,7 @@ from typing import Any, NoReturn, Protocol
 
 from derail_sdk import hooks
 from derail_sdk import provider_openai as openai_table
-from derail_sdk.budget import Shortfall
+from derail_sdk.budget import Held, Shortfall
 from derail_sdk.client import ControlError
 from derail_sdk.decide import READ_METHODS, Call, Decision, names
 from derail_sdk.errors import DerailRefused
@@ -504,7 +504,7 @@ def no_price(model: str) -> str:
 def budget_wait(plan: Plan, elapsed: float = 0.0, *, own: bool = True) -> float:
     """How long a call waits for calls in flight to free the budget.
 
-    own: every hold in the way is this run's, which may be a deadlock, so the wait is short:
+    own: this run's own holds keep the call out, which may be a deadlock, so the wait is short:
     30 s or half the time the run has left. Another run's holds end by its own time limit,
     so the call waits until near its own, leaving time for the refusal to be recorded.
     """
@@ -514,18 +514,16 @@ def budget_wait(plan: Plan, elapsed: float = 0.0, *, own: bool = True) -> float:
     return max(0.0, left - min(RUN_MARGIN_S, plan.time_limit_s / 10))
 
 
-def reserve(
-    ctx: Context,
-    step: Step,
-    request: Any,
-    extra: dict[str, object],
-    cancelled: Callable[[], bool] = lambda: False,
-) -> int | None:
-    """Reserve what this model call could cost, before it is sent.
+@dataclasses.dataclass(frozen=True)
+class Pause:
+    """The call must wait this long, then ask again with its ticket."""
 
-    When only calls in flight hold the room, ask again every step with a ticket, so a cancel
-    is seen between steps. None with a budget: the caller was cancelled meanwhile.
-    """
+    seconds: float
+    ticket: int | None
+
+
+def hold_for(ctx: Context, step: Step, request: Any, extra: dict[str, object]) -> float | None:
+    """What this model call could cost, at worst; None when nothing is reserved for it."""
     plan = ctx.run.plan
     if step.call.kind != "model" or plan.budget_usd is None:
         return None
@@ -539,65 +537,98 @@ def reserve(
     body = body_of(request) or b""
     fields = openai_table.request_fields(body) if body else None
     output = openai_table.max_output(fields or {}) or plan.reserve_output_tokens
-    usd = openai_table.cost(len(body) // CHAR_PER_TOKEN, output, rates)
-    started = time.monotonic()
-    ticket: int | None = None
+    return openai_table.cost(len(body) // CHAR_PER_TOKEN, output, rates)
+
+
+def reserve(ctx: Context, step: Step, request: Any, extra: dict[str, object]) -> int | None:
+    """Reserve what this model call could cost, before it is sent.
+
+    A sync call waits on its own thread, the one that made the call and is blocked on it
+    anyway, so no thread anyone else needs is held.
+    """
+    usd = hold_for(ctx, step, request, extra)
+    if usd is None:
+        return None
+    started, ticket = time.monotonic(), None
     while True:
-        try:
-            answer = ctx.client.reserve(plan.run, usd, step.call.label, ticket)
-        except ControlError as exc:
-            ctx.run.refuse(step, "control_unreachable")
-            refuse(ctx.run, step, f"the budget could not be checked, so the call is refused: {exc}")
-        if not isinstance(answer, Shortfall):
-            return answer
-        ticket = answer.ticket
-        own = bool(answer.holds) and all(h.run == plan.run for h in answer.holds)
-        bound = budget_wait(plan, started - ctx.run.began, own=own)
-        waited = time.monotonic() - started
-        if answer.why != "held" or waited >= bound:
-            break
-        if cancelled():
-            ctx.client.release(ticket or 0)
-            return None
-        time.sleep(min(WAIT_STEP_S, bound - waited))
-    if ticket is not None:
-        ctx.client.release(ticket)
-    waited = time.monotonic() - started if answer.why == "held" else 0.0
+        got = ask(ctx, step, extra, usd, started, ticket)
+        if not isinstance(got, Pause):
+            return got
+        ticket = got.ticket
+        time.sleep(got.seconds)
+
+
+def ask(
+    ctx: Context,
+    step: Step,
+    extra: dict[str, object],
+    usd: float,
+    started: float,
+    ticket: int | None,
+) -> int | Pause:
+    """Ask the runner once: a reservation, a pause before asking again, or a refusal."""
+    plan = ctx.run.plan
+    try:
+        answer = ctx.client.reserve(plan.run, usd, step.call.label, ticket)
+    except ControlError as exc:
+        ctx.run.refuse(step, "control_unreachable")
+        refuse(ctx.run, step, f"the budget could not be checked, so the call is refused: {exc}")
+    if not isinstance(answer, Shortfall):
+        return answer
+    own = waits_on_itself(answer, plan.run)
+    bound = budget_wait(plan, started - ctx.run.began, own=own)
+    waited = time.monotonic() - started
+    if answer.why == "held" and waited < bound:
+        return Pause(min(WAIT_STEP_S, bound - waited), answer.ticket)
+    if answer.ticket is not None:
+        ctx.client.release(answer.ticket)
+    waited = waited if answer.why == "held" else 0.0
     extra["budget"] = {
         "usd": round(answer.usd, 8),
         "spent": round(answer.spent, 8),
         "held": round(answer.held, 8),
         "limit": answer.limit,
         "waited_s": round(waited, 1),
+        "own": own,
         "holds": [
-            {"run": h.run, "label": h.label, "usd": round(h.usd, 8)}
+            {"run": h.run, "label": h.label, "usd": round(h.usd, 8), "ended": h.ended}
             for h in answer.holds[:SHOWN_HOLDS]
         ],
     }
-    reason = "budget" if answer.why == "spent" else "budget_held"
+    reason = "budget_held" if answer.why == "held" else "budget"
     ctx.run.refuse(step, reason)
-    refuse(ctx.run, step, shortfall_text(answer, waited, plan))
+    refuse(ctx.run, step, shortfall_text(answer, waited, plan, own))
 
 
-def shortfall_text(short: Shortfall, waited: float, plan: Plan) -> str:
+def waits_on_itself(short: Shortfall, run: str) -> bool:
+    """Even if every other run settled, this run's own holds would keep the call out: it
+    may be waiting on itself, such as on a stream it left open."""
+    own = sum(h.usd for h in short.holds if h.run == run)
+    left = sum(h.usd for h in short.holds if h.ended)
+    return short.spent + left + own + short.usd > short.limit
+
+
+def shortfall_text(short: Shortfall, waited: float, plan: Plan, own: bool) -> str:
     """What the call could cost, what is spent and who holds the rest, and what to change."""
     text = (
         f"it could cost up to ${short.usd:.4f}; ${short.spent:.4f} is spent and "
         f"${short.held:.4f} is held by calls in flight, of a budget of ${short.limit:g}"
     )
     if short.holds:
-        named = [
-            f"{h.label or 'a call'} in {'this run' if h.run == plan.run else h.run} ${h.usd:.4f}"
-            for h in short.holds[:SHOWN_HOLDS]
-        ]
+        named = [hold_text(h, plan.run) for h in short.holds[:SHOWN_HOLDS]]
         more = len(short.holds) - SHOWN_HOLDS
         text += f" ({', '.join(named)}{f' and {more} more' if more > 0 else ''})"
     if short.why == "held":
         text += f"; Derail waited {waited:.0f}s for them to finish"
-    own = bool(short.holds) and all(h.run == plan.run for h in short.holds)
-    if short.why == "held" and own:
+    if short.why == "left":
         return (
-            f"{text}. Only this run's own calls hold it, so it may be waiting on itself: a "
+            f"{text}. A run that ended while still holding can never give its hold back, so "
+            "waiting cannot help: it was killed during a call. Raise [agent] max_cost_usd, or "
+            "find why that run was killed in its log"
+        )
+    if own:
+        return (
+            f"{text}. This run's own calls hold the room, so it may be waiting on itself: a "
             "stream left open, or not read to its end, keeps its hold until it is closed. "
             "Close the stream before the next call, or set max_tokens to hold less"
         )
@@ -609,44 +640,90 @@ def shortfall_text(short: Shortfall, waited: float, plan: Plan) -> str:
     )
 
 
+def hold_text(hold: Held, run: str) -> str:
+    where = "this run" if hold.run == run else hold.run
+    ended = f", left by {hold.run}, which ended while still holding" if hold.ended else ""
+    return f"{hold.label or 'a call'} in {where} ${hold.usd:.4f}{ended}"
+
+
 async def reserve_off_the_loop(
     ctx: Context, step: Step, request: Any, extra: dict[str, object]
 ) -> int | None:
-    """Reserve on a thread, so the loop keeps running while the runner answers.
+    """Reserve for an async call. Each ask is one short request on a thread; the waits
+    between asks are on the loop, so a waiting call holds no thread. asyncio's default
+    threads also look up host names, so a held thread could keep a granted call from
+    connecting."""
+    usd = hold_for(ctx, step, request, extra)
+    if usd is None:
+        return None
+    started, ticket = time.monotonic(), None
+    while True:
+        got = await ask_off_the_loop(ctx, step, extra, usd, started, ticket)
+        if not isinstance(got, Pause):
+            return got
+        ticket = got.ticket
+        try:
+            await asyncio.sleep(got.seconds)
+        except asyncio.CancelledError:
+            give_up(ctx, ticket)
+            abandoned(ctx, step, extra, None)
+            raise
 
-    If the task is cancelled meanwhile, the thread still gets its reservation, with nobody
-    left to use it. Whichever of the two finishes last gives it back. A cancel can also
-    land while the work waits for a free thread, so it never runs: the call was already
-    counted, so the task writes its line instead.
+
+async def ask_off_the_loop(
+    ctx: Context,
+    step: Step,
+    extra: dict[str, object],
+    usd: float,
+    started: float,
+    ticket: int | None,
+) -> int | Pause:
+    """One ask on a thread, so the loop keeps running while the runner answers.
+
+    If the task is cancelled meanwhile, the thread still gets its answer, with nobody left
+    to use it. Whichever of the two finishes last gives back the hold or the ticket. A
+    cancel can also land while the work waits for a free thread, so it never runs: the
+    call was already counted, so the task writes its line instead.
     """
     lock = threading.Lock()
     cancelled: list[bool] = []
-    started: list[bool] = []
-    held: list[int | None] = []
+    started_work: list[bool] = []
+    done: list[int | Pause] = []
 
-    def work() -> int | None:
+    def let_go(got: int | Pause | None) -> None:
+        if isinstance(got, Pause):
+            give_up(ctx, got.ticket)
+        abandoned(ctx, step, extra, got if isinstance(got, int) else None)
+
+    def work() -> int | Pause:
         with lock:
             if cancelled:
-                return None
-            started.append(True)
-        reservation = reserve(ctx, step, request, extra, lambda: bool(cancelled))
+                return Pause(0.0, ticket)
+            started_work.append(True)
+        got = ask(ctx, step, extra, usd, started, ticket)
         with lock:
-            held.append(reservation)
+            done.append(got)
             abandon = bool(cancelled)
         if abandon:
-            abandoned(ctx, step, extra, reservation)
-        return reservation
+            let_go(got)
+        return got
 
     try:
         return await asyncio.to_thread(work)
     except asyncio.CancelledError:
         with lock:
             cancelled.append(True)
-            done = list(held)
-            waiting = not started
-        if done or waiting:
-            abandoned(ctx, step, extra, done[0] if done else None)
+            finished = list(done)
+            waiting = not started_work
+        if finished or waiting:
+            let_go(finished[0] if finished else Pause(0.0, ticket))
         raise
+
+
+def give_up(ctx: Context, ticket: int | None) -> None:
+    """Hand back a ticket off the caller's thread or loop. If it is lost, it goes stale."""
+    if ticket is not None:
+        threading.Thread(target=ctx.client.release, args=(ticket,), daemon=True).start()
 
 
 def abandoned(ctx: Context, step: Step, extra: dict[str, object], reservation: int | None) -> None:

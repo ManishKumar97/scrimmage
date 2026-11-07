@@ -153,7 +153,11 @@ def test_tools_that_are_methods_and_their_limits_are_documented() -> None:
 def test_the_wait_for_calls_in_flight_and_its_report_are_documented() -> None:
     guide = page("model-faults.md")
     assert "### When calls in flight hold the budget" in guide
-    assert "| only this run's own calls | 30 seconds, or half the time the run has left" in guide
+    assert (
+        "even if every other run finished | 30 seconds, or half the time the run has left" in guide
+    )
+    assert "| a run that has ended | no wait: refused at once |" in guide
+    assert "An async call waits on its event loop, not on a thread" in guide
     assert "Tickets are served in the order they came" in guide
     assert "a stream it stopped reading without closing" in guide
     assert "still holding" in guide and '| "not reserved" |' in guide

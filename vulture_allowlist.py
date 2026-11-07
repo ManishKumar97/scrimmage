@@ -50,7 +50,8 @@ _.answer_streamed  # tests/example/acme/rag.py: named by import path in a test's
 _.answer_priceless  # tests/example/acme/rag.py: named by import path in a test's derail.toml
 _.answer_streamed_slowly  # tests/example/acme/rag.py: named by import path in a test's derail.toml
 _.answer_holding_a_stream  # tests/example/acme/rag.py: named by import path in a test's derail.toml
-_.answer_holding_until_killed  # tests/example/acme/rag.py: named in a test's derail.toml
+_.answer_killed_holding  # tests/example/acme/rag.py: named in a test's derail.toml
+_.answer_many_async  # tests/example/acme/rag.py: named in a test's derail.toml
 _.answer_short_twice  # tests/example/acme/rag.py: named by import path in a test's derail.toml
 _.answer_web_after_close  # tests/example/acme/docs_bot.py: a test's derail.toml names it
 _.answer_unknown_request  # tests/example/acme/docs_bot.py: a test's derail.toml names it

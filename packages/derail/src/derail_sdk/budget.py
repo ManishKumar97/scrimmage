@@ -26,13 +26,16 @@ class Held:
     run: str
     label: str
     usd: float
+    ended: bool = False  # its run ended while still holding, so it can never settle
 
 
 @dataclass(frozen=True)
 class Shortfall:
     """Why a reservation was refused, with the numbers at that moment."""
 
-    why: str  # "spent": money spent leaves no room; "held": calls in flight hold the rest
+    # "spent": money spent leaves no room. "left": spent money and holds whose run ended
+    # leave none, and those never settle. "held": calls in flight hold the rest.
+    why: str
     usd: float  # what the call could cost
     spent: float
     held: float
@@ -67,7 +70,9 @@ class Ledger:
     ) -> int | Shortfall:
         """A reservation number, or why the budget cannot cover the call now.
 
-        A call that would fit waits behind the tickets ahead of it, first come first served.
+        Tickets are served first come first served: a call is granted when it fits along with
+        every ticket ahead of it, so many calls that all fit are granted at once, and a large
+        one at the head is not passed by small ones.
         """
         with self._lock:
             now = self._clock()
@@ -79,8 +84,16 @@ class Ledger:
             if self.spent + usd > limit:
                 self._line.pop(ticket or 0, None)
                 return self._short("spent", usd, limit)
-            ahead = next(iter(self._line), ticket)
-            if self.spent + self.reserved + usd <= limit and ahead in (ticket, None):
+            left = sum(h.usd for h in self._held.values() if h.run in self._closed)
+            if self.spent + left + usd > limit:
+                self._line.pop(ticket or 0, None)
+                return self._short("left", usd, limit)
+            ahead = 0.0
+            for number, waiting in self._line.items():
+                if number == ticket:
+                    break
+                ahead += waiting.usd
+            if self.spent + self.reserved + ahead + usd <= limit:
                 return self._grant(usd, run, label, ticket)
             if ticket is None or ticket not in self._line:
                 self._next += 1
@@ -113,7 +126,7 @@ class Ledger:
     def leaked(self) -> list[Held]:
         """Holds whose run ended without settling them."""
         with self._lock:
-            return [h for h in self._held.values() if h.run in self._closed]
+            return [self._seen(h) for h in self._held.values() if h.run in self._closed]
 
     def _grant(self, usd: float, run: str, label: str, ticket: int | None) -> int:
         self._line.pop(ticket or 0, None)
@@ -123,5 +136,8 @@ class Ledger:
         return self._next
 
     def _short(self, why: str, usd: float, limit: float, ticket: int | None = None) -> Shortfall:
-        holds = tuple(sorted(self._held.values(), key=lambda h: -h.usd))
+        holds = tuple(sorted((self._seen(h) for h in self._held.values()), key=lambda h: -h.usd))
         return Shortfall(why, usd, self.spent, self.reserved, limit, ticket, holds)
+
+    def _seen(self, hold: Held) -> Held:
+        return Held(hold.run, hold.label, hold.usd, hold.run in self._closed)

@@ -113,7 +113,7 @@ class ControlClient:
                 number(reply, "limit"),
                 None if place is None else int(str(place)),
                 tuple(
-                    Held(str(h["run"]), str(h["label"]), number(h, "usd"))
+                    Held(str(h["run"]), str(h["label"]), number(h, "usd"), h.get("ended") is True)
                     for h in map(obj, items(reply, "holds"))
                 ),
             )

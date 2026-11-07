@@ -4,6 +4,7 @@ The ledger never blocks a request: a waiter has a ticket and asks again every st
 """
 
 import asyncio
+import dataclasses
 import re
 import subprocess
 import sys
@@ -18,6 +19,7 @@ from conftest import EXAMPLE_FAULT, Project, Result
 from derail_sdk import http_gate
 from derail_sdk.budget import STALE_S, Held, Ledger, Shortfall
 from derail_sdk.client import ControlClient, ControlError
+from derail_sdk.config import Agent
 from derail_sdk.control import ControlServer
 from derail_sdk.errors import DerailRefused
 from derail_sdk.records import RecordStore
@@ -80,14 +82,13 @@ def test_holds_that_all_settle_leave_nothing_held() -> None:
 @pytest.mark.design("wait.fifo")
 def test_tickets_are_served_in_order_so_a_large_call_is_not_starved() -> None:
     ledger = Ledger(0.10)
-    held = granted(ledger.reserve(0.08, "run-a"))
+    held = granted(ledger.reserve(0.06, "run-a"))
     big = short(ledger.reserve(0.05, "run-b")).ticket
-    small = short(ledger.reserve(0.01, "run-c"))  # it fits, but the big call came first
+    small = short(ledger.reserve(0.03, "run-c"))  # it fits alone, but the big call came first
     assert small.why == "held"
     ledger.settle(held, 0.0)
-    assert short(ledger.reserve(0.01, "run-c", ticket=small.ticket)).why == "held"
+    granted(ledger.reserve(0.03, "run-c", ticket=small.ticket))  # now both fit
     granted(ledger.reserve(0.05, "run-b", ticket=big))
-    granted(ledger.reserve(0.01, "run-c", ticket=small.ticket))
 
 
 @pytest.mark.design("wait.no_starvation")
@@ -135,9 +136,9 @@ def test_a_ticket_not_asked_for_again_is_dropped() -> None:
     held = granted(ledger.reserve(0.06))
     short(ledger.reserve(0.06, "run-gone"))  # its caller dies and never asks again
     ledger.settle(held, 0.0)
-    assert short(ledger.reserve(0.01, "run-c")).why == "held"  # still behind the dead one
+    assert short(ledger.reserve(0.05, "run-c")).why == "held"  # still behind the dead one
     now[0] = STALE_S + 0.1
-    granted(ledger.reserve(0.01, "run-c"))
+    granted(ledger.reserve(0.05, "run-c"))
 
 
 def test_a_released_ticket_lets_the_next_call_through() -> None:
@@ -156,7 +157,7 @@ def test_a_closed_runs_holds_stay_and_are_listed_until_a_late_settle() -> None:
     ticket = short(ledger.reserve(0.06, "run-a")).ticket
     ledger.close_run("run-a")
     assert ledger.reserved == pytest.approx(0.06)  # the call may have been sent
-    assert ledger.leaked() == [Held("run-a", LABEL, 0.06)]
+    assert ledger.leaked() == [Held("run-a", LABEL, 0.06, ended=True)]
     assert ticket is not None and not ledger._line  # its ticket went
     ledger.settle(hold, 0.02)  # money spent is spent, even after the close
     assert ledger.leaked() == [] and ledger.spent == pytest.approx(0.02)
@@ -346,7 +347,7 @@ def test_a_call_held_out_by_its_own_run_is_refused_naming_the_hold(gated: None) 
     assert isinstance(line, dict) and line["reason"] == "budget_held"
     numbers = line["budget"]
     assert isinstance(numbers, dict) and numbers["held"] == pytest.approx(0.003)
-    assert numbers["holds"] == [{"run": "run-1", "label": LABEL, "usd": 0.003}]
+    assert numbers["holds"] == [{"run": "run-1", "label": LABEL, "usd": 0.003, "ended": False}]
     assert numbers["limit"] == 0.004 and numbers["waited_s"] == pytest.approx(0.5, abs=0.3)
     assert budget.ledger.reserve(0.0, "run-x") is not None and not budget.ledger._line
 
@@ -496,45 +497,193 @@ def test_a_stream_held_open_across_a_second_call_ends_in_a_clear_stop(project: P
 def test_a_run_killed_with_a_hold_leaves_it_held_and_the_report_says_so(
     project: Project,
 ) -> None:
-    agent(project, "acme.rag:answer_holding_until_killed", "runs = 1\nrun_timeout = 2")
+    """The agent kills itself once its stream holds money, so no timeout is raced."""
+    agent(project, "acme.rag:answer_killed_holding", "runs = 1")
     result = run_on_fake(project, ["chat_stream_usage"])
-    assert [s["outcome"] for s in result.summaries()] == ["timed out"]
     assert re.search(r"warning: run-\w+ ended with model:openai still holding \$0\.00", result.out)
+
+
+@pytest.mark.design("wait.async_holds_no_thread")
+def test_many_async_calls_to_a_host_name_all_answer_under_a_tight_budget(
+    project: Project,
+) -> None:
+    """The verifier's repro: 16 calls by gather to localhost, with room for 2 at a time.
+    Before, waiting calls held asyncio's threads, which also look up host names."""
+    agent(project, "acme.rag:answer_many_async", "runs = 1\nmax_cost_usd = 0.006")
+    project.edit(
+        'model_hosts = [{host = "127.0.0.1", provider = "openai"}]',
+        'model_hosts = [{host = "127.0.0.1", provider = "openai"}, '
+        '{host = "localhost", provider = "openai"}]',
+    )
+    result = run_on_fake(project, ["chat_stream_usage"])
+    assert [s["outcome"] for s in result.summaries()] == ["answered"], result.out
+    assert result.summaries()[0]["answer"] == " ".join(["Hello"] * 16)
+    model = [x for x in result.records()[0] if x.get("kind") == "model"]
+    assert len(model) == 16 and not any(x.get("error") for x in model)
+
+
+def short_of(holds: tuple[Held, ...], spent: float = 0.0) -> Shortfall:
+    held = sum(h.usd for h in holds)
+    return Shortfall("held", 0.0025, spent, held, 0.006, 1, holds)
+
+
+@pytest.mark.design("wait.own_run_classified")
+def test_a_call_waits_on_itself_when_its_own_holds_alone_keep_it_out() -> None:
+    own, other = Held("run-1", LABEL, 0.004), Held("run-2", LABEL, 0.001)
+    assert http_gate.waits_on_itself(short_of((own, other)), "run-1")  # other run or not
+    assert not http_gate.waits_on_itself(short_of((Held("run-1", LABEL, 0.001), other)), "run-1")
+    assert not http_gate.waits_on_itself(short_of((Held("run-2", LABEL, 0.004),)), "run-1")
+    assert http_gate.waits_on_itself(short_of((own,), spent=0.0001), "run-1")
+
+
+@pytest.mark.design("wait.own_run_with_another_run_holding")
+def test_an_own_run_deadlock_ends_at_the_short_bound_though_another_run_holds_money(
+    gated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(http_gate, "BUDGET_WAIT_S", 0.3)
+    budget = Budget(limit=0.006)
+    budget.ledger.reserve(0.004, "run-1", LABEL)  # this run's open stream
+    budget.ledger.reserve(0.001, "run-other", LABEL)  # another run's call, also in flight
+    sink, _ = install(make_plan(budget=0.006, time_limit_s=60.0), budget)
+    started = time.monotonic()
+    with pytest.raises(DerailRefused, match="may be waiting on itself"):
+        client().post(URL, json=BODY)
+    assert time.monotonic() - started < 3  # the short bound, not most of a minute
+    numbers = sink.lines[0]["budget"]
+    assert isinstance(numbers, dict) and numbers["own"] is True
+
+
+@pytest.mark.design("wait.ended_run_counts_as_spent")
+def test_a_hold_left_by_an_ended_run_refuses_at_once_and_is_named(gated: None) -> None:
+    budget = Budget(limit=0.004)
+    budget.ledger.reserve(0.003, "run-dead", LABEL)
+    budget.ledger.close_run("run-dead")  # killed during its call: the hold never settles
+    sink, _ = install(make_plan(budget=0.004, time_limit_s=60.0), budget)
+    started = time.monotonic()
+    with pytest.raises(DerailRefused) as caught:
+        client().post(URL, json=BODY)
+    assert time.monotonic() - started < 1  # waiting cannot help
+    message = str(caught.value)
+    assert "left by run-dead, which ended while still holding" in message
+    assert "lower [agent] parallel" not in message
+    line = sink.lines[0]
+    assert line["reason"] == "budget"
+    numbers = line["budget"]
+    assert isinstance(numbers, dict) and numbers["holds"][0]["ended"] is True  # type: ignore[index]
+
+
+def test_the_ledger_tells_a_left_hold_from_one_in_flight() -> None:
+    ledger = Ledger(0.10)
+    granted(ledger.reserve(0.06, "run-dead", LABEL))
+    ledger.close_run("run-dead")
+    refused = short(ledger.reserve(0.06, "run-b"))
+    assert refused.why == "left" and refused.ticket is None
+    assert refused.holds == (Held("run-dead", LABEL, 0.06, ended=True),)
+    granted(ledger.reserve(0.03, "run-b"))  # room that is free is still free
+
+
+@pytest.mark.design("wait.many_fit_at_once")
+def test_fifty_waiters_that_all_fit_are_granted_together(server: ControlServer) -> None:
+    """The verifier's drain.py: before, only the head was granted per ask, so 50 took 3.8 s."""
+    server.ledger.limit_usd = 1.0
+    hold = granted(server.ledger.reserve(0.99, "run-0", "big"))
+    granted_at: list[float] = []
+
+    def waiter() -> None:
+        talk, ticket = ControlClient(server.url, TOKEN), None
+        for _ in range(200):
+            answer = talk.reserve("run-1", 0.01, LABEL, ticket)
+            if isinstance(answer, int):
+                granted_at.append(time.monotonic())
+                return
+            ticket = answer.ticket
+            time.sleep(http_gate.WAIT_STEP_S)
+
+    threads = [threading.Thread(target=waiter, daemon=True) for _ in range(50)]
+    for thread in threads:
+        thread.start()
+    time.sleep(1.0)
+    server.ledger.settle(hold, 0.0)
+    settled = time.monotonic()
+    for thread in threads:
+        thread.join(20)
+    assert len(granted_at) == 50 and max(granted_at) - settled < 1.5
+
+
+def test_waiters_ahead_that_would_fit_are_served_together_in_order() -> None:
+    ledger = Ledger(0.10)
+    held = granted(ledger.reserve(0.10, "run-0"))
+    tickets = [short(ledger.reserve(0.03, f"run-{n}")).ticket for n in (1, 2, 3, 4)]
+    ledger.settle(held, 0.0)
+    granted(ledger.reserve(0.03, "run-3", ticket=tickets[2]))  # 1 and 2 still fit before it
+    assert short(ledger.reserve(0.03, "run-4", ticket=tickets[3])).why == "held"  # no room left
 
 
 @pytest.mark.design("wait.report_says_reached_only_when_spent")
 def test_the_report_says_reached_only_when_money_spent_reached_the_limit() -> None:
     from derail_sdk.runner import budget_line, reached
 
+    agent_ = config_agent(parallel=4)
     numbers: dict[str, object] = {
         "usd": 0.0331,
         "spent": 0.0001,
         "held": 0.0993,
         "limit": 0.1,
         "waited_s": 0.0,
-        "holds": [{"run": "run-7", "label": LABEL, "usd": 0.0331}],
+        "own": False,
+        "holds": [{"run": "run-7", "label": LABEL, "usd": 0.0331, "ended": False}],
     }
-    line = budget_line("budget", numbers, 4096)
+    line = budget_line("budget", numbers, agent_)
     assert line.startswith("a model call could not be reserved: it could cost up to $0.0331")
     assert "$0.0001 was spent and $0.0993 was held by calls in flight" in line
     assert "(model:openai in run-7 $0.0331), of a budget of $0.1" in line
     assert "reserve_output_tokens (4096)" in line and "was reached" not in line
     full = {**numbers, "spent": 0.1003}
-    assert budget_line("budget", full, 4096).startswith("the budget of $0.1 was reached: $0.1003")
-    held = budget_line("budget_held", {**numbers, "waited_s": 30.0}, 4096)
+    assert budget_line("budget", full, agent_).startswith("the budget of $0.1 was reached: $0.1003")
+    held = budget_line("budget_held", {**numbers, "waited_s": 30.0}, agent_)
     assert "after a wait of 30s for calls in flight" in held
     assert reached(full) and not reached(numbers)
 
 
+@pytest.mark.design("wait.report_advice_fits")
+@pytest.mark.parametrize("parallel", [1, 2])
+def test_the_reports_advice_fits_the_case_and_the_parallel_setting(parallel: int) -> None:
+    from derail_sdk.runner import budget_line
+
+    base: dict[str, object] = {"usd": 0.03, "spent": 0.0, "held": 0.08, "limit": 0.1}
+    hold = {"run": "run-7", "label": LABEL, "usd": 0.08, "ended": False}
+    others = budget_line("budget_held", {**base, "holds": [hold]}, config_agent(parallel))
+    assert ("lower [agent] parallel" in others) is (parallel > 1)
+    own = budget_line("budget_held", {**base, "own": True}, config_agent(parallel))
+    assert "close a stream before the next call" in own and "parallel" not in own
+    dead = budget_line(
+        "budget", {**base, "holds": [{**hold, "ended": True}]}, config_agent(parallel)
+    )
+    assert "left by run-7, which ended while still holding" in dead
+    assert "parallel" not in dead and "run killed during a call" in dead
+
+
+def config_agent(parallel: int) -> Agent:
+    from derail_sdk import config
+
+    loaded = config.load(Path(__file__).parent / "example" / "derail.toml").agent
+    return dataclasses.replace(loaded, parallel=parallel)
+
+
 @pytest.mark.design("wait.numbers_from_the_stopping_run")
 def test_the_report_takes_its_numbers_from_the_run_that_stopped_the_test() -> None:
-    from derail_sdk.runner import RunResult, stop_numbers
+    from derail_sdk.runner import RunResult, budget_refusal, stop_numbers
 
-    def result(first: str, spent: float) -> RunResult:
+    def result(reason: str, spent: float) -> RunResult:
         made = RunResult("run", None, "not reserved", None, None, {})  # type: ignore[arg-type]
-        made.first_refusal, made.budget = first, {"spent": spent}
+        made.budget_reason, made.budget = reason, {"spent": spent}
         return made
 
     results = [result("budget", 0.01), result("budget_held", 0.02)]
     assert stop_numbers(results, "budget_held") == {"spent": 0.02}
     assert stop_numbers(results, "no_price") is None
+    lines: list[dict[str, object]] = [
+        {"action": "refused", "reason": "unlisted"},
+        {"action": "refused", "reason": "budget_held", "budget": {"spent": 0.5}},
+    ]
+    assert budget_refusal(lines) == lines[1]  # its first budget refusal, not its first refusal

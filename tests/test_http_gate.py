@@ -269,7 +269,7 @@ def test_work_that_starts_after_the_cancel_does_nothing(
                 await c.post(URL, json=BODY)
 
     asyncio.run(go())
-    assert late[0]() is None
+    assert isinstance(late[0](), http_gate.Pause)  # it asked nothing
     assert len(sink.lines) == 1 and sink.settles == []
     assert budget.ledger.reserved == 0.0
 

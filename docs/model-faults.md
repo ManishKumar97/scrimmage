@@ -187,12 +187,15 @@ A call that needs room then waits for the others to finish and give back what th
 
 A waiting call takes a ticket and asks again every quarter of a second.
 Tickets are served in the order they came, so a large call is not starved by a stream of small ones.
+A call is granted when it fits along with every call ahead of it in line, so many calls that all fit go ahead together.
+An async call waits on its event loop, not on a thread, so asyncio's threads stay free for other work, such as looking up host names.
 How long a call waits depends on whose calls hold the room:
 
 | The holds in the way | The longest wait | Why |
 |---|---|---|
-| only this run's own calls | 30 seconds, or half the time the run has left, if that is less | the run may be waiting on itself |
-| any other run's call | until 10 seconds before this run's `run_timeout`, or a tenth of it, if that is less | the other run's own time limit ends its holds |
+| this run's own calls would keep it out even if every other run finished | 30 seconds, or half the time the run has left, if that is less | the run may be waiting on itself |
+| other runs' calls | until 10 seconds before this run's `run_timeout`, or a tenth of it, if that is less | the other run's own time limit ends its holds |
+| a run that has ended | no wait: refused at once | that hold can never be given back |
 
 If the call is still held out then, it is refused and the test stops with exit code 2.
 A run waits on itself when a hold cannot end until the waiting call returns.
@@ -216,6 +219,7 @@ The table's last line says what the test spent, and a `test mistake:` line says 
 | a call waited for calls in flight and still could not fit | the same, with the holds named, such as `(model:openai in run-3f2a $0.0331)`, and `after a wait of 30s for calls in flight` |
 
 A run killed while one of its calls holds money, such as one that ignored SIGTERM, leaves that hold in place, as the call may have been sent.
+It counts as spent from then on: a call it keeps out is refused at once, and the refusal names it as `left by run-3f2a, which ended while still holding`.
 The report then warns: `warning: run-3f2a ended with model:openai still holding $0.0331 of the budget`.
 
 To hold less, set `max_tokens` on the call, lower `reserve_output_tokens`, or lower `parallel`.

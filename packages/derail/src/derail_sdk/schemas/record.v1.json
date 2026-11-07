@@ -319,7 +319,8 @@
                 "required": [
                   "run",
                   "label",
-                  "usd"
+                  "usd",
+                  "ended"
                 ],
                 "properties": {
                   "run": {
@@ -331,9 +332,15 @@
                   "usd": {
                     "type": "number",
                     "minimum": 0
+                  },
+                  "ended": {
+                    "type": "boolean"
                   }
                 }
               }
+            },
+            "own": {
+              "type": "boolean"
             }
           }
         },
