@@ -17,13 +17,15 @@ def test_an_async_function_is_awaited(tmp_path: Path, monkeypatch: pytest.Monkey
 
 
 @pytest.mark.design("start.answer_file")
-def test_a_value_that_is_not_text_is_written_as_json(
+def test_a_value_that_is_not_text_needs_a_path_and_writes_no_answer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     answer = tmp_path / "answer.txt"
     monkeypatch.setenv("DERAIL_ANSWER_FILE", str(answer))
-    assert main(["start", "starter_agents:as_dict", "hi"]) == 0
-    assert answer.read_text() == '{"reply": "HI"}'
+    assert main(["start", "starter_agents:as_dict", "hi"]) == 1
+    assert not answer.exists()
+    assert main(["start", "starter_agents:as_dict", "hi", "reply"]) == 0
+    assert answer.read_text() == "HI"
 
 
 def test_without_an_answer_file_the_answer_is_printed(

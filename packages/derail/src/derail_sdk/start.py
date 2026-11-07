@@ -26,6 +26,11 @@ class BadAnswerPath(Exception):
 
 
 STEP = re.compile(r"\[(-?\d+)\]|\.?([A-Za-z_]\w*)")
+NOT_TEXT = (
+    "[agent] answer: the agent returned {kind}, not text, so the whole value would be judged, "
+    "tool results included. Set answer to the path of the final reply, such as "
+    "'messages[-1].content'; see docs/judging.md"
+)
 
 
 def pick(value: object, path: str) -> object:
@@ -61,19 +66,24 @@ def main(argv: list[str]) -> int:
     result = function(argv[2])
     if inspect.isawaitable(result):
         result = asyncio.run(_wait(result))
-    if len(argv) == 4:
-        try:
+    try:
+        if len(argv) == 4:
             result = pick(result, argv[3])
-        except BadAnswerPath as exc:
-            run = current()
-            if run is not None:
-                run.notice("answer_path", "derail", str(exc), mistake=str(exc))
-            print(f"derail: {exc}", file=sys.stderr)
-            return 1
-    answer = result if isinstance(result, str) else json.dumps(result, default=str)
+        elif not isinstance(result, str):
+            raise BadAnswerPath(NOT_TEXT.format(kind=type(result).__name__))
+    except BadAnswerPath as exc:
+        run = current()
+        if run is not None:
+            run.notice("answer_path", "derail", str(exc), mistake=str(exc))
+        print(f"derail: {exc}", file=sys.stderr)
+        return 1
+    # Structured text stays as written, so a rule on a word with an accent can find it.
+    answer = (
+        result if isinstance(result, str) else json.dumps(result, default=str, ensure_ascii=False)
+    )
     path = os.environ.get("DERAIL_ANSWER_FILE")
     if path:
-        with open(path, "w") as out:
+        with open(path, "w", encoding="utf-8", errors="replace") as out:
             out.write(answer)
     else:
         print(answer)

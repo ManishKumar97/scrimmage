@@ -293,7 +293,9 @@ class Runner:
             tool_calls=sum(1 for line in lines if line.get("kind") in ("tool", "mcp")),
         )
         # Here the raw answer is still at hand. The record only ever gets the redacted one.
-        result.judgement = judge.judge_run(outcome, answer, result.exercised, row.rules)
+        result.judgement = judge.judge_run(
+            outcome, answer, result.exercised, row.rules, bool(mistakes)
+        )
         summary: dict[str, object] = {
             "answer": None if answer is None else redact(answer),
             "outcome": outcome,
@@ -314,7 +316,7 @@ class Runner:
         """The answer file, or for a script that ended well its last printed line."""
         answer_file = self.answers / f"{run}.txt"
         if answer_file.exists():
-            return answer_file.read_text(errors="replace")
+            return answer_file.read_text(encoding="utf-8", errors="replace")
         return (
             last_line(self.folder / f"{run}.out")
             if self.config.agent.command and not code

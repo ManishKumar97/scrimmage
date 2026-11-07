@@ -16,6 +16,7 @@ PASS, FAIL, NO_RESULT = "pass", "fail", "no result"
 LEFT_OUT = "left out"
 EMPTY = "empty answer"
 NOT_FIRED = "the fault did not fire"
+TEST_MISTAKE = "a mistake in the test"
 Z_95 = 1.96
 # A crash or a time-out is a result about the agent. Every other ending with no answer
 # says nothing about it.
@@ -98,9 +99,13 @@ def broken_rules(answer: str, rules: Rules) -> tuple[Broken, ...]:
     return (*expect, *forbid)
 
 
-def judge_run(outcome: str, answer: str | None, exercised: bool, rules: Rules) -> RunJudgement:
+def judge_run(
+    outcome: str, answer: str | None, exercised: bool, rules: Rules, mistake: bool = False
+) -> RunJudgement:
     if not exercised:
         return RunJudgement(left_out=NOT_FIRED)
+    if mistake and outcome == "crashed":  # the test broke the run, so it shows nothing
+        return RunJudgement(left_out=TEST_MISTAKE)
     if outcome in ENDED_BADLY:
         return RunJudgement((Broken(outcome, outcome),))
     if outcome != "answered":

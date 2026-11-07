@@ -712,6 +712,61 @@ def test_a_script_that_prints_nothing_fails_as_crashed(project: Project) -> None
     assert "1 run: crashed" in result.out
 
 
+def returns(project: Project, value: str, extra: str = "", body: str = "") -> Result:
+    """derail test on an agent that returns a value, with one row and one run."""
+    (project.root / "shaped.py").write_text(f"def answer(question):\n    return {value}\n")
+    project.toml.write_text(
+        '[agent]\nfunction = "shaped:answer"\nruns = 1\nmax_cost_usd = "none"\n'
+        f'{extra}\n[[test]]\nname = "order"\nquestion = "Where?"\n{body}'
+    )
+    return project.test()
+
+
+STATE = {
+    "messages": [
+        {"content": "shipped, Oct 30"},
+        {"content": "Sorry, I am unable to look up order 1234 right now."},
+    ]
+}
+
+
+@pytest.mark.design("judge.not_text_is_a_mistake")
+@pytest.mark.parametrize("value", [repr(STATE), "['shipped, Oct 30']", "12", "None", "True"])
+def test_a_value_that_is_not_text_needs_an_answer_path(project: Project, value: str) -> None:
+    result = returns(project, value, body='expect = ["shipped", ["Oct 30", "October 30"]]\n')
+    assert result.code == 2, result.out
+    assert "not text, so the whole value would be judged" in result.out
+    assert "Set answer to the path of the final reply" in result.out
+    cells = table_row(result, "baseline")
+    assert cells[-1] == "no result" and "0/0" in cells
+    summary = result.summaries()[0]
+    assert (summary["judged"], summary["left_out"]) == ("left out", judge.TEST_MISTAKE)
+
+
+@pytest.mark.design("judge.answer_path_is_what_is_judged")
+def test_with_an_answer_path_the_final_reply_is_what_is_judged(project: Project) -> None:
+    result = returns(
+        project,
+        repr(STATE),
+        'answer = "messages[-1].content"',
+        'expect = ["shipped", ["Oct 30", "October 30"]]\n',
+    )
+    assert result.code == 1, result.out
+    assert 'expect "shipped" not found' in result.out
+
+
+@pytest.mark.design("judge.structured_text_not_escaped")
+def test_structured_text_keeps_its_accents_so_a_forbid_finds_them(project: Project) -> None:
+    result = returns(
+        project,
+        '{"reply": {"city": "Z\u00fcrich"}}',
+        'answer = "reply"',
+        'expect = ["city"]\nforbid = ["Z\u00fcrich"]\n',
+    )
+    assert result.code == 1, result.out
+    assert 'forbid "Z\u00fcrich" found' in result.out
+
+
 @pytest.mark.design("record.judged_fields")
 def test_every_summary_says_how_the_run_was_judged(project: Project, fake_openai: Fake) -> None:
     result = project.test(fake_openai(ACME))
