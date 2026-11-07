@@ -15,7 +15,6 @@ from typing import cast
 from scrimmage_core import capture
 
 LINE = 100  # an inline list or table this long or longer is written over several lines
-CAP = 64 * 1024  # a mock whose value is longer than this as TOML is not written
 INDENT = "    "
 BARE = re.compile(r"[A-Za-z0-9_-]+")
 # The tables written as their own section when they do not fit on one line.
@@ -29,14 +28,6 @@ class Unwritable(ValueError):
 
 class WriterBug(RuntimeError):
     """What was written does not read back as what was meant: a bug in Scrimmage, exit 3."""
-
-
-class TooLarge(ValueError):
-    """A mock's value over the cap, with its size in bytes."""
-
-    def __init__(self, size: int) -> None:
-        super().__init__(f"its value is {size} bytes as TOML, over the {CAP // 1024} KiB cap")
-        self.size = size
 
 
 def string(text: str) -> str:
@@ -111,11 +102,6 @@ def mock(fields: dict[str, object], comments: Sequence[str] = ()) -> str:
     fields is the mock as config reads it: call, recorded, args, returns and so on. A long
     args, returns or json table goes after the other keys as its own section.
     """
-    for name in SECTIONS:
-        if name != "args" and name in fields:
-            size = len(inline(fields[name]).encode())
-            if size > CAP:
-                raise TooLarge(size)
     inline_keys = [k for k in fields if not section(k, fields[k], inline(fields[k]))]
     width = max((len(key(k)) for k in inline_keys), default=0)
     lines = [comment(text) for text in comments]
@@ -151,13 +137,3 @@ def comment(text: str) -> str:
     escapes it, so a newline in a reply cannot end the comment."""
     escaped = "".join(char if char.isprintable() else repr(char)[1:-1] for char in text)
     return f"# {escaped}".rstrip()
-
-
-def with_header(text: str, header: str) -> str:
-    """The file with a header comment after its leading comment lines, so a #:schema line
-    that was first stays first."""
-    lines = text.splitlines(keepends=True)
-    place = next((i for i, line in enumerate(lines) if not line.startswith("#")), len(lines))
-    if place and not lines[place - 1].endswith("\n"):
-        lines[place - 1] += "\n"
-    return "".join([*lines[:place], comment(header) + "\n", *lines[place:]])

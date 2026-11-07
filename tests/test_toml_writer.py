@@ -119,13 +119,6 @@ def test_a_list_of_forty_order_ids_is_written_one_per_line() -> None:
     assert 'returns  = ["ORD-00000", "ORD-00001", "ORD-00002"]' in short
 
 
-def test_a_value_over_64_kib_is_too_large_and_one_under_is_written() -> None:
-    with pytest.raises(toml_write.TooLarge) as caught:
-        toml_write.mock(mock_of("x" * (64 * 1024)))
-    assert caught.value.size == 64 * 1024 + 2
-    assert toml_write.mock(mock_of("x" * (60 * 1024)))
-
-
 def test_a_mock_that_reads_back_differently_is_a_bug(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(toml_write, "string", lambda text: '"changed"')
     with pytest.raises(toml_write.WriterBug, match="reads back differently"):
@@ -133,16 +126,3 @@ def test_a_mock_that_reads_back_differently_is_a_bug(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(toml_write, "string", lambda text: '"broken')
     with pytest.raises(toml_write.WriterBug, match="cannot read"):
         toml_write.mock(mock_of("x"))
-
-
-@pytest.mark.parametrize(
-    ("team", "expected"),
-    [
-        ("#:schema ./s.json\n# ours\n[agent]\n", "#:schema ./s.json\n# ours\n# H\n[agent]\n"),
-        ("[agent]\n", "# H\n[agent]\n"),
-        ("# only a comment", "# only a comment\n# H\n"),
-        ("", "# H\n"),
-    ],
-)  # fmt: skip
-def test_the_header_goes_after_the_files_leading_comments(team: str, expected: str) -> None:
-    assert toml_write.with_header(team, "H") == expected
