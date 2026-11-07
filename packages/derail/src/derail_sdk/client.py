@@ -10,6 +10,7 @@ reach its exit steps: multiprocessing ends a forked worker with os._exit.
 """
 
 import base64
+import contextlib
 import http.client
 import json
 import queue
@@ -20,7 +21,8 @@ from collections.abc import Callable
 from urllib.parse import urlsplit
 
 from derail_sdk import protocol
-from derail_sdk.plan import obj
+from derail_sdk.budget import Held, Shortfall
+from derail_sdk.plan import items, number, obj
 
 QUEUE_SIZE = 10_000
 BATCH_LINES = 500
@@ -88,14 +90,41 @@ class ControlClient:
             raise ControlError(f"no plan for {run}: {reply.get('error')}")
         return reply.get("plan")
 
-    def reserve(self, run: str, usd: float) -> int | None:
-        """Reserve what a model call could cost; None when the budget cannot cover it."""
-        status, reply = self.request("POST", "/v1/budget/reserve", {"run": run, "usd": usd})
+    def reserve(
+        self, run: str, usd: float, label: str = "", ticket: int | None = None
+    ) -> int | Shortfall:
+        """Reserve what a model call could cost, or say why the budget cannot cover it now.
+
+        The server answers at once. A caller that waits asks again with its ticket.
+        """
+        payload = {"run": run, "usd": usd, "label": label, "ticket": ticket}
+        status, reply = self.request("POST", "/v1/budget/reserve", payload)
         if status != 200:
             raise ControlError(f"the budget could not be checked: {reply.get('error')}")
-        if reply.get("ok") is not True:
-            return None
-        return int(str(reply["reservation"]))
+        try:
+            if reply.get("ok") is True:
+                return int(str(reply["reservation"]))
+            place = reply.get("ticket")
+            return Shortfall(
+                str(reply["why"]),
+                number(reply, "usd"),
+                number(reply, "spent"),
+                number(reply, "held"),
+                number(reply, "limit"),
+                None if place is None else int(str(place)),
+                tuple(
+                    Held(str(h["run"]), str(h["label"]), number(h, "usd"), h.get("ended") is True)
+                    for h in map(obj, items(reply, "holds"))
+                ),
+            )
+        except (ValueError, KeyError) as exc:
+            raise ControlError("the control server's budget reply is not valid") from exc
+
+    def release(self, ticket: int) -> None:
+        """Stop waiting, so the calls behind this one are served. Best effort: a ticket
+        that is not asked for again is dropped in any case."""
+        with contextlib.suppress(ControlError):
+            self.request("POST", "/v1/budget/release", {"ticket": ticket})
 
 
 class Sender:

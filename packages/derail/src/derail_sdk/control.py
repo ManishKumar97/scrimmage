@@ -5,6 +5,7 @@ listens on the local machine only. Every request must be signed, and every reply
 """
 
 import base64
+import dataclasses
 import hashlib
 import json
 import re
@@ -18,7 +19,7 @@ from socket import socket
 from typing import Any
 
 from derail_sdk import protocol
-from derail_sdk.budget import Ledger
+from derail_sdk.budget import Ledger, Shortfall
 from derail_sdk.plan import items, number, obj
 from derail_sdk.records import RecordStore
 
@@ -89,6 +90,7 @@ class ControlServer:
         with self.lock:
             state = self.runs[run]
             state.open = False
+            self.ledger.close_run(run)
             return state
 
     def handle(
@@ -108,6 +110,8 @@ class ControlServer:
             return self._reserve(body)
         if method == "POST" and path == "/v1/budget/settle":
             return self._settle(body)
+        if method == "POST" and path == "/v1/budget/release":
+            return self._release(body)
         if method == "POST" and path == BLOB_PATH:
             return self._blob(body)
         return 404, {"error": "not_found"}
@@ -121,14 +125,30 @@ class ControlServer:
         try:
             request = obj(json.loads(body))
             run, usd = str(request["run"]), number(request, "usd")
+            label = str(request.get("label", ""))
+            ticket = None if request.get("ticket") is None else int(str(request["ticket"]))
         except (ValueError, KeyError):
             return 400, {"error": "bad_request"}
-        if usd < 0 or self._open(run) is None:
-            return 409 if usd >= 0 else 400, {"error": "run_closed" if usd >= 0 else "bad_request"}
-        reservation = self.ledger.reserve(usd)
-        if reservation is None:
-            return 200, {"ok": False}
+        if not usd >= 0:  # NaN too
+            return 400, {"error": "bad_request"}
+        # Answered at once, never held: a waiter asks again, and one that has gone stops
+        # asking. Under the run lock, so a run that has closed is granted nothing.
+        with self.lock:
+            state = self.runs.get(run)
+            if state is None or not state.open:
+                return 409, {"error": "run_closed"}
+            reservation = self.ledger.reserve(usd, run, label, ticket)
+        if isinstance(reservation, Shortfall):
+            return 200, {"ok": False, **dataclasses.asdict(reservation)}
         return 200, {"ok": True, "reservation": reservation}
+
+    def _release(self, body: bytes) -> tuple[int, dict[str, object]]:
+        try:
+            ticket = int(str(obj(json.loads(body))["ticket"]))
+        except (ValueError, KeyError):
+            return 400, {"error": "bad_request"}
+        self.ledger.release(ticket)
+        return 200, {"ok": True}
 
     def _settle(self, body: bytes) -> tuple[int, dict[str, object]]:
         try:
@@ -210,6 +230,8 @@ class _Server(ThreadingHTTPServer):
     """One thread per connection, at most 64 at once."""
 
     daemon_threads = True
+    # Connections wait here while the 64 threads are busy; the default of 5 resets the rest.
+    request_queue_size = 1024
 
     def __init__(self, address: tuple[str, int], handler: type[BaseHTTPRequestHandler]) -> None:
         super().__init__(address, handler)

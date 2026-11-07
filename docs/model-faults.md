@@ -162,12 +162,10 @@ Every test has a budget for the whole run of `derail test`. It is $5 unless you 
 max_cost_usd = 0.50
 ```
 
-Before each model call, Derail reserves what the call could cost: an estimate of its input, plus its `max_tokens` (or `reserve_output_tokens`, 4096 by default) at the output price.
+Before each model call, Derail reserves what the call could cost: an estimate of its input at the full input price, plus its `max_tokens` (or `reserve_output_tokens`, 4096 by default) at the output price.
 After the call, the real cost from the reply replaces the reservation.
 So four calls at once cannot all slip past the limit.
-
-When the budget cannot cover a call, the call is not made, that run ends as "budget reached", and the test stops with exit code 2.
-The table's last line says what the test spent.
+The real cost prices the input tokens the provider served from its prompt cache at the cached price, as OpenAI bills them.
 
 To turn the budget off on purpose:
 
@@ -175,16 +173,82 @@ To turn the budget off on purpose:
 max_cost_usd = "none"
 ```
 
+### When calls in flight hold the budget
+
+A hold can be much larger than what the call costs.
+On `gpt-4.1`, 4096 output tokens at $8 a million hold about $0.033, so three calls in flight hold all of a $0.10 budget while almost nothing is spent.
+A call that needs room then waits for the others to finish and give back what they did not use:
+
+| Money spent plus this call | Spent, held and this call | What happens |
+|---|---|---|
+| over the limit | any | refused at once: waiting cannot help, as spent money never comes back |
+| within the limit | within the limit | the call goes ahead |
+| within the limit | over the limit | the call waits for calls in flight to finish, then goes ahead |
+
+A waiting call takes a ticket and asks again every quarter of a second.
+Tickets are served in the order they came, so a large call is not starved by a stream of small ones.
+A call is granted when it fits along with every call ahead of it in line, so many calls that all fit go ahead together.
+An async call waits on its event loop, not on a thread, so asyncio's threads stay free for other work, such as looking up host names.
+How long a call waits depends on whose calls hold the room:
+
+| The holds in the way | The longest wait | Why |
+|---|---|---|
+| this run's own calls would keep it out even if every other run finished | 30 seconds, or half the time the run has left, if that is less | the run may be waiting on itself |
+| other runs' calls | until 10 seconds before this run's `run_timeout`, or a tenth of it, if that is less | the other run's own time limit ends its holds |
+| a run that has ended | no wait: refused at once | that hold can never be given back |
+
+If the call is still held out then, it is refused and the test stops with exit code 2.
+A run waits on itself when a hold cannot end until the waiting call returns.
+A stream the agent keeps open across a second call does that, and so does a stream it stopped reading without closing: each keeps its hold until it is closed, or the run ends.
+Close a stream, or read it to its end, before the next call.
+
+The refusal says what the call could cost, what was spent, which calls held the rest, with their run, their label and what each held, and how long it waited.
+When spent money cannot cover a call, the call is refused at once.
+
+| How a run ends | When |
+|---|---|
+| "budget reached" | money spent reached the limit |
+| "not reserved" | the call could not fit, though money spent had not reached the limit: the money left was too little, or calls in flight held it |
+
+The table's last line says what the test spent, and a `test mistake:` line says why the test stopped:
+
+| What stopped the test | The line |
+|---|---|
+| money spent reached the limit | `the budget of $0.1 was reached: $0.1003 was spent, so the test stopped` |
+| a call could not fit, though spent money had not reached the limit | `a model call could not be reserved: it could cost up to $0.0331, $0.0800 was spent and $0.0000 was held by calls in flight, of a budget of $0.1, so the test stopped; ...` |
+| a call waited for calls in flight and still could not fit | the same, with the holds named, such as `(model:openai in run-3f2a $0.0331)`, and `after a wait of 30s for calls in flight` |
+
+A run killed while one of its calls holds money, such as one that ignored SIGTERM, leaves that hold in place, as the call may have been sent.
+It counts as spent from then on: a call it keeps out is refused at once, and the refusal names it as `left by run-3f2a, which ended while still holding`.
+The report then warns: `warning: run-3f2a ended with model:openai still holding $0.0331 of the budget`.
+
+To hold less, set `max_tokens` on the call, lower `reserve_output_tokens`, or lower `parallel`.
+
 ### Prices
 
-Derail ships prices for common OpenAI models.
+Derail ships prices for common OpenAI models, cached input included, checked against OpenAI's pricing page on 7 November 2026.
 A dated model, such as `gpt-4o-mini-2024-07-18`, uses its family's price.
 For any other model, give the price in dollars per million tokens:
 
 ```toml
 [agent.prices]
 llama-70b = {input = 0.6, output = 0.6}
+acme-gpt = {input = 2.0, cached_input = 0.5, output = 8.0}
 ```
+
+### Cached input
+
+OpenAI caches a prompt over 1024 tokens that repeats, and bills the cached part at a lower price.
+Derail reads the cached count from each reply's usage: `prompt_tokens_details.cached_tokens` on Chat Completions, `input_tokens_details.cached_tokens` on Responses, streamed or not.
+The record line shows it as `tokens.cached`, and `cost_usd` uses it, so the cost column matches the bill.
+
+| Reply | Price of each input token |
+|---|---|
+| 2048 input tokens, 1536 of them cached, on `gpt-4o-mini` | 512 at $0.15 and 1536 at $0.075 per million |
+| a price under `[agent.prices]` with no `cached_input` | every input token at `input`, the safe overestimate |
+| a cached count above the input count, or not a whole number | every input token at `input` |
+
+The reservation before a call still counts every input token at the full price, since Derail cannot know what the provider will serve from its cache.
 
 A call that sends no model name, such as a Responses call on a stored prompt, is priced by the key `""`:
 

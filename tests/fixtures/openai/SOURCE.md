@@ -48,3 +48,12 @@ These are real replies, saved from the real-model check on 6 November 2026 with 
 | `real_chat_tool_call.json` | The bot's first chat request |
 | `real_chat_answer.json` | The chat request after the tool result |
 | `real_embedding.json` | The bot's embedding request |
+
+These are derived from the files above for cached input tokens.
+Only the token counts change; the fields that hold them are the spec's `prompt_tokens_details` and `input_tokens_details`.
+
+| File | Derived from | What changed |
+|---|---|---|
+| `chat_answer_cached.json` | `chat_answer.json` | 2048 prompt tokens, 1536 of them cached, and the total to match |
+| `chat_stream_usage_cached.sse` | `chat_stream_usage.sse` | 2048 prompt tokens, all cached, in the last chunk's `usage` |
+| `response_stream_cached.sse` | `response_stream.sse` | 2048 input tokens, 1024 cached, and an `input_tokens_details` block, in the last event's `usage` |

@@ -124,3 +124,54 @@ def test_a_fault_on_one_model_and_its_limits_are_documented() -> None:
     assert "`unreadable_model`" in safety and "- A chat request body" in safety
     assert "- A request body Derail cannot read" not in safety
     assert "`model`" not in page("configuration.md").split("## Coming in later versions")[1]
+
+
+@pytest.mark.design("docs.cached_input")
+def test_cached_input_prices_and_their_default_are_documented() -> None:
+    text = page("configuration.md")
+    assert all(mentioned(text, key) for key in config.PRICE_KEYS)
+    assert "cached tokens cost the full `input` price" in text
+    guide = page("model-faults.md")
+    for word in ("prompt_tokens_details.cached_tokens", "input_tokens_details.cached_tokens"):
+        assert word in guide, word
+    assert "`tokens.cached`" in guide and "the safe overestimate" in guide
+    assert "**Cached input on OpenAI only.**" in page("limits.md")
+
+
+@pytest.mark.design("docs.method_tools")
+def test_tools_that_are_methods_and_their_limits_are_documented() -> None:
+    text = page("configuration.md")
+    assert "`module:Class.method`" in text and "## Tools that are methods" in text
+    for case in ("`staticmethod`", "`classmethod`", "`__init__`", "`Outer.Inner.method`"):
+        assert case in text, case
+    assert "never holds `self` or `cls`" in text
+    assert "**Methods stored as the class is made.**" in page("limits.md")
+    assert "A method is gated on its class" in page("how-it-works.md")
+
+
+@pytest.mark.design("docs.budget_wait")
+def test_the_wait_for_calls_in_flight_and_its_report_are_documented() -> None:
+    guide = page("model-faults.md")
+    assert "### When calls in flight hold the budget" in guide
+    assert (
+        "even if every other run finished | 30 seconds, or half the time the run has left" in guide
+    )
+    assert "| a run that has ended | no wait: refused at once |" in guide
+    assert "An async call waits on its event loop, not on a thread" in guide
+    assert "Tickets are served in the order they came" in guide
+    assert "a stream it stopped reading without closing" in guide
+    assert "still holding" in guide and '| "not reserved" |' in guide
+    for line in ("was reached: $0.1003 was spent", "a model call could not be reserved"):
+        assert line in guide, line
+    assert "after a wait of 30s for calls in flight" in guide
+    assert "#when-calls-in-flight-hold-the-budget" in page("configuration.md")
+    assert "**A hold that cannot end while a call waits.**" in page("limits.md")
+    assert "| not reserved | left out |" in page("judging.md")
+    limits = page("limits.md")
+    for item in (
+        "A killed run's holds stay",
+        "The first in line waits",
+        "Two toolkits",
+        "alias at the top",
+    ):
+        assert item in limits, item

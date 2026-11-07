@@ -199,6 +199,7 @@
             "unlisted",
             "poisoned",
             "budget",
+            "budget_held",
             "no_price",
             "hosted",
             "unknown_tool_type",
@@ -251,7 +252,8 @@
           "additionalProperties": false,
           "required": [
             "input",
-            "output"
+            "output",
+            "cached"
           ],
           "properties": {
             "input": {
@@ -259,6 +261,10 @@
               "minimum": 0
             },
             "output": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "cached": {
               "type": "integer",
               "minimum": 0
             }
@@ -273,6 +279,70 @@
         },
         "cost_estimated": {
           "type": "boolean"
+        },
+        "budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "usd",
+            "spent",
+            "held",
+            "limit",
+            "waited_s"
+          ],
+          "properties": {
+            "usd": {
+              "type": "number",
+              "minimum": 0
+            },
+            "spent": {
+              "type": "number",
+              "minimum": 0
+            },
+            "held": {
+              "type": "number",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "waited_s": {
+              "type": "number",
+              "minimum": 0
+            },
+            "holds": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "run",
+                  "label",
+                  "usd",
+                  "ended"
+                ],
+                "properties": {
+                  "run": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "usd": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "ended": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "own": {
+              "type": "boolean"
+            }
+          }
         },
         "reply_incomplete": {
           "const": true
@@ -336,6 +406,7 @@
                 "timed out",
                 "refused call",
                 "budget reached",
+                "not reserved",
                 "infrastructure error",
                 "stopped"
               ]

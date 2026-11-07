@@ -509,8 +509,13 @@ def test_a_status_with_no_standard_name_still_has_a_body(lib: Any) -> None:
 @pytest.mark.design("web.no_budget_on_web")
 def test_a_web_request_reserves_nothing_from_the_budget(lib: Any, web: Web) -> None:
     class Nothing:
-        def reserve(self, run: str, usd: float) -> int | None:
+        def reserve(
+            self, run: str, usd: float, label: str = "", ticket: int | None = None
+        ) -> int | None:
             raise AssertionError(f"reserved {usd} for {run}")
+
+        def release(self, ticket: int) -> None:
+            raise AssertionError("released a ticket")
 
     unpatch(lib)
     sink = Sink()

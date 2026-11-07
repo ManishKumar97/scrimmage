@@ -220,7 +220,8 @@ class RunState:
                 "neither mocks it nor lists it under [agent] real. Mock it in the test, or "
                 f'add "{label} {detail}" to real if it is safe to run for real.'
             ),
-            "budget": f"{label}: the test's budget cannot cover this call. {detail}",
+            "budget": f"{label}: the test's budget cannot cover this call: {detail}",
+            "budget_held": f"{label}: the budget could not hold this call in time: {detail}",
             "no_price": detail,
             "hosted": detail,
             "unknown_tool_type": detail,

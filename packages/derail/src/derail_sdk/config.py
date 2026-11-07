@@ -19,6 +19,7 @@ from derail_sdk import labels, provider_openai, python_args
 from derail_sdk.errors import ConfigError
 from derail_sdk.judge import Rules, impossible, normal
 from derail_sdk.mocks import allowed
+from derail_sdk.provider_openai import Rates
 from derail_sdk.redact import redact
 
 AGENT_KEYS = {
@@ -55,11 +56,13 @@ FAULTS = ("timeout", "status", "error", "empty")
 STATUS = re.compile(r"status (?P<code>\d{3})")
 SCHEDULE = re.compile(r"always|(?:first|requests) (?P<n>[1-9]\d*)")
 MODEL_KEYS = {"host", "provider"}
+PRICE_KEYS = {"input", "output", "cached_input"}
 DEFAULT_BUDGET_USD = 5.0
 DEFAULT_RESERVE_OUTPUT_TOKENS = 4096
 # Where the answer is in what the agent returns, such as messages[-1].content.
 ANSWER_PATH = re.compile(r"[A-Za-z_]\w*(\[-?\d+\]|\.[A-Za-z_]\w*)*")
 IMPORT_PATH = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*:[A-Za-z_]\w*")
+TOOL_NAMES = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*")  # a function, or Class.method
 QUESTION = "{question}"  # in a command; the only placeholder filled in
 MAX_ARGUMENT = 128 * 1024  # Linux's limit on one argument, with its closing NUL
 
@@ -128,14 +131,6 @@ class ModelHost:
 
 
 @dataclass(frozen=True)
-class Price:
-    """Dollars per million tokens."""
-
-    input: float
-    output: float
-
-
-@dataclass(frozen=True)
 class Agent:
     function: str
     runs: int
@@ -148,7 +143,7 @@ class Agent:
     model_hosts: tuple[ModelHost, ...] = ()
     max_cost_usd: float | None = DEFAULT_BUDGET_USD  # None: the budget is off, on purpose
     reserve_output_tokens: int = DEFAULT_RESERVE_OUTPUT_TOKENS
-    prices: tuple[tuple[str, Price], ...] = ()
+    prices: tuple[tuple[str, Rates], ...] = ()
     answer: str | None = None  # where the answer is in what the agent returns
     command: tuple[str, ...] = ()  # a script's arguments; function is then empty
     children: bool = False  # child processes fire faults, and join on any Python
@@ -339,6 +334,22 @@ def import_path(value: str, where: str) -> str:
     return value
 
 
+def tool_path(value: str, where: str) -> str:
+    """A function, or a method on a class at the module's top level."""
+    module, colon, name = value.partition(":")
+    if colon and TOOL_NAMES.fullmatch(name) and IMPORT_PATH.fullmatch(f"{module}:x"):
+        if name.count(".") > 1:
+            raise ConfigError(
+                f"{where}: {value!r} names a method on a nested class, which this version "
+                "cannot gate; move the class to the top of its module"
+            )
+        return value
+    raise ConfigError(
+        f"{where}: {value!r} is not an import path of the form 'package.module:function' "
+        "or 'package.module:Class.method'"
+    )
+
+
 def whole(table: dict[str, object], key: str, default: int, where: str) -> int:
     value = table.get(key, default)
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
@@ -444,37 +455,45 @@ def read_budget(value: object, where: str) -> float | None:
     return float(value)
 
 
-def read_prices(value: object, where: str) -> tuple[tuple[str, Price], ...]:
-    prices: list[tuple[str, Price]] = []
+def read_prices(value: object, where: str) -> tuple[tuple[str, Rates], ...]:
+    prices: list[tuple[str, Rates]] = []
     for model, raw in as_table(value, where).items():
         item = f"{where} {model}"
         entry = as_table(raw, item)
-        check_keys(entry, {"input", "output"}, item)
-        parts: list[float] = []
-        for key in ("input", "output"):
-            number = entry.get(key)
-            if (
-                isinstance(number, bool)
-                or not isinstance(number, int | float)
-                or not math.isfinite(number)
-                or number < 0
-            ):
-                raise ConfigError(f"{item} {key}: expected dollars per million tokens")
-            parts.append(float(number))
-        prices.append((model, Price(parts[0], parts[1])))
+        check_keys(entry, PRICE_KEYS, item)
+        rate, output = dollars(entry, "input", item), dollars(entry, "output", item)
+        cached = dollars(entry, "cached_input", item) if "cached_input" in entry else None
+        if cached is not None and cached > rate:
+            raise ConfigError(
+                f"{item} cached_input: {cached:g} is above input, {rate:g}; a cached token "
+                "costs at most a full one"
+            )
+        prices.append((model, Rates(rate, output, cached)))
     return tuple(prices)
+
+
+def dollars(entry: dict[str, object], key: str, item: str) -> float:
+    number = entry.get(key)
+    if (
+        isinstance(number, bool)
+        or not isinstance(number, int | float)
+        or not math.isfinite(number)
+        or number < 0
+    ):
+        raise ConfigError(f"{item} {key}: expected dollars per million tokens")
+    return float(number)
 
 
 def read_tool(entry: object, where: str) -> tuple[str, str | None]:
     """A tools entry: an import path, or {path, name} when the model sees another name."""
     if isinstance(entry, str):
-        return import_path(entry, where), None
+        return tool_path(entry, where), None
     table = as_table(entry, where)
     check_keys(table, {"path", "name"}, where)
     name = text(table, "name", where)
     if not labels.TOOL_NAME.fullmatch(name):
         raise ConfigError(f"{where} name: {name!r} is not a tool name")
-    return import_path(text(table, "path", where), where), name
+    return tool_path(text(table, "path", where), where), name
 
 
 def read_test(table: dict[str, object], index: int) -> Test:

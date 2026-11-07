@@ -115,7 +115,7 @@ def test_an_embedding_runs_for_real_and_is_labelled(project: Project, fake_opena
     result = project.test(fake_openai(ACME, embedding="embedding"))
     first = next(x for x in result.records()[0] if x.get("kind") == "model")
     assert (first["call"], first["action"]) == ("model:openai/embeddings", "real")
-    assert first["tokens"] == {"input": 8, "output": 0}
+    assert first["tokens"] == {"input": 8, "output": 0, "cached": 0}
 
 
 @pytest.mark.design("model.fault_on_embeddings")

@@ -11,10 +11,10 @@ from derail_sdk.config import (
     Fault,
     Mock,
     ModelHost,
-    Price,
     Test,
 )
 from derail_sdk.judge import Rules
+from derail_sdk.provider_openai import Rates
 
 PLAN_VERSION = 1
 
@@ -34,7 +34,7 @@ class Plan:
     model_hosts: tuple[ModelHost, ...] = ()
     budget_usd: float | None = None  # None: no budget, so no reservations
     reserve_output_tokens: int = DEFAULT_RESERVE_OUTPUT_TOKENS
-    prices: tuple[tuple[str, Price], ...] = ()
+    prices: tuple[tuple[str, Rates], ...] = ()
     children: bool = False  # child processes fire faults too
     unavailable: str | None = None  # why a child has no plan; such a plan is never sent
 
@@ -59,7 +59,7 @@ class Plan:
             "budget": {
                 "limit_usd": self.budget_usd,
                 "reserve_output_tokens": self.reserve_output_tokens,
-                "prices": {m: {"input": p.input, "output": p.output} for m, p in self.prices},
+                "prices": {m: price_json(p) for m, p in self.prices},
             },
         }
         if self.renames:
@@ -88,8 +88,7 @@ class Plan:
         limit = number(doc, "time_limit_s")
         budget = obj(doc.get("budget", {}))
         prices = tuple(
-            (model, Price(number(obj(p), "input"), number(obj(p), "output")))
-            for model, p in obj(budget.get("prices", {})).items()
+            (model, price_from(obj(p))) for model, p in obj(budget.get("prices", {})).items()
         )
         hosts = tuple(
             ModelHost(string(h, "host"), string(h, "provider"))
@@ -113,6 +112,18 @@ class Plan:
             prices=prices,
             children=doc.get("children") is True,
         )
+
+
+def price_json(price: Rates) -> dict[str, float]:
+    doc = {"input": price.input, "output": price.output}
+    if price.cached_input is not None:
+        doc["cached_input"] = price.cached_input
+    return doc
+
+
+def price_from(doc: dict[str, object]) -> Rates:
+    cached = None if doc.get("cached_input") is None else number(doc, "cached_input")
+    return Rates(number(doc, "input"), number(doc, "output"), cached)
 
 
 def tools_text(tools: tuple[str, ...], renames: tuple[tuple[str, str], ...]) -> str:

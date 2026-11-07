@@ -5,11 +5,13 @@ model calls at once, a provider call that creates something, and model requests 
 offer tools Derail must check.
 """
 
+import asyncio
 import os
 import signal
 import threading
 import time
 from collections.abc import Callable
+from typing import Any
 
 import openai
 
@@ -43,6 +45,53 @@ def answer_streamed(question: str) -> str:
         return "".join(chunk.choices[0].delta.content or "" for chunk in stream if chunk.choices)
     except openai.APIError as exc:
         return f"error: {type(exc).__name__}"
+
+
+def answer_streamed_slowly(question: str) -> str:
+    """Reads its stream after a pause, so its hold on the budget overlaps other runs'."""
+    stream = openai.OpenAI(max_retries=0).chat.completions.create(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": question}], stream=True
+    )
+    time.sleep(2.5)  # longer than one 2 s step of a wait, so a wait must take more than one
+    return "".join(chunk.choices[0].delta.content or "" for chunk in stream if chunk.choices)
+
+
+def answer_holding_a_stream(question: str) -> str:
+    """Keeps a stream open while it makes a second call, which then waits on its own hold."""
+    client = openai.OpenAI(max_retries=0)
+    messages: list[Any] = [{"role": "user", "content": question}]
+    stream = client.chat.completions.create(model="gpt-4o-mini", messages=messages, stream=True)
+    reply = client.chat.completions.create(model="gpt-4o-mini", messages=messages)
+    stream.close()
+    return reply.choices[0].message.content or ""
+
+
+def answer_killed_holding(question: str) -> str:
+    """Opens a stream, which holds money, and is killed before it can give it back."""
+    openai.OpenAI(max_retries=0).chat.completions.create(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": question}], stream=True
+    )
+    os.kill(os.getpid(), signal.SIGKILL)  # once the hold is taken, whatever the machine's load
+    return "never"
+
+
+async def slow_stream(client: openai.AsyncOpenAI, question: str) -> str:
+    stream = await client.chat.completions.create(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": question}], stream=True
+    )
+    await asyncio.sleep(1.0)  # the hold stays while the stream is open
+    return "".join([c.choices[0].delta.content or "" async for c in stream if c.choices])
+
+
+def answer_many_async(question: str) -> str:
+    """Sixteen calls at once to a host by name, which asyncio looks up on its threads."""
+    base = os.environ["OPENAI_BASE_URL"].replace("127.0.0.1", "localhost")
+
+    async def many() -> list[str]:
+        client = openai.AsyncOpenAI(base_url=base, max_retries=0)
+        return await asyncio.gather(*(slow_stream(client, question) for _ in range(16)))
+
+    return " ".join(asyncio.run(many()))
 
 
 def answer_priceless(question: str) -> str:
@@ -110,6 +159,13 @@ def answer_short(question: str) -> str:
         model="gpt-4o-mini", messages=[{"role": "user", "content": question}], max_tokens=1
     )
     return reply.choices[0].message.content or "no text"
+
+
+def answer_short_twice(question: str) -> str:
+    """Two short calls in a row: the first can cost more than it held, using the budget up."""
+    answer_short(question)
+    time.sleep(0.5)  # the first call's real cost reaches the runner
+    return answer_short(question)
 
 
 def answer_if_asked(question: str) -> str:

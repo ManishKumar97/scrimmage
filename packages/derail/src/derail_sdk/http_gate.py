@@ -19,6 +19,7 @@ import http
 import inspect
 import json
 import threading
+import time
 import zlib
 from collections.abc import Callable, Iterator
 from contextvars import ContextVar
@@ -27,10 +28,12 @@ from typing import Any, NoReturn, Protocol
 
 from derail_sdk import hooks
 from derail_sdk import provider_openai as openai_table
+from derail_sdk.budget import Held, Shortfall
 from derail_sdk.client import ControlError
 from derail_sdk.decide import READ_METHODS, Call, Decision, names
 from derail_sdk.errors import DerailRefused
 from derail_sdk.labels import shown_name
+from derail_sdk.plan import Plan
 from derail_sdk.redact import redact
 from derail_sdk.state import BLOB_CAP, BlobSink, RunState, Step, blob, current, error_text
 
@@ -39,6 +42,10 @@ TESTED = {"httpx": ((0, 28), (0, 28)), "httpx2": ((2, 16), (2, 16))}
 GATED = "__derail_gate__"
 CHAR_PER_TOKEN = 4  # the rough size of a token, for estimates only
 PRICE_KEY_CAP = 300  # a longer name is not shown whole as a price key to paste
+BUDGET_WAIT_S = 30.0  # the longest a call waits for calls in flight to free the budget
+WAIT_STEP_S = 0.25  # how often a waiting call asks again; a cancel is seen between asks
+RUN_MARGIN_S = 10.0  # a wait on other runs ends this long before the run's time limit
+SHOWN_HOLDS = 5  # holds a refusal names
 # A refusal the team must act on: the message reaches the run table.
 MISTAKE_REASONS = (
     "no_price",
@@ -63,7 +70,11 @@ MCP_TRANSPORT: ContextVar[tuple[object, ...] | None] = ContextVar(
 
 
 class Reserver(Protocol):
-    def reserve(self, run: str, usd: float) -> int | None: ...
+    def reserve(
+        self, run: str, usd: float, label: str = "", ticket: int | None = None
+    ) -> int | Shortfall: ...
+
+    def release(self, ticket: int) -> None: ...
 
 
 class Context:
@@ -363,7 +374,8 @@ def check_tools(
     if unseen:
         why = "; ".join(run.blocked[name] for name in unseen if name in run.blocked)
         fix = (
-            'add it to [agent] tools as "package.module:function", or as {path, name} when '
+            'add it to [agent] tools as "package.module:function" or, for a method, '
+            '"package.module:Class.method", or as {path, name} when '
             "the model sees another name"
         )
         step.extra["unseen_tools"] = unseen
@@ -463,9 +475,8 @@ def mocked(
     return response
 
 
-def prices_of(ctx: Context, model: str) -> tuple[float, float] | None:
-    team = {m: (p.input, p.output) for m, p in ctx.run.plan.prices}
-    return openai_table.price(model, team)
+def prices_of(ctx: Context, model: str) -> openai_table.Rates | None:
+    return openai_table.price(model, dict(ctx.run.plan.prices))
 
 
 def no_price(model: str) -> str:
@@ -490,8 +501,29 @@ def no_price(model: str) -> str:
     )
 
 
-def reserve(ctx: Context, step: Step, request: Any, extra: dict[str, object]) -> int | None:
-    """Reserve what this model call could cost, before it is sent."""
+def budget_wait(plan: Plan, elapsed: float = 0.0, *, own: bool = True) -> float:
+    """How long a call waits for calls in flight to free the budget.
+
+    own: this run's own holds keep the call out, which may be a deadlock, so the wait is short:
+    30 s or half the time the run has left. Another run's holds end by its own time limit,
+    so the call waits until near its own, leaving time for the refusal to be recorded.
+    """
+    left = plan.time_limit_s - elapsed
+    if own:
+        return max(0.0, min(BUDGET_WAIT_S, left / 2))
+    return max(0.0, left - min(RUN_MARGIN_S, plan.time_limit_s / 10))
+
+
+@dataclasses.dataclass(frozen=True)
+class Pause:
+    """The call must wait this long, then ask again with its ticket."""
+
+    seconds: float
+    ticket: int | None
+
+
+def hold_for(ctx: Context, step: Step, request: Any, extra: dict[str, object]) -> float | None:
+    """What this model call could cost, at worst; None when nothing is reserved for it."""
     plan = ctx.run.plan
     if step.call.kind != "model" or plan.budget_usd is None:
         return None
@@ -505,60 +537,193 @@ def reserve(ctx: Context, step: Step, request: Any, extra: dict[str, object]) ->
     body = body_of(request) or b""
     fields = openai_table.request_fields(body) if body else None
     output = openai_table.max_output(fields or {}) or plan.reserve_output_tokens
-    usd = openai_table.cost(len(body) // CHAR_PER_TOKEN, output, rates)
+    return openai_table.cost(len(body) // CHAR_PER_TOKEN, output, rates)
+
+
+def reserve(ctx: Context, step: Step, request: Any, extra: dict[str, object]) -> int | None:
+    """Reserve what this model call could cost, before it is sent.
+
+    A sync call waits on its own thread, the one that made the call and is blocked on it
+    anyway, so no thread anyone else needs is held.
+    """
+    usd = hold_for(ctx, step, request, extra)
+    if usd is None:
+        return None
+    started, ticket = time.monotonic(), None
+    while True:
+        got = ask(ctx, step, extra, usd, started, ticket)
+        if not isinstance(got, Pause):
+            return got
+        ticket = got.ticket
+        time.sleep(got.seconds)
+
+
+def ask(
+    ctx: Context,
+    step: Step,
+    extra: dict[str, object],
+    usd: float,
+    started: float,
+    ticket: int | None,
+) -> int | Pause:
+    """Ask the runner once: a reservation, a pause before asking again, or a refusal."""
+    plan = ctx.run.plan
     try:
-        reservation = ctx.client.reserve(plan.run, usd)
+        answer = ctx.client.reserve(plan.run, usd, step.call.label, ticket)
     except ControlError as exc:
         ctx.run.refuse(step, "control_unreachable")
         refuse(ctx.run, step, f"the budget could not be checked, so the call is refused: {exc}")
-    if reservation is None:
-        ctx.run.refuse(step, "budget")
-        refuse(
-            ctx.run,
-            step,
-            f"raise [agent] max_cost_usd above ${plan.budget_usd:g} if this is expected",
+    if not isinstance(answer, Shortfall):
+        return answer
+    own = waits_on_itself(answer, plan.run)
+    bound = budget_wait(plan, started - ctx.run.began, own=own)
+    waited = time.monotonic() - started
+    if answer.why == "held" and waited < bound:
+        return Pause(min(WAIT_STEP_S, bound - waited), answer.ticket)
+    if answer.ticket is not None:
+        ctx.client.release(answer.ticket)
+    waited = waited if answer.why == "held" else 0.0
+    extra["budget"] = {
+        "usd": round(answer.usd, 8),
+        "spent": round(answer.spent, 8),
+        "held": round(answer.held, 8),
+        "limit": answer.limit,
+        "waited_s": round(waited, 1),
+        "own": own,
+        "holds": [
+            {"run": h.run, "label": h.label, "usd": round(h.usd, 8), "ended": h.ended}
+            for h in answer.holds[:SHOWN_HOLDS]
+        ],
+    }
+    reason = "budget_held" if answer.why == "held" else "budget"
+    ctx.run.refuse(step, reason)
+    refuse(ctx.run, step, shortfall_text(answer, waited, plan, own))
+
+
+def waits_on_itself(short: Shortfall, run: str) -> bool:
+    """Even if every other run settled, this run's own holds would keep the call out: it
+    may be waiting on itself, such as on a stream it left open."""
+    own = sum(h.usd for h in short.holds if h.run == run)
+    left = sum(h.usd for h in short.holds if h.ended)
+    return short.spent + left + own + short.usd > short.limit
+
+
+def shortfall_text(short: Shortfall, waited: float, plan: Plan, own: bool) -> str:
+    """What the call could cost, what is spent and who holds the rest, and what to change."""
+    text = (
+        f"it could cost up to ${short.usd:.4f}; ${short.spent:.4f} is spent and "
+        f"${short.held:.4f} is held by calls in flight, of a budget of ${short.limit:g}"
+    )
+    if short.holds:
+        named = [hold_text(h, plan.run) for h in short.holds[:SHOWN_HOLDS]]
+        more = len(short.holds) - SHOWN_HOLDS
+        text += f" ({', '.join(named)}{f' and {more} more' if more > 0 else ''})"
+    if short.why == "held":
+        text += f"; Derail waited {waited:.0f}s for them to finish"
+    if short.why == "left":
+        return (
+            f"{text}. A run that ended while still holding can never give its hold back, so "
+            "waiting cannot help: it was killed during a call. Raise [agent] max_cost_usd, or "
+            "find why that run was killed in its log"
         )
-    return reservation
+    if own:
+        return (
+            f"{text}. This run's own calls hold the room, so it may be waiting on itself: a "
+            "stream left open, or not read to its end, keeps its hold until it is closed. "
+            "Close the stream before the next call, or set max_tokens to hold less"
+        )
+    return (
+        f"{text}. A call without max_tokens holds reserve_output_tokens "
+        f"({plan.reserve_output_tokens}) at the output price: set max_tokens on the call or "
+        "lower [agent] reserve_output_tokens to hold less, lower [agent] parallel, or raise "
+        "[agent] max_cost_usd if this is expected"
+    )
+
+
+def hold_text(hold: Held, run: str) -> str:
+    where = "this run" if hold.run == run else hold.run
+    ended = f", left by {hold.run}, which ended while still holding" if hold.ended else ""
+    return f"{hold.label or 'a call'} in {where} ${hold.usd:.4f}{ended}"
 
 
 async def reserve_off_the_loop(
     ctx: Context, step: Step, request: Any, extra: dict[str, object]
 ) -> int | None:
-    """Reserve on a thread, so the loop keeps running while the runner answers.
+    """Reserve for an async call. Each ask is one short request on a thread; the waits
+    between asks are on the loop, so a waiting call holds no thread. asyncio's default
+    threads also look up host names, so a held thread could keep a granted call from
+    connecting."""
+    usd = hold_for(ctx, step, request, extra)
+    if usd is None:
+        return None
+    started, ticket = time.monotonic(), None
+    while True:
+        got = await ask_off_the_loop(ctx, step, extra, usd, started, ticket)
+        if not isinstance(got, Pause):
+            return got
+        ticket = got.ticket
+        try:
+            await asyncio.sleep(got.seconds)
+        except asyncio.CancelledError:
+            give_up(ctx, ticket)
+            abandoned(ctx, step, extra, None)
+            raise
 
-    If the task is cancelled meanwhile, the thread still gets its reservation, with nobody
-    left to use it. Whichever of the two finishes last gives it back. A cancel can also
-    land while the work waits for a free thread, so it never runs: the call was already
-    counted, so the task writes its line instead.
+
+async def ask_off_the_loop(
+    ctx: Context,
+    step: Step,
+    extra: dict[str, object],
+    usd: float,
+    started: float,
+    ticket: int | None,
+) -> int | Pause:
+    """One ask on a thread, so the loop keeps running while the runner answers.
+
+    If the task is cancelled meanwhile, the thread still gets its answer, with nobody left
+    to use it. Whichever of the two finishes last gives back the hold or the ticket. A
+    cancel can also land while the work waits for a free thread, so it never runs: the
+    call was already counted, so the task writes its line instead.
     """
     lock = threading.Lock()
     cancelled: list[bool] = []
-    started: list[bool] = []
-    held: list[int | None] = []
+    started_work: list[bool] = []
+    done: list[int | Pause] = []
 
-    def work() -> int | None:
+    def let_go(got: int | Pause | None) -> None:
+        if isinstance(got, Pause):
+            give_up(ctx, got.ticket)
+        abandoned(ctx, step, extra, got if isinstance(got, int) else None)
+
+    def work() -> int | Pause:
         with lock:
             if cancelled:
-                return None
-            started.append(True)
-        reservation = reserve(ctx, step, request, extra)
+                return Pause(0.0, ticket)
+            started_work.append(True)
+        got = ask(ctx, step, extra, usd, started, ticket)
         with lock:
-            held.append(reservation)
+            done.append(got)
             abandon = bool(cancelled)
         if abandon:
-            abandoned(ctx, step, extra, reservation)
-        return reservation
+            let_go(got)
+        return got
 
     try:
         return await asyncio.to_thread(work)
     except asyncio.CancelledError:
         with lock:
             cancelled.append(True)
-            done = list(held)
-            waiting = not started
-        if done or waiting:
-            abandoned(ctx, step, extra, done[0] if done else None)
+            finished = list(done)
+            waiting = not started_work
+        if finished or waiting:
+            let_go(finished[0] if finished else Pause(0.0, ticket))
         raise
+
+
+def give_up(ctx: Context, ticket: int | None) -> None:
+    """Hand back a ticket off the caller's thread or loop. If it is lost, it goes stale."""
+    if ticket is not None:
+        threading.Thread(target=ctx.client.release, args=(ticket,), daemon=True).start()
 
 
 def abandoned(ctx: Context, step: Step, extra: dict[str, object], reservation: int | None) -> None:
@@ -717,17 +882,17 @@ def record(
         extra.update(status=response.status_code, result=blob(body, ctx.sender, total=size))
         return 0.0
     used = openai_table.usage(body, output_required=step.call.name == "chat")
-    tokens_in, tokens_out = used.input, used.output
+    tokens_in, tokens_out, cached = used.input, used.output, used.cached
     if not used.known:
         tokens_in = len(body_of(request) or b"") // CHAR_PER_TOKEN
         tokens_out = len(body) // CHAR_PER_TOKEN
     free = step.call.name in openai_table.FREE_OPS
-    rates = (0.0, 0.0) if free else prices_of(ctx, str(extra.get("model", "")))
-    usd = openai_table.cost(tokens_in, tokens_out, rates) if rates else None
+    rates = openai_table.Rates(0.0, 0.0) if free else prices_of(ctx, str(extra.get("model", "")))
+    usd = openai_table.cost(tokens_in, tokens_out, rates, cached) if rates else None
     extra.update(
         status=response.status_code,
         result=blob(body, ctx.sender, total=size),
-        tokens={"input": tokens_in, "output": tokens_out},
+        tokens={"input": tokens_in, "output": tokens_out, "cached": cached},
         cost_usd=None if usd is None else round(usd, 8),
         cost_estimated=usd is not None and not used.known and not free,
     )

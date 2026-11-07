@@ -281,7 +281,7 @@ def test_a_child_sends_again_at_exit_what_failed_the_first_time(server: ControlS
 
 def test_a_childs_settlement_goes_out_at_once(server: ControlServer) -> None:
     held = server.ledger.reserve(1.0)
-    assert held is not None
+    assert isinstance(held, int)
     sender = Sender(ControlClient(server.url, TOKEN), "run-1", eager=True)
     sender.put_settle(held, 0.25)
     assert not sender.settles
@@ -542,7 +542,7 @@ def test_a_settlement_is_never_crowded_out_and_survives_a_failed_send(tmp_path: 
     control.open_run("run-1", "baseline", PLAN)
     try:
         held = ledger.reserve(0.5)
-        assert held is not None
+        assert isinstance(held, int)
         sender = Sender(ControlClient("http://127.0.0.1:9", TOKEN), "run-1")
         sender.posts.maxsize = 1
         sender.put_blob("a" * 64, b"x")  # the side-folder queue is full
@@ -583,7 +583,7 @@ def test_a_burst_of_settlements_all_arrive(tmp_path: Path) -> None:
         sender = Sender(ControlClient(control.url, TOKEN), "run-1")
         held = [ledger.reserve(0.5) for _ in range(200)]
         for reservation in held:
-            assert reservation is not None
+            assert isinstance(reservation, int)
             sender.put_settle(reservation, 0.5)
         sender.flush()
         assert (ledger.reserved, ledger.spent) == (0.0, 100.0)

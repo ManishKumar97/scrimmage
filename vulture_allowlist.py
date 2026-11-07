@@ -6,6 +6,7 @@ _.do_POST  # tests/fakes/openai_server.py: http.server calls do_<METHOD> by name
 _.log_message  # tests/fakes/openai_server.py: http.server calls it per request
 _.do_GET  # control.py and test_protocol.py: http.server calls do_<METHOD> by name
 _.daemon_threads  # control.py: socketserver.ThreadingMixIn reads it
+_.request_queue_size  # control.py: socketserver.TCPServer reads it
 _.maxsize  # test_protocol.py: queue.Queue reads it to decide when it is full
 _.get_order  # tests/example/acme/tools.py: the agent looks tools up by name
 _.check_inventory  # tests/example/acme/tools.py: the agent looks tools up by name
@@ -47,6 +48,11 @@ _.pytest_sessionfinish  # tests/conftest.py: pytest calls hooks by name
 _.exitstatus  # tests/conftest.py: pytest reads it to set the exit code
 _.answer_streamed  # tests/example/acme/rag.py: named by import path in a test's derail.toml
 _.answer_priceless  # tests/example/acme/rag.py: named by import path in a test's derail.toml
+_.answer_streamed_slowly  # tests/example/acme/rag.py: named by import path in a test's derail.toml
+_.answer_holding_a_stream  # tests/example/acme/rag.py: named by import path in a test's derail.toml
+_.answer_killed_holding  # tests/example/acme/rag.py: named in a test's derail.toml
+_.answer_many_async  # tests/example/acme/rag.py: named in a test's derail.toml
+_.answer_short_twice  # tests/example/acme/rag.py: named by import path in a test's derail.toml
 _.answer_web_after_close  # tests/example/acme/docs_bot.py: a test's derail.toml names it
 _.answer_unknown_request  # tests/example/acme/docs_bot.py: a test's derail.toml names it
 _.answer_with_reads  # tests/example/acme/docs_bot.py: a test's derail.toml names it

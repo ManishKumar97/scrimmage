@@ -1,6 +1,7 @@
 """Acme's order bot: a hand-written loop over the openai library and its own tools."""
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 import openai
@@ -45,11 +46,18 @@ def answer(question: str) -> str:
     return loop(openai.OpenAI(max_retries=0), question)
 
 
-def loop(client: openai.OpenAI, question: str) -> str:
-    messages: list[Any] = [{"role": "user", "content": question}]
+def loop(
+    client: openai.OpenAI,
+    question: str,
+    run: Callable[[str, str], str] = run_tool,
+    system: str | None = None,
+    model: str = "gpt-4o-mini",
+) -> str:
+    messages: list[Any] = [{"role": "system", "content": system}] if system else []
+    messages.append({"role": "user", "content": question})
     for _ in range(8):
         reply = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=model,
             messages=messages,
             tools=SPECS,  # type: ignore[arg-type]
         )
@@ -59,6 +67,6 @@ def loop(client: openai.OpenAI, question: str) -> str:
         messages.append(message.model_dump(exclude_none=True))
         for call in message.tool_calls:
             assert call.type == "function"
-            content = run_tool(call.function.name, call.function.arguments)
+            content = run(call.function.name, call.function.arguments)
             messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
     return "I could not finish."

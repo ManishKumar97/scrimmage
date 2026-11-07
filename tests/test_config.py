@@ -5,6 +5,7 @@ import pytest
 from conftest import EXAMPLE
 from derail_sdk import config, plan
 from derail_sdk.errors import ConfigError
+from derail_sdk.provider_openai import Rates
 
 
 def load_text(tmp_path: Path, text: str) -> config.Config:
@@ -284,7 +285,7 @@ def test_prices_and_model_hosts_are_read(tmp_path: Path) -> None:
         )
     )
     agent = load_text(tmp_path, text).agent
-    assert agent.prices == ((("acme-llama", config.Price(0.6, 0.7))),)
+    assert agent.prices == ((("acme-llama", Rates(0.6, 0.7))),)
     assert agent.model_hosts == (config.ModelHost("127.0.0.1", "openai"),)
 
 
@@ -475,3 +476,15 @@ def test_a_row_no_answer_can_pass_is_named_with_its_model(tmp_path: Path) -> Non
     )
     with pytest.raises(ConfigError, match=r"fault on model gpt-4\.1: no answer can pass"):
         with_fault(tmp_path, text)
+
+
+@pytest.mark.design("budget.snapshot_prices")
+def test_a_snapshot_priced_apart_from_its_family_has_its_own_row() -> None:
+    from derail_sdk import provider_openai as table
+
+    assert table.price("gpt-4o-2024-05-13", {}) == Rates(5.00, 15.00)  # not gpt-4o's $2.50
+    for snapshot in ("gpt-4o-2024-08-06", "gpt-4o-2024-11-20"):
+        assert table.price(snapshot, {}) == table.PRICES["gpt-4o"]
+    assert table.price("gpt-4o-mini-2024-07-18", {}) == table.PRICES["gpt-4o-mini"]
+    assert table.price("gpt-4.1-2025-04-14", {}) == table.PRICES["gpt-4.1"]
+    assert table.price("gpt-4.1-mini-2025-04-14", {}) == table.PRICES["gpt-4.1-mini"]

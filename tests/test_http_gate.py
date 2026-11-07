@@ -19,12 +19,13 @@ import openai
 import pytest
 
 from derail_sdk import http_gate, provider_openai, state
-from derail_sdk.budget import Ledger
+from derail_sdk.budget import Ledger, Shortfall
 from derail_sdk.client import ControlClient
-from derail_sdk.config import Fault, ModelHost, Price
+from derail_sdk.config import Fault, ModelHost
 from derail_sdk.decide import Counters
 from derail_sdk.errors import DerailRefused
 from derail_sdk.plan import Plan
+from derail_sdk.provider_openai import Rates
 from derail_sdk.runner import real_error
 
 URL = "https://api.openai.com/v1/chat/completions"
@@ -56,14 +57,24 @@ class Budget:
         self.ledger = Ledger(limit)
         self.delay = delay
 
-    def reserve(self, run: str, usd: float) -> int | None:
+    def reserve(
+        self, run: str, usd: float, label: str = "", ticket: int | None = None
+    ) -> int | Shortfall:
         time.sleep(self.delay)
-        return self.ledger.reserve(usd)
+        return self.ledger.reserve(usd, run, label, ticket)
+
+    def release(self, ticket: int) -> None:
+        self.ledger.release(ticket)
 
 
-def make_plan(faults: tuple[Fault, ...] = (), budget: float | None = None, **kw: Any) -> Plan:
+def make_plan(
+    faults: tuple[Fault, ...] = (),
+    budget: float | None = None,
+    time_limit_s: float = 60.0,
+    **kw: Any,
+) -> Plan:
     return Plan(
-        "run-1", "t", "row", (), faults, (), (), 60.0, budget_usd=budget,
+        "run-1", "t", "row", (), faults, (), (), time_limit_s, budget_usd=budget,
         model_hosts=(ModelHost("gateway.acme.internal", "openai"),), **kw,
     )  # fmt: skip
 
@@ -135,7 +146,7 @@ def test_the_agent_gets_the_reply_exactly_as_it_was_sent(gated: None) -> None:
     response = client().post(URL, json=BODY)
     assert response.json() == REPLY
     line = sink.lines[0]
-    assert line["tokens"] == {"input": 10, "output": 5} and line["status"] == 200
+    assert line["tokens"] == {"input": 10, "output": 5, "cached": 0} and line["status"] == 200
     assert line["cost_estimated"] is False
 
 
@@ -258,7 +269,7 @@ def test_work_that_starts_after_the_cancel_does_nothing(
                 await c.post(URL, json=BODY)
 
     asyncio.run(go())
-    assert late[0]() is None
+    assert isinstance(late[0](), http_gate.Pause)  # it asked nothing
     assert len(sink.lines) == 1 and sink.settles == []
     assert budget.ledger.reserved == 0.0
 
@@ -268,9 +279,11 @@ def test_tasks_cancelled_before_a_thread_took_them_keep_their_lines(gated: None)
     release = threading.Event()
 
     class Held(Budget):
-        def reserve(self, run: str, usd: float) -> int | None:
+        def reserve(
+            self, run: str, usd: float, label: str = "", ticket: int | None = None
+        ) -> int | Shortfall:
             release.wait(5)
-            return super().reserve(run, usd)
+            return super().reserve(run, usd, label, ticket)
 
     sink, _ = install(make_plan(budget=100.0), Held(limit=100.0))
 
@@ -386,7 +399,7 @@ def test_a_reply_in_pieces_is_passed_on_unchanged_and_read_as_it_goes_by(gated: 
     sink, _ = install(make_plan())
     response = httpx2.Client(transport=httpx2.MockTransport(streaming)).post(URL, json=BODY)
     assert response.json()["usage"]["completion_tokens"] == 4
-    assert sink.lines[0]["tokens"] == {"input": 3, "output": 4}
+    assert sink.lines[0]["tokens"] == {"input": 3, "output": 4, "cached": 0}
 
 
 def test_a_reply_in_pieces_on_the_async_path(gated: None) -> None:
@@ -397,7 +410,7 @@ def test_a_reply_in_pieces_on_the_async_path(gated: None) -> None:
             await c.post(URL, json=BODY)
 
     asyncio.run(go())
-    assert sink.lines[0]["tokens"] == {"input": 3, "output": 4}
+    assert sink.lines[0]["tokens"] == {"input": 3, "output": 4, "cached": 0}
 
 
 @pytest.mark.design("gate.reply_cut_short")
@@ -1244,7 +1257,7 @@ def test_a_name_over_the_cap_gets_no_cut_key(gated: None) -> None:
 
 @pytest.mark.design("gate.empty_price_key_prices_no_name")
 def test_the_empty_price_key_prices_a_call_with_no_name(gated: None) -> None:
-    sink, _ = install(make_plan(budget=1.0, prices=(("", Price(2.0, 8.0)),)))
+    sink, _ = install(make_plan(budget=1.0, prices=(("", Rates(2.0, 8.0)),)))
     assert client().post(URL, json={"messages": []}).status_code == 200
     cost = sink.lines[0]["cost_usd"]
     assert sink.lines[0]["action"] == "real" and isinstance(cost, float) and cost > 0

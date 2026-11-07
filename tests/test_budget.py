@@ -14,7 +14,7 @@ import pytest
 import derail_sdk
 from conftest import ACME, EXAMPLE_FAULT, Project
 from derail_sdk import provider_openai as table
-from derail_sdk.budget import Ledger
+from derail_sdk.budget import Ledger, Shortfall
 from derail_sdk.client import ControlClient, ControlError
 from derail_sdk.control import ControlServer
 from derail_sdk.records import RecordStore
@@ -34,8 +34,10 @@ def rag(project: Project, extra: str) -> None:
 @pytest.mark.design("budget.reservations_race")
 def test_four_calls_at_79_of_80_cents_reserve_one_and_refuse_three() -> None:
     ledger = Ledger(0.80)
-    ledger.settle(ledger.reserve(0.79) or 0, 0.79)
-    results: list[int | None] = []
+    first = ledger.reserve(0.79)
+    assert isinstance(first, int)
+    ledger.settle(first, 0.79)
+    results: list[int | Shortfall] = []
     start = threading.Barrier(4)
 
     def call() -> None:
@@ -47,21 +49,22 @@ def test_four_calls_at_79_of_80_cents_reserve_one_and_refuse_three() -> None:
         thread.start()
     for thread in threads:
         thread.join()
-    assert sum(r is not None for r in results) == 1
+    assert sum(isinstance(r, int) for r in results) == 1
 
 
 @pytest.mark.design("budget.real_cost_replaces_reservation")
 def test_the_real_cost_replaces_the_reservation() -> None:
     ledger = Ledger(1.00)
     held = ledger.reserve(0.60)
-    assert held is not None and ledger.reserve(0.60) is None
+    waiting = ledger.reserve(0.60)
+    assert isinstance(held, int) and isinstance(waiting, Shortfall)
     ledger.settle(held, 0.10)
     assert (round(ledger.spent, 2), ledger.reserved) == (0.10, 0.0)
-    assert ledger.reserve(0.60) is not None
+    assert isinstance(ledger.reserve(0.60, ticket=waiting.ticket), int)
 
 
 def test_no_limit_means_every_reservation_passes() -> None:
-    assert Ledger(None).reserve(1_000_000.0) is not None
+    assert isinstance(Ledger(None).reserve(1_000_000.0), int)
 
 
 @pytest.fixture
@@ -81,7 +84,7 @@ def test_the_ledger_works_through_the_signed_protocol(control: ControlServer) ->
     payload = {"run": "run-1", "reservation": held, "usd": 0.79}
     assert client.request("POST", "/v1/budget/settle", payload)[0] == 200
     outcomes = [client.reserve("run-1", 0.01) for _ in range(2)]
-    assert outcomes[0] is not None and outcomes[1] is None
+    assert isinstance(outcomes[0], int) and isinstance(outcomes[1], Shortfall)
     assert control.ledger.spent == pytest.approx(0.79)
 
 
@@ -120,7 +123,7 @@ def test_bad_budget_requests_are_refused(
 
 
 # Dollars per million tokens, chosen so a few tokens make whole cents.
-PRICES = (1_000_000.0 * 0.01, 1_000_000.0 * 0.02)  # 1 cent an input token, 2 an output
+PRICES = table.Rates(1_000_000.0 * 0.01, 1_000_000.0 * 0.02)  # 1 cent an input token, 2 an output
 
 
 @pytest.mark.design("budget.costs_to_the_cent")
@@ -181,10 +184,13 @@ def test_a_reply_that_is_not_json_has_no_counts() -> None:
 
 @pytest.mark.design("budget.price_lookup")
 def test_prices_come_from_the_team_then_the_table_then_the_family() -> None:
-    assert table.price("gpt-4o-mini", {}) == (0.15, 0.60)
-    assert table.price("gpt-4o-mini-2024-07-18", {}) == (0.15, 0.60)  # a dated snapshot
-    assert table.price("gpt-4o-mini", {"gpt-4o-mini": (9.0, 9.0)}) == (9.0, 9.0)
-    assert table.price("acme-llama-70b", {"acme-llama-70b": (0.6, 0.6)}) == (0.6, 0.6)
+    mini = table.Rates(0.15, 0.60, 0.075)
+    assert table.price("gpt-4o-mini", {}) == mini
+    assert table.price("gpt-4o-mini-2024-07-18", {}) == mini  # a dated snapshot
+    team = table.Rates(9.0, 9.0)
+    assert table.price("gpt-4o-mini", {"gpt-4o-mini": team}) == team  # whole, no cached rate
+    llama = table.Rates(0.6, 0.6)
+    assert table.price("acme-llama-70b", {"acme-llama-70b": llama}) == llama
     assert table.price("nobody-knows-me", {}) is None
 
 
@@ -233,15 +239,19 @@ def test_a_budget_that_cannot_cover_a_call_stops_the_test(
         fake.stop()
     assert result.code == 2, result.out
     assert fake.paths == ["/v1/embeddings"]  # the chat call, which cannot fit, never went
-    assert {s["outcome"] for s in result.summaries()} == {"budget reached"}
-    assert "the budget of $1e-05 was reached" in result.out
+    assert {s["outcome"] for s in result.summaries()} == {"not reserved"}  # spent is below
+    assert "a model call could not be reserved: it could cost up to" in result.out
+    assert (
+        "of a budget of $1e-05, so the test stopped" in result.out
+        and "was reached" not in result.out
+    )
 
 
 @pytest.mark.design("budget.stop_with_parallel_runs")
 @pytest.mark.parametrize(
     ("function", "extra", "fixtures", "message"),
     [
-        ("acme.rag:answer", "max_cost_usd = 0.00001", {"embedding": "embedding"}, "was reached"),
+        ("acme.rag:answer", "max_cost_usd = 0.00001", {"embedding": "embedding"}, "reserved"),
         ("acme.rag:answer_priceless", "", {}, "[agent.prices]"),
         ("acme.rag:answer_odd_tool", "", {}, "a tool of type teleport"),
         ("acme.rag:answer_unseen", "", {}, "lookup_order"),
@@ -298,7 +308,7 @@ def test_with_the_budget_off_there_is_no_price_rule_and_tokens_are_counted(
     result = project.test(fake_openai(["chat_answer"]))
     assert result.finished, result.out
     line = next(x for x in result.records()[0] if x.get("kind") == "model")
-    assert line["tokens"] == {"input": 19, "output": 10}
+    assert line["tokens"] == {"input": 19, "output": 10, "cached": 0}
     assert "of no budget" in result.out
 
 
@@ -326,7 +336,11 @@ def test_a_stream_with_token_counts_is_read_as_it_goes_by(
     project.edit(TOOL_FAULT, "")
     result = project.test(fake_openai(["chat_stream_usage"]))
     line = next(x for x in result.records()[0] if x.get("kind") == "model")
-    assert line["cost_estimated"] is False and line["tokens"] == {"input": 9, "output": 1}
+    assert line["cost_estimated"] is False and line["tokens"] == {
+        "input": 9,
+        "output": 1,
+        "cached": 0,
+    }
 
 
 @pytest.mark.design("check.no_model_calls")
@@ -455,6 +469,20 @@ def test_a_reply_that_costs_more_than_reserved_is_visible(
     project.edit(TOOL_FAULT, "")
     result = project.test(fake_openai(["acme_get_order"]))  # 82 + 17 tokens, for max_tokens = 1
     assert "spent more than its budget" in result.out
+
+
+@pytest.mark.design("budget.reached_outcome")
+def test_a_run_is_budget_reached_only_when_money_spent_reached_the_limit(
+    project: Project, fake_openai: Fake
+) -> None:
+    project.edit(
+        'function = "acme.agent:answer"',
+        'function = "acme.rag:answer_short_twice"\nruns = 1\nmax_cost_usd = 0.00001',
+    )
+    project.edit(TOOL_FAULT, "")
+    result = project.test(fake_openai(["acme_get_order"]))  # the first call overspends
+    assert [s["outcome"] for s in result.summaries()] == ["budget reached"], result.out
+    assert "test mistake: the budget of $1e-05 was reached: $0.0000 was spent" in result.out
 
 
 @pytest.mark.design("check.baseline_failed")
