@@ -8,6 +8,7 @@ The document is printed when the command ends.
 A test can take minutes, so nothing is printed before then.
 
 Its shape is the JSON Schema `derail_sdk/schemas/cli.v1.json`, which ships in the package.
+The schema is open: a field it does not list, and a value it does not list for a field that lists its values, both fit, so any version 1 copy of it reads any version 1 document.
 
 ## The envelope
 
@@ -31,15 +32,15 @@ Every command's document starts with the same fields:
 | Field | Meaning |
 |---|---|
 | `v` | The version of this format, 1. |
-| `derail` | The installed Derail version, so a document can be traced to the release that made it. |
+| `derail` | The installed Derail version, so a document can be traced to the release that made it. `unknown` when Derail runs with no package metadata, such as from a source tree. |
 | `command` | `test` or `check`. |
 | `exit` | The process's exit code. Always equal to it. |
 | `status` | A word for the exit code, per command; see below. |
 | `config` | The file read, as given on the command line. |
 | `mistakes` | One item per line the text prints after `test mistake:`, or per problem in the file. |
 | `notes` | One item per line the text prints after `note:`. |
-| `warnings` | One item per line the text prints after `warning:`. |
-| `infra` | One item per line the text prints after `infrastructure error:`, and the reason Derail itself stopped, such as `stopped by SIGINT`. |
+| `warnings` | One item per line the text prints after `warning:`. With `real = ["tool:*"]` the first one says that every tool that is not mocked runs for real; the text prints it above the table. |
+| `infra` | One item per line the text prints after `infrastructure error:`, and the reason Derail itself stopped, such as `stopped by SIGTERM`. When a run failed by itself, it points at the runs whose `outcome` is `infrastructure error`, in `run_details`. |
 
 Each item is an object with one field, `message`, the line's text: `{"message": "..."}`.
 It is an object so a later version can add a field to it, such as a code, without changing its type.
@@ -61,7 +62,7 @@ The text of a message can change in any release.
     {
       "test": "order-status",
       "row": "fault 1",
-      "fault": {"call": "tool:get_order", "do": "timeout", "when": "always", "model": null},
+      "fault": {"call": "tool:get_order", "do": "timeout", "when": "always", "model": null, "method": null, "path": null, "raises": null},
       "runs": 3,
       "fired": 3,
       "done": 3,
@@ -90,7 +91,7 @@ The text of a message can change in any release.
 |---|---|
 | `records` | The folder that holds this test's records, as the text's first line names it. `null` when the file did not load, so no folder was made. |
 | `tests` | How many `[[test]]` tables the file has. |
-| `rows` | One object per table row, in the table's order. Empty when the file did not load or the test was stopped. |
+| `rows` | One object per table row, in the table's order. Empty when the file did not load, when a signal stopped the test, or when Derail itself failed. A test a refusal stopped, such as for the budget, still has every row, and the rows that did not run have `runs` 0. |
 | `cost_usd` | What the model calls cost, in dollars. |
 | `budget_usd` | `max_cost_usd`, or `null` when the budget is off. |
 | `stopped_by` | The reason a refusal stopped the whole test, such as `budget`, or `null`. |
@@ -101,7 +102,7 @@ Each row's keys are the table's column names, with `cost_usd` for `cost`:
 |---|---|
 | `test` | The test's name. |
 | `row` | `baseline`, or `fault N`. |
-| `fault` | The row's fault: `call`, `do`, `when` and `model`, which is `null` unless the fault names a model. `null` on a baseline. |
+| `fault` | The row's fault: `call`, `do`, `when`, and `model`, `method`, `path` and `raises`, each `null` unless the fault sets it. `null` on a baseline. |
 | `runs` | Runs that ran. |
 | `fired` | Runs in which the fault fired. `null` on a baseline. |
 | `done` | Runs that ended with an answer. |
@@ -129,8 +130,10 @@ Each run in `run_details`:
 | `answer_preview` | The answer with secrets removed, cut at 200 characters, as a record's preview is. The full answer is in the record. `null` with no answer. |
 
 A file that does not load gives the envelope with `rows: []`, `records: null` and each problem in `mistakes`, with exit 2.
-A test stopped by Ctrl-C or SIGTERM gives `status` `infra`, exit 3, `rows: []` and the reason in `infra`.
-So does a failure of Derail itself.
+With `--json`, Ctrl-C or SIGTERM at any point, while the file is read or while runs go, stops the command with `status` `infra`, exit 3, `rows: []` and the reason in `infra`, such as `stopped by SIGTERM`.
+Runs that were going are stopped first. `records` names the records folder if the test had made one.
+A failure of Derail itself gives the same, with the error in `infra`.
+SIGKILL cannot be caught, so it leaves no document.
 
 ## derail check --json
 
@@ -164,5 +167,5 @@ A value that is removed or renamed comes only with a new version.
 | `kind` | `expect`, `forbid`, `empty`, `crashed`, `timed out`, `refused` | read as other |
 | `stopped_by` | `budget`, `budget_held`, `no_price`, `unknown_tool_type`, `unseen_tool`, `structure`, `ambiguous_label`, `unknown_label` | read as other |
 
-`cli.v1.json` lists the values of the release that ships it, so a document from a newer release can fail an older copy of the schema on a new value or field.
-Check a document against the schema of the Derail that wrote it, or not at all.
+`cli.v1.json` lists the values of the release that ships it, and also takes any other text there, so a reader may check a document against any version 1 copy of the schema.
+A field or value it does not list then fits; the reader ignores the field and reads the value as other.

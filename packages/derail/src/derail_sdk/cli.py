@@ -7,8 +7,9 @@ document starts with the same envelope; schemas/cli.v1.json describes it.
 import argparse
 import importlib.metadata
 import json
+import signal
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TextIO
 
@@ -20,13 +21,20 @@ from derail_sdk.runner import INFRA, MISTAKE, OK, Interrupted, Runner, plural
 
 SCHEMAS = Path(__file__).parent / "schemas"
 ENVELOPE_VERSION = 1
+UNKNOWN_VERSION = "unknown"  # Derail runs from a source tree with no package metadata
 LISTS = (running.MISTAKES, running.NOTES, running.WARNINGS, running.INFRA_ERRORS)
 # The word for each exit code, per command. A command never gives a code it has no word for.
 STATUS = {
     "test": {OK: "passed", running.ROW_FAILED: "failed", MISTAKE: "mistake", INFRA: "infra"},
     "check": {OK: "valid", MISTAKE: "mistake", INFRA: "infra"},
 }
-INTERRUPTED = "stopped by SIGINT"
+# With --json these stop the command with a document, wherever they arrive. The runner sets
+# its own handlers while runs go, and puts these back when they end.
+STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
+
+
+class Stopped(BaseException):
+    """derail test or check got SIGINT or SIGTERM outside the runs, with --json."""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -45,16 +53,44 @@ def main(argv: list[str] | None = None) -> int:
     run = run_test if args.command == "test" else run_check
     if not args.json:
         return run(args.path, None)
-    found = Found(args.command, str(args.path))
+    return as_json(args.command, args.path, run)
+
+
+def stop(signum: int, frame: object) -> None:
+    del frame
+    raise Stopped(signal.Signals(signum).name)
+
+
+def as_json(command: str, path: Path, run: Callable[[Path, "Found | None"], int]) -> int:
+    """Run a command for --json: one document on standard output, whatever happens."""
+    version = derail_version()
+    found = Found(command, str(path))
+    previous = {sig: signal.signal(sig, stop) for sig in STOP_SIGNALS}
     try:
-        code = run(args.path, found)
-    except KeyboardInterrupt:  # before the runner's own handler is set, or after it is reset
-        code = found.fail(INTERRUPTED)
-    except Exception as exc:  # Derail's own failure still gives a document
-        code = found.fail(f"derail {args.command} failed: {exc!r}")
-    doc = envelope(args.command, code, found.path, found.messages, **found.fields)
-    print(json.dumps(doc, indent=2))
+        try:
+            code = run(path, found)
+        except (Stopped, KeyboardInterrupt) as exc:
+            code = found.fail(f"stopped by {str(exc) or 'SIGINT'}")  # Ctrl-C has no name
+        except Exception as exc:  # Derail's own failure still gives a document
+            code = found.fail(f"derail {command} failed: {exc!r}")
+        text = json.dumps(envelope(command, code, found, version), indent=2)
+    except Exception as exc:  # the document itself could not be built
+        code = INFRA
+        bare = Found(command, str(path))
+        bare.fail(f"derail {command} could not write its document: {exc!r}")
+        text = json.dumps(envelope(command, code, bare, version), indent=2)
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+    print(text)
     return code
+
+
+def derail_version() -> str:
+    try:
+        return importlib.metadata.version("derail")
+    except importlib.metadata.PackageNotFoundError:
+        return UNKNOWN_VERSION
 
 
 class Found:
@@ -63,6 +99,7 @@ class Found:
     def __init__(self, command: str, path: str) -> None:
         self.path = path
         self.messages: list[tuple[str, str]] = []
+        self.runner: Runner | None = None
         # A command's own fields, as they are when it stops before it has any to give.
         self.fields: dict[str, object] = (
             {
@@ -77,18 +114,38 @@ class Found:
             else {"summary": None}
         )
 
+    def started(self, config: settings.Config, runner: Runner) -> None:
+        """The test has a records folder: a document from here on names it."""
+        self.runner = runner
+        self.fields.update(
+            records=str(runner.folder),
+            tests=len(config.tests),
+            budget_usd=config.agent.max_cost_usd,
+        )
+
     def fail(self, message: str) -> int:
         self.messages.append((running.INFRA_ERRORS, message))
+        if self.runner is not None:
+            self.fields["cost_usd"] = round(self.runner.ledger.spent, 8)
         return INFRA
 
 
-def envelope(
-    command: str, code: int, path: str, messages: Sequence[tuple[str, str]], **fields: object
+def envelope(command: str, code: int, found: Found, version: str) -> dict[str, object]:
+    return document(command, code, found.path, found.messages, version, **found.fields)
+
+
+def document(
+    command: str,
+    code: int,
+    path: str,
+    messages: Sequence[tuple[str, str]],
+    version: str,
+    **fields: object,
 ) -> dict[str, object]:
     """The fields every command's document starts with, then its own, then its messages."""
     doc: dict[str, object] = {
         "v": ENVELOPE_VERSION,
-        "derail": importlib.metadata.version("derail"),
+        "derail": version,
         "command": command,
         "exit": code,
         "status": STATUS[command][code],
@@ -113,8 +170,22 @@ def say(problems: list[str], err: TextIO) -> None:
         print(f"derail: {problem}", file=err)
 
 
+def unreadable(command: str, exc: Exception, found: Found | None) -> int:
+    """Reading the file failed inside Derail, as a parser that runs out of stack does."""
+    message = f"infrastructure error in derail {command}: {exc!r}"
+    if found is not None:
+        return found.fail(message)
+    print(f"derail: {message}", file=sys.stderr)
+    last = "the file was not checked" if command == "check" else "the test did not start"
+    print(f"derail {command}: {last}; nothing was run")
+    return INFRA
+
+
 def run_test(path: Path, found: Found | None) -> int:
-    config, problems = read(path)
+    try:
+        config, problems = read(path)
+    except Exception as exc:  # Derail's own failure, not a mistake in the file
+        return unreadable("test", exc, found)
     if config is None:
         if found is None:
             say(problems, sys.stderr)
@@ -127,6 +198,8 @@ def run_test(path: Path, found: Found | None) -> int:
     stopped: str | None = None
     try:
         runner = Runner(config)
+        if found is not None:
+            found.started(config, runner)
         results = runner.run_all()
     except Interrupted as exc:
         stopped = f"stopped by {exc}; every run was stopped"
@@ -139,18 +212,12 @@ def run_test(path: Path, found: Found | None) -> int:
         if found is None:
             print(f"derail: {stopped}", file=sys.stderr)
             return INFRA
-        found.fields.update(
-            records=None if runner is None else str(runner.folder),
-            tests=len(config.tests),
-            cost_usd=0.0 if runner is None else round(runner.ledger.spent, 8),
-            budget_usd=config.agent.max_cost_usd,
-        )
         return found.fail(stopped)
     assert runner is not None
     report = running.build_report(config, results, runner.folder, runner)
     if found is None:
         return running.print_report(report, sys.stdout)
-    found.messages += report.messages
+    found.messages += report.every_message
     found.fields.update(running.report_json(report))
     return report.code
 
@@ -160,11 +227,7 @@ def run_check(path: Path, found: Found | None) -> int:
     try:
         config, problems = read(path)
     except Exception as exc:  # Derail's own failure, not a mistake in the file
-        if found is not None:
-            return found.fail(f"infrastructure error in derail check: {exc!r}")
-        print(f"derail: infrastructure error in derail check: {exc!r}", file=sys.stderr)
-        print("derail check: the file was not checked; nothing was run")
-        return INFRA
+        return unreadable("check", exc, found)
     if config is None:
         if found is not None:
             found.messages += [(running.MISTAKES, problem) for problem in problems]

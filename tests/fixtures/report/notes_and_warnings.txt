@@ -1,6 +1,6 @@
 exit 2
 derail test: 1 test, 2 rows, 6 runs; records in /records/derail-runs/20261107T101500Z-a1b2c3
-every tool that is not mocked runs for real (real = ["tool:*"])
+warning: every tool that is not mocked runs for real (real = ["tool:*"])
 test                  row       fault                 runs  fired  done  passed  rate  range   tools  cost     result
 a-test-w...he-table-  baseline  -                     3     -      2     2/3     67%   21-94%  2.0    0.00036  fail
 a-test-w...he-table-  fault 1   model gp...9 first 2  3     0      3     0/0     -     -       2.0    0.00036  no result

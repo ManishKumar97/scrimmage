@@ -76,6 +76,7 @@ The schema checks the shape of the file. `derail check` decides.
 `derail test --json` and `derail check --json` print exactly one JSON document on standard output and nothing else.
 Standard error stays empty unless Python itself fails.
 The document's `exit` field is always the process's exit code.
+Ctrl-C or SIGTERM at any point still prints the document, with exit 3.
 A mistake in the command line itself, such as an unknown flag, is still text on standard error, with exit 2.
 [JSON output](json-output.md) describes every field.
 

@@ -100,6 +100,11 @@ PREFIXES = {
     WARNINGS: "warning",
     INFRA_ERRORS: "infrastructure error",
 }
+TOOL_STAR_LINE = 'every tool that is not mocked runs for real (real = ["tool:*"])'
+# Said in the text and in --json alike, so it names a field both can show.
+INFRA_LINE = (
+    "see each run whose outcome is infrastructure error, and its .log file in the records folder"
+)
 NOT_JUDGED = judge.RunJudgement(left_out="not judged")
 
 
@@ -792,11 +797,18 @@ class Report:
     rows: list[RowReport]
     table: list[list[str]]
     failures: list[str]  # which rules broke, in which runs: the lines under the table
-    # (list, text) in the order the text prints them, the list being one of LISTS
+    # (list, text) in the order the text prints them, the list being one of LISTS: those
+    # printed above the table, as a line that must not scroll away, and those below it
+    above: list[tuple[str, str]]
     messages: list[tuple[str, str]]
     spent: float
     stopped_by: str | None
     code: int
+
+    @property
+    def every_message(self) -> list[tuple[str, str]]:
+        """Every message, in the order the text prints them, for the JSON's lists."""
+        return [*self.above, *self.messages]
 
 
 def build_report(
@@ -949,13 +961,25 @@ def build_report(
         *((MISTAKES, text) for text in dict.fromkeys(mistakes)),
     ]
     if code == INFRA:
-        messages.append((INFRA_ERRORS, "see the runs marked so above, and their .log files"))
+        messages.append((INFRA_ERRORS, INFRA_LINE))
     elif mistakes:
         code = MISTAKE
     elif any(r.result.verdict == judge.FAIL for r in reports):
         code = ROW_FAILED
+    # The team's own statement that writes may run, so it is said first, not under the table.
+    above = [(WARNINGS, TOOL_STAR_LINE)] if "tool:*" in config.agent.real else []
     return Report(
-        config, results, folder, reports, table, failures, messages, spent, stopped_by, code
+        config,
+        results,
+        folder,
+        reports,
+        table,
+        failures,
+        above,
+        messages,
+        spent,
+        stopped_by,
+        code,
     )
 
 
@@ -968,8 +992,8 @@ def print_report(found: Report, out: TextIO) -> int:
         f"records in {found.folder}",
         file=out,
     )
-    if "tool:*" in config.agent.real:
-        print('every tool that is not mocked runs for real (real = ["tool:*"])', file=out)
+    for kind, text in found.above:
+        print(f"{PREFIXES[kind]}: {text}", file=out)
     widths = fitted(found.table)
     for line in found.table:
         print(
@@ -1028,7 +1052,15 @@ def row_json(entry: RowReport, folder: Path) -> dict[str, object]:
         "row": row.name,
         "fault": None
         if fault is None
-        else {"call": fault.call, "do": fault.do, "when": fault.when, "model": fault.model},
+        else {
+            "call": fault.call,
+            "do": fault.do,
+            "when": fault.when,
+            "model": fault.model,
+            "method": fault.method,
+            "path": fault.path,
+            "raises": fault.raises,
+        },
         "runs": len(mine),
         "fired": None if fault is None else sum(bool(r.fault_fired) for r in mine),
         "done": sum(1 for r in mine if r.outcome == "answered"),

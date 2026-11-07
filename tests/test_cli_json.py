@@ -48,9 +48,45 @@ class Done:
         return cast(dict[str, object], json.loads(self.out))
 
 
-def validator() -> jsonschema.Draft202012Validator:
-    jsonschema.Draft202012Validator.check_schema(CLI_SCHEMA)
-    return jsonschema.Draft202012Validator(CLI_SCHEMA)
+def strict(node: object) -> object:
+    """The shipped schema closed, for our own documents: no unknown field, no unknown value.
+
+    The shipped one is open, so a reader on any v1 copy accepts what a later release adds.
+    Ours must not add anything the schema does not list, so tests check against this.
+    """
+    if isinstance(node, list):
+        return [strict(item) for item in cast(list[object], node)]
+    if not isinstance(node, dict):
+        return node
+    # An "if" only picks the branch, so closing it would make it never match.
+    table = {k: v if k == "if" else strict(v) for k, v in cast(dict[str, object], node).items()}
+    if "anyOf" in table:
+        kept = [
+            alt
+            for alt in cast(list[dict[str, object]], table["anyOf"])
+            if not str(alt.get("$comment", "")).startswith("open:")
+        ]
+        table["anyOf"] = kept
+    if "properties" in table:
+        table["additionalProperties"] = False
+    return table
+
+
+def closed_schema() -> dict[str, object]:
+    closed = cast(dict[str, object], strict(CLI_SCHEMA))
+    # Only the commands this release has: the open envelope is for a later one.
+    closed["allOf"] = [
+        *cast(list[object], closed["allOf"])[1:],
+        {"required": ["command"], "properties": {"command": {"enum": list(cli.STATUS)}}},
+    ]
+    return closed
+
+
+def validate(doc: object) -> None:
+    """A document fits the shipped schema, and the closed one too."""
+    for schema in (CLI_SCHEMA, closed_schema()):
+        jsonschema.Draft202012Validator.check_schema(schema)
+        jsonschema.Draft202012Validator(schema).validate(doc)
 
 
 def derail(*args: str, env: dict[str, str] | None = None, cwd: Path | None = None) -> Done:
@@ -76,7 +112,7 @@ def one_document(done: Done, command: str) -> dict[str, object]:
     """Standard output is one JSON value that fits the schema, and stderr is empty."""
     assert done.err == "", done.err
     doc = done.doc
-    validator().validate(doc)
+    validate(doc)
     assert doc["command"] == command and doc["exit"] == done.code
     return doc
 
@@ -208,7 +244,7 @@ def test_ctrl_c_outside_the_runs_is_still_one_document(
     assert cli.main(["test", "--json", str(project.toml)]) == 3
     captured = capsys.readouterr()
     doc = json.loads(captured.out)
-    validator().validate(doc)
+    validate(doc)
     assert captured.err == "" and messages(doc, "infra") == ["stopped by SIGINT"]
 
 
@@ -221,9 +257,10 @@ def test_a_failure_of_derail_itself_is_still_one_document(
     monkeypatch.setattr(Runner, "run_all", broken)
     assert cli.main(["test", "--json", str(project.toml)]) == 3
     doc = json.loads(capsys.readouterr().out)
-    validator().validate(doc)
+    validate(doc)
     assert "no space left on device" in messages(doc, "infra")[0]
     assert doc["records"] is not None and doc["cost_usd"] == 0.0
+    assert doc["tests"] == 1 and doc["budget_usd"] == 5.0
 
     def report_broke(*args: object) -> None:
         raise ValueError("the report broke")
@@ -232,8 +269,11 @@ def test_a_failure_of_derail_itself_is_still_one_document(
     monkeypatch.setattr(runner, "build_report", report_broke)
     assert cli.main(["test", "--json", str(project.toml)]) == 3
     doc = json.loads(capsys.readouterr().out)
-    validator().validate(doc)
+    validate(doc)
     assert "the report broke" in messages(doc, "infra")[0]
+    # The runner had started, so the document still names its records and the test.
+    assert str(doc["records"]).startswith(str(project.root / "derail-runs"))
+    assert doc["tests"] == 1 and doc["cost_usd"] == 0.0
 
 
 def test_a_usage_error_stays_text_even_with_json(capsys: pytest.CaptureFixture[str]) -> None:
@@ -278,6 +318,27 @@ def constants_assigned(path: Path, function: str, variable: str) -> set[str]:
     return out
 
 
+def stopped_by_values(path: Path) -> set[str]:
+    """Every constant the runner assigns to self.stopped_by, a module constant read by name.
+
+    A local name, such as a refusal's reason, is left out: the runner keeps only reasons
+    in STOP_TEST there, which the schema's list is held to as a whole.
+    """
+    tree = ast.parse(path.read_text())
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Attribute) and t.attr == "stopped_by" for t in node.targets):
+            continue
+        for inner in ast.walk(node.value):
+            if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
+                found.add(inner.value)
+            elif isinstance(inner, ast.Name) and isinstance(getattr(runner, inner.id, None), str):
+                found.add(str(getattr(runner, inner.id)))
+    return found
+
+
 def broken_kinds(path: Path) -> set[str]:
     """The first argument of every Broken(...) the judge builds with a constant."""
     tree = ast.parse(path.read_text())
@@ -296,16 +357,19 @@ def test_each_enum_lists_every_value_the_code_gives() -> None:
     found = enums(CLI_SCHEMA)
     defs = cast(dict[str, dict[str, object]], CLI_SCHEMA["$defs"])
     for command, words in cli.STATUS.items():
-        status = cast(dict[str, dict[str, object]], defs[command]["properties"])["status"]
-        assert status["enum"] == list(words.values()), command
-    assert found["command"] == list(cli.STATUS)
+        status = cast(dict[str, object], defs[command]["properties"])["status"]
+        assert enums(status) == {"": list(words.values())}, command
+    assert found["command"] == [*cli.STATUS, *cli.STATUS]  # each command's own, then the envelope's
     assert found["result"] == list(judge.VERDICTS)
     assert found["judged"] == list(judge.RUN_VERDICTS)
     assert found["outcome"] == list(runner.OUTCOMES)
     assert found["kind"] == list(judge.KINDS)
     assert found["stopped_by"] == list(runner.STOPPED_BY)
     source = Path(runner.__file__)
-    assert constants_assigned(source, "one", "outcome") <= set(runner.OUTCOMES)
+    outcomes = constants_assigned(source, "one", "outcome")
+    assert outcomes and outcomes <= set(runner.OUTCOMES)  # an empty lookup proves nothing
+    reasons = stopped_by_values(source)
+    assert runner.UNKNOWN_LABEL in reasons and reasons <= set(runner.STOPPED_BY), reasons
     assert broken_kinds(Path(judge.__file__)) <= set(judge.KINDS)
     assert set(judge.ENDED_BADLY) | {judge.REFUSED} <= set(judge.KINDS)
     assert set(runner.STOP_TEST) | {runner.UNKNOWN_LABEL} == set(runner.STOPPED_BY)
@@ -349,19 +413,77 @@ def broken_line(broken: dict[str, object], folder: Path) -> str:
     return f"  {runner.plural(len(runs), 'run')}: {broken['text']}: {', '.join(names)}{more}"
 
 
+def rule_head(row: dict[str, object]) -> str:
+    """The line above a row's broken rules, as the text prints it."""
+    where = f"{row['test']} {row['row']}"
+    broken = cast(list[dict[str, object]], row["broken"])
+    refused = [str(b["text"]) for b in broken if b["kind"] == judge.REFUSED]
+    if refused:
+        call = refused[0].removeprefix(f"{judge.REFUSED} ")
+        advice = (
+            "See the line below" if call == runner.PROCESS_LABEL else "Mocking it would hide this"
+        )
+        return (
+            f"fail: {where}: under this fault the agent called {call}, which the test does not "
+            f"allow. {advice}"
+        )
+    word = "fail" if row["result"] == judge.FAIL else "note"
+    rate = cast(float, row["pass_rate"])
+    return f"{word}: {where}: {row['passed']}/{row['judged']} passed, pass_rate is {rate:g}"
+
+
+def text_head(doc: dict[str, object], folder: Path) -> list[str]:
+    """Every line the text prints through its cost line, rebuilt from the JSON alone."""
+    rows = cast(list[dict[str, object]], doc["rows"])
+    runs = sum(cast(int, row["runs"]) for row in rows)
+    tests = cast(int, doc["tests"])
+    lines = [
+        f"derail test: {runner.plural(tests, 'test')}, {runner.plural(len(rows), 'row')}, "
+        f"{runner.plural(runs, 'run')}; records in {doc['records']}"
+    ]
+    warnings = messages(doc, "warnings")
+    if warnings[:1] == [runner.TOOL_STAR_LINE]:  # the one warning said above the table
+        lines.append(f"warning: {runner.TOOL_STAR_LINE}")
+    table = [runner.HEAD, *(cells(row) for row in rows)]
+    widths = runner.fitted(table)
+    lines += [
+        "  ".join(runner.cut(c, w).ljust(w) for c, w in zip(line, widths, strict=True)).rstrip()
+        for line in table
+    ]
+    for row, line in zip(rows, table[1:], strict=True):
+        test, fault = runner.TEST_COLUMN, runner.FAULT_COLUMN
+        if len(line[test]) > widths[test] or len(line[fault]) > widths[fault]:
+            lines.append(f"full name: {row['test']} {row['row']}: {line[fault]}")
+    lines.append("range: a 95% Wilson interval, from these runs alone")
+    for row in rows:
+        broken = cast(list[dict[str, object]], row["broken"])
+        if broken:
+            lines += [rule_head(row), *(broken_line(b, folder) for b in broken)]
+    budget = doc["budget_usd"]
+    limit = "no budget" if budget is None else f"a budget of ${cast(float, budget):g}"
+    lines.append(f"model calls cost ${cast(float, doc['cost_usd']):.4f} of {limit}")
+    return lines
+
+
 def assert_same(text: str, doc: dict[str, object], table: list[list[str]], folder: Path) -> None:
-    """The JSON rows and lists say what the text says."""
+    """The JSON says every line the text says, and the text says nothing the JSON does not.
+
+    Up to the cost line the text is rebuilt from the JSON, line for line. After it, every
+    line must carry a list's prefix, and each list must hold those lines in their order.
+    """
     rows = cast(list[dict[str, object]], doc["rows"])
     assert [cells(row) for row in rows] == table[1:]
     lines = text.splitlines()
+    head = text_head(doc, folder)
+    assert lines[: len(head)] == head
+    rest = lines[len(head) :]
+    above = 1 if f"warning: {runner.TOOL_STAR_LINE}" in head else 0
+    for line in rest:
+        assert line.startswith(tuple(PREFIXES.values())), f"a line with no list: {line!r}"
     for key, prefix in PREFIXES.items():
-        printed = [line.removeprefix(prefix) for line in lines if line.startswith(prefix)]
-        assert messages(doc, key) == printed, key
-    indented = [line for line in lines if line.startswith("  ") and " run" in line]
-    from_json = [
-        broken_line(b, folder) for row in rows for b in cast(list[dict[str, object]], row["broken"])
-    ]
-    assert from_json == indented
+        printed = [line.removeprefix(prefix) for line in rest if line.startswith(prefix)]
+        listed = messages(doc, key)[above:] if key == "warnings" else messages(doc, key)
+        assert listed == printed, key
     for row in rows:
         assert len(cast(list[object], row["run_details"])) == row["runs"]
 
@@ -370,8 +492,8 @@ def render(case_config: config.Config, results: list[runner.RunResult], folder: 
     rep = build_report(case_config, results, folder, run)  # type: ignore[arg-type]
     out = io.StringIO()
     code = print_report(rep, out)
-    doc = cli.envelope("test", code, "derail.toml", rep.messages, **report_json(rep))
-    validator().validate(doc)
+    doc = cli.document("test", code, "derail.toml", rep.every_message, "0.0.0", **report_json(rep))
+    validate(doc)
     return out.getvalue(), doc, rep
 
 
@@ -410,7 +532,15 @@ def test_the_json_rows_and_lists_say_what_the_table_says(
     )
     _, doc = e2e(project, fake_openai(ACME))
     fault = cast(list[dict[str, object]], doc["rows"])[2]["fault"]
-    assert fault == {"call": "model", "do": "status 429", "when": "first 1", "model": "gpt-4o-mini"}
+    assert fault == {
+        "call": "model",
+        "do": "status 429",
+        "when": "first 1",
+        "model": "gpt-4o-mini",
+        "method": None,
+        "path": None,
+        "raises": None,
+    }
     # T1: tools that are methods on a class.
     project.edit('function = "acme.agent:answer"', 'function = "acme.toolkit:answer"')
     project.edit(
@@ -460,3 +590,121 @@ def test_an_answer_preview_has_no_secret_and_is_cut() -> None:
     )[0]
     preview = str(detail["answer_preview"])
     assert secret not in preview and len(preview) == 200
+
+
+def test_the_most_broken_rule_comes_first() -> None:
+    case = CASES["most_broken"]()
+    text, doc, _ = render(case.config, case.results, FOLDER, case.runner)
+    broken = cast(list[dict[str, object]], cast(list[dict[str, object]], doc["rows"])[0]["broken"])
+    assert [(b["text"], b["runs"]) for b in broken] == [
+        ('expect "shipped" not found', ["run-baseline-1", "run-baseline-2"]),
+        ('expect "Oct 30" or "October 30" not found', ["run-baseline-0"]),
+    ]
+    assert text.index('2 runs: expect "shipped"') < text.index("1 run: expect")
+
+
+def test_a_fault_row_names_its_method_path_and_raises() -> None:
+    case = CASES["never_fired"]()
+    _, doc, _ = render(case.config, case.results, FOLDER, case.runner)
+    fault = cast(list[dict[str, object]], doc["rows"])[1]["fault"]
+    assert fault == {
+        "call": "http:orders.acme.internal",
+        "do": "status 503",
+        "when": "always",
+        "model": None,
+        "method": None,
+        "path": None,
+        "raises": None,
+    }
+
+
+@pytest.mark.design("json.open_schema")
+def test_the_shipped_schema_takes_what_a_later_release_adds() -> None:
+    case = CASES["passing"]()
+    _, doc, _ = render(case.config, case.results, FOLDER, case.runner)
+    later = json.loads(json.dumps(doc))
+    later["trace"] = "a field a later release adds"
+    later["status"] = "flaky"
+    later["notes"] = [{"message": "a note", "code": "N001"}]
+    cast(list[dict[str, object]], later["rows"])[0]["outcome_counts"] = {"answered": 3}
+    jsonschema.Draft202012Validator(CLI_SCHEMA).validate(later)
+    record = {**doc, "command": "record", "out": "derail.recorded.toml"}
+    jsonschema.Draft202012Validator(CLI_SCHEMA).validate(record)  # a command it does not know
+    closed = jsonschema.Draft202012Validator(closed_schema())
+    for changed in (later, record, {**doc, "status": "flaky"}, {**doc, "extra": 1}):
+        assert list(closed.iter_errors(changed)), "the closed schema must catch what we add"
+
+
+@pytest.mark.design("json.version")
+def test_the_version_comes_from_the_package_or_is_unknown(
+    project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: f"sentinel-{name}")
+    assert cli.main(["check", "--json", str(project.toml)]) == 0
+    assert json.loads(capsys.readouterr().out)["derail"] == "sentinel-derail"
+
+    def missing(name: str) -> str:
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", missing)
+    assert cli.main(["check", "--json", str(project.toml)]) == 0
+    doc = json.loads(capsys.readouterr().out)
+    validate(doc)
+    assert doc["derail"] == "unknown"
+
+
+def test_a_document_that_cannot_be_written_still_gives_one(
+    project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(Runner, "run_all", lambda self: [])
+    monkeypatch.setattr(runner, "report_json", lambda report: {"rows": object()})
+    assert cli.main(["test", "--json", str(project.toml)]) == 3
+    captured = capsys.readouterr()
+    doc = json.loads(captured.out)
+    validate(doc)
+    assert captured.err == ""
+    assert "could not write its document: TypeError" in messages(doc, "infra")[0]
+
+
+@pytest.mark.design("json.sigterm")
+def test_sigterm_while_the_file_is_read_still_gives_one_document(
+    project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def terminated(path: Path) -> config.Config:
+        os.kill(os.getpid(), signal.SIGTERM)
+        time.sleep(5)  # the handler raises before this ends
+        raise AssertionError("SIGTERM did not stop the read")
+
+    before = signal.getsignal(signal.SIGTERM)
+    monkeypatch.setattr(config, "load", terminated)
+    for command in ("test", "check"):
+        assert cli.main([command, "--json", str(project.toml)]) == 3
+        doc = json.loads(capsys.readouterr().out)
+        validate(doc)
+        assert messages(doc, "infra") == ["stopped by SIGTERM"], command
+    assert signal.getsignal(signal.SIGTERM) == before  # put back after the command
+
+
+NESTED = "[agent]\nfunction = 'acme.agent:answer'\nx = " + "[" * 5000 + "]" * 5000 + "\n"
+
+
+@pytest.mark.design("cli.read_crash")
+def test_a_crash_while_reading_the_file_is_exit_3_with_or_without_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "derail.toml"
+    path.write_text(NESTED)
+    codes: dict[str, int] = {}
+    for command in ("test", "check"):
+        codes[command] = cli.main([command, str(path)])
+        captured = capsys.readouterr()
+        if codes[command] == 3:  # a parser that recurses runs out of stack: Derail's failure
+            assert f"derail: infrastructure error in derail {command}: RecursionError" in (
+                captured.err
+            )
+            assert captured.out.endswith("; nothing was run\n")
+        else:  # a parser with a depth limit calls it a mistake in the file
+            assert codes[command] == 2 and "derail: derail.toml:" in captured.err
+        assert cli.main([command, "--json", str(path)]) == codes[command]
+        validate(json.loads(capsys.readouterr().out))
+    assert codes["test"] == codes["check"]

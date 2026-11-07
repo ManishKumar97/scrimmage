@@ -1,0 +1,9 @@
+exit 1
+derail test: 1 test, 1 row, 3 runs; records in /records/derail-runs/20261107T101500Z-a1b2c3
+test          row       fault  runs  fired  done  passed  rate  range  tools  cost     result
+order-status  baseline  -      3     -      3     0/3     0%    0-56%  2.0    0.00036  fail
+range: a 95% Wilson interval, from these runs alone
+fail: order-status baseline: 0/3 passed, pass_rate is 1
+  2 runs: expect "shipped" not found: run-baseline-1, run-baseline-2
+  1 run: expect "Oct 30" or "October 30" not found: run-baseline-0
+model calls cost $0.0004 of a budget of $5

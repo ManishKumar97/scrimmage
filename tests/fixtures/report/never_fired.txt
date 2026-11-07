@@ -13,4 +13,4 @@ test mistake: order-status baseline: no result: 1 of 4 runs were judged, and a r
 test mistake: order-status fault 1: no result: 0 of 4 runs were judged, and a result needs 3. Make the fault fire in every run
 test mistake: order-status fault 1: the fault never fired in any run, so the row tested nothing
 test mistake: order-status fault 1: the mock on tool:get_order replaces the whole tool, so if that tool makes this call, http:orders.acme.internal can never fire; mock or fault one level, not both
-infrastructure error: see the runs marked so above, and their .log files
+infrastructure error: see each run whose outcome is infrastructure error, and its .log file in the records folder

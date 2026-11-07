@@ -2,19 +2,39 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:derail:schema:cli:v1",
   "title": "Derail --json output, version 1",
-  "description": "The one JSON document a derail command prints with --json. Every command's document starts with the same envelope. Within version 1, fields and enum values are only added: a reader ignores a field it does not know and reads an enum value it does not know as other. This file describes the release that ships it.",
-  "oneOf": [
+  "description": "The one JSON document a derail command prints with --json. Every command's document starts with the same envelope. Within version 1, fields and enum values are only added, so this schema is open: an unknown field, and an unknown value of a field that lists its values, both fit. A reader ignores a field it does not know and reads such a value as other.",
+  "allOf": [
     {
-      "$ref": "#/$defs/test"
+      "$ref": "#/$defs/envelope"
     },
     {
-      "$ref": "#/$defs/check"
+      "if": {
+        "properties": {
+          "command": {
+            "const": "test"
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/test"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "command": {
+            "const": "check"
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/check"
+      }
     }
   ],
   "$defs": {
     "message": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "message"
       ],
@@ -48,7 +68,6 @@
     },
     "test": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "v",
         "derail",
@@ -83,11 +102,19 @@
           "$ref": "#/$defs/exit"
         },
         "status": {
-          "enum": [
-            "passed",
-            "failed",
-            "mistake",
-            "infra"
+          "anyOf": [
+            {
+              "enum": [
+                "passed",
+                "failed",
+                "mistake",
+                "infra"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
           ]
         },
         "config": {
@@ -139,6 +166,10 @@
                 "ambiguous_label",
                 "unknown_label"
               ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
             }
           ]
         },
@@ -158,7 +189,6 @@
     },
     "row": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "test",
         "row",
@@ -191,12 +221,14 @@
             },
             {
               "type": "object",
-              "additionalProperties": false,
               "required": [
                 "call",
                 "do",
                 "when",
-                "model"
+                "model",
+                "method",
+                "path",
+                "raises"
               ],
               "properties": {
                 "call": {
@@ -209,6 +241,24 @@
                   "type": "string"
                 },
                 "model": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "method": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "path": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "raises": {
                   "type": [
                     "string",
                     "null"
@@ -279,17 +329,24 @@
           "$ref": "#/$defs/dollars"
         },
         "result": {
-          "enum": [
-            "pass",
-            "fail",
-            "no result"
+          "anyOf": [
+            {
+              "enum": [
+                "pass",
+                "fail",
+                "no result"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
           ]
         },
         "broken": {
           "type": "array",
           "items": {
             "type": "object",
-            "additionalProperties": false,
             "required": [
               "kind",
               "text",
@@ -297,13 +354,21 @@
             ],
             "properties": {
               "kind": {
-                "enum": [
-                  "expect",
-                  "forbid",
-                  "empty",
-                  "crashed",
-                  "timed out",
-                  "refused"
+                "anyOf": [
+                  {
+                    "enum": [
+                      "expect",
+                      "forbid",
+                      "empty",
+                      "crashed",
+                      "timed out",
+                      "refused"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "$comment": "open: a value this release does not know; read as other"
+                  }
                 ]
               },
               "text": {
@@ -329,7 +394,6 @@
     },
     "run": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "run",
         "outcome",
@@ -344,15 +408,23 @@
           "type": "string"
         },
         "outcome": {
-          "enum": [
-            "answered",
-            "crashed",
-            "timed out",
-            "refused call",
-            "budget reached",
-            "not reserved",
-            "infrastructure error",
-            "stopped"
+          "anyOf": [
+            {
+              "enum": [
+                "answered",
+                "crashed",
+                "timed out",
+                "refused call",
+                "budget reached",
+                "not reserved",
+                "infrastructure error",
+                "stopped"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
           ]
         },
         "fault_fired": {
@@ -362,10 +434,18 @@
           ]
         },
         "judged": {
-          "enum": [
-            "pass",
-            "fail",
-            "left out"
+          "anyOf": [
+            {
+              "enum": [
+                "pass",
+                "fail",
+                "left out"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
           ]
         },
         "left_out": {
@@ -388,7 +468,6 @@
     },
     "check": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "v",
         "derail",
@@ -418,10 +497,18 @@
           "$ref": "#/$defs/exit"
         },
         "status": {
-          "enum": [
-            "valid",
-            "mistake",
-            "infra"
+          "anyOf": [
+            {
+              "enum": [
+                "valid",
+                "mistake",
+                "infra"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
           ]
         },
         "config": {
@@ -434,7 +521,6 @@
             },
             {
               "type": "object",
-              "additionalProperties": false,
               "required": [
                 "tests",
                 "rows",
@@ -472,6 +558,64 @@
               }
             }
           ]
+        },
+        "mistakes": {
+          "$ref": "#/$defs/messages"
+        },
+        "notes": {
+          "$ref": "#/$defs/messages"
+        },
+        "warnings": {
+          "$ref": "#/$defs/messages"
+        },
+        "infra": {
+          "$ref": "#/$defs/messages"
+        }
+      }
+    },
+    "envelope": {
+      "type": "object",
+      "required": [
+        "v",
+        "derail",
+        "command",
+        "exit",
+        "status",
+        "config",
+        "mistakes",
+        "notes",
+        "warnings",
+        "infra"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "derail": {
+          "$ref": "#/$defs/derail"
+        },
+        "command": {
+          "anyOf": [
+            {
+              "enum": [
+                "test",
+                "check"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
+          ]
+        },
+        "exit": {
+          "$ref": "#/$defs/exit"
+        },
+        "status": {
+          "type": "string"
+        },
+        "config": {
+          "type": "string"
         },
         "mistakes": {
           "$ref": "#/$defs/messages"

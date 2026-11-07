@@ -133,6 +133,18 @@ def failing() -> Case:
     return Case(cfg, results, FakeRunner())
 
 
+def most_broken() -> Case:
+    """Two rules broken, by one run and by two, the one-run rule met first."""
+    cfg = load(AGENT + TEST)
+    (base,) = plan.rows(cfg)
+    results = [
+        run(base, 0, answer="It shipped."),  # no date: one run breaks the date rule
+        run(base, 1, answer="It arrives on Oct 30."),  # two runs break "shipped"
+        run(base, 2, answer="It arrives on October 30."),
+    ]
+    return Case(cfg, results, FakeRunner())
+
+
 def never_fired() -> Case:
     """A web fault under a tool mock that never fires, and a row with too few runs."""
     text = AGENT.replace("runs     = 3", "runs     = 4") + TEST.replace(
@@ -269,6 +281,7 @@ def empty() -> Case:
 CASES: dict[str, Callable[[], Case]] = {
     "passing": passing,
     "failing": failing,
+    "most_broken": most_broken,
     "never_fired": never_fired,
     "refused": refused,
     "budget": budget,

@@ -8,4 +8,4 @@ note: order-status baseline: 3 infrastructure error
 test mistake: order-status baseline: no result: 1 of 3 runs were judged, and a result needs 2
 test mistake: order-status baseline: run-baseline-1: model:openai returned 500, not injected
 test mistake: openai: openai 9.0 is newer than Derail can gate
-infrastructure error: see the runs marked so above, and their .log files
+infrastructure error: see each run whose outcome is infrastructure error, and its .log file in the records folder
