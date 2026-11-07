@@ -345,6 +345,12 @@ def test_a_row_no_answer_can_pass_costs_no_model_call(
     assert message in result.err
 
 
+def test_two_forbid_texts_can_rule_out_an_item_between_them(project: Project) -> None:
+    project.edit(EXPECT, 'expect = [["Oct 30", "shipped"]]\nforbid = ["Oct", "shipped"]')
+    with pytest.raises(ConfigError, match="baseline: no answer can pass"):
+        load(project)
+
+
 def test_one_open_alternative_is_enough_for_a_row_to_be_possible(project: Project) -> None:
     project.edit(EXPECT, 'expect = [["shipped", "on its way"]]\nforbid = ["shipped"]')
     assert load(project).tests[0].forbid == ("shipped",)

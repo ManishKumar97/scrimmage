@@ -156,9 +156,8 @@ def wilson(passed: int, judged: int) -> tuple[float, float]:
 
 
 def impossible(rules: Rules) -> str | None:
-    """A forbid text inside every alternative of an expect item: no answer can pass."""
+    """Every alternative of an expect item holds a forbid text: no answer can pass."""
     for item in rules.expect:
-        for word in rules.forbid:
-            if all(normal(word) in normal(alternative) for alternative in item):
-                return f'forbid "{word}" rules out expect {quoted(item)}'
+        if all(any(normal(w) in normal(a) for w in rules.forbid) for a in item):
+            return redact(f"forbid {quoted(rules.forbid)} rules out expect {quoted(item)}")
     return None
