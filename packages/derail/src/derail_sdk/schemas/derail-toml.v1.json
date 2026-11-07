@@ -21,9 +21,14 @@
       }
     }
   },
+  "allOf": [
+    {
+      "$ref": "#/$defs/value"
+    }
+  ],
   "$defs": {
     "text": {
-      "type": "string",
+      "$ref": "#/$defs/plain_text",
       "pattern": "\\S"
     },
     "texts": {
@@ -630,6 +635,39 @@
           "$ref": "#/$defs/pass_rate"
         }
       }
+    },
+    "plain_text": {
+      "type": "string",
+      "not": {
+        "pattern": "\\$\\{"
+      },
+      "description": "Text with no ${, as ${...} placeholders are not read in this version."
+    },
+    "value": {
+      "description": "Any value the file holds, at any depth, with no ${ in its text.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/plain_text"
+        },
+        {
+          "type": [
+            "number",
+            "boolean"
+          ]
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/value"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/value"
+          }
+        }
+      ]
     }
   }
 }

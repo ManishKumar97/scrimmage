@@ -1,7 +1,9 @@
 """The formats are JSON Schemas: the plan, the record and derail.toml, held to the code."""
 
 import json
+import os
 import re
+import sys
 import tomllib
 from pathlib import Path
 from typing import cast
@@ -172,7 +174,11 @@ def test_the_schemas_keys_are_the_parsers_keys() -> None:
 
 
 @pytest.mark.design("schema.config_accepts")
-def test_every_file_the_parser_accepts_fits_the_schema(tmp_path: Path) -> None:
+def test_every_file_the_parser_accepts_fits_the_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A docs block's command names python or python3; find them as a venv user would.
+    monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}")
     files = [
         (str(path.relative_to(TESTS)), path.read_text())
         for path in sorted(TESTS.rglob("*.toml"))

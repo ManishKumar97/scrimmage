@@ -229,6 +229,12 @@ def test_every_command_flag_exit_code_and_json_field_is_documented() -> None:
         cells = [f"`{words[code]}`" if code in words else "" for code in range(4)]
         row = re.sub(r"\s+", " ", f"| `{command}` | {' | '.join(cells)} |")
         assert row in lines, row
+    assert "a reader may check a document against any version 1 copy of the schema" in output
+    assert "the schema of the Derail that wrote it" not in output
+    assert (
+        "Ctrl-C or SIGTERM at any point" in cli_page and "Ctrl-C or SIGTERM at any point" in output
+    )
+    assert "`2.0`" in page("configuration.md") and "rejects `${`" in page("configuration.md")
     assert "[JSON output](json-output.md)" in page("index.md")
     assert "#:schema ./derail.schema.json" in page("configuration.md")
     assert "## Checking the file in your editor" in page("configuration.md")

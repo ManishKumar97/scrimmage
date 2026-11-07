@@ -299,6 +299,14 @@ BAD = [
         fault('call = "tool:t"\ndo = "timeout"\nwhen = "first 1"\npass_rate = 2\n'),
         True,
     ),
+    # ${...} is not read anywhere in the file, and a TOML date is not a value a plan carries.
+    Bad("placeholder", MINIMAL.replace("Where is order 1234?", "${HOME}"), True),
+    Bad("placeholder_in_returns", mock('call = "tool:t"\nreturns = {a = [{b = "${X}"}]}\n'), True),
+    Bad("placeholder_in_command", SCRIPT.replace("{question}", "{question} ${HOME}"), True),
+    Bad("placeholder_in_label", mock('call = "mcp:${S}/search"\nreturns = 1\n'), True),
+    Bad("placeholder_in_header", mock('call = "http:a.acme"\nheaders = {x = "${T}"}\n'), True),
+    Bad("toml_date", test("forbid = [2026-11-07]\n"), True),
+    Bad("toml_date_in_returns", mock('call = "tool:t"\nreturns = {at = 2026-11-07}\n'), True),
     # Below, only the parser can tell: these need the whole file, the folder or the machine.
     Bad("not_toml", "[agent\nfunction = 1\n", False),
     Bad("duplicate_test", MINIMAL + TEST, False),
@@ -311,12 +319,13 @@ BAD = [
     Bad("real_not_listed", agent('tools = ["acme.tools:a"]\nreal = ["tool:b"]\n'), False),
     Bad("two_tools_one_name", agent('tools = ["acme.a:get", "acme.b:get"]\n'), False),
     Bad("type_outside", mock('call = "tool:t"\nreturns = 1\ntype = "os.path:Path"\n'), False),
-    Bad("placeholder", MINIMAL.replace("Where is order 1234?", "${HOME}"), False),
-    Bad("toml_date", test("forbid = [2026-11-07]\n"), False),
     Bad("program_not_found", SCRIPT.replace("python3 bot.py", "no-such-program-x bot.py"), False),
     Bad("skipping_flag", SCRIPT.replace("python3 bot.py", "python3 -I bot.py"), False),
     Bad("impossible_rules", test('forbid = ["shipped"]\n'), False),
+    # JSON Schema counts 2.0 as a whole number, and no keyword tells it from 2 in
+    # python-jsonschema, so only the parser rejects these. docs/configuration.md says so.
     Bad("runs_float", agent("runs = 2.0\n"), False),
+    Bad("status_float", mock('call = "http:a.acme"\nstatus = 404.0\n'), False),
     Bad("budget_infinite", agent("max_cost_usd = inf\n"), False),
     Bad(
         "cached_above_input",
