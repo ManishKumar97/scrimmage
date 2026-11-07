@@ -11,10 +11,10 @@ from derail_sdk.config import (
     Fault,
     Mock,
     ModelHost,
-    Price,
     Test,
 )
 from derail_sdk.judge import Rules
+from derail_sdk.provider_openai import Rates
 
 PLAN_VERSION = 1
 
@@ -34,7 +34,7 @@ class Plan:
     model_hosts: tuple[ModelHost, ...] = ()
     budget_usd: float | None = None  # None: no budget, so no reservations
     reserve_output_tokens: int = DEFAULT_RESERVE_OUTPUT_TOKENS
-    prices: tuple[tuple[str, Price], ...] = ()
+    prices: tuple[tuple[str, Rates], ...] = ()
     children: bool = False  # child processes fire faults too
     unavailable: str | None = None  # why a child has no plan; such a plan is never sent
 
@@ -114,16 +114,16 @@ class Plan:
         )
 
 
-def price_json(price: Price) -> dict[str, float]:
+def price_json(price: Rates) -> dict[str, float]:
     doc = {"input": price.input, "output": price.output}
     if price.cached_input is not None:
         doc["cached_input"] = price.cached_input
     return doc
 
 
-def price_from(doc: dict[str, object]) -> Price:
+def price_from(doc: dict[str, object]) -> Rates:
     cached = None if doc.get("cached_input") is None else number(doc, "cached_input")
-    return Price(number(doc, "input"), number(doc, "output"), cached)
+    return Rates(number(doc, "input"), number(doc, "output"), cached)
 
 
 def tools_text(tools: tuple[str, ...], renames: tuple[tuple[str, str], ...]) -> str:

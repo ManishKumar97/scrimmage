@@ -51,6 +51,9 @@ class Rates:
 # before each release. A team overrides or adds a model under [agent.prices].
 PRICES: dict[str, Rates] = {
     "gpt-4o": Rates(2.50, 10.00, 1.25),
+    # Its own price, not its family's; shut down, so no longer on the pricing page. No
+    # cached rate: it had no prompt cache discount. A guess high is safe, low is not.
+    "gpt-4o-2024-05-13": Rates(5.00, 15.00),
     "gpt-4o-mini": Rates(0.15, 0.60, 0.075),
     "gpt-4.1": Rates(2.00, 8.00, 0.50),
     "gpt-4.1-mini": Rates(0.40, 1.60, 0.10),
