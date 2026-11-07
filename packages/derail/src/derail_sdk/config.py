@@ -41,6 +41,7 @@ TEST_KEYS = {"name", "question", "mock", "fault", *RULE_KEYS}
 MOCK_KEYS = {"call", "returns", "type"}
 WEB_MOCK_KEYS = {"call", "method", "path", "status", "headers", "json", "text"}
 FAULT_KEYS = {"call", "do", "when", "raises", *RULE_KEYS}
+MODEL_FAULT_KEYS = {*FAULT_KEYS, "model"}
 MCP_MOCK_KEYS = {"call", "returns"}
 MCP_FAULT_KEYS = {"call", "do", "when", *RULE_KEYS}
 WEB_FAULT_KEYS = {"call", "do", "when", "method", "path", *RULE_KEYS}
@@ -89,6 +90,12 @@ class Fault:
     expect: tuple[tuple[str, ...], ...] | None = None
     forbid: tuple[str, ...] | None = None
     pass_rate: float | None = None
+    model: str | None = None  # a model fault can be narrowed to one model name
+
+    @property
+    def target(self) -> str:
+        """The call as a person reads it: two rows can differ by model alone."""
+        return self.call if self.model is None else f"{self.call} {self.model}"
 
 
 @dataclass(frozen=True)
@@ -215,7 +222,7 @@ def check_references(config: Config) -> list[str]:
     for test in config.tests:
         for fault in (None, *test.faults):
             if why := impossible(test.rules_for(fault)):
-                row = "baseline" if fault is None else f"fault on {fault.call}"
+                row = "baseline" if fault is None else f"fault on {fault.target}"
                 problems.append(f"[[test]] {test.name!r} {row}: no answer can pass: {why}")
         for mock in test.mocks:
             if labels.kind_of(mock.call) == "model":
@@ -596,7 +603,8 @@ def read_mock(table: dict[str, object], where: str) -> Mock:
 def read_fault(table: dict[str, object], where: str) -> Fault:
     call = labels.check(text(table, "call", where), f"{where} call")
     kind = labels.kind_of(call)
-    keys = {"http": WEB_FAULT_KEYS, "mcp": MCP_FAULT_KEYS}.get(kind, FAULT_KEYS)
+    known = {"http": WEB_FAULT_KEYS, "mcp": MCP_FAULT_KEYS, "model": MODEL_FAULT_KEYS}
+    keys = known.get(kind, FAULT_KEYS)
     check_keys(table, keys, where)
     do = text(table, "do", where)
     status = STATUS.fullmatch(do)
@@ -630,7 +638,8 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
             f"expect or forbid, or use when = 'first N' for a recovery; see {JUDGING}"
         )
     rate = read_pass_rate(table, where)
-    return Fault(call, do, when, raises, method, path, expect, forbid, rate)
+    model = labels.model_name(table["model"], where) if "model" in table else None
+    return Fault(call, do, when, raises, method, path, expect, forbid, rate, model)
 
 
 def takes_a_message(kind: object) -> bool:

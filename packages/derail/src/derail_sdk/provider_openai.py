@@ -104,6 +104,12 @@ def request_fields(body: bytes) -> dict[str, object] | None:
     return _obj(value) or None
 
 
+def model_name(fields: dict[str, object] | None) -> str | None:
+    """The model a request names, or None when it names none that can be read."""
+    value = (fields or {}).get("model")
+    return value if isinstance(value, str) and value else None
+
+
 def max_output(fields: dict[str, object]) -> int | None:
     for key in ("max_completion_tokens", "max_tokens", "max_output_tokens"):
         value = fields.get(key)

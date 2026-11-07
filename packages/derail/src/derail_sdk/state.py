@@ -226,6 +226,13 @@ class RunState:
             "unknown_tool_type": detail,
             "unseen_tool": detail,
             "unreadable_body": detail,
+            "unreadable_model": (
+                f"{label}: a fault in this test names a model, but {detail} has no model name "
+                "Derail can read, so it cannot tell whether the fault is for this call. Send "
+                "this call as plain JSON with a model field. Taking model off the fault would "
+                "hit every call its label names, and with a budget any model call with no name "
+                'needs a price, as "" under [agent.prices]; see docs/model-faults.md'
+            ),
             "redirect_off_host": detail,
             "unsupported_loop": detail,
             "ambiguous_label": detail,

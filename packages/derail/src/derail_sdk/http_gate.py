@@ -12,6 +12,7 @@ imports either library: the hook patches one when the agent imports it.
 import asyncio
 import atexit
 import contextlib
+import dataclasses
 import datetime
 import hashlib
 import http
@@ -29,6 +30,7 @@ from derail_sdk import provider_openai as openai_table
 from derail_sdk.client import ControlError
 from derail_sdk.decide import READ_METHODS, Call, Decision, names
 from derail_sdk.errors import DerailRefused
+from derail_sdk.labels import shown_name
 from derail_sdk.redact import redact
 from derail_sdk.state import BLOB_CAP, BlobSink, RunState, Step, blob, current, error_text
 
@@ -36,6 +38,7 @@ from derail_sdk.state import BLOB_CAP, BlobSink, RunState, Step, blob, current, 
 TESTED = {"httpx": ((0, 28), (0, 28)), "httpx2": ((2, 16), (2, 16))}
 GATED = "__derail_gate__"
 CHAR_PER_TOKEN = 4  # the rough size of a token, for estimates only
+PRICE_KEY_CAP = 300  # a longer name is not shown whole as a price key to paste
 # A refusal the team must act on: the message reaches the run table.
 MISTAKE_REASONS = (
     "no_price",
@@ -44,6 +47,7 @@ MISTAKE_REASONS = (
     "hosted",
     "web_write",
     "unreadable_body",
+    "unreadable_model",
     "redirect_off_host",
     "unsupported_loop",
     "unlisted",
@@ -269,6 +273,8 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
     body = body_of(request)
     call = describe(ctx, request, who, body or b"")
     fields = openai_table.request_fields(body) if body and call.kind == "model" else None
+    if call.kind == "model":
+        call = dataclasses.replace(call, model=openai_table.model_name(fields))
     # The method and path only: headers, cookies and a query string are never recorded.
     extra: dict[str, object] = {
         "method": call.method,
@@ -278,7 +284,7 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
     if call.provider is not None:
         extra["provider"] = call.provider
     if call.kind == "model":
-        extra.update(model=str((fields or {}).get("model", "")), retry=call.retry)
+        extra.update(model=call.model or "", retry=call.retry)
         extra["stream"] = (fields or {}).get("stream") is True
     step = run.decide(call, {})
     step.extra = extra
@@ -293,8 +299,9 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
             refuse(
                 run,
                 step,
-                f"{where} has a body Derail cannot read, such as a stream or a compressed "
-                "one, so the tools it offers cannot be checked; send it as plain JSON",
+                f"{where} has a body Derail cannot read, such as one sent from a generator or "
+                "a compressed one, so the tools it offers cannot be checked; send it as plain "
+                "JSON",
             )
         check_tools(ctx, run, step, fields, str(request.url.path))
     if call.kind == "http" and step.decision.action == "real" and near_a_mock(run, call):
@@ -461,6 +468,28 @@ def prices_of(ctx: Context, model: str) -> tuple[float, float] | None:
     return openai_table.price(model, team)
 
 
+def no_price(model: str) -> str:
+    """Why a call cannot be budgeted, with a price key the team can paste, if it fits a line."""
+    rate = "{input = 0.15, output = 0.60} (dollars per million tokens)"
+    off = 'or set max_cost_usd = "none"'
+    if not model:
+        return (
+            "this model call sends no model name, so Derail has no price for it and cannot keep "
+            'the budget; send model on the call, or price calls with no name as "" = '
+            f"{rate} under [agent.prices], {off}"
+        )
+    if len(model) > PRICE_KEY_CAP:
+        return (
+            f"Derail has no price for the model {shown_name(model)}, so it cannot keep the "
+            f"budget; the name is too long to show whole here, so add it under [agent.prices] "
+            f"from your code, {off}"
+        )
+    return (
+        f"Derail has no price for the model {shown_name(model)}, so it cannot keep the budget; "
+        f"add it under [agent.prices], such as {json.dumps(model)} = {rate}, {off}"
+    )
+
+
 def reserve(ctx: Context, step: Step, request: Any, extra: dict[str, object]) -> int | None:
     """Reserve what this model call could cost, before it is sent."""
     plan = ctx.run.plan
@@ -472,14 +501,7 @@ def reserve(ctx: Context, step: Step, request: Any, extra: dict[str, object]) ->
     rates = prices_of(ctx, model)
     if rates is None:
         ctx.run.refuse(step, "no_price")
-        refuse(
-            ctx.run,
-            step,
-            f"Derail has no price for the model {model!r}, so it cannot keep the budget; "
-            f"add it under [agent.prices], such as {json.dumps(model)} = "
-            "{input = 0.15, output = 0.60} "
-            '(dollars per million tokens), or set max_cost_usd = "none"',
-        )
+        refuse(ctx.run, step, no_price(model))
     body = body_of(request) or b""
     fields = openai_table.request_fields(body) if body else None
     output = openai_table.max_output(fields or {}) or plan.reserve_output_tokens

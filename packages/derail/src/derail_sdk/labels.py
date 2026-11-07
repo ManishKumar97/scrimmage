@@ -20,6 +20,7 @@ WEB_METHOD = re.compile(r"[A-Za-z][A-Za-z-]*")  # letters, and the hyphen of M-S
 WEB_PATH = re.compile(r"/(?:(?![?#])[\x21-\x7e])*")  # as sent: percent-encoded, no query
 PROCESS = "process:python"  # a Python child that would run with no gates
 DOCS = "see docs/configuration.md"
+NAME_CAP = 200  # a model name comes from a request, so a line shows this much of it
 
 
 def kind_of(label: str) -> str:
@@ -119,6 +120,33 @@ def path_of(value: str, where: str) -> str:
         raise ConfigError(
             f"{where} path: {value!r} is not a path as a URL writes it, percent-encoded and "
             "with no query string"
+        )
+    return value
+
+
+def shown_name(name: str) -> str:
+    """A model name as a line can show it: escaped, so it cannot forge a line, and cut from the
+    middle, as two names often differ only at the end, such as a version."""
+    text = repr(name)
+    if len(text) <= NAME_CAP:
+        return text
+    kept = NAME_CAP - 3
+    return f"{text[: kept // 2]}...{text[-(kept - kept // 2) :]}"
+
+
+def model_name(value: object, where: str) -> str:
+    """A model's name as a request's body has it. It is compared whole, so a name that could
+    never be in a request is a mistake here, not a row of model calls that fires nothing."""
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or "*" in value
+        or not value.isprintable()
+    ):
+        raise ConfigError(
+            f"{where} model: {value!r} is not a model name; write the whole name your code "
+            "sends, as text, with no wildcard; see docs/model-faults.md"
         )
     return value
 

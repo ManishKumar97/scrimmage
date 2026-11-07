@@ -27,7 +27,7 @@ from typing import TextIO, cast
 from derail_sdk import judge, labels
 from derail_sdk import plan as planner
 from derail_sdk.budget import Ledger
-from derail_sdk.config import QUESTION, Config, Test
+from derail_sdk.config import QUESTION, Config, Fault, Test
 from derail_sdk.control import ControlServer, proc_key
 from derail_sdk.records import RECORD_VERSION, RecordStore
 from derail_sdk.redact import redact
@@ -71,6 +71,7 @@ PROCESS_LABEL = "process:python"
 FAILED = ("crashed", "timed out", "refused call", "budget reached")
 TABLE_WIDTH = 120
 SHOWN_RUNS = 3  # how many runs a line names for one broken rule
+SHOWN_NAMES = 5  # how many model names a line lists
 HEAD = [
     "test",
     "row",
@@ -107,6 +108,7 @@ class RunResult:
     tools_seen: list[str] | None = None  # None: the run did not report them
     near_mocks: set[str] = field(default_factory=set[str])  # real, though the host had mocks
     tool_calls: int = 0
+    models: set[tuple[str, str]] = field(default_factory=set[tuple[str, str]])  # label, name
     judgement: judge.RunJudgement = NOT_JUDGED
 
     @property
@@ -295,6 +297,7 @@ class Runner:
             tools_seen=reported_tools(notices),
             near_mocks=near,
             tool_calls=sum(1 for line in lines if line.get("kind") in ("tool", "mcp")),
+            models={(str(line["call"]), str(line.get("model") or "")) for line in model},
         )
         # Here the raw answer is still at hand. The record only ever gets the redacted one.
         chose = row.fault is not None and (state.refusals or [""])[0] in CHOSEN_CALLS
@@ -633,7 +636,7 @@ def fault_text(row: planner.Row) -> str:
     if row.fault is None:
         return "-"
     when = "" if row.fault.when == "always" else f" {row.fault.when}"
-    return f"{row.fault.call} {row.fault.do}{when}"
+    return f"{row.fault.target} {row.fault.do}{when}"
 
 
 def row_cells(report: RowReport) -> list[str]:
@@ -689,6 +692,27 @@ def no_result_reason(report: RowReport, runs: int) -> str:
     judged = report.result.judged
     counted = f"{judged} of {runs} runs were judged, and a result needs {report.result.floor}"
     return f"{counted}. Make the fault fire in every run" if unfired else counted
+
+
+def unused_model(fault: Fault, runs: list[RunResult]) -> str | None:
+    """Why a fault on a model name never fired, as far as the records can say.
+
+    None when the records cannot say: a call under the fault's label has no known name, or a
+    refused run was stopped, perhaps just before this model, and may have lost its last line.
+    """
+    used = {name for run in runs for label, name in run.models if labels.matches(fault.call, label)}
+    wanted = repr(fault.model)  # from the file, which allows only printable text: never cut
+    if fault.model in used:
+        return (
+            f"calls used the model {wanted}, yet the fault did not fire: a refused call fires "
+            "no fault, and nor does a call in a child process unless [agent] children is true"
+        )
+    if "" in used or any(run.outcome == "refused call" for run in runs):
+        return None
+    names = [labels.shown_name(name) for name in sorted(used)]
+    more = f" and {len(names) - SHOWN_NAMES} more" if len(names) > SHOWN_NAMES else ""
+    told = f"these calls used {', '.join(names[:SHOWN_NAMES])}{more}"
+    return f"no call used the model {wanted}; {told if names else 'no such call was made'}"
 
 
 def where_to_read(broken: judge.Broken, runs: list[RunResult], folder: Path) -> str:
@@ -772,6 +796,8 @@ def report(
                     f"that tool makes this call, {row.fault.call} can never fire; "
                     "mock or fault one level, not both"
                 )
+            if row.fault.model is not None and (why := unused_model(row.fault, ran)):
+                mistakes.append(f"{where}: {why}")
         notes += [
             f"{where}: {r.run}: {line['message']}"
             for r in mine

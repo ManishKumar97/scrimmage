@@ -104,3 +104,18 @@ def test_a_line_with_an_unknown_field_does_not_fit() -> None:
 def test_the_sdk_rejects_a_bad_plan(bad: object) -> None:
     with pytest.raises(ValueError):
         plan.Plan.from_json(bad)
+
+
+@pytest.mark.design("schema.plan_model_name")
+def test_a_plan_with_a_named_model_fits_the_schema() -> None:
+    fault = {"call": "model", "do": "status 429", "when": "first 3", "model": "gpt-4.1"}
+    assert list(validator("plan").iter_errors({**DESIGN_PLAN, "faults": [fault]})) == []
+    empty = {**fault, "model": ""}
+    assert list(validator("plan").iter_errors({**DESIGN_PLAN, "faults": [empty]}))
+
+
+@pytest.mark.design("schema.unreadable_model")
+def test_a_refusal_for_a_name_that_cannot_be_read_fits_the_schema() -> None:
+    line = {**DESIGN_LINE, "action": "refused", "reason": "unreadable_model"}
+    line.pop("fault")
+    assert list(validator("record").iter_errors(line)) == []

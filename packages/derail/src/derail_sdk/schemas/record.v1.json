@@ -206,6 +206,7 @@
             "web_write",
             "control_unreachable",
             "unreadable_body",
+            "unreadable_model",
             "redirect_off_host",
             "unsupported_loop",
             "ambiguous_label",

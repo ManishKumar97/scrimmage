@@ -65,8 +65,93 @@ When two model calls run at once, such as a guardrail next to the main call, Der
 | `model:*/embeddings` | embedding calls on any provider |
 
 A fault on `model` leaves embeddings alone, so you can fail the chat and keep your retrieval working, or the other way around.
+To tell two models apart, see [Failing one model](#failing-one-model).
 
 Model calls never need listing under `real`, and they cannot be mocked: the test exists to see how the real model reacts.
+
+## Failing one model
+
+A label names every model call of its kind, so a bare `model` fault also hits a router, a planner, a guardrail or a summariser.
+Add `model` to fail one model and leave the others alone:
+
+```toml
+[[test.fault]]
+call  = "model"
+model = "gpt-4.1"
+do    = "status 429"
+when  = "first 3"
+```
+
+A bot that routes with `gpt-4o-mini` and answers with `gpt-4.1` then gets this:
+
+| Call | What happens |
+|---|---|
+| `gpt-4o-mini` | runs for real and is not counted |
+| `gpt-4.1`, attempt 1 | Derail answers 429; the library retries |
+| `gpt-4.1`, attempt 2 | Derail answers 429; the library retries |
+| `gpt-4.1`, attempt 3 | Derail answers 429; the library raises `RateLimitError` into your code |
+
+`first N`, `requests N` and `always` count only the calls to that model, so a router call in between takes none of the count.
+It works on chat, Responses and embeddings, sync or async, with the reply streamed or not.
+For embeddings, name them in the label too:
+
+```toml
+call  = "model:*/embeddings"
+model = "text-embedding-3-large"
+```
+
+The table shows the name after the label, such as `model gpt-4.1 status 429 first 3`, so two rows read apart.
+On a record line, `call` stays `model:openai`, and the line's `model` field says which model it was.
+
+### The name is compared whole
+
+Write the name your code sends, case and all, not the name a reply or a dashboard shows.
+There are no prefixes, because `gpt-4o` would then hit a router on `gpt-4o-mini` as well, and nothing would tell you.
+
+| `model` in the fault | Name in the request | Fires? |
+|---|---|---|
+| `gpt-4.1` | `gpt-4.1` | yes |
+| `gpt-4.1` | `gpt-4.1-mini` | no |
+| `gpt-4o-mini` | `gpt-4o-mini-2024-07-18` | no |
+| `smart`, a gateway's alias | `smart` | yes |
+
+If your code sends a dated name such as `gpt-4o-mini-2024-07-18`, write the dated name.
+A gateway's alias works the same way: Derail sits in front of the gateway, so it sees the alias and never the name behind it.
+
+A wildcard is refused when the file is read, and so is a space at either end of the name or a character that does not print.
+
+A name no call used is a fault that never fired, so it is a test mistake with exit code 2 and the row has `no result`.
+It can never read as a pass, and the message says what the calls did use:
+
+```
+test mistake: routed fault 1: no call used the model 'gpt-4.2'; these calls used 'gpt-4.1', 'gpt-4o-mini'
+```
+
+That catch needs no call to have sent the exact name.
+If your code sends both `gpt-4o-mini` and `gpt-4o-mini-2024-07-18`, a fault on the first fires on it alone, the dated call runs for real, the row can pass, and nothing warns.
+
+If the name was used and the fault still did not fire, the message says that instead: a refused call fires no fault, and nor does a call in a child process unless `children` is true.
+When the records cannot say, because a call had no readable name or a run was refused, the message is left out.
+
+### A request with no name Derail can read
+
+Derail reads the name from the `model` field of the request body.
+That reading changes nothing: the request goes out byte for byte as your code built it, so the provider's prompt cache is not disturbed.
+
+When a fault gives `model` and a call its label names has no such field, Derail cannot tell whether the fault is for that call.
+So the call is refused before it is sent, with the reason `unreadable_model`, and the test stops with exit code 2.
+That covers a request body sent from a generator, a multipart or compressed body, and a body with no `model` at all, such as a Responses call on a stored prompt.
+Firing could hit the wrong call, and letting it through could spare the right one.
+
+For a stored prompt, send `model` on that call.
+The openai library takes `model` beside `prompt`, but Derail has not confirmed what the provider does when the stored prompt names another model.
+
+Taking `model` off the fault is the other way out, and it has two costs.
+The fault hits every call its label names again, such as the router.
+And with a budget on, any model call with no name, such as a Responses call on a stored prompt, has no price, so it is refused in the baseline too and the fault row never runs.
+Give calls with no name a price, as the key `""` under `[agent.prices]`, or set `max_cost_usd = "none"`.
+
+Calls the fault's label does not name go on as usual, and so does everything in a test with no `model` on its fault.
 
 ## Keep a budget
 
@@ -101,6 +186,13 @@ For any other model, give the price in dollars per million tokens:
 llama-70b = {input = 0.6, output = 0.6}
 ```
 
+A call that sends no model name, such as a Responses call on a stored prompt, is priced by the key `""`:
+
+```toml
+[agent.prices]
+"" = {input = 2.0, output = 8.0}
+```
+
 With a budget on, a model with no price stops the test at its first call, because it cannot be reserved for.
 With `max_cost_usd = "none"`, no price is needed, and tokens are still counted.
 
@@ -131,7 +223,7 @@ Derail reads the tools in each model request before it goes out.
 A built-in tool your code runs, such as `shell` or `apply_patch`, has no name of its own, so its type is the name.
 List the function that runs it, such as `{path = "package.module:run_shell", name = "shell"}`.
 
-A request body Derail cannot read, such as a compressed one, is refused, because its tools cannot be checked.
+A chat request body Derail cannot read, such as a compressed one, is refused, because its tools cannot be checked.
 
 ## Calls that create something at the provider
 

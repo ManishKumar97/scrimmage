@@ -382,3 +382,96 @@ def test_a_model_call_cannot_be_mocked(tmp_path: Path) -> None:
 def test_a_model_call_is_not_listed_as_real(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="real: model is not needed"):
         example(tmp_path, 'real     = ["tool:check_inventory"]', 'real = ["model"]')
+
+
+MODEL_FAULT = """
+[[test.fault]]
+call = "{call}"
+model = {model}
+do = "status 429"
+when = "first 3"
+"""
+
+
+def with_fault(tmp_path: Path, text: str) -> config.Config:
+    return load_text(tmp_path, (EXAMPLE / "derail.toml").read_text() + text)
+
+
+@pytest.mark.design("config.model_on_model_labels")
+@pytest.mark.parametrize(
+    "call", ["model", "model:openai", "model:openai/embeddings", "model:*/embeddings"]
+)
+def test_a_model_fault_can_name_a_model(tmp_path: Path, call: str) -> None:
+    text = MODEL_FAULT.format(call=call, model='"gpt-4.1"')
+    fault = with_fault(tmp_path, text).tests[0].faults[-1]
+    assert (fault.model, fault.target) == ("gpt-4.1", f"{call} gpt-4.1")
+
+
+@pytest.mark.design("config.model_any_alias")
+def test_a_gateways_alias_is_a_name(tmp_path: Path) -> None:
+    text = MODEL_FAULT.format(call="model", model='"team/smart:v2"')
+    assert with_fault(tmp_path, text).tests[0].faults[-1].model == "team/smart:v2"
+
+
+@pytest.mark.design("config.model_not_on_other_labels")
+@pytest.mark.parametrize("call", ["tool:get_order", "http:orders.acme.internal", "mcp:search"])
+def test_model_on_another_kind_of_fault_is_unknown_with_a_pointer(
+    tmp_path: Path, call: str
+) -> None:
+    text = f'[[test.fault]]\ncall = "{call}"\nmodel = "gpt-4.1"\ndo = "timeout"\nwhen = "first 1"\n'
+    with pytest.raises(ConfigError, match=r"model: unknown setting; see docs/configuration.md"):
+        with_fault(tmp_path, text)
+
+
+@pytest.mark.design("config.model_not_on_mocks")
+def test_model_on_a_mock_is_unknown_with_a_pointer(tmp_path: Path) -> None:
+    text = '[[test.mock]]\ncall = "tool:get_stock"\nreturns = 1\nmodel = "gpt-4.1"\n'
+    with pytest.raises(ConfigError, match=r"model: unknown setting; see docs/configuration.md"):
+        with_fault(tmp_path, text)
+
+
+@pytest.mark.design("config.model_bad_value")
+@pytest.mark.parametrize("value", ["5", "true", '""', '"  "', '["gpt-4.1"]'])
+def test_a_model_that_is_not_text_is_rejected_by_table_and_key(tmp_path: Path, value: str) -> None:
+    with pytest.raises(
+        ConfigError,
+        match=r"\[\[test\.fault\]\] 2 of .* model: .* is not a model name.*docs/model-faults.md",
+    ):
+        with_fault(tmp_path, MODEL_FAULT.format(call="model", model=value))
+
+
+@pytest.mark.design("config.model_cannot_match")
+@pytest.mark.parametrize(
+    "value", ['"gpt-*"', '"*"', '" gpt-4.1"', '"gpt-4.1 "', '"gpt\\n4.1"', '"gpt\\u001b[31m"']
+)
+def test_a_name_that_could_never_match_stops_before_any_model_call(
+    tmp_path: Path, value: str
+) -> None:
+    with pytest.raises(ConfigError, match=r"is not a model name.*docs/model-faults.md"):
+        with_fault(tmp_path, MODEL_FAULT.format(call="model", model=value))
+
+
+@pytest.mark.design("plan.model_round_trip")
+def test_the_name_survives_the_plan_so_a_fault_cannot_widen_on_the_way(tmp_path: Path) -> None:
+    cfg = with_fault(tmp_path, MODEL_FAULT.format(call="model", model='"gpt-4.1"'))
+    row = plan.rows(cfg)[-1]
+    sent = plan.plan_for(cfg, row, "run-1").to_json()
+    assert sent["faults"] == [
+        {"call": "model", "do": "status 429", "when": "first 3", "model": "gpt-4.1"}
+    ]
+    assert plan.Plan.from_json(sent).faults[0].model == "gpt-4.1"
+
+
+@pytest.mark.design("plan.no_model_no_key")
+def test_a_fault_with_no_model_sends_none() -> None:
+    assert "model" not in plan.fault_json(config.Fault("model", "timeout", "first 1"))
+
+
+@pytest.mark.design("config.impossible_row_names_the_model")
+def test_a_row_no_answer_can_pass_is_named_with_its_model(tmp_path: Path) -> None:
+    text = (
+        '[[test.fault]]\ncall = "model"\nmodel = "gpt-4.1"\ndo = "status 429"\n'
+        'expect = ["a"]\nforbid = ["a"]\n'
+    )
+    with pytest.raises(ConfigError, match=r"fault on model gpt-4\.1: no answer can pass"):
+        with_fault(tmp_path, text)

@@ -19,7 +19,7 @@ Anything this version does not support is rejected as unknown, with exit code 2.
 | `max_cost_usd` | The most the whole test may spend on model calls, in dollars. `"none"` turns the budget off, on purpose. | 5 |
 | `model_hosts` | Extra hosts whose requests are model calls, such as a gateway, each with the format it speaks: `[{host = "llm-gateway.internal", provider = "openai"}]`. A host name only, with no port. | empty |
 | `reserve_output_tokens` | The output tokens a budget reservation assumes when a request does not set `max_tokens`. | 4096 |
-| `prices` | Prices for other models, as the table below. | empty |
+| `prices` | Prices for other models, as the table below. The key `""` prices a call that sends no model name. | empty |
 | `answer` | Where the answer is in what the function returns, such as `"messages[-1].content"`. Only with `function`. Required when the function returns anything but text, as the whole value would hold tool results too. See [Agents on a framework](frameworks.md). | the returned text |
 
 ## [agent.prices]
@@ -69,6 +69,7 @@ See [Web requests](web-requests.md) and [MCP tools](mcp.md).
 | `when` | When it fires: `"always"`, the default; `"first N"`, the first N attempts; or on a model call `"requests N"`, the first N requests and every retry of each. |
 | `method` | On a web request: fail only this method. |
 | `path` | On a web request: fail only this exact path, with no query string. |
+| `model` | On a model call: fail only calls to this model, such as `"gpt-4.1"`. The whole name your code sends, compared exactly. See [Failing one model](model-faults.md#failing-one-model). |
 | `expect` | Replaces the test's for this row. A fault that fires on every call needs this or `forbid`; with `first N` it can use the test's. See [Judging an answer](judging.md). |
 | `forbid` | Replaces the test's for this row. `[]` drops the test's list. |
 | `pass_rate` | Replaces the test's for this row. |
