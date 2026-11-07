@@ -75,4 +75,4 @@ def test_a_real_timeout_and_the_injected_one_reach_the_loop_the_same_way(
         ("tool:get_stock", "mock"),
     ]
     assert actions(real_run) == [("tool:get_order", "real"), ("tool:get_stock", "mock")]
-    assert real.code == injected.finished
+    assert real.code == 1 and injected.code == 0
