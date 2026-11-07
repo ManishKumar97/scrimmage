@@ -282,7 +282,7 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
     if call.provider is not None:
         extra["provider"] = call.provider
     if call.kind == "model":
-        extra.update(model=str((fields or {}).get("model", "")), retry=call.retry)
+        extra.update(model=call.model or "", retry=call.retry)
         extra["stream"] = (fields or {}).get("stream") is True
     step = run.decide(call, {})
     step.extra = extra

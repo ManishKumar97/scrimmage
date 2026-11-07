@@ -1163,3 +1163,30 @@ def test_reading_the_name_leaves_every_byte_of_the_request_as_it_was(
     sender.send(built)
     assert seen[-1].content == content
     assert seen[-1].headers.raw == built.headers.raw
+
+
+@pytest.mark.design("gate.one_source_for_the_name")
+@pytest.mark.parametrize("value", [None, 5, {"a": 1}, ["gpt-4.1"], True], ids=str)
+def test_a_name_that_is_not_text_is_recorded_as_no_name(gated: None, value: object) -> None:
+    sink, _ = install(make_plan())
+    client().post(EMBEDDINGS, json={"model": value, "input": "hi"})
+    assert sink.lines[0]["model"] == ""
+
+
+@pytest.mark.design("gate.no_price_with_no_name")
+@pytest.mark.parametrize("value", [None, 5], ids=str)
+def test_the_budget_refuses_a_call_with_no_name_as_having_no_price(
+    gated: None, value: object
+) -> None:
+    sink, _ = install(make_plan(budget=1.0))
+    with pytest.raises(DerailRefused, match="no price for the model ''"):
+        client().post(EMBEDDINGS, json={"model": value, "input": "hi"})
+    assert sink.lines[0]["reason"] == "no_price"
+
+
+@pytest.mark.design("gate.price_uses_the_name")
+def test_a_named_call_still_reserves_at_its_price(gated: None) -> None:
+    budget = Budget(1.0)
+    sink, _ = install(make_plan(budget=1.0), budget)
+    assert client().post(URL, json=BODY).status_code == 200
+    assert sink.lines[0]["model"] == "gpt-4o-mini" and sink.lines[0]["cost_usd"] > 0
