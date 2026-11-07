@@ -16,7 +16,7 @@ import pytest
 import derail_sdk
 from conftest import ACME, EXAMPLE_FAULT, Project
 from derail_sdk import config
-from derail_sdk.runner import Runner, report
+from derail_sdk.runner import INFRA_LINE, Runner, report
 from fakes.openai_server import FakeOpenAI
 
 Fake = Callable[[list[str]], FakeOpenAI]
@@ -175,7 +175,7 @@ def test_an_unreachable_control_server_is_an_infrastructure_error(
     out = io.StringIO()
     code = report(cfg, runner.run_all(), runner.folder, out)
     assert code == 3, out.getvalue()
-    assert "infrastructure error: see the runs" in out.getvalue()
+    assert f"infrastructure error: {INFRA_LINE}" in out.getvalue()
 
 
 @pytest.mark.design("runner.real_all_header")
