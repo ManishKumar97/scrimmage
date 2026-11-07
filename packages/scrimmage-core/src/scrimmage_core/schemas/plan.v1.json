@@ -52,6 +52,12 @@
               "returns": {},
               "type": {
                 "$ref": "#/$defs/import_path"
+              },
+              "recorded": {
+                "type": "boolean"
+              },
+              "args": {
+                "type": "object"
               }
             }
           },
@@ -66,7 +72,13 @@
               "call": {
                 "$ref": "#/$defs/mcp_label"
               },
-              "returns": {}
+              "returns": {},
+              "recorded": {
+                "type": "boolean"
+              },
+              "args": {
+                "type": "object"
+              }
             }
           },
           {
@@ -100,6 +112,9 @@
               "json": {},
               "text": {
                 "type": "string"
+              },
+              "recorded": {
+                "type": "boolean"
               }
             }
           }

@@ -27,7 +27,7 @@ from typing import TextIO, cast
 from scrimmage_core import judge, labels
 from scrimmage_core import plan as planner
 from scrimmage_core.budget import Ledger
-from scrimmage_core.config import QUESTION, Agent, Config, Fault, Test
+from scrimmage_core.config import QUESTION, Agent, Config, Fault, Mock, Test
 from scrimmage_core.control import ControlServer, proc_key
 from scrimmage_core.records import RECORD_VERSION, RecordStore
 from scrimmage_core.redact import redact
@@ -547,14 +547,19 @@ def unknown_labels(config: Config, seen: list[str]) -> list[str]:
     ]
 
 
-def unused_mocks(config: Config, results: list[RunResult]) -> tuple[list[str], list[str]]:
-    """Mocks no run in any row used, as (notes, mistakes).
+def unused_mocks(
+    config: Config, results: list[RunResult]
+) -> tuple[list[str], list[str], list[str]]:
+    """Mocks no run in any row used, as (notes, mistakes, recorded).
 
     A tool's label passed its check, so an unused tool mock is only a note. A web or MCP
-    label has no such check, so an unused one may be misspelled: that is a mistake.
+    label has no such check, so an unused one may be misspelled: that is a mistake. A mock
+    scrimmage record wrote cannot be misspelled, and with its exact arguments one a later run
+    does not repeat goes unused by design, so it is a note, whatever its label or tools list.
     """
     notes: list[str] = []
     mistakes: list[str] = []
+    recorded: list[str] = []
     for test in config.tests:
         mine = [r for r in results if r.row.test == test]
         used = {index for r in mine for index in r.mocked}
@@ -564,7 +569,12 @@ def unused_mocks(config: Config, results: list[RunResult]) -> tuple[list[str], l
             if index in used:
                 continue
             name = mock.call.partition(":")[2]
-            if labels.kind_of(mock.call) == "http":
+            if mock.recorded:
+                recorded.append(
+                    f"in test {test.name!r} the recorded mock on {recorded_call(mock)} was not "
+                    "used; this run did not make that call"
+                )
+            elif labels.kind_of(mock.call) == "http":
                 mistakes.append(
                     f"[[test]] {test.name!r}: no request matched the mock on {mock.call}, or "
                     "an earlier mock answered it first. Check its host, method and path, or "
@@ -586,7 +596,18 @@ def unused_mocks(config: Config, results: list[RunResult]) -> tuple[list[str], l
                     "The label is correct. Remove the mock, or ask a question that needs the "
                     "tool."
                 )
-    return notes, mistakes
+    return notes, mistakes, recorded
+
+
+def recorded_call(mock: Mock) -> str:
+    """A recorded mock as a person finds it: its label, and its arguments or its request."""
+    if labels.kind_of(mock.call) == "http":
+        request = " ".join(part for part in (mock.method, mock.path) if part)
+        return f"{mock.call} {request}".rstrip()
+    if mock.args is None:
+        return mock.call
+    args = redact(json.dumps(mock.args, ensure_ascii=False))
+    return f"{mock.call} with {args if len(args) <= PREVIEW else args[:PREVIEW] + '...'}"
 
 
 def read_report(text: str) -> tuple[dict[str, object], dict[str, object]]:
@@ -909,8 +930,9 @@ def build_report(
             if r.outcome == "infrastructure error":
                 code = INFRA
     stopped_by = runner.stopped_by if runner is not None else None
-    unused, wrong = unused_mocks(config, results) if stopped_by is None else ([], [])
+    unused, wrong, recorded = unused_mocks(config, results) if stopped_by is None else ([], [], [])
     mistakes += wrong
+    notes += recorded
     if runner is not None and not config.agent.tools:
         mistakes += runner.label_problems
         if stopped_by is None and runner.tools_seen is not None:

@@ -183,6 +183,14 @@ def test_the_wait_for_calls_in_flight_and_its_report_are_documented() -> None:
         assert item in limits, item
 
 
+@pytest.mark.design("docs.recorded_mocks")
+def test_recorded_mocks_and_their_exact_arguments_are_documented() -> None:
+    text = page("configuration.md").split("### Recorded mocks")[1]
+    for words in ("exactly", "next mock", "normal rule", "note", "still a mistake", "exit code 2"):
+        assert words in text, words
+    assert "Recorded mocks match arguments exactly" in page("limits.md")
+
+
 @pytest.mark.design("docs.check")
 def test_check_is_documented_as_reading_the_file_only(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]

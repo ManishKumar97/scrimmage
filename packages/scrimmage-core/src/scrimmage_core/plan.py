@@ -160,6 +160,15 @@ class Row:
 
 
 def mock_json(mock: Mock) -> dict[str, object]:
+    doc = plain_mock_json(mock)
+    if mock.recorded:
+        doc["recorded"] = True
+    if mock.args is not None:
+        doc["args"] = mock.args
+    return doc
+
+
+def plain_mock_json(mock: Mock) -> dict[str, object]:
     if labels.kind_of(mock.call) != "http":
         doc: dict[str, object] = {"call": mock.call, "returns": mock.returns}
         if mock.type is not None:
@@ -181,8 +190,10 @@ def mock_json(mock: Mock) -> dict[str, object]:
 
 def mock_from(doc: dict[str, object]) -> Mock:
     call = string(doc, "call")
+    recorded = doc.get("recorded") is True
     if labels.kind_of(call) != "http":
-        return Mock(call, doc["returns"], optional(doc, "type"))
+        args = None if doc.get("args") is None else obj(doc["args"])
+        return Mock(call, doc["returns"], optional(doc, "type"), recorded=recorded, args=args)
     return Mock(
         call,
         None,
@@ -193,6 +204,7 @@ def mock_from(doc: dict[str, object]) -> Mock:
         tuple((k, str(v)) for k, v in obj(doc.get("headers", {})).items()),
         doc.get("json"),
         optional(doc, "text"),
+        recorded,
     )
 
 

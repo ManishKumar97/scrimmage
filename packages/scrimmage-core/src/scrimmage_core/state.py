@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol, cast
 
+from scrimmage_core import capture
 from scrimmage_core import decide as engine
 from scrimmage_core.errors import ScrimmageRefused, ScrimmageStopped, ScrimmageTimeLimit
 from scrimmage_core.plan import Plan
@@ -180,8 +181,17 @@ class RunState:
         self.live[id(step)] = step
         return step
 
+    def with_args(self, call: engine.Call, arguments: object) -> engine.Call:
+        """The call with its arguments as a recorded mock holds them, when one could match.
+
+        A plan with no recorded mock that has args never pays for the conversion.
+        """
+        if not any(mock.args is not None for mock in self.plan.mocks):
+            return call
+        return dataclasses.replace(call, args=capture.converted(arguments))
+
     def begin(self, name: str, args: dict[str, object]) -> Step:
-        return self.decide(engine.Call("tool", f"tool:{name}", name), args)
+        return self.decide(self.with_args(engine.Call("tool", f"tool:{name}", name), args), args)
 
     def passed(self, call: engine.Call) -> Step:
         """A call that is recorded but not decided, so it is not counted and cannot be refused."""

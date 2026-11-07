@@ -253,3 +253,33 @@ def test_a_plan_with_no_fault_needs_no_name() -> None:
 def test_a_fault_that_fires_comes_before_the_refusal_as_the_decision_order_says() -> None:
     p = make(faults=[Fault("model", "status 429", "always"), MAIN_FAULT])
     assert decide(named(None), p, [1, 0]).action == "fault"
+
+
+RECORDED = Mock("tool:get_order", "order 1", None, recorded=True, args={"order_id": "1"})
+
+
+def get_order_call(args: object) -> Call:
+    return dataclasses.replace(GET_ORDER, args=args)
+
+
+@pytest.mark.design("decide.recorded_args")
+def test_a_recorded_mock_answers_only_its_exact_arguments() -> None:
+    p = make([RECORDED], real=["tool:get_order"])
+    assert run(p, get_order_call({"order_id": "1"}))[0] == "mock"
+    assert run(p, get_order_call({"order_id": "2"}))[0] == "real"
+    assert run(p, get_order_call({"order_id": 1}))[0] == "real"  # type-strict: 1 is not "1"
+    assert run(p, get_order_call(None))[0] == "real"  # arguments no mock can hold
+    assert run(make([RECORDED]), get_order_call({"order_id": "2"})) == ("refused", 0)
+
+
+@pytest.mark.design("decide.recorded_args")
+def test_a_call_one_recorded_mock_misses_goes_on_to_the_next_one() -> None:
+    second = dataclasses.replace(RECORDED, returns="order 2", args={"order_id": "2"})
+    found = decide(get_order_call({"order_id": "2"}), make([RECORDED, second]), [])
+    assert (found.action, found.mock) == ("mock", 1)
+
+
+@pytest.mark.design("decide.recorded_args")
+@pytest.mark.parametrize("args", [{"order_id": "1"}, {"order_id": "2"}, {"order_id": 1}, None])
+def test_a_hand_written_mock_answers_every_call(args: object) -> None:
+    assert run(make([MOCK]), get_order_call(args))[0] == "mock"

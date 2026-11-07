@@ -301,7 +301,7 @@ def patch_transport(module: ModuleType, gate: Gate) -> None:
 def decided(gate: Gate, run: RunState, call: Call, arguments: object) -> Step:
     """Count and decide one call. Raises ScrimmageRefused after recording a refusal."""
     gate.note(call.name, call.label)
-    step = run.decide(call, {})
+    step = run.decide(run.with_args(call, arguments if arguments is not None else {}), {})
     forwarding = FORWARDING.get()
     if forwarding is not None:  # its real says only that it was passed on, so the line says so
         forwarding.extra["forwarded_to"] = call.label
