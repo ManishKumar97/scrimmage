@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import signal
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,15 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         names = ", ".join(report.nodeid for report in skipped)
         print(f"\nskipped tests are not allowed in CI: {names}")
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+@pytest.fixture
+def signals_kept() -> Iterator[None]:
+    """The test leaves SIGINT and SIGTERM as it found them, as derail run in-process must."""
+    before = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
+    yield
+    after = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
+    assert after == before, f"signal handlers changed: {before} -> {after}"
 
 
 @pytest.fixture

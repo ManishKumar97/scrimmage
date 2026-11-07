@@ -1,0 +1,10 @@
+exit 2
+derail test: 1 test, 1 row, 2 runs; records in /records/derail-runs/20261107T101500Z-a1b2c3
+test          row       fault  runs  fired  done  passed  rate  range    tools  cost     result
+order-status  baseline  -      2     -      1     1/1     100%  21-100%  2.0    0.00112  no result
+range: a 95% Wilson interval, from these runs alone
+model calls cost $0.0011 of a budget of $0.001
+warning: the test spent more than its budget of $0.001, because the last calls cost more than was reserved for them
+note: order-status baseline: 1 budget reached
+test mistake: order-status baseline: no result: 1 of 3 runs were judged, and a result needs 2
+test mistake: the budget of $0.001 was reached: $0.0010 was spent, so the test stopped; rows without runs have no result

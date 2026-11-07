@@ -143,3 +143,5 @@ _.delete_doc  # tests/fakes/docs_server.py: the MCP server calls its tools by na
 _.output_model  # tests/fakes/docs_server.py: read by the MCP server's result check
 _._handle_resumption_request  # tests/test_mcp.py: a stand-in the MCP gate wraps by name
 _.handle_get_stream  # tests/test_mcp.py: a stand-in the MCP gate wraps by name
+_.signals_kept  # tests/conftest.py: a fixture, which pytest.mark.usefixtures names as text
+_.pytestmark  # tests/test_cli_json.py and test_check.py: pytest reads it from the module

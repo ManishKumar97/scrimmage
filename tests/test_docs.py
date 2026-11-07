@@ -1,13 +1,17 @@
 """The user docs keep up with the code: every setting, fault and outcome has its place."""
 
+import json
 import re
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-from derail_sdk import config, judge, mcp_gate, runner
+import derail_sdk
+from derail_sdk import cli, config, judge, mcp_gate, runner
 
 DOCS = Path(__file__).parents[1] / "docs"
+CLI_SCHEMA = json.loads((Path(derail_sdk.__file__).parent / "schemas" / "cli.v1.json").read_text())
 
 
 def page(name: str) -> str:
@@ -175,3 +179,94 @@ def test_the_wait_for_calls_in_flight_and_its_report_are_documented() -> None:
         "alias at the top",
     ):
         assert item in limits, item
+
+
+@pytest.mark.design("docs.check")
+def test_check_is_documented_as_reading_the_file_only(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    text = page("cli.md")
+    assert "`derail check` reads the file only" in text
+    assert "## derail check" in text and "## derail schema" in text
+    assert "**`derail check` does not import your code.**" in page("limits.md")
+    # The quickstart's check line is what derail check prints on the quickstart's file.
+    guide = page("quickstart.md")
+    (tmp_path / "derail.toml").write_text(re.findall(r"```toml\n(.*?)```", guide, re.S)[0])
+    capsys.readouterr()
+    assert cli.main(["check", str(tmp_path / "derail.toml")]) == runner.OK
+    printed = capsys.readouterr().out.strip().replace(str(tmp_path / "derail.toml"), "derail.toml")
+    assert printed in guide
+
+
+def property_names(node: object) -> set[str]:
+    """Every property name in a JSON Schema, at every depth."""
+    names: set[str] = set()
+    if isinstance(node, dict):
+        table = cast(dict[str, object], node)
+        properties = table.get("properties")
+        if isinstance(properties, dict):
+            names |= set(cast(dict[str, object], properties))
+        for value in table.values():
+            names |= property_names(value)
+    elif isinstance(node, list):
+        for item in cast(list[object], node):
+            names |= property_names(item)
+    return names
+
+
+@pytest.mark.design("docs.json")
+def test_every_command_flag_exit_code_and_json_field_is_documented() -> None:
+    cli_page, output = page("cli.md"), page("json-output.md")
+    for word in ("derail check [path/to/derail.toml] [--json]", "derail schema", "--json"):
+        assert word in cli_page, word
+    check = cli_page.split("## derail check")[1].split("## derail schema")[0]
+    assert all(f"| {code} |" in check for code in cli.STATUS["check"])
+    assert "| 1 |" not in check
+    missing = sorted(name for name in property_names(CLI_SCHEMA) if f"`{name}`" not in output)
+    assert not missing, f"JSON fields with no entry in docs/json-output.md: {missing}"
+    lines = {re.sub(r"\s+", " ", line) for line in output.splitlines()}
+    for command, words in cli.STATUS.items():
+        cells = [f"`{words[code]}`" if code in words else "" for code in range(4)]
+        row = re.sub(r"\s+", " ", f"| `{command}` | {' | '.join(cells)} |")
+        assert row in lines, row
+    assert "a reader may check a document against any version 1 copy of the schema" in output
+    assert "the schema of the Derail that wrote it" not in output
+    for text in (cli_page, output):  # the window the code leaves, said, not "at any point"
+        assert "Ctrl-C or SIGTERM at any point" not in text
+        assert "a signal before that" in text and "always equals the document's `exit`" in text
+    assert "once derail has started" in output.lower() and "Once Derail has started" in cli_page
+    assert "`2.0`" in page("configuration.md") and "rejects `${`" in page("configuration.md")
+    assert "[JSON output](json-output.md)" in page("index.md")
+    assert "#:schema ./derail.schema.json" in page("configuration.md")
+    assert "## Checking the file in your editor" in page("configuration.md")
+
+
+def enum_values(node: object, name: str = "") -> dict[str, set[str]]:
+    """Every enum in the schema, by the name of the field that holds it."""
+    found: dict[str, set[str]] = {}
+    if isinstance(node, dict):
+        table = cast(dict[str, object], node)
+        if "enum" in table:
+            found.setdefault(name, set()).update(map(str, cast(list[object], table["enum"])))
+        for key, value in table.items():
+            inner = name if key in ("enum", "items", "anyOf", "oneOf") else key
+            for field, values in enum_values(value, inner).items():
+                found.setdefault(field, set()).update(values)
+    elif isinstance(node, list):
+        for item in cast(list[object], node):
+            for field, values in enum_values(item, name).items():
+                found.setdefault(field, set()).update(values)
+    return found
+
+
+@pytest.mark.design("json.unknown_value_read")
+def test_the_docs_say_beside_each_enum_that_an_unknown_value_reads_as_other() -> None:
+    text = page("json-output.md").split("## Values that can grow")[1]
+    enums = enum_values(CLI_SCHEMA)
+    assert {"command", "status", "result", "outcome", "judged", "kind", "stopped_by"} <= set(enums)
+    for field, values in enums.items():
+        row = next((line for line in text.splitlines() if line.startswith(f"| `{field}` | `")), "")
+        assert row.endswith("| read as other |"), field
+        listed = set(re.findall(r"`([^`]+)`", row.split("|")[2]))
+        assert listed == values, (field, listed ^ values)
+    assert "A reader that gets a value it does not know reads it as other." in text

@@ -1,0 +1,8 @@
+exit 2
+derail test: 1 test, 1 row, 3 runs; records in /records/derail-runs/20261107T101500Z-a1b2c3
+test          row       fault  runs  fired  done  passed  rate  range    tools  cost     result
+order-status  baseline  -      3     -      3     3/3     100%  44-100%  2.0    0.00036  pass
+range: a 95% Wilson interval, from these runs alone
+model calls cost $0.0004 of a budget of $5
+note: 3 runs answered with no model call
+test mistake: order-status: no baseline run made a model call, so the budget is not working; check for a cache in front of the model or a client Derail does not gate

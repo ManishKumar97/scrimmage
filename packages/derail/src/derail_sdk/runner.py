@@ -31,9 +31,10 @@ from derail_sdk.config import QUESTION, Agent, Config, Fault, Test
 from derail_sdk.control import ControlServer, proc_key
 from derail_sdk.records import RECORD_VERSION, RecordStore
 from derail_sdk.redact import redact
-from derail_sdk.state import COMMAND_CAP, now_iso
+from derail_sdk.state import COMMAND_CAP, PREVIEW, now_iso
 
 OK, ROW_FAILED, MISTAKE, INFRA = 0, 1, 2, 3
+END = b"\x00"  # ends the stop watcher; no signal has the number 0
 TAIL_BYTES = 1024 * 1024  # how much of a script's output is read to find its last line
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 KILL_GRACE_S = 5.0
@@ -58,6 +59,8 @@ STOP_TEST = (
     "structure",
     "ambiguous_label",
 )
+UNKNOWN_LABEL = "unknown_label"  # a label named no tool the agent's first run reported
+STOPPED_BY = (*STOP_TEST, UNKNOWN_LABEL)  # every reason that can stop the whole test
 # The agent's own cancellation is not a failure of the provider.
 NOT_A_FAILURE = (
     "CancelledError",
@@ -90,6 +93,19 @@ HEAD = [
     "result",
 ]
 TEST_COLUMN, FAULT_COLUMN = 0, 2
+# The lists a report's messages go in, and the word each line starts with in the text.
+MISTAKES, NOTES, WARNINGS, INFRA_ERRORS = "mistakes", "notes", "warnings", "infra"
+PREFIXES = {
+    MISTAKES: "test mistake",
+    NOTES: "note",
+    WARNINGS: "warning",
+    INFRA_ERRORS: "infrastructure error",
+}
+TOOL_STAR_LINE = 'every tool that is not mocked runs for real (real = ["tool:*"])'
+# Said in the text and in --json alike, so it names a field both can show.
+INFRA_LINE = (
+    "see each run whose outcome is infrastructure error, and its .log file in the records folder"
+)
 NOT_JUDGED = judge.RunJudgement(left_out="not judged")
 
 
@@ -122,7 +138,12 @@ class RunResult:
 
 
 class Runner:
-    def __init__(self, config: Config, control_url: Callable[[str], str] = lambda url: url) -> None:
+    def __init__(
+        self,
+        config: Config,
+        control_url: Callable[[str], str] = lambda url: url,
+        stop_flag: list[str] | None = None,
+    ) -> None:
         self.config = config
         self.control_url = control_url  # lets a test point the agent elsewhere
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -148,6 +169,12 @@ class Runner:
         self.label_problems: list[str] = []
         self.stopped_by: str | None = None  # the reason a refusal stopped the whole test
         self.skipped: list[str] = []  # tests whose fault rows did not run: baseline failed
+        # The name of the signal that stops the test. A watcher thread learns of it through
+        # signal.set_wakeup_fd, which Python's C handler writes at once, on whatever thread
+        # the signal lands; it then stops the runs. Nothing is raised in a handler, which a
+        # __del__ it fired in would swallow, and nothing waits for the main thread, which
+        # sleeps in the pool's wait and runs a Python handler only once it wakes.
+        self.stop_flag: list[str] = [] if stop_flag is None else stop_flag
 
     def _refused(self, run: str, reason: str) -> None:
         """The first refusal ends its run and its row; some reasons end the whole test."""
@@ -400,7 +427,7 @@ class Runner:
             self.label_problems = unknown_labels(self.config, result.tools_seen)
             if not self.label_problems:
                 return
-            self.stopped_by = self.stopped_by or "unknown_label"
+            self.stopped_by = self.stopped_by or UNKNOWN_LABEL
         self.cancel()
 
     def run_all(self) -> list[RunResult]:
@@ -408,7 +435,14 @@ class Runner:
         rows = planner.rows(self.config)
         runs = self.config.agent.runs
         self.server.start()
+        self.wake_read, self.wake = os.pipe()
+        os.set_blocking(self.wake, False)  # set_wakeup_fd needs it, and a full pipe is fine
+        watcher = threading.Thread(target=self._watch, name="derail-stop", daemon=True)
+        watcher.start()
         previous = {sig: signal.signal(sig, self._interrupted) for sig in STOP_SIGNALS}
+        old_wakeup = signal.set_wakeup_fd(self.wake)
+        if self.stop_flag:  # noted just before the handlers above were set
+            os.write(self.wake, bytes([STOP_SIGNALS[0]]))
         try:
             with ThreadPoolExecutor(max_workers=self.config.agent.parallel) as pool:
                 base = [row for row in rows if row.fault is None for _ in range(runs)]
@@ -428,10 +462,20 @@ class Runner:
                     for _ in range(runs)
                 ]
                 results += list(pool.map(self.one, rest))
+            if self.stop_flag:  # every run has ended, so it is raised where nothing drops it
+                name = self.stop_flag[0]
+                self.stop_flag.clear()  # the watcher and the handler may both have noted it
+                raise Interrupted(name)
         finally:
-            self.cancel()
+            # Handlers first: from here a signal goes to the caller's, never to a closed pipe.
+            signal.set_wakeup_fd(old_wakeup)
             for sig, handler in previous.items():
                 signal.signal(sig, handler)
+            os.write(self.wake, END)  # the watcher returns
+            watcher.join()
+            os.close(self.wake)
+            os.close(self.wake_read)
+            self.cancel()
             self.server.stop()
             shutil.rmtree(self.answers, ignore_errors=True)
         return [r for r in results if r is not None]
@@ -445,10 +489,19 @@ class Runner:
             stop_group(proc)
 
     def _interrupted(self, signum: int, frame: object) -> None:
-        """The runner itself was told to stop, such as a cancelled CI job."""
+        """The runner itself was told to stop, such as a cancelled CI job. Only notes it."""
         del frame
-        self.cancel()
-        raise Interrupted(signal.Signals(signum).name)
+        if not self.stop_flag:
+            self.stop_flag.append(signal.Signals(signum).name)
+
+    def _watch(self) -> None:
+        """Stop every run once a stop signal comes; at the end of run_all, return."""
+        while (byte := os.read(self.wake_read, 1)) != END:
+            if byte[0] in STOP_SIGNALS:  # the wakeup fd also carries other caught signals
+                if not self.stop_flag:
+                    self.stop_flag.append(signal.Signals(byte[0]).name)
+                self.cancel()
+                return
 
 
 def real_error(line: dict[str, object]) -> str | None:
@@ -734,13 +787,19 @@ def where_to_read(broken: judge.Broken, runs: list[RunResult], folder: Path) -> 
     return f"{', '.join(names)}{more}"
 
 
-def rule_lines(report: RowReport, folder: Path) -> list[str]:
-    """Which rules broke, in which runs. Empty when no run broke one."""
+def broken_runs(report: RowReport) -> list[tuple[judge.Broken, list[RunResult]]]:
+    """Each rule a run broke, with the runs that broke it, the most broken first."""
     tally: dict[judge.Broken, list[RunResult]] = {}
     for r in report.runs:
         for broken in r.judgement.broken:
             tally.setdefault(broken, []).append(r)
-    if not tally:
+    return sorted(tally.items(), key=lambda item: -len(item[1]))
+
+
+def rule_lines(report: RowReport, folder: Path) -> list[str]:
+    """Which rules broke, in which runs. Empty when no run broke one."""
+    most = broken_runs(report)
+    if not most:
         return []
     row, rate = report.result, report.row.rules.pass_rate
     word = "fail" if row.verdict == judge.FAIL else "note"
@@ -753,7 +812,6 @@ def rule_lines(report: RowReport, folder: Path) -> list[str]:
             f"fail: {report.where}: under this fault the agent called {call}, which the test "
             f"does not allow. {advice}"
         )
-    most = sorted(tally.items(), key=lambda item: -len(item[1]))
     return [
         head,
         *(
@@ -767,22 +825,34 @@ def counts(ended: Counter[str]) -> str:
     return ", ".join(f"{n} {outcome}" for outcome, n in sorted(ended.items()))
 
 
-def report(
-    config: Config,
-    results: list[RunResult],
-    folder: Path,
-    out: TextIO,
-    runner: "Runner | None" = None,
-) -> int:
+@dataclass(frozen=True)
+class Report:
+    """What derail test found, once. The text and the JSON are two renderings of it."""
+
+    config: Config
+    results: list[RunResult]
+    folder: Path
+    rows: list[RowReport]
+    table: list[list[str]]
+    failures: list[str]  # which rules broke, in which runs: the lines under the table
+    # (list, text) in the order the text prints them, the list being one of LISTS: those
+    # printed above the table, as a line that must not scroll away, and those below it
+    above: list[tuple[str, str]]
+    messages: list[tuple[str, str]]
+    spent: float
+    stopped_by: str | None
+    code: int
+
+    @property
+    def every_message(self) -> list[tuple[str, str]]:
+        """Every message, in the order the text prints them, for the JSON's lists."""
+        return [*self.above, *self.messages]
+
+
+def build_report(
+    config: Config, results: list[RunResult], folder: Path, runner: "Runner | None" = None
+) -> Report:
     reports = row_reports(config, results)
-    print(
-        f"derail test: {plural(len(config.tests), 'test')}, {plural(len(reports), 'row')}, "
-        f"{plural(len(results), 'run')}; "
-        f"records in {folder}",
-        file=out,
-    )
-    if "tool:*" in config.agent.real:
-        print('every tool that is not mocked runs for real (real = ["tool:*"])', file=out)
     table = [HEAD, *map(row_cells, reports)]
     mistakes: list[str] = []
     notes: list[str] = []
@@ -889,71 +959,176 @@ def report(
             mistakes.append(f"{r.row.test.name} {r.row.name}: {r.run}: {error}, not injected")
     hosted = sum(r.hosted_reads for r in results)
     near_mocks = sorted({call for r in results for call in r.near_mocks})
-    widths = fitted(table)
-    for line in table:
+    spent = sum(r.cost_usd for r in results)
+    warnings: list[str] = []
+    if budget_on and spent > (config.agent.max_cost_usd or 0):
+        warnings.append(
+            f"the test spent more than its budget of ${config.agent.max_cost_usd:g}, "
+            "because the last calls cost more than was reserved for them"
+        )
+    warnings += [
+        f"{hold.run} ended with {hold.label or 'a model call'} still holding "
+        f"${hold.usd:.4f} of the budget, such as a call cut off when its run was killed; "
+        "it stays held, as the call may have been sent"
+        for hold in leaked
+    ]
+    warnings += [
+        f"{call} ran for real, though the test has mocks for that host; "
+        "none matched its method and path"
+        for call in near_mocks
+    ]
+    if hosted:
+        warnings.append(
+            f"{plural(hosted, 'model request')} offered provider tools that only read, "
+            "such as web search; providers bill those per use, outside the token budget"
+        )
+    if silent:
+        notes.append(f"{plural(len(silent), 'run')} answered with no model call")
+    newer = sorted(
+        {
+            str(line.get("message"))
+            for r in results
+            for line in r.notices
+            if line.get("notice") == "newer_version"
+        }
+    )
+    messages = [
+        *((WARNINGS, text) for text in warnings),
+        *((NOTES, text) for text in notes),
+        *((WARNINGS, text) for text in newer),
+        *((MISTAKES, text) for text in dict.fromkeys(mistakes)),
+    ]
+    if code == INFRA:
+        messages.append((INFRA_ERRORS, INFRA_LINE))
+    elif mistakes:
+        code = MISTAKE
+    elif any(r.result.verdict == judge.FAIL for r in reports):
+        code = ROW_FAILED
+    # The team's own statement that writes may run, so it is said first, not under the table.
+    above = [(WARNINGS, TOOL_STAR_LINE)] if "tool:*" in config.agent.real else []
+    return Report(
+        config,
+        results,
+        folder,
+        reports,
+        table,
+        failures,
+        above,
+        messages,
+        spent,
+        stopped_by,
+        code,
+    )
+
+
+def print_report(found: Report, out: TextIO) -> int:
+    """The report as text: the table, the lines under it, and one line per message."""
+    config = found.config
+    print(
+        f"derail test: {plural(len(config.tests), 'test')}, {plural(len(found.rows), 'row')}, "
+        f"{plural(len(found.results), 'run')}; "
+        f"records in {found.folder}",
+        file=out,
+    )
+    for kind, text in found.above:
+        print(f"{PREFIXES[kind]}: {text}", file=out)
+    widths = fitted(found.table)
+    for line in found.table:
         print(
             "  ".join(cut(cell, w).ljust(w) for cell, w in zip(line, widths, strict=True)).rstrip(),
             file=out,
         )
-    for entry, line in zip(reports, table[1:], strict=True):
+    for entry, line in zip(found.rows, found.table[1:], strict=True):
         if len(line[TEST_COLUMN]) > widths[TEST_COLUMN] or (
             len(line[FAULT_COLUMN]) > widths[FAULT_COLUMN]
         ):
             print(f"full name: {entry.where}: {line[FAULT_COLUMN]}", file=out)
     print("range: a 95% Wilson interval, from these runs alone", file=out)
-    for line in failures:
+    for line in found.failures:
         print(line, file=out)
-    spent = sum(r.cost_usd for r in results)
-    limit = "no budget" if not budget_on else f"a budget of ${config.agent.max_cost_usd:g}"
-    print(f"model calls cost ${spent:.4f} of {limit}", file=out)
-    if budget_on and spent > (config.agent.max_cost_usd or 0):
-        print(
-            f"warning: the test spent more than its budget of ${config.agent.max_cost_usd:g}, "
-            "because the last calls cost more than was reserved for them",
-            file=out,
-        )
-    for hold in leaked:
-        print(
-            f"warning: {hold.run} ended with {hold.label or 'a model call'} still holding "
-            f"${hold.usd:.4f} of the budget, such as a call cut off when its run was killed; "
-            "it stays held, as the call may have been sent",
-            file=out,
-        )
-    for call in near_mocks:
-        print(
-            f"warning: {call} ran for real, though the test has mocks for that host; "
-            "none matched its method and path",
-            file=out,
-        )
-    if hosted:
-        print(
-            f"warning: {plural(hosted, 'model request')} offered provider tools that only read, "
-            "such as web search; providers bill those per use, outside the token budget",
-            file=out,
-        )
-    for message in notes:
-        print(f"note: {message}", file=out)
-    if silent:
-        print(f"note: {plural(len(silent), 'run')} answered with no model call", file=out)
-    warnings = {
-        str(line.get("message"))
-        for r in results
-        for line in r.notices
-        if line.get("notice") == "newer_version"
+    budget = config.agent.max_cost_usd
+    limit = "no budget" if budget is None else f"a budget of ${budget:g}"
+    print(f"model calls cost ${found.spent:.4f} of {limit}", file=out)
+    for kind, text in found.messages:
+        print(f"{PREFIXES[kind]}: {text}", file=out)
+    return found.code
+
+
+def report(
+    config: Config,
+    results: list[RunResult],
+    folder: Path,
+    out: TextIO,
+    runner: "Runner | None" = None,
+) -> int:
+    return print_report(build_report(config, results, folder, runner), out)
+
+
+def report_json(found: Report) -> dict[str, object]:
+    """The fields `derail test --json` adds to the envelope. Its lists come from messages."""
+    return {
+        "records": str(found.folder),
+        "tests": len(found.config.tests),
+        "rows": [row_json(entry, found.folder) for entry in found.rows],
+        "cost_usd": round(found.spent, 8),
+        "budget_usd": found.config.agent.max_cost_usd,
+        "stopped_by": found.stopped_by,
     }
-    for warning in sorted(warnings):
-        print(f"warning: {warning}", file=out)
-    for message in dict.fromkeys(mistakes):
-        print(f"test mistake: {message}", file=out)
-    if code == INFRA:
-        print(
-            "infrastructure error: see the runs marked so above, and their .log files",
-            file=out,
-        )
-        return INFRA
-    if mistakes:
-        return MISTAKE
-    return ROW_FAILED if any(r.result.verdict == judge.FAIL for r in reports) else OK
+
+
+def row_json(entry: RowReport, folder: Path) -> dict[str, object]:
+    """One table row, by the table's own column names, with its runs and broken rules."""
+    row, mine, result = entry.row, entry.runs, entry.result
+    fault = row.fault
+    rate: float | None = None
+    span: list[float] | None = None
+    if result.judged:
+        low, high = judge.wilson(result.passed, result.judged)
+        rate, span = round(result.passed / result.judged, 4), [round(low, 4), round(high, 4)]
+    return {
+        "test": row.test.name,
+        "row": row.name,
+        "fault": None
+        if fault is None
+        else {
+            "call": fault.call,
+            "do": fault.do,
+            "when": fault.when,
+            "model": fault.model,
+            "method": fault.method,
+            "path": fault.path,
+            "raises": fault.raises,
+        },
+        "runs": len(mine),
+        "fired": None if fault is None else sum(bool(r.fault_fired) for r in mine),
+        "done": sum(1 for r in mine if r.outcome == "answered"),
+        "passed": result.passed,
+        "judged": result.judged,
+        "rate": rate,
+        "range": span,
+        "pass_rate": row.rules.pass_rate,
+        "tools": round(sum(r.tool_calls for r in mine) / max(len(mine), 1), 4),
+        "cost_usd": round(sum(r.cost_usd for r in mine), 8),
+        "result": result.verdict,
+        "broken": [
+            {"kind": rule.kind, "text": rule.text, "runs": [r.run for r in runs]}
+            for rule, runs in broken_runs(entry)
+        ],
+        "run_details": [run_json(r) for r in mine],
+    }
+
+
+def run_json(result: RunResult) -> dict[str, object]:
+    answer = None if result.answer is None else redact(result.answer)[:PREVIEW]
+    return {
+        "run": result.run,
+        "outcome": result.outcome,
+        "fault_fired": result.fault_fired,
+        "judged": result.judgement.verdict,
+        "left_out": result.judgement.left_out,
+        "cost_usd": round(result.cost_usd, 8),
+        "answer_preview": answer,
+    }
 
 
 def budget_line(reason: str, numbers: dict[str, object], agent: Agent) -> str:

@@ -1,0 +1,22 @@
+exit 2
+derail test: 1 test, 2 rows, 6 runs; records in /records/derail-runs/20261107T101500Z-a1b2c3
+warning: every tool that is not mocked runs for real (real = ["tool:*"])
+test                  row       fault                 runs  fired  done  passed  rate  range   tools  cost     result
+a-test-w...he-table-  baseline  -                     3     -      2     2/3     67%   21-94%  2.0    0.00036  fail
+a-test-w...he-table-  fault 1   model gp...9 first 2  3     0      3     0/0     -     -       2.0    0.00036  no result
+full name: a-test-whose-name-is-far-too-long-for-the-table-a-test-whose-name-is-far-too-long-for-the-table- baseline: -
+full name: a-test-whose-name-is-far-too-long-for-the-table-a-test-whose-name-is-far-too-long-for-the-table- fault 1: model gpt-4.1 status 429 first 2
+range: a 95% Wilson interval, from these runs alone
+fail: a-test-whose-name-is-far-too-long-for-the-table-a-test-whose-name-is-far-too-long-for-the-table- baseline: 2/3 passed, pass_rate is 1
+  1 run: crashed: /records/derail-runs/20261107T101500Z-a1b2c3/run-baseline-2.log
+model calls cost $0.0007 of a budget of $5
+warning: http:x.acme GET /a ran for real, though the test has mocks for that host; none matched its method and path
+warning: 2 model requests offered provider tools that only read, such as web search; providers bill those per use, outside the token budget
+note: a-test-whose-name-is-far-too-long-for-the-table-a-test-whose-name-is-far-too-long-for-the-table- baseline: run-baseline-0: process 41 left the group
+note: a-test-whose-name-is-far-too-long-for-the-table-a-test-whose-name-is-far-too-long-for-the-table- baseline: 1 crashed
+note: a-test-whose-name-is-far-too-long-for-the-table-a-test-whose-name-is-far-too-long-for-the-table- fault 1: not exercised, the fault did not fire: 3 answered
+note: 1 run answered with no model call
+warning: httpx 2.1 is newer
+test mistake: a-test-whose-name-is-far-too-long-for-the-table-a-test-whose-name-is-far-too-long-for-the-table- fault 1: no result: the fault never fired
+test mistake: a-test-whose-name-is-far-too-long-for-the-table-a-test-whose-name-is-far-too-long-for-the-table- fault 1: the fault never fired in any run, so the row tested nothing
+test mistake: a-test-whose-name-is-far-too-long-for-the-table-a-test-whose-name-is-far-too-long-for-the-table- fault 1: no call used the model 'gpt-4.1'; these calls used 'gpt-4o-mini'

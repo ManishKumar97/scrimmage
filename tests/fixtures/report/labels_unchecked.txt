@@ -1,0 +1,14 @@
+exit 2
+derail test: 1 test, 2 rows, 3 runs; records in /records/derail-runs/20261107T101500Z-a1b2c3
+test          row       fault                   runs  fired  done  passed  rate  range  tools  cost     result
+order-status  baseline  -                       3     -      0     0/3     0%    0-56%  2.0    0.00036  fail
+order-status  fault 1   tool:get_order timeout  0     0      0     0/0     -     -      0.0    0.00000  no result
+range: a 95% Wilson interval, from these runs alone
+fail: order-status baseline: 0/3 passed, pass_rate is 1
+  3 runs: crashed: /records/derail-runs/20261107T101500Z-a1b2c3/run-baseline-0.log, /records/derail-runs/20261107T101500Z-a1b2c3/run-baseline-1.log, /records/derail-runs/20261107T101500Z-a1b2c3/run-baseline-2.log
+model calls cost $0.0004 of no budget
+note: order-status baseline: 3 crashed
+test mistake: order-status fault 1: no result: 0 of 3 runs were judged, and a result needs 2
+test mistake: [[test]] 'order-status': tool:get_ordr names no tool the agent has
+test mistake: no run reported the agent's tools, so the tool labels in this file were not checked; see the run logs
+test mistake: order-status: baseline failed: every baseline run crashed, timed out, was refused or reached the budget, so its fault rows did not run

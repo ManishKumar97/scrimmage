@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 dependencies = ["derail-marker"]
 
 [project.scripts]
-derail = "derail_sdk.cli:main"
+derail = "derail_sdk.entry:main"
 derail-run = "derail_sdk.run_command:main"
 
 [build-system]
