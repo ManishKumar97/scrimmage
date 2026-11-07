@@ -55,9 +55,16 @@ def is_this_python(path: str) -> bool:
     return mine or os.path.realpath(path) == os.path.realpath(sys.executable)
 
 
+def is_boot(folder: str) -> bool:
+    """Any Derail's startup folder, since the runner's can differ from this process's own."""
+    return folder.endswith(os.sep + BOOT) and os.path.isfile(
+        os.path.join(folder, "sitecustomize.py")
+    )
+
+
 def why_blind(env: dict[str, str], args: list[str]) -> str | None:
     folders = env.get("PYTHONPATH", "").split(os.pathsep)
-    if "DERAIL_TOKEN" not in env or not any(folder.endswith(BOOT) for folder in folders):
+    if "DERAIL_TOKEN" not in env or not any(map(is_boot, folders)):
         return "its environment does not hold Derail's variables and its PYTHONPATH folder"
     flag = python_args.skipping(args)
     return f"{flag} skips Derail's startup file" if flag else None
