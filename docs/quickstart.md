@@ -70,6 +70,18 @@ This says:
 
 ## 3. Run it
 
+First check the file. This runs nothing and costs nothing:
+
+```bash
+derail check
+```
+
+```text
+derail check: derail.toml is valid: 1 test, 2 rows, 6 runs, 4 tools, a budget of $5
+```
+
+Then run the test:
+
 ```bash
 derail test
 ```

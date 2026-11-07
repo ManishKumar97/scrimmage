@@ -32,7 +32,8 @@ Fault injection is an established practice; Derail brings it inside any Python a
 | [Judging an answer](judging.md) | `expect`, `forbid`, `pass_rate` and the result of a row |
 | [Concepts](concepts.md) | Rows, runs, labels, mocks, faults, records |
 | [Configuration](configuration.md) | Every setting in `derail.toml` |
-| [Commands](cli.md) | `derail test` and `derail-run` |
+| [Commands](cli.md) | `derail test`, `derail check`, `derail schema` and `derail-run` |
+| [JSON output](json-output.md) | What `--json` prints, field by field, for a coding agent or a CI step |
 | [How it works](how-it-works.md) | How Derail gets inside your agent |
 | [Safety](safety.md) | Why a test never changes real data by accident |
 | [Limits](limits.md) | What this version does not do yet |

@@ -121,6 +121,28 @@ See [Web requests](web-requests.md) and [MCP tools](mcp.md).
 | `forbid` | Replaces the test's for this row. `[]` drops the test's list. |
 | `pass_rate` | Replaces the test's for this row. |
 
+## Checking the file in your editor
+
+Derail ships a JSON Schema of this file, and `derail schema` prints the one that matches your installed version:
+
+```bash
+derail schema > derail.schema.json
+```
+
+Then make this the first line of `derail.toml`:
+
+```
+#:schema ./derail.schema.json
+```
+
+Taplo, the TOML language server behind VS Code's Even Better TOML extension, reads that comment and checks each key, type, label, schedule and fault word as you type.
+Rust and Python teams use it the same way for `Cargo.toml` and `pyproject.toml`.
+Derail reads the line as a comment, so it changes nothing.
+
+The schema checks the shape of the file only.
+It cannot check what needs the whole file, your folder or your machine: a tool name against `tools`, a mock on a model call, a `type` outside your packages, a program on your `PATH`, or a test name used twice.
+An editor that finds nothing wrong is a good sign. `derail check` decides; see [Commands](cli.md#derail-check).
+
 ## Coming in later versions
 
 These are part of Derail's design but not of this version.
