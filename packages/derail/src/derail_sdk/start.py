@@ -7,7 +7,6 @@ answer to DERAIL_ANSWER_FILE, so the agent's own prints cannot mix with it.
 import asyncio
 import importlib
 import inspect
-import json
 import os
 import re
 import sys
@@ -26,6 +25,10 @@ class BadAnswerPath(Exception):
 
 
 STEP = re.compile(r"\[(-?\d+)\]|\.?([A-Za-z_]\w*)")
+NOT_AN_ANSWER = (
+    "[agent] answer: {path!r} is a {kind}, not the answer, so all of it would be judged, tool "
+    "results included. Point answer at the text inside it; see docs/judging.md"
+)
 NOT_TEXT = (
     "[agent] answer: the agent returned {kind}, not text, so the whole value would be judged, "
     "tool results included. Set answer to the path of the final reply, such as "
@@ -69,6 +72,8 @@ def main(argv: list[str]) -> int:
     try:
         if len(argv) == 4:
             result = pick(result, argv[3])
+            if not isinstance(result, str | int | float):
+                raise BadAnswerPath(NOT_AN_ANSWER.format(path=argv[3], kind=type(result).__name__))
         elif not isinstance(result, str):
             raise BadAnswerPath(NOT_TEXT.format(kind=type(result).__name__))
     except BadAnswerPath as exc:
@@ -77,10 +82,7 @@ def main(argv: list[str]) -> int:
             run.notice("answer_path", "derail", str(exc), mistake=str(exc))
         print(f"derail: {exc}", file=sys.stderr)
         return 1
-    # Structured text stays as written, so a rule on a word with an accent can find it.
-    answer = (
-        result if isinstance(result, str) else json.dumps(result, default=str, ensure_ascii=False)
-    )
+    answer = str(result)
     path = os.environ.get("DERAIL_ANSWER_FILE")
     if path:
         with open(path, "w", encoding="utf-8", errors="replace") as out:

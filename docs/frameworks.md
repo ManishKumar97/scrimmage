@@ -49,6 +49,7 @@ forbid = ["shipped"]
 
 A graph returns its state, not text, so `answer` says where the answer is in what your function returned.
 A path can use field names, dots and indexes.
+It must lead to the answer, as text or a number. A path to a list or a table is a test mistake, because tool results in it could pass a rule.
 If the path does not fit, the run ends as crashed, and its `.log` file says which step failed.
 
 ## Tool names
