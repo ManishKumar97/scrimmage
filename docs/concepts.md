@@ -71,7 +71,7 @@ A row where the fault never fired tested nothing, and is reported as a mistake i
 ## Judging
 
 Each run is judged by `expect` and `forbid`, which the team writes, and each row by its `pass_rate`.
-A crash or a time-out fails. A refused, stopped or budget-stopped run and an infrastructure error are left out, and so is a run where the fault did not fire.
+A crash or a time-out fails. A refused run fails a fault row when the agent chose that call under the fault. Any other refused run, a stopped or budget-stopped run and an infrastructure error are left out, and so is a run where the fault did not fire.
 A row reads `pass`, `fail` or `no result`. See [Judging an answer](judging.md).
 
 ## Records

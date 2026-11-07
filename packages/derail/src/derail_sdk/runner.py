@@ -65,7 +65,7 @@ NOT_A_FAILURE = (
     "DerailStopped",
 )
 # The agent chose this call. Under a fault that is what it did about the failure.
-CHOSEN_CALLS = ("unlisted", "web_write")
+CHOSEN_CALLS = ("unlisted", "web_write", "blind_child")
 # A baseline whose every run ended so cannot be compared with, so its faults are skipped.
 FAILED = ("crashed", "timed out", "refused call", "budget reached")
 TABLE_WIDTH = 120

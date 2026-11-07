@@ -73,6 +73,7 @@ If a row's rules cannot both be met, such as a fault that forbids a word the tes
 | answered | pass or fail, by the rules |
 | answered, but the answer is empty | fail: `empty answer` |
 | crashed | fail: `crashed` |
+| crashed by a test mistake, such as an `answer` path that does not fit | left out |
 | timed out | fail: `timed out` |
 | refused call, on a fault row after the fault fired | fail: `refused tool:refund_order`, at any `pass_rate` |
 | refused call, on a baseline | left out |
