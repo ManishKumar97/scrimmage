@@ -6,6 +6,7 @@ import shutil
 
 PYTHON = re.compile(r"(?:python|pypy)[\d.]*")
 SKIPS = set("IES")  # flags that ignore PYTHONPATH or skip the startup file
+LONG_WITH_VALUE = "--check-hash-based-pycs"  # the one long flag whose value is the next word
 
 
 def interpreter(path: str, env: dict[str, str]) -> tuple[str, list[str]] | None:
@@ -29,13 +30,16 @@ def flags(args: list[str]) -> set[str]:
     found: set[str] = set()
     words = iter(args)
     for word in words:
+        if word == LONG_WITH_VALUE:
+            next(words, None)
+            continue
         if not word.startswith("-") or word in ("-", "--"):
             break
-        for letter in "" if word.startswith("--") else word[1:]:
+        for place, letter in enumerate("" if word.startswith("--") else word[1:], 2):
             if letter in "cm":
                 return found
             if letter in "WX":
-                if word.endswith(letter):
+                if place == len(word):
                     next(words, None)
                 break
             found.add(letter)

@@ -128,6 +128,9 @@ def _target() -> "str | None":
     """
     args = iter(getattr(sys, "orig_argv", [])[1:])
     for arg in args:
+        if arg == "--check-hash-based-pycs":  # its value is the next word
+            next(args, None)
+            continue
         if not arg.startswith("-") or arg in ("-", "--"):
             return None
         for place, letter in enumerate("" if arg.startswith("--") else arg[1:], 2):

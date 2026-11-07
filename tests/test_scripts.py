@@ -539,7 +539,7 @@ def test_a_program_that_cannot_be_found_is_a_mistake_in_the_test(
 
 @pytest.mark.design("config.flag_skips_the_gates")
 @pytest.mark.parametrize(
-    "flags", ["-E", "-S", "-I", "-BE", "-W ignore -S", "-Es", "--check-hash-based-pycs -I"]
+    "flags", ["-E", "-S", "-I", "-BE", "-W ignore -S", "-Es", "--check-hash-based-pycs always -I"]
 )
 def test_a_flag_that_skips_derail_on_the_command_is_a_mistake_in_the_test(
     project: Project, flags: str

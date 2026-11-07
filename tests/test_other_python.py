@@ -11,6 +11,7 @@ import jsonschema
 import pytest
 
 from conftest import Project, Result
+from derail_sdk import python_args
 from derail_sdk.control import ControlServer
 from derail_sdk.records import RecordStore
 from derail_sdk.run_command import BOOT
@@ -484,3 +485,67 @@ def test_joining_prints_nothing_to_a_stdio_servers_stream(tmp_path: Path) -> Non
         server.stop()
     assert done.stdout == b""
     assert done.stderr.strip() == b"DerailRefused"
+
+
+# Each form is one real Python accepts, so the readers are held to what Python does.
+SKIP_FORMS = [
+    "",
+    "-u",
+    "-E",
+    "-S",
+    "-I",
+    "-Es",
+    "-uE",
+    "-BS",
+    "-W ignore -S",
+    "-Wignore -E",
+    "-WW -S",
+    "-X dev -E",
+    "-Xdev -S",
+    "-XdevX -E",
+    "-X utf8",
+    "--check-hash-based-pycs always",
+    "--check-hash-based-pycs always -E",
+    "--check-hash-based-pycs never -S",
+]
+
+
+@pytest.mark.design("config.flag_skips_the_gates")
+@pytest.mark.parametrize("form", SKIP_FORMS)
+def test_reading_the_flags_agrees_with_python(tmp_path: Path, form: str) -> None:
+    (tmp_path / "probe.py").write_text(
+        "import sys; f = sys.flags; print(f.ignore_environment + f.isolated + f.no_site)"
+    )
+    command = [sys.executable, *form.split(), "probe.py"]
+    done = subprocess.run(command, cwd=tmp_path, env={}, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert bool(int(done.stdout)) == bool(python_args.skipping([*form.split(), "probe.py"]))
+
+
+@pytest.mark.design("script.tool_in_the_program_stops")
+@pytest.mark.parametrize(
+    "form",
+    [
+        "-m probe",
+        "-mprobe",
+        "-um probe",
+        "-umprobe",
+        "-B -m probe",
+        "-W ignore -m probe",
+        "-Wignore -m probe",
+        "-X dev -m probe",
+        "-XdevX -m probe",
+        "--check-hash-based-pycs always -m probe",
+    ],
+)
+def test_finding_the_module_agrees_with_python(tmp_path: Path, form: str) -> None:
+    (tmp_path / "probe.py").write_text(
+        "import importlib.util as util, sys\n"
+        "spec = util.spec_from_file_location('boot', sys.argv[1])\n"
+        "boot = util.module_from_spec(spec); spec.loader.exec_module(boot)\n"
+        "print(boot._target())\n"
+    )
+    command = [sys.executable, *form.split(), str(BOOT / "sitecustomize.py")]
+    done = subprocess.run(command, cwd=tmp_path, env={}, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "probe"
