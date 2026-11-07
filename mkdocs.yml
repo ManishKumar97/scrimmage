@@ -67,6 +67,15 @@ nav:
   - Get started:
       - Install: install.md
       - Quickstart: quickstart.md
+  - Examples:
+      - examples/index.md
+      - A function agent: examples/function-agent.md
+      - A script and its child process: examples/script-agent.md
+      - LangGraph tools: examples/langgraph.md
+      - MCP tools: examples/mcp.md
+      - A web request inside a tool: examples/web-request.md
+      - Judging an answer: examples/judging.md
+      - A fault on one model: examples/one-model.md
   - Guides:
       - Failing the model: model-faults.md
       - Agents on a framework: frameworks.md
