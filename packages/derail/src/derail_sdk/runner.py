@@ -69,6 +69,7 @@ CHOSEN_CALLS = ("unlisted", "web_write")
 # A baseline whose every run ended so cannot be compared with, so its faults are skipped.
 FAILED = ("crashed", "timed out", "refused call", "budget reached")
 TABLE_WIDTH = 120
+SHOWN_RUNS = 3  # how many runs a line names for one broken rule
 HEAD = [
     "test",
     "row",
@@ -295,8 +296,7 @@ class Runner:
             tool_calls=sum(1 for line in lines if line.get("kind") in ("tool", "mcp")),
         )
         # Here the raw answer is still at hand. The record only ever gets the redacted one.
-        chose = row.fault is not None and outcome == "refused call"
-        chose = chose and state.refusals[:1] and state.refusals[0] in CHOSEN_CALLS
+        chose = row.fault is not None and (state.refusals or [""])[0] in CHOSEN_CALLS
         refused = [str(line["call"]) for line in lines if line.get("action") == "refused"]
         result.judgement = judge.judge_run(
             outcome,
@@ -304,7 +304,7 @@ class Runner:
             result.exercised,
             row.rules,
             bool(mistakes),
-            refused[0] if chose else None,
+            refused[0] if chose and outcome == "refused call" else None,
         )
         summary: dict[str, object] = {
             "answer": None if answer is None else redact(answer),
@@ -669,9 +669,21 @@ def cut(text: str, width: int) -> str:
     return text if len(text) <= width else f"{text[: width - 3]}..."
 
 
-def rule_lines(report: RowReport) -> list[str]:
-    """Which rules broke, and in how many runs. Empty when no run broke one."""
-    tally = Counter(b.text for r in report.runs for b in r.judgement.broken)
+def where_to_read(broken: judge.Broken, runs: list[RunResult], folder: Path) -> str:
+    """Up to three runs that broke a rule: the log if the run ended badly, or else its name,
+    which is also its record's name in the folder the first line gives."""
+    logs = broken.kind in judge.ENDED_BADLY
+    names = [str(folder / f"{r.run}.log") if logs else r.run for r in runs[:SHOWN_RUNS]]
+    more = f" and {len(runs) - SHOWN_RUNS} more" if len(runs) > SHOWN_RUNS else ""
+    return f"{', '.join(names)}{more}"
+
+
+def rule_lines(report: RowReport, folder: Path) -> list[str]:
+    """Which rules broke, in which runs. Empty when no run broke one."""
+    tally: dict[judge.Broken, list[RunResult]] = {}
+    for r in report.runs:
+        for broken in r.judgement.broken:
+            tally.setdefault(broken, []).append(r)
     if not tally:
         return []
     row, rate = report.result, report.row.rules.pass_rate
@@ -684,7 +696,14 @@ def rule_lines(report: RowReport) -> list[str]:
             f"fail: {report.where}: under this fault the agent called {call}, which the test "
             "does not allow. Mocking it would hide this"
         )
-    return [head, *(f"  {plural(n, 'run')}: {rule}" for rule, n in tally.most_common())]
+    most = sorted(tally.items(), key=lambda item: -len(item[1]))
+    return [
+        head,
+        *(
+            f"  {plural(len(runs), 'run')}: {rule.text}: {where_to_read(rule, runs, folder)}"
+            for rule, runs in most
+        ),
+    ]
 
 
 def counts(ended: Counter[str]) -> str:
@@ -715,7 +734,7 @@ def report(
     for entry in reports:
         row, mine, where = entry.row, entry.runs, entry.where
         verdict = entry.result
-        failures += rule_lines(entry)
+        failures += rule_lines(entry, folder)
         if verdict.verdict == judge.NO_RESULT and not entry.refused:
             mistakes.append(
                 f"{where}: no result: {verdict.judged} of {config.agent.runs} runs were judged, "

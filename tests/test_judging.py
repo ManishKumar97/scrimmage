@@ -479,6 +479,24 @@ def test_pass_rate_passes_four_of_five_and_fails_three_of_five(
     assert f"{word}: order baseline: {good}/5 passed, pass_rate is 0.8" in result.out
 
 
+@pytest.mark.design("report.names_the_runs")
+def test_a_failed_rule_names_its_runs_and_stops_at_three(project: Project) -> None:
+    result = scripted(project, [{"answer": BAD}] * 4, "", "runs = 4")
+    assert result.code == 1, result.out
+    names = {path.stem for path in (project.root / "derail-runs").glob("*/*.jsonl")}
+    line = next(x for x in result.out.splitlines() if x.startswith("  4 runs: expect"))
+    shown = re.findall(r"run-[0-9a-f]+", line)
+    assert len(shown) == 3 and set(shown) <= names and line.endswith(" and 1 more")
+
+
+@pytest.mark.design("report.log_of_a_crash")
+def test_a_crashed_or_timed_out_run_gives_the_path_of_its_log(project: Project) -> None:
+    result = scripted(project, [{"answer": GOOD, "crash": True}], "", "runs = 1")
+    line = next(x for x in result.out.splitlines() if x.startswith("  1 run: crashed"))
+    log = Path(line.split(": ")[-1])
+    assert log.suffix == ".log" and "the bot crashed" in log.read_text()
+
+
 @pytest.mark.design("judge.default_all_runs")
 def test_by_default_one_failed_run_fails_the_row(project: Project) -> None:
     result = scripted(project, [{"answer": GOOD}] * 4 + [{"answer": BAD}], "", "runs = 5")

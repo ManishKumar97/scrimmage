@@ -124,7 +124,7 @@ order-status  baseline  -                       5     -      5     5/5     100% 
 order-status  fault 1   tool:get_order timeout  5     5      5     3/5     60%   23-88%   2.0    0.00055  fail
 range: a 95% Wilson interval, from these runs alone
 fail: order-status fault 1: 3/5 passed, pass_rate is 1
-  2 runs: forbid "October 30" found
+  2 runs: forbid "October 30" found: run-4f2a91c07b3e, run-a81c6d20f4e7
 ```
 
 | Column | Means |
@@ -141,6 +141,8 @@ The table fits in 120 columns. A long test or fault name is cut with `...`, and 
 
 The rate says what happened in these runs. It is not a promise about the next one.
 The range shows how little a few runs can say: 5 of 5 reads 57-100%. The result compares the plain rate with `pass_rate`, not the range.
+
+A line under the table names up to three runs for each rule, so you can open a run's record, `<run>.jsonl`, in the folder on the first line. For a run that crashed or timed out it gives the path of the run's log.
 
 ## Where the result is kept
 
