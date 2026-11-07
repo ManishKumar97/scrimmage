@@ -27,7 +27,7 @@ from typing import TextIO, cast
 from derail_sdk import judge, labels
 from derail_sdk import plan as planner
 from derail_sdk.budget import Ledger
-from derail_sdk.config import QUESTION, Config, Test
+from derail_sdk.config import QUESTION, Config, Fault, Test
 from derail_sdk.control import ControlServer, proc_key
 from derail_sdk.records import RECORD_VERSION, RecordStore
 from derail_sdk.redact import redact
@@ -107,6 +107,7 @@ class RunResult:
     tools_seen: list[str] | None = None  # None: the run did not report them
     near_mocks: set[str] = field(default_factory=set[str])  # real, though the host had mocks
     tool_calls: int = 0
+    models: set[tuple[str, str]] = field(default_factory=set[tuple[str, str]])  # label, name
     judgement: judge.RunJudgement = NOT_JUDGED
 
     @property
@@ -295,6 +296,7 @@ class Runner:
             tools_seen=reported_tools(notices),
             near_mocks=near,
             tool_calls=sum(1 for line in lines if line.get("kind") in ("tool", "mcp")),
+            models={(str(line["call"]), str(line.get("model") or "")) for line in model},
         )
         # Here the raw answer is still at hand. The record only ever gets the redacted one.
         chose = row.fault is not None and (state.refusals or [""])[0] in CHOSEN_CALLS
@@ -633,7 +635,7 @@ def fault_text(row: planner.Row) -> str:
     if row.fault is None:
         return "-"
     when = "" if row.fault.when == "always" else f" {row.fault.when}"
-    return f"{row.fault.call} {row.fault.do}{when}"
+    return f"{row.fault.target} {row.fault.do}{when}"
 
 
 def row_cells(report: RowReport) -> list[str]:
@@ -689,6 +691,18 @@ def no_result_reason(report: RowReport, runs: int) -> str:
     judged = report.result.judged
     counted = f"{judged} of {runs} runs were judged, and a result needs {report.result.floor}"
     return f"{counted}. Make the fault fire in every run" if unfired else counted
+
+
+def unused_model(fault: Fault, runs: list[RunResult]) -> str:
+    """A name that never fired is most likely misspelled, so say what the calls used."""
+    used = {
+        name
+        for run in runs
+        for label, name in run.models
+        if name and labels.matches(fault.call, label)
+    }
+    told = f"these calls used {', '.join(sorted(used))}" if used else "no such call was made"
+    return f"no call used the model {fault.model!r}; {told}"
 
 
 def where_to_read(broken: judge.Broken, runs: list[RunResult], folder: Path) -> str:
@@ -772,6 +786,8 @@ def report(
                     f"that tool makes this call, {row.fault.call} can never fire; "
                     "mock or fault one level, not both"
                 )
+            if row.fault.model is not None:
+                mistakes.append(f"{where}: {unused_model(row.fault, ran)}")
         notes += [
             f"{where}: {r.run}: {line['message']}"
             for r in mine
