@@ -294,3 +294,29 @@ def test_an_error_in_the_teams_type_is_unsavable_and_one_in_scrimmage_is_scrimma
     monkeypatch.setattr(capture, "differ", capture.text_problem)
     bug = capture.tool_value({"a": 1}, {}, get_dict, same, [])
     assert bug == {"code": "scrimmage_error", "why": "Scrimmage failed while recording it: TypeError"}
+
+
+class BadRepr:
+    def __repr__(self) -> str:
+        raise RuntimeError("no repr")
+
+
+@pytest.mark.design("record.never_fails_the_call")
+@pytest.mark.parametrize("record", [True, False], ids=["recording", "test"])
+@pytest.mark.parametrize(
+    "returns", [{"x": BadRepr()}, BadRepr(), 10**5000], ids=["in-a-dict", "alone", "huge-int"]
+)
+def test_a_value_whose_repr_fails_still_reaches_the_agent(
+    sink: Sink, record: bool, returns: object
+) -> None:
+    run = recording(sink, record=record)
+
+    def lookup(name: str) -> object:
+        return returns
+
+    assert gated(lookup)(name="a") is returns
+    (line,) = sink.calls()
+    assert line["action"] == "real" and run.live == {}
+    assert "BadRepr object at 0x" in line["result"]["preview"] or returns == 10**5000
+    if record:
+        assert line["recorded"]["code"] == "unsavable"

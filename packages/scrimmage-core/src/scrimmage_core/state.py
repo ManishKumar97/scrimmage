@@ -60,11 +60,12 @@ def content(value: object) -> dict[str, object]:
     """Hash, size and preview of a recorded value, with secrets removed first.
 
     The call is only observed, so no value may fail it: one that holds itself, is nested
-    deeper than the stack, or holds a lone surrogate is still recorded, as far as it can be.
+    deeper than the stack, holds a lone surrogate or has a repr that fails is still
+    recorded, as far as it can be.
     """
     try:
-        text = value if isinstance(value, str) else json.dumps(value, default=repr, sort_keys=True)
-    except (ValueError, RecursionError) as exc:  # a value that holds itself, or nests too deep
+        text = value if isinstance(value, str) else json.dumps(value, default=shown, sort_keys=True)
+    except Exception as exc:  # a value that holds itself, nests too deep, or will not sort
         text = f"<a {type(value).__name__} Scrimmage could not write as JSON: {type(exc).__name__}>"
     # A lone surrogate, such as an undecodable byte in a file name, has no UTF-8 form.
     text = redact(text).encode("utf-8", "backslashreplace").decode()
@@ -74,6 +75,14 @@ def content(value: object) -> dict[str, object]:
         "bytes": len(data),
         "preview": text[:PREVIEW],
     }
+
+
+def shown(value: object) -> str:
+    """An item JSON cannot hold, as its repr, or the plain object form if its repr fails."""
+    try:
+        return repr(value)
+    except Exception:
+        return object.__repr__(value)
 
 
 @dataclass
