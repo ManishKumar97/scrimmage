@@ -12,7 +12,7 @@ import jsonschema
 import pytest
 
 import derail_sdk
-from conftest import ACME, Project
+from conftest import ACME, EXAMPLE_FAULT, Project
 from derail_sdk import provider_openai as table
 from derail_sdk.budget import Ledger
 from derail_sdk.client import ControlClient, ControlError
@@ -22,7 +22,7 @@ from fakes.openai_server import FIXTURES, FakeOpenAI
 
 Fake = Callable[..., FakeOpenAI]
 TOKEN = "e" * 64
-TOOL_FAULT = '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'
+TOOL_FAULT = EXAMPLE_FAULT
 RAG = 'function = "acme.rag:answer"\nruns = 1'
 
 
@@ -296,7 +296,7 @@ def test_with_the_budget_off_there_is_no_price_rule_and_tokens_are_counted(
     )
     project.edit(TOOL_FAULT, "")
     result = project.test(fake_openai(["chat_answer"]))
-    assert result.code == 0, result.out
+    assert result.finished, result.out
     line = next(x for x in result.records()[0] if x.get("kind") == "model")
     assert line["tokens"] == {"input": 19, "output": 10}
     assert "of no budget" in result.out

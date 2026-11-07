@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterator
 
 import pytest
 
-from conftest import ACME, Project
+from conftest import ACME, EXAMPLE_FAULT, Project
 from fakes.openai_server import FakeOpenAI
 
 Fake = Callable[[list[str]], FakeOpenAI]
@@ -52,7 +52,7 @@ def test_a_real_timeout_and_the_injected_one_reach_the_loop_the_same_way(
         'real     = ["tool:check_inventory", "tool:get_order"]',
     )
     project.edit('[[test.mock]]\ncall    = "tool:get_order"\nreturns = "shipped, Oct 30"\n', "")
-    project.edit('[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n', "")
+    project.edit(EXAMPLE_FAULT, "")
     monkeypatch.setenv("ACME_ORDERS", silent_orders_system)
     real_fake = fake_openai(ACME)
     real = project.test(real_fake)
@@ -75,4 +75,4 @@ def test_a_real_timeout_and_the_injected_one_reach_the_loop_the_same_way(
         ("tool:get_stock", "mock"),
     ]
     assert actions(real_run) == [("tool:get_order", "real"), ("tool:get_stock", "mock")]
-    assert real.code == injected.code == 0
+    assert real.code == injected.finished

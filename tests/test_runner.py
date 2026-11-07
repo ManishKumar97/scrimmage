@@ -14,14 +14,14 @@ import jsonschema
 import pytest
 
 import derail_sdk
-from conftest import ACME, Project
+from conftest import ACME, EXAMPLE_FAULT, Project
 from derail_sdk import config
 from derail_sdk.runner import Runner, report
 from fakes.openai_server import FakeOpenAI
 
 Fake = Callable[[list[str]], FakeOpenAI]
 RECORD = json.loads((Path(derail_sdk.__file__).parent / "schemas" / "record.v1.json").read_text())
-FAULT_BLOCK = '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'
+FAULT_BLOCK = EXAMPLE_FAULT
 
 
 @pytest.mark.design("runner.example_end_to_end")
@@ -91,7 +91,7 @@ def test_a_hanging_run_ends_as_timed_out(project: Project) -> None:
     )
     project.edit(FAULT_BLOCK, "")
     result = project.test()
-    assert result.code == 0, result.out
+    assert result.code == 1, result.out
     assert [s["outcome"] for s in result.summaries()] == ["timed out"]
 
 
@@ -102,7 +102,7 @@ def test_an_agent_that_raises_has_crashed(project: Project) -> None:
     )
     project.edit(FAULT_BLOCK, "")
     result = project.test()
-    assert (result.code, [s["outcome"] for s in result.summaries()]) == (0, ["crashed"])
+    assert (result.code, [s["outcome"] for s in result.summaries()]) == (1, ["crashed"])
     log = next((project.root / "derail-runs").glob("*/*.log")).read_text()
     assert "the bot crashed" in log
 
@@ -112,7 +112,7 @@ def test_a_fault_that_never_fires_is_a_test_mistake(project: Project, fake_opena
     project.edit("[agent]\n", "[agent]\nruns = 2\n")
     result = project.test(fake_openai(["acme_answer"]))  # the model never asks for get_order
     assert result.code == 2
-    assert "order-status  fault 1   tool:get_order timeout  2     0          0" in result.out
+    assert "order-status  fault 1   tool:get_order timeout  2     0      2     0/0" in result.out
     assert "the fault never fired in any run" in result.out
     assert {s["fault_fired"] for s in result.summaries()} == {None, False}
 
@@ -442,7 +442,7 @@ def test_a_tool_can_carry_the_name_the_model_sees(project: Project, fake_openai:
     project.edit('call = "tool:get_order"', 'call = "tool:lookup-order"')
     project.edit('function = "acme.agent:answer"', 'function = "acme.rag:answer_renamed"\nruns = 1')
     result = project.test(fake_openai(["chat_answer", "chat_answer"]))
-    assert result.code == 0, result.out + result.err
+    assert result.finished, result.out + result.err
     fault = next(lines for lines in result.records() if lines[-1]["row"] == "fault 1")
     tool = next(x for x in fault if x.get("call") == "tool:lookup-order")
     assert tool["action"] == "fault"

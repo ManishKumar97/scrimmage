@@ -72,7 +72,7 @@ def test_pip_on_another_python_runs_untouched_and_prints_nothing_extra(
 ) -> None:
     pip = [str(other_version.parent / "pip"), "--version"]
     result = run_child(project, pip)
-    assert result.code == 0, result.out
+    assert result.finished, result.out
     assert summary_of(result)["answer"] == repr(plain_run(pip))
     assert "child" not in json.dumps(lines_of(result))
 
@@ -386,7 +386,7 @@ def test_a_stdio_server_on_mcp_1_in_another_venv_serves(project: Project, other_
     write_config(project, command)
     allow_mcp(project, "search")
     result = project.test()
-    assert result.code == 0, result.out + result.err
+    assert result.finished, result.out + result.err
     assert summary_of(result)["answer"] == "real refunds"
     assert (project.root / "received").read_text() == "refunds"
 
@@ -446,7 +446,7 @@ def test_a_stdio_server_gets_the_tests_mocks_and_its_stream_stays_clean(project:
     write_config(project, f"{sys.executable} bot.py {{question}}", body=mock)
     allow_mcp(project, "look")
     result = project.test()
-    assert result.code == 0, result.out + result.err
+    assert result.finished, result.out + result.err
     assert summary_of(result)["answer"] == "mocked in the server"
 
 

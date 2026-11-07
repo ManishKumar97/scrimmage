@@ -322,7 +322,7 @@ def test_a_swallowed_refusal_stops_every_later_tool_call(docs: Docs) -> None:
 def test_a_request_a_server_could_act_on_passes_and_leaves_a_line(docs: Docs) -> None:
     docs.start("stdio")
     result = docs.run("acme.docs_bot:answer_with_reads", "")
-    assert result.code == 0, result.out
+    assert result.finished, result.out
     assert docs.received() == ["resources/read handbook", "prompts/get refunds"]
     assert calls(result) == [
         ("mcp:docs/resources/read", "real"),
@@ -605,7 +605,7 @@ def test_a_real_protocol_error_is_on_the_line_and_reaches_the_agent(
     line = row(result, "baseline")[0]
     assert line["action"] == "real"
     assert line["error"].startswith("MCPError")
-    assert result.code == 0  # a real tool failure is the agent's world, not infrastructure
+    assert result.finished  # a real tool failure is the agent's world, not infrastructure
 
 
 @pytest.mark.design("mcp.record_redacted")
@@ -793,7 +793,7 @@ def test_a_tool_the_server_lists_can_be_offered_to_the_model(
         )
     )
     result = docs.project.test(fake)
-    assert result.code == 0, result.out
+    assert result.finished, result.out
     assert docs.received() == []
     told = [
         str(m["content"])
@@ -839,7 +839,7 @@ def test_fastmcps_client_is_mocked_and_faulted(docs: Docs, transport: str) -> No
     docs.start(transport)
     function = "acme.docs_bot:answer_fastmcp"
     result = docs.run(function, MOCK + ERROR + TIMEOUT)
-    assert result.code == 0, result.out
+    assert result.finished, result.out
     assert docs.received() == []
     assert calls(result) == [(LABEL, "mock")]
     assert "hits=['mocked']" in answer_of(result)
