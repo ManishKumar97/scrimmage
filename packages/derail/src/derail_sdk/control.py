@@ -5,6 +5,7 @@ listens on the local machine only. Every request must be signed, and every reply
 """
 
 import base64
+import dataclasses
 import hashlib
 import json
 import re
@@ -18,7 +19,7 @@ from socket import socket
 from typing import Any
 
 from derail_sdk import protocol
-from derail_sdk.budget import Ledger
+from derail_sdk.budget import Ledger, Shortfall
 from derail_sdk.plan import items, number, obj
 from derail_sdk.records import RecordStore
 
@@ -28,6 +29,7 @@ MAX_BLOB_BODY = 14 * 1024 * 1024  # one 10 MB side-folder item, base64 encoded
 BLOB_PATH = "/v1/blobs"
 SHA256 = re.compile(r"[0-9a-f]{64}")
 READ_TIMEOUT_S = 10.0  # a connection that sends nothing frees its slot
+MAX_WAIT_S = 5.0  # the longest one reservation request waits, under the client's 10 s timeout
 PLAN_PATH = re.compile(r"/v1/plans/([A-Za-z0-9_-]{1,64})")
 
 
@@ -121,13 +123,17 @@ class ControlServer:
         try:
             request = obj(json.loads(body))
             run, usd = str(request["run"]), number(request, "usd")
+            wait = number(request, "wait_s") if "wait_s" in request else 0.0
         except (ValueError, KeyError):
             return 400, {"error": "bad_request"}
-        if usd < 0 or self._open(run) is None:
-            return 409 if usd >= 0 else 400, {"error": "run_closed" if usd >= 0 else "bad_request"}
-        reservation = self.ledger.reserve(usd)
-        if reservation is None:
-            return 200, {"ok": False}
+        if not (usd >= 0 and wait >= 0):  # NaN too
+            return 400, {"error": "bad_request"}
+        if self._open(run) is None:
+            return 409, {"error": "run_closed"}
+        # A wait holds this connection, so it is short; the SDK asks again until its own bound.
+        reservation = self.ledger.reserve(usd, min(wait, MAX_WAIT_S))
+        if isinstance(reservation, Shortfall):
+            return 200, {"ok": False, **dataclasses.asdict(reservation)}
         return 200, {"ok": True, "reservation": reservation}
 
     def _settle(self, body: bytes) -> tuple[int, dict[str, object]]:

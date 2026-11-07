@@ -199,6 +199,7 @@
             "unlisted",
             "poisoned",
             "budget",
+            "budget_held",
             "no_price",
             "hosted",
             "unknown_tool_type",
@@ -279,6 +280,39 @@
         "cost_estimated": {
           "type": "boolean"
         },
+        "budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "usd",
+            "spent",
+            "held",
+            "limit",
+            "waited_s"
+          ],
+          "properties": {
+            "usd": {
+              "type": "number",
+              "minimum": 0
+            },
+            "spent": {
+              "type": "number",
+              "minimum": 0
+            },
+            "held": {
+              "type": "number",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "waited_s": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        },
         "reply_incomplete": {
           "const": true
         },
@@ -341,6 +375,7 @@
                 "timed out",
                 "refused call",
                 "budget reached",
+                "budget held",
                 "infrastructure error",
                 "stopped"
               ]

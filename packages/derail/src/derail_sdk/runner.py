@@ -44,12 +44,14 @@ OUTCOMES = (
     "timed out",
     "refused call",
     "budget reached",
+    "budget held",
     "infrastructure error",
     "stopped",
 )
 # A refusal for one of these reasons stops the whole test, not only its row.
 STOP_TEST = (
     "budget",
+    "budget_held",
     "no_price",
     "unknown_tool_type",
     "unseen_tool",
@@ -68,7 +70,7 @@ NOT_A_FAILURE = (
 CHOSEN_CALLS = ("unlisted", "web_write", "blind_child")
 PROCESS_LABEL = "process:python"
 # A baseline whose every run ended so cannot be compared with, so its faults are skipped.
-FAILED = ("crashed", "timed out", "refused call", "budget reached")
+FAILED = ("crashed", "timed out", "refused call", "budget reached", "budget held")
 TABLE_WIDTH = 120
 SHOWN_RUNS = 3  # how many runs a line names for one broken rule
 SHOWN_NAMES = 5  # how many model names a line lists
@@ -109,6 +111,7 @@ class RunResult:
     near_mocks: set[str] = field(default_factory=set[str])  # real, though the host had mocks
     tool_calls: int = 0
     models: set[tuple[str, str]] = field(default_factory=set[tuple[str, str]])  # label, name
+    budget: dict[str, object] | None = None  # the numbers of a refusal for the budget
     judgement: judge.RunJudgement = NOT_JUDGED
 
     @property
@@ -265,6 +268,8 @@ class Runner:
             outcome = "infrastructure error"
         elif state.refusals[:1] == ["budget"]:
             outcome = "budget reached"
+        elif state.refusals[:1] == ["budget_held"]:
+            outcome = "budget held"
         elif state.refused or kept_out:
             outcome = "refused call"
         elif timed_out:
@@ -298,6 +303,9 @@ class Runner:
             near_mocks=near,
             tool_calls=sum(1 for line in lines if line.get("kind") in ("tool", "mcp")),
             models={(str(line["call"]), str(line.get("model") or "")) for line in model},
+            budget=next(
+                (cast(dict[str, object], x["budget"]) for x in lines if "budget" in x), None
+            ),
         )
         # Here the raw answer is still at hand. The record only ever gets the redacted one.
         chose = row.fault is not None and (state.refusals or [""])[0] in CHOSEN_CALLS
@@ -841,11 +849,14 @@ def report(
             f"{name}: baseline failed: every baseline run crashed, timed out, was refused or "
             "reached the budget, so its fault rows did not run"
         )
-    if stopped_by == "budget":
-        mistakes.append(
-            f"the budget of ${config.agent.max_cost_usd:g} was reached, so the test stopped; "
-            "rows without runs have no result"
+    if stopped_by in ("budget", "budget_held"):
+        numbers = next((r.budget for r in results if r.budget is not None), None)
+        line = (
+            budget_line(stopped_by, numbers, config.agent.reserve_output_tokens)
+            if numbers is not None
+            else f"the budget of ${config.agent.max_cost_usd:g} stopped the test"
         )
+        mistakes.append(f"{line}; rows without runs have no result")
     budget_on = config.agent.max_cost_usd is not None
     for test in config.tests:
         baseline = [r for r in results if r.row.test == test and r.row.fault is None]
@@ -933,6 +944,23 @@ def report(
     if mistakes:
         return MISTAKE
     return ROW_FAILED if any(r.result.verdict == judge.FAIL for r in reports) else OK
+
+
+def budget_line(reason: str, numbers: dict[str, object], reserve_tokens: int) -> str:
+    """Why the budget stopped the test. "Reached" only when money spent reached the limit:
+    a call can be refused while most of the budget is only held by calls in flight."""
+    usd, spent, held, limit, waited = (
+        float(str(numbers.get(key, 0))) for key in ("usd", "spent", "held", "limit", "waited_s")
+    )
+    if spent >= limit:
+        return f"the budget of ${limit:g} was reached: ${spent:.4f} was spent, so the test stopped"
+    wait = f", after a wait of {waited:.0f}s for calls in flight" if reason == "budget_held" else ""
+    return (
+        f"a model call could not be reserved: it could cost up to ${usd:.4f}, ${spent:.4f} was "
+        f"spent and ${held:.4f} was held by calls in flight, of a budget of ${limit:g}{wait}, so "
+        f"the test stopped; set max_tokens on the call or lower [agent] reserve_output_tokens "
+        f"({reserve_tokens}) to hold less, or raise [agent] max_cost_usd"
+    )
 
 
 def plural(n: int, word: str) -> str:

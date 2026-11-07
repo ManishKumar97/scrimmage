@@ -14,7 +14,7 @@ import pytest
 import derail_sdk
 from conftest import ACME, EXAMPLE_FAULT, Project
 from derail_sdk import provider_openai as table
-from derail_sdk.budget import Ledger
+from derail_sdk.budget import Ledger, Shortfall
 from derail_sdk.client import ControlClient, ControlError
 from derail_sdk.control import ControlServer
 from derail_sdk.records import RecordStore
@@ -34,8 +34,10 @@ def rag(project: Project, extra: str) -> None:
 @pytest.mark.design("budget.reservations_race")
 def test_four_calls_at_79_of_80_cents_reserve_one_and_refuse_three() -> None:
     ledger = Ledger(0.80)
-    ledger.settle(ledger.reserve(0.79) or 0, 0.79)
-    results: list[int | None] = []
+    first = ledger.reserve(0.79)
+    assert isinstance(first, int)
+    ledger.settle(first, 0.79)
+    results: list[int | Shortfall] = []
     start = threading.Barrier(4)
 
     def call() -> None:
@@ -47,21 +49,21 @@ def test_four_calls_at_79_of_80_cents_reserve_one_and_refuse_three() -> None:
         thread.start()
     for thread in threads:
         thread.join()
-    assert sum(r is not None for r in results) == 1
+    assert sum(isinstance(r, int) for r in results) == 1
 
 
 @pytest.mark.design("budget.real_cost_replaces_reservation")
 def test_the_real_cost_replaces_the_reservation() -> None:
     ledger = Ledger(1.00)
     held = ledger.reserve(0.60)
-    assert held is not None and ledger.reserve(0.60) is None
+    assert isinstance(held, int) and isinstance(ledger.reserve(0.60), Shortfall)
     ledger.settle(held, 0.10)
     assert (round(ledger.spent, 2), ledger.reserved) == (0.10, 0.0)
-    assert ledger.reserve(0.60) is not None
+    assert isinstance(ledger.reserve(0.60), int)
 
 
 def test_no_limit_means_every_reservation_passes() -> None:
-    assert Ledger(None).reserve(1_000_000.0) is not None
+    assert isinstance(Ledger(None).reserve(1_000_000.0), int)
 
 
 @pytest.fixture
@@ -81,7 +83,7 @@ def test_the_ledger_works_through_the_signed_protocol(control: ControlServer) ->
     payload = {"run": "run-1", "reservation": held, "usd": 0.79}
     assert client.request("POST", "/v1/budget/settle", payload)[0] == 200
     outcomes = [client.reserve("run-1", 0.01) for _ in range(2)]
-    assert outcomes[0] is not None and outcomes[1] is None
+    assert isinstance(outcomes[0], int) and isinstance(outcomes[1], Shortfall)
     assert control.ledger.spent == pytest.approx(0.79)
 
 
@@ -237,14 +239,18 @@ def test_a_budget_that_cannot_cover_a_call_stops_the_test(
     assert result.code == 2, result.out
     assert fake.paths == ["/v1/embeddings"]  # the chat call, which cannot fit, never went
     assert {s["outcome"] for s in result.summaries()} == {"budget reached"}
-    assert "the budget of $1e-05 was reached" in result.out
+    assert "a model call could not be reserved: it could cost up to" in result.out
+    assert (
+        "of a budget of $1e-05, so the test stopped" in result.out
+        and "was reached" not in result.out
+    )
 
 
 @pytest.mark.design("budget.stop_with_parallel_runs")
 @pytest.mark.parametrize(
     ("function", "extra", "fixtures", "message"),
     [
-        ("acme.rag:answer", "max_cost_usd = 0.00001", {"embedding": "embedding"}, "was reached"),
+        ("acme.rag:answer", "max_cost_usd = 0.00001", {"embedding": "embedding"}, "reserved"),
         ("acme.rag:answer_priceless", "", {}, "[agent.prices]"),
         ("acme.rag:answer_odd_tool", "", {}, "a tool of type teleport"),
         ("acme.rag:answer_unseen", "", {}, "lookup_order"),

@@ -78,8 +78,10 @@ A row reads `pass`, `fail` or `no result`. See [Judging an answer](judging.md).
 
 Every call is written to the run's record, a JSON Lines file in `derail-runs/`.
 Each line says which call it was, which process made it, what Derail did (real, mock, fault or refused), a hash, size and short preview of the arguments and result, and any error.
+A method's `self` or `cls` is never among the arguments.
 A call still going on when the run was stopped has a line whose error is `DerailStopped`.
-A model call's line also holds the provider, the model, the status, the retry number, the token counts and the cost; its full request and reply are kept once in a `blobs/` folder next to the record, named by their hash.
+A model call's line also holds the provider, the model, the status, the retry number, the token counts with the cached input tokens, and the cost; its full request and reply are kept once in a `blobs/` folder next to the record, named by their hash.
+A call refused for the budget also holds `budget`: what it could cost, what was spent and held, the limit, and how long it waited.
 Each process that joined a run has one line saying what it is: its interpreter, its command line and its parent's process id.
 The last line is the run's summary: the answer, how the run ended, whether its fault fired, what the run cost, and how it was judged.
 
@@ -89,7 +91,8 @@ The last line is the run's summary: the answer, how the run ended, whether its f
 | crashed | the agent raised an error or exited with an error, or a script ended with no answer |
 | timed out | the run passed `run_timeout` and was stopped |
 | refused call | the agent or one of its child processes made a call the test does not allow, or a child on another Python imported a tool under `tools` |
-| budget reached | the budget could not cover a model call, so the test stopped |
+| budget reached | money spent could not cover a model call, so the test stopped |
+| budget held | a model call waited for calls in flight to free the budget and still could not fit, so the test stopped |
 | infrastructure error | the record is incomplete, the agent's program or a child never got its plan, no Python claimed the run, or a model call failed by itself with nobody injecting it |
 | stopped | another run stopped the whole test while this one was going, so it says nothing about this run |
 

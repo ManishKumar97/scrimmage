@@ -19,6 +19,7 @@ import http
 import inspect
 import json
 import threading
+import time
 import zlib
 from collections.abc import Callable, Iterator
 from contextvars import ContextVar
@@ -27,10 +28,12 @@ from typing import Any, NoReturn, Protocol
 
 from derail_sdk import hooks
 from derail_sdk import provider_openai as openai_table
+from derail_sdk.budget import Shortfall
 from derail_sdk.client import ControlError
 from derail_sdk.decide import READ_METHODS, Call, Decision, names
 from derail_sdk.errors import DerailRefused
 from derail_sdk.labels import shown_name
+from derail_sdk.plan import Plan
 from derail_sdk.redact import redact
 from derail_sdk.state import BLOB_CAP, BlobSink, RunState, Step, blob, current, error_text
 
@@ -39,6 +42,8 @@ TESTED = {"httpx": ((0, 28), (0, 28)), "httpx2": ((2, 16), (2, 16))}
 GATED = "__derail_gate__"
 CHAR_PER_TOKEN = 4  # the rough size of a token, for estimates only
 PRICE_KEY_CAP = 300  # a longer name is not shown whole as a price key to paste
+BUDGET_WAIT_S = 30.0  # the longest a call waits for calls in flight to free the budget
+WAIT_STEP_S = 2.0  # one request of that wait; a cancel is seen between them
 # A refusal the team must act on: the message reaches the run table.
 MISTAKE_REASONS = (
     "no_price",
@@ -63,7 +68,7 @@ MCP_TRANSPORT: ContextVar[tuple[object, ...] | None] = ContextVar(
 
 
 class Reserver(Protocol):
-    def reserve(self, run: str, usd: float) -> int | None: ...
+    def reserve(self, run: str, usd: float, wait_s: float) -> int | Shortfall: ...
 
 
 class Context:
@@ -489,8 +494,24 @@ def no_price(model: str) -> str:
     )
 
 
-def reserve(ctx: Context, step: Step, request: Any, extra: dict[str, object]) -> int | None:
-    """Reserve what this model call could cost, before it is sent."""
+def budget_wait(plan: Plan) -> float:
+    """How long a call waits for calls in flight to free the budget. Half the run's time
+    limit leaves the call time to run, and a deadlock ends in a refusal, not a time-out."""
+    return min(BUDGET_WAIT_S, plan.time_limit_s / 2)
+
+
+def reserve(
+    ctx: Context,
+    step: Step,
+    request: Any,
+    extra: dict[str, object],
+    cancelled: Callable[[], bool] = lambda: False,
+) -> int | None:
+    """Reserve what this model call could cost, before it is sent.
+
+    When only calls in flight hold the room, wait for them in short steps, so a cancel
+    is seen between steps. None with a budget: the caller was cancelled meanwhile.
+    """
     plan = ctx.run.plan
     if step.call.kind != "model" or plan.budget_usd is None:
         return None
@@ -505,19 +526,47 @@ def reserve(ctx: Context, step: Step, request: Any, extra: dict[str, object]) ->
     fields = openai_table.request_fields(body) if body else None
     output = openai_table.max_output(fields or {}) or plan.reserve_output_tokens
     usd = openai_table.cost(len(body) // CHAR_PER_TOKEN, output, rates)
-    try:
-        reservation = ctx.client.reserve(plan.run, usd)
-    except ControlError as exc:
-        ctx.run.refuse(step, "control_unreachable")
-        refuse(ctx.run, step, f"the budget could not be checked, so the call is refused: {exc}")
-    if reservation is None:
-        ctx.run.refuse(step, "budget")
-        refuse(
-            ctx.run,
-            step,
-            f"raise [agent] max_cost_usd above ${plan.budget_usd:g} if this is expected",
-        )
-    return reservation
+    started = time.monotonic()
+    deadline = started + budget_wait(plan)
+    while True:
+        left = max(0.0, deadline - time.monotonic())
+        try:
+            answer = ctx.client.reserve(plan.run, usd, min(left, WAIT_STEP_S))
+        except ControlError as exc:
+            ctx.run.refuse(step, "control_unreachable")
+            refuse(ctx.run, step, f"the budget could not be checked, so the call is refused: {exc}")
+        if not isinstance(answer, Shortfall):
+            return answer
+        if answer.why != "held" or left <= 0 or time.monotonic() >= deadline:
+            break
+        if cancelled():
+            return None
+    waited = time.monotonic() - started if answer.why == "held" else 0.0
+    extra["budget"] = {
+        "usd": round(answer.usd, 8),
+        "spent": round(answer.spent, 8),
+        "held": round(answer.held, 8),
+        "limit": answer.limit,
+        "waited_s": round(waited, 1),
+    }
+    reason = "budget" if answer.why == "spent" else "budget_held"
+    ctx.run.refuse(step, reason)
+    refuse(ctx.run, step, shortfall_text(answer, waited, plan.reserve_output_tokens))
+
+
+def shortfall_text(short: Shortfall, waited: float, reserve_tokens: int) -> str:
+    """What the call could cost, what is spent and held, and how to hold less."""
+    text = (
+        f"it could cost up to ${short.usd:.4f}; ${short.spent:.4f} is spent and "
+        f"${short.held:.4f} is held by calls in flight, of a budget of ${short.limit:g}"
+    )
+    if short.why == "held":
+        text += f"; Derail waited {waited:.0f}s for calls in flight to finish"
+    return (
+        f"{text}. A call without max_tokens holds reserve_output_tokens ({reserve_tokens}) at "
+        "the output price: set max_tokens on the call or lower [agent] reserve_output_tokens "
+        "to hold less, lower [agent] parallel, or raise [agent] max_cost_usd if this is expected"
+    )
 
 
 async def reserve_off_the_loop(
@@ -540,7 +589,7 @@ async def reserve_off_the_loop(
             if cancelled:
                 return None
             started.append(True)
-        reservation = reserve(ctx, step, request, extra)
+        reservation = reserve(ctx, step, request, extra, lambda: bool(cancelled))
         with lock:
             held.append(reservation)
             abandon = bool(cancelled)

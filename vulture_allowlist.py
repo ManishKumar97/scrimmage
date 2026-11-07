@@ -47,6 +47,8 @@ _.pytest_sessionfinish  # tests/conftest.py: pytest calls hooks by name
 _.exitstatus  # tests/conftest.py: pytest reads it to set the exit code
 _.answer_streamed  # tests/example/acme/rag.py: named by import path in a test's derail.toml
 _.answer_priceless  # tests/example/acme/rag.py: named by import path in a test's derail.toml
+_.answer_streamed_slowly  # tests/example/acme/rag.py: named by import path in a test's derail.toml
+_.answer_holding_a_stream  # tests/example/acme/rag.py: named by import path in a test's derail.toml
 _.answer_web_after_close  # tests/example/acme/docs_bot.py: a test's derail.toml names it
 _.answer_unknown_request  # tests/example/acme/docs_bot.py: a test's derail.toml names it
 _.answer_with_reads  # tests/example/acme/docs_bot.py: a test's derail.toml names it

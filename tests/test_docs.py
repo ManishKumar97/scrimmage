@@ -147,3 +147,16 @@ def test_tools_that_are_methods_and_their_limits_are_documented() -> None:
     assert "never holds `self` or `cls`" in text
     assert "**Methods stored as the class is made.**" in page("limits.md")
     assert "A method is gated on its class" in page("how-it-works.md")
+
+
+@pytest.mark.design("docs.budget_wait")
+def test_the_wait_for_calls_in_flight_and_its_report_are_documented() -> None:
+    guide = page("model-faults.md")
+    assert "### When calls in flight hold the budget" in guide
+    assert "A call waits at most 30 seconds, or half of `run_timeout`" in guide
+    for line in ("was reached: $0.1003 was spent", "a model call could not be reserved"):
+        assert line in guide, line
+    assert "after a wait of 30s for calls in flight" in guide
+    assert "#when-calls-in-flight-hold-the-budget" in page("configuration.md")
+    assert "**A hold that cannot end while a call waits.**" in page("limits.md")
+    assert "| budget held | left out |" in page("judging.md")

@@ -10,6 +10,7 @@ import signal
 import threading
 import time
 from collections.abc import Callable
+from typing import Any
 
 import openai
 
@@ -43,6 +44,25 @@ def answer_streamed(question: str) -> str:
         return "".join(chunk.choices[0].delta.content or "" for chunk in stream if chunk.choices)
     except openai.APIError as exc:
         return f"error: {type(exc).__name__}"
+
+
+def answer_streamed_slowly(question: str) -> str:
+    """Reads its stream after a pause, so its hold on the budget overlaps other runs'."""
+    stream = openai.OpenAI(max_retries=0).chat.completions.create(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": question}], stream=True
+    )
+    time.sleep(1.5)
+    return "".join(chunk.choices[0].delta.content or "" for chunk in stream if chunk.choices)
+
+
+def answer_holding_a_stream(question: str) -> str:
+    """Keeps a stream open while it makes a second call, which then waits on its own hold."""
+    client = openai.OpenAI(max_retries=0)
+    messages: list[Any] = [{"role": "user", "content": question}]
+    stream = client.chat.completions.create(model="gpt-4o-mini", messages=messages, stream=True)
+    reply = client.chat.completions.create(model="gpt-4o-mini", messages=messages)
+    stream.close()
+    return reply.choices[0].message.content or ""
 
 
 def answer_priceless(question: str) -> str:

@@ -20,7 +20,8 @@ from collections.abc import Callable
 from urllib.parse import urlsplit
 
 from derail_sdk import protocol
-from derail_sdk.plan import obj
+from derail_sdk.budget import Shortfall
+from derail_sdk.plan import number, obj
 
 QUEUE_SIZE = 10_000
 BATCH_LINES = 500
@@ -88,14 +89,22 @@ class ControlClient:
             raise ControlError(f"no plan for {run}: {reply.get('error')}")
         return reply.get("plan")
 
-    def reserve(self, run: str, usd: float) -> int | None:
-        """Reserve what a model call could cost; None when the budget cannot cover it."""
-        status, reply = self.request("POST", "/v1/budget/reserve", {"run": run, "usd": usd})
+    def reserve(self, run: str, usd: float, wait_s: float = 0.0) -> int | Shortfall:
+        """Reserve what a model call could cost, or say why the budget cannot cover it.
+
+        The server may wait up to wait_s, or less, for calls in flight to free room.
+        """
+        payload = {"run": run, "usd": usd, "wait_s": wait_s}
+        status, reply = self.request("POST", "/v1/budget/reserve", payload)
         if status != 200:
             raise ControlError(f"the budget could not be checked: {reply.get('error')}")
-        if reply.get("ok") is not True:
-            return None
-        return int(str(reply["reservation"]))
+        try:
+            if reply.get("ok") is True:
+                return int(str(reply["reservation"]))
+            numbers = [number(reply, key) for key in ("usd", "spent", "held", "limit")]
+            return Shortfall(str(reply["why"]), *numbers)
+        except (ValueError, KeyError) as exc:
+            raise ControlError("the control server's budget reply is not valid") from exc
 
 
 class Sender:

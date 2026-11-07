@@ -19,7 +19,7 @@ import openai
 import pytest
 
 from derail_sdk import http_gate, provider_openai, state
-from derail_sdk.budget import Ledger
+from derail_sdk.budget import Ledger, Shortfall
 from derail_sdk.client import ControlClient
 from derail_sdk.config import Fault, ModelHost
 from derail_sdk.decide import Counters
@@ -57,14 +57,19 @@ class Budget:
         self.ledger = Ledger(limit)
         self.delay = delay
 
-    def reserve(self, run: str, usd: float) -> int | None:
+    def reserve(self, run: str, usd: float, wait_s: float = 0.0) -> int | Shortfall:
         time.sleep(self.delay)
-        return self.ledger.reserve(usd)
+        return self.ledger.reserve(usd, wait_s)
 
 
-def make_plan(faults: tuple[Fault, ...] = (), budget: float | None = None, **kw: Any) -> Plan:
+def make_plan(
+    faults: tuple[Fault, ...] = (),
+    budget: float | None = None,
+    time_limit_s: float = 60.0,
+    **kw: Any,
+) -> Plan:
     return Plan(
-        "run-1", "t", "row", (), faults, (), (), 60.0, budget_usd=budget,
+        "run-1", "t", "row", (), faults, (), (), time_limit_s, budget_usd=budget,
         model_hosts=(ModelHost("gateway.acme.internal", "openai"),), **kw,
     )  # fmt: skip
 
@@ -269,9 +274,9 @@ def test_tasks_cancelled_before_a_thread_took_them_keep_their_lines(gated: None)
     release = threading.Event()
 
     class Held(Budget):
-        def reserve(self, run: str, usd: float) -> int | None:
+        def reserve(self, run: str, usd: float, wait_s: float = 0.0) -> int | Shortfall:
             release.wait(5)
-            return super().reserve(run, usd)
+            return super().reserve(run, usd, wait_s)
 
     sink, _ = install(make_plan(budget=100.0), Held(limit=100.0))
 

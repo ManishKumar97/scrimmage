@@ -164,17 +164,42 @@ max_cost_usd = 0.50
 
 Before each model call, Derail reserves what the call could cost: an estimate of its input at the full input price, plus its `max_tokens` (or `reserve_output_tokens`, 4096 by default) at the output price.
 After the call, the real cost from the reply replaces the reservation.
-The real cost prices the input tokens the provider served from its prompt cache at the cached price, as OpenAI bills them.
 So four calls at once cannot all slip past the limit.
-
-When the budget cannot cover a call, the call is not made, that run ends as "budget reached", and the test stops with exit code 2.
-The table's last line says what the test spent.
+The real cost prices the input tokens the provider served from its prompt cache at the cached price, as OpenAI bills them.
 
 To turn the budget off on purpose:
 
 ```toml
 max_cost_usd = "none"
 ```
+
+### When calls in flight hold the budget
+
+A hold can be much larger than what the call costs.
+On `gpt-4.1`, 4096 output tokens at $8 a million hold about $0.033, so three calls in flight hold all of a $0.10 budget while almost nothing is spent.
+A call that needs room then waits for the others to finish and give back what they did not use:
+
+| Money spent plus this call | Spent, held and this call | What happens |
+|---|---|---|
+| over the limit | any | refused at once: waiting cannot help, as spent money never comes back |
+| within the limit | within the limit | the call goes ahead |
+| within the limit | over the limit | the call waits for calls in flight to finish, then goes ahead |
+
+A call waits at most 30 seconds, or half of `run_timeout` if that is less.
+If it is still held out then, it is refused, that run ends as "budget held", and the test stops with exit code 2.
+That happens when a hold cannot end while the call waits: the agent keeps a stream open, or another thread or task of the same run waits on this call.
+The refusal says what the call could cost, what was spent, what calls in flight held and how long it waited.
+
+When spent money cannot cover a call, the call is not made, that run ends as "budget reached", and the test stops with exit code 2.
+The table's last line says what the test spent, and a `test mistake:` line says why the test stopped:
+
+| What stopped the test | The line |
+|---|---|
+| money spent reached the limit | `the budget of $0.1 was reached: $0.1003 was spent, so the test stopped` |
+| a call could not fit, though spent money had not reached the limit | `a model call could not be reserved: it could cost up to $0.0331, $0.0800 was spent and $0.0000 was held by calls in flight, of a budget of $0.1, so the test stopped; ...` |
+| a call waited for calls in flight and still could not fit | the same, with `after a wait of 30s for calls in flight` |
+
+To hold less, set `max_tokens` on the call, lower `reserve_output_tokens`, or lower `parallel`.
 
 ### Prices
 
