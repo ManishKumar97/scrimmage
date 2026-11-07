@@ -21,7 +21,7 @@ def mentioned(text: str, word: str) -> bool:
 @pytest.mark.design("docs.every_setting")
 def test_every_setting_is_documented() -> None:
     text = page("configuration.md")
-    keys = (config.AGENT_KEYS | config.TEST_KEYS | config.MOCK_KEYS | config.FAULT_KEYS) - {
+    keys = (config.AGENT_KEYS | config.TEST_KEYS | config.MOCK_KEYS | config.MODEL_FAULT_KEYS) - {
         "mock",
         "fault",
     }
@@ -95,3 +95,15 @@ def test_every_page_is_linked_from_the_index_and_every_link_works() -> None:
     for name in pages:
         for target in re.findall(r"\]\(([a-z-]+\.md)\)", page(name)):
             assert (DOCS / target).exists(), f"{name} links to missing {target}"
+
+
+@pytest.mark.design("docs.model_name")
+def test_a_fault_on_one_model_and_its_limits_are_documented() -> None:
+    assert "| `model` | On a model call" in page("configuration.md")
+    guide = page("model-faults.md")
+    for word in ("gpt-4.1", "gpt-4o-mini-2024-07-18", "unreadable_model"):
+        assert word in guide, word
+    limits = page("limits.md")
+    assert "**Two calls to one model.**" in limits
+    assert "**A model name is compared whole.**" in limits
+    assert "`model`" not in page("configuration.md").split("## Coming in later versions")[1]

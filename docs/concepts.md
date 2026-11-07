@@ -27,7 +27,7 @@ This version knows these labels:
 |---|---|
 | `tool:<name>` | your agent's own Python tool, by the name the model sees |
 | `tool:*` | every tool (only under `real`) |
-| `model` | every chat call to a model, on any provider |
+| `model` | every chat call to a model, on any provider. A fault can name one model. See [Failing one model](model-faults.md#failing-one-model) |
 | `model:openai` | chat calls to OpenAI |
 | `model:openai/embeddings`, `model:*/embeddings` | embedding calls |
 | `hosted:mcp/<label>` | a hosted MCP server (only under `real`) |
