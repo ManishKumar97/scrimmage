@@ -1,16 +1,23 @@
-"""The plan and record formats are JSON Schemas, and the design's examples fit them."""
+"""The formats are JSON Schemas: the plan, the record and derail.toml, held to the code."""
 
 import json
+import re
+import tomllib
 from pathlib import Path
+from typing import cast
 
 import jsonschema
 import pytest
 
 import derail_sdk
+from config_cases import AGENT, BAD, GOOD, MINIMAL, TEST, Bad
 from conftest import EXAMPLE
-from derail_sdk import config, plan
+from derail_sdk import cli, config, plan
+from derail_sdk.errors import ConfigError
 
 SCHEMAS = Path(derail_sdk.__file__).parent / "schemas"
+TESTS = Path(__file__).parent
+DOCS = TESTS.parent / "docs"
 
 
 def schema(name: str) -> dict[str, object]:
@@ -119,3 +126,100 @@ def test_a_refusal_for_a_name_that_cannot_be_read_fits_the_schema() -> None:
     line = {**DESIGN_LINE, "action": "refused", "reason": "unreadable_model"}
     line.pop("fault")
     assert list(validator("record").iter_errors(line)) == []
+
+
+CONFIG_TABLES = {
+    "agent": config.AGENT_KEYS,
+    "test": config.TEST_KEYS,
+    "tool_mock": config.MOCK_KEYS,
+    "web_mock": config.WEB_MOCK_KEYS,
+    "mcp_mock": config.MCP_MOCK_KEYS,
+    "tool_fault": config.FAULT_KEYS,
+    "model_fault": config.MODEL_FAULT_KEYS,
+    "web_fault": config.WEB_FAULT_KEYS,
+    "mcp_fault": config.MCP_FAULT_KEYS,
+    "price": config.PRICE_KEYS,
+}
+
+
+def toml_blocks() -> list[tuple[str, str]]:
+    """Every TOML block in the docs, by page."""
+    blocks: list[tuple[str, str]] = []
+    for page in sorted(DOCS.glob("*.md")):
+        found = re.findall(r"```toml\n(.*?)```", page.read_text(), flags=re.S)
+        blocks += [(f"{page.name} {i}", block) for i, block in enumerate(found, 1)]
+    return blocks
+
+
+@pytest.mark.design("schema.config_prints")
+def test_derail_schema_prints_the_packaged_schema(capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["schema"]) == 0
+    out = capsys.readouterr().out
+    assert out == (SCHEMAS / "derail-toml.v1.json").read_text()
+    jsonschema.Draft202012Validator.check_schema(json.loads(out))
+
+
+@pytest.mark.design("schema.config_keys")
+def test_the_schemas_keys_are_the_parsers_keys() -> None:
+    top = schema("derail-toml")
+    defs = cast(dict[str, dict[str, object]], top["$defs"])
+    for name, keys in CONFIG_TABLES.items():
+        table = defs[name]
+        assert set(cast(dict[str, object], table["properties"])) == keys, name
+        assert table["additionalProperties"] is False, name
+    assert set(cast(dict[str, object], top["properties"])) == {"agent", "test"}
+    assert top["additionalProperties"] is False
+
+
+@pytest.mark.design("schema.config_accepts")
+def test_every_file_the_parser_accepts_fits_the_schema(tmp_path: Path) -> None:
+    files = [
+        (str(path.relative_to(TESTS)), path.read_text())
+        for path in sorted(TESTS.rglob("*.toml"))
+        if "fixtures" not in path.parts
+    ]
+    # A docs block is often part of a file: a fault, an [agent] table or a few of its keys.
+    # Each is also tried inside a minimal file, so the part is checked in a whole one.
+    blocks = [
+        (f"{name}: {how}", text)
+        for name, block in toml_blocks()
+        for how, text in (
+            ("alone", block),
+            ("with a test", block + TEST),
+            ("after a test", f"{MINIMAL}\n{block}"),
+            ("in [agent]", block.replace("[agent]\n", AGENT, 1) + TEST),
+            ("under [agent]", AGENT + block + TEST),
+        )
+    ]
+    accepted: list[str] = []
+    for name, text in [*files, *GOOD.items(), *blocks]:
+        path = tmp_path / "derail.toml"
+        path.write_text(text)
+        try:
+            config.load(path)
+        except ConfigError:
+            continue
+        errors = [e.message for e in validator("derail-toml").iter_errors(tomllib.loads(text))]
+        assert not errors, (name, errors)
+        accepted.append(name)
+    assert {"example/derail.toml", *GOOD} <= set(accepted)
+    checked = {name.partition(":")[0] for name in accepted if ".md " in name}
+    # Only model-faults.md 3 is left: two keys of a fault, shown on their own.
+    assert len(checked) == len(toml_blocks()) - 1, sorted(checked)
+
+
+@pytest.mark.design("schema.config_rejects")
+@pytest.mark.parametrize("bad", BAD, ids=[bad.name for bad in BAD])
+def test_a_bad_file_is_rejected_by_the_parser_and_a_bad_shape_by_the_schema(
+    tmp_path: Path, bad: Bad
+) -> None:
+    path = tmp_path / "derail.toml"
+    path.write_text(bad.text)
+    with pytest.raises(ConfigError):
+        config.load(path)
+    if bad.shape:
+        assert list(validator("derail-toml").iter_errors(tomllib.loads(bad.text))), bad.name
+
+
+def test_there_are_at_least_thirty_bad_shapes() -> None:
+    assert sum(bad.shape for bad in BAD) >= 30

@@ -1,4 +1,4 @@
-"""The derail command: derail test and derail check.
+"""The derail command: derail test, derail check and derail schema.
 
 With --json, standard output holds one JSON document and nothing else. Every command's
 document starts with the same envelope; schemas/cli.v1.json describes it.
@@ -18,6 +18,7 @@ from derail_sdk import runner as running
 from derail_sdk.errors import ConfigError
 from derail_sdk.runner import INFRA, MISTAKE, OK, Interrupted, Runner, plural
 
+SCHEMAS = Path(__file__).parent / "schemas"
 ENVELOPE_VERSION = 1
 LISTS = (running.MISTAKES, running.NOTES, running.WARNINGS, running.INFRA_ERRORS)
 # The word for each exit code, per command. A command never gives a code it has no word for.
@@ -36,7 +37,11 @@ def main(argv: list[str] | None = None) -> int:
     for command in (test, check):
         command.add_argument("path", nargs="?", default="derail.toml", type=Path)
         command.add_argument("--json", action="store_true", help="print one JSON document")
+    commands.add_parser("schema", help="print the JSON Schema of derail.toml")
     args = parser.parse_args(argv)
+    if args.command == "schema":
+        sys.stdout.write((SCHEMAS / "derail-toml.v1.json").read_text())
+        return OK
     run = run_test if args.command == "test" else run_check
     if not args.json:
         return run(args.path, None)
