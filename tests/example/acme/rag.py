@@ -51,7 +51,7 @@ def answer_streamed_slowly(question: str) -> str:
     stream = openai.OpenAI(max_retries=0).chat.completions.create(
         model="gpt-4o-mini", messages=[{"role": "user", "content": question}], stream=True
     )
-    time.sleep(1.5)
+    time.sleep(2.5)  # longer than one 2 s step of a wait, so a wait must take more than one
     return "".join(chunk.choices[0].delta.content or "" for chunk in stream if chunk.choices)
 
 
