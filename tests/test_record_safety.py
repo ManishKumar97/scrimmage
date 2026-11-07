@@ -304,10 +304,17 @@ class BadRepr:
 @pytest.mark.design("record.never_fails_the_call")
 @pytest.mark.parametrize("record", [True, False], ids=["recording", "test"])
 @pytest.mark.parametrize(
-    "returns", [{"x": BadRepr()}, BadRepr(), 10**5000], ids=["in-a-dict", "alone", "huge-int"]
+    ("returns", "shown"),
+    [
+        ({"x": BadRepr()}, "BadRepr object at 0x"),
+        (BadRepr(), "BadRepr object at 0x"),
+        (10**5000, "could not write as JSON: ValueError"),
+        ({1: "a", "b": 2}, "could not write as JSON: TypeError"),  # keys that cannot be sorted
+    ],
+    ids=["in-a-dict", "alone", "huge-int", "mixed-keys"],
 )
 def test_a_value_whose_repr_fails_still_reaches_the_agent(
-    sink: Sink, record: bool, returns: object
+    sink: Sink, record: bool, returns: object, shown: str
 ) -> None:
     run = recording(sink, record=record)
 
@@ -317,6 +324,6 @@ def test_a_value_whose_repr_fails_still_reaches_the_agent(
     assert gated(lookup)(name="a") is returns
     (line,) = sink.calls()
     assert line["action"] == "real" and run.live == {}
-    assert "BadRepr object at 0x" in line["result"]["preview"] or returns == 10**5000
+    assert shown in line["result"]["preview"]
     if record:
         assert line["recorded"]["code"] == "unsavable"
