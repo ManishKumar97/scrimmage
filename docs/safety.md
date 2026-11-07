@@ -5,6 +5,9 @@ A tool that changes data, such as `refund_order`, must never run for real by acc
 
 Nothing can reliably tell a read from a write by looking at a tool, so Scrimmage does not try.
 
+This page has the rules each gate applies, call by call.
+Where your data goes, the control channel, records and how to report a problem are on [Security](security.md).
+
 ## Every tool is refused unless the test allows it
 
 A tool call runs for real only if it is listed under `[agent] real`, in your program or in a child process that joined the run.
@@ -115,7 +118,7 @@ If one stray call to a tool would do real harm, make that tool unreachable from 
 
 - Installing or importing Scrimmage never switches anything on.
 - The startup file is never on Python's default path; only `scrimmage-run` puts it there.
-- The SDK switches on only when a test run gives it its secret, and then prints that it is active. A child process that joins prints nothing, and the record lists it.
+- The SDK switches on only when a test run gives it the run token, and then prints that it is active. A child process that joins prints nothing, and the record lists it.
 
 In production you start your agent the usual way, and Scrimmage is never loaded.
 
@@ -126,6 +129,5 @@ A CI job that holds model API keys must not run `scrimmage test` on a pull reque
 
 ## Records
 
-Records stay on your machine, are readable only by you, and have known secret patterns removed. Headers are never recorded, so your API key does not reach a record.
-A process's command line is recorded with those patterns removed, so a secret in an unknown format stays in it. Pass secrets in the environment, which is never recorded.
-The per-run `.log` and `.out` files hold whatever your agent printed and are not cleaned, so keep them like any test log.
+Records stay on your machine and are readable only by you.
+What they keep, what is removed from them, and what is not, is on [Security](security.md#records).

@@ -1,40 +1,63 @@
 # Security
 
-This page says how Scrimmage protects your systems and your data while it tests an agent, and where that protection ends.
-Each statement here is enforced by code in the `scrimmage` package and checked by its test suite.
-For the rules a test follows call by call, see [Safety](safety.md).
+This page covers the trust boundaries of a test: where your data goes, how Scrimmage's processes talk to each other, what it keeps in records, and how to report a problem.
+The rules a test applies call by call, such as which calls are refused, are on [Safety](safety.md).
+
+Each statement below is enforced by code in the `scrimmage` package.
+The line "Checked by" under it names the test in the repository that fails if the statement stops being true.
 
 ## Your data stays on your machine
 
-- Scrimmage has no telemetry and no hosted service.
-  It sends nothing to its authors or to any third party.
-- The runner and the code inside your agent talk over one local connection: a control server that listens on `127.0.0.1` only, on a port chosen for each test.
-- The `scrimmage` package uses only Python's standard library, so it brings in no network client of another project.
-- Records are written to `scrimmage-runs/` next to your `scrimmage.toml`.
-  Scrimmage writes a `.gitignore` there, so the records are not committed by accident.
+Scrimmage has no telemetry and no hosted service.
+It sends nothing to its authors or to any third party.
+The only connections Scrimmage itself makes are to its own control server, and the only processes it starts are the runs of your agent.
+
+*Checked by: `tests/test_security_audit.py::test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_sends_the_token`, `tests/test_security_claims.py::test_the_only_connections_are_to_and_from_the_control_server`*
+
+The runner and the code inside your agent talk over one local connection, to a control server that listens on `127.0.0.1` only, on a port chosen for each test.
+
+*Checked by: `tests/test_security_claims.py::test_the_control_server_listens_on_loopback_only`*
+
+The `scrimmage` package uses only Python's standard library, so it brings in no network client of another project.
+
+*Checked by: `tests/test_stdlib_only.py::test_imports_only_the_standard_library`*
 
 Your agent's own calls, such as model calls to your provider, go where your agent sends them, as they would without Scrimmage.
 
-## Writes are refused unless the test allows them
+## The control channel
 
-A test runs your agent many times, so a call that changes data must never run for real by accident.
-Nothing can reliably tell a read from a write by looking at a call, so Scrimmage does not guess.
+The runner makes a new random value for each `scrimmage test`, 256 bits long, called the run token.
+It passes the run token to the agent's processes in the `SCRIMMAGE_TOKEN` environment variable.
+Each request to the control server, and each reply, is signed with HMAC-SHA256.
+HMAC-SHA256 is a standard way to prove that a message came from someone who holds a shared secret; AWS signs its API requests with it, and Stripe its webhooks.
 
-- A listed tool or an MCP tool runs for real only if the test lists it under `[agent] real`.
-  Otherwise it is mocked or refused.
-- A web request through httpx or httpx2 with a method other than `GET` or `HEAD` is refused unless `real` lists it.
-- A refused call raises `ScrimmageRefused`, an error type of Scrimmage's own.
-  Code that catches a library's errors, such as `OSError` or `TimeoutError`, does not catch it.
-- One refusal ends the run.
-  Every gated call after it is refused too, so code that swallows the error cannot go on to the next write.
-- A hosted MCP server acts at the model provider, where no gate can see it.
-  A model request that offers one is never sent unless `real` lists it.
-- A model call that is redirected to a host that is not a model host is refused.
-- A Python child process that would run without the gates, because it has its own environment or a flag such as `-I`, is refused when your Python code starts it.
+- The run token itself is never sent.
+  A request's signature covers its method, path, time, a one-time nonce and a hash of its body.
 
-See [Safety](safety.md) for each rule and its exceptions.
+  *Checked by: `tests/test_security_audit.py::test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_sends_the_token`, `tests/test_protocol.py::test_a_request_signed_with_another_token_is_refused`*
 
-## The plan is data, and imports are limited
+- A request whose time is more than 60 seconds from the server's clock is refused.
+
+  *Checked by: `tests/test_protocol.py::test_a_request_more_than_a_minute_off_is_refused`*
+
+- A nonce used before is refused, so a request cannot be replayed.
+
+  *Checked by: `tests/test_protocol.py::test_a_replayed_request_is_refused`*
+
+- Each reply is signed over the request's own signature, its status and a hash of its body, so a reply cannot be moved to another request.
+
+  *Checked by: `tests/test_protocol.py::test_a_reply_made_for_another_request_is_refused`*
+
+What the signing protects against is limited.
+Any process that runs as the same user can read the run token, for example from `/proc/<pid>/environ` on Linux.
+So can any code inside the agent under test, which needs it so that its child processes can join the run.
+The signing keeps out programs of other users on the machine only.
+It follows that records are not tamper-proof against the agent under test: code in the agent could send lines of its own.
+Do not use records as audit evidence.
+
+*Checked by: `tests/test_bootstrap.py::test_with_the_token_the_sdk_says_it_is_active`*
+
+## The plan is data
 
 For each run, the runner sends the code inside your agent a plan: which calls to mock, which to fail, and which may run for real.
 The plan is data only.
@@ -44,58 +67,89 @@ Two settings name Python objects: a mock's `type` and a fault's `raises`.
 Scrimmage imports such a name only if it is under one of your agent's own top-level packages, the ones that `function` and `tools` name.
 The check runs before the import, and at the start of each process, so a plan that names anything else stops the program before your agent runs.
 
-## The control channel is signed
+*Checked by: `tests/test_bootstrap.py::test_a_type_outside_the_allowed_prefixes_is_refused_before_import`, `tests/test_tool_gate.py::test_a_type_outside_the_allowed_prefixes_is_refused_before_import`, `tests/test_schemas.py::test_the_sdk_rejects_a_bad_plan`*
 
-The runner makes a new random token for each `scrimmage test`, 256 bits long.
-It passes the token to the agent's processes in the `SCRIMMAGE_TOKEN` environment variable.
+## Records
 
-- The token itself is never sent.
-  Each request is signed with HMAC-SHA256 over its method, path, time, a one-time nonce and a hash of its body.
-- A request whose time is more than 60 seconds from the server's clock is refused.
-- A nonce used before is refused, so a request cannot be replayed.
-- Each reply is signed over the request's own signature, its status and a hash of its body, so a reply cannot be moved to another request.
+Every gated call is written to a record in `scrimmage-runs/`, next to your `scrimmage.toml`.
 
-Any process in the run can read `SCRIMMAGE_TOKEN`, because a child process needs it to join the run.
-So the signing protects the channel from other programs on the machine, not from code inside the agent under test.
+- The record folders are readable only by you: `scrimmage-runs/` and every folder in it have mode `0700`, and every file mode `0600`.
+  Scrimmage writes a `.gitignore` there, so records are not committed by accident.
 
-## Secrets in records
+  *Checked by: `tests/test_security_claims.py::test_the_record_root_is_owner_only_even_if_it_was_open`, `tests/test_runner.py::test_every_record_file_is_owner_only`, `tests/test_runner.py::test_records_stay_out_of_the_teams_git_repo`*
 
-Every call is written to a record, so Scrimmage keeps known secrets out of it.
-
-- The record folder is readable only by you: folders are created with mode `0700` and files with mode `0600`.
 - A web request's line holds its method and its path.
   Its headers, its cookies and its query string are never recorded.
-- The environment is never recorded, and neither is the run's token.
-- Text that is recorded, such as tool arguments and results, model requests and replies, error messages, answers and command lines, has known secret shapes replaced with `[secret removed]`:
-    - OpenAI and Anthropic API keys, such as `sk-...` and `sk-proj-...`;
-    - AWS access key ids, `AKIA...`;
-    - Google API keys, `AIza...`;
-    - GitHub tokens, `ghp_...` and the other `gh?_` forms;
-    - Slack tokens, `xoxb-...` and the like;
-    - bearer tokens, `Bearer ...`;
-    - JSON Web Tokens, `eyJ...`.
+
+  *Checked by: `tests/test_web_requests.py::test_no_header_cookie_or_query_value_reaches_the_record`, `tests/test_http_gate.py::test_a_query_string_never_reaches_the_record`*
+
+- The environment is never recorded, and neither is the run token.
+
+  *Checked by: `tests/test_security_audit.py::test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_sends_the_token`*
+
+- Text that is recorded, such as tool arguments and results, model requests and replies, error messages, answers and command lines, has these secret shapes replaced with `[secret removed]`:
+    - OpenAI and Anthropic API keys: `sk-`, `sk-proj-`, `sk-ant-`, `sk-svcacct-`;
+    - AWS access key ids: `AKIA`;
+    - Google API keys: `AIza`;
+    - GitHub tokens: `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` and `github_pat_`;
+    - Slack tokens: `xoxa-`, `xoxb-`, `xoxe-`, `xoxp-`, `xoxr-`, `xoxs-`, `xoxe.xoxp-` and `xapp-`;
+    - bearer tokens: `Bearer` and the value after it;
+    - JSON Web Tokens, which start with `eyJ`.
+
+  AWS temporary access key ids, `ASIA`, are coming in a later change.
+
+  *Checked by: `tests/test_security_claims.py::test_each_listed_secret_shape_is_removed`, `tests/test_redact.py::test_a_jwt_is_removed_after_any_separator`*
+
 - In any URL that is recorded, the query, the fragment and a user name or password are replaced with `[removed]`.
+
+  *Checked by: `tests/test_redact.py::test_a_url_keeps_its_place_but_not_its_query_or_credentials`*
 
 These are pattern matches, a heuristic: they remove secrets of a known shape only.
 See the limits below.
 
-## Real spending has a cap
+Records hold your data as it was.
+Tool results, model requests and replies in `scrimmage-runs/<time>/blobs/` keep customer and personal data word for word, apart from the secret shapes above.
+Scrimmage never deletes records.
+Delete old ones yourself, and keep them where you would keep that data.
+
+## Real spending has a cap, and the cap is soft
 
 Model calls run for real, so a test has a budget, $5 unless you change `max_cost_usd`.
 
 - Each model call reserves an estimate of its cost before it is sent.
   A call that does not fit in what is left is not sent.
+
+  *Checked by: `tests/test_budget.py::test_a_budget_that_cannot_cover_a_call_stops_the_test`*
+
 - If the runner cannot be reached to check the budget, the call is refused rather than sent.
+
+  *Checked by: `tests/test_http_gate.py::test_an_unreachable_control_server_refuses_the_call`*
+
+The cap can still be passed:
+
+- The estimate assumes `max_tokens`, or `reserve_output_tokens` when a request sets none.
+  A reply that uses more output than that costs more than was reserved, so one call can take the total over the limit.
+- A provider that is not OpenAI's format, listed under `real` as a web host, is not budgeted at all.
+- A run killed with SIGKILL can leave a reservation that never settles.
+  It counts as spent, so the cap errs low, not high.
 
 See [Failing the model, and keeping a budget](model-faults.md).
 
 ## Staying out of production
 
 - Installing or importing Scrimmage switches nothing on.
+
+  *Checked by: `tests/test_bootstrap.py::test_importing_the_sdk_never_switches_gates_on`, `tests/test_bootstrap.py::test_without_the_token_nothing_is_imported_or_patched`*
+
 - Its startup file is never on Python's default path.
   Only `scrimmage-run`, which `scrimmage test` uses for every run, puts it there.
-- The code inside your agent switches on only when a test run gives it its token.
+
+  *Checked by: `tests/test_bootstrap.py::test_scrimmage_run_puts_its_folder_first`*
+
+- The code inside your agent switches on only when a test run gives it the run token.
   If it then cannot set up every gate, the program stops before your agent runs, rather than running without them.
+
+  *Checked by: `tests/test_bootstrap.py::test_a_broken_control_reply_stops_the_program_instead_of_running_ungated`*
 
 ## What Scrimmage does not protect against
 
@@ -103,18 +157,28 @@ See [Failing the model, and keeping a budget](model-faults.md).
   They stop accidents, not code that sets out to evade them, such as calling a tool's plain function directly or patching a library.
   A test is not a sandbox.
   If one stray call would do real harm, make that system unreachable from the test environment, with test credentials or a network that cannot reach it.
-- **Calls Scrimmage does not see.** Only httpx and httpx2 are gated.
-  A write sent with another HTTP library, or a raw socket, is not refused or recorded.
-  A program on another Python, or a child started through a shell, is not gated either.
-- **Secrets of an unknown shape.** Redaction removes known shapes only.
+- **A read that writes.** A `GET` or `HEAD` that is not mocked runs for real.
+  A service that changes data on a `GET` is not caught.
+  Mock it.
+- **Code that is not a gated call.** Only listed tools, LangChain tools, httpx and httpx2 requests, MCP tool calls and model calls are gated.
+  A database driver, boto3 and other cloud SDKs, urllib3, `requests`, gRPC or a raw socket inside code that is not a listed tool runs untouched and is not recorded.
+  A listed tool that is neither mocked nor under `real` never runs, so a write inside it never happens.
+- **MCP requests that are not tool calls.** `resources/read`, `prompts/get` and the other requests that are not tool calls pass, and a server can act on them.
+  What a stdio MCP server does by itself, such as writing to its own database, is not gated.
+- **A provider that is not OpenAI's format.** Listing its host under `real` lets its calls through as web requests, which no budget counts.
+- **Calls Scrimmage does not see.** A program on another Python, or a Python child started through a shell, is not gated.
+- **Secrets of an unknown shape.** Redaction removes the shapes listed above only.
   A plain `password=hunter2` in a tool's result or a command line is recorded as written.
   Pass secrets in the environment, which is never recorded.
+
+  *Checked by: `tests/test_security_claims.py::test_a_secret_with_no_known_shape_passes_through_redaction`*
+
 - **Your agent's own output.** The per-run `.log` and `.out` files hold whatever your agent printed, and they are not cleaned.
   They are readable only by you; keep them like any test log.
 - **A hostile `scrimmage.toml`.** `function` and `command` name code that runs, so treat the file like code.
   A CI job that holds model API keys must not run `scrimmage test` on a pull request from an outside contributor.
 
-[Limits](limits.md) lists every known gap of this version.
+[Limits](limits.md) lists every known gap of this version, and [Safety](safety.md) the rules each gate applies.
 
 ## Reporting a vulnerability
 
@@ -125,3 +189,4 @@ If you find a security problem in Scrimmage, please report it privately, not in 
     The maintainer will add it here and in `SECURITY.md` before the first release.
 
 Please include what you found, how to reproduce it, and the version or commit you tested.
+`SECURITY.md` in the repository says how a report is handled.
