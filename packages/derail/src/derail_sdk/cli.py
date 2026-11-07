@@ -46,10 +46,13 @@ class Stopped(BaseException):
 def main(argv: list[str] | None = None, *, process: bool = False) -> int:
     """The derail command. process: this is the derail process itself, which exits on the
     code returned, so signals stay ignored after the document is printed."""
-    parser = argparse.ArgumentParser(prog="derail")
+    # No abbreviations: entry.py looks for --json itself, so --js would skip its handlers.
+    parser = argparse.ArgumentParser(prog="derail", allow_abbrev=False)
     commands = parser.add_subparsers(dest="command", required=True)
-    test = commands.add_parser("test", help="run every test in derail.toml")
-    check = commands.add_parser("check", help="check derail.toml without running anything")
+    test = commands.add_parser("test", help="run every test in derail.toml", allow_abbrev=False)
+    check = commands.add_parser(
+        "check", help="check derail.toml without running anything", allow_abbrev=False
+    )
     for command in (test, check):
         command.add_argument("path", nargs="?", default="derail.toml", type=Path)
         command.add_argument("--json", action="store_true", help="print one JSON document")

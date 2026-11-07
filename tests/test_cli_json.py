@@ -894,6 +894,19 @@ def test_a_long_run_stops_within_seconds_of_each_of_two_signals(project: Project
     )
 
 
+@pytest.mark.design("cli.no_abbreviations")
+@pytest.mark.parametrize("flag", ["--js", "--jso"])
+def test_a_shortened_json_flag_is_a_usage_error(
+    project: Project, flag: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for command in ("check", "test"):
+        with pytest.raises(SystemExit) as stop:
+            cli.main([command, flag, str(project.toml)])
+        assert stop.value.code == 2
+        captured = capsys.readouterr()
+        assert captured.out == "" and f"unrecognized arguments: {flag}" in captured.err
+
+
 def run_entry(script: str, *argv: str) -> Done:
     """derail's entry point in its own process, after a script that sets up a hook."""
     clean = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
