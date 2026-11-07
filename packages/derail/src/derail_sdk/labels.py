@@ -123,6 +123,17 @@ def path_of(value: str, where: str) -> str:
     return value
 
 
+def model_name(value: str, where: str) -> str:
+    """A model's name as a request's body has it. It is compared whole, so a name that could
+    never be in a request is a mistake here, not a row of model calls that fires nothing."""
+    if value != value.strip() or "*" in value or not value.isprintable():
+        raise ConfigError(
+            f"{where} model: {value!r} is not a model name; write the whole name your code "
+            "sends, with no wildcard; see docs/model-faults.md"
+        )
+    return value
+
+
 def check_model(text: str, where: str) -> str:
     found = MODEL.fullmatch(text)
     if not found:

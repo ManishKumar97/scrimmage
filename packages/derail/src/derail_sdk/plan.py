@@ -81,6 +81,7 @@ class Plan:
                 optional(f, "raises"),
                 optional(f, "method"),
                 optional(f, "path"),
+                model=optional(f, "model"),
             )
             for f in map(obj, items(doc, "faults"))
         )
@@ -190,6 +191,7 @@ def fault_json(fault: Fault) -> dict[str, object]:
         ("raises", fault.raises),
         ("method", fault.method),
         ("path", fault.path),
+        ("model", fault.model),
     ):
         if value is not None:
             doc[key] = value
