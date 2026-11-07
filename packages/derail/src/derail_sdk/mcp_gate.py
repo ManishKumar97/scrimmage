@@ -21,10 +21,13 @@ from typing import Any
 from derail_sdk import hooks
 from derail_sdk.decide import Call
 from derail_sdk.http_gate import MCP_TRANSPORT, endpoint_of, params, refuse
+from derail_sdk.process_gate import EXEMPT
 from derail_sdk.state import BlobSink, RunState, Step, blob, current
 
 SESSION = "mcp.client.session"
 TRANSPORT = "mcp.client.streamable_http"
+STDIO = "mcp.client.stdio"
+STARTS_THE_SERVER = "_create_platform_compatible_process"
 TESTED = ((2, 3), (2, 3))  # the oldest and newest minor versions this release was tested with
 GATED = "__derail_gate__"
 SEND_ARGUMENTS = [
@@ -184,6 +187,22 @@ def install(run: RunState, sender: BlobSink | None, stop: Callable[[str], None])
     gate = Gate(run, sender, stop)
     hooks.on_import(SESSION, lambda module: patch(module, gate))
     hooks.on_import(TRANSPORT, lambda module: patch_transport(module, gate))
+    hooks.on_import(STDIO, patch_stdio)
+
+
+def patch_stdio(module: ModuleType) -> None:
+    """This gate decides what the server is asked, so starting it is not a blind child, even
+    with the small environment the library gives it by default."""
+    start = getattr(module, STARTS_THE_SERVER)
+
+    async def start_exempt(*args: Any, **kwargs: Any) -> Any:
+        token = EXEMPT.set(True)
+        try:
+            return await start(*args, **kwargs)
+        finally:
+            EXEMPT.reset(token)
+
+    setattr(module, STARTS_THE_SERVER, start_exempt)
 
 
 def patch(module: ModuleType, gate: Gate) -> None:

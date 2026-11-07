@@ -155,3 +155,11 @@ A tool the model sees under another name, such as `docs_search`, is reported as 
 A call's line has the kind `mcp` and the label as its call.
 Its arguments and result go in the `blobs/` folder, with secrets removed.
 A real MCP call's line is never dropped, because it could be a write.
+
+## A stdio server and the run
+
+A stdio server you start with `env={**os.environ}` inherits Derail's environment.
+On your agent's Python it joins the run like any child process, and prints nothing to the stream that carries the protocol.
+On another Python it runs untouched, on any version of `mcp`.
+A server started with the library's default environment does not join, and what it does by itself is not gated. Its start is not refused as a blind child, because this gate decides every call to it.
+See [An agent run as a script](scripts.md#mcp-servers-over-stdio).

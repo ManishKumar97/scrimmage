@@ -13,6 +13,10 @@ class DerailTimeLimit(DerailError):
     """The run passed its time limit, so the gate stops the call."""
 
 
+class DerailStopped(DerailError):
+    """The run was stopped while a call was going on. It is what the call's line says."""
+
+
 class DerailMockError(DerailError):
     """A mock or a fault cannot be built as the test says. A mistake in the test."""
 

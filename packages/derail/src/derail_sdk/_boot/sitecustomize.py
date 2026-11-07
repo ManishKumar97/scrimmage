@@ -3,12 +3,19 @@
 It does nothing unless DERAIL_TOKEN is set; then it switches the SDK on. Either
 way it then runs the next sitecustomize.py on the path, which this one hid, so the
 program starts exactly as it would without Derail.
+
+Every Python program the agent starts runs this file too, on whatever version that is, so
+it uses only the standard library and syntax Python 3.8 can run, and on a Python that is
+not the run's it prints nothing.
 """
 
 import importlib.machinery
 import importlib.util
 import os
 import sys
+import time
+
+CLAIM_WAIT_S = 5.0
 
 
 def _chain() -> None:
@@ -22,30 +29,167 @@ def _chain() -> None:
     spec.loader.exec_module(module)
 
 
-def _is_root() -> bool:
-    """Whether this is the program the test started, not a child it started.
+def _python() -> str:
+    """This Python: its environment and its version.
 
-    derail-run sets DERAIL_ROOT_PID to its own process id and then becomes the
-    program, so only that program has a matching id. Unset means no derail-run,
-    such as PYTHONPATH set by hand, which also starts the program under test.
+    In one venv python and python3 are the same Python, even when --copies makes them two
+    files. Two venvs made from one binary are not, because each has its own packages.
     """
-    root = os.environ.get("DERAIL_ROOT_PID", "")
-    return not root or root == str(os.getpid())
+    return "{}{}{}.{}".format(sys.prefix, os.pathsep, *sys.version_info[:2])
+
+
+def _is_program() -> bool:
+    """Whether this process is the one derail-run became, or one started by hand.
+
+    It is the program under test for certain. Through a wrapper it can only be the first
+    Python that claims the run.
+    """
+    mine = str(os.getpid())
+    if "DERAIL_PYTHON" in os.environ:  # a root that execs itself keeps derail-run's id
+        return os.environ.get("DERAIL_ROOT_PID") == mine
+    return os.environ.get("DERAIL_ROOT_PID", mine) == mine
+
+
+def _claim() -> "str | None":
+    """Claim the run for this Python. None if it is the first, else the Python that was.
+
+    Each process has its own environment, so two siblings under a shell or uv cannot tell
+    each other anything there. A file beside the answer is shared, and O_EXCL lets one win.
+    """
+    answer = os.environ.get("DERAIL_ANSWER_FILE")
+    if not answer:
+        return None  # no run folder, as with PYTHONPATH set by hand
+    claim = answer + ".root"
+    try:
+        fd = os.open(claim, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        pass
+    else:
+        with os.fdopen(fd, "w") as out:
+            out.write(_python())
+        return None
+    deadline = time.monotonic() + CLAIM_WAIT_S
+    while time.monotonic() < deadline:  # the winner writes just after it creates the file
+        with open(claim) as claimed:
+            winner = claimed.read()
+        if winner:
+            return winner
+        time.sleep(0.001)
+    raise RuntimeError(f"the first Python of this run never finished its claim on {claim}")
+
+
+class _KeepOut:
+    """Stops a listed tool's module from loading on a Python that cannot gate it.
+
+    The tool's write must not run with no gate, and no other program here is touched.
+    """
+
+    def __init__(self, modules: "set[str]") -> None:
+        self.modules = modules
+
+    def _means_a_tool(self, name: str, path: object) -> bool:
+        """A listed module by its own name, or its file by a shorter one."""
+        if name in self.modules:
+            return True
+        last = name.rpartition(".")[2]
+        close = [m for m in self.modules if m.rpartition(".")[2] == last]
+        finder = importlib.machinery.PathFinder
+        spec = finder.find_spec(name, path) if close else None  # type: ignore[arg-type]
+        origin = str(getattr(spec, "origin", ""))
+        return any(origin.endswith(os.sep + m.replace(".", os.sep) + ".py") for m in close)
+
+    def find_spec(self, name: str, path: object = None, target: object = None) -> None:
+        if self._means_a_tool(name, path):
+            message = (
+                f"{name} holds a tool under [agent] tools, and {sys.executable} is not the "
+                "run's Python, so Derail cannot gate it"
+            )
+            _tell_the_runner(message)
+            raise ImportError(f"derail: {message}")
+
+
+def _tell_the_runner(message: str) -> None:
+    """This Python may not have the SDK, so a line beside the answer reaches the runner."""
+    import json
+
+    process = {"python": sys.executable, "command": " ".join(sys.argv), "parent": os.getppid()}
+    line = json.dumps({"pid": os.getpid(), "message": message, "process": process})
+    try:
+        with open(os.environ["DERAIL_ANSWER_FILE"] + ".refused", "a") as out:
+            out.write(line + "\n")
+    except (KeyError, OSError):
+        pass  # the import still fails, so the write still does not run
+
+
+def _target() -> "str | None":
+    """The module of python -m, which the arguments here show only as -m.
+
+    Python reads flags as bundles, so -um x and -mx are this too.
+    """
+    args = iter(getattr(sys, "orig_argv", [])[1:])
+    for arg in args:
+        if arg == "--check-hash-based-pycs":  # its value is the next word
+            next(args, None)
+            continue
+        if not arg.startswith("-") or arg in ("-", "--"):
+            return None
+        for place, letter in enumerate("" if arg.startswith("--") else arg[1:], 2):
+            if letter == "c":
+                return None
+            if letter == "m":
+                return arg[place:] or next(args, None)
+            if letter in "WX":
+                if place == len(arg):
+                    next(args, None)
+                break
+    return None
+
+
+def _keep_out_tools() -> None:
+    entries = os.environ.get("DERAIL_TOOLS", "").split(",")
+    modules = {entry.partition(":")[0] for entry in entries if entry}
+    if not modules:
+        return
+    sys.meta_path.insert(0, _KeepOut(modules))
+    # The program itself is never imported, so the finder cannot stop it.
+    script = os.path.abspath(sys.argv[0]).rpartition(".")[0].replace(os.sep, ".")
+    target = _target()
+    for module in modules:
+        if target in (module, module + ".__main__") or script.endswith("." + module):
+            message = (
+                f"{module} holds a tool under [agent] tools, and {sys.executable} is not the "
+                "run's Python, so Derail cannot gate it"
+            )
+            _tell_the_runner(message)
+            raise RuntimeError(message)
 
 
 def _start() -> None:
-    try:
-        from derail_sdk import bootstrap
-    except ModuleNotFoundError as exc:
-        if exc.name != "derail_sdk":
-            raise
-        if not _is_root():
-            return  # a child on another Python, such as the aws CLI: leave it alone
+    has_sdk = importlib.util.find_spec("derail_sdk") is not None
+    theirs = os.environ.get("DERAIL_PYTHON")
+    program = _is_program()
+    if not has_sdk and program:
         raise RuntimeError(
             f"derail is not installed for {sys.executable}, so the program under "
             "test would run with no gates; run it on a Python with derail installed"
-        ) from None
-    bootstrap.start()
+        )
+    if not has_sdk:
+        _keep_out_tools()  # a tool, a build step or a cloud command: leave it alone
+        return
+    root = program and theirs is not None  # it execs itself and stays the root
+    if theirs is None:
+        theirs = _claim()
+        root = theirs is None
+    joins = root or theirs == _python() or os.environ.get("DERAIL_CHILDREN")
+    if not joins:
+        os.environ["DERAIL_PYTHON"] = str(theirs)
+        _keep_out_tools()  # another Python, such as the aws CLI: leave it alone
+        return
+    os.environ["DERAIL_PYTHON"] = str(theirs or _python())
+
+    from derail_sdk import bootstrap
+
+    bootstrap.start(child=not root, target=_target())
 
 
 if os.environ.get("DERAIL_TOKEN"):

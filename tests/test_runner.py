@@ -40,13 +40,13 @@ def test_the_example_runs_six_times_and_the_fault_fires(
     for lines in records:
         by_row.setdefault(lines[-1]["row"], []).append(lines)
     for lines in by_row["fault 1"]:
-        assert [(x["call"], x["action"]) for x in lines[:-1] if x["kind"] == "tool"] == [
+        assert [(x["call"], x["action"]) for x in lines[:-1] if x.get("kind") == "tool"] == [
             ("tool:get_order", "fault"),
             ("tool:get_stock", "mock"),
         ]
         assert lines[-1]["summary"]["fault_fired"] is True  # type: ignore[index]
     for lines in by_row["baseline"]:
-        assert [x["action"] for x in lines[:-1] if x["kind"] == "tool"] == ["mock", "mock"]
+        assert [x["action"] for x in lines[:-1] if x.get("kind") == "tool"] == ["mock", "mock"]
         assert lines[-1]["summary"]["outcome"] == "answered"  # type: ignore[index]
     assert "order-status  fault 1   tool:get_order timeout  3     3" in result.out
 
@@ -364,10 +364,12 @@ def test_a_process_that_made_more_lines_than_arrived_is_an_infrastructure_error(
     assert {s["incomplete"] for s in result.summaries()} == {True}
 
 
-def test_a_stale_root_pid_in_the_runners_environment_is_ignored(
+def test_stale_run_variables_in_the_runners_environment_are_ignored(
     project: Project, fake_openai: Fake, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("DERAIL_ROOT_PID", "1")
+    monkeypatch.setenv("DERAIL_PYTHON", "a Python from another run")
+    monkeypatch.setenv("DERAIL_CHILDREN", "1")
     project.edit("[agent]\n", "[agent]\nruns = 1\n")
     result = project.test(fake_openai(ACME))
     assert result.code == 0 and "  1     1  " in result.out  # the fault row was exercised

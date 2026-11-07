@@ -68,7 +68,7 @@ def test_a_real_timeout_and_the_injected_one_reach_the_loop_the_same_way(
 
     # The records' actions match, apart from real against fault.
     def actions(lines: list[dict[str, object]]) -> list[tuple[object, object]]:
-        return [(x["call"], x["action"]) for x in lines[:-1] if x["kind"] == "tool"]
+        return [(x["call"], x["action"]) for x in lines[:-1] if x.get("kind") == "tool"]
 
     assert actions(fault_run) == [
         ("tool:get_order", "fault"),

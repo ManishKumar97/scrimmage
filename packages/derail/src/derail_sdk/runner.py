@@ -1,17 +1,20 @@
-"""The runner for a function agent: one new program per run, the run table, exit codes.
+"""The runner: one new program per run, the run table, exit codes.
 
 Exit codes: 0 when every row produced a result; 2 for a mistake in the test, a refused
 call and a test the budget stopped included; 3 for an infrastructure error.
 """
 
+import json
 import os
 import secrets
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -23,14 +26,17 @@ from typing import TextIO, cast
 from derail_sdk import labels
 from derail_sdk import plan as planner
 from derail_sdk.budget import Ledger
-from derail_sdk.config import Config, Test
+from derail_sdk.config import QUESTION, Config, Test
 from derail_sdk.control import ControlServer, proc_key
-from derail_sdk.records import RecordStore
+from derail_sdk.records import RECORD_VERSION, RecordStore
 from derail_sdk.redact import redact
+from derail_sdk.state import COMMAND_CAP, now_iso
 
 OK, MISTAKE, INFRA = 0, 2, 3
+TAIL_BYTES = 1024 * 1024  # how much of a script's output is read to find its last line
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 KILL_GRACE_S = 5.0
+GROUP_POLL_S = 0.01
 OUTCOMES = (
     "answered",
     "crashed",
@@ -50,7 +56,13 @@ STOP_TEST = (
     "ambiguous_label",
 )
 # The agent's own cancellation is not a failure of the provider.
-NOT_A_FAILURE = ("CancelledError", "KeyboardInterrupt", "SystemExit", "GeneratorExit")
+NOT_A_FAILURE = (
+    "CancelledError",
+    "KeyboardInterrupt",
+    "SystemExit",
+    "GeneratorExit",
+    "DerailStopped",
+)
 # A baseline whose every run ended so cannot be compared with, so its faults are skipped.
 FAILED = ("crashed", "timed out", "refused call", "budget reached")
 
@@ -122,16 +134,30 @@ class Runner:
             self.cancel()
 
     def env(self, run: str) -> dict[str, str]:
+        agent = self.config.agent
         env = dict(os.environ)
-        env.pop("DERAIL_ROOT_PID", None)  # derail-run sets it for this run's program
+        for name in ("DERAIL_ROOT_PID", "DERAIL_PYTHON", "DERAIL_CHILDREN"):
+            env.pop(name, None)  # the program sets the first two for itself
         env.update(
             DERAIL_TOKEN=self.token,
             DERAIL_CONTROL_URL=self.control_url(self.server.url),
             DERAIL_RUN=run,
             DERAIL_ANSWER_FILE=str(self.answers / f"{run}.txt"),
-            DERAIL_ALLOW_IMPORTS=",".join(self.config.agent.allowed_imports()),
+            DERAIL_ALLOW_IMPORTS=",".join(agent.allowed_imports()),
+            DERAIL_TOOLS=planner.tools_text(agent.tools, agent.renames),
         )
+        if agent.children:
+            env["DERAIL_CHILDREN"] = "1"
         return env
+
+    def program(self, question: str) -> list[str]:
+        """What one run starts. A script's command was split when the file was read, so the
+        question stays one argument, and no shell ever sees it."""
+        agent = self.config.agent
+        if agent.command:
+            return [part.replace(QUESTION, question) for part in agent.command]
+        answer = [agent.answer] if agent.answer else []
+        return [sys.executable, "-m", "derail_sdk.start", agent.function, question, *answer]
 
     def one(self, row: planner.Row) -> RunResult | None:
         with self.lock:
@@ -144,25 +170,24 @@ class Runner:
         if self.cancelled:
             self.server.close_run(run)
             return None
-        command = [
-            sys.executable, "-m", "derail_sdk.run_command",
-            sys.executable, "-m", "derail_sdk.start",
-            self.config.agent.function, row.test.question,
-            *([self.config.agent.answer] if self.config.agent.answer else []),
-        ]  # fmt: skip
-        log = os.open(self.folder / f"{run}.log", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        command = [sys.executable, "-m", "derail_sdk.run_command", *self.program(row.test.question)]
+        # A script's last printed line can be its answer, so what it prints stays apart.
+        log = owner_only(self.folder / f"{run}.log")
+        out = owner_only(self.folder / f"{run}.out") if self.config.agent.command else log
         try:
             proc = subprocess.Popen(
                 command,
                 cwd=self.config.root,
                 env=self.env(run),
                 stdin=subprocess.DEVNULL,
-                stdout=log,
+                stdout=out,
                 stderr=log,
                 start_new_session=True,  # its own process group, so every child stops too
             )
         finally:
             os.close(log)
+            if out != log:
+                os.close(out)
         with self.lock:
             self.procs[run] = proc
         # Refused, or the test was stopped, before this program was registered.
@@ -173,17 +198,19 @@ class Runner:
             proc.wait(timeout=self.config.agent.run_timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
-            stop_group(proc)
+        stop_group(proc)  # at the time limit, or a child that outlived the program
+        left = kill_those_who_left(run, proc.pid)
         with self.lock:
             del self.procs[run]
         state = self.server.close_run(run)
+        kept_out = self.other_python_lines(run, row)
         # The server stops a test on a thread of its own, which this run's end can overtake.
         # Settle it here, so the next run sees it.
-        if state.broken or state.refusals:
-            self._refused(run, "structure" if state.broken else state.refusals[0])
+        if state.broken or state.refusals or kept_out:
+            reason = "other_python" if kept_out else (state.refusals or ["structure"])[0]
+            self._refused(run, "structure" if state.broken else reason)
         lines = self.store.lines(run)
-        answer_file = self.answers / f"{run}.txt"
-        answer = answer_file.read_text() if answer_file.exists() else None
+        answer = self.answer_of(run, proc.returncode)
         # Another run stopped the test and this run was stopped with it. That says
         # nothing about this run, and it never got to send its last batch.
         stopped = (
@@ -196,19 +223,23 @@ class Runner:
         gap = any(per_proc[proc] < made for proc, made in state.made.items())
         unfinished = not state.made or any(proc not in state.made for proc in per_proc)
         incomplete = bool(state.dropped) or (ended_itself and (gap or unfinished))
+        made = kept_out + [self.left_line(run, row, *entry) for entry in left]
+        self.store.add(run, made)
+        lines += made
         model = [line for line in lines if line.get("kind") == "model"]
         notices = [line for line in lines if "notice" in line]
         cost = sum(float(str(line.get("cost_usd") or 0)) for line in model)
         # The provider failing by itself says nothing about the agent.
         real_errors = [e for e in map(real_error, model) if e is not None]
         broken = any(n.get("notice") == "structure" for n in notices)
+        no_plan = "no_plan" in state.refusals  # says nothing about the agent
         if stopped:
             outcome = "stopped"
-        elif not state.fetched or incomplete or real_errors or broken:
+        elif not state.fetched or incomplete or real_errors or broken or no_plan:
             outcome = "infrastructure error"
         elif state.refusals[:1] == ["budget"]:
             outcome = "budget reached"
-        elif state.refused:
+        elif state.refused or kept_out:
             outcome = "refused call"
         elif timed_out:
             outcome = "timed out"
@@ -252,6 +283,61 @@ class Runner:
         )
         self.check_labels(result)
         return result
+
+    def answer_of(self, run: str, code: int) -> str | None:
+        """The answer file, or for a script that ended well its last printed line."""
+        answer_file = self.answers / f"{run}.txt"
+        if answer_file.exists():
+            return answer_file.read_text(errors="replace")
+        return (
+            last_line(self.folder / f"{run}.out")
+            if self.config.agent.command and not code
+            else None
+        )
+
+    def line(self, run: str, row: planner.Row, seq: int, pid: object) -> dict[str, object]:
+        """A record line the runner writes itself, about a process that sent none."""
+        proc = {"host": socket.gethostname(), "pid": pid, "started": now_iso()}
+        return {
+            "v": RECORD_VERSION,
+            "run": run,
+            "test": row.test.name,
+            "row": row.name,
+            "seq": seq,
+            "proc": proc,
+            "library": "derail",
+        }
+
+    def left_line(self, run: str, row: planner.Row, pid: int, command: str) -> dict[str, object]:
+        text = redact(command)[:COMMAND_CAP]
+        message = f"process {pid} left the run's process group and was killed: {text}"
+        return {**self.line(run, row, 1, pid), "notice": "left_group", "message": message}
+
+    def other_python_lines(self, run: str, row: planner.Row) -> list[dict[str, object]]:
+        """A child on another Python tried to import a listed tool, and did not get it.
+
+        That Python may not have the SDK, so it left its report beside the answer.
+        """
+        path = self.answers / f"{run}.txt.refused"
+        if not path.exists():
+            return []
+        lines: list[dict[str, object]] = []
+        for number, text in enumerate(path.read_text(errors="replace").splitlines(), 1):
+            report, process = read_report(text)
+            lines.append(
+                {
+                    **self.line(run, row, number, report["pid"]),
+                    "notice": "other_python",
+                    "message": redact(str(report["message"])),
+                    "mistake": redact(str(report["message"])),
+                    "process": {
+                        "python": redact(str(process["python"])),
+                        "command": redact(str(process["command"]))[:COMMAND_CAP],
+                        "parent": process["parent"],
+                    },
+                }
+            )
+        return lines
 
     def check_labels(self, result: RunResult) -> None:
         """With no tools list, compare the test's labels with the tools the agent has."""
@@ -393,18 +479,86 @@ def unused_mocks(config: Config, results: list[RunResult]) -> tuple[list[str], l
     return notes, mistakes
 
 
-def stop_group(proc: subprocess.Popen[bytes]) -> None:
-    """SIGTERM to the run's process group, then SIGKILL after five seconds."""
+def read_report(text: str) -> tuple[dict[str, object], dict[str, object]]:
+    """A line a child left, and its process. A line it could not finish is still a refusal."""
     try:
-        os.killpg(proc.pid, signal.SIGTERM)
-        proc.wait(timeout=KILL_GRACE_S)
-    except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)
-        proc.wait()
-    except ProcessLookupError:  # the group is gone; make sure the program is too
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait()
+        report = cast(dict[str, object], json.loads(text))
+        return report, cast(dict[str, object], report["process"])
+    except (ValueError, KeyError, TypeError):
+        message = "a program on another Python tried to import a listed tool"
+        process: dict[str, object] = {"python": "", "command": text, "parent": 0}
+        return {"pid": 0, "message": message}, process
+
+
+def kill_those_who_left(run: str, group: int) -> list[tuple[int, str]]:
+    """SIGKILL any process that left the group but still holds this run, as (pid, command).
+
+    A process's own /proc environ is the only proof, and it must hold the exact variable.
+    A system with no /proc has no sweep.
+    """
+    if not Path("/proc/self/environ").exists():
+        return []
+    wanted = f"DERAIL_RUN={run}".encode()
+    killed: list[tuple[int, str]] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        pid = int(entry.name)
+        try:
+            if wanted not in (entry / "environ").read_bytes().split(b"\0"):
+                continue
+            if os.getpgid(pid) == group:
+                continue  # one SIGKILL has not finished yet
+            words = (entry / "cmdline").read_bytes().split(b"\0")
+            command = b" ".join(words).decode(errors="replace")
+            os.kill(pid, signal.SIGKILL)
+        except OSError:  # another user's, or gone already
+            continue
+        killed.append((pid, command.strip()))
+    return killed
+
+
+def owner_only(path: Path) -> int:
+    return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+
+
+def last_line(path: Path) -> str | None:
+    """The last line of a script's output that is not blank."""
+    with path.open("rb") as out:
+        out.seek(max(0, path.stat().st_size - TAIL_BYTES))
+        tail = out.read().decode("utf-8", "replace")
+    return next((line for line in reversed(tail.split("\n")) if line.strip()), None)
+
+
+def stop_group(proc: subprocess.Popen[bytes]) -> None:
+    """SIGTERM to the run's process group, then SIGKILL to what is left after five seconds.
+
+    It waits on the group, not on the program: a child can outlive the program, and can
+    ignore SIGTERM after the program has gone.
+    """
+    if signal_group(proc, signal.SIGTERM):
+        deadline = time.monotonic() + KILL_GRACE_S
+        while time.monotonic() < deadline:
+            proc.poll()  # a program that has ended stays in the group until it is reaped
+            if not signal_group(proc, 0):
+                break
+            time.sleep(GROUP_POLL_S)
+        else:
+            signal_group(proc, signal.SIGKILL)
+    if proc.poll() is None:  # it left the group by itself
+        proc.kill()
+    proc.wait()
+
+
+def signal_group(proc: subprocess.Popen[bytes], sig: int) -> bool:
+    """False when no process is left in the group."""
+    try:
+        os.killpg(proc.pid, sig)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # macOS says this for a group of zombies
+        return False
+    return True
 
 
 def report(
@@ -448,6 +602,12 @@ def report(
                     f"that tool makes this call, {row.fault.call} can never fire; "
                     "mock or fault one level, not both"
                 )
+        notes += [
+            f"{where}: {r.run}: {line['message']}"
+            for r in mine
+            for line in r.notices
+            if line.get("notice") == "left_group"
+        ]
         ended = Counter(r.outcome for r in mine if not r.exercised)
         if ended:
             how = ", ".join(f"{n} {outcome}" for outcome, n in sorted(ended.items()))

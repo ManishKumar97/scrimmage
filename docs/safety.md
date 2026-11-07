@@ -7,7 +7,7 @@ Nothing can reliably tell a read from a write by looking at a tool, so Derail do
 
 ## Every tool is refused unless the test allows it
 
-A tool call runs for real only if it is listed under `[agent] real`.
+A tool call runs for real only if it is listed under `[agent] real`, in your program or in a child process that joined the run.
 Any tool can be mocked instead, write tools included, so a test can give `refund_order` a fixed reply and see what the agent does next.
 
 | Tool call, not mocked | Listed under `real` | What happens |
@@ -74,6 +74,22 @@ If a stray one would do real harm, point the test at a server that cannot do it.
 If a label such as `mcp:search` could mean a tool on two servers, the test stops at the first call after both servers are known, so from then on a read on one server cannot be taken for a write on another.
 A call made before the second server was listed or called goes by that label. See [Limits](limits.md).
 
+## Child processes
+
+The rules above reach every process that joined the run, so a child's `refund_order` is refused like your program's, and the refusal ends the run.
+A forked child's refusal reaches the runner before the error reaches your code, so it is not lost when the child ends with `os._exit`.
+A child that cannot get its plan refuses each call, and the run is an infrastructure error.
+
+A Python child that would not join, because it has its own environment or a flag such as `-I`, is refused where it starts, unless `real` lists `process:python`.
+Only a start made from Python is seen, so `sh -c 'python x'` is not. See [Limits](limits.md).
+
+So a rerun never reaches a write through a child: the child joins and is refused, or never starts.
+The exceptions are all in [Limits](limits.md).
+
+A program on another Python is not gated, and it may be something unrelated, such as `pip`, so it runs untouched.
+But it cannot import a module that holds a tool under `tools`, or run that file: the import fails or the program stops, and the run ends as "refused call".
+A web request or an MCP call from a program on another Python is not stopped. See [Limits](limits.md).
+
 ## The budget
 
 A test has a budget, $5 unless you change it. When the runner cannot be reached to check it, the call is refused rather than sent.
@@ -98,7 +114,7 @@ If one stray call to a tool would do real harm, make that tool unreachable from 
 
 - Installing or importing Derail never switches anything on.
 - The startup file is never on Python's default path; only `derail-run` puts it there.
-- The SDK switches on only when a test run gives it its secret, and then prints that it is active.
+- The SDK switches on only when a test run gives it its secret, and then prints that it is active. A child process that joins prints nothing, and the record lists it.
 
 In production you start your agent the usual way, and Derail is never loaded.
 
@@ -110,4 +126,5 @@ A CI job that holds model API keys must not run `derail test` on a pull request 
 ## Records
 
 Records stay on your machine, are readable only by you, and have known secret patterns removed. Headers are never recorded, so your API key does not reach a record.
-The per-run `.log` file holds whatever your agent printed and is not cleaned, so keep it like any test log.
+A process's command line is recorded with those patterns removed, so a secret in an unknown format stays in it. Pass secrets in the environment, which is never recorded.
+The per-run `.log` and `.out` files hold whatever your agent printed and are not cleaned, so keep them like any test log.

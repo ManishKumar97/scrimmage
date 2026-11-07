@@ -14,7 +14,7 @@ from derail_sdk.labels import matches, matches_real
 from derail_sdk.plan import Plan
 
 Action = Literal["fault", "mock", "real", "refused"]
-Kind = Literal["tool", "model", "http", "mcp"]
+Kind = Literal["tool", "model", "http", "mcp", "process"]
 READ_METHODS = ("GET", "HEAD")
 
 

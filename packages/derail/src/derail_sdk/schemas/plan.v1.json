@@ -158,6 +158,9 @@
             "const": "tool:*"
           },
           {
+            "const": "process:python"
+          },
+          {
             "$ref": "#/$defs/mcp_label"
           },
           {
@@ -170,6 +173,9 @@
           }
         ]
       }
+    },
+    "children": {
+      "type": "boolean"
     },
     "time_limit_s": {
       "type": "number",

@@ -59,10 +59,12 @@ class Result:
     err: str
     root: Path
 
-    def records(self) -> list[list[dict[str, object]]]:
-        """Every run's record lines, one list per run."""
+    def records(self, *, processes: bool = False) -> list[list[dict[str, object]]]:
+        """Every run's record lines, one list per run. Each process's own line is left out
+        unless asked for, so a test about calls reads only calls."""
         files = sorted((self.root / "derail-runs").glob("*/*.jsonl"))
-        return [[json.loads(line) for line in f.read_text().splitlines()] for f in files]
+        runs = [[json.loads(line) for line in f.read_text().splitlines()] for f in files]
+        return [[x for x in run if processes or x.get("notice") != "process"] for run in runs]
 
     def summaries(self) -> list[dict[str, object]]:
         return [lines[-1]["summary"] for lines in self.records()]  # type: ignore[misc]

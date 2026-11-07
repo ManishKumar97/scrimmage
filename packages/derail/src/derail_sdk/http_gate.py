@@ -112,11 +112,12 @@ def version(module: ModuleType) -> tuple[int, int] | None:
 
 def install(
     run: RunState, client: Reserver, sender: BlobSink | None, stop: Callable[[str], None]
-) -> None:
+) -> Context:
     ctx = Context(run, client, sender, stop)
     atexit.register(ctx.close_open)  # registered after the sender's flush, so it runs first
     for library in TESTED:
         hooks.on_import(library, lambda module, name=library: patch(module, ctx, name))
+    return ctx
 
 
 def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:

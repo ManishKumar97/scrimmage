@@ -122,14 +122,15 @@
         },
         "call": {
           "type": "string",
-          "pattern": "^(tool:[A-Za-z0-9_-]+|model:[a-z*]+(/[a-z_]+)?|http:.+|mcp:.+)$"
+          "pattern": "^(tool:[A-Za-z0-9_-]+|model:[a-z*]+(/[a-z_]+)?|http:.+|mcp:.+|process:python)$"
         },
         "kind": {
           "enum": [
             "tool",
             "model",
             "http",
-            "mcp"
+            "mcp",
+            "process"
           ]
         },
         "action": {
@@ -207,7 +208,9 @@
             "unreadable_body",
             "redirect_off_host",
             "unsupported_loop",
-            "ambiguous_label"
+            "ambiguous_label",
+            "blind_child",
+            "no_plan"
           ]
         },
         "provider": {
@@ -432,8 +435,31 @@
             "structure",
             "newer_version",
             "tools_seen",
-            "answer_path"
+            "answer_path",
+            "process",
+            "other_python",
+            "left_group"
           ]
+        },
+        "process": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "python",
+            "command",
+            "parent"
+          ],
+          "properties": {
+            "python": {
+              "type": "string"
+            },
+            "command": {
+              "type": "string"
+            },
+            "parent": {
+              "type": "integer"
+            }
+          }
         },
         "library": {
           "type": "string"

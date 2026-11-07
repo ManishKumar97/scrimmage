@@ -13,10 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from derail_sdk import protocol
+from derail_sdk import protocol, state
 from derail_sdk.budget import Ledger
 from derail_sdk.client import ControlClient, ControlError, Sender
 from derail_sdk.control import ControlServer, proc_key
+from derail_sdk.plan import Plan, no_plan
 from derail_sdk.records import RecordStore
 
 TOKEN = "a" * 64
@@ -30,6 +31,10 @@ def server(tmp_path: Path) -> Iterator[ControlServer]:
     control.open_run("run-1", "baseline", PLAN)
     yield control
     control.stop()
+
+
+def a_plan() -> Plan:
+    return Plan("run-1", "t", "baseline", (), (), (), ("tool:a",), 60.0)
 
 
 def raw(
@@ -248,6 +253,98 @@ def test_a_batch_that_fails_is_sent_again(server: ControlServer) -> None:
     sender.flush()
     assert server.store.lines("run-1") == [line(1)]
     assert server.runs["run-1"].made == {proc_key(None): 1}
+
+
+@pytest.mark.design("record.child_sends_as_it_goes")
+def test_a_child_sends_each_line_as_it_is_made_and_needs_no_thread(server: ControlServer) -> None:
+    sender = Sender(ControlClient(server.url, TOKEN), "run-1", eager=True)
+    sender.put(line(1))
+    assert server.store.lines("run-1") == [line(1)]
+    assert server.runs["run-1"].made == {proc_key(None): 1}  # no last batch is needed
+    assert not sender._thread.is_alive()  # type: ignore[reportPrivateUsage]
+
+
+def test_a_child_that_made_no_lines_sends_nothing_at_exit() -> None:
+    sender = Sender(ControlClient("http://127.0.0.1:9", TOKEN), "run-1", eager=True)
+    sender.client.request = None  # type: ignore[method-assign, assignment]  # any send would fail
+    sender.flush()
+
+
+def test_a_child_sends_again_at_exit_what_failed_the_first_time(server: ControlServer) -> None:
+    sender = Sender(ControlClient("http://127.0.0.1:9", TOKEN), "run-1", eager=True)
+    sender.put(line(1))
+    assert sender.unsent == [line(1)]
+    sender.client = ControlClient(server.url, TOKEN)
+    sender.flush()
+    assert server.store.lines("run-1") == [line(1)] and sender.unsent == []
+
+
+def test_a_childs_settlement_goes_out_at_once(server: ControlServer) -> None:
+    held = server.ledger.reserve(1.0)
+    assert held is not None
+    sender = Sender(ControlClient(server.url, TOKEN), "run-1", eager=True)
+    sender.put_settle(held, 0.25)
+    assert not sender.settles
+
+
+def test_a_forked_sender_starts_empty_with_new_locks(server: ControlServer) -> None:
+    sender = Sender(ControlClient("http://127.0.0.1:9", TOKEN), "run-1", "the parent")
+    sender.put(line(1))
+    sender.forked("the fork")
+    assert sender.queue.empty() and sender.made == 0 and sender.eager and sender.proc == "the fork"
+    sender.client = ControlClient(server.url, TOKEN)
+    sender.put(line(2))
+    assert server.store.lines("run-1") == [line(2)]
+
+
+@pytest.mark.design("stop.one_line_per_call")
+def test_a_call_stopped_and_then_ended_has_one_line() -> None:
+    lines: list[dict[str, object]] = []
+
+    class Sink:
+        def put(self, line: dict[str, object], *, keep: bool = False) -> None:
+            del keep
+            lines.append(line)
+
+    run = state.RunState(a_plan(), Sink(), [])
+    step = run.begin("a", {})
+    run.stop_open()
+    run.finish(step, result="late")
+    assert len(lines) == 1 and "DerailStopped" in str(lines[0]["error"])
+
+
+@pytest.mark.design("boot.plan_failure_is_not_for_life")
+def test_a_failed_plan_fetch_refuses_one_call_and_is_tried_again() -> None:
+    answers = [no_plan("run-1", "the server was busy"), a_plan()]
+
+    class Sink:
+        def put(self, line: dict[str, object], *, keep: bool = False) -> None:
+            del line, keep
+
+    run = state.RunState(None, Sink(), [], load=lambda: answers.pop(0))
+    first = run.begin("a", {})
+    assert first.decision.reason == "no_plan" and run.refused is None
+    assert "the server was busy" in str(run.refusal(first))
+    assert run.begin("a", {}).decision.reason == "no_plan"  # too soon to ask again
+    run._try_again_at = 0.0  # type: ignore[reportPrivateUsage]
+    assert run.begin("a", {}).decision.action == "real"
+    assert not answers
+
+
+@pytest.mark.design("stop.daemon_poisoned")
+def test_a_line_for_a_closed_run_poisons_the_process(server: ControlServer) -> None:
+    run = state.RunState(
+        a_plan(), Sender(ControlClient(server.url, TOKEN), "run-1", eager=True), []
+    )
+    run.sink.on_closed = run.run_closed  # type: ignore[attr-defined]
+    server.close_run("run-1")
+    run.begin("a", {})
+    step = run.begin("a", {})
+    run.finish(step)
+    assert run.refused == state.CLOSED
+    late = run.begin("a", {})
+    assert late.decision.reason == "poisoned"
+    assert "run has ended" in str(run.refusal(late))
 
 
 def test_a_server_away_for_long_keeps_a_bounded_backlog(monkeypatch: pytest.MonkeyPatch) -> None:

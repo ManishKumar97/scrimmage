@@ -366,9 +366,9 @@ def test_module_exists_does_not_import(tmp_path: object) -> None:
     (folder / "pkg_never").mkdir()
     (folder / "pkg_never" / "__init__.py").write_text("raise SystemExit('imported')\n")
     (folder / "pkg_never" / "tools.py").write_text("")
-    assert tool_gate.module_exists("pkg_never.tools", [str(folder)])
-    assert not tool_gate.module_exists("pkg_never.tool", [str(folder)])
-    assert not tool_gate.module_exists("no_such_pkg.tools", [str(folder)])
+    assert tool_gate.module_spec("pkg_never.tools", [str(folder)]) is not None
+    assert tool_gate.module_spec("pkg_never.tool", [str(folder)]) is None
+    assert tool_gate.module_spec("no_such_pkg.tools", [str(folder)]) is None
     assert "pkg_never" not in sys.modules
 
 
@@ -395,7 +395,7 @@ def test_a_forked_child_fires_no_faults(lines: Lines) -> None:
         [Mock("tool:get_text", "mocked", None)],
         [Fault("tool:get_text", "timeout", "always")],
     )
-    os.register_at_fork(after_in_child=run.drop_faults)
+    os.register_at_fork(after_in_child=run.forked)
     read, write = os.pipe()
     pid = os.fork()
     if pid == 0:  # the child
