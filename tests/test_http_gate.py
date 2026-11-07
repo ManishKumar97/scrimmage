@@ -1022,3 +1022,144 @@ def test_a_secret_in_a_list_on_a_line_is_removed(gated: None) -> None:
     with pytest.raises(DerailRefused):
         client().post(URL, json={**BODY, "tools": [spec]})
     assert sink.lines[0]["unseen_tools"] == ["[secret removed]"]
+
+
+MAIN = {**BODY, "model": "gpt-4.1"}
+EMBEDDINGS = "https://api.openai.com/v1/embeddings"
+ON_MAIN = Fault("model", "status 429", "always", model="gpt-4.1")
+ON_EMBEDDING = Fault("model:*/embeddings", "status 429", "always", model="main-embedding")
+
+
+def sends(seen: list[httpx2.Request]) -> httpx2.Client:
+    def keep(request: httpx2.Request) -> httpx2.Response:
+        request.read()
+        seen.append(request)
+        return httpx2.Response(200, json=REPLY)
+
+    return httpx2.Client(transport=httpx2.MockTransport(keep))
+
+
+def generated() -> Iterator[bytes]:
+    yield b'{"model": "main-embedding", "input": "hi"}'
+
+
+@pytest.mark.design("gate.model_name_fires")
+def test_the_gate_fires_on_the_named_model_and_sends_the_other(gated: None) -> None:
+    sink, _ = install(make_plan((ON_MAIN,)))
+    seen: list[httpx2.Request] = []
+    assert sends(seen).post(URL, json=BODY).status_code == 200
+    assert sends(seen).post(URL, json=MAIN).status_code == 429
+    assert len(seen) == 1
+    assert [(x["model"], x["action"]) for x in sink.lines] == [
+        ("gpt-4o-mini", "real"),
+        ("gpt-4.1", "fault"),
+    ]
+
+
+@pytest.mark.design("gate.model_name_alias")
+def test_a_gateways_alias_is_matched_as_your_code_sends_it(gated: None) -> None:
+    fault = Fault("model", "status 429", "always", model="smart")
+    sink, _ = install(make_plan((fault,)))
+    url = "https://gateway.acme.internal/v1/chat/completions"
+    assert client().post(url, json={**BODY, "model": "smart"}).status_code == 429
+    assert sink.lines[0]["model"] == "smart"
+
+
+@pytest.mark.design("gate.no_name_refused")
+@pytest.mark.parametrize(
+    "send",
+    [
+        {"content": gzip.compress(b'{"model": "main-embedding"}', mtime=0)},
+        {"content": b'{"model": "main-embedding"', "headers": {"content-type": "text/plain"}},
+        {"content": b"[1, 2]"},
+        {"content": b""},
+        {"json": {"input": "hi"}},
+        {"json": {"model": "", "input": "hi"}},
+        {"json": {"model": 5, "input": "hi"}},
+        {"json": {"model": None, "input": "hi"}},
+        {"json": {"model": ["main-embedding"], "input": "hi"}},
+        {"files": {"file": ("a.jsonl", b'{"model": "main-embedding"}')}},
+    ],
+    ids=[
+        "compressed",
+        "cut short",
+        "not an object",
+        "empty",
+        "no model",
+        "blank model",
+        "number",
+        "null",
+        "list",
+        "multipart",
+    ],
+)
+def test_a_call_with_no_readable_name_is_refused_and_never_sent(
+    gated: None, send: dict[str, Any]
+) -> None:
+    sink, _ = install(make_plan((ON_EMBEDDING,)))
+    seen: list[httpx2.Request] = []
+    with pytest.raises(DerailRefused, match="has no model name Derail can read"):
+        sends(seen).post(EMBEDDINGS, **send)
+    assert seen == []
+    assert sink.lines[0]["reason"] == "unreadable_model"
+    assert "mistake" in sink.lines[0]
+
+
+@pytest.mark.design("gate.no_name_streamed")
+def test_a_streamed_body_is_refused_and_is_not_used_up(gated: None) -> None:
+    sink, _ = install(make_plan((ON_EMBEDDING,)))
+    body = generated()
+    with pytest.raises(DerailRefused, match="has no model name Derail can read"):
+        client().post(EMBEDDINGS, content=body)
+    assert sink.lines[0]["reason"] == "unreadable_model"
+    assert next(body, None) is not None  # the gate left it as it found it
+
+
+@pytest.mark.design("gate.no_name_async")
+def test_an_async_call_with_no_readable_name_is_refused(gated: None) -> None:
+    sink, _ = install(make_plan((ON_EMBEDDING,)))
+
+    async def send() -> None:
+        transport = httpx2.MockTransport(answer)
+        async with httpx2.AsyncClient(transport=transport) as async_client:
+            await async_client.post(EMBEDDINGS, content=gzip.compress(b"{}", mtime=0))
+
+    with pytest.raises(DerailRefused, match="has no model name Derail can read"):
+        asyncio.run(send())
+    assert sink.lines[0]["reason"] == "unreadable_model"
+
+
+@pytest.mark.design("gate.no_name_chat")
+def test_a_chat_body_with_no_name_is_refused_for_that_reason(gated: None) -> None:
+    sink, _ = install(make_plan((ON_MAIN,)))
+    with pytest.raises(DerailRefused, match="take model off the fault"):
+        client().post(URL, json={"messages": []})
+    assert sink.lines[0]["reason"] == "unreadable_model"
+
+
+@pytest.mark.design("gate.no_name_other_label_runs")
+def test_an_unreadable_embedding_runs_under_a_fault_on_chat(gated: None) -> None:
+    sink, _ = install(make_plan((ON_MAIN,)))
+    assert client().post(EMBEDDINGS, content=gzip.compress(b"{}", mtime=0)).status_code == 200
+    assert sink.lines[0]["action"] == "real"
+
+
+@pytest.mark.design("proxy.unchanged_request")
+@pytest.mark.parametrize("model", ["gpt-4o-mini", "gpt-4.1"], ids=["other model", "named, past it"])
+def test_reading_the_name_leaves_every_byte_of_the_request_as_it_was(
+    gated: None, model: str
+) -> None:
+    fault = Fault("model", "status 429", "first 1", model="gpt-4.1")
+    install(make_plan((fault,)))
+    # Odd spacing, an odd key order and an escape: any rewrite of the JSON would show.
+    content = b'{ "stream":false,\n  "messages" : [],\t"m\\u006fdel2": 1, "model":"%s"  }' % (
+        model.encode()
+    )
+    headers = {"x-odd-header": "Kept As Sent", "content-type": "application/json"}
+    built = httpx2.Request("POST", URL, content=content, headers=headers)
+    seen: list[httpx2.Request] = []
+    sender = sends(seen)
+    sender.post(URL, json=MAIN)  # uses up the fault, so the request under test is sent
+    sender.send(built)
+    assert seen[-1].content == content
+    assert seen[-1].headers.raw == built.headers.raw

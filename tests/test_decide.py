@@ -1,12 +1,13 @@
 """The decision engine: fault, then mock, then real, else refused."""
 
+import dataclasses
 import threading
 from collections.abc import Sequence
 
 import pytest
 
 from derail_sdk.config import Fault, Mock
-from derail_sdk.decide import Call, Counters, decide, fires
+from derail_sdk.decide import Call, Counters, decide, fires, names
 from derail_sdk.labels import matches
 from derail_sdk.plan import Plan
 
@@ -148,3 +149,101 @@ def test_schedules() -> None:
     assert fires("requests 1", 1) and not fires("requests 1", 2)
     with pytest.raises(ValueError, match="is not a schedule"):
         fires("once", 1)
+
+
+def named(model: str | None, *, label: str = "model:openai") -> Call:
+    return Call("model", label, "chat", "openai", "POST", model=model)
+
+
+MAIN_FAULT = Fault("model", "status 429", "first 3", model="gpt-4.1")
+
+
+@pytest.mark.design("decide.model_name_exact")
+@pytest.mark.parametrize(
+    ("sent", "fires"),
+    [
+        ("gpt-4.1", True),
+        ("gpt-4.1-mini", False),  # the very trap of a prefix
+        ("gpt-4.1-2025-04-14", False),
+        ("GPT-4.1", False),
+        ("gpt-4", False),
+        ("", False),
+    ],
+)
+def test_a_fault_names_the_whole_model_name_case_and_all(sent: str, fires: bool) -> None:
+    assert names(MAIN_FAULT, named(sent)) is fires
+
+
+@pytest.mark.design("decide.dated_name_is_another_name")
+def test_a_plain_name_does_not_name_its_dated_snapshot() -> None:
+    fault = Fault("model", "status 429", "always", model="gpt-4o-mini")
+    assert not names(fault, named("gpt-4o-mini-2024-07-18"))
+
+
+@pytest.mark.design("decide.model_name_counts")
+def test_a_model_fault_counts_only_calls_to_that_model() -> None:
+    p = make(faults=[MAIN_FAULT])
+    counters = Counters(p)
+    router, main = named("gpt-4o-mini"), named("gpt-4.1")
+    assert decide(router, p, counters.note(router)).action == "real"
+    assert counters.attempts == [0]
+    numbers = [decide(main, p, counters.note(main)).n for _ in range(3)]
+    assert numbers == [1, 2, 3] and decide(router, p, counters.note(router)).action == "real"
+
+
+@pytest.mark.design("decide.model_name_decides")
+def test_the_decision_itself_compares_the_name() -> None:
+    p = make(faults=[MAIN_FAULT])
+    assert decide(named("gpt-4o-mini"), p, [1]).action == "real"
+    assert decide(named("gpt-4.1"), p, [1]).action == "fault"
+
+
+@pytest.mark.design("decide.model_name_requests")
+def test_requests_n_keeps_a_retry_with_its_request_past_another_model() -> None:
+    p = make(faults=[Fault("model", "status 429", "requests 1", model="gpt-4.1")])
+    counters = Counters(p)
+    main = dataclasses.replace(named("gpt-4.1"), key="thread-1:main")
+    router = dataclasses.replace(named("gpt-4o-mini"), key="thread-1:router")
+    assert decide(main, p, counters.note(main)).action == "fault"
+    assert decide(router, p, counters.note(router)).action == "real"
+    retry = dataclasses.replace(main, retry=1)
+    assert decide(retry, p, counters.note(retry)).n == 1  # still the first request
+
+
+@pytest.mark.design("decide.no_name_fails_closed")
+def test_a_call_with_no_readable_name_is_refused_when_a_fault_names_a_model() -> None:
+    p = make(faults=[MAIN_FAULT])
+    call = named(None)
+    counters = Counters(p)
+    decision = decide(call, p, counters.note(call))
+    assert (decision.action, decision.reason) == ("refused", "unreadable_model")
+    assert counters.attempts == [0]  # a call that may not be the target takes no number
+
+
+@pytest.mark.design("decide.no_name_after_the_schedule")
+def test_the_refusal_does_not_depend_on_what_the_schedule_has_left() -> None:
+    p = make(faults=[Fault("model", "status 429", "first 1", model="gpt-4.1")])
+    counters = Counters(p)
+    main = named("gpt-4.1")
+    counters.note(main)
+    counters.note(main)
+    assert decide(named(None), p, counters.note(named(None))).reason == "unreadable_model"
+
+
+@pytest.mark.design("decide.no_name_only_under_its_label")
+def test_a_call_the_faults_label_does_not_name_is_left_alone() -> None:
+    p = make(faults=[MAIN_FAULT])
+    embedding = named(None, label="model:openai/embeddings")
+    assert decide(embedding, p, Counters(p).note(embedding)).action == "real"
+
+
+@pytest.mark.design("decide.no_name_no_change")
+def test_a_fault_with_no_model_needs_no_name() -> None:
+    p = make(faults=[Fault("model", "status 429", "always")])
+    call = named(None)
+    assert decide(call, p, Counters(p).note(call)).action == "fault"
+
+
+@pytest.mark.design("decide.no_name_without_a_named_fault")
+def test_a_plan_with_no_fault_needs_no_name() -> None:
+    assert decide(named(None), make(), []).action == "real"

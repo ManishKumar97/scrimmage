@@ -12,6 +12,7 @@ imports either library: the hook patches one when the agent imports it.
 import asyncio
 import atexit
 import contextlib
+import dataclasses
 import datetime
 import hashlib
 import http
@@ -44,6 +45,7 @@ MISTAKE_REASONS = (
     "hosted",
     "web_write",
     "unreadable_body",
+    "unreadable_model",
     "redirect_off_host",
     "unsupported_loop",
     "unlisted",
@@ -269,6 +271,8 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
     body = body_of(request)
     call = describe(ctx, request, who, body or b"")
     fields = openai_table.request_fields(body) if body and call.kind == "model" else None
+    if call.kind == "model":
+        call = dataclasses.replace(call, model=openai_table.model_name(fields))
     # The method and path only: headers, cookies and a query string are never recorded.
     extra: dict[str, object] = {
         "method": call.method,

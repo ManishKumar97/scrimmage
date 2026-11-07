@@ -22,10 +22,10 @@ READ_METHODS = ("GET", "HEAD")
 class Call:
     """What a gate saw.
 
-    For a model call, retry is the library's own attempt number (0 for a first attempt)
-    and key ties a retry to its first attempt: who sent it and what it sent. For a web
-    request, name is the path. For an MCP tool, the label names the server too and short
-    is the label without it.
+    For a model call, retry is the library's own attempt number (0 for a first attempt),
+    key ties a retry to its first attempt: who sent it and what it sent, and model is the
+    name in its body, or None when none can be read. For a web request, name is the path.
+    For an MCP tool, the label names the server too and short is the label without it.
     """
 
     kind: Kind
@@ -36,6 +36,7 @@ class Call:
     retry: int = 0
     key: str | None = None
     short: str | None = None
+    model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -47,13 +48,30 @@ class Decision:
     reason: str | None = None  # why a call was refused
 
 
-def names(entry: Mock | Fault, call: Call) -> bool:
-    """Whether a mock or fault names this call exactly as it is written."""
+def labelled(entry: Mock | Fault, call: Call) -> bool:
+    """Whether a mock or fault names this call, leaving a model's name out of it."""
     if not matches(entry.call, call.label) and entry.call != call.short:
         return False
     if entry.method is not None and entry.method != call.method:
         return False
     return entry.path is None or entry.path == call.name
+
+
+def names(entry: Mock | Fault, call: Call) -> bool:
+    """Whether a mock or fault names this call exactly as it is written."""
+    if not labelled(entry, call):
+        return False
+    return not isinstance(entry, Fault) or entry.model in (None, call.model)
+
+
+def unknowable(call: Call, plan: Plan) -> bool:
+    """A fault names a model, its label covers this call, and this call has no readable name.
+
+    Firing could hit the wrong call and passing could spare the right one, so neither is safe.
+    """
+    if call.model is not None:
+        return False
+    return any(fault.model is not None and labelled(fault, call) for fault in plan.faults)
 
 
 def schedule(when: str) -> tuple[str, int]:
@@ -115,6 +133,8 @@ class Counters:
 
 
 def decide(call: Call, plan: Plan, numbers: list[int]) -> Decision:
+    if unknowable(call, plan):
+        return Decision("refused", reason="unreadable_model")
     for i, fault in enumerate(plan.faults):
         if names(fault, call) and fires(fault.when, numbers[i]):
             return Decision("fault", fault=i, n=numbers[i])
