@@ -16,6 +16,7 @@ from pathlib import Path
 
 import httpx
 import openai
+from openai.types.responses import ResponsePromptParam
 
 ROUTER = "gpt-4o-mini"
 MAIN = "gpt-4.1"
@@ -110,9 +111,11 @@ def stored(text: str, *, named: bool) -> str:
     """The router, then a stored prompt, whose request holds a model name only if given one."""
     client = openai.OpenAI(max_retries=0)
     ask(client, "chat", ROUTER, f"Route this: {text}", False)
-    model = {"model": MAIN} if named else {}
+    prompt: ResponsePromptParam = {"id": "pmpt_1"}
     try:
-        return client.responses.create(prompt={"id": "pmpt_1"}, input=text, **model).output_text
+        if named:  # the library's types take model beside prompt
+            return client.responses.create(model=MAIN, prompt=prompt, input=text).output_text
+        return client.responses.create(prompt=prompt, input=text).output_text
     except openai.APIError as exc:
         return f"error: {type(exc).__name__}"
 

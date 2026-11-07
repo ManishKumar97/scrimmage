@@ -1189,7 +1189,8 @@ def test_a_named_call_still_reserves_at_its_price(gated: None) -> None:
     budget = Budget(1.0)
     sink, _ = install(make_plan(budget=1.0), budget)
     assert client().post(URL, json=BODY).status_code == 200
-    assert sink.lines[0]["model"] == "gpt-4o-mini" and sink.lines[0]["cost_usd"] > 0
+    cost = sink.lines[0]["cost_usd"]
+    assert sink.lines[0]["model"] == "gpt-4o-mini" and isinstance(cost, float) and cost > 0
 
 
 @pytest.mark.design("gate.no_price_line_is_bounded")
