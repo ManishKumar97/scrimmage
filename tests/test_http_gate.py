@@ -21,7 +21,7 @@ import pytest
 from derail_sdk import http_gate, provider_openai, state
 from derail_sdk.budget import Ledger
 from derail_sdk.client import ControlClient
-from derail_sdk.config import Fault, ModelHost
+from derail_sdk.config import Fault, ModelHost, Price
 from derail_sdk.decide import Counters
 from derail_sdk.errors import DerailRefused
 from derail_sdk.plan import Plan
@@ -1132,7 +1132,9 @@ def test_an_async_call_with_no_readable_name_is_refused(gated: None) -> None:
 @pytest.mark.design("gate.no_name_chat")
 def test_a_chat_body_with_no_name_is_refused_for_that_reason(gated: None) -> None:
     sink, _ = install(make_plan((ON_MAIN,)))
-    with pytest.raises(DerailRefused, match=r"plain JSON with a model field.*has no price"):
+    with pytest.raises(
+        DerailRefused, match=r'plain JSON with a model field.*needs a price, as "" under'
+    ):
         client().post(URL, json={"messages": []})
     assert sink.lines[0]["reason"] == "unreadable_model"
 
@@ -1179,7 +1181,7 @@ def test_the_budget_refuses_a_call_with_no_name_as_having_no_price(
     gated: None, value: object
 ) -> None:
     sink, _ = install(make_plan(budget=1.0))
-    with pytest.raises(DerailRefused, match="no price for the model ''"):
+    with pytest.raises(DerailRefused, match="this model call sends no model name"):
         client().post(EMBEDDINGS, json={"model": value, "input": "hi"})
     assert sink.lines[0]["reason"] == "no_price"
 
@@ -1209,3 +1211,40 @@ def test_the_no_price_message_keeps_a_short_name_whole(gated: None) -> None:
     install(make_plan(budget=1.0))
     with pytest.raises(DerailRefused, match=r"model 'llama-70b'.*such as \"llama-70b\" ="):
         client().post(URL, json={**BODY, "model": "llama-70b"})
+
+
+@pytest.mark.design("gate.no_price_for_no_name")
+def test_a_call_with_no_name_is_told_to_send_one_or_price_the_empty_key(gated: None) -> None:
+    install(make_plan(budget=1.0))
+    with pytest.raises(DerailRefused) as caught:
+        client().post(URL, json={"messages": []})
+    message = str(caught.value)
+    assert "sends no model name" in message and "send model on the call" in message
+    assert 'as "" = {input = 0.15, output = 0.60}' in message
+    assert "model ''" not in message
+
+
+@pytest.mark.design("gate.no_price_whole_key")
+def test_a_name_under_the_cap_is_given_whole_as_its_price_key(gated: None) -> None:
+    install(make_plan(budget=1.0))
+    name = "arn:aws:bedrock:us-east-1:123456789012:" + "x" * 240
+    with pytest.raises(DerailRefused) as caught:
+        client().post(URL, json={**BODY, "model": name})
+    assert f'such as "{name}" = ' in str(caught.value)
+
+
+@pytest.mark.design("gate.no_price_too_long")
+def test_a_name_over_the_cap_gets_no_cut_key(gated: None) -> None:
+    install(make_plan(budget=1.0))
+    with pytest.raises(DerailRefused) as caught:
+        client().post(URL, json={**BODY, "model": "y" * (http_gate.PRICE_KEY_CAP + 1)})
+    message = str(caught.value)
+    assert "too long to show whole" in message and "such as" not in message
+
+
+@pytest.mark.design("gate.empty_price_key_prices_no_name")
+def test_the_empty_price_key_prices_a_call_with_no_name(gated: None) -> None:
+    sink, _ = install(make_plan(budget=1.0, prices=(("", Price(2.0, 8.0)),)))
+    assert client().post(URL, json={"messages": []}).status_code == 200
+    cost = sink.lines[0]["cost_usd"]
+    assert sink.lines[0]["action"] == "real" and isinstance(cost, float) and cost > 0

@@ -19,7 +19,7 @@ Anything this version does not support is rejected as unknown, with exit code 2.
 | `max_cost_usd` | The most the whole test may spend on model calls, in dollars. `"none"` turns the budget off, on purpose. | 5 |
 | `model_hosts` | Extra hosts whose requests are model calls, such as a gateway, each with the format it speaks: `[{host = "llm-gateway.internal", provider = "openai"}]`. A host name only, with no port. | empty |
 | `reserve_output_tokens` | The output tokens a budget reservation assumes when a request does not set `max_tokens`. | 4096 |
-| `prices` | Prices for other models, as the table below. | empty |
+| `prices` | Prices for other models, as the table below. The key `""` prices a call that sends no model name. | empty |
 | `answer` | Where the answer is in what the function returns, such as `"messages[-1].content"`. Only with `function`. Required when the function returns anything but text, as the whole value would hold tool results too. See [Agents on a framework](frameworks.md). | the returned text |
 
 ## [agent.prices]

@@ -230,8 +230,8 @@ class RunState:
                 f"{label}: a fault in this test names a model, but {detail} has no model name "
                 "Derail can read, so it cannot tell whether the fault is for this call. Send "
                 "this call as plain JSON with a model field. Taking model off the fault would "
-                "hit every call its label names, and with a budget a chat or an embedding with "
-                "no name has no price; see docs/model-faults.md"
+                "hit every call its label names, and with a budget any model call with no name "
+                'needs a price, as "" under [agent.prices]; see docs/model-faults.md'
             ),
             "redirect_off_host": detail,
             "unsupported_loop": detail,

@@ -148,8 +148,8 @@ The openai library takes `model` beside `prompt`, but Derail has not confirmed w
 
 Taking `model` off the fault is the other way out, and it has two costs.
 The fault hits every call its label names again, such as the router.
-And with a budget on, a chat or an embedding with no name has no price, so it is refused in the baseline too and the fault row never runs.
-Such a test needs `max_cost_usd = "none"`.
+And with a budget on, any model call with no name, such as a Responses call on a stored prompt, has no price, so it is refused in the baseline too and the fault row never runs.
+Give calls with no name a price, as the key `""` under `[agent.prices]`, or set `max_cost_usd = "none"`.
 
 Calls the fault's label does not name go on as usual, and so does everything in a test with no `model` on its fault.
 
@@ -184,6 +184,13 @@ For any other model, give the price in dollars per million tokens:
 ```toml
 [agent.prices]
 llama-70b = {input = 0.6, output = 0.6}
+```
+
+A call that sends no model name, such as a Responses call on a stored prompt, is priced by the key `""`:
+
+```toml
+[agent.prices]
+"" = {input = 2.0, output = 8.0}
 ```
 
 With a budget on, a model with no price stops the test at its first call, because it cannot be reserved for.
