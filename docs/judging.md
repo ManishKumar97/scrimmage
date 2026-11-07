@@ -1,0 +1,137 @@
+# Judging an answer
+
+`derail test` passes or fails each row.
+You write the rules. Derail compares text, with no model, so the same answer always gets the same result.
+
+## The rules
+
+```toml
+[[test]]
+name     = "order-status"
+question = "Where is order 1234?"
+expect   = ["shipped", ["Oct 30", "October 30"]]
+```
+
+`expect` is a list, and every item must match.
+An item is a text, or a list of texts of which any one is enough.
+So this answer needs "shipped", and either spelling of the date.
+
+`forbid` is a list of texts the answer must not hold. Any one of them fails the run:
+
+```toml
+forbid = ["refunded"]
+```
+
+## How text is compared
+
+The rule and the answer go through the same steps first:
+
+- case is ignored;
+- a non-breaking space, a full-width letter and other Unicode variants become the plain character;
+- curly quotes become straight, and the dash and non-breaking hyphen forms become `-`;
+- a run of spaces or new lines becomes one space.
+
+Then the rule must appear in the answer as plain text. It is not a word match, so:
+
+- `"shipped"` is found in "has not shipped"; add a `forbid` for what must not be said;
+- `"12"` is found in "123";
+- Markdown stays, so `"Oct 30"` is not found in `Oct **30**`.
+
+Derail compares the answer your agent really gave. The answer in the record has secrets removed, so a rule can forbid a secret by its value and still find it. A rule is shown with secrets removed too.
+
+## Rules for a fault row
+
+A fault can carry its own `expect` and `forbid`. Each one replaces the test's for that row:
+
+```toml
+[[test.fault]]
+call   = "tool:get_order"
+do     = "timeout"
+expect = [["unable", "try again", "sorry"]]
+forbid = ["Oct 30", "October 30"]
+```
+
+This row passes only if the bot says it could not get the order and states no date.
+The test's own `expect` could not do this: a bot with no order data should not say "shipped".
+Derail has no word list for "admits the failure". You write the words your agent uses.
+
+`forbid = []` on a fault drops the test's list for that row.
+
+A fault with no `expect` of its own uses the test's.
+That is right for a recovery row, such as `when = "first 1"`, where the agent should retry and give the same answer as the baseline.
+It is not safe for a fault that fires on every call. An agent with no data can still write the expected words from general knowledge, and a rule cannot tell where the words came from.
+So when such a row passes on the test's rules alone, Derail prints a note. Give that row its own rules, unless the agent has a real way around the failure.
+
+If a row's rules cannot both be met, such as a fault that forbids a word the test expects, the file is refused before the first run.
+
+## How a run counts
+
+| How the run ended | Counts as |
+|---|---|
+| answered | pass or fail, by the rules |
+| answered, but the answer is empty | fail: `empty answer` |
+| crashed | fail: `crashed` |
+| timed out | fail: `timed out` |
+| refused call | left out |
+| budget reached | left out |
+| infrastructure error | left out |
+| stopped | left out |
+| any ending, when the row's fault did not fire | left out |
+
+A crash or a time-out is a real result about your agent, so it fails.
+The rest say nothing about your agent, so they are left out of every rate.
+A script's answer is what [An agent run as a script](scripts.md#the-answer) says it is: the answer file, or the last line printed. Earlier lines are not read.
+
+## How a row counts
+
+A row passes when all its runs pass.
+`pass_rate` lowers that line, on a test or on one fault. The fault's wins for its row:
+
+```toml
+pass_rate = 0.8
+```
+
+| Result | When |
+|---|---|
+| `pass` | passed runs divided by judged runs reaches `pass_rate`, and enough runs were judged |
+| `fail` | passed runs divided by judged runs is below `pass_rate` |
+| `no result` | no run was judged; too few were judged; or a run was refused |
+
+"Enough" is the share of `runs` that `pass_rate` asks for, rounded up.
+With `runs = 5` and `pass_rate = 0.8`, a row needs 4 judged runs. 4 of 5 passes, and 3 of 5 fails.
+With `runs = 3`, 0.8 means all three, as 2 of 3 is below it.
+At the default every run must be judged, so a run where the fault did not fire keeps the row from passing, even though it is not in the rate. Make the fault fire in every run, or lower `pass_rate`.
+
+`no result` is a mistake in the test, not a failure of the agent, so it exits with code 2.
+
+Runs of a row whose baseline answered badly still happen. Only a baseline that crashed, timed out, was refused or reached the budget in every run skips its fault rows.
+
+## The table
+
+```text
+test          row       fault                   runs  fired  done  passed  rate  range    tools  cost     result
+order-status  baseline  -                       5     -      5     5/5     100%  57-100%  1.0    0.00030  pass
+order-status  fault 1   tool:get_order timeout  5     5      5     3/5     60%   23-88%   2.0    0.00055  fail
+range: a 95% Wilson interval, from these runs alone
+fail: order-status fault 1: 3/5 passed, pass_rate is 1
+  2 runs: forbid "October 30" found
+```
+
+| Column | Means |
+|---|---|
+| `fired` | runs where the fault fired, `-` on a baseline |
+| `done` | runs that ended "answered" |
+| `passed` | passed runs of judged runs |
+| `rate` | the same as a share |
+| `range` | a 95% Wilson interval for that share |
+| `tools` | tool and MCP tool calls per run, on average |
+| `cost` | what the row's model calls cost, in dollars |
+
+The table fits in 120 columns. A long test or fault name is cut with `...`, and the lines under the table give it in full.
+
+The rate says what happened in these runs. It is not a promise about the next one.
+The range shows how little a few runs can say: 5 of 5 reads 57-100%. The result compares the plain rate with `pass_rate`, not the range.
+
+## Where the result is kept
+
+Each run's summary, the last line of its record, says how that run was judged: `judged` is `pass`, `fail` or `left out`, and `broken_rules` lists what it broke.

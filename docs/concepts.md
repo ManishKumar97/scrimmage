@@ -65,8 +65,14 @@ If the tool returns its own type, Derail builds that type from the mock:
 
 A fault fires on every call it names, unless `when` narrows it to the `first N` attempts or the first `requests N`. See [Failing the model](model-faults.md).
 It fires only in the program Derail started, not in its child processes, unless `children` is set. See [An agent run as a script](scripts.md#faults-in-children).
-If the agent never makes that call in a run, the run is **not exercised**: it was really a baseline run, so it is left out of the row's counts.
+If the agent never makes that call in a run, the run is **not exercised**: it was really a baseline run, so it is left out of the row's rate.
 A row where the fault never fired tested nothing, and is reported as a mistake in the test.
+
+## Judging
+
+Each run is judged by `expect` and `forbid`, which the team writes, and each row by its `pass_rate`.
+A crash or a time-out fails. A refused, stopped or budget-stopped run and an infrastructure error are left out, and so is a run where the fault did not fire.
+A row reads `pass`, `fail` or `no result`. See [Judging an answer](judging.md).
 
 ## Records
 
@@ -75,7 +81,7 @@ Each line says which call it was, which process made it, what Derail did (real, 
 A call still going on when the run was stopped has a line whose error is `DerailStopped`.
 A model call's line also holds the provider, the model, the status, the retry number, the token counts and the cost; its full request and reply are kept once in a `blobs/` folder next to the record, named by their hash.
 Each process that joined a run has one line saying what it is: its interpreter, its command line and its parent's process id.
-The last line is the run's summary: the answer, how the run ended, whether its fault fired, and what the run cost.
+The last line is the run's summary: the answer, how the run ended, whether its fault fired, what the run cost, and how it was judged.
 
 | How a run ended | Meaning |
 |---|---|

@@ -12,13 +12,16 @@ Before the first run it checks the file, and every label against `tools` when th
 the test stops and lists the tools it knows.
 With no `tools` list, a framework's tool names are known only when the agent runs, so one baseline run goes first, alone. If a mock or fault names a tool the agent does not have, the test stops there with exit 2 and lists the real tools.
 
-It prints one table row per test row and what the model calls cost, writes each run's record to `derail-runs/<time>/`, and exits with:
+It prints one table row per test row with its pass rate and result, then which rules failed and what the model calls cost. See [Judging an answer](judging.md). It writes each run's record to `derail-runs/<time>/`, and exits with:
 
 | Code | Meaning |
 |---|---|
-| 0 | Every row produced a result (answered, crashed and timed out are results) |
-| 2 | A mistake in the test, a failed baseline, or a test the budget stopped |
+| 0 | Every row passed |
+| 1 | A row failed |
+| 2 | A mistake in the test, a failed baseline, a row with no result, or a test the budget stopped |
 | 3 | An infrastructure error, such as a model call that failed with nobody injecting it, or a library version Derail cannot gate |
+
+The higher code wins: a failed row in a test with a mistake exits 2. The table still shows every row.
 
 Each run's own output, everything your agent printed, is in `derail-runs/<time>/<run>.log`.
 For a script, what it printed to standard output is in `<run>.out` and its standard error in `<run>.log`.

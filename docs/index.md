@@ -14,6 +14,7 @@ For each call your agent makes, a test decides what it gets back:
 - **fault**: a failure that looks exactly like a real one, such as a timeout or a 429 from the model.
 
 Every call is written to a record, so you can see what the agent was given and what it did next.
+Each answer is judged by rules you write, so a build can fail when a row falls below the line you set.
 
 Fault injection is an established practice; Derail brings it inside any Python agent.
 
@@ -28,6 +29,7 @@ Fault injection is an established practice; Derail brings it inside any Python a
 | [An agent run as a script](scripts.md) | A command, its answer, its child processes and how it stops |
 | [Web requests](web-requests.md) | Mocking and failing the request inside a tool |
 | [MCP tools](mcp.md) | Mocking and failing a tool on an MCP server |
+| [Judging an answer](judging.md) | `expect`, `forbid`, `pass_rate` and the result of a row |
 | [Concepts](concepts.md) | Rows, runs, labels, mocks, faults, records |
 | [Configuration](configuration.md) | Every setting in `derail.toml` |
 | [Commands](cli.md) | `derail test` and `derail-run` |
@@ -38,5 +40,5 @@ Fault injection is an established practice; Derail brings it inside any Python a
 ## Status
 
 Derail is at an early stage.
-This version tests an agent that is a Python function, with its own loop or on LangGraph, or a Python script and the child processes it starts. It fails or mocks the agent's own Python tools, the web requests inside them and MCP tools, fails OpenAI model calls, and keeps a budget.
+This version tests an agent that is a Python function, with its own loop or on LangGraph, or a Python script and the child processes it starts. It fails or mocks the agent's own Python tools, the web requests inside them and MCP tools, fails OpenAI model calls, keeps a budget, and passes or fails each row.
 Other providers and more frameworks come in later versions.

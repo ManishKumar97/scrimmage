@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from derail_sdk import config, mcp_gate, runner
+from derail_sdk import config, judge, mcp_gate, runner
 
 DOCS = Path(__file__).parents[1] / "docs"
 
@@ -60,6 +60,20 @@ def test_the_script_shape_its_children_and_its_stopping_are_documented() -> None
     assert "mcp 1.x, started with your environment" not in page("limits.md")
 
 
+@pytest.mark.design("docs.judging")
+def test_the_rules_the_table_and_the_endings_are_documented() -> None:
+    text = page("judging.md")
+    for word in sorted(config.RULE_KEYS) + runner.HEAD[3:-1]:
+        assert mentioned(text, word), word
+    for result in (judge.PASS, judge.FAIL, judge.NO_RESULT):
+        assert f"`{result}`" in text
+    assert all(f"| {outcome} |" in text for outcome in runner.OUTCOMES)
+    assert judge.EMPTY in text
+    assert "not a promise about the next one" in text
+    assert "No judging" not in page("limits.md")
+    assert "later version" not in text
+
+
 def test_every_fault_and_outcome_is_documented() -> None:
     concepts = page("concepts.md")
     assert all(mentioned(concepts, f) for f in config.FAULTS)
@@ -69,7 +83,7 @@ def test_every_fault_and_outcome_is_documented() -> None:
 
 def test_exit_codes_match_the_runner() -> None:
     cli = page("cli.md")
-    for code in (runner.OK, runner.MISTAKE, runner.INFRA):
+    for code in (runner.OK, runner.ROW_FAILED, runner.MISTAKE, runner.INFRA):
         assert f"| {code} |" in cli
 
 

@@ -30,7 +30,11 @@
 - **A few faults.** `timeout` and `error` on tools, `timeout` and `status N` on model calls and web requests, and `timeout`, `error` and `empty` on MCP tools. Faults that change the model's reply come later.
 - **Prices need checking.** The built-in price table is small; check it against your provider's pricing, and use `[agent.prices]` for anything else.
 - **Tools reached by import path.** A tool your code stores in a list or dictionary the moment it is defined keeps the original function, so the gate cannot reach it. A marker for those comes later.
-- **No judging.** The answer is recorded, not compared with `expect`.
+- **Rules are plain text.** `expect` and `forbid` find text in the answer, with no word boundaries, numbers or meaning. "shipped" is found in "has not shipped", and Markdown stays in the answer. See [Judging an answer](judging.md).
+- **No model judges an answer, and there is no built-in list for "admits the failure".** You write the words.
+- **A rule cannot tell where a word came from.** An agent that answers from general knowledge can pass a rule that its tools should have earned. Give a fault that fires on every call its own rules.
+- **A rate describes the runs that happened.** A few runs say little, the range shows how little, and neither is a promise about the next run.
+- **One `runs` for every row.** A row cannot run more times than another.
 - **A command that clears Derail's path.** `env PYTHONPATH=. python bot.py` replaces the startup folder, so the program runs with no gates, its writes are real, and only then does the run read infrastructure error. Add to `PYTHONPATH` in the environment of `derail test` instead. A flag that does the same, `python -E`, is refused when the file is read.
 - **A blind child not started from Python.** A Python child with its own `env`, or with `-I`, `-E` or `-S`, is refused when your Python code starts it. Only those starts are seen, so `sh -c 'python x'`, `env -i python x`, `os.system`, and any exec from a program that is not Python, such as a shell script or a wrapper, are missed: the child runs with no gate and no line. A shell script that runs Python has the same gap if it clears the environment.
 - **A blind child on another Python.** A Python that is not the run's, with its own `env`, passes the check and is not kept from a listed tool. That includes a venv elsewhere made from the same binary. The base binary of your venv counts as this Python, and is refused.
