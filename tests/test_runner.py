@@ -87,7 +87,7 @@ def test_an_unlisted_write_tool_ends_its_run_as_refused(project: Project) -> Non
 def test_a_hanging_run_ends_as_timed_out(project: Project) -> None:
     project.edit(
         'function = "acme.agent:answer"',
-        'function = "acme.slow:hang"\nrun_timeout = 1\nruns = 1\nmax_cost_usd = "none"',
+        'function = "acme.slow:hang"\nrun_timeout = 5\nruns = 1\nmax_cost_usd = "none"',
     )
     project.edit(FAULT_BLOCK, "")
     result = project.test()
@@ -218,11 +218,11 @@ def test_a_refused_run_is_stopped_even_if_the_agent_carries_on(project: Project)
 
 @pytest.mark.design("runner.sigkill_after_grace")
 def test_an_agent_that_ignores_sigterm_is_killed(project: Project) -> None:
-    only_baseline(project, "acme.slow:stubborn", "\nrun_timeout = 1")
+    only_baseline(project, "acme.slow:stubborn", "\nrun_timeout = 5")
     started = time.monotonic()
     result = project.test()
     assert [s["outcome"] for s in result.summaries()] == ["timed out"]
-    assert time.monotonic() - started < 20  # 1 s, then SIGTERM, then SIGKILL 5 s later
+    assert time.monotonic() - started < 20  # 5 s, then SIGTERM, then SIGKILL 5 s later
 
 
 @pytest.mark.design("record.gap_is_infrastructure")

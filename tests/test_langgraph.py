@@ -361,7 +361,7 @@ def test_a_mock_no_run_used_is_a_note(project: Project, fake_openai: Fake) -> No
 def test_a_test_where_no_run_reported_its_tools_fails(project: Project) -> None:
     graph(project, "hang", "")
     project.edit("acme.graph:hang", "acme.slow:hang")
-    project.edit("parallel = 1", "parallel = 1\nrun_timeout = 1")
+    project.edit("parallel = 1", "parallel = 1\nrun_timeout = 5")
     project.edit('answer   = "messages[-1].content"\n', "")
     project.edit("[agent]\n", '[agent]\nmax_cost_usd = "none"\n')
     result = project.test()
