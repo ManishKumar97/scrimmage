@@ -7,6 +7,9 @@ Then the tool's parsing and error handling are part of the test.
 Scrimmage gates requests sent with httpx, a common Python HTTP client, and httpx2.
 The `openai` library uses httpx too.
 
+Libraries this example needs: `openai` and `httpx`.
+This page was checked with openai 3.46 and httpx 0.28.
+
 ## The files
 
 Start from the three files of the [function agent](function-agent.md).

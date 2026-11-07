@@ -4,7 +4,6 @@ This page takes you from a fresh clone to a test that fails, and then passes aft
 It uses the small order bot in the repository, under `tests/example`.
 
 You need Python 3.11 or newer, an OpenAI API key, and about five minutes.
-The whole page makes about 60 small model calls to `gpt-4o-mini`, which cost well under one cent.
 
 ## 1. Get the example and install Scrimmage
 
@@ -143,7 +142,7 @@ Add a second fault at the end of `scrimmage.toml`:
 ```
 
 `first 1` fails only the first model call of each run.
-Scrimmage answers that call itself with a real 429 reply, so nothing reaches OpenAI and it costs nothing.
+Scrimmage answers that call itself with a 429 reply shaped like the provider's, so nothing reaches OpenAI and it costs nothing.
 This fault row has no rules of its own, so the answer must pass the test's own rules: after one busy reply, the bot should still answer.
 
 ```bash

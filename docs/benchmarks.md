@@ -2,8 +2,9 @@
 
 !!! note "Numbers are coming"
     This page has no performance numbers yet.
-    They come from a later slice of work on performance, slice P1.
+    They come in a later release.
     This page will show each number with the machine it ran on and the command that reproduces it.
+    Each number will also come with a budget per call that CI checks, so a slower change fails the build.
 
 ## What will be measured
 

@@ -4,6 +4,9 @@ Each run's answer is judged by rules you write: `expect`, `forbid` and `pass_rat
 Scrimmage compares text, with no model, so the same answer always gets the same result.
 This example shows a rule that is too narrow, what the report says about it, and the fix.
 
+Libraries this example needs: `openai`.
+This page was checked with openai 3.46.
+
 ## The files
 
 Start from the three files of the [function agent](function-agent.md), and replace its test:

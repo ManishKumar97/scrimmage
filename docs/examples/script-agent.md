@@ -4,6 +4,9 @@ Some agents are a program you start with a question, which prints its answer and
 This example turns the [function agent](function-agent.md) into a script that also starts a child process.
 The child calls a tool that writes, and Scrimmage's rules reach it there too.
 
+Libraries this example needs: `openai`.
+This page was checked with openai 3.46.
+
 ## The files
 
 Start from the three files of the [function agent](function-agent.md).

@@ -3,6 +3,9 @@
 An agent often calls more than one model: a large one to answer, and a small one as a fallback, a router or a guardrail.
 A fault with `model` fails calls to one model by name and leaves the others alone.
 
+Libraries this example needs: `openai`.
+This page was checked with openai 3.46.
+
 ## The files
 
 Start from the three files of the [function agent](function-agent.md).

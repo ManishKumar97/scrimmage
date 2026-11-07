@@ -4,6 +4,9 @@ MCP, the Model Context Protocol, is a standard way for an agent to call tools th
 Agent frameworks and coding assistants use it to connect to tools run by other teams.
 Scrimmage gates each MCP tool call inside your program, so a test can mock the tool or make it fail without changing the server.
 
+Libraries this example needs: `openai`, and `mcp` 2.3 or newer, as Scrimmage gates `mcp` 2.x only.
+This page was checked with openai 3.46 and mcp 2.3.
+
 ## The files
 
 A small MCP server with one tool, `search`, run over stdio:

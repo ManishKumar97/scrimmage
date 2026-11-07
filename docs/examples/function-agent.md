@@ -3,6 +3,9 @@
 The smallest complete project: an agent that is one Python function with its own loop, two tools, and one test.
 Copy the three files into an empty folder to start your own.
 
+Libraries this example needs: `openai`.
+This page was checked with openai 3.46.
+
 ## The files
 
 ```python title="shop/tools.py"
