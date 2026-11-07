@@ -39,7 +39,9 @@ Derail imports only modules under your agent's own top-level packages, the ones 
 |---|---|
 | `name` | A name for the test, unique in the file. Required. |
 | `question` | The question the agent gets. Required. |
-| `expect` | A list of text the answer should contain. Required; used for judging in a later version. |
+| `expect` | What the answer must hold: a list, every item must match, and an item is a text or a list of texts of which any one is enough. `["shipped", ["Oct 30", "October 30"]]`. Required. See [Judging an answer](judging.md). |
+| `forbid` | A list of texts the answer must not hold. Optional. |
+| `pass_rate` | The share of runs that must pass, above 0 and up to 1, such as `0.8`. Every run by default. |
 
 ## [[test.mock]]
 
@@ -67,6 +69,9 @@ See [Web requests](web-requests.md) and [MCP tools](mcp.md).
 | `when` | When it fires: `"always"`, the default; `"first N"`, the first N attempts; or on a model call `"requests N"`, the first N requests and every retry of each. |
 | `method` | On a web request: fail only this method. |
 | `path` | On a web request: fail only this exact path, with no query string. |
+| `expect` | Replaces the test's for this row. With none, the row uses the test's. |
+| `forbid` | Replaces the test's for this row. `[]` drops the test's list. |
+| `pass_rate` | Replaces the test's for this row. |
 
 ## Coming in later versions
 
