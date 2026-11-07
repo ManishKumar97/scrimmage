@@ -269,8 +269,8 @@ def clean(value: object) -> tuple[object, list[Removed]]:
             out: dict[str, object] = {}
             for name, inner in cast(dict[str, object], item).items():
                 name = text(name, key)
-                listed = isinstance(inner, str | list)
-                out[name] = walk(inner, name, listed and secret_key(name))
+                # A table under the key gets the rule key by key; a number is never replaced.
+                out[name] = walk(inner, name, secret_key(name))
             return out
         return item
 
