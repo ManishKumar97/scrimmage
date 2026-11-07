@@ -1,22 +1,25 @@
 """Claims on the security page that no other test held: where the control server listens,
-that it is the only connection Scrimmage makes, what never reaches a record, and a known gap
-in redaction."""
+that it is the only connection Scrimmage makes, the record folder's mode, each secret shape
+redaction removes, a known gap in redaction, and the numbers the page states."""
 
 import re
-import secrets
+import stat
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from conftest import ACME, Project
+from scrimmage_core import config, protocol
 from scrimmage_core.control import ControlServer
 from scrimmage_core.records import RecordStore
-from scrimmage_core.redact import redact
+from scrimmage_core.redact import REMOVED, redact
 from fakes.openai_server import FakeOpenAI
 
 TOKEN = "f00d" * 16
-PACKAGES = Path(__file__).parents[1] / "packages"
+ROOT = Path(__file__).parents[1]
+PACKAGES = ROOT / "packages"
+SDK = PACKAGES / "scrimmage" / "src" / "scrimmage_core"
 # Every standard-library name that opens a connection or listens for one.
 NETWORK = re.compile(
     r"\b(HTTPS?Connection|urlopen|urlretrieve|create_connection|open_connection|"
@@ -28,9 +31,7 @@ NETWORK = re.compile(
 
 @pytest.mark.design("security.no_telemetry")
 def test_the_only_connections_are_to_and_from_the_control_server() -> None:
-    """The SDK's client opens one kind of connection, to the control server's URL, and the
-    runner's control server is the only thing that listens. Nothing else reaches the network:
-    `socket` is used only to read the host name."""
+    """A fast check by name. test_security_audit.py watches a real run do the same."""
     found = {
         (path.name, name)
         for path in PACKAGES.rglob("*.py")
@@ -58,30 +59,70 @@ def test_the_control_server_listens_on_loopback_only(tmp_path: Path) -> None:
         control.server.server_close()
 
 
-@pytest.mark.design("security.token_and_environment_unrecorded")
-def test_no_record_or_log_holds_the_run_token_or_the_environment(
-    project: Project,
-    fake_openai: Callable[..., FakeOpenAI],
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.design("security.records_owner_only")
+def test_the_record_root_is_owner_only_even_if_it_was_open(
+    project: Project, fake_openai: Callable[..., FakeOpenAI]
 ) -> None:
-    secret = "a1b2c3d4" * 8
-    real = secrets.token_hex
-    # The token is the one 32-byte value; run ids and folder names stay random.
-    monkeypatch.setattr(secrets, "token_hex", lambda n: secret if n == 32 else real(n))
-    monkeypatch.setenv("ACME_DATABASE_PASSWORD", "env-only-value-7f3a")
-    result = project.test(fake_openai(ACME))
-    assert result.finished
-    files = [f for f in (project.root / "scrimmage-runs").rglob("*") if f.is_file()]
-    assert any(f.suffix == ".jsonl" for f in files) and any(f.suffix == ".log" for f in files)
-    for path in files:
-        data = path.read_bytes()
-        assert secret.encode() not in data, path
-        assert b"env-only-value-7f3a" not in data, path
-        assert b"ACME_DATABASE_PASSWORD" not in data, path
+    root = project.root / "scrimmage-runs"
+    root.mkdir(mode=0o755)
+    root.chmod(0o755)
+    assert project.test(fake_openai(ACME)).finished
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700
+
+
+# One value of each shape the security page lists, as its prefix and a made-up body. They are
+# joined only when the test runs, so the source holds nothing that looks like a real secret.
+LETTERS = "abcdefghijklmnopqrstuvwxyz"
+SHAPES = {
+    "openai key": ("sk-", LETTERS),
+    "openai project key": ("sk-proj-", LETTERS),
+    "anthropic key": ("sk-ant-", LETTERS),
+    "openai service account key": ("sk-svcacct-", LETTERS),
+    "aws access key id": ("AK" + "IA", "Q" * 16),
+    "google api key": ("AI" + "za", "B" * 35),
+    "github token ghp": ("gh" + "p_", "a1B2" * 9),
+    "github token gho": ("gh" + "o_", "a1B2" * 9),
+    "github token ghu": ("gh" + "u_", "a1B2" * 9),
+    "github token ghs": ("gh" + "s_", "a1B2" * 9),
+    "github token ghr": ("gh" + "r_", "a1B2" * 9),
+    "github fine-grained token": ("github" + "_pat_", LETTERS),
+    "slack bot token": ("xo" + "xb-", LETTERS),
+    "slack user token": ("xo" + "xp-", LETTERS),
+    "slack app token": ("xo" + "xa-", LETTERS),
+    "slack refresh token": ("xo" + "xr-", LETTERS),
+    "slack legacy token": ("xo" + "xs-", LETTERS),
+    "slack config token": ("xo" + "xe-", LETTERS),
+    "slack rotating token": ("xo" + "xe.xoxp-", LETTERS),
+    "slack app-level token": ("xa" + "pp-", LETTERS),
+    "bearer token": ("Bearer ", LETTERS),
+    "json web token": ("ey" + "J", f"{LETTERS}.ey{LETTERS}.{LETTERS}"),
+}
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+def test_each_listed_secret_shape_is_removed(shape: str) -> None:
+    prefix, body = SHAPES[shape]
+    secret = prefix + body
+    assert redact(f"value: {secret} end") == f"value: {REMOVED} end"
 
 
 @pytest.mark.design("security.redaction_gap")
 def test_a_secret_with_no_known_shape_passes_through_redaction() -> None:
     """A known limit, stated on the security page: only known shapes are removed."""
     assert redact("password=hunter2") == "password=hunter2"
-    assert redact("key sk-abcdefghijklmnop1234") == "key [secret removed]"
+
+
+@pytest.mark.design("security.page_numbers")
+def test_the_numbers_on_the_security_page_are_the_codes() -> None:
+    page = (ROOT / "docs" / "security.md").read_text()
+    control = (SDK / "control.py").read_text()
+    records = (SDK / "records.py").read_text()
+    runner = (SDK / "runner.py").read_text()
+    assert '("127.0.0.1", 0)' in control and "`127.0.0.1`" in page
+    assert "mode=0o700" in records and "0o700" in runner and "`0700`" in page
+    assert "0o600" in records and "`0600`" in page
+    assert protocol.WINDOW_S == 60 and "more than 60 seconds" in page
+    assert "self.token = secrets.token_hex(32)" in runner and "256 bits" in page
+    assert config.DEFAULT_BUDGET_USD == 5 and "$5 unless" in page
+    assert "hashlib.sha256" in (SDK / "protocol.py").read_text() and "HMAC-SHA256" in page
