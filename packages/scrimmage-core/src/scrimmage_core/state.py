@@ -33,9 +33,11 @@ BLOB_CAP = 10 * 1024 * 1024  # a side-folder item keeps its first 10 MB and is m
 CLOSED = "a run that has ended"
 PLAN_RETRY_S = 1.0  # a failed plan fetch can take ten seconds, so not one per line
 COMMAND_CAP = 1000  # a process's line keeps this much of its command, which can hold a question
-# The call_id of the real tool call whose code is running, in a recording run. A context
-# variable follows await and the tasks made inside the tool, but not a thread the tool starts.
-PARENT: ContextVar[int | None] = ContextVar("scrimmage_parent", default=None)
+# The process and call_id of the real tool call whose code is running, in a recording run.
+# A context variable follows await, the tasks made inside the tool and asyncio.to_thread,
+# which copy it, but not a thread or a pool the tool starts itself. A forked child inherits
+# it, so it holds the process too: a call in another process names no parent.
+PARENT: ContextVar[tuple[int, int] | None] = ContextVar("scrimmage_parent", default=None)
 
 
 class LineSink(Protocol):
@@ -199,7 +201,9 @@ class RunState:
         """Track a call until it ends. Called with the lock held, so ids follow decisions."""
         if self.recording:
             self._ids += 1
-            step.call_id, step.parent = self._ids, PARENT.get()
+            inside = PARENT.get()
+            parent = inside[1] if inside is not None and inside[0] == os.getpid() else None
+            step.call_id, step.parent = self._ids, parent
         self.live[id(step)] = step
         return step
 
@@ -530,7 +534,7 @@ def inside(step: Step) -> Generator[None]:
     if step.call_id is None:
         yield
         return
-    token = PARENT.set(step.call_id)
+    token = PARENT.set((os.getpid(), step.call_id))
     try:
         yield
     finally:

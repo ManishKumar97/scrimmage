@@ -6,6 +6,7 @@ import dataclasses
 import datetime
 import enum
 import functools
+import hashlib
 import json
 import threading
 import tomllib
@@ -22,7 +23,17 @@ import pydantic
 import pytest
 
 import scrimmage_core
-from scrimmage_core import capture, config, http_gate, langchain_gate, state, toml_write, tool_gate
+from conftest import Project
+from scrimmage_core import (
+    capture,
+    config,
+    http_gate,
+    langchain_gate,
+    state,
+    toml_write,
+    tool_gate,
+)
+from scrimmage_core import plan as planner
 from scrimmage_core.config import Mock
 from scrimmage_core.plan import Plan
 from scrimmage_core.redact import REMOVED
@@ -534,6 +545,19 @@ def test_a_request_a_tool_sends_from_a_thread_has_no_parent(web: Sink) -> None:
 
 
 @pytest.mark.design("record.parent_links")
+def test_a_request_sent_through_asyncio_to_thread_names_its_tool(web: Sink) -> None:
+    async def threaded(sku: str) -> str:
+        return await asyncio.to_thread(fetch, f"/to-thread/{sku}")  # it copies the context
+
+    asyncio.run(gated(threaded)(sku="a"))
+    lines = by_call(web)
+    assert (
+        lines["http:inventory.acme.internal /to-thread/a"]["parent"]
+        == (lines["tool:threaded"]["call_id"])
+    )
+
+
+@pytest.mark.design("record.parent_links")
 def test_two_async_tools_at_once_keep_their_own_requests(web: Sink) -> None:
     async def fetch_async(path: str) -> str:
         await asyncio.sleep(0.01)
@@ -577,6 +601,67 @@ def test_call_ids_are_unique_across_threads(sink: Sink) -> None:
     assert sorted(ids) == list(range(1, 201))
 
 
+# A forked child is another process, so its calls name no parent from this one.
+
+FORKING = """
+import multiprocessing
+import os
+
+import httpx
+
+
+def get(path):
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"ok": True}))
+    with httpx.Client(transport=transport) as client:
+        return client.get(f"https://inventory.acme.internal{path}").text
+
+
+def in_a_worker():
+    get("/worker")
+
+
+def lookup(sku: str) -> str:
+    pid = os.fork()
+    if pid == 0:
+        get("/fork")
+        os._exit(0)
+    os.waitpid(pid, 0)
+    worker = multiprocessing.get_context("fork").Process(target=in_a_worker)
+    worker.start()
+    worker.join()
+    return get("/own")
+
+
+def answer(question):
+    return lookup("SKU-1")
+"""
+
+
+@pytest.mark.design("record.parent_links")
+def test_a_forked_child_inside_a_real_tool_names_no_parent(project: Project) -> None:
+    (project.root / "acme" / "forking.py").write_text(FORKING)
+    project.toml.write_text(
+        '[agent]\nfunction = "acme.forking:answer"\ntools = ["acme.forking:lookup"]\n'
+        'real = ["tool:lookup"]\nruns = 1\nmax_cost_usd = "none"\n\n'
+        '[[test]]\nname = "t"\nquestion = "q"\nexpect = ["ok"]\n'
+    )
+    made = planner.plan_for
+
+    def record_too(*args: Any) -> Plan:
+        return dataclasses.replace(made(*args), record=True)
+
+    project.monkeypatch.setattr(planner, "plan_for", record_too)
+    result = project.test()
+    assert result.code == 0, result.out + result.err
+    (lines,) = result.records()
+    found = {f"{x['call']} {x.get('path', '')}".strip(): x for x in lines if "call" in x}
+    tool = found["tool:lookup"]
+    assert found["http:inventory.acme.internal /own"]["parent"] == tool["call_id"]
+    for child in ("/fork", "/worker"):
+        line = found[f"http:inventory.acme.internal {child}"]
+        assert "parent" not in line and line["proc"] != tool["proc"], line
+
+
 # Web lines.
 
 
@@ -594,7 +679,6 @@ def test_a_web_line_holds_the_content_type_and_the_query_hash_never_the_query(we
     found = first["recorded"]
     assert found["content_type"] == "application/json" and found["utf8"] is True
     assert found["query_sha256"] != second["recorded"]["query_sha256"]
-    import hashlib
 
     assert found["query_sha256"] == hashlib.sha256(b"q=refunds").hexdigest()
     assert second["recorded"]["query_sha256"] == hashlib.sha256(b"").hexdigest()
