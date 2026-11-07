@@ -1129,3 +1129,14 @@ def test_an_injected_value_passed_by_position_stays_out_of_the_record(
 def test_the_docs_say_a_helper_of_the_same_name_is_refused() -> None:
     text = (Path(__file__).parent.parent / "docs" / "frameworks.md").read_text()
     assert "helper method that only shares a name" in text
+
+
+class CallableText(str):
+    """Text that can also be called, as LangChain's message.text is."""
+
+    def __call__(self) -> str:
+        return str(self)
+
+
+def test_an_answer_path_may_end_on_text_that_can_be_called() -> None:
+    assert pick({"text": CallableText("shipped")}, "text") == "shipped"

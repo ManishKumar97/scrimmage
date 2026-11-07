@@ -28,6 +28,15 @@ def test_a_value_that_is_not_text_needs_a_path_and_writes_no_answer(
     assert answer.read_text() == "HI"
 
 
+def test_a_text_enum_is_judged_by_its_value_not_its_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    answer = tmp_path / "answer.txt"
+    monkeypatch.setenv("DERAIL_ANSWER_FILE", str(answer))
+    assert main(["start", "starter_agents:as_text_enum", "hi"]) == 0
+    assert answer.read_text() == "still pending, no date"
+
+
 def test_without_an_answer_file_the_answer_is_printed(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

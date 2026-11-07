@@ -27,12 +27,12 @@ class BadAnswerPath(Exception):
 STEP = re.compile(r"\[(-?\d+)\]|\.?([A-Za-z_]\w*)")
 NOT_AN_ANSWER = (
     "[agent] answer: {path!r} is a {kind}, not the answer, so all of it would be judged, tool "
-    "results included. Point answer at the text inside it; see docs/judging.md"
+    "results included. Point answer at the text inside it; see docs/frameworks.md"
 )
 NOT_TEXT = (
     "[agent] answer: the agent returned {kind}, not text, so the whole value would be judged, "
     "tool results included. Set answer to the path of the final reply, such as "
-    "'messages[-1].content'; see docs/judging.md"
+    "'messages[-1].text'; see docs/frameworks.md"
 )
 
 
@@ -52,7 +52,8 @@ def pick(value: object, path: str) -> object:
                 f"[agent] answer {path!r} does not fit what the agent returned: "
                 f"{step.group()!r} failed with {exc!r}"
             ) from None
-    if value is None or callable(value):
+    # LangChain's .text is a str that can also be called, as an older spelling of it.
+    if value is None or (callable(value) and not isinstance(value, str)):
         raise BadAnswerPath(f"[agent] answer {path!r} reaches {value!r}, which is not an answer")
     return value
 
@@ -82,7 +83,8 @@ def main(argv: list[str]) -> int:
             run.notice("answer_path", "derail", str(exc), mistake=str(exc))
         print(f"derail: {exc}", file=sys.stderr)
         return 1
-    answer = str(result)
+    # str() of a text enum is its name, not its value.
+    answer = result if isinstance(result, str) else str(result)
     path = os.environ.get("DERAIL_ANSWER_FILE")
     if path:
         with open(path, "w", encoding="utf-8", errors="replace") as out:
