@@ -595,7 +595,7 @@ def test_a_row_under_the_floor_has_no_result(project: Project) -> None:
     assert result.code == 2, result.out
     cells = table_row(result, "fault 1")
     assert "1/1" in cells and cells[-1] == "no result"
-    assert "order fault 1: no result: 1 of 3 runs were judged, and a result needs 2" in result.out
+    assert "1 of 3 runs were judged, and a result needs 2. Make the fault fire" in result.out
 
 
 @pytest.mark.design("judge.unfired_run_does_not_block")
@@ -619,6 +619,15 @@ def test_a_row_with_no_judged_runs_is_never_a_pass(project: Project) -> None:
     assert "0/0" in cells and cells[-1] == "no result"
     assert cells[7:9] == ["-", "-"]  # the rate and the range
     assert "the fault never fired in any run" in result.out
+    assert "order fault 1: no result: the fault never fired" in result.out
+    assert "Make the fault fire" not in result.out
+
+
+@pytest.mark.design("report.no_advice_when_nothing_was_unfired")
+def test_a_row_cut_short_gets_no_advice_to_fire_its_fault(project: Project) -> None:
+    result = scripted(project, [{"answer": GOOD, "crash": True}], ALWAYS, "runs = 1")
+    assert "order fault 1: no result: 0 of 1 runs were judged" in result.out
+    assert "Make the fault fire" not in result.out
 
 
 @pytest.mark.design("judge.crash_is_a_result")

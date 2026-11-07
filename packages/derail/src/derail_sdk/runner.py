@@ -669,6 +669,16 @@ def cut(text: str, width: int) -> str:
     return text if len(text) <= width else f"{text[: width - 3]}..."
 
 
+def no_result_reason(report: RowReport, runs: int) -> str:
+    """Why a row has no result. Only runs left out as unfired call for firing the fault."""
+    unfired = any(r.judgement.left_out == judge.NOT_FIRED for r in report.runs)
+    if unfired and not any(r.fault_fired for r in report.runs):
+        return "the fault never fired"
+    judged = report.result.judged
+    counted = f"{judged} of {runs} runs were judged, and a result needs {report.result.floor}"
+    return f"{counted}. Make the fault fire in every run" if unfired else counted
+
+
 def where_to_read(broken: judge.Broken, runs: list[RunResult], folder: Path) -> str:
     """Up to three runs that broke a rule: the log if the run ended badly, or else its name,
     which is also its record's name in the folder the first line gives."""
@@ -736,11 +746,7 @@ def report(
         verdict = entry.result
         failures += rule_lines(entry, folder)
         if verdict.verdict == judge.NO_RESULT and not entry.refused:
-            mistakes.append(
-                f"{where}: no result: {verdict.judged} of {config.agent.runs} runs were judged, "
-                f"and a result needs {verdict.floor}. Make the fault fire in every run, lower "
-                "pass_rate, or see the lines below"
-            )
+            mistakes.append(f"{where}: no result: {no_result_reason(entry, config.agent.runs)}")
         elif verdict.judged < config.agent.runs:
             notes.append(f"{where}: {verdict.judged} of {config.agent.runs} runs judged")
         ran = [r for r in mine if r.outcome != "stopped"]
