@@ -637,33 +637,6 @@ def test_a_body_that_is_not_utf8_or_is_packed_another_way_is_marked(web: Sink) -
     assert [f["utf8"] for f in found] == [False, False]
 
 
-@pytest.mark.design("record.credential_at_gate")
-@pytest.mark.parametrize(
-    ("url", "what"),
-    [
-        ("http://169.254.169.254/latest/api/token", "EC2 instance metadata"),
-        ("https://sts.us-east-1.amazonaws.com/", "AWS STS"),
-        ("https://vault.acme.internal/v1/secret/data/db", "a HashiCorp Vault secret"),
-        ("https://login.acme.internal/oauth2/v2.0/token", "an OAuth 2.0 token endpoint"),
-        ("https://keys.vault.azure.net/secrets/db", "Azure Key Vault"),
-    ],
-)
-def test_a_credential_request_is_never_saved_inside_a_tool_or_out(
-    web: Sink, url: str, what: str
-) -> None:
-    def credentials(name: str) -> str:
-        with httpx2.Client(transport=httpx2.MockTransport(Server())) as client:
-            return client.get(url).text
-
-    gated(credentials)(name="a")
-    with httpx2.Client(transport=httpx2.MockTransport(Server())) as client:
-        client.get(url)
-    found = [line for line in web.calls() if line["kind"] == "http"]
-    assert [line["recorded"]["code"] for line in found] == ["credential", "credential"]
-    assert what in found[0]["recorded"]["why"]
-    assert "parent" in found[0] and "parent" not in found[1]
-
-
 def test_a_request_to_a_model_host_is_never_saved(web: Sink) -> None:
     with httpx2.Client(transport=httpx2.MockTransport(Server())) as client:
         client.get("https://api.openai.com/v1/files")

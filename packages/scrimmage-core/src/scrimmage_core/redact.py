@@ -8,7 +8,7 @@ PATTERNS = re.compile(
     "|".join(
         [
             r"sk-(?:proj-|ant-|svcacct-)?[A-Za-z0-9_-]{16,}",  # OpenAI and Anthropic keys
-            r"AKIA[0-9A-Z]{16}",  # AWS access key ids
+            r"(?:AKIA|ASIA)[0-9A-Z]{16}",  # AWS access key ids, long-term and temporary
             r"AIza[0-9A-Za-z_-]{35}",  # Google API keys
             r"gh[pousr]_[A-Za-z0-9]{36,}",  # GitHub tokens
             r"xox[abpr]-[A-Za-z0-9-]{10,}",  # Slack tokens
