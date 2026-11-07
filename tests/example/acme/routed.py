@@ -1,13 +1,20 @@
 """A bot with a cheap router in front of its main model, both through OpenAI.
 
 The words before the first colon of the question choose how it calls them: the API, async,
-stream, parallel, loop (three rounds), stored, or nothing for chat. So one function serves each
-way a test wants to call the model, the same for both models.
+stream, parallel, loop (three rounds), stored, named, child, poison, raw, or nothing for
+chat. So one function serves each way a test wants to call the model.
 """
 
 import asyncio
+import contextlib
+import json
+import os
+import subprocess
+import sys
 import threading
+from pathlib import Path
 
+import httpx
 import openai
 
 ROUTER = "gpt-4o-mini"
@@ -15,6 +22,7 @@ MAIN = "gpt-4.1"
 ROUTER_EMBEDDING = "text-embedding-3-small"
 MAIN_EMBEDDING = "text-embedding-3-large"
 ROUNDS = 3
+IN_A_CHILD = "import sys; from acme.routed import answer; print(answer('chat:' + sys.argv[1]))"
 
 
 def text_of(stream: object, api: str) -> str:
@@ -98,18 +106,54 @@ def rounds(api: str, models: tuple[str, str], text: str) -> str:
     return " | ".join(said)
 
 
-def stored(text: str) -> str:
-    """The router, then a stored prompt, whose request holds no model name."""
+def stored(text: str, *, named: bool) -> str:
+    """The router, then a stored prompt, whose request holds a model name only if given one."""
     client = openai.OpenAI(max_retries=0)
     ask(client, "chat", ROUTER, f"Route this: {text}", False)
-    return client.responses.create(prompt={"id": "pmpt_1"}, input=text).output_text
+    model = {"model": MAIN} if named else {}
+    try:
+        return client.responses.create(prompt={"id": "pmpt_1"}, input=text, **model).output_text
+    except openai.APIError as exc:
+        return f"error: {type(exc).__name__}"
+
+
+def in_a_child(text: str) -> str:
+    done = subprocess.run(
+        [sys.executable, "-c", IN_A_CHILD, text], capture_output=True, text=True, check=True
+    )
+    return done.stdout.strip()
+
+
+def poisoned(text: str) -> str:
+    """After the first run, a refused write ends the run before the main model is called."""
+    client = openai.OpenAI(max_retries=0)
+    if not Path("first-run").exists():
+        Path("first-run").touch()
+        return ask(client, "chat", MAIN, text, False)
+    with contextlib.suppress(Exception):  # the refusal; the run goes on to meet the next one
+        httpx.post("https://orders.acme.internal/refunds")
+    return ask(client, "chat", MAIN, text, False)
+
+
+def raw(names: list[str]) -> str:
+    """Sends each name as raw JSON, so it can hold what the library would never send."""
+    url = f"{os.environ['OPENAI_BASE_URL']}/chat/completions"
+    for name in names:
+        httpx.post(url, content=f'{{"model": "{name}", "messages": []}}'.encode(), timeout=30)
+    return "sent"
 
 
 def answer(question: str) -> str:
     shape, _, text = question.partition(":")
     words = shape.split()
     if "stored" in words:
-        return stored(text)
+        return stored(text, named="named" in words)
+    if "child" in words:
+        return in_a_child(text)
+    if "poison" in words:
+        return poisoned(text)
+    if "raw" in words:
+        return raw(json.loads(Path("names.json").read_text()))
     api = next((w for w in ("embeddings", "responses") if w in words), "chat")
     stream = "stream" in words
     models = (ROUTER_EMBEDDING, MAIN_EMBEDDING) if api == "embeddings" else (ROUTER, MAIN)

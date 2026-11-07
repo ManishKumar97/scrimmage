@@ -71,6 +71,7 @@ PROCESS_LABEL = "process:python"
 FAILED = ("crashed", "timed out", "refused call", "budget reached")
 TABLE_WIDTH = 120
 SHOWN_RUNS = 3  # how many runs a line names for one broken rule
+SHOWN_NAMES = 5  # how many model names a line lists
 HEAD = [
     "test",
     "row",
@@ -693,16 +694,25 @@ def no_result_reason(report: RowReport, runs: int) -> str:
     return f"{counted}. Make the fault fire in every run" if unfired else counted
 
 
-def unused_model(fault: Fault, runs: list[RunResult]) -> str:
-    """A name that never fired is most likely misspelled, so say what the calls used."""
-    used = {
-        name
-        for run in runs
-        for label, name in run.models
-        if name and labels.matches(fault.call, label)
-    }
-    told = f"these calls used {', '.join(sorted(used))}" if used else "no such call was made"
-    return f"no call used the model {fault.model!r}; {told}"
+def unused_model(fault: Fault, runs: list[RunResult]) -> str | None:
+    """Why a fault on a model name never fired, as far as the records can say.
+
+    None when the records cannot say: a call under the fault's label has no known name, or a
+    refused run was stopped, perhaps just before this model, and may have lost its last line.
+    """
+    used = {name for run in runs for label, name in run.models if labels.matches(fault.call, label)}
+    wanted = labels.shown_name(fault.model or "")
+    if fault.model in used:
+        return (
+            f"calls used the model {wanted}, yet the fault did not fire: a refused call fires "
+            "no fault, and nor does a call in a child process unless [agent] children is true"
+        )
+    if "" in used or any(run.outcome == "refused call" for run in runs):
+        return None
+    names = [labels.shown_name(name) for name in sorted(used)]
+    more = f" and {len(names) - SHOWN_NAMES} more" if len(names) > SHOWN_NAMES else ""
+    told = f"these calls used {', '.join(names[:SHOWN_NAMES])}{more}"
+    return f"no call used the model {wanted}; {told if names else 'no such call was made'}"
 
 
 def where_to_read(broken: judge.Broken, runs: list[RunResult], folder: Path) -> str:
@@ -786,8 +796,8 @@ def report(
                     f"that tool makes this call, {row.fault.call} can never fire; "
                     "mock or fault one level, not both"
                 )
-            if row.fault.model is not None:
-                mistakes.append(f"{where}: {unused_model(row.fault, ran)}")
+            if row.fault.model is not None and (why := unused_model(row.fault, ran)):
+                mistakes.append(f"{where}: {why}")
         notes += [
             f"{where}: {r.run}: {line['message']}"
             for r in mine

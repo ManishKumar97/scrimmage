@@ -30,6 +30,7 @@ from derail_sdk import provider_openai as openai_table
 from derail_sdk.client import ControlError
 from derail_sdk.decide import READ_METHODS, Call, Decision, names
 from derail_sdk.errors import DerailRefused
+from derail_sdk.labels import NAME_CAP, shown_name
 from derail_sdk.redact import redact
 from derail_sdk.state import BLOB_CAP, BlobSink, RunState, Step, blob, current, error_text
 
@@ -479,8 +480,8 @@ def reserve(ctx: Context, step: Step, request: Any, extra: dict[str, object]) ->
         refuse(
             ctx.run,
             step,
-            f"Derail has no price for the model {model!r}, so it cannot keep the budget; "
-            f"add it under [agent.prices], such as {json.dumps(model)} = "
+            f"Derail has no price for the model {shown_name(model)}, so it cannot keep the "
+            f"budget; add it under [agent.prices], such as {json.dumps(model[:NAME_CAP])} = "
             "{input = 0.15, output = 0.60} "
             '(dollars per million tokens), or set max_cost_usd = "none"',
         )

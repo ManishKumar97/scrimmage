@@ -438,7 +438,9 @@ def test_a_model_that_is_not_text_is_rejected_by_table_and_key(tmp_path: Path, v
 
 
 @pytest.mark.design("config.model_cannot_match")
-@pytest.mark.parametrize("value", ['"gpt-*"', '"*"', '" gpt-4.1"', '"gpt-4.1 "', '"gpt\\n4.1"'])
+@pytest.mark.parametrize(
+    "value", ['"gpt-*"', '"*"', '" gpt-4.1"', '"gpt-4.1 "', '"gpt\\n4.1"', '"gpt\\u001b[31m"']
+)
 def test_a_name_that_could_never_match_stops_before_any_model_call(
     tmp_path: Path, value: str
 ) -> None:

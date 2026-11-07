@@ -20,6 +20,7 @@ WEB_METHOD = re.compile(r"[A-Za-z][A-Za-z-]*")  # letters, and the hyphen of M-S
 WEB_PATH = re.compile(r"/(?:(?![?#])[\x21-\x7e])*")  # as sent: percent-encoded, no query
 PROCESS = "process:python"  # a Python child that would run with no gates
 DOCS = "see docs/configuration.md"
+NAME_CAP = 80  # a model name comes from a request, so a line shows this much of it
 
 
 def kind_of(label: str) -> str:
@@ -121,6 +122,12 @@ def path_of(value: str, where: str) -> str:
             "with no query string"
         )
     return value
+
+
+def shown_name(name: str) -> str:
+    """A model name as a line can show it: escaped, so it cannot forge a line, and cut."""
+    text = repr(name)
+    return text if len(text) <= NAME_CAP else f"{text[:NAME_CAP]}..."
 
 
 def model_name(value: str, where: str) -> str:

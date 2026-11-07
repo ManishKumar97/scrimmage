@@ -1,10 +1,14 @@
 """A fault that names a model, through the real openai library, against the fake server."""
 
+import json
 from collections.abc import Callable
 
 import pytest
 
 from conftest import Project, Result
+from derail_sdk import config
+from derail_sdk.plan import Row
+from derail_sdk.runner import RunResult, unused_model
 from fakes.openai_server import FakeOpenAI
 
 Fake = Callable[..., FakeOpenAI]
@@ -192,7 +196,7 @@ def test_a_name_that_is_not_exact_never_fires_and_is_no_pass(
     assert seen(result) == [(ROUTER, "real", 0), (MAIN, "real", 0)]
     assert result.code == 2
     assert "routed fault 1: no result: the fault never fired" in result.out
-    assert f"no call used the model {name!r}; these calls used {MAIN}, {ROUTER}" in result.out
+    assert f"no call used the model {name!r}; these calls used {MAIN!r}, {ROUTER!r}" in result.out
     summary = summary_of(result)
     assert summary["judged"] == "left out"
     assert summary["left_out"] == "the fault did not fire"
@@ -238,3 +242,118 @@ def test_a_request_with_no_model_name_is_refused_and_not_sent_and_is_no_pass(
     assert (summary["outcome"], summary["judged"]) == ("refused call", "left out")
     row = next(line for line in result.out.splitlines() if " fault 1 " in line)
     assert row.endswith("no result")
+    # The refused call's name is unknown, so nothing may say this model was not used.
+    assert "no call used the model" not in result.out
+    assert "yet the fault did not fire" not in result.out
+
+
+@pytest.mark.design("model_name.stored_prompt_with_a_name")
+def test_a_stored_prompt_that_sends_its_model_can_be_faulted(
+    project: Project, fake_openai: Fake
+) -> None:
+    bot(project, "stored named", "grove")
+    add_fault(project, MAIN, "always", call="model:openai")
+    result = project.test(fake_openai(["chat_answer"], response="response_text"))
+    assert seen(result) == [(ROUTER, "real", 0), (MAIN, "fault", 0)]
+    assert answer(result) == "error: RateLimitError"
+
+
+@pytest.mark.design("model_name.used_in_a_child")
+def test_a_call_in_a_child_is_not_reported_as_unused(project: Project, fake_openai: Fake) -> None:
+    bot(project, "child")
+    add_fault(project, MAIN, "first 3")
+    result = project.test(fake_openai(["chat_answer"]))
+    assert result.code == 2
+    assert "no call used the model" not in result.out
+    assert f"calls used the model {MAIN!r}, yet the fault did not fire" in result.out
+    assert "unless [agent] children is true" in result.out
+
+
+@pytest.mark.design("model_name.refused_run_says_nothing_false")
+def test_a_run_refused_on_its_way_to_the_model_is_not_reported_as_unused(
+    project: Project, fake_openai: Fake
+) -> None:
+    bot(project, "poison")
+    add_fault(project, MAIN, "first 3")
+    result = project.test(fake_openai(["chat_answer"]))
+    assert result.code == 2
+    # The run is stopped at its refusal, so the later call may or may not have its line.
+    assert "no call used the model" not in result.out
+
+
+FAULT = config.Fault("model", "status 429", "first 3", model=MAIN)
+CHAT_LABEL = "model:openai"
+
+
+def ran(outcome: str, *models: tuple[str, str]) -> RunResult:
+    row = Row(config.Test("routed", "q", (("a",),), (), (FAULT,)), "fault 1", FAULT)
+    return RunResult("run-1", row, outcome, None, False, {}, models=set(models))
+
+
+@pytest.mark.design("model_name.poisoned_line_counts_as_used")
+def test_a_refused_call_with_a_recorded_name_says_it_was_used() -> None:
+    why = unused_model(FAULT, [ran("refused call", (CHAT_LABEL, MAIN))])
+    assert why is not None and why.startswith(f"calls used the model {MAIN!r}, yet")
+
+
+@pytest.mark.design("model_name.silent_when_the_records_cannot_say")
+@pytest.mark.parametrize(
+    "run",
+    [ran("refused call", (CHAT_LABEL, ROUTER)), ran("answered", (CHAT_LABEL, ""))],
+    ids=["refused run", "a call with no name"],
+)
+def test_nothing_is_said_when_the_records_cannot_say(run: RunResult) -> None:
+    assert unused_model(FAULT, [run]) is None
+
+
+@pytest.mark.design("model_name.silent_over_every_run_of_the_row")
+def test_one_refused_run_of_three_is_enough_to_say_nothing() -> None:
+    runs = [ran("answered", (CHAT_LABEL, ROUTER)), ran("refused call")]
+    assert unused_model(FAULT, runs) is None
+
+
+def send_raw(
+    project: Project, fake_openai: Fake, names: list[str], *, word: str = "sent"
+) -> Result:
+    """Each name goes out as raw JSON, spelled as given, under a fault on another model."""
+    bot(project, "raw", word)
+    project.edit("runs = 1", 'runs = 1\nmax_cost_usd = "none"')
+    (project.root / "names.json").write_text(json.dumps(names))
+    add_fault(project, MAIN, "first 3")
+    return project.test(fake_openai(["chat_answer"]))
+
+
+@pytest.mark.design("model_name.message_cannot_forge_a_line")
+def test_a_name_with_control_characters_cannot_forge_a_line(
+    project: Project, fake_openai: Fake
+) -> None:
+    result = send_raw(project, fake_openai, ["gpt-4.1\\u001b[31mRED\\nFAKE: exit 0 PASS"])
+    assert result.code == 2
+    assert "\x1b" not in result.out
+    assert not any(line.startswith("FAKE") for line in result.out.splitlines())
+    assert "these calls used 'gpt-4.1\\x1b[31mRED\\nFAKE: exit 0 PASS'" in result.out
+
+
+@pytest.mark.design("model_name.message_survives_a_surrogate")
+def test_a_lone_surrogate_prints_and_the_other_mistakes_still_show(
+    project: Project, fake_openai: Fake
+) -> None:
+    result = send_raw(project, fake_openai, ["bad\\ud800name"])
+    assert result.code == 2  # a mistake in the test, not a row failure from a traceback
+    assert "these calls used 'bad\\ud800name'" in result.out
+    assert "the fault never fired in any run" in result.out
+
+
+@pytest.mark.design("model_name.message_lists_a_few")
+def test_a_long_list_of_names_is_cut_with_a_count(project: Project, fake_openai: Fake) -> None:
+    result = send_raw(project, fake_openai, [f"model-{i:02}" for i in range(12)])
+    line = next(x for x in result.out.splitlines() if "no call used the model" in x)
+    assert line.endswith("'model-04' and 7 more")
+    assert "model-05" not in line
+
+
+@pytest.mark.design("model_name.message_cuts_a_long_name")
+def test_a_very_long_name_is_cut(project: Project, fake_openai: Fake) -> None:
+    result = send_raw(project, fake_openai, ["x" * 200_000])
+    line = next(x for x in result.out.splitlines() if "no call used the model" in x)
+    assert len(line) < 300 and line.endswith("...")

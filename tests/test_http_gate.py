@@ -1190,3 +1190,21 @@ def test_a_named_call_still_reserves_at_its_price(gated: None) -> None:
     sink, _ = install(make_plan(budget=1.0), budget)
     assert client().post(URL, json=BODY).status_code == 200
     assert sink.lines[0]["model"] == "gpt-4o-mini" and sink.lines[0]["cost_usd"] > 0
+
+
+@pytest.mark.design("gate.no_price_line_is_bounded")
+def test_the_no_price_message_cannot_forge_a_line_or_run_on(gated: None) -> None:
+    sink, _ = install(make_plan(budget=1.0))
+    name = "a\n\x1b[31m" + "x" * 200_000
+    with pytest.raises(DerailRefused) as caught:
+        client().post(URL, json={**BODY, "model": name})
+    message = str(caught.value)
+    assert len(message) < 500 and "\n" not in message and "\x1b" not in message
+    assert sink.lines[0]["reason"] == "no_price"
+
+
+@pytest.mark.design("gate.no_price_keeps_a_short_name")
+def test_the_no_price_message_keeps_a_short_name_whole(gated: None) -> None:
+    install(make_plan(budget=1.0))
+    with pytest.raises(DerailRefused, match=r"model 'llama-70b'.*such as \"llama-70b\" ="):
+        client().post(URL, json={**BODY, "model": "llama-70b"})
