@@ -19,6 +19,7 @@ from derail_sdk import labels, provider_openai, python_args
 from derail_sdk.errors import ConfigError
 from derail_sdk.judge import Rules, impossible, normal
 from derail_sdk.mocks import allowed
+from derail_sdk.redact import redact
 
 AGENT_KEYS = {
     "function",
@@ -499,7 +500,7 @@ def read_test(table: dict[str, object], index: int) -> Test:
 def rule_text(value: object, where: str) -> str:
     """One text a rule looks for. Blank text would be found in every answer."""
     if not isinstance(value, str) or not normal(value):
-        raise ConfigError(f"{where}: expected text, got {value!r}")
+        raise ConfigError(f"{where}: expected text, got {redact(repr(value))}")
     return value
 
 
@@ -532,7 +533,9 @@ def read_pass_rate(table: dict[str, object], where: str) -> float | None:
         return None
     rate = table["pass_rate"]
     if isinstance(rate, bool) or not isinstance(rate, int | float) or not 0 < rate <= 1:
-        raise ConfigError(f"{where} pass_rate: expected a share above 0, up to 1, got {rate!r}")
+        raise ConfigError(
+            f"{where} pass_rate: expected a share above 0, up to 1, got {redact(repr(rate))}"
+        )
     return float(rate)
 
 

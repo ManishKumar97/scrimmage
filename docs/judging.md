@@ -37,7 +37,8 @@ Then the rule must appear in the answer as plain text. It is not a word match, s
 - `"12"` is found in "123";
 - Markdown stays, so `"Oct 30"` is not found in `Oct **30**`.
 
-Derail compares the answer your agent really gave. The answer in the record has secrets removed, so a rule can forbid a secret by its value and still find it. A rule is shown with secrets removed too.
+Derail compares the answer your agent really gave. The answer in the record has secrets removed, so a rule can forbid a secret by its value and still find it.
+A rule goes through the same removal before it is printed or recorded. That catches only known shapes, such as an API key or a bearer token. A secret with no known shape, such as `hunter2-password`, prints as written, so keep such a rule out of a file you share.
 
 ## Rules for a fault row
 

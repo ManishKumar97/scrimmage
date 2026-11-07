@@ -320,6 +320,31 @@ def test_a_rule_on_a_mock_is_unknown(project: Project) -> None:
         load(project)
 
 
+@pytest.mark.design("config.errors_redacted")
+@pytest.mark.parametrize(
+    ("line", "message"),
+    [
+        (f'expect = [["x", ["{SECRET}"]]]', "expected text"),
+        (f'forbid = [["{SECRET}"]]', "expected text"),
+        (f'pass_rate = "{SECRET}"', "pass_rate"),
+    ],
+)
+def test_a_bad_rule_prints_no_known_secret(project: Project, line: str, message: str) -> None:
+    extra = f"{EXPECT}\n{line}" if not line.startswith("expect") else line
+    project.edit(EXPECT, extra)
+    result = project.test()
+    assert result.code == 2 and message in result.err
+    assert SECRET not in result.err and "[secret removed]" in result.err
+
+
+@pytest.mark.design("config.impossible_redacted")
+def test_a_row_no_answer_can_pass_prints_no_known_secret(project: Project) -> None:
+    project.edit(EXPECT, f'expect = ["{SECRET}"]\nforbid = ["{SECRET}"]')
+    result = project.test()
+    assert result.code == 2 and "no answer can pass" in result.err
+    assert SECRET not in result.err
+
+
 @pytest.mark.design("config.impossible_row")
 @pytest.mark.parametrize(
     ("old", "new", "message"),
