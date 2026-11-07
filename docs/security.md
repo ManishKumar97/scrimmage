@@ -14,6 +14,11 @@ The only connections Scrimmage itself makes are to its own control server, and t
 
 *Checked by: `tests/test_security_audit.py::test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_sends_the_token`, `tests/test_security_claims.py::test_the_only_connections_are_to_and_from_the_control_server`*
 
+Scrimmage's start-up inside the agent is checked by a source scan, not watched.
+It runs before any watcher in that process could be installed, so the scan checks that no product module but the runner and `scrimmage-run` starts a process, and that only the SDK's client opens a connection.
+
+*Checked by: `tests/test_security_claims.py::test_the_only_processes_scrimmage_starts_are_its_runs`, `tests/test_security_claims.py::test_the_only_connections_are_to_and_from_the_control_server`*
+
 The runner and the code inside your agent talk over one local connection, to a control server that listens on `127.0.0.1` only, on a port chosen for each test.
 
 *Checked by: `tests/test_security_claims.py::test_the_control_server_listens_on_loopback_only`*
@@ -34,7 +39,7 @@ HMAC-SHA256 is a standard way to prove that a message came from someone who hold
 - The run token itself is never sent.
   A request's signature covers its method, path, time, a one-time nonce and a hash of its body.
 
-  *Checked by: `tests/test_security_audit.py::test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_sends_the_token`, `tests/test_protocol.py::test_a_request_signed_with_another_token_is_refused`*
+  *Checked by: `tests/test_security_audit.py::test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_sends_the_token`*
 
 - A request whose time is more than 60 seconds from the server's clock is refused.
 
@@ -54,8 +59,6 @@ So can any code inside the agent under test, which needs it so that its child pr
 The signing keeps out programs of other users on the machine only.
 It follows that records are not tamper-proof against the agent under test: code in the agent could send lines of its own.
 Do not use records as audit evidence.
-
-*Checked by: `tests/test_bootstrap.py::test_with_the_token_the_sdk_says_it_is_active`*
 
 ## The plan is data
 

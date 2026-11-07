@@ -113,7 +113,7 @@ Service proxies such as Envoy, which many companies run in front of their servic
 Others have applied the idea to AI agents.
 These descriptions come from each project's own public pages, as of November 2026:
 
-- [AgentChaos](https://github.com/floritange/AgentChaos), a research project, wraps the HTTP client inside an agent's process at run time and injects server errors, cut-off replies and corrupted tool calls, with no change to the agent's code.
+- [AgentChaos](https://arxiv.org/abs/2608.06790), a 2026 paper, injects server errors, truncated replies and corrupted content or tool-call fields into LLM API responses at run time, at the HTTP layer every agent shares, with no change to source code.
 - [AgentCheck](https://arxiv.org/abs/2607.11098), a 2026 paper and workbench, injects faults at an MCP server, records and replays tool calls, and scores runs with rules and a model judge.
 - [ReliabilityBench](https://arxiv.org/abs/2601.06112), a 2026 benchmark, measures agents under timeouts, rate limits, partial replies and schema changes.
 - [Owotogbe and others](https://arxiv.org/abs/2505.03096), a 2025 paper, propose chaos engineering for systems of several LLM agents.
