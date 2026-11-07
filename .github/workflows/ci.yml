@@ -49,8 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # A distribution's Python has its own sitecustomize, which Derail must chain to.
-      UV_PYTHON: "3.12"
-      UV_PYTHON_PREFERENCE: only-system
+      UV_PYTHON: /usr/bin/python3.12
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
