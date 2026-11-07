@@ -11,7 +11,7 @@ Anything this version does not support is rejected as unknown, with exit code 2.
 | `function` | The agent, as `module:function`. Derail calls it with the question and waits for it if it is async. Give this or `command`. | none |
 | `command` | The agent as a script, such as `"python bot.py {question}"`. It is split into arguments like a shell's words, and the question fills `{question}` as part of one argument, with no shell. Must hold `{question}`. Give this or `function`. See [An agent run as a script](scripts.md). | none |
 | `children` | `true` fires faults in child processes too, and lets a child on another Python join if it has Derail installed. See [Faults in children](scripts.md#faults-in-children). | `false` |
-| `tools` | The agent's own tools, as `module:function` import paths. Derail swaps each one for a gate when your code imports its module. When the model sees a different name, write `{path = "package.tools:lookup_order", name = "lookup-order"}`; labels use the name the model sees. | empty |
+| `tools` | The agent's own tools, as `module:function` import paths, or `module:Class.method` for a tool that is a method. Derail swaps each one for a gate when your code imports its module. When the model sees a different name, write `{path = "package.tools:lookup_order", name = "lookup-order"}`; labels use the name the model sees, which for a method is its own name. See [Tools that are methods](#tools-that-are-methods). | empty |
 | `real` | Calls that are safe to run for real when a test does not mock them, such as `"tool:check_inventory"`, `"tool:*"` for every tool, `"mcp:docs/search"` for a tool on an MCP server, `"hosted:mcp/orders"` for a hosted MCP server, `"process:python"` for a Python child that does not join, or a web write such as `"http:orders.acme.internal POST /refunds"`. Model calls are not listed: they are real unless a fault names them. | empty |
 | `runs` | How many times each row runs. | 3 |
 | `parallel` | How many runs go at the same time. | 4 |
@@ -41,6 +41,42 @@ acme-gpt = {input = 2.0, cached_input = 0.5, output = 8.0}
 A price here replaces the built-in one whole: `gpt-4o = {input = 2.5, output = 10}` has no cached price, even though the built-in table has one.
 
 Derail imports only modules under your agent's own top-level packages, the ones `function` and `tools` name. For a script, that is the ones `tools` names.
+
+## Tools that are methods
+
+Many agents define their tools as methods on a class, and call them on an instance:
+
+```python
+# shop/tools.py
+class StoreTools:
+    def __init__(self, database: str) -> None:
+        self.database = database
+
+    def get_order(self, order_id: str) -> str: ...
+
+    @staticmethod
+    def check_inventory(sku: str) -> str: ...
+```
+
+List each method by its class:
+
+```toml
+tools = ["shop.tools:StoreTools.get_order", "shop.tools:StoreTools.check_inventory"]
+```
+
+The model sees `get_order`, so the label is `tool:get_order`.
+Derail gates the method on the class when the module loads, so every instance goes through the gate, whether it was made before or after.
+Mocks and faults work as on a function. A mock is built from the method's return annotation.
+The record never holds `self` or `cls`, only the arguments after them.
+
+| What the path names | What happens |
+|---|---|
+| a method, a `staticmethod` or a `classmethod`, sync or async | gated, of the same kind |
+| a method a base class defines, named through a subclass, `StoreTools.get_order` | gated on `StoreTools` and its subclasses; the base class and its other subclasses are left alone |
+| the class itself, `shop.tools:StoreTools` | the run stops: list each method instead |
+| a property or a plain attribute | the run stops: it is not a method |
+| an attribute your code sets in `__init__` | the run stops: Derail gates the class when the module loads, before any instance exists, so define it as a method |
+| a method on a nested class, `Outer.Inner.method` | refused when the file is read: move the class to the top of its module |
 
 ## [[test]]
 

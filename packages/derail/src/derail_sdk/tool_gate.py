@@ -13,7 +13,7 @@ from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from types import ModuleType
-from typing import Any
+from typing import Any, NoReturn
 
 from derail_sdk import hooks, mocks
 from derail_sdk.config import Fault
@@ -35,12 +35,22 @@ def is_gate(function: object) -> bool:
 
 
 def _arguments(
-    tool: Callable[..., object], args: tuple[Any, ...], kwargs: dict[str, Any]
+    tool: Callable[..., object],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    *,
+    bound: bool = False,
 ) -> dict[str, object]:
+    """The call's arguments by name. bound: the first is self or cls, which is never
+    recorded: its repr can show an object's state, and it says nothing about the call."""
     try:
-        return dict(inspect.signature(tool).bind_partial(*args, **kwargs).arguments)
+        signature = inspect.signature(tool)
+        arguments = dict(signature.bind_partial(*args, **kwargs).arguments)
     except TypeError:
-        return {"args": list(args), "kwargs": kwargs}
+        return {"args": list(args[1:] if bound else args), "kwargs": kwargs}
+    if bound:
+        arguments.pop(next(iter(signature.parameters), ""), None)
+    return arguments
 
 
 def injected(state: RunState, fault: Fault, name: str, failure: type[Exception]) -> Exception:
@@ -152,13 +162,25 @@ def gate_with(tool: Callable[..., Any], describe: Describe) -> Callable[..., Any
     return mark(sync_gate)
 
 
-def gate(tool: Callable[..., Any], name: str) -> Callable[..., Any]:
-    """The gate for a plain function, by the name the model sees."""
-    return gate_with(tool, lambda args, kwargs: Gated(name, _arguments(tool, args, kwargs), tool))
+def gate(tool: Callable[..., Any], name: str, *, bound: bool = False) -> Callable[..., Any]:
+    """The gate for a function, by the name the model sees. bound: a method's function,
+    whose first argument is self or cls."""
+
+    def describe(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Gated:
+        return Gated(name, _arguments(tool, args, kwargs, bound=bound), tool)
+
+    return gate_with(tool, describe)
 
 
 class ListedToolMissing(ImportError):
     """A tool under [agent] tools is not in its module. The import fails on purpose."""
+
+
+def cannot_gate(name: str, message: str) -> NoReturn:
+    run = current()
+    if run is not None:
+        run.cannot_gate(name, message)
+    raise ListedToolMissing(message)
 
 
 def swap(
@@ -167,31 +189,75 @@ def swap(
     renamed: dict[str, str] | None = None,
     listed: str | None = None,
 ) -> None:
-    """Swap each named function; its label uses the name the model sees.
+    """Swap each named function or method; its label uses the name the model sees.
 
     listed is the name the tools list gives this file, when it was imported by another.
     """
     for name in names:
-        tool = getattr(module, name, None)
+        class_name, dot, method = name.partition(".")
+        tool = getattr(module, class_name, None)
         if listed is not None and tool is None:
             continue
-        seen = (renamed or {}).get(f"{listed or module.__name__}:{name}", name)
+        path = f"{listed or module.__name__}:{name}"
+        seen = (renamed or {}).get(path, method or name)
+        if dot:
+            swap_method(tool, path, method, seen)
+            continue
         if hasattr(tool, "invoke") and hasattr(tool, "_run"):
             run = current()
             if run is not None:  # a framework's tool object: only its adapter can vouch for it
                 run.listed.discard(seen)
             continue
-        if not callable(tool):
-            message = (
-                f"{module.__name__}:{name} is listed under [agent] tools, but "
-                f"{module.__name__} has no function {name}"
+        if isinstance(tool, type):  # calling it makes an object: no tool ran
+            cannot_gate(
+                seen,
+                f"{path} is listed under [agent] tools, but it is a class, so it cannot be "
+                f"gated as a tool; list each of its tool methods as {path}.method",
             )
-            run = current()
-            if run is not None:
-                run.cannot_gate(name, message)
-            raise ListedToolMissing(message)
+        if not callable(tool):
+            cannot_gate(
+                name,
+                f"{module.__name__}:{name} is listed under [agent] tools, but "
+                f"{module.__name__} has no function {name}",
+            )
         if not is_gate(tool):
             setattr(module, name, gate(tool, seen))
+
+
+def swap_method(owner: object, path: str, method: str, seen: str) -> None:
+    """Gate a method on its class, so every instance, made before or after, goes through it.
+
+    The function is found in the class's method order, so one from a base class is gated
+    on the named class alone. A staticmethod or classmethod keeps its kind.
+    """
+    where = f"{path} is listed under [agent] tools, but"
+    class_path = path.rpartition(".")[0]
+    if not isinstance(owner, type):
+        what = "its module has no such class" if owner is None else f"{class_path} is not a class"
+        cannot_gate(seen, f"{where} {what}, so it cannot be gated")
+    found = next((c.__dict__[method] for c in owner.__mro__ if method in c.__dict__), None)
+    if found is None:
+        cannot_gate(
+            seen,
+            f"{where} {class_path} has no method {method}; an attribute set in __init__ "
+            "cannot be gated when the module loads, so define it as a method on the class",
+        )
+    static, of_class = isinstance(found, staticmethod), isinstance(found, classmethod)
+    function: Any = found.__func__ if static or of_class else found
+    if not inspect.isfunction(function):
+        what = "a property" if isinstance(found, property) else "not a method"
+        what = "a nested class" if isinstance(found, type) else what
+        cannot_gate(seen, f"{where} it is {what}, so it cannot be gated as a tool")
+    if is_gate(function):
+        if method in owner.__dict__:
+            return  # this class is gated already
+        function = inspect.unwrap(function, stop=lambda f: not is_gate(f))  # a base class's gate
+    gated = gate(function, seen, bound=not static)
+    if static:
+        gated = staticmethod(gated)
+    elif of_class:
+        gated = classmethod(gated)
+    setattr(owner, method, gated)
 
 
 def module_spec(name: str, extra: list[str]) -> importlib.machinery.ModuleSpec | None:

@@ -136,3 +136,14 @@ def test_cached_input_prices_and_their_default_are_documented() -> None:
         assert word in guide, word
     assert "`tokens.cached`" in guide and "the safe overestimate" in guide
     assert "**Cached input on OpenAI only.**" in page("limits.md")
+
+
+@pytest.mark.design("docs.method_tools")
+def test_tools_that_are_methods_and_their_limits_are_documented() -> None:
+    text = page("configuration.md")
+    assert "`module:Class.method`" in text and "## Tools that are methods" in text
+    for case in ("`staticmethod`", "`classmethod`", "`__init__`", "`Outer.Inner.method`"):
+        assert case in text, case
+    assert "never holds `self` or `cls`" in text
+    assert "**Methods stored as the class is made.**" in page("limits.md")
+    assert "A method is gated on its class" in page("how-it-works.md")

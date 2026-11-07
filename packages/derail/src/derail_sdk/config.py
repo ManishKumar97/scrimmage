@@ -63,6 +63,7 @@ DEFAULT_RESERVE_OUTPUT_TOKENS = 4096
 # Where the answer is in what the agent returns, such as messages[-1].content.
 ANSWER_PATH = re.compile(r"[A-Za-z_]\w*(\[-?\d+\]|\.[A-Za-z_]\w*)*")
 IMPORT_PATH = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*:[A-Za-z_]\w*")
+TOOL_NAMES = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*")  # a function, or Class.method
 QUESTION = "{question}"  # in a command; the only placeholder filled in
 MAX_ARGUMENT = 128 * 1024  # Linux's limit on one argument, with its closing NUL
 
@@ -334,6 +335,22 @@ def import_path(value: str, where: str) -> str:
     return value
 
 
+def tool_path(value: str, where: str) -> str:
+    """A function, or a method on a class at the module's top level."""
+    module, colon, name = value.partition(":")
+    if colon and TOOL_NAMES.fullmatch(name) and IMPORT_PATH.fullmatch(f"{module}:x"):
+        if name.count(".") > 1:
+            raise ConfigError(
+                f"{where}: {value!r} names a method on a nested class, which this version "
+                "cannot gate; move the class to the top of its module"
+            )
+        return value
+    raise ConfigError(
+        f"{where}: {value!r} is not an import path of the form 'package.module:function' "
+        "or 'package.module:Class.method'"
+    )
+
+
 def whole(table: dict[str, object], key: str, default: int, where: str) -> int:
     value = table.get(key, default)
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
@@ -471,13 +488,13 @@ def dollars(entry: dict[str, object], key: str, item: str) -> float:
 def read_tool(entry: object, where: str) -> tuple[str, str | None]:
     """A tools entry: an import path, or {path, name} when the model sees another name."""
     if isinstance(entry, str):
-        return import_path(entry, where), None
+        return tool_path(entry, where), None
     table = as_table(entry, where)
     check_keys(table, {"path", "name"}, where)
     name = text(table, "name", where)
     if not labels.TOOL_NAME.fullmatch(name):
         raise ConfigError(f"{where} name: {name!r} is not a tool name")
-    return import_path(text(table, "path", where), where), name
+    return tool_path(text(table, "path", where), where), name
 
 
 def read_test(table: dict[str, object], index: int) -> Test:

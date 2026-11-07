@@ -100,7 +100,7 @@ See [Failing the model, and keeping a budget](model-faults.md).
 
 The rule covers every tool a gate reaches: the ones listed under `tools`, and LangChain tools, which need no list.
 
-If `tools` names a function or a module that does not exist, the run stops as a mistake in the test.
+If `tools` names a function, a class, a method or a module that does not exist, or a name that is not a function or a method, the run stops as a mistake in the test.
 Otherwise a typo such as `refund_ordr` would leave the real `refund_order` running with no gate.
 
 ## What the gates assume
