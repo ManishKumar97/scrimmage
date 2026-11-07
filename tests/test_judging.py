@@ -618,6 +618,44 @@ def test_a_refused_run_leaves_its_row_with_no_pass(project: Project) -> None:
     assert "no result: 2 of" not in result.out  # the refusal says it already
 
 
+@pytest.mark.design("judge.refused_on_a_fault_row_fails")
+def test_a_refusal_on_a_fault_row_fails_at_any_rate_and_keeps_exit_2(project: Project) -> None:
+    result = scripted(
+        project,
+        [
+            {"answer": GOOD},
+            {"answer": GOOD},
+            {"answer": GOOD, "fired": True},
+            {"answer": GOOD, "fired": True, "refund": True},
+        ],
+        f'{FAULT}forbid = ["never said"]\npass_rate = 0.5\n',
+        "runs = 2",
+    )
+    assert result.code == 2, result.out
+    cells = table_row(result, "fault 1")
+    assert cells[-1] == "fail" and "1/2" in cells
+    assert "under this fault the agent called tool:refund_order" in result.out
+    assert "Mocking it would hide this" in result.out
+    assert "1 run: refused tool:refund_order" in result.out
+    assert "Mock it in the test" not in result.out
+    assert "made a call the test does not allow" in result.out
+    kinds = [b["kind"] for s in result.summaries() for b in s["broken_rules"]]  # type: ignore[attr-defined]
+    assert kinds == ["refused"]
+
+
+@pytest.mark.design("judge.refused_unfired_left_out")
+def test_a_refusal_before_the_fault_fired_stays_left_out(project: Project) -> None:
+    result = scripted(
+        project,
+        [{"answer": GOOD}, {"answer": GOOD, "refund": True}],
+        f'{FAULT}forbid = ["never said"]\n',
+        "runs = 1",
+    )
+    assert result.code == 2, result.out
+    assert table_row(result, "fault 1")[-1] == "no result"
+    assert "Mocking it would hide this" not in result.out
+
+
 @pytest.mark.design("judge.exit_mistake_over_failure")
 def test_a_test_mistake_keeps_exit_2_and_the_table_still_shows_the_failure(
     project: Project,

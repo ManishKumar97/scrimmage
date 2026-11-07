@@ -72,13 +72,16 @@ If a row's rules cannot both be met, such as a fault that forbids a word the tes
 | answered, but the answer is empty | fail: `empty answer` |
 | crashed | fail: `crashed` |
 | timed out | fail: `timed out` |
-| refused call | left out |
+| refused call, on a fault row after the fault fired | fail: `refused tool:refund_order`, at any `pass_rate` |
+| refused call, on a baseline | left out |
 | budget reached | left out |
 | infrastructure error | left out |
 | stopped | left out |
 | any ending, when the row's fault did not fire | left out |
 
 A crash or a time-out is a real result about your agent, so it fails.
+A refusal under a fault is the worst result there is: the tool failed, and the agent reached for a call the test does not allow, such as a refund. So its row reads `fail`, and the test still exits with code 2. Do not mock that call to make it pass: that hides what the agent did. Fix the agent.
+On a baseline a refusal usually means the test forgot a mock, so it is left out.
 The rest say nothing about your agent, so they are left out of every rate.
 A script's answer is what [An agent run as a script](scripts.md#the-answer) says it is: the answer file, or the last line printed. Earlier lines are not read.
 

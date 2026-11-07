@@ -64,6 +64,8 @@ NOT_A_FAILURE = (
     "GeneratorExit",
     "DerailStopped",
 )
+# The agent chose this call. Under a fault that is what it did about the failure.
+CHOSEN_CALLS = ("unlisted", "web_write")
 # A baseline whose every run ended so cannot be compared with, so its faults are skipped.
 FAILED = ("crashed", "timed out", "refused call", "budget reached")
 TABLE_WIDTH = 120
@@ -293,8 +295,16 @@ class Runner:
             tool_calls=sum(1 for line in lines if line.get("kind") in ("tool", "mcp")),
         )
         # Here the raw answer is still at hand. The record only ever gets the redacted one.
+        chose = row.fault is not None and outcome == "refused call"
+        chose = chose and state.refusals[:1] and state.refusals[0] in CHOSEN_CALLS
+        refused = [str(line["call"]) for line in lines if line.get("action") == "refused"]
         result.judgement = judge.judge_run(
-            outcome, answer, result.exercised, row.rules, bool(mistakes)
+            outcome,
+            answer,
+            result.exercised,
+            row.rules,
+            bool(mistakes),
+            refused[0] if chose else None,
         )
         summary: dict[str, object] = {
             "answer": None if answer is None else redact(answer),
@@ -667,6 +677,13 @@ def rule_lines(report: RowReport) -> list[str]:
     row, rate = report.result, report.row.rules.pass_rate
     word = "fail" if row.verdict == judge.FAIL else "note"
     head = f"{word}: {report.where}: {row.passed}/{row.judged} passed, pass_rate is {rate:g}"
+    calls = [b.text for r in report.runs for b in r.judgement.broken if b.kind == judge.REFUSED]
+    if calls:
+        call = calls[0].removeprefix(f"{judge.REFUSED} ")
+        head = (
+            f"fail: {report.where}: under this fault the agent called {call}, which the test "
+            "does not allow. Mocking it would hide this"
+        )
     return [head, *(f"  {plural(n, 'run')}: {rule}" for rule, n in tally.most_common())]
 
 
@@ -746,7 +763,8 @@ def report(
                 mistakes.append(
                     f"{where}: {r.run} made a call the test does not allow; see its record"
                 )
-            mistakes += [f"{where}: {r.run}: {m}" for m in r.mistakes]
+            refused = any(b.kind == judge.REFUSED for b in r.judgement.broken)
+            mistakes += [f"{where}: {r.run}: {m}" for m in r.mistakes if not refused]
             if r.outcome == "infrastructure error":
                 code = INFRA
     stopped_by = runner.stopped_by if runner is not None else None

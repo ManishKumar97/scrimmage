@@ -17,6 +17,7 @@ LEFT_OUT = "left out"
 EMPTY = "empty answer"
 NOT_FIRED = "the fault did not fire"
 TEST_MISTAKE = "a mistake in the test"
+REFUSED = "refused"
 Z_95 = 1.96
 # A crash or a time-out is a result about the agent. Every other ending with no answer
 # says nothing about it.
@@ -44,7 +45,7 @@ class Rules:
 class Broken:
     """One rule a run broke. The text is safe to print and to record."""
 
-    kind: str  # expect, forbid, empty, crashed or timed out
+    kind: str  # expect, forbid, empty, crashed, timed out or refused
     text: str
 
 
@@ -100,10 +101,18 @@ def broken_rules(answer: str, rules: Rules) -> tuple[Broken, ...]:
 
 
 def judge_run(
-    outcome: str, answer: str | None, exercised: bool, rules: Rules, mistake: bool = False
+    outcome: str,
+    answer: str | None,
+    exercised: bool,
+    rules: Rules,
+    mistake: bool = False,
+    refused_call: str | None = None,
 ) -> RunJudgement:
+    """How one run counts. refused_call names a call the agent chose under a fault."""
     if not exercised:
         return RunJudgement(left_out=NOT_FIRED)
+    if refused_call is not None:
+        return RunJudgement((Broken(REFUSED, f"refused {refused_call}"),))
     if mistake and outcome == "crashed":  # the test broke the run, so it shows nothing
         return RunJudgement(left_out=TEST_MISTAKE)
     if outcome in ENDED_BADLY:
@@ -125,7 +134,9 @@ def judge_row(
     judged = [run for run in runs_judged if run.left_out is None]
     passed = sum(1 for run in judged if not run.broken)
     floor = floor_runs(runs)
-    if len(judged) < floor:
+    if any(broken.kind == REFUSED for run in judged for broken in run.broken):
+        verdict = FAIL  # what the agent did under the fault, at any rate
+    elif len(judged) < floor:
         verdict = NO_RESULT
     elif passed / len(judged) < pass_rate:
         verdict = FAIL

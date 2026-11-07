@@ -407,7 +407,8 @@
                       "forbid",
                       "empty",
                       "crashed",
-                      "timed out"
+                      "timed out",
+                      "refused"
                     ]
                   },
                   "text": {
