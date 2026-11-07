@@ -55,6 +55,14 @@ def answer(question):
             pass
     if step.get("refund"):
         tools.refund_order("1234")
+    if step.get("post"):
+        import httpx
+
+        httpx.post("https://payments.example.invalid/refund")
+    if step.get("blind"):
+        import subprocess, sys
+
+        subprocess.run([sys.executable, "-c", "print(1)"], env={"PATH": "/usr/bin"}, check=False)
     if step.get("model"):
         import openai
 
@@ -71,6 +79,11 @@ FAULT = '[[test.fault]]\ncall = "tool:get_order"\ndo = "timeout"\n'
 ALWAYS = FAULT + 'forbid = ["never said"]\n'
 GOOD = "It shipped, and it arrives on October 30."
 BAD = "It shipped."
+
+
+@pytest.mark.parametrize("blank", ["\u034f", "\ufe0f", "\u3164"])
+def test_a_blank_character_hides_no_word(blank: str) -> None:
+    assert broken_texts(f"re{blank}funded", Rules((), ("refunded",), 1.0))
 
 
 def broken_texts(answer: str, rules: Rules) -> list[str]:
@@ -705,6 +718,25 @@ def test_a_refusal_on_a_fault_row_fails_at_any_rate_and_keeps_exit_2(project: Pr
     assert kinds == ["refused"]
 
 
+@pytest.mark.parametrize(
+    ("step", "shown"),
+    [("post", "http:payments.example.invalid"), ("blind", "process:python")],
+    ids=["a web write", "a child with no gate"],
+)
+def test_every_call_the_agent_chose_fails_a_fault_row(
+    project: Project, step: str, shown: str
+) -> None:
+    result = scripted(
+        project,
+        [{"answer": GOOD}, {"answer": GOOD, "fired": True, step: True}],
+        ALWAYS,
+        "runs = 1",
+    )
+    assert result.code == 2, result.out
+    assert table_row(result, "fault 1")[-1] == "fail"
+    assert f"1 run: refused {shown}" in result.out
+
+
 @pytest.mark.design("judge.refused_unfired_left_out")
 def test_a_refusal_before_the_fault_fired_stays_left_out(project: Project) -> None:
     result = scripted(
@@ -868,16 +900,28 @@ def test_with_an_answer_path_the_final_reply_is_what_is_judged(project: Project)
     assert 'expect "shipped" not found' in result.out
 
 
-@pytest.mark.design("judge.structured_text_not_escaped")
-def test_structured_text_keeps_its_accents_so_a_forbid_finds_them(project: Project) -> None:
+@pytest.mark.design("judge.answer_path_is_what_is_judged")
+@pytest.mark.parametrize(
+    ("value", "path"),
+    [
+        ('{"messages": [{"content": "tool text: shipped, Oct 30"}]}', "messages"),
+        ('{"state": {"reply": "shipped, Oct 30"}}', "state"),
+    ],
+    ids=["a list", "a table"],
+)
+def test_an_answer_path_must_lead_to_the_answer_not_to_all_of_it(
+    project: Project, value: str, path: str
+) -> None:
     result = returns(
-        project,
-        '{"reply": {"city": "Z\u00fcrich"}}',
-        'answer = "reply"',
-        'expect = ["city"]\nforbid = ["Z\u00fcrich"]\n',
+        project, value, f'answer = "{path}"', 'expect = ["shipped", ["Oct 30", "October 30"]]\n'
     )
-    assert result.code == 1, result.out
-    assert 'forbid "Z\u00fcrich" found' in result.out
+    assert result.code == 2, result.out + result.err
+    assert "not the answer" in result.out + result.err
+
+
+def test_an_answer_path_may_lead_to_a_number(project: Project) -> None:
+    result = returns(project, '{"count": 12}', 'answer = "count"', 'expect = ["12"]\n')
+    assert result.code == 0, result.out + result.err
 
 
 @pytest.mark.design("record.judged_fields")

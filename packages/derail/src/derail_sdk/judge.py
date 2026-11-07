@@ -21,6 +21,7 @@ REFUSED = "refused"
 Z_95 = 1.96
 FORMAT = "Cf"  # the Unicode category of characters that do not show
 COMBINING_DOT = "\u0307"
+BLANK = dict.fromkeys(map(ord, "\u034f\ufe0e\ufe0f\u1160"))  # blank, yet not of that category
 # A crash or a time-out is a result about the agent. Every other ending with no answer
 # says nothing about it.
 ENDED_BADLY = ("crashed", "timed out")
@@ -80,7 +81,7 @@ def normal(text: str) -> str:
     Casefold turns a dotted capital I into i and a dot of its own, which goes too.
     """
     plain = unicodedata.normalize("NFKC", text).translate(PLAIN_FORMS)
-    shown = "".join(char for char in plain if unicodedata.category(char) != FORMAT)
+    shown = "".join(char for char in plain.translate(BLANK) if unicodedata.category(char) != FORMAT)
     return " ".join(shown.casefold().replace(COMBINING_DOT, "").split())
 
 
