@@ -1,0 +1,491 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:derail:schema:cli:v1",
+  "title": "Derail --json output, version 1",
+  "description": "The one JSON document a derail command prints with --json. Every command's document starts with the same envelope. Within version 1, fields and enum values are only added: a reader ignores a field it does not know and reads an enum value it does not know as other. This file describes the release that ships it.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/test"
+    },
+    {
+      "$ref": "#/$defs/check"
+    }
+  ],
+  "$defs": {
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "message"
+      ],
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": "The line's text, without its prefix. It can change in any release; do not match on it."
+        }
+      }
+    },
+    "messages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/message"
+      }
+    },
+    "derail": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The installed Derail version."
+    },
+    "exit": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3,
+      "description": "The process's exit code."
+    },
+    "dollars": {
+      "type": "number",
+      "minimum": 0
+    },
+    "test": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v",
+        "derail",
+        "command",
+        "exit",
+        "status",
+        "config",
+        "records",
+        "tests",
+        "rows",
+        "cost_usd",
+        "budget_usd",
+        "stopped_by",
+        "mistakes",
+        "notes",
+        "warnings",
+        "infra"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "derail": {
+          "$ref": "#/$defs/derail"
+        },
+        "command": {
+          "enum": [
+            "test"
+          ]
+        },
+        "exit": {
+          "$ref": "#/$defs/exit"
+        },
+        "status": {
+          "enum": [
+            "passed",
+            "failed",
+            "mistake",
+            "infra"
+          ]
+        },
+        "config": {
+          "type": "string"
+        },
+        "records": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The folder that holds this test's records, or null when none was made."
+        },
+        "tests": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/row"
+          }
+        },
+        "cost_usd": {
+          "$ref": "#/$defs/dollars"
+        },
+        "budget_usd": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/dollars"
+            }
+          ]
+        },
+        "stopped_by": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "enum": [
+                "budget",
+                "budget_held",
+                "no_price",
+                "unknown_tool_type",
+                "unseen_tool",
+                "structure",
+                "ambiguous_label",
+                "unknown_label"
+              ]
+            }
+          ]
+        },
+        "mistakes": {
+          "$ref": "#/$defs/messages"
+        },
+        "notes": {
+          "$ref": "#/$defs/messages"
+        },
+        "warnings": {
+          "$ref": "#/$defs/messages"
+        },
+        "infra": {
+          "$ref": "#/$defs/messages"
+        }
+      }
+    },
+    "row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "test",
+        "row",
+        "fault",
+        "runs",
+        "fired",
+        "done",
+        "passed",
+        "judged",
+        "rate",
+        "range",
+        "pass_rate",
+        "tools",
+        "cost_usd",
+        "result",
+        "broken",
+        "run_details"
+      ],
+      "properties": {
+        "test": {
+          "type": "string"
+        },
+        "row": {
+          "type": "string"
+        },
+        "fault": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "call",
+                "do",
+                "when",
+                "model"
+              ],
+              "properties": {
+                "call": {
+                  "type": "string"
+                },
+                "do": {
+                  "type": "string"
+                },
+                "when": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "runs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fired": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "done": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "passed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "judged": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rate": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "range": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          ]
+        },
+        "pass_rate": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "tools": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cost_usd": {
+          "$ref": "#/$defs/dollars"
+        },
+        "result": {
+          "enum": [
+            "pass",
+            "fail",
+            "no result"
+          ]
+        },
+        "broken": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "text",
+              "runs"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "expect",
+                  "forbid",
+                  "empty",
+                  "crashed",
+                  "timed out",
+                  "refused"
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "runs": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "run_details": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/run"
+          }
+        }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run",
+        "outcome",
+        "fault_fired",
+        "judged",
+        "left_out",
+        "cost_usd",
+        "answer_preview"
+      ],
+      "properties": {
+        "run": {
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "answered",
+            "crashed",
+            "timed out",
+            "refused call",
+            "budget reached",
+            "not reserved",
+            "infrastructure error",
+            "stopped"
+          ]
+        },
+        "fault_fired": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "judged": {
+          "enum": [
+            "pass",
+            "fail",
+            "left out"
+          ]
+        },
+        "left_out": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cost_usd": {
+          "$ref": "#/$defs/dollars"
+        },
+        "answer_preview": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 200
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v",
+        "derail",
+        "command",
+        "exit",
+        "status",
+        "config",
+        "summary",
+        "mistakes",
+        "notes",
+        "warnings",
+        "infra"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "derail": {
+          "$ref": "#/$defs/derail"
+        },
+        "command": {
+          "enum": [
+            "check"
+          ]
+        },
+        "exit": {
+          "$ref": "#/$defs/exit"
+        },
+        "status": {
+          "enum": [
+            "valid",
+            "mistake",
+            "infra"
+          ]
+        },
+        "config": {
+          "type": "string"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "tests",
+                "rows",
+                "runs",
+                "tools",
+                "budget_usd"
+              ],
+              "properties": {
+                "tests": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "rows": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "runs": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "tools": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "budget_usd": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/$defs/dollars"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "mistakes": {
+          "$ref": "#/$defs/messages"
+        },
+        "notes": {
+          "$ref": "#/$defs/messages"
+        },
+        "warnings": {
+          "$ref": "#/$defs/messages"
+        },
+        "infra": {
+          "$ref": "#/$defs/messages"
+        }
+      }
+    }
+  }
+}

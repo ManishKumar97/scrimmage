@@ -14,6 +14,8 @@ from derail_sdk.redact import redact
 
 PASS, FAIL, NO_RESULT = "pass", "fail", "no result"
 LEFT_OUT = "left out"
+VERDICTS = (PASS, FAIL, NO_RESULT)  # a row's result
+RUN_VERDICTS = (PASS, FAIL, LEFT_OUT)  # how one run counts
 EMPTY = "empty answer"
 NOT_FIRED = "the fault did not fire"
 TEST_MISTAKE = "a mistake in the test"
@@ -25,6 +27,7 @@ BLANK = dict.fromkeys(map(ord, "\u034f\ufe0e\ufe0f\u1160"))  # blank, yet not of
 # A crash or a time-out is a result about the agent. Every other ending with no answer
 # says nothing about it.
 ENDED_BADLY = ("crashed", "timed out")
+KINDS = ("expect", "forbid", "empty", *ENDED_BADLY, REFUSED)  # what a broken rule can be
 # Forms a model picks freely, so that a rule written the plain way still matches.
 PLAIN_FORMS = str.maketrans(
     {
@@ -48,7 +51,7 @@ class Rules:
 class Broken:
     """One rule a run broke. The text is safe to print and to record."""
 
-    kind: str  # expect, forbid, empty, crashed, timed out or refused
+    kind: str  # one of KINDS
     text: str
 
 

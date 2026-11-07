@@ -31,7 +31,7 @@ from derail_sdk.config import QUESTION, Agent, Config, Fault, Test
 from derail_sdk.control import ControlServer, proc_key
 from derail_sdk.records import RECORD_VERSION, RecordStore
 from derail_sdk.redact import redact
-from derail_sdk.state import COMMAND_CAP, now_iso
+from derail_sdk.state import COMMAND_CAP, PREVIEW, now_iso
 
 OK, ROW_FAILED, MISTAKE, INFRA = 0, 1, 2, 3
 TAIL_BYTES = 1024 * 1024  # how much of a script's output is read to find its last line
@@ -1000,6 +1000,65 @@ def report(
     runner: "Runner | None" = None,
 ) -> int:
     return print_report(build_report(config, results, folder, runner), out)
+
+
+def report_json(found: Report) -> dict[str, object]:
+    """The fields `derail test --json` adds to the envelope. Its lists come from messages."""
+    return {
+        "records": str(found.folder),
+        "tests": len(found.config.tests),
+        "rows": [row_json(entry, found.folder) for entry in found.rows],
+        "cost_usd": round(found.spent, 8),
+        "budget_usd": found.config.agent.max_cost_usd,
+        "stopped_by": found.stopped_by,
+    }
+
+
+def row_json(entry: RowReport, folder: Path) -> dict[str, object]:
+    """One table row, by the table's own column names, with its runs and broken rules."""
+    row, mine, result = entry.row, entry.runs, entry.result
+    fault = row.fault
+    rate: float | None = None
+    span: list[float] | None = None
+    if result.judged:
+        low, high = judge.wilson(result.passed, result.judged)
+        rate, span = round(result.passed / result.judged, 4), [round(low, 4), round(high, 4)]
+    return {
+        "test": row.test.name,
+        "row": row.name,
+        "fault": None
+        if fault is None
+        else {"call": fault.call, "do": fault.do, "when": fault.when, "model": fault.model},
+        "runs": len(mine),
+        "fired": None if fault is None else sum(bool(r.fault_fired) for r in mine),
+        "done": sum(1 for r in mine if r.outcome == "answered"),
+        "passed": result.passed,
+        "judged": result.judged,
+        "rate": rate,
+        "range": span,
+        "pass_rate": row.rules.pass_rate,
+        "tools": round(sum(r.tool_calls for r in mine) / max(len(mine), 1), 4),
+        "cost_usd": round(sum(r.cost_usd for r in mine), 8),
+        "result": result.verdict,
+        "broken": [
+            {"kind": rule.kind, "text": rule.text, "runs": [r.run for r in runs]}
+            for rule, runs in broken_runs(entry)
+        ],
+        "run_details": [run_json(r) for r in mine],
+    }
+
+
+def run_json(result: RunResult) -> dict[str, object]:
+    answer = None if result.answer is None else redact(result.answer)[:PREVIEW]
+    return {
+        "run": result.run,
+        "outcome": result.outcome,
+        "fault_fired": result.fault_fired,
+        "judged": result.judgement.verdict,
+        "left_out": result.judgement.left_out,
+        "cost_usd": round(result.cost_usd, 8),
+        "answer_preview": answer,
+    }
 
 
 def budget_line(reason: str, numbers: dict[str, object], agent: Agent) -> str:
