@@ -34,6 +34,7 @@ from derail_sdk.redact import redact
 from derail_sdk.state import COMMAND_CAP, PREVIEW, now_iso
 
 OK, ROW_FAILED, MISTAKE, INFRA = 0, 1, 2, 3
+END = b"\x00"  # ends the stop watcher; no signal has the number 0
 TAIL_BYTES = 1024 * 1024  # how much of a script's output is read to find its last line
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 KILL_GRACE_S = 5.0
@@ -137,7 +138,12 @@ class RunResult:
 
 
 class Runner:
-    def __init__(self, config: Config, control_url: Callable[[str], str] = lambda url: url) -> None:
+    def __init__(
+        self,
+        config: Config,
+        control_url: Callable[[str], str] = lambda url: url,
+        stop_flag: list[str] | None = None,
+    ) -> None:
         self.config = config
         self.control_url = control_url  # lets a test point the agent elsewhere
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -163,6 +169,12 @@ class Runner:
         self.label_problems: list[str] = []
         self.stopped_by: str | None = None  # the reason a refusal stopped the whole test
         self.skipped: list[str] = []  # tests whose fault rows did not run: baseline failed
+        # The name of the signal that stops the test. A watcher thread learns of it through
+        # signal.set_wakeup_fd, which Python's C handler writes at once, on whatever thread
+        # the signal lands; it then stops the runs. Nothing is raised in a handler, which a
+        # __del__ it fired in would swallow, and nothing waits for the main thread, which
+        # sleeps in the pool's wait and runs a Python handler only once it wakes.
+        self.stop_flag: list[str] = [] if stop_flag is None else stop_flag
 
     def _refused(self, run: str, reason: str) -> None:
         """The first refusal ends its run and its row; some reasons end the whole test."""
@@ -423,7 +435,14 @@ class Runner:
         rows = planner.rows(self.config)
         runs = self.config.agent.runs
         self.server.start()
+        self.wake_read, self.wake = os.pipe()
+        os.set_blocking(self.wake, False)  # set_wakeup_fd needs it, and a full pipe is fine
+        watcher = threading.Thread(target=self._watch, name="derail-stop", daemon=True)
+        watcher.start()
         previous = {sig: signal.signal(sig, self._interrupted) for sig in STOP_SIGNALS}
+        old_wakeup = signal.set_wakeup_fd(self.wake)
+        if self.stop_flag:  # noted just before the handlers above were set
+            os.write(self.wake, bytes([STOP_SIGNALS[0]]))
         try:
             with ThreadPoolExecutor(max_workers=self.config.agent.parallel) as pool:
                 base = [row for row in rows if row.fault is None for _ in range(runs)]
@@ -443,10 +462,20 @@ class Runner:
                     for _ in range(runs)
                 ]
                 results += list(pool.map(self.one, rest))
+            if self.stop_flag:  # every run has ended, so it is raised where nothing drops it
+                name = self.stop_flag[0]
+                self.stop_flag.clear()  # the watcher and the handler may both have noted it
+                raise Interrupted(name)
         finally:
-            self.cancel()
+            # Handlers first: from here a signal goes to the caller's, never to a closed pipe.
+            signal.set_wakeup_fd(old_wakeup)
             for sig, handler in previous.items():
                 signal.signal(sig, handler)
+            os.write(self.wake, END)  # the watcher returns
+            watcher.join()
+            os.close(self.wake)
+            os.close(self.wake_read)
+            self.cancel()
             self.server.stop()
             shutil.rmtree(self.answers, ignore_errors=True)
         return [r for r in results if r is not None]
@@ -460,10 +489,19 @@ class Runner:
             stop_group(proc)
 
     def _interrupted(self, signum: int, frame: object) -> None:
-        """The runner itself was told to stop, such as a cancelled CI job."""
+        """The runner itself was told to stop, such as a cancelled CI job. Only notes it."""
         del frame
-        self.cancel()
-        raise Interrupted(signal.Signals(signum).name)
+        if not self.stop_flag:
+            self.stop_flag.append(signal.Signals(signum).name)
+
+    def _watch(self) -> None:
+        """Stop every run once a stop signal comes; at the end of run_all, return."""
+        while (byte := os.read(self.wake_read, 1)) != END:
+            if byte[0] in STOP_SIGNALS:  # the wakeup fd also carries other caught signals
+                if not self.stop_flag:
+                    self.stop_flag.append(signal.Signals(byte[0]).name)
+                self.cancel()
+                return
 
 
 def real_error(line: dict[str, object]) -> str | None:

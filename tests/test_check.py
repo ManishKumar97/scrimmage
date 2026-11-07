@@ -41,7 +41,7 @@ def test_check_passes_exactly_when_test_gets_past_the_file(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    def reached(self: runner.Runner, cfg: config.Config) -> None:
+    def reached(self: runner.Runner, cfg: config.Config, **kwargs: object) -> None:
         raise Reached
 
     monkeypatch.setattr(runner.Runner, "__init__", reached)

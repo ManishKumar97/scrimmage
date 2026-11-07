@@ -694,10 +694,14 @@ def test_a_document_that_cannot_be_written_still_gives_one(
 def test_sigterm_while_the_file_is_read_still_gives_one_document(
     project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    real_load = config.load
+    handlers: list[object] = []
+
     def terminated(path: Path) -> config.Config:
         os.kill(os.getpid(), signal.SIGTERM)
-        time.sleep(5)  # the handler raises before this ends
-        raise AssertionError("SIGTERM did not stop the read")
+        time.sleep(0.1)  # the handler has run: it noted the signal and raised nothing
+        handlers.append(signal.getsignal(signal.SIGTERM))
+        return real_load(path)
 
     # Handlers no test could have left: so a handler a command leaves set cannot pass.
     marker_int, marker_term = signal.default_int_handler, signal.SIG_DFL
@@ -711,6 +715,183 @@ def test_sigterm_while_the_file_is_read_still_gives_one_document(
         assert messages(doc, "infra") == ["stopped by SIGTERM"], command
         assert signal.getsignal(signal.SIGINT) is marker_int, command  # put back after it
         assert signal.getsignal(signal.SIGTERM) is marker_term, command
+    # After the first signal the handler was still set, not SIG_IGN, so a second would count.
+    assert handlers == [cli.stop, cli.stop]
+
+
+# Sends SIGTERM from inside a __del__ and spins there, so the handler runs inside it, where
+# Python prints and drops any exception it raises. In cli: as the file is read.
+SIGNAL_IN_DEL = """
+import gc, os, signal
+
+class Bomb:
+    def __del__(self):
+        os.kill(os.getpid(), signal.SIGTERM)
+        for _ in range(200_000):  # the handler runs here, inside __del__
+            pass
+
+def go_off():
+    Bomb()
+    gc.collect()
+"""
+IN_READ = (
+    SIGNAL_IN_DEL
+    + """
+from derail_sdk import config
+real_load = config.load
+def load(path):
+    go_off()
+    return real_load(path)
+config.load = load
+"""
+)
+
+
+def hang(project: Project, timeout: int = 120) -> None:
+    """The example's agent swapped for one that sleeps, one baseline run, no fault."""
+    project.edit(
+        'function = "acme.agent:answer"',
+        f'function = "acme.slow:hang"\nruns = 1\nrun_timeout = {timeout}\nmax_cost_usd = "none"',
+    )
+    project.edit(project.toml.read_text().split("[[test.fault]]")[1], "")
+    project.edit("[[test.fault]]", "")
+
+
+@pytest.mark.design("json.signal_in_cleanup")
+@pytest.mark.parametrize("command", ["check", "test"])
+def test_a_signal_inside_a_del_while_the_file_is_read_still_stops(
+    project: Project, command: str
+) -> None:
+    hang(project)
+    started = time.monotonic()
+    done = run_entry(IN_READ, command, "--json", str(project.toml))
+    assert time.monotonic() - started < 30, "the signal was lost and the run went on"
+    assert done.code == 3, done.out + done.err
+    doc = one_document(done, command)  # standard error is empty: nothing was dropped
+    assert messages(doc, "infra") == ["stopped by SIGTERM"]
+    assert not (project.root / "derail-runs").exists()  # it stopped before a runner was made
+
+
+IN_RUNNER = (
+    SIGNAL_IN_DEL
+    + """
+from derail_sdk import runner
+real_init = runner.Runner.__init__
+def init(self, *args, **kwargs):
+    real_init(self, *args, **kwargs)
+    go_off()  # the runner exists and its folder is made; its runs have not started
+runner.Runner.__init__ = init
+"""
+)
+
+
+@pytest.mark.design("json.signal_in_cleanup")
+def test_a_signal_as_the_runner_is_made_stops_before_any_run(project: Project) -> None:
+    hang(project)
+    done = run_entry(IN_RUNNER, "test", "--json", str(project.toml))
+    assert done.code == 3, done.out + done.err
+    doc = one_document(done, "test")
+    assert messages(doc, "infra") == ["stopped by SIGTERM"]  # not "every run was stopped"
+    assert doc["records"] is not None
+    assert not list((project.root / "derail-runs").glob("*/*.log")), "a run was started"
+
+
+# Blocks the stop signals in the main thread once the pool exists, so the kernel must give
+# a signal to another thread, as it may at any time under load.
+MAIN_THREAD_DEAF = """
+import signal
+from derail_sdk import runner
+real_pool = runner.ThreadPoolExecutor
+def pool(*args, **kwargs):
+    made = real_pool(*args, **kwargs)
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+    return made
+runner.ThreadPoolExecutor = pool
+"""
+
+
+@pytest.mark.design("json.stops_fast")
+def test_a_signal_on_another_thread_still_stops_the_runs(project: Project) -> None:
+    hang(project)
+    clean = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
+    code = f"import sys\nsys.argv = ['derail', 'test', '--json', {str(project.toml)!r}]\n"
+    code += MAIN_THREAD_DEAF + "from derail_sdk import entry\nentry.main()\n"
+    proc = subprocess.Popen(
+        [sys.executable, "-c", code],
+        env=clean, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )  # fmt: skip
+    for _ in range(300):
+        time.sleep(0.1)
+        if list((project.root / "derail-runs").glob("*/*.log")):
+            break
+    time.sleep(0.5)
+    sent = time.monotonic()
+    proc.send_signal(signal.SIGTERM)
+    out, err = proc.communicate(timeout=60)
+    assert time.monotonic() - sent < 10, "the runs waited for the main thread"
+    done = Done(proc.returncode, out, err)
+    assert done.code == 3, out + err
+    assert messages(one_document(done, "test"), "infra") == [
+        "stopped by SIGTERM; every run was stopped"
+    ]
+
+
+RUNNER_DEL = """
+import gc, os, signal, threading, time
+
+class Bomb:
+    def __del__(self):
+        os.kill(os.getpid(), signal.SIGTERM)
+        for _ in range(200_000):  # the runner's handler runs here, inside __del__
+            pass
+
+from derail_sdk import runner
+real_pool = runner.ThreadPoolExecutor
+def pool(*args, **kwargs):
+    Bomb()  # made and dropped on the main thread, with the runner's handlers set
+    gc.collect()
+    return real_pool(*args, **kwargs)
+runner.ThreadPoolExecutor = pool
+"""
+
+
+@pytest.mark.design("json.signal_in_cleanup")
+def test_a_signal_inside_a_del_while_runs_go_still_stops_them(project: Project) -> None:
+    hang(project)
+    started = time.monotonic()
+    done = run_entry(RUNNER_DEL, "test", "--json", str(project.toml))
+    assert time.monotonic() - started < 30, "the signal was lost and the run went on"
+    assert done.code == 3, done.out + done.err
+    doc = one_document(done, "test")
+    assert messages(doc, "infra") == ["stopped by SIGTERM; every run was stopped"]
+
+
+@pytest.mark.design("json.stops_fast")
+def test_a_long_run_stops_within_seconds_of_each_of_two_signals(project: Project) -> None:
+    hang(project)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
+    proc = subprocess.Popen(
+        [DERAIL, "test", "--json", str(project.toml)],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )  # fmt: skip
+    for _ in range(300):
+        time.sleep(0.1)
+        if list((project.root / "derail-runs").glob("*/*.log")):
+            break
+    time.sleep(0.5)  # the agent is in its sleep, inside the runner's wait
+    sent = time.monotonic()
+    proc.send_signal(signal.SIGTERM)
+    proc.send_signal(signal.SIGINT)  # a second signal changes nothing and is not lost
+    out, err = proc.communicate(timeout=60)
+    assert time.monotonic() - sent < 10
+    done = Done(proc.returncode, out, err)
+    assert done.code == 3, out + err
+    doc = one_document(done, "test")
+    # Two signals pending at once come lowest number first, so either can be the first.
+    assert messages(doc, "infra") in (
+        ["stopped by SIGTERM; every run was stopped"],
+        ["stopped by SIGINT; every run was stopped"],
+    )
 
 
 def run_entry(script: str, *argv: str) -> Done:

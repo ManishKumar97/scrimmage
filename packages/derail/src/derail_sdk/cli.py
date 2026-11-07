@@ -35,7 +35,12 @@ STOP_SIGNALS = entry.STOP_SIGNALS
 
 
 class Stopped(BaseException):
-    """derail test or check got SIGINT or SIGTERM outside the runs, with --json."""
+    """derail test or check got SIGINT or SIGTERM outside the runs, with --json.
+
+    The signal handler never raises it: it only notes the signal, and stop_point raises it
+    in plain code. An exception raised in a handler that fires inside a __del__, a weakref
+    callback or a generator's close is printed and dropped by Python, and the signal lost.
+    """
 
 
 def main(argv: list[str] | None = None, *, process: bool = False) -> int:
@@ -59,16 +64,25 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
     return as_json(args.command, args.path, run, process)
 
 
-def ignore_signals() -> None:
-    """From here on the command's code is settled: no signal may change the exit it states."""
+def settle() -> None:
+    """From here on the command's code is settled: no signal may change the exit it states.
+
+    A signal noted after the last stop point is dropped with it, so a later call in the
+    same process does not start stopped.
+    """
     for sig in STOP_SIGNALS:
         signal.signal(sig, signal.SIG_IGN)
+    entry.pending.clear()
 
 
-def stop(signum: int, frame: object) -> None:
-    del frame
-    ignore_signals()  # a second signal must not interrupt the document of the first
-    raise Stopped(signal.Signals(signum).name)
+# With --json, a signal is noted, as while Derail loads, and acted on at the next stop point.
+stop = entry.note
+
+
+def stop_point() -> None:
+    """Stop here if a signal was noted. Called in plain code, where nothing can swallow it."""
+    if entry.pending:
+        raise Stopped(entry.pending[0])
 
 
 def as_json(
@@ -82,17 +96,17 @@ def as_json(
         try:
             for sig in STOP_SIGNALS:
                 signal.signal(sig, stop)
-            if entry.pending:  # it came while Derail was still loading
-                raise Stopped(entry.pending.pop())
+            stop_point()  # a signal that came while Derail was still loading
             code = run(path, found)
+            stop_point()  # one that came after the last stop point inside the command
         except (Stopped, KeyboardInterrupt) as exc:
             code = found.fail(f"stopped by {str(exc) or 'SIGINT'}")  # Ctrl-C has no name
         except Exception as exc:  # Derail's own failure still gives a document
             code = found.fail(f"derail {command} failed: {exc!r}")
-        ignore_signals()
+        settle()
         text = json.dumps(envelope(command, code, found, version), indent=2)
     except Exception as exc:  # the document itself could not be built
-        ignore_signals()
+        settle()
         code = INFRA
         bare = Found(command, str(path))
         bare.fail(f"derail {command} could not write its document: {exc!r}")
@@ -207,6 +221,7 @@ def run_test(path: Path, found: Found | None) -> int:
         config, problems = read(path)
     except Exception as exc:  # Derail's own failure, not a mistake in the file
         return unreadable("test", exc, found)
+    stop_point()
     if config is None:
         if found is None:
             say(problems, sys.stderr)
@@ -218,9 +233,12 @@ def run_test(path: Path, found: Found | None) -> int:
     results: list[running.RunResult] = []
     stopped: str | None = None
     try:
-        runner = Runner(config)
+        # With --json the runner shares the noted signal, so one that came just before its
+        # runs start still stops them, and one during them is said once.
+        runner = Runner(config, stop_flag=None if found is None else entry.pending)
         if found is not None:
             found.started(config, runner)
+        stop_point()
         results = runner.run_all()
     except Interrupted as exc:
         stopped = f"stopped by {exc}; every run was stopped"
@@ -249,6 +267,7 @@ def run_check(path: Path, found: Found | None) -> int:
         config, problems = read(path)
     except Exception as exc:  # Derail's own failure, not a mistake in the file
         return unreadable("check", exc, found)
+    stop_point()
     if config is None:
         if found is not None:
             found.messages += [(running.MISTAKES, problem) for problem in problems]
