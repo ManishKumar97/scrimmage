@@ -48,8 +48,12 @@ def _arguments(
         arguments = dict(signature.bind_partial(*args, **kwargs).arguments)
     except TypeError:
         return {"args": list(args[1:] if bound else args), "kwargs": kwargs}
-    if bound:
-        arguments.pop(next(iter(signature.parameters), ""), None)
+    first = next(iter(signature.parameters.values()), None)
+    if bound and first is not None and first.name in arguments:
+        if first.kind is inspect.Parameter.VAR_POSITIONAL:  # def m(*args): self is args[0]
+            arguments[first.name] = tuple(arguments[first.name])[1:]
+        else:
+            del arguments[first.name]
     return arguments
 
 
@@ -257,7 +261,18 @@ def swap_method(owner: object, path: str, method: str, seen: str) -> None:
         gated = staticmethod(gated)
     elif of_class:
         gated = classmethod(gated)
-    setattr(owner, method, gated)
+    # An alias in a class body, fetch = get, is the same object under another name.
+    aliases = {
+        name
+        for c in owner.__mro__
+        for name, value in c.__dict__.items()
+        if value is found and inspect.getattr_static(owner, name) is found
+    }
+    try:
+        for name in sorted(aliases | {method}):
+            setattr(owner, name, gated)
+    except (TypeError, AttributeError) as exc:  # a metaclass that refuses new attributes
+        cannot_gate(seen, f"{where} its class does not let Derail set the gate on it: {exc}")
 
 
 def module_spec(name: str, extra: list[str]) -> importlib.machinery.ModuleSpec | None:

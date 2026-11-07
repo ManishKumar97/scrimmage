@@ -73,6 +73,8 @@ The record never holds `self` or `cls`, only the arguments after them.
 |---|---|
 | a method, a `staticmethod` or a `classmethod`, sync or async | gated, of the same kind |
 | a method a base class defines, named through a subclass, `StoreTools.get_order` | gated on `StoreTools` and its subclasses; the base class and its other subclasses are left alone |
+| an alias in the class body, `fetch = get_order` | gated with the method, under the same label |
+| a method of a class whose metaclass refuses new attributes | the run stops, with the reason |
 | the class itself, `shop.tools:StoreTools` | the run stops: list each method instead |
 | a property or a plain attribute | the run stops: it is not a method |
 | an attribute your code sets in `__init__` | the run stops: Derail gates the class when the module loads, before any instance exists, so define it as a method |

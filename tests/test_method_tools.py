@@ -355,3 +355,108 @@ def test_a_toolkit_agent_runs_with_its_methods_mocked_faulted_and_kept_secret(
     )
     for path in (result.root / "derail-runs").glob("*/*.jsonl"):
         assert "s3cret" not in path.read_text()
+
+
+# The review's probes, from test_probe_methods.py.
+PROBES = """
+import functools
+
+class Base:
+    def __init__(self):
+        self.secret = "s3cret"
+
+    def get(self, order_id):
+        return "real " + order_id
+
+    fetch = get
+
+    def star(*args):
+        return "star " + repr(args[1:])
+
+    @functools.lru_cache
+    def cached(self, x):
+        return x
+
+class Sub(Base):
+    pass
+
+class Meta(type):
+    def __setattr__(cls, key, value):
+        raise TypeError("frozen class")
+
+class Frozen(metaclass=Meta):
+    def get(self, x):
+        return x
+"""
+
+
+def probes() -> types.ModuleType:
+    module = types.ModuleType("probe_tools")
+    exec(PROBES, module.__dict__)
+    return module
+
+
+@pytest.mark.design("method.alias_gated")
+def test_an_alias_in_the_class_body_goes_through_the_gate_too(lines: Lines) -> None:
+    module = probes()
+    install(lines, [Mock("tool:get", "mocked", None)])
+    tool_gate.swap(module, ["Base.get"])
+    shop = module.Base()
+    assert shop.get("1") == "mocked" and shop.fetch("1") == "mocked"
+    assert [line["call"] for line in lines.lines] == ["tool:get", "tool:get"]
+
+
+def test_an_alias_on_a_base_class_is_gated_through_the_named_subclass(lines: Lines) -> None:
+    module = probes()
+    install(lines, [Mock("tool:get", "mocked", None)])
+    tool_gate.swap(module, ["Sub.get"])
+    assert module.Sub().fetch("1") == "mocked"
+    assert module.Base().fetch("1") == "real 1"  # the base class is left alone
+
+
+@pytest.mark.design("method.star_args")
+def test_a_method_on_star_args_drops_only_self(lines: Lines) -> None:
+    module = probes()
+    install(lines, real=["tool:star"])
+    tool_gate.swap(module, ["Base.star"])
+    assert module.Base().star("a", "b") == "star ('a', 'b')"
+    preview = json.loads(str(lines.lines[0]["args"]["preview"]))  # type: ignore[index]
+    assert preview == {"args": ["a", "b"]}
+    secretless(lines)
+
+
+@pytest.mark.design("method.frozen_class")
+def test_a_class_that_refuses_the_gate_stops_the_run_with_the_reason(lines: Lines) -> None:
+    module = probes()
+    install(lines)
+    with pytest.raises(tool_gate.ListedToolMissing, match="does not let Derail set the gate"):
+        tool_gate.swap(module, ["Frozen.get"])
+    assert "frozen class" in str(lines.lines[0]["mistake"])
+
+
+def test_a_cached_method_is_refused_as_not_a_method(lines: Lines) -> None:
+    module = probes()
+    install(lines)
+    with pytest.raises(tool_gate.ListedToolMissing, match="it is not a method"):
+        tool_gate.swap(module, ["Base.cached"])
+
+
+def test_a_subclass_then_its_base_each_keep_their_gate(lines: Lines) -> None:
+    module = probes()
+    install(lines, real=["tool:get"])
+    tool_gate.swap(module, ["Sub.get"])
+    tool_gate.swap(module, ["Base.get"])
+    module.Sub().get("1")
+    module.Base().get("2")
+    assert [line["call"] for line in lines.lines] == ["tool:get", "tool:get"]
+
+
+def test_self_passed_by_name_or_with_extra_arguments_is_never_recorded(lines: Lines) -> None:
+    module = probes()
+    install(lines, real=["tool:get"])
+    tool_gate.swap(module, ["Base.get"])
+    shop = module.Base()
+    module.Base.get(self=shop, order_id="1")
+    with pytest.raises(TypeError):
+        shop.get("1", "extra")
+    secretless(lines)
