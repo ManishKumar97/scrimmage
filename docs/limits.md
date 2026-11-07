@@ -3,7 +3,6 @@
 - **`derail check` does not import your code.** It finds a tool name that is not in `tools`, but not a misspelled import path such as `acme.tools:get_ordr`; the first run of `derail test` finds that. A static lookup would call a tool made by assignment or a star import a mistake, and then `check` would fail a file `test` runs.
 - **The editor schema checks shape only.** `derail schema` cannot see a tool name against `tools`, a type outside your packages or a program on your `PATH`. `derail check` decides.
 - **`--json` prints at the end.** One document, when the command ends; nothing is printed while a test runs.
-
 - **Two agent shapes.** The agent is a Python function or a Python script. Web services come later.
 - **Tools, web requests and OpenAI model calls.** Derail gates the tools you list under `tools`, the LangChain tools it finds by itself, requests sent with httpx or httpx2, and model calls. See [Safety](safety.md).
 - **mcp 2.x only, tested with 2.3.** A program that imports `mcp` 1.x stops with exit code 3, even if it never calls an MCP tool, because 1.x has no place for the gate. Install `mcp` 2.x in the test environment.
