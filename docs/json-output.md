@@ -130,9 +130,11 @@ Each run in `run_details`:
 | `answer_preview` | The answer with secrets removed, cut at 200 characters, as a record's preview is. The full answer is in the record. `null` with no answer. |
 
 A file that does not load gives the envelope with `rows: []`, `records: null` and each problem in `mistakes`, with exit 2.
-With `--json`, Ctrl-C or SIGTERM at any point, while the file is read or while runs go, stops the command with `status` `infra`, exit 3, `rows: []` and the reason in `infra`, such as `stopped by SIGTERM`.
+With `--json`, once Derail has started, Ctrl-C or SIGTERM while Derail loads, while the file is read or while runs go stops the command with `status` `infra`, exit 3, `rows: []` and the reason in `infra`, such as `stopped by SIGTERM`.
 Runs that were going are stopped first. `records` names the records folder if the test had made one.
 A failure of Derail itself gives the same, with the error in `infra`.
+Derail has started from the moment its entry point runs, a few tens of milliseconds after Python does; a signal before that ends the process with no document.
+Once the result is settled, a signal is ignored until the process exits, so its exit code always equals the document's `exit`.
 SIGKILL cannot be caught, so it leaves no document.
 
 ## derail check --json

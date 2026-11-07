@@ -19,12 +19,13 @@ import pytest
 
 import derail_sdk
 from conftest import ACME, Project
-from derail_sdk import cli, config, judge, runner
+from derail_sdk import cli, config, entry, judge, runner
 from derail_sdk.runner import Runner, build_report, print_report, report_json
 from fakes.openai_server import FakeOpenAI
 from report_cases import CASES, FOLDER, GOLDEN
 
 Fake = Callable[..., FakeOpenAI]
+pytestmark = pytest.mark.usefixtures("signals_kept")
 SCHEMAS = Path(derail_sdk.__file__).parent / "schemas"
 CLI_SCHEMA = json.loads((SCHEMAS / "cli.v1.json").read_text())
 DERAIL = str(Path(sys.executable).parent / "derail")
@@ -206,24 +207,45 @@ def test_every_message_is_an_object_with_its_text(project: Project, fake_openai:
     assert messages(done[3].doc, "infra")
 
 
+CALL_THEN_HANG = '''"""Makes one model call, then hangs, so a signal comes after money was spent."""
+
+import time
+
+import openai
+
+
+def answer(question):
+    openai.OpenAI(max_retries=0).chat.completions.create(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": question}]
+    )
+    time.sleep(600)
+    return "never"
+'''
+
+
 @pytest.mark.design("json.interrupted")
-def test_sigint_during_a_test_still_prints_one_document(project: Project) -> None:
+def test_sigint_during_a_test_still_prints_one_document(
+    project: Project, fake_openai: Fake
+) -> None:
+    (project.root / "acme" / "call_then_hang.py").write_text(CALL_THEN_HANG)
     project.edit(
         'function = "acme.agent:answer"',
-        'function = "acme.slow:hang"\nruns = 1\nrun_timeout = 120\nmax_cost_usd = "none"',
+        'function = "acme.call_then_hang:answer"\nruns = 1\nrun_timeout = 120',
     )
     project.edit(project.toml.read_text().split("[[test.fault]]")[1], "")
     project.edit("[[test.fault]]", "")
+    fake = fake_openai(["chat_answer"])
     env = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
     proc = subprocess.Popen(
         [DERAIL, "test", "--json", str(project.toml)],
-        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env={**env, **model_env(fake)}, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )  # fmt: skip
-    for _ in range(200):
+    for _ in range(300):
         time.sleep(0.1)
-        if list((project.root / "derail-runs").glob("*/*.log")):
+        if fake.requests:
             break
-    time.sleep(0.5)  # the agent is in its sleep, inside the runner's wait
+    assert fake.requests, "the agent never made its model call"
+    time.sleep(1.5)  # the reply is settled in the budget; the agent is in its sleep
     proc.send_signal(signal.SIGINT)
     out, err = proc.communicate(timeout=60)
     done = Done(proc.returncode, out, err)
@@ -232,6 +254,8 @@ def test_sigint_during_a_test_still_prints_one_document(project: Project) -> Non
     assert doc["status"] == "infra"
     assert messages(doc, "infra") == ["stopped by SIGINT; every run was stopped"]
     assert doc["records"] is not None and doc["rows"] == []
+    # The money already spent is not lost because the test was stopped.
+    assert cast(float, doc["cost_usd"]) > 0, doc["cost_usd"]
 
 
 def test_ctrl_c_outside_the_runs_is_still_one_document(
@@ -675,14 +699,122 @@ def test_sigterm_while_the_file_is_read_still_gives_one_document(
         time.sleep(5)  # the handler raises before this ends
         raise AssertionError("SIGTERM did not stop the read")
 
-    before = signal.getsignal(signal.SIGTERM)
+    # Handlers no test could have left: so a handler a command leaves set cannot pass.
+    marker_int, marker_term = signal.default_int_handler, signal.SIG_DFL
     monkeypatch.setattr(config, "load", terminated)
     for command in ("test", "check"):
+        signal.signal(signal.SIGINT, marker_int)
+        signal.signal(signal.SIGTERM, marker_term)
         assert cli.main([command, "--json", str(project.toml)]) == 3
         doc = json.loads(capsys.readouterr().out)
         validate(doc)
         assert messages(doc, "infra") == ["stopped by SIGTERM"], command
-    assert signal.getsignal(signal.SIGTERM) == before  # put back after the command
+        assert signal.getsignal(signal.SIGINT) is marker_int, command  # put back after it
+        assert signal.getsignal(signal.SIGTERM) is marker_term, command
+
+
+def run_entry(script: str, *argv: str) -> Done:
+    """derail's entry point in its own process, after a script that sets up a hook."""
+    clean = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
+    code = f"import sys\nsys.argv = ['derail', *{list(argv)!r}]\n{script}\n"
+    code += "from derail_sdk import entry\nentry.main()\n"
+    proc = subprocess.run(
+        [sys.executable, "-c", code], env=clean, capture_output=True, text=True, timeout=120
+    )
+    return Done(proc.returncode, proc.stdout, proc.stderr)
+
+
+# Sends the signal as the first of Derail's heavy modules is imported, so it lands while
+# Derail loads, the window before cli can set its own handlers.
+SIGNAL_WHILE_LOADING = """
+import importlib.abc, os, signal, time
+
+class Signal(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path, target=None):
+        if name == "derail_sdk.runner":
+            sys.meta_path.remove(self)
+            os.kill(os.getpid(), signal.{sig})
+            time.sleep(0.2)
+        return None
+
+sys.meta_path.insert(0, Signal())
+"""
+# Sends both signals just after the document is written, before the process exits.
+SIGNAL_AFTER_PRINT = """
+import io, os, signal, time
+
+class Out(io.TextIOWrapper):
+    def write(self, text):
+        written = super().write(text)
+        if text.rstrip().endswith("}"):
+            self.flush()
+            os.kill(os.getpid(), signal.SIGTERM)
+            os.kill(os.getpid(), signal.SIGINT)
+            time.sleep(0.2)
+        return written
+
+sys.stdout = Out(sys.stdout.detach(), encoding="utf-8", line_buffering=False)
+"""
+
+
+@pytest.mark.design("json.sigterm")
+@pytest.mark.parametrize("sig", ["SIGTERM", "SIGINT"])
+@pytest.mark.parametrize("command", ["check", "test"])
+def test_a_signal_while_derail_loads_still_gives_one_document(
+    project: Project, sig: str, command: str
+) -> None:
+    done = run_entry(SIGNAL_WHILE_LOADING.format(sig=sig), command, "--json", str(project.toml))
+    assert done.code == 3, done.out + done.err
+    doc = one_document(done, command)
+    assert messages(doc, "infra") == [f"stopped by {sig}"]
+    assert not (project.root / "derail-runs").exists()  # it stopped before any run
+
+
+@pytest.mark.design("json.exit_matches")
+def test_a_signal_after_the_document_does_not_change_the_exit(project: Project) -> None:
+    good = run_entry(SIGNAL_AFTER_PRINT, "check", "--json", str(project.toml))
+    assert (good.code, one_document(good, "check")["exit"]) == (0, 0), good.err
+    project.edit("[agent]\n", "[agent]\nbogus = 1\n")
+    bad = run_entry(SIGNAL_AFTER_PRINT, "check", "--json", str(project.toml))
+    assert (bad.code, one_document(bad, "check")["exit"]) == (2, 2), bad.err
+    # The derail process itself keeps ignoring signals after main returns, until it exits.
+    late = subprocess.run(
+        [sys.executable, "-c", SIGNAL_AFTER_MAIN, "check", "--json", str(project.toml)],
+        capture_output=True, text=True, timeout=120, check=False,
+    )  # fmt: skip
+    assert (late.returncode, json.loads(late.stdout)["exit"]) == (2, 2), late.stderr
+
+
+# Sends SIGTERM after cli.main has returned, while the process lingers before it exits.
+SIGNAL_AFTER_MAIN = """
+import os, signal, sys, time
+from derail_sdk import cli
+code = cli.main(sys.argv[1:], process=True)
+os.kill(os.getpid(), signal.SIGTERM)
+time.sleep(0.3)
+sys.exit(code)
+"""
+
+
+def test_the_entry_point_without_json_sets_no_handler(
+    project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    before = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
+    monkeypatch.setattr(sys, "argv", ["derail", "check", str(project.toml)])
+    with pytest.raises(SystemExit) as end:
+        entry.main()
+    assert end.value.code == 0 and "is valid" in capsys.readouterr().out
+    assert (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)) == before
+
+
+@pytest.mark.design("json.tool_star_warning")
+def test_the_tool_star_line_is_the_first_warning_end_to_end(
+    project: Project, fake_openai: Fake
+) -> None:
+    project.edit('real     = ["tool:check_inventory"]', 'real     = ["tool:*"]')
+    done = derail("test", "--json", str(project.toml), env=model_env(fake_openai(ACME)))
+    doc = one_document(done, "test")
+    assert messages(doc, "warnings")[0] == runner.TOOL_STAR_LINE
 
 
 NESTED = "[agent]\nfunction = 'acme.agent:answer'\nx = " + "[" * 5000 + "]" * 5000 + "\n"

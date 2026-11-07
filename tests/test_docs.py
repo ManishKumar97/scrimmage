@@ -231,9 +231,10 @@ def test_every_command_flag_exit_code_and_json_field_is_documented() -> None:
         assert row in lines, row
     assert "a reader may check a document against any version 1 copy of the schema" in output
     assert "the schema of the Derail that wrote it" not in output
-    assert (
-        "Ctrl-C or SIGTERM at any point" in cli_page and "Ctrl-C or SIGTERM at any point" in output
-    )
+    for text in (cli_page, output):  # the window the code leaves, said, not "at any point"
+        assert "Ctrl-C or SIGTERM at any point" not in text
+        assert "a signal before that" in text and "always equals the document's `exit`" in text
+    assert "once derail has started" in output.lower() and "Once Derail has started" in cli_page
     assert "`2.0`" in page("configuration.md") and "rejects `${`" in page("configuration.md")
     assert "[JSON output](json-output.md)" in page("index.md")
     assert "#:schema ./derail.schema.json" in page("configuration.md")

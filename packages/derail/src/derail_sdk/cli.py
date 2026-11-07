@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TextIO
 
 from derail_sdk import config as settings
+from derail_sdk import entry
 from derail_sdk import plan as planner
 from derail_sdk import runner as running
 from derail_sdk.errors import ConfigError
@@ -30,14 +31,16 @@ STATUS = {
 }
 # With --json these stop the command with a document, wherever they arrive. The runner sets
 # its own handlers while runs go, and puts these back when they end.
-STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
+STOP_SIGNALS = entry.STOP_SIGNALS
 
 
 class Stopped(BaseException):
     """derail test or check got SIGINT or SIGTERM outside the runs, with --json."""
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, process: bool = False) -> int:
+    """The derail command. process: this is the derail process itself, which exits on the
+    code returned, so signals stay ignored after the document is printed."""
     parser = argparse.ArgumentParser(prog="derail")
     commands = parser.add_subparsers(dest="command", required=True)
     test = commands.add_parser("test", help="run every test in derail.toml")
@@ -53,36 +56,54 @@ def main(argv: list[str] | None = None) -> int:
     run = run_test if args.command == "test" else run_check
     if not args.json:
         return run(args.path, None)
-    return as_json(args.command, args.path, run)
+    return as_json(args.command, args.path, run, process)
+
+
+def ignore_signals() -> None:
+    """From here on the command's code is settled: no signal may change the exit it states."""
+    for sig in STOP_SIGNALS:
+        signal.signal(sig, signal.SIG_IGN)
 
 
 def stop(signum: int, frame: object) -> None:
     del frame
+    ignore_signals()  # a second signal must not interrupt the document of the first
     raise Stopped(signal.Signals(signum).name)
 
 
-def as_json(command: str, path: Path, run: Callable[[Path, "Found | None"], int]) -> int:
+def as_json(
+    command: str, path: Path, run: Callable[[Path, "Found | None"], int], process: bool
+) -> int:
     """Run a command for --json: one document on standard output, whatever happens."""
     version = derail_version()
     found = Found(command, str(path))
-    previous = {sig: signal.signal(sig, stop) for sig in STOP_SIGNALS}
+    previous = {sig: signal.getsignal(sig) for sig in STOP_SIGNALS}
     try:
         try:
+            for sig in STOP_SIGNALS:
+                signal.signal(sig, stop)
+            if entry.pending:  # it came while Derail was still loading
+                raise Stopped(entry.pending.pop())
             code = run(path, found)
         except (Stopped, KeyboardInterrupt) as exc:
             code = found.fail(f"stopped by {str(exc) or 'SIGINT'}")  # Ctrl-C has no name
         except Exception as exc:  # Derail's own failure still gives a document
             code = found.fail(f"derail {command} failed: {exc!r}")
+        ignore_signals()
         text = json.dumps(envelope(command, code, found, version), indent=2)
     except Exception as exc:  # the document itself could not be built
+        ignore_signals()
         code = INFRA
         bare = Found(command, str(path))
         bare.fail(f"derail {command} could not write its document: {exc!r}")
         text = json.dumps(envelope(command, code, bare, version), indent=2)
-    finally:
+    print(text, flush=True)
+    # The derail process exits on this code with signals still ignored. A caller in the
+    # same process, such as a test, gets its own handlers back.
+    if not process:
         for sig, handler in previous.items():
-            signal.signal(sig, handler)
-    print(text)
+            if handler is not None:  # None: set outside Python, which cannot be put back
+                signal.signal(sig, handler)
     return code
 
 
@@ -257,4 +278,4 @@ def run_check(path: Path, found: Found | None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(process=True))
