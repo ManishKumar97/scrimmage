@@ -58,6 +58,7 @@ The last printed line is the last line in the file, whoever wrote it, because yo
 So a child that prints after your program gives the run the child's line as its answer. Derail cannot tell: nothing is recorded to say so.
 To avoid it, print the answer last, stop the child from printing, or write the answer file.
 An answer over several lines needs the answer file too, as only the last line is read, and only that line is [judged](judging.md).
+Derail reads the last 1 MiB of what your program printed, so a last line longer than that is judged on its final 1 MiB. Use the answer file for a longer one.
 A line ends only at a newline.
 
 ```python

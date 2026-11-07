@@ -85,7 +85,7 @@ A crash or a time-out is a real result about your agent, so it fails.
 A refusal under a fault is the worst result there is: the tool failed, and the agent reached for a call the test does not allow, such as a refund. So its row reads `fail`, and the test still exits with code 2. Do not mock that call to make it pass: that hides what the agent did. Fix the agent.
 On a baseline a refusal usually means the test forgot a mock, so it is left out.
 The rest say nothing about your agent, so they are left out of every rate.
-A script's answer is what [An agent run as a script](scripts.md#the-answer) says it is: the answer file, or the last line printed. Earlier lines are not read.
+A script's answer is what [An agent run as a script](scripts.md#the-answer) says it is: the answer file, or the last line printed. Earlier lines are not read, and a last line over 1 MiB is judged on its final 1 MiB.
 
 ## How a row counts
 
@@ -99,12 +99,13 @@ pass_rate = 0.8
 The rate is over the runs that were judged, not the runs planned.
 Derail reads a row in this order:
 
-| Result | When |
-|---|---|
-| `no result` | fewer than half the planned runs were judged: under the floor below |
-| `fail` | passed runs divided by judged runs is below `pass_rate` |
-| `no result` | a baseline run was refused |
-| `pass` | anything else |
+| Checked | Result | When |
+|---|---|---|
+| 1 | `fail` | a run on a fault row was refused, at any rate |
+| 2 | `no result` | fewer judged runs than the floor below |
+| 3 | `fail` | passed runs divided by judged runs is below `pass_rate` |
+| 4 | `no result` | a run outside rule 1 was refused |
+| 5 | `pass` | anything else |
 
 The floor is `runs // 2 + 1` judged runs, whatever `pass_rate` is: 3 of 5, 2 of 3, 1 of 1.
 Under it the test did not test, so a row never passes on one run out of five.
