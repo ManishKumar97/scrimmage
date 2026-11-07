@@ -2,6 +2,7 @@
 child's calls name no parent from the process that forked it."""
 
 import asyncio
+import dataclasses
 import hashlib
 import json
 from typing import cast
@@ -10,9 +11,18 @@ import pytest
 
 from scrimmage_core import capture, mcp_gate, state
 from scrimmage_core.decide import Call
-from test_record_lines import Sink, gated, get_dict, recorded_of, recording, sink
+from test_record_lines import (
+    Sink,
+    expect_scrimmage_error,
+    gated,
+    get_dict,
+    no_scrimmage_error,
+    recorded_of,
+    recording,
+    sink,
+)
 
-__all__ = ["sink"]  # the fixture, used by name
+__all__ = ["expect_scrimmage_error", "no_scrimmage_error", "sink"]  # fixtures, used by name
 
 
 # Recording only observes a call, so nothing in it may fail the agent's call.
@@ -72,6 +82,7 @@ def test_a_value_scrimmage_cannot_write_still_reaches_the_agent_and_leaves_its_l
 
 
 @pytest.mark.design("record.never_fails_the_call")
+@pytest.mark.usefixtures("expect_scrimmage_error")
 def test_a_failure_inside_recording_is_listed_never_raised(
     sink: Sink, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -83,8 +94,8 @@ def test_a_failure_inside_recording_is_listed_never_raised(
     monkeypatch.setattr(capture, "tool_value", broken)
     assert gated(get_dict)(order_id="1") == get_dict("1")
     assert recorded_of(sink, "tool:get_dict") == {
-        "code": "unsavable",
-        "why": "Scrimmage could not record it: KeyError",
+        "code": "scrimmage_error",
+        "why": "Scrimmage failed while recording it: KeyError",
     }
     assert run.live == {}
 
@@ -233,6 +244,7 @@ def test_a_saved_value_over_the_cap_is_cut_and_named_by_what_is_stored(
 
 
 @pytest.mark.design("record.never_fails_the_call")
+@pytest.mark.usefixtures("expect_scrimmage_error")
 def test_a_failure_inside_mcp_recording_is_listed_never_raised(
     sink: Sink, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -243,7 +255,42 @@ def test_a_failure_inside_mcp_recording_is_listed_never_raised(
     got, run = mcp_call(sink, text_result("found"), {"q": "a"}, Session())
     assert cast(Reply, got).doc == text_result("found")
     assert sink.calls()[0]["recorded"] == {
-        "code": "unsavable",
-        "why": "Scrimmage could not record it: KeyError",
+        "code": "scrimmage_error",
+        "why": "Scrimmage failed while recording it: KeyError",
     }
     assert run.live == {}
+
+
+@dataclasses.dataclass
+class Validated:
+    """A team's type whose own check raises an error of its own kind."""
+
+    n: int
+
+    def __post_init__(self) -> None:
+        if self.n > 1:
+            raise RuntimeError("the team's own check failed")
+
+
+def get_validated(n: str) -> Validated:
+    return Validated(1)
+
+
+@pytest.mark.design("record.scrimmage_error")
+def test_an_error_in_the_teams_type_is_unsavable_and_one_in_scrimmage_is_scrimmage_error(
+    sink: Sink, monkeypatch: pytest.MonkeyPatch, expect_scrimmage_error: None
+) -> None:
+    def same(value: object) -> object:
+        return value
+
+    value = Validated(1)
+    value.n = 2  # changed after it was made, so the team's check fails as the mock is built
+    found = capture.tool_value(value, {}, get_validated, same, [f"{__name__}."])
+    assert found == {
+        "code": "unsavable",
+        "why": "returns: a mock built from it fails with RuntimeError",
+    }
+    # A bug in Scrimmage's own code: differ called with arguments it does not take.
+    monkeypatch.setattr(capture, "differ", capture.text_problem)
+    bug = capture.tool_value({"a": 1}, {}, get_dict, same, [])
+    assert bug == {"code": "scrimmage_error", "why": "Scrimmage failed while recording it: TypeError"}

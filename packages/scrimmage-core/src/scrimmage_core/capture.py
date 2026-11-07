@@ -10,12 +10,14 @@ another type. The original value goes back to the agent untouched.
 
 import dataclasses
 import math
+import os
 import re
 from collections.abc import Callable
 from typing import Any, cast
 
 from scrimmage_core import mocks
 from scrimmage_core.config import IMPORT_PATH
+from scrimmage_core.errors import ScrimmageMockError
 from scrimmage_core.redact import REMOVED, redacted
 
 INT64 = (-(2**63), 2**63 - 1)  # TOML integers are 64 bits
@@ -52,6 +54,9 @@ PAGING = frozenset({"page", "next", "continuation", "pagination", "sync", "curso
 WORD = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+")
 KEY_NAME, PATTERN = "key_name", "pattern"
 UNSAVABLE, SECRET_CHANGED_SHAPE, STATUS = "unsavable", "secret_changed_shape", "status"
+# Scrimmage itself failed while recording: a bug, never the team's value. J3b2 exits 3 on it.
+SCRIMMAGE_ERROR = "scrimmage_error"
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 Removed = dict[str, object]
 
@@ -277,6 +282,25 @@ def clean(value: object) -> tuple[object, list[Removed]]:
     return walk(value, None, False), removed
 
 
+def ours(exc: BaseException) -> bool:
+    """Whether an error was raised in Scrimmage's own code, not the team's: the frame that
+    raised it is in this package. ScrimmageMockError is Scrimmage saying the mock does not fit
+    the team's type, so it is not a bug."""
+    if isinstance(exc, ScrimmageMockError):
+        return False
+    tb = exc.__traceback__
+    while tb is not None and tb.tb_next is not None:
+        tb = tb.tb_next
+    return (
+        tb is not None and os.path.dirname(os.path.abspath(tb.tb_frame.f_code.co_filename)) == HERE
+    )
+
+
+def scrimmage_error(exc: BaseException) -> dict[str, object]:
+    """A bug in Scrimmage while it recorded a call: listed apart from a value no mock can hold."""
+    return unsaved(SCRIMMAGE_ERROR, f"Scrimmage failed while recording it: {kind_of(exc)}")
+
+
 def unsaved(code: str, why: str) -> dict[str, object]:
     return {"code": code, "why": cleaned_text(why)}
 
@@ -331,7 +355,9 @@ def tool_value(
         where = differ(value, built, "returns")
     except Unsavable as exc:
         return unsaved(UNSAVABLE, str(exc))
-    except Exception as exc:  # the team's class, its __eq__ or its validation
+    except Exception as exc:  # the team's class, its __eq__ or its validation, or Scrimmage's bug
+        if ours(exc):
+            return scrimmage_error(exc)
         # The error's type only: its message, such as pydantic's, can quote the value.
         return unsaved(UNSAVABLE, f"returns: a mock built from it fails with {kind_of(exc)}")
     if where is not None:

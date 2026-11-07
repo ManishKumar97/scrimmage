@@ -1317,7 +1317,10 @@ def recording(docs: Docs) -> Callable[[], None]:
 
 
 def recorded_line(result: Result, label: str = LABEL) -> dict[str, Any]:
-    return next(x for x in row(result, "baseline") if x.get("call") == label)["recorded"]
+    """The call's recorded field. Scrimmage failing while it recorded is never what a test wants."""
+    found = next(x for x in row(result, "baseline") if x.get("call") == label)["recorded"]
+    assert found.get("code") != "scrimmage_error", found
+    return found
 
 
 def saved(result: Result, entry: dict[str, Any]) -> object:

@@ -128,6 +128,31 @@ def sink() -> Iterator[Sink]:
     state.install(None)
 
 
+@pytest.fixture
+def expect_scrimmage_error() -> None:
+    """Asked for by a test that makes Scrimmage fail while recording on purpose."""
+
+
+@pytest.fixture(autouse=True)
+def no_scrimmage_error(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[None]:
+    """Fail any test in which Scrimmage itself failed while recording, unless it expected to:
+    such a line would otherwise pass as a value no mock can hold."""
+    seen: list[str] = []
+    real = capture.unsaved
+
+    def watched(code: str, why: str) -> dict[str, object]:
+        if code == capture.SCRIMMAGE_ERROR:
+            seen.append(why)
+        return real(code, why)
+
+    monkeypatch.setattr(capture, "unsaved", watched)
+    yield
+    if "expect_scrimmage_error" not in request.fixturenames:
+        assert not seen, f"Scrimmage failed while recording: {seen}"
+
+
 def recording(
     sink: Sink,
     mocks: tuple[Mock, ...] = (),

@@ -231,9 +231,7 @@ class RunState:
         try:
             return self.save(find())
         except Exception as exc:
-            return capture.unsaved(
-                capture.UNSAVABLE, f"Scrimmage could not record it: {type(exc).__name__}"
-            )
+            return capture.scrimmage_error(exc)
 
     def save(self, doc: dict[str, object]) -> dict[str, object]:
         """A recorded field for a line: the value and arguments go to the side folder."""

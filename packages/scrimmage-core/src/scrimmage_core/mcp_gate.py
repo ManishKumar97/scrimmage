@@ -366,9 +366,7 @@ async def carried(
         except asyncio.CancelledError as exc:
             found, cancel = capture.unsaved(capture.UNSAVABLE, "the run was cancelled"), exc
         except Exception as exc:  # recording only observes the call, so it never fails it
-            found = capture.unsaved(
-                capture.UNSAVABLE, f"Scrimmage could not record it: {type(exc).__name__}"
-            )
+            found = capture.scrimmage_error(exc)
         step.extra["recorded"] = run.recorded(lambda: found)
     run.finish(step)
     if cancel is not None:
