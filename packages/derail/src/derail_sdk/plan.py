@@ -14,6 +14,7 @@ from derail_sdk.config import (
     Price,
     Test,
 )
+from derail_sdk.judge import Rules
 
 PLAN_VERSION = 1
 
@@ -140,6 +141,10 @@ class Row:
     test: Test
     name: str
     fault: Fault | None
+
+    @property
+    def rules(self) -> Rules:
+        return self.test.rules_for(self.fault)
 
 
 def mock_json(mock: Mock) -> dict[str, object]:

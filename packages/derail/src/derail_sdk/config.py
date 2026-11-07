@@ -17,6 +17,7 @@ from typing import cast
 
 from derail_sdk import labels, provider_openai, python_args
 from derail_sdk.errors import ConfigError
+from derail_sdk.judge import Rules, impossible, normal
 from derail_sdk.mocks import allowed
 
 AGENT_KEYS = {
@@ -34,13 +35,14 @@ AGENT_KEYS = {
     "prices",
     "answer",
 }
-TEST_KEYS = {"name", "question", "expect", "mock", "fault"}
+RULE_KEYS = {"expect", "forbid", "pass_rate"}
+TEST_KEYS = {"name", "question", "mock", "fault", *RULE_KEYS}
 MOCK_KEYS = {"call", "returns", "type"}
 WEB_MOCK_KEYS = {"call", "method", "path", "status", "headers", "json", "text"}
-FAULT_KEYS = {"call", "do", "when", "raises"}
+FAULT_KEYS = {"call", "do", "when", "raises", *RULE_KEYS}
 MCP_MOCK_KEYS = {"call", "returns"}
-MCP_FAULT_KEYS = {"call", "do", "when"}
-WEB_FAULT_KEYS = {"call", "do", "when", "method", "path"}
+MCP_FAULT_KEYS = {"call", "do", "when", *RULE_KEYS}
+WEB_FAULT_KEYS = {"call", "do", "when", "method", "path", *RULE_KEYS}
 # A mock's body is sent as written, so these could only make the reply lie about it.
 BODY_HEADERS = {"content-length", "content-encoding", "transfer-encoding"}
 
@@ -81,15 +83,31 @@ class Fault:
     raises: str | None = None  # for "error": a built-in name, or package.module:Class
     method: str | None = None  # a web fault can be narrowed to one method and path
     path: str | None = None
+    # What judges this row in place of the test's. Never in a plan: the agent must not see it.
+    expect: tuple[tuple[str, ...], ...] | None = None
+    forbid: tuple[str, ...] | None = None
+    pass_rate: float | None = None
 
 
 @dataclass(frozen=True)
 class Test:
     name: str
     question: str
-    expect: tuple[str, ...]
+    expect: tuple[tuple[str, ...], ...]
     mocks: tuple[Mock, ...]
     faults: tuple[Fault, ...]
+    forbid: tuple[str, ...] = ()
+    pass_rate: float = 1.0
+
+    def rules_for(self, fault: Fault | None) -> Rules:
+        """What a row is judged by: each setting a fault gives replaces the test's."""
+        if fault is None:
+            return Rules(self.expect, self.forbid, self.pass_rate)
+        return Rules(
+            self.expect if fault.expect is None else fault.expect,
+            self.forbid if fault.forbid is None else fault.forbid,
+            self.pass_rate if fault.pass_rate is None else fault.pass_rate,
+        )
 
 
 @dataclass(frozen=True)
@@ -193,6 +211,10 @@ def check_references(config: Config) -> list[str]:
         )
     problems += [p for test in config.tests if (p := bad_question(test, config.agent))]
     for test in config.tests:
+        for fault in (None, *test.faults):
+            if why := impossible(test.rules_for(fault)):
+                row = "baseline" if fault is None else f"fault on {fault.call}"
+                problems.append(f"[[test]] {test.name!r} {row}: no answer can pass: {why}")
         for mock in test.mocks:
             if labels.kind_of(mock.call) == "model":
                 problems.append(
@@ -451,11 +473,9 @@ def read_test(table: dict[str, object], index: int) -> Test:
     check_keys(table, TEST_KEYS, where)
     name = text(table, "name", where)
     where = f"[[test]] {name!r}"
-    if "expect" not in table:
+    expect = read_expect(table, where)
+    if expect is None:
         raise ConfigError(f"{where} expect: required")
-    expect = as_list(table["expect"], f"{where} expect")
-    if not expect or not all(isinstance(e, str) for e in expect):
-        raise ConfigError(f"{where} expect: expected a list of text, got {expect!r}")
     mocks = [
         read_mock(as_table(m, f"{where} mock"), f"[[test.mock]] {i} of {name!r}")
         for i, m in enumerate(as_list(table.get("mock", []), f"{where} mock"), 1)
@@ -467,10 +487,52 @@ def read_test(table: dict[str, object], index: int) -> Test:
     return Test(
         name=name,
         question=text(table, "question", where),
-        expect=tuple(str(e) for e in expect),
+        expect=expect,
         mocks=tuple(mocks),
         faults=tuple(faults),
+        forbid=read_forbid(table, where) or (),
+        pass_rate=read_pass_rate(table, where) or 1.0,
     )
+
+
+def rule_text(value: object, where: str) -> str:
+    """One text a rule looks for. Blank text would be found in every answer."""
+    if not isinstance(value, str) or not normal(value):
+        raise ConfigError(f"{where}: expected text, got {value!r}")
+    return value
+
+
+def read_expect(table: dict[str, object], where: str) -> tuple[tuple[str, ...], ...] | None:
+    """Each item is one text, or a list of texts of which any one will do."""
+    if "expect" not in table:
+        return None
+    items = as_list(table["expect"], f"{where} expect")
+    if not items:
+        raise ConfigError(f"{where} expect: expected a list of text, got []")
+    expect: list[tuple[str, ...]] = []
+    for item in items:
+        words = as_list(cast(object, item), where) if isinstance(item, list) else [item]
+        if not words:
+            raise ConfigError(f"{where} expect: a list of alternatives is empty")
+        expect.append(tuple(rule_text(word, f"{where} expect") for word in words))
+    return tuple(expect)
+
+
+def read_forbid(table: dict[str, object], where: str) -> tuple[str, ...] | None:
+    """Text no answer may hold. An empty list is how a fault drops the test's list."""
+    if "forbid" not in table:
+        return None
+    words = as_list(table["forbid"], f"{where} forbid")
+    return tuple(rule_text(word, f"{where} forbid") for word in words)
+
+
+def read_pass_rate(table: dict[str, object], where: str) -> float | None:
+    if "pass_rate" not in table:
+        return None
+    rate = table["pass_rate"]
+    if isinstance(rate, bool) or not isinstance(rate, int | float) or not 0 < rate <= 1:
+        raise ConfigError(f"{where} pass_rate: expected a share above 0, up to 1, got {rate!r}")
+    return float(rate)
 
 
 def reject_model_mocks(test: Test, agent: Agent) -> None:
@@ -556,7 +618,9 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
             f"{where} when: {when!r} counts model requests and their retries; use 'first N' here"
         )
     method, path = narrowing(table, where) if kind == "http" else (None, None)
-    return Fault(call, do, when, raises, method, path)
+    expect, forbid = read_expect(table, where), read_forbid(table, where)
+    rate = read_pass_rate(table, where)
+    return Fault(call, do, when, raises, method, path, expect, forbid, rate)
 
 
 def takes_a_message(kind: object) -> bool:
