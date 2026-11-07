@@ -433,7 +433,10 @@ def test_model_on_a_mock_is_unknown_with_a_pointer(tmp_path: Path) -> None:
 @pytest.mark.design("config.model_bad_value")
 @pytest.mark.parametrize("value", ["5", "true", '""', '"  "', '["gpt-4.1"]'])
 def test_a_model_that_is_not_text_is_rejected_by_table_and_key(tmp_path: Path, value: str) -> None:
-    with pytest.raises(ConfigError, match=r"\[\[test\.fault\]\] 2 of .* model: expected text"):
+    with pytest.raises(
+        ConfigError,
+        match=r"\[\[test\.fault\]\] 2 of .* model: .* is not a model name.*docs/model-faults.md",
+    ):
         with_fault(tmp_path, MODEL_FAULT.format(call="model", model=value))
 
 

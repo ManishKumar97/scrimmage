@@ -638,7 +638,7 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
             f"expect or forbid, or use when = 'first N' for a recovery; see {JUDGING}"
         )
     rate = read_pass_rate(table, where)
-    model = labels.model_name(text(table, "model", where), where) if "model" in table else None
+    model = labels.model_name(table["model"], where) if "model" in table else None
     return Fault(call, do, when, raises, method, path, expect, forbid, rate, model)
 
 
