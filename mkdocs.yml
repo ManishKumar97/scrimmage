@@ -94,3 +94,5 @@ nav:
   - Safety and security:
       - Safety: safety.md
       - Security: security.md
+  - Benchmarks: benchmarks.md
+  - Changelog: changelog.md
