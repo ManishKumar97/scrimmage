@@ -32,7 +32,7 @@ The program runs in the folder that holds `derail.toml`.
 If that Python has no Derail installed, the program stops before your agent runs, and the run is an infrastructure error.
 
 A wrapper such as `uv run python bot.py {question}` or `sh run.sh {question}` is fine.
-A wrapper that is itself a Python program with no Derail is not: `poetry run python bot.py {question}` stops with exit code 3, because `derail-run` becomes poetry, which is then the program under test on a Python with no Derail. Put that line in a shell script and write `sh run.sh {question}`.
+A wrapper that is itself a Python program with no Derail is not: `poetry run python bot.py {question}` stops with exit code 3, because `derail-run` becomes poetry, which is then the program under test on a Python with no Derail. Put that line in a shell script, with no `exec`, and write `sh run.sh {question}`.
 The program under test is **the first Python in the run that has Derail installed**. It claims the run.
 A Python before it with no Derail, such as a tool in your shell script or a package build `uv run` starts, runs as usual.
 If no Python ever claims the run, nothing was tested, and the run is an infrastructure error.
