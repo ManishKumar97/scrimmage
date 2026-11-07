@@ -29,7 +29,6 @@ MAX_BLOB_BODY = 14 * 1024 * 1024  # one 10 MB side-folder item, base64 encoded
 BLOB_PATH = "/v1/blobs"
 SHA256 = re.compile(r"[0-9a-f]{64}")
 READ_TIMEOUT_S = 10.0  # a connection that sends nothing frees its slot
-MAX_WAIT_S = 5.0  # the longest one reservation request waits, under the client's 10 s timeout
 PLAN_PATH = re.compile(r"/v1/plans/([A-Za-z0-9_-]{1,64})")
 
 
@@ -91,6 +90,7 @@ class ControlServer:
         with self.lock:
             state = self.runs[run]
             state.open = False
+            self.ledger.close_run(run)
             return state
 
     def handle(
@@ -110,6 +110,8 @@ class ControlServer:
             return self._reserve(body)
         if method == "POST" and path == "/v1/budget/settle":
             return self._settle(body)
+        if method == "POST" and path == "/v1/budget/release":
+            return self._release(body)
         if method == "POST" and path == BLOB_PATH:
             return self._blob(body)
         return 404, {"error": "not_found"}
@@ -123,18 +125,30 @@ class ControlServer:
         try:
             request = obj(json.loads(body))
             run, usd = str(request["run"]), number(request, "usd")
-            wait = number(request, "wait_s") if "wait_s" in request else 0.0
+            label = str(request.get("label", ""))
+            ticket = None if request.get("ticket") is None else int(str(request["ticket"]))
         except (ValueError, KeyError):
             return 400, {"error": "bad_request"}
-        if not (usd >= 0 and wait >= 0):  # NaN too
+        if not usd >= 0:  # NaN too
             return 400, {"error": "bad_request"}
-        if self._open(run) is None:
-            return 409, {"error": "run_closed"}
-        # A wait holds this connection, so it is short; the SDK asks again until its own bound.
-        reservation = self.ledger.reserve(usd, min(wait, MAX_WAIT_S))
+        # Answered at once, never held: a waiter asks again, and one that has gone stops
+        # asking. Under the run lock, so a run that has closed is granted nothing.
+        with self.lock:
+            state = self.runs.get(run)
+            if state is None or not state.open:
+                return 409, {"error": "run_closed"}
+            reservation = self.ledger.reserve(usd, run, label, ticket)
         if isinstance(reservation, Shortfall):
             return 200, {"ok": False, **dataclasses.asdict(reservation)}
         return 200, {"ok": True, "reservation": reservation}
+
+    def _release(self, body: bytes) -> tuple[int, dict[str, object]]:
+        try:
+            ticket = int(str(obj(json.loads(body))["ticket"]))
+        except (ValueError, KeyError):
+            return 400, {"error": "bad_request"}
+        self.ledger.release(ticket)
+        return 200, {"ok": True}
 
     def _settle(self, body: bytes) -> tuple[int, dict[str, object]]:
         try:
@@ -216,6 +230,8 @@ class _Server(ThreadingHTTPServer):
     """One thread per connection, at most 64 at once."""
 
     daemon_threads = True
+    # Connections wait here while the 64 threads are busy; the default of 5 resets the rest.
+    request_queue_size = 1024
 
     def __init__(self, address: tuple[str, int], handler: type[BaseHTTPRequestHandler]) -> None:
         super().__init__(address, handler)

@@ -310,6 +310,30 @@
             "waited_s": {
               "type": "number",
               "minimum": 0
+            },
+            "holds": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "run",
+                  "label",
+                  "usd"
+                ],
+                "properties": {
+                  "run": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "usd": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                }
+              }
             }
           }
         },
@@ -375,7 +399,7 @@
                 "timed out",
                 "refused call",
                 "budget reached",
-                "budget held",
+                "not reserved",
                 "infrastructure error",
                 "stopped"
               ]

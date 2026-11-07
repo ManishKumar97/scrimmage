@@ -43,7 +43,9 @@ GATED = "__derail_gate__"
 CHAR_PER_TOKEN = 4  # the rough size of a token, for estimates only
 PRICE_KEY_CAP = 300  # a longer name is not shown whole as a price key to paste
 BUDGET_WAIT_S = 30.0  # the longest a call waits for calls in flight to free the budget
-WAIT_STEP_S = 2.0  # one request of that wait; a cancel is seen between them
+WAIT_STEP_S = 0.25  # how often a waiting call asks again; a cancel is seen between asks
+RUN_MARGIN_S = 10.0  # a wait on other runs ends this long before the run's time limit
+SHOWN_HOLDS = 5  # holds a refusal names
 # A refusal the team must act on: the message reaches the run table.
 MISTAKE_REASONS = (
     "no_price",
@@ -68,7 +70,11 @@ MCP_TRANSPORT: ContextVar[tuple[object, ...] | None] = ContextVar(
 
 
 class Reserver(Protocol):
-    def reserve(self, run: str, usd: float, wait_s: float) -> int | Shortfall: ...
+    def reserve(
+        self, run: str, usd: float, label: str = "", ticket: int | None = None
+    ) -> int | Shortfall: ...
+
+    def release(self, ticket: int) -> None: ...
 
 
 class Context:
@@ -368,7 +374,8 @@ def check_tools(
     if unseen:
         why = "; ".join(run.blocked[name] for name in unseen if name in run.blocked)
         fix = (
-            'add it to [agent] tools as "package.module:function", or as {path, name} when '
+            'add it to [agent] tools as "package.module:function" or, for a method, '
+            '"package.module:Class.method", or as {path, name} when '
             "the model sees another name"
         )
         step.extra["unseen_tools"] = unseen
@@ -494,10 +501,17 @@ def no_price(model: str) -> str:
     )
 
 
-def budget_wait(plan: Plan, elapsed: float = 0.0) -> float:
-    """How long a call waits for calls in flight to free the budget: half the time the run
-    has left, so the call has time to run and a deadlock ends in a refusal, not a time-out."""
-    return max(0.0, min(BUDGET_WAIT_S, (plan.time_limit_s - elapsed) / 2))
+def budget_wait(plan: Plan, elapsed: float = 0.0, *, own: bool = True) -> float:
+    """How long a call waits for calls in flight to free the budget.
+
+    own: every hold in the way is this run's, which may be a deadlock, so the wait is short:
+    30 s or half the time the run has left. Another run's holds end by its own time limit,
+    so the call waits until near its own, leaving time for the refusal to be recorded.
+    """
+    left = plan.time_limit_s - elapsed
+    if own:
+        return max(0.0, min(BUDGET_WAIT_S, left / 2))
+    return max(0.0, left - min(RUN_MARGIN_S, plan.time_limit_s / 10))
 
 
 def reserve(
@@ -509,7 +523,7 @@ def reserve(
 ) -> int | None:
     """Reserve what this model call could cost, before it is sent.
 
-    When only calls in flight hold the room, wait for them in short steps, so a cancel
+    When only calls in flight hold the room, ask again every step with a ticket, so a cancel
     is seen between steps. None with a budget: the caller was cancelled meanwhile.
     """
     plan = ctx.run.plan
@@ -527,20 +541,27 @@ def reserve(
     output = openai_table.max_output(fields or {}) or plan.reserve_output_tokens
     usd = openai_table.cost(len(body) // CHAR_PER_TOKEN, output, rates)
     started = time.monotonic()
-    deadline = started + budget_wait(plan, started - ctx.run.began)
+    ticket: int | None = None
     while True:
-        left = max(0.0, deadline - time.monotonic())
         try:
-            answer = ctx.client.reserve(plan.run, usd, min(left, WAIT_STEP_S))
+            answer = ctx.client.reserve(plan.run, usd, step.call.label, ticket)
         except ControlError as exc:
             ctx.run.refuse(step, "control_unreachable")
             refuse(ctx.run, step, f"the budget could not be checked, so the call is refused: {exc}")
         if not isinstance(answer, Shortfall):
             return answer
-        if answer.why != "held" or left <= 0 or time.monotonic() >= deadline:
+        ticket = answer.ticket
+        own = bool(answer.holds) and all(h.run == plan.run for h in answer.holds)
+        bound = budget_wait(plan, started - ctx.run.began, own=own)
+        waited = time.monotonic() - started
+        if answer.why != "held" or waited >= bound:
             break
         if cancelled():
+            ctx.client.release(ticket or 0)
             return None
+        time.sleep(min(WAIT_STEP_S, bound - waited))
+    if ticket is not None:
+        ctx.client.release(ticket)
     waited = time.monotonic() - started if answer.why == "held" else 0.0
     extra["budget"] = {
         "usd": round(answer.usd, 8),
@@ -548,24 +569,43 @@ def reserve(
         "held": round(answer.held, 8),
         "limit": answer.limit,
         "waited_s": round(waited, 1),
+        "holds": [
+            {"run": h.run, "label": h.label, "usd": round(h.usd, 8)}
+            for h in answer.holds[:SHOWN_HOLDS]
+        ],
     }
     reason = "budget" if answer.why == "spent" else "budget_held"
     ctx.run.refuse(step, reason)
-    refuse(ctx.run, step, shortfall_text(answer, waited, plan.reserve_output_tokens))
+    refuse(ctx.run, step, shortfall_text(answer, waited, plan))
 
 
-def shortfall_text(short: Shortfall, waited: float, reserve_tokens: int) -> str:
-    """What the call could cost, what is spent and held, and how to hold less."""
+def shortfall_text(short: Shortfall, waited: float, plan: Plan) -> str:
+    """What the call could cost, what is spent and who holds the rest, and what to change."""
     text = (
         f"it could cost up to ${short.usd:.4f}; ${short.spent:.4f} is spent and "
         f"${short.held:.4f} is held by calls in flight, of a budget of ${short.limit:g}"
     )
+    if short.holds:
+        named = [
+            f"{h.label or 'a call'} in {'this run' if h.run == plan.run else h.run} ${h.usd:.4f}"
+            for h in short.holds[:SHOWN_HOLDS]
+        ]
+        more = len(short.holds) - SHOWN_HOLDS
+        text += f" ({', '.join(named)}{f' and {more} more' if more > 0 else ''})"
     if short.why == "held":
-        text += f"; Derail waited {waited:.0f}s for calls in flight to finish"
+        text += f"; Derail waited {waited:.0f}s for them to finish"
+    own = bool(short.holds) and all(h.run == plan.run for h in short.holds)
+    if short.why == "held" and own:
+        return (
+            f"{text}. Only this run's own calls hold it, so it may be waiting on itself: a "
+            "stream left open, or not read to its end, keeps its hold until it is closed. "
+            "Close the stream before the next call, or set max_tokens to hold less"
+        )
     return (
-        f"{text}. A call without max_tokens holds reserve_output_tokens ({reserve_tokens}) at "
-        "the output price: set max_tokens on the call or lower [agent] reserve_output_tokens "
-        "to hold less, lower [agent] parallel, or raise [agent] max_cost_usd if this is expected"
+        f"{text}. A call without max_tokens holds reserve_output_tokens "
+        f"({plan.reserve_output_tokens}) at the output price: set max_tokens on the call or "
+        "lower [agent] reserve_output_tokens to hold less, lower [agent] parallel, or raise "
+        "[agent] max_cost_usd if this is expected"
     )
 
 

@@ -65,6 +65,16 @@ def answer_holding_a_stream(question: str) -> str:
     return reply.choices[0].message.content or ""
 
 
+def answer_holding_until_killed(question: str) -> str:
+    """Holds a stream open and ignores SIGTERM, so the runner ends it with SIGKILL."""
+    signal.signal(signal.SIGTERM, lambda *_: None)
+    openai.OpenAI(max_retries=0).chat.completions.create(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": question}], stream=True
+    )
+    time.sleep(600)
+    return "never"
+
+
 def answer_priceless(question: str) -> str:
     """A gateway's own model, with no public price."""
     reply = openai.OpenAI(max_retries=0).chat.completions.create(
@@ -130,6 +140,13 @@ def answer_short(question: str) -> str:
         model="gpt-4o-mini", messages=[{"role": "user", "content": question}], max_tokens=1
     )
     return reply.choices[0].message.content or "no text"
+
+
+def answer_short_twice(question: str) -> str:
+    """Two short calls in a row: the first can cost more than it held, using the budget up."""
+    answer_short(question)
+    time.sleep(0.5)  # the first call's real cost reaches the runner
+    return answer_short(question)
 
 
 def answer_if_asked(question: str) -> str:

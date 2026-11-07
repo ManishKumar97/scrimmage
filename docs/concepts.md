@@ -91,8 +91,8 @@ The last line is the run's summary: the answer, how the run ended, whether its f
 | crashed | the agent raised an error or exited with an error, or a script ended with no answer |
 | timed out | the run passed `run_timeout` and was stopped |
 | refused call | the agent or one of its child processes made a call the test does not allow, or a child on another Python imported a tool under `tools` |
-| budget reached | money spent could not cover a model call, so the test stopped |
-| budget held | a model call waited for calls in flight to free the budget and still could not fit, so the test stopped |
+| budget reached | money spent reached the limit, so a model call was refused and the test stopped |
+| not reserved | a model call could not fit in the budget, though money spent had not reached the limit: the money left was too little, or calls in flight held it; the test stopped |
 | infrastructure error | the record is incomplete, the agent's program or a child never got its plan, no Python claimed the run, or a model call failed by itself with nobody injecting it |
 | stopped | another run stopped the whole test while this one was going, so it says nothing about this run |
 

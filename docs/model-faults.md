@@ -185,19 +185,38 @@ A call that needs room then waits for the others to finish and give back what th
 | within the limit | within the limit | the call goes ahead |
 | within the limit | over the limit | the call waits for calls in flight to finish, then goes ahead |
 
-A call waits at most 30 seconds, or half the time its run has left under `run_timeout` if that is less.
-If it is still held out then, it is refused, that run ends as "budget held", and the test stops with exit code 2.
-That happens when a hold cannot end while the call waits: the agent keeps a stream open, or another thread or task of the same run waits on this call.
-The refusal says what the call could cost, what was spent, what calls in flight held and how long it waited.
+A waiting call takes a ticket and asks again every quarter of a second.
+Tickets are served in the order they came, so a large call is not starved by a stream of small ones.
+How long a call waits depends on whose calls hold the room:
 
-When spent money cannot cover a call, the call is not made, that run ends as "budget reached", and the test stops with exit code 2.
+| The holds in the way | The longest wait | Why |
+|---|---|---|
+| only this run's own calls | 30 seconds, or half the time the run has left, if that is less | the run may be waiting on itself |
+| any other run's call | until 10 seconds before this run's `run_timeout`, or a tenth of it, if that is less | the other run's own time limit ends its holds |
+
+If the call is still held out then, it is refused and the test stops with exit code 2.
+A run waits on itself when a hold cannot end until the waiting call returns.
+A stream the agent keeps open across a second call does that, and so does a stream it stopped reading without closing: each keeps its hold until it is closed, or the run ends.
+Close a stream, or read it to its end, before the next call.
+
+The refusal says what the call could cost, what was spent, which calls held the rest, with their run, their label and what each held, and how long it waited.
+When spent money cannot cover a call, the call is refused at once.
+
+| How a run ends | When |
+|---|---|
+| "budget reached" | money spent reached the limit |
+| "not reserved" | the call could not fit, though money spent had not reached the limit: the money left was too little, or calls in flight held it |
+
 The table's last line says what the test spent, and a `test mistake:` line says why the test stopped:
 
 | What stopped the test | The line |
 |---|---|
 | money spent reached the limit | `the budget of $0.1 was reached: $0.1003 was spent, so the test stopped` |
 | a call could not fit, though spent money had not reached the limit | `a model call could not be reserved: it could cost up to $0.0331, $0.0800 was spent and $0.0000 was held by calls in flight, of a budget of $0.1, so the test stopped; ...` |
-| a call waited for calls in flight and still could not fit | the same, with `after a wait of 30s for calls in flight` |
+| a call waited for calls in flight and still could not fit | the same, with the holds named, such as `(model:openai in run-3f2a $0.0331)`, and `after a wait of 30s for calls in flight` |
+
+A run killed while one of its calls holds money, such as one that ignored SIGTERM, leaves that hold in place, as the call may have been sent.
+The report then warns: `warning: run-3f2a ended with model:openai still holding $0.0331 of the budget`.
 
 To hold less, set `max_tokens` on the call, lower `reserve_output_tokens`, or lower `parallel`.
 

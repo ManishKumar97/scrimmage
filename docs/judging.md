@@ -78,7 +78,7 @@ If a row's rules cannot both be met, such as a fault that forbids a word the tes
 | refused call, on a fault row after the fault fired | fail: `refused tool:refund_order`, at any `pass_rate` |
 | refused call, on a baseline | left out |
 | budget reached | left out |
-| budget held | left out |
+| not reserved | left out |
 | infrastructure error | left out |
 | stopped | left out |
 | any ending, when the row's fault did not fire | left out |

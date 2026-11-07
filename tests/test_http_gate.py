@@ -25,7 +25,7 @@ from derail_sdk.config import Fault, ModelHost
 from derail_sdk.decide import Counters
 from derail_sdk.errors import DerailRefused
 from derail_sdk.plan import Plan
-from derail_sdk.provider_openai import Rates as Price
+from derail_sdk.provider_openai import Rates
 from derail_sdk.runner import real_error
 
 URL = "https://api.openai.com/v1/chat/completions"
@@ -57,9 +57,14 @@ class Budget:
         self.ledger = Ledger(limit)
         self.delay = delay
 
-    def reserve(self, run: str, usd: float, wait_s: float = 0.0) -> int | Shortfall:
+    def reserve(
+        self, run: str, usd: float, label: str = "", ticket: int | None = None
+    ) -> int | Shortfall:
         time.sleep(self.delay)
-        return self.ledger.reserve(usd, wait_s)
+        return self.ledger.reserve(usd, run, label, ticket)
+
+    def release(self, ticket: int) -> None:
+        self.ledger.release(ticket)
 
 
 def make_plan(
@@ -274,9 +279,11 @@ def test_tasks_cancelled_before_a_thread_took_them_keep_their_lines(gated: None)
     release = threading.Event()
 
     class Held(Budget):
-        def reserve(self, run: str, usd: float, wait_s: float = 0.0) -> int | Shortfall:
+        def reserve(
+            self, run: str, usd: float, label: str = "", ticket: int | None = None
+        ) -> int | Shortfall:
             release.wait(5)
-            return super().reserve(run, usd, wait_s)
+            return super().reserve(run, usd, label, ticket)
 
     sink, _ = install(make_plan(budget=100.0), Held(limit=100.0))
 
@@ -1250,7 +1257,7 @@ def test_a_name_over_the_cap_gets_no_cut_key(gated: None) -> None:
 
 @pytest.mark.design("gate.empty_price_key_prices_no_name")
 def test_the_empty_price_key_prices_a_call_with_no_name(gated: None) -> None:
-    sink, _ = install(make_plan(budget=1.0, prices=(("", Price(2.0, 8.0)),)))
+    sink, _ = install(make_plan(budget=1.0, prices=(("", Rates(2.0, 8.0)),)))
     assert client().post(URL, json={"messages": []}).status_code == 200
     cost = sink.lines[0]["cost_usd"]
     assert sink.lines[0]["action"] == "real" and isinstance(cost, float) and cost > 0

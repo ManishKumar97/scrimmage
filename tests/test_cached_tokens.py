@@ -3,6 +3,7 @@
 import json
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import httpx2
 import jsonschema
@@ -102,7 +103,7 @@ def test_the_reservation_holds_every_input_token_at_the_full_rate(gated: None) -
     held: list[float] = []
     real = budget.ledger.reserve
 
-    def watch(usd: float, *rest: float) -> object:
+    def watch(usd: float, *rest: Any) -> object:
         held.append(usd)
         return real(usd, *rest)
 

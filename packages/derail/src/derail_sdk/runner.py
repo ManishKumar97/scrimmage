@@ -44,7 +44,7 @@ OUTCOMES = (
     "timed out",
     "refused call",
     "budget reached",
-    "budget held",
+    "not reserved",
     "infrastructure error",
     "stopped",
 )
@@ -70,7 +70,8 @@ NOT_A_FAILURE = (
 CHOSEN_CALLS = ("unlisted", "web_write", "blind_child")
 PROCESS_LABEL = "process:python"
 # A baseline whose every run ended so cannot be compared with, so its faults are skipped.
-FAILED = ("crashed", "timed out", "refused call", "budget reached", "budget held")
+FAILED = ("crashed", "timed out", "refused call", "budget reached", "not reserved")
+BUDGET_REASONS = ("budget", "budget_held")  # refusals for the budget
 TABLE_WIDTH = 120
 SHOWN_RUNS = 3  # how many runs a line names for one broken rule
 SHOWN_NAMES = 5  # how many model names a line lists
@@ -111,7 +112,8 @@ class RunResult:
     near_mocks: set[str] = field(default_factory=set[str])  # real, though the host had mocks
     tool_calls: int = 0
     models: set[tuple[str, str]] = field(default_factory=set[tuple[str, str]])  # label, name
-    budget: dict[str, object] | None = None  # the numbers of a refusal for the budget
+    budget: dict[str, object] | None = None  # the numbers of its first refusal, if for the budget
+    first_refusal: str = ""  # the reason of the run's first refusal
     judgement: judge.RunJudgement = NOT_JUDGED
 
     @property
@@ -262,14 +264,21 @@ class Runner:
         real_errors = [e for e in map(real_error, model) if e is not None]
         broken = any(n.get("notice") == "structure" for n in notices)
         no_plan = "no_plan" in state.refusals  # says nothing about the agent
+        first = (state.refusals or [""])[0]
+        numbers = next(
+            (
+                cast(dict[str, object], x["budget"])
+                for x in lines
+                if "budget" in x and x.get("reason") == first
+            ),
+            None,
+        )
         if stopped:
             outcome = "stopped"
         elif not state.fetched or incomplete or real_errors or broken or no_plan:
             outcome = "infrastructure error"
-        elif state.refusals[:1] == ["budget"]:
-            outcome = "budget reached"
-        elif state.refusals[:1] == ["budget_held"]:
-            outcome = "budget held"
+        elif first in BUDGET_REASONS:
+            outcome = "budget reached" if numbers and reached(numbers) else "not reserved"
         elif state.refused or kept_out:
             outcome = "refused call"
         elif timed_out:
@@ -303,9 +312,8 @@ class Runner:
             near_mocks=near,
             tool_calls=sum(1 for line in lines if line.get("kind") in ("tool", "mcp")),
             models={(str(line["call"]), str(line.get("model") or "")) for line in model},
-            budget=next(
-                (cast(dict[str, object], x["budget"]) for x in lines if "budget" in x), None
-            ),
+            budget=numbers,
+            first_refusal=first,
         )
         # Here the raw answer is still at hand. The record only ever gets the redacted one.
         chose = row.fault is not None and (state.refusals or [""])[0] in CHOSEN_CALLS
@@ -849,14 +857,15 @@ def report(
             f"{name}: baseline failed: every baseline run crashed, timed out, was refused or "
             "reached the budget, so its fault rows did not run"
         )
-    if stopped_by in ("budget", "budget_held"):
-        numbers = next((r.budget for r in results if r.budget is not None), None)
+    if stopped_by in BUDGET_REASONS:
+        numbers = stop_numbers(results, stopped_by)
         line = (
             budget_line(stopped_by, numbers, config.agent.reserve_output_tokens)
             if numbers is not None
             else f"the budget of ${config.agent.max_cost_usd:g} stopped the test"
         )
         mistakes.append(f"{line}; rows without runs have no result")
+    leaked = runner.ledger.leaked() if runner is not None else []
     budget_on = config.agent.max_cost_usd is not None
     for test in config.tests:
         baseline = [r for r in results if r.row.test == test and r.row.fault is None]
@@ -909,6 +918,13 @@ def report(
             "because the last calls cost more than was reserved for them",
             file=out,
         )
+    for hold in leaked:
+        print(
+            f"warning: {hold.run} ended with {hold.label or 'a model call'} still holding "
+            f"${hold.usd:.4f} of the budget, such as a call cut off when its run was killed; "
+            "it stays held, as the call may have been sent",
+            file=out,
+        )
     for call in near_mocks:
         print(
             f"warning: {call} ran for real, though the test has mocks for that host; "
@@ -955,12 +971,28 @@ def budget_line(reason: str, numbers: dict[str, object], reserve_tokens: int) ->
     if spent >= limit:
         return f"the budget of ${limit:g} was reached: ${spent:.4f} was spent, so the test stopped"
     wait = f", after a wait of {waited:.0f}s for calls in flight" if reason == "budget_held" else ""
+    holds = [planner.obj(h) for h in cast(list[object], numbers.get("holds") or [])]
+    who = ", ".join(
+        f"{h.get('label')} in {h.get('run')} ${planner.number(h, 'usd'):.4f}" for h in holds
+    )
     return (
         f"a model call could not be reserved: it could cost up to ${usd:.4f}, ${spent:.4f} was "
-        f"spent and ${held:.4f} was held by calls in flight, of a budget of ${limit:g}{wait}, so "
-        f"the test stopped; set max_tokens on the call or lower [agent] reserve_output_tokens "
-        f"({reserve_tokens}) to hold less, or raise [agent] max_cost_usd"
+        f"spent and ${held:.4f} was held by calls in flight{f' ({who})' if who else ''}, of a "
+        f"budget of ${limit:g}{wait}, so the test stopped; set max_tokens on the call or lower "
+        f"[agent] reserve_output_tokens ({reserve_tokens}) to hold less, lower [agent] parallel, "
+        "close a stream before the next call, or raise [agent] max_cost_usd"
     )
+
+
+def stop_numbers(results: list[RunResult], stopped_by: str) -> dict[str, object] | None:
+    """The numbers of the refusal that stopped the test, not another run's, refused for
+    another reason while the test was being stopped."""
+    return next((r.budget for r in results if r.first_refusal == stopped_by and r.budget), None)
+
+
+def reached(numbers: dict[str, object]) -> bool:
+    """Money spent reached the limit, as the refusal saw it."""
+    return float(str(numbers.get("spent", 0))) >= float(str(numbers.get("limit", 0)))
 
 
 def plural(n: int, word: str) -> str:

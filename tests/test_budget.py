@@ -56,10 +56,11 @@ def test_four_calls_at_79_of_80_cents_reserve_one_and_refuse_three() -> None:
 def test_the_real_cost_replaces_the_reservation() -> None:
     ledger = Ledger(1.00)
     held = ledger.reserve(0.60)
-    assert isinstance(held, int) and isinstance(ledger.reserve(0.60), Shortfall)
+    waiting = ledger.reserve(0.60)
+    assert isinstance(held, int) and isinstance(waiting, Shortfall)
     ledger.settle(held, 0.10)
     assert (round(ledger.spent, 2), ledger.reserved) == (0.10, 0.0)
-    assert isinstance(ledger.reserve(0.60), int)
+    assert isinstance(ledger.reserve(0.60, ticket=waiting.ticket), int)
 
 
 def test_no_limit_means_every_reservation_passes() -> None:
@@ -238,7 +239,7 @@ def test_a_budget_that_cannot_cover_a_call_stops_the_test(
         fake.stop()
     assert result.code == 2, result.out
     assert fake.paths == ["/v1/embeddings"]  # the chat call, which cannot fit, never went
-    assert {s["outcome"] for s in result.summaries()} == {"budget reached"}
+    assert {s["outcome"] for s in result.summaries()} == {"not reserved"}  # spent is below
     assert "a model call could not be reserved: it could cost up to" in result.out
     assert (
         "of a budget of $1e-05, so the test stopped" in result.out
@@ -468,6 +469,20 @@ def test_a_reply_that_costs_more_than_reserved_is_visible(
     project.edit(TOOL_FAULT, "")
     result = project.test(fake_openai(["acme_get_order"]))  # 82 + 17 tokens, for max_tokens = 1
     assert "spent more than its budget" in result.out
+
+
+@pytest.mark.design("budget.reached_outcome")
+def test_a_run_is_budget_reached_only_when_money_spent_reached_the_limit(
+    project: Project, fake_openai: Fake
+) -> None:
+    project.edit(
+        'function = "acme.agent:answer"',
+        'function = "acme.rag:answer_short_twice"\nruns = 1\nmax_cost_usd = 0.00001',
+    )
+    project.edit(TOOL_FAULT, "")
+    result = project.test(fake_openai(["acme_get_order"]))  # the first call overspends
+    assert [s["outcome"] for s in result.summaries()] == ["budget reached"], result.out
+    assert "test mistake: the budget of $1e-05 was reached: $0.0000 was spent" in result.out
 
 
 @pytest.mark.design("check.baseline_failed")
