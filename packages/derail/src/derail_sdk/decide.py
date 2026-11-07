@@ -133,11 +133,11 @@ class Counters:
 
 
 def decide(call: Call, plan: Plan, numbers: list[int]) -> Decision:
-    if unknowable(call, plan):
-        return Decision("refused", reason="unreadable_model")
     for i, fault in enumerate(plan.faults):
         if names(fault, call) and fires(fault.when, numbers[i]):
             return Decision("fault", fault=i, n=numbers[i])
+    if unknowable(call, plan):
+        return Decision("refused", reason="unreadable_model")
     if call.kind == "model":
         return Decision("real")  # model calls are what is being tested; never mocked
     for i, mock in enumerate(plan.mocks):

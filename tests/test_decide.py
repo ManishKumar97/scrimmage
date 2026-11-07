@@ -247,3 +247,9 @@ def test_a_fault_with_no_model_needs_no_name() -> None:
 @pytest.mark.design("decide.no_name_without_a_named_fault")
 def test_a_plan_with_no_fault_needs_no_name() -> None:
     assert decide(named(None), make(), []).action == "real"
+
+
+@pytest.mark.design("decide.fault_before_the_refusal")
+def test_a_fault_that_fires_comes_before_the_refusal_as_the_decision_order_says() -> None:
+    p = make(faults=[Fault("model", "status 429", "always"), MAIN_FAULT])
+    assert decide(named(None), p, [1, 0]).action == "fault"
