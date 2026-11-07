@@ -628,9 +628,16 @@ def row_reports(config: Config, results: list[RunResult]) -> list[RowReport]:
     return reports
 
 
+def fault_text(row: planner.Row) -> str:
+    if row.fault is None:
+        return "-"
+    when = "" if row.fault.when == "always" else f" {row.fault.when}"
+    return f"{row.fault.call} {row.fault.do}{when}"
+
+
 def row_cells(report: RowReport) -> list[str]:
     row, mine, result = report.row, report.runs, report.result
-    fault = "-" if row.fault is None else f"{row.fault.call} {row.fault.do}"
+    fault = fault_text(row)
     fired = "-" if row.fault is None else str(sum(bool(r.fault_fired) for r in mine))
     rate, span = "-", "-"
     if result.judged:
@@ -666,7 +673,11 @@ def fitted(table: list[list[str]]) -> list[int]:
 
 
 def cut(text: str, width: int) -> str:
-    return text if len(text) <= width else f"{text[: width - 3]}..."
+    """Cut from the middle, so a fault's schedule and the end of a long name still show."""
+    if len(text) <= width:
+        return text
+    kept = width - 3
+    return f"{text[: kept // 2]}...{text[-(kept - kept // 2) :]}"
 
 
 def no_result_reason(report: RowReport, runs: int) -> str:
@@ -838,6 +849,11 @@ def report(
             "  ".join(cut(cell, w).ljust(w) for cell, w in zip(line, widths, strict=True)).rstrip(),
             file=out,
         )
+    for entry, line in zip(reports, table[1:], strict=True):
+        if len(line[TEST_COLUMN]) > widths[TEST_COLUMN] or (
+            len(line[FAULT_COLUMN]) > widths[FAULT_COLUMN]
+        ):
+            print(f"full name: {entry.where}: {line[FAULT_COLUMN]}", file=out)
     print("range: a 95% Wilson interval, from these runs alone", file=out)
     for line in failures:
         print(line, file=out)

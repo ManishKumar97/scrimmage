@@ -963,6 +963,20 @@ def test_the_table_stays_within_120_columns_and_notes_keep_full_names(
     assert table and all(len(line) <= 120 for line in table)
     assert any("..." in line for line in table)
     assert f"fail: {name} baseline: 0/3 passed" in out.text
+    assert f"full name: {name} fault 1: http:inventory.warehouse.acme.internal" in out.text
+
+
+@pytest.mark.design("table.shows_when")
+def test_the_fault_cell_shows_a_schedule(project: Project, tmp_path: Path) -> None:
+    project.edit('do   = "timeout"', 'do   = "timeout"\nwhen = "first 1"')
+    out = Capture()
+    report(load(project), [], tmp_path, out)  # type: ignore[arg-type]
+    table = out.text.split("range:")[0]
+    assert "first 1" in table and "full name: order-status fault 1" in table
+    project.edit('name     = "order-status"', 'name = "o"')
+    out = Capture()
+    report(load(project), [], tmp_path, out)  # type: ignore[arg-type]
+    assert "tool:get_order timeout first 1" in out.text and "full name" not in out.text
 
 
 def test_a_short_test_name_leaves_its_room_to_the_fault(project: Project, tmp_path: Path) -> None:
