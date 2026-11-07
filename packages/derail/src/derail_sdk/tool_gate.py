@@ -9,7 +9,7 @@ import functools
 import importlib.machinery
 import inspect
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Sequence, Set
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from types import ModuleType
@@ -205,7 +205,9 @@ def swap(
         path = f"{listed or module.__name__}:{name}"
         seen = (renamed or {}).get(path, method or name)
         if dot:
-            swap_method(tool, path, method, seen)
+            # A method listed under its own name keeps it, even if it is an alias of another.
+            mine = {n.partition(".")[2] for n in names if n.partition(".")[0] == class_name}
+            swap_method(tool, path, method, seen, mine - {method})
             continue
         if hasattr(tool, "invoke") and hasattr(tool, "_run"):
             run = current()
@@ -228,7 +230,9 @@ def swap(
             setattr(module, name, gate(tool, seen))
 
 
-def swap_method(owner: object, path: str, method: str, seen: str) -> None:
+def swap_method(
+    owner: object, path: str, method: str, seen: str, listed: Set[str] = frozenset()
+) -> None:
     """Gate a method on its class, so every instance, made before or after, goes through it.
 
     The function is found in the class's method order, so one from a base class is gated
@@ -266,7 +270,7 @@ def swap_method(owner: object, path: str, method: str, seen: str) -> None:
         name
         for c in owner.__mro__
         for name, value in c.__dict__.items()
-        if value is found and inspect.getattr_static(owner, name) is found
+        if value is found and name not in listed and inspect.getattr_static(owner, name) is found
     }
     try:
         for name in sorted(aliases | {method}):

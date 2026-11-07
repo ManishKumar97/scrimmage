@@ -460,3 +460,14 @@ def test_self_passed_by_name_or_with_extra_arguments_is_never_recorded(lines: Li
     with pytest.raises(TypeError):
         shop.get("1", "extra")
     secretless(lines)
+
+
+@pytest.mark.design("method.alias_listed_by_name")
+@pytest.mark.parametrize("order", [["Base.get", "Base.fetch"], ["Base.fetch", "Base.get"]])
+def test_an_alias_listed_under_its_own_name_keeps_that_name(lines: Lines, order: list[str]) -> None:
+    module = probes()
+    install(lines, [Mock("tool:get", "from get", None), Mock("tool:fetch", "from fetch", None)])
+    tool_gate.swap(module, order)
+    shop = module.Base()
+    assert shop.get("1") == "from get" and shop.fetch("1") == "from fetch"
+    assert [line["call"] for line in lines.lines] == ["tool:get", "tool:fetch"]
