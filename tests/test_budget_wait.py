@@ -6,6 +6,7 @@ The ledger never blocks a request: a waiter has a ticket and asks again every st
 import asyncio
 import dataclasses
 import heapq
+import itertools
 import json
 import random
 import re
@@ -471,6 +472,8 @@ def test_a_hundred_waiters_ask_less_as_the_line_grows_and_get_no_control_errors(
     errors: list[str] = []
     asked: list[list[float]] = [[] for _ in range(100)]  # when each waiter asked
     hints: list[float] = [0.0] * 100  # the last hint each waiter was given
+    # Each waiter's asks, as (start of the ask, the pause it was told to take after it).
+    gaps: list[list[tuple[float, float]]] = [[] for _ in range(100)]
     grants: list[int] = []
     stop = threading.Event()
 
@@ -487,16 +490,13 @@ def test_a_hundred_waiters_ask_less_as_the_line_grows_and_get_no_control_errors(
                 grants.append(n)
                 talk.request("POST", "/v1/budget/settle", {"reservation": answer, "usd": 0.0})
                 ticket = None
+                gaps[n].append((asked[n][-1], http_gate.WAIT_STEP_S))
                 time.sleep(http_gate.next_ask_s(None))
             else:
                 ticket, hints[n] = answer.ticket, answer.retry_s or 0.0
+                gaps[n].append((asked[n][-1], hints[n]))
                 time.sleep(http_gate.next_ask_s(answer.retry_s))
 
-    def asks_between(start: float, end: float) -> int:
-        return sum(start <= t < end for times in asked for t in times)
-
-    # A waiter waits at least half its hint between asks, so this many asks a second at most.
-    most_per_s = sum(2 / budget_module.ask_again_s(place) for place in range(100))
     free: list[int] = []  # the server's free connection slots, sampled
 
     def sample() -> None:
@@ -507,19 +507,16 @@ def test_a_hundred_waiters_ask_less_as_the_line_grows_and_get_no_control_errors(
     threads = [threading.Thread(target=waiter, args=(n,), daemon=True) for n in range(100)]
     sampler = threading.Thread(target=sample, daemon=True)
     try:
-        began = time.monotonic()
         sampler.start()
         for thread in threads:
             thread.start()
         until(lambda: min(map(len, asked)) >= 2 or bool(errors))  # all 100 are waiting
         in_line = list(hints)  # no call can be granted yet, so each keeps its place
         settler = ControlClient(made.url, TOKEN)
-        started = time.monotonic()
         statuses = [
             settler.request("POST", "/v1/budget/settle", {"reservation": hold, "usd": 0.0})[0]
             for hold in holds
         ]
-        settled = time.monotonic()
         until(lambda: len(grants) >= 10 or bool(errors))  # the freed room goes round them
     finally:
         stop.set()
@@ -530,13 +527,16 @@ def test_a_hundred_waiters_ask_less_as_the_line_grows_and_get_no_control_errors(
     assert errors == [] and statuses == [200] * 20 and min(free) > 0, min(free)
     # The hints grow with the line: the head asks again at once, the back far less often.
     assert sorted(in_line) == [budget_module.ask_again_s(place) for place in range(100)]
-    # Each waiter's first ask, then at most most_per_s; a fixed 0.25 s step would be 400.
-    waiting = asks_between(began, started)
-    assert waiting <= 100 + most_per_s * (started - began), (waiting, started - began)
-    # No flood for the settles to queue behind: at most one ask in flight per waiter, and
-    # the rest within the hints.
-    during = asks_between(started, settled)
-    assert during <= 100 + most_per_s * (settled - started), (during, settled - started)
+    # Each waiter waits at least half the pause it was told, ask start to ask start, so the
+    # asks are capped by the hints. Load only lengthens a gap. A count of asks against wall
+    # time would not do: a flood slows the server, and the longer window raises the cap.
+    short_gaps = [
+        (n, round(later - start, 3), told)
+        for n, asks in enumerate(gaps)
+        for (start, told), (later, _) in itertools.pairwise(asks)
+        if later - start < told / 2
+    ]
+    assert short_gaps == [], (len(short_gaps), short_gaps[:10])
 
 
 # The gate
