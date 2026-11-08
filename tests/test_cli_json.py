@@ -23,6 +23,7 @@ from conftest import ACME, Project
 from fakes.openai_server import FakeOpenAI
 from report_cases import CASES, FOLDER, GOLDEN
 from scrimmage_core import capture, cli, config, entry, judge, record, runner
+from scrimmage_core import init as init_module
 from scrimmage_core.runner import Runner, build_report, print_report, report_json
 
 Fake = Callable[..., FakeOpenAI]
@@ -430,6 +431,8 @@ def test_each_enum_lists_every_value_the_code_gives() -> None:
     source_record = Path(record.__file__).read_text()
     for code in (*record.MANUAL_CODES, *record.SKIPPED_CODES):
         assert f'"{code}"' in source_record, code
+    assert found["found_by"] == [*init_module.FOUND_BY] * 3  # a tool's, an adapter tool's, a host's
+    assert found["problem"] == list(init_module.PROBLEMS)
     source = Path(runner.__file__)
     outcomes = constants_assigned(source, "one", "outcome")
     assert outcomes and outcomes <= set(runner.OUTCOMES)  # an empty lookup proves nothing

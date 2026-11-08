@@ -42,6 +42,18 @@
       "then": {
         "$ref": "#/$defs/record"
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "command": {
+            "const": "init"
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/init"
+      }
     }
   ],
   "$defs": {
@@ -699,6 +711,311 @@
         }
       }
     },
+    "init": {
+      "type": "object",
+      "required": [
+        "v",
+        "scrimmage",
+        "command",
+        "exit",
+        "status",
+        "config",
+        "out",
+        "entry",
+        "probe",
+        "numbers",
+        "tools",
+        "adapter_tools",
+        "unresolved",
+        "model_hosts",
+        "mistakes",
+        "notes",
+        "warnings",
+        "infra"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "scrimmage": {
+          "$ref": "#/$defs/scrimmage"
+        },
+        "command": {
+          "enum": [
+            "init"
+          ]
+        },
+        "exit": {
+          "$ref": "#/$defs/exit"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "enum": [
+                "written",
+                "mistake",
+                "infra"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
+          ]
+        },
+        "config": {
+          "type": "string"
+        },
+        "out": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The file written. Null means nothing was written."
+        },
+        "entry": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "kind",
+                "value",
+                "guess",
+                "candidates"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "description": "function or command."
+                },
+                "value": {
+                  "type": "string"
+                },
+                "candidates": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "value",
+                      "why"
+                    ],
+                    "properties": {
+                      "value": {
+                        "type": "string"
+                      },
+                      "why": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "guess": {
+                  "type": "boolean",
+                  "description": "True when init chose the entry point by reading the code. A guess is never run."
+                }
+              }
+            }
+          ]
+        },
+        "probe": {
+          "type": "object",
+          "required": [
+            "ran",
+            "function",
+            "outcome"
+          ],
+          "properties": {
+            "ran": {
+              "type": "boolean"
+            },
+            "outcome": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "function": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The function --probe named, which is the only one a probe runs."
+            }
+          }
+        },
+        "numbers": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "tools_offered",
+                "tools_mapped"
+              ],
+              "properties": {
+                "tools_offered": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "tools_mapped": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "name",
+              "found_by"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "found_by": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "probe",
+                      "static"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "$comment": "open: a value this release does not know; read as other"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "adapter_tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "found_by"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "found_by": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "probe",
+                      "static"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "$comment": "open: a value this release does not know; read as other"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "unresolved": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "candidates",
+              "problem"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "candidates": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "problem": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "ambiguous",
+                      "nested",
+                      "not_found"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "$comment": "open: a value this release does not know; read as other"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "model_hosts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "host",
+              "provider",
+              "found_by"
+            ],
+            "properties": {
+              "host": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "found_by": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "probe",
+                      "static"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "$comment": "open: a value this release does not know; read as other"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "mistakes": {
+          "$ref": "#/$defs/messages"
+        },
+        "notes": {
+          "$ref": "#/$defs/messages"
+        },
+        "warnings": {
+          "$ref": "#/$defs/messages"
+        },
+        "infra": {
+          "$ref": "#/$defs/messages"
+        }
+      }
+    },
     "envelope": {
       "type": "object",
       "required": [
@@ -726,7 +1043,8 @@
               "enum": [
                 "test",
                 "check",
-                "record"
+                "record",
+                "init"
               ]
             },
             {

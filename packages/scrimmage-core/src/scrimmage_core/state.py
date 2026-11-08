@@ -141,6 +141,7 @@ class RunState:
         self._lock = threading.Lock()
         self._unannounced = self.child  # a child says what it is on its first line
         self.live: dict[int, Step] = {}  # calls decided and not yet finished
+        self.end_program: Callable[[], None] = lambda: None  # set where a run has a sender
         if plan is not None:
             self._arrived(plan)
 
@@ -316,6 +317,10 @@ class RunState:
             "unsupported_loop": detail,
             "ambiguous_label": detail,
             "blind_child": detail,
+            "probe": (
+                f"{label} {detail}: scrimmage init --probe stops at the first model request, "
+                "which is refused before it is sent"
+            ),
         }
         return ScrimmageRefused(messages.get(reason, f"{label} is refused: {detail}"))
 
@@ -424,6 +429,7 @@ class RunState:
         *,
         mistake: str | None = None,
         tools: list[str] | None = None,
+        extra: dict[str, object] | None = None,
     ) -> None:
         """A line that is not a call, such as a library version the gate cannot use."""
         self._first_line()
@@ -433,6 +439,8 @@ class RunState:
             line["mistake"] = redact(mistake)
         if tools is not None:
             line["tools"] = tools
+        if extra is not None:
+            line.update(extra)
         self.sink.put(line, keep=True)
 
     def finish(
@@ -448,6 +456,10 @@ class RunState:
             going = self.live.pop(id(step), None) is not None
         if going:
             self._write(step, result=result, error=error, mistake=mistake)
+        # A refusal is an Exception the agent can catch, and its next plain tool would then
+        # run. In a probe nothing is needed past this point, so no more of its code runs.
+        if step.decision.action == "refused" and self._plan is not None and self._plan.probe:
+            self.end_program()
 
     def _write(
         self,

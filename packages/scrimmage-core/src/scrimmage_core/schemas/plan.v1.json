@@ -283,6 +283,9 @@
     },
     "record": {
       "type": "boolean"
+    },
+    "probe": {
+      "type": "boolean"
     }
   },
   "$defs": {

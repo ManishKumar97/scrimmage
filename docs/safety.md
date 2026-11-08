@@ -114,6 +114,15 @@ Code that deliberately works around a gate, or calls the plain function directly
 So a test is not a sandbox.
 If one stray call to a tool would do real harm, make that tool unreachable from the test environment, with test credentials or a network that cannot reach the real system.
 
+## The init probe
+
+`scrimmage init` reads your code and runs none of it.
+The entry point in a draft is init's guess, and a guess is never run.
+`scrimmage init --probe module:function` runs the function the team names, up to its first model request, which is refused before it is sent.
+After any refusal the process ends, so code that catches one runs no further.
+The probe has no tool list yet, so a plain tool function your code calls before that first request runs for real, as an unlisted function does, and the command says so every time.
+See [Drafting a test file](init.md#what-the-probe-can-do).
+
 ## Staying out of production
 
 - Installing or importing Scrimmage never switches anything on.
