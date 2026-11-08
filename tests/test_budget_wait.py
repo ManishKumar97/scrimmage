@@ -277,6 +277,18 @@ def test_a_budget_reply_without_its_numbers_is_a_control_error(server: ControlSe
     talk.release(1)  # best effort: a lost release is dropped after LOST_S, or at the run's end
 
 
+@pytest.mark.design("wait.run_end_clears_tickets")
+def test_closing_a_run_on_the_server_clears_its_tickets(server: ControlServer) -> None:
+    """The runner's close, as after a SIGKILL: the run's waiting tickets leave the line."""
+    hold = granted(server.ledger.reserve(0.10, "run-0", LABEL))
+    assert short(ControlClient(server.url, TOKEN).reserve("run-1", 0.06, LABEL)).ticket
+    assert server.ledger._line  # type: ignore[attr-defined]
+    server.close_run("run-1")
+    assert not server.ledger._line  # type: ignore[attr-defined]
+    server.ledger.settle(hold, 0.0)
+    granted(server.ledger.reserve(0.10, "run-2"))  # nothing of run-1 is ahead
+
+
 WAITER = """
 import sys, time
 from scrimmage_core.client import ControlClient
