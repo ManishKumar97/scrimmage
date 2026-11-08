@@ -14,7 +14,9 @@ import re
 from pathlib import Path
 from typing import Any
 
-SCHEMAS = Path(__file__).parents[2] / "packages" / "scrimmage" / "src" / "scrimmage_core" / "schemas"
+SCHEMAS = (
+    Path(__file__).parents[2] / "packages" / "scrimmage-core" / "src" / "scrimmage_core" / "schemas"
+)
 PAGE = "schemas.md"
 MARKER = "<!-- shipped schemas -->"
 FIRST = ["scrimmage-toml.v1.json", "cli.v1.json", "record.v1.json", "plan.v1.json"]
