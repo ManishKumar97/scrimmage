@@ -420,24 +420,7 @@
           "type": "string"
         },
         "outcome": {
-          "anyOf": [
-            {
-              "enum": [
-                "answered",
-                "crashed",
-                "timed out",
-                "refused call",
-                "budget reached",
-                "not reserved",
-                "infrastructure error",
-                "stopped"
-              ]
-            },
-            {
-              "type": "string",
-              "$comment": "open: a value this release does not know; read as other"
-            }
-          ]
+          "$ref": "#/$defs/outcome"
         },
         "fault_fired": {
           "type": [
@@ -584,6 +567,26 @@
           "$ref": "#/$defs/messages"
         }
       }
+    },
+    "outcome": {
+      "anyOf": [
+        {
+          "enum": [
+            "answered",
+            "crashed",
+            "timed out",
+            "refused call",
+            "budget reached",
+            "not reserved",
+            "infrastructure error",
+            "stopped"
+          ]
+        },
+        {
+          "type": "string",
+          "$comment": "open: a value this release does not know; read as other"
+        }
+      ]
     },
     "record": {
       "type": "object",
@@ -964,7 +967,7 @@
           "type": "string"
         },
         "outcome": {
-          "$ref": "#/$defs/run/properties/outcome"
+          "$ref": "#/$defs/outcome"
         },
         "written": {
           "type": "array",
