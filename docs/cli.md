@@ -63,6 +63,23 @@ scrimmage check: 1 problem; nothing was run
 | 2 | A mistake in the file, or a file that cannot be read |
 | 3 | Scrimmage itself failed while reading the file |
 
+## scrimmage record
+
+```bash
+scrimmage record [path/to/scrimmage.toml] [--test NAME]... [--refresh LABEL]... [--json]
+```
+
+Runs each test's baseline once, with its mocks and nothing injected, and writes each real tool, MCP and web call as a mock in `scrimmage.recorded.toml`, beside your file.
+Your file is never changed. See [Recording replies](recording.md).
+`--test NAME` records only that test. `--refresh LABEL` records a label again that already has a mock.
+
+| Code | Meaning |
+|---|---|
+| 0 | Every call that needs a mock got one, and every run answered |
+| 1 | The file is written, and a call is listed by hand, or a run did not answer |
+| 2 | A mistake: the file, a refused call, an unseen tool, the budget, or a file layout record cannot extend |
+| 3 | An infrastructure error, including a bug in Scrimmage while it recorded; nothing is written for a test whose record is incomplete |
+
 ## scrimmage schema
 
 ```bash
@@ -75,7 +92,7 @@ The schema checks the shape of the file. `scrimmage check` decides.
 
 ## --json
 
-`scrimmage test --json` and `scrimmage check --json` print exactly one JSON document on standard output and nothing else.
+`scrimmage test --json`, `scrimmage check --json` and `scrimmage record --json` print exactly one JSON document on standard output and nothing else.
 Standard error stays empty unless Python itself fails.
 The document's `exit` field is always the process's exit code.
 Once Scrimmage has started, Ctrl-C or SIGTERM still prints the document, with exit 3.

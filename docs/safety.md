@@ -131,3 +131,10 @@ A CI job that holds model API keys must not run `scrimmage test` on a pull reque
 
 Records stay on your machine and are readable only by you.
 What they keep, what is removed from them, and what is not, is on [Security](security.md#records).
+
+## Recording
+
+`scrimmage record` writes replies from your real systems into a file meant for git.
+It runs only what `scrimmage test` runs: every refusal, the budget and each gate work the same, and a write tool without a mock is refused.
+Credential, metadata and secret-store requests are never written, values go through the secret patterns and a key-name rule, and every record prints a warning that the mocks can hold customer data.
+See [Recording replies](recording.md).

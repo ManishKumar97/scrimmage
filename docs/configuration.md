@@ -123,6 +123,8 @@ args     = {order_id = "1234"}
 returns  = {order_id = "1234", status = "shipped", delivered = "Oct 30"}
 ```
 
+`scrimmage record` writes these for you; see [Recording replies](recording.md).
+
 A mock you write yourself has no `args`, and answers every call to its tool, as before.
 `args` on a mock without `recorded = true` is a mistake, exit code 2, so a hand-written mock keeps its meaning.
 An unused recorded mock is a note, because a later run that does not repeat a recorded call leaves it unused by design.

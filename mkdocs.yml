@@ -93,6 +93,7 @@ nav:
       - Web requests: web-requests.md
       - MCP tools: mcp.md
       - Judging an answer: judging.md
+      - Recording replies: recording.md
   - Reference:
       - Commands: cli.md
       - JSON output: json-output.md

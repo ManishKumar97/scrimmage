@@ -1,6 +1,6 @@
 # JSON output
 
-`scrimmage test --json` and `scrimmage check --json` print one JSON document on standard output and nothing else.
+`scrimmage test --json`, `scrimmage check --json` and `scrimmage record --json` print one JSON document on standard output and nothing else.
 They are for a coding agent or a CI step that reads the result, not the table.
 Read the document with one `json.loads` of standard output, then act on its fields and their stable values, never on message text.
 
@@ -33,7 +33,7 @@ Every command's document starts with the same fields:
 |---|---|
 | `v` | The version of this format, 1. |
 | `scrimmage` | The installed Scrimmage version, so a document can be traced to the release that made it. `unknown` when Scrimmage runs with no package metadata, such as from a source tree. |
-| `command` | `test` or `check`. |
+| `command` | `test`, `check` or `record`. |
 | `exit` | The process's exit code. Always equal to it. |
 | `status` | A word for the exit code, per command; see below. |
 | `config` | The file read, as given on the command line. |
@@ -50,6 +50,7 @@ The text of a message can change in any release.
 |---|---|---|---|---|
 | `test` | `passed` | `failed` | `mistake` | `infra` |
 | `check` | `valid` | | `mistake` | `infra` |
+| `record` | `complete` | `incomplete` | `mistake` | `infra` |
 
 ## scrimmage test --json
 
@@ -151,6 +152,54 @@ SIGKILL cannot be caught, so it leaves no document.
 |---|---|
 | `summary` | What the file holds: `tests`, `rows`, the `runs` a test would start, the `tools` listed and `budget_usd`. `null` when the file does not load. |
 
+## scrimmage record --json
+
+```json
+{
+  "v": 1, "scrimmage": "0.4.0", "command": "record", "exit": 1, "status": "incomplete", "config": "scrimmage.toml",
+  "out": "scrimmage.recorded.toml",
+  "records": "scrimmage-runs/20261107T101500Z-a1b2c3",
+  "cost_usd": 0.0012,
+  "numbers": {"calls_seen": 4, "calls_written": 3},
+  "tests": [
+    {
+      "test": "order-status",
+      "run": "run-3f9a1c40b2e1",
+      "outcome": "answered",
+      "written": [
+        {"call": "http:inventory.acme.internal", "method": "GET", "path": "/stock/SKU-42", "calls": 1, "removed": []},
+        {"call": "tool:get_user", "method": null, "path": null, "calls": 1, "removed": [{"key": "access_token", "rule": "key_name"}]}
+      ],
+      "kept": [{"call": "tool:refund_order", "mock": 1}],
+      "skipped": [{"call": "http:sts.amazonaws.com", "method": "POST", "path": "/", "code": "credential", "calls": 1}],
+      "manual": [
+        {"call": "tool:get_invoice", "code": "unsavable", "method": null, "path": null, "calls": 1, "message": "returns: a bytes, which a mock cannot hold"}
+      ]
+    }
+  ],
+  "mistakes": [], "notes": [], "warnings": [{"message": "the mocks hold replies from real systems, which can hold customer data; check them before you commit them"}], "infra": []
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `out` | The file written, whole. `null` means nothing was written, and the reason is in `mistakes` or `infra`. |
+| `records` | The folder that holds this record's run, or `null` when no run started. |
+| `cost_usd` | What the model calls cost, in dollars. |
+| `numbers` | `calls_seen`, the real tool, MCP and web calls that no other call made, less the credential requests. `calls_written`, those whose level was written whole. |
+| `calls_seen`, `calls_written` | See `numbers`. |
+| `tests` | One object per test that ran. |
+| `test` | The test's name. |
+| `run` | The run's name, also its record's name in `records`. |
+| `outcome` | How the run ended. |
+| `written` | Each mock written: `call`, `method` and `path` (`null` for a tool or MCP call), `calls` (how many calls this mock stands for) and `removed` (each secret taken out: its `key`, `null` for a pattern match in plain text, and the `rule`, `pattern` or `key_name`). |
+| `kept` | Each team mock used: its `call`, and `mock`, its place in the test from 1. |
+| `skipped` | Each call skipped, with its `code` (below), `calls`, and `method` and `path` for a web request. |
+| `manual` | Each call that could not be written: its `call`, `code` (below), `message`, `calls`, and `method` and `path`. |
+| `mocks_text` | Only when the file's layout could not take the mocks: the mocks, for you to copy in. `out` is then `null`. |
+
+The diff is in the text output only: compare `config` with `out` to see it.
+
 ## Values that can grow
 
 Within version 1, fields are only added: none is renamed, removed or given another type.
@@ -161,12 +210,14 @@ A value that is removed or renamed comes only with a new version.
 
 | Field | Values today | A value it does not know |
 |---|---|---|
-| `command` | `test`, `check` | read as other |
-| `status` | `passed`, `failed`, `valid`, `mistake`, `infra` | read as other |
+| `command` | `test`, `check`, `record` | read as other |
+| `status` | `passed`, `failed`, `valid`, `complete`, `incomplete`, `mistake`, `infra` | read as other |
 | `result` | `pass`, `fail`, `no result` | read as other |
 | `outcome` | `answered`, `crashed`, `timed out`, `refused call`, `budget reached`, `not reserved`, `infrastructure error`, `stopped` | read as other |
 | `judged` | `pass`, `fail`, `left out` | read as other |
 | `kind` | `expect`, `forbid`, `empty`, `crashed`, `timed out`, `refused` | read as other |
+| `code` | `refused`, `raised`, `status`, `differs`, `nondeterministic`, `unsavable`, `null`, `placeholder`, `too_large`, `binary`, `incomplete_reply`, `secret_changed_shape`, `model_inside`, `not_finished`, `outside_tool`, `credential` | read as other |
+| `rule` | `pattern`, `key_name` | read as other |
 | `stopped_by` | `budget`, `budget_held`, `no_price`, `unknown_tool_type`, `unseen_tool`, `structure`, `ambiguous_label`, `unknown_label` | read as other |
 
 `cli.v1.json` lists the values of the release that ships it, and also takes any other text there, so a reader may check a document against any version 1 copy of the schema.
