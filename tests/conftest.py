@@ -18,6 +18,13 @@ from scrimmage_core.cli import main
 from scrimmage_core.runner import OK, ROW_FAILED
 
 EXAMPLE = Path(__file__).parent / "example"
+
+
+def doc_pages(docs: Path) -> list[Path]:
+    """Every page of the user docs. The maintainer's notes folder is not part of them."""
+    return sorted(p for p in docs.rglob("*.md") if p.relative_to(docs).parts[0] != "private")
+
+
 # The S1 conversation: the bot asks for the order, then the stock, then answers, or says it
 # could not if a tool failed.
 ACME = ["acme_get_order", "acme_get_stock", "acme_answer|acme_admits"]
