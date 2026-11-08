@@ -913,7 +913,8 @@ def record(
     encoding = str(response.headers.get("content-encoding", ""))
     body = decoded(raw, encoding)
     if step.call.kind != "model":
-        extra.update(status=response.status_code, result=blob(body, ctx.sender, total=size))
+        saved = blob(body, ctx.sender, total=size, wait=ctx.run.recording)
+        extra.update(status=response.status_code, result=saved)
         if ctx.run.recording and step.call.provider is None:  # a model host is never recorded
             extra["recorded"] = ctx.run.recorded(
                 lambda: web_recorded(request, response, body, encoding)
