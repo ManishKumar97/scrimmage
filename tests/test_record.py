@@ -1,5 +1,6 @@
 """scrimmage record end to end: real runs of a small bot against a local service."""
 
+import contextlib
 import json
 import signal
 import threading
@@ -57,7 +58,8 @@ class Service:
                 self.send_header("content-length", str(len(data)))
                 self.end_headers()
                 if self.command != "HEAD":
-                    self.wfile.write(data)
+                    with contextlib.suppress(OSError):  # a client that stopped reading
+                        self.wfile.write(data)
 
             def log_message(self, format: str, *args: object) -> None:
                 del format, args
@@ -1387,3 +1389,29 @@ def answer(question):
     assert mock["call"] == "tool:chained" and mock["returns"] == "chain z"
     code, out = team.test_output()
     assert code == 0, out
+
+
+@pytest.mark.design("record.incomplete_reply")
+def test_a_reply_the_agent_stopped_reading_falls_back_to_a_tool_mock(team: Team) -> None:
+    team.service.routes["/big"] = (200, {"content-type": "text/plain"}, b"x" * (1024 * 1024))
+    team.write(
+        """
+def first_chunk(key):
+    with httpx.Client() as client:
+        with client.stream("GET", SERVICE + "/big", timeout=30) as reply:
+            for chunk in reply.iter_bytes(chunk_size=1024):
+                return len(chunk)
+
+def answer(question):
+    first_chunk("x")
+    return "ok"
+""",
+        ["bot:first_chunk"],
+        ("tool:first_chunk",),
+    )
+    done = team.record()
+    assert done.code == 1, done.out
+    assert [m["call"] for m in done.mocks()] == ["tool:first_chunk"]
+    assert [m["path"] for m in done.manual("incomplete_reply")] == ["/big"]
+    code, out = team.test_output()
+    assert code == 0 and team.service.requests == [], out
