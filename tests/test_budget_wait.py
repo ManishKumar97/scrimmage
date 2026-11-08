@@ -877,6 +877,7 @@ import time
 from pathlib import Path
 
 import openai
+from scrimmage_core import http_gate
 
 role, question = sys.argv[1], sys.argv[2]
 client = openai.OpenAI(max_retries=0)
@@ -884,12 +885,18 @@ messages = [{"role": "user", "content": question}]
 if role == "hold":
     client.chat.completions.create(model="gpt-4o-mini", messages=messages, stream=True)
     Path("holding").touch()
-    time.sleep(120)  # the stream stays open until the test stops this run
+    time.sleep(600)  # the stream stays open until the test stops this run
 else:
+    # The margin under test, made wide in this run's own process. The run's age leaves only
+    # the margin, and the SDK's own time limit ends the run once that has passed, so the
+    # margin is the time this program has from its plan to its call. 10 s, with its imports
+    # under coverage on a loaded machine, was not always enough.
+    http_gate.RUN_MARGIN_S = 60.0
     reply = client.chat.completions.create(model="gpt-4o-mini", messages=messages)
     print(reply.choices[0].message.content)
 '''
-STARTUP_S = 110.0  # run_timeout less its 10 s margin: no time is left to wait
+RUN_TIMEOUT_S = 600.0  # a tenth of it is 60 s, so the margin is not cut below RUN_MARGIN_S
+STARTUP_S = RUN_TIMEOUT_S - 60.0  # run_timeout less the margin: no time is left to wait
 
 
 @pytest.mark.design("wait.slow_start_end_to_end")
@@ -897,18 +904,20 @@ STARTUP_S = 110.0  # run_timeout less its 10 s margin: no time is left to wait
 def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
     project: Project, monkeypatch: pytest.MonkeyPatch, time_limit: TimeLimit
 ) -> None:
-    """A program that takes 110 s to load, as `uv run` on a cold cache can, then waits on
-    another run's hold. Its wait must end before the runner's limit, so the run reads "not
-    reserved", not "timed out".
+    """A program that takes most of its run_timeout to load, as `uv run` on a cold cache can,
+    then waits on another run's hold. Its wait must end before the runner's limit, so the run
+    reads "not reserved", not "timed out".
 
-    No real time passes: each run is made STARTUP_S old when its program asks for its plan.
-    Only the 10 s margin is then left, so any wait at all is one the design forbids, and the
+    No real time passes: the waiting run is made STARTUP_S old when its program asks for its
+    plan. Only the margin is then left, so any wait at all is one the design forbids, and the
     limit arrives the moment a call asks again. The first build waited, and timed out.
+    The holding run keeps its real age, so its own start-up races no limit.
     """
     real_plan = control.ControlServer._plan
 
     def slow_start(server: control.ControlServer, run: str) -> tuple[int, dict[str, object]]:
-        server.runs[run].opened = time.monotonic() - STARTUP_S
+        if (project.root / "holding").exists():  # the waiting run starts once the hold is on
+            server.runs[run].opened = time.monotonic() - STARTUP_S
         return real_plan(server, run)
 
     real_reserve = control.ControlServer._reserve
@@ -926,10 +935,12 @@ def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
     (project.root / "race.py").write_text(RACE)
     project.edit(
         'function = "acme.agent:answer"',
-        'command = "sh slow_start.sh {question}"\nruns = 2\nparallel = 2\nmax_cost_usd = 0.004',
+        'command = "sh slow_start.sh {question}"\nruns = 2\nparallel = 2\nmax_cost_usd = 0.004\n'
+        f"run_timeout = {RUN_TIMEOUT_S:g}",
     )
     project.edit(EXAMPLE_FAULT, "")
     result = run_on_fake(project, ["chat_stream_usage"])
+    assert time_limit.given == [RUN_TIMEOUT_S] * 2
     assert result.code == 2, result.out
     assert sorted(str(s["outcome"]) for s in result.summaries()) == ["not reserved", "stopped"]
     assert "test mistake: a model call could not be reserved" in result.out
