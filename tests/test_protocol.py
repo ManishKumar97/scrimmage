@@ -367,7 +367,7 @@ def test_a_refusal_waits_for_room_instead_of_being_dropped(server: ControlServer
     time.sleep(0.2)
     assert waiter.is_alive()  # the queue is full, so the refusal waits ...
     sender.start()
-    waiter.join(timeout=5)
+    waiter.join(timeout=60)  # a ceiling: it returns once the sender makes room
     sender.flush()  # ... and is sent once there is room
     assert [x["seq"] for x in server.store.lines("run-1")] == [1, 2]
     assert server.runs["run-1"].dropped == 0
@@ -388,10 +388,10 @@ def test_a_refused_line_tells_the_runner_once(tmp_path: Path) -> None:
                 "/v1/records",
                 {"run": "run-1", "lines": [{**line(seq), "action": "refused"}]},
             )
-        for _ in range(50):  # the runner is told on a thread of its own
+        for _ in range(3000):  # the runner is told on a thread of its own
             if told:
                 break
-            time.sleep(0.05)
+            time.sleep(0.01)
         assert told == ["run-1"]
     finally:
         control.stop()
@@ -423,9 +423,8 @@ def test_a_bad_length_is_refused_and_an_idle_connection_is_let_go(
         for length in ("-1", "abc"):
             assert raw_status(control, {"Content-Length": length}) == 400
         host, port = control.server.server_address[:2]
-        idle = socket.create_connection((str(host), port))
-        time.sleep(1.0)
-        assert idle.recv(1) == b""  # the server closed the silent connection
+        idle = socket.create_connection((str(host), port), timeout=30)
+        assert idle.recv(1) == b""  # blocks until the server closes the silent connection
         idle.close()
     finally:
         control.stop()
@@ -452,10 +451,13 @@ def test_a_negative_made_count_is_refused(server: ControlServer) -> None:
 
 @pytest.mark.design("record.gate_never_waits")
 def test_queueing_a_line_never_waits_for_a_batch_in_flight() -> None:
+    arrived, release = threading.Event(), threading.Event()
+
     class Slow(BaseHTTPRequestHandler):
         def do_POST(self) -> None:
             self.rfile.read(int(self.headers.get("Content-Length") or 0))
-            time.sleep(2)
+            arrived.set()
+            release.wait(60)  # held until the test has queued its second line
             self.send_response(500)
             self.end_headers()
 
@@ -468,11 +470,14 @@ def test_queueing_a_line_never_waits_for_a_batch_in_flight() -> None:
         sender = Sender(ControlClient(f"http://127.0.0.1:{slow.server_address[1]}", TOKEN), "run-1")
         sender.start()
         sender.put(line(1))
-        time.sleep(0.5)  # the first batch is now waiting on the slow server
-        started = time.monotonic()
-        sender.put(line(2))
-        assert time.monotonic() - started < 0.1
+        assert arrived.wait(60)  # the first batch is now waiting on the slow server
+        second = threading.Thread(target=sender.put, args=(line(2),))
+        second.start()
+        second.join(30)
+        # It returned while the batch was still held: a put that waited would block here.
+        assert not second.is_alive() and not release.is_set()
     finally:
+        release.set()
         slow.shutdown()
         slow.server_close()
 

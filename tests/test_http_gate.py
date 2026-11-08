@@ -3,7 +3,6 @@
 import asyncio
 import dataclasses
 import gzip
-import itertools
 import json
 import threading
 import time
@@ -176,24 +175,34 @@ def test_the_async_gate_follows_the_same_path(gated: None) -> None:
 
 @pytest.mark.design("gate.async_no_block")
 def test_an_async_call_does_not_block_the_loop_while_it_reserves(gated: None) -> None:
-    budget = Budget(limit=100.0, delay=0.3)
-    install(make_plan(budget=100.0), budget)
-    ticks: list[float] = []
+    ticked = threading.Event()
+    waited: list[bool] = []
+
+    class Waits(Budget):
+        """The reserve ends only once a task on the loop has ticked ten times. Had it run on
+        the loop's thread, the ticker could not run, and the wait would reach its ceiling."""
+
+        def reserve(
+            self, run: str, usd: float, label: str = "", ticket: int | None = None
+        ) -> int | Shortfall:
+            waited.append(ticked.wait(30))
+            return super().reserve(run, usd, label, ticket)
+
+    install(make_plan(budget=100.0), Waits(limit=100.0))
 
     async def ticker() -> None:
-        while True:
-            ticks.append(time.monotonic())
+        for _ in range(10):
             await asyncio.sleep(0.01)
+        ticked.set()
 
     async def go() -> None:
         tick = asyncio.create_task(ticker())
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(answer)) as c:
             await c.post(URL, json=BODY)
-        tick.cancel()
+        await tick
 
     asyncio.run(go())
-    gaps = [b - a for a, b in itertools.pairwise(ticks)]
-    assert len(ticks) > 10 and max(gaps) < 0.15  # the loop kept running through the 0.3 s wait
+    assert waited == [True]  # the loop kept running while the call reserved
 
 
 def test_a_timeout_fault_on_the_async_path_is_httpx2s_own(gated: None) -> None:
@@ -209,19 +218,28 @@ def test_a_timeout_fault_on_the_async_path_is_httpx2s_own(gated: None) -> None:
 
 @pytest.mark.design("budget.cancelled_reservation_given_back")
 def test_a_task_cancelled_while_it_reserves_gives_the_reservation_back(gated: None) -> None:
-    budget = Budget(limit=100.0, delay=0.2)
-    sink, _ = install(make_plan(budget=100.0), budget)
+    entered, release = threading.Event(), threading.Event()
+
+    class Held(Budget):
+        def reserve(
+            self, run: str, usd: float, label: str = "", ticket: int | None = None
+        ) -> int | Shortfall:
+            entered.set()
+            release.wait(60)
+            return super().reserve(run, usd, label, ticket)
+
+    sink, _ = install(make_plan(budget=100.0), Held(limit=100.0))
 
     async def go() -> None:
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(answer)) as c:
             task = asyncio.create_task(c.post(URL, json=BODY))
-            await asyncio.sleep(0.05)  # it is now waiting for the reservation
+            await until_set(entered)  # it is now waiting for the reservation
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
-            await asyncio.sleep(0.3)  # the thread gets its reservation with nobody to use it
+            release.set()  # the thread gets its reservation with nobody to use it
 
-    asyncio.run(go())
+    asyncio.run(go())  # it waits for the thread, which gives the reservation back
     assert sink.settles == [(1, 0.0)]
     assert [str(x["error"]).split(":")[0] for x in sink.lines] == ["CancelledError"]
     assert real_error(sink.lines[0]) is None  # cancelling is not the provider failing
@@ -276,13 +294,14 @@ def test_work_that_starts_after_the_cancel_does_nothing(
 
 @pytest.mark.design("budget.cancelled_in_the_queue_is_recorded")
 def test_tasks_cancelled_before_a_thread_took_them_keep_their_lines(gated: None) -> None:
-    release = threading.Event()
+    entered, release = threading.Event(), threading.Event()
 
     class Held(Budget):
         def reserve(
             self, run: str, usd: float, label: str = "", ticket: int | None = None
         ) -> int | Shortfall:
-            release.wait(5)
+            entered.set()
+            release.wait(60)
             return super().reserve(run, usd, label, ticket)
 
     sink, _ = install(make_plan(budget=100.0), Held(limit=100.0))
@@ -291,7 +310,7 @@ def test_tasks_cancelled_before_a_thread_took_them_keep_their_lines(gated: None)
         asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(1))
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(answer)) as c:
             tasks = [asyncio.create_task(c.post(URL, json=BODY)) for _ in range(5)]
-            await asyncio.sleep(0.05)  # one holds the only thread, four wait for it
+            await until_set(entered)  # one holds the only thread, four wait for it
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -302,6 +321,15 @@ def test_tasks_cancelled_before_a_thread_took_them_keep_their_lines(gated: None)
     assert [str(x["error"]).split(":")[0] for x in sink.lines] == ["CancelledError"] * 5
     assert {x["cost_usd"] for x in sink.lines} == {0.0}
     assert sink.settles == [(1, 0.0)]  # only the one that reached a thread reserved
+
+
+async def until_set(event: threading.Event) -> None:
+    """Wait on the loop for a thread's event; the ceiling only ends a hang."""
+    for _ in range(6000):
+        if event.is_set():
+            return
+        await asyncio.sleep(0.01)
+    pytest.fail("the event never came")
 
 
 @pytest.mark.design("gate.outside_asyncio_refused")
