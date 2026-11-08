@@ -9,16 +9,18 @@ Over streamable HTTP each message is also a web request. The transport's own req
 carry a mark, so a message is decided here and never again at the web gate.
 """
 
+import asyncio
 import contextlib
 import copy
 import importlib.metadata
 import json
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextvars import ContextVar
+from dataclasses import dataclass
 from types import ModuleType
 from typing import Any
 
-from scrimmage_core import hooks
+from scrimmage_core import capture, hooks
 from scrimmage_core.decide import Call
 from scrimmage_core.http_gate import MCP_TRANSPORT, endpoint_of, params, refuse
 from scrimmage_core.process_gate import EXEMPT
@@ -233,12 +235,14 @@ def patch(module: ModuleType, gate: Gate) -> None:
         fields = data.get("params", {})
         tool_call = method == "tools/call"
         call = call_for(server, fields["name"] if tool_call else method)
-        step = decided(gate, run, call, fields.get("arguments") if tool_call else fields)
+        arguments = fields.get("arguments") if tool_call else fields
+        step = decided(gate, run, call, arguments)
         if step.decision.action == "real":
             token = FORWARDING.set(step)
+            keep = Kept(self, arguments, result_type) if run.recording and tool_call else None
             try:
                 sent = send(self, request, result_type, *args, **kw)
-                return await carried(gate, run, step, sent)
+                return await carried(gate, run, step, sent, keep)
             finally:
                 FORWARDING.reset(token)
         if step.decision.action == "fault":
@@ -301,7 +305,7 @@ def patch_transport(module: ModuleType, gate: Gate) -> None:
 def decided(gate: Gate, run: RunState, call: Call, arguments: object) -> Step:
     """Count and decide one call. Raises ScrimmageRefused after recording a refusal."""
     gate.note(call.name, call.label)
-    step = run.decide(call, {})
+    step = run.decide(run.with_args(call, arguments if arguments is not None else {}), {})
     forwarding = FORWARDING.get()
     if forwarding is not None:  # its real says only that it was passed on, so the line says so
         forwarding.extra["forwarded_to"] = call.label
@@ -328,16 +332,73 @@ def record(gate: Gate, value: object) -> dict[str, object]:
     return blob(json.dumps(value, default=repr, sort_keys=True).encode(), gate.sender)
 
 
-async def carried(gate: Gate, run: RunState, step: Step, sent: Coroutine[Any, Any, Any]) -> Any:
-    """Wait for the reply, real or injected, and write the call's line."""
+@dataclass(frozen=True)
+class Kept:
+    """What a recording run needs to save a real tool call's result."""
+
+    session: Any
+    arguments: object
+    result_type: Any
+
+
+async def carried(
+    gate: Gate,
+    run: RunState,
+    step: Step,
+    sent: Coroutine[Any, Any, Any],
+    keep: Kept | None = None,
+) -> Any:
+    """Wait for the reply, real or injected, and write the call's line.
+
+    A recording run then saves the result. The call has succeeded by then, so a cancel that
+    arrives while it is saved is raised only after the line says it succeeded.
+    """
     try:
         reply = await sent
         step.extra["result"] = record(gate, wire_form(reply))
     except BaseException as exc:
         run.finish(step, error=exc)
         raise
+    cancel = None
+    if keep is not None:
+        try:
+            found = await saved(gate, step, keep, reply)
+        except asyncio.CancelledError as exc:
+            found, cancel = capture.unsaved(capture.UNSAVABLE, "the run was cancelled"), exc
+        except Exception as exc:  # recording only observes the call, so it never fails it
+            found = capture.scrimmage_error(exc)
+        step.extra["recorded"] = run.recorded(lambda: found)
     run.finish(step)
+    if cancel is not None:
+        raise cancel
     return reply
+
+
+async def saved(gate: Gate, step: Step, keep: Kept, reply: Any) -> dict[str, object]:
+    """C.J3.34: the result is saved only if a mock built from it gives the same result.
+
+    The mock is built as scrimmage test builds it, which lists the server's tools first when
+    the agent never did, so this does too. A failed result needs no listing: it is never
+    saved, so it sends nothing more to the server.
+    """
+    real = wire_form(reply)
+    failed = capture.failed_result(real)
+    if failed is not None:
+        return failed
+    if step.call.label not in gate.listed:
+        try:
+            await keep.session.list_tools()
+        except Exception as exc:
+            return capture.unsaved(
+                capture.UNSAVABLE, f"listing the server's tools failed: {type(exc).__name__}"
+            )
+    shaped = step.call.label in gate.shaped
+
+    def rebuild(value: object) -> object:
+        # The library reads every reply with this pydantic TypeAdapter, as it reads a mock's.
+        return wire_form(keep.result_type.validate_python(mock_result(value, shaped)))
+
+    return capture.mcp_value(real, keep.arguments, rebuild)
 
 
 def wire_form(reply: Any) -> object:
@@ -395,8 +456,13 @@ async def mock_reply(gate: Gate, run: RunState, step: Step, session: Any) -> dic
         except BaseException as exc:
             run.finish(step, error=exc)
             raise
+    return mock_result(value, step.call.label in gate.shaped)
+
+
+def mock_result(value: object, shaped: bool) -> dict[str, object]:
+    """The result a mock of this value gives, as a server would send it."""
     text = value if isinstance(value, str) else json.dumps(value, indent=2, ensure_ascii=False)
     reply = tool_result([{"type": "text", "text": text}])
-    if step.call.label in gate.shaped:
+    if shaped:
         reply["structuredContent"] = value
     return reply

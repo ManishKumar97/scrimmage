@@ -345,6 +345,24 @@
         "returns": {},
         "type": {
           "$ref": "#/$defs/import_path"
+        },
+        "recorded": {
+          "type": "boolean"
+        },
+        "args": {
+          "type": "object"
+        }
+      },
+      "dependentSchemas": {
+        "args": {
+          "required": [
+            "recorded"
+          ],
+          "properties": {
+            "recorded": {
+              "const": true
+            }
+          }
         }
       }
     },
@@ -359,7 +377,25 @@
         "call": {
           "$ref": "#/$defs/mcp_label"
         },
-        "returns": {}
+        "returns": {},
+        "recorded": {
+          "type": "boolean"
+        },
+        "args": {
+          "type": "object"
+        }
+      },
+      "dependentSchemas": {
+        "args": {
+          "required": [
+            "recorded"
+          ],
+          "properties": {
+            "recorded": {
+              "const": true
+            }
+          }
+        }
       }
     },
     "web_mock": {
@@ -398,6 +434,9 @@
         "json": {},
         "text": {
           "$ref": "#/$defs/text"
+        },
+        "recorded": {
+          "type": "boolean"
         }
       }
     },

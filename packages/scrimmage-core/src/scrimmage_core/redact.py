@@ -8,7 +8,7 @@ PATTERNS = re.compile(
     "|".join(
         [
             r"sk-(?:proj-|ant-|svcacct-)?[A-Za-z0-9_-]{16,}",  # OpenAI and Anthropic keys
-            r"AKIA[0-9A-Z]{16}",  # AWS access key ids
+            r"(?:AKIA|ASIA)[0-9A-Z]{16}",  # AWS access key ids, long-term and temporary
             r"AIza[0-9A-Za-z_-]{35}",  # Google API keys
             r"gh[pousr]_[A-Za-z0-9]{36,}",  # GitHub tokens
             r"xox[abpr]-[A-Za-z0-9-]{10,}",  # Slack tokens
@@ -47,5 +47,21 @@ def no_jwt(found: re.Match[str]) -> str:
     return found.group(1).removesuffix("eyJ") + REMOVED
 
 
+def redacted(text: str) -> tuple[str, int]:
+    """The text with secrets removed, and how many places were removed."""
+    count = 0
+
+    def url(found: re.Match[str]) -> str:
+        nonlocal count
+        kept = plain_url(found)
+        count += kept != found.group()
+        return kept
+
+    text = URL.sub(url, text)
+    text, jwts = JWT.subn(no_jwt, text)
+    text, keys = PATTERNS.subn(REMOVED, text)
+    return text, count + jwts + keys
+
+
 def redact(text: str) -> str:
-    return PATTERNS.sub(REMOVED, JWT.sub(no_jwt, URL.sub(plain_url, text)))
+    return redacted(text)[0]

@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+import config_cases
 from conftest import EXAMPLE
 from scrimmage_core import config, plan
 from scrimmage_core.errors import ConfigError
@@ -488,3 +489,45 @@ def test_a_snapshot_priced_apart_from_its_family_has_its_own_row() -> None:
     assert table.price("gpt-4o-mini-2024-07-18", {}) == table.PRICES["gpt-4o-mini"]
     assert table.price("gpt-4.1-2025-04-14", {}) == table.PRICES["gpt-4.1"]
     assert table.price("gpt-4.1-mini-2025-04-14", {}) == table.PRICES["gpt-4.1-mini"]
+
+
+@pytest.mark.design("config.recorded_setting")
+def test_recorded_and_args_are_read_and_carried_by_the_plan(tmp_path: Path) -> None:
+    cfg = load_text(tmp_path, config_cases.RECORDED)
+    tool, mcp, web, hand = cfg.tests[0].mocks
+    assert (tool.recorded, tool.args) == (True, {"order_id": "1234"})
+    assert (mcp.recorded, mcp.args) == (True, {"q": "refunds"})
+    assert (web.recorded, web.args) == (True, None)
+    assert (hand.recorded, hand.args) == (False, None)
+    sent = plan.plan_for(cfg, plan.rows(cfg)[0], "run-1")
+    assert plan.Plan.from_json(sent.to_json()).mocks == sent.mocks
+    assert "recorded" not in plan.mock_json(hand)
+
+
+@pytest.mark.design("config.recorded_setting")
+@pytest.mark.parametrize("value", ['"yes"', "1", "[true]"])
+def test_a_recorded_value_that_is_not_true_or_false_is_rejected(tmp_path: Path, value: str) -> None:
+    text = config_cases.mock(f'call = "tool:t"\nreturns = 1\nrecorded = {value}\n')
+    with pytest.raises(ConfigError, match=r"\[\[test.mock\]\] 1 of 't' recorded: expected true"):
+        load_text(tmp_path, text)
+
+
+@pytest.mark.design("config.args_only_recorded")
+@pytest.mark.parametrize("recorded", ["", "recorded = false\n"])
+def test_args_on_a_mock_that_is_not_recorded_is_rejected(tmp_path: Path, recorded: str) -> None:
+    text = config_cases.mock(f'call = "tool:t"\nreturns = 1\n{recorded}args = {{a = 1}}\n')
+    with pytest.raises(ConfigError) as caught:
+        load_text(tmp_path, text)
+    message = str(caught.value)
+    assert "[[test.mock]] 1 of 't' args: works only on a mock with recorded = true" in message
+    assert "docs/configuration.md" in message
+
+
+@pytest.mark.design("config.args_only_recorded")
+def test_args_that_are_not_a_table_and_args_on_a_web_mock_are_rejected(tmp_path: Path) -> None:
+    text = config_cases.mock('call = "tool:t"\nreturns = 1\nrecorded = true\nargs = "a"\n')
+    with pytest.raises(ConfigError, match="args: expected a table of the call's arguments"):
+        load_text(tmp_path, text)
+    web = config_cases.mock('call = "http:a.acme"\nrecorded = true\nargs = {a = 1}\n')
+    with pytest.raises(ConfigError, match="args: unknown setting"):
+        load_text(tmp_path, web)

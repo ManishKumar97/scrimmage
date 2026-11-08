@@ -14,11 +14,14 @@ import socket
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol, cast
 
+from scrimmage_core import capture
 from scrimmage_core import decide as engine
 from scrimmage_core.errors import ScrimmageRefused, ScrimmageStopped, ScrimmageTimeLimit
 from scrimmage_core.plan import Plan
@@ -30,6 +33,11 @@ BLOB_CAP = 10 * 1024 * 1024  # a side-folder item keeps its first 10 MB and is m
 CLOSED = "a run that has ended"
 PLAN_RETRY_S = 1.0  # a failed plan fetch can take ten seconds, so not one per line
 COMMAND_CAP = 1000  # a process's line keeps this much of its command, which can hold a question
+# The process and call_id of the real tool call whose code is running, in a recording run.
+# A context variable follows await, the tasks made inside the tool and asyncio.to_thread,
+# which copy it, but not a thread or a pool the tool starts itself. A forked child inherits
+# it, so it holds the process too: a call in another process names no parent.
+PARENT: ContextVar[tuple[int, int] | None] = ContextVar("scrimmage_parent", default=None)
 
 
 class LineSink(Protocol):
@@ -49,15 +57,32 @@ def now_iso() -> str:
 
 
 def content(value: object) -> dict[str, object]:
-    """Hash, size and preview of a recorded value, with secrets removed first."""
-    text = value if isinstance(value, str) else json.dumps(value, default=repr, sort_keys=True)
-    text = redact(text)
+    """Hash, size and preview of a recorded value, with secrets removed first.
+
+    The call is only observed, so no value may fail it: one that holds itself, is nested
+    deeper than the stack, holds a lone surrogate or has a repr that fails is still
+    recorded, as far as it can be.
+    """
+    try:
+        text = value if isinstance(value, str) else json.dumps(value, default=shown, sort_keys=True)
+    except Exception as exc:  # a value that holds itself, nests too deep, or will not sort
+        text = f"<a {type(value).__name__} Scrimmage could not write as JSON: {type(exc).__name__}>"
+    # A lone surrogate, such as an undecodable byte in a file name, has no UTF-8 form.
+    text = redact(text).encode("utf-8", "backslashreplace").decode()
     data = text.encode()
     return {
         "sha256": hashlib.sha256(data).hexdigest(),
         "bytes": len(data),
         "preview": text[:PREVIEW],
     }
+
+
+def shown(value: object) -> str:
+    """An item JSON cannot hold, as its repr, or the plain object form if its repr fails."""
+    try:
+        return repr(value)
+    except Exception:
+        return object.__repr__(value)
 
 
 @dataclass
@@ -70,6 +95,8 @@ class Step:
     start: str
     started: float
     extra: dict[str, object] = field(default_factory=dict[str, object])
+    call_id: int | None = None  # in a recording run: this call's number in its process
+    parent: int | None = None  # the real tool call this one was made inside, if any
 
 
 def this_process() -> dict[str, object]:
@@ -87,6 +114,7 @@ class RunState:
         *,
         load: Callable[[], Plan] | None = None,
         tools: tuple[str, ...] = (),
+        blobs: BlobSink | None = None,
     ) -> None:
         """A child passes no plan: load fetches it, and tools names its gates until then."""
         self.child = plan is None
@@ -96,6 +124,7 @@ class RunState:
         self._try_again_at = 0.0
         self._plan_lock = threading.Lock()
         self.sink = sink
+        self.blobs = blobs  # where a recorded value's content goes
         self.listed = set(tools if plan is None else plan.tool_names())  # names gates will reach
         self.adapted: set[str] = set()  # names a framework's adapter has checked
         self.blocked: dict[str, str] = {}  # names a call could skip a gate by, and why
@@ -106,6 +135,7 @@ class RunState:
         self.model_calls = 0
         self.proc = this_process()
         self._seq = 0
+        self._ids = 0
         self._lock = threading.Lock()
         self._unannounced = self.child  # a child says what it is on its first line
         self.live: dict[int, Step] = {}  # calls decided and not yet finished
@@ -177,11 +207,49 @@ class RunState:
             return self._going(Step(call, decision, args, now_iso(), time.monotonic()))
 
     def _going(self, step: Step) -> Step:
+        """Track a call until it ends. Called with the lock held, so ids follow decisions."""
+        if self.recording:
+            self._ids += 1
+            inside = PARENT.get()
+            parent = inside[1] if inside is not None and inside[0] == os.getpid() else None
+            step.call_id, step.parent = self._ids, parent
         self.live[id(step)] = step
         return step
 
+    @property
+    def recording(self) -> bool:
+        """Whether this is a recording run. A child with no plan yet records nothing."""
+        plan = self._plan
+        return plan is not None and plan.record
+
+    def with_args(self, call: engine.Call, arguments: object) -> engine.Call:
+        """The call with its arguments as a recorded mock holds them, when one could match.
+
+        A plan with no recorded mock that has args never pays for the conversion.
+        """
+        if not any(mock.args is not None for mock in self.plan.mocks):
+            return call
+        return dataclasses.replace(call, args=capture.converted(arguments))
+
     def begin(self, name: str, args: dict[str, object]) -> Step:
-        return self.decide(engine.Call("tool", f"tool:{name}", name), args)
+        return self.decide(self.with_args(engine.Call("tool", f"tool:{name}", name), args), args)
+
+    def recorded(self, find: Callable[[], dict[str, object]]) -> dict[str, object]:
+        """A recorded field for a line. Recording only observes the call, so no failure in
+        it, Scrimmage's own included, may reach the agent: it is listed as unsavable."""
+        try:
+            return self.save(find())
+        except Exception as exc:
+            return capture.scrimmage_error(exc)
+
+    def save(self, doc: dict[str, object]) -> dict[str, object]:
+        """A recorded field for a line: the value and arguments go to the side folder."""
+        out = dict(doc)
+        for key in ("value", "args"):
+            if key in out:
+                text = json.dumps(out[key], ensure_ascii=False)  # plain refused surrogates
+                out[key] = kept_blob(text.encode(), self.blobs)
+        return out
 
     def passed(self, call: engine.Call) -> Step:
         """A call that is recorded but not decided, so it is not counted and cannot be refused."""
@@ -257,6 +325,7 @@ class RunState:
         self.child = True
         self.proc = this_process()
         self._seq = 0
+        self._ids = 0
         self.live = {}
         self._unannounced = True
         if self._plan is not None:
@@ -401,6 +470,10 @@ class RunState:
             line["reason"] = decision.reason or "unlisted"
         if mistake is not None:
             line["mistake"] = redact(mistake)
+        if step.call_id is not None:
+            line["call_id"] = step.call_id
+        if step.parent is not None:
+            line["parent"] = step.parent
         line.update({key: scrub(value) for key, value in step.extra.items()})
         write = step.call.kind == "http" and step.call.method not in engine.READ_METHODS
         # Nothing tells an MCP read from an MCP write, so a real one is kept as a write is.
@@ -414,7 +487,11 @@ def error_text(call: engine.Call, error: BaseException) -> str:
     """A web client's message can quote the URL or a header, so a web line keeps its type."""
     if call.kind == "http" and not isinstance(error, ScrimmageRefused):
         return type(error).__name__
-    return redact(f"{type(error).__name__}: {error}")
+    try:
+        message = str(error)
+    except Exception:  # an error whose own __str__ fails must not fail the call it observed
+        message = "its message could not be read"
+    return redact(f"{type(error).__name__}: {message}").encode("utf-8", "backslashreplace").decode()
 
 
 def scrub(value: object) -> object:
@@ -442,6 +519,33 @@ def blob(data: bytes, sink: BlobSink | None, total: int | None = None) -> dict[s
     if sink is not None and not sink.put_blob(sha, kept):
         entry["unsaved"] = True
     return entry
+
+
+def kept_blob(data: bytes, sink: BlobSink | None) -> dict[str, object]:
+    """A side-folder item whose every string is already cleaned, so it is kept exactly:
+    redacting the JSON text again could change what a mock built from it gives back."""
+    kept = data[:BLOB_CAP]
+    sha = hashlib.sha256(kept).hexdigest()  # the name of what is stored, as blob does
+    preview = data[: PREVIEW * 4].decode("utf-8", "ignore")[:PREVIEW]
+    entry: dict[str, object] = {"sha256": sha, "bytes": len(data), "preview": preview}
+    if len(data) > BLOB_CAP:
+        entry["cut"] = True
+    if sink is None or not sink.put_blob(sha, kept):
+        entry["unsaved"] = True
+    return entry
+
+
+@contextmanager
+def inside(step: Step) -> Generator[None]:
+    """While a real tool call runs, the calls it makes name it as their parent."""
+    if step.call_id is None:
+        yield
+        return
+    token = PARENT.set((os.getpid(), step.call_id))
+    try:
+        yield
+    finally:
+        PARENT.reset(token)
 
 
 _current: RunState | None = None

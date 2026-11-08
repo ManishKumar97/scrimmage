@@ -141,7 +141,36 @@ command = "python3 bot.py --question {question}"
 max_cost_usd = "none"
 """ + TEST.replace("Where is order 1234?", "Where is it?")
 
-GOOD = {"minimal": MINIMAL, "every_key": EVERY_KEY, "script": SCRIPT}
+# The mocks scrimmage record writes: each marked, the tool and MCP ones with their arguments.
+RECORDED = (
+    MINIMAL
+    + """
+[[test.mock]]
+call     = "tool:get_order"
+recorded = true
+args     = {order_id = "1234"}
+returns  = {status = "shipped"}
+
+[[test.mock]]
+call     = "mcp:docs/search"
+recorded = true
+args     = {q = "refunds"}
+returns  = "found"
+
+[[test.mock]]
+call     = "http:inventory.acme.internal"
+recorded = true
+method   = "GET"
+path     = "/stock/SKU-42"
+json     = {count = 12}
+
+[[test.mock]]
+call     = "tool:check_inventory"
+recorded = false
+returns  = "hand-written"
+"""
+)
+GOOD = {"minimal": MINIMAL, "every_key": EVERY_KEY, "script": SCRIPT, "recorded": RECORDED}
 
 
 @dataclass(frozen=True)
@@ -229,6 +258,23 @@ BAD = [
     Bad("model_mock", mock('call = "model"\nreturns = 1\n'), True),
     Bad("process_mock", mock('call = "process:python"\nreturns = 1\n'), True),
     Bad("unknown_label_kind", mock('call = "db:orders"\nreturns = 1\n'), True),
+    Bad("recorded_text", mock('call = "tool:t"\nreturns = 1\nrecorded = "yes"\n'), True),
+    Bad("web_recorded_number", mock('call = "http:a.acme"\nrecorded = 1\n'), True),
+    Bad("args_hand_written", mock('call = "tool:t"\nreturns = 1\nargs = {a = 1}\n'), True),
+    Bad(
+        "args_not_recorded",
+        mock('call = "tool:t"\nreturns = 1\nrecorded = false\nargs = {a = 1}\n'),
+        True,
+    ),
+    Bad(
+        "args_not_a_table",
+        mock('call = "tool:t"\nreturns = 1\nrecorded = true\nargs = [1]\n'),
+        True,
+    ),
+    Bad(
+        "mcp_args_hand_written", mock('call = "mcp:search"\nreturns = 1\nargs = {q = "a"}\n'), True
+    ),
+    Bad("web_mock_args", mock('call = "http:a.acme"\nrecorded = true\nargs = {q = "a"}\n'), True),
     Bad(
         "fault_not_a_fault",
         fault('call = "tool:get_order"\ndo = "explode"\nwhen = "first 1"\n'),

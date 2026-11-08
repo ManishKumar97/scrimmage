@@ -9,6 +9,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Literal
 
+from scrimmage_core import capture
 from scrimmage_core.config import Fault, Mock
 from scrimmage_core.labels import matches, matches_real
 from scrimmage_core.plan import Plan
@@ -26,6 +27,8 @@ class Call:
     key ties a retry to its first attempt: who sent it and what it sent, and model is the
     name in its body, or None when none can be read. For a web request, name is the path.
     For an MCP tool, the label names the server too and short is the label without it.
+    For a tool or MCP call, args is its arguments as a recorded mock holds them, set only
+    when the plan has such a mock; None when they are not known or cannot be held.
     """
 
     kind: Kind
@@ -37,6 +40,7 @@ class Call:
     key: str | None = None
     short: str | None = None
     model: str | None = None
+    args: object = None
 
 
 @dataclass(frozen=True)
@@ -58,10 +62,18 @@ def labelled(entry: Mock | Fault, call: Call) -> bool:
 
 
 def names(entry: Mock | Fault, call: Call) -> bool:
-    """Whether a mock or fault names this call exactly as it is written."""
+    """Whether a mock or fault names this call exactly as it is written.
+
+    A recorded mock with args names only a call whose arguments are type-strict equal to
+    them; any other call goes on to the next mock and then to the normal rule.
+    """
     if not labelled(entry, call):
         return False
-    return not isinstance(entry, Fault) or entry.model in (None, call.model)
+    if isinstance(entry, Mock):
+        return entry.args is None or (
+            call.args is not None and capture.differ(call.args, entry.args, "args") is None
+        )
+    return entry.model in (None, call.model)
 
 
 def unknowable(call: Call, plan: Plan) -> bool:

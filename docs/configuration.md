@@ -103,8 +103,30 @@ The record never holds `self` or `cls`, only the arguments after them.
 | `headers` | On a web request: extra reply headers, as a table of text. |
 | `json` | On a web request: the body, as JSON. |
 | `text` | On a web request: the body, as text. |
+| `recorded` | `true` marks a mock written from a recorded run, not by hand. Its only effect: if no run used it, the report gives a note, not a test mistake. `true` or `false`; `false` by default. |
+| `args` | On a tool or MCP mock with `recorded = true`: the arguments it answers, as a table, such as `{order_id = "1234"}`. Allowed only with `recorded = true`. |
 
 See [Web requests](web-requests.md) and [MCP tools](mcp.md).
+
+### Recorded mocks
+
+A mock with `recorded = true` and `args` answers only a call whose arguments equal its `args` exactly.
+The types must match too: `{order_id = "1234"}` answers `get_order("1234")`, not `get_order(1234)` or `get_order("5678")`.
+A call that does not match goes on to the next mock, then to the normal rule: it runs for real if it is under `real`, and is refused if it is not.
+So a mock written from one run never gives one order's data to a question about another.
+
+```toml
+[[test.mock]]
+call     = "tool:get_order"
+recorded = true
+args     = {order_id = "1234"}
+returns  = {order_id = "1234", status = "shipped", delivered = "Oct 30"}
+```
+
+A mock you write yourself has no `args`, and answers every call to its tool, as before.
+`args` on a mock without `recorded = true` is a mistake, exit code 2, so a hand-written mock keeps its meaning.
+An unused recorded mock is a note, because a later run that does not repeat a recorded call leaves it unused by design.
+An unused hand-written web or MCP mock is still a mistake, as its label may be misspelled.
 
 ## [[test.fault]]
 

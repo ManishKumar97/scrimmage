@@ -15,10 +15,10 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import Any, NoReturn
 
-from scrimmage_core import hooks, mocks
+from scrimmage_core import capture, hooks, mocks
 from scrimmage_core.config import Fault
 from scrimmage_core.errors import ScrimmageMockError
-from scrimmage_core.state import RunState, Step, current
+from scrimmage_core.state import RunState, Step, current, inside
 
 GATED = "__scrimmage_gate__"
 
@@ -118,6 +118,17 @@ def apply(state: RunState, step: Step, gated: Gated) -> object:
     return value
 
 
+def ended(state: RunState, step: Step, gated: Gated, result: object) -> None:
+    """Write a real call's line. A recording run keeps what a mock of it needs, or why not."""
+    if state.recording:
+        step.extra["recorded"] = state.recorded(
+            lambda: capture.tool_value(
+                result, gated.arguments, gated.tool, gated.shape, state.allowed
+            )
+        )
+    state.finish(step, result=result)
+
+
 def gate_with(tool: Callable[..., Any], describe: Describe) -> Callable[..., Any]:
     """A function of the same kind as the tool, sync or async, that follows the plan.
 
@@ -135,12 +146,12 @@ def gate_with(tool: Callable[..., Any], describe: Describe) -> Callable[..., Any
             if step.decision.action != "real":
                 return apply(state, step, gated)
             try:
-                with gated.during():
+                with inside(step), gated.during():
                     result = await tool(*args, **kwargs)
             except BaseException as exc:
                 state.finish(step, error=exc)
                 raise
-            state.finish(step, result=result)
+            ended(state, step, gated, result)
             return result
 
         return mark(async_gate)
@@ -155,12 +166,12 @@ def gate_with(tool: Callable[..., Any], describe: Describe) -> Callable[..., Any
         if step.decision.action != "real":
             return apply(state, step, gated)
         try:
-            with gated.during():
+            with inside(step), gated.during():
                 result = tool(*args, **kwargs)
         except BaseException as exc:
             state.finish(step, error=exc)
             raise
-        state.finish(step, result=result)
+        ended(state, step, gated, result)
         return result
 
     return mark(sync_gate)

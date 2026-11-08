@@ -39,11 +39,13 @@ AGENT_KEYS = {
 }
 RULE_KEYS = {"expect", "forbid", "pass_rate"}
 TEST_KEYS = {"name", "question", "mock", "fault", *RULE_KEYS}
-MOCK_KEYS = {"call", "returns", "type"}
-WEB_MOCK_KEYS = {"call", "method", "path", "status", "headers", "json", "text"}
+# recorded marks a mock scrimmage record wrote; args, on a recorded mock only, the arguments
+# it answers.
+MOCK_KEYS = {"call", "returns", "type", "recorded", "args"}
+WEB_MOCK_KEYS = {"call", "method", "path", "status", "headers", "json", "text", "recorded"}
 FAULT_KEYS = {"call", "do", "when", "raises", *RULE_KEYS}
 MODEL_FAULT_KEYS = {*FAULT_KEYS, "model"}
-MCP_MOCK_KEYS = {"call", "returns"}
+MCP_MOCK_KEYS = {"call", "returns", "recorded", "args"}
 MCP_FAULT_KEYS = {"call", "do", "when", *RULE_KEYS}
 WEB_FAULT_KEYS = {"call", "do", "when", "method", "path", *RULE_KEYS}
 # A mock's body is sent as written, so these could only make the reply lie about it.
@@ -79,6 +81,8 @@ class Mock:
     headers: tuple[tuple[str, str], ...] = ()
     json: object = None
     text: str | None = None
+    recorded: bool = False  # written by scrimmage record: unused, it is a note, not a mistake
+    args: dict[str, object] | None = None  # a recorded mock answers only these arguments
 
 
 @dataclass(frozen=True)
@@ -603,7 +607,34 @@ def read_web_mock(table: dict[str, object], call: str, where: str) -> Mock:
         headers.append((name, value))
     method, path = narrowing(table, where)
     body = text(table, "text", where) if "text" in table else None
-    return Mock(call, None, None, method, path, status, tuple(headers), table.get("json"), body)
+    recorded = read_recorded(table, where)
+    return Mock(
+        call, None, None, method, path, status, tuple(headers), table.get("json"), body, recorded
+    )
+
+
+def read_recorded(table: dict[str, object], where: str) -> bool:
+    recorded = table.get("recorded", False)
+    if not isinstance(recorded, bool):
+        raise ConfigError(f"{where} recorded: expected true or false, got {redact(repr(recorded))}")
+    return recorded
+
+
+def read_args(table: dict[str, object], recorded: bool, where: str) -> dict[str, object] | None:
+    """The arguments a recorded mock answers. A hand-written mock answers every call."""
+    if "args" not in table:
+        return None
+    if not recorded:
+        raise ConfigError(
+            f"{where} args: works only on a mock with recorded = true, as scrimmage record "
+            f"writes it; a mock you write answers every call to its tool; see {DOCS}"
+        )
+    args: object = table["args"]
+    if not isinstance(args, dict):
+        raise ConfigError(
+            f"{where} args: expected a table of the call's arguments, got {redact(repr(args))}"
+        )
+    return as_table(cast(object, args), f"{where} args")
 
 
 def read_mock(table: dict[str, object], where: str) -> Mock:
@@ -616,7 +647,9 @@ def read_mock(table: dict[str, object], where: str) -> Mock:
     kind = table.get("type")
     if kind is not None:
         kind = import_path(text(table, "type", where), f"{where} type")
-    return Mock(call, table["returns"], kind)
+    recorded = read_recorded(table, where)
+    args = read_args(table, recorded, where)
+    return Mock(call, table["returns"], kind, recorded=recorded, args=args)
 
 
 def read_fault(table: dict[str, object], where: str) -> Fault:
