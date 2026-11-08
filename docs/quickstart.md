@@ -101,7 +101,7 @@ First check the file. This runs nothing and costs nothing:
 scrimmage check
 ```
 
-```text
+```text title="Output"
 scrimmage check: scrimmage.toml is valid: 1 test, 2 rows, 6 runs, 4 tools, a budget of $5
 ```
 

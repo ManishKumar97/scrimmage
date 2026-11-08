@@ -2,7 +2,8 @@
 
 A page's code blocks with a title are its files: `title="shop/agent.py"` writes that file,
 and a `diff` block changes the file it names. A block titled "Output" is what
-`scrimmage test` prints at that point, so each one runs the test and compares, line by line.
+the command in the block before it prints, `scrimmage test` or `scrimmage check`, so each
+one runs that command and compares, line by line.
 The model is the fake OpenAI server, scripted per page below, so no key is needed.
 """
 
@@ -15,9 +16,9 @@ from pathlib import Path
 import pytest
 
 from conftest import ACME, EXAMPLE
+from fakes.openai_server import FakeOpenAI
 from scrimmage_core.cli import main
 from scrimmage_core.runner import MISTAKE, OK, ROW_FAILED
-from fakes.openai_server import FakeOpenAI
 
 DOCS = Path(__file__).parents[1] / "docs"
 OUTPUT = "Output"
@@ -37,7 +38,7 @@ class Example:
 # The bot asks for the order, then answers, or says it could not if the tool failed.
 ONE_TOOL = ["acme_get_order", "acme_answer|acme_admits"]
 EXAMPLES = {
-    "quickstart.md": Example(ACME, [OK, ROW_FAILED, OK], start=EXAMPLE),
+    "quickstart.md": Example(ACME, [OK, OK, ROW_FAILED, OK], start=EXAMPLE),
     "examples/function-agent.md": Example(ONE_TOOL, [OK]),
     "examples/script-agent.md": Example(ONE_TOOL, [MISTAKE, OK], base="examples/function-agent.md"),
     "examples/langgraph.md": Example(ONE_TOOL, [ROW_FAILED, OK]),
@@ -111,13 +112,21 @@ def test_the_page_runs_and_prints_what_it_shows(
     monkeypatch.setenv("OPENAI_API_KEY", "test")
     monkeypatch.chdir(root)
     codes: list[int] = []
-    for block in blocks(name):
+    command: list[str] = []
+    for lang, title, body in FENCE.findall((DOCS / name).read_text()):
+        if lang == "bash":
+            shown = [line for line in body.splitlines() if line.startswith("scrimmage ")]
+            command = shown[-1].split()[1:] if shown else command
+            continue
+        if not title:
+            continue
+        block = Block(lang, title, body)
         if block.title != OUTPUT:
             apply(root, block)
             continue
         with_fake_host(root / "scrimmage.toml")
         capsys.readouterr()
-        codes.append(main(["test"]))
+        codes.append(main(command))
         out = capsys.readouterr().out
         assert normal(out) == normal(block.body), f"{name}, Output {len(codes)}:\n{out}"
     assert codes == example.codes

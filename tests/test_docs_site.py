@@ -108,9 +108,10 @@ def test_every_scrimmage_command_on_a_run_page_is_the_one_the_harness_runs() -> 
         for i, (lang, title, body) in enumerate(blocks):
             if lang == "bash":
                 commands = [line for line in body.splitlines() if line.startswith("scrimmage")]
-                assert commands in ([], ["scrimmage test"]), (name, body)
+                assert commands in ([], ["scrimmage test"], ["scrimmage check"]), (name, body)
             if title == OUTPUT:
-                assert blocks[i - 1][:3:2] == ("bash", "scrimmage test\n"), (name, i)
+                assert blocks[i - 1][0] == "bash", (name, i)
+                assert blocks[i - 1][2] in ("scrimmage test\n", "scrimmage check\n"), (name, i)
 
 
 def test_the_quickstart_installs_as_the_install_page_says() -> None:
