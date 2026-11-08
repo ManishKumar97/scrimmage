@@ -433,7 +433,9 @@ def test_a_read_timeout_over_https_is_the_same_real_or_injected(
     lib: Any, tls_web: tuple[Web, ssl.SSLContext]
 ) -> None:
     server, trust = tls_web
-    with lib.Client(verify=trust, timeout=0.2) as client:
+    # Only the read is timed: the server never answers /hang. The TLS handshake is in
+    # connect, which a loaded machine can slow past 0.2 s, and that would be ConnectTimeout.
+    with lib.Client(verify=trust, timeout=lib.Timeout(60, read=0.2)) as client:
         real = outcome(lambda: client.get(server.url("/hang")))
     sink = gate(lib, faults=(on_local("timeout"),))
     with lib.Client(verify=trust) as client:

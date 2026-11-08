@@ -8,11 +8,14 @@ import os
 import httpx
 
 BASE = os.environ.get("INVENTORY_URL", "https://inventory.acme.internal")
+# In a test the service is a local server, which a loaded machine can keep for seconds. A
+# timeout here would fail a run for the clock, so it is far longer than any answer takes.
+TIMEOUT_S = 60
 
 
 def check_inventory(sku: str) -> str:
     try:
-        reply = httpx.get(f"{BASE}/stock/{sku}", timeout=2)
+        reply = httpx.get(f"{BASE}/stock/{sku}", timeout=TIMEOUT_S)
         reply.raise_for_status()
     except httpx.HTTPError as exc:
         return f"inventory unavailable: {type(exc).__name__}"
@@ -78,4 +81,5 @@ def answer_report(question: str) -> str:
 
 
 def answer_two_paths(question: str) -> str:
-    return httpx.get(f"{BASE}/stock/SKU-42").text + httpx.get(f"{BASE}/stock/SKU-99").text
+    first = httpx.get(f"{BASE}/stock/SKU-42", timeout=TIMEOUT_S)
+    return first.text + httpx.get(f"{BASE}/stock/SKU-99", timeout=TIMEOUT_S).text
