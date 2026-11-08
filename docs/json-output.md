@@ -183,7 +183,7 @@ SIGKILL cannot be caught, so it leaves no document.
 
 | Field | Meaning |
 |---|---|
-| `out` | The file written, whole. `null` means nothing was written, and the reason is in `mistakes` or `infra`. |
+| `out` | The file written, whole. `null` means nothing was written. The reason is in `mistakes` or `infra`, or, for a record with no mocks that keeps an earlier file, in `notes`, and that alone does not change the exit code, so it can be 0 and `complete`. |
 | `records` | The folder that holds this record's run, or `null` when no run started. |
 | `cost_usd` | What the model calls cost, in dollars. |
 | `numbers` | `calls_seen`, the real tool, MCP and web calls that no other call made, less the credential requests. `calls_written`, those whose level was written whole. |

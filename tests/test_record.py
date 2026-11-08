@@ -1838,3 +1838,55 @@ def answer(question):
     done = team.record()
     assert done.code == 3 and not team.out_path.exists(), done.out
     assert any("nothing was written" in i["message"] for i in done.doc["infra"])
+
+
+def test_a_json_text_secret_in_an_argument_is_in_no_comment_and_no_output(team: Team) -> None:
+    team.write(
+        """
+def a8(a):
+    return "seen"
+
+def answer(question):
+    a8(json.dumps({"password": "hunterK"}))
+    return "ok"
+""",
+        ["bot:a8"],
+        ("tool:a8",),
+    )
+    done = team.record()
+    assert done.code == 1, done.out
+    assert [m["call"] for m in done.manual("secret_changed_shape")] == ["tool:a8"]
+    assert "hunterK" not in team.out_path.read_text() and "hunterK" not in done.out
+    assert "# tool:a8 with" not in team.out_path.read_text()
+    code, out = team.record_text()
+    assert code == 1 and "hunterK" not in out
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {"body": json.dumps({"password": "hunterW"})},
+        [json.dumps({"api_key": "hunterW"}), "plain"],
+    ],
+    ids=["dict", "list"],
+)
+def test_a_json_web_reply_is_checked_for_json_text_inside_it(team: Team, reply: object) -> None:
+    team.service.json("/wrapped", reply)
+    team.write(
+        """
+def wrapped(name):
+    http_get("/wrapped")
+    return "seen"
+
+def answer(question):
+    wrapped("x")
+    return "ok"
+""",
+        ["bot:wrapped"],
+        ("tool:wrapped",),
+    )
+    done = team.record()
+    assert done.code == 1, done.out
+    assert [m["path"] for m in done.manual("secret_changed_shape")] == ["/wrapped"]
+    assert "hunterW" not in team.out_path.read_text()
+    assert not any(m.get("path") == "/wrapped" for m in done.mocks())

@@ -395,6 +395,13 @@ def web_body(
         return removed, text_form(fields, body, kind)
     cleaned, more = capture.clean(parsed)
     all_removed = removed + more
+    where = capture.embedded_secret(cleaned)
+    if where is not None:
+        return all_removed, Listed(
+            SECRET_CHANGED_SHAPE,
+            f"a JSON text inside its body holds a secret (under {where}), and an exact text "
+            "cannot be cleaned",
+        )
     if not toml_can_hold(cleaned):
         if all_removed:
             return all_removed, Listed(
@@ -780,7 +787,8 @@ class Recorder:
 
 def shown_arguments(line: Line) -> str | None:
     """A call's arguments for a skeleton's comment, cleaned by both rules. A preview that was
-    cut is left out, as its text could stop in the middle of a secret with no key to name it."""
+    cut is left out, as its text could stop in the middle of a secret with no key to name it,
+    and so are arguments with a secret in JSON text, which no rule can take out of a string."""
     preview = cast(Fields, line.get("args") or {}).get("preview")
     if not isinstance(preview, str):
         return None
@@ -789,6 +797,8 @@ def shown_arguments(line: Line) -> str | None:
     except ValueError:
         return None
     cleaned, _ = capture.clean(parsed)
+    if capture.embedded_secret(cleaned) is not None:
+        return None
     return shown(json.dumps(cleaned, ensure_ascii=False, sort_keys=True))
 
 
