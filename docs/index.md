@@ -131,4 +131,4 @@ and it judges each answer with rules you write, over repeated runs.
 - [Install](install.md), then the [Quickstart](quickstart.md): a failing row, then a fix.
 - [Examples](examples/index.md): scripts, LangGraph, MCP, web requests, judging and one model.
 - [Safety](safety.md) and [Security](security.md): what a test can and cannot do to your systems and data.
-- [Configuration](configuration.md) and [Commands](cli.md): the reference.
+- [Configuration](configuration.md), [Commands](cli.md) and [JSON output](json-output.md): the reference.

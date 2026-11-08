@@ -94,6 +94,7 @@ nav:
       - Judging an answer: judging.md
   - Reference:
       - Commands: cli.md
+      - JSON output: json-output.md
       - Configuration: configuration.md
       - Schemas: schemas.md
       - Limits: limits.md
