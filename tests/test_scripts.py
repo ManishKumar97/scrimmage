@@ -1266,6 +1266,37 @@ def test_a_model_call_going_on_at_the_time_limit_is_a_time_out_not_a_failure(
     assert result.finished
 
 
+@pytest.mark.design("stop.sdk_threads_deaf")
+def test_a_sigterm_the_main_thread_cannot_take_is_left_to_it_not_to_an_sdk_thread(
+    project: Project,
+) -> None:
+    """Linux gives a signal sent to the process to a thread that does not block it, and can
+    pass over a main thread off the CPU. Before, the SDK's sender thread took it, and a
+    main thread blocked in a call that never ends never ran the handler: the call in flight
+    had no line, and the run ended in SIGKILL.
+
+    The program's main thread blocks SIGTERM, so the kernel must give it to another thread
+    at once. The SDK's handler then runs only if some other thread took it: the main thread
+    runs it as soon as one has. No SDK thread may, so the handler never runs and the signal
+    waits for the main thread. The 2 s wait only gives a broken build time to show itself:
+    with the fix the answer does not depend on it.
+    """
+    code = (
+        "import os, signal, time\n"
+        "sdk = signal.getsignal(signal.SIGTERM)  # the SDK's handler\n"
+        "signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})\n"
+        "os.kill(os.getpid(), signal.SIGTERM)  # to the process, as the runner sends it\n"
+        "end = time.monotonic() + 2\n"
+        "while signal.getsignal(signal.SIGTERM) is sdk and time.monotonic() < end:\n"
+        "    time.sleep(0.05)\n"
+        "ran = signal.getsignal(signal.SIGTERM) is not sdk\n"
+        "print('handler ran' if ran else 'still waiting')\n"
+    )
+    result = script(project, code)
+    assert summary_of(result)["answer"] == "still waiting", result.out
+    assert summary_of(result)["outcome"] == "answered"
+
+
 def pids_in(path: Path) -> list[int]:
     return [int(word) for word in path.read_text().split()]
 

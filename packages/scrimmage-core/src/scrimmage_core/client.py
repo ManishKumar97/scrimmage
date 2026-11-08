@@ -20,7 +20,7 @@ from collections import deque
 from collections.abc import Callable
 from urllib.parse import urlsplit
 
-from scrimmage_core import protocol
+from scrimmage_core import protocol, threads
 from scrimmage_core.budget import Held, Shortfall
 from scrimmage_core.plan import items, number, obj
 
@@ -164,7 +164,7 @@ class Sender:
         self._thread = threading.Thread(target=self._loop, name="scrimmage-sender", daemon=True)
 
     def start(self) -> None:
-        self._thread.start()
+        threads.start(self._thread)
 
     def forked(self, proc: object) -> None:
         """This process is a copy of its parent. The lines waiting are the parent's to send,

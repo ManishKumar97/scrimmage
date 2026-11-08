@@ -26,7 +26,7 @@ from contextvars import ContextVar
 from types import ModuleType
 from typing import Any, NoReturn, Protocol
 
-from scrimmage_core import credentials, hooks
+from scrimmage_core import credentials, hooks, threads
 from scrimmage_core import provider_openai as openai_table
 from scrimmage_core.budget import Held, Shortfall
 from scrimmage_core.client import ControlError
@@ -723,7 +723,7 @@ async def ask_off_the_loop(
 def give_up(ctx: Context, ticket: int | None) -> None:
     """Hand back a ticket off the caller's thread or loop. If it is lost, it goes stale."""
     if ticket is not None:
-        threading.Thread(target=ctx.client.release, args=(ticket,), daemon=True).start()
+        threads.start(threading.Thread(target=ctx.client.release, args=(ticket,), daemon=True))
 
 
 def abandoned(ctx: Context, step: Step, extra: dict[str, object], reservation: int | None) -> None:
