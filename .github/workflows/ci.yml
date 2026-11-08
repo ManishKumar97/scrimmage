@@ -95,14 +95,23 @@ jobs:
       - run: uv sync
       - name: Check the job runs the Python it names
         run: uv run python -c "import sys; v = '.'.join(map(str, sys.version_info[:2])); assert v == '${{ matrix.python }}', v"
+      # Python 3.11's sys.settrace raises RuntimeError in a thread that starts while another
+      # thread is in a Python audit hook (gh-98257, fixed in 3.12), and coverage calls it as
+      # each thread starts. So 3.11 runs every test with no tracer, and coverage is measured
+      # on 3.12 and later. The product has no code that only 3.11 runs.
+      - name: Tests, with no coverage tracer
+        if: matrix.python == '3.11'
+        run: uv run pytest
       # pytest runs one worker per CPU (-n auto in pyproject.toml). Coverage follows
       # each worker and each child process; combine merges every data file.
       - name: Tests, measuring coverage in every process
+        if: matrix.python != '3.11'
         run: |
           uv run coverage run -m pytest
           uv run coverage combine
           mv .coverage ".coverage.py${{ matrix.python }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: matrix.python != '3.11'
         with:
           name: coverage-${{ matrix.python }}
           path: .coverage.py${{ matrix.python }}

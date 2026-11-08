@@ -20,7 +20,9 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CreateMessageResult, EmptyResult, PromptReference, Request, TextContent
 
-LIMIT = float(os.environ.get("DOCS_TIMEOUT", "20"))
+# A test of a real timeout sets 1 s against a server that sleeps 30 s. Any other call gets
+# 60 s, so a server slowed by a loaded machine is not taken for one that hangs.
+LIMIT = float(os.environ.get("DOCS_TIMEOUT", "60"))
 TOOL = os.environ.get("DOCS_TOOL", "search")
 
 

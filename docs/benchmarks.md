@@ -32,4 +32,5 @@ Run each command from the root of a clone, after `uv sync`.
 | The fake model's replies against real ones | Every field the fake model server sends is in a reply saved from a real call to OpenAI | `uv run pytest -n0 tests/test_fixtures_match_real.py` |
 | The pages of this site | Every example and the quickstart run, and print what their pages show | `uv run pytest -n0 tests/test_docs_examples.py` |
 
-The suite also requires at least 95% branch coverage of the product code, measured in every process a test starts, across Python 3.11 to 3.14.
+The suite also requires at least 95% branch coverage of the product code, measured in every process a test starts, across Python 3.12 to 3.14.
+Python 3.11 runs every test with no coverage tracer, as its `sys.settrace` can fail in a new thread while another thread is in an audit hook.

@@ -8,11 +8,12 @@ dependencies = ["scrimmage-core", "scrimmage"]
 package = false
 
 [tool.uv.workspace]
-members = ["packages/*"]
+members = ["packages/*", "tools/coverage-threads"]
 
 [tool.uv.sources]
 scrimmage-core = { workspace = true }
 scrimmage = { workspace = true }
+coverage-threads = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -26,6 +27,7 @@ dev = [
     "jsonschema>=4.26",
     "pytest-cov>=7.1",
     "coverage>=7.17",
+    "coverage-threads",
     "langgraph>=1.2",
     "langchain-core>=1.7",
     "langchain-openai>=1.7",
@@ -61,7 +63,7 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
 "vulture_allowlist.py" = ["B018"]
 
 [tool.pyright]
-include = ["packages/scrimmage-core/src", "packages/scrimmage/src", "tests"]
+include = ["packages/scrimmage-core/src", "packages/scrimmage/src", "tools", "tests"]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
 # Product code is strict. A gate or adapter module, which reaches into a library's
@@ -69,7 +71,7 @@ typeCheckingMode = "standard"
 strict = ["packages/scrimmage-core/src", "packages/scrimmage/src"]
 
 [tool.vulture]
-paths = ["packages/scrimmage-core/src", "packages/scrimmage/src", "tests", "vulture_allowlist.py"]
+paths = ["packages/scrimmage-core/src", "packages/scrimmage/src", "tools", "tests", "vulture_allowlist.py"]
 # 60, not 80: vulture rates every unused function and method at 60.
 min_confidence = 60
 
@@ -95,6 +97,8 @@ branch = true
 source_pkgs = ["scrimmage_core"]
 # The SDK runs inside each run's own program, so measure child processes too.
 patch = ["subprocess"]
+# Keeps coverage from deleting a module another thread is importing: see its docstring.
+plugins = ["coverage_threads"]
 parallel = true
 relative_files = true
 
