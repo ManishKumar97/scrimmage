@@ -71,6 +71,7 @@ def test_every_notice_the_product_writes_fits_the_schema() -> None:
 
 
 @pytest.mark.design("web.use_case")
+@pytest.mark.slow
 def test_a_mocked_reply_a_503_and_a_timeout_reach_the_tools_own_handling(project: Project) -> None:
     result = run(project, "acme.web:answer", JSON_MOCK + OUTAGE + TIMEOUT)
     assert result.finished, result.out + result.err
@@ -85,6 +86,7 @@ def test_a_mocked_reply_a_503_and_a_timeout_reach_the_tools_own_handling(project
 
 
 @pytest.mark.design("web.post_refused_e2e")
+@pytest.mark.slow
 def test_a_post_to_a_payments_host_is_refused(project: Project) -> None:
     result = run(project, "acme.web:answer_refund", "")
     assert result.code == 2
@@ -96,6 +98,7 @@ def test_a_post_to_a_payments_host_is_refused(project: Project) -> None:
 
 
 @pytest.mark.design("web.two_levels_mixed")
+@pytest.mark.slow
 def test_a_tool_mock_and_a_web_fault_on_the_same_tool_is_a_test_mistake(project: Project) -> None:
     tools = 'tools = ["acme.web:check_inventory"]'
     body = '[[test.mock]]\ncall = "tool:check_inventory"\nreturns = "12 in stock"\n' + OUTAGE
@@ -106,6 +109,7 @@ def test_a_tool_mock_and_a_web_fault_on_the_same_tool_is_a_test_mistake(project:
 
 
 @pytest.mark.design("web.near_mock_warning")
+@pytest.mark.slow
 def test_a_real_request_to_a_mocked_host_is_a_warning(
     project: Project, web: "Web", monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -118,6 +122,7 @@ def test_a_real_request_to_a_mocked_host_is_a_warning(
 
 
 @pytest.mark.design("web.unused_narrow_mock")
+@pytest.mark.slow
 def test_a_web_mock_nothing_used_is_a_test_mistake(project: Project) -> None:
     other = f'[[test.mock]]\ncall = "{LABEL}"\npath = "/never"\ntext = "x"\n'
     result = run(project, "acme.web:answer", JSON_MOCK + other)
@@ -126,6 +131,7 @@ def test_a_web_mock_nothing_used_is_a_test_mistake(project: Project) -> None:
     fits_the_schema(result)
 
 
+@pytest.mark.slow
 def test_an_unused_web_mock_is_a_test_mistake_with_a_tools_list_too(project: Project) -> None:
     typo = '[[test.mock]]\ncall = "http:inventory.acme.intenral"\ntext = "x"\n'
     tools = 'tools = ["acme.web:check_inventory"]\nreal = ["tool:check_inventory"]'
@@ -134,6 +140,7 @@ def test_an_unused_web_mock_is_a_test_mistake_with_a_tools_list_too(project: Pro
     assert "no request matched the mock on http:inventory.acme.intenral" in result.out
 
 
+@pytest.mark.slow
 def test_a_misspelled_host_in_a_web_mock_is_a_test_mistake(project: Project) -> None:
     typo = '[[test.mock]]\ncall = "http:inventory.acme.intenral"\ntext = "x"\n'
     result = run(project, "acme.web:answer", JSON_MOCK + typo)
@@ -141,6 +148,7 @@ def test_a_misspelled_host_in_a_web_mock_is_a_test_mistake(project: Project) -> 
     assert "no request matched the mock on http:inventory.acme.intenral" in result.out
 
 
+@pytest.mark.slow
 def test_a_web_mock_shadowed_by_an_earlier_one_is_a_test_mistake(project: Project) -> None:
     second = f'[[test.mock]]\ncall = "{LABEL}"\ntext = "x"\n'
     result = run(project, "acme.web:answer", JSON_MOCK + second)
@@ -149,6 +157,7 @@ def test_a_web_mock_shadowed_by_an_earlier_one_is_a_test_mistake(project: Projec
 
 
 @pytest.mark.design("web.record_clean")
+@pytest.mark.slow
 def test_no_header_cookie_or_query_value_reaches_the_record(project: Project) -> None:
     result = run(project, "acme.web:answer_report", JSON_MOCK)
     assert result.code == 0, result.out + result.err
@@ -166,6 +175,7 @@ def recorded(project: Project) -> str:
 
 
 @pytest.mark.design("web.error_text_clean")
+@pytest.mark.slow
 def test_a_query_in_an_error_reaches_no_record_through_the_answer(project: Project) -> None:
     result = run(project, "acme.web:answer_with_its_error", OUTAGE)
     assert result.finished, result.out + result.err
@@ -174,6 +184,7 @@ def test_a_query_in_an_error_reaches_no_record_through_the_answer(project: Proje
 
 
 @pytest.mark.design("web.error_text_clean")
+@pytest.mark.slow
 def test_a_query_in_an_error_reaches_no_record_through_a_tool_line(project: Project) -> None:
     tools = 'tools = ["acme.web:strict_lookup"]\nreal = ["tool:strict_lookup"]'
     result = run(project, "acme.web:answer_through_a_strict_tool", JSON_MOCK + OUTAGE, tools)
@@ -184,6 +195,7 @@ def test_a_query_in_an_error_reaches_no_record_through_a_tool_line(project: Proj
 
 
 @pytest.mark.design("web.error_text_clean")
+@pytest.mark.slow
 def test_a_bad_header_reaches_no_record(
     project: Project, web: "Web", monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -196,6 +208,7 @@ def test_a_bad_header_reaches_no_record(
 
 @pytest.mark.design("web.real_failure_not_infrastructure")
 @pytest.mark.parametrize("path", ["/down", ""])
+@pytest.mark.slow
 def test_a_real_web_failure_is_the_tools_to_handle_not_an_infrastructure_error(
     project: Project, web: "Web", monkeypatch: pytest.MonkeyPatch, path: str
 ) -> None:

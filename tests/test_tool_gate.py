@@ -387,6 +387,7 @@ def test_errors_and_mistakes_are_redacted(lines: Lines) -> None:
 
 
 @pytest.mark.design("boot.fork_no_faults")
+@pytest.mark.slow
 def test_a_forked_child_fires_no_faults(lines: Lines) -> None:
     import os
 

@@ -335,6 +335,7 @@ TOOLKIT = (
 
 
 @pytest.mark.design("method.end_to_end")
+@pytest.mark.slow
 def test_a_toolkit_agent_runs_with_its_methods_mocked_faulted_and_kept_secret(
     project: Project, fake_openai: Fake
 ) -> None:

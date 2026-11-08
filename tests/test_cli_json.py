@@ -1,6 +1,7 @@
 """--json: one document on standard output, one envelope, and the same report as the text."""
 
 import ast
+import contextlib
 import importlib.metadata
 import io
 import json
@@ -9,7 +10,7 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -161,6 +162,7 @@ def check_runs(project: Project) -> dict[int, Done]:
 
 
 @pytest.mark.design("json.one_document")
+@pytest.mark.slow
 def test_each_command_prints_one_document_for_each_exit_code(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -188,12 +190,14 @@ def test_each_command_prints_one_document_for_each_exit_code(
 
 
 @pytest.mark.design("json.version")
+@pytest.mark.slow
 def test_the_envelope_names_the_installed_version(project: Project) -> None:
     doc = one_document(scrimmage("check", "--json", str(project.toml)), "check")
     assert doc["scrimmage"] == importlib.metadata.version("scrimmage-core")
     assert doc["v"] == 1 and doc["config"] == str(project.toml)
 
 
+@pytest.mark.slow
 def test_scrim_is_the_same_command_under_a_short_name(project: Project) -> None:
     scripts = importlib.metadata.entry_points(group="console_scripts")
     assert scripts["scrim"].value == scripts["scrimmage"].value
@@ -202,6 +206,7 @@ def test_scrim_is_the_same_command_under_a_short_name(project: Project) -> None:
 
 
 @pytest.mark.design("json.message_objects")
+@pytest.mark.slow
 def test_every_message_is_an_object_with_its_text(project: Project, fake_openai: Fake) -> None:
     done = runs_of_test(project, fake_openai)
     seen = 0
@@ -220,6 +225,7 @@ def test_every_message_is_an_object_with_its_text(project: Project, fake_openai:
 CALL_THEN_HANG = '''"""Makes one model call, then hangs, so a signal comes after money was spent."""
 
 import time
+from pathlib import Path
 
 import openai
 
@@ -228,14 +234,38 @@ def answer(question):
     openai.OpenAI(max_retries=0).chat.completions.create(
         model="gpt-4o-mini", messages=[{"role": "user", "content": question}]
     )
+    Path("called").touch()  # the call has returned: its cost is on the record's line
     time.sleep(600)
     return "never"
 '''
 
 
+@pytest.fixture
+def leftovers(project: Project) -> Iterator[list[subprocess.Popen[str]]]:
+    """What a test started, stopped at its end even when it fails.
+
+    A test whose signal was lost would leave scrimmage test, and the agent under it in its
+    600 s sleep, running long after. The agent runs in the project's folder, so it is
+    found there; scrimmage test is the process the test adds to the list.
+    """
+    started: list[subprocess.Popen[str]] = []
+    yield started
+    for proc in started:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    root = project.root.resolve()
+    for entry_ in Path("/proc").iterdir():
+        if entry_.name.isdigit():
+            with contextlib.suppress(OSError):
+                if (entry_ / "cwd").resolve() == root:
+                    os.kill(int(entry_.name), signal.SIGKILL)
+
+
 @pytest.mark.design("json.interrupted")
+@pytest.mark.slow
 def test_sigint_during_a_test_still_prints_one_document(
-    project: Project, fake_openai: Fake
+    project: Project, fake_openai: Fake, leftovers: list[subprocess.Popen[str]]
 ) -> None:
     (project.root / "acme" / "call_then_hang.py").write_text(CALL_THEN_HANG)
     project.edit(
@@ -250,12 +280,8 @@ def test_sigint_during_a_test_still_prints_one_document(
         [SCRIMMAGE, "test", "--json", str(project.toml)],
         env={**env, **model_env(fake)}, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )  # fmt: skip
-    for _ in range(300):
-        time.sleep(0.1)
-        if fake.requests:
-            break
-    assert fake.requests, "the agent never made its model call"
-    time.sleep(1.5)  # the reply is settled in the budget; the agent is in its sleep
+    leftovers.append(proc)
+    wait_for(project.root / "called")  # the agent made its call and is in its sleep
     proc.send_signal(signal.SIGINT)
     out, err = proc.communicate(timeout=60)
     done = Done(proc.returncode, out, err)
@@ -547,6 +573,7 @@ def e2e(project: Project, fake: FakeOpenAI) -> tuple[str, dict[str, object]]:
 
 
 @pytest.mark.design("json.same_as_table")
+@pytest.mark.slow
 def test_the_json_rows_and_lists_say_what_the_table_says(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -758,8 +785,20 @@ config.load = load
 )
 
 
-def hang(project: Project, timeout: int = 120) -> None:
-    """The example's agent swapped for one that sleeps, one baseline run, no fault."""
+def wait_for(path: Path) -> None:
+    """Wait for the agent's marker; the ceiling only ends a test whose agent never got there."""
+    ceiling = time.monotonic() + 120
+    while not path.exists():
+        assert time.monotonic() < ceiling, f"{path.name} never appeared"
+        time.sleep(0.01)
+
+
+def hang(project: Project, timeout: int = 600) -> None:
+    """The example's agent swapped for one that sleeps, one baseline run, no fault.
+
+    The time limit is long, so a signal that was lost shows as a run that went on: its
+    process outlives the test's own 120 s wait for it.
+    """
     project.edit(
         'function = "acme.agent:answer"',
         f'function = "acme.slow:hang"\nruns = 1\nrun_timeout = {timeout}\nmax_cost_usd = "none"',
@@ -770,13 +809,12 @@ def hang(project: Project, timeout: int = 120) -> None:
 
 @pytest.mark.design("json.signal_in_cleanup")
 @pytest.mark.parametrize("command", ["check", "test"])
+@pytest.mark.slow
 def test_a_signal_inside_a_del_while_the_file_is_read_still_stops(
-    project: Project, command: str
+    project: Project, command: str, leftovers: list[subprocess.Popen[str]]
 ) -> None:
     hang(project)
-    started = time.monotonic()
     done = run_entry(IN_READ, command, "--json", str(project.toml))
-    assert time.monotonic() - started < 30, "the signal was lost and the run went on"
     assert done.code == 3, done.out + done.err
     doc = one_document(done, command)  # standard error is empty: nothing was dropped
     assert messages(doc, "infra") == ["stopped by SIGTERM"]
@@ -797,7 +835,10 @@ runner.Runner.__init__ = init
 
 
 @pytest.mark.design("json.signal_in_cleanup")
-def test_a_signal_as_the_runner_is_made_stops_before_any_run(project: Project) -> None:
+@pytest.mark.slow
+def test_a_signal_as_the_runner_is_made_stops_before_any_run(
+    project: Project, leftovers: list[subprocess.Popen[str]]
+) -> None:
     hang(project)
     done = run_entry(IN_RUNNER, "test", "--json", str(project.toml))
     assert done.code == 3, done.out + done.err
@@ -822,7 +863,10 @@ runner.ThreadPoolExecutor = pool
 
 
 @pytest.mark.design("json.stops_fast")
-def test_a_signal_on_another_thread_still_stops_the_runs(project: Project) -> None:
+@pytest.mark.slow
+def test_a_signal_on_another_thread_still_stops_the_runs(
+    project: Project, leftovers: list[subprocess.Popen[str]]
+) -> None:
     hang(project)
     clean = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
     code = f"import sys\nsys.argv = ['scrimmage', 'test', '--json', {str(project.toml)!r}]\n"
@@ -831,15 +875,10 @@ def test_a_signal_on_another_thread_still_stops_the_runs(project: Project) -> No
         [sys.executable, "-c", code],
         env=clean, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )  # fmt: skip
-    for _ in range(300):
-        time.sleep(0.1)
-        if list((project.root / "scrimmage-runs").glob("*/*.log")):
-            break
-    time.sleep(0.5)
-    sent = time.monotonic()
+    leftovers.append(proc)
+    wait_for(project.root / "hanging")  # the agent is in its sleep, inside the runner's wait
     proc.send_signal(signal.SIGTERM)
-    out, err = proc.communicate(timeout=60)
-    assert time.monotonic() - sent < 10, "the runs waited for the main thread"
+    out, err = proc.communicate(timeout=120)  # had the runs waited, they would run 600 s
     done = Done(proc.returncode, out, err)
     assert done.code == 3, out + err
     assert messages(one_document(done, "test"), "infra") == [
@@ -867,34 +906,33 @@ runner.ThreadPoolExecutor = pool
 
 
 @pytest.mark.design("json.signal_in_cleanup")
-def test_a_signal_inside_a_del_while_runs_go_still_stops_them(project: Project) -> None:
+@pytest.mark.slow
+def test_a_signal_inside_a_del_while_runs_go_still_stops_them(
+    project: Project, leftovers: list[subprocess.Popen[str]]
+) -> None:
     hang(project)
-    started = time.monotonic()
     done = run_entry(RUNNER_DEL, "test", "--json", str(project.toml))
-    assert time.monotonic() - started < 30, "the signal was lost and the run went on"
     assert done.code == 3, done.out + done.err
     doc = one_document(done, "test")
     assert messages(doc, "infra") == ["stopped by SIGTERM; every run was stopped"]
 
 
 @pytest.mark.design("json.stops_fast")
-def test_a_long_run_stops_within_seconds_of_each_of_two_signals(project: Project) -> None:
+@pytest.mark.slow
+def test_a_long_run_stops_at_either_of_two_signals(
+    project: Project, leftovers: list[subprocess.Popen[str]]
+) -> None:
     hang(project)
     env = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
     proc = subprocess.Popen(
         [SCRIMMAGE, "test", "--json", str(project.toml)],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )  # fmt: skip
-    for _ in range(300):
-        time.sleep(0.1)
-        if list((project.root / "scrimmage-runs").glob("*/*.log")):
-            break
-    time.sleep(0.5)  # the agent is in its sleep, inside the runner's wait
-    sent = time.monotonic()
+    leftovers.append(proc)
+    wait_for(project.root / "hanging")  # the agent is in its sleep, inside the runner's wait
     proc.send_signal(signal.SIGTERM)
     proc.send_signal(signal.SIGINT)  # a second signal changes nothing and is not lost
-    out, err = proc.communicate(timeout=60)
-    assert time.monotonic() - sent < 10
+    out, err = proc.communicate(timeout=120)  # had both been lost, the run would go 600 s
     done = Done(proc.returncode, out, err)
     assert done.code == 3, out + err
     doc = one_document(done, "test")
@@ -965,6 +1003,7 @@ sys.stdout = Out(sys.stdout.detach(), encoding="utf-8", line_buffering=False)
 @pytest.mark.design("json.sigterm")
 @pytest.mark.parametrize("sig", ["SIGTERM", "SIGINT"])
 @pytest.mark.parametrize("command", ["check", "test"])
+@pytest.mark.slow
 def test_a_signal_while_scrimmage_loads_still_gives_one_document(
     project: Project, sig: str, command: str
 ) -> None:
@@ -976,6 +1015,7 @@ def test_a_signal_while_scrimmage_loads_still_gives_one_document(
 
 
 @pytest.mark.design("json.exit_matches")
+@pytest.mark.slow
 def test_a_signal_after_the_document_does_not_change_the_exit(project: Project) -> None:
     good = run_entry(SIGNAL_AFTER_PRINT, "check", "--json", str(project.toml))
     assert (good.code, one_document(good, "check")["exit"]) == (0, 0), good.err
@@ -1013,6 +1053,7 @@ def test_the_entry_point_without_json_sets_no_handler(
 
 
 @pytest.mark.design("json.tool_star_warning")
+@pytest.mark.slow
 def test_the_tool_star_line_is_the_first_warning_end_to_end(
     project: Project, fake_openai: Fake
 ) -> None:

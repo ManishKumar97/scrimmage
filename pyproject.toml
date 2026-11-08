@@ -45,6 +45,7 @@ addopts = ["--strict-markers", "-p", "no:langsmith_plugin", "-n", "auto"]
 filterwarnings = ["error"]
 markers = [
     "design(tag): the design point this test proves, as a short public name",
+    "slow: starts a process or a real scrimmage test run; left out of the fast tier",
 ]
 
 [tool.ruff]

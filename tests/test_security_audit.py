@@ -26,6 +26,9 @@ from conftest import ACME, Project
 from fakes.openai_server import FakeOpenAI
 from scrimmage_core import protocol
 
+# Every test here, or nearly, starts a process or a real scrimmage test run.
+pytestmark = pytest.mark.slow
+
 HOOK = textwrap.dedent(
     """
     import json, os, sys, sysconfig

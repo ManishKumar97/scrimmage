@@ -130,6 +130,7 @@ def agent_on(project: Project, function: str, extra: str = "") -> None:
     ],
     ids=["team cached rate", "no cached rate"],
 )
+@pytest.mark.slow
 def test_a_run_records_the_cached_count_and_the_cost_column_agrees(
     project: Project, fake_openai: Fake, price: str, dollars: float
 ) -> None:
@@ -146,6 +147,7 @@ def test_a_run_records_the_cached_count_and_the_cost_column_agrees(
 
 
 @pytest.mark.design("cached.end_to_end_builtin")
+@pytest.mark.slow
 def test_a_stream_priced_from_the_built_in_table_uses_its_cached_rate(
     project: Project, fake_openai: Fake
 ) -> None:

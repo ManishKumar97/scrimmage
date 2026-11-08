@@ -144,4 +144,5 @@ _.output_model  # tests/fakes/docs_server.py: read by the MCP server's result ch
 _._handle_resumption_request  # tests/test_mcp.py: a stand-in the MCP gate wraps by name
 _.handle_get_stream  # tests/test_mcp.py: a stand-in the MCP gate wraps by name
 _.signals_kept  # tests/conftest.py: a fixture, which pytest.mark.usefixtures names as text
+_.fast_tests_start_no_process  # tests/conftest.py: an autouse fixture, which pytest runs by itself
 _.pytestmark  # tests/test_cli_json.py and test_check.py: pytest reads it from the module

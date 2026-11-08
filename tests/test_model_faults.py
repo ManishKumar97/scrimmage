@@ -14,6 +14,9 @@ from scrimmage_core import config
 from scrimmage_core import runner as runner_module
 from scrimmage_core.runner import Runner
 
+# Every test here, or nearly, starts a process or a real scrimmage test run.
+pytestmark = pytest.mark.slow
+
 Fake = Callable[..., FakeOpenAI]
 TOOL_FAULT = EXAMPLE_FAULT
 

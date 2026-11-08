@@ -21,6 +21,7 @@ def use(project: Project, function: str) -> None:
 
 
 @pytest.mark.design("hosted.write_never_sent")
+@pytest.mark.slow
 def test_an_unlisted_hosted_mcp_server_is_never_sent(project: Project) -> None:
     use(project, "acme.rag:answer_hosted")
     fake = FakeOpenAI([], response="response_text")
@@ -37,6 +38,7 @@ def test_an_unlisted_hosted_mcp_server_is_never_sent(project: Project) -> None:
 
 
 @pytest.mark.design("hosted.listed_runs")
+@pytest.mark.slow
 def test_a_listed_hosted_mcp_server_is_sent(project: Project, fake_openai: Fake) -> None:
     use(project, "acme.rag:answer_hosted")
     project.edit(
@@ -50,6 +52,7 @@ def test_a_listed_hosted_mcp_server_is_sent(project: Project, fake_openai: Fake)
 
 
 @pytest.mark.design("hosted.unknown_type_stops")
+@pytest.mark.slow
 def test_an_unknown_tool_type_stops_the_test_naming_it(project: Project) -> None:
     use(project, "acme.rag:answer_odd_tool")
     fake = FakeOpenAI([])
@@ -65,6 +68,7 @@ def test_an_unknown_tool_type_stops_the_test_naming_it(project: Project) -> None
 
 @pytest.mark.design("hosted.unseen_tool_stops")
 @pytest.mark.parametrize("function", ["acme.rag:answer_unseen", "acme.rag:answer_old_functions"])
+@pytest.mark.slow
 def test_a_tool_no_gate_sees_stops_the_test_before_any_model_call(
     project: Project, function: str
 ) -> None:
@@ -92,6 +96,7 @@ RENAMED = '{path = "acme.tools:get_order", name = "lookup-order"}'
         ("acme.rag:answer_renamed_responses", {"response": "response_text"}, "/v1/responses"),
     ],
 )
+@pytest.mark.slow
 def test_a_renamed_tool_counts_as_seen(
     project: Project, fake_openai: Fake, function: str, reply: dict[str, str], path: str
 ) -> None:
@@ -112,6 +117,7 @@ def test_a_renamed_tool_counts_as_seen(
 
 
 @pytest.mark.design("hosted.renamed_tool_is_seen")
+@pytest.mark.slow
 def test_the_old_name_of_a_renamed_tool_is_not_seen(project: Project) -> None:
     project.edit('"acme.tools:get_order"', RENAMED)
     project.edit('call    = "tool:get_order"', 'call    = "tool:lookup-order"')
@@ -128,6 +134,7 @@ def test_the_old_name_of_a_renamed_tool_is_not_seen(project: Project) -> None:
 
 
 @pytest.mark.design("hosted.reads_noted")
+@pytest.mark.slow
 def test_a_provider_tool_that_only_reads_is_noted_and_warned_about(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -139,6 +146,7 @@ def test_a_provider_tool_that_only_reads_is_noted_and_warned_about(
     assert "1 model request offered provider tools that only read" in result.out
 
 
+@pytest.mark.slow
 def test_every_tool_the_gates_see_passes(project: Project, fake_openai: Fake) -> None:
     use(project, "acme.rag:answer")
     result = project.test(fake_openai(ACME, embedding="embedding"))

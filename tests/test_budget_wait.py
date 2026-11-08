@@ -17,7 +17,7 @@ import pytest
 
 from conftest import EXAMPLE_FAULT, Project, Result
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import http_gate
+from scrimmage_core import http_gate, state
 from scrimmage_core.budget import STALE_S, Held, Ledger, Shortfall
 from scrimmage_core.client import ControlClient, ControlError
 from scrimmage_core.config import Agent
@@ -32,10 +32,42 @@ LABEL = "model:openai"
 __all__ = ["gated"]  # the fixture, used by name
 
 
-def later(seconds: float, action: Callable[[], object]) -> threading.Thread:
-    thread = threading.Thread(target=lambda: (time.sleep(seconds), action()), daemon=True)
-    thread.start()
-    return thread
+class Clock:
+    """The gate's clock: time passes only when the gate pauses, so a wait is exact under
+    any load. An action set for a time runs once the wait has reached it."""
+
+    def __init__(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        actions: list[tuple[float, Callable[[], object]]] | None = None,
+    ) -> None:
+        current = state.current()
+        assert current is not None, "install the run first"
+        self.start = self.now = current.began
+        self.slept: list[float] = []
+        self.actions = sorted(actions or [], key=lambda action: action[0])
+        monkeypatch.setattr(http_gate, "time", self)
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += max(seconds, 1e-6)  # as a real clock does, it always moves on
+        while self.actions and self.waited >= self.actions[0][0] - 1e-9:
+            self.actions.pop(0)[1]()
+
+    @property
+    def waited(self) -> float:
+        return self.now - self.start
+
+
+def until(event: Callable[[], bool], ceiling: float = 60.0) -> None:
+    """Wait for an event; the ceiling only ends a test whose event never comes."""
+    end = time.monotonic() + ceiling
+    while not event():
+        assert time.monotonic() < end, "the event never came"
+        time.sleep(0.01)
 
 
 def granted(answer: int | Shortfall) -> int:
@@ -93,40 +125,24 @@ def test_tickets_are_served_in_order_so_a_large_call_is_not_starved() -> None:
 
 @pytest.mark.design("wait.no_starvation")
 def test_a_large_waiter_gets_its_turn_among_steady_small_calls() -> None:
-    """The review's probe: four threads keep taking $0.03; one call needs $0.05."""
+    """The review's probe, in fixed turns, so no scheduler decides it: four callers keep
+    taking $0.03 and giving it back, and one call needs $0.05. Each turn every small
+    caller settles what it holds and asks again, then the large call asks."""
     ledger = Ledger(0.10)
-    stop = time.monotonic() + 3
-    start = threading.Barrier(5)
-
-    def small() -> None:
-        start.wait()
-        ticket = None
-        while time.monotonic() < stop:
-            answer = ledger.reserve(0.03, "run-small", ticket=ticket)
-            if isinstance(answer, int):
-                ticket = None
-                time.sleep(0.05)
-                ledger.settle(answer, 0.00001)
-            else:
-                ticket = answer.ticket
-                time.sleep(0.01)
-
-    threads = [threading.Thread(target=small) for _ in range(4)]
-    for thread in threads:
-        thread.start()
-    start.wait()
-    time.sleep(0.1)
-    began, ticket, answer = time.monotonic(), None, None
-    while time.monotonic() < stop:
-        answer = ledger.reserve(0.05, "run-big", ticket=ticket)
-        if isinstance(answer, int):
-            break
-        ticket = answer.ticket
-        time.sleep(0.01)
-    took = time.monotonic() - began
-    for thread in threads:
-        thread.join()
-    assert isinstance(answer, int) and took < 1.5  # starved, it waited all 3 s
+    small: list[int | Shortfall | None] = [None] * 4
+    big: int | Shortfall | None = None
+    for _ in range(20):
+        for n in range(4):
+            mine = small[n]
+            if isinstance(mine, int):
+                ledger.settle(mine, 0.00001)
+            ticket = mine.ticket if isinstance(mine, Shortfall) else None
+            small[n] = ledger.reserve(0.03, "run-small", ticket=ticket)
+        ticket = big.ticket if isinstance(big, Shortfall) else None
+        big = ledger.reserve(0.05, "run-big", ticket=ticket)
+        if isinstance(big, int):
+            return
+    pytest.fail("the large call never got in: the small calls took every room it freed")
 
 
 @pytest.mark.design("wait.stale_ticket")
@@ -181,7 +197,11 @@ def test_the_server_answers_at_once_and_names_the_holds(server: ControlServer) -
     held = granted(talk.reserve("run-1", 0.06, LABEL))
     started = time.monotonic()
     refused = short(talk.reserve("run-1", 0.06, LABEL))
-    assert time.monotonic() - started < 0.5  # no request is ever held open
+    for _ in range(99):
+        short(talk.reserve("run-1", 0.06, LABEL, refused.ticket))
+    # No request is held open. The first build held each up to 2 s waiting for a settle,
+    # so these 100 asks would take 200 s; short requests take far less than 30 s.
+    assert time.monotonic() - started < 30
     assert refused.holds == (Held("run-1", LABEL, 0.06),) and refused.ticket is not None
     server.ledger.settle(held, 0.02)
     granted(talk.reserve("run-1", 0.06, LABEL, refused.ticket))
@@ -215,12 +235,13 @@ while True:
 
 
 @pytest.mark.design("wait.killed_waiter_gets_nothing")
+@pytest.mark.slow
 def test_a_waiter_killed_mid_wait_is_never_granted_a_hold(server: ControlServer) -> None:
     """The review's leak.py: before, the server granted the dead waiter after a settle."""
     hold = granted(server.ledger.reserve(0.06, "run-0", LABEL))
     child = subprocess.Popen([sys.executable, "-c", WAITER, server.url, TOKEN])
     try:
-        time.sleep(1.0)
+        until(lambda: bool(server.ledger._line))  # the waiter is waiting, with its ticket
     finally:
         child.kill()
         child.wait()
@@ -239,11 +260,13 @@ def test_a_hundred_waiters_get_no_control_errors_and_a_settle_stays_fast(
     made = ControlServer(TOKEN, RecordStore(tmp_path / "r"), ledger=ledger)
     made.start()
     made.open_run("run-1", "baseline", {"v": 1})
-    hold = granted(ledger.reserve(0.9, "run-0"))
+    holds = [granted(ledger.reserve(0.04, "run-0")) for _ in range(20)]  # $0.80 held
     errors: list[str] = []
+    asks = [0] * 100
+    grants: list[int] = []
     stop = threading.Event()
 
-    def waiter() -> None:
+    def waiter(n: int) -> None:
         talk, ticket = ControlClient(made.url, TOKEN), None
         while not stop.is_set():
             try:
@@ -251,44 +274,54 @@ def test_a_hundred_waiters_get_no_control_errors_and_a_settle_stays_fast(
             except ControlError as exc:
                 errors.append(str(exc))
                 return
+            asks[n] += 1
             if isinstance(answer, int):
+                grants.append(n)
                 talk.request("POST", "/v1/budget/settle", {"reservation": answer, "usd": 0.0})
                 ticket = None
             else:
                 ticket = answer.ticket
             time.sleep(http_gate.WAIT_STEP_S)
 
-    threads = [threading.Thread(target=waiter, daemon=True) for _ in range(100)]
+    threads = [threading.Thread(target=waiter, args=(n,), daemon=True) for n in range(100)]
     try:
         for thread in threads:
             thread.start()
-        time.sleep(1.0)
+        until(lambda: min(asks) >= 2 or bool(errors))  # all 100 are waiting, asking again
+        settler = ControlClient(made.url, TOKEN)
         started = time.monotonic()
-        payload = {"reservation": hold, "usd": 0.0}
-        assert (
-            ControlClient(made.url, TOKEN).request("POST", "/v1/budget/settle", payload)[0] == 200
-        )
+        statuses = [
+            settler.request("POST", "/v1/budget/settle", {"reservation": hold, "usd": 0.0})[0]
+            for hold in holds
+        ]
         took = time.monotonic() - started
-        time.sleep(1.0)
+        until(lambda: len(grants) >= 10 or bool(errors))  # the freed room goes round them
     finally:
         stop.set()
         for thread in threads:
-            thread.join(5)
+            thread.join(30)
         made.stop()
-    assert errors == [] and took < 1.5  # before, a settle took 1 to 7 s
+    # Before, waiters filled the server's threads: 16 of 100 got a connection reset, and a
+    # settle queued behind them took 1 to 7 s. Twenty settles in a row take well under a
+    # second here; queued, or slowed to even 1.5 s each, they would pass 30 s.
+    assert errors == [] and statuses == [200] * 20
+    assert took < 30, f"20 settles took {took:.1f}s among 100 waiters"
 
 
 # The gate
 
 
 @pytest.mark.design("wait.gate_waits")
-def test_a_sync_call_waits_for_another_runs_hold_and_goes_through(gated: None) -> None:
+def test_a_sync_call_waits_for_another_runs_hold_and_goes_through(
+    gated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     budget = Budget(limit=0.004)
     sink, _ = install(make_plan(budget=0.004), budget)
     other = granted(budget.ledger.reserve(0.003, "run-other", LABEL))
-    later(0.3, lambda: budget.ledger.settle(other, 0.0001))
+    clock = Clock(monkeypatch, [(0.3, lambda: budget.ledger.settle(other, 0.0001))])
     assert client().post(URL, json=BODY).status_code == 200  # gpt-4o-mini holds about $0.0025
     assert sink.lines[0].get("action") == "real" and "reason" not in sink.lines[0]
+    assert clock.waited >= 0.3  # it waited for the settle
 
 
 @pytest.mark.design("wait.other_run_past_the_short_bound")
@@ -300,10 +333,9 @@ def test_a_hold_in_another_run_is_waited_out_past_the_short_bound(
     budget = Budget(limit=0.004)
     install(make_plan(budget=0.004, time_limit_s=60.0), budget)
     other = granted(budget.ledger.reserve(0.003, "run-other", LABEL))
-    later(1.0, lambda: budget.ledger.settle(other, 0.0001))
-    started = time.monotonic()
+    clock = Clock(monkeypatch, [(1.0, lambda: budget.ledger.settle(other, 0.0001))])
     assert client().post(URL, json=BODY).status_code == 200
-    assert time.monotonic() - started > 0.9
+    assert clock.waited >= 1.0  # past the short bound of 0.3 s
 
 
 @pytest.mark.design("wait.bounds")
@@ -328,12 +360,14 @@ def held_forever(
 
 
 @pytest.mark.design("wait.gate_refuses_held")
-def test_a_call_held_out_by_its_own_run_is_refused_naming_the_hold(gated: None) -> None:
+def test_a_call_held_out_by_its_own_run_is_refused_naming_the_hold(
+    gated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     budget, lines = held_forever(0.004)
-    started = time.monotonic()
+    clock = Clock(monkeypatch)
     with pytest.raises(ScrimmageRefused) as caught:
         client().post(URL, json=BODY)
-    assert 0.4 < time.monotonic() - started < 3  # half of a one-second time limit
+    assert clock.waited == pytest.approx(0.5, abs=0.001)  # half of a one-second time limit
     message = str(caught.value)
     for part in (
         "$0.0030 is held by calls in flight, of a budget of $0.004 "
@@ -348,7 +382,7 @@ def test_a_call_held_out_by_its_own_run_is_refused_naming_the_hold(gated: None) 
     numbers = line["budget"]
     assert isinstance(numbers, dict) and numbers["held"] == pytest.approx(0.003)
     assert numbers["holds"] == [{"run": "run-1", "label": LABEL, "usd": 0.003, "ended": False}]
-    assert numbers["limit"] == 0.004 and numbers["waited_s"] == pytest.approx(0.5, abs=0.3)
+    assert numbers["limit"] == 0.004 and numbers["waited_s"] == 0.5
     assert budget.ledger.reserve(0.0, "run-x") is not None and not budget.ledger._line
 
 
@@ -357,6 +391,7 @@ def test_a_refusal_after_other_runs_names_them_and_gives_the_parallel_advice(
 ) -> None:
     monkeypatch.setattr(http_gate, "RUN_MARGIN_S", 0.5)
     _, _ = held_forever(0.004, time_limit=1.0, run="run-other")
+    Clock(monkeypatch)
     with pytest.raises(ScrimmageRefused) as caught:
         client().post(URL, json=BODY)
     message = str(caught.value)
@@ -370,6 +405,7 @@ def test_a_wait_asks_again_every_step_with_one_ticket(
 ) -> None:
     monkeypatch.setattr(http_gate, "WAIT_STEP_S", 0.05)
     budget, _ = held_forever(0.004, time_limit=1.0)
+    Clock(monkeypatch)
     asked: list[int | None] = []
     real = budget.reserve
 
@@ -384,42 +420,74 @@ def test_a_wait_asks_again_every_step_with_one_ticket(
 
 
 @pytest.mark.design("wait.gate_refuses_spent")
-def test_a_call_spent_money_cannot_cover_is_refused_at_once(gated: None) -> None:
+def test_a_call_spent_money_cannot_cover_is_refused_at_once(
+    gated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     budget = Budget(limit=0.004)
     budget.ledger.settle(granted(budget.ledger.reserve(0.003)), 0.003)
     sink, _ = install(make_plan(budget=0.004, time_limit_s=60.0), budget)
-    started = time.monotonic()
+    clock = Clock(monkeypatch)
     with pytest.raises(ScrimmageRefused, match=r"\$0.0030 is spent"):
         client().post(URL, json=BODY)
-    assert time.monotonic() - started < 1
+    assert clock.slept == []  # no pause: waiting cannot help
     assert sink.lines[0]["reason"] == "budget"
 
 
+class GateWaits:
+    """http_gate's asyncio, with its sleep noted: the gate's pause between asks.
+
+    Each pause is a window, from its start to its end, as a count of the ticks so far.
+    """
+
+    def __init__(self, ticks: list[int]) -> None:
+        self.ticks = ticks
+        self.windows: list[tuple[int, int]] = []
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(asyncio, name)
+
+    async def sleep(self, seconds: float) -> None:
+        began = len(self.ticks)
+        await asyncio.sleep(seconds)
+        self.windows.append((began, len(self.ticks)))
+
+
 @pytest.mark.design("wait.loop_runs")
-def test_an_async_call_waits_without_blocking_the_loop(gated: None) -> None:
+def test_an_async_call_waits_without_blocking_the_loop(
+    gated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import httpx2
 
     budget = Budget(limit=0.004)
     other = granted(budget.ledger.reserve(0.003, "run-other"))
     install(make_plan(budget=0.004), budget)
-    later(0.5, lambda: budget.ledger.settle(other, 0.0))
-    ticks: list[float] = []
+    ticks: list[int] = []
+    waits = GateWaits(ticks)
+    monkeypatch.setattr(http_gate, "asyncio", waits)
+    done = asyncio.Event()
 
     async def tick() -> None:
-        for _ in range(8):
-            ticks.append(time.monotonic())
-            await asyncio.sleep(0.05)
+        while not done.is_set():
+            ticks.append(len(ticks))
+            await asyncio.sleep(0.01)
+            if len(waits.windows) >= 3:
+                # The settle comes from a task on the loop, after three of the gate's waits.
+                budget.ledger.settle(other, 0.0)
 
     async def main() -> int:
         transport = httpx2.MockTransport(lambda request: httpx2.Response(200, json={}))
         async with httpx2.AsyncClient(transport=transport) as session:
             ticker = asyncio.create_task(tick())
             reply = await session.post(URL, json=BODY)
+            done.set()
             await ticker
             return reply.status_code
 
     assert asyncio.run(main()) == 200
-    assert len(ticks) == 8 and ticks[-1] - ticks[0] < 1.0  # the loop ran while it waited
+    # The gate paused on the loop between asks, and the ticker ran inside every pause. A
+    # wait that blocked the loop, such as time.sleep, makes no window or an empty one.
+    assert len(waits.windows) >= 3
+    assert all(end > began for began, end in waits.windows), waits.windows
 
 
 @pytest.mark.design("wait.cancel_ends_it")
@@ -427,19 +495,31 @@ def test_a_task_cancelled_while_it_waits_stops_and_gives_up_its_ticket(gated: No
     import httpx2
 
     budget, lines = held_forever(0.004, time_limit=60.0, run="run-other")
+    asks: list[int | None] = []
+    real = budget.reserve
+
+    def watch(run: str, usd: float, label: str = "", ticket: int | None = None) -> object:
+        asks.append(ticket)
+        return real(run, usd, label, ticket)
+
+    budget.reserve = watch  # type: ignore[method-assign, assignment]
+    at_cancel: list[int] = []
 
     async def main() -> None:
         transport = httpx2.MockTransport(lambda request: httpx2.Response(200, json={}))
         async with httpx2.AsyncClient(transport=transport) as session:
             task = asyncio.create_task(session.post(URL, json=BODY))
-            await asyncio.sleep(0.3)
+            for _ in range(6000):  # until the gate has asked once and is waiting
+                if asks:
+                    break
+                await asyncio.sleep(0.01)
             task.cancel()
+            at_cancel.append(len(asks))
             with pytest.raises(asyncio.CancelledError):
                 await task
 
-    started = time.monotonic()
-    asyncio.run(main())
-    assert time.monotonic() - started < 2  # asyncio.run waits for the thread: it stopped
+    asyncio.run(main())  # it waits for the gate's thread, so the wait has ended
+    assert asks and len(asks) - at_cancel[0] <= 1  # an ask in flight at most, then it stopped
     assert budget.ledger.reserved == pytest.approx(0.003)  # only the other hold is left
     assert not budget.ledger._line  # type: ignore[attr-defined]  # its ticket is gone
     line = lines[0]
@@ -464,6 +544,7 @@ def run_on_fake(project: Project, fixtures: list[str]) -> Result:
 
 
 @pytest.mark.design("wait.parallel_runs_end_to_end")
+@pytest.mark.slow
 def test_parallel_runs_whose_holds_overlap_all_answer(project: Project) -> None:
     # gpt-4o-mini holds 4096 x $0.60 a million, about $0.0025, so two fit in $0.006.
     agent(
@@ -475,25 +556,35 @@ def test_parallel_runs_whose_holds_overlap_all_answer(project: Project) -> None:
     assert "could not be reserved" not in result.out
 
 
+DEADLOCK = '''"""The agent that holds a stream open, with a short wait for its own holds."""
+
+from scrimmage_core import http_gate
+
+from acme.rag import answer_holding_a_stream as answer
+
+# The bound under test, made short in this run's own process. The run's time limit stays
+# at 120 s, so the wait always ends first, however slowly the run starts.
+http_gate.BUDGET_WAIT_S = 1.0
+__all__ = ["answer"]
+'''
+
+
 @pytest.mark.design("wait.deadlock_end_to_end")
+@pytest.mark.slow
 def test_a_stream_held_open_across_a_second_call_ends_in_a_clear_stop(project: Project) -> None:
-    agent(
-        project,
-        "acme.rag:answer_holding_a_stream",
-        "runs = 1\nrun_timeout = 6\nmax_cost_usd = 0.004",
-    )
-    started = time.monotonic()
+    (project.root / "acme" / "deadlock.py").write_text(DEADLOCK)
+    agent(project, "acme.deadlock:answer", "runs = 1\nmax_cost_usd = 0.004")
     result = run_on_fake(project, ["chat_stream_usage"])
-    assert time.monotonic() - started < 15
     assert result.code == 2, result.out
     assert [s["outcome"] for s in result.summaries()] == ["not reserved"]
     assert "test mistake: a model call could not be reserved" in result.out
     assert "was held by calls in flight (model:openai in run-" in result.out
-    assert re.search(r"after a wait of [123]s for calls in flight", result.out), result.out
+    assert "after a wait of 1s for calls in flight" in result.out, result.out
     assert "was reached" not in result.out
 
 
 @pytest.mark.design("wait.leak_reported")
+@pytest.mark.slow
 def test_a_run_killed_with_a_hold_leaves_it_held_and_the_report_says_so(
     project: Project,
 ) -> None:
@@ -504,6 +595,7 @@ def test_a_run_killed_with_a_hold_leaves_it_held_and_the_report_says_so(
 
 
 @pytest.mark.design("wait.async_holds_no_thread")
+@pytest.mark.slow
 def test_many_async_calls_to_a_host_name_all_answer_under_a_tight_budget(
     project: Project,
 ) -> None:
@@ -545,24 +637,26 @@ def test_an_own_run_deadlock_ends_at_the_short_bound_though_another_run_holds_mo
     budget.ledger.reserve(0.004, "run-1", LABEL)  # this run's open stream
     budget.ledger.reserve(0.001, "run-other", LABEL)  # another run's call, also in flight
     sink, _ = install(make_plan(budget=0.006, time_limit_s=60.0), budget)
-    started = time.monotonic()
+    clock = Clock(monkeypatch)
     with pytest.raises(ScrimmageRefused, match="may be waiting on itself"):
         client().post(URL, json=BODY)
-    assert time.monotonic() - started < 3  # the short bound, not most of a minute
+    assert clock.waited == pytest.approx(0.3, abs=0.001)  # the short bound, not most of a minute
     numbers = sink.lines[0]["budget"]
-    assert isinstance(numbers, dict) and numbers["own"] is True
+    assert isinstance(numbers, dict) and numbers["own"] is True and numbers["waited_s"] == 0.3
 
 
 @pytest.mark.design("wait.ended_run_counts_as_spent")
-def test_a_hold_left_by_an_ended_run_refuses_at_once_and_is_named(gated: None) -> None:
+def test_a_hold_left_by_an_ended_run_refuses_at_once_and_is_named(
+    gated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     budget = Budget(limit=0.004)
     budget.ledger.reserve(0.003, "run-dead", LABEL)
     budget.ledger.close_run("run-dead")  # killed during its call: the hold never settles
     sink, _ = install(make_plan(budget=0.004, time_limit_s=60.0), budget)
-    started = time.monotonic()
+    clock = Clock(monkeypatch)
     with pytest.raises(ScrimmageRefused) as caught:
         client().post(URL, json=BODY)
-    assert time.monotonic() - started < 1  # waiting cannot help
+    assert clock.slept == []  # waiting cannot help
     message = str(caught.value)
     assert "left by run-dead, which ended while still holding" in message
     assert "waiting cannot help" in message and "waiting on itself" not in message
@@ -588,27 +682,36 @@ def test_fifty_waiters_that_all_fit_are_granted_together(server: ControlServer) 
     """The verifier's drain.py: before, only the head was granted per ask, so 50 took 3.8 s."""
     server.ledger.limit_usd = 1.0
     hold = granted(server.ledger.reserve(0.99, "run-0", "big"))
-    granted_at: list[float] = []
+    asks = [0] * 50
+    grants: list[int] = []
+    held_after: list[int] = []  # a waiter that asked after the settle and still waited
+    settled = threading.Event()
 
-    def waiter() -> None:
+    def waiter(n: int) -> None:
         talk, ticket = ControlClient(server.url, TOKEN), None
-        for _ in range(200):
+        for _ in range(400):
+            after = settled.is_set()
             answer = talk.reserve("run-1", 0.01, LABEL, ticket)
+            asks[n] += 1
             if isinstance(answer, int):
-                granted_at.append(time.monotonic())
+                grants.append(n)
                 return
+            if after:
+                held_after.append(n)
             ticket = answer.ticket
             time.sleep(http_gate.WAIT_STEP_S)
 
-    threads = [threading.Thread(target=waiter, daemon=True) for _ in range(50)]
+    threads = [threading.Thread(target=waiter, args=(n,), daemon=True) for n in range(50)]
     for thread in threads:
         thread.start()
-    time.sleep(1.0)
+    until(lambda: min(asks) >= 1)  # all 50 wait behind the big hold
     server.ledger.settle(hold, 0.0)
-    settled = time.monotonic()
+    settled.set()
     for thread in threads:
-        thread.join(20)
-    assert len(granted_at) == 50 and max(granted_at) - settled < 1.5
+        thread.join(60)
+    # Each is granted at its first ask after the settle. Before, only the head of the line
+    # was granted per ask, so the last of 50 waited through dozens of asks.
+    assert len(grants) == 50 and held_after == []
 
 
 def test_waiters_ahead_that_would_fit_are_served_together_in_order() -> None:

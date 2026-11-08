@@ -10,7 +10,7 @@ import jsonschema
 import pytest
 
 import scrimmage_core
-from conftest import ACME, Project, Result
+from conftest import ACME, Project, Result, TimeLimit
 from fakes.openai_server import FakeOpenAI
 from scrimmage_core import config, judge, plan
 from scrimmage_core.errors import ConfigError
@@ -74,7 +74,8 @@ def answer(question):
     if step.get("crash"):
         raise RuntimeError("the bot crashed")
     if step.get("hang"):
-        time.sleep(60)
+        pathlib.Path("hanging").touch()  # the test's event: the time limit finds it here
+        time.sleep(600)
     return step["answer"]
 '''
 FAULT = '[[test.fault]]\ncall = "tool:get_order"\ndo = "timeout"\n'
@@ -413,6 +414,7 @@ def test_no_rule_goes_in_a_plan(project: Project) -> None:
 
 
 @pytest.mark.design("judge.raw_answer")
+@pytest.mark.slow
 def test_the_raw_answer_is_compared_and_never_reaches_a_record(project: Project) -> None:
     # Redacted, this answer has no key in it and the forbid would find nothing.
     result = scripted(
@@ -435,6 +437,7 @@ def test_the_raw_answer_is_compared_and_never_reaches_a_record(project: Project)
 
 
 @pytest.mark.design("judge.raw_answer_expect")
+@pytest.mark.slow
 def test_an_expected_url_matches_though_the_record_cuts_its_query(project: Project) -> None:
     url = "https://track.acme.example/1234?carrier=ups"
     result = scripted(project, [{"answer": url}], "", "runs = 1", f'expect = ["{url}"]\n')
@@ -444,6 +447,7 @@ def test_an_expected_url_matches_though_the_record_cuts_its_query(project: Proje
 
 
 @pytest.mark.design("judge.fault_own_expect")
+@pytest.mark.slow
 def test_a_fault_with_its_own_expect_judges_by_it(project: Project) -> None:
     result = scripted(
         project,
@@ -465,6 +469,7 @@ def test_a_fault_with_its_own_expect_judges_by_it(project: Project) -> None:
 
 
 @pytest.mark.design("judge.fault_inherits_expect")
+@pytest.mark.slow
 def test_a_fault_with_no_expect_of_its_own_uses_the_tests(project: Project) -> None:
     result = scripted(
         project,
@@ -486,6 +491,7 @@ def test_a_fault_on_every_call_needs_its_own_rules(project: Project, rules: str)
 
 @pytest.mark.design("config.own_rules_on_an_always_fault")
 @pytest.mark.parametrize("rules", ['expect = ["sorry"]\n', 'forbid = ["shipped"]\n'])
+@pytest.mark.slow
 def test_own_expect_or_forbid_is_enough(project: Project, rules: str) -> None:
     head = 'expect = [["delivered", "sorry"]]\n'
     scripted(project, [{"answer": "sorry"}] * 2, f"{FAULT}{rules}", "runs = 1", head)
@@ -493,6 +499,7 @@ def test_own_expect_or_forbid_is_enough(project: Project, rules: str) -> None:
 
 
 @pytest.mark.design("judge.fault_forbid_replaces")
+@pytest.mark.slow
 def test_a_faults_forbid_replaces_the_tests_and_an_empty_one_drops_it(project: Project) -> None:
     head = 'expect = ["shipped"]\nforbid = ["delayed"]\n'
     result = scripted(
@@ -511,6 +518,7 @@ def test_a_faults_forbid_replaces_the_tests_and_an_empty_one_drops_it(project: P
 
 @pytest.mark.design("judge.pass_rate_threshold")
 @pytest.mark.parametrize(("good", "code", "verdict"), [(4, 0, "pass"), (3, 1, "fail")])
+@pytest.mark.slow
 def test_pass_rate_passes_four_of_five_and_fails_three_of_five(
     project: Project, good: int, code: int, verdict: str
 ) -> None:
@@ -530,6 +538,7 @@ def test_pass_rate_passes_four_of_five_and_fails_three_of_five(
 
 
 @pytest.mark.design("report.names_the_runs")
+@pytest.mark.slow
 def test_a_failed_rule_names_its_runs_and_stops_at_three(project: Project) -> None:
     result = scripted(project, [{"answer": BAD}] * 4, "", "runs = 4")
     assert result.code == 1, result.out
@@ -540,6 +549,7 @@ def test_a_failed_rule_names_its_runs_and_stops_at_three(project: Project) -> No
 
 
 @pytest.mark.design("report.log_of_a_crash")
+@pytest.mark.slow
 def test_a_crashed_or_timed_out_run_gives_the_path_of_its_log(project: Project) -> None:
     result = scripted(project, [{"answer": GOOD, "crash": True}], "", "runs = 1")
     line = next(x for x in result.out.splitlines() if x.startswith("  1 run: crashed"))
@@ -548,12 +558,14 @@ def test_a_crashed_or_timed_out_run_gives_the_path_of_its_log(project: Project) 
 
 
 @pytest.mark.design("judge.default_all_runs")
+@pytest.mark.slow
 def test_by_default_one_failed_run_fails_the_row(project: Project) -> None:
     result = scripted(project, [{"answer": GOOD}] * 4 + [{"answer": BAD}], "", "runs = 5")
     assert result.code == 1 and table_row(result, "baseline")[-1] == "fail"
 
 
 @pytest.mark.design("judge.fault_pass_rate_wins")
+@pytest.mark.slow
 def test_a_faults_pass_rate_wins_over_the_tests_for_its_row(project: Project) -> None:
     result = scripted(
         project,
@@ -572,6 +584,7 @@ def test_a_faults_pass_rate_wins_over_the_tests_for_its_row(project: Project) ->
 
 
 @pytest.mark.design("judge.fault_rate_inherits_tests")
+@pytest.mark.slow
 def test_a_tests_pass_rate_applies_to_a_fault_that_gives_none(project: Project) -> None:
     result = scripted(
         project,
@@ -589,6 +602,7 @@ def test_a_tests_pass_rate_applies_to_a_fault_that_gives_none(project: Project) 
 
 
 @pytest.mark.design("judge.not_fired_in_no_rate")
+@pytest.mark.slow
 def test_a_run_where_the_fault_did_not_fire_counts_in_no_rate(project: Project) -> None:
     result = scripted(
         project,
@@ -606,6 +620,7 @@ def test_a_run_where_the_fault_did_not_fire_counts_in_no_rate(project: Project) 
 
 
 @pytest.mark.design("judge.too_few_runs")
+@pytest.mark.slow
 def test_a_row_under_the_floor_has_no_result(project: Project) -> None:
     result = scripted(
         project,
@@ -620,6 +635,7 @@ def test_a_row_under_the_floor_has_no_result(project: Project) -> None:
 
 
 @pytest.mark.design("judge.unfired_run_does_not_block")
+@pytest.mark.slow
 def test_one_unfired_run_does_not_block_a_pass_and_gets_a_note(project: Project) -> None:
     result = scripted(
         project,
@@ -633,6 +649,7 @@ def test_one_unfired_run_does_not_block_a_pass_and_gets_a_note(project: Project)
 
 
 @pytest.mark.design("judge.no_judged_runs")
+@pytest.mark.slow
 def test_a_row_with_no_judged_runs_is_never_a_pass(project: Project) -> None:
     result = scripted(project, [{"answer": GOOD}] * 4, ALWAYS, "runs = 2")
     assert result.code == 2, result.out
@@ -645,6 +662,7 @@ def test_a_row_with_no_judged_runs_is_never_a_pass(project: Project) -> None:
 
 
 @pytest.mark.design("report.no_advice_when_nothing_was_unfired")
+@pytest.mark.slow
 def test_a_row_cut_short_gets_no_advice_to_fire_its_fault(project: Project) -> None:
     result = scripted(project, [{"answer": GOOD, "crash": True}], ALWAYS, "runs = 1")
     assert "order fault 1: no result: 0 of 1 runs were judged" in result.out
@@ -652,6 +670,7 @@ def test_a_row_cut_short_gets_no_advice_to_fire_its_fault(project: Project) -> N
 
 
 @pytest.mark.design("judge.crash_is_a_result")
+@pytest.mark.slow
 def test_a_crash_on_a_fault_row_fails_it(project: Project) -> None:
     result = scripted(
         project,
@@ -667,18 +686,21 @@ def test_a_crash_on_a_fault_row_fails_it(project: Project) -> None:
 
 
 @pytest.mark.design("judge.timeout_is_a_result")
-def test_a_run_past_its_time_limit_fails_its_row(project: Project) -> None:
+@pytest.mark.slow
+def test_a_run_past_its_time_limit_fails_its_row(project: Project, time_limit: TimeLimit) -> None:
+    time_limit.at((project.root / "hanging").exists)
     result = scripted(
         project,
         [{"answer": GOOD}, {"answer": GOOD, "fired": True, "hang": True}],
         ALWAYS,
-        "runs = 1\nrun_timeout = 5",
+        "runs = 1",
     )
     assert result.code == 1, result.out
     assert "1 run: timed out" in result.out
 
 
 @pytest.mark.design("judge.refused_stops_row")
+@pytest.mark.slow
 def test_a_refused_run_leaves_its_row_with_no_pass(project: Project) -> None:
     result = scripted(
         project,
@@ -696,6 +718,7 @@ def test_a_refused_run_leaves_its_row_with_no_pass(project: Project) -> None:
 
 
 @pytest.mark.design("judge.refused_on_a_fault_row_fails")
+@pytest.mark.slow
 def test_a_refusal_on_a_fault_row_fails_at_any_rate_and_keeps_exit_2(project: Project) -> None:
     result = scripted(
         project,
@@ -725,6 +748,7 @@ def test_a_refusal_on_a_fault_row_fails_at_any_rate_and_keeps_exit_2(project: Pr
     [("post", "http:payments.example.invalid"), ("blind", "process:python")],
     ids=["a web write", "a child with no gate"],
 )
+@pytest.mark.slow
 def test_every_call_the_agent_chose_fails_a_fault_row(
     project: Project, step: str, shown: str
 ) -> None:
@@ -742,6 +766,7 @@ def test_every_call_the_agent_chose_fails_a_fault_row(
 
 
 @pytest.mark.design("judge.refused_unfired_left_out")
+@pytest.mark.slow
 def test_a_refusal_before_the_fault_fired_stays_left_out(project: Project) -> None:
     result = scripted(
         project,
@@ -755,6 +780,7 @@ def test_a_refusal_before_the_fault_fired_stays_left_out(project: Project) -> No
 
 
 @pytest.mark.design("judge.exit_mistake_over_failure")
+@pytest.mark.slow
 def test_a_test_mistake_keeps_exit_2_and_the_table_still_shows_the_failure(
     project: Project,
 ) -> None:
@@ -766,6 +792,7 @@ def test_a_test_mistake_keeps_exit_2_and_the_table_still_shows_the_failure(
 
 
 @pytest.mark.design("judge.exit_infra_over_failure")
+@pytest.mark.slow
 def test_an_infrastructure_error_keeps_exit_3_and_is_not_held_against_the_agent(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -785,6 +812,7 @@ def test_an_infrastructure_error_keeps_exit_3_and_is_not_held_against_the_agent(
 
 
 @pytest.mark.design("judge.budget_left_out")
+@pytest.mark.slow
 def test_a_budget_stopped_run_is_left_out(project: Project) -> None:
     project.edit("[agent]\n", "[agent]\nmax_cost_usd = 0.0000001\n")
     fake = FakeOpenAI(ACME)  # the budget stops the run before any request
@@ -804,6 +832,7 @@ def table_row_any(result: Result, start: str) -> str:
 
 
 @pytest.mark.design("judge.baseline_with_bad_answers_still_runs_faults")
+@pytest.mark.slow
 def test_a_baseline_that_answered_badly_still_runs_its_fault_rows(project: Project) -> None:
     result = scripted(
         project, [{"answer": BAD}, {"answer": "unable", "fired": True}], ALWAYS, "runs = 1"
@@ -813,6 +842,7 @@ def test_a_baseline_that_answered_badly_still_runs_its_fault_rows(project: Proje
 
 
 @pytest.mark.design("judge.failed_baseline_skips")
+@pytest.mark.slow
 def test_a_crashed_baseline_reads_fail_and_its_fault_rows_read_no_result(project: Project) -> None:
     result = scripted(project, [{"answer": GOOD, "crash": True}], ALWAYS, "runs = 1")
     assert result.code == 2, result.out
@@ -822,6 +852,7 @@ def test_a_crashed_baseline_reads_fail_and_its_fault_rows_read_no_result(project
 
 
 @pytest.mark.design("judge.empty_answer_end_to_end")
+@pytest.mark.slow
 def test_an_agent_that_returns_nothing_fails_by_name(project: Project) -> None:
     result = scripted(project, [{"answer": ""}], "", "runs = 1")
     assert result.code == 1, result.out
@@ -838,6 +869,7 @@ def script_project(project: Project, source: str, body: str) -> Result:
 
 
 @pytest.mark.design("judge.script_last_line")
+@pytest.mark.slow
 def test_only_a_scripts_last_line_is_judged(project: Project) -> None:
     result = script_project(project, 'print("shipped")\nprint("delayed")\n', 'expect = ["shipped"]')
     assert result.code == 1, result.out
@@ -845,6 +877,7 @@ def test_only_a_scripts_last_line_is_judged(project: Project) -> None:
 
 
 @pytest.mark.design("judge.script_answer_file")
+@pytest.mark.slow
 def test_a_scripts_answer_file_is_judged_whole(project: Project) -> None:
     source = (
         "import os\n"
@@ -855,6 +888,7 @@ def test_a_scripts_answer_file_is_judged_whole(project: Project) -> None:
 
 
 @pytest.mark.design("judge.script_no_answer")
+@pytest.mark.slow
 def test_a_script_that_prints_nothing_fails_as_crashed(project: Project) -> None:
     result = script_project(project, "pass\n", 'expect = ["shipped"]')
     assert result.code == 1, result.out
@@ -881,6 +915,7 @@ STATE = {
 
 @pytest.mark.design("judge.not_text_is_a_mistake")
 @pytest.mark.parametrize("value", [repr(STATE), "['shipped, Oct 30']", "12", "None", "True"])
+@pytest.mark.slow
 def test_a_value_that_is_not_text_needs_an_answer_path(project: Project, value: str) -> None:
     result = returns(project, value, body='expect = ["shipped", ["Oct 30", "October 30"]]\n')
     assert result.code == 2, result.out
@@ -893,6 +928,7 @@ def test_a_value_that_is_not_text_needs_an_answer_path(project: Project, value: 
 
 
 @pytest.mark.design("judge.answer_path_is_what_is_judged")
+@pytest.mark.slow
 def test_with_an_answer_path_the_final_reply_is_what_is_judged(project: Project) -> None:
     result = returns(
         project,
@@ -913,6 +949,7 @@ def test_with_an_answer_path_the_final_reply_is_what_is_judged(project: Project)
     ],
     ids=["a list", "a table"],
 )
+@pytest.mark.slow
 def test_an_answer_path_must_lead_to_the_answer_not_to_all_of_it(
     project: Project, value: str, path: str
 ) -> None:
@@ -923,12 +960,14 @@ def test_an_answer_path_must_lead_to_the_answer_not_to_all_of_it(
     assert "not the answer" in result.out + result.err
 
 
+@pytest.mark.slow
 def test_an_answer_path_may_lead_to_a_number(project: Project) -> None:
     result = returns(project, '{"count": 12}', 'answer = "count"', 'expect = ["12"]\n')
     assert result.code == 0, result.out + result.err
 
 
 @pytest.mark.design("record.judged_fields")
+@pytest.mark.slow
 def test_every_summary_says_how_the_run_was_judged(project: Project, fake_openai: Fake) -> None:
     result = project.test(fake_openai(ACME))
     validator = jsonschema.Draft202012Validator(RECORD, format_checker=jsonschema.FormatChecker())
@@ -940,6 +979,7 @@ def test_every_summary_says_how_the_run_was_judged(project: Project, fake_openai
 
 
 @pytest.mark.design("record.judged_required")
+@pytest.mark.slow
 def test_a_summary_without_a_judgement_does_not_fit_the_schema(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -951,6 +991,7 @@ def test_a_summary_without_a_judgement_does_not_fit_the_schema(
 
 
 @pytest.mark.design("table.example")
+@pytest.mark.slow
 def test_the_table_shows_rate_range_tools_cost_and_result(
     project: Project, fake_openai: Fake
 ) -> None:

@@ -1,14 +1,19 @@
 import json
+import multiprocessing.process
 import os
 import shutil
 import signal
+import subprocess
+import sys
+import time
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
 
 from fakes.openai_server import FakeOpenAI
+from scrimmage_core import runner
 from scrimmage_core.cli import main
 from scrimmage_core.runner import OK, ROW_FAILED
 
@@ -20,6 +25,50 @@ EXAMPLE_FAULT = (
     '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'
     'expect = [["unable", "sorry", "try again"]]\nforbid = ["Oct 30", "October 30"]\n'
 )
+
+
+# Audit events for a new process. A test that makes one is in the slow tier.
+PROCESS_STARTS = frozenset(
+    {
+        "subprocess.Popen",
+        "os.fork",
+        "os.forkpty",
+        "os.posix_spawn",
+        "os.exec",
+        "os.spawn",
+        "os.system",
+    }
+)
+started: list[str] = []
+
+
+def note_process_start(event: str, args: tuple[object, ...]) -> None:
+    del args
+    if event in PROCESS_STARTS:
+        started.append(event)
+
+
+sys.addaudithook(note_process_start)
+# multiprocessing's spawn and forkserver start a process with no audit event, so its start
+# is noted by hand. Its fork method raises os.fork as well.
+real_process_start = multiprocessing.process.BaseProcess.start
+
+
+def noted_process_start(self: multiprocessing.process.BaseProcess) -> None:
+    started.append("multiprocessing.Process.start")
+    real_process_start(self)
+
+
+multiprocessing.process.BaseProcess.start = noted_process_start
+
+
+@pytest.fixture(autouse=True)
+def fast_tests_start_no_process(request: pytest.FixtureRequest) -> Iterator[None]:
+    """A test not marked slow fails if it starts a process, so the fast tier stays fast."""
+    started.clear()
+    yield
+    if started and request.node.get_closest_marker("slow") is None:
+        pytest.fail(f"this test starts a process ({started[0]}), so mark it slow")
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:
@@ -44,6 +93,45 @@ def signals_kept() -> Iterator[None]:
     yield
     after = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
     assert after == before, f"signal handlers changed: {before} -> {after}"
+
+
+@dataclass
+class TimeLimit:
+    """When a run's time limit arrives, and whether each run reached it.
+
+    The event is something the agent does once it is where the limit should find it,
+    such as writing a marker file. The run's real run_timeout stays as a ceiling, so a
+    test whose event never comes still ends.
+    """
+
+    event: Callable[[], bool] = lambda: False
+    reached: list[bool] = field(default_factory=list[bool])
+    given: list[float] = field(default_factory=list[float])  # the limit the runner passed
+
+    def at(self, event: Callable[[], bool]) -> None:
+        self.event = event
+
+    def wait(self, proc: subprocess.Popen[bytes], seconds: float) -> bool:
+        self.given.append(seconds)
+        ceiling = time.monotonic() + seconds
+        while proc.poll() is None:
+            if self.event() or time.monotonic() > ceiling:
+                self.reached.append(proc.poll() is None)
+                return self.reached[-1]
+            time.sleep(0.01)
+        self.reached.append(False)
+        return False
+
+
+@pytest.fixture
+def time_limit(monkeypatch: pytest.MonkeyPatch) -> TimeLimit:
+    """The time limit of each run in this test arrives at an event, not on the clock.
+
+    A limit of a few seconds races the program's start-up, which takes longer under load.
+    """
+    limit = TimeLimit()
+    monkeypatch.setattr(runner, "wait_run", limit.wait)
+    return limit
 
 
 @pytest.fixture

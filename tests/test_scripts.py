@@ -17,11 +17,14 @@ import jsonschema
 import pytest
 
 import scrimmage_core
-from conftest import ACME, Project, Result
+from conftest import ACME, Project, Result, TimeLimit
 from fakes.openai_server import FakeOpenAI
 from scrimmage_core import bootstrap, runner
 from scrimmage_core.control import ControlServer
 from scrimmage_core.runner import stop_group
+
+# Every test here, or nearly, starts a process or a real scrimmage test run.
+pytestmark = pytest.mark.slow
 
 Fake = Callable[[list[str]], FakeOpenAI]
 Line = dict[str, object]
@@ -998,7 +1001,7 @@ def test_a_fork_while_another_thread_holds_the_locks_does_not_hang(project: Proj
         "_, status = os.waitpid(pid, 0)\n"
         "print(status)\n"
     )
-    result = script(project, code, "run_timeout = 10")
+    result = script(project, code)
     assert summary_of(result)["answer"] == "0", result.out
     assert len(calls(result)) == 1
 
@@ -1126,15 +1129,20 @@ while not os.path.exists("inside the tool"):
 
 
 @pytest.mark.design("stop.timed_out_summary")
-def test_a_script_stopped_at_run_timeout_has_a_summary_saying_timed_out(project: Project) -> None:
+def test_a_script_stopped_at_run_timeout_has_a_summary_saying_timed_out(
+    project: Project, time_limit: TimeLimit
+) -> None:
     code = (
         "import time\n"
+        "from pathlib import Path\n"
         "from acme import tools\n"
         "tools.check_inventory('SKU-1')\n"
         "print('working', flush=True)\n"
+        "Path('working').touch()\n"
         "time.sleep(600)\n"
     )
-    result = script(project, code, "run_timeout = 3")
+    time_limit.at((project.root / "working").exists)
+    result = script(project, code)
     assert summary_of(result)["outcome"] == "timed out", result.out
     assert summary_of(result)["answer"] is None
     assert [x["call"] for x in calls(result)] == ["tool:check_inventory"]
@@ -1155,11 +1163,14 @@ def test_a_call_just_before_sigterm_is_in_the_record(project: Project) -> None:
 
 
 @pytest.mark.design("stop.call_in_flight")
-def test_a_call_going_on_at_the_time_limit_is_in_the_record(project: Project) -> None:
+def test_a_call_going_on_at_the_time_limit_is_in_the_record(
+    project: Project, time_limit: TimeLimit
+) -> None:
     (project.root / "acme" / "waits.py").write_text(SLOW_TOOL)
     code = "from acme import waits\nwaits.wait_a_while('SKU-1')\n"
     (project.root / "bot.py").write_text(code)
-    write_config(project, f"{sys.executable} bot.py {{question}}", "run_timeout = 4")
+    write_config(project, f"{sys.executable} bot.py {{question}}")
+    time_limit.at((project.root / "inside the tool").exists)
     project.edit(TOOLS, '["acme.waits:wait_a_while"]')
     project.edit('real = ["tool:check_inventory"]', 'real = ["tool:wait_a_while"]')
     result = project.test()
@@ -1212,24 +1223,28 @@ def test_a_refused_child_keeps_the_line_of_a_call_going_on_in_another_thread(
 
 
 @pytest.fixture
-def silent_model(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """A model host that takes a request and never answers."""
+def silent_model(monkeypatch: pytest.MonkeyPatch) -> Iterator[threading.Event]:
+    """A model host that takes a request and never answers. The event: it has one."""
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen(8)
     held: list[socket.socket] = []
+    asked = threading.Event()
 
     def serve() -> None:
         while True:
             try:
-                held.append(listener.accept()[0])
+                conn = listener.accept()[0]
+                held.append(conn)
+                if conn.recv(1):  # the request is in: the call is going on
+                    asked.set()
             except OSError:
                 return
 
     threading.Thread(target=serve, daemon=True).start()
     monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{listener.getsockname()[1]}/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "test")
-    yield
+    yield asked
     listener.close()
     for conn in held:
         conn.close()
@@ -1237,15 +1252,15 @@ def silent_model(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 @pytest.mark.design("stop.model_call_in_flight")
 def test_a_model_call_going_on_at_the_time_limit_is_a_time_out_not_a_failure(
-    project: Project, silent_model: None
+    project: Project, silent_model: threading.Event, time_limit: TimeLimit
 ) -> None:
-    del silent_model
     code = (
         "import openai\n"
         "client = openai.OpenAI(max_retries=0)\n"
         "client.chat.completions.create(model='gpt-4o-mini', messages=[])\n"
     )
-    result = script(project, code, "run_timeout = 10")
+    time_limit.at(silent_model.is_set)
+    result = script(project, code)
     assert summary_of(result)["outcome"] == "timed out", result.out
     assert "ScrimmageStopped" in str(calls(result)[-1]["error"])
     assert result.finished
@@ -1256,16 +1271,19 @@ def pids_in(path: Path) -> list[int]:
 
 
 @pytest.mark.design("stop.sigkill")
-def test_a_program_that_ignores_sigterm_is_stopped_with_sigkill(project: Project) -> None:
+def test_a_program_that_ignores_sigterm_is_stopped_with_sigkill(
+    project: Project, time_limit: TimeLimit
+) -> None:
     code = (
         "import os, signal, time\n"
         "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-        "with open('pid', 'w') as out:\n"
-        "    out.write(str(os.getpid()))\n"
+        "open('pid.tmp', 'w').write(str(os.getpid()))\n"
+        "os.rename('pid.tmp', 'pid')\n"
         "time.sleep(600)\n"
     )
     project.monkeypatch.setattr(runner, "KILL_GRACE_S", 1.0)
-    result = script(project, code, "run_timeout = 4")
+    time_limit.at((project.root / "pid").exists)  # SIGTERM is ignored from here on
+    result = script(project, code)
     assert summary_of(result)["outcome"] == "timed out", result.out
     assert not alive(pids_in(project.root / "pid")[0])
 
@@ -1324,6 +1342,7 @@ def test_a_call_made_by_a_child_left_running_reaches_the_record(project: Project
 
 DOUBLE_FORK = """
 import os, time
+
 {setsid_first}
 if os.fork() == 0:
     {setsid_second}
@@ -1392,7 +1411,7 @@ def test_with_no_sweep_a_daemon_lives_on_and_its_write_stays_refused(
         os.kill(pid, signal.SIGKILL)
 
 
-WAIT = "import time; time.sleep(60)"
+WAIT = "import time; time.sleep(600)"
 
 
 @pytest.mark.design("stop.sweep_exact")
@@ -1409,7 +1428,7 @@ def test_the_sweep_kills_only_the_exact_run(tmp_path: Path) -> None:
             time.sleep(0.01)  # until it has done its exec
         killed = runner.kill_those_who_left("run-abc", -1)
         assert [pid for pid, _ in killed] == [wanted.pid]
-        assert wanted.wait(timeout=10) == -signal.SIGKILL
+        assert wanted.wait(timeout=60) == -signal.SIGKILL
         assert longer.poll() is None and shorter.poll() is None and other.poll() is None
     finally:
         for proc in (wanted, longer, shorter, other):
@@ -1573,12 +1592,18 @@ def test_the_sdks_wait_is_shorter_than_the_runners() -> None:
 
 
 def test_stop_group_returns_when_the_program_left_its_group() -> None:
-    code = "import os, time\nos.setpgid(0, os.getppid())\ntime.sleep(600)\n"
-    proc = subprocess.Popen(
-        [sys.executable, "-c", code], start_new_session=True, stdout=subprocess.DEVNULL
-    )
-    deadline = time.monotonic() + 10
-    while os.getpgid(proc.pid) == proc.pid and time.monotonic() < deadline:
-        time.sleep(0.01)
-    stop_group(proc)
-    assert proc.returncode is not None
+    # Its own group, in this session, so it may move to the test's group. A program in a
+    # session of its own could not: setpgid across sessions fails, so it never left.
+    code = "import os, time\nos.setpgid(0, os.getpgid(os.getppid()))\ntime.sleep(600)\n"
+    proc = subprocess.Popen([sys.executable, "-c", code], process_group=0)
+    try:
+        ceiling = time.monotonic() + 60
+        while os.getpgid(proc.pid) == proc.pid:  # the event: it has left its group
+            assert time.monotonic() < ceiling and proc.poll() is None, "it never left"
+            time.sleep(0.01)
+        stop_group(proc)  # its group is empty, so only the program itself is left to stop
+        assert proc.returncode == -signal.SIGKILL
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()

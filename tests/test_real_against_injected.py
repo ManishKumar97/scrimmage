@@ -9,6 +9,9 @@ import pytest
 from conftest import ACME, EXAMPLE_FAULT, Project
 from fakes.openai_server import FakeOpenAI
 
+# Every test here, or nearly, starts a process or a real scrimmage test run.
+pytestmark = pytest.mark.slow
+
 Fake = Callable[[list[str]], FakeOpenAI]
 
 

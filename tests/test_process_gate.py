@@ -45,6 +45,7 @@ def blind_run(project: Project, start: str) -> Result:
 
 @pytest.mark.design("blind.refused")
 @pytest.mark.parametrize("how", sorted(STARTS))
+@pytest.mark.slow
 def test_a_python_child_with_its_own_environment_is_refused(project: Project, how: str) -> None:
     result = blind_run(project, STARTS[how])
     assert not (project.root / "REAL WRITE").exists()
@@ -63,6 +64,7 @@ def test_a_python_child_with_its_own_environment_is_refused(project: Project, ho
 @pytest.mark.parametrize(
     "flags", [["-I"], ["-E"], ["-S"], ["-B", "-I"], ["-BE"], ["-W", "error", "-S"]]
 )
+@pytest.mark.slow
 def test_a_flag_that_skips_the_startup_file_is_refused(project: Project, flags: list[str]) -> None:
     start = f"subprocess.run([sys.executable, *{flags!r}, 'report.py'])"
     result = blind_run(project, start)
@@ -72,6 +74,7 @@ def test_a_flag_that_skips_the_startup_file_is_refused(project: Project, flags: 
 
 @pytest.mark.design("blind.shebang")
 @pytest.mark.parametrize("line", ["{python}", "{python} -I", "/usr/bin/env {python}"])
+@pytest.mark.slow
 def test_a_script_with_a_python_shebang_counts_as_python(project: Project, line: str) -> None:
     tool = project.root / "tool"
     tool.write_text(f"#!{line.format(python=sys.executable)}\n{WRITE}")
@@ -83,6 +86,7 @@ def test_a_script_with_a_python_shebang_counts_as_python(project: Project, line:
 
 
 @pytest.mark.design("blind.listed")
+@pytest.mark.slow
 def test_listing_the_label_lets_it_run_and_leaves_a_line(project: Project) -> None:
     result = blind_run(project, STARTS["subprocess"])
     assert not (project.root / "REAL WRITE").exists()
@@ -97,6 +101,7 @@ def test_listing_the_label_lets_it_run_and_leaves_a_line(project: Project) -> No
 
 
 @pytest.mark.design("blind.joined_passes")
+@pytest.mark.slow
 def test_a_child_given_the_environment_with_more_in_it_runs(project: Project) -> None:
     start = "subprocess.run([sys.executable, 'report.py'], env={**os.environ, 'MORE': '1'})"
     result = blind_run(project, start)
@@ -114,6 +119,7 @@ def test_a_child_given_the_environment_with_more_in_it_runs(project: Project) ->
         "subprocess.run(['sh', '-c', 'true'], env={'PATH': os.environ['PATH']})",
     ],
 )
+@pytest.mark.slow
 def test_a_child_that_is_not_python_passes_with_a_clean_environment(
     project: Project, start: str
 ) -> None:
@@ -123,6 +129,7 @@ def test_a_child_that_is_not_python_passes_with_a_clean_environment(
 
 
 @pytest.mark.design("blind.replaced_pythonpath")
+@pytest.mark.slow
 def test_a_replaced_pythonpath_is_blind_and_the_message_says_so(project: Project) -> None:
     start = "subprocess.run(CHILD, env={**os.environ, 'PYTHONPATH': '/somewhere'})"
     result = blind_run(project, start)
@@ -132,6 +139,7 @@ def test_a_replaced_pythonpath_is_blind_and_the_message_says_so(project: Project
 
 
 @pytest.mark.design("blind.link_to_this_binary")
+@pytest.mark.slow
 def test_a_link_to_this_python_elsewhere_is_this_python(project: Project) -> None:
     (project.root / "link").mkdir()
     link = project.root / "link" / "python"
@@ -142,6 +150,7 @@ def test_a_link_to_this_python_elsewhere_is_this_python(project: Project) -> Non
 
 
 @pytest.mark.design("blind.base_binary")
+@pytest.mark.slow
 def test_the_binary_this_venv_was_made_from_is_this_python(project: Project) -> None:
     base = str(Path(sys.base_prefix) / "bin" / Path(sys.executable).resolve().name)
     result = blind_run(project, f"subprocess.run([{base!r}, 'report.py'], env=ENV)")
@@ -160,6 +169,7 @@ def test_this_venvs_bin_folder_is_this_python_whatever_the_file_is(
 
 
 @pytest.mark.design("blind.cwd")
+@pytest.mark.slow
 def test_a_relative_program_is_read_from_the_folder_it_starts_in(project: Project) -> None:
     folder = project.root / "deep"
     folder.mkdir()
@@ -173,6 +183,7 @@ def test_a_relative_program_is_read_from_the_folder_it_starts_in(project: Projec
 
 @pytest.mark.design("blind.venv_on_this_binary_passes")
 @pytest.mark.parametrize("copies", [[], ["--copies"]], ids=["links", "copies"])
+@pytest.mark.slow
 def test_a_venv_elsewhere_on_this_binary_is_another_python(
     project: Project, copies: list[str]
 ) -> None:
@@ -188,6 +199,7 @@ def test_a_venv_elsewhere_on_this_binary_is_another_python(
 
 
 @pytest.mark.design("blind.other_python_passes")
+@pytest.mark.slow
 def test_another_python_with_its_own_environment_runs(
     project: Project,
     other_version: Path,  # noqa: F811
@@ -199,6 +211,7 @@ def test_another_python_with_its_own_environment_runs(
 
 
 @pytest.mark.design("blind.missed_through_a_shell")
+@pytest.mark.slow
 def test_a_python_started_through_a_shell_is_not_seen(project: Project) -> None:
     """The listed limit: the hook sees sh, which is not Python."""
     (project.root / "report.py").write_text(WRITE)
@@ -209,6 +222,7 @@ def test_a_python_started_through_a_shell_is_not_seen(project: Project) -> None:
 
 
 @pytest.mark.design("blind.child_refuses_too")
+@pytest.mark.slow
 def test_a_child_that_joined_refuses_a_blind_grandchild(project: Project) -> None:
     (project.root / "report.py").write_text(
         "import subprocess, sys\nsubprocess.run([sys.executable, 'grandchild.py'], env={})\n"
@@ -220,6 +234,7 @@ def test_a_child_that_joined_refuses_a_blind_grandchild(project: Project) -> Non
     assert summary_of(result)["outcome"] == "refused call", result.out
 
 
+@pytest.mark.slow
 def test_a_command_it_cannot_find_is_left_to_fail_as_usual(project: Project) -> None:
     start = "subprocess.run(['no-such-program-here'])"
     result = script(project, PROGRAM.format(start=start))
@@ -230,6 +245,7 @@ def test_a_command_it_cannot_find_is_left_to_fail_as_usual(project: Project) -> 
 
 
 @pytest.mark.design("blind.mcp_default_env")
+@pytest.mark.slow
 def test_a_stdio_server_on_the_librarys_small_environment_still_starts(project: Project) -> None:
     (project.root / "server.py").write_text(
         "from mcp.server.mcpserver import MCPServer\n"

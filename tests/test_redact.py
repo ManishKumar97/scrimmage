@@ -79,7 +79,9 @@ def test_every_dotted_part_after_a_jwt_goes_with_it() -> None:
 def test_a_large_base64_body_is_not_slow(body: str) -> None:
     started = time.monotonic()
     redact(body)
-    assert time.monotonic() - started < 5
+    # About 0.2 s on a quiet machine. A scan that backtracks takes minutes on a body like
+    # this, so 30 s tells the two apart under any load.
+    assert time.monotonic() - started < 30
 
 
 @pytest.mark.design("record.secret_in_reply")

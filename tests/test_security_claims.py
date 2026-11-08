@@ -98,6 +98,7 @@ def test_the_control_server_listens_on_loopback_only(tmp_path: Path) -> None:
 
 
 @pytest.mark.design("security.records_owner_only")
+@pytest.mark.slow
 def test_the_record_root_is_owner_only_even_if_it_was_open(
     project: Project, fake_openai: Callable[..., FakeOpenAI]
 ) -> None:
