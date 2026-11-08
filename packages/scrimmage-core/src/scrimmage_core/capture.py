@@ -424,7 +424,9 @@ def mcp_value(
         where = differ(result, rebuild(fields), "result")
     except Unsavable as exc:
         return unsaved(UNSAVABLE, str(exc))
-    except Exception as exc:  # the library's own validation of the reply
+    except Exception as exc:  # the library's own validation of the reply, or Scrimmage's bug
+        if ours(exc):
+            return scrimmage_error(exc)
         return unsaved(UNSAVABLE, f"result: a mock built from it fails with {kind_of(exc)}")
     if where is not None:
         return unsaved(UNSAVABLE, where)

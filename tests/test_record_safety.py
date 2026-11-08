@@ -370,3 +370,17 @@ def test_a_comparison_that_fails_in_c_is_the_teams_type_not_our_bug(sink: Sink) 
     }
     with pytest.raises(capture.Unsavable, match="comparing the Squishy fails with ValueError"):
         capture.differ(Squishy(), Squishy(), "x")
+
+
+@pytest.mark.design("record.scrimmage_error")
+@pytest.mark.usefixtures("expect_scrimmage_error")
+def test_a_bug_in_scrimmage_on_the_mcp_path_is_scrimmage_error_not_unsavable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A bug in Scrimmage's own code: mcp_returns given what it does not take.
+    monkeypatch.setattr(capture, "mcp_returns", capture.text_problem)
+    found = capture.mcp_value({"content": []}, {}, lambda value: value)
+    assert found == {
+        "code": "scrimmage_error",
+        "why": "Scrimmage failed while recording it: AttributeError",
+    }
