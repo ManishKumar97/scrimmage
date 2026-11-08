@@ -93,14 +93,18 @@ def test_exit_codes_match_the_runner() -> None:
         assert f"| {code} |" in cli
 
 
-def test_every_page_is_linked_from_the_index_and_every_link_works() -> None:
-    index = page("index.md")
-    links = set(re.findall(r"\]\(([a-z-]+\.md)\)", index))
-    pages = {p.name for p in DOCS.glob("*.md")} - {"index.md"}
-    assert links == pages, f"index links {sorted(links)}, pages {sorted(pages)}"
+def test_every_page_is_in_the_site_navigation_and_every_link_works() -> None:
+    """mkdocs build --strict checks the same, but needs the docs group; this runs everywhere."""
+    nav = (DOCS.parent / "mkdocs.yml").read_text().split("\nnav:\n")[1]
+    listed = set(re.findall(r"([a-z/-]+\.md)$", nav, re.M))
+    pages = {str(p.relative_to(DOCS)) for p in DOCS.rglob("*.md")}
+    assert listed == pages, f"nav lists {sorted(listed)}, pages {sorted(pages)}"
     for name in pages:
-        for target in re.findall(r"\]\(([a-z-]+\.md)\)", page(name)):
-            assert (DOCS / target).exists(), f"{name} links to missing {target}"
+        for target in re.findall(r"\]\(((?:\.\./)?[a-z/-]+\.md)(?:#[a-z0-9-]+)?\)", page(name)):
+            path = (DOCS / name).parent / target
+            assert path.resolve().is_file(), f"{name} links to missing {target}"
+    assert "[Install](install.md)" in page("index.md")
+    assert "[Quickstart](quickstart.md)" in page("index.md")
 
 
 @pytest.mark.design("docs.model_name")

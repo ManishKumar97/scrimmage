@@ -1,0 +1,23 @@
+# Examples
+
+Each example is a small, complete project: the agent's code, its `scrimmage.toml`, and what `scrimmage test` prints.
+Several start from the [function agent](function-agent.md) and change one thing.
+
+| Example | What it shows |
+|---|---|
+| [A function agent](function-agent.md) | The smallest project: a loop, two tools, a mock and an `error` fault |
+| [A script and its child process](script-agent.md) | `command`, and a write in a child process that is refused, then mocked |
+| [LangGraph tools](langgraph.md) | A graph with no `tools` list, a tool error that crashes it, and the fix |
+| [MCP tools](mcp.md) | A tool on an MCP server over stdio, mocked, timed out and failed |
+| [A web request inside a tool](web-request.md) | The tool runs for real, and the request inside it is mocked or gets a 503 |
+| [Judging an answer](judging.md) | `expect`, `forbid` and `pass_rate`, a rule that is too narrow, and the fix |
+| [A fault on one model](one-model.md) | A busy large model, a fallback to a small one, and `model` in a fault |
+
+## How these pages are checked
+
+Every file and every output on these pages is taken from a run.
+The repository's test suite reads each page, writes its files into a new folder, runs `scrimmage test`, and compares what it prints with the page, line by line.
+Only the folder name and the run ids are allowed to differ.
+That suite uses a fake model server with scripted replies, so it needs no API key.
+
+With your own key, the answers will use different words, and the costs will differ a little.

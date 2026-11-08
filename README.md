@@ -6,3 +6,6 @@ This repository is at an early stage.
 Scrimmage was called Faultline, then Derail, until November 2026.
 
 The docs start at [docs/index.md](docs/index.md): install, a quickstart, concepts and every setting.
+They are also a website, built with MkDocs: `uv run --group docs mkdocs build --strict` writes it to `site/`.
+
+To report a security problem, see [SECURITY.md](SECURITY.md).

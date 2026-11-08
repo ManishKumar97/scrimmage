@@ -148,6 +148,8 @@ class Runner:
         self.control_url = control_url  # lets a test point the agent elsewhere
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         runs = config.root / "scrimmage-runs"
+        runs.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(runs, 0o700)  # records hold customer data: only their owner may list them
         self.folder = runs / f"{stamp}-{secrets.token_hex(3)}"
         self.store = RecordStore(self.folder)
         # Records can hold customer data, so they stay out of the team's git repo.

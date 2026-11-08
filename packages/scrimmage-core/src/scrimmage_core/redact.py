@@ -11,7 +11,9 @@ PATTERNS = re.compile(
             r"(?:AKIA|ASIA)[0-9A-Z]{16}",  # AWS access key ids, long-term and temporary
             r"AIza[0-9A-Za-z_-]{35}",  # Google API keys
             r"gh[pousr]_[A-Za-z0-9]{36,}",  # GitHub tokens
-            r"xox[abpr]-[A-Za-z0-9-]{10,}",  # Slack tokens
+            r"github_pat_[A-Za-z0-9_]{22,}",  # GitHub fine-grained tokens
+            r"(?:xoxe\.)?xox[abeprs]-[A-Za-z0-9-]{10,}",  # Slack tokens, refresh tokens too
+            r"xapp-[A-Za-z0-9-]{10,}",  # Slack app-level tokens
             r"(?i:bearer)\s+[A-Za-z0-9._~+/=-]{16,}",  # bearer tokens
             r"Illegal header (?:name|value) .*",  # h11 quotes the bad header
         ]

@@ -1,8 +1,27 @@
 # Quickstart
 
-This walks through a small order bot and one test: what does the bot say when its `get_order` tool times out?
+This page takes you from a fresh clone to a test that fails, and then passes after a fix.
+It uses the small order bot in the repository, under `tests/example`.
 
-## 1. The agent
+You need Python 3.11 or newer, an OpenAI API key, and about five minutes.
+
+## 1. Get the example and install Scrimmage
+
+```bash
+git clone https://github.com/ManishKumar97/faultline
+cd faultline
+python -m venv .venv
+. .venv/bin/activate
+pip install ./packages/scrimmage ./packages/scrimmage-core openai
+export OPENAI_API_KEY=...   # your own key
+cd tests/example
+```
+
+The bot calls OpenAI through the `openai` library, so that library is installed too.
+Scrimmage itself needs nothing outside Python's standard library.
+See [Install](install.md) for other ways to install it.
+
+## 2. The agent
 
 The bot is a Python function with its own loop.
 It asks the model, runs the tools the model asks for, and returns the answer.
@@ -15,28 +34,29 @@ acme/
 ```
 
 ```python
-# acme/agent.py (shortened)
-from acme import tools
+# acme/agent.py, shortened
+def run_tool(name: str, arguments: str) -> str:
+    try:
+        result = getattr(tools, name)(**json.loads(arguments))
+    except Exception as exc:  # the bot tells the model what went wrong
+        return f"error: {type(exc).__name__}: {exc}"
+    ...
 
 
 def answer(question: str) -> str:
-    ...
-    result = getattr(tools, call.function.name)(**arguments)
-    ...
+    return loop(openai.OpenAI(max_retries=0), question)
 ```
 
 Nothing in this code mentions Scrimmage.
-The full example is in the repository under `tests/example/`.
 
-## 2. The test file
+## 3. The test file
 
-Next to the code, write `scrimmage.toml`:
+Next to the code is `scrimmage.toml`:
 
 ```toml
 [agent]
 function = "acme.agent:answer"
-tools    = ["acme.tools:get_order", "acme.tools:check_inventory",
-            "acme.tools:refund_order", "acme.tools:get_stock"]
+tools    = ["acme.tools:get_order", "acme.tools:check_inventory", "acme.tools:refund_order", "acme.tools:get_stock"]
 real     = ["tool:check_inventory"]
 
 [[test]]
@@ -49,8 +69,8 @@ call    = "tool:get_order"
 returns = "shipped, Oct 30"
 
 [[test.mock]]
-call    = "tool:get_stock"
-returns = {sku = "SKU-42", count = 12}   # becomes an acme.models.Stock
+call    = "tool:get_stock"             # returns an acme.models.Stock object
+returns = {sku = "SKU-42", count = 12}
 
 [[test.fault]]
 call = "tool:get_order"
@@ -59,16 +79,21 @@ expect = [["unable", "sorry", "try again"]]
 forbid = ["Oct 30", "October 30"]
 ```
 
-This says:
+The file in the repository has one more line, `model_hosts`.
+It lets the repository's own tests send model calls to a fake model server on `127.0.0.1`.
+It changes nothing when you use a real key.
+
+This file says:
 
 - run `acme.agent:answer` with the question;
-- `get_order` returns "shipped, Oct 30", and `get_stock` returns a `Stock` with 12 in stock, instead of calling real systems;
+- `get_order` returns "shipped, Oct 30", and `get_stock` returns a `Stock` with 12 in stock, so no real system is called;
 - `check_inventory` is safe to run for real;
 - `refund_order` is neither mocked nor safe, so if the agent calls it, the call is refused;
 - the answer must say "shipped" and give the date, in either spelling;
-- then try the same test again with `get_order` timing out. There the answer must admit the failure and give no date.
+- then run the same test with `get_order` timing out.
+  There the answer must admit the failure and give no date.
 
-## 3. Run it
+## 4. Run it
 
 First check the file. This runs nothing and costs nothing:
 
@@ -76,7 +101,7 @@ First check the file. This runs nothing and costs nothing:
 scrimmage check
 ```
 
-```text
+```text title="Output"
 scrimmage check: scrimmage.toml is valid: 1 test, 2 rows, 6 runs, 4 tools, a budget of $5
 ```
 
@@ -86,34 +111,108 @@ Then run the test:
 scrimmage test
 ```
 
-```text
-scrimmage test: 1 test, 2 rows, 6 runs; records in scrimmage-runs/20261105T075653Z-e277a2
+```text title="Output"
+scrimmage test: 1 test, 2 rows, 6 runs; records in /home/me/faultline/tests/example/scrimmage-runs/20261107T193000Z-4c1d2a
 test          row       fault                   runs  fired  done  passed  rate  range    tools  cost     result
-order-status  baseline  -                       3     -      3     3/3     100%  44-100%  2.0    0.00015  pass
-order-status  fault 1   tool:get_order timeout  3     3      3     3/3     100%  44-100%  2.0    0.00015  pass
+order-status  baseline  -                       3     -      3     3/3     100%  44-100%  2.0    0.00016  pass
+order-status  fault 1   tool:get_order timeout  3     3      3     3/3     100%  44-100%  2.0    0.00016  pass
 range: a 95% Wilson interval, from these runs alone
 model calls cost $0.0003 of a budget of $5
 ```
 
 Scrimmage ran the test as two **rows**: a baseline with the mocks and no fault, and one row with the timeout.
-Each row ran three times, each time as a brand-new program.
-In all three fault runs the timeout fired, and the bot admitted it, so both rows pass.
-The rate and its range say what happened in these three runs, not what the next run will do.
-If a row fails, the lines under the table name the rule that broke. See [Judging an answer](judging.md).
+Each row ran three times, each time as a new program.
+In all three fault runs the timeout fired, and the bot said it could not look up the order, so both rows pass.
+The rate and its range describe these three runs only.
+They do not predict the next run.
 
-## 4. Read what happened
+Your answers will use different words, and your cost will differ a little.
+
+## 5. Add a fault the bot does not handle
+
+What happens when the model itself is busy and answers with HTTP 429, "too many requests", just once?
+Add a second fault at the end of `scrimmage.toml`:
+
+```diff title="scrimmage.toml"
++
++[[test.fault]]
++call = "model"
++do   = "status 429"
++when = "first 1"
+```
+
+`first 1` fails only the first model call of each run.
+Scrimmage answers that call itself with a 429 reply shaped like the provider's, so nothing reaches OpenAI and it costs nothing.
+This fault row has no rules of its own, so the answer must pass the test's own rules: after one busy reply, the bot should still answer.
+
+```bash
+scrimmage test
+```
+
+```text title="Output"
+scrimmage test: 1 test, 3 rows, 9 runs; records in /home/me/faultline/tests/example/scrimmage-runs/20261107T193100Z-9e0b17
+test          row       fault                     runs  fired  done  passed  rate  range    tools  cost     result
+order-status  baseline  -                         3     -      3     3/3     100%  44-100%  2.0    0.00016  pass
+order-status  fault 1   tool:get_order timeout    3     3      3     3/3     100%  44-100%  2.0    0.00016  pass
+order-status  fault 2   model status 429 first 1  3     3      0     0/3     0%    0-56%    0.0    0.00000  fail
+range: a 95% Wilson interval, from these runs alone
+fail: order-status fault 2: 0/3 passed, pass_rate is 1
+  3 runs: crashed: /home/me/faultline/tests/example/scrimmage-runs/20261107T193100Z-9e0b17/run-312d14f54352.log, /home/me/faultline/tests/example/scrimmage-runs/20261107T193100Z-9e0b17/run-a5fa971e377c.log, /home/me/faultline/tests/example/scrimmage-runs/20261107T193100Z-9e0b17/run-355cdc9d4a47.log
+model calls cost $0.0003 of a budget of $5
+note: order-status fault 2: 3 crashed
+```
+
+The new row fails, and `scrimmage test` exits with code 1.
+Every run crashed.
+The log of a run ends with the error your agent raised:
+
+```text
+openai.RateLimitError: Error code: 429 - Rate limit reached for default-codex in organization org-{id} on requests per min. ...
+```
+
+The bot builds its client with `max_retries=0`, so the first busy reply ends the whole answer.
+
+## 6. Fix the bot
+
+Let the `openai` library retry, as it does by default:
+
+```diff title="acme/agent.py"
+-    return loop(openai.OpenAI(max_retries=0), question)
++    return loop(openai.OpenAI(max_retries=2), question)
+```
+
+```bash
+scrimmage test
+```
+
+```text title="Output"
+scrimmage test: 1 test, 3 rows, 9 runs; records in /home/me/faultline/tests/example/scrimmage-runs/20261107T193200Z-27f0c3
+test          row       fault                     runs  fired  done  passed  rate  range    tools  cost     result
+order-status  baseline  -                         3     -      3     3/3     100%  44-100%  2.0    0.00016  pass
+order-status  fault 1   tool:get_order timeout    3     3      3     3/3     100%  44-100%  2.0    0.00016  pass
+order-status  fault 2   model status 429 first 1  3     3      3     3/3     100%  44-100%  2.0    0.00016  pass
+range: a 95% Wilson interval, from these runs alone
+model calls cost $0.0005 of a budget of $5
+```
+
+Every row passes, and `scrimmage test` exits with code 0.
+In each run the first model call got the 429, the library waited and retried, and the retry went through.
+Keep the fault row in the file, so a later change that turns retries off again fails the test.
+
+## 7. Read what happened
 
 Each run has a record in `scrimmage-runs/`, one JSON object per line:
 
 ```json
+{"call": "model:openai", "action": "fault", "fault": {"do": "status 429", "n": 1, "when": "first 1"}, "model": "gpt-4o-mini", "status": 429, ...}
 {"call": "model:openai", "action": "real", "model": "gpt-4o-mini", "status": 200, "cost_usd": 0.0000225, ...}
-{"call": "tool:get_order", "action": "fault", "fault": {"do": "timeout", "when": "always", "n": 1},
- "error": "TimeoutError: get_order timed out", ...}
-{"call": "tool:get_stock", "action": "mock", ...}
+{"call": "tool:get_order", "action": "mock", ...}
 {"summary": {"outcome": "answered", "answer": "...", "fault_fired": true, "judged": "pass", ...}}
 ```
 
-The answer is in the summary line, so you can read what the bot said, and `judged` says how that run counted.
+The last line is the summary.
+It holds the answer, and `judged` says how that run counted.
+See [Judging an answer](judging.md) for the rules, and [Concepts](concepts.md) for rows, runs and records.
 
 ## Exit codes
 
@@ -124,4 +223,4 @@ The answer is in the summary line, so you can read what the bot said, and `judge
 | 2 | A mistake in the test: a refused call, a fault that never fired, a mock that does not fit its type, a misspelled label, a failed baseline, a row with no result, or a test the budget stopped |
 | 3 | An infrastructure error: a run whose record is incomplete, an error from the provider nobody injected, or a failure inside Scrimmage itself |
 
-Next: [Failing the model, and keeping a budget](model-faults.md), [An agent run as a script](scripts.md) if yours is a program and not a function, or [Concepts](concepts.md).
+Next: the [examples](examples/index.md), [Failing the model, and keeping a budget](model-faults.md), or [An agent run as a script](scripts.md) if your agent is a program and not a function.

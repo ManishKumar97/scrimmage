@@ -1,0 +1,105 @@
+# The product website. Build it with: uv run --group docs mkdocs build --strict
+# The site's title is site_name. The pages write the name out in their text, over 300
+# times, so a rename is a case-preserving find-and-replace across docs/; --strict then
+# catches any link or anchor the replace broke.
+#
+# Material for MkDocs reaches end of life on 5 May 2027; its team's successor is Zensical.
+# Move to Zensical before then. Until that move, keep the theme as it is and the schemas
+# hook thin, so there is little to port.
+site_name: Scrimmage
+site_description: An in-process fault injector for AI agents under test.
+repo_url: https://github.com/ManishKumar97/faultline
+edit_uri: ""
+
+docs_dir: docs
+site_dir: site
+exclude_docs: |
+  hooks/
+
+hooks:
+  - docs/hooks/schemas.py
+
+# In strict mode, each of these warnings fails the build.
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+
+nav:
+  - Home: index.md
+  - Get started:
+      - Install: install.md
+      - Quickstart: quickstart.md
+  - Examples:
+      - examples/index.md
+      - "Example: a function agent": examples/function-agent.md
+      - "Example: a script and its child process": examples/script-agent.md
+      - "Example: LangGraph tools": examples/langgraph.md
+      - "Example: MCP tools": examples/mcp.md
+      - "Example: a web request inside a tool": examples/web-request.md
+      - "Example: judging an answer": examples/judging.md
+      - "Example: a fault on one model": examples/one-model.md
+  - Concepts:
+      - Concepts: concepts.md
+      - How it works: how-it-works.md
+  - Guides:
+      - Failing the model: model-faults.md
+      - Agents on a framework: frameworks.md
+      - An agent run as a script: scripts.md
+      - Web requests: web-requests.md
+      - MCP tools: mcp.md
+      - Judging an answer: judging.md
+  - Reference:
+      - Commands: cli.md
+      - JSON output: json-output.md
+      - Configuration: configuration.md
+      - Schemas: schemas.md
+      - Limits: limits.md
+  - Safety and security:
+      - Safety: safety.md
+      - Security: security.md
+  - Benchmarks: benchmarks.md
+  - Changelog: changelog.md

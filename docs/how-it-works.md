@@ -7,7 +7,7 @@ Scrimmage has two parts.
 
 ## One run, step by step
 
-1. `scrimmage test` starts a small **control server** on your machine (127.0.0.1 only) and makes a random secret for this test.
+1. `scrimmage test` starts a small **control server** on your machine (127.0.0.1 only) and makes a random secret for this test, the run token.
 2. For each run, it stores the run's **plan**: the mocks, the fault, the tools and what is safe to run for real.
 3. It starts a new program through `scrimmage-run`, in its own process group, with the run's name, the control server's address and the secret in environment variables. For a function that program is Scrimmage's starter. For a script it is your command, with the question as one argument and no shell.
 4. `scrimmage-run` puts a folder holding one file, `sitecustomize.py`, first on Python's path. Python runs that file before anything else.

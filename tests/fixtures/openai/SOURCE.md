@@ -24,6 +24,8 @@ Only the tool name, its arguments, the call id and the answer text are changed; 
 | `acme_admits.json` | Default | the answer text, for a conversation where a tool failed |
 | `acme_three_orders.json` | Functions | three `get_order` calls in one reply |
 | `docs_search.json` | Functions | calls the MCP tool `search` with `{"q": "refunds"}` |
+| `docs_answer.json` | Default | the answer text, for the docs example on MCP tools |
+| `docs_admits.json` | Default | the answer text, for a conversation where the MCP tool failed |
 
 These come from the same spec, for model faults and the budget.
 Where the spec shows a placeholder, the placeholder is removed so the file is valid; nothing else changes unless the table says so.
