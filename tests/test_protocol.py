@@ -5,6 +5,7 @@ import dataclasses
 import hashlib
 import http.client
 import json
+import signal
 import stat
 import threading
 import time
@@ -331,6 +332,30 @@ def test_a_forked_sender_starts_empty_with_new_locks(server: ControlServer) -> N
     sender.client = ControlClient(server.url, TOKEN)
     sender.put(line(2))
     assert server.store.lines("run-1") == [line(2)]
+
+
+def blocked_in(thread: threading.Thread) -> set[int]:
+    """The signals a thread blocks, as Linux shows them: SigBlk is a hex mask, bit n-1."""
+    status = Path(f"/proc/self/task/{thread.native_id}/status").read_text()
+    mask = int(next(x for x in status.splitlines() if x.startswith("SigBlk:")).split()[1], 16)
+    return {n for n in range(1, 65) if mask >> (n - 1) & 1}
+
+
+@pytest.mark.design("stop.sdk_threads_deaf")
+@pytest.mark.skipif(not Path("/proc/self/task").is_dir(), reason="reads Linux's /proc")
+def test_the_sender_thread_blocks_the_stop_signals_and_its_creator_does_not() -> None:
+    """The kernel can then give the runner's SIGTERM only to a thread that can run the
+    handler, never to the SDK's own, which would leave the main thread stuck in its call."""
+    sender = Sender(ControlClient("http://127.0.0.1:9", TOKEN), "run-1")
+    before = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+    sender.start()
+    try:
+        assert {signal.SIGINT, signal.SIGTERM} <= blocked_in(sender._thread)  # type: ignore[reportPrivateUsage]
+        assert signal.pthread_sigmask(signal.SIG_BLOCK, set()) == before  # put back
+        assert signal.SIGTERM not in blocked_in(threading.current_thread())
+    finally:
+        sender._stop.set()  # type: ignore[reportPrivateUsage]
+        sender._thread.join(30)  # type: ignore[reportPrivateUsage]
 
 
 @pytest.mark.design("stop.one_line_per_call")

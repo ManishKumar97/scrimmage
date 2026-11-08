@@ -22,6 +22,7 @@ from scrimmage_core import (
     mcp_gate,
     process_gate,
     state,
+    threads,
     tool_gate,
 )
 from scrimmage_core.client import ControlClient, ControlError, Sender
@@ -88,7 +89,7 @@ def handle_sigterm(last_lines: Callable[[], None]) -> None:
         signal.signal(signum, signal.SIG_IGN)  # the runner may send it twice
         try:
             worker = threading.Thread(target=last_lines, daemon=True)
-            worker.start()
+            threads.start(worker)
             worker.join(TERM_WAIT_S)
         except RuntimeError:  # Python is already shutting down, so no new thread
             pass
