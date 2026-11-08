@@ -3,6 +3,8 @@
 
 _ = object()
 _.do_POST  # tests/fakes/openai_server.py: http.server calls do_<METHOD> by name
+_.connection_made  # tests/fakes/fast_server.py: asyncio calls a Protocol's methods by name
+_.data_received  # tests/fakes/fast_server.py: asyncio calls a Protocol's methods by name
 _.log_message  # tests/fakes/openai_server.py: http.server calls it per request
 _.do_GET  # control.py and test_protocol.py: http.server calls do_<METHOD> by name
 _.daemon_threads  # control.py: socketserver.ThreadingMixIn reads it
