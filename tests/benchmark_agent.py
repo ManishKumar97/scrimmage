@@ -6,14 +6,15 @@ nanoseconds; the first few calls of each case, which set up connections, are lef
 
 BENCH_MODE says what is kept. "samples", the default, keeps every call's time. "batches"
 keeps each batch's median, for the budget test to compare a plain process with a gated
-one. "trips", inside a run, counts the requests each call makes to the runner, off the
-sender thread: a count, so it needs no clock.
+one. "trips", inside a run, counts the requests each call makes to the runner on the wire,
+off the sender thread: a count, so it needs no clock.
 
 With BENCH_PROFILE set, the calls run under cProfile and the stats go to that file.
 """
 
 import asyncio
 import cProfile
+import http.client
 import json
 import os
 import statistics
@@ -23,6 +24,7 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 WARMUP = 10
 COUNTS = {
@@ -86,26 +88,27 @@ async def measure_async(call: Callable[[], Awaitable[object]], count: int) -> li
 
 
 class RoundTrips:
-    """Counts each request to the runner that a gated call waits on.
+    """Counts each request to the runner that a gated call waits on, as it goes on the wire.
 
-    The sender thread's requests, which carry record lines in the background, are left
-    out. Every other thread's count, as an async call asks from a worker thread.
+    It wraps http.client's request, for connections to the runner's port, so a request that
+    did not go through the SDK's client is counted too. The sender thread's requests, which
+    carry record lines in the background, are left out. Every other thread's count, as an
+    async call asks from a worker thread.
     """
 
     def __init__(self) -> None:
-        from scrimmage_core.client import ControlClient
-
         self.count = 0
         self.lock = threading.Lock()
-        real = ControlClient._send
+        port = urlsplit(os.environ["SCRIMMAGE_CONTROL_URL"]).port
+        real = http.client.HTTPConnection.request
 
-        def counted(client: ControlClient, method: str, path: str, payload: object) -> Any:
-            if threading.current_thread().name != SENDER_THREAD:
+        def counted(conn: http.client.HTTPConnection, *args: Any, **kwargs: Any) -> Any:
+            if conn.port == port and threading.current_thread().name != SENDER_THREAD:
                 with self.lock:
                     self.count += 1
-            return real(client, method, path, payload)
+            return real(conn, *args, **kwargs)
 
-        ControlClient._send = counted  # type: ignore[method-assign]
+        http.client.HTTPConnection.request = counted  # type: ignore[method-assign, assignment]
 
 
 class Recorder:
