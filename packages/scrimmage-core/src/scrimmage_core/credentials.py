@@ -13,6 +13,7 @@ import fnmatch
 import ipaddress
 import re
 import urllib.parse
+from collections.abc import Mapping
 
 # AWS services whose replies are credentials or secrets, in every partition and FIPS form.
 AWS = {
@@ -59,6 +60,10 @@ ENDPOINTS: tuple[tuple[str, str, str], ...] = (
     ("*", "*/token", ""),
     ("*", "*/login/oauth/access_token", ""),
 )
+# The header every HashiCorp Vault client sends. A secret mount can sit at any depth under a
+# namespace, as /v1/team/kv/data/db does, and by its path alone that looks like an ordinary
+# /v1/stations/KSEA/data/latest, so the header says what the path cannot.
+VAULT_TOKEN = "x-vault-token"
 SLASHES = re.compile(r"/{2,}")
 NUMBER = re.compile(r"0x[0-9a-f]+|[0-9]+")  # an IPv4 address written as one number
 
@@ -100,3 +105,8 @@ def credential(host: str, path: str) -> str | None:
         if fnmatch.fnmatchcase(host, host_pattern) and rule.fullmatch(path):
             return what or f"an endpoint that matches a credential path pattern ({path_pattern})"
     return None
+
+
+def carries_vault_token(headers: Mapping[str, str]) -> bool:
+    """Whether a request carries a Vault token, which names it a request to Vault's API."""
+    return VAULT_TOKEN in {name.lower() for name in headers}

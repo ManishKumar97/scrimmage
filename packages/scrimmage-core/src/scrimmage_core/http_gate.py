@@ -915,7 +915,9 @@ def record(
     if step.call.kind != "model":
         extra.update(status=response.status_code, result=blob(body, ctx.sender, total=size))
         if ctx.run.recording and step.call.provider is None:  # a model host is never recorded
-            extra["recorded"] = web_recorded(request, response, body, encoding)
+            extra["recorded"] = ctx.run.recorded(
+                lambda: web_recorded(request, response, body, encoding)
+            )
         return 0.0
     used = openai_table.usage(body, output_required=step.call.name == "chat")
     tokens_in, tokens_out, cached = used.input, used.output, used.cached
@@ -944,6 +946,8 @@ def web_recorded(request: Any, response: Any, body: bytes, encoding: str) -> dic
     """
     host, path = host_of(request.url), path_of(request.url)
     what = credentials.credential(host, path)
+    if what is None and credentials.carries_vault_token(request.headers):
+        what = "HashiCorp Vault's API, as its token header says"
     if what is not None:
         return {"code": "credential", "why": f"a request to {what} is never recorded"}
     unpacked = encoding.strip().lower() in ("", "identity", "gzip", "deflate")
