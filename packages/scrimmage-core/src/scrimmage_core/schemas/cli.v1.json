@@ -895,7 +895,8 @@
         "method",
         "path",
         "calls",
-        "message"
+        "message",
+        "instead"
       ],
       "properties": {
         "call": {
@@ -945,6 +946,13 @@
         },
         "message": {
           "type": "string"
+        },
+        "instead": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The mock written in this call's place, so it needs nothing from the team, or null."
         }
       }
     },

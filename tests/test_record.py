@@ -1,6 +1,7 @@
 """scrimmage record end to end: real runs of a small bot against a local service."""
 
 import contextlib
+import difflib
 import json
 import signal
 import threading
@@ -172,6 +173,12 @@ class Team:
         assert captured.err == "", captured.err
         assert doc["command"] == "record" and doc["exit"] == code
         validate(doc)  # the shipped schema and the tests' closed copy of it
+        if doc["out"] is not None:
+            text = self.out_path.read_text()
+            for entry in (m for found in doc["tests"] for m in found["manual"]):
+                assert f'# call    = "{entry["call"]}"' in text, entry  # a skeleton per listing
+        else:
+            assert doc["numbers"]["calls_written"] == 0
         return Done(code, doc, captured.out, captured.err, self)
 
     def record_text(self, *flags: str) -> tuple[int, str]:
@@ -1415,3 +1422,419 @@ def answer(question):
     assert [m["path"] for m in done.manual("incomplete_reply")] == ["/big"]
     code, out = team.test_output()
     assert code == 0 and team.service.requests == [], out
+
+
+# A tool mock is written only if nothing forbidden is beneath the tool.
+
+
+def test_a_credential_reply_never_reaches_the_file_through_a_tool_mock(team: Team) -> None:
+    team.service.routes["/oauth/token"] = (200, {}, b'{"access_token": "live-token-value"}')
+    team.service.routes["/png"] = (200, {"content-type": "image/png"}, b"\x89PNG\r\n\xff\xfe")
+    team.write(
+        """
+def connect(name):
+    token = httpx.post(SERVICE + "/oauth/token", timeout=30, json={}).json()["access_token"]
+    http_get("/png")
+    return {"db_pw": token}
+
+def answer(question):
+    connect("x")
+    return "ok"
+""",
+        ["bot:connect"],
+        ("tool:connect", "http:localhost POST /oauth/token"),
+    )
+    done = team.record()
+    assert done.code == 1, done.out
+    assert not any(m["call"] == "tool:connect" for m in done.mocks())
+    assert "live-token-value" not in team.out_path.read_text()
+    assert [s["path"] for s in done.skipped("credential")] == ["/oauth/token"]
+    assert [m["path"] for m in done.manual("binary")] == ["/png"]
+    assert done.doc["numbers"] == {"calls_seen": 1, "calls_written": 0}
+
+
+@pytest.mark.parametrize(
+    ("route", "extra"),
+    [
+        ("/down", "status"),
+        ("/secret", "secret_changed_shape"),
+        ("/model", "model_inside"),
+    ],
+    ids=["a-503", "a-password-body", "the-model"],
+)
+def test_nothing_forbidden_two_levels_down_gets_a_tool_mock(
+    team: Team, fake_openai: Callable[..., FakeOpenAI], route: str, extra: str
+) -> None:
+    team.service.json("/down", {"error": "down"}, status=503)
+    team.service.routes["/secret"] = (
+        200,
+        {"content-type": "application/json"},
+        b'{"password": "hunter2", "v": null}',
+    )
+    team.write(
+        f"""
+import openai
+
+def inner(name):
+    if {route!r} == "/model":
+        openai.OpenAI().chat.completions.create(
+            model="gpt-4o-mini", messages=[{{"role": "user", "content": name}}]
+        )
+    else:
+        http_get({route!r})
+    return {{"inner": "done"}}
+
+def outer(name):
+    return inner(name)
+
+def answer(question):
+    outer("x")
+    return "ok"
+""",
+        ["bot:inner", "bot:outer"],
+        ("tool:inner", "tool:outer"),
+        agent_extra='model_hosts = [{host = "127.0.0.1", provider = "openai"}]\n',
+    )
+    if route == "/model":
+        fake = fake_openai(["chat_answer"])
+        team.project.monkeypatch.setenv("OPENAI_BASE_URL", fake.base_url)
+        team.project.monkeypatch.setenv("OPENAI_API_KEY", "test")
+    done = team.record()
+    assert done.code == 1, done.out
+    calls = {m["call"] for m in done.mocks()}
+    assert "tool:outer" not in calls and "tool:inner" not in calls
+    assert done.manual(extra)
+    assert "hunter2" not in team.out_path.read_text()
+
+
+def test_a_refusal_a_tool_swallows_still_stops_its_mock(team: Team) -> None:
+    team.write(
+        """
+def careful(name):
+    try:
+        httpx.post(SERVICE + "/write", timeout=30, json={})
+    except Exception:
+        pass
+    return {"fine": True}
+
+def answer(question):
+    careful("x")
+    return "ok"
+""",
+        ["bot:careful"],
+        ("tool:careful",),
+    )
+    done = team.record()
+    assert done.code == 2, done.out
+    assert not any(m["call"] == "tool:careful" for m in done.mocks())
+    assert [m["path"] for m in done.manual("refused")] == ["/write"]
+
+
+def test_a_web_request_body_never_goes_in_a_comment(team: Team) -> None:
+    team.service.routes["/save"] = (503, {}, b"down")
+    team.write(
+        """
+def save(name):
+    httpx.post(SERVICE + "/save", json={"password": "hunter2", "note": "n"}, timeout=30)
+    return "x"
+
+def answer(question):
+    save("x")
+    return "ok"
+""",
+        ["bot:save"],
+        ("tool:save", "http:localhost POST /save"),
+    )
+    done = team.record()
+    assert done.code == 1, done.out
+    text = team.out_path.read_text()
+    assert "hunter2" not in text and "note" not in text
+
+
+def test_json_inside_a_string_is_checked_by_its_keys(team: Team) -> None:
+    team.write(
+        """
+def as_text(name):
+    return json.dumps({"password": "hunter2", "v": 1})
+
+def clean_text(name):
+    return json.dumps({"v": 1})
+
+def answer(question):
+    as_text("x")
+    clean_text("y")
+    return "ok"
+""",
+        ["bot:as_text", "bot:clean_text"],
+        ("tool:as_text", "tool:clean_text"),
+    )
+    done = team.record()
+    assert done.code == 1, done.out
+    assert [m["call"] for m in done.manual("secret_changed_shape")] == ["tool:as_text"]
+    assert [m["call"] for m in done.mocks()] == ["tool:clean_text"]
+    assert "hunter2" not in team.out_path.read_text()
+
+
+def test_an_existing_output_is_replaced_only_if_record_wrote_it(team: Team) -> None:
+    team.write(
+        """
+def get_order(order_id):
+    return {"id": order_id}
+
+def answer(question):
+    get_order("1")
+    return "ok"
+""",
+        ["bot:get_order"],
+        ("tool:get_order",),
+    )
+    team.out_path.write_text("# my own notes, kept by hand\n")
+    refused = team.record()
+    assert refused.code == 2 and refused.doc["out"] is None, refused.out
+    assert team.out_path.read_text() == "# my own notes, kept by hand\n"
+    assert any("did not write it" in m["message"] for m in refused.doc["mistakes"])
+    team.out_path.unlink()
+    first = team.record()
+    assert first.code == 0 and team.out_path.exists(), first.out
+    earlier = team.out_path.read_text()
+    (team.root / "bot.py").write_text(
+        (team.root / "bot.py").read_text().replace('get_order("1")', "pass")
+    )
+    empty = team.record()
+    assert empty.doc["out"] is None and team.out_path.read_text() == earlier, empty.out
+    assert any("kept as it was" in n["message"] for n in empty.doc["notes"])
+
+
+def test_a_success_and_a_failure_on_the_same_arguments_are_nondeterministic(team: Team) -> None:
+    team.write(
+        """
+COUNT = [0]
+
+def flaky(key):
+    COUNT[0] += 1
+    if COUNT[0] == 1:
+        return {"ok": True}
+    raise ValueError("second call")
+
+def nulled(key):
+    COUNT[0] += 1
+    return {"v": None} if COUNT[0] > 3 else {"v": 1}
+
+def answer(question):
+    flaky("a")
+    try:
+        flaky("a")
+    except ValueError:
+        pass
+    nulled("b")
+    nulled("b")
+    return "ok"
+""",
+        ["bot:flaky", "bot:nulled"],
+        ("tool:flaky", "tool:nulled"),
+    )
+    done = team.record()
+    assert done.code == 1, done.out
+    assert done.mocks() == []
+    assert sorted(m["call"] for m in done.manual("nondeterministic")) == [
+        "tool:flaky",
+        "tool:nulled",
+    ]
+
+
+def test_a_redirect_falls_back_to_the_tool_and_says_so(team: Team) -> None:
+    team.service.routes["/old"] = (301, {"location": "/new"}, b"")
+    team.service.json("/new", {"v": 1})
+    team.write(
+        """
+def moved(name):
+    return httpx.get(SERVICE + "/old", timeout=30, follow_redirects=True).json()
+
+def answer(question):
+    moved("x")
+    return "ok"
+""",
+        ["bot:moved"],
+        ("tool:moved",),
+    )
+    done = team.record()
+    assert done.code == 1, done.out
+    (mock,) = done.mocks()
+    assert mock["call"] == "tool:moved"
+    (entry,) = done.manual("status")
+    assert entry["path"] == "/old" and "tool:moved" in entry["instead"]
+    code, out = team.record_text()
+    assert code == 1
+    assert "instead:" in out and "by hand" not in out.split("records in", 1)[1]
+
+
+def test_a_tight_loop_of_350_calls_completes(team: Team) -> None:
+    team.write(
+        """
+def lookup(n):
+    return {"n": n}
+
+def answer(question):
+    for i in range(350):
+        lookup(i)
+    return "ok"
+""",
+        ["bot:lookup"],
+        ("tool:lookup",),
+    )
+    done = team.record()
+    assert done.code == 0, done.out
+    assert done.doc["numbers"] == {"calls_seen": 350, "calls_written": 350}
+
+
+def test_a_body_of_newlines_is_measured_as_toml(team: Team) -> None:
+    team.service.routes["/nl"] = (200, {"content-type": "text/plain"}, b"\n" * 40000)
+    team.write(
+        """
+def lines(name):
+    http_get("/nl")
+    return "lines"
+
+def answer(question):
+    lines("x")
+    return "ok"
+""",
+        ["bot:lines"],
+        ("tool:lines",),
+    )
+    done = team.record()
+    assert done.code == 1, done.out
+    (entry,) = done.manual("too_large")
+    assert "80002 bytes" in entry["message"]
+
+
+def answers(team: Team) -> list[str]:
+    files = sorted(team.root.glob("scrimmage-runs/*/*.jsonl"), key=lambda f: f.stat().st_mtime_ns)
+    return [str(json.loads(f.read_text().splitlines()[-1])["summary"]["answer"]) for f in files]
+
+
+TYPED = """
+from dataclasses import dataclass
+from typing import NamedTuple
+import datetime
+import pydantic
+
+@dataclass
+class Stock:
+    sku: str
+    count: int
+
+class Point(NamedTuple):
+    x: int
+    y: float
+
+class Order(pydantic.BaseModel):
+    order_id: str
+    total: float
+
+class Rounded(pydantic.BaseModel):
+    value: float | int
+
+    @pydantic.field_serializer("value")
+    def whole(self, value):
+        return int(value)
+
+def get_stock(sku):
+    return Stock(sku, 12)
+
+def get_point(n):
+    return Point(1, 2.5)
+
+def get_order(order_id):
+    return Order(order_id=order_id, total=9.0)
+
+def rounded(n):
+    return Rounded(value=1.0)
+
+def when(n):
+    return datetime.datetime(2026, 1, 1)
+
+def answer(question):
+    values = [get_stock("a"), get_point("p"), get_order("o")]
+    rounded("r")
+    when("w")
+    return "ok " + repr(values) + " " + " ".join(type(v).__name__ for v in values)
+"""
+
+
+def test_typed_values_round_trip_and_the_rest_are_listed_through_the_command(team: Team) -> None:
+    team.write(
+        TYPED,
+        ["bot:get_stock", "bot:get_point", "bot:get_order", "bot:rounded", "bot:when"],
+        ("tool:get_stock", "tool:get_point", "tool:get_order", "tool:rounded", "tool:when"),
+    )
+    done = team.record()
+    assert done.code == 1, done.out
+    assert {m["call"] for m in done.mocks()} == {
+        "tool:get_stock",
+        "tool:get_point",
+        "tool:get_order",
+    }
+    unsavable = {m["call"]: m["message"] for m in done.manual("unsavable")}
+    assert set(unsavable) == {"tool:rounded", "tool:when"}
+    assert "datetime" in unsavable["tool:when"]
+    assert "value" in unsavable["tool:rounded"]
+    code, out = team.test_output()
+    assert code == 0, out
+    assert len(set(answers(team))) == 1  # the recorded run and every test run gave one answer
+
+
+def test_an_mcp_result_the_mock_cannot_give_is_listed_through_the_command(
+    team: Team, tmp_path: Path
+) -> None:
+    team.project.monkeypatch.setenv(
+        "DOCS_SERVER", str(Path(__file__).parent / "fakes/docs_server.py")
+    )
+    team.project.monkeypatch.setenv("DOCS_LOG", str(tmp_path / "docs.log"))
+    team.project.monkeypatch.setenv("DOCS_MODE", "two")
+    team.project.monkeypatch.setenv("DOCS_TRANSPORT", "stdio")
+    team.write(
+        """
+from acme.docs_bot import connected
+
+def answer(question):
+    async def go():
+        async with connected() as session:
+            await session.list_tools()
+            await session.call_tool("note", {"q": "x"})
+    asyncio.run(go())
+    return "ok"
+""",
+        [],
+        ("mcp:docs/note",),
+    )
+    done = team.record()
+    assert done.code == 1, done.out
+    assert done.mocks() == []
+    assert [m["call"] for m in done.manual("unsavable")] == ["mcp:docs/note"]
+
+
+def test_a_failure_before_the_file_lands_leaves_no_file(
+    team: Team, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    team.write(
+        """
+def get_order(order_id):
+    return {"id": order_id}
+
+def answer(question):
+    get_order("1")
+    return "ok"
+""",
+        ["bot:get_order"],
+        ("tool:get_order",),
+    )
+
+    def broken(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise RuntimeError("no diff")
+
+    monkeypatch.setattr(difflib, "unified_diff", broken)
+    done = team.record()
+    assert done.code == 3 and not team.out_path.exists(), done.out
+    assert any("nothing was written" in i["message"] for i in done.doc["infra"])

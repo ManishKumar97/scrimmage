@@ -28,6 +28,7 @@ from scrimmage_core import runner as running
 from scrimmage_core.control import proc_key
 from scrimmage_core.decide import READ_METHODS
 from scrimmage_core.errors import ConfigError
+from scrimmage_core.state import BLOB_WAIT_S
 
 CAP = 64 * 1024  # a mock's value, as TOML, is at most this long: a reviewer must read it
 BIG_DIFF = 1000  # added lines a person can review at once
@@ -72,9 +73,22 @@ OUTSIDE_TOOL, CREDENTIAL = "outside_tool", "credential"
 SKIPPED_CODES = (OUTSIDE_TOOL, CREDENTIAL)
 # A tool whose call ended so gets no mock of its own, and keeps running for real: its value
 # would freeze a failure into every run, as a 5xx must not be, or copy a body whose secret
-# could not be taken out.
+# could not be taken out. A redirect is not a failure, so a 3xx does not block.
 NO_TOOL_MOCK = (STATUS, RAISED, SECRET_CHANGED_SHAPE)
 NOT_DATA = (401, 403, 407, 408, 429)
+MODEL_BENEATH, FROZEN_BENEATH, CREDENTIAL_BENEATH = "model", "frozen", "credential"
+# A sibling that failed or could not be saved, beside a success with the same arguments, means
+# the call's reply is not one fixed value, so a mock of the success would say what is not so.
+SIBLING_CODES = (
+    RAISED,
+    STATUS,
+    NULL,
+    PLACEHOLDER,
+    TOO_LARGE,
+    UNSAVABLE,
+    SECRET_CHANGED_SHAPE,
+)
+HEADER_START = "# Written by scrimmage record from "
 CUSTOMER_DATA = (
     "the mocks hold replies from real systems, which can hold customer data; "
     "check them before you commit them"
@@ -94,6 +108,11 @@ class Listed:
 
     code: str
     why: str
+    blocks: bool | None = None  # no tool above it gets a mock: by default, from its code
+
+    def __post_init__(self) -> None:
+        if self.blocks is None:
+            self.blocks = self.code in NO_TOOL_MOCK
 
 
 @dataclass
@@ -131,6 +150,20 @@ class Node:
     @property
     def label(self) -> str:
         return str(self.line.get("call"))
+
+
+@dataclass
+class Verdict:
+    """What one call means for the tools above it.
+
+    The invariant: a tool mock is written only if nothing forbidden is anywhere beneath the
+    tool. forbidden names what is there, and every level hands it up whole, so a call at any
+    depth, of a kind added later too, stops every tool above it from being mocked.
+    """
+
+    whole: bool  # this call is written whole at this level or below
+    mocks: list[Saved]
+    forbidden: set[str] = field(default_factory=set[str])
 
 
 @dataclass
@@ -221,7 +254,11 @@ def value_problem(name: str, value: object) -> Listed | None:
 def blob_data(folder: Path, entry: Fields) -> bytes:
     """A side-folder item's content. One that never arrived leaves the record incomplete."""
     if entry.get("unsaved"):
-        raise Incomplete(f"the side-folder item {entry.get('sha256')} was not saved")
+        raise Incomplete(
+            f"a burst of calls filled the queue of saved values for over {BLOB_WAIT_S:g} seconds, "
+            "so a saved value was lost; each call saves two values and the queue holds 64, so "
+            "make fewer calls at once in this test"
+        )
     try:
         return (folder / "blobs" / str(entry["sha256"])).read_bytes()
     except OSError as exc:
@@ -296,7 +333,12 @@ def web_outcome(line: Line, folder: Path) -> Outcome:
         int(cast(int, line.get("status") or 0)),
     )
     if not data_status(status):
-        return Listed(STATUS, f"it got status {status}, which a mock must not copy")
+        redirect = 300 <= status < 400
+        return Listed(
+            STATUS,
+            f"it got status {status}, which a mock must not copy",
+            blocks=False if redirect else None,
+        )
     if recorded.get("path_changed"):
         return Listed(SECRET_CHANGED_SHAPE, "its path holds a secret, so a mock could not match")
     if not recorded.get("utf8"):
@@ -497,6 +539,7 @@ class Recorder:
         roots, orphans = tree([line for line in lines if "call" in line])
         self.classify(walk(roots) + orphans)
         self.settle_groups()
+        self.settle_siblings()
         for node in roots:
             self.root(node)
         for node in orphans:
@@ -554,6 +597,25 @@ class Recorder:
             for member in members:
                 self.outcomes[id(member)] = Listed(code, why)
 
+    def settle_siblings(self) -> None:
+        """A tool or MCP call that succeeded once and failed once on the same arguments has no
+        one reply, so the group is nondeterministic. Web keeps its own 503-then-200 rule."""
+        groups: dict[tuple[str, str], list[Node]] = {}
+        for node_id in self.outcomes:
+            node = self.nodes[node_id]
+            if node.kind in ("tool", "mcp"):
+                sha = str(cast(Fields, node.line.get("args") or {}).get("sha256"))
+                groups.setdefault((node.label, sha), []).append(node)
+        for members in groups.values():
+            found = [self.outcomes[id(n)] for n in members]
+            listed = [o for o in found if isinstance(o, Listed) and o.code in SIBLING_CODES]
+            if not listed or not any(isinstance(o, Saved) for o in found):
+                continue
+            blocks = any(o.blocks for o in listed)
+            why = "the same arguments succeeded once and failed once, so no one reply stands"
+            for member in members:
+                self.outcomes[id(member)] = Listed(NONDETERMINISTIC, why, blocks=blocks)
+
     def root(self, node: Node) -> None:
         if node.action == "mock":
             self.kept(node)
@@ -565,10 +627,10 @@ class Recorder:
             self.root_web(node)
         elif node.kind in ("tool", "mcp") and id(node) in self.outcomes:
             self.record.seen += 1
-            whole, mocks = self.level(node)
-            if whole:
+            verdict = self.level(node)
+            if verdict.whole:
                 self.record.done += 1
-            self.chosen += mocks
+            self.chosen += verdict.mocks
 
     def root_web(self, node: Node) -> None:
         outcome = self.outcomes[id(node)]
@@ -583,78 +645,66 @@ class Recorder:
             self.record.seen += 1
             self.manual(node, Listed(NOT_FINISHED, "the tool that made it never finished"))
 
-    def level(self, node: Node) -> tuple[bool, list[Saved]]:
-        """Whether this call's level is written whole, and the mocks that make it so.
-
-        A tool with gated calls under it is written as those calls when each can be, so
-        its code still runs in a test. A tool with a call that cannot be written is
-        written itself, unless a tool mock of it must not be written (NO_TOOL_MOCK).
+    def level(self, node: Node) -> Verdict:
+        """This call's verdict. A tool with gated calls under it is written as those calls when
+        each can be, so its code still runs in a test. A tool with a call that cannot be written
+        falls back to a mock of itself, only when nothing forbidden is beneath it (see Verdict).
         """
         own = self.outcomes.get(id(node))
+        if isinstance(own, Listed) and own.code == CREDENTIAL:
+            self.skip(node, CREDENTIAL)
+            return Verdict(True, [], {CREDENTIAL_BENEATH})
         if not node.children:
             return self.leaf(node, own)
+        verdicts = [self.child_verdict(child) for child in node.children]
+        forbidden = {name for verdict in verdicts for name in verdict.forbidden}
+        mocks = [saved for verdict in verdicts for saved in verdict.mocks]
         if isinstance(own, Listed) and node.line.get("error"):
             self.manual(node, own)
-            for child in node.children:
-                self.visit_child(child)
-            return False, []
-        model_inside = False
-        frozen = False
-        cannot = False
-        children_mocks: list[Saved] = []
-        for child in node.children:
-            verdict, mocks = self.visit_child(child)
-            children_mocks += mocks
-            if verdict == "model":
-                model_inside = True
-            elif verdict == "frozen":
-                frozen = True
-            elif verdict == "cannot":
-                cannot = True
-        if model_inside:
-            self.manual(node, Listed(MODEL_INSIDE, "it made a model call, so it is never mocked"))
-            return False, children_mocks
-        if frozen:
-            return False, children_mocks
-        if cannot:
-            if isinstance(own, Saved):
-                self.mark_instead(node.children, own)
-                return True, [own]
-            if own is not None:
-                self.manual(node, own)
-            return False, []
-        return True, children_mocks
-
-    def leaf(self, node: Node, own: Outcome | None) -> tuple[bool, list[Saved]]:
+            return Verdict(False, [], forbidden | self.own_forbidden(own))
+        if MODEL_BENEATH in forbidden:
+            self.manual(node, Listed(MODEL_INSIDE, "a call under it reached the model"))
+            return Verdict(False, mocks, forbidden)
+        if FROZEN_BENEATH in forbidden:
+            return Verdict(False, mocks, forbidden)
+        if all(verdict.whole for verdict in verdicts):
+            return Verdict(True, mocks, forbidden)
+        if CREDENTIAL_BENEATH in forbidden:  # its value could hold what that request fetched
+            return Verdict(False, mocks, forbidden)
         if isinstance(own, Saved):
-            return True, [own]
-        if own is not None:
-            self.manual(node, own)
-        return False, []
+            self.mark_instead(node.children, own)
+            return Verdict(True, [own], set())
+        if own is None:
+            return Verdict(False, [], forbidden)
+        self.manual(node, own)
+        return Verdict(False, [], forbidden | self.own_forbidden(own))
 
-    def visit_child(self, child: Node) -> tuple[str, list[Saved]]:
-        """What one call a tool made means for that tool: "ok", "model", "frozen" (a failure
-        a tool mock must not freeze), or "cannot"."""
+    def own_forbidden(self, own: Listed) -> set[str]:
+        return {FROZEN_BENEATH} if own.blocks else set()
+
+    def leaf(self, node: Node, own: Outcome | None) -> Verdict:
+        if isinstance(own, Saved):
+            return Verdict(True, [own])
+        if own is None:
+            return Verdict(False, [])
+        self.manual(node, own)
+        return Verdict(False, [], self.own_forbidden(own))
+
+    def child_verdict(self, child: Node) -> Verdict:
+        """A call a tool made. What is not a kind known here is forbidden, so a new one is safe."""
         if child.action == "mock":
             self.kept(child)
-            return "ok", []
+            return Verdict(True, [])
         if child.action == "refused":
             self.refused(child)
-            return "cannot", []
+            return Verdict(False, [], {FROZEN_BENEATH})
         if child.kind == "model" or (child.kind == "http" and "provider" in child.line):
-            return "model", []
+            return Verdict(False, [], {MODEL_BENEATH})
         if child.kind == "process":
-            return "cannot", []
-        own = self.outcomes.get(id(child))
-        if isinstance(own, Listed) and own.code == CREDENTIAL:
-            self.skip(child, CREDENTIAL)
-            return "ok", []
-        whole, mocks = self.level(child)
-        if whole:
-            return "ok", mocks
-        if isinstance(own, Listed) and own.code in NO_TOOL_MOCK:
-            return "frozen", mocks
-        return "cannot", mocks
+            return Verdict(False, [])
+        if id(child) in self.outcomes:
+            return self.level(child)
+        return Verdict(False, [], {FROZEN_BENEATH})
 
     def mark_instead(self, children: list[Node], own: Saved) -> None:
         """Say on each listed call under this tool that the tool's own mock stands for it."""
@@ -707,7 +757,8 @@ class Recorder:
                 listed.why,
                 None if method is None else str(method),
                 None if path is None else str(path),
-                shown=shown_arguments(node.line),
+                # A web line's arguments are its request body, which holds what no rule cleans.
+                shown=None if node.kind == "http" else shown_arguments(node.line),
             )
         self.record.manual[key].calls += 1
 
@@ -822,7 +873,8 @@ class Result:
 
     @property
     def done(self) -> int:
-        return sum(r.done for r in self.records)
+        """Calls written whole: none when no file was written."""
+        return 0 if self.out is None else sum(r.done for r in self.records)
 
     @property
     def wrote(self) -> int:
@@ -912,6 +964,9 @@ def test_code(found: TestRecord, messages: list[tuple[str, str]]) -> int:
     """The test's part of the exit code, and the lines that go with it."""
     name = found.test.name
     outcome = found.result.outcome
+    if outcome == "stopped":  # a refusal elsewhere stopped it, and the report says which
+        messages.append((running.NOTES, f"{name}: {found.trouble}, so nothing was written for it"))
+        return running.OK
     if found.trouble is not None:
         messages.append(
             (running.INFRA_ERRORS, f"{name}: {found.trouble}, so nothing was written for it")
@@ -939,11 +994,13 @@ def write_file(result: Result, plan: Plan, path: Path) -> Result:
     new_text, problem = spliced(team_text, plan, result.records, built, when, path.name)
     if problem is not None:
         return layout_refused(result, problem, built)
-    replaced = out.exists()
-    write_atomically(path, out, new_text)
-    if replaced:
-        result.messages.insert(1, (running.NOTES, f"replaced {out}, which an earlier record wrote"))
-    result.out = str(out)
+    written_before = out.exists() or out.is_symlink()
+    if written_before and not holds_record_header(out):
+        return not_ours(result, out, built)
+    if written_before and result.wrote == 0:
+        note = f"{out} is kept as it was: this record wrote no mocks, so it would only lose them"
+        result.messages.insert(1, (running.NOTES, note))
+        return result
     team_lines, new_lines = team_text.splitlines(), new_text.splitlines()
     result.diff = list(
         difflib.unified_diff(team_lines, new_lines, str(path), str(out), lineterm="")
@@ -952,13 +1009,49 @@ def write_file(result: Result, plan: Plan, path: Path) -> Result:
     warning = batch_warning(added)
     if warning is not None:
         result.messages.insert(1, (running.WARNINGS, warning))
+    if written_before:
+        note = f"replaced {out}, which an earlier record wrote; rename a file to keep it"
+        result.messages.insert(1, (running.NOTES, note))
+    write_atomically(path, out, new_text)  # the last step: nothing below it can fail
+    result.out = str(out)
     return result
 
 
 def batch_warning(added: int) -> str | None:
     if added <= BIG_DIFF:
         return None
-    return f"the diff adds {added} lines, too long to review at once; record in batches with --test"
+    return (
+        f"the diff adds {added} lines, too long to review at once; record in batches with "
+        "--test, and rename each batch's file before the next, as the next replaces it"
+    )
+
+
+def holds_record_header(out: Path) -> bool:
+    """Whether a file already there is one scrimmage record wrote, by its header."""
+    try:
+        text = out.read_text(errors="replace")
+    except OSError:
+        return False
+    for line in text.split("\n"):
+        if not line.startswith("#"):
+            return False
+        if line.startswith(HEADER_START):
+            return True
+    return False
+
+
+def not_ours(result: Result, out: Path, built: list[str]) -> Result:
+    """A file of that name that record did not write is the team's: it is never replaced."""
+    result.code = max(result.code, running.MISTAKE)
+    result.mocks_text = "".join(built)
+    result.messages.append(
+        (
+            running.MISTAKES,
+            f"{out} exists and scrimmage record did not write it; nothing was written, and the "
+            "mocks are printed. Move that file away and run record again",
+        )
+    )
+    return result
 
 
 def layout_refused(result: Result, problem: str, built: list[str]) -> Result:
@@ -1108,9 +1201,7 @@ def patched(lines: list[str], inserts: dict[int, str], taken: list[tuple[int, in
 
 def with_header(lines: list[str], name: str, when: str) -> list[str]:
     """One header line, after the file's leading comment lines, so a #:schema line stays first."""
-    header = (
-        f"# Written by scrimmage record from {name} on {when}. Review it, then rename it to {name}."
-    )
+    header = f"{HEADER_START}{name} on {when}. Review it, then rename it to {name}."
     place = 0
     while place < len(lines) and lines[place].startswith("#"):
         place += 1
@@ -1195,7 +1286,7 @@ def test_line(found: TestRecord) -> str:
     for word, count in (
         ("kept", len(found.kept)),
         ("skipped", len(found.skipped)),
-        ("by hand", len(found.manual)),
+        ("by hand", sum(1 for entry in found.manual.values() if entry.instead is None)),
     ):
         if count:
             parts.append(f"{word} {count}")
@@ -1207,7 +1298,12 @@ def test_line(found: TestRecord) -> str:
 
 def by_hand_lines(found: TestRecord) -> list[str]:
     name = found.test.name
-    out = [f"by hand: {name}: {entry.call}: {entry.message}" for entry in found.manual.values()]
+    out = [
+        f"by hand: {name}: {entry.call}: {entry.message}"
+        if entry.instead is None
+        else f"instead: {name}: {entry.call}: {entry.message}; {entry.instead} stands for it"
+        for entry in found.manual.values()
+    ]
     for entry in found.skipped.values():
         why = (
             "a credential request is never recorded; it runs for real, as in the recording"
@@ -1274,6 +1370,7 @@ def test_json(found: TestRecord) -> dict[str, object]:
                 "path": entry.path,
                 "calls": entry.calls,
                 "message": entry.message,
+                "instead": entry.instead,
             }
             for entry in found.manual.values()
         ],

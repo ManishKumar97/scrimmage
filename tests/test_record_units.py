@@ -1,12 +1,14 @@
 """scrimmage record's choices that need no run: statuses, the file layout, the model rule."""
 
+import dataclasses
 import tomllib
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from scrimmage_core import config as settings
-from scrimmage_core import record
+from scrimmage_core import record, state
 from scrimmage_core.judge import RunJudgement
 from scrimmage_core.plan import Row
 from scrimmage_core.runner import RunResult
@@ -189,3 +191,42 @@ def test_each_listed_code_gives_a_comment_that_adds_nothing(code: str) -> None:
     assert tomllib.loads(text) == {}
     assert all(line.startswith("#") for line in text.splitlines())
     assert '# call    = "tool:x"' in text
+
+
+@pytest.mark.design("record.budget_stop")
+def test_a_run_another_run_stopped_is_not_an_infrastructure_error(tmp_path: Path) -> None:
+    config = loaded(tmp_path)
+    test = config.tests[1]
+    result = dataclasses.replace(result_for(test), outcome="stopped")
+    found = record.TestRecord(test, result, trouble="another run stopped this one")
+    messages: list[tuple[str, str]] = []
+    assert record.test_code(found, messages) == 0
+    assert [kind for kind, _ in messages] == ["notes"]
+
+
+def test_a_lost_saved_value_names_the_burst_and_what_to_do() -> None:
+    with pytest.raises(record.Incomplete, match=r"burst of calls.*fewer calls at once"):
+        record.blob_data(Path("/nowhere"), {"unsaved": True, "sha256": "x"})
+
+
+def test_a_call_waits_for_room_only_while_recording_and_only_up_to_the_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Full:
+        def __init__(self, room_after: int) -> None:
+            self.tries = 0
+            self.room_after = room_after
+
+        def put_blob(self, sha: str, data: bytes) -> bool:
+            self.tries += 1
+            return self.tries > self.room_after
+
+    monkeypatch.setattr(state, "BLOB_POLL_S", 0.0)
+    plain = Full(1)
+    assert state.handed_over(cast(state.BlobSink, plain), "s", b"", wait=False) is False
+    assert plain.tries == 1
+    waited = Full(5)
+    assert state.handed_over(cast(state.BlobSink, waited), "s", b"", wait=True) is True
+    monkeypatch.setattr(state, "BLOB_WAIT_S", 0.0)
+    never = Full(10**9)
+    assert state.handed_over(cast(state.BlobSink, never), "s", b"", wait=True) is False

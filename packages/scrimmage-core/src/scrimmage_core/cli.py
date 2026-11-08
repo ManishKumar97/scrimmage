@@ -355,7 +355,7 @@ def run_record(path: Path, found: Found | None, names: list[str], refresh: list[
         if found is not None:
             settle()  # the file is written, so no signal may turn this into a failure now
     except KeyboardInterrupt:  # Ctrl-C in the text form, where no signal is only noted
-        print("scrimmage: stopped by SIGINT; nothing was written", file=sys.stderr)
+        print("scrimmage: stopped by SIGINT while the file was written", file=sys.stderr)
         return INFRA
     except Exception as exc:  # WriterBug or any other failure while writing: Scrimmage's own
         message = f"infrastructure error while writing the file, nothing was written: {exc!r}"
