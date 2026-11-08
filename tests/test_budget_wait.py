@@ -260,7 +260,7 @@ def test_a_hundred_waiters_get_no_control_errors_and_a_settle_stays_fast(
     made = ControlServer(TOKEN, RecordStore(tmp_path / "r"), ledger=ledger)
     made.start()
     made.open_run("run-1", "baseline", {"v": 1})
-    hold = granted(ledger.reserve(0.9, "run-0"))
+    holds = [granted(ledger.reserve(0.04, "run-0")) for _ in range(20)]  # $0.80 held
     errors: list[str] = []
     asks = [0] * 100
     grants: list[int] = []
@@ -288,16 +288,24 @@ def test_a_hundred_waiters_get_no_control_errors_and_a_settle_stays_fast(
         for thread in threads:
             thread.start()
         until(lambda: min(asks) >= 2 or bool(errors))  # all 100 are waiting, asking again
-        payload = {"reservation": hold, "usd": 0.0}
-        status = ControlClient(made.url, TOKEN).request("POST", "/v1/budget/settle", payload)[0]
+        settler = ControlClient(made.url, TOKEN)
+        started = time.monotonic()
+        statuses = [
+            settler.request("POST", "/v1/budget/settle", {"reservation": hold, "usd": 0.0})[0]
+            for hold in holds
+        ]
+        took = time.monotonic() - started
         until(lambda: len(grants) >= 10 or bool(errors))  # the freed room goes round them
     finally:
         stop.set()
         for thread in threads:
             thread.join(30)
         made.stop()
-    # Before, waiters filled the server's threads, and 16 of 100 got a connection reset.
-    assert errors == [] and status == 200
+    # Before, waiters filled the server's threads: 16 of 100 got a connection reset, and a
+    # settle queued behind them took 1 to 7 s. Twenty settles in a row take well under a
+    # second here; queued, or slowed to even 1.5 s each, they would pass 30 s.
+    assert errors == [] and statuses == [200] * 20
+    assert took < 30, f"20 settles took {took:.1f}s among 100 waiters"
 
 
 # The gate
