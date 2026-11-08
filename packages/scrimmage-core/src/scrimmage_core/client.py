@@ -122,7 +122,7 @@ class ControlClient:
 
     def release(self, ticket: int) -> None:
         """Stop waiting, so the calls behind this one are served. Best effort: a ticket
-        that is not asked for again is dropped in any case."""
+        that is not asked for again is dropped after budget.LOST_S, or when its run ends."""
         with contextlib.suppress(ControlError):
             self.request("POST", "/v1/budget/release", {"ticket": ticket})
 

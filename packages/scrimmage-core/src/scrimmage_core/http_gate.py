@@ -544,18 +544,27 @@ def reserve(ctx: Context, step: Step, request: Any, extra: dict[str, object]) ->
     """Reserve what this model call could cost, before it is sent.
 
     A sync call waits on its own thread, the one that made the call and is blocked on it
-    anyway, so no thread anyone else needs is held.
+    anyway, so no thread anyone else needs is held. An exception that lands in the wait,
+    such as a tool timeout's SIGALRM or a KeyboardInterrupt the program goes on after,
+    gives the ticket back: the line keeps a place until its caller lets go of it.
     """
     usd = hold_for(ctx, step, request, extra)
     if usd is None:
         return None
     started, ticket = time.monotonic(), None
-    while True:
-        got = ask(ctx, step, extra, usd, started, ticket)
-        if not isinstance(got, Pause):
-            return got
-        ticket = got.ticket
-        time.sleep(got.seconds)
+    try:
+        while True:
+            got = ask(ctx, step, extra, usd, started, ticket)
+            if not isinstance(got, Pause):
+                return got
+            ticket = got.ticket
+            time.sleep(got.seconds)
+    except ScrimmageRefused:
+        raise  # ask's own refusal, which gave back its ticket and wrote the line
+    except BaseException as exc:
+        give_up(ctx, ticket)
+        abandoned(ctx, step, extra, None, exc)
+        raise
 
 
 def ask(
@@ -721,15 +730,22 @@ async def ask_off_the_loop(
 
 
 def give_up(ctx: Context, ticket: int | None) -> None:
-    """Hand back a ticket off the caller's thread or loop. If it is lost, it goes stale."""
+    """Hand back a ticket off the caller's thread or loop. If the release is lost, the
+    ledger drops the ticket once it has not been asked for in budget.LOST_S."""
     if ticket is not None:
         threads.start(threading.Thread(target=ctx.client.release, args=(ticket,), daemon=True))
 
 
-def abandoned(ctx: Context, step: Step, extra: dict[str, object], reservation: int | None) -> None:
-    """The call was cancelled before it was sent, so it cost nothing."""
+def abandoned(
+    ctx: Context,
+    step: Step,
+    extra: dict[str, object],
+    reservation: int | None,
+    error: BaseException | None = None,
+) -> None:
+    """The call was cancelled or interrupted before it was sent, so it cost nothing."""
     extra["cost_usd"] = 0.0
-    ctx.run.finish(step, error=asyncio.CancelledError("cancelled before it was sent"))
+    ctx.run.finish(step, error=error or asyncio.CancelledError("cancelled before it was sent"))
     settle(ctx, reservation, 0.0)
 
 
