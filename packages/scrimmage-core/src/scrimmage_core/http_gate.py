@@ -721,7 +721,8 @@ async def ask_off_the_loop(
 
 
 def give_up(ctx: Context, ticket: int | None) -> None:
-    """Hand back a ticket off the caller's thread or loop. If it is lost, it goes stale."""
+    """Hand back a ticket off the caller's thread or loop. If the release is lost, the
+    ledger drops the ticket once it has not been asked for in budget.LOST_S."""
     if ticket is not None:
         threads.start(threading.Thread(target=ctx.client.release, args=(ticket,), daemon=True))
 

@@ -5,7 +5,9 @@ The ledger never blocks a request: a waiter has a ticket and asks again every st
 
 import asyncio
 import dataclasses
+import heapq
 import json
+import random
 import re
 import subprocess
 import sys
@@ -19,7 +21,7 @@ import pytest
 from conftest import EXAMPLE_FAULT, Project, Result, TimeLimit
 from fakes.openai_server import FakeOpenAI
 from scrimmage_core import control, http_gate, state
-from scrimmage_core.budget import STALE_S, Held, Ledger, Shortfall
+from scrimmage_core.budget import LOST_S, Held, Ledger, Shortfall
 from scrimmage_core.client import ControlClient, ControlError
 from scrimmage_core.config import Agent
 from scrimmage_core.control import ControlServer
@@ -146,16 +148,67 @@ def test_a_large_waiter_gets_its_turn_among_steady_small_calls() -> None:
     pytest.fail("the large call never got in: the small calls took every room it freed")
 
 
-@pytest.mark.design("wait.stale_ticket")
-def test_a_ticket_not_asked_for_again_is_dropped() -> None:
+@pytest.mark.design("wait.lost_release")
+def test_a_ticket_whose_release_was_lost_is_dropped_after_a_minute() -> None:
     now = [0.0]
     ledger = Ledger(0.10, clock=lambda: now[0])
     held = granted(ledger.reserve(0.06))
-    short(ledger.reserve(0.06, "run-gone"))  # its caller dies and never asks again
+    short(ledger.reserve(0.06, "run-gone"))  # its release is lost, and it never asks again
     ledger.settle(held, 0.0)
-    assert short(ledger.reserve(0.05, "run-c")).why == "held"  # still behind the dead one
-    now[0] = STALE_S + 0.1
+    now[0] = LOST_S - 1
+    assert short(ledger.reserve(0.05, "run-c")).why == "held"  # still behind the lost one
+    now[0] = LOST_S + 0.1
     granted(ledger.reserve(0.05, "run-c"))
+
+
+@pytest.mark.design("wait.slow_asker_keeps_its_place")
+def test_a_waiter_that_asks_slowly_keeps_its_place() -> None:
+    """A loaded machine stretches the time between asks. The first build dropped a ticket
+    not asked for in 2 s, so a slow first waiter went to the back, behind a later one."""
+    now = [0.0]
+    ledger = Ledger(0.10, clock=lambda: now[0])
+    held = granted(ledger.reserve(0.10, "run-0"))
+    first = short(ledger.reserve(0.06, "run-a")).ticket
+    later = short(ledger.reserve(0.06, "run-b"))
+    for second in range(1, 30):  # the later one asks every second, the first not at all
+        now[0] = second
+        later = short(ledger.reserve(0.06, "run-b", ticket=later.ticket))
+    ledger.settle(held, 0.0)
+    assert short(ledger.reserve(0.06, "run-b", ticket=later.ticket)).why == "held"
+    granted(ledger.reserve(0.06, "run-a", ticket=first))  # 30 s on, still at the head
+
+
+@pytest.mark.design("wait.line_under_load")
+@pytest.mark.parametrize("seed", range(5))
+def test_a_hundred_slow_askers_are_served_in_order_once_the_room_frees(seed: int) -> None:
+    """The F2 probe, on a fake clock: 100 calls of $0.50 wait behind $1.00 of holds, and
+    each asks again 2.1 to 4 s after its last ask, as on a loaded machine. A granted call
+    settles 1 s later. With tickets dropped after 2 s no call ever reached the head, and
+    the probe saw 0 grants in 60 s with the whole budget free."""
+    rng = random.Random(seed)
+    now = [0.0]
+    ledger = Ledger(1.0, clock=lambda: now[0])
+    hold = granted(ledger.reserve(1.0, "run-0"))
+    tickets = [short(ledger.reserve(0.5, f"run-{n}")).ticket for n in range(100)]
+    ledger.settle(hold, 0.0)
+    asks = sorted((rng.uniform(0.0, 4.0), n) for n in range(100))
+    settles: list[tuple[float, int]] = []
+    grants: list[tuple[float, int]] = []
+    while len(grants) < 10 and asks[0][0] < 60.0:
+        now[0], n = heapq.heappop(asks)
+        while settles and settles[0][0] <= now[0]:
+            ledger.settle(heapq.heappop(settles)[1], 0.0)
+        answer = ledger.reserve(0.5, f"run-{n}", ticket=tickets[n])
+        if isinstance(answer, int):
+            waiting = [m for m in range(100) if m not in {g for _, g in grants}]
+            assert n <= waiting[0] + 1, f"{n} went ahead of {waiting[:2]}"  # two fit at once
+            grants.append((now[0], n))
+            heapq.heappush(settles, (now[0] + 1.0, answer))
+        else:
+            heapq.heappush(asks, (now[0] + rng.uniform(2.1, 4.0), n))
+    # Each pair at the head goes as soon as its callers next ask: 10 to 16 s for ten
+    # grants across these seeds. 30 s leaves room; the 2 s drop never passed two grants.
+    assert len(grants) == 10 and grants[-1][0] < 30.0, grants
 
 
 def test_a_released_ticket_lets_the_next_call_through() -> None:
@@ -221,7 +274,7 @@ def test_a_budget_reply_without_its_numbers_is_a_control_error(server: ControlSe
     with pytest.raises(ControlError, match="budget reply is not valid"):
         talk.reserve("run-1", 0.01)
     talk.request = lambda *args: (_ for _ in ()).throw(ControlError("down"))  # type: ignore[method-assign, assignment]
-    talk.release(1)  # best effort: a ticket nobody asks for is dropped anyway
+    talk.release(1)  # best effort: a lost release is dropped after LOST_S, or at the run's end
 
 
 WAITER = """
@@ -246,7 +299,9 @@ def test_a_waiter_killed_mid_wait_is_never_granted_a_hold(server: ControlServer)
     finally:
         child.kill()
         child.wait()
+    assert server.ledger._line  # the dead waiter keeps its place while its run is open
     server.close_run("run-1")
+    assert not server.ledger._line  # the run's end clears it, as the runner sees it end
     server.ledger.settle(hold, 0.0)
     time.sleep(0.3)
     assert server.ledger.reserved == 0.0 and server.ledger.leaked() == []

@@ -9,6 +9,11 @@ room. The ledger never blocks a request, so a waiter holds no connection, and on
 stops asking is never granted anything. Tickets are served in order, so a large call is
 not starved by a stream of small ones. A call that spent money alone cannot cover is
 refused at once: spent money never comes back.
+
+A ticket keeps its place until its caller releases it, is granted, or its run ends, however
+slowly its caller asks: a loaded machine stretches the time between asks, and a place that
+depended on it would be lost by every waiter at once. Only a ticket not asked for in LOST_S
+is dropped, for a release that never arrived from a run that is still going.
 """
 
 import threading
@@ -16,7 +21,10 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-STALE_S = 2.0  # a ticket not asked for again in this long is dropped: its caller is gone
+# A live waiter asks every quarter second, and an ask that the control server does not
+# answer within the client's 10 s socket timeout, twice with a clock retry, ends its wait
+# with a refusal. So a ticket not asked for in three times that lost its release.
+LOST_S = 60.0
 
 
 @dataclass(frozen=True)
@@ -76,7 +84,7 @@ class Ledger:
         """
         with self._lock:
             now = self._clock()
-            for number in [n for n, t in self._line.items() if now - t.asked > STALE_S]:
+            for number in [n for n, t in self._line.items() if now - t.asked > LOST_S]:
                 del self._line[number]
             limit = self.limit_usd
             if limit is None:
