@@ -714,21 +714,24 @@ def test_a_call_spent_money_cannot_cover_is_refused_at_once(
 
 
 class GateWaits:
-    """http_gate's asyncio, with its sleep noted: the gate's pause between asks.
+    """asyncio.sleep with the gate's own calls noted: the gate's pause between asks.
 
-    Each pause is a window, from its start to its end, as a count of the ticks so far.
+    Each pause is a window, from its start to its end, as a count of the ticks so far. The
+    gate imports asyncio when it first needs it, so the sleep is replaced on asyncio itself,
+    and a sleep called from anywhere but http_gate is passed on as it is.
     """
 
     def __init__(self, ticks: list[int]) -> None:
         self.ticks = ticks
         self.windows: list[tuple[int, int]] = []
-
-    def __getattr__(self, name: str) -> object:
-        return getattr(asyncio, name)
+        self.real_sleep = asyncio.sleep
 
     async def sleep(self, seconds: float) -> None:
+        if sys._getframe(1).f_globals.get("__name__") != http_gate.__name__:  # type: ignore[reportPrivateUsage]
+            await self.real_sleep(seconds)
+            return
         began = len(self.ticks)
-        await asyncio.sleep(seconds)
+        await self.real_sleep(seconds)
         self.windows.append((began, len(self.ticks)))
 
 
@@ -743,7 +746,7 @@ def test_an_async_call_waits_without_blocking_the_loop(
     install(make_plan(budget=0.004), budget)
     ticks: list[int] = []
     waits = GateWaits(ticks)
-    monkeypatch.setattr(http_gate, "asyncio", waits)
+    monkeypatch.setattr(asyncio, "sleep", waits.sleep)
     done = asyncio.Event()
 
     async def tick() -> None:

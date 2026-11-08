@@ -10,7 +10,6 @@ patches it when the agent imports it.
 import contextlib
 import contextvars
 import functools
-import importlib.metadata
 import inspect
 import threading
 import typing
@@ -63,6 +62,8 @@ def gatable(module: ModuleType) -> bool:
 
 
 def version() -> tuple[int, int] | None:
+    import importlib.metadata  # not at import: the SDK starts without it
+
     try:
         parts = importlib.metadata.version(LIBRARY).split(".")
         return int(parts[0]), int(parts[1])

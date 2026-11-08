@@ -104,6 +104,16 @@ NOT_IMPORTED_BY_CLI = (
     "http.server",
     "concurrent.futures",
 )
+# Modules the SDK's start must not load. A program on asyncio imports it itself, and the
+# gates import it on their first use, so none of these cost a program that does not need it.
+NOT_IMPORTED_BY_SDK = (
+    "asyncio",
+    "importlib.metadata",
+    "concurrent.futures",
+    "logging",
+    "openai",
+    "httpx",
+)
 
 
 @dataclass(frozen=True)

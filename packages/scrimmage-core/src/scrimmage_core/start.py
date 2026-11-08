@@ -4,7 +4,6 @@ It calls the function with the question, waits for it if it is async, and writes
 answer to SCRIMMAGE_ANSWER_FILE, so the agent's own prints cannot mix with it.
 """
 
-import asyncio
 import importlib
 import inspect
 import os
@@ -69,6 +68,8 @@ def main(argv: list[str]) -> int:
     function = getattr(importlib.import_module(module), name)
     result = function(argv[2])
     if inspect.isawaitable(result):
+        import asyncio
+
         result = asyncio.run(_wait(result))
     try:
         if len(argv) == 4:
