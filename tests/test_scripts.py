@@ -1592,12 +1592,18 @@ def test_the_sdks_wait_is_shorter_than_the_runners() -> None:
 
 
 def test_stop_group_returns_when_the_program_left_its_group() -> None:
-    code = "import os, time\nos.setpgid(0, os.getppid())\ntime.sleep(600)\n"
-    proc = subprocess.Popen(
-        [sys.executable, "-c", code], start_new_session=True, stdout=subprocess.DEVNULL
-    )
-    deadline = time.monotonic() + 60
-    while os.getpgid(proc.pid) == proc.pid and time.monotonic() < deadline:
-        time.sleep(0.01)
-    stop_group(proc)
-    assert proc.returncode is not None
+    # Its own group, in this session, so it may move to the test's group. A program in a
+    # session of its own could not: setpgid across sessions fails, so it never left.
+    code = "import os, time\nos.setpgid(0, os.getpgid(os.getppid()))\ntime.sleep(600)\n"
+    proc = subprocess.Popen([sys.executable, "-c", code], process_group=0)
+    try:
+        ceiling = time.monotonic() + 60
+        while os.getpgid(proc.pid) == proc.pid:  # the event: it has left its group
+            assert time.monotonic() < ceiling and proc.poll() is None, "it never left"
+            time.sleep(0.01)
+        stop_group(proc)  # its group is empty, so only the program itself is left to stop
+        assert proc.returncode == -signal.SIGKILL
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
