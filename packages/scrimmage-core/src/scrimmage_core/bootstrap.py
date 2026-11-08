@@ -7,6 +7,7 @@ A child whose plan cannot be fetched refuses each call, and tries again for the 
 """
 
 import atexit
+import contextlib
 import os
 import signal
 import sys
@@ -179,11 +180,17 @@ def start(*, child: bool = False, target: str | None = None) -> None:
         sender.flush()
 
     def end_program() -> None:
-        """scrimmage init --probe has what it came for, so no more of the team's code runs."""
+        """scrimmage init --probe has what it came for, so no more of the team's code runs.
+
+        os._exit skips the flush Python does at exit, so what the agent printed is flushed here.
+        """
         last_lines()
+        for stream in (sys.stdout, sys.stderr):
+            with contextlib.suppress(Exception):  # a stream the agent closed or replaced
+                stream.flush()
         os._exit(0)
 
-    ctx.end_program = end_program
+    run_state.end_program = end_program
 
     def before_exec() -> None:
         """exec ends this image with no exit steps, and if it fails the program goes on."""

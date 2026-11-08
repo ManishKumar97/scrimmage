@@ -101,7 +101,6 @@ class Context:
         self.faults = True  # false when the library has lost what faults are built from
         self.open: set[Callable[[bool], None]] = set()  # replies not read to their end
         self.root = probing.here()  # the folder the probe's paths are looked for under
-        self.end_program: Callable[[], None] = lambda: None  # set where a run has a sender
 
     def close_open(self) -> None:
         """At exit: a reply the agent never finished reading is still a call that was made."""
@@ -368,8 +367,7 @@ def stop_probe(
     run.notice("probe", "scrimmage", f"the probe stopped at {method} {path}", extra=extra)
     run.refuse(step, "probe")
     error = run.refusal(step, redact(f"{method} {path}"))
-    run.finish(step, error=error)
-    ctx.end_program()
+    run.finish(step, error=error)  # in a probe, this ends the program
     raise error
 
 

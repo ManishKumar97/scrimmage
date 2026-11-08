@@ -141,6 +141,7 @@ class RunState:
         self._lock = threading.Lock()
         self._unannounced = self.child  # a child says what it is on its first line
         self.live: dict[int, Step] = {}  # calls decided and not yet finished
+        self.end_program: Callable[[], None] = lambda: None  # set where a run has a sender
         if plan is not None:
             self._arrived(plan)
 
@@ -455,6 +456,10 @@ class RunState:
             going = self.live.pop(id(step), None) is not None
         if going:
             self._write(step, result=result, error=error, mistake=mistake)
+        # A refusal is an Exception the agent can catch, and its next plain tool would then
+        # run. In a probe nothing is needed past this point, so no more of its code runs.
+        if step.decision.action == "refused" and self._plan is not None and self._plan.probe:
+            self.end_program()
 
     def _write(
         self,
