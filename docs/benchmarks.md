@@ -19,6 +19,7 @@ A local server in its own process takes the place of the network, so network tim
 Gated calls go through the real gates, a real control server and the real sender thread.
 Each measure was repeated 5 times; the range after each figure is the spread between those repeats.
 The first calls of each kind, which set up connections, are left out.
+The web reply is about 1 KB, and the model reply is 796 bytes.
 
 ## Time added per gated call
 
@@ -48,6 +49,14 @@ If a model call takes 200 ms, 2 ms adds 1 percent.
 
 The MCP library has no sync client, so MCP has only an async row.
 The MCP rows use the stdio transport.
+
+## Not measured
+
+- Injected fault paths.
+- Streamed responses, on web requests or model calls.
+- MCP over HTTP.
+- Bodies that contain secrets.
+- A real provider's latency.
 
 ## Agent startup
 
@@ -90,9 +99,17 @@ The cost per run comes from the slope between a test of 1 run and a test of 11 r
 ## Budgets
 
 The suite's slow tier has a test, `tests/test_benchmark_budgets.py`, that fails when a cost goes over its ceiling.
-A ceiling is several times today's quiet number, and over the worst seen on a machine under heavy load.
-It is there to catch a large regression, such as a new round trip on every call, not a small one.
-So it does not fail because the machine is busy, and it does not fail on small changes.
+The ceilings are set far above today's quiet numbers, and above the worst seen on a machine under heavy load.
+That is 8 times for a tool call, 19.8 times for a sync web request, 14.5 times for an async one, 20 times for an MCP call, 11.3 times for a sync model call, 9.1 times for an async one, and 8.8 times for the CLI.
+So they do not fail because the machine is busy, and they catch only a large slowdown.
+Of the per-call ceilings, only the tool call's catches one added round trip to the runner.
+A web request needs about 7.6 ms added to fail, and a model call about 18 ms.
+
+The same test file has two checks that use no clock.
+One counts the requests to the runner that a gated call waits on: none for a tool, a web request or an MCP call, one for a model call with a budget, and none for a model call without one.
+The other imports `scrimmage_core.cli` in a new process and checks that `openai` and `httpx` are not loaded.
+
+Nothing enforces a smaller slowdown.
 
 | Measure | Ceiling |
 |---|---|
