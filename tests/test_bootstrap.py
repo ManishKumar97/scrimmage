@@ -15,6 +15,9 @@ from scrimmage_core.control import ControlServer
 from scrimmage_core.records import RecordStore
 from scrimmage_core.run_command import BOOT, main
 
+# Every test here, or nearly, starts a process or a real scrimmage test run.
+pytestmark = pytest.mark.slow
+
 TOKEN = "d" * 64
 UBUNTU_PYTHON = Path("/usr/bin/python3.12")
 APPORT = Path("/usr/lib/python3.12/sitecustomize.py")

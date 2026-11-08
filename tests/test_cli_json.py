@@ -161,6 +161,7 @@ def check_runs(project: Project) -> dict[int, Done]:
 
 
 @pytest.mark.design("json.one_document")
+@pytest.mark.slow
 def test_each_command_prints_one_document_for_each_exit_code(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -188,12 +189,14 @@ def test_each_command_prints_one_document_for_each_exit_code(
 
 
 @pytest.mark.design("json.version")
+@pytest.mark.slow
 def test_the_envelope_names_the_installed_version(project: Project) -> None:
     doc = one_document(scrimmage("check", "--json", str(project.toml)), "check")
     assert doc["scrimmage"] == importlib.metadata.version("scrimmage-core")
     assert doc["v"] == 1 and doc["config"] == str(project.toml)
 
 
+@pytest.mark.slow
 def test_scrim_is_the_same_command_under_a_short_name(project: Project) -> None:
     scripts = importlib.metadata.entry_points(group="console_scripts")
     assert scripts["scrim"].value == scripts["scrimmage"].value
@@ -202,6 +205,7 @@ def test_scrim_is_the_same_command_under_a_short_name(project: Project) -> None:
 
 
 @pytest.mark.design("json.message_objects")
+@pytest.mark.slow
 def test_every_message_is_an_object_with_its_text(project: Project, fake_openai: Fake) -> None:
     done = runs_of_test(project, fake_openai)
     seen = 0
@@ -236,6 +240,7 @@ def answer(question):
 
 
 @pytest.mark.design("json.interrupted")
+@pytest.mark.slow
 def test_sigint_during_a_test_still_prints_one_document(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -544,6 +549,7 @@ def e2e(project: Project, fake: FakeOpenAI) -> tuple[str, dict[str, object]]:
 
 
 @pytest.mark.design("json.same_as_table")
+@pytest.mark.slow
 def test_the_json_rows_and_lists_say_what_the_table_says(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -779,6 +785,7 @@ def hang(project: Project, timeout: int = 600) -> None:
 
 @pytest.mark.design("json.signal_in_cleanup")
 @pytest.mark.parametrize("command", ["check", "test"])
+@pytest.mark.slow
 def test_a_signal_inside_a_del_while_the_file_is_read_still_stops(
     project: Project, command: str
 ) -> None:
@@ -804,6 +811,7 @@ runner.Runner.__init__ = init
 
 
 @pytest.mark.design("json.signal_in_cleanup")
+@pytest.mark.slow
 def test_a_signal_as_the_runner_is_made_stops_before_any_run(project: Project) -> None:
     hang(project)
     done = run_entry(IN_RUNNER, "test", "--json", str(project.toml))
@@ -829,6 +837,7 @@ runner.ThreadPoolExecutor = pool
 
 
 @pytest.mark.design("json.stops_fast")
+@pytest.mark.slow
 def test_a_signal_on_another_thread_still_stops_the_runs(project: Project) -> None:
     hang(project)
     clean = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
@@ -868,6 +877,7 @@ runner.ThreadPoolExecutor = pool
 
 
 @pytest.mark.design("json.signal_in_cleanup")
+@pytest.mark.slow
 def test_a_signal_inside_a_del_while_runs_go_still_stops_them(project: Project) -> None:
     hang(project)
     done = run_entry(RUNNER_DEL, "test", "--json", str(project.toml))
@@ -877,6 +887,7 @@ def test_a_signal_inside_a_del_while_runs_go_still_stops_them(project: Project) 
 
 
 @pytest.mark.design("json.stops_fast")
+@pytest.mark.slow
 def test_a_long_run_stops_within_seconds_of_each_of_two_signals(project: Project) -> None:
     hang(project)
     env = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
@@ -958,6 +969,7 @@ sys.stdout = Out(sys.stdout.detach(), encoding="utf-8", line_buffering=False)
 @pytest.mark.design("json.sigterm")
 @pytest.mark.parametrize("sig", ["SIGTERM", "SIGINT"])
 @pytest.mark.parametrize("command", ["check", "test"])
+@pytest.mark.slow
 def test_a_signal_while_scrimmage_loads_still_gives_one_document(
     project: Project, sig: str, command: str
 ) -> None:
@@ -969,6 +981,7 @@ def test_a_signal_while_scrimmage_loads_still_gives_one_document(
 
 
 @pytest.mark.design("json.exit_matches")
+@pytest.mark.slow
 def test_a_signal_after_the_document_does_not_change_the_exit(project: Project) -> None:
     good = run_entry(SIGNAL_AFTER_PRINT, "check", "--json", str(project.toml))
     assert (good.code, one_document(good, "check")["exit"]) == (0, 0), good.err
@@ -1006,6 +1019,7 @@ def test_the_entry_point_without_json_sets_no_handler(
 
 
 @pytest.mark.design("json.tool_star_warning")
+@pytest.mark.slow
 def test_the_tool_star_line_is_the_first_warning_end_to_end(
     project: Project, fake_openai: Fake
 ) -> None:

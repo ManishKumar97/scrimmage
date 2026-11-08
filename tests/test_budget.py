@@ -210,6 +210,7 @@ def test_a_request_can_set_its_own_output_limit() -> None:
 
 
 @pytest.mark.design("budget.costs_reach_the_record")
+@pytest.mark.slow
 def test_a_runs_cost_is_summed_from_its_real_replies(project: Project, fake_openai: Fake) -> None:
     rag(project, "\nmax_cost_usd = 1000")
     project.edit(
@@ -226,6 +227,7 @@ def test_a_runs_cost_is_summed_from_its_real_replies(project: Project, fake_open
 
 
 @pytest.mark.design("budget.stops_the_test")
+@pytest.mark.slow
 def test_a_budget_that_cannot_cover_a_call_stops_the_test(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -257,6 +259,7 @@ def test_a_budget_that_cannot_cover_a_call_stops_the_test(
     ],
     ids=["budget", "no price", "unknown tool type", "unseen tool"],
 )
+@pytest.mark.slow
 def test_a_stop_at_default_parallel_exits_2_not_3(
     project: Project, function: str, extra: str, fixtures: dict[str, str], message: str
 ) -> None:
@@ -277,6 +280,7 @@ def test_a_stop_at_default_parallel_exits_2_not_3(
 
 
 @pytest.mark.design("budget.no_price")
+@pytest.mark.slow
 def test_a_model_with_no_price_fails_its_first_call_naming_the_setting(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -296,6 +300,7 @@ def test_a_model_with_no_price_fails_its_first_call_naming_the_setting(
 
 
 @pytest.mark.design("budget.none_counts_tokens")
+@pytest.mark.slow
 def test_with_the_budget_off_there_is_no_price_rule_and_tokens_are_counted(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -312,6 +317,7 @@ def test_with_the_budget_off_there_is_no_price_rule_and_tokens_are_counted(
 
 
 @pytest.mark.design("budget.estimates_without_counts")
+@pytest.mark.slow
 def test_a_stream_with_no_token_counts_is_estimated_and_says_so(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -326,6 +332,7 @@ def test_a_stream_with_no_token_counts_is_estimated_and_says_so(
 
 
 @pytest.mark.design("budget.stream_counts")
+@pytest.mark.slow
 def test_a_stream_with_token_counts_is_read_as_it_goes_by(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -343,6 +350,7 @@ def test_a_stream_with_token_counts_is_read_as_it_goes_by(
 
 
 @pytest.mark.design("check.no_model_calls")
+@pytest.mark.slow
 def test_with_a_budget_and_no_model_call_in_the_baseline_the_test_fails(project: Project) -> None:
     project.edit('function = "acme.agent:answer"', 'function = "acme.slow:echo"\nruns = 1')
     project.edit(TOOL_FAULT, "")
@@ -362,6 +370,7 @@ def test_with_a_budget_and_no_model_call_in_the_baseline_the_test_fails(project:
     ],
     ids=["no price", "unknown tool type", "unseen tool"],
 )
+@pytest.mark.slow
 def test_runs_stopped_because_another_run_stopped_the_test_are_not_errors(
     project: Project, function: str
 ) -> None:
@@ -389,6 +398,7 @@ def test_runs_stopped_because_another_run_stopped_the_test_are_not_errors(
 
 
 @pytest.mark.design("runner.finished_run_keeps_its_outcome")
+@pytest.mark.slow
 def test_a_run_that_finishes_by_itself_during_a_stop_keeps_its_answer(project: Project) -> None:
     project.edit(
         'function = "acme.agent:answer"',
@@ -405,6 +415,7 @@ def test_a_run_that_finishes_by_itself_during_a_stop_keeps_its_answer(project: P
 
 
 @pytest.mark.design("check.no_model_calls_per_test")
+@pytest.mark.slow
 def test_the_no_model_call_check_is_per_test(project: Project, fake_openai: Fake) -> None:
     project.edit(
         'function = "acme.agent:answer"', 'function = "acme.rag:answer_if_asked"\nruns = 1'
@@ -421,6 +432,7 @@ def test_the_no_model_call_check_is_per_test(project: Project, fake_openai: Fake
 
 
 @pytest.mark.design("check.no_model_calls_only_when_it_means_something")
+@pytest.mark.slow
 def test_a_run_refused_before_its_first_model_call_says_nothing_about_the_budget(
     project: Project,
 ) -> None:
@@ -434,6 +446,7 @@ def test_a_run_refused_before_its_first_model_call_says_nothing_about_the_budget
 
 
 @pytest.mark.design("runner.stops_late_starters")
+@pytest.mark.slow
 def test_a_program_started_during_a_stop_is_stopped_too(
     project: Project, monkeypatch: pytest.MonkeyPatch, time_limit: TimeLimit
 ) -> None:
@@ -457,6 +470,7 @@ def test_a_program_started_during_a_stop_is_stopped_too(
 
 
 @pytest.mark.design("budget.overrun_visible")
+@pytest.mark.slow
 def test_a_reply_that_costs_more_than_reserved_is_visible(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -470,6 +484,7 @@ def test_a_reply_that_costs_more_than_reserved_is_visible(
 
 
 @pytest.mark.design("budget.reached_outcome")
+@pytest.mark.slow
 def test_a_run_is_budget_reached_only_when_money_spent_reached_the_limit(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -484,6 +499,7 @@ def test_a_run_is_budget_reached_only_when_money_spent_reached_the_limit(
 
 
 @pytest.mark.design("check.baseline_failed")
+@pytest.mark.slow
 def test_a_failed_baseline_skips_its_fault_rows(project: Project, fake_openai: Fake) -> None:
     project.edit(
         'function = "acme.agent:answer"',

@@ -3,6 +3,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -23,6 +24,31 @@ EXAMPLE_FAULT = (
     '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'
     'expect = [["unable", "sorry", "try again"]]\nforbid = ["Oct 30", "October 30"]\n'
 )
+
+
+# Audit events for a new process. A test that makes one is in the slow tier.
+PROCESS_STARTS = frozenset(
+    {"subprocess.Popen", "os.fork", "os.forkpty", "os.posix_spawn", "os.exec", "os.spawn"}
+)
+started: list[str] = []
+
+
+def note_process_start(event: str, args: tuple[object, ...]) -> None:
+    del args
+    if event in PROCESS_STARTS:
+        started.append(event)
+
+
+sys.addaudithook(note_process_start)
+
+
+@pytest.fixture(autouse=True)
+def fast_tests_start_no_process(request: pytest.FixtureRequest) -> Iterator[None]:
+    """A test not marked slow fails if it starts a process, so the fast tier stays fast."""
+    started.clear()
+    yield
+    if started and request.node.get_closest_marker("slow") is None:
+        pytest.fail(f"this test starts a process ({started[0]}), so mark it slow")
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:

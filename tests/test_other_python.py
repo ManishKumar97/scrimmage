@@ -18,6 +18,9 @@ from scrimmage_core.run_command import BOOT
 from test_bootstrap import this_python
 from test_scripts import RECORD, calls, lines_of, script, summary_of, write_config
 
+# Every test here, or nearly, starts a process or a real scrimmage test run.
+pytestmark = pytest.mark.slow
+
 ROOT = Path(__file__).parents[1]
 REPORT = "from acme import tools\nprint(tools.refund_order('1234'))\n"
 RUNS_OTHER = """
@@ -396,6 +399,7 @@ def test_a_stdio_server_on_mcp_1_in_another_venv_serves(project: Project, other_
 SERVER_WITH_TOOL = """
 from acme import tools
 from mcp.server.mcpserver import MCPServer
+
 
 server = MCPServer("docs")
 

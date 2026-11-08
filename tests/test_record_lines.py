@@ -665,6 +665,7 @@ def answer(question):
 
 
 @pytest.mark.design("record.parent_links")
+@pytest.mark.slow
 def test_a_forked_child_inside_a_real_tool_names_no_parent(project: Project) -> None:
     (project.root / "acme" / "forking.py").write_text(FORKING)
     project.toml.write_text(

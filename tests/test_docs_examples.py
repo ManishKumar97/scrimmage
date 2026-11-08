@@ -92,6 +92,7 @@ def with_fake_host(toml: Path) -> None:
 
 @pytest.mark.design("docs.examples_run")
 @pytest.mark.parametrize("name", sorted(EXAMPLES))
+@pytest.mark.slow
 def test_the_page_runs_and_prints_what_it_shows(
     name: str,
     tmp_path: Path,

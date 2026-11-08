@@ -11,6 +11,9 @@ from scrimmage_core import config, labels
 from scrimmage_core.plan import Row
 from scrimmage_core.runner import RunResult, unused_model
 
+# Every test here, or nearly, starts a process or a real scrimmage test run.
+pytestmark = pytest.mark.slow
+
 Fake = Callable[..., FakeOpenAI]
 ROUTER, MAIN = "gpt-4o-mini", "gpt-4.1"
 ROUTER_EMBEDDING, MAIN_EMBEDDING = "text-embedding-3-small", "text-embedding-3-large"

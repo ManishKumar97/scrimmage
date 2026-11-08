@@ -69,6 +69,7 @@ def told(fake: FakeOpenAI) -> set[str]:
 
 
 @pytest.mark.design("adapter.no_tools_list")
+@pytest.mark.slow
 def test_the_same_file_without_a_tools_list_runs_the_same_rows(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -88,6 +89,7 @@ def test_the_same_file_without_a_tools_list_runs_the_same_rows(
 
 
 @pytest.mark.design("adapter.typed_mock_from_tool")
+@pytest.mark.slow
 def test_a_mock_becomes_the_type_the_tool_function_returns(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -98,6 +100,7 @@ def test_a_mock_becomes_the_type_the_tool_function_returns(
 
 
 @pytest.mark.design("adapter.crashed_outcome")
+@pytest.mark.slow
 def test_an_error_fault_with_no_handler_ends_the_graph_as_crashed(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -116,6 +119,7 @@ def test_an_error_fault_with_no_handler_ends_the_graph_as_crashed(
 
 
 @pytest.mark.design("adapter.error_default_type")
+@pytest.mark.slow
 def test_an_error_fault_reaches_langchains_handler_as_toolexception(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -128,6 +132,7 @@ def test_an_error_fault_reaches_langchains_handler_as_toolexception(
 
 
 @pytest.mark.design("fault.error_raises")
+@pytest.mark.slow
 def test_a_fault_can_name_another_error_type(project: Project) -> None:
     graph(project, fault=error_fault('raises = "ConnectionError"\n'))
     fake = FakeOpenAI(ACME)
@@ -142,6 +147,7 @@ def test_a_fault_can_name_another_error_type(project: Project) -> None:
 
 
 @pytest.mark.design("adapter.parallel_call_numbers")
+@pytest.mark.slow
 def test_three_parallel_tool_calls_get_three_distinct_numbers(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -193,6 +199,7 @@ def test_calls_at_the_same_moment_never_share_a_number() -> None:
         ("real_failure_handled", "answer_handled", "answered"),
     ],
 )
+@pytest.mark.slow
 def test_a_real_toolexception_and_an_injected_error_are_handled_alike(
     project: Project, real_function: str, injected_function: str, outcome: str
 ) -> None:
@@ -237,6 +244,7 @@ def test_a_real_toolexception_and_an_injected_error_are_handled_alike(
 
 
 @pytest.mark.design("adapter.listed_framework_tool")
+@pytest.mark.slow
 def test_a_framework_tool_can_also_be_listed_under_tools(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -257,6 +265,7 @@ def test_a_framework_tool_can_also_be_listed_under_tools(
         ("answer_handled_async", "get_order failed"),
     ],
 )
+@pytest.mark.slow
 def test_every_form_of_handle_tool_error_gets_the_injected_error(
     project: Project, fake_openai: Fake, function: str, text: str
 ) -> None:
@@ -268,6 +277,7 @@ def test_every_form_of_handle_tool_error_gets_the_injected_error(
 
 
 @pytest.mark.design("adapter.label_is_model_name")
+@pytest.mark.slow
 def test_a_label_uses_the_name_the_model_sees(project: Project) -> None:
     project.edit('call    = "tool:get_order"', 'call    = "tool:lookup_order"')
     graph(project, "renamed", "")
@@ -278,6 +288,7 @@ def test_a_label_uses_the_name_the_model_sees(project: Project) -> None:
 
 
 @pytest.mark.design("adapter.plain_tool_class")
+@pytest.mark.slow
 def test_the_plain_tool_class_is_gated(project: Project) -> None:
     graph(project, "plain_tool", "")
     project.edit('answer   = "messages[-1].content"\n', "")
@@ -287,6 +298,7 @@ def test_the_plain_tool_class_is_gated(project: Project) -> None:
 
 
 @pytest.mark.design("adapter.structure_stops_end_to_end")
+@pytest.mark.slow
 def test_a_changed_library_stops_the_run_with_exit_3(project: Project) -> None:
     graph(project, "nested", "")
     project.edit('answer   = "messages[-1].content"\n', "")
@@ -305,6 +317,7 @@ def test_a_changed_library_stops_the_run_with_exit_3(project: Project) -> None:
 
 
 @pytest.mark.design("labels.fault_typo_costs_one_run")
+@pytest.mark.slow
 def test_a_misspelled_fault_stops_the_test_after_one_baseline_run(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -319,6 +332,7 @@ def test_a_misspelled_fault_stops_the_test_after_one_baseline_run(
 
 
 @pytest.mark.design("labels.mock_typo_on_real_tool")
+@pytest.mark.slow
 def test_a_misspelled_mock_of_a_tool_under_real_stops_the_test(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -337,6 +351,7 @@ def test_a_misspelled_mock_of_a_tool_under_real_stops_the_test(
     assert "tool:check_inventry names no tool the agent has" in result.out
 
 
+@pytest.mark.slow
 def test_a_tool_mock_shadowed_by_an_earlier_one_is_a_note(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -349,6 +364,7 @@ def test_a_tool_mock_shadowed_by_an_earlier_one_is_a_note(
 
 
 @pytest.mark.design("labels.never_used_mock")
+@pytest.mark.slow
 def test_a_mock_no_run_used_is_a_note(project: Project, fake_openai: Fake) -> None:
     graph(project, fault="")
     result = project.test(fake_openai(["acme_get_order", "acme_answer"]))
@@ -360,6 +376,7 @@ def test_a_mock_no_run_used_is_a_note(project: Project, fake_openai: Fake) -> No
 
 
 @pytest.mark.design("labels.no_report_is_a_mistake")
+@pytest.mark.slow
 def test_a_test_where_no_run_reported_its_tools_fails(
     project: Project, time_limit: TimeLimit
 ) -> None:
@@ -374,6 +391,7 @@ def test_a_test_where_no_run_reported_its_tools_fails(
 
 
 @pytest.mark.design("labels.siblings_end_as_stopped")
+@pytest.mark.slow
 def test_runs_stopped_by_a_bad_label_end_as_stopped(project: Project, fake_openai: Fake) -> None:
     """The lone first run reports nothing, so the check falls to a run beside others."""
     graph(project, "first_goes_quiet", TIMEOUT.replace("tool:get_order", "tool:get_ordr"), 3)
@@ -411,6 +429,7 @@ def test_a_first_run_that_reports_nothing_leaves_the_check_to_a_later_run(
 
 
 @pytest.mark.design("adapter.class_tool")
+@pytest.mark.slow
 def test_a_tool_written_as_a_class_is_gated(project: Project, fake_openai: Fake) -> None:
     graph(project, "answer_custom_class")
     result = project.test(fake_openai(ACME))
@@ -418,6 +437,7 @@ def test_a_tool_written_as_a_class_is_gated(project: Project, fake_openai: Fake)
 
 
 @pytest.mark.design("adapter.mixin_tool")
+@pytest.mark.slow
 def test_a_run_function_from_a_mixin_is_gated(project: Project) -> None:
     graph(project, "mixin_tool", "")
     project.edit('answer   = "messages[-1].content"\n', "")
@@ -428,6 +448,7 @@ def test_a_run_function_from_a_mixin_is_gated(project: Project) -> None:
 
 
 @pytest.mark.design("adapter.invoke_override_stops")
+@pytest.mark.slow
 def test_a_tool_that_overrides_invoke_stops_the_test_if_offered(project: Project) -> None:
     graph(project, "answer_overridden", "")
     fake = FakeOpenAI(ACME)
@@ -441,6 +462,7 @@ def test_a_tool_that_overrides_invoke_stops_the_test_if_offered(project: Project
 
 
 @pytest.mark.design("adapter.async_graph")
+@pytest.mark.slow
 def test_an_async_graph_is_gated_too(project: Project, fake_openai: Fake) -> None:
     graph(project, "answer_async")
     result = project.test(fake_openai(ACME))
@@ -448,6 +470,7 @@ def test_an_async_graph_is_gated_too(project: Project, fake_openai: Fake) -> Non
 
 
 @pytest.mark.design("gate.same_kind_async_tool")
+@pytest.mark.slow
 def test_an_async_tool_gets_an_async_gate(project: Project) -> None:
     project.edit('returns = "shipped, Oct 30"', 'returns = "mocked"')
     project.edit('call    = "tool:get_order"', 'call    = "tool:get_order_async"')
@@ -467,6 +490,7 @@ def test_an_async_tool_gets_an_async_gate(project: Project) -> None:
         ('["only the report"]', None, 2),
     ],
 )
+@pytest.mark.slow
 def test_a_tool_with_an_artifact_is_mocked_with_a_list_of_two(
     project: Project, returns: str, answer: str | None, code: int
 ) -> None:
@@ -482,6 +506,7 @@ def test_a_tool_with_an_artifact_is_mocked_with_a_list_of_two(
 
 
 @pytest.mark.design("adapter.plumbing_not_recorded")
+@pytest.mark.slow
 def test_langchains_own_arguments_are_left_out_of_the_record(project: Project) -> None:
     graph(project, "plumbing", "")
     project.edit('answer   = "messages[-1].content"\n', "")
@@ -498,6 +523,7 @@ def test_langchains_own_arguments_are_left_out_of_the_record(project: Project) -
 
 
 @pytest.mark.design("adapter.async_real_error_recorded")
+@pytest.mark.slow
 def test_a_real_error_in_an_async_tool_is_recorded(project: Project) -> None:
     graph(project, "async_tool", "")
     project.edit('answer   = "messages[-1].content"\n', "")
@@ -507,6 +533,7 @@ def test_a_real_error_in_an_async_tool_is_recorded(project: Project) -> None:
 
 
 @pytest.mark.design("adapter.one_call_one_line")
+@pytest.mark.slow
 def test_arun_delegating_to_run_is_one_call(project: Project) -> None:
     graph(project, "sync_tool_through_arun", "")
     project.edit('answer   = "messages[-1].content"\n', "")
@@ -516,6 +543,7 @@ def test_arun_delegating_to_run_is_one_call(project: Project) -> None:
 
 
 @pytest.mark.design("adapter.nested_tool_gated")
+@pytest.mark.slow
 def test_a_tool_called_from_inside_a_tool_is_a_call_of_its_own(project: Project) -> None:
     graph(project, "nested", "")
     project.edit('answer   = "messages[-1].content"\n', "")
@@ -526,6 +554,7 @@ def test_a_tool_called_from_inside_a_tool_is_a_call_of_its_own(project: Project)
 
 
 @pytest.mark.design("adapter.write_refused")
+@pytest.mark.slow
 def test_an_unlisted_write_tool_is_refused_and_never_runs(project: Project) -> None:
     graph(project, fault="")
     fake = FakeOpenAI(["acme_refund_order", "acme_answer"])
@@ -540,6 +569,7 @@ def test_an_unlisted_write_tool_is_refused_and_never_runs(project: Project) -> N
 
 
 @pytest.mark.design("adapter.tools_count_as_seen")
+@pytest.mark.slow
 def test_a_frameworks_tools_count_as_seen_but_a_tool_no_gate_reaches_stops_the_test(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -766,6 +796,7 @@ def test_an_answer_path_that_does_not_fit_says_so(path: str, message: str) -> No
 
 
 @pytest.mark.design("start.answer_path_is_a_mistake")
+@pytest.mark.slow
 def test_a_wrong_answer_path_is_a_test_mistake_not_a_result(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -800,6 +831,7 @@ def wrote(result: Result) -> bool:
 
 
 @pytest.mark.design("gate.wrapper_is_not_the_gate")
+@pytest.mark.slow
 def test_a_wrapper_copying_a_gates_attributes_is_gated_itself(project: Project) -> None:
     result, _ = offered(project, "wrapped_gate")
     assert result.code == 0, result.out + result.err
@@ -829,6 +861,7 @@ def test_only_the_gate_itself_passes_for_a_gate(kind: str) -> None:
 
 
 @pytest.mark.design("adapter.listed_tool_must_pass")
+@pytest.mark.slow
 def test_listing_a_tool_does_not_vouch_for_one_that_skips_the_gate(project: Project) -> None:
     project.edit(
         "[agent]\n", '[agent]\ntools = ["acme.listed:write_order", "acme.listed:get_stock"]\n'
@@ -847,6 +880,7 @@ def stopped_at_the_offer(result: Result, fake: FakeOpenAI) -> None:
 
 
 @pytest.mark.design("adapter.blocked_name_wins")
+@pytest.mark.slow
 def test_a_gated_tool_does_not_vouch_for_a_second_tool_of_its_name(project: Project) -> None:
     result, fake = offered(project, "same_name_as_a_gated_tool")
     stopped_at_the_offer(result, fake)
@@ -858,6 +892,7 @@ def test_a_gated_tool_does_not_vouch_for_a_second_tool_of_its_name(project: Proj
     "function",
     ["run_set_on_the_tool", "run_set_on_the_tool_called_directly", "run_set_when_made"],
 )
+@pytest.mark.slow
 def test_a_run_function_set_on_the_tool_itself_never_runs(project: Project, function: str) -> None:
     result, _ = offered(project, function)
     assert result.code == 2, result.out + result.err
@@ -870,6 +905,7 @@ def test_a_run_function_set_on_the_tool_itself_never_runs(project: Project, func
     "function",
     ["invoke_set_on_the_class_later", "run_set_on_the_class_later", "run_set_on_the_tool"],
 )
+@pytest.mark.slow
 def test_a_tool_changed_after_it_was_made_stops_at_the_next_model_request(
     project: Project, function: str
 ) -> None:
@@ -897,6 +933,7 @@ def test_a_recheck_finds_the_name_a_tool_was_given_later() -> None:
     ("function", "method"),
     [("invoke_override_called_directly", "invoke"), ("run_override_called_directly", "run")],
 )
+@pytest.mark.slow
 def test_an_override_called_directly_is_refused(
     project: Project, function: str, method: str
 ) -> None:
@@ -936,6 +973,7 @@ def test_an_async_override_is_refused_and_a_mixin_stays_as_it_was() -> None:
 
 
 @pytest.mark.design("labels.only_the_root_reports_tools")
+@pytest.mark.slow
 def test_a_python_child_does_not_report_the_agents_tools(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -956,6 +994,7 @@ def test_a_tool_annotated_any_keeps_the_mock_as_written(annotation: object) -> N
 
 
 @pytest.mark.design("adapter.plumbing_not_recorded")
+@pytest.mark.slow
 def test_langgraphs_runtime_argument_is_left_out_of_the_record(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -986,6 +1025,7 @@ def test_the_async_entry_point_checks_the_tool_too() -> None:
 
 
 @pytest.mark.design("check.no_model_calls_only_when_it_means_something")
+@pytest.mark.slow
 def test_a_crash_before_the_first_model_call_is_not_called_a_budget_problem(
     project: Project,
 ) -> None:
@@ -996,6 +1036,7 @@ def test_a_crash_before_the_first_model_call_is_not_called_a_budget_problem(
 
 
 @pytest.mark.design("labels.blocked_tool_is_known")
+@pytest.mark.slow
 def test_a_blocked_tool_is_not_called_a_misspelled_label(project: Project) -> None:
     result, _ = offered(project, "partial_run")
     assert "names no tool the agent has" not in result.out
@@ -1013,6 +1054,7 @@ def test_a_property_that_fails_on_the_answer_path_says_so() -> None:
 
 
 @pytest.mark.design("adapter.listed_tool_must_pass")
+@pytest.mark.slow
 def test_listing_a_tool_object_no_adapter_sees_does_not_vouch_for_it(project: Project) -> None:
     project.edit(
         "[agent]\n", '[agent]\ntools = ["acme.listed:other_tool", "acme.listed:get_stock"]\n'
@@ -1026,6 +1068,7 @@ def test_listing_a_tool_object_no_adapter_sees_does_not_vouch_for_it(project: Pr
 
 @pytest.mark.design("adapter.override_refused")
 @pytest.mark.parametrize("function", ["static_run_and_override", "post_init_run_and_override"])
+@pytest.mark.slow
 def test_an_override_is_refused_when_the_tool_has_a_second_problem(
     project: Project, function: str
 ) -> None:
@@ -1048,6 +1091,7 @@ def test_an_override_is_refused_when_the_tool_has_a_second_problem(
         "_to_args_and_kwargs",
     ],
 )
+@pytest.mark.slow
 def test_an_override_of_any_library_function_is_refused(project: Project, name: str) -> None:
     project.monkeypatch.setenv("OVERRIDE", name)
     result, _ = offered(project, "override_named_by_the_test")
@@ -1057,6 +1101,7 @@ def test_an_override_of_any_library_function_is_refused(project: Project, name: 
 
 
 @pytest.mark.design("adapter.ordinary_overrides_allowed")
+@pytest.mark.slow
 def test_what_real_tools_override_is_not_refused(project: Project) -> None:
     result, _ = offered(project, "ordinary_tool")
     assert result.code == 0, result.out + result.err
@@ -1064,6 +1109,7 @@ def test_what_real_tools_override_is_not_refused(project: Project) -> None:
 
 
 @pytest.mark.design("adapter.class_checked_when_made")
+@pytest.mark.slow
 def test_a_class_is_checked_when_it_is_made_not_only_its_tools(project: Project) -> None:
     result, _ = offered(project, "override_with_no_init")
     assert result.code == 2, result.out + result.err
@@ -1072,6 +1118,7 @@ def test_a_class_is_checked_when_it_is_made_not_only_its_tools(project: Project)
 
 
 @pytest.mark.design("adapter.plumbing_not_recorded")
+@pytest.mark.slow
 def test_injected_state_and_store_are_left_out_of_the_record(
     project: Project, fake_openai: Fake
 ) -> None:
@@ -1083,6 +1130,7 @@ def test_injected_state_and_store_are_left_out_of_the_record(
 
 
 @pytest.mark.design("adapter.copy_is_tracked")
+@pytest.mark.slow
 def test_a_renamed_copy_of_a_safe_tool_does_not_stop_the_test(project: Project) -> None:
     result, fake = offered(project, "renamed_copy")
     assert result.finished, result.out + result.err
@@ -1106,6 +1154,7 @@ def test_the_docs_say_a_test_is_not_a_sandbox() -> None:
         "dict_schema",
     ],
 )
+@pytest.mark.slow
 def test_only_what_the_model_supplies_reaches_the_record(
     project: Project, fake_openai: Fake, function: str
 ) -> None:
@@ -1117,6 +1166,7 @@ def test_only_what_the_model_supplies_reaches_the_record(
     assert args["preview"] == '{"order_id": "1234"}'
 
 
+@pytest.mark.slow
 def test_an_injected_value_passed_by_position_stays_out_of_the_record(
     project: Project, fake_openai: Fake
 ) -> None:

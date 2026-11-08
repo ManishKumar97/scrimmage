@@ -235,6 +235,7 @@ while True:
 
 
 @pytest.mark.design("wait.killed_waiter_gets_nothing")
+@pytest.mark.slow
 def test_a_waiter_killed_mid_wait_is_never_granted_a_hold(server: ControlServer) -> None:
     """The review's leak.py: before, the server granted the dead waiter after a settle."""
     hold = granted(server.ledger.reserve(0.06, "run-0", LABEL))
@@ -507,6 +508,7 @@ def run_on_fake(project: Project, fixtures: list[str]) -> Result:
 
 
 @pytest.mark.design("wait.parallel_runs_end_to_end")
+@pytest.mark.slow
 def test_parallel_runs_whose_holds_overlap_all_answer(project: Project) -> None:
     # gpt-4o-mini holds 4096 x $0.60 a million, about $0.0025, so two fit in $0.006.
     agent(
@@ -532,6 +534,7 @@ __all__ = ["answer"]
 
 
 @pytest.mark.design("wait.deadlock_end_to_end")
+@pytest.mark.slow
 def test_a_stream_held_open_across_a_second_call_ends_in_a_clear_stop(project: Project) -> None:
     (project.root / "acme" / "deadlock.py").write_text(DEADLOCK)
     agent(project, "acme.deadlock:answer", "runs = 1\nmax_cost_usd = 0.004")
@@ -545,6 +548,7 @@ def test_a_stream_held_open_across_a_second_call_ends_in_a_clear_stop(project: P
 
 
 @pytest.mark.design("wait.leak_reported")
+@pytest.mark.slow
 def test_a_run_killed_with_a_hold_leaves_it_held_and_the_report_says_so(
     project: Project,
 ) -> None:
@@ -555,6 +559,7 @@ def test_a_run_killed_with_a_hold_leaves_it_held_and_the_report_says_so(
 
 
 @pytest.mark.design("wait.async_holds_no_thread")
+@pytest.mark.slow
 def test_many_async_calls_to_a_host_name_all_answer_under_a_tight_budget(
     project: Project,
 ) -> None:

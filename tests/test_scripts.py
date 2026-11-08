@@ -23,6 +23,9 @@ from scrimmage_core import bootstrap, runner
 from scrimmage_core.control import ControlServer
 from scrimmage_core.runner import stop_group
 
+# Every test here, or nearly, starts a process or a real scrimmage test run.
+pytestmark = pytest.mark.slow
+
 Fake = Callable[[list[str]], FakeOpenAI]
 Line = dict[str, object]
 RECORD = json.loads(
@@ -1339,6 +1342,7 @@ def test_a_call_made_by_a_child_left_running_reaches_the_record(project: Project
 
 DOUBLE_FORK = """
 import os, time
+
 {setsid_first}
 if os.fork() == 0:
     {setsid_second}

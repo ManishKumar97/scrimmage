@@ -9,6 +9,9 @@ from fakes.openai_server import FakeOpenAI
 from scrimmage_core.config import Mock
 from scrimmage_core.runner import recorded_call
 
+# Every test here, or nearly, starts a process or a real scrimmage test run.
+pytestmark = pytest.mark.slow
+
 Fake = Callable[[list[str]], FakeOpenAI]
 HAND_MOCK = '[[test.mock]]\ncall    = "tool:get_order"\nreturns = "shipped, Oct 30"\n'
 

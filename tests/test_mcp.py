@@ -134,6 +134,7 @@ def calls(result: Result, name: str = "baseline") -> list[tuple[str, str]]:
 
 @pytest.mark.design("mcp.use_case")
 @BOTH
+@pytest.mark.slow
 def test_the_server_never_sees_a_mocked_or_faulted_call(docs: Docs, transport: str) -> None:
     docs.start(transport)
     result = docs.run("acme.docs_bot:answer", MOCK + ERROR + EMPTY + TIMEOUT)
@@ -150,6 +151,7 @@ def test_the_server_never_sees_a_mocked_or_faulted_call(docs: Docs, transport: s
 
 
 @pytest.mark.design("mcp.g1_no_web_decision")
+@pytest.mark.slow
 def test_over_http_no_mcp_message_reaches_the_web_gate(docs: Docs) -> None:
     docs.start("http")
     result = docs.run("acme.docs_bot:answer", MOCK, 'real = ["mcp:docs/note"]')
@@ -160,6 +162,7 @@ def test_over_http_no_mcp_message_reaches_the_web_gate(docs: Docs) -> None:
 
 
 @pytest.mark.design("mcp.g1_no_web_decision")
+@pytest.mark.slow
 def test_a_real_call_over_http_also_stays_off_the_web_gate(docs: Docs) -> None:
     docs.start("http")
     result = docs.run("acme.docs_bot:answer", "", f'real = ["{LABEL}"]')
@@ -171,6 +174,7 @@ def test_a_real_call_over_http_also_stays_off_the_web_gate(docs: Docs) -> None:
 
 @pytest.mark.design("mcp.mock_wrong_shape")
 @BOTH
+@pytest.mark.slow
 def test_a_mock_of_the_wrong_shape_fails_as_a_real_reply_does(docs: Docs, transport: str) -> None:
     docs.start(transport, "wrong")
     function = "acme.docs_bot:answer"
@@ -186,6 +190,7 @@ def test_a_mock_of_the_wrong_shape_fails_as_a_real_reply_does(docs: Docs, transp
 
 @pytest.mark.design("mcp.mock_wrong_shape")
 @BOTH
+@pytest.mark.slow
 def test_the_shape_is_checked_for_a_tool_the_bot_never_listed(docs: Docs, transport: str) -> None:
     docs.start(transport)
     shape = f'[[test.mock]]\ncall = "{LABEL}"\nreturns = {{hits = "not a list"}}\n'
@@ -195,6 +200,7 @@ def test_the_shape_is_checked_for_a_tool_the_bot_never_listed(docs: Docs, transp
 
 
 @pytest.mark.design("mcp.mock_text")
+@pytest.mark.slow
 def test_a_mock_is_text_or_json_and_fills_the_structured_result_only_for_a_shape(
     docs: Docs,
 ) -> None:
@@ -209,6 +215,7 @@ def test_a_mock_is_text_or_json_and_fills_the_structured_result_only_for_a_shape
 
 
 @pytest.mark.design("mcp.mock_text")
+@pytest.mark.slow
 def test_a_text_mock_on_a_tool_with_a_shape_fails_the_librarys_check(docs: Docs) -> None:
     docs.start("stdio")
     text = f'[[test.mock]]\ncall = "{LABEL}"\nreturns = "just text"\n'
@@ -218,6 +225,7 @@ def test_a_text_mock_on_a_tool_with_a_shape_fails_the_librarys_check(docs: Docs)
 
 
 @pytest.mark.design("mcp.mock_text")
+@pytest.mark.slow
 def test_a_wrapped_shape_takes_the_field_the_server_sends(docs: Docs) -> None:
     docs.start("stdio")
     docs.project.monkeypatch.setenv("DOCS_TOOL", "title")
@@ -229,6 +237,7 @@ def test_a_wrapped_shape_takes_the_field_the_server_sends(docs: Docs) -> None:
 
 @pytest.mark.design("mcp.mock_text")
 @BOTH
+@pytest.mark.slow
 def test_a_mocks_text_is_written_as_a_real_server_writes_it(docs: Docs, transport: str) -> None:
     docs.start(transport, "accent")
     real = docs.run("acme.docs_bot:answer", "", f'real = ["{LABEL}"]')
@@ -257,6 +266,7 @@ def test_a_shape_the_server_drops_is_forgotten() -> None:
 
 @pytest.mark.design("mcp.short_label")
 @pytest.mark.parametrize("label", ["mcp:search", LABEL])
+@pytest.mark.slow
 def test_a_tool_can_be_named_with_or_without_its_server(docs: Docs, label: str) -> None:
     docs.start("stdio")
     mock = f'[[test.mock]]\ncall = "{label}"\nreturns = {{hits = [], total = 0}}\n'
@@ -268,6 +278,7 @@ def test_a_tool_can_be_named_with_or_without_its_server(docs: Docs, label: str) 
 @pytest.mark.design("mcp.real_listed")
 @BOTH
 @pytest.mark.parametrize("label", ["mcp:search", LABEL])
+@pytest.mark.slow
 def test_a_listed_tool_runs_for_real(docs: Docs, transport: str, label: str) -> None:
     docs.start(transport)
     result = docs.run("acme.docs_bot:answer", "", f'real = ["{label}"]')
@@ -278,6 +289,7 @@ def test_a_listed_tool_runs_for_real(docs: Docs, transport: str, label: str) -> 
 
 @pytest.mark.design("mcp.refused")
 @BOTH
+@pytest.mark.slow
 def test_an_unlisted_tool_is_refused_and_never_reaches_the_server(
     docs: Docs, transport: str
 ) -> None:
@@ -298,6 +310,7 @@ def test_an_unlisted_tool_is_refused_and_never_reaches_the_server(
 
 
 @pytest.mark.design("mcp.read_only_hint")
+@pytest.mark.slow
 def test_a_read_only_hint_is_quoted_and_never_trusted(docs: Docs) -> None:
     docs.start("stdio")
     result = docs.run("acme.docs_bot:answer", "")
@@ -307,6 +320,7 @@ def test_a_read_only_hint_is_quoted_and_never_trusted(docs: Docs) -> None:
 
 
 @pytest.mark.design("mcp.refusal_poisons")
+@pytest.mark.slow
 def test_a_swallowed_refusal_stops_every_later_tool_call(docs: Docs) -> None:
     docs.start("stdio")
     result = docs.run("acme.docs_bot:answer_swallows_refusal", MOCK)
@@ -319,6 +333,7 @@ def test_a_swallowed_refusal_stops_every_later_tool_call(docs: Docs) -> None:
 
 
 @pytest.mark.design("mcp.reads_recorded")
+@pytest.mark.slow
 def test_a_request_a_server_could_act_on_passes_and_leaves_a_line(docs: Docs) -> None:
     docs.start("stdio")
     result = docs.run("acme.docs_bot:answer_with_reads", "")
@@ -347,6 +362,7 @@ def test_a_recorded_read_is_a_kept_line_and_is_not_decided() -> None:
 
 @pytest.mark.design("mcp.unknown_method")
 @BOTH
+@pytest.mark.slow
 def test_a_request_this_release_does_not_know_is_gated_not_passed(
     docs: Docs, transport: str
 ) -> None:
@@ -358,6 +374,7 @@ def test_a_request_this_release_does_not_know_is_gated_not_passed(
 
 
 @pytest.mark.design("mcp.unknown_method")
+@pytest.mark.slow
 def test_a_listed_unknown_request_is_sent(docs: Docs) -> None:
     docs.start("stdio")
     result = docs.run("acme.docs_bot:answer_unknown_request", "", 'real = ["mcp:docs/tasks/run"]')
@@ -388,6 +405,7 @@ REAL_FAILURES = [("error", "fail", ERROR), ("empty", "empty", EMPTY)]
 @pytest.mark.design("mcp.real_against_injected_error")
 @BOTH
 @pytest.mark.parametrize(("name", "mode", "fault"), REAL_FAILURES)
+@pytest.mark.slow
 def test_a_real_failure_and_the_injected_one_look_the_same(
     docs: Docs, transport: str, name: str, mode: str, fault: str
 ) -> None:
@@ -405,6 +423,7 @@ def test_a_real_failure_and_the_injected_one_look_the_same(
 
 @pytest.mark.design("mcp.real_against_injected_empty")
 @BOTH
+@pytest.mark.slow
 def test_a_real_empty_reply_and_the_injected_one_on_a_tool_with_no_shape(
     docs: Docs, transport: str
 ) -> None:
@@ -423,6 +442,7 @@ def test_a_real_empty_reply_and_the_injected_one_on_a_tool_with_no_shape(
 
 @pytest.mark.design("mcp.real_against_injected_timeout")
 @BOTH
+@pytest.mark.slow
 def test_a_real_timeout_and_the_injected_one_look_the_same(
     docs: Docs, transport: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -438,6 +458,7 @@ def test_a_real_timeout_and_the_injected_one_look_the_same(
 
 
 @pytest.mark.design("mcp.fault_first_n")
+@pytest.mark.slow
 def test_a_fault_counts_calls_and_a_mock_answers_the_rest(docs: Docs) -> None:
     docs.start("stdio")
     fault = f'[[test.fault]]\ncall = "{LABEL}"\ndo = "error"\nwhen = "first 1"\n'
@@ -448,6 +469,7 @@ def test_a_fault_counts_calls_and_a_mock_answers_the_rest(docs: Docs) -> None:
 
 
 @pytest.mark.design("mcp.ambiguous_label")
+@pytest.mark.slow
 def test_a_label_two_servers_match_stops_the_test(docs: Docs) -> None:
     docs.start("stdio")
     mock = '[[test.mock]]\ncall = "mcp:search"\nreturns = {hits = [], total = 0}\n'
@@ -465,6 +487,7 @@ def test_a_label_two_servers_match_stops_the_test(docs: Docs) -> None:
 
 
 @pytest.mark.design("mcp.ambiguous_label")
+@pytest.mark.slow
 def test_naming_the_server_settles_it(docs: Docs) -> None:
     docs.start("stdio")
     result = docs.run("acme.docs_bot:answer_two_servers", MOCK)
@@ -473,6 +496,7 @@ def test_naming_the_server_settles_it(docs: Docs) -> None:
 
 
 @pytest.mark.design("mcp.ambiguous_label")
+@pytest.mark.slow
 def test_a_real_label_two_servers_match_stops_the_test_too(docs: Docs) -> None:
     docs.start("stdio")
     result = docs.run("acme.docs_bot:answer_two_servers", "", 'real = ["mcp:search"]')
@@ -481,6 +505,7 @@ def test_a_real_label_two_servers_match_stops_the_test_too(docs: Docs) -> None:
 
 
 @pytest.mark.design("mcp.slash_in_a_tool")
+@pytest.mark.slow
 def test_a_tool_with_a_slash_is_not_taken_for_a_server_and_a_tool(docs: Docs) -> None:
     docs.start("stdio")
     result = docs.run("acme.docs_bot:answer_slashed_tool", "", f'real = ["{LABEL}"]')
@@ -505,6 +530,7 @@ def test_a_tool_with_a_slash_on_a_nameless_server_does_not_read_as_a_server() ->
 
 @pytest.mark.design("mcp.label_read_two_ways")
 @pytest.mark.parametrize("kind", ["real", "mock"])
+@pytest.mark.slow
 def test_a_label_that_reads_two_ways_stops_the_test(docs: Docs, kind: str) -> None:
     docs.start("stdio")
     label = "mcp:a/b/c"
@@ -518,6 +544,7 @@ def test_a_label_that_reads_two_ways_stops_the_test(docs: Docs, kind: str) -> No
 
 
 @pytest.mark.design("mcp.unused_mock")
+@pytest.mark.slow
 def test_a_mock_no_call_used_is_a_test_mistake(docs: Docs) -> None:
     docs.start("stdio")
     typo = '[[test.mock]]\ncall = "mcp:docs/serach"\nreturns = "x"\n'
@@ -527,6 +554,7 @@ def test_a_mock_no_call_used_is_a_test_mistake(docs: Docs) -> None:
 
 
 @pytest.mark.design("mcp.never_fired")
+@pytest.mark.slow
 def test_a_fault_no_call_met_is_a_test_mistake(docs: Docs) -> None:
     docs.start("stdio")
     fault = '[[test.fault]]\ncall = "mcp:docs/other"\ndo = "error"\nforbid = ["never said"]\n'
@@ -536,6 +564,7 @@ def test_a_fault_no_call_met_is_a_test_mistake(docs: Docs) -> None:
 
 
 @pytest.mark.design("mcp.two_levels_mixed")
+@pytest.mark.slow
 def test_a_tool_mock_and_an_mcp_fault_is_named_as_two_levels(docs: Docs) -> None:
     docs.start("stdio")
     body = '[[test.mock]]\ncall = "tool:find_docs"\nreturns = "x"\n' + ERROR
@@ -546,6 +575,7 @@ def test_a_tool_mock_and_an_mcp_fault_is_named_as_two_levels(docs: Docs) -> None
 
 
 @pytest.mark.design("mcp.server_inherits_the_run")
+@pytest.mark.slow
 def test_a_stdio_server_that_inherits_the_run_still_serves(docs: Docs) -> None:
     docs.start("stdio")
     function = "acme.docs_bot:answer_with_the_runs_environment"
@@ -558,6 +588,7 @@ def test_a_stdio_server_that_inherits_the_run_still_serves(docs: Docs) -> None:
 
 
 @pytest.mark.design("mcp.record_redacted")
+@pytest.mark.slow
 def test_arguments_and_results_are_recorded_without_secrets(docs: Docs) -> None:
     docs.start("stdio")
     result = docs.run("acme.docs_bot:answer_keeps_a_secret", "", f'real = ["{LABEL}"]')
@@ -596,6 +627,7 @@ def test_a_reply_that_is_not_a_model_keeps_its_line() -> None:
 
 
 @pytest.mark.design("mcp.real_error_recorded")
+@pytest.mark.slow
 def test_a_real_protocol_error_is_on_the_line_and_reaches_the_agent(
     docs: Docs, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -622,6 +654,7 @@ def test_a_label_a_server_made_up_is_recorded_without_secrets() -> None:
 
 
 @pytest.mark.design("mcp.mark_does_not_leak")
+@pytest.mark.slow
 def test_the_agents_own_write_to_the_servers_host_is_still_refused(docs: Docs) -> None:
     docs.start("http")
     result = docs.run("acme.docs_bot:answer_web_after_mcp", MOCK)
@@ -632,6 +665,7 @@ def test_the_agents_own_write_to_the_servers_host_is_still_refused(docs: Docs) -
 
 
 @pytest.mark.design("mcp.mark_does_not_leak")
+@pytest.mark.slow
 def test_a_write_after_the_connection_closed_is_still_refused(docs: Docs) -> None:
     docs.start("http")
     result = docs.run("acme.docs_bot:answer_web_after_close", "")
@@ -665,6 +699,7 @@ def refused_web_write(result: Result) -> bool:
 
 @pytest.mark.design("mcp.mark_is_the_endpoint")
 @pytest.mark.parametrize("target", TARGETS)
+@pytest.mark.slow
 def test_a_post_from_an_event_hook_is_a_web_write(
     docs: Docs, target: Callable[[Docs], str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -675,6 +710,7 @@ def test_a_post_from_an_event_hook_is_a_web_write(
 
 
 @pytest.mark.design("mcp.mark_is_the_endpoint")
+@pytest.mark.slow
 def test_a_post_to_another_host_from_an_event_hook_is_a_web_write(
     docs: Docs, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -687,6 +723,7 @@ def test_a_post_to_another_host_from_an_event_hook_is_a_web_write(
 @pytest.mark.design("mcp.mark_ends_with_the_send")
 @pytest.mark.parametrize("target", [*TARGETS, the_endpoint])
 @pytest.mark.parametrize("callback", ["logging", "progress", "sampling"])
+@pytest.mark.slow
 def test_a_post_from_a_callback_is_a_web_write(
     docs: Docs, callback: str, target: Callable[[Docs], str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -698,6 +735,7 @@ def test_a_post_from_a_callback_is_a_web_write(
 
 
 @pytest.mark.design("mcp.mark_ends_with_the_send")
+@pytest.mark.slow
 def test_a_model_call_in_a_callback_gets_its_line_and_its_budget(
     docs: Docs, fake_openai: Callable[..., FakeOpenAI], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -719,6 +757,7 @@ def test_a_model_call_in_a_callback_gets_its_line_and_its_budget(
 
 
 @pytest.mark.design("mcp.token_request")
+@pytest.mark.slow
 def test_a_token_post_on_the_servers_host_is_refused_unless_listed(
     docs: Docs, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -736,6 +775,7 @@ def test_a_token_post_on_the_servers_host_is_refused_unless_listed(
 
 
 @pytest.mark.design("mcp.redirect_fails_closed")
+@pytest.mark.slow
 def test_a_redirect_to_another_path_is_a_web_write(
     docs: Docs, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -750,6 +790,7 @@ def test_a_redirect_to_another_path_is_a_web_write(
 
 
 @pytest.mark.design("mcp.newer_era")
+@pytest.mark.slow
 def test_the_newer_protocol_is_mocked_faulted_and_refused_the_same(docs: Docs) -> None:
     docs.start("http")
     result = docs.run("acme.docs_bot:answer_newer_protocol", MOCK + ERROR)
@@ -768,6 +809,7 @@ def test_the_newer_protocol_is_mocked_faulted_and_refused_the_same(docs: Docs) -
 
 
 @pytest.mark.design("mcp.old_sse_refused")
+@pytest.mark.slow
 def test_the_old_sse_transport_fails_closed_at_the_web_gate(docs: Docs) -> None:
     docs.start("sse")
     result = docs.run("acme.docs_bot:answer_sse", MOCK)
@@ -781,6 +823,7 @@ def test_the_old_sse_transport_fails_closed_at_the_web_gate(docs: Docs) -> None:
 
 
 @pytest.mark.design("mcp.seen_by_the_unseen_check")
+@pytest.mark.slow
 def test_a_tool_the_server_lists_can_be_offered_to_the_model(
     docs: Docs, fake_openai: Callable[..., FakeOpenAI]
 ) -> None:
@@ -809,6 +852,7 @@ def test_a_tool_the_server_lists_can_be_offered_to_the_model(
 
 
 @pytest.mark.design("mcp.tool_gate_first")
+@pytest.mark.slow
 def test_a_langchain_tool_meets_its_own_gate_first(docs: Docs) -> None:
     docs.start("stdio")
     function = "acme.docs_bot:answer_langchain"
@@ -824,6 +868,7 @@ def test_a_langchain_tool_meets_its_own_gate_first(docs: Docs) -> None:
 
 
 @pytest.mark.design("mcp.mock_on_a_closed_session")
+@pytest.mark.slow
 def test_a_mock_on_a_closed_session_still_answers(docs: Docs) -> None:
     docs.start("stdio")
     result = docs.run("acme.docs_bot:answer_after_close", MOCK)
@@ -835,6 +880,7 @@ def test_a_mock_on_a_closed_session_still_answers(docs: Docs) -> None:
 
 @pytest.mark.design("mcp.fastmcp_mock")
 @BOTH
+@pytest.mark.slow
 def test_fastmcps_client_is_mocked_and_faulted(docs: Docs, transport: str) -> None:
     docs.start(transport)
     function = "acme.docs_bot:answer_fastmcp"
@@ -850,6 +896,7 @@ def test_fastmcps_client_is_mocked_and_faulted(docs: Docs, transport: str) -> No
 
 @pytest.mark.design("mcp.fastmcp_wrong_shape")
 @BOTH
+@pytest.mark.slow
 def test_fastmcp_a_wrong_shape_fails_as_a_real_reply_does(docs: Docs, transport: str) -> None:
     function = "acme.docs_bot:answer_fastmcp"
     docs.start(transport, "wrong")
@@ -866,6 +913,7 @@ def test_fastmcp_a_wrong_shape_fails_as_a_real_reply_does(docs: Docs, transport:
 
 @pytest.mark.design("mcp.fastmcp_real_against_injected")
 @BOTH
+@pytest.mark.slow
 def test_fastmcp_a_real_failure_and_the_injected_one_look_the_same(
     docs: Docs, transport: str
 ) -> None:
@@ -881,6 +929,7 @@ def test_fastmcp_a_real_failure_and_the_injected_one_look_the_same(
 
 @pytest.mark.design("mcp.fastmcp_real_against_injected")
 @BOTH
+@pytest.mark.slow
 def test_fastmcp_a_real_timeout_and_the_injected_one_look_the_same(
     docs: Docs, transport: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -898,6 +947,7 @@ ROUTER = "mcp:MCPRouter/docs_search"
 
 
 @pytest.mark.design("mcp.fastmcp_router")
+@pytest.mark.slow
 def test_fastmcps_router_fails_closed(docs: Docs) -> None:
     docs.start("stdio")
     result = docs.run("acme.docs_bot:answer_fastmcp_two_servers", MOCK)
@@ -907,6 +957,7 @@ def test_fastmcps_router_fails_closed(docs: Docs) -> None:
 
 
 @pytest.mark.design("mcp.fastmcp_router")
+@pytest.mark.slow
 def test_fastmcps_router_can_be_mocked(docs: Docs) -> None:
     docs.start("stdio")
     mock = f'[[test.mock]]\ncall = "{ROUTER}"\nreturns = {{hits = ["mocked"], total = 1}}\n'
@@ -917,6 +968,7 @@ def test_fastmcps_router_can_be_mocked(docs: Docs) -> None:
 
 
 @pytest.mark.design("mcp.fastmcp_router")
+@pytest.mark.slow
 def test_a_forwarded_call_says_what_decided_it(docs: Docs) -> None:
     docs.start("stdio")
     result = docs.run("acme.docs_bot:answer_fastmcp_two_servers", MOCK, f'real = ["{ROUTER}"]')
@@ -929,6 +981,7 @@ def test_a_forwarded_call_says_what_decided_it(docs: Docs) -> None:
 
 
 @pytest.mark.design("mcp.fastmcp_router")
+@pytest.mark.slow
 def test_a_forwarded_call_that_is_refused_stops_at_the_server_label(docs: Docs) -> None:
     docs.start("stdio")
     result = docs.run("acme.docs_bot:answer_fastmcp_two_servers", "", f'real = ["{ROUTER}"]')
@@ -937,6 +990,7 @@ def test_a_forwarded_call_that_is_refused_stops_at_the_server_label(docs: Docs) 
 
 
 @pytest.mark.design("mcp.fastmcp_refused")
+@pytest.mark.slow
 def test_fastmcps_client_is_refused(docs: Docs) -> None:
     docs.start("http")
     docs.project.monkeypatch.setenv("DOCS_TOOL", "delete_doc")
@@ -1080,6 +1134,7 @@ def test_a_changed_transport_stops_the_program() -> None:
 
 
 @pytest.mark.design("mcp.structural")
+@pytest.mark.slow
 def test_mcp_1_stops_a_program_that_only_imports_it(docs: Docs) -> None:
     root = docs.project.root
     package = root / "mcp" / "client"
@@ -1330,6 +1385,7 @@ def saved(result: Result, entry: dict[str, Any]) -> object:
 
 @pytest.mark.design("record.mcp_round_trip")
 @pytest.mark.parametrize(("tool", "label"), [("search", LABEL), ("note", "mcp:docs/note")])
+@pytest.mark.slow
 def test_a_saved_mcp_result_comes_back_as_the_same_result_from_its_mock(
     docs: Docs, tool: str, label: str
 ) -> None:
@@ -1351,6 +1407,7 @@ def test_a_saved_mcp_result_comes_back_as_the_same_result_from_its_mock(
 
 
 @pytest.mark.design("record.mcp_round_trip")
+@pytest.mark.slow
 def test_a_tool_the_agent_never_listed_is_listed_before_its_result_is_saved(docs: Docs) -> None:
     docs.start("stdio")
     recording(docs)
@@ -1361,6 +1418,7 @@ def test_a_tool_the_agent_never_listed_is_listed_before_its_result_is_saved(docs
 
 @pytest.mark.design("record.mcp_unsavable")
 @pytest.mark.parametrize(("mode", "why"), [("two", "2 items"), ("image", "a image item")])
+@pytest.mark.slow
 def test_an_mcp_result_no_mock_can_give_is_unsavable(docs: Docs, mode: str, why: str) -> None:
     docs.start("stdio", mode)
     docs.project.monkeypatch.setenv("DOCS_TOOL", "note")
@@ -1371,6 +1429,7 @@ def test_an_mcp_result_no_mock_can_give_is_unsavable(docs: Docs, mode: str, why:
 
 
 @pytest.mark.design("record.mcp_is_error")
+@pytest.mark.slow
 def test_an_mcp_result_with_is_error_is_listed_as_status(docs: Docs) -> None:
     docs.start("stdio", "fail")
     recording(docs)
