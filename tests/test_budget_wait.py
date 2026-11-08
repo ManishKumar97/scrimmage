@@ -433,33 +433,61 @@ def test_a_call_spent_money_cannot_cover_is_refused_at_once(
     assert sink.lines[0]["reason"] == "budget"
 
 
+class GateWaits:
+    """http_gate's asyncio, with its sleep noted: the gate's pause between asks.
+
+    Each pause is a window, from its start to its end, as a count of the ticks so far.
+    """
+
+    def __init__(self, ticks: list[int]) -> None:
+        self.ticks = ticks
+        self.windows: list[tuple[int, int]] = []
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(asyncio, name)
+
+    async def sleep(self, seconds: float) -> None:
+        began = len(self.ticks)
+        await asyncio.sleep(seconds)
+        self.windows.append((began, len(self.ticks)))
+
+
 @pytest.mark.design("wait.loop_runs")
-def test_an_async_call_waits_without_blocking_the_loop(gated: None) -> None:
+def test_an_async_call_waits_without_blocking_the_loop(
+    gated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import httpx2
 
     budget = Budget(limit=0.004)
     other = granted(budget.ledger.reserve(0.003, "run-other"))
     install(make_plan(budget=0.004), budget)
-    ticks: list[float] = []
+    ticks: list[int] = []
+    waits = GateWaits(ticks)
+    monkeypatch.setattr(http_gate, "asyncio", waits)
+    done = asyncio.Event()
 
     async def tick() -> None:
-        for _ in range(8):
-            ticks.append(time.monotonic())
-            await asyncio.sleep(0.05)
-        # The settle comes from a task on the loop, so the call can get through only if
-        # the loop kept running while it waited. A blocked loop ends at the bound, refused.
-        budget.ledger.settle(other, 0.0)
+        while not done.is_set():
+            ticks.append(len(ticks))
+            await asyncio.sleep(0.01)
+            if len(waits.windows) >= 3:
+                # The settle comes from a task on the loop, after three of the gate's waits.
+                budget.ledger.settle(other, 0.0)
 
     async def main() -> int:
         transport = httpx2.MockTransport(lambda request: httpx2.Response(200, json={}))
         async with httpx2.AsyncClient(transport=transport) as session:
             ticker = asyncio.create_task(tick())
             reply = await session.post(URL, json=BODY)
+            done.set()
             await ticker
             return reply.status_code
 
     assert asyncio.run(main()) == 200
-    assert len(ticks) == 8
+    # The gate paused on the loop between asks, and the ticker ran inside every pause. A
+    # wait that blocked the loop, such as time.sleep, makes no window or an empty one.
+    assert len(waits.windows) >= 3
+    assert all(end > began for began, end in waits.windows), waits.windows
 
 
 @pytest.mark.design("wait.cancel_ends_it")
