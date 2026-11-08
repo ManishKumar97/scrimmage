@@ -30,6 +30,8 @@ CI measures branch coverage on Python 3.12 and later, in every process a test st
 On 3.11, `sys.settrace` raises `RuntimeError` in a thread that starts while another thread is in a Python audit hook ([gh-98257](https://github.com/python/cpython/issues/98257), fixed in 3.12).
 Coverage calls it as each thread starts, and the suite and the SDK each have such a hook, so a thread now and then died before its first line.
 A coverage run on 3.11 stops at once and says so.
+Coverage also loads `tools/coverage-threads`, a plugin of this repository's own.
+Without it, coverage could delete a module another thread was importing, once `sys.path` had changed, and that import failed with `KeyError`; its docstring says how.
 To measure it here, use a second environment, so the 3.11 one stays as it is:
 
 ```sh
