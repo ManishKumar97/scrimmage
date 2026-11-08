@@ -173,7 +173,7 @@ SIGKILL cannot be caught, so it leaves no document.
       "kept": [{"call": "tool:refund_order", "mock": 1}],
       "skipped": [{"call": "http:sts.amazonaws.com", "method": "POST", "path": "/", "code": "credential", "calls": 1}],
       "manual": [
-        {"call": "tool:get_invoice", "code": "unsavable", "method": null, "path": null, "calls": 1, "message": "returns: a bytes, which a mock cannot hold"}
+        {"call": "tool:get_invoice", "code": "unsavable", "method": null, "path": null, "calls": 1, "message": "returns: a bytes, which a mock cannot hold", "instead": null}
       ]
     }
   ],
@@ -195,7 +195,8 @@ SIGKILL cannot be caught, so it leaves no document.
 | `written` | Each mock written: `call`, `method` and `path` (`null` for a tool or MCP call), `calls` (how many calls this mock stands for) and `removed` (each secret taken out: its `key`, `null` for a pattern match in plain text, and the `rule`, `pattern` or `key_name`). |
 | `kept` | Each team mock used: its `call`, and `mock`, its place in the test from 1. |
 | `skipped` | Each call skipped, with its `code` (below), `calls`, and `method` and `path` for a web request. |
-| `manual` | Each call that could not be written: its `call`, `code` (below), `message`, `calls`, and `method` and `path`. |
+| `manual` | Each call that could not be written: its `call`, `code` (below), `message`, `calls`, `method` and `path`, and `instead`. |
+| `instead` | The mock written in this call's place, such as the mock of the tool that made it, so it needs nothing from you. `null` when you must write it. |
 | `mocks_text` | Only when the file's layout could not take the mocks: the mocks, for you to copy in. `out` is then `null`. |
 
 The diff is in the text output only: compare `config` with `out` to see it.
