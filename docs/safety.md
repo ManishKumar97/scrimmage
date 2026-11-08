@@ -117,9 +117,10 @@ If one stray call to a tool would do real harm, make that tool unreachable from 
 ## The init probe
 
 `scrimmage init` reads your code and runs none of it.
-`scrimmage init --probe` is opt-in, and it runs your entry point up to its first model request, which is refused before it is sent.
-It has no tool list yet, so a plain tool function your code calls before that first request runs for real, as an unlisted function does.
-That is the one place Scrimmage knowingly runs less safely than a test baseline, and the command says so every time.
+The entry point in a draft is init's guess, and a guess is never run.
+`scrimmage init --probe module:function` runs the function the team names, up to its first model request, which is refused before it is sent.
+After any refusal the process ends, so code that catches one runs no further.
+The probe has no tool list yet, so a plain tool function your code calls before that first request runs for real, as an unlisted function does, and the command says so every time.
 See [Drafting a test file](init.md#what-the-probe-can-do).
 
 ## Staying out of production

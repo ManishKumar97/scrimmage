@@ -11,8 +11,8 @@ scrimmage init
 
 ```
 scrimmage init: read 14 Python files under . without importing them
-entry point: support.agent:answer (one argument, named question, in a module that imports openai)
-probe: not run; pass --probe to find the tools the model is offered
+entry point (a guess): support.agent:answer (one argument, named question, in a module that imports openai)
+probe: not run; to find the tools the model is offered, check the guess above, then run: scrimmage init --probe support.agent:answer --out scrimmage.probed.toml
 tools: 2 found by reading the code
   support.tools:get_order
   support.tools:refund_order
@@ -28,13 +28,16 @@ The draft is a starting point: read every line. A guess that reads like a fact w
 `scrimmage init [folder]` reads every `.py` file under the folder with Python's `ast` module.
 It parses the code and imports nothing, so none of your code runs.
 It skips `.venv`, `venv`, `site-packages`, `node_modules`, `scrimmage-runs` and hidden folders, and it says which files it could not read as Python.
-Module names are the import names: a `src` folder is not part of them, and a folder inside a package keeps its package's name.
+A file over 5 MB is treated as generated: it is skipped, and reported as too large.
+Module names are the import names of an installed package: a `src` folder is not part of them, and a folder inside a package keeps its package's name.
+When the top package cannot be imported from the folder you read, a note tells you to install it, such as with `pip install -e .`, because `scrimmage test` will need it.
 To read one part of a large checkout, give that part as the folder, such as `scrimmage init src/mypackage/domains/airline --out scrimmage.toml`.
 Names used by several parts then stop being ambiguous.
 
 It looks for three things.
 
-**The entry point**, best first:
+**The entry point**, which is a guess. It is written with a comment that says so, and the guess is never run.
+Best first:
 
 | Rank | Candidate |
 |---|---|
@@ -42,6 +45,7 @@ It looks for three things.
 | 2 | A module with `if __name__ == "__main__":` that reads `sys.argv` or uses `argparse`, as `command = "python <path> {question}"` |
 | 3 | The same function as rank 1, in a module that imports none of those |
 
+Within a rank, a module that builds a model client comes before the rest.
 The best is written. The others are comments, up to five, and `--json` lists all of them.
 A function a tool decorator marks, or one named in a tool spec, is a tool and never an entry point.
 
@@ -77,29 +81,31 @@ So the draft does not load until you add a test. `scrimmage check` says `at leas
 ## --probe
 
 ```bash
-scrimmage init --probe
+scrimmage init --probe support.agent:answer
 ```
 
 The static read cannot name a tool made by a dict comprehension or a framework.
-With `--probe`, Scrimmage runs your function entry point, the way `scrimmage test` starts it, with the question `scrimmage init probe`.
+`--probe` takes the function to run, as `module:function`, and runs only that function. You choose it: the command prints it first, and never runs its own guess.
+A bare `--probe`, a script path, or anything that is not `module:function` exits 2 and runs nothing.
+Scrimmage starts the function the way `scrimmage test` does, with the question `scrimmage init probe`.
 The probe stops at the first model request. That request is refused before it is sent, and the tools it offers are read from it.
-The probe costs $0 in model calls Scrimmage sees, as it sends none.
-Without a key in the environment, a placeholder lets the client be built; no model request carries it.
+The probe costs $0 in model calls Scrimmage sees, as it sends none. A paid call through a library it does not gate is not seen.
+With no key in the environment, the run gets a placeholder `OPENAI_API_KEY` so the client can be built. A model request through a gated client never carries it out, but the agent's own requests can: a POST with `requests`, `urllib` or a `curl` subprocess did send it in testing.
 The probe is opt-in, and `--json` never turns it on.
 
 In probe mode a POST to a path Scrimmage knows, such as `/v1/chat/completions`, counts as a model request on any host, so a gateway you have not named yet is found and refused, never sent.
 Outside the probe, the normal rule stands: only hosts in the table or under `model_hosts` are model calls.
 
-After the refusal the probe ends the process. Code that catches the refusal runs no further.
+After any refusal, at the model gate or at a web, tool or MCP gate, the probe ends the process. Code that catches the refusal runs no further.
 
 ### What the probe can do
 
 !!! warning "The probe runs your code"
-    It runs your entry point up to its first model request, as a program, with no tool list and no budget.
-    That is less safe than a test baseline in one way: a plain tool function called before the first model request runs for real, because the probe does not know your tools yet.
+    It runs the function you name up to its first model request, as a program, with no tool list and no budget.
+    A plain tool function called before the first model request runs for real, because the probe does not know your tools yet.
 
 A web write through httpx or httpx2, a LangChain tool, and an MCP tool call are refused, as in `scrimmage test`.
-A write through a library Scrimmage does not gate, such as `requests`, runs.
+A write through a library Scrimmage does not gate, such as `requests`, runs, and so does a subprocess.
 Most agents call no tool before the model replies, but that is your agent's loop, not a promise from Scrimmage.
 The probe prints this every time it runs.
 A script entry point is never probed: its command can do anything before Python starts.
@@ -113,7 +119,7 @@ A script entry point is never probed: its command can do anything before Python 
 | Reached a model request | `stopped at POST /v1/chat/completions on <host>, refused before it was sent` |
 | Reached a first model request that offers no tools, such as an embeddings call | `stopped at POST /v1/embeddings on <host>, which offers no tools, refused before it was sent; no tools are known` |
 | Was refused at another call first | `stopped at <label> <method> <path>, refused before it ran; no tools are known` |
-| Ended with no model request | `ended with no model request` |
+| Returned with no POST to a model path through httpx or httpx2 | `saw no model request through a gated client` |
 | Crashed, or passed its 120 seconds | `crashed, see <log>` or `timed out, see <log>` |
 
 When no tools are known, the candidates from reading the code stand.
@@ -123,4 +129,4 @@ The number to read is `numbers`: `tools_mapped` over `tools_offered`.
 |---|---|
 | 0 | A draft was written with an entry point |
 | 2 | No entry point was found, so the draft has the line to fill in; or the target file exists, so nothing was written |
-| 3 | Scrimmage's own failure, or the probe's infrastructure error; nothing was written |
+| 3 | Scrimmage's own failure, or the probe's infrastructure error; no draft was written, and a probe leaves its records under `scrimmage-runs/` |

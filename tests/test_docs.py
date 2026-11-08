@@ -326,7 +326,7 @@ def test_recording_its_codes_and_its_limits_are_documented() -> None:
 def test_init_its_probe_and_the_probe_s_limits_are_documented() -> None:
     guide, commands, limits = page("quickstart.md"), page("cli.md"), page("limits.md")
     assert guide.index("scrimmage init") < guide.index("## 1."), "the quickstart starts with init"
-    assert "scrimmage init [folder] [--out PATH] [--probe] [--json]" in commands
+    assert "scrimmage init [folder] [--out PATH] [--probe MODULE:FUNCTION] [--json]" in commands
     section = commands.split("## scrimmage init")[1].split("## --json")[0]
     assert all(f"| {code} |" in section for code in cli.STATUS["init"])
     assert "| 1 |" not in section
@@ -335,9 +335,11 @@ def test_init_its_probe_and_the_probe_s_limits_are_documented() -> None:
         "`--json` never turns it on",
         "refused before it is sent",
         "imports nothing",
-        "a plain tool function called before the first model request runs for real",
+        "A plain tool function called before the first model request runs for real",
+        "never runs its own guess",
+        "`requests`, `urllib` or a `curl` subprocess",
         "A script entry point is never probed",
-        "such as `requests`, runs",
+        "such as `requests`, runs, and so does a subprocess",
         "on any host",
         "labelled as a heuristic",
         "costs $0",
