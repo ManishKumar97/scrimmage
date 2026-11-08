@@ -58,9 +58,10 @@ FIRST_LINE = "import time; print(time.time_ns())"
 
 
 # The enforced ceilings: what a change may never cost, in the unit the name says.
-# Each is several times today's cost on a quiet machine, and over the worst seen under
-# load (docs/benchmarks.md), so a busy machine does not reach it. See the same page for
-# the budget each number should come down to, and why.
+# They are wide, so a busy machine does not reach them: 8x today's quiet cost for a tool
+# call, 19.8x for sync HTTP, 14.5x async, 20x MCP, 11.3x for a sync model call, 9.1x async,
+# and 8.8x for the CLI. Only the tool ceiling catches one added round trip to the runner:
+# HTTP needs about 7.6 ms added and a model call about 18 ms. ROUND_TRIPS catches those.
 CALL_BUDGETS_US = {
     "tool_sync": 500.0,  # 62 µs quiet
     "tool_async": 500.0,
@@ -78,6 +79,21 @@ PROCESS_BUDGETS_MS = {
     "import scrimmage_core.cli": 800.0,  # 88 ms quiet, 301 ms seen under load
 }
 RUN_BUDGET_MS = {"run": 2000.0}  # 255 ms quiet, 802 ms seen under load
+# Requests to the runner that one gated call waits on: a count, so no machine can change it.
+ROUND_TRIPS = {
+    "tool_sync": 0.0,
+    "tool_async": 0.0,
+    "tool_mock": 0.0,
+    "http_sync": 0.0,
+    "http_async": 0.0,
+    "http_mock": 0.0,
+    "model_sync": 1.0,  # the reservation against the budget
+    "model_async": 1.0,
+    "mcp_async": 0.0,
+}
+ROUND_TRIPS_BUDGET_OFF = {"model_sync": 0.0, "model_async": 0.0}
+# Libraries the CLI's import must not load. Only ones it does not load today.
+NOT_IMPORTED_BY_CLI = ("openai", "httpx")
 
 
 @dataclass(frozen=True)
@@ -151,24 +167,25 @@ def start_server(args: list[str]) -> tuple[subprocess.Popen[bytes], str]:
 
 
 def call_env(
-    servers: Servers, cases: str, out: Path, *, paired: bool = False, profile: Path | None = None
+    servers: Servers, cases: str, out: Path, *, mode: str = "samples", profile: Path | None = None
 ) -> dict[str, str]:
     env: dict[str, str] = {
         "BENCH_BASE": servers.base,
         "BENCH_MCP": servers.mcp,
         "BENCH_CASES": cases,
         "BENCH_OUT": str(out),
+        "BENCH_MODE": mode,
     }
-    if paired:
-        env["BENCH_PAIRED"] = "1"
     if profile is not None:
         env["BENCH_PROFILE"] = str(profile)
     return env_with(env)
 
 
-def run_plain(servers: Servers, out: Path, cases: str) -> dict[str, dict[str, list[int]]]:
+def run_plain(
+    servers: Servers, out: Path, cases: str, *, mode: str = "samples"
+) -> dict[str, dict[str, list[int]]]:
     code = "import benchmark_agent; benchmark_agent.answer('go')"
-    env = call_env(servers, cases, out)
+    env = call_env(servers, cases, out, mode=mode)
     subprocess.run([PYTHON, "-c", code], env=env, cwd=out.parent, check=True)
     return json.loads(out.read_text())
 
@@ -179,7 +196,7 @@ def run_gated(
     cases: str,
     budget: str,
     *,
-    paired: bool = False,
+    mode: str = "samples",
     profile: Path | None = None,
 ) -> dict[str, dict[str, list[int]]]:
     """The agent under a real scrimmage test."""
@@ -187,7 +204,7 @@ def run_gated(
     project.mkdir()
     mocks = "tool_mock" in cases
     (project / "scrimmage.toml").write_text(toml(budget=budget, mocks=mocks))
-    env = call_env(servers, cases, out, paired=paired, profile=profile)
+    env = call_env(servers, cases, out, mode=mode, profile=profile)
     result = subprocess.run(
         [SCRIMMAGE, "test", str(project / "scrimmage.toml")],
         env=env,
@@ -282,23 +299,36 @@ def measure_calls(rounds: int, tmp: Path, servers: Servers) -> list[CallRow]:
     return [*rows.values(), *free.values()]
 
 
-def paired_added_us(servers: Servers, tmp: Path, name: str) -> dict[str, tuple[float, float]]:
-    """Per case, the gated and plain batch time in µs, measured in one process.
+def batched_added_us(servers: Servers, tmp: Path, name: str) -> dict[str, tuple[float, float]]:
+    """Per case, the time in µs in a gated process and in a plain one, which has no gates.
 
-    Each is the smallest of the batch medians, so a stretch of load on the machine can
-    only make a batch look slower: the smallest is the batch the machine left alone.
+    Each is the smallest of its batch medians, so a stretch of load only makes a batch
+    look slower. It reads below the calls table's median of all calls, so it is a
+    regression signal for the budget test, not a number to publish.
     """
-    out = run_gated(servers, tmp / f"{name}.json", PLAIN_CASES, "1000", paired=True)
-    return {case: (us(min(data["gated"])), us(min(data["plain"]))) for case, data in out.items()}
+    plain = run_plain(servers, tmp / f"{name}-plain.json", PLAIN_CASES, mode="batches")
+    gated = run_gated(servers, tmp / f"{name}-gated.json", PLAIN_CASES, "1000", mode="batches")
+    return {
+        case: (us(min(data["batches"])), us(min(plain[case]["batches"])))
+        for case, data in gated.items()
+    }
 
 
-def paired_table(rows: list[dict[str, tuple[float, float]]]) -> str:
+def batched_table(rows: list[dict[str, tuple[float, float]]]) -> str:
     out = "| Call | Added µs, smallest batch medians (spread) |\n|---|---|\n"
     for name, case, has_plain in CALLS:
         if has_plain:
             added = [row[case][0] - row[case][1] for row in rows]
             out += f"| {name} | {med(added):.1f} ({spread(added)}) |\n"
     return out
+
+
+def round_trips(
+    servers: Servers, tmp: Path, name: str, cases: str, budget: str
+) -> dict[str, float]:
+    """Requests to the runner per gated call, in a real run."""
+    out = run_gated(servers, tmp / f"{name}.json", cases, budget, mode="trips")
+    return {case: data["trips"][0] / data["calls"][0] for case, data in out.items()}
 
 
 def timed_spawn(args: Sequence[str], env: dict[str, str], cwd: Path) -> float:
@@ -580,7 +610,7 @@ def runner_added_ms(tmp: Path, label: str, high: int = 6) -> float:
     return 1000 * (many - one) / (high - 1) - plain
 
 
-SECTIONS = ("calls", "paired", "startup", "cli", "imports", "runner", "profile")
+SECTIONS = ("calls", "batches", "startup", "cli", "imports", "runner", "profile")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -600,14 +630,14 @@ def main(argv: list[str] | None = None) -> int:
             print("Time added per gated call:\n")
             print(call_table(rows))
             raw["calls"] = [r.__dict__ for r in rows]
-        if "paired" in sections:
+        if "batches" in sections:
             with running_servers(tmp) as servers:
-                rows_paired = [
-                    paired_added_us(servers, tmp, f"paired-{n}") for n in range(args.rounds)
+                batched = [
+                    batched_added_us(servers, tmp, f"batches-{n}") for n in range(args.rounds)
                 ]
-            print("Added per call, run on and off in one process (the budget test's measure):\n")
-            print(paired_table(rows_paired))
-            raw["paired"] = rows_paired
+            print("Added per call, the smallest batch medians (the budget test's measure):\n")
+            print(batched_table(batched))
+            raw["batches"] = batched
         if "startup" in sections:
             results = measure_startup(args.rounds, 5, tmp)
             print("Agent startup:\n")

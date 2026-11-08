@@ -4,10 +4,10 @@ BENCH_CASES says which kinds, BENCH_BASE is the local server's address, BENCH_OU
 the times go. Each time is one call, from before it starts to after it returns, in
 nanoseconds; the first few calls of each case, which set up connections, are left out.
 
-With BENCH_PAIRED=1, inside a run, each case alternates batches of calls with the run
-switched on and off in the same process, and the file holds each batch's median. The
-gates stay in place with the run off, so the plain batches still pass through them; a
-gate with no run does nothing but look that up, which is far below these times.
+BENCH_MODE says what is kept. "samples", the default, keeps every call's time. "batches"
+keeps each batch's median, for the budget test to compare a plain process with a gated
+one. "trips", inside a run, counts the requests each call makes to the runner, off the
+sender thread: a count, so it needs no clock.
 
 With BENCH_PROFILE set, the calls run under cProfile and the stats go to that file.
 """
@@ -18,6 +18,7 @@ import json
 import os
 import statistics
 import sys
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -36,6 +37,8 @@ COUNTS = {
     "mcp_async": 400,
 }
 BATCHES = 12
+TRIP_CALLS = 20
+SENDER_THREAD = "scrimmage-sender"
 CHAT: dict[str, Any] = {
     "model": "gpt-4o-mini",
     "max_tokens": 50,
@@ -82,51 +85,69 @@ async def measure_async(call: Callable[[], Awaitable[object]], count: int) -> li
     return times
 
 
+class RoundTrips:
+    """Counts each request to the runner that a gated call waits on.
+
+    The sender thread's requests, which carry record lines in the background, are left
+    out. Every other thread's count, as an async call asks from a worker thread.
+    """
+
+    def __init__(self) -> None:
+        from scrimmage_core.client import ControlClient
+
+        self.count = 0
+        self.lock = threading.Lock()
+        real = ControlClient._send
+
+        def counted(client: ControlClient, method: str, path: str, payload: object) -> Any:
+            if threading.current_thread().name != SENDER_THREAD:
+                with self.lock:
+                    self.count += 1
+            return real(client, method, path, payload)
+
+        ControlClient._send = counted  # type: ignore[method-assign]
+
+
 class Recorder:
-    """Takes each case's times, in one of two ways, and keeps them by case."""
+    """Takes each case's calls in the way BENCH_MODE says, and keeps them by case."""
 
-    def __init__(self, paired: bool) -> None:
+    def __init__(self, mode: str) -> None:
         self.out: dict[str, dict[str, list[int]]] = {}
-        self.run: Any = None
-        self.state: Any = None
-        if paired:
-            from scrimmage_core import state
-
-            self.state, self.run = state, state.current()
-            assert self.run is not None, "BENCH_PAIRED needs a run"
+        self.mode = mode
+        self.trips = RoundTrips() if mode == "trips" else None
 
     def batch(self, name: str) -> int:
         return max(COUNTS[name] // 30, 10)
 
     def take(self, name: str, call: Callable[[], object]) -> None:
         measure(call, WARMUP)
-        if self.run is None:
+        if self.mode == "samples":
             self.out[name] = {"samples": measure(call, COUNTS[name])}
-            return
-        gated: list[int] = []
-        plain: list[int] = []
-        for _ in range(BATCHES):
-            self.state.install(self.run)
-            gated.append(int(statistics.median(measure(call, self.batch(name)))))
-            self.state.install(None)
-            plain.append(int(statistics.median(measure(call, self.batch(name)))))
-        self.state.install(self.run)
-        self.out[name] = {"gated": gated, "plain": plain}
+        elif self.mode == "batches":
+            size = self.batch(name)
+            medians = [int(statistics.median(measure(call, size))) for _ in range(BATCHES)]
+            self.out[name] = {"batches": medians}
+        else:
+            assert self.trips is not None
+            before = self.trips.count
+            measure(call, TRIP_CALLS)
+            self.out[name] = {"trips": [self.trips.count - before], "calls": [TRIP_CALLS]}
 
     async def take_async(self, name: str, call: Callable[[], Awaitable[object]]) -> None:
         await measure_async(call, WARMUP)
-        if self.run is None:
+        if self.mode == "samples":
             self.out[name] = {"samples": await measure_async(call, COUNTS[name])}
-            return
-        gated: list[int] = []
-        plain: list[int] = []
-        for _ in range(BATCHES):
-            self.state.install(self.run)
-            gated.append(int(statistics.median(await measure_async(call, self.batch(name)))))
-            self.state.install(None)
-            plain.append(int(statistics.median(await measure_async(call, self.batch(name)))))
-        self.state.install(self.run)
-        self.out[name] = {"gated": gated, "plain": plain}
+        elif self.mode == "batches":
+            size = self.batch(name)
+            medians = [
+                int(statistics.median(await measure_async(call, size))) for _ in range(BATCHES)
+            ]
+            self.out[name] = {"batches": medians}
+        else:
+            assert self.trips is not None
+            before = self.trips.count
+            await measure_async(call, TRIP_CALLS)
+            self.out[name] = {"trips": [self.trips.count - before], "calls": [TRIP_CALLS]}
 
 
 def case_tool_sync(rec: Recorder) -> None:
@@ -218,7 +239,7 @@ CASES: dict[str, Callable[[Recorder], None]] = {
 def answer(question: str) -> str:
     """The function a run starts: makes every case's calls and writes what they took."""
     del question
-    recorder = Recorder(os.environ.get("BENCH_PAIRED") == "1")
+    recorder = Recorder(os.environ.get("BENCH_MODE", "samples"))
     profile = cProfile.Profile() if "BENCH_PROFILE" in os.environ else None
     if profile is not None:
         profile.enable()
