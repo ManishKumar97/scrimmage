@@ -1,10 +1,14 @@
 """What redact removes from a recorded text."""
 
 import base64
+import random
+import re
+import sys
 import time
 
 import pytest
 
+from scrimmage_core import redact as redact_module
 from scrimmage_core.redact import redact, redacted
 
 
@@ -89,3 +93,108 @@ def test_redacted_counts_each_place_it_removed_and_gives_the_same_text() -> None
     text = "key sk-proj-a1B2c3D4e5F6g7H8i9J0 at https://a.b/c?token=x and https://a.b/plain"
     assert redacted(text) == (redact(text), 2)
     assert redacted("nothing here") == ("nothing here", 0)
+
+
+# One secret for each literal that lets a pass run. A new kind of secret needs its own.
+SAMPLES = {
+    "sk-": "sk-" + "a" * 20,
+    "AKIA": "AKIA" + "A" * 16,
+    "ASIA": "ASIA" + "B" * 16,
+    "AIza": "AIza" + "c" * 35,
+    "ghp_": "ghp_" + "d" * 36,
+    "gho_": "gho_" + "d" * 36,
+    "ghu_": "ghu_" + "d" * 36,
+    "ghs_": "ghs_" + "d" * 36,
+    "ghr_": "ghr_" + "d" * 36,
+    "github_pat_": "github_pat_" + "e" * 22,
+    "xox": "xoxb-" + "1" * 10,
+    "xapp-": "xapp-" + "2" * 10,
+    "bearer": "bearer " + "f" * 16,
+    "Illegal header": "Illegal header value b'x'",
+}
+JWT_SAMPLE = (
+    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+)
+
+
+def reference(text: str) -> tuple[str, int]:
+    """The three passes run unconditionally, on the product's own compiled expressions."""
+    count = 0
+
+    def url(found: re.Match[str]) -> str:
+        nonlocal count
+        kept = redact_module.plain_url(found)
+        count += kept != found.group()
+        return kept
+
+    text = redact_module.URL.sub(url, text)
+    text, jwts = redact_module.JWT.subn(redact_module.no_jwt, text)
+    text, keys = redact_module.PATTERNS.subn(redact_module.REMOVED, text)
+    return text, count + jwts + keys
+
+
+def corpus() -> list[str]:
+    rng = random.Random(20261108)
+    pieces = [
+        *SAMPLES.values(),
+        *(literal for secret in redact_module.SECRETS for literal in secret.literals),
+        JWT_SAMPLE,
+        "eyJ",
+        "://",
+        "https://a.b/c?k=SECRET",
+        "https://user:pw@host/x",
+        "BeArEr " + "g" * 20,
+        "BEARER\t" + "h" * 16,
+        "bearer",
+        "Bearer " + chr(0x17F) + "i" * 16,
+        chr(0x17F),
+        chr(0x130),
+        chr(0x212A),
+        "\ud800",
+        "\n",
+        "\\n",
+        " ",
+        "task-abc",
+        "risk-abc",
+        "sk",
+        "-",
+        "_",
+        "xoxe." + SAMPLES["xox"],
+        "plain words",
+    ]
+    out: list[str] = []
+    for _ in range(5000):
+        parts = [rng.choice(pieces) for _ in range(rng.randint(1, 12))]
+        if rng.random() < 0.3:  # split a secret, or put something inside it
+            i = rng.randrange(len(parts))
+            at = rng.randrange(len(parts[i]) + 1)
+            parts[i] = parts[i][:at] + rng.choice(["", " ", "x", "-", "://"]) + parts[i][at:]
+        out.append(rng.choice(["", " ", "/"]).join(parts))
+    return out
+
+
+def test_redacted_gives_the_same_output_as_running_every_pass() -> None:
+    for text in corpus():
+        assert redacted(text) == reference(text), text
+
+
+def test_every_kind_has_a_sample_and_each_sample_is_removed() -> None:
+    literals = {literal for secret in redact_module.SECRETS for literal in secret.literals}
+    assert set(SAMPLES) == literals, "a literal without a sample, or a sample without a literal"
+    for secret in redact_module.SECRETS:
+        assert any(re.fullmatch(secret.pattern, SAMPLES[lit]) for lit in secret.literals), secret
+        for literal in secret.literals:
+            sample = SAMPLES[literal]
+            assert literal in (sample.lower() if secret.lowercase else sample), sample
+            assert redacted(sample) == (redact_module.REMOVED, 1), sample
+
+
+def test_every_letter_of_bearer_is_found_by_lowering_the_text() -> None:
+    """The check lowers the text and looks for 'bearer'. A character that (?i:bearer) matches
+    must lower to the letter it stands for, or a bearer token could be missed."""
+    for letter in "bearer":
+        matcher = re.compile(f"(?i:{letter})")
+        for code in range(sys.maxunicode + 1):
+            char = chr(code)
+            if matcher.fullmatch(char):
+                assert char.lower() == letter, (hex(code), letter)

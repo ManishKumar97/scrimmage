@@ -1,24 +1,44 @@
 """Remove known secret patterns from anything that is recorded."""
 
 import re
+from typing import NamedTuple
 
 REMOVED = "[secret removed]"
 URL_PART_REMOVED = "[removed]"
-PATTERNS = re.compile(
-    "|".join(
-        [
-            r"sk-(?:proj-|ant-|svcacct-)?[A-Za-z0-9_-]{16,}",  # OpenAI and Anthropic keys
-            r"(?:AKIA|ASIA)[0-9A-Z]{16}",  # AWS access key ids, long-term and temporary
-            r"AIza[0-9A-Za-z_-]{35}",  # Google API keys
-            r"gh[pousr]_[A-Za-z0-9]{36,}",  # GitHub tokens
-            r"github_pat_[A-Za-z0-9_]{22,}",  # GitHub fine-grained tokens
-            r"(?:xoxe\.)?xox[abeprs]-[A-Za-z0-9-]{10,}",  # Slack tokens, refresh tokens too
-            r"xapp-[A-Za-z0-9-]{10,}",  # Slack app-level tokens
-            r"(?i:bearer)\s+[A-Za-z0-9._~+/=-]{16,}",  # bearer tokens
-            r"Illegal header (?:name|value) .*",  # h11 quotes the bad header
-        ]
-    )
+
+
+class Secret(NamedTuple):
+    """One kind of key. Every match holds one of the literals, so a text with none of them
+    needs no regex pass. lowercase: the literal is looked for in the text in lower case."""
+
+    pattern: str
+    literals: tuple[str, ...]
+    lowercase: bool = False
+
+
+SECRETS = (
+    # OpenAI and Anthropic keys
+    Secret(r"sk-(?:proj-|ant-|svcacct-)?[A-Za-z0-9_-]{16,}", ("sk-",)),
+    # AWS access key ids, long-term and temporary
+    Secret(r"(?:AKIA|ASIA)[0-9A-Z]{16}", ("AKIA", "ASIA")),
+    # Google API keys
+    Secret(r"AIza[0-9A-Za-z_-]{35}", ("AIza",)),
+    # GitHub tokens
+    Secret(r"gh[pousr]_[A-Za-z0-9]{36,}", ("ghp_", "gho_", "ghu_", "ghs_", "ghr_")),
+    # GitHub fine-grained tokens
+    Secret(r"github_pat_[A-Za-z0-9_]{22,}", ("github_pat_",)),
+    # Slack tokens, refresh tokens too
+    Secret(r"(?:xoxe\.)?xox[abeprs]-[A-Za-z0-9-]{10,}", ("xox",)),
+    # Slack app-level tokens
+    Secret(r"xapp-[A-Za-z0-9-]{10,}", ("xapp-",)),
+    # bearer tokens
+    Secret(r"(?i:bearer)\s+[A-Za-z0-9._~+/=-]{16,}", ("bearer",), lowercase=True),
+    # h11 quotes the bad header
+    Secret(r"Illegal header (?:name|value) .*", ("Illegal header",)),
 )
+PATTERNS = re.compile("|".join(secret.pattern for secret in SECRETS))
+LITERALS = tuple(lit for secret in SECRETS if not secret.lowercase for lit in secret.literals)
+LOWER_LITERALS = tuple(lit for secret in SECRETS if secret.lowercase for lit in secret.literals)
 
 
 # A JWT. Each run of token characters is tried once, from its first eyJ, with no backing up,
@@ -59,9 +79,16 @@ def redacted(text: str) -> tuple[str, int]:
         count += kept != found.group()
         return kept
 
-    text = URL.sub(url, text)
-    text, jwts = JWT.subn(no_jwt, text)
-    text, keys = PATTERNS.subn(REMOVED, text)
+    # Each pass runs only if the text, as the pass before left it, holds a string every
+    # match of that pass contains. A text that has none is returned as it is.
+    jwts = keys = 0
+    if "://" in text:
+        text = URL.sub(url, text)
+    if "eyJ" in text:
+        text, jwts = JWT.subn(no_jwt, text)
+    lowered = text.lower()
+    if any(lit in text for lit in LITERALS) or any(lit in lowered for lit in LOWER_LITERALS):
+        text, keys = PATTERNS.subn(REMOVED, text)
     return text, count + jwts + keys
 
 
