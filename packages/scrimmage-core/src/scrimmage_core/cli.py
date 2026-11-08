@@ -1,4 +1,4 @@
-"""The scrimmage command: scrimmage test, check, record and schema.
+"""The scrimmage command: scrimmage test, check, record, init and schema.
 
 With --json, standard output holds one JSON document and nothing else. Every command's
 document starts with the same envelope; schemas/cli.v1.json describes it.
@@ -15,6 +15,7 @@ from typing import TextIO
 
 from scrimmage_core import config as settings
 from scrimmage_core import entry
+from scrimmage_core import init as drafting
 from scrimmage_core import plan as planner
 from scrimmage_core import record as recording
 from scrimmage_core import runner as running
@@ -35,6 +36,7 @@ STATUS = {
         MISTAKE: "mistake",
         INFRA: "infra",
     },
+    "init": {OK: "written", MISTAKE: "mistake", INFRA: "infra"},
 }
 # With --json these stop the command with a document, wherever they arrive. The runner sets
 # its own handlers while runs go, and puts these back when they end.
@@ -73,7 +75,16 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
         "--refresh", action="append", default=[], metavar="LABEL", help="record this label again"
     )
     commands.add_parser("schema", help="print the JSON Schema of scrimmage.toml")
+    init = commands.add_parser(
+        "init", help="draft a scrimmage.toml by reading the code", allow_abbrev=False
+    )
+    init.add_argument("folder", nargs="?", default=Path(), type=Path)
+    init.add_argument("--out", type=Path, help="the file to write; default scrimmage.toml there")
+    init.add_argument("--probe", action="store_true", help="run the agent to its first model call")
+    init.add_argument("--json", action="store_true", help="print one JSON document")
     args = parser.parse_args(argv)
+    if args.command == "init":
+        return init_command(args, process)
     if args.command == "schema":
         sys.stdout.write((SCHEMAS / "scrimmage-toml.v1.json").read_text())
         return OK
@@ -187,7 +198,12 @@ def empty_record() -> dict[str, object]:
 
 
 # A command's own fields, as they are when it stops before it has any to give.
-EMPTY_FIELDS = {"test": empty_test, "check": empty_check, "record": empty_record}
+EMPTY_FIELDS = {
+    "test": empty_test,
+    "check": empty_check,
+    "record": empty_record,
+    "init": drafting.empty_fields,
+}
 
 
 class Found:
@@ -413,6 +429,50 @@ def run_check(path: Path, found: Found | None) -> int:
         f"{plural(rows, 'row')}, {plural(rows * agent.runs, 'run')}, {tools}, {budget}"
     )
     return OK
+
+
+def init_command(args: argparse.Namespace, process: bool) -> int:
+    folder, probe = args.folder, args.probe
+    out = args.out if args.out is not None else folder / "scrimmage.toml"
+
+    def run(path: Path, found: Found | None) -> int:
+        return run_init(folder, path, probe, found)
+
+    return as_json("init", out, run, process) if args.json else run(out, None)
+
+
+def run_init(folder: Path, out: Path, probe: bool, found: Found | None) -> int:
+    """A draft from reading the code, and from a probe if asked. Never over an existing file."""
+    try:
+        draft = drafting.prepare(
+            folder, out, probe=probe, stop_flag=None if found is None else entry.pending
+        )
+        stop_point()  # a signal that came during the read or the probe: nothing is written yet
+        drafting.write(draft)
+        if found is not None:
+            settle()  # the file is written, so no signal may turn this into a failure now
+    except Stopped:
+        raise  # as_json says it, with the document
+    except (running.Interrupted, KeyboardInterrupt) as exc:
+        name = str(exc) or "SIGINT"
+        return init_failed(
+            f"stopped by {name}; every run was stopped, and nothing was written", found
+        )
+    except Exception as exc:  # Scrimmage's own failure, not a mistake in the folder
+        return init_failed(f"infrastructure error in scrimmage init: {exc!r}", found)
+    if found is None:
+        drafting.print_text(draft)
+        return draft.code
+    found.messages += draft.messages
+    found.fields.update(draft.fields)
+    return draft.code
+
+
+def init_failed(message: str, found: Found | None) -> int:
+    if found is not None:
+        return found.fail(message)
+    print(f"scrimmage: {message}", file=sys.stderr)
+    return INFRA
 
 
 if __name__ == "__main__":
