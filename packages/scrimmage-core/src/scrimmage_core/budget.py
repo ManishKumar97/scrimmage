@@ -21,13 +21,14 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-# A live waiter asks every quarter second, and an ask that the control server does not
+# A live waiter asks again within ASK_MAX_S, and an ask that the control server does not
 # answer within the client's 10 s socket timeout, twice with a clock retry, ends its wait
 # with a refusal. So a ticket not asked for in three times that lost its release.
 LOST_S = 60.0
-# How soon a held call asks again: the head of the line at once, each ticket ahead of it a
-# little later, as it cannot be served before those are. 100 waiters then ask about 75
-# times a second, not 400, so a settle is not stuck behind a flood of asks.
+# How soon a held call asks again: the head of the line within ASK_FIRST_S, each ticket
+# ahead of it a little later, as it cannot be served before those are. With the gate's
+# jitter, 100 waiters ask about 100 times a second, not 533, so a settle is not stuck
+# behind a flood of asks.
 ASK_FIRST_S = 0.25
 ASK_STEP_S = 0.05
 ASK_MAX_S = 2.0  # far under LOST_S, so a waiter that follows the hint keeps its place
