@@ -386,6 +386,72 @@ def test_the_gate_pauses_as_long_as_the_runners_hint_says(
     assert all(hint / 2 <= s <= hint for s in clock.slept), (hint, clock.slept)
 
 
+@pytest.mark.design("wait.bad_hint")
+@pytest.mark.parametrize(
+    "hint",
+    [None, 0.0, -1.0, float("nan"), float("-inf"), float("inf"), 2.5],
+    ids=["none", "zero", "negative", "nan", "minus_inf", "inf", "over_the_cap"],
+)
+def test_no_hint_or_a_bad_one_pauses_a_jittered_quarter_second(hint: float | None) -> None:
+    """A zero or NaN hint once gave a pause of 0, so the call asked back to back."""
+    pauses = [http_gate.next_ask_s(hint) for _ in range(200)]
+    step = http_gate.WAIT_STEP_S
+    assert all(step / 2 <= x <= step for x in pauses), (min(pauses), max(pauses))
+
+
+@pytest.mark.parametrize("sent", ["soon", True, None, [1]], ids=["text", "bool", "null", "list"])
+def test_an_unreadable_hint_is_no_hint_not_a_control_error(sent: object) -> None:
+    """retry_s is optional, so a runner that sends nonsense leaves the gate at its own pace."""
+    talk = ControlClient("http://127.0.0.1:9", TOKEN)
+    reply: dict[str, object] = {
+        "ok": False, "why": "held", "usd": 0.01, "spent": 0.0, "held": 0.1, "limit": 0.1,
+        "ticket": 3, "holds": [], "retry_s": sent,
+    }  # fmt: skip
+    talk.request = lambda *args: (200, reply)  # type: ignore[method-assign, assignment]
+    answer = short(talk.reserve("run-1", 0.01))
+    assert answer.retry_s is None and answer.ticket == 3
+
+
+def test_the_jitter_spreads_each_pause_over_the_upper_half_of_the_hint() -> None:
+    pauses = [http_gate.next_ask_s(1.0) for _ in range(400)]
+    assert len(set(pauses)) == len(pauses)  # it varies, so waiters drift apart
+    assert min(pauses) >= 0.5 and max(pauses) <= 1.0
+    assert min(pauses) < 0.55 and max(pauses) > 0.95  # it covers the whole range
+
+
+def test_the_jitter_leaves_the_programs_own_random_sequence_alone() -> None:
+    """The gate runs in the team's program, which may seed random for its own runs."""
+    random.seed(1234)
+    expected = [random.random() for _ in range(5)]
+    random.seed(1234)
+    seen = []
+    for _ in range(5):
+        http_gate.next_ask_s(1.0)
+        seen.append(random.random())
+    assert seen == expected
+
+
+FORKS = """
+import os
+from scrimmage_core import http_gate
+read, write = os.pipe()
+pid = os.fork()
+if pid == 0:  # the child: its next jitter, for the parent to read
+    os.write(write, repr(http_gate.JITTER.random()).encode())
+    os._exit(0)
+os.close(write)
+os.waitpid(pid, 0)
+print(float(os.read(read, 64).decode()) != http_gate.JITTER.random())
+"""
+
+
+@pytest.mark.slow
+def test_a_forked_child_jitters_apart_from_its_parent() -> None:
+    """In a process of its own, as pytest's has threads that fork would warn about."""
+    done = subprocess.run([sys.executable, "-c", FORKS], capture_output=True, text=True, timeout=60)
+    assert done.stdout.strip() == "True", done.stderr  # forked with one state, seeded apart
+
+
 @pytest.mark.design("wait.many_waiters")
 def test_a_hundred_waiters_ask_less_as_the_line_grows_and_get_no_control_errors(
     tmp_path: Path,

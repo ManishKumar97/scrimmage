@@ -18,6 +18,8 @@ import hashlib
 import http
 import inspect
 import json
+import math
+import os
 import random
 import threading
 import time
@@ -29,7 +31,7 @@ from typing import Any, NoReturn, Protocol
 
 from scrimmage_core import credentials, hooks, threads
 from scrimmage_core import provider_openai as openai_table
-from scrimmage_core.budget import Held, Shortfall
+from scrimmage_core.budget import ASK_MAX_S, Held, Shortfall
 from scrimmage_core.client import ControlError
 from scrimmage_core.decide import READ_METHODS, Call, Decision, names
 from scrimmage_core.errors import ScrimmageRefused
@@ -46,6 +48,8 @@ PRICE_KEY_CAP = 300  # a longer name is not shown whole as a price key to paste
 BUDGET_WAIT_S = 30.0  # the longest a call waits for calls in flight to free the budget
 WAIT_STEP_S = 0.25  # how soon a waiting call asks again when the runner sends no hint
 JITTER = random.Random()  # its own, so the team's program keeps its random sequence
+if hasattr(os, "register_at_fork"):  # forked children do not ask in step
+    os.register_at_fork(after_in_child=JITTER.seed)
 RUN_MARGIN_S = 10.0  # a wait on other runs ends this long before the run's time limit
 SHOWN_HOLDS = 5  # holds a refusal names
 # A refusal the team must act on: the message reaches the run table.
@@ -613,9 +617,12 @@ def ask(
 
 def next_ask_s(hint: float | None) -> float:
     """How long a held call waits before asking again: the runner's hint, which grows with
-    the line ahead of it, or WAIT_STEP_S from a runner that sends none. Equal jitter, half
-    of it and then a random part of the rest, keeps waiters that started together apart."""
-    step = WAIT_STEP_S if hint is None else max(0.0, hint)
+    the line ahead of it, or WAIT_STEP_S from a runner that sends none or one out of range.
+    Equal jitter, half of it and then a random part of the rest, keeps waiters that started
+    together apart."""
+    step = WAIT_STEP_S  # also for a zero or NaN hint, which would ask back to back
+    if hint is not None and math.isfinite(hint) and 0.0 < hint <= ASK_MAX_S:
+        step = hint
     return step / 2 + JITTER.uniform(0.0, step / 2)
 
 

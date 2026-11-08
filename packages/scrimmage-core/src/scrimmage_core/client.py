@@ -35,6 +35,15 @@ class ControlError(Exception):
     """The control server could not be reached, refused us, or sent a bad reply."""
 
 
+def hint(reply: dict[str, object]) -> float | None:
+    """The reply's retry_s, or None. It is optional: a runner from before it sends none, and
+    one that sends something unreadable leaves the gate at its own pace, not refused."""
+    try:
+        return number(reply, "retry_s")
+    except ValueError:
+        return None
+
+
 class ControlClient:
     def __init__(self, url: str, token: str) -> None:
         parts = urlsplit(url)
@@ -105,8 +114,7 @@ class ControlClient:
             if reply.get("ok") is True:
                 return int(str(reply["reservation"]))
             place = reply.get("ticket")
-            # A runner from before the hint sends none; the gate then asks at its own pace.
-            retry = number(reply, "retry_s") if reply.get("retry_s") is not None else None
+            retry = hint(reply)
             return Shortfall(
                 str(reply["why"]),
                 number(reply, "usd"),
