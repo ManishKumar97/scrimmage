@@ -30,6 +30,8 @@ from scrimmage_core.redact import redact
 
 PREVIEW = 200
 BLOB_CAP = 10 * 1024 * 1024  # a side-folder item keeps its first 10 MB and is marked cut
+BLOB_WAIT_S = 10.0  # the longest a recording call waits for room for its saved value
+BLOB_POLL_S = 0.005
 CLOSED = "a run that has ended"
 PLAN_RETRY_S = 1.0  # a failed plan fetch can take ten seconds, so not one per line
 COMMAND_CAP = 1000  # a process's line keeps this much of its command, which can hold a question
@@ -255,7 +257,7 @@ class RunState:
         for key in ("value", "args"):
             if key in out:
                 text = json.dumps(out[key], ensure_ascii=False)  # plain refused surrogates
-                out[key] = kept_blob(text.encode(), self.blobs)
+                out[key] = kept_blob(text.encode(), self.blobs, wait=True)
         return out
 
     def passed(self, call: engine.Call) -> Step:
@@ -510,7 +512,22 @@ def scrub(value: object) -> object:
     return value
 
 
-def blob(data: bytes, sink: BlobSink | None, total: int | None = None) -> dict[str, object]:
+def handed_over(sink: BlobSink, sha: str, data: bytes, *, wait: bool) -> bool:
+    """Queue one side-folder item. A recording run must lose none, so it waits for room, up
+    to a bound: a sender that never drains must not hang the agent's call."""
+    if sink.put_blob(sha, data):
+        return True
+    deadline = time.monotonic() + BLOB_WAIT_S if wait else 0.0
+    while time.monotonic() < deadline:
+        time.sleep(BLOB_POLL_S)
+        if sink.put_blob(sha, data):
+            return True
+    return False
+
+
+def blob(
+    data: bytes, sink: BlobSink | None, total: int | None = None, *, wait: bool = False
+) -> dict[str, object]:
     """Record a model request or reply: its full content goes to the side folder by hash.
 
     total is the true size when only part of the content was kept while it went by.
@@ -523,12 +540,12 @@ def blob(data: bytes, sink: BlobSink | None, total: int | None = None) -> dict[s
     entry: dict[str, object] = {"sha256": sha, "bytes": size, "preview": text[:PREVIEW]}
     if size > BLOB_CAP:
         entry["cut"] = True
-    if sink is not None and not sink.put_blob(sha, kept):
+    if sink is not None and not handed_over(sink, sha, kept, wait=wait):
         entry["unsaved"] = True
     return entry
 
 
-def kept_blob(data: bytes, sink: BlobSink | None) -> dict[str, object]:
+def kept_blob(data: bytes, sink: BlobSink | None, *, wait: bool = False) -> dict[str, object]:
     """A side-folder item whose every string is already cleaned, so it is kept exactly:
     redacting the JSON text again could change what a mock built from it gives back."""
     kept = data[:BLOB_CAP]
@@ -537,7 +554,7 @@ def kept_blob(data: bytes, sink: BlobSink | None) -> dict[str, object]:
     entry: dict[str, object] = {"sha256": sha, "bytes": len(data), "preview": preview}
     if len(data) > BLOB_CAP:
         entry["cut"] = True
-    if sink is None or not sink.put_blob(sha, kept):
+    if sink is None or not handed_over(sink, sha, kept, wait=wait):
         entry["unsaved"] = True
     return entry
 

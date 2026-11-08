@@ -9,7 +9,7 @@ import pytest
 
 import scrimmage_core
 from conftest import doc_pages
-from scrimmage_core import cli, config, judge, mcp_gate, runner
+from scrimmage_core import cli, config, judge, mcp_gate, record, runner
 
 DOCS = Path(__file__).parents[1] / "docs"
 CLI_SCHEMA = json.loads(
@@ -235,7 +235,7 @@ def test_every_command_flag_exit_code_and_json_field_is_documented() -> None:
     cli_page, output = page("cli.md"), page("json-output.md")
     for word in ("scrimmage check [path/to/scrimmage.toml] [--json]", "scrimmage schema", "--json"):
         assert word in cli_page, word
-    check = cli_page.split("## scrimmage check")[1].split("## scrimmage schema")[0]
+    check = cli_page.split("## scrimmage check")[1].split("## scrimmage record")[0]
     assert all(f"| {code} |" in check for code in cli.STATUS["check"])
     assert "| 1 |" not in check
     missing = sorted(name for name in property_names(CLI_SCHEMA) if f"`{name}`" not in output)
@@ -287,3 +287,36 @@ def test_the_docs_say_beside_each_enum_that_an_unknown_value_reads_as_other() ->
         listed = set(re.findall(r"`([^`]+)`", row.split("|")[2]))
         assert listed == values, (field, listed ^ values)
     assert "A reader that gets a value it does not know reads it as other." in text
+
+
+@pytest.mark.design("docs.recording")
+def test_recording_its_codes_and_its_limits_are_documented() -> None:
+    guide, cli_page, output, limits = (
+        page("recording.md"),
+        page("cli.md"),
+        page("json-output.md"),
+        page("limits.md"),
+    )
+    assert "Recording replies: recording.md" in (DOCS.parent / "mkdocs.yml").read_text()
+    assert (
+        "scrimmage record [path/to/scrimmage.toml] [--test NAME]... [--refresh LABEL]..."
+        in cli_page
+    )
+    section = cli_page.split("## scrimmage record")[1].split("## scrimmage schema")[0]
+    assert all(f"| {code} |" in section for code in cli.STATUS["record"])
+    for flag in ("--test NAME", "--refresh LABEL", "--json"):
+        assert flag in guide, flag
+    for word in ("`recorded = true`", "outside_tool", "credential", "`kept`", "64 KiB"):
+        assert word in guide or word in limits, word
+    for code in (*record.MANUAL_CODES, *record.SKIPPED_CODES):
+        assert f"`{code}`" in output, code
+    for limit in (
+        "**A live session cookie under `session_id` is kept.**",
+        "**A Vault secret read at a nested mount.**",
+        "**A web mock cannot match a query or a body.**",
+        "**A secret with no pattern under an innocent key is written.**",
+        "**A mock's value is capped at 64 KiB of TOML.**",
+    ):
+        assert limit in limits, limit
+    assert "No rule can promise there is none" in guide
+    assert "Recording replies" in page("configuration.md") and "## Recording" in page("safety.md")

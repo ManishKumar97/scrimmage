@@ -108,3 +108,58 @@ def test_an_sts_reply_has_its_temporary_key_id_removed() -> None:
     )
     cleaned, count = redacted(reply)
     assert "ASIAIOSFODNN7EXAMPLE" not in cleaned and count == 1
+
+
+@pytest.mark.design("record.credential_at_gate")
+@pytest.mark.parametrize(
+    "url", ["https://vault.acme.internal/v1/team/kv/data/db", "https://v.acme/v1/a/b/creds/x"]
+)
+def test_a_nested_vault_mount_is_found_by_its_token_header_not_its_path(
+    web: Sink, url: str
+) -> None:
+    def fetch_secret(name: str) -> str:
+        with httpx2.Client(transport=httpx2.MockTransport(Server())) as client:
+            return client.get(url, headers={"X-Vault-Token": "s.abc"}).text
+
+    parsed = httpx2.URL(url)
+    # The path alone cannot tell it from /v1/stations/KSEA/data/latest, so docs/limits.md says so.
+    assert credentials.credential(http_gate.host_of(parsed), http_gate.path_of(parsed)) is None
+    gated(fetch_secret)(name="a")
+    (line,) = [line for line in web.calls() if line["kind"] == "http"]
+    assert line["recorded"]["code"] == "credential"
+    assert "Vault" in line["recorded"]["why"]
+
+
+@pytest.mark.design("record.credential_at_gate")
+def test_a_request_with_no_vault_token_on_a_vault_like_path_stays_recordable(web: Sink) -> None:
+    def fetch_weather(name: str) -> str:
+        with httpx2.Client(transport=httpx2.MockTransport(Server())) as client:
+            return client.get("https://api.weather.acme/v1/stations/KSEA/data/latest").text
+
+    gated(fetch_weather)(name="a")
+    (line,) = [line for line in web.calls() if line["kind"] == "http"]
+    assert "code" not in line["recorded"]
+
+
+@pytest.mark.design("record.credential_at_gate")
+def test_a_reply_in_vaults_envelope_is_a_credential_whatever_its_path(web: Sink) -> None:
+    envelope = {
+        "request_id": "1",
+        "lease_id": "",
+        "renewable": False,
+        "lease_duration": 0,
+        "data": {"data": {"password": "x"}},
+    }
+
+    def fetch_secret(name: str) -> str:
+        def vault(request: httpx2.Request) -> httpx2.Response:
+            return httpx2.Response(200, json=envelope)
+
+        with httpx2.Client(transport=httpx2.MockTransport(vault)) as client:
+            return client.get("https://proxy.acme.internal/team/kv/db").text
+
+    gated(fetch_secret)(name="a")
+    (line,) = [line for line in web.calls() if line["kind"] == "http"]
+    assert line["recorded"]["code"] == "credential"
+    assert not credentials.vault_reply(b'{"lease_id": "x", "other": 1}')
+    assert not credentials.vault_reply(b"not json lease_id")

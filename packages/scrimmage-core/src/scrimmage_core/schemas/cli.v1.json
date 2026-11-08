@@ -30,6 +30,18 @@
       "then": {
         "$ref": "#/$defs/check"
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "command": {
+            "const": "record"
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/record"
+      }
     }
   ],
   "$defs": {
@@ -408,24 +420,7 @@
           "type": "string"
         },
         "outcome": {
-          "anyOf": [
-            {
-              "enum": [
-                "answered",
-                "crashed",
-                "timed out",
-                "refused call",
-                "budget reached",
-                "not reserved",
-                "infrastructure error",
-                "stopped"
-              ]
-            },
-            {
-              "type": "string",
-              "$comment": "open: a value this release does not know; read as other"
-            }
-          ]
+          "$ref": "#/$defs/outcome"
         },
         "fault_fired": {
           "type": [
@@ -573,6 +568,137 @@
         }
       }
     },
+    "outcome": {
+      "anyOf": [
+        {
+          "enum": [
+            "answered",
+            "crashed",
+            "timed out",
+            "refused call",
+            "budget reached",
+            "not reserved",
+            "infrastructure error",
+            "stopped"
+          ]
+        },
+        {
+          "type": "string",
+          "$comment": "open: a value this release does not know; read as other"
+        }
+      ]
+    },
+    "record": {
+      "type": "object",
+      "required": [
+        "v",
+        "scrimmage",
+        "command",
+        "exit",
+        "status",
+        "config",
+        "out",
+        "records",
+        "cost_usd",
+        "numbers",
+        "tests",
+        "mistakes",
+        "notes",
+        "warnings",
+        "infra"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "scrimmage": {
+          "$ref": "#/$defs/scrimmage"
+        },
+        "command": {
+          "enum": [
+            "record"
+          ]
+        },
+        "exit": {
+          "$ref": "#/$defs/exit"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "enum": [
+                "complete",
+                "incomplete",
+                "mistake",
+                "infra"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
+          ]
+        },
+        "config": {
+          "type": "string"
+        },
+        "out": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The file written, whole, or null when nothing was written."
+        },
+        "records": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The folder that holds this record's run, or null when no run started."
+        },
+        "cost_usd": {
+          "$ref": "#/$defs/dollars"
+        },
+        "numbers": {
+          "type": "object",
+          "required": [
+            "calls_seen",
+            "calls_written"
+          ],
+          "properties": {
+            "calls_seen": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "calls_written": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record_test"
+          }
+        },
+        "mocks_text": {
+          "type": "string",
+          "description": "The mocks, when the file's layout could not take them."
+        },
+        "mistakes": {
+          "$ref": "#/$defs/messages"
+        },
+        "notes": {
+          "$ref": "#/$defs/messages"
+        },
+        "warnings": {
+          "$ref": "#/$defs/messages"
+        },
+        "infra": {
+          "$ref": "#/$defs/messages"
+        }
+      }
+    },
     "envelope": {
       "type": "object",
       "required": [
@@ -599,7 +725,8 @@
             {
               "enum": [
                 "test",
-                "check"
+                "check",
+                "record"
               ]
             },
             {
@@ -628,6 +755,251 @@
         },
         "infra": {
           "$ref": "#/$defs/messages"
+        }
+      }
+    },
+    "removal": {
+      "type": "object",
+      "required": [
+        "key",
+        "rule"
+      ],
+      "properties": {
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The key a value was under, or null for a pattern match in plain text."
+        },
+        "rule": {
+          "anyOf": [
+            {
+              "enum": [
+                "pattern",
+                "key_name"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
+          ],
+          "description": "pattern: the existing redaction; key_name: the key-name heuristic."
+        }
+      }
+    },
+    "written_mock": {
+      "type": "object",
+      "required": [
+        "call",
+        "method",
+        "path",
+        "calls",
+        "removed"
+      ],
+      "properties": {
+        "call": {
+          "type": "string"
+        },
+        "method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "calls": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "removed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/removal"
+          }
+        }
+      }
+    },
+    "kept_mock": {
+      "type": "object",
+      "required": [
+        "call",
+        "mock"
+      ],
+      "properties": {
+        "call": {
+          "type": "string"
+        },
+        "mock": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "skipped_call": {
+      "type": "object",
+      "required": [
+        "call",
+        "method",
+        "path",
+        "code",
+        "calls"
+      ],
+      "properties": {
+        "call": {
+          "type": "string"
+        },
+        "method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "code": {
+          "anyOf": [
+            {
+              "enum": [
+                "outside_tool",
+                "credential"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
+          ]
+        },
+        "calls": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "manual_call": {
+      "type": "object",
+      "required": [
+        "call",
+        "code",
+        "method",
+        "path",
+        "calls",
+        "message",
+        "instead"
+      ],
+      "properties": {
+        "call": {
+          "type": "string"
+        },
+        "code": {
+          "anyOf": [
+            {
+              "enum": [
+                "refused",
+                "raised",
+                "status",
+                "differs",
+                "nondeterministic",
+                "unsavable",
+                "null",
+                "placeholder",
+                "too_large",
+                "binary",
+                "incomplete_reply",
+                "secret_changed_shape",
+                "model_inside",
+                "not_finished"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
+          ]
+        },
+        "method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "calls": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "message": {
+          "type": "string"
+        },
+        "instead": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The mock written in this call's place, so it needs nothing from the team, or null."
+        }
+      }
+    },
+    "record_test": {
+      "type": "object",
+      "required": [
+        "test",
+        "run",
+        "outcome",
+        "written",
+        "kept",
+        "skipped",
+        "manual"
+      ],
+      "properties": {
+        "test": {
+          "type": "string"
+        },
+        "run": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/outcome"
+        },
+        "written": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/written_mock"
+          }
+        },
+        "kept": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/kept_mock"
+          }
+        },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/skipped_call"
+          }
+        },
+        "manual": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/manual_call"
+          }
         }
       }
     }

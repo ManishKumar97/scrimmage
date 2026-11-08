@@ -9,6 +9,7 @@ another type. The original value goes back to the agent untouched.
 """
 
 import dataclasses
+import json
 import math
 import os
 import re
@@ -213,7 +214,13 @@ def differ(real: object, built: object, place: str) -> str | None:
         )
     if isinstance(real, float) and math.isnan(real) and math.isnan(cast(float, built)):
         return None
-    return None if real == built else f"{place}: the {kind_of(real)} differs"
+    try:
+        equal = bool(real == built)
+    except Exception as exc:  # an __eq__ or __bool__ written in C has no Python frame of its own
+        raise Unsavable(
+            f"{place}: comparing the {kind_of(real)} fails with {kind_of(exc)}"
+        ) from None
+    return None if equal else f"{place}: the {kind_of(real)} differs"
 
 
 # Words a final s is dropped from, so tokens is token and api_keys holds the pair api key.
@@ -238,7 +245,7 @@ def secret_key(key: str) -> bool:
         word = part in SECRET_WORDS or part in SECRET_JOINED
         if (
             word
-            and then not in ABOUT
+            and (then not in ABOUT or (part == "secret" and then == "id"))  # Vault's AppRole
             and last not in COUNTING
             and not (part == "token" and last in PAGING)
         ):
@@ -274,12 +281,49 @@ def clean(value: object) -> tuple[object, list[Removed]]:
             out: dict[str, object] = {}
             for name, inner in cast(dict[str, object], item).items():
                 name = text(name, key)
-                # A table under the key gets the rule key by key; a number is never replaced.
-                out[name] = walk(inner, name, secret_key(name))
+                # A table under a secret key is secret all the way down; a number never is.
+                out[name] = walk(inner, name, secret or secret_key(name))
             return out
         return item
 
     return walk(value, None, False), removed
+
+
+def embedded_secret(value: object) -> str | None:
+    """Where a string holds JSON with a secret by its key's name, or None.
+
+    A tool that returns json.dumps(reply) holds the reply in one string, which the key rule
+    cannot see. A string is kept exactly, so a secret in it cannot be taken out.
+    """
+    if isinstance(value, list):
+        return next((w for item in cast(list[object], value) if (w := embedded_secret(item))), None)
+    if isinstance(value, dict):
+        items = cast(dict[str, object], value).values()
+        return next((w for item in items if (w := embedded_secret(item))), None)
+    if not isinstance(value, str) or value.lstrip()[:1] not in ("{", "["):
+        return None
+    try:
+        parsed = json.loads(value)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(parsed, dict | list):
+        return None
+    _, removed = clean(cast(object, parsed))
+    if removed:
+        return ", ".join(sorted({str(r["key"]) for r in removed}))
+    return embedded_secret(cast(object, parsed))
+
+
+def json_text_problem(value: object, place: str) -> dict[str, object] | None:
+    """Why a value with JSON text inside it cannot be written, if a secret is in that text."""
+    where = embedded_secret(value)
+    if where is None:
+        return None
+    return unsaved(
+        SECRET_CHANGED_SHAPE,
+        f"{place}: a JSON text inside it holds a secret (under {where}), and an exact text "
+        "cannot be cleaned",
+    )
 
 
 def ours(exc: BaseException) -> bool:
@@ -335,7 +379,8 @@ def saved_arguments(arguments: object) -> tuple[object, dict[str, object] | None
             f"its arguments hold a secret (under {where}), and a cleaned argument could "
             "never match the real call",
         )
-    return cleaned, None
+    problem = json_text_problem(cleaned, "args")
+    return (None, problem) if problem else (cleaned, None)
 
 
 def tool_value(
@@ -374,6 +419,9 @@ def tool_value(
                 SECRET_CHANGED_SHAPE,
                 f"returns: with its secrets removed it no longer fits, {kind_of(exc)}",
             )
+    embedded = json_text_problem(cleaned, "returns")
+    if embedded is not None:
+        return embedded
     doc: dict[str, object] = {"value": cleaned, "args": args, "removed": removed}
     if kind is not None:
         doc["type"] = kind
@@ -418,7 +466,9 @@ def mcp_value(
         where = differ(result, rebuild(fields), "result")
     except Unsavable as exc:
         return unsaved(UNSAVABLE, str(exc))
-    except Exception as exc:  # the library's own validation of the reply
+    except Exception as exc:  # the library's own validation of the reply, or Scrimmage's bug
+        if ours(exc):
+            return scrimmage_error(exc)
         return unsaved(UNSAVABLE, f"result: a mock built from it fails with {kind_of(exc)}")
     if where is not None:
         return unsaved(UNSAVABLE, where)
@@ -434,4 +484,7 @@ def mcp_value(
                 SECRET_CHANGED_SHAPE,
                 f"result: with its secrets removed it no longer fits, {kind_of(exc)}",
             )
+    embedded = json_text_problem(cleaned, "result")
+    if embedded is not None:
+        return embedded
     return {"value": cleaned, "args": args, "removed": removed}

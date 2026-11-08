@@ -3,10 +3,12 @@ child's calls name no parent from the process that forked it."""
 
 import asyncio
 import dataclasses
+import decimal
 import hashlib
 import json
 from typing import cast
 
+import pydantic
 import pytest
 
 from scrimmage_core import capture, mcp_gate, state
@@ -330,3 +332,84 @@ def test_a_value_whose_repr_fails_still_reaches_the_agent(
     assert shown in line["result"]["preview"]
     if record:
         assert line["recorded"]["code"] == "unsavable"
+
+
+class Priced(pydantic.BaseModel):
+    """A field whose value raises when compared, with no Python frame of the team's own."""
+
+    price: decimal.Decimal = pydantic.Field(allow_inf_nan=True)
+
+
+def get_priced(n: str) -> Priced:
+    return Priced(price=decimal.Decimal("sNaN"))
+
+
+class Murky:
+    """A value == gives back, whose truth raises, as a numpy array's does."""
+
+    def __bool__(self) -> bool:
+        raise ValueError("ambiguous")
+
+
+class Squishy:
+    def __eq__(self, other: object) -> Murky:  # type: ignore[override]
+        return Murky()
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+@pytest.mark.design("record.scrimmage_error")
+def test_a_comparison_that_fails_in_c_is_the_teams_type_not_our_bug(sink: Sink) -> None:
+    def same(value: object) -> object:
+        return value
+
+    found = capture.tool_value(get_priced("a"), {}, get_priced, same, [f"{__name__}."])
+    assert found == {
+        "code": "unsavable",
+        "why": "returns.price: comparing the Decimal fails with InvalidOperation",
+    }
+    with pytest.raises(capture.Unsavable, match="comparing the Squishy fails with ValueError"):
+        capture.differ(Squishy(), Squishy(), "x")
+
+
+@pytest.mark.design("record.scrimmage_error")
+@pytest.mark.usefixtures("expect_scrimmage_error")
+def test_a_bug_in_scrimmage_on_the_mcp_path_is_scrimmage_error_not_unsavable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A bug in Scrimmage's own code: mcp_returns given what it does not take.
+    monkeypatch.setattr(capture, "mcp_returns", capture.text_problem)
+    found = capture.mcp_value({"content": []}, {}, lambda value: value)
+    assert found == {
+        "code": "scrimmage_error",
+        "why": "Scrimmage failed while recording it: AttributeError",
+    }
+
+
+def test_a_table_or_a_list_of_tables_under_a_secret_key_is_cleaned() -> None:
+    cleaned, removed = capture.clean(
+        {"credentials": {"value": "x"}, "tokens": [{"a": "b"}], "count": 2}
+    )
+    assert cleaned == {
+        "credentials": {"value": "[secret removed]"},
+        "tokens": [{"a": "[secret removed]"}],
+        "count": 2,
+    }
+    assert len(removed) == 2
+
+
+def test_a_secret_id_is_a_secret_as_vault_uses_the_name() -> None:
+    assert capture.secret_key("secret_id") and capture.secret_key("SecretID")
+    assert not capture.secret_key("session_id")
+
+
+def test_an_mcp_text_that_is_json_with_a_secret_is_not_saved() -> None:
+    text = json.dumps({"token": "abc"})
+    real = {"content": [{"type": "text", "text": text}]}
+
+    def rebuild(value: object) -> object:
+        return {"content": [{"type": "text", "text": value}]}
+
+    assert capture.mcp_value(real, {"q": "x"}, rebuild)["code"] == "secret_changed_shape"
+    fine = {"content": [{"type": "text", "text": json.dumps({"v": 1})}]}
+    assert "code" not in capture.mcp_value(fine, {"q": "x"}, rebuild)
