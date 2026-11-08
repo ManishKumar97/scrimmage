@@ -3,7 +3,6 @@
 import json
 import subprocess
 import threading
-import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -12,7 +11,7 @@ import jsonschema
 import pytest
 
 import scrimmage_core
-from conftest import ACME, EXAMPLE_FAULT, Project
+from conftest import ACME, EXAMPLE_FAULT, Project, TimeLimit
 from fakes.openai_server import FIXTURES, FakeOpenAI
 from scrimmage_core import provider_openai as table
 from scrimmage_core.budget import Ledger, Shortfall
@@ -436,7 +435,7 @@ def test_a_run_refused_before_its_first_model_call_says_nothing_about_the_budget
 
 @pytest.mark.design("runner.stops_late_starters")
 def test_a_program_started_during_a_stop_is_stopped_too(
-    project: Project, monkeypatch: pytest.MonkeyPatch
+    project: Project, monkeypatch: pytest.MonkeyPatch, time_limit: TimeLimit
 ) -> None:
     from scrimmage_core import config
     from scrimmage_core.runner import Runner
@@ -452,9 +451,8 @@ def test_a_program_started_during_a_stop_is_stopped_too(
         return proc
 
     monkeypatch.setattr("scrimmage_core.runner.subprocess.Popen", popen_then_cancel)
-    started = time.monotonic()
     results = runner.run_all()
-    assert time.monotonic() - started < 30  # not left hanging for run_timeout
+    assert time_limit.reached == [False]  # stopped, not left hanging for run_timeout
     assert [r.outcome for r in results] == ["stopped"]
 
 

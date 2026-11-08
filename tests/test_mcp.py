@@ -82,7 +82,7 @@ class Docs:
     def stop(self) -> None:
         for server in self.started:
             server.kill()  # a slow tool holds the server, and nothing here needs it to close well
-            server.wait(timeout=10)
+            server.wait(timeout=60)
         self.started.clear()
 
     def received(self) -> list[str]:

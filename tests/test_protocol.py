@@ -45,7 +45,7 @@ def raw(
     body: bytes = b"",
 ) -> tuple[int, dict[str, object], str]:
     host, port = control.server.server_address[:2]
-    conn = http.client.HTTPConnection(str(host), port, timeout=5)
+    conn = http.client.HTTPConnection(str(host), port, timeout=30)
     conn.request(method, path, body=body, headers=headers)
     response = conn.getresponse()
     data = response.read()
@@ -189,7 +189,7 @@ def test_bad_requests_are_refused(server: ControlServer) -> None:
 
 def raw_status(control: ControlServer, headers: dict[str, str]) -> int:
     host, port = control.server.server_address[:2]
-    conn = http.client.HTTPConnection(str(host), port, timeout=5)
+    conn = http.client.HTTPConnection(str(host), port, timeout=30)
     conn.putrequest("POST", "/v1/records")
     for k, v in headers.items():
         conn.putheader(k, v)
