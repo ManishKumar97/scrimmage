@@ -146,9 +146,11 @@ class Runner:
         stop_flag: list[str] | None = None,
         *,
         record: bool = False,
+        probe: bool = False,
     ) -> None:
         self.config = config
         self.record = record  # scrimmage record: real calls' lines carry what a mock needs
+        self.probe = probe  # scrimmage init --probe: the first model request ends the run
         self.control_url = control_url  # lets a test point the agent elsewhere
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         runs = config.root / "scrimmage-runs"
@@ -212,6 +214,8 @@ class Runner:
         )
         if agent.children:
             env["SCRIMMAGE_CHILDREN"] = "1"
+        if self.probe:  # nothing reaches a model, so a key is needed only to build the client
+            env.setdefault("OPENAI_API_KEY", "scrimmage-probe-sends-no-request")
         return env
 
     def program(self, question: str) -> list[str]:
@@ -232,6 +236,8 @@ class Runner:
         plan = planner.plan_for(self.config, row, run)
         if self.record:
             plan = dataclasses.replace(plan, record=True)
+        if self.probe:
+            plan = dataclasses.replace(plan, probe=True)
         self.server.open_run(run, row.name, plan.to_json())
         if self.cancelled:
             self.server.close_run(run)

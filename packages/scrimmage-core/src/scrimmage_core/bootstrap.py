@@ -178,6 +178,13 @@ def start(*, child: bool = False, target: str | None = None) -> None:
         run_state.stop_open()
         sender.flush()
 
+    def end_program() -> None:
+        """scrimmage init --probe has what it came for, so no more of the team's code runs."""
+        last_lines()
+        os._exit(0)
+
+    ctx.end_program = end_program
+
     def before_exec() -> None:
         """exec ends this image with no exit steps, and if it fails the program goes on."""
         last_lines()

@@ -212,7 +212,8 @@
             "unsupported_loop",
             "ambiguous_label",
             "blind_child",
-            "no_plan"
+            "no_plan",
+            "probe"
           ]
         },
         "provider": {
@@ -563,7 +564,8 @@
             "answer_path",
             "process",
             "other_python",
-            "left_group"
+            "left_group",
+            "probe"
           ]
         },
         "process": {
@@ -598,8 +600,65 @@
         "tools": {
           "type": "array",
           "items": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "paths",
+                  "adapter"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "paths": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "adapter": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            ]
           }
+        },
+        "model_request": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "host",
+            "method",
+            "path",
+            "provider"
+          ],
+          "properties": {
+            "host": {
+              "type": "string"
+            },
+            "method": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            }
+          }
+        },
+        "stopped_at": {
+          "type": "string"
+        },
+        "unreadable": {
+          "type": "boolean"
         }
       }
     },

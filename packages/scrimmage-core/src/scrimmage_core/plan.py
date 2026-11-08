@@ -38,6 +38,7 @@ class Plan:
     children: bool = False  # child processes fire faults too
     unavailable: str | None = None  # why a child has no plan; such a plan is never sent
     record: bool = False  # scrimmage record: real calls' lines carry what a mock needs
+    probe: bool = False  # scrimmage init --probe: the first model request ends the run
     # How long the run had been going when the runner sent this copy, on the runner's clock.
     # The runner adds it to each copy it serves, so the SDK's time limit counts from the
     # runner's start, however long the program took to load.
@@ -71,6 +72,8 @@ class Plan:
             doc["renames"] = dict(self.renames)
         if self.record:
             doc["record"] = True
+        if self.probe:
+            doc["probe"] = True
         if self.elapsed_s:
             doc["elapsed_s"] = self.elapsed_s
         return doc
@@ -124,6 +127,7 @@ class Plan:
             prices=prices,
             children=doc.get("children") is True,
             record=doc.get("record") is True,
+            probe=doc.get("probe") is True,
             elapsed_s=elapsed,
         )
 

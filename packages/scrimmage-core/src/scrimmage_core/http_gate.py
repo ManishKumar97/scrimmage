@@ -30,6 +30,7 @@ from types import ModuleType
 from typing import Any, NoReturn, Protocol
 
 from scrimmage_core import credentials, hooks, threads
+from scrimmage_core import probe as probing
 from scrimmage_core import provider_openai as openai_table
 from scrimmage_core.budget import ASK_MAX_S, Held, Shortfall
 from scrimmage_core.client import ControlError
@@ -99,6 +100,8 @@ class Context:
         self.stop = stop  # ends the program: a library that cannot be gated
         self.faults = True  # false when the library has lost what faults are built from
         self.open: set[Callable[[bool], None]] = set()  # replies not read to their end
+        self.root = probing.here()  # the folder the probe's paths are looked for under
+        self.end_program: Callable[[], None] = lambda: None  # set where a run has a sender
 
     def close_open(self) -> None:
         """At exit: a reply the agent never finished reading is still a call that was made."""
@@ -270,6 +273,8 @@ def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call:
     host = host_of(request.url)
     provider = provider_of(ctx, host)
     method = str(request.method).upper()
+    if provider is None and ctx.run.plan.probe and openai_table.op_for(request.url.path, method):
+        provider = "openai"  # a gateway not named yet: the probe is how it gets found
     op = openai_table.op_for(str(request.url.path), method) if provider is not None else None
     if provider is None or op is None:
         return Call("http", f"http:{host}", path_of(request.url), provider, method)
@@ -310,6 +315,8 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
     where = f"{call.method} {path_of(request.url)}"
     if step.decision.action == "refused":
         refuse(run, step, where)
+    if call.kind == "model" and run.plan.probe:
+        stop_probe(ctx, run, step, fields, request.url)
     if call.kind == "model" and call.name == "chat":
         if fields is None:
             run.refuse(step, "unreadable_body")
@@ -324,6 +331,46 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
     if call.kind == "http" and step.decision.action == "real" and near_a_mock(run, call):
         extra["near_mock"] = True
     return step, extra
+
+
+def stop_probe(
+    ctx: Context, run: RunState, step: Step, fields: dict[str, object] | None, url: Any
+) -> NoReturn:
+    """Note the tools this first model request offers, refuse it unsent, and end the program.
+
+    The note is put before the refusal, so the runner has it when the refusal stops the run.
+    A body that cannot be read offers tools no one can name, which is said, not guessed.
+    """
+    host, path, method = host_of(url), path_of(url), str(step.call.method)
+    with contextlib.suppress(Exception):  # the probe only reads, so it fails no call
+        run.recheck_tools()
+    names = [] if fields is None else openai_table.offered(str(url.path), fields).agent
+    tools = [
+        {
+            "name": redact(name),
+            "paths": probing.paths_of(name, ctx.root),
+            "adapter": name in run.adapted,
+        }
+        for name in dict.fromkeys(names)
+    ]
+    extra: dict[str, object] = {
+        "tools": tools,
+        "model_request": {
+            "host": redact(host),
+            "method": method,
+            "path": redact(path),
+            "provider": str(step.call.provider),
+        },
+        "stopped_at": redact(f"{step.call.label} {method} {path}"),
+    }
+    if fields is None:
+        extra["unreadable"] = True
+    run.notice("probe", "scrimmage", f"the probe stopped at {method} {path}", extra=extra)
+    run.refuse(step, "probe")
+    error = run.refusal(step, redact(f"{method} {path}"))
+    run.finish(step, error=error)
+    ctx.end_program()
+    raise error
 
 
 def without_faults(run: RunState, step: Step) -> None:
