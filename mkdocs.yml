@@ -15,6 +15,7 @@ docs_dir: docs
 site_dir: site
 exclude_docs: |
   hooks/
+  private/
 
 hooks:
   - docs/hooks/schemas.py

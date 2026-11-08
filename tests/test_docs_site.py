@@ -3,12 +3,15 @@
 import importlib.util
 import json
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from types import ModuleType
 
 import pytest
 
-from conftest import EXAMPLE
+from conftest import EXAMPLE, doc_pages
 from test_docs_examples import DOCS, EXAMPLES, FENCE, OUTPUT
 
 ROOT = Path(__file__).parents[1]
@@ -57,7 +60,7 @@ def test_every_test_a_page_cites_exists() -> None:
     """A "Checked by" line, or a command, names tests/<file>.py::<test>; each must be real."""
     cited = {
         (page, path, name)
-        for page in (str(p.relative_to(DOCS)) for p in DOCS.rglob("*.md"))
+        for page in (str(p.relative_to(DOCS)) for p in doc_pages(DOCS))
         for path, name in re.findall(r"(tests/\w+\.py)::(\w+)", (DOCS / page).read_text())
     }
     assert len({c for c in cited if c[0] == "security.md"}) >= 20
@@ -126,3 +129,29 @@ def test_the_quickstart_installs_as_the_install_page_says() -> None:
     assert "pip install ./packages/scrimmage ./packages/scrimmage-core openai" in quick
     for line in ("python -m venv .venv", ". .venv/bin/activate"):
         assert line in install and line in quick
+
+
+@pytest.mark.slow
+def test_the_maintainers_notes_folder_is_not_built_into_the_site(tmp_path: Path) -> None:
+    """A private/ folder under docs/ is left out of the site: no page, no word of it."""
+    pytest.importorskip("mkdocs")
+    docs = tmp_path / "docs"
+    shutil.copytree(ROOT / "docs", docs, ignore=shutil.ignore_patterns("private"))
+    (docs / "private").mkdir()
+    (docs / "private" / "secret.md").write_text("# Notes\n\nzebracrossing12345\n")
+    config = (ROOT / "mkdocs.yml").read_text()
+    config = config.replace("docs_dir: docs", f"docs_dir: {docs}")
+    config = config.replace("site_dir: site", f"site_dir: {tmp_path / 'site'}")
+    config = config.replace("docs/hooks/schemas.py", str(ROOT / "docs/hooks/schemas.py"))
+    (tmp_path / "mkdocs.yml").write_text(config)
+    run = subprocess.run(
+        [sys.executable, "-m", "mkdocs", "build", "--strict", "-f", str(tmp_path / "mkdocs.yml")],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+    assert run.returncode == 0, run.stderr
+    built = [p for p in (tmp_path / "site").rglob("*") if p.is_file()]
+    assert built
+    assert [p for p in built if "private" in p.relative_to(tmp_path / "site").parts] == []
+    assert [p for p in built if b"zebracrossing12345" in p.read_bytes()] == []

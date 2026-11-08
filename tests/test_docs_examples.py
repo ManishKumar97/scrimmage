@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import ACME, EXAMPLE
+from conftest import ACME, EXAMPLE, doc_pages
 from fakes.openai_server import FakeOpenAI
 from scrimmage_core.cli import main
 from scrimmage_core.runner import MISTAKE, OK, ROW_FAILED
@@ -136,7 +136,7 @@ def test_the_page_runs_and_prints_what_it_shows(
 def test_every_page_with_an_output_is_run() -> None:
     pages = {
         str(p.relative_to(DOCS))
-        for p in DOCS.rglob("*.md")
+        for p in doc_pages(DOCS)
         if any(b.title == OUTPUT for b in blocks(str(p.relative_to(DOCS))))
     }
     assert pages == set(EXAMPLES)

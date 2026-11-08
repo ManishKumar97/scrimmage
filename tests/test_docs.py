@@ -8,6 +8,7 @@ from typing import cast
 import pytest
 
 import scrimmage_core
+from conftest import doc_pages
 from scrimmage_core import cli, config, judge, mcp_gate, runner
 
 DOCS = Path(__file__).parents[1] / "docs"
@@ -97,7 +98,7 @@ def test_every_page_is_in_the_site_navigation_and_every_link_works() -> None:
     """mkdocs build --strict checks the same, but needs the docs group; this runs everywhere."""
     nav = (DOCS.parent / "mkdocs.yml").read_text().split("\nnav:\n")[1]
     listed = set(re.findall(r"([a-z/-]+\.md)$", nav, re.M))
-    pages = {str(p.relative_to(DOCS)) for p in DOCS.rglob("*.md")}
+    pages = {str(p.relative_to(DOCS)) for p in doc_pages(DOCS)}
     assert listed == pages, f"nav lists {sorted(listed)}, pages {sorted(pages)}"
     for name in pages:
         for target in re.findall(r"\]\(((?:\.\./)?[a-z/-]+\.md)(?:#[a-z0-9-]+)?\)", page(name)):
