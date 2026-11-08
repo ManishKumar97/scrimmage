@@ -71,6 +71,24 @@ def fast_tests_start_no_process(request: pytest.FixtureRequest) -> Iterator[None
         pytest.fail(f"this test starts a process ({started[0]}), so mark it slow")
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    """Coverage on Python 3.11 fails tests at random, so such a run stops before it starts.
+
+    3.11's sys.settrace raises RuntimeError in a thread that starts while another thread is
+    in a Python audit hook (gh-98257, fixed in 3.12). Coverage calls it as each thread
+    starts, and the hook above, like the SDK's, runs on every audit event. The thread dies
+    before its first line, and the test fails on whatever that thread was for.
+    """
+    if sys.version_info >= (3, 12) or hasattr(config, "workerinput"):
+        return
+    coverage = sys.modules.get("coverage")
+    if coverage is not None and coverage.Coverage.current() is not None:
+        raise pytest.UsageError(
+            "coverage cannot be measured on Python 3.11, whose sys.settrace races audit hooks "
+            "(gh-98257); measure it on 3.12 or later, as tests/README.md shows"
+        )
+
+
 def pytest_sessionfinish(session: pytest.Session) -> None:
     """In CI a skipped test fails the run: a safety check that did not run proves nothing.
 

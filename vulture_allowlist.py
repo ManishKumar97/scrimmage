@@ -44,6 +44,7 @@ _.answer_handled_async  # tests/example/acme/graph.py: a test's scrimmage.toml n
 _.renamed  # tests/example/acme/graph.py: a test's scrimmage.toml names it
 _.plain_tool  # tests/example/acme/graph.py: a test's scrimmage.toml names it
 _.first_goes_quiet  # tests/example/acme/slow.py: a test's scrimmage.toml names it
+_.pytest_configure  # tests/conftest.py: pytest calls hooks by name
 _.pytest_sessionfinish  # tests/conftest.py: pytest calls hooks by name
 _.exitstatus  # tests/conftest.py: pytest reads it to set the exit code
 _.answer_streamed  # tests/example/acme/rag.py: named by import path in a test's scrimmage.toml

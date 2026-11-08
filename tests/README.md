@@ -24,6 +24,19 @@ Before you push, run everything, as CI does:
 uv run pytest
 ```
 
+## Coverage
+
+CI measures branch coverage on Python 3.12 and later, in every process a test starts, and 3.11 runs every test with no tracer.
+On 3.11, `sys.settrace` raises `RuntimeError` in a thread that starts while another thread is in a Python audit hook ([gh-98257](https://github.com/python/cpython/issues/98257), fixed in 3.12).
+Coverage calls it as each thread starts, and the suite and the SDK each have such a hook, so a thread now and then died before its first line.
+A coverage run on 3.11 stops at once and says so.
+To measure it here, use a second environment, so the 3.11 one stays as it is:
+
+```sh
+export UV_PYTHON=3.12 UV_PROJECT_ENVIRONMENT=.venv-3.12
+uv run coverage run -m pytest && uv run coverage combine && uv run coverage report
+```
+
 ## Timing
 
 A test never races the clock.
