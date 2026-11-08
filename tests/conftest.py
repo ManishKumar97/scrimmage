@@ -1,4 +1,5 @@
 import json
+import multiprocessing.process
 import os
 import shutil
 import signal
@@ -28,7 +29,15 @@ EXAMPLE_FAULT = (
 
 # Audit events for a new process. A test that makes one is in the slow tier.
 PROCESS_STARTS = frozenset(
-    {"subprocess.Popen", "os.fork", "os.forkpty", "os.posix_spawn", "os.exec", "os.spawn"}
+    {
+        "subprocess.Popen",
+        "os.fork",
+        "os.forkpty",
+        "os.posix_spawn",
+        "os.exec",
+        "os.spawn",
+        "os.system",
+    }
 )
 started: list[str] = []
 
@@ -40,6 +49,17 @@ def note_process_start(event: str, args: tuple[object, ...]) -> None:
 
 
 sys.addaudithook(note_process_start)
+# multiprocessing's spawn and forkserver start a process with no audit event, so its start
+# is noted by hand. Its fork method raises os.fork as well.
+real_process_start = multiprocessing.process.BaseProcess.start
+
+
+def noted_process_start(self: multiprocessing.process.BaseProcess) -> None:
+    started.append("multiprocessing.Process.start")
+    real_process_start(self)
+
+
+multiprocessing.process.BaseProcess.start = noted_process_start
 
 
 @pytest.fixture(autouse=True)
