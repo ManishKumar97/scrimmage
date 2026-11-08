@@ -11,9 +11,11 @@ address, a quoted letter or a doubled slash cannot slip past a pattern.
 
 import fnmatch
 import ipaddress
+import json
 import re
 import urllib.parse
 from collections.abc import Mapping
+from typing import cast
 
 # AWS services whose replies are credentials or secrets, in every partition and FIPS form.
 AWS = {
@@ -64,6 +66,7 @@ ENDPOINTS: tuple[tuple[str, str, str], ...] = (
 # namespace, as /v1/team/kv/data/db does, and by its path alone that looks like an ordinary
 # /v1/stations/KSEA/data/latest, so the header says what the path cannot.
 VAULT_TOKEN = "x-vault-token"
+VAULT_ENVELOPE = {"request_id", "lease_id", "renewable", "lease_duration"}  # every Vault reply
 SLASHES = re.compile(r"/{2,}")
 NUMBER = re.compile(r"0x[0-9a-f]+|[0-9]+")  # an IPv4 address written as one number
 
@@ -105,6 +108,17 @@ def credential(host: str, path: str) -> str | None:
         if fnmatch.fnmatchcase(host, host_pattern) and rule.fullmatch(path):
             return what or f"an endpoint that matches a credential path pattern ({path_pattern})"
     return None
+
+
+def vault_reply(body: bytes) -> bool:
+    """Whether a reply is Vault's envelope, whatever its path or who added the token."""
+    if b"lease_id" not in body:
+        return False
+    try:
+        parsed = json.loads(body)
+    except (ValueError, RecursionError):
+        return False
+    return isinstance(parsed, dict) and set(cast(dict[str, object], parsed)) >= VAULT_ENVELOPE
 
 
 def carries_vault_token(headers: Mapping[str, str]) -> bool:

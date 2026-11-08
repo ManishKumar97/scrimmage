@@ -948,6 +948,8 @@ def web_recorded(request: Any, response: Any, body: bytes, encoding: str) -> dic
     what = credentials.credential(host, path)
     if what is None and credentials.carries_vault_token(request.headers):
         what = "HashiCorp Vault's API, as its token header says"
+    if what is None and credentials.vault_reply(body):
+        what = "HashiCorp Vault's API, as its reply's envelope says"
     if what is not None:
         return {"code": "credential", "why": f"a request to {what} is never recorded"}
     unpacked = encoding.strip().lower() in ("", "identity", "gzip", "deflate")

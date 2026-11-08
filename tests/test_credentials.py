@@ -139,3 +139,27 @@ def test_a_request_with_no_vault_token_on_a_vault_like_path_stays_recordable(web
     gated(fetch_weather)(name="a")
     (line,) = [line for line in web.calls() if line["kind"] == "http"]
     assert "code" not in line["recorded"]
+
+
+@pytest.mark.design("record.credential_at_gate")
+def test_a_reply_in_vaults_envelope_is_a_credential_whatever_its_path(web: Sink) -> None:
+    envelope = {
+        "request_id": "1",
+        "lease_id": "",
+        "renewable": False,
+        "lease_duration": 0,
+        "data": {"data": {"password": "x"}},
+    }
+
+    def fetch_secret(name: str) -> str:
+        def vault(request: httpx2.Request) -> httpx2.Response:
+            return httpx2.Response(200, json=envelope)
+
+        with httpx2.Client(transport=httpx2.MockTransport(vault)) as client:
+            return client.get("https://proxy.acme.internal/team/kv/db").text
+
+    gated(fetch_secret)(name="a")
+    (line,) = [line for line in web.calls() if line["kind"] == "http"]
+    assert line["recorded"]["code"] == "credential"
+    assert not credentials.vault_reply(b'{"lease_id": "x", "other": 1}')
+    assert not credentials.vault_reply(b"not json lease_id")
