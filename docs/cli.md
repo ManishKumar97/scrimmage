@@ -90,6 +90,23 @@ Prints the JSON Schema of `scrimmage.toml` that ships with your installed Scrimm
 An editor uses it to check the file as you type; see [Checking the file in your editor](configuration.md#checking-the-file-in-your-editor).
 The schema checks the shape of the file. `scrimmage check` decides.
 
+## scrimmage init
+
+```bash
+scrimmage init [folder] [--out PATH] [--probe] [--json]
+```
+
+Writes a first `scrimmage.toml` for the agent in the folder, the current folder by default.
+It reads the code with `ast`, imports nothing and runs nothing, unless you pass `--probe`.
+The draft has no real tools, no test and no mock, and `--out`, or `scrimmage.toml` in the folder, is never replaced.
+`--probe` runs a function entry point up to its first model request, which is refused before it is sent, and reads the tools that request offers; it costs $0, and `--json` never turns it on. See [Drafting a test file](init.md).
+
+| Code | Meaning |
+|---|---|
+| 0 | A draft was written with an entry point |
+| 2 | No entry point was found, or the target file exists |
+| 3 | Scrimmage's own failure, or the probe's infrastructure error |
+
 ## --json
 
 `scrimmage test --json`, `scrimmage check --json` and `scrimmage record --json` print exactly one JSON document on standard output and nothing else.
@@ -99,6 +116,7 @@ Once Scrimmage has started, Ctrl-C or SIGTERM still prints the document, with ex
 Scrimmage has started from the moment its entry point runs, a few tens of milliseconds after Python does; a signal before that, while Python itself starts, ends the process with no document.
 A signal after the command's result is settled is ignored, so the exit code always equals the document's `exit`.
 A mistake in the command line itself, such as an unknown flag, is still text on standard error, with exit 2.
+`scrimmage init --json` prints its one document the same way.
 [JSON output](json-output.md) describes every field.
 
 ## scrimmage-run

@@ -74,6 +74,7 @@ nav:
   - Get started:
       - Install: install.md
       - Quickstart: quickstart.md
+      - Drafting a test file: init.md
   - Examples:
       - examples/index.md
       - "Example: a function agent": examples/function-agent.md

@@ -33,7 +33,7 @@ Every command's document starts with the same fields:
 |---|---|
 | `v` | The version of this format, 1. |
 | `scrimmage` | The installed Scrimmage version, so a document can be traced to the release that made it. `unknown` when Scrimmage runs with no package metadata, such as from a source tree. |
-| `command` | `test`, `check` or `record`. |
+| `command` | `test`, `check`, `record` or `init`. |
 | `exit` | The process's exit code. Always equal to it. |
 | `status` | A word for the exit code, per command; see below. |
 | `config` | The file read, as given on the command line. |
@@ -51,6 +51,7 @@ The text of a message can change in any release.
 | `test` | `passed` | `failed` | `mistake` | `infra` |
 | `check` | `valid` | | `mistake` | `infra` |
 | `record` | `complete` | `incomplete` | `mistake` | `infra` |
+| `init` | `written` | | `mistake` | `infra` |
 
 ## scrimmage test --json
 
@@ -201,6 +202,34 @@ SIGKILL cannot be caught, so it leaves no document.
 
 The diff is in the text output only: compare `config` with `out` to see it.
 
+## scrimmage init --json
+
+```json
+{
+  "v": 1, "scrimmage": "0.4.0", "command": "init", "exit": 0, "status": "written", "config": "scrimmage.toml",
+  "out": "scrimmage.toml",
+  "entry": {"kind": "function", "value": "support.agent:answer", "guess": false, "probe_command": null, "candidates": [{"value": "support.agent:answer", "why": "one argument, named question, in a module that imports openai"}]},
+  "probe": {"ran": true, "function": "support.agent:answer", "outcome": "stopped at POST /v1/chat/completions on gateway.acme.internal, refused before it was sent"},
+  "numbers": {"tools_offered": 4, "tools_mapped": 4},
+  "tools": [{"path": "support.desk:Desk.lookup_ticket", "name": "lookup_ticket", "found_by": "probe"}],
+  "adapter_tools": [],
+  "unresolved": [],
+  "model_hosts": [{"host": "gateway.acme.internal", "provider": "openai", "found_by": "probe"}],
+  "mistakes": [], "notes": [{"message": "the probe ran your code up to its first model request; ..."}], "warnings": [], "infra": []
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `out` | The file written. A non-null value means it was written, whole. `null` means nothing was written, and `mistakes` or `infra` says why. |
+| `entry` | The entry point: `kind`, `function` or `command`, its `value`, `guess`, true when init chose it by reading the code and false when `--probe` named it, `probe_command`, a command that would probe a guessed function, which nothing runs for you, and every `candidates` item with its `value` and `why`, best first. `null` when none was found. |
+| `probe` | `ran`, whether a probe ran, `function`, the function `--probe` named, and `outcome`, what ended it, in words. `{"ran": false, "function": null, "outcome": null}` without `--probe`. |
+| `numbers` | `tools_offered`, the names the probe's model request offered, and `tools_mapped`, those written as one path. `null` when no model request offered a tool that could be read. |
+| `tools` | Each tool written: its import `path`, the `name` the model sees, and `found_by`. |
+| `adapter_tools` | Tools a framework's adapter sees, which need no `tools` list: `name` and `found_by`. |
+| `unresolved` | Each name that could not be mapped to one path: `name`, `candidates`, every path it could be, and `problem`. |
+| `model_hosts` | Each host to name under `model_hosts`: `host`, `provider` and `found_by`. The built-in OpenAI host is left out. |
+
 ## Values that can grow
 
 Within version 1, fields are only added: none is renamed, removed or given another type.
@@ -211,14 +240,16 @@ A value that is removed or renamed comes only with a new version.
 
 | Field | Values today | A value it does not know |
 |---|---|---|
-| `command` | `test`, `check`, `record` | read as other |
-| `status` | `passed`, `failed`, `valid`, `complete`, `incomplete`, `mistake`, `infra` | read as other |
+| `command` | `test`, `check`, `record`, `init` | read as other |
+| `status` | `passed`, `failed`, `valid`, `complete`, `incomplete`, `written`, `mistake`, `infra` | read as other |
 | `result` | `pass`, `fail`, `no result` | read as other |
 | `outcome` | `answered`, `crashed`, `timed out`, `refused call`, `budget reached`, `not reserved`, `infrastructure error`, `stopped` | read as other |
 | `judged` | `pass`, `fail`, `left out` | read as other |
 | `kind` | `expect`, `forbid`, `empty`, `crashed`, `timed out`, `refused` | read as other |
 | `code` | `refused`, `raised`, `status`, `differs`, `nondeterministic`, `unsavable`, `null`, `placeholder`, `too_large`, `binary`, `incomplete_reply`, `secret_changed_shape`, `model_inside`, `not_finished`, `outside_tool`, `credential` | read as other |
 | `rule` | `pattern`, `key_name` | read as other |
+| `found_by` | `probe`, `static` | read as other |
+| `problem` | `ambiguous`, `nested`, `not_found` | read as other |
 | `stopped_by` | `budget`, `budget_held`, `no_price`, `unknown_tool_type`, `unseen_tool`, `structure`, `ambiguous_label`, `unknown_label` | read as other |
 
 `cli.v1.json` lists the values of the release that ships it, and also takes any other text there, so a reader may check a document against any version 1 copy of the schema.

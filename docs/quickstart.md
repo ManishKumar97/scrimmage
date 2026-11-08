@@ -5,6 +5,10 @@ It uses the small order bot in the repository, under `tests/example`.
 
 You need Python 3.11 or newer, an OpenAI API key, and about five minutes.
 
+If you already have an agent, start from your own code: run `scrimmage init` in its folder, and it writes a first `scrimmage.toml` from reading the code, with no import and no run.
+See [Drafting a test file](init.md).
+The rest of this page walks through the example with a file already written.
+
 ## 1. Get the example and install Scrimmage
 
 ```bash
