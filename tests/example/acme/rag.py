@@ -103,13 +103,12 @@ def answer_priceless(question: str) -> str:
 
 
 def first_stops_the_rest(stop: Callable[[str], str], question: str) -> str:
-    """The first run makes a call that stops the test; the others are still working."""
-    try:
-        os.close(os.open("first-run", os.O_CREAT | os.O_EXCL))
-    except FileExistsError:
+    """The first run makes a call that stops the test once the other two are working."""
+    if not first_run():
+        going()
         time.sleep(600)
         return "never"
-    time.sleep(0.5)  # let the others start
+    wait_for_others(2)
     return stop(question)
 
 
@@ -140,16 +139,35 @@ def answer_forked(question: str) -> str:
     return read_order()
 
 
-def answer_one_stops_one_finishes(question: str) -> str:
-    """The first run stops the test; the other finishes properly when told to stop."""
+def first_run() -> bool:
+    """True for the one run that makes the file, however many try at once."""
     try:
         os.close(os.open("first-run", os.O_CREAT | os.O_EXCL))
     except FileExistsError:
+        return False
+    return True
+
+
+def going() -> None:
+    """Says this run is going, so the first run knows when to stop the test."""
+    with open(f"going-{os.getpid()}", "w"):
+        pass
+
+
+def wait_for_others(others: int) -> None:
+    while len([name for name in os.listdir() if name.startswith("going-")]) < others:
+        time.sleep(0.01)
+
+
+def answer_one_stops_one_finishes(question: str) -> str:
+    """The first run stops the test; the other finishes properly when told to stop."""
+    if not first_run():
         told = threading.Event()
         signal.signal(signal.SIGTERM, lambda *_: told.set())
+        going()  # only now would a stop find it ready
         told.wait(60)
         return "finished"
-    time.sleep(0.5)  # let the other start
+    wait_for_others(1)
     return answer_priceless(question)
 
 
