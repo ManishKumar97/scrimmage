@@ -105,6 +105,8 @@ class ControlClient:
             if reply.get("ok") is True:
                 return int(str(reply["reservation"]))
             place = reply.get("ticket")
+            # A runner from before the hint sends none; the gate then asks at its own pace.
+            retry = number(reply, "retry_s") if reply.get("retry_s") is not None else None
             return Shortfall(
                 str(reply["why"]),
                 number(reply, "usd"),
@@ -116,6 +118,7 @@ class ControlClient:
                     Held(str(h["run"]), str(h["label"]), number(h, "usd"), h.get("ended") is True)
                     for h in map(obj, items(reply, "holds"))
                 ),
+                retry,
             )
         except (ValueError, KeyError) as exc:
             raise ControlError("the control server's budget reply is not valid") from exc

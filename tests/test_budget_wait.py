@@ -20,6 +20,7 @@ import pytest
 
 from conftest import EXAMPLE_FAULT, Project, Result, TimeLimit
 from fakes.openai_server import FakeOpenAI
+from scrimmage_core import budget as budget_module
 from scrimmage_core import control, http_gate, state
 from scrimmage_core.budget import LOST_S, Held, Ledger, Shortfall
 from scrimmage_core.client import ControlClient, ControlError
@@ -319,61 +320,157 @@ def test_a_waiter_killed_mid_wait_is_never_granted_a_hold(server: ControlServer)
     assert server.ledger.reserved == 0.0 and server.ledger.leaked() == []
 
 
+@pytest.mark.design("wait.hint_grows_with_the_line")
+def test_a_held_call_is_told_to_ask_later_the_further_back_it_is() -> None:
+    ledger = Ledger(0.10)
+    held = granted(ledger.reserve(0.10, "run-0"))
+    tickets = [short(ledger.reserve(0.01, f"run-{n}")) for n in range(60)]
+    assert [t.retry_s for t in tickets[:3]] == [0.25, 0.3, 0.35]  # the head asks at once
+    assert tickets[10].retry_s == pytest.approx(0.75) and tickets[59].retry_s == 2.0  # capped
+    again = short(ledger.reserve(0.01, "run-10", ticket=tickets[10].ticket))
+    assert again.retry_s == pytest.approx(0.75)  # asking again keeps the place and its hint
+    ledger.release(tickets[0].ticket or 0)
+    assert short(ledger.reserve(0.01, "run-1", ticket=tickets[1].ticket)).retry_s == 0.25
+    ledger.settle(held, 0.0)
+    assert ledger.reserve(0.01, "run-1", ticket=tickets[1].ticket)  # no hint once it fits
+    assert budget_module.ASK_MAX_S < LOST_S / 10  # one who follows the hint never goes stale
+
+
+@pytest.mark.design("wait.line_asks_less")
+@pytest.mark.parametrize("seed", range(3))
+def test_a_long_line_asks_far_less_than_once_a_quarter_second_each(seed: int) -> None:
+    """The ledger's hints and the gate's jittered pause, on a fake clock: 100 calls held for
+    60 s. Each asking every 0.25 s would be 400 asks a second, 533 with the jitter's mean."""
+    http_gate.JITTER.seed(seed)
+    now = [0.0]
+    ledger = Ledger(1.0, clock=lambda: now[0])
+    granted(ledger.reserve(1.0, "run-0"))  # never settles in this test
+    asks: list[tuple[float, int, int | None]] = [(0.0, n, None) for n in range(100)]
+    count, head_gaps, last_head = 0, [], None
+    while asks[0][0] < 60.0:
+        now[0], n, ticket = heapq.heappop(asks)
+        answer = short(ledger.reserve(0.5, f"run-{n}", ticket=ticket))
+        count += 1
+        if n == 0:
+            if last_head is not None:
+                head_gaps.append(now[0] - last_head)
+            last_head = now[0]
+        heapq.heappush(asks, (now[0] + http_gate.next_ask_s(answer.retry_s), n, answer.ticket))
+    per_s = count / 60.0
+    assert per_s < 110, per_s  # about 101 by the sum of the hints
+    assert max(head_gaps) <= budget_module.ASK_FIRST_S  # the head is never slowed
+
+
+@pytest.mark.design("wait.gate_follows_the_hint")
+def test_the_gate_pauses_as_long_as_the_runners_hint_says(
+    gated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    budget, _ = held_forever(0.004, time_limit=60.0, run="run-other")
+    for n in range(10):  # ten calls are ahead of this one
+        short(budget.ledger.reserve(0.002, f"run-{n}"))
+    clock = Clock(monkeypatch)
+    real = budget.reserve
+    calls: list[int] = []
+
+    def five_asks(run: str, usd: float, label: str = "", ticket: int | None = None) -> object:
+        calls.append(1)
+        if len(calls) > 5:
+            raise ControlError("enough")  # ends the call: the pauses are what is measured
+        return real(run, usd, label, ticket)
+
+    budget.reserve = five_asks  # type: ignore[method-assign, assignment]
+    with pytest.raises(ScrimmageRefused):
+        client().post(URL, json=BODY)
+    hint = budget_module.ask_again_s(10)
+    assert len(clock.slept) == 5
+    assert all(hint / 2 <= s <= hint for s in clock.slept), (hint, clock.slept)
+
+
 @pytest.mark.design("wait.many_waiters")
-def test_a_hundred_waiters_get_no_control_errors_and_a_settle_stays_fast(
+def test_a_hundred_waiters_ask_less_as_the_line_grows_and_get_no_control_errors(
     tmp_path: Path,
 ) -> None:
-    """The review's slots.py: before, waiters filled the 64 slots and connections reset."""
+    """The review's slots.py, and F2's flood, on the real server.
+
+    Before, waiters filled the 64 slots and connections reset: 16 of 100 got an error. Then
+    each asked every 0.25 s, 400 asks a second, and on a loaded machine a settle waited
+    behind them, 2 s each. Now each waits as long as the server's hint says, which grows
+    with the tickets ahead of it, so the asks are capped by the hints, whatever the load.
+    """
     ledger = Ledger(1.0)
     made = ControlServer(TOKEN, RecordStore(tmp_path / "r"), ledger=ledger)
     made.start()
     made.open_run("run-1", "baseline", {"v": 1})
     holds = [granted(ledger.reserve(0.04, "run-0")) for _ in range(20)]  # $0.80 held
     errors: list[str] = []
-    asks = [0] * 100
+    asked: list[list[float]] = [[] for _ in range(100)]  # when each waiter asked
+    hints: list[float] = [0.0] * 100  # the last hint each waiter was given
     grants: list[int] = []
     stop = threading.Event()
 
     def waiter(n: int) -> None:
         talk, ticket = ControlClient(made.url, TOKEN), None
         while not stop.is_set():
+            asked[n].append(time.monotonic())
             try:
                 answer = talk.reserve("run-1", 0.5, LABEL, ticket)
             except ControlError as exc:
                 errors.append(str(exc))
                 return
-            asks[n] += 1
             if isinstance(answer, int):
                 grants.append(n)
                 talk.request("POST", "/v1/budget/settle", {"reservation": answer, "usd": 0.0})
                 ticket = None
+                time.sleep(http_gate.next_ask_s(None))
             else:
-                ticket = answer.ticket
-            time.sleep(http_gate.WAIT_STEP_S)
+                ticket, hints[n] = answer.ticket, answer.retry_s or 0.0
+                time.sleep(http_gate.next_ask_s(answer.retry_s))
+
+    def asks_between(start: float, end: float) -> int:
+        return sum(start <= t < end for times in asked for t in times)
+
+    # A waiter waits at least half its hint between asks, so this many asks a second at most.
+    most_per_s = sum(2 / budget_module.ask_again_s(place) for place in range(100))
+    free: list[int] = []  # the server's free connection slots, sampled
+
+    def sample() -> None:
+        while not stop.is_set():
+            free.append(made.server.slots._value)  # type: ignore[attr-defined]
+            time.sleep(0.005)
 
     threads = [threading.Thread(target=waiter, args=(n,), daemon=True) for n in range(100)]
+    sampler = threading.Thread(target=sample, daemon=True)
     try:
+        began = time.monotonic()
+        sampler.start()
         for thread in threads:
             thread.start()
-        until(lambda: min(asks) >= 2 or bool(errors))  # all 100 are waiting, asking again
+        until(lambda: min(map(len, asked)) >= 2 or bool(errors))  # all 100 are waiting
+        in_line = list(hints)  # no call can be granted yet, so each keeps its place
         settler = ControlClient(made.url, TOKEN)
         started = time.monotonic()
         statuses = [
             settler.request("POST", "/v1/budget/settle", {"reservation": hold, "usd": 0.0})[0]
             for hold in holds
         ]
-        took = time.monotonic() - started
+        settled = time.monotonic()
         until(lambda: len(grants) >= 10 or bool(errors))  # the freed room goes round them
     finally:
         stop.set()
-        for thread in threads:
+        for thread in [*threads, sampler]:
             thread.join(30)
         made.stop()
-    # Before, waiters filled the server's threads: 16 of 100 got a connection reset, and a
-    # settle queued behind them took 1 to 7 s. Twenty settles in a row take well under a
-    # second here; queued, or slowed to even 1.5 s each, they would pass 30 s.
-    assert errors == [] and statuses == [200] * 20
-    assert took < 30, f"20 settles took {took:.1f}s among 100 waiters"
+    # The slot bug: a server that held a waiter's request open would fill all 64 slots.
+    assert errors == [] and statuses == [200] * 20 and min(free) > 0, min(free)
+    # The hints grow with the line: the head asks again at once, the back far less often.
+    assert sorted(in_line) == [budget_module.ask_again_s(place) for place in range(100)]
+    # Each waiter's first ask, then at most most_per_s; a fixed 0.25 s step would be 400.
+    waiting = asks_between(began, started)
+    assert waiting <= 100 + most_per_s * (started - began), (waiting, started - began)
+    # No flood for the settles to queue behind: at most one ask in flight per waiter, and
+    # the rest within the hints.
+    during = asks_between(started, settled)
+    assert during <= 100 + most_per_s * (settled - started), (during, settled - started)
 
 
 # The gate
@@ -520,7 +617,7 @@ def test_a_refusal_after_other_runs_names_them_and_gives_the_parallel_advice(
 def test_a_wait_asks_again_every_step_with_one_ticket(
     gated: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(http_gate, "WAIT_STEP_S", 0.05)
+    monkeypatch.setattr(budget_module, "ASK_FIRST_S", 0.05)  # the runner's hint at the head
     budget, _ = held_forever(0.004, time_limit=1.0)
     Clock(monkeypatch)
     asked: list[int | None] = []
