@@ -46,3 +46,10 @@ It waits for the event it means: a marker file the agent writes, a line in the r
 The `time_limit` fixture makes a run's time limit arrive at such an event, as a short `run_timeout` races the program's start-up.
 Where time itself is the claim, the margin is large enough to tell the two designs apart under any load, and a comment says so.
 A wait for an event has a ceiling of 30 s or more, which only ends a test whose event never comes.
+
+## Benchmarks
+
+`uv run python tests/benchmark.py` measures what Scrimmage costs and prints every table on `docs/benchmarks.md`.
+Run it on an otherwise idle machine.
+`--rounds N` and `--section NAME` narrow it; `--section profile` shows where a gated call spends its time.
+`tests/test_benchmark_budgets.py`, in the slow tier, fails when a cost goes over its ceiling.
