@@ -23,8 +23,8 @@ from typing import Any
 import pytest
 
 from conftest import ACME, Project
-from scrimmage_core import protocol
 from fakes.openai_server import FakeOpenAI
+from scrimmage_core import protocol
 
 HOOK = textwrap.dedent(
     """
@@ -157,6 +157,13 @@ def test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_
     runs = [e for e in agents if e["argv"][1:3] == ["-m", "scrimmage_core.start"]]
     assert len(plans) == len(runs) > 0 and len(received) > len(plans)
     assert not [e for e in received if token in json.dumps(e["headers"]) + e["body"]]
+
+    # Nor does it reach the model host. httpx sends through its own sockets, which neither
+    # the http.client hook nor the control server sees, so the fake model server keeps every
+    # request's headers and body, and they are checked here.
+    assert len(fake.received) >= len(runs)
+    leaks = [h for h, body in fake.received if token in json.dumps(h) or token.encode() in body]
+    assert not leaks
 
     # Every connection goes to 127.0.0.1: the control server or the fake model server.
     control_ports = {e["control"].rsplit(":", 1)[1] for e in agents}

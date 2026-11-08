@@ -62,6 +62,9 @@ class FakeOpenAI:
         self._lock = threading.Lock()
         self.requests: list[dict[str, Any]] = []
         self.paths: list[str] = []  # every path asked for, in order, retries included
+        # Every request as it arrived, headers and raw body, so a test can check what a
+        # program sent to the model host.
+        self.received: list[tuple[dict[str, str], bytes]] = []
         self.errors: list[str] = []
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
@@ -118,6 +121,8 @@ class FakeOpenAI:
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                with fake._lock:
+                    fake.received.append((dict(self.headers.items()), body))
                 reply = fake._next(self.path, body)
                 if isinstance(reply, str):
                     status, content, kind = (
