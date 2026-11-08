@@ -380,6 +380,34 @@ def test_a_sync_call_waits_for_another_runs_hold_and_goes_through(
     assert clock.waited >= 0.3  # it waited for the settle
 
 
+@pytest.mark.design("wait.sync_interrupt_gives_back")
+def test_a_sync_wait_interrupted_gives_back_its_ticket(
+    gated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tool timeout's SIGALRM, raised 0.6 s into the wait, as the review's probe did.
+
+    The first build kept the ticket, so the run's own next call waited behind it for
+    53 s and was refused. Now the wait gives it back, and the next call goes at once.
+    """
+    budget = Budget(limit=0.004)
+    sink, _ = install(make_plan(budget=0.004), budget)
+    other = granted(budget.ledger.reserve(0.003, "run-other", LABEL))
+
+    def alarm() -> None:
+        raise TimeoutError("the tool's alarm")
+
+    clock = Clock(monkeypatch, [(0.6, alarm)])
+    with pytest.raises(TimeoutError):
+        client().post(URL, json=BODY)
+    until(lambda: not budget.ledger._line)  # type: ignore[attr-defined]  # given back
+    line = sink.lines[0]
+    assert "TimeoutError" in str(line["error"]) and line["cost_usd"] == 0.0
+    budget.ledger.settle(other, 0.0001)
+    waited = clock.waited
+    assert client().post(URL, json=BODY).status_code == 200
+    assert clock.waited == waited  # granted at its first ask, with no wait
+
+
 @pytest.mark.design("wait.other_run_past_the_short_bound")
 def test_a_hold_in_another_run_is_waited_out_past_the_short_bound(
     gated: None, monkeypatch: pytest.MonkeyPatch
