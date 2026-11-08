@@ -182,12 +182,14 @@ def start(*, child: bool = False, target: str | None = None) -> None:
     def end_program() -> None:
         """scrimmage init --probe has what it came for, so no more of the team's code runs.
 
-        os._exit skips the flush Python does at exit, so what the agent printed is flushed here.
+        os._exit skips the flush Python does at exit, so what the agent printed is flushed here,
+        first: sending the last lines delivers the refusal, and the runner then signals this
+        process, which ends it before anything after that point.
         """
-        last_lines()
         for stream in (sys.stdout, sys.stderr):
             with contextlib.suppress(Exception):  # a stream the agent closed or replaced
                 stream.flush()
+        last_lines()
         os._exit(0)
 
     run_state.end_program = end_program

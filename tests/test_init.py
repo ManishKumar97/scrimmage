@@ -133,7 +133,7 @@ def test_without_probe_no_process_starts(
     assert cli.main(["init", str(tmp_path), "--out", str(tmp_path / "b.toml")]) == OK
     out = capsys.readouterr().out
     assert "entry point (a guess): bot:answer" in out
-    assert f"scrimmage init {tmp_path} --probe bot:answer --out" in out
+    assert "--probe bot:answer" not in out and "--probe module:function" in out
 
 
 @pytest.mark.design("init.script_not_probed")
@@ -182,7 +182,7 @@ def test_a_script_guess_is_written_and_never_probed(
     code, doc = run(capsys, str(tmp_path))
     assert code == OK and probe_of(doc)["ran"] is False
     entry = cast(dict[str, object], doc["entry"])
-    assert entry["guess"] is True and entry["probe_command"] is None
+    assert entry["guess"] is True and "probe_command" not in entry
     assert agent_table(tmp_path / "scrimmage.toml")["command"] == "python bot.py {question}"
 
 
@@ -1090,6 +1090,29 @@ def test_an_agent_that_ignores_sigterm_still_ends_at_once_with_its_output(
 
 
 @pytest.mark.slow
+@pytest.mark.design("init.probe_exit_flushes")
+def test_what_an_ordinary_agent_printed_reaches_the_log(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refusal reaches the runner, which signals the process, so what the agent printed
+    is flushed before the refusal is sent, or the signal loses it."""
+    code = HEAD + (
+        "def answer(question):\n    print('printed before the request')\n"
+        '    client.chat.completions.create(model="gpt-4o-mini", messages=[])\n'
+        "    return 'done'\n"
+    )
+    write(tmp_path, {"bot.py": code})
+    fake = fake_openai([])
+    rc, _ = probed(capsys, tmp_path, fake, monkeypatch)
+    assert rc == OK and fake.received == []
+    logs = list((tmp_path / "scrimmage-runs").glob("*/*.log"))
+    assert "printed before the request" in logs[0].read_text()
+
+
+@pytest.mark.slow
 @pytest.mark.design("init.probe_outcome")
 def test_an_entry_that_returns_none_saw_no_model_request(
     tmp_path: Path,
@@ -1114,7 +1137,9 @@ REPRO = {
 
 @pytest.mark.design("init.probe_never_guesses")
 def test_a_wrong_guess_is_never_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    write(tmp_path, REPRO)
+    # The real entry needs two arguments, so the read's best guess is the tool that deletes.
+    agent_file = "import openai\n\n\ndef run_agent(question, session):\n    return question\n"
+    write(tmp_path, {**REPRO, "agent.py": agent_file})
     with pytest.raises(SystemExit):
         cli.main(["init", str(tmp_path), "--probe"])
     assert not (tmp_path / "DELETED").exists()
@@ -1122,7 +1147,14 @@ def test_a_wrong_guess_is_never_run(tmp_path: Path, capsys: pytest.CaptureFixtur
     code, doc = run(capsys, str(tmp_path))
     assert code == OK and not (tmp_path / "DELETED").exists()
     entry = cast(dict[str, object], doc["entry"])
-    assert entry["guess"] is True and "--probe" in str(entry["probe_command"])
+    assert entry["guess"] is True and "probe_command" not in entry
+    assert entry["value"] == "tools:delete_customer"  # the wrong guess this test is about
+    assert "--probe tools:delete_customer" not in json.dumps(doc)
+    capsys.readouterr()
+    assert cli.main(["init", str(tmp_path), "--out", str(tmp_path / "b.toml")]) == OK
+    out = capsys.readouterr().out
+    assert "--probe tools:delete_customer" not in out
+    assert "--probe module:function" in out
     text = (tmp_path / "scrimmage.toml").read_text()
     assert "# A guess from reading the code." in text
 

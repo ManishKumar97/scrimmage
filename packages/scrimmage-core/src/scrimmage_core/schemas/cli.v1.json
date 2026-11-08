@@ -784,7 +784,6 @@
                 "kind",
                 "value",
                 "guess",
-                "probe_command",
                 "candidates"
               ],
               "properties": {
@@ -816,13 +815,6 @@
                 "guess": {
                   "type": "boolean",
                   "description": "True when init chose the entry point by reading the code. A guess is never run."
-                },
-                "probe_command": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "description": "A command that would probe a guessed function. A suggestion only: nothing runs it."
                 }
               }
             }

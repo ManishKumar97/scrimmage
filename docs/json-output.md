@@ -208,7 +208,7 @@ The diff is in the text output only: compare `config` with `out` to see it.
 {
   "v": 1, "scrimmage": "0.4.0", "command": "init", "exit": 0, "status": "written", "config": "scrimmage.toml",
   "out": "scrimmage.toml",
-  "entry": {"kind": "function", "value": "support.agent:answer", "guess": false, "probe_command": null, "candidates": [{"value": "support.agent:answer", "why": "one argument, named question, in a module that imports openai"}]},
+  "entry": {"kind": "function", "value": "support.agent:answer", "guess": false, "candidates": [{"value": "support.agent:answer", "why": "one argument, named question, in a module that imports openai"}]},
   "probe": {"ran": true, "function": "support.agent:answer", "outcome": "stopped at POST /v1/chat/completions on gateway.acme.internal, refused before it was sent"},
   "numbers": {"tools_offered": 4, "tools_mapped": 4},
   "tools": [{"path": "support.desk:Desk.lookup_ticket", "name": "lookup_ticket", "found_by": "probe"}],
@@ -222,7 +222,7 @@ The diff is in the text output only: compare `config` with `out` to see it.
 | Field | Meaning |
 |---|---|
 | `out` | The file written. A non-null value means it was written, whole. `null` means nothing was written, and `mistakes` or `infra` says why. |
-| `entry` | The entry point: `kind`, `function` or `command`, its `value`, `guess`, true when init chose it by reading the code and false when `--probe` named it, `probe_command`, a command that would probe a guessed function, which nothing runs for you, and every `candidates` item with its `value` and `why`, best first. `null` when none was found. |
+| `entry` | The entry point: `kind`, `function` or `command`, its `value`, `guess`, true when init chose it by reading the code and false when `--probe` named it, and every `candidates` item with its `value` and `why`, best first. `null` when none was found. |
 | `probe` | `ran`, whether a probe ran, `function`, the function `--probe` named, and `outcome`, what ended it, in words. `{"ran": false, "function": null, "outcome": null}` without `--probe`. |
 | `numbers` | `tools_offered`, the names the probe's model request offered, and `tools_mapped`, those written as one path. `null` when no model request offered a tool that could be read. |
 | `tools` | Each tool written: its import `path`, the `name` the model sees, and `found_by`. |

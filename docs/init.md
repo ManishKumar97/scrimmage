@@ -12,7 +12,7 @@ scrimmage init
 ```
 scrimmage init: read 14 Python files under . without importing them
 entry point (a guess): support.agent:answer (one argument, named question, in a module that imports openai)
-probe: not run; to find the tools the model is offered, check the guess above, then run: scrimmage init --probe support.agent:answer --out scrimmage.probed.toml
+probe: not run; to find the tools the model is offered, choose the function to run and name it: scrimmage init --probe module:function --out another.toml
 tools: 2 found by reading the code
   support.tools:get_order
   support.tools:refund_order
@@ -85,7 +85,7 @@ scrimmage init --probe support.agent:answer
 ```
 
 The static read cannot name a tool made by a dict comprehension or a framework.
-`--probe` takes the function to run, as `module:function`, and runs only that function. You choose it: the command prints it first, and never runs its own guess.
+`--probe` takes the function to run, as `module:function`, and runs only that function. You choose it: the command prints it first, and never runs its own guess, and it does not print or return a ready command for the guess either.
 A bare `--probe`, a script path, or anything that is not `module:function` exits 2 and runs nothing.
 Scrimmage starts the function the way `scrimmage test` does, with the question `scrimmage init probe`.
 The probe stops at the first model request. That request is refused before it is sent, and the tools it offers are read from it.

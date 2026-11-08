@@ -727,7 +727,6 @@ def fill_fields(draft: Draft, found: Findings) -> None:
             "kind": chosen.kind,
             "value": chosen.value,
             "guess": found.guess,
-            "probe_command": probe_command(draft, found),
             "candidates": [{"value": c.value, "why": c.why} for c in found.entries],
         }
     draft.fields.update(
@@ -748,16 +747,6 @@ def fill_fields(draft: Draft, found: Findings) -> None:
     )
 
 
-def probe_command(draft: Draft, found: Findings) -> str | None:
-    """The command that would probe a guess, for the team to run once they have checked it."""
-    chosen = found.chosen
-    if not found.guess or chosen is None or chosen.kind != "function":
-        return None
-    second = draft.out.with_name(f"{draft.out.stem}.probed.toml")  # the draft will exist by then
-    folder = [] if found.folder == Path() else [str(found.folder)]
-    return shlex.join(["scrimmage", "init", *folder, "--probe", chosen.value, "--out", str(second)])
-
-
 def say_found(draft: Draft, found: Findings) -> None:
     tools, chosen, lines = found.tools, found.chosen, draft.lines
     count = found.reading.files
@@ -771,7 +760,7 @@ def say_found(draft: Draft, found: Findings) -> None:
         if chosen
         else "entry point: none found"
     )
-    lines.append(probe_line(draft, found))
+    lines.append(probe_line(found))
     numbers = numbers_of(found)
     if numbers is not None:
         mapped, offered = numbers["tools_mapped"], numbers["tools_offered"]
@@ -789,17 +778,17 @@ def say_found(draft: Draft, found: Findings) -> None:
         lines.append(f"model hosts: {printable(hosts)}")
 
 
-def probe_line(draft: Draft, found: Findings) -> str:
+def probe_line(found: Findings) -> str:
+    """Says how to name a function. It never prints a command for the guess: one that can be
+    run as given would run the guess, which may be the wrong function."""
     result, chosen = found.result, found.chosen
     if result.ran and chosen is not None:
         return f"probe: ran {chosen.value} up to its first model request; {result.outcome}"
-    if chosen is None:
-        return "probe: not run; name the function to run with --probe module:function"
-    if chosen.kind == "command":
+    if chosen is not None and chosen.kind == "command":
         return "probe: not run; a script is never probed"
     return (
-        "probe: not run; to find the tools the model is offered, check the guess above, "
-        f"then run: {printable(probe_command(draft, found))}"
+        "probe: not run; to find the tools the model is offered, choose the function to run "
+        "and name it: scrimmage init --probe module:function --out another.toml"
     )
 
 
