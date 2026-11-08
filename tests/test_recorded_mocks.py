@@ -5,9 +5,9 @@ from collections.abc import Callable
 import pytest
 
 from conftest import ACME, EXAMPLE_FAULT, Project, Result
+from fakes.openai_server import FakeOpenAI
 from scrimmage_core.config import Mock
 from scrimmage_core.runner import recorded_call
-from fakes.openai_server import FakeOpenAI
 
 Fake = Callable[[list[str]], FakeOpenAI]
 HAND_MOCK = '[[test.mock]]\ncall    = "tool:get_order"\nreturns = "shipped, Oct 30"\n'

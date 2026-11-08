@@ -293,7 +293,10 @@ def test_an_error_in_the_teams_type_is_unsavable_and_one_in_scrimmage_is_scrimma
     # A bug in Scrimmage's own code: differ called with arguments it does not take.
     monkeypatch.setattr(capture, "differ", capture.text_problem)
     bug = capture.tool_value({"a": 1}, {}, get_dict, same, [])
-    assert bug == {"code": "scrimmage_error", "why": "Scrimmage failed while recording it: TypeError"}
+    assert bug == {
+        "code": "scrimmage_error",
+        "why": "Scrimmage failed while recording it: TypeError",
+    }
 
 
 class BadRepr:

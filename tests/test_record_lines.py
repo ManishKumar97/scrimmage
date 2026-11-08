@@ -40,7 +40,9 @@ from scrimmage_core.redact import REMOVED
 
 HERE = __name__
 ALLOWED = [f"{HERE}."]
-RECORD = json.loads((Path(scrimmage_core.__file__).parent / "schemas" / "record.v1.json").read_text())
+RECORD = json.loads(
+    (Path(scrimmage_core.__file__).parent / "schemas" / "record.v1.json").read_text()
+)
 SK = "sk-proj-" + "a1B2c3D4e5F6g7H8i9J0"
 JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
 
