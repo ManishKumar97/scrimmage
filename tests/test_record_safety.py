@@ -384,3 +384,32 @@ def test_a_bug_in_scrimmage_on_the_mcp_path_is_scrimmage_error_not_unsavable(
         "code": "scrimmage_error",
         "why": "Scrimmage failed while recording it: AttributeError",
     }
+
+
+def test_a_table_or_a_list_of_tables_under_a_secret_key_is_cleaned() -> None:
+    cleaned, removed = capture.clean(
+        {"credentials": {"value": "x"}, "tokens": [{"a": "b"}], "count": 2}
+    )
+    assert cleaned == {
+        "credentials": {"value": "[secret removed]"},
+        "tokens": [{"a": "[secret removed]"}],
+        "count": 2,
+    }
+    assert len(removed) == 2
+
+
+def test_a_secret_id_is_a_secret_as_vault_uses_the_name() -> None:
+    assert capture.secret_key("secret_id") and capture.secret_key("SecretID")
+    assert not capture.secret_key("session_id")
+
+
+def test_an_mcp_text_that_is_json_with_a_secret_is_not_saved() -> None:
+    text = json.dumps({"token": "abc"})
+    real = {"content": [{"type": "text", "text": text}]}
+
+    def rebuild(value: object) -> object:
+        return {"content": [{"type": "text", "text": value}]}
+
+    assert capture.mcp_value(real, {"q": "x"}, rebuild)["code"] == "secret_changed_shape"
+    fine = {"content": [{"type": "text", "text": json.dumps({"v": 1})}]}
+    assert "code" not in capture.mcp_value(fine, {"q": "x"}, rebuild)
