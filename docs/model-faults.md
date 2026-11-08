@@ -198,6 +198,8 @@ How long a call waits depends on whose calls hold the room:
 | a run that has ended | no wait: refused at once | that hold can never be given back |
 
 If the call is still held out then, it is refused and the test stops with exit code 2.
+The time a run has left counts from when Scrimmage started its program, as `run_timeout` does.
+A slow start-up before the SDK loads, such as `uv run` on a cold cache or a setup script, uses up part of that time, so the wait still ends before the run is stopped.
 A run waits on itself when a hold cannot end until the waiting call returns.
 A stream the agent keeps open across a second call does that, and so does a stream it stopped reading without closing: each keeps its hold until it is closed, or the run ends.
 Close a stream, or read it to its end, before the next call.

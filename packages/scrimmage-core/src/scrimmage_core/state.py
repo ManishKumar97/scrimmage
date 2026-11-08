@@ -130,7 +130,7 @@ class RunState:
         self.blocked: dict[str, str] = {}  # names a call could skip a gate by, and why
         self.rechecks: list[Callable[[], None]] = []  # an adapter's check of its tools
         self.allowed = allowed
-        self.began = time.monotonic()
+        self.began = time.monotonic()  # until a plan says how long the run has been going
         self.refused: str | None = None
         self.model_calls = 0
         self.proc = this_process()
@@ -140,7 +140,14 @@ class RunState:
         self._unannounced = self.child  # a child says what it is on its first line
         self.live: dict[int, Step] = {}  # calls decided and not yet finished
         if plan is not None:
-            self._take(plan)
+            self._arrived(plan)
+
+    def _arrived(self, plan: Plan) -> Plan:
+        """Take a plan the runner just sent. Its elapsed_s is the run's age on the runner's
+        clock, so the run's time counts from when the runner started it, not from when this
+        process loaded. Only a length of time crosses between the two processes' clocks."""
+        self.began = time.monotonic() - plan.elapsed_s
+        return self._take(plan)
 
     def _take(self, plan: Plan) -> Plan:
         # Each process counts its own calls, so "the third call" would mean something
@@ -164,7 +171,7 @@ class RunState:
             assert self._load is not None
             fetched = self._load()
             if fetched.unavailable is None:
-                return self._take(fetched)
+                return self._arrived(fetched)
             self._missing = fetched
             self._try_again_at = time.monotonic() + PLAN_RETRY_S
             return fetched
@@ -181,10 +188,10 @@ class RunState:
             recheck()
 
     def check_time(self) -> None:
-        """The time limit counts from when this process took up the run.
+        """The time limit counts from when the runner started the run, as the plan says.
 
-        For a function the runner stops the program at run_timeout first, so here it
-        is a backstop; it matters where one process outlives its runs.
+        The runner stops the program at run_timeout first, so here it is a backstop; it
+        matters where one process outlives its runs.
         """
         if time.monotonic() - self.began > self.plan.time_limit_s:
             limit = self.plan.time_limit_s

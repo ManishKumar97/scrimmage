@@ -44,6 +44,9 @@ class Run:
     # Lines each process said it made, from its last batch, keyed like proc_key.
     made: dict[str, int] = field(default_factory=dict[str, int])
     refusals: list[str] = field(default_factory=list[str])  # the reason of each refusal
+    # When the run opened, just before its program started: the runner's run_timeout counts
+    # from about here. Monotonic, so it is read only as a difference on this process's clock.
+    opened: float = field(default_factory=time.monotonic)
 
 
 class ControlServer:
@@ -183,7 +186,9 @@ class ControlServer:
             if state is None or not state.open:
                 return 404, {"error": "no_such_run"}
             state.fetched = True
-            return 200, {"plan": state.plan}
+            # The run's age, not a time on this clock, which means nothing in the agent's.
+            elapsed = round(max(0.0, time.monotonic() - state.opened), 3)
+            return 200, {"plan": {**state.plan, "elapsed_s": elapsed}}
 
     def _records(self, body: bytes) -> tuple[int, dict[str, object]]:
         try:

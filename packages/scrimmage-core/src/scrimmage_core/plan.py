@@ -38,6 +38,10 @@ class Plan:
     children: bool = False  # child processes fire faults too
     unavailable: str | None = None  # why a child has no plan; such a plan is never sent
     record: bool = False  # scrimmage record: real calls' lines carry what a mock needs
+    # How long the run had been going when the runner sent this copy, on the runner's clock.
+    # The runner adds it to each copy it serves, so the SDK's time limit counts from the
+    # runner's start, however long the program took to load.
+    elapsed_s: float = 0.0
 
     def tool_names(self) -> list[str]:
         """Every tool's final name: the one the model sees."""
@@ -67,6 +71,8 @@ class Plan:
             doc["renames"] = dict(self.renames)
         if self.record:
             doc["record"] = True
+        if self.elapsed_s:
+            doc["elapsed_s"] = self.elapsed_s
         return doc
 
     @staticmethod
@@ -99,6 +105,9 @@ class Plan:
         )
         reserve = int(number(budget, "reserve_output_tokens"))
         limit_usd = None if budget.get("limit_usd") is None else number(budget, "limit_usd")
+        elapsed = number(doc, "elapsed_s") if "elapsed_s" in doc else 0.0
+        if not elapsed >= 0:  # NaN too: a negative age would stretch the time limit
+            raise ValueError("plan elapsed_s is negative")
         return Plan(
             run=string(doc, "run"),
             test=string(doc, "test"),
@@ -115,6 +124,7 @@ class Plan:
             prices=prices,
             children=doc.get("children") is True,
             record=doc.get("record") is True,
+            elapsed_s=elapsed,
         )
 
 
