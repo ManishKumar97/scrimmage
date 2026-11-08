@@ -3,10 +3,12 @@ child's calls name no parent from the process that forked it."""
 
 import asyncio
 import dataclasses
+import decimal
 import hashlib
 import json
 from typing import cast
 
+import pydantic
 import pytest
 
 from scrimmage_core import capture, mcp_gate, state
@@ -330,3 +332,41 @@ def test_a_value_whose_repr_fails_still_reaches_the_agent(
     assert shown in line["result"]["preview"]
     if record:
         assert line["recorded"]["code"] == "unsavable"
+
+
+class Priced(pydantic.BaseModel):
+    """A field whose value raises when compared, with no Python frame of the team's own."""
+
+    price: decimal.Decimal = pydantic.Field(allow_inf_nan=True)
+
+
+def get_priced(n: str) -> Priced:
+    return Priced(price=decimal.Decimal("sNaN"))
+
+
+class Murky:
+    """A value == gives back, whose truth raises, as a numpy array's does."""
+
+    def __bool__(self) -> bool:
+        raise ValueError("ambiguous")
+
+
+class Squishy:
+    def __eq__(self, other: object) -> Murky:  # type: ignore[override]
+        return Murky()
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+@pytest.mark.design("record.scrimmage_error")
+def test_a_comparison_that_fails_in_c_is_the_teams_type_not_our_bug(sink: Sink) -> None:
+    def same(value: object) -> object:
+        return value
+
+    found = capture.tool_value(get_priced("a"), {}, get_priced, same, [f"{__name__}."])
+    assert found == {
+        "code": "unsavable",
+        "why": "returns.price: comparing the Decimal fails with InvalidOperation",
+    }
+    with pytest.raises(capture.Unsavable, match="comparing the Squishy fails with ValueError"):
+        capture.differ(Squishy(), Squishy(), "x")

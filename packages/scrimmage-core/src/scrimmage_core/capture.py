@@ -213,7 +213,13 @@ def differ(real: object, built: object, place: str) -> str | None:
         )
     if isinstance(real, float) and math.isnan(real) and math.isnan(cast(float, built)):
         return None
-    return None if real == built else f"{place}: the {kind_of(real)} differs"
+    try:
+        equal = bool(real == built)
+    except Exception as exc:  # an __eq__ or __bool__ written in C has no Python frame of its own
+        raise Unsavable(
+            f"{place}: comparing the {kind_of(real)} fails with {kind_of(exc)}"
+        ) from None
+    return None if equal else f"{place}: the {kind_of(real)} differs"
 
 
 # Words a final s is dropped from, so tokens is token and api_keys holds the pair api key.
