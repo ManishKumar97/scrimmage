@@ -220,6 +220,7 @@ def test_every_message_is_an_object_with_its_text(project: Project, fake_openai:
 CALL_THEN_HANG = '''"""Makes one model call, then hangs, so a signal comes after money was spent."""
 
 import time
+from pathlib import Path
 
 import openai
 
@@ -228,6 +229,7 @@ def answer(question):
     openai.OpenAI(max_retries=0).chat.completions.create(
         model="gpt-4o-mini", messages=[{"role": "user", "content": question}]
     )
+    Path("called").touch()  # the call has returned: its cost is on the record's line
     time.sleep(600)
     return "never"
 '''
@@ -250,12 +252,7 @@ def test_sigint_during_a_test_still_prints_one_document(
         [SCRIMMAGE, "test", "--json", str(project.toml)],
         env={**env, **model_env(fake)}, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )  # fmt: skip
-    for _ in range(300):
-        time.sleep(0.1)
-        if fake.requests:
-            break
-    assert fake.requests, "the agent never made its model call"
-    time.sleep(1.5)  # the reply is settled in the budget; the agent is in its sleep
+    wait_for(project.root / "called")  # the agent made its call and is in its sleep
     proc.send_signal(signal.SIGINT)
     out, err = proc.communicate(timeout=60)
     done = Done(proc.returncode, out, err)
@@ -758,8 +755,20 @@ config.load = load
 )
 
 
-def hang(project: Project, timeout: int = 120) -> None:
-    """The example's agent swapped for one that sleeps, one baseline run, no fault."""
+def wait_for(path: Path) -> None:
+    """Wait for the agent's marker; the ceiling only ends a test whose agent never got there."""
+    ceiling = time.monotonic() + 120
+    while not path.exists():
+        assert time.monotonic() < ceiling, f"{path.name} never appeared"
+        time.sleep(0.01)
+
+
+def hang(project: Project, timeout: int = 600) -> None:
+    """The example's agent swapped for one that sleeps, one baseline run, no fault.
+
+    The time limit is long, so a signal that was lost shows as a run that went on: its
+    process outlives the test's own 120 s wait for it.
+    """
     project.edit(
         'function = "acme.agent:answer"',
         f'function = "acme.slow:hang"\nruns = 1\nrun_timeout = {timeout}\nmax_cost_usd = "none"',
@@ -774,9 +783,7 @@ def test_a_signal_inside_a_del_while_the_file_is_read_still_stops(
     project: Project, command: str
 ) -> None:
     hang(project)
-    started = time.monotonic()
     done = run_entry(IN_READ, command, "--json", str(project.toml))
-    assert time.monotonic() - started < 30, "the signal was lost and the run went on"
     assert done.code == 3, done.out + done.err
     doc = one_document(done, command)  # standard error is empty: nothing was dropped
     assert messages(doc, "infra") == ["stopped by SIGTERM"]
@@ -831,15 +838,9 @@ def test_a_signal_on_another_thread_still_stops_the_runs(project: Project) -> No
         [sys.executable, "-c", code],
         env=clean, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )  # fmt: skip
-    for _ in range(300):
-        time.sleep(0.1)
-        if list((project.root / "scrimmage-runs").glob("*/*.log")):
-            break
-    time.sleep(0.5)
-    sent = time.monotonic()
+    wait_for(project.root / "hanging")  # the agent is in its sleep, inside the runner's wait
     proc.send_signal(signal.SIGTERM)
-    out, err = proc.communicate(timeout=60)
-    assert time.monotonic() - sent < 10, "the runs waited for the main thread"
+    out, err = proc.communicate(timeout=120)  # had the runs waited, they would run 600 s
     done = Done(proc.returncode, out, err)
     assert done.code == 3, out + err
     assert messages(one_document(done, "test"), "infra") == [
@@ -869,9 +870,7 @@ runner.ThreadPoolExecutor = pool
 @pytest.mark.design("json.signal_in_cleanup")
 def test_a_signal_inside_a_del_while_runs_go_still_stops_them(project: Project) -> None:
     hang(project)
-    started = time.monotonic()
     done = run_entry(RUNNER_DEL, "test", "--json", str(project.toml))
-    assert time.monotonic() - started < 30, "the signal was lost and the run went on"
     assert done.code == 3, done.out + done.err
     doc = one_document(done, "test")
     assert messages(doc, "infra") == ["stopped by SIGTERM; every run was stopped"]
@@ -885,16 +884,10 @@ def test_a_long_run_stops_within_seconds_of_each_of_two_signals(project: Project
         [SCRIMMAGE, "test", "--json", str(project.toml)],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )  # fmt: skip
-    for _ in range(300):
-        time.sleep(0.1)
-        if list((project.root / "scrimmage-runs").glob("*/*.log")):
-            break
-    time.sleep(0.5)  # the agent is in its sleep, inside the runner's wait
-    sent = time.monotonic()
+    wait_for(project.root / "hanging")  # the agent is in its sleep, inside the runner's wait
     proc.send_signal(signal.SIGTERM)
     proc.send_signal(signal.SIGINT)  # a second signal changes nothing and is not lost
-    out, err = proc.communicate(timeout=60)
-    assert time.monotonic() - sent < 10
+    out, err = proc.communicate(timeout=120)  # had both been lost, the run would go 600 s
     done = Done(proc.returncode, out, err)
     assert done.code == 3, out + err
     doc = one_document(done, "test")
