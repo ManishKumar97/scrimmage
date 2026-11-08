@@ -5,6 +5,7 @@ import dataclasses
 import hashlib
 import http.client
 import json
+import queue
 import signal
 import stat
 import threading
@@ -15,9 +16,10 @@ from pathlib import Path
 
 import pytest
 
+from scrimmage_core import client as client_module
 from scrimmage_core import protocol, state
 from scrimmage_core.budget import Ledger
-from scrimmage_core.client import ControlClient, ControlError, Sender
+from scrimmage_core.client import WAKE, ControlClient, ControlError, Sender
 from scrimmage_core.control import ControlServer, proc_key
 from scrimmage_core.plan import Plan, no_plan
 from scrimmage_core.records import RecordStore
@@ -278,6 +280,74 @@ def test_the_sender_sends_every_line_and_reports_drops(server: ControlServer) ->
     full.put(line(5001))  # no room: dropped, and the record is marked incomplete
     full.flush()
     assert server.runs["run-1"].dropped == 1
+
+
+def test_flush_wakes_the_sender_instead_of_waiting_out_its_window(
+    server: ControlServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A window of an hour: only the wake can end the thread inside flush's join, which
+    # gives up after twice TIMEOUT_S. No clock is compared.
+    monkeypatch.setattr(client_module, "BATCH_S", 3600.0)
+    monkeypatch.setattr(client_module, "TIMEOUT_S", 0.5)
+    sender = Sender(ControlClient(server.url, TOKEN), "run-1")
+    sender.start()
+    for seq in range(1, 4):
+        sender.put(line(seq))
+    sender.flush()
+    assert not sender._thread.is_alive()  # type: ignore[reportPrivateUsage]
+    assert len(server.store.lines("run-1")) == 3
+    assert server.runs["run-1"].made == {proc_key(None): 3}
+
+
+def test_the_stop_is_set_before_the_wake_is_put() -> None:
+    sender = Sender(ControlClient("http://127.0.0.1:9", TOKEN), "run-1")
+    seen: list[bool] = []
+
+    class Watching(queue.Queue[dict[str, object]]):
+        def put_nowait(self, item: dict[str, object]) -> None:
+            seen.append(sender._stop.is_set())  # type: ignore[reportPrivateUsage]
+            super().put_nowait(item)
+
+    sender.queue = Watching(10)
+    sender.start()
+    sender.flush()
+    assert seen == [True]
+
+
+def test_lines_behind_the_wake_are_still_delivered(server: ControlServer) -> None:
+    sender = Sender(ControlClient(server.url, TOKEN), "run-1")
+    sender.queue.put(WAKE)
+    for seq in range(1, 1201):
+        sender.put(line(seq))
+    sender.flush()  # no thread: flush itself drains, and the wake must not end the drain
+    assert len(server.store.lines("run-1")) == 1200
+    assert server.runs["run-1"].made == {proc_key(None): 1200}
+
+
+def test_the_wake_is_not_a_line(server: ControlServer) -> None:
+    sender = Sender(ControlClient(server.url, TOKEN), "run-1")
+    batches: list[object] = []
+    real = sender.client.request
+
+    def spy(method: str, path: str, payload: object = None) -> tuple[int, dict[str, object]]:
+        if path == "/v1/records":
+            assert isinstance(payload, dict)
+            batches.extend(payload["lines"])
+        return real(method, path, payload)
+
+    sender.client.request = spy  # type: ignore[method-assign]
+    sender.queue.put(WAKE)
+    sender.put(line(1))
+    sender.queue.put(WAKE)
+    sender.flush()
+    assert batches == [line(1)]  # the wake is on no batch
+    assert server.store.lines("run-1") == [line(1)]
+    assert sender.unsent == []
+    # a wake left in an eager sender's queue does not stop its next line
+    eager = Sender(ControlClient(server.url, TOKEN), "run-1", eager=True)
+    eager.queue.put(WAKE)
+    eager.put(line(2))
+    assert server.store.lines("run-1") == [line(1), line(2)]
 
 
 @pytest.mark.design("record.resend")
