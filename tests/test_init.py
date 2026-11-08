@@ -1016,9 +1016,8 @@ def test_the_probe_s_lines_fit_the_record_schema(
 
 
 @pytest.mark.slow
-def test_json_is_one_document_on_a_real_process_for_every_exit_code(
-    tmp_path: Path, fake_openai: Callable[..., FakeOpenAI]
-) -> None:
+@pytest.mark.design("json.init_one_document")
+def test_json_is_one_document_on_a_real_process_for_every_exit_code(tmp_path: Path) -> None:
     def scrimmage(*args: str) -> tuple[int, str, str]:
         done = subprocess.run(
             [sys.executable, "-m", "scrimmage_core.cli", "init", "--json", *args],
@@ -1047,3 +1046,15 @@ def test_json_is_one_document_on_a_real_process_for_every_exit_code(
         doc = json.loads(out)
         jsonschema.validate(doc, SCHEMA)
         assert doc["exit"] == code and doc["status"] == cli.STATUS["init"][code]
+
+
+def test_a_function_named_in_a_tool_spec_is_not_an_entry_point(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = (
+        "import openai\n\n\ndef search(query):\n    return query\n\n\n"
+        'SPEC = {"type": "function", "name": "search", "parameters": {}}\n'
+    )
+    write(tmp_path, {"bot.py": code})
+    _, doc = run(capsys, str(tmp_path))
+    assert doc["entry"] is None and tool_paths(doc) == ["bot:search"]
