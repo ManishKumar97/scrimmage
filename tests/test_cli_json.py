@@ -1,6 +1,7 @@
 """--json: one document on standard output, one envelope, and the same report as the text."""
 
 import ast
+import contextlib
 import importlib.metadata
 import io
 import json
@@ -9,7 +10,7 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -239,10 +240,32 @@ def answer(question):
 '''
 
 
+@pytest.fixture
+def leftovers(project: Project) -> Iterator[list[subprocess.Popen[str]]]:
+    """What a test started, stopped at its end even when it fails.
+
+    A test whose signal was lost would leave scrimmage test, and the agent under it in its
+    600 s sleep, running long after. The agent runs in the project's folder, so it is
+    found there; scrimmage test is the process the test adds to the list.
+    """
+    started: list[subprocess.Popen[str]] = []
+    yield started
+    for proc in started:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    root = project.root.resolve()
+    for entry_ in Path("/proc").iterdir():
+        if entry_.name.isdigit():
+            with contextlib.suppress(OSError):
+                if (entry_ / "cwd").resolve() == root:
+                    os.kill(int(entry_.name), signal.SIGKILL)
+
+
 @pytest.mark.design("json.interrupted")
 @pytest.mark.slow
 def test_sigint_during_a_test_still_prints_one_document(
-    project: Project, fake_openai: Fake
+    project: Project, fake_openai: Fake, leftovers: list[subprocess.Popen[str]]
 ) -> None:
     (project.root / "acme" / "call_then_hang.py").write_text(CALL_THEN_HANG)
     project.edit(
@@ -257,6 +280,7 @@ def test_sigint_during_a_test_still_prints_one_document(
         [SCRIMMAGE, "test", "--json", str(project.toml)],
         env={**env, **model_env(fake)}, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )  # fmt: skip
+    leftovers.append(proc)
     wait_for(project.root / "called")  # the agent made its call and is in its sleep
     proc.send_signal(signal.SIGINT)
     out, err = proc.communicate(timeout=60)
@@ -787,7 +811,7 @@ def hang(project: Project, timeout: int = 600) -> None:
 @pytest.mark.parametrize("command", ["check", "test"])
 @pytest.mark.slow
 def test_a_signal_inside_a_del_while_the_file_is_read_still_stops(
-    project: Project, command: str
+    project: Project, command: str, leftovers: list[subprocess.Popen[str]]
 ) -> None:
     hang(project)
     done = run_entry(IN_READ, command, "--json", str(project.toml))
@@ -812,7 +836,9 @@ runner.Runner.__init__ = init
 
 @pytest.mark.design("json.signal_in_cleanup")
 @pytest.mark.slow
-def test_a_signal_as_the_runner_is_made_stops_before_any_run(project: Project) -> None:
+def test_a_signal_as_the_runner_is_made_stops_before_any_run(
+    project: Project, leftovers: list[subprocess.Popen[str]]
+) -> None:
     hang(project)
     done = run_entry(IN_RUNNER, "test", "--json", str(project.toml))
     assert done.code == 3, done.out + done.err
@@ -838,7 +864,9 @@ runner.ThreadPoolExecutor = pool
 
 @pytest.mark.design("json.stops_fast")
 @pytest.mark.slow
-def test_a_signal_on_another_thread_still_stops_the_runs(project: Project) -> None:
+def test_a_signal_on_another_thread_still_stops_the_runs(
+    project: Project, leftovers: list[subprocess.Popen[str]]
+) -> None:
     hang(project)
     clean = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
     code = f"import sys\nsys.argv = ['scrimmage', 'test', '--json', {str(project.toml)!r}]\n"
@@ -847,6 +875,7 @@ def test_a_signal_on_another_thread_still_stops_the_runs(project: Project) -> No
         [sys.executable, "-c", code],
         env=clean, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )  # fmt: skip
+    leftovers.append(proc)
     wait_for(project.root / "hanging")  # the agent is in its sleep, inside the runner's wait
     proc.send_signal(signal.SIGTERM)
     out, err = proc.communicate(timeout=120)  # had the runs waited, they would run 600 s
@@ -878,7 +907,9 @@ runner.ThreadPoolExecutor = pool
 
 @pytest.mark.design("json.signal_in_cleanup")
 @pytest.mark.slow
-def test_a_signal_inside_a_del_while_runs_go_still_stops_them(project: Project) -> None:
+def test_a_signal_inside_a_del_while_runs_go_still_stops_them(
+    project: Project, leftovers: list[subprocess.Popen[str]]
+) -> None:
     hang(project)
     done = run_entry(RUNNER_DEL, "test", "--json", str(project.toml))
     assert done.code == 3, done.out + done.err
@@ -888,13 +919,16 @@ def test_a_signal_inside_a_del_while_runs_go_still_stops_them(project: Project) 
 
 @pytest.mark.design("json.stops_fast")
 @pytest.mark.slow
-def test_a_long_run_stops_within_seconds_of_each_of_two_signals(project: Project) -> None:
+def test_a_long_run_stops_at_either_of_two_signals(
+    project: Project, leftovers: list[subprocess.Popen[str]]
+) -> None:
     hang(project)
     env = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
     proc = subprocess.Popen(
         [SCRIMMAGE, "test", "--json", str(project.toml)],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )  # fmt: skip
+    leftovers.append(proc)
     wait_for(project.root / "hanging")  # the agent is in its sleep, inside the runner's wait
     proc.send_signal(signal.SIGTERM)
     proc.send_signal(signal.SIGINT)  # a second signal changes nothing and is not lost
