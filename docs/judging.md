@@ -1,7 +1,7 @@
 # Judging an answer
 
-`derail test` passes or fails each row.
-You write the rules. Derail compares text, with no model, so the same answer always gets the same result.
+`scrimmage test` passes or fails each row.
+You write the rules. Scrimmage compares text, with no model, so the same answer always gets the same result.
 
 ## The rules
 
@@ -39,7 +39,7 @@ Then the rule must appear in the answer as plain text. It is not a word match, s
 - Markdown stays, so `"Oct 30"` is not found in `Oct **30**`;
 - `2²` reads as `22`, because Unicode folds a superscript to its digit.
 
-Derail compares the answer your agent really gave. The answer in the record has secrets removed, so a rule can forbid a secret by its value and still find it.
+Scrimmage compares the answer your agent really gave. The answer in the record has secrets removed, so a rule can forbid a secret by its value and still find it.
 A rule goes through the same removal before it is printed or recorded. That catches only known shapes, such as an API key or a bearer token. A secret with no known shape, such as `hunter2-password`, prints as written, so keep such a rule out of a file you share.
 
 ## Rules for a fault row
@@ -56,12 +56,12 @@ forbid = ["Oct 30", "October 30"]
 
 This row passes only if the bot says it could not get the order and states no date.
 The test's own `expect` could not do this: a bot with no order data should not say "shipped".
-Derail has no word list for "admits the failure". You write the words your agent uses.
+Scrimmage has no word list for "admits the failure". You write the words your agent uses.
 
 `forbid = []` on a fault drops the test's list for that row.
 
 A fault that fires on every call must have its own `expect` or a `forbid` with something in it.
-An agent with no data can still write the expected words from general knowledge, and a rule cannot tell where the words came from, so such a row would pass when it should not. Derail refuses the file, with exit code 2.
+An agent with no data can still write the expected words from general knowledge, and a rule cannot tell where the words came from, so such a row would pass when it should not. Scrimmage refuses the file, with exit code 2.
 A fault with `when = "first N"` or `"requests N"` may use the test's rules. That is right for a recovery row, where the agent should retry and give the same answer as the baseline.
 
 If a row's rules cannot both be met, such as a fault that forbids a word the test expects, the file is refused before the first run.
@@ -100,7 +100,7 @@ pass_rate = 0.8
 ```
 
 The rate is over the runs that were judged, not the runs planned.
-Derail reads a row in this order:
+Scrimmage reads a row in this order:
 
 | Checked | Result | When |
 |---|---|---|

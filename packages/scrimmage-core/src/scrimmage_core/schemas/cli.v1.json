@@ -1,0 +1,635 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:scrimmage:schema:cli:v1",
+  "title": "Scrimmage --json output, version 1",
+  "description": "The one JSON document a scrimmage command prints with --json. Every command's document starts with the same envelope. Within version 1, fields and enum values are only added, so this schema is open: an unknown field, and an unknown value of a field that lists its values, both fit. A reader ignores a field it does not know and reads such a value as other.",
+  "allOf": [
+    {
+      "$ref": "#/$defs/envelope"
+    },
+    {
+      "if": {
+        "properties": {
+          "command": {
+            "const": "test"
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/test"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "command": {
+            "const": "check"
+          }
+        }
+      },
+      "then": {
+        "$ref": "#/$defs/check"
+      }
+    }
+  ],
+  "$defs": {
+    "message": {
+      "type": "object",
+      "required": [
+        "message"
+      ],
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": "The line's text, without its prefix. It can change in any release; do not match on it."
+        }
+      }
+    },
+    "messages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/message"
+      }
+    },
+    "scrimmage": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The installed Scrimmage version."
+    },
+    "exit": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3,
+      "description": "The process's exit code."
+    },
+    "dollars": {
+      "type": "number",
+      "minimum": 0
+    },
+    "test": {
+      "type": "object",
+      "required": [
+        "v",
+        "scrimmage",
+        "command",
+        "exit",
+        "status",
+        "config",
+        "records",
+        "tests",
+        "rows",
+        "cost_usd",
+        "budget_usd",
+        "stopped_by",
+        "mistakes",
+        "notes",
+        "warnings",
+        "infra"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "scrimmage": {
+          "$ref": "#/$defs/scrimmage"
+        },
+        "command": {
+          "enum": [
+            "test"
+          ]
+        },
+        "exit": {
+          "$ref": "#/$defs/exit"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "enum": [
+                "passed",
+                "failed",
+                "mistake",
+                "infra"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
+          ]
+        },
+        "config": {
+          "type": "string"
+        },
+        "records": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The folder that holds this test's records, or null when none was made."
+        },
+        "tests": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/row"
+          }
+        },
+        "cost_usd": {
+          "$ref": "#/$defs/dollars"
+        },
+        "budget_usd": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/dollars"
+            }
+          ]
+        },
+        "stopped_by": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "enum": [
+                "budget",
+                "budget_held",
+                "no_price",
+                "unknown_tool_type",
+                "unseen_tool",
+                "structure",
+                "ambiguous_label",
+                "unknown_label"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
+          ]
+        },
+        "mistakes": {
+          "$ref": "#/$defs/messages"
+        },
+        "notes": {
+          "$ref": "#/$defs/messages"
+        },
+        "warnings": {
+          "$ref": "#/$defs/messages"
+        },
+        "infra": {
+          "$ref": "#/$defs/messages"
+        }
+      }
+    },
+    "row": {
+      "type": "object",
+      "required": [
+        "test",
+        "row",
+        "fault",
+        "runs",
+        "fired",
+        "done",
+        "passed",
+        "judged",
+        "rate",
+        "range",
+        "pass_rate",
+        "tools",
+        "cost_usd",
+        "result",
+        "broken",
+        "run_details"
+      ],
+      "properties": {
+        "test": {
+          "type": "string"
+        },
+        "row": {
+          "type": "string"
+        },
+        "fault": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "call",
+                "do",
+                "when",
+                "model",
+                "method",
+                "path",
+                "raises"
+              ],
+              "properties": {
+                "call": {
+                  "type": "string"
+                },
+                "do": {
+                  "type": "string"
+                },
+                "when": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "method": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "path": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "raises": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "runs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fired": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "done": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "passed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "judged": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rate": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "range": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          ]
+        },
+        "pass_rate": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "tools": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cost_usd": {
+          "$ref": "#/$defs/dollars"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "enum": [
+                "pass",
+                "fail",
+                "no result"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
+          ]
+        },
+        "broken": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "kind",
+              "text",
+              "runs"
+            ],
+            "properties": {
+              "kind": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "expect",
+                      "forbid",
+                      "empty",
+                      "crashed",
+                      "timed out",
+                      "refused"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "$comment": "open: a value this release does not know; read as other"
+                  }
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "runs": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "run_details": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/run"
+          }
+        }
+      }
+    },
+    "run": {
+      "type": "object",
+      "required": [
+        "run",
+        "outcome",
+        "fault_fired",
+        "judged",
+        "left_out",
+        "cost_usd",
+        "answer_preview"
+      ],
+      "properties": {
+        "run": {
+          "type": "string"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "enum": [
+                "answered",
+                "crashed",
+                "timed out",
+                "refused call",
+                "budget reached",
+                "not reserved",
+                "infrastructure error",
+                "stopped"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
+          ]
+        },
+        "fault_fired": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "judged": {
+          "anyOf": [
+            {
+              "enum": [
+                "pass",
+                "fail",
+                "left out"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
+          ]
+        },
+        "left_out": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cost_usd": {
+          "$ref": "#/$defs/dollars"
+        },
+        "answer_preview": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 200
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "required": [
+        "v",
+        "scrimmage",
+        "command",
+        "exit",
+        "status",
+        "config",
+        "summary",
+        "mistakes",
+        "notes",
+        "warnings",
+        "infra"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "scrimmage": {
+          "$ref": "#/$defs/scrimmage"
+        },
+        "command": {
+          "enum": [
+            "check"
+          ]
+        },
+        "exit": {
+          "$ref": "#/$defs/exit"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "enum": [
+                "valid",
+                "mistake",
+                "infra"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
+          ]
+        },
+        "config": {
+          "type": "string"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "tests",
+                "rows",
+                "runs",
+                "tools",
+                "budget_usd"
+              ],
+              "properties": {
+                "tests": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "rows": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "runs": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "tools": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "budget_usd": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/$defs/dollars"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "mistakes": {
+          "$ref": "#/$defs/messages"
+        },
+        "notes": {
+          "$ref": "#/$defs/messages"
+        },
+        "warnings": {
+          "$ref": "#/$defs/messages"
+        },
+        "infra": {
+          "$ref": "#/$defs/messages"
+        }
+      }
+    },
+    "envelope": {
+      "type": "object",
+      "required": [
+        "v",
+        "scrimmage",
+        "command",
+        "exit",
+        "status",
+        "config",
+        "mistakes",
+        "notes",
+        "warnings",
+        "infra"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "scrimmage": {
+          "$ref": "#/$defs/scrimmage"
+        },
+        "command": {
+          "anyOf": [
+            {
+              "enum": [
+                "test",
+                "check"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
+          ]
+        },
+        "exit": {
+          "$ref": "#/$defs/exit"
+        },
+        "status": {
+          "type": "string"
+        },
+        "config": {
+          "type": "string"
+        },
+        "mistakes": {
+          "$ref": "#/$defs/messages"
+        },
+        "notes": {
+          "$ref": "#/$defs/messages"
+        },
+        "warnings": {
+          "$ref": "#/$defs/messages"
+        },
+        "infra": {
+          "$ref": "#/$defs/messages"
+        }
+      }
+    }
+  }
+}

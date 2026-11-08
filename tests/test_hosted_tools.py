@@ -5,8 +5,8 @@ from collections.abc import Callable
 import pytest
 
 from conftest import ACME, EXAMPLE_FAULT, Project
-from derail_sdk import provider_openai as table
 from fakes.openai_server import FakeOpenAI
+from scrimmage_core import provider_openai as table
 
 Fake = Callable[..., FakeOpenAI]
 TOOL_FAULT = EXAMPLE_FAULT

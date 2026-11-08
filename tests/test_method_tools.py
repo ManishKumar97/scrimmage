@@ -11,10 +11,10 @@ from typing import Any
 import pytest
 
 from conftest import ACME, Project
-from derail_sdk import config, labels, state, tool_gate
-from derail_sdk.config import Fault, Mock
-from derail_sdk.errors import ConfigError
 from fakes.openai_server import FakeOpenAI
+from scrimmage_core import config, labels, state, tool_gate
+from scrimmage_core.config import Fault, Mock
+from scrimmage_core.errors import ConfigError
 from test_tool_gate import Lines, install
 
 Fake = Callable[..., FakeOpenAI]
@@ -286,14 +286,14 @@ def test_self_is_left_out_even_when_the_arguments_do_not_bind(lines: Lines) -> N
 
 @pytest.mark.design("method.config")
 def test_a_method_path_is_read_and_the_model_sees_the_methods_name(tmp_path: Path) -> None:
-    text = (Path(__file__).parent / "example" / "derail.toml").read_text()
+    text = (Path(__file__).parent / "example" / "scrimmage.toml").read_text()
     text = text.replace('"acme.tools:get_order"', '"acme.toolkit:StoreTools.get_order"')
     text = text.replace(
         '"acme.tools:check_inventory"',
         '{path = "acme.toolkit:StoreTools.check_inventory", name = "inventory"}',
     ).replace('real     = ["tool:check_inventory"]', 'real     = ["tool:inventory"]')
-    (tmp_path / "derail.toml").write_text(text)
-    agent = config.load(tmp_path / "derail.toml").agent
+    (tmp_path / "scrimmage.toml").write_text(text)
+    agent = config.load(tmp_path / "scrimmage.toml").agent
     assert agent.tools[0] == "acme.toolkit:StoreTools.get_order"
     assert agent.tool_names()[:2] == ["get_order", "inventory"]
     assert labels.tool_name("a.b:C.d", {}) == "d"
@@ -313,19 +313,19 @@ def test_a_method_path_is_read_and_the_model_sees_the_methods_name(tmp_path: Pat
 def test_a_bad_method_path_is_rejected_when_the_file_is_read(
     tmp_path: Path, path: str, message: str
 ) -> None:
-    text = (Path(__file__).parent / "example" / "derail.toml").read_text()
-    (tmp_path / "derail.toml").write_text(text.replace("acme.tools:refund_order", path))
+    text = (Path(__file__).parent / "example" / "scrimmage.toml").read_text()
+    (tmp_path / "scrimmage.toml").write_text(text.replace("acme.tools:refund_order", path))
     with pytest.raises(ConfigError, match=message):
-        config.load(tmp_path / "derail.toml")
+        config.load(tmp_path / "scrimmage.toml")
 
 
 def test_two_classes_with_one_method_name_need_a_name_each(tmp_path: Path) -> None:
-    text = (Path(__file__).parent / "example" / "derail.toml").read_text()
+    text = (Path(__file__).parent / "example" / "scrimmage.toml").read_text()
     text = text.replace("acme.tools:refund_order", "acme.toolkit:OrderTools.get_order")
     text = text.replace("acme.tools:get_order", "acme.toolkit:StoreTools.get_order")
-    (tmp_path / "derail.toml").write_text(text)
+    (tmp_path / "scrimmage.toml").write_text(text)
     with pytest.raises(ConfigError, match="two tools are named 'get_order'"):
-        config.load(tmp_path / "derail.toml")
+        config.load(tmp_path / "scrimmage.toml")
 
 
 TOOLKIT = (
@@ -353,7 +353,7 @@ def test_a_toolkit_agent_runs_with_its_methods_mocked_faulted_and_kept_secret(
     assert len(faulted) == 2 and all(
         x["error"] == "TimeoutError: get_order timed out" for x in faulted
     )
-    for path in (result.root / "derail-runs").glob("*/*.jsonl"):
+    for path in (result.root / "scrimmage-runs").glob("*/*.jsonl"):
         assert "s3cret" not in path.read_text()
 
 
@@ -429,7 +429,7 @@ def test_a_method_on_star_args_drops_only_self(lines: Lines) -> None:
 def test_a_class_that_refuses_the_gate_stops_the_run_with_the_reason(lines: Lines) -> None:
     module = probes()
     install(lines)
-    with pytest.raises(tool_gate.ListedToolMissing, match="does not let Derail set the gate"):
+    with pytest.raises(tool_gate.ListedToolMissing, match="does not let Scrimmage set the gate"):
         tool_gate.swap(module, ["Frozen.get"])
     assert "frozen class" in str(lines.lines[0]["mistake"])
 

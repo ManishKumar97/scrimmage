@@ -11,12 +11,12 @@ import pytest
 PACKAGES = Path(__file__).parents[1] / "packages"
 # Each source tree, with the first-party names it may import.
 ALLOWED = {
-    PACKAGES / "derail" / "src" / "derail_sdk": {"derail_sdk", "derail"},
-    PACKAGES / "derail-marker" / "src" / "derail": {"derail"},
+    PACKAGES / "scrimmage-core" / "src" / "scrimmage_core": {"scrimmage_core", "scrimmage"},
+    PACKAGES / "scrimmage" / "src" / "scrimmage": {"scrimmage"},
 }
 DYNAMIC = {"import_module", "__import__"}
 # The only places that import a computed name: the team's own module from a mock's
-# type, and the agent's function in the starter. Both are under DERAIL_ALLOW_IMPORTS.
+# type, and the agent's function in the starter. Both are under SCRIMMAGE_ALLOW_IMPORTS.
 COMPUTED_ALLOWED = {("mocks.py", "import_object"), ("start.py", "main")}
 
 

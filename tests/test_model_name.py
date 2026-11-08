@@ -6,10 +6,10 @@ from collections.abc import Callable
 import pytest
 
 from conftest import Project, Result
-from derail_sdk import config, labels
-from derail_sdk.plan import Row
-from derail_sdk.runner import RunResult, unused_model
 from fakes.openai_server import FakeOpenAI
+from scrimmage_core import config, labels
+from scrimmage_core.plan import Row
+from scrimmage_core.runner import RunResult, unused_model
 
 Fake = Callable[..., FakeOpenAI]
 ROUTER, MAIN = "gpt-4o-mini", "gpt-4.1"
@@ -237,7 +237,7 @@ def test_a_request_with_no_model_name_is_refused_and_not_sent_and_is_no_pass(
         ("refused", "unreadable_model"),
     ]
     assert fake.paths.count("/v1/responses") == 1  # the baseline's, none from the fault row
-    assert "has no model name Derail can read" in result.out
+    assert "has no model name Scrimmage can read" in result.out
     summary = summary_of(result)
     assert (summary["outcome"], summary["judged"]) == ("refused call", "left out")
     row = next(line for line in result.out.splitlines() if " fault 1 " in line)

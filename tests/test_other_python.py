@@ -11,10 +11,10 @@ import jsonschema
 import pytest
 
 from conftest import Project, Result
-from derail_sdk import python_args
-from derail_sdk.control import ControlServer
-from derail_sdk.records import RecordStore
-from derail_sdk.run_command import BOOT
+from scrimmage_core import python_args
+from scrimmage_core.control import ControlServer
+from scrimmage_core.records import RecordStore
+from scrimmage_core.run_command import BOOT
 from test_bootstrap import this_python
 from test_scripts import RECORD, calls, lines_of, script, summary_of, write_config
 
@@ -34,7 +34,7 @@ def uv(*args: str, cwd: Path) -> None:
 
 @pytest.fixture(scope="session")
 def other_version(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Another Python version, with pip, and no Derail: as a team's cloud tool would be."""
+    """Another Python version, with pip, and no Scrimmage: as a team's cloud tool would be."""
     version = "3.12" if sys.version_info[:2] == (3, 13) else "3.13"
     folder = tmp_path_factory.mktemp("other-version")
     uv("venv", "--no-project", "--seed", "--python", version, "venv", cwd=folder)
@@ -43,20 +43,20 @@ def other_version(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture(scope="session")
 def other_venv(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """The same binary as this Python, with its own packages: Derail, and mcp 1.x."""
+    """The same binary as this Python, with its own packages: Scrimmage, and mcp 1.x."""
     folder = tmp_path_factory.mktemp("other-venv")
     base = Path(sys.base_prefix) / "bin" / "python3"
     uv("venv", "--no-project", "--python", str(base), "venv", cwd=folder)
     python = folder / "venv" / "bin" / "python"
-    packages = [str(ROOT / "packages" / name) for name in ("derail", "derail-marker")]
+    packages = [str(ROOT / "packages" / name) for name in ("scrimmage-core", "scrimmage")]
     # A built wheel is cached by the package's metadata, not by this code.
-    refresh = ["--refresh-package", "derail", "--reinstall-package", "derail"]
+    refresh = ["--refresh-package", "scrimmage-core", "--reinstall-package", "scrimmage-core"]
     uv("pip", "install", *refresh, "--python", str(python), "mcp<2", *packages, cwd=folder)
     return python
 
 
 def plain_run(command: list[str]) -> tuple[int, str, str]:
-    clean = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
+    clean = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
     done = subprocess.run(command, capture_output=True, text=True, env=clean, timeout=60)
     return done.returncode, done.stdout, done.stderr
 
@@ -78,7 +78,7 @@ def test_pip_on_another_python_runs_untouched_and_prints_nothing_extra(
 
 
 @pytest.mark.design("other.children_set_pip_untouched")
-def test_with_children_set_a_python_with_no_derail_still_runs_untouched(
+def test_with_children_set_a_python_with_no_scrimmage_still_runs_untouched(
     project: Project, other_version: Path
 ) -> None:
     pip = [str(other_version), "-m", "pip", "--version"]
@@ -87,7 +87,7 @@ def test_with_children_set_a_python_with_no_derail_still_runs_untouched(
 
 
 def imported(python: Path) -> list[str]:
-    code = "import sys; print('derail_sdk' in sys.modules, flush=True)"
+    code = "import sys; print('scrimmage_core' in sys.modules, flush=True)"
     return [str(python), "-c", code]
 
 
@@ -126,7 +126,7 @@ def test_a_package_build_uv_starts_does_not_stop_the_run(project: Project) -> No
 name = "acme-bot"
 version = "0"
 requires-python = ">=3.11"
-dependencies = ["derail", "derail-marker"]
+dependencies = ["scrimmage-core", "scrimmage"]
 
 [build-system]
 requires = ["hatchling"]
@@ -136,8 +136,8 @@ build-backend = "hatchling.build"
 packages = ["acme"]
 
 [tool.uv.sources]
-derail = {{path = "{packages / "derail"}", editable = true}}
-derail-marker = {{path = "{packages / "derail-marker"}", editable = true}}
+scrimmage-core = {{path = "{packages / "scrimmage-core"}", editable = true}}
+scrimmage = {{path = "{packages / "scrimmage"}", editable = true}}
 """
     )
     (project.root / "bot.py").write_text("print('the answer')\n")
@@ -162,10 +162,10 @@ print("the answer")
 
 @pytest.mark.design("other.bot_on_its_own_venv")
 @pytest.mark.parametrize("how", ["direct", "wrapper"])
-def test_a_bot_on_another_venv_with_derail_keeps_its_children(
+def test_a_bot_on_another_venv_with_scrimmage_keeps_its_children(
     project: Project, other_venv: Path, how: str
 ) -> None:
-    """derail test runs here, so the folder on PYTHONPATH is not the bot's own Derail."""
+    """scrimmage test runs here, so the folder on PYTHONPATH is not the bot's own Scrimmage."""
     (project.root / "bot.py").write_text(CROSS_BOT)
     (project.root / "report.py").write_text("from acme import tools\ntools.check_inventory('1')\n")
     (project.root / "run.sh").write_text(f'#!/bin/sh\nexec {other_venv} bot.py "$1"\n')
@@ -225,7 +225,7 @@ def test_python_and_python3_in_a_venv_of_copies_are_one_python(tmp_path: Path) -
 
 
 @pytest.mark.design("other.same_binary_is_another_python")
-def test_a_venv_on_the_same_binary_is_another_python_even_with_derail_installed(
+def test_a_venv_on_the_same_binary_is_another_python_even_with_scrimmage_installed(
     project: Project, other_venv: Path
 ) -> None:
     result = run_child(project, imported(other_venv))
@@ -233,13 +233,15 @@ def test_a_venv_on_the_same_binary_is_another_python_even_with_derail_installed(
 
 
 @pytest.mark.design("other.children_join")
-def test_with_children_set_a_python_with_derail_joins(project: Project, other_venv: Path) -> None:
+def test_with_children_set_a_python_with_scrimmage_joins(
+    project: Project, other_venv: Path
+) -> None:
     result = run_child(project, imported(other_venv), "children = true")
     assert summary_of(result)["answer"] == repr((0, "True\n", "")), result.out
 
 
 @pytest.mark.design("other.children_refused")
-def test_with_children_set_a_python_with_derail_is_gated(
+def test_with_children_set_a_python_with_scrimmage_is_gated(
     project: Project, other_venv: Path
 ) -> None:
     (project.root / "report.py").write_text(REPORT)
@@ -307,7 +309,7 @@ def test_a_secret_on_another_pythons_command_line_is_not_recorded(
     secret = f"sk-{'c' * 40}"
     (project.root / "report.py").write_text(REPORT)
     run_child(project, [str(other_version), "report.py", secret])
-    records = (project.root / "derail-runs").glob("*/*.jsonl")
+    records = (project.root / "scrimmage-runs").glob("*/*.jsonl")
     assert not any(secret in record.read_text() for record in records)
 
 
@@ -325,9 +327,9 @@ def test_the_keep_out_works_with_nowhere_to_report(tmp_path: Path, other_version
     env = {
         "PATH": os.environ["PATH"],
         "PYTHONPATH": str(BOOT),
-        "DERAIL_TOKEN": TOKEN,
-        "DERAIL_PYTHON": "the run's Python",
-        "DERAIL_TOOLS": "held:write",
+        "SCRIMMAGE_TOKEN": TOKEN,
+        "SCRIMMAGE_PYTHON": "the run's Python",
+        "SCRIMMAGE_TOOLS": "held:write",
     }
     done = subprocess.run(
         [str(other_version), "-c", "import held"],
@@ -465,14 +467,14 @@ def test_joining_prints_nothing_to_a_stdio_servers_stream(tmp_path: Path) -> Non
         )
         (tmp_path / "acme_tools.py").write_text("def write():\n    raise SystemExit(9)\n")
         identity = this_python()
-        env = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
+        env = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
         env.update(
             PYTHONPATH=str(BOOT),
-            DERAIL_TOKEN=TOKEN,
-            DERAIL_CONTROL_URL=server.url,
-            DERAIL_RUN="no-such-run",
-            DERAIL_PYTHON=identity,
-            DERAIL_TOOLS="acme_tools:write",
+            SCRIMMAGE_TOKEN=TOKEN,
+            SCRIMMAGE_CONTROL_URL=server.url,
+            SCRIMMAGE_RUN="no-such-run",
+            SCRIMMAGE_PYTHON=identity,
+            SCRIMMAGE_TOOLS="acme_tools:write",
         )
         done = subprocess.run(
             [sys.executable, "-c", program],
@@ -484,7 +486,7 @@ def test_joining_prints_nothing_to_a_stdio_servers_stream(tmp_path: Path) -> Non
     finally:
         server.stop()
     assert done.stdout == b""
-    assert done.stderr.strip() == b"DerailRefused"
+    assert done.stderr.strip() == b"ScrimmageRefused"
 
 
 # Each form is one real Python accepts, so the readers are held to what Python does.

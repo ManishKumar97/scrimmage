@@ -2,7 +2,7 @@
 
 Each case reaches a different part of the report, so its text can be compared byte for
 byte with what the report printed before it was split into a report and its renderings.
-The files under fixtures/report/ were printed by `derail test`'s report at 533209e.
+The files under fixtures/report/ were printed by `scrimmage test`'s report at 533209e.
 """
 
 import tempfile
@@ -10,11 +10,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from derail_sdk import config, judge, plan
-from derail_sdk.budget import Held
-from derail_sdk.runner import RunResult
+from scrimmage_core import config, judge, plan
+from scrimmage_core.budget import Held
+from scrimmage_core.runner import RunResult
 
-FOLDER = Path("/records/derail-runs/20261107T101500Z-a1b2c3")
+FOLDER = Path("/records/scrimmage-runs/20261107T101500Z-a1b2c3")
 GOLDEN = Path(__file__).parent / "fixtures" / "report"
 AGENT = """[agent]
 function = "acme.agent:answer"
@@ -71,7 +71,7 @@ class Case:
 
 def load(text: str) -> config.Config:
     with tempfile.TemporaryDirectory() as folder:
-        path = Path(folder) / "derail.toml"
+        path = Path(folder) / "scrimmage.toml"
         path.write_text(text)
         return config.load(path)
 
@@ -209,13 +209,13 @@ def budget_reached() -> Case:
 
 
 def infra() -> Case:
-    """A provider that failed by itself and a library Derail cannot gate."""
+    """A provider that failed by itself and a library Scrimmage cannot gate."""
     cfg = load(AGENT + TEST)
     (base,) = plan.rows(cfg)
     structure: dict[str, object] = {
         "notice": "structure",
         "library": "openai",
-        "message": "openai 9.0 is newer than Derail can gate",
+        "message": "openai 9.0 is newer than Scrimmage can gate",
     }
     results = [
         run(base, 0),

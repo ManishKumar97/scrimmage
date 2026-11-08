@@ -3,7 +3,7 @@
 ## Test, row and run
 
 A **test** is one `[[test]]` block: one question for your agent.
-Derail expands each test into **rows**:
+Scrimmage expands each test into **rows**:
 
 | Row | Mocks | Fault |
 |---|---|---|
@@ -33,7 +33,7 @@ This version knows these labels:
 | `hosted:mcp/<label>` | a hosted MCP server (only under `real`) |
 | `http:<host>` | a web request to that host. See [Web requests](web-requests.md) |
 | `mcp:<server>/<tool>`, `mcp:<tool>` | a tool on an MCP server. See [MCP tools](mcp.md) |
-| `process:python` | a Python child that would run with no gates (only under `real`). See [An agent run as a script](scripts.md#a-python-child-derail-cannot-reach) |
+| `process:python` | a Python child that would run with no gates (only under `real`). See [An agent run as a script](scripts.md#a-python-child-scrimmage-cannot-reach) |
 
 ## What a call can get
 
@@ -48,7 +48,7 @@ For every call, in this order:
 ## Mocks
 
 A mock's `returns` is written in TOML.
-If the tool returns its own type, Derail builds that type from the mock:
+If the tool returns its own type, Scrimmage builds that type from the mock:
 
 - the type is read from the tool's return annotation, such as `-> Stock`, or from the mock's `type`;
 - a pydantic model is built with `model_validate`, any other class with `Type(**returns)`;
@@ -64,7 +64,7 @@ If the tool returns its own type, Derail builds that type from the mock:
 | `status` | written `status 429`: a model call gets a real HTTP error reply, and the library raises its own error, such as `RateLimitError`; a web request gets a reply with that status |
 
 A fault fires on every call it names, unless `when` narrows it to the `first N` attempts or the first `requests N`. See [Failing the model](model-faults.md).
-It fires only in the program Derail started, not in its child processes, unless `children` is set. See [An agent run as a script](scripts.md#faults-in-children).
+It fires only in the program Scrimmage started, not in its child processes, unless `children` is set. See [An agent run as a script](scripts.md#faults-in-children).
 If the agent never makes that call in a run, the run is **not exercised**: it was really a baseline run, so it is left out of the row's rate.
 A row where the fault never fired tested nothing, and is reported as a mistake in the test.
 
@@ -76,10 +76,10 @@ A row reads `pass`, `fail` or `no result`. See [Judging an answer](judging.md).
 
 ## Records
 
-Every call is written to the run's record, a JSON Lines file in `derail-runs/`.
-Each line says which call it was, which process made it, what Derail did (real, mock, fault or refused), a hash, size and short preview of the arguments and result, and any error.
+Every call is written to the run's record, a JSON Lines file in `scrimmage-runs/`.
+Each line says which call it was, which process made it, what Scrimmage did (real, mock, fault or refused), a hash, size and short preview of the arguments and result, and any error.
 A method's `self` or `cls` is never among the arguments.
-A call still going on when the run was stopped has a line whose error is `DerailStopped`.
+A call still going on when the run was stopped has a line whose error is `ScrimmageStopped`.
 A model call's line also holds the provider, the model, the status, the retry number, the token counts with the cached input tokens, and the cost; its full request and reply are kept once in a `blobs/` folder next to the record, named by their hash.
 A call refused for the budget also holds `budget`: what it could cost, what was spent and held, the limit, and how long it waited.
 Each process that joined a run has one line saying what it is: its interpreter, its command line and its parent's process id.

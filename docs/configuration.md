@@ -1,17 +1,17 @@
-# Configuration: derail.toml
+# Configuration: scrimmage.toml
 
-One `derail.toml` describes one agent and its tests.
-Derail names the table and key of every bad value, such as `[agent] run_timeout: expected a number of seconds, got 'abc'`.
+One `scrimmage.toml` describes one agent and its tests.
+Scrimmage names the table and key of every bad value, such as `[agent] run_timeout: expected a number of seconds, got 'abc'`.
 Anything this version does not support is rejected as unknown, with exit code 2. Nothing is ever silently ignored.
 
 ## [agent]
 
 | Setting | What it does | Default |
 |---|---|---|
-| `function` | The agent, as `module:function`. Derail calls it with the question and waits for it if it is async. Give this or `command`. | none |
+| `function` | The agent, as `module:function`. Scrimmage calls it with the question and waits for it if it is async. Give this or `command`. | none |
 | `command` | The agent as a script, such as `"python bot.py {question}"`. It is split into arguments like a shell's words, and the question fills `{question}` as part of one argument, with no shell. Must hold `{question}`. Give this or `function`. See [An agent run as a script](scripts.md). | none |
-| `children` | `true` fires faults in child processes too, and lets a child on another Python join if it has Derail installed. See [Faults in children](scripts.md#faults-in-children). | `false` |
-| `tools` | The agent's own tools, as `module:function` import paths, or `module:Class.method` for a tool that is a method. Derail swaps each one for a gate when your code imports its module. When the model sees a different name, write `{path = "package.tools:lookup_order", name = "lookup-order"}`; labels use the name the model sees, which for a method is its own name. See [Tools that are methods](#tools-that-are-methods). | empty |
+| `children` | `true` fires faults in child processes too, and lets a child on another Python join if it has Scrimmage installed. See [Faults in children](scripts.md#faults-in-children). | `false` |
+| `tools` | The agent's own tools, as `module:function` import paths, or `module:Class.method` for a tool that is a method. Scrimmage swaps each one for a gate when your code imports its module. When the model sees a different name, write `{path = "package.tools:lookup_order", name = "lookup-order"}`; labels use the name the model sees, which for a method is its own name. See [Tools that are methods](#tools-that-are-methods). | empty |
 | `real` | Calls that are safe to run for real when a test does not mock them, such as `"tool:check_inventory"`, `"tool:*"` for every tool, `"mcp:docs/search"` for a tool on an MCP server, `"hosted:mcp/orders"` for a hosted MCP server, `"process:python"` for a Python child that does not join, or a web write such as `"http:orders.acme.internal POST /refunds"`. Model calls are not listed: they are real unless a fault names them. | empty |
 | `runs` | How many times each row runs. | 3 |
 | `parallel` | How many runs go at the same time. | 4 |
@@ -40,7 +40,7 @@ acme-gpt = {input = 2.0, cached_input = 0.5, output = 8.0}
 
 A price here replaces the built-in one whole: `gpt-4o = {input = 2.5, output = 10}` has no cached price, even though the built-in table has one.
 
-Derail imports only modules under your agent's own top-level packages, the ones `function` and `tools` name. For a script, that is the ones `tools` names.
+Scrimmage imports only modules under your agent's own top-level packages, the ones `function` and `tools` name. For a script, that is the ones `tools` names.
 
 ## Tools that are methods
 
@@ -65,7 +65,7 @@ tools = ["shop.tools:StoreTools.get_order", "shop.tools:StoreTools.check_invento
 ```
 
 The model sees `get_order`, so the label is `tool:get_order`.
-Derail gates the method on the class when the module loads, so every instance goes through the gate, whether it was made before or after.
+Scrimmage gates the method on the class when the module loads, so every instance goes through the gate, whether it was made before or after.
 Mocks and faults work as on a function. A mock is built from the method's return annotation.
 The record never holds `self` or `cls`, only the arguments after them.
 
@@ -77,7 +77,7 @@ The record never holds `self` or `cls`, only the arguments after them.
 | a method of a class whose metaclass refuses new attributes | the run stops, with the reason |
 | the class itself, `shop.tools:StoreTools` | the run stops: list each method instead |
 | a property or a plain attribute | the run stops: it is not a method |
-| an attribute your code sets in `__init__` | the run stops: Derail gates the class when the module loads, before any instance exists, so define it as a method |
+| an attribute your code sets in `__init__` | the run stops: Scrimmage gates the class when the module loads, before any instance exists, so define it as a method |
 | a method on a nested class, `Outer.Inner.method` | refused when the file is read: move the class to the top of its module |
 
 ## [[test]]
@@ -123,31 +123,31 @@ See [Web requests](web-requests.md) and [MCP tools](mcp.md).
 
 ## Checking the file in your editor
 
-Derail ships a JSON Schema of this file, and `derail schema` prints the one that matches your installed version:
+Scrimmage ships a JSON Schema of this file, and `scrimmage schema` prints the one that matches your installed version:
 
 ```bash
-derail schema > derail.schema.json
+scrimmage schema > scrimmage.schema.json
 ```
 
-Then make this the first line of `derail.toml`:
+Then make this the first line of `scrimmage.toml`:
 
 ```
-#:schema ./derail.schema.json
+#:schema ./scrimmage.schema.json
 ```
 
 Taplo, the TOML language server behind VS Code's Even Better TOML extension, reads that comment and checks each key, type, label, schedule and fault word as you type.
 Rust and Python teams use it the same way for `Cargo.toml` and `pyproject.toml`.
-Derail reads the line as a comment, so it changes nothing.
+Scrimmage reads the line as a comment, so it changes nothing.
 
 The schema checks the shape of the file only.
 It cannot check what needs the whole file, your folder or your machine: a tool name against `tools`, a mock on a model call, a `type` outside your packages, a program on your `PATH`, or a test name used twice.
-The schema also rejects `${` in any text, as Derail does not read placeholders.
-It cannot tell a whole number written as `2.0` from `2`, as JSON Schema counts both as an integer, so Taplo and other editors accept `runs = 2.0`; Derail rejects it.
-An editor that finds nothing wrong is a good sign. `derail check` decides; see [Commands](cli.md#derail-check).
+The schema also rejects `${` in any text, as Scrimmage does not read placeholders.
+It cannot tell a whole number written as `2.0` from `2`, as JSON Schema counts both as an integer, so Taplo and other editors accept `runs = 2.0`; Scrimmage rejects it.
+An editor that finds nothing wrong is a good sign. `scrimmage check` decides; see [Commands](cli.md#scrimmage-check).
 
 ## Coming in later versions
 
-These are part of Derail's design but not of this version.
+These are part of Scrimmage's design but not of this version.
 Using one now stops the test: it is rejected as unknown.
 
 - Agent shapes: `service` (a web service).

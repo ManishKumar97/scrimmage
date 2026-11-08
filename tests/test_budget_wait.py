@@ -16,14 +16,14 @@ from pathlib import Path
 import pytest
 
 from conftest import EXAMPLE_FAULT, Project, Result
-from derail_sdk import http_gate
-from derail_sdk.budget import STALE_S, Held, Ledger, Shortfall
-from derail_sdk.client import ControlClient, ControlError
-from derail_sdk.config import Agent
-from derail_sdk.control import ControlServer
-from derail_sdk.errors import DerailRefused
-from derail_sdk.records import RecordStore
 from fakes.openai_server import FakeOpenAI
+from scrimmage_core import http_gate
+from scrimmage_core.budget import STALE_S, Held, Ledger, Shortfall
+from scrimmage_core.client import ControlClient, ControlError
+from scrimmage_core.config import Agent
+from scrimmage_core.control import ControlServer
+from scrimmage_core.errors import ScrimmageRefused
+from scrimmage_core.records import RecordStore
 from test_http_gate import BODY, URL, Budget, client, gated, install, make_plan
 
 Fake = Callable[..., FakeOpenAI]
@@ -205,7 +205,7 @@ def test_a_budget_reply_without_its_numbers_is_a_control_error(server: ControlSe
 
 WAITER = """
 import sys, time
-from derail_sdk.client import ControlClient
+from scrimmage_core.client import ControlClient
 talk, ticket = ControlClient(sys.argv[1], sys.argv[2]), None
 while True:
     answer = talk.reserve("run-1", 0.06, "model:openai", ticket)
@@ -331,7 +331,7 @@ def held_forever(
 def test_a_call_held_out_by_its_own_run_is_refused_naming_the_hold(gated: None) -> None:
     budget, lines = held_forever(0.004)
     started = time.monotonic()
-    with pytest.raises(DerailRefused) as caught:
+    with pytest.raises(ScrimmageRefused) as caught:
         client().post(URL, json=BODY)
     assert 0.4 < time.monotonic() - started < 3  # half of a one-second time limit
     message = str(caught.value)
@@ -357,7 +357,7 @@ def test_a_refusal_after_other_runs_names_them_and_gives_the_parallel_advice(
 ) -> None:
     monkeypatch.setattr(http_gate, "RUN_MARGIN_S", 0.5)
     _, _ = held_forever(0.004, time_limit=1.0, run="run-other")
-    with pytest.raises(DerailRefused) as caught:
+    with pytest.raises(ScrimmageRefused) as caught:
         client().post(URL, json=BODY)
     message = str(caught.value)
     assert "model:openai in run-other $0.0030" in message
@@ -378,7 +378,7 @@ def test_a_wait_asks_again_every_step_with_one_ticket(
         return real(run, usd, label, ticket)
 
     budget.reserve = watch  # type: ignore[method-assign, assignment]
-    with pytest.raises(DerailRefused, match=r"waited [01]s"):
+    with pytest.raises(ScrimmageRefused, match=r"waited [01]s"):
         client().post(URL, json=BODY)
     assert len(asked) >= 5 and asked[0] is None and len(set(asked[1:])) == 1
 
@@ -389,7 +389,7 @@ def test_a_call_spent_money_cannot_cover_is_refused_at_once(gated: None) -> None
     budget.ledger.settle(granted(budget.ledger.reserve(0.003)), 0.003)
     sink, _ = install(make_plan(budget=0.004, time_limit_s=60.0), budget)
     started = time.monotonic()
-    with pytest.raises(DerailRefused, match=r"\$0.0030 is spent"):
+    with pytest.raises(ScrimmageRefused, match=r"\$0.0030 is spent"):
         client().post(URL, json=BODY)
     assert time.monotonic() - started < 1
     assert sink.lines[0]["reason"] == "budget"
@@ -546,7 +546,7 @@ def test_an_own_run_deadlock_ends_at_the_short_bound_though_another_run_holds_mo
     budget.ledger.reserve(0.001, "run-other", LABEL)  # another run's call, also in flight
     sink, _ = install(make_plan(budget=0.006, time_limit_s=60.0), budget)
     started = time.monotonic()
-    with pytest.raises(DerailRefused, match="may be waiting on itself"):
+    with pytest.raises(ScrimmageRefused, match="may be waiting on itself"):
         client().post(URL, json=BODY)
     assert time.monotonic() - started < 3  # the short bound, not most of a minute
     numbers = sink.lines[0]["budget"]
@@ -560,7 +560,7 @@ def test_a_hold_left_by_an_ended_run_refuses_at_once_and_is_named(gated: None) -
     budget.ledger.close_run("run-dead")  # killed during its call: the hold never settles
     sink, _ = install(make_plan(budget=0.004, time_limit_s=60.0), budget)
     started = time.monotonic()
-    with pytest.raises(DerailRefused) as caught:
+    with pytest.raises(ScrimmageRefused) as caught:
         client().post(URL, json=BODY)
     assert time.monotonic() - started < 1  # waiting cannot help
     message = str(caught.value)
@@ -622,7 +622,7 @@ def test_waiters_ahead_that_would_fit_are_served_together_in_order() -> None:
 
 @pytest.mark.design("wait.report_says_reached_only_when_spent")
 def test_the_report_says_reached_only_when_money_spent_reached_the_limit() -> None:
-    from derail_sdk.runner import budget_line, reached
+    from scrimmage_core.runner import budget_line, reached
 
     agent_ = config_agent(parallel=4)
     numbers: dict[str, object] = {
@@ -649,7 +649,7 @@ def test_the_report_says_reached_only_when_money_spent_reached_the_limit() -> No
 @pytest.mark.design("wait.report_advice_fits")
 @pytest.mark.parametrize("parallel", [1, 2])
 def test_the_reports_advice_fits_the_case_and_the_parallel_setting(parallel: int) -> None:
-    from derail_sdk.runner import budget_line
+    from scrimmage_core.runner import budget_line
 
     base: dict[str, object] = {"usd": 0.03, "spent": 0.0, "held": 0.08, "limit": 0.1}
     hold = {"run": "run-7", "label": LABEL, "usd": 0.08, "ended": False}
@@ -665,15 +665,15 @@ def test_the_reports_advice_fits_the_case_and_the_parallel_setting(parallel: int
 
 
 def config_agent(parallel: int) -> Agent:
-    from derail_sdk import config
+    from scrimmage_core import config
 
-    loaded = config.load(Path(__file__).parent / "example" / "derail.toml").agent
+    loaded = config.load(Path(__file__).parent / "example" / "scrimmage.toml").agent
     return dataclasses.replace(loaded, parallel=parallel)
 
 
 @pytest.mark.design("wait.numbers_from_the_stopping_run")
 def test_the_report_takes_its_numbers_from_the_run_that_stopped_the_test() -> None:
-    from derail_sdk.runner import RunResult, budget_refusal, stop_numbers
+    from scrimmage_core.runner import RunResult, budget_refusal, stop_numbers
 
     def result(reason: str, spent: float) -> RunResult:
         made = RunResult("run", None, "not reserved", None, None, {})  # type: ignore[arg-type]

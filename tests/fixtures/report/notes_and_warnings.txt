@@ -1,5 +1,5 @@
 exit 2
-derail test: 1 test, 2 rows, 6 runs; records in /records/derail-runs/20261107T101500Z-a1b2c3
+scrimmage test: 1 test, 2 rows, 6 runs; records in /records/scrimmage-runs/20261107T101500Z-a1b2c3
 warning: every tool that is not mocked runs for real (real = ["tool:*"])
 test                  row       fault                 runs  fired  done  passed  rate  range   tools  cost     result
 a-test-w...he-table-  baseline  -                     3     -      2     2/3     67%   21-94%  2.0    0.00036  fail
@@ -8,7 +8,7 @@ full name: a-test-whose-name-is-far-too-long-for-the-table-a-test-whose-name-is-
 full name: a-test-whose-name-is-far-too-long-for-the-table-a-test-whose-name-is-far-too-long-for-the-table- fault 1: model gpt-4.1 status 429 first 2
 range: a 95% Wilson interval, from these runs alone
 fail: a-test-whose-name-is-far-too-long-for-the-table-a-test-whose-name-is-far-too-long-for-the-table- baseline: 2/3 passed, pass_rate is 1
-  1 run: crashed: /records/derail-runs/20261107T101500Z-a1b2c3/run-baseline-2.log
+  1 run: crashed: /records/scrimmage-runs/20261107T101500Z-a1b2c3/run-baseline-2.log
 model calls cost $0.0007 of a budget of $5
 warning: http:x.acme GET /a ran for real, though the test has mocks for that host; none matched its method and path
 warning: 2 model requests offered provider tools that only read, such as web search; providers bill those per use, outside the token budget

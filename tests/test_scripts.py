@@ -16,16 +16,18 @@ from typing import cast
 import jsonschema
 import pytest
 
-import derail_sdk
+import scrimmage_core
 from conftest import ACME, Project, Result
-from derail_sdk import bootstrap, runner
-from derail_sdk.control import ControlServer
-from derail_sdk.runner import stop_group
 from fakes.openai_server import FakeOpenAI
+from scrimmage_core import bootstrap, runner
+from scrimmage_core.control import ControlServer
+from scrimmage_core.runner import stop_group
 
 Fake = Callable[[list[str]], FakeOpenAI]
 Line = dict[str, object]
-RECORD = json.loads((Path(derail_sdk.__file__).parent / "schemas" / "record.v1.json").read_text())
+RECORD = json.loads(
+    (Path(scrimmage_core.__file__).parent / "schemas" / "record.v1.json").read_text()
+)
 TOOLS = """["acme.tools:get_order", "acme.tools:check_inventory", "acme.tools:get_stock",
     "acme.tools:refund_order"]"""
 QUESTION = "Where is order 1234; rm -rf ~"
@@ -137,7 +139,7 @@ def test_a_question_reaches_the_script_as_one_argument_with_no_shell(project: Pr
 def test_nothing_in_a_question_is_read_by_a_shell(project: Project, question: str) -> None:
     (project.root / "bot.py").write_text(
         "import json, os, sys\n"
-        "with open(os.environ['DERAIL_ANSWER_FILE'], 'w') as out:\n"
+        "with open(os.environ['SCRIMMAGE_ANSWER_FILE'], 'w') as out:\n"
         "    json.dump(sys.argv[1:], out)\n"
     )
     write_config(project, f"{sys.executable} bot.py {{question}}")
@@ -210,8 +212,8 @@ def test_what_goes_to_stderr_is_never_the_answer(project: Project) -> None:
     code = "import sys\nprint('the answer', flush=True)\nprint('a log line', file=sys.stderr)\n"
     result = script(project, code)
     assert summary_of(result)["answer"] == "the answer"
-    run = next((project.root / "derail-runs").glob("*/*.jsonl")).stem
-    folder = next((project.root / "derail-runs").glob("*/*.jsonl")).parent
+    run = next((project.root / "scrimmage-runs").glob("*/*.jsonl")).stem
+    folder = next((project.root / "scrimmage-runs").glob("*/*.jsonl")).parent
     assert "a log line" in (folder / f"{run}.log").read_text()
     assert "a log line" not in (folder / f"{run}.out").read_text()
 
@@ -220,7 +222,7 @@ def test_what_goes_to_stderr_is_never_the_answer(project: Project) -> None:
 def test_the_answer_file_wins_over_the_last_printed_line(project: Project) -> None:
     code = (
         "import os\n"
-        "with open(os.environ['DERAIL_ANSWER_FILE'], 'w') as out:\n"
+        "with open(os.environ['SCRIMMAGE_ANSWER_FILE'], 'w') as out:\n"
         "    out.write('from the file')\n"
         "print('a printed line')\n"
     )
@@ -267,7 +269,7 @@ def test_a_script_that_ends_well_with_no_output_gave_no_answer(project: Project)
 
 def test_the_output_file_is_owner_only(project: Project) -> None:
     script(project, "print('the answer')\n")
-    out = next((project.root / "derail-runs").glob("*/*.out"))
+    out = next((project.root / "scrimmage-runs").glob("*/*.out"))
     assert stat.S_IMODE(out.stat().st_mode) == 0o600
 
 
@@ -275,19 +277,19 @@ def test_the_output_file_is_owner_only(project: Project) -> None:
 def test_a_function_agents_output_stays_in_one_log(project: Project, fake_openai: Fake) -> None:
     project.edit("[agent]\n", "[agent]\nruns = 1\n")
     project.test(fake_openai(ACME))
-    assert not list((project.root / "derail-runs").glob("*/*.out"))
+    assert not list((project.root / "scrimmage-runs").glob("*/*.out"))
 
 
 @pytest.mark.design("script.runs_under_any_starter")
 def test_a_script_started_by_uv_run_is_still_the_program_under_test(project: Project) -> None:
-    """uv keeps its own process, so Python's id is not the one derail-run set."""
+    """uv keeps its own process, so Python's id is not the one scrimmage-run set."""
     (project.root / "bot.py").write_text(
         "import os\n"
         "from acme import tools\n"
         "try:\n"
         "    print(tools.get_order('1'))\n"
         "except TimeoutError:\n"
-        "    print(os.environ['DERAIL_ROOT_PID'] != str(os.getpid()))\n"
+        "    print(os.environ['SCRIMMAGE_ROOT_PID'] != str(os.getpid()))\n"
     )
     uv = f"uv run --no-project --python {sys.executable} python bot.py {{question}}"
     write_config(project, uv, body=ORDER_ROW)
@@ -345,13 +347,13 @@ def test_two_pythons_started_at_once_make_one_root(project: Project) -> None:
     before = f"{sys.executable} side.py &\n{sys.executable} side2.py &\nwait"
     result = wrapped(project, before)
     assert result.finished, result.out
-    stderr = next((project.root / "derail-runs").glob("*/*.log")).read_text()
-    assert stderr.count("derail: active") == 1
+    stderr = next((project.root / "scrimmage-runs").glob("*/*.log")).read_text()
+    assert stderr.count("scrimmage: active") == 1
 
 
-def test_derail_run_in_front_of_the_script_changes_nothing(project: Project) -> None:
+def test_scrimmage_run_in_front_of_the_script_changes_nothing(project: Project) -> None:
     (project.root / "bot.py").write_text("print('the answer')\n")
-    command = f"{sys.executable} -m derail_sdk.run_command {sys.executable} bot.py {{question}}"
+    command = f"{sys.executable} -m scrimmage_core.run_command {sys.executable} bot.py {{question}}"
     write_config(project, command)
     assert summary_of(project.test())["answer"] == "the answer"
 
@@ -534,21 +536,21 @@ def test_a_program_that_cannot_be_found_is_a_mistake_in_the_test(
     write_config(project, command)
     result = project.test()
     assert result.code == 2 and "is not a program it can find" in result.err
-    assert not (project.root / "derail-runs").exists()
+    assert not (project.root / "scrimmage-runs").exists()
 
 
 @pytest.mark.design("config.flag_skips_the_gates")
 @pytest.mark.parametrize(
     "flags", ["-E", "-S", "-I", "-BE", "-W ignore -S", "-Es", "--check-hash-based-pycs always -I"]
 )
-def test_a_flag_that_skips_derail_on_the_command_is_a_mistake_in_the_test(
+def test_a_flag_that_skips_scrimmage_on_the_command_is_a_mistake_in_the_test(
     project: Project, flags: str
 ) -> None:
     (project.root / "bot.py").write_text("open('REAL WRITE', 'w').close()\n")
     write_config(project, f"{sys.executable} {flags} bot.py {{question}}")
     result = project.test()
     assert result.code == 2 and "startup file" in result.err, result.out + result.err
-    assert not (project.root / "derail-runs").exists()
+    assert not (project.root / "scrimmage-runs").exists()
     assert not (project.root / "REAL WRITE").exists()
 
 
@@ -598,7 +600,7 @@ def test_a_question_that_cannot_be_an_argument_is_a_mistake_in_the_test(
     project.edit(json.dumps(QUESTION), question)
     result = project.test()
     assert result.code == 2 and "question" in result.err, result.err
-    assert not (project.root / "derail-runs").exists()
+    assert not (project.root / "scrimmage-runs").exists()
 
 
 def test_a_question_at_the_limit_runs(project: Project) -> None:
@@ -608,16 +610,16 @@ def test_a_question_at_the_limit_runs(project: Project) -> None:
     assert summary_of(project.test())["answer"] == str(128 * 1024 - 1)
 
 
-def test_derail_run_says_why_a_program_cannot_start(tmp_path: Path) -> None:
-    def derail_run(program: str) -> subprocess.CompletedProcess[str]:
-        command = [sys.executable, "-m", "derail_sdk.run_command", program]
+def test_scrimmage_run_says_why_a_program_cannot_start(tmp_path: Path) -> None:
+    def scrimmage_run(program: str) -> subprocess.CompletedProcess[str]:
+        command = [sys.executable, "-m", "scrimmage_core.run_command", program]
         return subprocess.run(command, capture_output=True, text=True, timeout=60)
 
-    missing = derail_run(str(tmp_path / "missing"))
-    assert missing.returncode == 127 and "derail-run: cannot run" in missing.stderr
+    missing = scrimmage_run(str(tmp_path / "missing"))
+    assert missing.returncode == 127 and "scrimmage-run: cannot run" in missing.stderr
     plain = tmp_path / "plain.txt"
     plain.write_text("not a program\n")
-    assert derail_run(str(plain)).returncode == 126
+    assert scrimmage_run(str(plain)).returncode == 126
 
 
 # 6.2 Children.
@@ -711,7 +713,7 @@ def test_a_child_that_binds_a_tool_at_import_is_gated_before_any_plan_arrives(
 ) -> None:
     (project.root / "report.py").write_text(
         "from acme.tools import refund_order\n"
-        "import derail_sdk.state as state\n"
+        "import scrimmage_core.state as state\n"
         "assert state.current()._plan is None\n"
         "refund_order('1234')\n"
     )
@@ -818,7 +820,7 @@ def test_a_child_that_cannot_get_its_plan_is_an_infrastructure_error(project: Pr
     (project.root / "report.py").write_text(REPORT_REFUNDS)
     code = (
         "import os, subprocess, sys\n"
-        "env = {**os.environ, 'DERAIL_ALLOW_IMPORTS': ''}\n"  # the plan's tools are now refused
+        "env = {**os.environ, 'SCRIMMAGE_ALLOW_IMPORTS': ''}\n"  # the plan's tools are now refused
         "subprocess.run([sys.executable, 'report.py'], env=env)\n"
         "print('the answer')\n"
     )
@@ -877,7 +879,7 @@ def test_a_very_long_command_line_is_cut_on_the_record(project: Project) -> None
 def test_a_torn_report_from_another_python_is_still_a_refusal(project: Project, line: str) -> None:
     code = (
         "import os\n"
-        f"open(os.environ['DERAIL_ANSWER_FILE'] + '.refused', 'w').write({line!r} + '\\n')\n"
+        f"open(os.environ['SCRIMMAGE_ANSWER_FILE'] + '.refused', 'w').write({line!r} + '\\n')\n"
         "print('the answer')\n"
     )
     result = script(project, code)
@@ -978,7 +980,7 @@ def test_a_forked_child_fires_no_fault_unless_children_is_set(project: Project) 
 def test_a_fork_while_another_thread_holds_the_locks_does_not_hang(project: Project) -> None:
     code = (
         "import os, threading\n"
-        "import derail_sdk.state as state\n"
+        "import scrimmage_core.state as state\n"
         "from acme import tools\n"
         "run = state.current()\n"
         "held, done = threading.Event(), threading.Event()\n"
@@ -1004,7 +1006,7 @@ def test_a_fork_while_another_thread_holds_the_locks_does_not_hang(project: Proj
 def test_a_fork_does_not_send_the_parents_waiting_lines_or_tools_twice(project: Project) -> None:
     code = (
         "import os\n"
-        "import derail_sdk.state as state\n"
+        "import scrimmage_core.state as state\n"
         "from acme import tools\n"
         "tools.check_inventory('parent')\n"
         "if os.fork() == 0:\n"
@@ -1163,7 +1165,7 @@ def test_a_call_going_on_at_the_time_limit_is_in_the_record(project: Project) ->
     result = project.test()
     assert summary_of(result)["outcome"] == "timed out", result.out
     line = calls(result)[-1]
-    assert line["call"] == "tool:wait_a_while" and "DerailStopped" in str(line["error"])
+    assert line["call"] == "tool:wait_a_while" and "ScrimmageStopped" in str(line["error"])
 
 
 @pytest.mark.design("stop.child_call_in_flight")
@@ -1182,7 +1184,7 @@ def test_a_childs_call_going_on_when_the_group_is_stopped_is_in_the_record(
     project.edit(TOOLS, '["acme.waits:wait_a_while"]')
     project.edit('real = ["tool:check_inventory"]', 'real = ["tool:wait_a_while"]')
     result = project.test()
-    assert "DerailStopped" in str(calls(result)[-1]["error"]), result.out
+    assert "ScrimmageStopped" in str(calls(result)[-1]["error"]), result.out
 
 
 @pytest.mark.design("stop.refused_child_other_call")
@@ -1206,7 +1208,7 @@ def test_a_refused_child_keeps_the_line_of_a_call_going_on_in_another_thread(
     result = project.test()
     assert summary_of(result)["outcome"] == "refused call", result.out
     stopped = [x for x in calls(result) if x["call"] == "tool:wait_a_while"]
-    assert len(stopped) == 1 and "DerailStopped" in str(stopped[0]["error"])
+    assert len(stopped) == 1 and "ScrimmageStopped" in str(stopped[0]["error"])
 
 
 @pytest.fixture
@@ -1245,7 +1247,7 @@ def test_a_model_call_going_on_at_the_time_limit_is_a_time_out_not_a_failure(
     )
     result = script(project, code, "run_timeout = 10")
     assert summary_of(result)["outcome"] == "timed out", result.out
-    assert "DerailStopped" in str(calls(result)[-1]["error"])
+    assert "ScrimmageStopped" in str(calls(result)[-1]["error"])
     assert result.finished
 
 
@@ -1317,7 +1319,7 @@ def test_a_call_made_by_a_child_left_running_reaches_the_record(project: Project
     project.edit('real = ["tool:check_inventory"]', 'real = ["tool:wait_a_while"]')
     result = project.test()
     assert summary_of(result)["outcome"] == "answered", result.out
-    assert "DerailStopped" in str(calls(result)[-1]["error"])
+    assert "ScrimmageStopped" in str(calls(result)[-1]["error"])
 
 
 DOUBLE_FORK = """
@@ -1385,7 +1387,7 @@ def test_with_no_sweep_a_daemon_lives_on_and_its_write_stays_refused(
         assert summary_of(result)["outcome"] == "answered", result.out
         assert alive(pid)
         (project.root / "the run ended").write_text("yes")
-        assert wait_for(project.root / "result") == "DerailRefused"
+        assert wait_for(project.root / "result") == "ScrimmageRefused"
     finally:
         os.kill(pid, signal.SIGKILL)
 
@@ -1396,14 +1398,14 @@ WAIT = "import time; time.sleep(60)"
 @pytest.mark.design("stop.sweep_exact")
 def test_the_sweep_kills_only_the_exact_run(tmp_path: Path) -> None:
     def sleeper(run: str) -> subprocess.Popen[bytes]:
-        env = {**os.environ, "DERAIL_RUN": run}
+        env = {**os.environ, "SCRIMMAGE_RUN": run}
         return subprocess.Popen([sys.executable, "-c", WAIT], env=env)
 
     wanted, longer, shorter = sleeper("run-abc"), sleeper("run-abcd"), sleeper("run-ab")
-    env = {**os.environ, "NOT_DERAIL_RUN": "DERAIL_RUN=run-abc", "DERAIL_RUN": "x"}
+    env = {**os.environ, "NOT_SCRIMMAGE_RUN": "SCRIMMAGE_RUN=run-abc", "SCRIMMAGE_RUN": "x"}
     other = subprocess.Popen([sys.executable, "-c", WAIT], env=env)
     try:
-        while b"DERAIL_RUN=run-abc" not in Path(f"/proc/{wanted.pid}/environ").read_bytes():
+        while b"SCRIMMAGE_RUN=run-abc" not in Path(f"/proc/{wanted.pid}/environ").read_bytes():
             time.sleep(0.01)  # until it has done its exec
         killed = runner.kill_those_who_left("run-abc", -1)
         assert [pid for pid, _ in killed] == [wanted.pid]
@@ -1416,7 +1418,7 @@ def test_the_sweep_kills_only_the_exact_run(tmp_path: Path) -> None:
 
 
 def test_the_sweep_leaves_a_member_of_the_group_to_the_group_stop() -> None:
-    env = {**os.environ, "DERAIL_RUN": "run-group"}
+    env = {**os.environ, "SCRIMMAGE_RUN": "run-group"}
     proc = subprocess.Popen([sys.executable, "-c", WAIT], env=env, start_new_session=True)
     try:
         assert runner.kill_those_who_left("run-group", proc.pid) == []
@@ -1446,11 +1448,11 @@ def test_a_call_going_on_a_daemon_thread_at_exit_keeps_its_line(project: Project
     project.edit('real = ["tool:check_inventory"]', 'real = ["tool:wait_a_while"]')
     result = project.test()
     assert summary_of(result)["outcome"] == "answered", result.out
-    assert "DerailStopped" in str(calls(result)[-1]["error"])
+    assert "ScrimmageStopped" in str(calls(result)[-1]["error"])
 
 
 @pytest.mark.design("stop.exit_status_kept")
-def test_sigterm_ends_the_program_as_it_would_without_derail(project: Project) -> None:
+def test_sigterm_ends_the_program_as_it_would_without_scrimmage(project: Project) -> None:
     (project.root / "bot.py").write_text(
         "import atexit, os, signal\n"
         "atexit.register(lambda: open('atexit ran', 'w').close())\n"
@@ -1464,7 +1466,7 @@ def test_sigterm_ends_the_program_as_it_would_without_derail(project: Project) -
     assert summary_of(result)["outcome"] == "crashed", result.out
     assert not (project.root / "atexit ran").exists()
     assert not (project.root / "finally ran").exists()
-    run = next((project.root / "derail-runs").glob("*/*.jsonl"))
+    run = next((project.root / "scrimmage-runs").glob("*/*.jsonl"))
     assert "Traceback" not in run.with_suffix(".log").read_text()
 
 

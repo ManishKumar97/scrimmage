@@ -1,5 +1,5 @@
 exit 2
-derail test: 1 test, 1 row, 2 runs; records in /records/derail-runs/20261107T101500Z-a1b2c3
+scrimmage test: 1 test, 1 row, 2 runs; records in /records/scrimmage-runs/20261107T101500Z-a1b2c3
 test          row       fault  runs  fired  done  passed  rate  range    tools  cost     result
 order-status  baseline  -      2     -      1     1/1     100%  21-100%  2.0    0.00112  no result
 range: a 95% Wilson interval, from these runs alone

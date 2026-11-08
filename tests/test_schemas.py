@@ -1,4 +1,4 @@
-"""The formats are JSON Schemas: the plan, the record and derail.toml, held to the code."""
+"""The formats are JSON Schemas: the plan, the record and scrimmage.toml, held to the code."""
 
 import json
 import os
@@ -11,13 +11,13 @@ from typing import cast
 import jsonschema
 import pytest
 
-import derail_sdk
+import scrimmage_core
 from config_cases import AGENT, BAD, GOOD, MINIMAL, TEST, Bad
 from conftest import EXAMPLE
-from derail_sdk import cli, config, plan
-from derail_sdk.errors import ConfigError
+from scrimmage_core import cli, config, plan
+from scrimmage_core.errors import ConfigError
 
-SCHEMAS = Path(derail_sdk.__file__).parent / "schemas"
+SCHEMAS = Path(scrimmage_core.__file__).parent / "schemas"
 TESTS = Path(__file__).parent
 DOCS = TESTS.parent / "docs"
 
@@ -73,7 +73,7 @@ DESIGN_LINE = {
 @pytest.mark.design("schema.plan")
 def test_the_designs_plan_fits_the_schema(tmp_path: Path) -> None:
     validator("plan").validate(DESIGN_PLAN)
-    cfg = config.load(EXAMPLE / "derail.toml")
+    cfg = config.load(EXAMPLE / "scrimmage.toml")
     for row in plan.rows(cfg):
         validator("plan").validate(plan.plan_for(cfg, row, "run-1").to_json())
     assert plan.Plan.from_json(DESIGN_PLAN).to_json() == DESIGN_PLAN
@@ -154,16 +154,16 @@ def toml_blocks() -> list[tuple[str, str]]:
 
 
 @pytest.mark.design("schema.config_prints")
-def test_derail_schema_prints_the_packaged_schema(capsys: pytest.CaptureFixture[str]) -> None:
+def test_scrimmage_schema_prints_the_packaged_schema(capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.main(["schema"]) == 0
     out = capsys.readouterr().out
-    assert out == (SCHEMAS / "derail-toml.v1.json").read_text()
+    assert out == (SCHEMAS / "scrimmage-toml.v1.json").read_text()
     jsonschema.Draft202012Validator.check_schema(json.loads(out))
 
 
 @pytest.mark.design("schema.config_keys")
 def test_the_schemas_keys_are_the_parsers_keys() -> None:
-    top = schema("derail-toml")
+    top = schema("scrimmage-toml")
     defs = cast(dict[str, dict[str, object]], top["$defs"])
     for name, keys in CONFIG_TABLES.items():
         table = defs[name]
@@ -199,16 +199,16 @@ def test_every_file_the_parser_accepts_fits_the_schema(
     ]
     accepted: list[str] = []
     for name, text in [*files, *GOOD.items(), *blocks]:
-        path = tmp_path / "derail.toml"
+        path = tmp_path / "scrimmage.toml"
         path.write_text(text)
         try:
             config.load(path)
         except ConfigError:
             continue
-        errors = [e.message for e in validator("derail-toml").iter_errors(tomllib.loads(text))]
+        errors = [e.message for e in validator("scrimmage-toml").iter_errors(tomllib.loads(text))]
         assert not errors, (name, errors)
         accepted.append(name)
-    assert {"example/derail.toml", *GOOD} <= set(accepted)
+    assert {"example/scrimmage.toml", *GOOD} <= set(accepted)
     checked = {name.partition(":")[0] for name in accepted if ".md " in name}
     # Only model-faults.md 3 is left: two keys of a fault, shown on their own.
     assert len(checked) == len(toml_blocks()) - 1, sorted(checked)
@@ -219,12 +219,12 @@ def test_every_file_the_parser_accepts_fits_the_schema(
 def test_a_bad_file_is_rejected_by_the_parser_and_a_bad_shape_by_the_schema(
     tmp_path: Path, bad: Bad
 ) -> None:
-    path = tmp_path / "derail.toml"
+    path = tmp_path / "scrimmage.toml"
     path.write_text(bad.text)
     with pytest.raises(ConfigError):
         config.load(path)
     if bad.shape:
-        assert list(validator("derail-toml").iter_errors(tomllib.loads(bad.text))), bad.name
+        assert list(validator("scrimmage-toml").iter_errors(tomllib.loads(bad.text))), bad.name
 
 
 def test_there_are_at_least_thirty_bad_shapes() -> None:

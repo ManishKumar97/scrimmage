@@ -9,8 +9,8 @@ import jsonschema
 import pytest
 
 from conftest import Project, Result
-from derail_sdk import process_gate, python_args
-from derail_sdk.run_command import BOOT
+from scrimmage_core import process_gate, python_args
+from scrimmage_core.run_command import BOOT
 from test_other_python import other_version  # noqa: F401  # a fixture
 from test_scripts import RECORD, calls, script, summary_of, write_config
 
@@ -225,7 +225,7 @@ def test_a_command_it_cannot_find_is_left_to_fail_as_usual(project: Project) -> 
     result = script(project, PROGRAM.format(start=start))
     assert summary_of(result)["outcome"] == "answered", result.out
     assert calls(result) == []
-    out = next((project.root / "derail-runs").glob("*/*.out")).read_text()
+    out = next((project.root / "scrimmage-runs").glob("*/*.out")).read_text()
     assert "FileNotFoundError" in out
 
 
@@ -263,13 +263,13 @@ def test_a_shell_script_is_not_python(tmp_path: Path) -> None:
     assert python_args.interpreter(str(script_file), {}) is None
 
 
-def test_any_derail_startup_folder_counts_and_nothing_else_does(tmp_path: Path) -> None:
-    folder = tmp_path / "site-packages" / "derail_sdk" / "_boot"
+def test_any_scrimmage_startup_folder_counts_and_nothing_else_does(tmp_path: Path) -> None:
+    folder = tmp_path / "site-packages" / "scrimmage_core" / "_boot"
     folder.mkdir(parents=True)
     (folder / "sitecustomize.py").write_text("")
     other = str(folder)
-    assert process_gate.why_blind({"DERAIL_TOKEN": "x", "PYTHONPATH": f"/a:{other}"}, []) is None
-    assert process_gate.why_blind({"DERAIL_TOKEN": "x", "PYTHONPATH": "/a/_boot"}, [])
+    assert process_gate.why_blind({"SCRIMMAGE_TOKEN": "x", "PYTHONPATH": f"/a:{other}"}, []) is None
+    assert process_gate.why_blind({"SCRIMMAGE_TOKEN": "x", "PYTHONPATH": "/a/_boot"}, [])
     assert process_gate.why_blind({"PYTHONPATH": other}, [])
 
 
@@ -284,13 +284,13 @@ def test_a_flag_after_the_program_is_the_programs_own() -> None:
     assert python_args.flags(["-Wignore", "-S"]) == {"S"}
 
 
-def test_a_lookalike_folder_is_not_derails_startup_folder(tmp_path: Path) -> None:
-    fake = tmp_path / "my_derail_sdk" / "_boot"
-    empty = tmp_path / "derail_sdk" / "_boot"
+def test_a_lookalike_folder_is_not_scrimmages_startup_folder(tmp_path: Path) -> None:
+    fake = tmp_path / "my_scrimmage_core" / "_boot"
+    empty = tmp_path / "scrimmage_core" / "_boot"
     fake.mkdir(parents=True)
     empty.mkdir(parents=True)
     (fake / "sitecustomize.py").write_text("")
     assert not process_gate.is_boot(str(fake))
     assert not process_gate.is_boot(str(empty))
-    assert not process_gate.is_boot("derail_sdk/_boot")
+    assert not process_gate.is_boot("scrimmage_core/_boot")
     assert process_gate.is_boot(str(BOOT))

@@ -11,15 +11,15 @@ from pathlib import Path
 
 import pytest
 
-from derail_sdk.control import ControlServer
-from derail_sdk.records import RecordStore
-from derail_sdk.run_command import BOOT, main
+from scrimmage_core.control import ControlServer
+from scrimmage_core.records import RecordStore
+from scrimmage_core.run_command import BOOT, main
 
 TOKEN = "d" * 64
 UBUNTU_PYTHON = Path("/usr/bin/python3.12")
 APPORT = Path("/usr/lib/python3.12/sitecustomize.py")
 GATES_LOADED = (
-    "import sys; print('derail_sdk' in sys.modules, "
+    "import sys; print('scrimmage_core' in sys.modules, "
     "any(type(f).__name__ == 'ImportHook' for f in sys.meta_path))"
 )
 
@@ -27,7 +27,7 @@ GATES_LOADED = (
 def python(
     code: str, env: dict[str, str], cwd: Path | None = None, exe: str = sys.executable
 ) -> subprocess.CompletedProcess[str]:
-    clean = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
+    clean = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
     return subprocess.run(
         [exe, "-c", code],
         env={**clean, **env},
@@ -57,10 +57,10 @@ def plan(**changes: object) -> dict[str, object]:
 def joined(control: ControlServer, **extra: str) -> dict[str, str]:
     return {
         "PYTHONPATH": str(BOOT),
-        "DERAIL_TOKEN": TOKEN,
-        "DERAIL_CONTROL_URL": control.url,
-        "DERAIL_RUN": "run-1",
-        "DERAIL_ALLOW_IMPORTS": "acme.",
+        "SCRIMMAGE_TOKEN": TOKEN,
+        "SCRIMMAGE_CONTROL_URL": control.url,
+        "SCRIMMAGE_RUN": "run-1",
+        "SCRIMMAGE_ALLOW_IMPORTS": "acme.",
         **extra,
     }
 
@@ -72,7 +72,7 @@ def this_python() -> str:
 
 
 def as_child(control: ControlServer, **extra: str) -> dict[str, str]:
-    return joined(control, DERAIL_PYTHON=this_python(), **extra)
+    return joined(control, SCRIMMAGE_PYTHON=this_python(), **extra)
 
 
 @pytest.mark.design("boot.old_python_syntax")
@@ -99,7 +99,9 @@ def test_without_the_token_nothing_is_imported_or_patched() -> None:
 
 @pytest.mark.design("boot.import_never_switches_on")
 def test_importing_the_sdk_never_switches_gates_on() -> None:
-    result = python("import derail_sdk.tool_gate, derail_sdk.bootstrap; " + GATES_LOADED, {})
+    result = python(
+        "import scrimmage_core.tool_gate, scrimmage_core.bootstrap; " + GATES_LOADED, {}
+    )
     assert result.stdout.strip() == "True False"
 
 
@@ -146,36 +148,40 @@ def test_ubuntus_apport_hook_still_installs() -> None:
 
 
 @pytest.mark.design("boot.child_other_python_untouched")
-@pytest.mark.skipif(not UBUNTU_PYTHON.exists(), reason="needs a second Python without Derail")
+@pytest.mark.skipif(not UBUNTU_PYTHON.exists(), reason="needs a second Python without Scrimmage")
 def test_a_child_on_a_python_without_the_sdk_is_left_alone() -> None:
-    # Like the aws CLI started by the agent: it inherits the variables, but not Derail.
-    env = {"PYTHONPATH": str(BOOT), "DERAIL_TOKEN": TOKEN, "DERAIL_PYTHON": "the run's Python"}
+    # Like the aws CLI started by the agent: it inherits the variables, but not Scrimmage.
+    env = {
+        "PYTHONPATH": str(BOOT),
+        "SCRIMMAGE_TOKEN": TOKEN,
+        "SCRIMMAGE_PYTHON": "the run's Python",
+    }
     result = python("print('ok')", env, exe=str(UBUNTU_PYTHON))
     assert (result.returncode, result.stdout.strip(), result.stderr) == (0, "ok", "")
 
 
 @pytest.mark.design("boot.root_other_python_stops")
-@pytest.mark.skipif(not UBUNTU_PYTHON.exists(), reason="needs a second Python without Derail")
+@pytest.mark.skipif(not UBUNTU_PYTHON.exists(), reason="needs a second Python without Scrimmage")
 def test_the_program_under_test_on_a_python_without_the_sdk_stops() -> None:
-    # The runner's own step: derail-run sets DERAIL_ROOT_PID, then becomes the
-    # program, here a Python with no Derail installed.
-    env = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
-    env["DERAIL_TOKEN"] = TOKEN
+    # The runner's own step: scrimmage-run sets SCRIMMAGE_ROOT_PID, then becomes the
+    # program, here a Python with no Scrimmage installed.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
+    env["SCRIMMAGE_TOKEN"] = TOKEN
     command = [
         sys.executable,
         "-m",
-        "derail_sdk.run_command",
+        "scrimmage_core.run_command",
         str(UBUNTU_PYTHON),
         "-c",
         "print('agent ran')",
     ]
     result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode == 1 and "agent ran" not in result.stdout
-    assert "derail is not installed for" in result.stderr
-    # Without derail-run, as with PYTHONPATH set by hand, it is the program under test too.
+    assert "scrimmage-core is not installed for" in result.stderr
+    # Without scrimmage-run, as with PYTHONPATH set by hand, it is the program under test too.
     by_hand = python(
         "print('agent ran')",
-        {"PYTHONPATH": str(BOOT), "DERAIL_TOKEN": TOKEN},
+        {"PYTHONPATH": str(BOOT), "SCRIMMAGE_TOKEN": TOKEN},
         exe=str(UBUNTU_PYTHON),
     )
     assert by_hand.returncode == 1 and "agent ran" not in by_hand.stdout
@@ -186,7 +192,7 @@ def test_with_the_token_the_sdk_says_it_is_active(control: ControlServer) -> Non
     control.open_run("run-1", "baseline", plan())
     result = python(GATES_LOADED, joined(control))
     assert result.stdout.strip() == "True True"
-    assert "derail: active for run run-1 (t, baseline);" in result.stderr
+    assert "scrimmage: active for run run-1 (t, baseline);" in result.stderr
 
 
 @pytest.mark.design("boot.unreachable_stops_program")
@@ -195,8 +201,8 @@ def test_without_its_plan_the_program_ends_before_the_agent_runs(
 ) -> None:
     for env in (
         joined(control),
-        joined(control, DERAIL_CONTROL_URL="http://127.0.0.1:9"),
-        joined(control, DERAIL_RUN=""),
+        joined(control, SCRIMMAGE_CONTROL_URL="http://127.0.0.1:9"),
+        joined(control, SCRIMMAGE_RUN=""),
     ):
         result = python("print('agent ran')", env)
         assert result.returncode == 1 and "agent ran" not in result.stdout
@@ -217,7 +223,7 @@ def test_a_type_outside_the_allowed_prefixes_is_refused_before_import(
         plan(mocks=[{"call": "tool:a", "returns": 1, "type": "evil:Thing"}]),
     )
     result = python("print('agent ran')", joined(control), cwd=tmp_path)
-    assert "evil:Thing is outside DERAIL_ALLOW_IMPORTS (acme.)" in result.stderr
+    assert "evil:Thing is outside SCRIMMAGE_ALLOW_IMPORTS (acme.)" in result.stderr
     assert "agent ran" not in result.stdout and not marker.exists()
 
 
@@ -232,20 +238,20 @@ def test_a_fault_type_outside_the_allowed_prefixes_is_refused_before_import(
     fault = {"call": "tool:a", "do": "error", "when": "always", "raises": "evil:E"}
     control.open_run("run-1", "baseline", plan(faults=[fault]))
     result = python("print('agent ran')", joined(control), cwd=tmp_path)
-    assert "evil:E is outside DERAIL_ALLOW_IMPORTS (acme.)" in result.stderr
+    assert "evil:E is outside SCRIMMAGE_ALLOW_IMPORTS (acme.)" in result.stderr
     assert "agent ran" not in result.stdout and not marker.exists()
 
 
-def test_derail_run_needs_a_command(capsys: pytest.CaptureFixture[str]) -> None:
+def test_scrimmage_run_needs_a_command(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([]) == 2
     assert "usage" in capsys.readouterr().err
 
 
-def test_derail_run_puts_its_folder_first() -> None:
+def test_scrimmage_run_puts_its_folder_first() -> None:
     code = "import os, sys; print(os.environ['PYTHONPATH'].split(os.pathsep)[0])"
-    env = {k: v for k, v in os.environ.items() if not k.startswith("DERAIL_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
     result = subprocess.run(
-        [sys.executable, "-m", "derail_sdk.run_command", sys.executable, "-c", code],
+        [sys.executable, "-m", "scrimmage_core.run_command", sys.executable, "-c", code],
         env={**env, "PYTHONPATH": "/somewhere"}, capture_output=True, text=True, timeout=60,
     )  # fmt: skip
     assert result.stdout.strip() == str(BOOT)
@@ -271,7 +277,7 @@ def test_a_broken_control_reply_stops_the_program_instead_of_running_ungated(
     thread = threading.Thread(target=answer, daemon=True)
     thread.start()
     url = f"http://127.0.0.1:{listener.getsockname()[1]}"
-    result = python("print('REAL REFUND RAN')", joined(control, DERAIL_CONTROL_URL=url))
+    result = python("print('REAL REFUND RAN')", joined(control, SCRIMMAGE_CONTROL_URL=url))
     listener.close()
     assert result.returncode == 1 and "REAL REFUND RAN" not in result.stdout
     assert "the program stops" in result.stderr
@@ -280,7 +286,7 @@ def test_a_broken_control_reply_stops_the_program_instead_of_running_ungated(
 @pytest.mark.design("boot.child_has_no_plan")
 def test_a_child_with_no_plan_refuses_every_call(control: ControlServer, tmp_path: Path) -> None:
     (tmp_path / "held.py").write_text("def write():\n    print('THE WRITE RAN')\n")
-    env = as_child(control, DERAIL_TOOLS="held:write", DERAIL_RUN="not-a-run")
+    env = as_child(control, SCRIMMAGE_TOOLS="held:write", SCRIMMAGE_RUN="not-a-run")
     code = (
         "import held\n"
         "print('started')\n"
@@ -304,8 +310,8 @@ def test_a_child_with_no_plan_refuses_a_read_as_well(control: ControlServer) -> 
         "except Exception as exc:\n"
         "    print(type(exc).__name__)\n"
     )
-    result = python(code, as_child(control, DERAIL_RUN="not-a-run"))
-    assert result.stdout.strip() == "DerailRefused", result.stderr
+    result = python(code, as_child(control, SCRIMMAGE_RUN="not-a-run"))
+    assert result.stdout.strip() == "ScrimmageRefused", result.stderr
 
 
 @pytest.mark.design("boot.child_plan_outside_imports")
@@ -316,7 +322,7 @@ def test_a_child_refuses_a_plan_that_names_an_import_it_may_not_make(
     mock = {"call": "tool:write", "returns": 1, "type": "evil:Thing"}
     control.open_run("run-1", "baseline", plan(mocks=[mock]))
     code = "import held\ntry:\n    held.write()\nexcept Exception as exc:\n    print(exc)\n"
-    result = python(code, as_child(control, DERAIL_TOOLS="held:write"), cwd=tmp_path)
+    result = python(code, as_child(control, SCRIMMAGE_TOOLS="held:write"), cwd=tmp_path)
     assert "evil:Thing is outside the allowed imports" in result.stdout
     assert "THE WRITE RAN" not in result.stdout
 
@@ -325,8 +331,8 @@ def test_a_child_refuses_a_plan_that_names_an_import_it_may_not_make(
 def test_a_child_process_keeps_the_mocks_but_fires_no_faults(control: ControlServer) -> None:
     faults = [{"call": "tool:a", "do": "timeout", "when": "always"}]
     control.open_run("run-1", "baseline", plan(faults=faults))
-    code = "import derail_sdk.state as s; print(len(s.current().plan.faults))"
-    root = python(code, joined(control))  # DERAIL_ROOT_PID unset: this is the root
+    code = "import scrimmage_core.state as s; print(len(s.current().plan.faults))"
+    root = python(code, joined(control))  # SCRIMMAGE_ROOT_PID unset: this is the root
     child = python(code, as_child(control))
     assert (root.stdout.strip(), child.stdout.strip()) == ("1", "0")
     assert child.stderr == ""

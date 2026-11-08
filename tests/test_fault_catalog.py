@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from derail_sdk.config import FAULTS
+from scrimmage_core.config import FAULTS
 
 CATALOG = Path(__file__).parents[1] / "docs" / "fault-catalog.toml"
 ORIGINS = {"public incident", "trace"}
@@ -60,7 +60,7 @@ def test_a_misspelled_table_and_a_duplicate_are_rejected() -> None:
 
 
 @pytest.mark.design("catalog.every_built_fault")
-def test_every_fault_derail_can_inject_is_in_the_catalog() -> None:
+def test_every_fault_scrimmage_can_inject_is_in_the_catalog() -> None:
     names = {fault["name"] for fault in tomllib.loads(CATALOG.read_text()).get("fault", [])}
     missing = set(FAULTS) - names
     assert not missing, f"faults with no catalog entry: {sorted(missing)}"

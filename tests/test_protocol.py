@@ -13,12 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from derail_sdk import protocol, state
-from derail_sdk.budget import Ledger
-from derail_sdk.client import ControlClient, ControlError, Sender
-from derail_sdk.control import ControlServer, proc_key
-from derail_sdk.plan import Plan, no_plan
-from derail_sdk.records import RecordStore
+from scrimmage_core import protocol, state
+from scrimmage_core.budget import Ledger
+from scrimmage_core.client import ControlClient, ControlError, Sender
+from scrimmage_core.control import ControlServer, proc_key
+from scrimmage_core.plan import Plan, no_plan
+from scrimmage_core.records import RecordStore
 
 TOKEN = "a" * 64
 PLAN: dict[str, object] = {"v": 1}
@@ -310,7 +310,7 @@ def test_a_call_stopped_and_then_ended_has_one_line() -> None:
     step = run.begin("a", {})
     run.stop_open()
     run.finish(step, result="late")
-    assert len(lines) == 1 and "DerailStopped" in str(lines[0]["error"])
+    assert len(lines) == 1 and "ScrimmageStopped" in str(lines[0]["error"])
 
 
 @pytest.mark.design("boot.plan_failure_is_not_for_life")
@@ -348,7 +348,7 @@ def test_a_line_for_a_closed_run_poisons_the_process(server: ControlServer) -> N
 
 
 def test_a_server_away_for_long_keeps_a_bounded_backlog(monkeypatch: pytest.MonkeyPatch) -> None:
-    import derail_sdk.client as client_module
+    import scrimmage_core.client as client_module
 
     monkeypatch.setattr(client_module, "QUEUE_SIZE", 3)
     sender = Sender(ControlClient("http://127.0.0.1:9", TOKEN), "run-1")
@@ -414,7 +414,7 @@ def test_a_bad_length_is_refused_and_an_idle_connection_is_let_go(
 ) -> None:
     import socket
 
-    import derail_sdk.control as control_module
+    import scrimmage_core.control as control_module
 
     monkeypatch.setattr(control_module, "READ_TIMEOUT_S", 0.5)
     control = ControlServer(TOKEN, RecordStore(tmp_path / "r"))

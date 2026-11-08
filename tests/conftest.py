@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from derail_sdk.cli import main
-from derail_sdk.runner import OK, ROW_FAILED
 from fakes.openai_server import FakeOpenAI
+from scrimmage_core.cli import main
+from scrimmage_core.runner import OK, ROW_FAILED
 
 EXAMPLE = Path(__file__).parent / "example"
 # The S1 conversation: the bot asks for the order, then the stock, then answers, or says it
@@ -39,7 +39,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
 
 @pytest.fixture
 def signals_kept() -> Iterator[None]:
-    """The test leaves SIGINT and SIGTERM as it found them, as derail run in-process must."""
+    """The test leaves SIGINT and SIGTERM as it found them, as scrimmage run in-process must."""
     before = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
     yield
     after = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
@@ -85,7 +85,7 @@ class Result:
     def records(self, *, processes: bool = False) -> list[list[dict[str, object]]]:
         """Every run's record lines, one list per run. Each process's own line is left out
         unless asked for, so a test about calls reads only calls."""
-        files = sorted((self.root / "derail-runs").glob("*/*.jsonl"))
+        files = sorted((self.root / "scrimmage-runs").glob("*/*.jsonl"))
         runs = [[json.loads(line) for line in f.read_text().splitlines()] for f in files]
         return [[x for x in run if processes or x.get("notice") != "process"] for run in runs]
 
@@ -101,7 +101,7 @@ class Project:
 
     @property
     def toml(self) -> Path:
-        return self.root / "derail.toml"
+        return self.root / "scrimmage.toml"
 
     def edit(self, old: str, new: str) -> None:
         text = self.toml.read_text()
@@ -122,7 +122,7 @@ class Project:
 def project(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> Project:
-    """A copy of Acme's example agent and its derail.toml in a fresh folder."""
+    """A copy of Acme's example agent and its scrimmage.toml in a fresh folder."""
     root = tmp_path / "acme-bot"
     shutil.copytree(EXAMPLE, root, ignore=shutil.ignore_patterns("__pycache__"))
     return Project(root, capsys, monkeypatch)

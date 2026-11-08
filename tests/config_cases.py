@@ -1,8 +1,8 @@
-"""derail.toml files the parser accepts and files it rejects, for the schema and for check.
+"""scrimmage.toml files the parser accepts and files it rejects, for the schema and for check.
 
 A bad file marked shape is one the JSON Schema must reject too: a key, a type, a label
 form, a schedule or a fault word. The others need the whole file, the folder or the
-machine, which only `derail check` sees.
+machine, which only `scrimmage check` sees.
 """
 
 from dataclasses import dataclass

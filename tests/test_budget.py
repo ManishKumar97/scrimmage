@@ -11,14 +11,14 @@ from typing import Any
 import jsonschema
 import pytest
 
-import derail_sdk
+import scrimmage_core
 from conftest import ACME, EXAMPLE_FAULT, Project
-from derail_sdk import provider_openai as table
-from derail_sdk.budget import Ledger, Shortfall
-from derail_sdk.client import ControlClient, ControlError
-from derail_sdk.control import ControlServer
-from derail_sdk.records import RecordStore
 from fakes.openai_server import FIXTURES, FakeOpenAI
+from scrimmage_core import provider_openai as table
+from scrimmage_core.budget import Ledger, Shortfall
+from scrimmage_core.client import ControlClient, ControlError
+from scrimmage_core.control import ControlServer
+from scrimmage_core.records import RecordStore
 
 Fake = Callable[..., FakeOpenAI]
 TOKEN = "e" * 64
@@ -381,7 +381,7 @@ def test_runs_stopped_because_another_run_stopped_the_test_are_not_errors(
     assert outcomes == ["refused call", "stopped", "stopped"], result.out
     assert result.code == 2, result.out
     schema = json.loads(
-        (Path(derail_sdk.__file__).parent / "schemas" / "record.v1.json").read_text()
+        (Path(scrimmage_core.__file__).parent / "schemas" / "record.v1.json").read_text()
     )
     validator = jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker())
     for lines in result.records():
@@ -438,8 +438,8 @@ def test_a_run_refused_before_its_first_model_call_says_nothing_about_the_budget
 def test_a_program_started_during_a_stop_is_stopped_too(
     project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from derail_sdk import config
-    from derail_sdk.runner import Runner
+    from scrimmage_core import config
+    from scrimmage_core.runner import Runner
 
     project.edit('function = "acme.agent:answer"', 'function = "acme.slow:hang"\nruns = 1')
     project.edit(TOOL_FAULT, "")
@@ -451,7 +451,7 @@ def test_a_program_started_during_a_stop_is_stopped_too(
         runner.cancelled = True  # the stop lands just after the program started
         return proc
 
-    monkeypatch.setattr("derail_sdk.runner.subprocess.Popen", popen_then_cancel)
+    monkeypatch.setattr("scrimmage_core.runner.subprocess.Popen", popen_then_cancel)
     started = time.monotonic()
     results = runner.run_all()
     assert time.monotonic() - started < 30  # not left hanging for run_timeout
