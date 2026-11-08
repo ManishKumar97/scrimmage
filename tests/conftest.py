@@ -86,11 +86,13 @@ class TimeLimit:
 
     event: Callable[[], bool] = lambda: False
     reached: list[bool] = field(default_factory=list[bool])
+    given: list[float] = field(default_factory=list[float])  # the limit the runner passed
 
     def at(self, event: Callable[[], bool]) -> None:
         self.event = event
 
     def wait(self, proc: subprocess.Popen[bytes], seconds: float) -> bool:
+        self.given.append(seconds)
         ceiling = time.monotonic() + seconds
         while proc.poll() is None:
             if self.event() or time.monotonic() > ceiling:

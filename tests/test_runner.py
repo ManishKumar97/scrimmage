@@ -94,11 +94,12 @@ def test_an_unlisted_write_tool_ends_its_run_as_refused(project: Project) -> Non
 def test_a_hanging_run_ends_as_timed_out(project: Project, time_limit: TimeLimit) -> None:
     project.edit(
         'function = "acme.agent:answer"',
-        'function = "acme.slow:hang"\nruns = 1\nmax_cost_usd = "none"',
+        'function = "acme.slow:hang"\nrun_timeout = 77\nruns = 1\nmax_cost_usd = "none"',
     )
     project.edit(FAULT_BLOCK, "")
     time_limit.at((project.root / "hanging").exists)
     result = project.test()
+    assert time_limit.given == [77.0]  # the setting is the limit the runner waits with
     assert result.code == 1, result.out
     assert [s["outcome"] for s in result.summaries()] == ["timed out"]
 
