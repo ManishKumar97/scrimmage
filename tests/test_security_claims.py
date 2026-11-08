@@ -76,11 +76,13 @@ def test_the_only_processes_scrimmage_starts_are_its_runs() -> None:
         for name in imported_roots(path) & STARTERS
     }
     # The runner runs its runs on a pool of threads, and a process pool is caught above.
-    # asyncio can start processes too; the two modules that use it never call those.
+    # asyncio can start processes too; the modules that use it never call those, which the
+    # scan above checks.
     assert imports == {
         ("runner.py", "subprocess"),
         ("runner.py", "concurrent"),
         ("http_gate.py", "asyncio"),
+        ("mcp_gate.py", "asyncio"),
         ("start.py", "asyncio"),
     }
 
@@ -115,6 +117,7 @@ SHAPES = {
     "anthropic key": ("sk-ant-", LETTERS),
     "openai service account key": ("sk-svcacct-", LETTERS),
     "aws access key id": ("AK" + "IA", "Q" * 16),
+    "aws temporary access key id": ("AS" + "IA", "Q" * 16),
     "google api key": ("AI" + "za", "B" * 35),
     "github token ghp": ("gh" + "p_", "a1B2" * 9),
     "github token gho": ("gh" + "o_", "a1B2" * 9),

@@ -92,14 +92,12 @@ Every gated call is written to a record in `scrimmage-runs/`, next to your `scri
 
 - Text that is recorded, such as tool arguments and results, model requests and replies, error messages, answers and command lines, has these secret shapes replaced with `[secret removed]`:
     - OpenAI and Anthropic API keys: `sk-`, `sk-proj-`, `sk-ant-`, `sk-svcacct-`;
-    - AWS access key ids: `AKIA`;
+    - AWS access key ids: `AKIA`, and `ASIA` for temporary ones;
     - Google API keys: `AIza`;
     - GitHub tokens: `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` and `github_pat_`;
     - Slack tokens: `xoxa-`, `xoxb-`, `xoxe-`, `xoxp-`, `xoxr-`, `xoxs-`, `xoxe.xoxp-` and `xapp-`;
     - bearer tokens: `Bearer` and the value after it;
     - JSON Web Tokens, which start with `eyJ`.
-
-  AWS temporary access key ids, `ASIA`, are coming in a later change.
 
   *Checked by: `tests/test_security_claims.py::test_each_listed_secret_shape_is_removed`, `tests/test_redact.py::test_a_jwt_is_removed_after_any_separator`*
 
