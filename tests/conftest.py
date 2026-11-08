@@ -2,13 +2,16 @@ import json
 import os
 import shutil
 import signal
+import subprocess
+import time
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
 
 from fakes.openai_server import FakeOpenAI
+from scrimmage_core import runner
 from scrimmage_core.cli import main
 from scrimmage_core.runner import OK, ROW_FAILED
 
@@ -44,6 +47,43 @@ def signals_kept() -> Iterator[None]:
     yield
     after = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
     assert after == before, f"signal handlers changed: {before} -> {after}"
+
+
+@dataclass
+class TimeLimit:
+    """When a run's time limit arrives, and whether each run reached it.
+
+    The event is something the agent does once it is where the limit should find it,
+    such as writing a marker file. The run's real run_timeout stays as a ceiling, so a
+    test whose event never comes still ends.
+    """
+
+    event: Callable[[], bool] = lambda: False
+    reached: list[bool] = field(default_factory=list[bool])
+
+    def at(self, event: Callable[[], bool]) -> None:
+        self.event = event
+
+    def wait(self, proc: subprocess.Popen[bytes], seconds: float) -> bool:
+        ceiling = time.monotonic() + seconds
+        while proc.poll() is None:
+            if self.event() or time.monotonic() > ceiling:
+                self.reached.append(proc.poll() is None)
+                return self.reached[-1]
+            time.sleep(0.01)
+        self.reached.append(False)
+        return False
+
+
+@pytest.fixture
+def time_limit(monkeypatch: pytest.MonkeyPatch) -> TimeLimit:
+    """The time limit of each run in this test arrives at an event, not on the clock.
+
+    A limit of a few seconds races the program's start-up, which takes longer under load.
+    """
+    limit = TimeLimit()
+    monkeypatch.setattr(runner, "wait_run", limit.wait)
+    return limit
 
 
 @pytest.fixture

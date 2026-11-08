@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from conftest import ACME, EXAMPLE_FAULT, Project, Result
+from conftest import ACME, EXAMPLE_FAULT, Project, Result, TimeLimit
 from fakes.openai_server import FakeOpenAI
 from scrimmage_core import config, langchain_gate, mocks, plan, state, tool_gate
 from scrimmage_core.config import Fault
@@ -360,10 +360,12 @@ def test_a_mock_no_run_used_is_a_note(project: Project, fake_openai: Fake) -> No
 
 
 @pytest.mark.design("labels.no_report_is_a_mistake")
-def test_a_test_where_no_run_reported_its_tools_fails(project: Project) -> None:
+def test_a_test_where_no_run_reported_its_tools_fails(
+    project: Project, time_limit: TimeLimit
+) -> None:
     graph(project, "hang", "")
     project.edit("acme.graph:hang", "acme.slow:hang")
-    project.edit("parallel = 1", "parallel = 1\nrun_timeout = 5")
+    time_limit.at((project.root / "hanging").exists)
     project.edit('answer   = "messages[-1].content"\n', "")
     project.edit("[agent]\n", '[agent]\nmax_cost_usd = "none"\n')
     result = project.test()

@@ -10,7 +10,7 @@ import jsonschema
 import pytest
 
 import scrimmage_core
-from conftest import ACME, Project, Result
+from conftest import ACME, Project, Result, TimeLimit
 from fakes.openai_server import FakeOpenAI
 from scrimmage_core import config, judge, plan
 from scrimmage_core.errors import ConfigError
@@ -74,7 +74,8 @@ def answer(question):
     if step.get("crash"):
         raise RuntimeError("the bot crashed")
     if step.get("hang"):
-        time.sleep(60)
+        pathlib.Path("hanging").touch()  # the test's event: the time limit finds it here
+        time.sleep(600)
     return step["answer"]
 '''
 FAULT = '[[test.fault]]\ncall = "tool:get_order"\ndo = "timeout"\n'
@@ -667,12 +668,13 @@ def test_a_crash_on_a_fault_row_fails_it(project: Project) -> None:
 
 
 @pytest.mark.design("judge.timeout_is_a_result")
-def test_a_run_past_its_time_limit_fails_its_row(project: Project) -> None:
+def test_a_run_past_its_time_limit_fails_its_row(project: Project, time_limit: TimeLimit) -> None:
+    time_limit.at((project.root / "hanging").exists)
     result = scripted(
         project,
         [{"answer": GOOD}, {"answer": GOOD, "fired": True, "hang": True}],
         ALWAYS,
-        "runs = 1\nrun_timeout = 5",
+        "runs = 1",
     )
     assert result.code == 1, result.out
     assert "1 run: timed out" in result.out

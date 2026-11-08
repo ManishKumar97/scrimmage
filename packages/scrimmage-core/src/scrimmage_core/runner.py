@@ -258,11 +258,7 @@ class Runner:
         # Refused, or the test was stopped, before this program was registered.
         if self.server.runs[run].refused or self.cancelled:
             stop_group(proc)
-        timed_out = False
-        try:
-            proc.wait(timeout=self.config.agent.run_timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
+        timed_out = wait_run(proc, self.config.agent.run_timeout)
         stop_group(proc)  # at the time limit, or a child that outlived the program
         left = kill_those_who_left(run, proc.pid)
         with self.lock:
@@ -661,6 +657,18 @@ def last_line(path: Path) -> str | None:
         out.seek(max(0, path.stat().st_size - TAIL_BYTES))
         tail = out.read().decode("utf-8", "replace")
     return next((line for line in reversed(tail.split("\n")) if line.strip()), None)
+
+
+def wait_run(proc: subprocess.Popen[bytes], seconds: float) -> bool:
+    """Wait for the run's program to end. True when it is still going at its time limit.
+
+    One function, so a test can make the time limit arrive at an event of its own.
+    """
+    try:
+        proc.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        return True
+    return False
 
 
 def stop_group(proc: subprocess.Popen[bytes]) -> None:

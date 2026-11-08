@@ -14,9 +14,10 @@ import jsonschema
 import pytest
 
 import scrimmage_core
-from conftest import ACME, EXAMPLE_FAULT, Project
+from conftest import ACME, EXAMPLE_FAULT, Project, TimeLimit
 from fakes.openai_server import FakeOpenAI
 from scrimmage_core import config
+from scrimmage_core import runner as runner_module
 from scrimmage_core.runner import INFRA_LINE, Runner, report
 
 Fake = Callable[[list[str]], FakeOpenAI]
@@ -86,15 +87,28 @@ def test_an_unlisted_write_tool_ends_its_run_as_refused(project: Project) -> Non
 
 
 @pytest.mark.design("runner.timed_out")
-def test_a_hanging_run_ends_as_timed_out(project: Project) -> None:
+def test_a_hanging_run_ends_as_timed_out(project: Project, time_limit: TimeLimit) -> None:
     project.edit(
         'function = "acme.agent:answer"',
-        'function = "acme.slow:hang"\nrun_timeout = 5\nruns = 1\nmax_cost_usd = "none"',
+        'function = "acme.slow:hang"\nruns = 1\nmax_cost_usd = "none"',
     )
     project.edit(FAULT_BLOCK, "")
+    time_limit.at((project.root / "hanging").exists)
     result = project.test()
     assert result.code == 1, result.out
     assert [s["outcome"] for s in result.summaries()] == ["timed out"]
+
+
+def test_the_time_limit_is_a_wait_on_the_program() -> None:
+    """The real wait, which the tests of a run's outcome replace with an event."""
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+    try:
+        assert runner_module.wait_run(sleeper, 0.1)  # a 600 s sleep is going after 0.1 s
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+    done = subprocess.Popen([sys.executable, "-c", "pass"])
+    assert not runner_module.wait_run(done, 120)
 
 
 def test_an_agent_that_raises_has_crashed(project: Project) -> None:
@@ -210,21 +224,25 @@ def only_baseline(project: Project, function: str, extra: str = "") -> None:
 
 
 @pytest.mark.design("runner.refused_kills_process")
-def test_a_refused_run_is_stopped_even_if_the_agent_carries_on(project: Project) -> None:
-    only_baseline(project, "acme.slow:refuse_then_hang", "\nrun_timeout = 60")
-    started = time.monotonic()
+def test_a_refused_run_is_stopped_even_if_the_agent_carries_on(
+    project: Project, time_limit: TimeLimit
+) -> None:
+    only_baseline(project, "acme.slow:refuse_then_hang")
     result = project.test()
-    assert time.monotonic() - started < 30  # stopped at the refusal, not at run_timeout
+    assert time_limit.reached == [False]  # stopped at the refusal, not at run_timeout
     assert result.code == 2 and [s["outcome"] for s in result.summaries()] == ["refused call"]
 
 
 @pytest.mark.design("runner.sigkill_after_grace")
-def test_an_agent_that_ignores_sigterm_is_killed(project: Project) -> None:
-    only_baseline(project, "acme.slow:stubborn", "\nrun_timeout = 5")
-    started = time.monotonic()
+def test_an_agent_that_ignores_sigterm_is_killed(
+    project: Project, time_limit: TimeLimit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    only_baseline(project, "acme.slow:stubborn")
+    monkeypatch.setattr(runner_module, "KILL_GRACE_S", 1.0)
+    time_limit.at((project.root / "ignoring").exists)  # SIGTERM is ignored from here on
     result = project.test()
-    assert [s["outcome"] for s in result.summaries()] == ["timed out"]
-    assert time.monotonic() - started < 20  # 5 s, then SIGTERM, then SIGKILL 5 s later
+    assert [s["outcome"] for s in result.summaries()] == ["timed out"]  # so SIGKILL ended it
+    assert not alive(int((project.root / "ignoring").read_text()))
 
 
 @pytest.mark.design("record.gap_is_infrastructure")
@@ -292,30 +310,20 @@ def test_stopping_scrimmage_test_stops_every_run(project: Project) -> None:
         [sys.executable, "-m", "scrimmage_core.cli", "test", str(project.toml)],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )  # fmt: skip
-    pid = None
-    for _ in range(100):
-        time.sleep(0.1)
-        pid = agent_pid(project.root)
-        if pid:
-            break
-    assert pid, "the agent never started"
+    pid = wait_for_pid(project.root / "hanging")
     runner.send_signal(signal.SIGTERM)
-    _, err = runner.communicate(timeout=30)
+    _, err = runner.communicate(timeout=60)
     assert runner.returncode == 3 and "stopped by SIGTERM" in err
-    time.sleep(0.5)
     assert not alive(pid), "the agent outlived scrimmage test"
 
 
-def agent_pid(root: Path) -> int | None:
-    for proc in Path("/proc").iterdir():
-        if proc.name.isdigit():
-            try:
-                cmd = (proc / "cmdline").read_bytes().split(b"\0")
-            except OSError:
-                continue
-            if b"acme.slow:hang" in cmd and (proc / "cwd").resolve() == root:
-                return int(proc.name)
-    return None
+def wait_for_pid(path: Path) -> int:
+    """The pid an agent wrote once it was going; a ceiling, not a deadline, ends a hang."""
+    ceiling = time.monotonic() + 60
+    while not path.exists():
+        assert time.monotonic() < ceiling, "the agent never started"
+        time.sleep(0.01)
+    return int(path.read_text())
 
 
 def alive(pid: int) -> bool:

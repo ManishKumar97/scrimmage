@@ -10,7 +10,14 @@ from pathlib import Path
 from acme import tools
 
 
+def mark(name: str) -> None:
+    """Writes this process's pid to a file in one step, so a test can wait for the file."""
+    Path(f"{name}.tmp").write_text(str(os.getpid()))
+    os.replace(f"{name}.tmp", name)
+
+
 def hang(question: str) -> str:
+    mark("hanging")  # the test's event: the agent is in its sleep
     time.sleep(600)
     return "never"
 
@@ -22,6 +29,7 @@ def crash(question: str) -> str:
 def stubborn(question: str) -> str:
     """Ignores SIGTERM, so only SIGKILL stops it."""
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    mark("ignoring")
     time.sleep(600)
     return "never"
 
