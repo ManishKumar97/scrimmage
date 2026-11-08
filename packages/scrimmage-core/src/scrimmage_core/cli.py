@@ -80,7 +80,11 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
     )
     init.add_argument("folder", nargs="?", default=Path(), type=Path)
     init.add_argument("--out", type=Path, help="the file to write; default scrimmage.toml there")
-    init.add_argument("--probe", action="store_true", help="run the agent to its first model call")
+    init.add_argument(
+        "--probe",
+        metavar="MODULE:FUNCTION",
+        help="run this function up to its first model request, to read the tools it offers",
+    )
     init.add_argument("--json", action="store_true", help="print one JSON document")
     args = parser.parse_args(argv)
     if args.command == "init":
@@ -441,11 +445,15 @@ def init_command(args: argparse.Namespace, process: bool) -> int:
     return as_json("init", out, run, process) if args.json else run(out, None)
 
 
-def run_init(folder: Path, out: Path, probe: bool, found: Found | None) -> int:
+def run_init(folder: Path, out: Path, probe: str | None, found: Found | None) -> int:
     """A draft from reading the code, and from a probe if asked. Never over an existing file."""
     try:
         draft = drafting.prepare(
-            folder, out, probe=probe, stop_flag=None if found is None else entry.pending
+            folder,
+            out,
+            probe=probe,
+            stop_flag=None if found is None else entry.pending,
+            announce=announce if found is None else (lambda line: None),
         )
         stop_point()  # a signal that came during the read or the probe: nothing is written yet
         drafting.write(draft)
@@ -456,7 +464,7 @@ def run_init(folder: Path, out: Path, probe: bool, found: Found | None) -> int:
     except (running.Interrupted, KeyboardInterrupt) as exc:
         name = str(exc) or "SIGINT"
         return init_failed(
-            f"stopped by {name}; every run was stopped, and nothing was written", found
+            f"stopped by {name}; every run was stopped, and no draft was written", found
         )
     except Exception as exc:  # Scrimmage's own failure, not a mistake in the folder
         return init_failed(f"infrastructure error in scrimmage init: {exc!r}", found)
@@ -466,6 +474,10 @@ def run_init(folder: Path, out: Path, probe: bool, found: Found | None) -> int:
     found.messages += draft.messages
     found.fields.update(draft.fields)
     return draft.code
+
+
+def announce(line: str) -> None:
+    print(line, flush=True)
 
 
 def init_failed(message: str, found: Found | None) -> int:

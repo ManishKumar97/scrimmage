@@ -1,10 +1,10 @@
 """scrimmage init: draft a scrimmage.toml from reading the code, and from a probe if asked.
 
-The read uses ast and imports nothing, so none of the team's code runs. The probe is opt-in:
-it runs a function entry point up to its first model request, which is refused before it
-is sent, and reads the tools that request offers. A script is never probed. The draft never
-holds a real tool, a test or a mock, as those are the team's to say, and it never replaces
-a file.
+The read uses ast and imports nothing, so none of the team's code runs. The entry point it
+finds is a guess, and a guess is never run. The probe takes the function to run by name, runs
+it up to its first model request, which is refused before it is sent, and reads the tools
+that request offers. A script is never probed. The draft never holds a real tool, a test or
+a mock, as those are the team's to say, and it never replaces a file.
 """
 
 import ast
@@ -13,7 +13,7 @@ import shlex
 import sys
 import tomllib
 import warnings
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 
 from scrimmage_core import probe as probing
 from scrimmage_core import toml_write
-from scrimmage_core.config import Agent, Config, Test
+from scrimmage_core.config import IMPORT_PATH, Agent, Config, Test
 from scrimmage_core.provider_openai import HOSTS
 from scrimmage_core.runner import (
     INFRA,
@@ -46,6 +46,8 @@ FRAMEWORKS = ("langchain", "langgraph")  # their tools reach a gate with no tool
 WEB_SERVICES = ("fastapi", "flask", "starlette")
 TOOL_DECORATORS = ("tool", "is_tool", "function_tool")
 CLIENTS = ("OpenAI", "AsyncOpenAI", "AzureOpenAI")
+MODEL_CLIENTS = (*CLIENTS, "ChatOpenAI", "AzureChatOpenAI")  # what building an agent's client calls
+NAME_ARGUMENT_DECORATORS = ("tool",)  # LangChain's @tool("name"); elsewhere text is a description
 READ_PREFIXES = ("get_", "list_", "search_", "find_", "lookup_", "read_", "check_", "fetch_")
 FOUND_BY = ("probe", "static")  # how a tool or a model host was found
 PROBLEMS = ("ambiguous", "nested", "not_found")  # why a tool could not be mapped to one path
@@ -53,7 +55,13 @@ RISK_NOTE = (
     "the probe ran your code up to its first model request; a tool function called before "
     "then, or a write through a library Scrimmage does not gate, would have run for real"
 )
-NOT_PROBED = "a script is never probed: its command can do anything, so its tools are not known"
+BAD_PROBE = (
+    "--probe takes the function to run, as module:function, such as acme.agent:answer; "
+    "got {value!r}. A script is never probed; nothing was run"
+)
+NO_MODEL_REQUEST = "saw no model request through a gated client"
+NAMED = "the function named with --probe"
+GUESS_COMMENT = "# A guess from reading the code. Check it before you run anything."
 FIRST_ONLY = (
     "the probe stops at the first model request, so tools offered later are not seen; "
     "the candidates from reading the code stand"
@@ -93,6 +101,8 @@ class Reading:
 
     files: int = 0
     unread: list[str] = field(default_factory=list[str])
+    too_large: list[str] = field(default_factory=list[str])
+    src_dropped: bool = False  # a module name left out a leading src folder
     definitions: list[Definition] = field(default_factory=list[Definition])
     spec_names: set[str] = field(default_factory=set[str])
     candidates: list[Candidate] = field(default_factory=list[Candidate])
@@ -145,7 +155,11 @@ class Findings:
     result: Probe
     tools: Tools
     hosts: list[dict[str, str]]
-    asked: bool  # --probe was given
+    function: str | None  # the function --probe named; without it, the entry point is a guess
+
+    @property
+    def guess(self) -> bool:
+        return self.chosen is not None and self.function is None
 
 
 @dataclass
@@ -167,7 +181,7 @@ def empty_fields() -> dict[str, object]:
     return {
         "out": None,
         "entry": None,
-        "probe": {"ran": False, "outcome": None},
+        "probe": {"ran": False, "function": None, "outcome": None},
         "numbers": None,
         "tools": [],
         "adapter_tools": [],
@@ -176,21 +190,36 @@ def empty_fields() -> dict[str, object]:
     }
 
 
-def prepare(folder: Path, out: Path, *, probe: bool, stop_flag: list[str] | None = None) -> Draft:
-    """Read the code and, if asked, probe it. Nothing is written yet."""
+def prepare(
+    folder: Path,
+    out: Path,
+    *,
+    probe: str | None,
+    stop_flag: list[str] | None = None,
+    announce: Callable[[str], None] = lambda line: None,
+) -> Draft:
+    """Read the code and, if asked, probe the named function. Nothing is written yet."""
     draft = Draft(out, str(out))
-    # Both are checked first, so the team's code never runs for a draft that cannot be written.
+    # All are checked first, so the team's code never runs for a draft that cannot be written.
+    if probe is not None and not IMPORT_PATH.fullmatch(probe):
+        return refused(draft, BAD_PROBE.format(value=probe))
     if not folder.is_dir():
         return refused(draft, f"{folder} is not a folder")
     if os.path.lexists(out):
         return refused(draft, f"{out} exists, and scrimmage init never replaces a file; use --out")
+    if not out.parent.is_dir():
+        return refused(draft, f"cannot write {out}: its folder does not exist")
     root = folder.resolve()
     reading = read_folder(root)
     entries = sorted(entry_points(reading), key=lambda c: (c.rank, c.order))
+    if probe is not None:
+        named_entry = Candidate("function", probe, NAMED, 0, ())
+        entries = [named_entry, *(c for c in entries if c.value != probe)]
     chosen = entries[0] if entries else None
     result = Probe()
-    if probe and chosen is not None and chosen.kind == "function":
-        result = run_probe(chosen, root, stop_flag)
+    if probe is not None:
+        announce(f"probe: running {probe} up to its first model request")
+        result = run_probe(probe, root, stop_flag)
     known = result.notice is not None and bool(result.offered)
     tools = probe_tools(result, reading) if known else static_tools(reading)
     found = Findings(
@@ -200,11 +229,17 @@ def prepare(folder: Path, out: Path, *, probe: bool, stop_flag: list[str] | None
     return draft
 
 
-def refused(draft: Draft, message: str) -> Draft:
+def refused(draft: Draft, message: str, last: str = "nothing was written") -> Draft:
     draft.code = MISTAKE
     draft.messages.append((MISTAKES, message))
-    draft.last = "nothing was written"
+    draft.last = last
     return draft
+
+
+def printable(text: object) -> str:
+    """Text a terminal shows as written: a newline, an escape or a name that is not UTF-8 is
+    escaped, so a name from the code cannot forge a line or fail the print."""
+    return "".join(c if c.isprintable() else repr(c)[1:-1] for c in str(text))
 
 
 # The read
@@ -215,12 +250,20 @@ def read_folder(folder: Path) -> Reading:
     reading = Reading()
     for path in python_files(folder):
         relative = path.relative_to(folder).as_posix()
+        shown = relative.encode("utf-8", "backslashreplace").decode()
+        if over_the_cap(path):
+            reading.too_large.append(shown)
+            continue
         tree = parse(path)
         if tree is None:
-            reading.unread.append(relative)
+            reading.unread.append(shown)
+            continue
+        try:
+            read_module(tree, module_name(folder, path, reading), relative, reading)
+        except RecursionError:  # a tree too deep to walk is a file the read cannot use
+            reading.unread.append(shown)
             continue
         reading.files += 1
-        read_module(tree, module_name(folder, path), relative, reading)
     return reading
 
 
@@ -234,12 +277,17 @@ def python_files(folder: Path) -> Iterator[Path]:
                 yield path
 
 
+def over_the_cap(path: Path) -> bool:
+    try:
+        return path.stat().st_size > FILE_CAP
+    except OSError:
+        return False  # parse says it could not read it
+
+
 def parse(path: Path) -> ast.Module | None:
     """The file's syntax tree, or None if it cannot be read as Python."""
     try:
         str(path).encode()  # a name that is not text cannot go in a file or a document
-        if path.stat().st_size > FILE_CAP:
-            return None
         with warnings.catch_warnings():  # the team's bad escapes must not reach standard error
             warnings.simplefilter("ignore")
             return ast.parse(path.read_bytes())
@@ -247,12 +295,13 @@ def parse(path: Path) -> ast.Module | None:
         return None
 
 
-def module_name(folder: Path, path: Path) -> str:
-    """Its import name from the folder. A src layout's folder is not a package, and a folder
-    that is itself inside a package keeps its packages' names."""
+def module_name(folder: Path, path: Path, reading: Reading) -> str:
+    """Its import name once its package is installed. A src layout's folder is not a package,
+    and a folder that is itself inside a package keeps its packages' names."""
     parts = list(path.relative_to(folder).with_suffix("").parts)
     if parts[0] == "src" and len(parts) > 1:
         parts = parts[1:]
+        reading.src_dropped = True
     if parts[-1] == "__init__":
         parts.pop()
     packages: list[str] = []
@@ -271,11 +320,14 @@ def read_module(tree: ast.Module, module: str, relative: str, reading: Reading) 
     imports = imported(tree)
     reading.web_service = reading.web_service or any(root in imports for root in WEB_SERVICES)
     framework = any(has_library(imports, name) for name in FRAMEWORKS)
+    builds_client = False
     for node in ast.walk(tree):
         if isinstance(node, ast.Dict) and (name := spec_name(node)) is not None:
             reading.spec_names.add(name)
-        elif isinstance(node, ast.Call) and (host := client_host(node)) is not None:
-            reading.hosts.add(host)
+        elif isinstance(node, ast.Call):
+            builds_client = builds_client or decorator_target(node) in MODEL_CLIENTS
+            if (host := client_host(node)) is not None:
+                reading.hosts.add(host)
     if is_script(tree, imports):
         reading.candidates.append(script_candidate(relative))
     if not importable(module):
@@ -285,7 +337,7 @@ def read_module(tree: ast.Module, module: str, relative: str, reading: Reading) 
             reading.definitions.append(
                 definition(f"{module}:{statement.name}", statement, framework=framework)
             )
-            found = function_candidate(statement, module, imports, relative)
+            found = function_candidate(statement, module, imports, relative, builds_client)
             if found is not None:
                 reading.candidates.append(found)
         elif isinstance(statement, ast.ClassDef):
@@ -296,16 +348,19 @@ def read_module(tree: ast.Module, module: str, relative: str, reading: Reading) 
 
 def top_level(body: list[ast.stmt]) -> Iterator[ast.stmt]:
     """A module's statements, with those inside a top-level if or try."""
-    for statement in body:
+    # A stack, not recursion: an elif chain is an If nested in the last one's orelse.
+    stack = list(reversed(body))
+    while stack:
+        statement = stack.pop()
         yield statement
+        inner: list[ast.stmt] = []
         if isinstance(statement, ast.If):
-            yield from top_level(statement.body)
-            yield from top_level(statement.orelse)
+            inner = [*statement.body, *statement.orelse]
         elif isinstance(statement, ast.Try):
-            yield from top_level(statement.body)
-            yield from top_level(statement.orelse)
+            inner = [*statement.body, *statement.orelse]
             for handler in statement.handlers:
-                yield from top_level(handler.body)
+                inner += handler.body
+        stack.extend(reversed(inner))
 
 
 def read_class(
@@ -353,7 +408,8 @@ def decorator_name(node: ast.expr) -> str | None:
     """The name a tool decorator gives the model, when the code writes it as text."""
     if not isinstance(node, ast.Call):
         return None
-    given = [node.args[0]] if node.args else []
+    positional = decorator_target(node) in NAME_ARGUMENT_DECORATORS and node.args
+    given = [node.args[0]] if positional else []
     given += [k.value for k in node.keywords if k.arg in ("name", "name_override")]
     return next(
         (v.value for v in given if isinstance(v, ast.Constant) and isinstance(v.value, str)), None
@@ -457,6 +513,7 @@ def function_candidate(
     module: str,
     imports: set[str],
     relative: str,
+    builds_client: bool,
 ) -> Candidate | None:
     """A public top-level function with one required argument, named for a question."""
     if node.name.startswith("_") or any(tool_decorator(d) for d in node.decorator_list):
@@ -471,7 +528,16 @@ def function_candidate(
     library = next((name for name in LIBRARIES if has_library(imports, name)), None)
     named = f"one argument, named {required[0].arg}"
     why = f"{named}, in a module that imports {library}" if library else named
-    order = (test_file(relative), QUESTION_NAMES.index(required[0].arg), module, node.name)
+    client = builds_client
+    if client:
+        why += " and builds a model client"
+    order = (
+        test_file(relative),
+        not client,
+        QUESTION_NAMES.index(required[0].arg),
+        module,
+        node.name,
+    )
     return Candidate("function", f"{module}:{node.name}", why, 1 if library else 3, order)
 
 
@@ -505,15 +571,15 @@ def static_tools(reading: Reading) -> Tools:
 
 def place(tools: Tools, name: str, matches: list[Definition], found_by: str) -> None:
     """One match is a path. None, several, or one that cannot be gated is listed instead."""
-    paths = tuple(sorted(m.path for m in matches))
+    paths = tuple(sorted({m.path for m in matches}))  # defined in both arms of an if: one path
     if not matches:
         tools.unresolved.append(Unresolved(name, (), "not_found"))
-    elif len(matches) > 1:
+    elif len(paths) > 1:
         tools.unresolved.append(Unresolved(name, paths, "ambiguous"))
     elif matches[0].nested:
         tools.unresolved.append(Unresolved(name, paths, "nested"))
     else:
-        tools.mapped.append(Tool(paths[0], name, found_by, matches[0].name != name))
+        tools.mapped.append(Tool(matches[0].path, name, found_by, matches[0].name != name))
 
 
 def probe_tools(result: Probe, reading: Reading) -> Tools:
@@ -552,10 +618,10 @@ def model_hosts(result: Probe, reading: Reading) -> list[dict[str, str]]:
 # The probe
 
 
-def run_probe(chosen: Candidate, folder: Path, stop_flag: list[str] | None) -> Probe:
-    """One run of the entry point, with no tools, no mocks and no budget: nothing it can
-    reach costs money, as its first model request is refused before it is sent."""
-    agent = Agent(chosen.value, 1, 1, PROBE_TIMEOUT_S, (), (), max_cost_usd=None)
+def run_probe(function: str, folder: Path, stop_flag: list[str] | None) -> Probe:
+    """One run of the function the team named, with no tools, no mocks and no budget. Its
+    first model request is refused before it is sent, and any refusal ends the program."""
+    agent = Agent(function, 1, 1, PROBE_TIMEOUT_S, (), (), max_cost_usd=None)
     config = Config(agent, (Test("init-probe", PROBE_QUESTION, (), (), ()),), folder)
     runner = Runner(config, stop_flag=stop_flag, probe=True)
     try:
@@ -574,8 +640,12 @@ def read_probe(result: RunResult, lines: list[dict[str, object]], log: Path) -> 
     if notice is not None:
         return Probe(True, stopped_at_model(notice), notice)
     outcome = result.outcome
-    if outcome == "answered":
-        return Probe(True, "ended with no model request")
+    # A function that returned something other than text still ended by itself.
+    returned = outcome == "crashed" and any(
+        n.get("notice") == "answer_path" for n in result.notices
+    )
+    if outcome == "answered" or returned:
+        return Probe(True, NO_MODEL_REQUEST)
     if outcome in ("crashed", "timed out"):
         return Probe(True, f"{outcome}, see {log}")
     if outcome == "refused call":
@@ -617,7 +687,8 @@ def fill(draft: Draft, found: Findings) -> None:
     if result.infra is not None:
         draft.code = INFRA
         draft.messages.append(("infra", result.infra))
-        draft.last = "nothing was written"
+        records = found.folder / "scrimmage-runs"
+        draft.last = f"no draft was written; the probe left its records under {records}"
         return
     draft.text = render(found)
     if found.chosen is None:
@@ -632,19 +703,17 @@ def fill(draft: Draft, found: Findings) -> None:
             "next: write one [[test]] with a question and its expect, list the tools that are "
             "safe to run for real under real, then run scrimmage check"
         )
-    if draft.out.resolve().parent != found.folder.resolve():
+    root = found.folder.resolve()
+    if draft.out.resolve().parent != root:
         draft.messages.append(
-            (
-                WARNINGS,
-                f"the draft's module paths are from {found.folder}, so it runs from that folder",
-            )
+            (WARNINGS, f"the draft's module paths need it beside the code; move it to {root}")
         )
 
 
 def numbers_of(found: Findings) -> dict[str, int] | None:
-    """Tools mapped over tools offered, when a model request was reached and could be read."""
+    """Tools mapped over tools offered, when a model request offered any."""
     notice = found.result.notice
-    if notice is None or notice.get("unreadable"):
+    if notice is None or not found.result.offered:
         return None
     mapped = sum(1 for tool in found.tools.mapped if tool.found_by == "probe")
     return {"tools_offered": len(found.result.offered), "tools_mapped": mapped}
@@ -657,11 +726,17 @@ def fill_fields(draft: Draft, found: Findings) -> None:
         entry = {
             "kind": chosen.kind,
             "value": chosen.value,
+            "guess": found.guess,
+            "probe_command": probe_command(draft, found),
             "candidates": [{"value": c.value, "why": c.why} for c in found.entries],
         }
     draft.fields.update(
         entry=entry,
-        probe={"ran": found.result.ran, "outcome": found.result.outcome},
+        probe={
+            "ran": found.result.ran,
+            "function": found.function,
+            "outcome": found.result.outcome,
+        },
         numbers=numbers_of(found),
         tools=[{"path": t.path, "name": t.name, "found_by": t.found_by} for t in tools.mapped],
         adapter_tools=[{"name": n, "found_by": by} for n, by in tools.adapter],
@@ -673,46 +748,63 @@ def fill_fields(draft: Draft, found: Findings) -> None:
     )
 
 
+def probe_command(draft: Draft, found: Findings) -> str | None:
+    """The command that would probe a guess, for the team to run once they have checked it."""
+    chosen = found.chosen
+    if not found.guess or chosen is None or chosen.kind != "function":
+        return None
+    second = draft.out.with_name(f"{draft.out.stem}.probed.toml")  # the draft will exist by then
+    folder = [] if found.folder == Path() else [str(found.folder)]
+    return shlex.join(["scrimmage", "init", *folder, "--probe", chosen.value, "--out", str(second)])
+
+
 def say_found(draft: Draft, found: Findings) -> None:
     tools, chosen, lines = found.tools, found.chosen, draft.lines
     count = found.reading.files
     lines.append(
-        f"scrimmage init: read {count} Python files under {found.folder} without importing them"
+        f"scrimmage init: read {count} Python files under {printable(found.folder)} "
+        "without importing them"
     )
+    label = "entry point (a guess)" if found.guess else "entry point"
     lines.append(
-        f"entry point: {chosen.value} ({chosen.why})" if chosen else "entry point: none found"
+        f"{label}: {printable(chosen.value)} ({chosen.why})"
+        if chosen
+        else "entry point: none found"
     )
-    lines.append(probe_line(found))
+    lines.append(probe_line(draft, found))
     numbers = numbers_of(found)
     if numbers is not None:
         mapped, offered = numbers["tools_mapped"], numbers["tools_offered"]
         lines.append(f"tools: {mapped} of {offered} offered to the model mapped")
     else:
         lines.append(f"tools: {len(tools.mapped)} found by reading the code")
-    lines += [f"  {t.path}" for t in tools.mapped]
+    lines += [f"  {printable(t.path)}" for t in tools.mapped]
     for item in tools.unresolved:
         where = ", ".join(item.candidates) or "no candidates"
-        lines.append(f"  {item.name}: not mapped ({item.problem}): {where}")
+        lines.append(f"  {printable(item.name)}: not mapped ({item.problem}): {printable(where)}")
     if tools.adapter:
-        lines.append(f"adapter tools: {', '.join(n for n, _ in tools.adapter)}")
+        lines.append(f"adapter tools: {printable(', '.join(n for n, _ in tools.adapter))}")
     if found.hosts:
         hosts = ", ".join(f"{h['host']} ({h['provider']})" for h in found.hosts)
-        lines.append(f"model hosts: {hosts}")
+        lines.append(f"model hosts: {printable(hosts)}")
 
 
-def probe_line(found: Findings) -> str:
+def probe_line(draft: Draft, found: Findings) -> str:
     result, chosen = found.result, found.chosen
     if result.ran and chosen is not None:
         return f"probe: ran {chosen.value} up to its first model request; {result.outcome}"
-    if found.asked and chosen is None:
-        return "probe: not run; there is no entry point to run"
-    if found.asked:
+    if chosen is None:
+        return "probe: not run; name the function to run with --probe module:function"
+    if chosen.kind == "command":
         return "probe: not run; a script is never probed"
-    return "probe: not run; pass --probe to find the tools the model is offered"
+    return (
+        "probe: not run; to find the tools the model is offered, check the guess above, "
+        f"then run: {printable(probe_command(draft, found))}"
+    )
 
 
 def add_notes(draft: Draft, found: Findings) -> None:
-    result, chosen, reading, tools = found.result, found.chosen, found.reading, found.tools
+    result, reading, tools = found.result, found.reading, found.tools
     notes: list[str] = []
     if result.ran:
         notes.append(RISK_NOTE)
@@ -720,8 +812,7 @@ def add_notes(draft: Draft, found: Findings) -> None:
         notes.append(FIRST_ONLY)
     elif result.ran and result.notice is None:
         notes.append("no tools are known from the probe; the candidates from the code stand")
-    if found.asked and chosen is not None and chosen.kind == "command":
-        notes.append(NOT_PROBED)
+    notes += install_notes(found)
     if tools.adapter:
         notes.append("a framework's tools reach a gate by themselves, so they need no tools list")
     if reading.web_service:
@@ -731,6 +822,9 @@ def add_notes(draft: Draft, found: Findings) -> None:
     if reading.unread:
         shown = ", ".join(reading.unread[:5])
         notes.append(f"could not read {len(reading.unread)} files as Python: {shown}")
+    if reading.too_large:
+        shown = ", ".join(reading.too_large[:5])
+        notes.append(f"skipped {len(reading.too_large)} files over 5 MB as too large: {shown}")
     left_out = sorted(left_out_tools(reading, tools)) if result.offered else []
     if left_out:
         notes.append(
@@ -738,6 +832,31 @@ def add_notes(draft: Draft, found: Findings) -> None:
             + ", ".join(left_out)
         )
     draft.messages += [(NOTES, note) for note in notes]
+
+
+def install_notes(found: Findings) -> list[str]:
+    """What the module names assume. A run imports from the read folder or the environment."""
+    notes: list[str] = []
+    if found.reading.src_dropped:
+        notes.append("module names leave out the src folder, as an installed package's do")
+    paths = [t.path for t in found.tools.mapped]
+    if found.chosen is not None and found.chosen.kind == "function":
+        paths.append(found.chosen.value)
+    root = found.folder.resolve()
+    missing = sorted(
+        {
+            top
+            for top in (path.split(".")[0].split(":")[0] for path in paths)
+            if not (root / top).is_dir() and not (root / f"{top}.py").is_file()
+        }
+    )
+    if missing:
+        names = ", ".join(missing)
+        notes.append(
+            f"{names} cannot be imported from {printable(found.folder)}; these module names "
+            "assume the package is installed, so install it, such as with pip install -e ."
+        )
+    return notes
 
 
 def left_out_tools(reading: Reading, tools: Tools) -> set[str]:
@@ -764,6 +883,8 @@ def render(found: Findings) -> str:
             '# command  = "python bot.py {question}"',
         ]
     else:
+        if found.guess:
+            lines.append(GUESS_COMMENT)
         lines += toml_write.assignment(chosen.kind, chosen.value, WIDTH)
         others = found.entries[1:]
         lines += [
@@ -782,6 +903,17 @@ def render(found: Findings) -> str:
     for item in tools.unresolved:
         where = ", ".join(item.candidates) or "no match in the code"
         lines.append(toml_write.comment(f"Not listed, {item.problem}: {item.name}: {where}"))
+        if item.problem == "nested":
+            lines.append(
+                "# This version cannot gate a method on a nested class; "
+                "move the class to the top of its module."
+            )
+        elif item.problem == "ambiguous":
+            lines.append(
+                toml_write.comment(
+                    f'Pick one, and list it as {{path = "...", name = "{item.name}"}}.'
+                )
+            )
     if hosts:
         value: list[object] = [{"host": h["host"], "provider": h["provider"]} for h in hosts]
         lines += toml_write.assignment("model_hosts", value, WIDTH)
@@ -842,12 +974,11 @@ def write(draft: Draft) -> None:
         with open(draft.out, "x", encoding="utf-8") as output:
             output.write(draft.text)
     except FileExistsError:
-        refused(
-            draft, f"{draft.shown_out} exists, and scrimmage init never replaces a file; use --out"
-        )
+        message = f"{draft.shown_out} exists, and scrimmage init never replaces a file; use --out"
+        refused(draft, message, "no draft was written")
         return
     except OSError as exc:
-        refused(draft, f"could not write {draft.shown_out}: {exc.strerror}")
+        refused(draft, f"could not write {draft.shown_out}: {exc.strerror}", "no draft was written")
         return
     draft.fields["out"] = draft.shown_out
 
@@ -856,6 +987,7 @@ def print_text(draft: Draft) -> None:
     """The text form. Mistakes go to standard error, as scrimmage test sends them."""
     for line in draft.lines:
         print(line)
+    draft.messages = [(kind, printable(message)) for kind, message in draft.messages]
     prefixes = {NOTES: "note", WARNINGS: "warning", "infra": "infrastructure error"}
     for kind, message in draft.messages:
         if kind == MISTAKES:
@@ -863,5 +995,5 @@ def print_text(draft: Draft) -> None:
         else:
             print(f"{prefixes[kind]}: {message}")
     if draft.fields["out"] is not None:
-        print(f"wrote {draft.shown_out}")
-    print(draft.last)
+        print(f"wrote {printable(draft.shown_out)}")
+    print(printable(draft.last))

@@ -1,6 +1,7 @@
 """scrimmage init: the read that imports nothing, the probe that sends nothing, and the draft."""
 
 import json
+import os
 import subprocess
 import sys
 import tomllib
@@ -67,9 +68,10 @@ def probed(
     root: Path,
     fake: FakeOpenAI,
     monkeypatch: pytest.MonkeyPatch,
+    function: str = "bot:answer",
 ) -> tuple[int, dict[str, object]]:
     monkeypatch.setenv("OPENAI_BASE_URL", fake.base_url)
-    return run(capsys, str(root), "--probe", "--out", str(root / "draft.toml"))
+    return run(capsys, str(root), "--probe", function, "--out", str(root / "draft.toml"))
 
 
 def probe_of(doc: dict[str, object]) -> dict[str, object]:
@@ -124,29 +126,64 @@ def test_without_probe_no_process_starts(
     monkeypatch.setattr(subprocess, "Popen", refuse)
     write(tmp_path, {"bot.py": ENTRY})
     code, doc = run(capsys, str(tmp_path))
-    assert code == OK and probe_of(doc) == {"ran": False, "outcome": None}
+    assert code == OK and probe_of(doc) == {"ran": False, "function": None, "outcome": None}
     assert doc["numbers"] is None
     assert not (tmp_path / "scrimmage-runs").exists()
     capsys.readouterr()
     assert cli.main(["init", str(tmp_path), "--out", str(tmp_path / "b.toml")]) == OK
-    assert "pass --probe to find the tools" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "entry point (a guess): bot:answer" in out
+    assert f"scrimmage init {tmp_path} --probe bot:answer --out" in out
 
 
 @pytest.mark.design("init.script_not_probed")
-def test_a_script_is_never_probed(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("value", ["bot.py", "python bot.py", "bot", "a:b:c", "pkg:Class.method"])
+def test_a_value_that_is_not_module_function_runs_nothing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
 ) -> None:
     def refuse(*args: object, **kwargs: object) -> None:
         raise AssertionError("a process started")
 
     monkeypatch.setattr(subprocess, "Popen", refuse)
     write(tmp_path, {"bot.py": SCRIPT})
-    code, doc = run(capsys, str(tmp_path), "--probe")
-    assert code == OK
-    assert probe_of(doc) == {"ran": False, "outcome": None}
-    assert "a script is never probed" in messages(doc, "notes")
-    assert agent_table(tmp_path / "scrimmage.toml")["command"] == "python bot.py {question}"
+    code, doc = run(capsys, str(tmp_path), "--probe", value)
+    assert code == MISTAKE and doc["out"] is None
+    assert "a script is never probed" in messages(doc, "mistakes").lower()
+    assert probe_of(doc)["ran"] is False
     assert not (tmp_path / "scrimmage-runs").exists()
+    assert not (tmp_path / "scrimmage.toml").exists()
+
+
+@pytest.mark.design("init.probe_needs_a_function")
+def test_a_bare_probe_is_a_usage_error_and_runs_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise AssertionError("a process started")
+
+    monkeypatch.setattr(subprocess, "Popen", refuse)
+    write(tmp_path, {"bot.py": ENTRY})
+    for args in (["--probe"], ["--probe", "--json"]):
+        with pytest.raises(SystemExit) as stopped:
+            cli.main(["init", str(tmp_path), *args])
+        assert stopped.value.code == MISTAKE
+        assert "expected one argument" in capsys.readouterr().err
+    assert not (tmp_path / "scrimmage.toml").exists()
+
+
+@pytest.mark.design("init.script_draft")
+def test_a_script_guess_is_written_and_never_probed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(tmp_path, {"bot.py": SCRIPT})
+    code, doc = run(capsys, str(tmp_path))
+    assert code == OK and probe_of(doc)["ran"] is False
+    entry = cast(dict[str, object], doc["entry"])
+    assert entry["guess"] is True and entry["probe_command"] is None
+    assert agent_table(tmp_path / "scrimmage.toml")["command"] == "python bot.py {question}"
 
 
 @pytest.mark.design("init.no_entry")
@@ -159,7 +196,7 @@ def test_no_entry_point_writes_the_commented_draft_and_exits_2(
     monkeypatch.setattr(subprocess, "Popen", refuse)
     write(tmp_path, {"lib.py": "def helper(a, b):\n    return a\n"})
     toml = tmp_path / "scrimmage.toml"
-    code, doc = run(capsys, str(tmp_path), "--probe")
+    code, doc = run(capsys, str(tmp_path))
     assert code == MISTAKE and doc["status"] == "mistake"
     assert doc["entry"] is None and doc["out"] == str(toml)
     assert "no entry point" in messages(doc, "mistakes")
@@ -453,7 +490,9 @@ def test_init_never_replaces_a_file(
     write(tmp_path, {"bot.py": ENTRY})
     toml = tmp_path / "scrimmage.toml"
     toml.write_bytes(b"mine\n")
-    code, doc = run(capsys, str(tmp_path), "--probe")  # no process starts: this is a fast test
+    code, doc = run(
+        capsys, str(tmp_path), "--probe", "bot:answer"
+    )  # no process starts: this is a fast test
     assert code == MISTAKE and doc["out"] is None and "never replaces" in messages(doc, "mistakes")
     assert toml.read_bytes() == b"mine\n"
     assert not (tmp_path / "scrimmage-runs").exists()
@@ -509,8 +548,9 @@ def test_an_out_in_a_missing_folder_is_a_mistake_and_another_folder_warns(
     missing = tmp_path / "nope" / "scrimmage.toml"
     code, doc = run(capsys, str(tmp_path / "code"), "--out", str(missing))
     assert code == MISTAKE and doc["out"] is None
+    assert "its folder does not exist" in messages(doc, "mistakes")
     code, doc = run(capsys, str(tmp_path / "code"), "--out", str(tmp_path / "scrimmage.toml"))
-    assert code == OK and "module paths" in messages(doc, "warnings")
+    assert code == OK and f"move it to {(tmp_path / 'code').resolve()}" in messages(doc, "warnings")
 
 
 @pytest.mark.design("init.numbers")
@@ -535,7 +575,7 @@ def test_tools_mapped_over_tools_offered(
         lambda *a: drafting.Probe(True, outcome, cast(dict[str, object], notice)),
     )
     write(tmp_path, {"bot.py": ENTRY})
-    _, doc = run(capsys, str(tmp_path), "--probe")
+    _, doc = run(capsys, str(tmp_path), "--probe", "bot:answer")
     assert doc["numbers"] == {"tools_offered": 5, "tools_mapped": 4}
     assert doc["unresolved"] == [
         {"name": "two", "candidates": ["a:two", "b:two"], "problem": "ambiguous"}
@@ -545,7 +585,12 @@ def test_tools_mapped_over_tools_offered(
         {"host": "gateway.acme.internal", "provider": "openai", "found_by": "probe"}
     ]
     capsys.readouterr()
-    assert cli.main(["init", str(tmp_path), "--probe", "--out", str(tmp_path / "b.toml")]) == OK
+    assert (
+        cli.main(
+            ["init", str(tmp_path), "--probe", "bot:answer", "--out", str(tmp_path / "b.toml")]
+        )
+        == OK
+    )
     assert "tools: 4 of 5 offered to the model mapped" in capsys.readouterr().out
 
 
@@ -567,9 +612,9 @@ def test_a_probe_with_no_offer_keeps_the_static_tools_and_a_name_found_only_by_t
         lambda *a: drafting.Probe(True, "stopped", cast(dict[str, object], notice)),
     )
     write(tmp_path, {"bot.py": ENTRY + "@tool\ndef get_order(n):\n    return n\n"})
-    _, doc = run(capsys, str(tmp_path), "--probe")
+    _, doc = run(capsys, str(tmp_path), "--probe", "bot:answer")
     assert tool_paths(doc) == ["bot:get_order"]
-    assert doc["numbers"] == {"tools_offered": 0, "tools_mapped": 0} and doc["model_hosts"] == []
+    assert doc["numbers"] is None and doc["model_hosts"] == []
 
 
 def test_a_name_the_probe_could_not_place_is_looked_up_in_the_read(
@@ -597,7 +642,7 @@ def test_a_name_the_probe_could_not_place_is_looked_up_in_the_read(
             + "@tool\ndef other(n):\n    return n\n"
         },
     )
-    _, doc = run(capsys, str(tmp_path), "--probe")
+    _, doc = run(capsys, str(tmp_path), "--probe", "bot:answer")
     assert doc["tools"] == [{"path": "bot:find", "name": "lookup", "found_by": "probe"}]
     assert "left out of the draft: other" in messages(doc, "notes")
 
@@ -624,7 +669,7 @@ def test_an_infrastructure_failure_in_the_probe_writes_nothing(
         drafting, "run_probe", lambda *a: drafting.Probe(True, "x", infra="it broke")
     )
     write(tmp_path, {"bot.py": ENTRY})
-    code, doc = run(capsys, str(tmp_path), "--probe")
+    code, doc = run(capsys, str(tmp_path), "--probe", "bot:answer")
     assert code == INFRA and doc["out"] is None and not (tmp_path / "scrimmage.toml").exists()
 
 
@@ -654,7 +699,7 @@ def test_the_text_form_says_what_it_found_and_what_to_do_next(
     assert cli.main(["init", str(tmp_path)]) == OK
     out = capsys.readouterr().out
     assert "read 1 Python files under" in out and "without importing them" in out
-    assert "entry point: bot:answer (one argument, named question" in out
+    assert "entry point (a guess): bot:answer (one argument, named question" in out
     assert "bot:get_order" in out and f"wrote {tmp_path / 'scrimmage.toml'}" in out
     assert out.strip().splitlines()[-1].startswith("next: write one [[test]]")
 
@@ -670,10 +715,10 @@ def test_the_probe_note_says_what_it_can_run(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        drafting, "run_probe", lambda *a: drafting.Probe(True, "ended with no model request")
+        drafting, "run_probe", lambda *a: drafting.Probe(True, drafting.NO_MODEL_REQUEST)
     )
     write(tmp_path, {"bot.py": ENTRY})
-    _, doc = run(capsys, str(tmp_path), "--probe")
+    _, doc = run(capsys, str(tmp_path), "--probe", "bot:answer")
     assert "would have run for real" in messages(doc, "notes")
 
 
@@ -773,7 +818,7 @@ def test_the_probe_finds_tools_sends_nothing_and_runs_no_tool(
     )
     project.monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     fake = fake_openai([])
-    code, doc = probed(capsys, project.root, fake, project.monkeypatch)
+    code, doc = probed(capsys, project.root, fake, project.monkeypatch, "acme.agent:answer")
     assert code == OK, doc
     assert fake.received == []
     assert not (project.root / "acme" / "tool-ran").exists()
@@ -827,7 +872,7 @@ def test_a_host_read_from_the_environment_is_found_by_the_probe(
     fake = fake_openai([])
     monkeypatch.setenv("GATEWAY", fake.base_url)
     monkeypatch.setenv("OPENAI_BASE_URL", "http://unused.invalid/v1")
-    _, doc = run(capsys, str(tmp_path), "--probe")
+    _, doc = run(capsys, str(tmp_path), "--probe", "bot:answer")
     assert fake.received == []
     assert doc["model_hosts"] == [{"host": "127.0.0.1", "provider": "openai", "found_by": "probe"}]
 
@@ -864,7 +909,7 @@ def test_a_first_request_that_offers_no_tools_stops_there_and_keeps_the_candidat
     assert tool_paths(doc) == ["bot:get_order"]
     assert cast(list[dict[str, str]], doc["tools"])[0]["found_by"] == "static"
     assert "tools offered later are not seen" in messages(doc, "notes")
-    assert doc["numbers"] == {"tools_offered": 0, "tools_mapped": 0}
+    assert doc["numbers"] is None
 
 
 @pytest.mark.slow
@@ -902,7 +947,7 @@ def test_an_agent_that_never_asks_the_model_ends_with_no_model_request(
 ) -> None:
     write(tmp_path, {"bot.py": ENTRY})
     _, doc = probed(capsys, tmp_path, fake_openai([]), monkeypatch)
-    assert probe_of(doc)["outcome"] == "ended with no model request"
+    assert probe_of(doc)["outcome"] == "saw no model request through a gated client"
     assert doc["numbers"] is None
 
 
@@ -962,6 +1007,269 @@ def test_an_agent_that_catches_the_refusal_runs_nothing_more(
     assert rc == OK and fake.received == []
     assert not marker.exists()
     assert "refused before it was sent" in str(probe_of(doc)["outcome"])
+
+
+@pytest.mark.slow
+@pytest.mark.design("init.probe_ends_after_any_refusal")
+def test_an_agent_that_catches_a_refused_web_write_runs_nothing_more(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = tmp_path / "refund-ran"
+    code = (
+        "import httpx\n\n\ndef refund():\n"
+        f"    open({str(marker)!r}, 'w').close()\n\n\n"
+        "def answer(question):\n    try:\n"
+        '        httpx.post("http://127.0.0.1:1/v1/messages", json={})\n'
+        "    except Exception:\n        refund()\n    return 'done'\n"
+    )
+    write(tmp_path, {"bot.py": code})
+    fake = fake_openai([])
+    rc, doc = probed(capsys, tmp_path, fake, monkeypatch)
+    assert rc == OK and fake.received == []
+    assert not marker.exists()
+    assert "refused before it ran" in str(probe_of(doc)["outcome"])
+
+
+@pytest.mark.slow
+@pytest.mark.design("init.probe_ends_after_any_refusal")
+def test_an_agent_that_catches_a_refused_tool_runs_nothing_more(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = tmp_path / "refund-ran"
+    code = (
+        "from langchain_core.tools import tool\n\n\n"
+        "@tool\ndef get_order(order_id: str) -> str:\n"
+        '    """Look up an order."""\n    return ""\n\n\n'
+        "def refund():\n"
+        f"    open({str(marker)!r}, 'w').close()\n\n\n"
+        "def answer(question):\n    try:\n"
+        '        get_order.invoke({"order_id": "1"})\n'
+        "    except Exception:\n        refund()\n    return 'done'\n"
+    )
+    write(tmp_path, {"bot.py": code})
+    rc, doc = probed(capsys, tmp_path, fake_openai([]), monkeypatch)
+    assert rc == OK
+    assert not marker.exists()
+    assert str(probe_of(doc)["outcome"]).startswith("stopped at tool:get_order")
+
+
+@pytest.mark.slow
+@pytest.mark.design("init.probe_exit_flushes")
+def test_an_agent_that_ignores_sigterm_still_ends_at_once_with_its_output(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SIGTERM does nothing here, so only the probe's own exit can end the agent. What it
+    printed sits in a buffer, as the log is a file, and that exit must not lose it."""
+    marker = tmp_path / "went-on"
+    code = (
+        "import signal\n"
+        + HEAD
+        + "def answer(question):\n    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        + "    print('printed before the request')\n    try:\n"
+        + '        client.chat.completions.create(model="gpt-4o-mini", messages=[])\n'
+        + "    except Exception:\n"
+        + f"        open({str(marker)!r}, 'w').close()\n"
+        + "    return 'done'\n"
+    )
+    write(tmp_path, {"bot.py": code})
+    fake = fake_openai([])
+    rc, doc = probed(capsys, tmp_path, fake, monkeypatch)
+    assert rc == OK and fake.received == [] and not marker.exists()
+    assert "refused before it was sent" in str(probe_of(doc)["outcome"])
+    logs = list((tmp_path / "scrimmage-runs").glob("*/*.log"))
+    assert "printed before the request" in logs[0].read_text()
+
+
+@pytest.mark.slow
+@pytest.mark.design("init.probe_outcome")
+def test_an_entry_that_returns_none_saw_no_model_request(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write(tmp_path, {"bot.py": "import openai\n\n\ndef answer(question):\n    return None\n"})
+    _, doc = probed(capsys, tmp_path, fake_openai([]), monkeypatch)
+    assert probe_of(doc)["outcome"] == "saw no model request through a gated client"
+
+
+REPRO = {
+    "agent.py": (
+        "import openai\n\n\ndef run_agent(question, session):\n    return question\n\n\n"
+        "def answer(question):\n    return run_agent(question, None)\n"
+    ),
+    "tools.py": "import httpx\nfrom pathlib import Path\n\n\ndef delete_customer(query):\n"
+    "    Path(__file__).with_name('DELETED').touch()\n",
+}
+
+
+@pytest.mark.design("init.probe_never_guesses")
+def test_a_wrong_guess_is_never_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    write(tmp_path, REPRO)
+    with pytest.raises(SystemExit):
+        cli.main(["init", str(tmp_path), "--probe"])
+    assert not (tmp_path / "DELETED").exists()
+    capsys.readouterr()
+    code, doc = run(capsys, str(tmp_path))
+    assert code == OK and not (tmp_path / "DELETED").exists()
+    entry = cast(dict[str, object], doc["entry"])
+    assert entry["guess"] is True and "--probe" in str(entry["probe_command"])
+    text = (tmp_path / "scrimmage.toml").read_text()
+    assert "# A guess from reading the code." in text
+
+
+@pytest.mark.slow
+@pytest.mark.design("init.probe_runs_what_was_named")
+def test_the_named_function_runs_and_nothing_else(
+    tmp_path: Path, fake_openai: Callable[..., FakeOpenAI], capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(tmp_path, REPRO)
+    capsys.readouterr()
+    code = cli.main(["init", str(tmp_path), "--probe", "agent:answer"])
+    out = capsys.readouterr().out
+    assert code == OK
+    assert out.splitlines()[0] == "probe: running agent:answer up to its first model request"
+    assert not (tmp_path / "DELETED").exists()
+    data = agent_table(tmp_path / "scrimmage.toml")
+    assert data["function"] == "agent:answer"
+    assert "# A guess" not in (tmp_path / "scrimmage.toml").read_text()
+
+
+def test_a_module_that_builds_a_client_is_ranked_ahead_of_the_name_tie_break(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    builds = (
+        "import openai\n\nclient = openai.OpenAI()\n\n\ndef reply(message):\n    return message\n"
+    )
+    write(tmp_path, {"a_tools.py": ENTRY, "z_agent.py": builds})
+    _, doc = run(capsys, str(tmp_path))
+    entry = cast(dict[str, object], doc["entry"])
+    assert entry["value"] == "z_agent:reply"
+    assert "builds a model client" in str(cast(list[dict[str, str]], entry["candidates"])[0]["why"])
+
+
+@pytest.mark.slow
+def test_a_file_name_that_is_not_utf_8_prints_on_a_strict_stream(tmp_path: Path) -> None:
+    root = bytes(tmp_path) + b"/bad\xff.py"
+    with open(root, "w") as handle:
+        handle.write("X = 1\n")
+    write(tmp_path, {"bot.py": ENTRY})
+    done = subprocess.run(
+        [sys.executable, "-m", "scrimmage_core.cli", "init", str(tmp_path)],
+        capture_output=True,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8:strict"},
+        check=False,
+    )
+    assert done.returncode == OK, done.stderr
+    assert b"bad\\udcff.py" in done.stdout
+
+
+def test_a_very_long_elif_chain_is_read(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    branches = "".join(f"elif X == {n}:\n    Y = {n}\n" for n in range(1500))
+    code = f"X = 1\nif X == 0:\n    Y = 0\n{branches}else:\n{'    '}Y = 1\n" + ENTRY
+    write(tmp_path, {"long.py": code})
+    rc, doc = run(capsys, str(tmp_path))
+    assert rc == OK and cast(dict[str, object], doc["entry"])["value"] == "long:answer"
+
+
+def test_a_tree_too_deep_to_walk_is_unread_not_a_failure(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def deep(*args: object) -> None:
+        raise RecursionError
+
+    monkeypatch.setattr(drafting, "read_module", deep)
+    write(tmp_path, {"bot.py": ENTRY})
+    code, doc = run(capsys, str(tmp_path))
+    assert code == MISTAKE and "could not read 1 files" in messages(doc, "notes")
+
+
+def test_a_package_that_cannot_be_imported_from_the_folder_is_said(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(tmp_path, {"src/pkg/__init__.py": "", "src/pkg/agent.py": ENTRY})
+    _, doc = run(capsys, str(tmp_path))
+    notes = messages(doc, "notes")
+    assert "pkg cannot be imported from" in notes and "install it" in notes
+    assert "leave out the src folder" in notes
+    write(tmp_path / "flat", {"bot.py": ENTRY})
+    _, plain = run(capsys, str(tmp_path / "flat"))
+    assert "cannot be imported" not in messages(plain, "notes")
+
+
+def test_a_file_over_the_cap_is_too_large_not_unreadable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(tmp_path, {"bot.py": ENTRY})
+    with open(tmp_path / "big.py", "wb") as handle:
+        handle.truncate(drafting.FILE_CAP + 1)
+    _, doc = run(capsys, str(tmp_path))
+    notes = messages(doc, "notes")
+    assert "skipped 1 files over 5 MB as too large: big.py" in notes
+    assert "could not read" not in notes
+
+
+def test_a_named_pipe_is_not_opened(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    write(tmp_path, {"bot.py": ENTRY})
+    os.mkfifo(tmp_path / "pipe.py")
+    code, doc = run(capsys, str(tmp_path))  # a pipe opened for reading would never return
+    assert code == OK and doc["entry"] is not None
+
+
+def test_a_name_in_both_arms_of_an_if_is_one_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = (
+        ENTRY + "if X:\n    @tool\n    def get_order(n):\n        return n\n"
+        "else:\n    @tool\n    def get_order(n):\n        return n\n"
+    )
+    write(tmp_path, {"bot.py": code})
+    _, doc = run(capsys, str(tmp_path))
+    assert tool_paths(doc) == ["bot:get_order"] and doc["unresolved"] == []
+
+
+def test_text_given_to_another_decorator_is_not_the_model_s_name(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = ENTRY + '@register_tool("Looks up an order")\ndef get_order(n):\n    return n\n'
+    write(tmp_path, {"bot.py": code})
+    _, doc = run(capsys, str(tmp_path))
+    assert doc["tools"] == [{"path": "bot:get_order", "name": "get_order", "found_by": "static"}]
+
+
+def test_a_name_with_a_newline_or_an_escape_stays_on_its_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = ENTRY + 'SPEC = {"type": "function", "name": "a\\nb\\x1b[31m", "parameters": {}}\n'
+    write(tmp_path, {"bot.py": code})
+    capsys.readouterr()
+    assert cli.main(["init", str(tmp_path)]) == OK
+    out = capsys.readouterr().out
+    assert "\x1b" not in out and "a\\nb\\x1b[31m: not mapped" in out
+
+
+def test_comments_say_how_to_fix_a_nested_or_ambiguous_tool(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    nested = (
+        "class Outer:\n    class Inner:\n        @tool\n"
+        "        def deep(self):\n            return 1\n"
+    )
+    two = "@tool\ndef twice(n):\n    return n\n"
+    write(tmp_path, {"bot.py": ENTRY + nested, "a.py": two, "b.py": two})
+    run(capsys, str(tmp_path))
+    text = (tmp_path / "scrimmage.toml").read_text()
+    assert "move the class to the top of its module" in text
+    assert 'list it as {path = "...", name = "twice"}' in text
 
 
 @pytest.mark.slow
