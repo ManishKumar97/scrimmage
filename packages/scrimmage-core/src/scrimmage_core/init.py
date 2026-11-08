@@ -23,17 +23,9 @@ from urllib.parse import urlsplit
 from scrimmage_core import probe as probing
 from scrimmage_core import toml_write
 from scrimmage_core.config import IMPORT_PATH, Agent, Config, Test
+from scrimmage_core.outcomes import INFRA, MISTAKE, MISTAKES, NOTES, OK, WARNINGS
 from scrimmage_core.provider_openai import HOSTS
-from scrimmage_core.runner import (
-    INFRA,
-    MISTAKE,
-    MISTAKES,
-    NOTES,
-    OK,
-    WARNINGS,
-    Runner,
-    RunResult,
-)
+from scrimmage_core.runner import Runner, RunResult
 
 PROBE_QUESTION = "scrimmage init probe"
 PROBE_TIMEOUT_S = 120.0

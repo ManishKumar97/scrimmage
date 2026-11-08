@@ -20,7 +20,7 @@ from fakes.openai_server import FakeOpenAI
 from scrimmage_core import cli, entry
 from scrimmage_core import init as drafting
 from scrimmage_core import probe as probing
-from scrimmage_core.runner import INFRA, MISTAKE, OK
+from scrimmage_core.outcomes import INFRA, MISTAKE, OK
 
 SCHEMA = json.loads((Path(scrimmage_core.__file__).parent / "schemas" / "cli.v1.json").read_text())
 

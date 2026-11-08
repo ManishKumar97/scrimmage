@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-from scrimmage_core import capture, labels, toml_write
+from scrimmage_core import capture, labels, outcomes, toml_write
 from scrimmage_core import config as settings
 from scrimmage_core import runner as running
 from scrimmage_core.control import proc_key
@@ -906,16 +906,16 @@ def finish(
     for test in plan.config.tests:
         result = by_name.get(test.name)
         if result is None:
-            notes.append((running.NOTES, f"{test.name}: it did not run, so nothing was written"))
+            notes.append((outcomes.NOTES, f"{test.name}: it did not run, so nothing was written"))
             continue
         records.append(record_test(test, result, folder, plan, runner, notes))
-    messages: list[tuple[str, str]] = [(running.WARNINGS, CUSTOMER_DATA), *notes]
+    messages: list[tuple[str, str]] = [(outcomes.WARNINGS, CUSTOMER_DATA), *notes]
     messages += report.messages
     code = report.code
     for found in records:
         code = max(code, test_code(found, messages))
     if any(r.manual for r in records):
-        code = max(code, running.ROW_FAILED)
+        code = max(code, outcomes.ROW_FAILED)
     result = Result(
         code,
         None,
@@ -962,7 +962,7 @@ def record_test(
         for broken in result.judgement.broken:
             notes.append(
                 (
-                    running.NOTES,
+                    outcomes.NOTES,
                     f"{test.name}: the recorded run's answer broke a rule: {broken.text}; "
                     "check the mocks before trusting them",
                 )
@@ -975,24 +975,24 @@ def test_code(found: TestRecord, messages: list[tuple[str, str]]) -> int:
     name = found.test.name
     outcome = found.result.outcome
     if outcome == "stopped":  # a refusal elsewhere stopped it, and the report says which
-        messages.append((running.NOTES, f"{name}: {found.trouble}, so nothing was written for it"))
-        return running.OK
+        messages.append((outcomes.NOTES, f"{name}: {found.trouble}, so nothing was written for it"))
+        return outcomes.OK
     if found.trouble is not None:
         messages.append(
-            (running.INFRA_ERRORS, f"{name}: {found.trouble}, so nothing was written for it")
+            (outcomes.INFRA_ERRORS, f"{name}: {found.trouble}, so nothing was written for it")
         )
-        return running.INFRA
+        return outcomes.INFRA
     if outcome == "refused call":
         messages.append(
             (
-                running.NOTES,
+                outcomes.NOTES,
                 f"{name}: the run stopped at the refusal, so calls after it were not seen",
             )
         )
-        return running.OK
+        return outcomes.OK
     if outcome in ("crashed", "timed out"):
-        return running.ROW_FAILED
-    return running.OK
+        return outcomes.ROW_FAILED
+    return outcomes.OK
 
 
 def write_file(result: Result, plan: Plan, path: Path) -> Result:
@@ -1009,7 +1009,7 @@ def write_file(result: Result, plan: Plan, path: Path) -> Result:
         return not_ours(result, out, built)
     if written_before and result.wrote == 0:
         note = f"{out} is kept as it was: this record wrote no mocks, so it would only lose them"
-        result.messages.insert(1, (running.NOTES, note))
+        result.messages.insert(1, (outcomes.NOTES, note))
         return result
     team_lines, new_lines = team_text.splitlines(), new_text.splitlines()
     result.diff = list(
@@ -1018,10 +1018,10 @@ def write_file(result: Result, plan: Plan, path: Path) -> Result:
     added = sum(1 for line in result.diff if line.startswith("+") and not line.startswith("+++"))
     warning = batch_warning(added)
     if warning is not None:
-        result.messages.insert(1, (running.WARNINGS, warning))
+        result.messages.insert(1, (outcomes.WARNINGS, warning))
     if written_before:
         note = f"replaced {out}, which an earlier record wrote; rename a file to keep it"
-        result.messages.insert(1, (running.NOTES, note))
+        result.messages.insert(1, (outcomes.NOTES, note))
     write_atomically(path, out, new_text)  # the last step: nothing below it can fail
     result.out = str(out)
     return result
@@ -1052,11 +1052,11 @@ def holds_record_header(out: Path) -> bool:
 
 def not_ours(result: Result, out: Path, built: list[str]) -> Result:
     """A file of that name that record did not write is the team's: it is never replaced."""
-    result.code = max(result.code, running.MISTAKE)
+    result.code = max(result.code, outcomes.MISTAKE)
     result.mocks_text = "".join(built)
     result.messages.append(
         (
-            running.MISTAKES,
+            outcomes.MISTAKES,
             f"{out} exists and scrimmage record did not write it; nothing was written, and the "
             "mocks are printed. Move that file away and run record again",
         )
@@ -1066,11 +1066,11 @@ def not_ours(result: Result, out: Path, built: list[str]) -> Result:
 
 def layout_refused(result: Result, problem: str, built: list[str]) -> Result:
     """The file's own layout cannot be extended safely: the mocks are printed, nothing written."""
-    result.code = max(result.code, running.MISTAKE)
+    result.code = max(result.code, outcomes.MISTAKE)
     result.mocks_text = "".join(built)
     result.messages.append(
         (
-            running.MISTAKES,
+            outcomes.MISTAKES,
             f"{problem}; nothing was written, and the mocks are printed for you to copy in",
         )
     )
@@ -1263,8 +1263,8 @@ def write_atomically(team: Path, out: Path, text: str) -> None:
 def print_result(result: Result, config: settings.Config) -> None:
     """The result as text, in the order a reviewer reads it."""
     tests, runs = (
-        running.plural(len(config.tests), "test"),
-        running.plural(len(result.records), "run"),
+        outcomes.plural(len(config.tests), "test"),
+        outcomes.plural(len(result.records), "run"),
     )
     print(f"scrimmage record: {tests}, {runs}; records in {result.folder}")
     for kind, text in result.above:
@@ -1272,7 +1272,7 @@ def print_result(result: Result, config: settings.Config) -> None:
     for found in result.records:
         print(test_line(found))
     if result.out is not None:
-        wrote = running.plural(result.wrote, "mock")
+        wrote = outcomes.plural(result.wrote, "mock")
         print(f"wrote {wrote} to {result.out}; {result.team} is unchanged")
     print(f"recorded {result.done} of {result.seen} calls that needed a mock")
     for found in result.records:

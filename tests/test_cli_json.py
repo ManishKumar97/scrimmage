@@ -22,7 +22,7 @@ import scrimmage_core
 from conftest import ACME, Project
 from fakes.openai_server import FakeOpenAI
 from report_cases import CASES, FOLDER, GOLDEN
-from scrimmage_core import capture, cli, config, entry, judge, record, runner
+from scrimmage_core import capture, cli, config, entry, judge, outcomes, record, runner
 from scrimmage_core import init as init_module
 from scrimmage_core.runner import Runner, build_report, print_report, report_json
 
@@ -478,7 +478,7 @@ def broken_line(broken: dict[str, object], folder: Path) -> str:
     logs = broken["kind"] in judge.ENDED_BADLY
     names = [str(folder / f"{r}.log") if logs else r for r in runs[: runner.SHOWN_RUNS]]
     more = f" and {len(runs) - runner.SHOWN_RUNS} more" if len(runs) > runner.SHOWN_RUNS else ""
-    return f"  {runner.plural(len(runs), 'run')}: {broken['text']}: {', '.join(names)}{more}"
+    return f"  {outcomes.plural(len(runs), 'run')}: {broken['text']}: {', '.join(names)}{more}"
 
 
 def rule_head(row: dict[str, object]) -> str:
@@ -506,8 +506,8 @@ def text_head(doc: dict[str, object], folder: Path) -> list[str]:
     runs = sum(cast(int, row["runs"]) for row in rows)
     tests = cast(int, doc["tests"])
     lines = [
-        f"scrimmage test: {runner.plural(tests, 'test')}, {runner.plural(len(rows), 'row')}, "
-        f"{runner.plural(runs, 'run')}; records in {doc['records']}"
+        f"scrimmage test: {outcomes.plural(tests, 'test')}, {outcomes.plural(len(rows), 'row')}, "
+        f"{outcomes.plural(runs, 'run')}; records in {doc['records']}"
     ]
     warnings = messages(doc, "warnings")
     if warnings[:1] == [runner.TOOL_STAR_LINE]:  # the one warning said above the table
@@ -975,14 +975,15 @@ def run_entry(script: str, *argv: str) -> Done:
     return Done(proc.returncode, proc.stdout, proc.stderr)
 
 
-# Sends the signal as the first of Scrimmage's heavy modules is imported, so it lands while
-# Scrimmage loads, the window before cli can set its own handlers.
+# Sends the signal as a Scrimmage module is imported, so it lands while Scrimmage loads. The
+# cli module is the window before cli can set its own handlers. The runner is imported late,
+# when a test starts, with the handlers set.
 SIGNAL_WHILE_LOADING = """
 import importlib.abc, os, signal, time
 
 class Signal(importlib.abc.MetaPathFinder):
     def find_spec(self, name, path, target=None):
-        if name == "scrimmage_core.runner":
+        if name == "{module}":
             sys.meta_path.remove(self)
             os.kill(os.getpid(), signal.{sig})
             time.sleep(0.2)
@@ -1010,12 +1011,20 @@ sys.stdout = Out(sys.stdout.detach(), encoding="utf-8", line_buffering=False)
 
 @pytest.mark.design("json.sigterm")
 @pytest.mark.parametrize("sig", ["SIGTERM", "SIGINT"])
-@pytest.mark.parametrize("command", ["check", "test"])
+@pytest.mark.parametrize(
+    ("command", "module"),
+    [
+        ("check", "scrimmage_core.cli"),
+        ("test", "scrimmage_core.cli"),
+        ("test", "scrimmage_core.runner"),
+    ],
+)
 @pytest.mark.slow
 def test_a_signal_while_scrimmage_loads_still_gives_one_document(
-    project: Project, sig: str, command: str
+    project: Project, sig: str, command: str, module: str
 ) -> None:
-    done = run_entry(SIGNAL_WHILE_LOADING.format(sig=sig), command, "--json", str(project.toml))
+    script = SIGNAL_WHILE_LOADING.format(sig=sig, module=module)
+    done = run_entry(script, command, "--json", str(project.toml))
     assert done.code == 3, done.out + done.err
     doc = one_document(done, command)
     assert messages(doc, "infra") == [f"stopped by {sig}"]

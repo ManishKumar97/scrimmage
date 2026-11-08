@@ -15,7 +15,7 @@ import pytest
 from fakes.openai_server import FakeOpenAI
 from scrimmage_core import runner
 from scrimmage_core.cli import main
-from scrimmage_core.runner import OK, ROW_FAILED
+from scrimmage_core.outcomes import OK, ROW_FAILED
 
 EXAMPLE = Path(__file__).parent / "example"
 

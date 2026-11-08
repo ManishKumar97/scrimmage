@@ -92,8 +92,18 @@ ROUND_TRIPS = {
     "mcp_async": 0.0,
 }
 ROUND_TRIPS_BUDGET_OFF = {"model_sync": 0.0, "model_async": 0.0}
-# Libraries the CLI's import must not load. Only ones it does not load today.
-NOT_IMPORTED_BY_CLI = ("openai", "httpx")
+# Modules the CLI's import must not load: the runner and what it brings, and the libraries
+# that would pass the time ceiling. The runner is imported when a test or a recording runs.
+NOT_IMPORTED_BY_CLI = (
+    "openai",
+    "httpx",
+    "importlib.metadata",
+    "scrimmage_core.runner",
+    "scrimmage_core.record",
+    "scrimmage_core.control",
+    "http.server",
+    "concurrent.futures",
+)
 
 
 @dataclass(frozen=True)

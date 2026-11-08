@@ -9,7 +9,7 @@ import pytest
 
 import scrimmage_core
 from conftest import doc_pages
-from scrimmage_core import cli, config, judge, mcp_gate, record, runner
+from scrimmage_core import cli, config, judge, mcp_gate, outcomes, record, runner
 
 DOCS = Path(__file__).parents[1] / "docs"
 CLI_SCHEMA = json.loads(
@@ -90,7 +90,7 @@ def test_every_fault_and_outcome_is_documented() -> None:
 
 def test_exit_codes_match_the_runner() -> None:
     cli = page("cli.md")
-    for code in (runner.OK, runner.ROW_FAILED, runner.MISTAKE, runner.INFRA):
+    for code in (outcomes.OK, outcomes.ROW_FAILED, outcomes.MISTAKE, outcomes.INFRA):
         assert f"| {code} |" in cli
 
 
@@ -208,7 +208,7 @@ def test_check_is_documented_as_reading_the_file_only(
     guide = page("quickstart.md")
     (tmp_path / "scrimmage.toml").write_text(re.findall(r"```toml\n(.*?)```", guide, re.S)[0])
     capsys.readouterr()
-    assert cli.main(["check", str(tmp_path / "scrimmage.toml")]) == runner.OK
+    assert cli.main(["check", str(tmp_path / "scrimmage.toml")]) == outcomes.OK
     printed = capsys.readouterr().out.strip()
     printed = printed.replace(str(tmp_path / "scrimmage.toml"), "scrimmage.toml")
     assert printed in guide

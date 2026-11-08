@@ -4,35 +4,46 @@ With --json, standard output holds one JSON document and nothing else. Every com
 document starts with the same envelope; schemas/cli.v1.json describes it.
 """
 
+from __future__ import annotations
+
 import argparse
-import importlib.metadata
 import json
 import signal
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import TextIO
+from typing import TYPE_CHECKING, TextIO
 
 from scrimmage_core import config as settings
 from scrimmage_core import entry
-from scrimmage_core import init as drafting
 from scrimmage_core import plan as planner
-from scrimmage_core import record as recording
-from scrimmage_core import runner as running
 from scrimmage_core.errors import ConfigError
-from scrimmage_core.runner import INFRA, MISTAKE, OK, Interrupted, Runner, plural
+from scrimmage_core.outcomes import (
+    INFRA,
+    INFRA_ERRORS,
+    MISTAKE,
+    MISTAKES,
+    NOTES,
+    OK,
+    ROW_FAILED,
+    WARNINGS,
+    plural,
+)
+
+if TYPE_CHECKING:
+    from scrimmage_core.runner import Runner
 
 SCHEMAS = Path(__file__).parent / "schemas"
 ENVELOPE_VERSION = 1
 UNKNOWN_VERSION = "unknown"  # Scrimmage runs from a source tree with no package metadata
-LISTS = (running.MISTAKES, running.NOTES, running.WARNINGS, running.INFRA_ERRORS)
+LISTS = (MISTAKES, NOTES, WARNINGS, INFRA_ERRORS)
 # The word for each exit code, per command. A command never gives a code it has no word for.
 STATUS = {
-    "test": {OK: "passed", running.ROW_FAILED: "failed", MISTAKE: "mistake", INFRA: "infra"},
+    "test": {OK: "passed", ROW_FAILED: "failed", MISTAKE: "mistake", INFRA: "infra"},
     "check": {OK: "valid", MISTAKE: "mistake", INFRA: "infra"},
     "record": {
         OK: "complete",
-        running.ROW_FAILED: "incomplete",
+        ROW_FAILED: "incomplete",
         MISTAKE: "mistake",
         INFRA: "infra",
     },
@@ -98,7 +109,7 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
     return as_json(args.command, args.path, run, process)
 
 
-def chosen_command(args: argparse.Namespace) -> Callable[[Path, "Found | None"], int]:
+def chosen_command(args: argparse.Namespace) -> Callable[[Path, Found | None], int]:
     """The function that runs this command, with a command's own flags already bound."""
     if args.command == "test":
         return run_test
@@ -106,7 +117,7 @@ def chosen_command(args: argparse.Namespace) -> Callable[[Path, "Found | None"],
         return run_check
     names, refresh = list(args.test), list(args.refresh)
 
-    def record(path: Path, found: "Found | None") -> int:
+    def record(path: Path, found: Found | None) -> int:
         return run_record(path, found, names, refresh)
 
     return record
@@ -134,7 +145,7 @@ def stop_point() -> None:
 
 
 def as_json(
-    command: str, path: Path, run: Callable[[Path, "Found | None"], int], process: bool
+    command: str, path: Path, run: Callable[[Path, Found | None], int], process: bool
 ) -> int:
     """Run a command for --json: one document on standard output, whatever happens."""
     version = scrimmage_version()
@@ -170,6 +181,8 @@ def as_json(
 
 
 def scrimmage_version() -> str:
+    import importlib.metadata  # about 20 ms, so only the command that prints the version pays
+
     try:
         return importlib.metadata.version("scrimmage-core")
     except importlib.metadata.PackageNotFoundError:
@@ -201,12 +214,18 @@ def empty_record() -> dict[str, object]:
     }
 
 
+def empty_init() -> dict[str, object]:
+    from scrimmage_core import init as drafting  # init brings the runner, for its probe
+
+    return drafting.empty_fields()
+
+
 # A command's own fields, as they are when it stops before it has any to give.
 EMPTY_FIELDS = {
     "test": empty_test,
     "check": empty_check,
     "record": empty_record,
-    "init": drafting.empty_fields,
+    "init": empty_init,
 }
 
 
@@ -229,7 +248,7 @@ class Found:
         )
 
     def fail(self, message: str) -> int:
-        self.messages.append((running.INFRA_ERRORS, message))
+        self.messages.append((INFRA_ERRORS, message))
         if self.runner is not None:
             self.fields["cost_usd"] = round(self.runner.ledger.spent, 8)
         return INFRA
@@ -287,6 +306,8 @@ def unreadable(command: str, exc: Exception, found: Found | None) -> int:
 
 
 def run_test(path: Path, found: Found | None) -> int:
+    from scrimmage_core import runner as running  # the heavy import waits until a test runs
+
     try:
         config, problems = read(path)
     except Exception as exc:  # Scrimmage's own failure, not a mistake in the file
@@ -297,7 +318,7 @@ def run_test(path: Path, found: Found | None) -> int:
             say(problems, sys.stderr)
             print("scrimmage: the test stopped before the first run", file=sys.stderr)
         else:
-            found.messages += [(running.MISTAKES, problem) for problem in problems]
+            found.messages += [(MISTAKES, problem) for problem in problems]
         return MISTAKE
     runner: Runner | None = None
     results: list[running.RunResult] = []
@@ -305,12 +326,12 @@ def run_test(path: Path, found: Found | None) -> int:
     try:
         # With --json the runner shares the noted signal, so one that came just before its
         # runs start still stops them, and one during them is said once.
-        runner = Runner(config, stop_flag=None if found is None else entry.pending)
+        runner = running.Runner(config, stop_flag=None if found is None else entry.pending)
         if found is not None:
             found.started(config, runner)
         stop_point()
         results = runner.run_all()
-    except Interrupted as exc:
+    except running.Interrupted as exc:
         stopped = f"stopped by {exc}; every run was stopped"
     except Exception as exc:  # the runner's own failure is never a result
         stopped = f"infrastructure error in the runner: {exc!r}"
@@ -333,6 +354,9 @@ def run_test(path: Path, found: Found | None) -> int:
 
 def run_record(path: Path, found: Found | None, names: list[str], refresh: list[str]) -> int:
     """One real baseline run per test, its real calls written as mocks beside the team's file."""
+    from scrimmage_core import record as recording
+    from scrimmage_core import runner as running
+
     try:
         config, problems = read(path)
     except Exception as exc:  # Scrimmage's own failure, not a mistake in the file
@@ -347,7 +371,7 @@ def run_record(path: Path, found: Found | None, names: list[str], refresh: list[
     results: list[running.RunResult] = []
     stopped: str | None = None
     try:
-        runner = Runner(
+        runner = running.Runner(
             plan.config, stop_flag=None if found is None else entry.pending, record=True
         )
         if found is not None:
@@ -355,7 +379,7 @@ def run_record(path: Path, found: Found | None, names: list[str], refresh: list[
             found.fields["records"] = str(runner.folder)
         stop_point()
         results = runner.run_all()
-    except Interrupted as exc:
+    except running.Interrupted as exc:
         stopped = f"stopped by {exc}; every run was stopped, and nothing was written"
     except Exception as exc:  # the runner's own failure is never a result
         stopped = f"infrastructure error in the runner: {exc!r}"
@@ -396,7 +420,7 @@ def record_mistakes(problems: list[str], found: Found | None) -> int:
         say(problems, sys.stderr)
         print("scrimmage: nothing was recorded", file=sys.stderr)
         return MISTAKE
-    found.messages += [(running.MISTAKES, problem) for problem in problems]
+    found.messages += [(MISTAKES, problem) for problem in problems]
     return MISTAKE
 
 
@@ -409,7 +433,7 @@ def run_check(path: Path, found: Found | None) -> int:
     stop_point()
     if config is None:
         if found is not None:
-            found.messages += [(running.MISTAKES, problem) for problem in problems]
+            found.messages += [(MISTAKES, problem) for problem in problems]
             return MISTAKE
         say(problems, sys.stderr)
         print(f"scrimmage check: {plural(len(problems), 'problem')}; nothing was run")
@@ -447,6 +471,9 @@ def init_command(args: argparse.Namespace, process: bool) -> int:
 
 def run_init(folder: Path, out: Path, probe: str | None, found: Found | None) -> int:
     """A draft from reading the code, and from a probe if asked. Never over an existing file."""
+    from scrimmage_core import init as drafting
+    from scrimmage_core.runner import Interrupted
+
     try:
         draft = drafting.prepare(
             folder,
@@ -461,7 +488,7 @@ def run_init(folder: Path, out: Path, probe: str | None, found: Found | None) ->
             settle()  # the file is written, so no signal may turn this into a failure now
     except Stopped:
         raise  # as_json says it, with the document
-    except (running.Interrupted, KeyboardInterrupt) as exc:
+    except (Interrupted, KeyboardInterrupt) as exc:
         name = str(exc) or "SIGINT"
         return init_failed(
             f"stopped by {name}; every run was stopped, and no draft was written", found
