@@ -1366,3 +1366,21 @@ def test_a_function_named_in_a_tool_spec_is_not_an_entry_point(
     write(tmp_path, {"bot.py": code})
     _, doc = run(capsys, str(tmp_path))
     assert doc["entry"] is None and tool_paths(doc) == ["bot:search"]
+
+
+def test_a_named_function_that_is_not_the_best_guess_is_the_entry(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(drafting, "run_probe", lambda *a: drafting.Probe(True, "ended"))
+    write(tmp_path, {"bot.py": ENTRY, "other.py": "def mine(a, b):\n    return a\n"})
+    _, doc = run(capsys, str(tmp_path), "--probe", "other:mine")
+    entry = cast(dict[str, object], doc["entry"])
+    assert entry["value"] == "other:mine" and entry["guess"] is False
+    assert agent_table(tmp_path / "scrimmage.toml")["function"] == "other:mine"
+    assert probe_of(doc)["function"] == "other:mine"
+
+
+def test_an_unreadable_file_name_is_stored_as_text(tmp_path: Path) -> None:
+    with open(bytes(tmp_path) + b"/bad\xff.py", "w") as handle:
+        handle.write("X = 1\n")
+    assert drafting.read_folder(tmp_path).unread == ["bad\\udcff.py"]
