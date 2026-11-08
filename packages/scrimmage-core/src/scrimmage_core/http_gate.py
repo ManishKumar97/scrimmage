@@ -18,6 +18,9 @@ import hashlib
 import http
 import inspect
 import json
+import math
+import os
+import random
 import threading
 import time
 import zlib
@@ -28,7 +31,7 @@ from typing import Any, NoReturn, Protocol
 
 from scrimmage_core import credentials, hooks, threads
 from scrimmage_core import provider_openai as openai_table
-from scrimmage_core.budget import Held, Shortfall
+from scrimmage_core.budget import ASK_MAX_S, Held, Shortfall
 from scrimmage_core.client import ControlError
 from scrimmage_core.decide import READ_METHODS, Call, Decision, names
 from scrimmage_core.errors import ScrimmageRefused
@@ -43,7 +46,10 @@ GATED = "__scrimmage_gate__"
 CHAR_PER_TOKEN = 4  # the rough size of a token, for estimates only
 PRICE_KEY_CAP = 300  # a longer name is not shown whole as a price key to paste
 BUDGET_WAIT_S = 30.0  # the longest a call waits for calls in flight to free the budget
-WAIT_STEP_S = 0.25  # how often a waiting call asks again; a cancel is seen between asks
+WAIT_STEP_S = 0.25  # how soon a waiting call asks again when the runner sends no hint
+JITTER = random.Random()  # its own, so the team's program keeps its random sequence
+if hasattr(os, "register_at_fork"):  # forked children do not ask in step
+    os.register_at_fork(after_in_child=JITTER.seed)
 RUN_MARGIN_S = 10.0  # a wait on other runs ends this long before the run's time limit
 SHOWN_HOLDS = 5  # holds a refusal names
 # A refusal the team must act on: the message reaches the run table.
@@ -588,7 +594,7 @@ def ask(
     bound = budget_wait(plan, started - ctx.run.began, own=own)
     waited = time.monotonic() - started
     if answer.why == "held" and waited < bound:
-        return Pause(min(WAIT_STEP_S, bound - waited), answer.ticket)
+        return Pause(min(next_ask_s(answer.retry_s), bound - waited), answer.ticket)
     if answer.ticket is not None:
         ctx.client.release(answer.ticket)
     waited = waited if answer.why == "held" else 0.0
@@ -607,6 +613,17 @@ def ask(
     reason = "budget_held" if answer.why == "held" else "budget"
     ctx.run.refuse(step, reason)
     refuse(ctx.run, step, shortfall_text(answer, waited, plan, own))
+
+
+def next_ask_s(hint: float | None) -> float:
+    """How long a held call waits before asking again: the runner's hint, which grows with
+    the line ahead of it, or WAIT_STEP_S from a runner that sends none or one out of range.
+    Equal jitter, half of it and then a random part of the rest, keeps waiters that started
+    together apart."""
+    step = WAIT_STEP_S  # also for a zero or NaN hint, which would ask back to back
+    if hint is not None and math.isfinite(hint) and 0.0 < hint <= ASK_MAX_S:
+        step = hint
+    return step / 2 + JITTER.uniform(0.0, step / 2)
 
 
 def waits_on_itself(short: Shortfall, run: str) -> bool:

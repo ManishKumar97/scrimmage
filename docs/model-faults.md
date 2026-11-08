@@ -185,7 +185,9 @@ A call that needs room then waits for the others to finish and give back what th
 | within the limit | within the limit | the call goes ahead |
 | within the limit | over the limit | the call waits for calls in flight to finish, then goes ahead |
 
-A waiting call takes a ticket and asks again every quarter of a second.
+A waiting call takes a ticket and asks again when the runner says to.
+The first in line asks again within a quarter of a second, and each call ahead adds a twentieth of a second, up to 2 seconds, with some random spread so calls that started together do not ask together.
+So 100 waiting calls ask about 100 times a second, not 400, and the runner stays quick to answer the calls that finish.
 Tickets are served in the order they came, so a large call is not starved by a stream of small ones.
 A call is granted when it fits along with every call ahead of it in line, so many calls that all fit go ahead together.
 An async call waits on its event loop, not on a thread, so asyncio's threads stay free for other work, such as looking up host names.
