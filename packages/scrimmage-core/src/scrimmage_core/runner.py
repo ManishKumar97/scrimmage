@@ -5,6 +5,7 @@ refused call and a test the budget stopped included; 3 for an infrastructure err
 higher code wins, as a mistake or an error makes the rates not worth trusting.
 """
 
+import dataclasses
 import json
 import os
 import secrets
@@ -143,8 +144,11 @@ class Runner:
         config: Config,
         control_url: Callable[[str], str] = lambda url: url,
         stop_flag: list[str] | None = None,
+        *,
+        record: bool = False,
     ) -> None:
         self.config = config
+        self.record = record  # scrimmage record: real calls' lines carry what a mock needs
         self.control_url = control_url  # lets a test point the agent elsewhere
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         runs = config.root / "scrimmage-runs"
@@ -226,6 +230,8 @@ class Runner:
             run = f"run-{secrets.token_hex(6)}"
             self.row_of[run] = row
         plan = planner.plan_for(self.config, row, run)
+        if self.record:
+            plan = dataclasses.replace(plan, record=True)
         self.server.open_run(run, row.name, plan.to_json())
         if self.cancelled:
             self.server.close_run(run)
@@ -886,8 +892,15 @@ class Report:
 
 
 def build_report(
-    config: Config, results: list[RunResult], folder: Path, runner: "Runner | None" = None
+    config: Config,
+    results: list[RunResult],
+    folder: Path,
+    runner: "Runner | None" = None,
+    *,
+    judged: bool = True,
 ) -> Report:
+    """What a run of tests found. judged=False is for scrimmage record, whose one run is not a
+    rate: a row with no result, a failed rule and a mock no run used are then not mistakes."""
     reports = row_reports(config, results)
     table = [HEAD, *map(row_cells, reports)]
     mistakes: list[str] = []
@@ -898,7 +911,7 @@ def build_report(
         row, mine, where = entry.row, entry.runs, entry.where
         verdict = entry.result
         failures += rule_lines(entry, folder)
-        if verdict.verdict == judge.NO_RESULT and not entry.refused:
+        if judged and verdict.verdict == judge.NO_RESULT and not entry.refused:
             mistakes.append(f"{where}: no result: {no_result_reason(entry, config.agent.runs)}")
         elif verdict.judged < config.agent.runs:
             notes.append(f"{where}: {verdict.judged} of {config.agent.runs} runs judged")
@@ -940,7 +953,9 @@ def build_report(
             if r.outcome == "infrastructure error":
                 code = INFRA
     stopped_by = runner.stopped_by if runner is not None else None
-    unused, wrong, recorded = unused_mocks(config, results) if stopped_by is None else ([], [], [])
+    unused, wrong, recorded = (
+        unused_mocks(config, results) if judged and stopped_by is None else ([], [], [])
+    )
     mistakes += wrong
     notes += recorded
     if runner is not None and not config.agent.tools:
@@ -1039,7 +1054,7 @@ def build_report(
         messages.append((INFRA_ERRORS, INFRA_LINE))
     elif mistakes:
         code = MISTAKE
-    elif any(r.result.verdict == judge.FAIL for r in reports):
+    elif judged and any(r.result.verdict == judge.FAIL for r in reports):
         code = ROW_FAILED
     # The team's own statement that writes may run, so it is said first, not under the table.
     above = [(WARNINGS, TOOL_STAR_LINE)] if "tool:*" in config.agent.real else []

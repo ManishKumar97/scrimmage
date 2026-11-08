@@ -1,4 +1,4 @@
-"""The scrimmage command: scrimmage test, scrimmage check and scrimmage schema.
+"""The scrimmage command: scrimmage test, check, record and schema.
 
 With --json, standard output holds one JSON document and nothing else. Every command's
 document starts with the same envelope; schemas/cli.v1.json describes it.
@@ -16,6 +16,7 @@ from typing import TextIO
 from scrimmage_core import config as settings
 from scrimmage_core import entry
 from scrimmage_core import plan as planner
+from scrimmage_core import record as recording
 from scrimmage_core import runner as running
 from scrimmage_core.errors import ConfigError
 from scrimmage_core.runner import INFRA, MISTAKE, OK, Interrupted, Runner, plural
@@ -28,6 +29,12 @@ LISTS = (running.MISTAKES, running.NOTES, running.WARNINGS, running.INFRA_ERRORS
 STATUS = {
     "test": {OK: "passed", running.ROW_FAILED: "failed", MISTAKE: "mistake", INFRA: "infra"},
     "check": {OK: "valid", MISTAKE: "mistake", INFRA: "infra"},
+    "record": {
+        OK: "complete",
+        running.ROW_FAILED: "incomplete",
+        MISTAKE: "mistake",
+        INFRA: "infra",
+    },
 }
 # With --json these stop the command with a document, wherever they arrive. The runner sets
 # its own handlers while runs go, and puts these back when they end.
@@ -53,18 +60,41 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
     check = commands.add_parser(
         "check", help="check scrimmage.toml without running anything", allow_abbrev=False
     )
-    for command in (test, check):
+    record = commands.add_parser(
+        "record", help="run each test once and write its calls as mocks", allow_abbrev=False
+    )
+    for command in (test, check, record):
         command.add_argument("path", nargs="?", default="scrimmage.toml", type=Path)
         command.add_argument("--json", action="store_true", help="print one JSON document")
+    record.add_argument(
+        "--test", action="append", default=[], metavar="NAME", help="record only this test"
+    )
+    record.add_argument(
+        "--refresh", action="append", default=[], metavar="LABEL", help="record this label again"
+    )
     commands.add_parser("schema", help="print the JSON Schema of scrimmage.toml")
     args = parser.parse_args(argv)
     if args.command == "schema":
         sys.stdout.write((SCHEMAS / "scrimmage-toml.v1.json").read_text())
         return OK
-    run = run_test if args.command == "test" else run_check
+    run = chosen_command(args)
     if not args.json:
         return run(args.path, None)
     return as_json(args.command, args.path, run, process)
+
+
+def chosen_command(args: argparse.Namespace) -> Callable[[Path, "Found | None"], int]:
+    """The function that runs this command, with a command's own flags already bound."""
+    if args.command == "test":
+        return run_test
+    if args.command == "check":
+        return run_check
+    names, refresh = list(args.test), list(args.refresh)
+
+    def record(path: Path, found: "Found | None") -> int:
+        return run_record(path, found, names, refresh)
+
+    return record
 
 
 def settle() -> None:
@@ -131,6 +161,35 @@ def scrimmage_version() -> str:
         return UNKNOWN_VERSION
 
 
+def empty_test() -> dict[str, object]:
+    return {
+        "records": None,
+        "tests": 0,
+        "rows": [],
+        "cost_usd": 0.0,
+        "budget_usd": None,
+        "stopped_by": None,
+    }
+
+
+def empty_check() -> dict[str, object]:
+    return {"summary": None}
+
+
+def empty_record() -> dict[str, object]:
+    return {
+        "out": None,
+        "records": None,
+        "cost_usd": 0.0,
+        "numbers": {"calls_seen": 0, "calls_written": 0},
+        "tests": [],
+    }
+
+
+# A command's own fields, as they are when it stops before it has any to give.
+EMPTY_FIELDS = {"test": empty_test, "check": empty_check, "record": empty_record}
+
+
 class Found:
     """What a --json run gathers for its document, in place of printing it."""
 
@@ -138,19 +197,7 @@ class Found:
         self.path = path
         self.messages: list[tuple[str, str]] = []
         self.runner: Runner | None = None
-        # A command's own fields, as they are when it stops before it has any to give.
-        self.fields: dict[str, object] = (
-            {
-                "records": None,
-                "tests": 0,
-                "rows": [],
-                "cost_usd": 0.0,
-                "budget_usd": None,
-                "stopped_by": None,
-            }
-            if command == "test"
-            else {"summary": None}
-        )
+        self.fields: dict[str, object] = EMPTY_FIELDS[command]()
 
     def started(self, config: settings.Config, runner: Runner) -> None:
         """The test has a records folder: a document from here on names it."""
@@ -262,6 +309,75 @@ def run_test(path: Path, found: Found | None) -> int:
     found.messages += report.every_message
     found.fields.update(running.report_json(report))
     return report.code
+
+
+def run_record(path: Path, found: Found | None, names: list[str], refresh: list[str]) -> int:
+    """One real baseline run per test, its real calls written as mocks beside the team's file."""
+    try:
+        config, problems = read(path)
+    except Exception as exc:  # Scrimmage's own failure, not a mistake in the file
+        return unreadable("record", exc, found)
+    stop_point()
+    if config is None:
+        return record_mistakes(problems, found)
+    plan, problems = recording.prepare(config, names, refresh)
+    if plan is None:
+        return record_mistakes(problems, found)
+    runner: Runner | None = None
+    results: list[running.RunResult] = []
+    stopped: str | None = None
+    try:
+        runner = Runner(
+            plan.config, stop_flag=None if found is None else entry.pending, record=True
+        )
+        if found is not None:
+            found.runner = runner
+            found.fields["records"] = str(runner.folder)
+        stop_point()
+        results = runner.run_all()
+    except Interrupted as exc:
+        stopped = f"stopped by {exc}; every run was stopped, and nothing was written"
+    except Exception as exc:  # the runner's own failure is never a result
+        stopped = f"infrastructure error in the runner: {exc!r}"
+    finally:
+        if runner is not None:
+            runner.server.server.server_close()
+    if stopped is not None:
+        if found is None:
+            print(f"scrimmage: {stopped}", file=sys.stderr)
+            return INFRA
+        return found.fail(stopped)
+    assert runner is not None
+    report = running.build_report(plan.config, results, runner.folder, runner, judged=False)
+    stop_point()  # a signal that came while the last run ended: nothing has been written
+    try:
+        result = recording.finish(plan, path, runner, results, report)
+        if found is not None:
+            settle()  # the file is written, so no signal may turn this into a failure now
+    except KeyboardInterrupt:  # Ctrl-C in the text form, where no signal is only noted
+        print("scrimmage: stopped by SIGINT; nothing was written", file=sys.stderr)
+        return INFRA
+    except Exception as exc:  # WriterBug or any other failure while writing: Scrimmage's own
+        message = f"infrastructure error while writing the file, nothing was written: {exc!r}"
+        if found is None:
+            print(f"scrimmage: {message}", file=sys.stderr)
+            return INFRA
+        return found.fail(message)
+    if found is None:
+        recording.print_result(result, plan.config)
+        return result.code
+    found.messages += [*result.above, *result.messages]
+    found.fields.update(recording.json_fields(result))
+    return result.code
+
+
+def record_mistakes(problems: list[str], found: Found | None) -> int:
+    if found is None:
+        say(problems, sys.stderr)
+        print("scrimmage: nothing was recorded", file=sys.stderr)
+        return MISTAKE
+    found.messages += [(running.MISTAKES, problem) for problem in problems]
+    return MISTAKE
 
 
 def run_check(path: Path, found: Found | None) -> int:

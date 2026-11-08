@@ -22,7 +22,7 @@ import scrimmage_core
 from conftest import ACME, Project
 from fakes.openai_server import FakeOpenAI
 from report_cases import CASES, FOLDER, GOLDEN
-from scrimmage_core import cli, config, entry, judge, runner
+from scrimmage_core import capture, cli, config, entry, judge, record, runner
 from scrimmage_core.runner import Runner, build_report, print_report, report_json
 
 Fake = Callable[..., FakeOpenAI]
@@ -425,6 +425,11 @@ def test_each_enum_lists_every_value_the_code_gives() -> None:
     assert found["outcome"] == list(runner.OUTCOMES)
     assert found["kind"] == list(judge.KINDS)
     assert found["stopped_by"] == list(runner.STOPPED_BY)
+    assert set(found["code"]) == set(record.MANUAL_CODES) | set(record.SKIPPED_CODES)
+    assert set(found["rule"]) == {capture.PATTERN, capture.KEY_NAME}
+    source_record = Path(record.__file__).read_text()
+    for code in (*record.MANUAL_CODES, *record.SKIPPED_CODES):
+        assert f'"{code}"' in source_record, code
     source = Path(runner.__file__)
     outcomes = constants_assigned(source, "one", "outcome")
     assert outcomes and outcomes <= set(runner.OUTCOMES)  # an empty lookup proves nothing
@@ -690,7 +695,7 @@ def test_the_shipped_schema_takes_what_a_later_release_adds() -> None:
     later["notes"] = [{"message": "a note", "code": "N001"}]
     cast(list[dict[str, object]], later["rows"])[0]["outcome_counts"] = {"answered": 3}
     jsonschema.Draft202012Validator(CLI_SCHEMA).validate(later)
-    record = {**doc, "command": "record", "out": "scrimmage.recorded.toml"}
+    record = {**doc, "command": "later", "out": "scrimmage.recorded.toml"}
     jsonschema.Draft202012Validator(CLI_SCHEMA).validate(record)  # a command it does not know
     closed = jsonschema.Draft202012Validator(closed_schema())
     for changed in (later, record, {**doc, "status": "flaky"}, {**doc, "extra": 1}):
