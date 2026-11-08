@@ -1,6 +1,7 @@
 """The signed protocol between the SDK and the control server, and the record store."""
 
 import base64
+import dataclasses
 import hashlib
 import http.client
 import json
@@ -61,9 +62,44 @@ def line(seq: int, run: str = "run-1") -> dict[str, object]:
     return {"v": 1, "run": run, "row": "baseline", "seq": seq, "proc": {"pid": 1}}
 
 
+def served(fetched: object) -> object:
+    """A served plan without the run's age, which the server adds to each copy."""
+    assert isinstance(fetched, dict) and "elapsed_s" in fetched, fetched
+    return {k: v for k, v in fetched.items() if k != "elapsed_s"}
+
+
 def test_a_signed_request_gets_its_plan(server: ControlServer) -> None:
-    assert ControlClient(server.url, TOKEN).fetch_plan("run-1") == PLAN
+    assert served(ControlClient(server.url, TOKEN).fetch_plan("run-1")) == PLAN
     assert server.runs["run-1"].fetched
+
+
+@pytest.mark.design("protocol.plan_says_run_age")
+def test_a_served_plan_says_how_long_the_run_has_been_going(server: ControlServer) -> None:
+    """Only a length of time is sent: a monotonic reading means nothing in another process."""
+    server.runs["run-1"].opened -= 30.0  # the program took 30 s to load, so it asks late
+    fetched = ControlClient(server.url, TOKEN).fetch_plan("run-1")
+    assert isinstance(fetched, dict)
+    assert 30.0 <= fetched["elapsed_s"] < 60.0  # 30 s, and however long the request took
+    assert "elapsed_s" not in server.runs["run-1"].plan  # the stored plan is left as it was
+
+
+@pytest.mark.design("protocol.run_age_sets_origin")
+def test_a_fetched_plan_puts_the_runs_start_back_by_its_age() -> None:
+    """A child fetches its plan late, and its time still counts from the run's start."""
+
+    class Sink:
+        def put(self, line: dict[str, object], *, keep: bool = False) -> None:
+            del line, keep
+
+    aged = dataclasses.replace(a_plan(), elapsed_s=45.0)
+    run = state.RunState(None, Sink(), [], load=lambda: aged)
+    loaded = time.monotonic()
+    run.begin("a", {})  # its first gated call fetches the plan
+    assert loaded - 45.0 <= run.began <= time.monotonic() - 45.0
+    with pytest.raises(ValueError, match="elapsed_s is negative"):
+        Plan.from_json({**aged.to_json(), "elapsed_s": -1.0})
+    assert Plan.from_json(aged.to_json()) == aged
+    assert "elapsed_s" not in a_plan().to_json()  # a stored plan round-trips as it was
 
 
 @pytest.mark.design("protocol.wrong_signature")
@@ -162,7 +198,7 @@ def test_a_five_minute_clock_gap_is_recovered_with_one_retry(tmp_path: Path) -> 
     control.open_run("run-1", "baseline", PLAN)
     try:
         client = ControlClient(control.url, TOKEN)
-        assert client.fetch_plan("run-1") == PLAN
+        assert served(client.fetch_plan("run-1")) == PLAN
         assert client.offset == pytest.approx(300, abs=5)
     finally:
         control.stop()

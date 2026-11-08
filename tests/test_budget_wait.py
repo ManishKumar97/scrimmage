@@ -5,6 +5,7 @@ The ledger never blocks a request: a waiter has a ticket and asks again every st
 
 import asyncio
 import dataclasses
+import json
 import re
 import subprocess
 import sys
@@ -15,9 +16,9 @@ from pathlib import Path
 
 import pytest
 
-from conftest import EXAMPLE_FAULT, Project, Result
+from conftest import EXAMPLE_FAULT, Project, Result, TimeLimit
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import http_gate, state
+from scrimmage_core import control, http_gate, state
 from scrimmage_core.budget import STALE_S, Held, Ledger, Shortfall
 from scrimmage_core.client import ControlClient, ControlError
 from scrimmage_core.config import Agent
@@ -350,6 +351,27 @@ def test_the_bound_is_short_for_own_holds_and_long_for_other_runs() -> None:
     assert http_gate.budget_wait(plan, elapsed=200.0, own=False) == 0.0
 
 
+@pytest.mark.design("wait.counts_from_the_runners_start")
+@pytest.mark.parametrize(("elapsed", "bound"), [(0.0, 110.0), (50.0, 60.0)])
+def test_a_wait_on_another_run_shrinks_by_the_time_the_runner_says_has_passed(
+    gated: None, monkeypatch: pytest.MonkeyPatch, elapsed: float, bound: float
+) -> None:
+    """The runner's run_timeout counts from its start. A program that took 50 s to load has
+    70 s of its 120 s left, so its wait ends 10 s before the limit, at 60 s, not at 110 s."""
+    budget = Budget(limit=0.004)
+    budget.ledger.reserve(0.003, "run-other", LABEL)  # a hold that never settles
+    before = time.monotonic()
+    sink, _ = install(make_plan(budget=0.004, time_limit_s=120.0, elapsed_s=elapsed), budget)
+    clock = Clock(monkeypatch)
+    clock.start = clock.now = time.monotonic()  # the fake clock goes on from the real one
+    took = clock.start - before  # the plan arrived in this window
+    with pytest.raises(ScrimmageRefused, match="model:openai in run-other"):
+        client().post(URL, json=BODY)
+    assert bound - took - 0.001 <= clock.waited <= bound + 0.001
+    numbers = sink.lines[0]["budget"]
+    assert isinstance(numbers, dict) and numbers["own"] is False
+
+
 def held_forever(
     limit: float, time_limit: float = 1.0, run: str = "run-1"
 ) -> tuple[Budget, list[object]]:
@@ -581,6 +603,79 @@ def test_a_stream_held_open_across_a_second_call_ends_in_a_clear_stop(project: P
     assert "was held by calls in flight (model:openai in run-" in result.out
     assert "after a wait of 1s for calls in flight" in result.out, result.out
     assert "was reached" not in result.out
+
+
+SLOW_START = """\
+# The first run takes the budget. The second starts its program once the first holds it.
+if mkdir first 2>/dev/null; then exec python race.py hold "$1"; fi
+while [ ! -e holding ]; do sleep 0.05; done
+exec python race.py wait "$1"
+"""
+
+RACE = '''"""Run A opens a stream, which holds the budget, and keeps it open. Run B needs room."""
+
+import sys
+import time
+from pathlib import Path
+
+import openai
+
+role, question = sys.argv[1], sys.argv[2]
+client = openai.OpenAI(max_retries=0)
+messages = [{"role": "user", "content": question}]
+if role == "hold":
+    client.chat.completions.create(model="gpt-4o-mini", messages=messages, stream=True)
+    Path("holding").touch()
+    time.sleep(120)  # the stream stays open until the test stops this run
+else:
+    reply = client.chat.completions.create(model="gpt-4o-mini", messages=messages)
+    print(reply.choices[0].message.content)
+'''
+STARTUP_S = 110.0  # run_timeout less its 10 s margin: no time is left to wait
+
+
+@pytest.mark.design("wait.slow_start_end_to_end")
+@pytest.mark.slow
+def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
+    project: Project, monkeypatch: pytest.MonkeyPatch, time_limit: TimeLimit
+) -> None:
+    """A program that takes 110 s to load, as `uv run` on a cold cache can, then waits on
+    another run's hold. Its wait must end before the runner's limit, so the run reads "not
+    reserved", not "timed out".
+
+    No real time passes: each run is made STARTUP_S old when its program asks for its plan.
+    Only the 10 s margin is then left, so any wait at all is one the design forbids, and the
+    limit arrives the moment a call asks again. The first build waited, and timed out.
+    """
+    real_plan = control.ControlServer._plan
+
+    def slow_start(server: control.ControlServer, run: str) -> tuple[int, dict[str, object]]:
+        server.runs[run].opened = time.monotonic() - STARTUP_S
+        return real_plan(server, run)
+
+    real_reserve = control.ControlServer._reserve
+    asked_again: list[str] = []
+
+    def reserve(server: control.ControlServer, body: bytes) -> tuple[int, dict[str, object]]:
+        if json.loads(body).get("ticket") is not None:
+            asked_again.append("waiting")
+        return real_reserve(server, body)
+
+    monkeypatch.setattr(control.ControlServer, "_plan", slow_start)
+    monkeypatch.setattr(control.ControlServer, "_reserve", reserve)
+    time_limit.at(lambda: bool(asked_again))
+    (project.root / "slow_start.sh").write_text(SLOW_START)
+    (project.root / "race.py").write_text(RACE)
+    project.edit(
+        'function = "acme.agent:answer"',
+        'command = "sh slow_start.sh {question}"\nruns = 2\nparallel = 2\nmax_cost_usd = 0.004',
+    )
+    project.edit(EXAMPLE_FAULT, "")
+    result = run_on_fake(project, ["chat_stream_usage"])
+    assert result.code == 2, result.out
+    assert sorted(str(s["outcome"]) for s in result.summaries()) == ["not reserved", "stopped"]
+    assert "test mistake: a model call could not be reserved" in result.out
+    assert asked_again == [] and True not in time_limit.reached
 
 
 @pytest.mark.design("wait.leak_reported")

@@ -200,6 +200,11 @@
       "type": "number",
       "exclusiveMinimum": 0
     },
+    "elapsed_s": {
+      "description": "How long the run had been going when the runner sent this plan, in seconds. The SDK counts time_limit_s from the runner's start, not its own.",
+      "type": "number",
+      "minimum": 0
+    },
     "renames": {
       "type": "object",
       "additionalProperties": {

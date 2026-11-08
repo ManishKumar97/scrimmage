@@ -87,6 +87,14 @@ def test_a_plan_with_a_renamed_tool_fits_the_schema_and_round_trips() -> None:
         validator("plan").validate({**DESIGN_PLAN, "renamed": {}})
 
 
+def test_a_served_plan_with_the_runs_age_fits_the_schema_and_round_trips() -> None:
+    doc = {**DESIGN_PLAN, "elapsed_s": 12.5}
+    validator("plan").validate(doc)
+    assert plan.Plan.from_json(doc).to_json() == doc
+    with pytest.raises(jsonschema.ValidationError):
+        validator("plan").validate({**DESIGN_PLAN, "elapsed_s": -1})
+
+
 @pytest.mark.design("schema.record")
 def test_the_designs_record_line_fits_the_schema() -> None:
     validator("record").validate(DESIGN_LINE)
