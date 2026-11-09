@@ -9,10 +9,8 @@ Over streamable HTTP each message is also a web request. The transport's own req
 carry a mark, so a message is decided here and never again at the web gate.
 """
 
-import asyncio
 import contextlib
 import copy
-import importlib.metadata
 import json
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextvars import ContextVar
@@ -165,6 +163,8 @@ def web_gatable(module: ModuleType) -> bool:
 
 
 def version() -> tuple[int, int] | None:
+    import importlib.metadata  # not at import: the SDK starts without it
+
     try:
         parts = importlib.metadata.version("mcp").split(".")
         return int(parts[0]), int(parts[1])
@@ -353,6 +353,8 @@ async def carried(
     A recording run then saves the result. The call has succeeded by then, so a cancel that
     arrives while it is saved is raised only after the line says it succeeded.
     """
+    import asyncio
+
     try:
         reply = await sent
         step.extra["result"] = record(gate, wire_form(reply))

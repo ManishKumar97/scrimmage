@@ -29,6 +29,8 @@ BATCH_LINES = 500
 BATCH_S = 0.1
 TIMEOUT_S = 10.0
 BLOB_QUEUE = 64  # side-folder items waiting to be sent; each is at most 10 MB
+# Put on the queue at exit to end the sender's wait. Compared by identity, never sent.
+WAKE: dict[str, object] = {}
 
 
 class ControlError(Exception):
@@ -236,8 +238,10 @@ class Sender:
             if self.unsent or self.unsent_posts or self.settles:
                 self._send_batch(block=False, final=True)
             return
-        self._stop.set()
+        self._stop.set()  # before the wake, or the thread could open a new window
         if self._thread.is_alive():
+            with contextlib.suppress(queue.Full):  # a full queue means get is not waiting
+                self.queue.put_nowait(WAKE)
             self._thread.join(timeout=2 * TIMEOUT_S)
         while self._send_batch(block=False):
             pass
@@ -255,11 +259,15 @@ class Sender:
             wait = deadline - time.monotonic()
             try:
                 if block and wait > 0:
-                    lines.append(self.queue.get(timeout=wait))
+                    line = self.queue.get(timeout=wait)
                 else:
-                    lines.append(self.queue.get_nowait())
+                    line = self.queue.get_nowait()
             except queue.Empty:
                 break
+            if line is WAKE:  # send what is here now; lines behind it still go
+                block = False
+                continue
+            lines.append(line)
         if not self.eager:
             with self._sending:
                 self._send_posts()

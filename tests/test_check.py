@@ -8,7 +8,7 @@ import pytest
 
 from config_cases import BAD, GOOD
 from conftest import EXAMPLE, Project
-from scrimmage_core import cli, config, control, runner
+from scrimmage_core import cli, config, control, outcomes, runner
 
 TESTS = Path(__file__).parent
 pytestmark = pytest.mark.usefixtures("signals_kept")
@@ -57,10 +57,10 @@ def test_check_passes_exactly_when_test_gets_past_the_file(
         check = capsys.readouterr()
         tested = cli.main(["test", str(path)])
         test = capsys.readouterr()
-        got_past = tested == runner.INFRA and "Reached" in test.err
-        assert (checked == runner.OK) == got_past, (name, check, test)
-        assert checked in (runner.OK, runner.MISTAKE), name
-        if checked == runner.OK:
+        got_past = tested == outcomes.INFRA and "Reached" in test.err
+        assert (checked == outcomes.OK) == got_past, (name, check, test)
+        assert checked in (outcomes.OK, outcomes.MISTAKE), name
+        if checked == outcomes.OK:
             assert check.err == "" and check.out.startswith("scrimmage check: "), name
         else:
             assert problems(check.err) == problems(test.err), name
@@ -80,11 +80,11 @@ def test_check_starts_no_process_server_or_records_folder(
     monkeypatch.setattr(subprocess, "Popen", refuse)
     monkeypatch.setattr(control.ControlServer, "start", refuse)
     monkeypatch.setattr(control.ControlServer, "__init__", refuse)
-    assert cli.main(["check", str(project.toml)]) == runner.OK
-    assert cli.main(["check", "--json", str(project.toml)]) == runner.OK
+    assert cli.main(["check", str(project.toml)]) == outcomes.OK
+    assert cli.main(["check", "--json", str(project.toml)]) == outcomes.OK
     assert not (project.root / "scrimmage-runs").exists()
     project.edit('function = "acme.agent:answer"', 'command = "python3 bot.py {question}"')
-    assert cli.main(["check", str(project.toml)]) == runner.OK, capsys.readouterr()
+    assert cli.main(["check", str(project.toml)]) == outcomes.OK, capsys.readouterr()
     assert not (project.root / "scrimmage-runs").exists()
 
 
@@ -104,7 +104,7 @@ def test_a_file_that_cannot_be_read_is_one_problem(
     path = tmp_path / "scrimmage.toml"
     if content is not None:
         path.write_bytes(content)
-    assert cli.main(["check", str(path)]) == runner.MISTAKE
+    assert cli.main(["check", str(path)]) == outcomes.MISTAKE
     captured = capsys.readouterr()
     lines = captured.err.splitlines()
     assert len(lines) == 1 and lines[0].startswith(f"scrimmage: {says}"), lines
@@ -114,7 +114,7 @@ def test_a_file_that_cannot_be_read_is_one_problem(
 def test_a_valid_file_gets_one_line_with_what_it_holds(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert cli.main(["check", str(project.toml)]) == runner.OK
+    assert cli.main(["check", str(project.toml)]) == outcomes.OK
     captured = capsys.readouterr()
     assert captured.err == ""
     assert captured.out == (
@@ -127,7 +127,7 @@ def test_a_valid_file_gets_one_line_with_what_it_holds(
         '"acme.tools:refund_order", "acme.tools:get_stock"]\n',
         "",
     )
-    assert cli.main(["check", str(project.toml)]) == runner.OK
+    assert cli.main(["check", str(project.toml)]) == outcomes.OK
     assert capsys.readouterr().out.endswith("1 test, 2 rows, 2 runs, no tools list, no budget\n")
 
 
@@ -135,7 +135,7 @@ def test_check_reads_scrimmage_toml_in_the_current_folder_by_default(
     project: Project, capsys: pytest.CaptureFixture[str]
 ) -> None:
     project.monkeypatch.chdir(project.root)
-    assert cli.main(["check"]) == runner.OK
+    assert cli.main(["check"]) == outcomes.OK
     assert capsys.readouterr().out.startswith("scrimmage check: scrimmage.toml is valid: ")
 
 
@@ -146,7 +146,7 @@ def test_a_failure_of_scrimmage_itself_is_exit_3_in_text_too(
         raise RuntimeError("the reader broke")
 
     monkeypatch.setattr(config, "load", boom)
-    assert cli.main(["check", str(project.toml)]) == runner.INFRA
+    assert cli.main(["check", str(project.toml)]) == outcomes.INFRA
     captured = capsys.readouterr()
     broke = "RuntimeError('the reader broke')"
     assert f"scrimmage: infrastructure error in scrimmage check: {broke}" in captured.err

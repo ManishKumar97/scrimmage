@@ -40,11 +40,18 @@ def _arguments(
     kwargs: dict[str, Any],
     *,
     bound: bool = False,
+    built: list[inspect.Signature] | None = None,
 ) -> dict[str, object]:
     """The call's arguments by name. bound: the first is self or cls, which is never
-    recorded: its repr can show an object's state, and it says nothing about the call."""
+    recorded: its repr can show an object's state, and it says nothing about the call.
+    built: the tool's signature, kept here by its first successful build."""
     try:
-        signature = inspect.signature(tool)
+        if built:
+            signature = built[0]
+        else:
+            signature = inspect.signature(tool)
+            if built is not None:
+                built.append(signature)
         arguments = dict(signature.bind_partial(*args, **kwargs).arguments)
     except TypeError:
         return {"args": list(args[1:] if bound else args), "kwargs": kwargs}
@@ -181,8 +188,10 @@ def gate(tool: Callable[..., Any], name: str, *, bound: bool = False) -> Callabl
     """The gate for a function, by the name the model sees. bound: a method's function,
     whose first argument is self or cls."""
 
+    built: list[inspect.Signature] = []  # building a signature costs more than the call's gate
+
     def describe(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Gated:
-        return Gated(name, _arguments(tool, args, kwargs, bound=bound), tool)
+        return Gated(name, _arguments(tool, args, kwargs, bound=bound, built=built), tool)
 
     return gate_with(tool, describe)
 

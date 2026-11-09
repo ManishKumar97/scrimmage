@@ -50,6 +50,10 @@ def get_text(order_id: str) -> str:
     return "real"
 
 
+def get_more(order_id: str) -> str:
+    return "real"
+
+
 async def get_async(order_id: str) -> str:
     return "real async"
 
@@ -331,6 +335,29 @@ def test_arguments_that_do_not_bind_are_still_recorded(lines: Lines) -> None:
     assert tool_gate.gate(get_text, "get_text")(1, 2, extra=3) == "m"
     args = lines.lines[0]["args"]
     assert isinstance(args, dict) and '"kwargs"' in str(args["preview"])
+
+
+def test_a_gate_builds_its_tools_signature_once(
+    lines: Lines, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install(lines, [Mock("tool:get_text", "m", None), Mock("tool:get_more", "m", None)])
+    built: list[object] = []
+    real = inspect.signature
+
+    def counting(tool: object, **kwargs: object) -> inspect.Signature:
+        built.append(tool)
+        return real(tool, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(inspect, "signature", counting)
+    one = tool_gate.gate(get_text, "get_text")
+    for _ in range(100):
+        assert one(order_id="1") == "m"
+    assert len(built) == 1
+    assert lines.lines[-1]["args"] is not None
+    other = tool_gate.gate(get_more, "get_more")
+    for _ in range(3):
+        other("1")
+    assert built == [get_text, get_more]
 
 
 @pytest.mark.design("tools.listed_missing_stops")

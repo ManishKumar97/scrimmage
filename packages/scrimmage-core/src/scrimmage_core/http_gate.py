@@ -9,7 +9,6 @@ request's own URL, so a proxy or a mounted transport changes nothing. The SDK ne
 imports either library: the hook patches one when the agent imports it.
 """
 
-import asyncio
 import atexit
 import contextlib
 import dataclasses
@@ -21,13 +20,14 @@ import json
 import math
 import os
 import random
+import sys
 import threading
 import time
 import zlib
 from collections.abc import Callable, Iterator
 from contextvars import ContextVar
 from types import ModuleType
-from typing import Any, NoReturn, Protocol
+from typing import TYPE_CHECKING, Any, NoReturn, Protocol
 
 from scrimmage_core import credentials, hooks, threads
 from scrimmage_core import probe as probing
@@ -40,6 +40,9 @@ from scrimmage_core.labels import shown_name
 from scrimmage_core.plan import Plan
 from scrimmage_core.redact import redact, redacted
 from scrimmage_core.state import BLOB_CAP, BlobSink, RunState, Step, blob, current, error_text
+
+if TYPE_CHECKING:
+    import asyncio
 
 # The minor versions this release was tested with, per library.
 TESTED = {"httpx": ((0, 28), (0, 28)), "httpx2": ((2, 16), (2, 16))}
@@ -191,8 +194,11 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
         return response
 
     async def async_gate(self: Any, request: Any) -> Any:
+        # A program on an asyncio loop has imported asyncio. Without it the task is None,
+        # as under trio, and the SDK does not pay for the import.
+        current_task = getattr(sys.modules.get("asyncio"), "current_task", None)
         try:
-            task = asyncio.current_task()
+            task = current_task() if current_task is not None else None
         except RuntimeError:  # no asyncio loop: trio, or something else
             task = None
         who = f"task-{id(task)}" if task is not None else f"thread-{threading.get_ident()}"
@@ -724,6 +730,8 @@ async def reserve_off_the_loop(
     between asks are on the loop, so a waiting call holds no thread. asyncio's default
     threads also look up host names, so a held thread could keep a granted call from
     connecting."""
+    import asyncio
+
     usd = hold_for(ctx, step, request, extra)
     if usd is None:
         return None
@@ -756,6 +764,8 @@ async def ask_off_the_loop(
     cancel can also land while the work waits for a free thread, so it never runs: the
     call was already counted, so the task writes its line instead.
     """
+    import asyncio
+
     lock = threading.Lock()
     cancelled: list[bool] = []
     started_work: list[bool] = []
@@ -807,7 +817,11 @@ def abandoned(
 ) -> None:
     """The call was cancelled or interrupted before it was sent, so it cost nothing."""
     extra["cost_usd"] = 0.0
-    ctx.run.finish(step, error=error or asyncio.CancelledError("cancelled before it was sent"))
+    if error is None:
+        import asyncio  # only a cancelled call lands here, and its program has imported it
+
+        error = asyncio.CancelledError("cancelled before it was sent")
+    ctx.run.finish(step, error=error)
     settle(ctx, reservation, 0.0)
 
 
@@ -826,9 +840,11 @@ def off_host(ctx: Context, step: Step, request: Any, response: Any) -> str | Non
     return None if provider_of(ctx, host) else host
 
 
-async def close_keeping_cancel(response: Any) -> asyncio.CancelledError | None:
+async def close_keeping_cancel(response: Any) -> "asyncio.CancelledError | None":
     """Close a reply being refused. A cancel or a failed close must not lose its line or
     settlement, so a cancel is handed back to raise once those are written."""
+    import asyncio
+
     try:
         await response.aclose()
     except asyncio.CancelledError as cancel:

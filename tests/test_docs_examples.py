@@ -18,7 +18,7 @@ import pytest
 from conftest import ACME, EXAMPLE, doc_pages
 from fakes.openai_server import FakeOpenAI
 from scrimmage_core.cli import main
-from scrimmage_core.runner import MISTAKE, OK, ROW_FAILED
+from scrimmage_core.outcomes import MISTAKE, OK, ROW_FAILED
 
 DOCS = Path(__file__).parents[1] / "docs"
 OUTPUT = "Output"

@@ -30,11 +30,21 @@ from scrimmage_core import plan as planner
 from scrimmage_core.budget import Ledger
 from scrimmage_core.config import QUESTION, Agent, Config, Fault, Mock, Test
 from scrimmage_core.control import ControlServer, proc_key
+from scrimmage_core.outcomes import (  # the runner's names for them
+    INFRA,
+    INFRA_ERRORS,
+    MISTAKE,
+    MISTAKES,
+    NOTES,
+    OK,
+    ROW_FAILED,
+    WARNINGS,
+    plural,
+)
 from scrimmage_core.records import RECORD_VERSION, RecordStore
 from scrimmage_core.redact import redact
 from scrimmage_core.state import COMMAND_CAP, PREVIEW, now_iso
 
-OK, ROW_FAILED, MISTAKE, INFRA = 0, 1, 2, 3
 END = b"\x00"  # ends the stop watcher; no signal has the number 0
 TAIL_BYTES = 1024 * 1024  # how much of a script's output is read to find its last line
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
@@ -95,7 +105,6 @@ HEAD = [
 ]
 TEST_COLUMN, FAULT_COLUMN = 0, 2
 # The lists a report's messages go in, and the word each line starts with in the text.
-MISTAKES, NOTES, WARNINGS, INFRA_ERRORS = "mistakes", "notes", "warnings", "infra"
 PREFIXES = {
     MISTAKES: "test mistake",
     NOTES: "note",
@@ -1239,7 +1248,3 @@ def stop_numbers(results: list[RunResult], stopped_by: str) -> dict[str, object]
 def reached(numbers: dict[str, object]) -> bool:
     """Money spent reached the limit, as the refusal saw it."""
     return float(str(numbers.get("spent", 0))) >= float(str(numbers.get("limit", 0)))
-
-
-def plural(n: int, word: str) -> str:
-    return f"{n} {word}" if n == 1 else f"{n} {word}s"
