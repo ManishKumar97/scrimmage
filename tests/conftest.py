@@ -197,8 +197,15 @@ class Result:
 
     def records(self, *, processes: bool = False) -> list[list[dict[str, object]]]:
         """Every run's record lines, one list per run. Each process's own line is left out
-        unless asked for, so a test about calls reads only calls."""
-        files = sorted((self.root / "scrimmage-runs").glob("*/*.jsonl"))
+        unless asked for, so a test about calls reads only calls.
+
+        Folders are in the order they were written. Their names are not: two `scrimmage
+        test` runs in one second share a stamp, and a random suffix then decides."""
+        files = list((self.root / "scrimmage-runs").glob("*/*.jsonl"))
+        newest: dict[Path, int] = {}
+        for file in files:
+            newest[file.parent] = max(newest.get(file.parent, 0), file.stat().st_mtime_ns)
+        files.sort(key=lambda file: (newest[file.parent], file))
         runs = [[json.loads(line) for line in f.read_text().splitlines()] for f in files]
         return [[x for x in run if processes or x.get("notice") != "process"] for run in runs]
 
