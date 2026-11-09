@@ -87,7 +87,7 @@ A child that joins gets the same mocks and safety rules, and its calls go into t
 So a child's `refund_order` is refused, and the refusal ends the run as if your program had made the call.
 
 A child that joins prints nothing, so it adds nothing to its parent's output, and a stdio MCP server's protocol stream stays clean.
-It fetches the plan at its first gated call, so a short command sends no request at all. It does load the SDK: a Python that joins and does nothing takes about 100 ms, against about 10 ms without Scrimmage.
+It fetches the plan at its first gated call, so a short command sends no request at all. It does load the SDK: a Python that joins and does nothing takes about 90 ms, against about 10 ms without Scrimmage.
 
 The first time a process writes a record line, the record says what it is: a line with the notice `process`, holding its interpreter, its command line and its parent's process id.
 Known secret patterns are removed from the command line, and it is cut to 1000 characters.

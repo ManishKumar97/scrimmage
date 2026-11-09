@@ -58,27 +58,29 @@ FIRST_LINE = "import time; print(time.time_ns())"
 
 
 # The enforced ceilings: what a change may never cost, in the unit the name says.
-# They are wide, so a busy machine does not reach them: 8x today's quiet cost for a tool
-# call, 19.8x for sync HTTP, 14.5x async, 20x MCP, 11.3x for a sync model call, 9.1x async,
-# and 8.8x for the CLI. Only the tool ceiling catches one added round trip to the runner:
-# HTTP needs about 7.6 ms added and a model call about 18 ms. ROUND_TRIPS catches those.
+# They are wide, so a busy machine does not reach them: 11.6x today's quiet cost for a tool
+# call, 19.6x for sync HTTP, 18.8x async, 23x MCP, 12.2x for a sync model call, 9.7x async,
+# and 10.6x to 12.3x for the CLI. Only the tool ceiling catches one added round trip to the
+# runner: HTTP needs about 5.7 ms added and a model call about 18 ms. ROUND_TRIPS catches those.
+# "Seen under load" is the worst of 3 attempts with 16 busy loops on the 4 CPUs.
 CALL_BUDGETS_US = {
-    "tool_sync": 500.0,  # 62 µs quiet
-    "tool_async": 500.0,
-    "http_sync": 8000.0,  # 404 µs quiet, 2.8 ms seen under load
-    "http_async": 8000.0,  # 553 µs quiet, 2.3 ms seen under load
-    "model_sync": 20000.0,  # 1.8 ms quiet with the budget on, 9 ms seen under load
-    "model_async": 20000.0,  # 2.2 ms quiet, 6 ms seen under load
-    "mcp_async": 6000.0,  # 300 µs quiet, 2 ms seen under load
+    "tool_sync": 500.0,  # 43 µs quiet, 53 µs seen under load
+    "tool_async": 500.0,  # 43 µs quiet, 54 µs seen under load
+    "http_sync": 6000.0,  # 307 µs quiet, 2.4 ms seen under load
+    "http_async": 7000.0,  # 373 µs quiet, 1.0 ms seen under load
+    "model_sync": 20000.0,  # 1.6 ms quiet with the budget on, 3.5 ms seen under load
+    "model_async": 20000.0,  # 2.1 ms quiet, 6.4 ms seen under load
+    "mcp_async": 6000.0,  # 257 µs quiet, 4.3 ms seen under load
 }
 PROCESS_BUDGETS_MS = {
-    "startup, first line": 800.0,  # 106 ms quiet, 318 ms seen under load
-    "startup, whole process": 1500.0,  # 226 ms quiet, 664 ms seen under load
-    "scrimmage check": 800.0,  # 91 ms quiet, 314 ms seen under load
-    "scrimmage --help": 800.0,  # 91 ms quiet, 375 ms seen under load
-    "import scrimmage_core.cli": 800.0,  # 88 ms quiet, 301 ms seen under load
+    # Kept at 800: twice the 487 ms seen under load is 973, so it is not lowered.
+    "startup, first line": 800.0,  # 90 ms quiet, 487 ms seen under load
+    "startup, whole process": 1150.0,  # 102 ms quiet, 558 ms seen under load
+    "scrimmage check": 520.0,  # 49 ms quiet, 253 ms seen under load
+    "scrimmage --help": 600.0,  # 49 ms quiet, 289 ms seen under load
+    "import scrimmage_core.cli": 500.0,  # 45 ms quiet, 232 ms seen under load
 }
-RUN_BUDGET_MS = {"run": 2000.0}  # 255 ms quiet, 802 ms seen under load
+RUN_BUDGET_MS = {"run": 1450.0}  # 150 ms quiet, 654 ms seen under load
 # Requests to the runner that one gated call waits on: a count, so no machine can change it.
 ROUND_TRIPS = {
     "tool_sync": 0.0,
