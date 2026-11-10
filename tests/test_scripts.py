@@ -20,6 +20,7 @@ import scrimmage_core
 from conftest import ACME, Project, Result, TimeLimit
 from fakes.openai_server import FakeOpenAI
 from scrimmage_core import bootstrap, runner
+from scrimmage_core.client import ControlClient, Sender
 from scrimmage_core.control import ControlServer
 from scrimmage_core.runner import stop_group
 
@@ -1575,6 +1576,10 @@ def test_a_second_sigterm_during_the_first_changes_nothing(project: Project) -> 
     assert len(calls(result)) == 1, result.out
 
 
+def idle_sender() -> Sender:
+    return Sender(ControlClient("http://127.0.0.1:1", "t"), "run-1")
+
+
 @pytest.mark.design("stop.handler_sends_then_ends")
 def test_the_handler_sends_the_last_lines_then_ends_the_program_by_the_signal(
     monkeypatch: pytest.MonkeyPatch,
@@ -1586,7 +1591,7 @@ def test_the_handler_sends_the_last_lines_then_ends_the_program_by_the_signal(
     before = signal.getsignal(signal.SIGTERM)
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
     try:
-        bootstrap.handle_sigterm(lambda: done.append("last lines"))
+        bootstrap.handle_sigterm(lambda: done.append("last lines"), idle_sender())
         handler = signal.getsignal(signal.SIGTERM)
         assert callable(handler)
         handler(signal.SIGTERM, None)
@@ -1609,7 +1614,7 @@ def test_the_handler_ends_the_program_when_python_cannot_start_a_thread(
     before = signal.getsignal(signal.SIGTERM)
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
     try:
-        bootstrap.handle_sigterm(lambda: None)
+        bootstrap.handle_sigterm(lambda: None, idle_sender())
         handler = signal.getsignal(signal.SIGTERM)
         assert callable(handler)
         handler(signal.SIGTERM, None)
