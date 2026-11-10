@@ -52,7 +52,8 @@ A web reply is written as `json` when TOML can hold it, or as exact `text` with 
 
 Only replies that are data are written: 2xx, and 4xx other than 401, 403, 407, 408 and 429. A 5xx written as a mock would be a fault nobody injected in every run.
 
-A tool or MCP mock has `args`, the call's own arguments, and answers only those: see [Recorded mocks](configuration.md#recorded-mocks).
+A tool or MCP mock has `args`, the call's own arguments, and answers only those: see [Mocks that match arguments](configuration.md#mocks-that-match-arguments).
+An argument that differs on a later run is a miss, which the report shows; see [When a replay misses a mock](#when-a-replay-misses-a-mock).
 
 ## What is never written
 
@@ -81,10 +82,32 @@ A call that could not be written is a commented skeleton at the end of its test,
 # Write it by hand, or leave the tool under real.
 # [[test.mock]]
 # call    = "tool:get_invoice"
+# args    = {invoice_id = "INV-7"}
 # returns = ...
 ```
 
 Being commented, it changes nothing a test reads.
+The `args` line is written only when the call's arguments were read whole, held no secret and were plain, so it can be uncommented as it is.
+When a tool under `real` by name now has a mock with `args`, `record` adds a note: a call with other arguments runs for real there.
+
+## When a replay misses a mock
+
+A recording keeps the arguments the model sent that once.
+If a later run sends another form, such as `"SKU-42"` where the recording has `"42"`, no mock matches.
+The call runs for real if its label is under `real` by name, and is refused if it is not.
+The report shows the arguments sent and the nearest mock.
+
+You can:
+
+1. Fix the tool description or the prompt, so the model sends one form.
+2. Add a second mock for the other value, by hand, or by running `scrimmage record` on the recorded file.
+3. Remove `args`, so one reply answers any value.
+4. Remove the tool from `real`, so a miss stops the run.
+
+Recording again on the recorded file has limits.
+It writes to `<name>.recorded.recorded.toml`, as `record` writes `<stem>.recorded.toml`.
+It captures the other value only if the model sends it in that one run.
+It works only for a label under `real` by name: under `tool:*`, and for a label not listed, a miss is refused and nothing is written for that call.
 
 ## Exit codes
 

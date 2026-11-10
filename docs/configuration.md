@@ -104,31 +104,83 @@ The record never holds `self` or `cls`, only the arguments after them.
 | `json` | On a web request: the body, as JSON. |
 | `text` | On a web request: the body, as text. |
 | `recorded` | `true` marks a mock written from a recorded run, not by hand. Its only effect: if no run used it, the report gives a note, not a test mistake. `true` or `false`; `false` by default. |
-| `args` | On a tool or MCP mock with `recorded = true`: the arguments it answers, as a table, such as `{order_id = "1234"}`. Allowed only with `recorded = true`. |
+| `args` | On a tool or MCP mock: the arguments it answers, exactly, as a table, such as `{order_id = "1234"}`. See [Mocks that match arguments](#mocks-that-match-arguments). A web mock has no `args`. |
 
 See [Web requests](web-requests.md) and [MCP tools](mcp.md).
 
-### Recorded mocks
+### Mocks that match arguments
 
-A mock with `recorded = true` and `args` answers only a call whose arguments equal its `args` exactly.
-The types must match too: `{order_id = "1234"}` answers `get_order("1234")`, not `get_order(1234)` or `get_order("5678")`.
-A call that does not match goes on to the next mock, then to the normal rule: it runs for real if it is under `real`, and is refused if it is not.
-So a mock written from one run never gives one order's data to a question about another.
+A tool or MCP mock with `args` answers only a call whose arguments equal its `args` exactly.
+The types must match too: `{order_id = "1234"}` answers `get_order("1234")`, not `get_order(1234)`, `get_order("5678")` or a call that also sends another argument.
+There is no looser form: no subset, no ignored key and no pattern.
+A call that does not match goes on to the next mock, and the first mock that matches wins.
+Then it goes to the normal rule: it runs for real if its label is under `real`, and is refused if it is not.
+So a mock never gives one order's data to a question about another.
 
 ```toml
 [[test.mock]]
-call     = "tool:get_order"
-recorded = true
-args     = {order_id = "1234"}
-returns  = {order_id = "1234", status = "shipped", delivered = "Oct 30"}
+call    = "tool:get_order"
+args    = {order_id = "1234"}
+returns = {order_id = "1234", status = "shipped", delivered = "Oct 30"}
 ```
 
-`scrimmage record` writes these for you; see [Recording replies](recording.md).
+`scrimmage record` writes these for you, with `recorded = true`; see [Recording replies](recording.md).
+You can write `args` by hand too.
+It is the way to pin a tool that writes: a mock of `refund_order` with `args = {order_id = "1234"}` answers a refund of order 1234 and refuses a refund of order 5678, which never runs.
+A mock with no `args` answers every call to its tool, as before, so on a tool that writes it hides every difference between calls.
 
-A mock you write yourself has no `args`, and answers every call to its tool, as before.
-`args` on a mock without `recorded = true` is a mistake, exit code 2, so a hand-written mock keeps its meaning.
-An unused recorded mock is a note, because a later run that does not repeat a recorded call leaves it unused by design.
+What `args` must hold is the form the gate sees:
+
+| Call | The arguments as `args` holds them |
+|---|---|
+| A plain or method tool | Bound by the signature, so the names are the parameters' names, whether the call was positional or not. |
+| A `**kwargs` parameter | Nested under its own name: `{kwargs = {a = 1}}`. |
+| A default the call did not send | Absent. Defaults are not filled in. |
+| A LangChain tool called positionally | `{args = [...]}`. |
+| An argument a framework fills in and never shows the model | Not held, so not compared. |
+
+Each value must be text, a number, `true` or `false`, a list or a table.
+A TOML date, time or datetime is a mistake, exit code 2, because the gate can never hold one and the mock could never match.
+
+A call that had a mock on its label and matched none is a miss.
+The report says so, with the arguments the call sent and the mock that came nearest; see [Mocks that miss](#mocks-that-miss).
+
+A mock with no `args` above a mock with `args` on the same label is a mistake, exit code 2: the first answers every call, so the second never does.
+Put the mock with `args` first and the catch-all last.
+
+`real = ["tool:*"]` does not cover a call that misses a mock with `args`.
+Such a call is refused unless its label is under `real` by name, such as `"tool:get_order"`, because `tool:*` includes tools that write.
+`scrimmage record` on a file with these mocks follows the same rule.
+
+An unused mock with `args` is a note when its tool was called with other arguments.
+An unused recorded mock is a note too, because a later run that does not repeat a recorded call leaves it unused by design.
 An unused hand-written web or MCP mock is still a mistake, as its label may be misspelled.
+
+#### Mocks that miss
+
+A miss on a tool under `real` by name is a warning, and the exit code does not change: the team said the call is safe, and the result is a real observation of the agent.
+A miss on a tool that is not under `real` by name is a refusal, as before, and it now names the arguments.
+A web read that misses runs for real, and a web write that misses is refused, as before.
+
+```text
+warning: tool:get_stock with {"sku": "SKU-42"} matched no mock and ran for real, as it is under [agent] real; nearest mock (heuristic: fewest differing arguments): {"sku": "42"}, differs at sku; values cleaned by a heuristic (order-status baseline, 1 of 1 runs)
+```
+
+The warning shows values only for the arguments that differ.
+Every other argument shows its name and type, such as `<str>`.
+The nearest mock is a guess, chosen for display only: it never decides a match.
+Values are cleaned by a heuristic, so a secret that fits no pattern and sits under an ordinary key name may still print.
+The same misses are in `--json`, in `mock_misses`; see [JSON output](json-output.md).
+A row that had a miss says so beside its broken rules, and `mock_miss_count` is on every row and run.
+
+To act on a miss:
+
+| You want | Do |
+|---|---|
+| The flip gone at its source | Fix the tool description or the prompt, so the model sends one form. |
+| Both values answered | Add a second mock for the other value. |
+| One reply for any value | Remove `args`. |
+| A miss to stop the run | Remove the tool from `real`. |
 
 ## [[test.fault]]
 
