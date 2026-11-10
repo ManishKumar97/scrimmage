@@ -198,3 +198,12 @@ def test_every_letter_of_bearer_is_found_by_lowering_the_text() -> None:
             char = chr(code)
             if matcher.fullmatch(char):
                 assert char.lower() == letter, (hex(code), letter)
+
+
+def test_redacted_gives_a_plain_str_even_when_no_pass_runs() -> None:
+    class Marked(str):
+        pass
+
+    for text in (Marked("nothing here"), Marked("sk-" + "a" * 20)):
+        assert type(redacted(text)[0]) is str
+        assert type(redact(text)) is str
