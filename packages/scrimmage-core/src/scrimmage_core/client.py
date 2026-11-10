@@ -262,7 +262,10 @@ class Sender:
         """Called by a signal handler: if this thread is inside the exit drain, run then when
         the drain ends and return True. The drain holds the send lock, and the handler runs on
         this very thread, so anything it waited for that needs the lock would wait for nothing.
-        A handler runs between two steps of the drain, so no lock is needed here."""
+        A handler runs between two steps of the drain, so no lock is needed here.
+
+        It holds one drain at a time. A second thread flushing at once replaces draining, and
+        a signal then takes the old path, which is no worse than before this was added."""
         if self.draining != threading.get_ident():
             return False
         self.after_drain = then

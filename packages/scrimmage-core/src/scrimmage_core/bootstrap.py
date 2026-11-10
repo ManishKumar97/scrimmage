@@ -83,7 +83,10 @@ def handle_sigterm(last_lines: Callable[[], None], sender: Sender) -> None:
     replaces this one. The sender thread has then sent all but the last 100 ms.
 
     A signal that arrives while this thread is itself sending the exit batches waits for them
-    to end: they hold the send lock, and the thread that would send the rest needs it.
+    to end: they hold the send lock, and the thread that would send the rest needs it. That
+    wait has no limit of its own, so a drain stuck on a silent runner ends at the runner's
+    SIGKILL, exit 137, about a second later than the four seconds above. No line is lost to
+    it that the old path kept.
     """
     if signal.getsignal(signal.SIGTERM) is not signal.SIG_DFL:
         return
