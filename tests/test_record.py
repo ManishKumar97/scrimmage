@@ -1890,3 +1890,104 @@ def answer(question):
     assert [m["path"] for m in done.manual("secret_changed_shape")] == ["/wrapped"]
     assert "hunterW" not in team.out_path.read_text()
     assert not any(m.get("path") == "/wrapped" for m in done.mocks())
+
+
+# The arguments of a call a mock cannot be written for, and the labels a miss now covers.
+
+DOLLARS = """
+def dollars(key):
+    return "cost ${HOME}"
+"""
+RECORDED_ORDER = (
+    '[[test]]\nname     = "t"\nquestion = "q"\nexpect   = ["ok"]\n'
+    '[[test.mock]]\ncall = "tool:get_order"\nrecorded = true\nargs = {order_id = "5678"}\n'
+    'returns = "shipped"\n'
+)
+ORDER_BOT = """
+def get_order(order_id):
+    return "shipped"
+
+def answer(question):
+    get_order("1")
+    return "ok"
+"""
+
+
+def skeleton_of(team: Team, call: str, arg: str, defs: str = DOLLARS) -> tuple[str, Done]:
+    team.write(
+        f"{defs}\ndef answer(question):\n    {call}({arg})\n    return 'ok'\n",
+        ["bot:dollars"],
+        ("tool:dollars",),
+    )
+    team.out_path.unlink(missing_ok=True)  # an earlier output is kept, not rewritten
+    done = team.record()
+    assert [m["call"] for m in done.manual()] == ["tool:dollars"], done.out
+    return team.out_path.read_text(), done
+
+
+@pytest.mark.design("record.skeleton")
+def test_a_skeleton_carries_exact_args_for_a_tool_call(team: Team) -> None:
+    text, _ = skeleton_of(team, "dollars", '"d"')
+    assert '# call    = "tool:dollars"\n# args    = {key = "d"}\n# returns = ...' in text
+    assert tomllib.loads(text)["test"][0].get("mock") is None  # a comment: the file reads the same
+
+
+@pytest.mark.design("record.skeleton")
+def test_a_skeleton_has_no_args_line_when_the_arguments_held_a_secret(team: Team) -> None:
+    both = DOLLARS.replace("(key)", "(key, password='x')")
+    text, _ = skeleton_of(team, "dollars", f'"{SK}"', both)
+    assert "# args" not in text and SK not in text
+    text, _ = skeleton_of(team, "dollars", '"d", password="hunter2-plain"', both)
+    assert "# args" not in text and "hunter2-plain" not in text
+
+
+@pytest.mark.design("record.skeleton")
+def test_a_skeleton_has_no_args_line_when_the_preview_was_cut(team: Team) -> None:
+    text, _ = skeleton_of(team, "dollars", '"x" * 300')
+    assert "# args" not in text
+
+
+@pytest.mark.design("record.skeleton")
+@pytest.mark.parametrize("value", ["https://x.acme/p?token=abc123", JWT])
+def test_a_skeleton_has_no_args_line_when_the_preview_was_redacted(team: Team, value: str) -> None:
+    text, _ = skeleton_of(team, "dollars", f'"{value}"')
+    assert "# args" not in text and "abc123" not in text and JWT not in text
+
+
+@pytest.mark.design("record.skeleton")
+def test_a_skeleton_has_no_args_line_when_a_value_was_not_plain(team: Team) -> None:
+    text, done = skeleton_of(team, "dollars", "{1, 2}")
+    assert "# args" not in text
+    real = [x for x in lines_of(done) if x.get("call") == "tool:dollars"]
+    assert real and real[0]["args_not_plain"] is True
+
+
+@pytest.mark.design("record.skeleton")
+def test_record_names_real_labels_that_now_have_args_mocks(team: Team) -> None:
+    team.write(ORDER_BOT, ["bot:get_order"], ("tool:get_order",))
+    done = team.record()
+    named = "tool:get_order is under real and now has a mock with args"
+    assert any(named in n["message"] for n in done.doc["notes"])
+    team.write(ORDER_BOT, ["bot:get_order"], ("tool:*",))
+    done = team.record()
+    assert not any(named in n["message"] for n in done.doc["notes"])
+
+
+@pytest.mark.design("record.skeleton")
+def test_record_under_a_wildcard_refuses_a_miss_and_writes_nothing_for_it(team: Team) -> None:
+    team.write(ORDER_BOT, ["bot:get_order"], ("tool:*",), tests=RECORDED_ORDER)
+    done = team.record()
+    assert done.written_calls() == []
+    assert [m["code"] for m in done.manual()] == ["refused"]
+    assert "5678" not in done.manual()[0]["message"]
+    assert "mock_misses" not in done.doc
+
+
+@pytest.mark.design("record.skeleton")
+def test_record_on_a_recorded_file_writes_a_missed_call_under_real_by_name(team: Team) -> None:
+    team.write(ORDER_BOT, ["bot:get_order"], ("tool:get_order",), tests=RECORDED_ORDER)
+    done = team.record()
+    assert done.code == 0, done.out
+    assert done.written_calls() == ["tool:get_order"]
+    args = [m["args"] for m in done.mocks()]
+    assert args == [{"order_id": "5678"}, {"order_id": "1"}]
