@@ -1963,6 +1963,19 @@ def test_a_skeleton_has_no_args_line_when_a_value_was_not_plain(team: Team) -> N
 
 
 @pytest.mark.design("record.skeleton")
+def test_a_refused_call_whose_value_was_not_plain_gets_no_args_line(team: Team) -> None:
+    defs = DOLLARS + "import enum\nclass C(enum.StrEnum):\n    RED = 'red'\n"
+    code = f"{defs}\ndef answer(question):\n    dollars(C.RED)\n    return 'ok'\n"
+    team.write(code, ["bot:dollars"], ())
+    team.out_path.unlink(missing_ok=True)  # an earlier output is kept, not rewritten
+    done = team.record()
+    assert [m["call"] for m in done.manual()] == ["tool:dollars"], done.out
+    assert "# args" not in team.out_path.read_text()
+    refused = [x for x in lines_of(done) if x.get("call") == "tool:dollars"]
+    assert refused and refused[0]["args_not_plain"] is True
+
+
+@pytest.mark.design("record.skeleton")
 def test_record_names_real_labels_that_now_have_args_mocks(team: Team) -> None:
     team.write(ORDER_BOT, ["bot:get_order"], ("tool:get_order",))
     done = team.record()

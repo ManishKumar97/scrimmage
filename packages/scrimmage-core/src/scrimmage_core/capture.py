@@ -382,7 +382,12 @@ def shown_args(value: object, differing: Sequence[str]) -> str | None:
     parts: list[str] = []
     for key in order:
         name = cleaned_text(key)
-        if key in differing:
+        held = table[key]
+        if key in differing and secret_key(key) and isinstance(held, int | float):
+            # clean keeps a number, as it is never a secret pattern, but a PIN under a
+            # secret's name would print to a CI log here.
+            shown = f"<{type(held).__name__}>"
+        elif key in differing:
             cleaned, _ = clean({key: table[key]})
             shown = json.dumps(without_json_secrets(cast(dict[str, object], cleaned)[name]))
         else:

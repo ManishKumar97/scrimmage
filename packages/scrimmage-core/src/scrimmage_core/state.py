@@ -527,12 +527,9 @@ class RunState:
         line.update({key: scrub(value) for key, value in step.extra.items()})
         if step.miss is not None:
             line["mock_miss"] = self.miss_line(step)
-        if (
-            self.recording
-            and decision.action == "real"
-            and step.call.kind in ("tool", "mcp")
-            and step.call.args is None
-        ):
+        # On every recorded tool or MCP line, refused ones too: a refused call is the one a
+        # skeleton is written for, and its preview can parse while no mock could match it.
+        if self.recording and step.call.kind in ("tool", "mcp") and step.call.args is None:
             line["args_not_plain"] = True  # the preview holds a repr, which no mock can match
         write = step.call.kind == "http" and step.call.method not in engine.READ_METHODS
         # Nothing tells an MCP read from an MCP write, so a real one is kept as a write is.

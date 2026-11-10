@@ -82,7 +82,7 @@ class Mock:
     json: object = None
     text: str | None = None
     recorded: bool = False  # written by scrimmage record: unused, it is a note, not a mistake
-    args: dict[str, object] | None = None  # a recorded mock answers only these arguments
+    args: dict[str, object] | None = None  # the mock answers only these exact arguments
 
 
 @dataclass(frozen=True)
