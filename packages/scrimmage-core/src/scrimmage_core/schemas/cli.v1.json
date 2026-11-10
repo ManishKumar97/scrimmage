@@ -702,6 +702,26 @@
             "calls_written": {
               "type": "integer",
               "minimum": 0
+            },
+            "runs": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "The runs of each test that --runs asked for."
+            },
+            "runs_recorded": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The runs whose calls were read, in tests with nothing wrong."
+            },
+            "argument_sets_seen": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The distinct tool and MCP calls, by label and arguments, that ran for real."
+            },
+            "argument_sets_written": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Of those, the ones with a mock of their own."
             }
           }
         },
@@ -1154,6 +1174,11 @@
           "type": "integer",
           "minimum": 1
         },
+        "runs": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many runs saw this mock's key."
+        },
         "removed": {
           "type": "array",
           "items": {
@@ -1335,6 +1360,110 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/manual_call"
+          }
+        },
+        "runs": {
+          "type": "array",
+          "description": "One entry per run, in the order the runs were submitted.",
+          "items": {
+            "$ref": "#/$defs/record_run"
+          }
+        },
+        "not_started": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Runs of the number asked for that never started, for any cause."
+        },
+        "argument_sets": {
+          "type": "array",
+          "description": "Per tool or MCP label that ran for real, how its calls split by arguments. No argument value is in it.",
+          "items": {
+            "$ref": "#/$defs/argument_set"
+          }
+        }
+      }
+    },
+    "record_run": {
+      "type": "object",
+      "required": [
+        "run",
+        "outcome",
+        "calls_seen",
+        "calls_written",
+        "cost_usd"
+      ],
+      "properties": {
+        "run": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/outcome"
+        },
+        "calls_seen": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "calls_written": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cost_usd": {
+          "$ref": "#/$defs/dollars"
+        }
+      }
+    },
+    "argument_set": {
+      "type": "object",
+      "required": [
+        "call",
+        "seen",
+        "written",
+        "sets"
+      ],
+      "properties": {
+        "call": {
+          "type": "string"
+        },
+        "seen": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The distinct sets of arguments this label was called with."
+        },
+        "written": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Of those, the sets with a mock of their own."
+        },
+        "sets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "runs",
+              "mock",
+              "code"
+            ],
+            "properties": {
+              "runs": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "mock": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1,
+                "description": "The mock's place among the output test's mocks, from 1, or null."
+              },
+              "code": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The code it is listed with, or null."
+              }
+            }
           }
         }
       }

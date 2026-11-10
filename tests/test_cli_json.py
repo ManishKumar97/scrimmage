@@ -1310,3 +1310,64 @@ def test_a_miss_counts_on_its_row_and_run_with_no_change_to_status_or_exit() -> 
         assert {k: v for k, v in new.items() if k not in ("mock_miss_count", "run_details")} == {
             k: v for k, v in old.items() if k not in ("mock_miss_count", "run_details")
         }
+
+
+# The record document as it was before --runs: its required lists and the types of its fields.
+RECORD_BEFORE: dict[str, tuple[list[str], dict[str, object]]] = {
+    "record": (
+        [
+            "v",
+            "scrimmage",
+            "command",
+            "exit",
+            "status",
+            "config",
+            "out",
+            "records",
+            "cost_usd",
+            "numbers",
+            "tests",
+            "mistakes",
+            "notes",
+            "warnings",
+            "infra",
+        ],
+        {
+            "config": "string",
+            "out": ["string", "null"],
+            "records": ["string", "null"],
+            "numbers": "object",
+            "tests": "array",
+            "mocks_text": "string",
+        },
+    ),
+    "record_test": (
+        ["test", "run", "outcome", "written", "kept", "skipped", "manual"],
+        {"test": "string", "run": "string", "written": "array", "kept": "array"},
+    ),
+    "written_mock": (
+        ["call", "method", "path", "calls", "removed"],
+        {
+            "call": "string",
+            "method": ["string", "null"],
+            "path": ["string", "null"],
+            "calls": "integer",
+        },
+    ),
+}
+
+
+def test_the_record_document_change_is_additive() -> None:
+    defs = cast(dict[str, dict[str, Any]], CLI_SCHEMA["$defs"])
+    for name, (required, types) in RECORD_BEFORE.items():
+        found = defs[name]
+        assert found["required"] == required, name  # nothing new is required, nothing dropped
+        for field, kind in types.items():
+            assert found["properties"][field]["type"] == kind, (name, field)
+    numbers = defs["record"]["properties"]["numbers"]
+    assert numbers["required"] == ["calls_seen", "calls_written"]
+    assert {"runs", "runs_recorded", "argument_sets_seen", "argument_sets_written"} <= set(
+        numbers["properties"]
+    )
+    assert {"runs", "not_started", "argument_sets"} <= set(defs["record_test"]["properties"])
+    assert "runs" in defs["written_mock"]["properties"]
