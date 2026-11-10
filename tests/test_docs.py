@@ -381,3 +381,39 @@ def test_the_held_argument_form_is_documented() -> None:
         "mock with no `args` above a mock with `args`",
     ):
         assert words in text, words
+
+
+@pytest.mark.design("docs.record_runs")
+def test_recording_more_than_one_run_is_documented() -> None:
+    guide, cli_page, output, limits = (
+        page("recording.md"),
+        page("cli.md"),
+        page("json-output.md"),
+        page("limits.md"),
+    )
+    assert "[--refresh LABEL]... [--runs N] [--json]" in cli_page and "[--runs N]" in guide
+    section = guide.split("## Recording more than one run")[1].split("## What gets written")[0]
+    for words in (
+        "covers every run of every test",
+        "file's `runs`",
+        "is not read",
+        "run N times",
+        "`nondeterministic`",
+        "p = 0.25",
+        "A stop on the budget writes nothing at all",
+        "reply that changes with time",
+        "`--runs 1`, write its mock by hand, or leave it under `real`",
+    ):
+        assert words in section, words
+    assert "`scrimmage record --runs N`" in guide.split("## When a replay misses a mock")[1]
+    for name in ("runs", "runs_recorded", "argument_sets_seen", "argument_sets_written"):
+        assert f"`{name}`" in output, name
+    assert "`not_started`" in output and "`argument_sets`" in output
+    for limit in (
+        "**A form the model never sent while recording still misses.**",
+        "**One web mock answers any query, at any N.**",
+        "**A reply that changes with time is not written at N above 1.**",
+    ):
+        assert limit in limits, limit
+    for text in (guide, cli_page, limits):  # no page says a looser match exists
+        assert "looser match" not in text.replace("No looser form", "")

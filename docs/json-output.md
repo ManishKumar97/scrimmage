@@ -185,12 +185,14 @@ SIGKILL cannot be caught, so it leaves no document.
   "out": "scrimmage.recorded.toml",
   "records": "scrimmage-runs/20261107T101500Z-a1b2c3",
   "cost_usd": 0.0012,
-  "numbers": {"calls_seen": 4, "calls_written": 3},
+  "numbers": {"calls_seen": 4, "calls_written": 3, "runs": 1, "runs_recorded": 1, "argument_sets_seen": 1, "argument_sets_written": 1},
   "tests": [
     {
       "test": "order-status",
       "run": "run-3f9a1c40b2e1",
       "outcome": "answered",
+      "runs": [{"run": "run-3f9a1c40b2e1", "outcome": "answered", "calls_seen": 4, "calls_written": 3, "cost_usd": 0.0012}],
+      "not_started": 0,
       "written": [
         {"call": "http:inventory.acme.internal", "method": "GET", "path": "/stock/SKU-42", "calls": 1, "removed": []},
         {"call": "tool:get_user", "method": null, "path": null, "calls": 1, "removed": [{"key": "access_token", "rule": "key_name"}]}
@@ -199,7 +201,8 @@ SIGKILL cannot be caught, so it leaves no document.
       "skipped": [{"call": "http:sts.amazonaws.com", "method": "POST", "path": "/", "code": "credential", "calls": 1}],
       "manual": [
         {"call": "tool:get_invoice", "code": "unsavable", "method": null, "path": null, "calls": 1, "message": "returns: a bytes, which a mock cannot hold", "instead": null}
-      ]
+      ],
+      "argument_sets": [{"call": "tool:get_user", "seen": 1, "written": 1, "sets": [{"runs": 1, "mock": 2, "code": null}]}]
     }
   ],
   "mistakes": [], "notes": [], "warnings": [{"message": "the mocks hold replies from real systems, which can hold customer data; check them before you commit them"}], "infra": []
@@ -212,11 +215,16 @@ SIGKILL cannot be caught, so it leaves no document.
 | `records` | The folder that holds this record's run, or `null` when no run started. |
 | `cost_usd` | What the model calls cost, in dollars. |
 | `numbers` | `calls_seen`, the real tool, MCP and web calls that no other call made, less the credential requests. `calls_written`, those whose level was written whole. |
-| `calls_seen`, `calls_written` | See `numbers`. |
+| `calls_seen`, `calls_written` | See `numbers`. Over every run of every test. |
+| `runs` | In `numbers`: the runs of each test that `--runs` asked for. In a test: one object per run, in the order the runs were submitted, with `run`, `outcome`, `calls_seen`, `calls_written` and `cost_usd`. In a written mock: how many runs saw its key. |
+| `runs_recorded` | In `numbers`: the runs whose calls were read, in tests with nothing wrong. |
+| `argument_sets_seen`, `argument_sets_written` | In `numbers`: the distinct tool and MCP calls, by label and arguments, that ran for real, and the ones with a mock of their own. |
+| `not_started` | In a test: the runs of the number asked for that never started, for any cause. |
+| `argument_sets` | In a test: for each tool or MCP label that ran for real, `call`, `seen` (its distinct sets of arguments), `written` (those with a mock) and `sets`. Each set has `runs` (how many runs sent it), `mock` (its place among the output test's mocks from 1, or `null`) and `code` (the code it is listed with, or `null`). No argument value is in it, as a document reaches CI logs. The values are in the file's comments and in the text. |
 | `tests` | One object per test that ran. |
 | `test` | The test's name. |
 | `run` | The run's name, also its record's name in `records`. |
-| `outcome` | How the run ended. |
+| `outcome` | How the test's runs ended: `answered` if every run answered, else the outcome of the first run that did not. Its `run` is that run's name, or the first run's. |
 | `written` | Each mock written: `call`, `method` and `path` (`null` for a tool or MCP call), `calls` (how many calls this mock stands for) and `removed` (each secret taken out: its `key`, `null` for a pattern match in plain text, and the `rule`, `pattern` or `key_name`). |
 | `kept` | Each team mock used: its `call`, and `mock`, its place in the test from 1. |
 | `skipped` | Each call skipped, with its `code` (below), `calls`, and `method` and `path` for a web request. |
