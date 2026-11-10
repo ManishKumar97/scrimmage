@@ -226,6 +226,24 @@ def infra() -> Case:
     return Case(cfg, results, FakeRunner())
 
 
+WEB_MISS: dict[str, object] = {
+    "call": "http:x.acme",
+    "action": "real",
+    "reason": "request",
+    "seen": None,
+    "method": "GET",
+    "path": "/a",
+    "nearest": {
+        "mock": 0,
+        "args": None,
+        "method": "GET",
+        "path": "/b",
+        "differs": ["path"],
+        "differs_left_out": 0,
+    },
+}
+
+
 def notes_and_warnings() -> Case:
     """tool:*, long names, notices, near mocks, hosted reads and a silent run."""
     name = "a-test-whose-name-is-far-too-long-for-the-table-" * 2
@@ -240,7 +258,7 @@ def notes_and_warnings() -> Case:
     left: dict[str, object] = {"notice": "left_group", "message": "process 41 left the group"}
     newer: dict[str, object] = {"notice": "newer_version", "message": "httpx 2.1 is newer"}
     results = [
-        run(base, 0, notices=[left, newer], near_mocks={"http:x.acme GET /a"}, hosted_reads=2),
+        run(base, 0, notices=[left, newer], misses=[WEB_MISS], hosted_reads=2),
         run(base, 1, model_calls=0),
         run(base, 2, "crashed", None),
     ]

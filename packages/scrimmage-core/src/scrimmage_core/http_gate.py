@@ -34,7 +34,7 @@ from scrimmage_core import probe as probing
 from scrimmage_core import provider_openai as openai_table
 from scrimmage_core.budget import ASK_MAX_S, Held, Shortfall
 from scrimmage_core.client import ControlError
-from scrimmage_core.decide import READ_METHODS, Call, Decision, names
+from scrimmage_core.decide import READ_METHODS, Call, Decision
 from scrimmage_core.errors import ScrimmageRefused
 from scrimmage_core.labels import shown_name
 from scrimmage_core.plan import Plan
@@ -333,8 +333,6 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
                 "JSON",
             )
         check_tools(ctx, run, step, fields, str(request.url.path))
-    if call.kind == "http" and step.decision.action == "real" and near_a_mock(run, call):
-        extra["near_mock"] = True
     return step, extra
 
 
@@ -384,12 +382,6 @@ def without_faults(run: RunState, step: Step) -> None:
         run.refuse(step, "web_write")
     else:
         step.decision = Decision("real")
-
-
-def near_a_mock(run: RunState, call: Call) -> bool:
-    """A real request to a host the test has mocks for, though none matched it."""
-    mocks = [m for m in run.plan.mocks if m.call == call.label]
-    return bool(mocks) and not any(names(m, call) for m in mocks)
 
 
 def refuse(run: RunState, step: Step, detail: str) -> NoReturn:

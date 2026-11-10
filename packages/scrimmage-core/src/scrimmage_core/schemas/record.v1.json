@@ -238,9 +238,6 @@
         "forwarded_to": {
           "type": "string"
         },
-        "near_mock": {
-          "const": true
-        },
         "mock": {
           "type": "integer",
           "minimum": 0
@@ -370,6 +367,96 @@
         },
         "recorded": {
           "$ref": "#/$defs/recorded"
+        },
+        "args_not_plain": {
+          "const": true
+        },
+        "mock_miss": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reason",
+            "seen",
+            "method",
+            "path",
+            "nearest"
+          ],
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "seen": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "method": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "nearest": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mock",
+                    "args",
+                    "method",
+                    "path",
+                    "differs",
+                    "differs_left_out"
+                  ],
+                  "properties": {
+                    "mock": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "args": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "method": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "path": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "differs": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "differs_left_out": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              ]
+            }
+          }
         }
       }
     },

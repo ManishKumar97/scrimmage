@@ -25,6 +25,8 @@ Your code, or a framework, might swallow that error and carry on, and the next t
 So one refusal ends the run: Scrimmage fails every gated call after it, and the runner stops the program.
 
 If you have decided every tool is safe, write `real = ["tool:*"]`; the run table then says so in its header.
+This does not cover a call that misses a mock with `args`: such a call is refused unless its label is under `real` by name, because `tool:*` includes tools that write.
+A mock with no `args` on a tool that writes answers every call and hides any difference between calls; `args` pins it to the arguments you name.
 
 ## What a model request may do
 

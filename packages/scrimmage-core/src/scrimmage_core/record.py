@@ -28,6 +28,7 @@ from scrimmage_core import runner as running
 from scrimmage_core.control import proc_key
 from scrimmage_core.decide import READ_METHODS
 from scrimmage_core.errors import ConfigError
+from scrimmage_core.redact import REMOVED, URL_PART_REMOVED
 from scrimmage_core.state import BLOB_WAIT_S
 
 CAP = 64 * 1024  # a mock's value, as TOML, is at most this long: a reviewer must read it
@@ -184,6 +185,7 @@ class ManualEntry:
     calls: int = 0
     instead: str | None = None  # the mock of the tool written in place of this call
     shown: str | None = None  # the call's arguments, cleaned, for the skeleton
+    args: dict[str, object] | None = None  # the arguments exactly, when a mock could hold them
 
 
 @dataclass
@@ -766,6 +768,7 @@ class Recorder:
                 None if path is None else str(path),
                 # A web line's arguments are its request body, which holds what no rule cleans.
                 shown=None if node.kind == "http" else shown_arguments(node.line),
+                args=None if node.kind not in ("tool", "mcp") else exact_arguments(node.line),
             )
         self.record.manual[key].calls += 1
 
@@ -800,6 +803,30 @@ def shown_arguments(line: Line) -> str | None:
     if capture.embedded_secret(cleaned) is not None:
         return None
     return shown(json.dumps(cleaned, ensure_ascii=False, sort_keys=True))
+
+
+def exact_arguments(line: Line) -> dict[str, object] | None:
+    """A call's arguments exactly as a mock would hold them, or None. None unless the whole
+    preview was read, cleaning took nothing out, the gate's redaction left nothing in it and
+    the arguments were plain: a line written from anything less could never match the call."""
+    arguments = cast(Fields, line.get("args") or {})
+    preview = arguments.get("preview")
+    if not isinstance(preview, str) or line.get("args_not_plain"):
+        return None
+    if REMOVED in preview or URL_PART_REMOVED in preview:
+        return None
+    try:
+        parsed = cast(object, json.loads(preview))
+    except ValueError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    cleaned, removed = capture.clean(cast(dict[str, object], parsed))
+    if removed or capture.embedded_secret(cleaned) is not None:
+        return None
+    if value_problem("args", cleaned) is not None:
+        return None
+    return cast(dict[str, object], cleaned)
 
 
 def prepare(
@@ -911,6 +938,7 @@ def finish(
         records.append(record_test(test, result, folder, plan, runner, notes))
     messages: list[tuple[str, str]] = [(outcomes.WARNINGS, CUSTOMER_DATA), *notes]
     messages += report.messages
+    messages += [(outcomes.NOTES, text) for text in real_with_args(plan, records)]
     code = report.code
     for found in records:
         code = max(code, test_code(found, messages))
@@ -930,6 +958,23 @@ def finish(
     if not records or all(r.trouble is not None for r in records):
         return result
     return write_file(result, plan, path)
+
+
+def real_with_args(plan: Plan, records: list[TestRecord]) -> list[str]:
+    """Labels under real by name that now have a mock with args: a call with other arguments
+    runs for real there. Under tool:* the same call is refused, so it is not said."""
+    labels_written = dict.fromkeys(
+        str(item.saved.fields["call"])
+        for found in records
+        for item in found.written
+        if "args" in item.saved.fields
+    )
+    return [
+        f"{label} is under real and now has a mock with args: a call with other arguments runs "
+        "for real; remove it from real if that call should be refused"
+        for label in labels_written
+        if label in plan.full.agent.real
+    ]
 
 
 def record_test(
@@ -1106,6 +1151,8 @@ def skeleton(entry: ManualEntry) -> str:
         lines.append(f"{entry.call} with {entry.shown}")
     lines.append("[[test.mock]]")
     lines.append(f'call    = "{entry.call}"')
+    if entry.args is not None:
+        lines.append(f"args    = {toml_write.inline(entry.args)}")
     if entry.method is not None:
         lines += [f'method  = "{entry.method}"', f'path    = "{entry.path}"', "status  = ..."]
     else:

@@ -23,6 +23,7 @@ from typing import Protocol, cast
 
 from scrimmage_core import capture
 from scrimmage_core import decide as engine
+from scrimmage_core.decide import missed
 from scrimmage_core.errors import ScrimmageRefused, ScrimmageStopped, ScrimmageTimeLimit
 from scrimmage_core.plan import Plan
 from scrimmage_core.records import RECORD_VERSION
@@ -99,6 +100,7 @@ class Step:
     extra: dict[str, object] = field(default_factory=dict[str, object])
     call_id: int | None = None  # in a recording run: this call's number in its process
     parent: int | None = None  # the real tool call this one was made inside, if any
+    miss: engine.Miss | None = None  # the call had a mock on its label and no mock named it
 
 
 def this_process() -> dict[str, object]:
@@ -214,7 +216,18 @@ class RunState:
                 decision = engine.decide(call, plan, numbers)
                 if decision.action == "refused":
                     self.refused = call.label
-            return self._going(Step(call, decision, args, now_iso(), time.monotonic()))
+            step = Step(call, decision, args, now_iso(), time.monotonic())
+            step.miss = self.found_miss(call, plan, decision)
+            return self._going(step)
+
+    @staticmethod
+    def found_miss(call: engine.Call, plan: Plan, decision: engine.Decision) -> engine.Miss | None:
+        """Whether the call is a miss. This runs on the agent's call, so a failure in it must
+        not reach the agent: the decision stands and the miss is marked unreadable."""
+        try:
+            return missed(call, plan, decision)
+        except Exception:
+            return engine.Miss("unreadable")
 
     def _going(self, step: Step) -> Step:
         """Track a call until it ends. Called with the lock held, so ids follow decisions."""
@@ -235,9 +248,10 @@ class RunState:
     def with_args(self, call: engine.Call, arguments: object) -> engine.Call:
         """The call with its arguments as a recorded mock holds them, when one could match.
 
-        A plan with no recorded mock that has args never pays for the conversion.
+        A plan with no mock that has args never pays for the conversion, unless it is
+        recording: a recording run needs to know whether the arguments were plain.
         """
-        if not any(mock.args is not None for mock in self.plan.mocks):
+        if not self.plan.record and not any(mock.args is not None for mock in self.plan.mocks):
             return call
         return dataclasses.replace(call, args=capture.converted(arguments))
 
@@ -283,6 +297,8 @@ class RunState:
         if self.refused == CLOSED:
             return ScrimmageRefused(f"{label}: this process's run has ended, so every call fails")
         reason = step.decision.reason or "unlisted"
+        if reason == "unlisted" and step.miss is not None and step.miss.reason == "arguments":
+            reason = "arguments"
         first = self.refused or label
         if reason == "poisoned" or first != label:
             return ScrimmageRefused(
@@ -293,6 +309,11 @@ class RunState:
                 f"{label} is neither mocked by this test nor listed under [agent] real. "
                 f'Mock it in the test, or add "{label}" to real if it is safe to run for real.'
                 f"{detail}"
+            ),
+            "arguments": (
+                f"{label} has mocks in this test, but none matches this call's arguments, and "
+                "it is not under [agent] real by name, so it is refused. Add a mock for these "
+                f'arguments, or add "{label}" to real if it is safe to run for real.'
             ),
             "web_write": (
                 f"{label} {detail} is a web request that can change data, and this test "
@@ -323,6 +344,14 @@ class RunState:
             ),
         }
         return ScrimmageRefused(messages.get(reason, f"{label} is refused: {detail}"))
+
+    def miss_line(self, step: Step) -> dict[str, object]:
+        """A miss as it goes on the line. It runs on the agent's call, so no failure in it may
+        reach the agent: the line then says the evidence could not be built."""
+        try:
+            return miss_evidence(step.call, self.plan, step.miss)
+        except Exception:
+            return fit_miss(unreadable_miss())
 
     def run_closed(self) -> None:
         """The run ended and this process lived on, so nothing it does can be recorded."""
@@ -496,12 +525,97 @@ class RunState:
         if step.parent is not None:
             line["parent"] = step.parent
         line.update({key: scrub(value) for key, value in step.extra.items()})
+        if step.miss is not None:
+            line["mock_miss"] = self.miss_line(step)
+        # On every recorded tool or MCP line, refused ones too: a refused call is the one a
+        # skeleton is written for, and its preview can parse while no mock could match it.
+        if self.recording and step.call.kind in ("tool", "mcp") and step.call.args is None:
+            line["args_not_plain"] = True  # the preview holds a repr, which no mock can match
         write = step.call.kind == "http" and step.call.method not in engine.READ_METHODS
         # Nothing tells an MCP read from an MCP write, so a real one is kept as a write is.
         write = write or (step.call.kind == "mcp" and decision.action == "real")
         write = write or step.call.kind == "process"
         keep = decision.action == "refused" or step.call.kind == "model" or write
+        keep = keep or "mock_miss" in line
         self.sink.put(line, keep=keep)
+
+
+MISS_CAP = 2048  # a miss on a line, as JSON text; a batch over 4 MB is refused with a 413
+DIFFERS_CAP, KEY_CUT = 20, 64
+FIRST_KEYS = 5
+
+
+def unreadable_miss() -> dict[str, object]:
+    return {
+        "reason": "unreadable",
+        "seen": None,
+        "method": None,
+        "path": None,
+        "nearest": None,
+    }
+
+
+def miss_evidence(call: engine.Call, plan: Plan, miss: engine.Miss | None) -> dict[str, object]:
+    """The miss as display text, cleaned by the heuristic in capture.shown_args, and capped."""
+    if miss is None or miss.reason == "unreadable":
+        return fit_miss(unreadable_miss())
+    differs = list(miss.differs)
+    nearest: dict[str, object] | None = None
+    if miss.nearest is not None:
+        mock = plan.mocks[miss.nearest]
+        nearest = {
+            "mock": miss.nearest,
+            "args": None if mock.args is None else capture.shown_args(mock.args, differs),
+            "method": mock.method,
+            "path": None if mock.path is None else redact(mock.path)[:PATH_CUT],
+            "differs": [redact(capture.cleaned_text(k))[:KEY_CUT] for k in differs[:DIFFERS_CAP]],
+            "differs_left_out": max(len(differs) - DIFFERS_CAP, 0),
+        }
+    web = miss.reason == "request"
+    seen = None
+    if miss.reason == "no_mock":
+        seen = capture.shown_args(call.args, ())
+    elif miss.reason == "arguments" and miss.known:
+        seen = capture.shown_args(call.args, differs)
+    return fit_miss(
+        {
+            "reason": miss.reason,
+            "seen": seen,
+            "method": call.method if web else None,
+            "path": redact(call.name)[:PATH_CUT] if web else None,
+            "nearest": nearest,
+        }
+    )
+
+
+PATH_CUT = 200
+
+
+def fit_miss(miss: dict[str, object]) -> dict[str, object]:
+    """Keep a miss under MISS_CAP as JSON text, giving up the most detailed parts first."""
+
+    def size() -> int:
+        return len(json.dumps(miss))
+
+    nearest = cast("dict[str, object] | None", miss["nearest"])
+    if size() > MISS_CAP:
+        miss["seen"] = None
+        if nearest is not None:
+            nearest["args"] = None
+            keys = cast(list[str], nearest["differs"])
+            nearest["differs_left_out"] = int(str(nearest["differs_left_out"])) + max(
+                len(keys) - FIRST_KEYS, 0
+            )
+            nearest["differs"] = keys[:FIRST_KEYS]
+    if size() > MISS_CAP:
+        miss["path"] = None
+        if nearest is not None:
+            nearest["path"] = None
+            nearest["differs_left_out"] = int(str(nearest["differs_left_out"])) + len(
+                cast(list[str], nearest["differs"])
+            )
+            nearest["differs"] = []
+    return miss
 
 
 def error_text(call: engine.Call, error: BaseException) -> str:

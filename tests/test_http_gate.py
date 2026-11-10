@@ -11,17 +11,20 @@ import types
 import zlib
 from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
 import httpx2
+import jsonschema
 import openai
 import pytest
 
 from scrimmage_core import http_gate, provider_openai, state
+from scrimmage_core import plan as plan_module
 from scrimmage_core.budget import Ledger, Shortfall
 from scrimmage_core.client import ControlClient
-from scrimmage_core.config import Fault, ModelHost
-from scrimmage_core.decide import Counters
+from scrimmage_core.config import Fault, Mock, ModelHost
+from scrimmage_core.decide import Call, Counters
 from scrimmage_core.errors import ScrimmageRefused
 from scrimmage_core.plan import Plan
 from scrimmage_core.provider_openai import Rates
@@ -1289,3 +1292,25 @@ def test_the_empty_price_key_prices_a_call_with_no_name(gated: None) -> None:
     assert client().post(URL, json={"messages": []}).status_code == 200
     cost = sink.lines[0]["cost_usd"]
     assert sink.lines[0]["action"] == "real" and isinstance(cost, float) and cost > 0
+
+
+@pytest.mark.design("web.near_mock_warning")
+def test_a_web_read_and_a_web_write_that_miss_write_the_evidence() -> None:
+    mocks = (Mock("http:x.acme", None, None, "GET", "/stock/42"),)
+    sink = Sink()
+    run = state.RunState(Plan("run-1", "t", "row", mocks, (), (), (), 60.0), sink, [])
+    read = run.decide(Call("http", "http:x.acme", "/stock/SKU-42", method="GET"), {})
+    run.finish(read)
+    write = run.decide(Call("http", "http:x.acme", "/stock/42", method="POST"), {})
+    run.finish(write, error=run.refusal(write, "POST /stock/42"))
+    first, second = sink.lines[:2]
+    assert first["action"] == "real" and "near_mock" not in first
+    miss = cast("dict[str, Any]", first["mock_miss"])
+    assert (miss["reason"], miss["method"], miss["path"]) == ("request", "GET", "/stock/SKU-42")
+    assert (miss["nearest"]["path"], miss["nearest"]["differs"]) == ("/stock/42", ["path"])
+    assert second["action"] == "refused"
+    assert cast("dict[str, Any]", second["mock_miss"])["nearest"]["differs"] == ["method"]
+    path = Path(plan_module.__file__).parent / "schemas" / "record.v1.json"
+    validator = jsonschema.Draft202012Validator(json.loads(path.read_text()))
+    for line in (first, second):
+        validator.validate(line)

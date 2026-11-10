@@ -7,13 +7,15 @@ import io
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import jsonschema
 import pytest
@@ -645,6 +647,7 @@ def test_a_row_carries_its_runs_and_the_rules_they_broke() -> None:
         "left_out": None,
         "cost_usd": 0.00012,
         "answer_preview": "It shipped, and arrives on Oct 30.",
+        "mock_miss_count": 0,
     }
     assert doc["records"] == str(FOLDER) and doc["stopped_by"] is None
     assert doc["budget_usd"] == 5.0 and doc["tests"] == 1
@@ -1103,3 +1106,207 @@ def test_a_crash_while_reading_the_file_is_exit_3_with_or_without_json(
         assert cli.main([command, "--json", str(path)]) == codes[command]
         validate(json.loads(capsys.readouterr().out))
     assert codes["test"] == codes["check"]
+
+
+# Calls that had a mock on their label and matched none.
+
+
+HAND_ARGS = (
+    '[[test.mock]]\ncall    = "tool:get_order"\nargs    = {order_id = "5678"}\n'
+    'returns = "shipped, Oct 30"\n'
+)
+ORDERS = '[[test.mock]]\ncall    = "tool:get_order"\nreturns = "shipped, Oct 30"\n'
+
+
+@contextlib.contextmanager
+def orders_system(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """A real orders system on localhost, which the example's get_order asks."""
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen()
+    stop = threading.Event()
+
+    def serve() -> None:
+        while not stop.is_set():
+            try:
+                conn, _ = server.accept()
+            except OSError:
+                return
+            with conn:
+                conn.recv(1024)
+                conn.sendall(b"shipped, Oct 30")
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    monkeypatch.setenv("ACME_ORDERS", f"127.0.0.1:{server.getsockname()[1]}")
+    try:
+        yield
+    finally:
+        stop.set()
+        server.close()
+        thread.join(timeout=10)
+
+
+def missing(project: Project, real: str, fake: FakeOpenAI) -> tuple[str, dict[str, object]]:
+    project.edit(
+        '[[test.fault]]\ncall = "tool:get_order"\ndo   = "timeout"\n'
+        'expect = [["unable", "sorry", "try again"]]\nforbid = ["Oct 30", "October 30"]\n',
+        "",
+    )
+    project.edit(ORDERS, HAND_ARGS)
+    project.edit('real     = ["tool:check_inventory"]', f"real     = {real}")
+    return e2e(project, fake)
+
+
+@pytest.mark.design("json.mock_misses")
+@pytest.mark.slow
+def test_a_miss_on_a_listed_tool_warns_and_the_test_still_passes(
+    project: Project, fake_openai: Fake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with orders_system(monkeypatch):
+        text, doc = missing(project, '["tool:get_order"]', fake_openai(ACME))
+    assert (doc["exit"], doc["status"]) == (0, "passed")
+    [miss] = cast(list[dict[str, Any]], doc["mock_misses"])
+    assert (miss["call"], miss["reason"], miss["action"]) == ("tool:get_order", "arguments", "real")
+    assert miss["seen"] == '{"order_id": "1234"}' and miss["runs"] == 3
+    assert miss["nearest"]["args"] == '{"order_id": "5678"}' and miss["nearest"]["mock"] == 1
+    assert miss["nearest"]["differs"] == ["order_id"]
+    assert doc["mock_misses_left_out"] == 0
+    assert 'warning: tool:get_order with {"order_id": "1234"} matched no mock and ran for real' in (
+        text
+    )
+    assert "heuristic: fewest differing arguments" in text
+
+
+@pytest.mark.design("json.mock_misses")
+@pytest.mark.slow
+def test_a_miss_on_an_unlisted_tool_is_refused_with_its_evidence(
+    project: Project, fake_openai: Fake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with orders_system(monkeypatch):
+        _, doc = missing(project, '["tool:check_inventory"]', fake_openai(ACME[:1]))
+    assert doc["exit"] == 2
+    [miss] = cast(list[dict[str, Any]], doc["mock_misses"])
+    assert (miss["reason"], miss["action"], miss["nearest"]["differs"]) == (
+        "arguments",
+        "refused",
+        ["order_id"],
+    )
+    mistakes = " ".join(m["message"] for m in cast(list[dict[str, str]], doc["mistakes"]))
+    assert "none matches this call's arguments" in mistakes and "1234" not in mistakes
+
+
+@pytest.mark.design("json.mock_misses")
+@pytest.mark.slow
+def test_the_miss_in_the_text_and_in_json_say_the_same(
+    project: Project, fake_openai: Fake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with orders_system(monkeypatch):
+        text, doc = missing(project, '["tool:get_order"]', fake_openai(ACME))
+    [miss] = cast(list[dict[str, Any]], doc["mock_misses"])
+    [line] = [
+        w for w in cast(list[dict[str, str]], doc["warnings"]) if "matched no mock" in w["message"]
+    ]
+    for shown in (miss["seen"], miss["nearest"]["args"], *miss["nearest"]["differs"]):
+        assert shown in line["message"]
+    assert f"({miss['test']} {miss['row']}, {miss['runs']} of 3 runs)" in line["message"]
+    assert f"warning: {line['message']}" in text
+
+
+def a_miss(
+    call: str = "tool:get_order", seen: str = '{"order_id": "1"}', action: str = "real"
+) -> dict[str, object]:
+    return {
+        "call": call,
+        "action": action,
+        "reason": "arguments",
+        "seen": seen,
+        "method": None,
+        "path": None,
+        "nearest": {
+            "mock": 0,
+            "args": '{"order_id": "2"}',
+            "method": None,
+            "path": None,
+            "differs": ["order_id"],
+            "differs_left_out": 0,
+        },
+    }
+
+
+def passing_case() -> tuple[config.Config, list[runner.RunResult]]:
+    case = CASES["passing"]()
+    return case.config, case.results
+
+
+@pytest.mark.design("json.mock_misses")
+def test_misses_group_over_runs() -> None:
+    cfg, results = passing_case()
+    base = [r for r in results if r.row.fault is None]
+    base[0].misses = [a_miss(), a_miss(seen='{"order_id": "3"}')]
+    base[1].misses = [a_miss(), a_miss()]  # twice in one run counts one run
+    base[2].misses = [a_miss(call="tool:get_stock")]
+    _, doc, _ = render(cfg, results, FOLDER, None)
+    groups = {
+        (m["call"], m["seen"]): m["runs"] for m in cast(list[dict[str, Any]], doc["mock_misses"])
+    }
+    assert groups == {
+        ("tool:get_order", '{"order_id": "1"}'): 2,
+        ("tool:get_order", '{"order_id": "3"}'): 1,
+        ("tool:get_stock", '{"order_id": "1"}'): 1,
+    }
+    first = cast(list[dict[str, Any]], doc["mock_misses"])[0]
+    assert first["run"] == base[0].run and first["nearest"]["mock"] == 1
+
+
+@pytest.mark.design("json.mock_misses")
+def test_the_miss_list_is_cut_real_first_and_says_by_how_many() -> None:
+    cfg, results = passing_case()
+    run = next(r for r in results if r.row.fault is None)
+    run.misses = [a_miss(seen=f'{{"order_id": "{i:04}"}}', action="refused") for i in range(150)]
+    run.misses += [a_miss(seen=f'{{"order_id": "r{i:04}"}}') for i in range(60)]
+    text, doc, _ = render(cfg, results, FOLDER, None)
+    listed = cast(list[dict[str, Any]], doc["mock_misses"])
+    assert len(listed) == 200 and doc["mock_misses_left_out"] == 10
+    assert [m["action"] for m in listed[:60]] == ["real"] * 60  # real calls are kept first
+    assert sum(m["action"] == "refused" for m in listed) == 140
+    assert text.count("matched no mock") == 20 and "and 190 more; see --json" in text
+
+
+@pytest.mark.design("json.mock_misses")
+@pytest.mark.slow
+def test_a_recording_run_has_no_mock_misses_field(project: Project, fake_openai: Fake) -> None:
+    project.monkeypatch.setenv("OPENAI_BASE_URL", fake_openai(ACME).base_url)
+    project.monkeypatch.setenv("OPENAI_API_KEY", "test")
+    done = scrimmage("record", str(project.toml), "--json", env=os.environ.copy(), cwd=project.root)
+    doc = done.doc
+    assert doc["command"] == "record" and "mock_misses" not in doc
+    assert "mock_misses_left_out" not in doc
+
+
+@pytest.mark.design("json.mock_misses")
+def test_the_miss_fits_the_cli_schema() -> None:
+    cfg, results = passing_case()
+    results[0].misses = [a_miss(), {**a_miss(call="http:x.acme"), "reason": "request"}]
+    _, doc, _ = render(cfg, results, FOLDER, None)  # render validates against both schemas
+    assert len(cast(list[object], doc["mock_misses"])) == 2
+    bad = {**doc, "mock_misses": [{"call": "tool:get_order"}]}
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.Draft202012Validator(CLI_SCHEMA).validate(bad)
+
+
+@pytest.mark.design("json.mock_misses")
+def test_a_miss_counts_on_its_row_and_run_with_no_change_to_status_or_exit() -> None:
+    cfg, results = passing_case()
+    _, before, _ = render(cfg, results, FOLDER, None)
+    results[0].misses = [a_miss(), a_miss(seen="{}")]
+    _, after, _ = render(cfg, results, FOLDER, None)
+    rows_before = cast(list[dict[str, Any]], before["rows"])
+    rows_after = cast(list[dict[str, Any]], after["rows"])
+    assert (rows_after[0]["mock_miss_count"], rows_before[0]["mock_miss_count"]) == (2, 0)
+    assert rows_after[0]["run_details"][0]["mock_miss_count"] == 2
+    assert (after["exit"], after["status"]) == (before["exit"], before["status"])
+    for old, new in zip(rows_before, rows_after, strict=True):
+        assert {k: v for k, v in new.items() if k not in ("mock_miss_count", "run_details")} == {
+            k: v for k, v in old.items() if k not in ("mock_miss_count", "run_details")
+        }

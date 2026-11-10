@@ -190,10 +190,11 @@ def test_the_wait_for_calls_in_flight_and_its_report_are_documented() -> None:
 
 @pytest.mark.design("docs.recorded_mocks")
 def test_recorded_mocks_and_their_exact_arguments_are_documented() -> None:
-    text = page("configuration.md").split("### Recorded mocks")[1]
+    text = page("configuration.md").split("### Mocks that match arguments")[1]
     for words in ("exactly", "next mock", "normal rule", "note", "still a mistake", "exit code 2"):
         assert words in text, words
-    assert "Recorded mocks match arguments exactly" in page("limits.md")
+    assert "Mocks with `args` match arguments exactly" in page("limits.md")
+    assert "without `recorded = true` is a mistake" not in text
 
 
 @pytest.mark.design("docs.check")
@@ -347,3 +348,36 @@ def test_init_its_probe_and_the_probe_s_limits_are_documented() -> None:
         assert words in text, words
     assert "can run calls a test baseline would refuse" in limits
     assert "[Drafting a test file](init.md" in page("safety.md")
+
+
+@pytest.mark.design("docs.mock_misses")
+def test_a_miss_and_its_warning_are_documented() -> None:
+    text = page("configuration.md").split("#### Mocks that miss")[1].split("## [[test.fault]]")[0]
+    for words in (
+        "warning, and the exit code does not change",
+        "refusal",
+        "nearest mock is a guess",
+        "cleaned by a heuristic",
+        "fewest differing arguments",
+        "Remove the tool from `real`",
+    ):
+        assert words in text, words
+    assert "mock_misses" in page("json-output.md") and "Do not parse it" in page("json-output.md")
+    assert "does not cover a call that misses a mock with `args`" in page("safety.md")
+    assert "When a replay misses a mock" in page("recording.md")
+    for page_name in ("configuration.md", "recording.md", "limits.md", "safety.md"):
+        assert "subset" not in page(page_name).replace("no subset", ""), page_name
+
+
+@pytest.mark.design("docs.held_argument_form")
+def test_the_held_argument_form_is_documented() -> None:
+    text = page("configuration.md").split("### Mocks that match arguments")[1]
+    for words in (
+        "Bound by the signature",
+        "`{kwargs = {a = 1}}`",
+        "Absent. Defaults are not filled in.",
+        "`{args = [...]}`",
+        "A TOML date, time or datetime is a mistake",
+        "mock with no `args` above a mock with `args`",
+    ):
+        assert words in text, words

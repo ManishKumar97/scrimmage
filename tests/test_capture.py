@@ -259,3 +259,11 @@ def test_a_cleaned_mcp_value_that_no_longer_fits_is_secret_changed_shape() -> No
     found = capture.mcp_value(real, {}, strict)
     assert found["code"] == "secret_changed_shape" and key not in str(found)
     assert capture.mcp_value(real, {}, rebuild)["removed"] == [{"key": None, "rule": "pattern"}]
+
+
+@pytest.mark.parametrize("pin", [24680, 2468.0])
+def test_a_number_under_a_secret_key_shows_only_its_type(pin: float) -> None:
+    shown = capture.shown_args({"password": pin, "order": "1"}, ["password"])
+    assert shown == f'{{"password": <{type(pin).__name__}>, "order": <str>}}'
+    assert str(pin) not in (shown or "")
+    assert capture.shown_args({"amount": 24680}, ["amount"]) == '{"amount": 24680}'

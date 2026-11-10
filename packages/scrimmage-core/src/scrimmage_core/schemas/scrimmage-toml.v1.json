@@ -352,18 +352,6 @@
         "args": {
           "type": "object"
         }
-      },
-      "dependentSchemas": {
-        "args": {
-          "required": [
-            "recorded"
-          ],
-          "properties": {
-            "recorded": {
-              "const": true
-            }
-          }
-        }
       }
     },
     "mcp_mock": {
@@ -383,18 +371,6 @@
         },
         "args": {
           "type": "object"
-        }
-      },
-      "dependentSchemas": {
-        "args": {
-          "required": [
-            "recorded"
-          ],
-          "properties": {
-            "recorded": {
-              "const": true
-            }
-          }
         }
       }
     },

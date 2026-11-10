@@ -2,13 +2,19 @@
 
 import asyncio
 import inspect
+import json
 import sys
 import types
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from typing import Any, cast
 
 import pytest
 
+from report_cases import AGENT, TEST, load
+from report_cases import run as a_run
+from scrimmage_core import decide as engine
+from scrimmage_core import plan as planner
 from scrimmage_core import state, tool_gate
 from scrimmage_core.config import Fault, Mock
 from scrimmage_core.errors import (
@@ -17,6 +23,8 @@ from scrimmage_core.errors import (
     ScrimmageTimeLimit,
 )
 from scrimmage_core.plan import Plan
+from scrimmage_core.redact import redact
+from scrimmage_core.runner import miss_groups
 
 
 @dataclass
@@ -438,3 +446,202 @@ def test_a_forked_child_fires_no_faults(lines: Lines) -> None:
     assert os.read(read, 100) == b"mocked"
     with pytest.raises(TimeoutError):  # the parent still fires the fault
         tool_gate.gate(get_text, "get_text")("1")
+
+
+# Evidence for a call that had a mock on its label and matched none.
+
+
+def lookup(order_id: str, warehouse: str = "") -> str:
+    del order_id, warehouse
+    return "real"
+
+
+def login(password: str) -> str:
+    return "real"
+
+
+def search(q: str) -> str:
+    return "real"
+
+
+def args_mock(label: str, args: dict[str, object]) -> Mock:
+    return Mock(label, "mocked", None, args=args)
+
+
+def a_miss(lines: Lines) -> dict[str, object]:
+    found = [line for line in lines.lines if "mock_miss" in line]
+    assert len(found) == 1, lines.lines
+    return cast(dict[str, object], found[0]["mock_miss"])
+
+
+def pinned(lines: Lines, args: dict[str, object], **kw: object) -> state.RunState:
+    return install(lines, [args_mock("tool:lookup", args)], real=["tool:lookup"], **kw)  # type: ignore[arg-type]
+
+
+@pytest.mark.design("decide.miss_evidence")
+def test_a_failure_in_missed_does_not_fail_the_call(
+    lines: Lines, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pinned(lines, {"order_id": "1234"})
+
+    def broken(*_: object) -> None:
+        raise RuntimeError("a bug in the evidence code")
+
+    monkeypatch.setattr(state, "missed", broken)
+    assert tool_gate.gate(lookup, "lookup")("5678") == "real"
+    miss = a_miss(lines)
+    assert miss["reason"] == "unreadable" and miss["nearest"] is None and miss["seen"] is None
+    assert lines.lines[0]["action"] == "real"
+
+
+KEY = "sk-" + "abcdefghijklmnopqrstuvwxyz0123456789ABCD"
+SECRETS = [
+    pytest.param("lookup", "q", KEY, id="pattern"),
+    pytest.param(
+        "lookup",
+        "q",
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+        id="jwt",
+    ),
+    pytest.param("lookup", "q", "https://x.acme/p?token=abcSECRET123", id="url_query"),
+    pytest.param("lookup", "q", '{"password": "hunter2hunter2"}', id="json_text"),
+    pytest.param("lookup", "q", "a" * 170 + KEY, id="across_cut"),
+    pytest.param("login", "password", "hunter2-plain-text", id="key_name"),
+]
+HIDDEN = ["abcdefghijklmnopqrstuvwxyz", "dBjftJeZ4", "abcSECRET123", "hunter2", "sk-"]
+
+
+@pytest.mark.design("decide.miss_evidence")
+@pytest.mark.parametrize(("tool", "key", "secret"), SECRETS)
+def test_mock_miss_is_cleaned_by_both_rules(lines: Lines, tool: str, key: str, secret: str) -> None:
+    fn = {"lookup": lookup, "login": login}[tool]
+    first = "order_id" if tool == "lookup" else "password"
+    # 1. the call's own value, in a key that differs
+    install(lines, [args_mock(f"tool:{tool}", {first: "other"})], real=[f"tool:{tool}"])
+    tool_gate.gate(fn, tool)(secret)
+    miss = a_miss(lines)
+    assert miss["seen"] is not None and len(str(miss["seen"])) <= 200
+    # the report and --json are built from the line, so they show what it holds
+    shown = json.dumps(miss) + " " + " ".join(group_text(lines))
+    for word in HIDDEN:
+        assert word not in shown, (word, shown)
+    # 2. the nearest mock's value, written by hand
+    again = Lines()
+    install(again, [args_mock(f"tool:{tool}", {first: secret})], real=[f"tool:{tool}"])
+    tool_gate.gate(fn, tool)("clean")
+    shown = json.dumps(a_miss(again)) + " " + " ".join(group_text(again))
+    for word in HIDDEN:
+        assert word not in shown, (word, shown)
+    # 3. a differing key's name and a web path hold a pattern
+    if redact(secret) == secret:
+        return
+    call = engine.Call("tool", f"tool:{tool}", tool, args={secret: "a", "b": "c"})
+    held = Plan("r", "t", "row", (args_mock(f"tool:{tool}", {"b": "c"}),), (), (), (), 60.0)
+    found = state.miss_evidence(call, held, engine.missed(call, held, engine.Decision("real")))
+    web = engine.Call("http", "http:x.acme", f"/p/{secret}", method="GET")
+    mocks = (Mock("http:x.acme", None, None, "GET", "/stock/1"),)
+    q = Plan("run-1", "t", "row", mocks, (), (), (), 60.0)
+    path = state.miss_evidence(web, q, engine.missed(web, q, engine.Decision("real")))
+    for word in HIDDEN:
+        assert word not in json.dumps(found) + json.dumps(path), (word, found, path)
+
+
+def group_text(lines: Lines) -> list[str]:
+    """What the text report and --json would print for these lines."""
+    result = a_run(planner.rows(load(AGENT + TEST))[0], 0)
+    result.misses = [
+        {
+            "call": str(x["call"]),
+            "action": str(x["action"]),
+            **cast(dict[str, object], x["mock_miss"]),
+        }
+        for x in lines.lines
+        if "mock_miss" in x
+    ]
+    return [text + json.dumps(doc) for doc, text in miss_groups([result])]
+
+
+@pytest.mark.design("decide.miss_evidence")
+def test_only_differing_keys_show_values(lines: Lines) -> None:
+    pinned(lines, {"order_id": "1234", "warehouse": "north"})
+    tool_gate.gate(lookup, "lookup")("5678", "north")
+    miss = a_miss(lines)
+    nearest = cast(dict[str, Any], miss["nearest"])
+    assert miss["seen"] == '{"order_id": "5678", "warehouse": <str>}'
+    assert nearest["args"] == '{"order_id": "1234", "warehouse": <str>}'
+    assert nearest["differs"] == ["order_id"] and nearest["mock"] == 0
+    assert (miss["reason"], miss["method"], miss["path"]) == ("arguments", None, None)
+
+
+@pytest.mark.design("decide.miss_evidence")
+def test_no_mock_shows_names_and_types_only(lines: Lines) -> None:
+    pinned(lines, {"order_id": "1234"})
+    with pytest.raises(ScrimmageRefused):
+        tool_gate.gate(search, "search")("private free text")
+    miss = a_miss(lines)
+    assert (miss["reason"], miss["seen"], miss["nearest"]) == ("no_mock", '{"q": <str>}', None)
+    assert lines.lines[0]["action"] == "refused" and lines.kept[0] is True
+
+
+@pytest.mark.design("decide.miss_evidence")
+def test_a_miss_leaves_the_args_preview_and_hash_as_they_are(lines: Lines) -> None:
+    install(lines, [args_mock("tool:login", {"password": "x"})], real=["tool:login"])
+    tool_gate.gate(login, "login")("hunter2-plain-text")
+    line = lines.lines[0]
+    assert line["args"] == state.content({"password": "hunter2-plain-text"})
+    assert "hunter2-plain-text" in str(cast(dict[str, object], line["args"])["preview"])
+
+
+@pytest.mark.design("decide.miss_evidence")
+def test_a_miss_line_stays_under_its_size_cap(lines: Lines) -> None:
+    big = {f"key{i}-" + "k" * 100: "v" * 100 for i in range(1000)}
+    p = Plan("run-1", "t", "row", (args_mock("tool:big", {"z": 1}),), (), (), ("tool:big",), 60.0)
+    run = state.RunState(p, lines, [])
+    call = engine.Call("tool", "tool:big", "big", args=big)
+    run.finish(run.decide(call, {}))
+    miss = a_miss(lines)
+    assert len(json.dumps(miss)) <= state.MISS_CAP
+    nearest = cast(dict[str, Any], miss["nearest"])
+    synthetic: dict[str, object] = {
+        "reason": "arguments",
+        "seen": "s" * 900,
+        "method": None,
+        "path": "p" * 900,
+        "nearest": {
+            "mock": 0,
+            "args": "a" * 900,
+            "method": None,
+            "path": "q" * 900,
+            "differs": ["k" * 64] * 20,
+            "differs_left_out": 0,
+        },
+    }
+    fitted = state.fit_miss(synthetic)
+    assert len(json.dumps(fitted)) <= state.MISS_CAP
+    assert fitted["seen"] is None and fitted["path"] is None
+    assert len(nearest["differs"]) + nearest["differs_left_out"] == 1001
+    # a long web path is cut as well
+    web = engine.Call("http", "http:x.acme", "/p/" + "x" * 5000, method="GET")
+    mocks = (Mock("http:x.acme", None, None, "GET", "/stock/1"),)
+    q = Plan("run-1", "t", "row", mocks, (), (), (), 60.0)
+    shown = state.miss_evidence(web, q, engine.missed(web, q, engine.Decision("real")))
+    assert len(cast(str, shown["path"])) <= state.PATH_CUT
+
+
+@pytest.mark.design("decide.miss_evidence")
+def test_a_miss_line_is_kept_when_the_queue_is_full(lines: Lines) -> None:
+    pinned(lines, {"order_id": "1234"})
+    tool_gate.gate(lookup, "lookup")("5678")
+    tool_gate.gate(lookup, "lookup")("1234")  # answered by the mock: nothing to keep
+    assert lines.kept == [True, False]
+
+
+@pytest.mark.design("decide.miss_evidence")
+def test_a_refusal_holds_no_argument_value(lines: Lines) -> None:
+    install(lines, [args_mock("tool:lookup", {"order_id": "1234"})])
+    with pytest.raises(ScrimmageRefused) as caught:
+        tool_gate.gate(lookup, "lookup")("order-5678")
+    message = str(caught.value)
+    assert "none matches this call's arguments" in message
+    assert "order-5678" not in message and "1234" not in message
+    assert 'add "tool:lookup" to real' in message

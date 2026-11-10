@@ -97,6 +97,28 @@ The text of a message can change in any release.
 | `cost_usd` | What the model calls cost, in dollars. |
 | `budget_usd` | `max_cost_usd`, or `null` when the budget is off. |
 | `stopped_by` | The reason a refusal stopped the whole test, such as `budget`, or `null`. |
+| `mock_misses` | The calls that had a mock on their label and matched none, one object per distinct call, below. Absent in `scrimmage record --json`. At most 200, real calls first. |
+| `mock_misses_left_out` | How many more misses than the 200 listed. |
+
+Each object in `mock_misses`:
+
+| Field | Meaning |
+|---|---|
+| `test`, `row`, `call` | Where the miss was, and the call's label. |
+| `reason` | `arguments`: a tool or MCP call, no mock's `args` equal. `request`: a web call, no mock names its method and path. `no_mock`: a refused tool call with no mock of its own, in a test that has mocks with `args`. `unreadable`: the evidence could not be built; the decision stands. |
+| `action` | `real`: the call ran for real. `refused`: it was refused. |
+| `method`, `path` | For a web call, what it sent. `null` otherwise. |
+| `seen` | The arguments the call sent, as display text: values for the arguments that differ, the name and type for the others. Cleaned by a heuristic. Do not parse it. |
+| `nearest` | The mock that came nearest, chosen for display only by fewest differing arguments, or for a web call by most path segments alike. `null` for `no_mock`. |
+| `nearest.mock` | The mock's place in the test, counting from 1. |
+| `nearest.args` | Its arguments as display text, cleaned the same way. Do not parse it. |
+| `nearest.method`, `nearest.path` | For a web mock. |
+| `nearest.differs` | The arguments that differ, or for a web call `method` and `path`. |
+| `differs_left_out` | In `nearest`: how many more differ than `differs` lists. |
+| `runs` | The distinct runs that made this miss. |
+| `run` | The first of them. |
+
+A miss changes no `status` or `exit`.
 
 Each row's keys are the table's column names, with `cost_usd` for `cost`:
 
@@ -117,6 +139,7 @@ Each row's keys are the table's column names, with `cost_usd` for `cost`:
 | `cost_usd` | What this row's model calls cost. |
 | `result` | The row's result. |
 | `broken` | Each rule a run broke: its `kind`, its `text` and every `runs` name that broke it, the most broken first. |
+| `mock_miss_count` | The calls in this row's runs that had a mock on their label and matched none. |
 | `run_details` | One object per run, below. |
 
 Each run in `run_details`:
@@ -130,6 +153,7 @@ Each run in `run_details`:
 | `left_out` | Why a run was left out of the rate, such as `the fault did not fire`, or `null`. |
 | `cost_usd` | What this run's model calls cost. |
 | `answer_preview` | The answer with secrets removed, cut at 200 characters, as a record's preview is. The full answer is in the record. `null` with no answer. |
+| `mock_miss_count` | This run's calls that had a mock on their label and matched none. |
 
 A file that does not load gives the envelope with `rows: []`, `records: null` and each problem in `mistakes`, with exit 2.
 With `--json`, once Scrimmage has started, Ctrl-C or SIGTERM while Scrimmage loads, while the file is read or while runs go stops the command with `status` `infra`, exit 3, `rows: []` and the reason in `infra`, such as `stopped by SIGTERM`.
@@ -250,6 +274,8 @@ A value that is removed or renamed comes only with a new version.
 | `rule` | `pattern`, `key_name` | read as other |
 | `found_by` | `probe`, `static` | read as other |
 | `problem` | `ambiguous`, `nested`, `not_found` | read as other |
+| `reason` | `arguments`, `request`, `no_mock`, `unreadable` | read as other |
+| `action` | `real`, `refused` | read as other |
 | `stopped_by` | `budget`, `budget_held`, `no_price`, `unknown_tool_type`, `unseen_tool`, `structure`, `ambiguous_label`, `unknown_label` | read as other |
 
 `cli.v1.json` lists the values of the release that ships it, and also takes any other text there, so a reader may check a document against any version 1 copy of the schema.

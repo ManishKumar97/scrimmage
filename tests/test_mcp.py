@@ -1437,3 +1437,33 @@ def test_an_mcp_result_with_is_error_is_listed_as_status(docs: Docs) -> None:
     assert "error=True" in answer_of(result)
     assert recorded_line(result)["code"] == "status"
     fits_the_schema(result)
+
+
+@pytest.mark.design("mcp.miss_evidence")
+def test_a_mcp_call_that_misses_writes_the_evidence() -> None:
+    sink = Sink()
+    mock = Mock(LABEL, "x", None, args={"q": "refunds"})
+    run = state.RunState(a_plan(real=(LABEL,), mocks=(mock,)), sink, [])
+    call = mcp_gate.call_for("docs", "search")
+    run.finish(run.decide(run.with_args(call, {"q": "returns"}), {}))
+    line = sink.lines[0]
+    assert (line["action"], line["keep"]) == ("real", True)
+    miss = cast(dict[str, Any], line["mock_miss"])
+    assert miss["reason"] == "arguments" and miss["seen"] == '{"q": "returns"}'
+    assert miss["nearest"]["args"] == '{"q": "refunds"}' and miss["nearest"]["differs"] == ["q"]
+
+
+@pytest.mark.design("mcp.miss_evidence")
+def test_a_mcp_mock_in_short_form_that_misses_writes_the_evidence() -> None:
+    sink = Sink()
+    mock = Mock("mcp:search", "x", None, args={"q": "refunds"})
+    run = state.RunState(a_plan(real=(LABEL,), mocks=(mock,)), sink, [])
+    call = mcp_gate.call_for("docs", "search")
+    run.finish(run.decide(run.with_args(call, {"q": "returns"}), {}))
+    miss = cast(dict[str, Any], sink.lines[0]["mock_miss"])
+    assert miss["reason"] == "arguments" and miss["nearest"]["mock"] == 0
+    # the same call, not listed by name, is refused and says so
+    other = state.RunState(a_plan(mocks=(mock,)), sink, [])
+    step = other.decide(other.with_args(call, {"q": "returns"}), {})
+    assert step.decision.action == "refused"
+    assert step.miss is not None and step.miss.reason == "arguments"
