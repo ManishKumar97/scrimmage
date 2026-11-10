@@ -40,6 +40,7 @@ CALLS: tuple[tuple[str, str, bool], ...] = (
     ("tool call, sync", "tool_sync", True),
     ("tool call, async", "tool_async", True),
     ("tool call, mocked (sync)", "tool_mock", False),
+    ("tool call, args miss (sync)", "tool_miss", True),
     ("HTTP through httpx, sync", "http_sync", True),
     ("HTTP through httpx, async", "http_async", True),
     ("HTTP through httpx, mocked (sync)", "http_mock", False),
@@ -66,6 +67,9 @@ FIRST_LINE = "import time; print(time.time_ns())"
 CALL_BUDGETS_US = {
     "tool_sync": 500.0,  # 43 µs quiet, 53 µs seen under load
     "tool_async": 500.0,  # 43 µs quiet, 54 µs seen under load
+    # A miss costs about 100 to 150 µs a call: the mock search, the nearest mock and the
+    # evidence. The ceiling is wide, as the others are, so it catches only a large slowdown.
+    "tool_miss": 1500.0,  # 100 to 150 µs quiet
     "http_sync": 6000.0,  # 307 µs quiet, 2.4 ms seen under load
     "http_async": 7000.0,  # 373 µs quiet, 1.0 ms seen under load
     "model_sync": 20000.0,  # 1.6 ms quiet with the budget on, 3.5 ms seen under load
@@ -86,6 +90,7 @@ ROUND_TRIPS = {
     "tool_sync": 0.0,
     "tool_async": 0.0,
     "tool_mock": 0.0,
+    "tool_miss": 0.0,
     "http_sync": 0.0,
     "http_async": 0.0,
     "http_mock": 0.0,
@@ -124,16 +129,28 @@ class Servers:
     mcp: str  # the MCP server's arguments, split on |, as the agent passes them on
 
 
-def toml(*, budget: str, mocks: bool) -> str:
+def toml(*, budget: str, mocks: bool, miss: bool = False) -> str:
     """The scrimmage.toml of the bench agent. A mock that goes unused is a test mistake."""
     tools = ", ".join(
-        f'"benchmark_agent:{name}"' for name in ("tool_sync", "tool_async", "tool_mock")
+        f'"benchmark_agent:{name}"'
+        for name in ("tool_sync", "tool_async", "tool_mock", "tool_miss")
     )
-    return textwrap.dedent(f"""\
+    reals = ", ".join(
+        f'"{name}"'
+        for name in (
+            "tool:tool_sync",
+            "tool:tool_async",
+            "tool:tool_miss",
+            "http:127.0.0.1",
+            "mcp:docs/search",
+        )
+    )
+    return (
+        textwrap.dedent(f"""\
         [agent]
         function = "benchmark_agent:answer"
         tools = [{tools}]
-        real = ["tool:tool_sync", "tool:tool_async", "http:127.0.0.1", "mcp:docs/search"]
+        real = [{reals}]
         model_hosts = [{{host = "127.0.0.1", provider = "openai"}}]
         runs = 1
         parallel = 1
@@ -145,8 +162,9 @@ def toml(*, budget: str, mocks: bool) -> str:
         question = "go"
         expect = ["ok"]
 
-        """) + (
-        textwrap.dedent("""\
+        """)
+        + (
+            textwrap.dedent("""\
 
         [[test.mock]]
         call = "tool:tool_mock"
@@ -156,8 +174,20 @@ def toml(*, budget: str, mocks: bool) -> str:
         call = "http:mocked.invalid"
         json = {status = "mocked"}
         """)
-        if mocks
-        else ""
+            if mocks
+            else ""
+        )
+        + (
+            textwrap.dedent("""\
+
+        [[test.mock]]
+        call = "tool:tool_miss"
+        args = {order_id = "A1"}
+        returns = {order_id = "A1", status = "mocked"}
+        """)
+            if miss
+            else ""
+        )
     )
 
 
@@ -225,7 +255,9 @@ def run_gated(
     project = out.parent / f"project-{out.stem}"
     project.mkdir()
     mocks = "tool_mock" in cases
-    (project / "scrimmage.toml").write_text(toml(budget=budget, mocks=mocks))
+    (project / "scrimmage.toml").write_text(
+        toml(budget=budget, mocks=mocks, miss="tool_miss" in cases)
+    )
     env = call_env(servers, cases, out, mode=mode, profile=profile)
     result = subprocess.run(
         [SCRIMMAGE, "test", str(project / "scrimmage.toml")],
