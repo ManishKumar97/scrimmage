@@ -195,7 +195,8 @@ def start(*, child: bool = False, target: str | None = None) -> None:
         process, which ends it before anything after that point.
         """
         for stream in (sys.stdout, sys.stderr):
-            with contextlib.suppress(Exception):  # a stream the agent closed or replaced
+            with contextlib.suppress(BaseException):  # a stream the agent closed or replaced, even
+                # one whose flush raises SystemExit: os._exit below must still run
                 stream.flush()
         last_lines()
         os._exit(0)
