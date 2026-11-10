@@ -208,6 +208,16 @@
         },
         "infra": {
           "$ref": "#/$defs/messages"
+        },
+        "mock_misses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/miss"
+          }
+        },
+        "mock_misses_left_out": {
+          "type": "integer",
+          "minimum": 0
         }
       }
     },
@@ -413,6 +423,10 @@
           "items": {
             "$ref": "#/$defs/run"
           }
+        },
+        "mock_miss_count": {
+          "type": "integer",
+          "minimum": 0
         }
       }
     },
@@ -470,6 +484,10 @@
             "null"
           ],
           "maxLength": 200
+        },
+        "mock_miss_count": {
+          "type": "integer",
+          "minimum": 0
         }
       }
     },
@@ -1318,6 +1336,144 @@
           "items": {
             "$ref": "#/$defs/manual_call"
           }
+        }
+      }
+    },
+    "miss": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "test",
+        "row",
+        "call",
+        "reason",
+        "action",
+        "method",
+        "path",
+        "seen",
+        "nearest",
+        "runs",
+        "run"
+      ],
+      "properties": {
+        "test": {
+          "type": "string"
+        },
+        "row": {
+          "type": "string"
+        },
+        "call": {
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "arguments",
+                "request",
+                "no_mock",
+                "unreadable"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
+          ]
+        },
+        "action": {
+          "anyOf": [
+            {
+              "enum": [
+                "real",
+                "refused"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
+          ]
+        },
+        "method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seen": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "$comment": "display text, cleaned by a heuristic; do not parse it"
+        },
+        "nearest": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "mock",
+                "args",
+                "method",
+                "path",
+                "differs",
+                "differs_left_out"
+              ],
+              "properties": {
+                "mock": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "args": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "$comment": "display text; do not parse it"
+                },
+                "method": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "path": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "differs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "differs_left_out": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "runs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "run": {
+          "type": "string"
         }
       }
     }

@@ -10,7 +10,7 @@ range: a 95% Wilson interval, from these runs alone
 fail: a-test-whose-name-is-far-too-long-for-the-table-a-test-whose-name-is-far-too-long-for-the-table- baseline: 2/3 passed, pass_rate is 1
   1 run: crashed: /records/scrimmage-runs/20261107T101500Z-a1b2c3/run-baseline-2.log
 model calls cost $0.0007 of a budget of $5
-warning: http:x.acme GET /a ran for real, though the test has mocks for that host; none matched its method and path
+warning: http:x.acme GET /a ran for real, though the test has mocks for that host; none matched its method and path; nearest mock (heuristic: most path segments alike): GET /b (a-test-whose-name-is-far-too-long-for-the-table-a-test-whose-name-is-far-too-long-for-the-table- baseline, 1 of 3 runs)
 warning: 2 model requests offered provider tools that only read, such as web search; providers bill those per use, outside the token budget
 note: a-test-whose-name-is-far-too-long-for-the-table-a-test-whose-name-is-far-too-long-for-the-table- baseline: run-baseline-0: process 41 left the group
 note: a-test-whose-name-is-far-too-long-for-the-table-a-test-whose-name-is-far-too-long-for-the-table- baseline: 1 crashed

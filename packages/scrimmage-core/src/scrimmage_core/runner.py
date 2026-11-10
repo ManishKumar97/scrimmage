@@ -135,12 +135,17 @@ class RunResult:
     hosted_reads: int = 0
     mocked: set[int] = field(default_factory=set[int])  # the mocks this run used, by place
     tools_seen: list[str] | None = None  # None: the run did not report them
-    near_mocks: set[str] = field(default_factory=set[str])  # real, though the host had mocks
+    # calls that had a mock on their label and matched none: the line's mock_miss and call
+    misses: list[dict[str, object]] = field(default_factory=list[dict[str, object]])
     tool_calls: int = 0
     models: set[tuple[str, str]] = field(default_factory=set[tuple[str, str]])  # label, name
     budget: dict[str, object] | None = None  # the numbers of its first refusal, if for the budget
     budget_reason: str = ""  # the reason of its first refusal for the budget
     judgement: judge.RunJudgement = NOT_JUDGED
+
+    @property
+    def miss_count(self) -> int:
+        return len(self.misses)
 
     @property
     def exercised(self) -> bool:
@@ -338,7 +343,15 @@ class Runner:
         }
         fired = None if row.fault is None else calls["fault"] > 0
         mistakes = [str(line["mistake"]) for line in lines if "mistake" in line]
-        near = {f"{x['call']} {x['method']} {x['path']}" for x in lines if x.get("near_mock")}
+        misses = [
+            {
+                "call": str(x["call"]),
+                "action": str(x["action"]),
+                **cast(dict[str, object], x["mock_miss"]),
+            }
+            for x in lines
+            if "mock_miss" in x
+        ]
         result = RunResult(
             run,
             row,
@@ -354,7 +367,7 @@ class Runner:
             hosted_reads=sum(1 for line in model if "hosted_reads" in line),
             mocked={int(str(line["mock"])) for line in lines if line.get("action") == "mock"},
             tools_seen=reported_tools(notices),
-            near_mocks=near,
+            misses=misses,
             tool_calls=sum(1 for line in lines if line.get("kind") in ("tool", "mcp")),
             models={(str(line["call"]), str(line.get("model") or "")) for line in model},
             budget=numbers,
@@ -584,14 +597,39 @@ def unused_mocks(
         used = {index for r in mine for index in r.mocked}
         if not mine or all(r.outcome in FAILED for r in mine):
             continue
+        nearest = {
+            int(str(cast(dict[str, object], m["nearest"])["mock"]))
+            for r in mine
+            for m in r.misses
+            if m.get("nearest") is not None
+        }
         for index, mock in enumerate(test.mocks):
             if index in used:
                 continue
             name = mock.call.partition(":")[2]
             if mock.recorded:
+                said = (
+                    "a call with other arguments missed it; see the warning"
+                    if index in nearest
+                    else "this run did not make that call"
+                )
                 recorded.append(
                     f"in test {test.name!r} the recorded mock on {recorded_call(mock)} was not "
-                    "used; this run did not make that call"
+                    f"used; {said}"
+                )
+            elif (
+                mock.args is not None
+                and labels.kind_of(mock.call) in ("tool", "mcp")
+                and (
+                    index in nearest
+                    or any(i in used and m.call == mock.call for i, m in enumerate(test.mocks))
+                )
+            ):
+                # Said with the recorded notes: it names a call that happened, so it needs no
+                # tools list to be true.
+                recorded.append(
+                    f"in test {test.name!r} the mock on {recorded_call(mock)} was not used; the "
+                    "tool was called with other arguments"
                 )
             elif labels.kind_of(mock.call) == "http":
                 mistakes.append(
@@ -604,7 +642,9 @@ def unused_mocks(
                     f"[[test]] {test.name!r}: no call matched the mock on {mock.call}, or an "
                     "earlier mock answered it first. Check its server and tool, or remove it."
                 )
-            elif any(other.call == mock.call for other in test.mocks[:index]):
+            elif any(
+                other.call == mock.call and other.args is None for other in test.mocks[:index]
+            ):
                 notes.append(
                     f"in test {test.name!r} an earlier mock on {name} answers every call, so "
                     "the later one was not used. Remove it."
@@ -873,9 +913,17 @@ def rule_lines(report: RowReport, folder: Path) -> list[str]:
         head,
         *(
             f"  {plural(len(runs), 'run')}: {rule.text}: {where_to_read(rule, runs, folder)}"
+            f"{miss_pointer(runs)}"
             for rule, runs in most
         ),
     ]
+
+
+def miss_pointer(runs: list[RunResult]) -> str:
+    """Said beside a broken rule when some of its runs had a mock miss, as a real call that a
+    mock was meant to answer can change what the agent did."""
+    n = sum(1 for r in runs if r.miss_count)
+    return f" ({n} of these runs had a mock miss; see the warnings)" if n else ""
 
 
 def counts(ended: Counter[str]) -> str:
@@ -899,6 +947,8 @@ class Report:
     spent: float
     stopped_by: str | None
     code: int
+    misses: list[dict[str, object]] = field(default_factory=list[dict[str, object]])
+    misses_left_out: int = 0
 
     @property
     def every_message(self) -> list[tuple[str, str]]:
@@ -1025,7 +1075,14 @@ def build_report(
             code = INFRA
             mistakes.append(f"{r.row.test.name} {r.row.name}: {r.run}: {error}, not injected")
     hosted = sum(r.hosted_reads for r in results)
-    near_mocks = sorted({call for r in results for call in r.near_mocks})
+    grouped = miss_groups(results)
+    web_misses = sorted(
+        {
+            f"{doc['call']} {doc['method']} {doc['path']}"
+            for doc, _ in grouped
+            if doc["reason"] == "request" and doc["action"] == "real"
+        }
+    )
     spent = sum(r.cost_usd for r in results)
     warnings: list[str] = []
     if budget_on and spent > (config.agent.max_cost_usd or 0):
@@ -1039,11 +1096,16 @@ def build_report(
         "it stays held, as the call may have been sent"
         for hold in leaked
     ]
-    warnings += [
-        f"{call} ran for real, though the test has mocks for that host; "
-        "none matched its method and path"
-        for call in near_mocks
-    ]
+    if judged:
+        warnings += [text for _, text in grouped[:MISS_LINES]]
+        if len(grouped) > MISS_LINES:
+            warnings.append(f"and {len(grouped) - MISS_LINES} more; see --json")
+    else:
+        warnings += [
+            f"{call} ran for real, though the test has mocks for that host; "
+            "none matched its method and path"
+            for call in web_misses
+        ]
     if hosted:
         warnings.append(
             f"{plural(hosted, 'model request')} offered provider tools that only read, "
@@ -1085,7 +1147,112 @@ def build_report(
         spent,
         stopped_by,
         code,
+        [doc for doc, _ in grouped[:MISS_JSON]],
+        max(len(grouped) - MISS_JSON, 0),
     )
+
+
+MISS_JSON, MISS_LINES = 200, 20
+
+
+def nearest_text(doc: dict[str, object]) -> str:
+    """The nearest mock as a person reads it, labelled as a heuristic."""
+    near = cast("dict[str, object] | None", doc["nearest"])
+    if near is None:
+        return ""
+    if doc["reason"] == "request":
+        request = " ".join(str(part) for part in (near["method"], near["path"]) if part)
+        return f"; nearest mock (heuristic: most path segments alike): {request or 'any request'}"
+    keys = cast(list[str], near["differs"])
+    more = int(str(near["differs_left_out"]))
+    differs = f", differs at {', '.join(keys)}{f' and {more} more' if more else ''}" if keys else ""
+    shown = near["args"] if near["args"] is not None else "arguments not readable"
+    return f"; nearest mock (heuristic: fewest differing arguments): {shown}{differs}"
+
+
+def miss_text(doc: dict[str, object], where: str) -> str:
+    """One warning line for a group of misses. It states what happened and that the nearest
+    mock is a guess; it never says the agent or the mock is wrong."""
+    call, ran = str(doc["call"]), doc["action"] == "real"
+    seen = f" with {doc['seen']}" if doc["seen"] is not None else ""
+    tail = f" ({where})"
+    if doc["reason"] == "request":
+        request = f"{call} {doc['method']} {doc['path']}"
+        verdict = "ran for real" if ran else "was refused"
+        return (
+            f"{request} {verdict}, though the test has mocks for that host; "
+            f"none matched its method and path{nearest_text(doc)}{tail}"
+        )
+    if doc["reason"] == "no_mock":
+        return (
+            f"{call}{seen} has no mock in this test and was refused, and the test has mocks "
+            f"that match arguments{tail}"
+        )
+    if doc["reason"] == "unreadable":
+        return f"{call} missed a mock, but the evidence could not be built{tail}"
+    verdict = (
+        "matched no mock and ran for real, as it is under [agent] real"
+        if ran
+        else "matched no mock and was refused, as it is not under [agent] real by name"
+    )
+    return f"{call}{seen} {verdict}{nearest_text(doc)}; values cleaned by a heuristic{tail}"
+
+
+def miss_groups(results: list[RunResult]) -> list[tuple[dict[str, object], str]]:
+    """The misses of every run, one group for the same call, evidence and nearest mock, as
+    (the --json form, the warning line). A group counts distinct runs. Calls that ran for
+    real come first, as nothing else reports them; a refused call is a mistake already."""
+    total = Counter((r.row.test.name, r.row.name) for r in results)
+    docs: dict[tuple[object, ...], dict[str, object]] = {}
+    seen_in: dict[tuple[object, ...], set[str]] = {}
+    for r in results:
+        for m in r.misses:
+            near = cast("dict[str, object] | None", m.get("nearest"))
+            key = (
+                r.row.test.name,
+                r.row.name,
+                m["call"],
+                m["reason"],
+                m["action"],
+                m["seen"],
+                m["method"],
+                m["path"],
+                None if near is None else near["mock"],
+            )
+            if key not in docs:
+                shown = None if near is None else {**near, "mock": int(str(near["mock"])) + 1}
+                docs[key] = {
+                    "test": r.row.test.name,
+                    "row": r.row.name,
+                    "call": m["call"],
+                    "reason": m["reason"],
+                    "action": m["action"],
+                    "method": m["method"],
+                    "path": m["path"],
+                    "seen": m["seen"],
+                    "nearest": shown,
+                    "run": r.run,
+                }
+                seen_in[key] = set()
+            seen_in[key].add(r.run)
+    out: list[tuple[dict[str, object], str]] = []
+    for key, doc in docs.items():
+        doc["runs"] = len(seen_in[key])
+        where = (
+            f"{doc['test']} {doc['row']}, {len(seen_in[key])} of "
+            f"{total[str(doc['test']), str(doc['row'])]} runs"
+        )
+        out.append((doc, miss_text(doc, where)))
+    out.sort(
+        key=lambda x: (
+            x[0]["action"] != "real",
+            str(x[0]["test"]),
+            str(x[0]["row"]),
+            str(x[0]["call"]),
+            str(x[0]["seen"] or ""),
+        )
+    )
+    return out
 
 
 def print_report(found: Report, out: TextIO) -> int:
@@ -1140,6 +1307,8 @@ def report_json(found: Report) -> dict[str, object]:
         "cost_usd": round(found.spent, 8),
         "budget_usd": found.config.agent.max_cost_usd,
         "stopped_by": found.stopped_by,
+        "mock_misses": found.misses,
+        "mock_misses_left_out": found.misses_left_out,
     }
 
 
@@ -1181,6 +1350,7 @@ def row_json(entry: RowReport, folder: Path) -> dict[str, object]:
             {"kind": rule.kind, "text": rule.text, "runs": [r.run for r in runs]}
             for rule, runs in broken_runs(entry)
         ],
+        "mock_miss_count": sum(r.miss_count for r in mine),
         "run_details": [run_json(r) for r in mine],
     }
 
@@ -1195,6 +1365,7 @@ def run_json(result: RunResult) -> dict[str, object]:
         "left_out": result.judgement.left_out,
         "cost_usd": round(result.cost_usd, 8),
         "answer_preview": answer,
+        "mock_miss_count": result.miss_count,
     }
 
 
