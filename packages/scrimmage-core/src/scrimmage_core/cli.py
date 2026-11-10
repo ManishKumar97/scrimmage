@@ -74,7 +74,7 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
         "check", help="check scrimmage.toml without running anything", allow_abbrev=False
     )
     record = commands.add_parser(
-        "record", help="run each test once and write its calls as mocks", allow_abbrev=False
+        "record", help="run each test's baseline and write its calls as mocks", allow_abbrev=False
     )
     for command in (test, check, record):
         command.add_argument("path", nargs="?", default="scrimmage.toml", type=Path)
@@ -85,6 +85,7 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
     record.add_argument(
         "--refresh", action="append", default=[], metavar="LABEL", help="record this label again"
     )
+    record.add_argument("--runs", default="1", metavar="N", help="run each test's baseline N times")
     commands.add_parser("schema", help="print the JSON Schema of scrimmage.toml")
     init = commands.add_parser(
         "init", help="draft a scrimmage.toml by reading the code", allow_abbrev=False
@@ -115,10 +116,10 @@ def chosen_command(args: argparse.Namespace) -> Callable[[Path, Found | None], i
         return run_test
     if args.command == "check":
         return run_check
-    names, refresh = list(args.test), list(args.refresh)
+    names, refresh, runs = list(args.test), list(args.refresh), str(args.runs)
 
     def record(path: Path, found: Found | None) -> int:
-        return run_record(path, found, names, refresh)
+        return run_record(path, found, names, refresh, runs)
 
     return record
 
@@ -352,7 +353,9 @@ def run_test(path: Path, found: Found | None) -> int:
     return report.code
 
 
-def run_record(path: Path, found: Found | None, names: list[str], refresh: list[str]) -> int:
+def run_record(
+    path: Path, found: Found | None, names: list[str], refresh: list[str], runs: str = "1"
+) -> int:
     """One real baseline run per test, its real calls written as mocks beside the team's file."""
     from scrimmage_core import record as recording
     from scrimmage_core import runner as running
@@ -364,9 +367,11 @@ def run_record(path: Path, found: Found | None, names: list[str], refresh: list[
     stop_point()
     if config is None:
         return record_mistakes(problems, found)
-    plan, problems = recording.prepare(config, names, refresh)
+    plan, problems = recording.prepare(config, names, refresh, runs)
     if plan is None:
         return record_mistakes(problems, found)
+    if (before := recording.before_runs(plan.config)) is not None:
+        print(f"scrimmage record: {before}", file=sys.stderr if found else sys.stdout, flush=True)
     runner: Runner | None = None
     results: list[running.RunResult] = []
     stopped: str | None = None
