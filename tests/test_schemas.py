@@ -98,6 +98,24 @@ def test_a_served_plan_with_the_runs_age_fits_the_schema_and_round_trips() -> No
 @pytest.mark.design("schema.record")
 def test_the_designs_record_line_fits_the_schema() -> None:
     validator("record").validate(DESIGN_LINE)
+    miss = {
+        "reason": "arguments",
+        "seen": '{"sku": "SKU-42"}',
+        "method": None,
+        "path": None,
+        "nearest": {
+            "mock": 3,
+            "args": '{"sku": "42"}',
+            "method": None,
+            "path": None,
+            "differs": ["sku"],
+            "differs_left_out": 0,
+        },
+    }
+    validator("record").validate({**DESIGN_LINE, "action": "real", "mock_miss": miss})
+    validator("record").validate({**DESIGN_LINE, "args_not_plain": True})
+    with pytest.raises(jsonschema.ValidationError):
+        validator("record").validate({**DESIGN_LINE, "near_mock": True})
 
 
 def test_a_line_with_an_unknown_field_does_not_fit() -> None:

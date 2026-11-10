@@ -13,7 +13,7 @@ import json
 import math
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, cast
 
 from scrimmage_core import mocks
@@ -351,6 +351,44 @@ def unsaved(code: str, why: str) -> dict[str, object]:
 
 def cleaned_text(text: str) -> str:
     return redacted(text)[0]
+
+
+SHOWN_CAP = 200  # a miss line shows this much of a call's arguments
+
+
+def without_json_secrets(value: object) -> object:
+    """Every string that holds JSON with a secret by its key's name, replaced whole."""
+    if isinstance(value, str):
+        return REMOVED if embedded_secret(value) else value
+    if isinstance(value, list):
+        return [without_json_secrets(x) for x in cast(list[object], value)]
+    if isinstance(value, dict):
+        return {k: without_json_secrets(v) for k, v in cast(dict[str, object], value).items()}
+    return value
+
+
+def shown_args(value: object, differing: Sequence[str]) -> str | None:
+    """A call's arguments as display text for a miss, or None if they are not a table.
+
+    The values of the keys in differing are shown, cleaned by a heuristic: the patterns, the
+    key-name rule, and a string of JSON with a secret by its key's name replaced whole. Every
+    other key shows its name and type only, as <str>, because a key that matched has no reason
+    to print. The differing keys come first, and the text is cut last, after the cleaning.
+    """
+    if not isinstance(value, dict):
+        return None
+    table = cast(dict[str, object], value)
+    order = [k for k in differing if k in table] + [k for k in table if k not in differing]
+    parts: list[str] = []
+    for key in order:
+        name = cleaned_text(key)
+        if key in differing:
+            cleaned, _ = clean({key: table[key]})
+            shown = json.dumps(without_json_secrets(cast(dict[str, object], cleaned)[name]))
+        else:
+            shown = f"<{type(table[key]).__name__}>"
+        parts.append(f"{json.dumps(name)}: {shown}")
+    return ("{" + ", ".join(parts) + "}")[:SHOWN_CAP]
 
 
 def converted(arguments: object) -> object | None:

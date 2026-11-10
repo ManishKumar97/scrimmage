@@ -7,7 +7,7 @@ from collections.abc import Sequence
 import pytest
 
 from scrimmage_core.config import Fault, Mock
-from scrimmage_core.decide import Call, Counters, decide, fires, names
+from scrimmage_core.decide import Call, Counters, Decision, decide, fires, missed, names
 from scrimmage_core.labels import matches
 from scrimmage_core.plan import Plan
 
@@ -283,3 +283,92 @@ def test_a_call_one_recorded_mock_misses_goes_on_to_the_next_one() -> None:
 @pytest.mark.parametrize("args", [{"order_id": "1"}, {"order_id": "2"}, {"order_id": 1}, None])
 def test_a_hand_written_mock_answers_every_call(args: object) -> None:
     assert run(make([MOCK]), get_order_call(args))[0] == "mock"
+
+
+HAND = Mock("tool:get_order", "order 1", None, args={"order_id": "1"})
+
+
+@pytest.mark.design("decide.hand_written_args")
+def test_a_hand_written_mock_with_args_answers_only_those_arguments() -> None:
+    p = make([HAND], real=["tool:get_order"])
+    assert run(p, get_order_call({"order_id": "1"}))[0] == "mock"
+    assert run(p, get_order_call({"order_id": "2"}))[0] == "real"
+    assert run(p, get_order_call({"order_id": 1}))[0] == "real"  # type-strict
+    assert run(p, get_order_call({"order_id": "1", "extra": 1}))[0] == "real"  # no subset match
+    assert run(p, get_order_call(object()))[0] == "real"  # arguments that are not known
+    assert run(p, get_order_call(None))[0] == "real"
+    counted = Mock("tool:get_order", "x", None, args={"n": 1})
+    for other in (True, 1.0):  # type-strict at every level: True is not 1, 1.0 is not 1
+        found = run(make([counted], real=["tool:get_order"]), get_order_call({"n": other}))
+        assert found[0] == "real"
+    assert run(make([HAND]), get_order_call({"order_id": "2"})) == ("refused", 0)
+
+
+@pytest.mark.design("decide.miss_evidence")
+def test_a_miss_under_a_wildcard_is_refused() -> None:
+    p = make([HAND], real=["tool:*"])
+    other = get_order_call({"order_id": "2"})
+    assert decide(other, p, []) == Decision("refused", reason="unlisted")
+    # by name it runs for real; so does a call the mock answers
+    named_p = make([HAND], real=["tool:get_order"])
+    assert decide(other, named_p, []).action == "real"
+    assert decide(get_order_call({"order_id": "1"}), p, []).action == "mock"
+
+
+@pytest.mark.design("decide.miss_evidence")
+def test_missed_names_the_nearest_mock_by_fewest_differing_keys() -> None:
+    far = Mock("tool:get_order", "a", None, args={"order_id": "9", "wh": "x", "n": 1})
+    near = Mock("tool:get_order", "b", None, args={"order_id": "9", "wh": "x"})
+    tie = Mock("tool:get_order", "c", None, args={"order_id": "9", "wh": "x"})
+    p = make([far, near, tie], real=["tool:get_order"])
+    call = get_order_call({"order_id": "1", "wh": "x"})
+    found = missed(call, p, decide(call, p, []))
+    assert found is not None
+    assert (found.reason, found.nearest, found.differs) == ("arguments", 1, ("order_id",))
+    # an added key and a type change count as differences
+    added = get_order_call({"order_id": "9", "wh": "x", "extra": True})
+    other = missed(added, p, decide(added, p, []))
+    assert other is not None and other.differs == ("extra",)
+    retyped = get_order_call({"order_id": 9, "wh": "x"})
+    third = missed(retyped, p, decide(retyped, p, []))
+    assert third is not None and third.differs == ("order_id",)
+    # arguments that are not known: the first mock, nothing said to differ
+    unknown = get_order_call(None)
+    fourth = missed(unknown, p, decide(unknown, p, []))
+    assert fourth is not None and (fourth.nearest, fourth.differs, fourth.known) == (0, (), False)
+
+
+@pytest.mark.design("decide.miss_evidence")
+def test_a_call_answered_by_a_fault_or_a_mock_is_not_a_miss() -> None:
+    p = make([HAND], [TIMEOUT], real=["tool:get_order"])
+    call = get_order_call({"order_id": "2"})
+    assert missed(call, p, decide(call, p, [1])) is None  # a fault answered
+    q = make([HAND], real=["tool:get_order"])
+    same = get_order_call({"order_id": "1"})
+    assert missed(same, q, decide(same, q, [])) is None  # a mock answered
+    assert missed(call, q, Decision("refused", reason="poisoned")) is None
+    model = Call("model", "model:openai", "chat")
+    assert missed(model, q, Decision("real")) is None
+    process = Call("process", "process:python", "python")
+    assert missed(process, q, Decision("refused", reason="unlisted")) is None
+
+
+@pytest.mark.design("decide.miss_evidence")
+def test_a_listed_tool_with_no_mock_is_not_a_miss() -> None:
+    p = make([HAND], real=["tool:get_order", "tool:get_stock"])
+    stock = Call("tool", "tool:get_stock", "get_stock", args={"sku": "1"})
+    assert decide(stock, p, []).action == "real"
+    assert missed(stock, p, decide(stock, p, [])) is None
+
+
+@pytest.mark.design("decide.miss_evidence")
+def test_a_refused_call_with_no_mock_is_a_no_mock_miss() -> None:
+    p = make([HAND], real=["tool:get_order"])
+    stock = Call("tool", "tool:get_stock", "get_stock", args={"sku": "1"})
+    decision = decide(stock, p, [])
+    found = missed(stock, p, decision)
+    assert decision.action == "refused"
+    assert found is not None and (found.reason, found.nearest) == ("no_mock", None)
+    # with no mock that pins arguments in the plan, a refusal is the old refusal
+    plain = make([MOCK])
+    assert missed(stock, plain, decide(stock, plain, [])) is None
