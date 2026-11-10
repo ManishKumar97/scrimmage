@@ -62,12 +62,14 @@ def gatable(module: ModuleType) -> bool:
 
 
 def version() -> tuple[int, int] | None:
-    import importlib.metadata  # not at import: the SDK starts without it
-
     try:
+        # Not at import: the SDK starts without it. A team's stray module of the same name
+        # as one this pulls in can raise, and that must not crash the run.
+        import importlib.metadata
+
         parts = importlib.metadata.version(LIBRARY).split(".")
         return int(parts[0]), int(parts[1])
-    except (importlib.metadata.PackageNotFoundError, ValueError, IndexError):
+    except Exception:
         return None
 
 

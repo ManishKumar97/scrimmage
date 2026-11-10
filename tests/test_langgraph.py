@@ -3,6 +3,7 @@
 import asyncio
 import functools
 import json
+import sys
 import threading
 import time
 import types
@@ -1192,3 +1193,17 @@ class CallableText(str):
 
 def test_an_answer_path_may_end_on_text_that_can_be_called() -> None:
     assert pick({"text": CallableText("shipped")}, "text") == "shipped"
+
+
+def test_a_library_import_that_raises_is_no_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A team's csv.py beside the script can raise inside the import version() makes."""
+
+    class Raises:
+        @staticmethod
+        def find_spec(name: str, *args: object) -> None:
+            if name == "importlib.metadata":
+                raise RuntimeError("a stray module raised at import")
+
+    monkeypatch.delitem(sys.modules, "importlib.metadata")
+    monkeypatch.setattr(sys, "meta_path", [Raises(), *sys.meta_path])
+    assert langchain_gate.version() is None

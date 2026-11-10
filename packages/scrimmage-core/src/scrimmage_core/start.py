@@ -64,12 +64,12 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 2
+    import asyncio  # before the agent's import can put its folder on the path
+
     module, _, name = argv[1].partition(":")
     function = getattr(importlib.import_module(module), name)
     result = function(argv[2])
     if inspect.isawaitable(result):
-        import asyncio
-
         result = asyncio.run(_wait(result))
     try:
         if len(argv) == 4:

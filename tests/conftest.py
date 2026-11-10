@@ -1,6 +1,7 @@
 import json
 import multiprocessing.process
 import os
+import platform
 import shutil
 import signal
 import subprocess
@@ -86,6 +87,9 @@ def pytest_configure(config: pytest.Config) -> None:
     starts, and the hook above, like the SDK's, runs on every audit event. The thread dies
     before its first line, and the test fails on whatever that thread was for.
     """
+    # platform starts `uname -p` on its first use. Once here, no test's no-process teardown
+    # meets it, whether the run is parallel or -n0.
+    platform.platform()
     if sys.version_info >= (3, 12) or hasattr(config, "workerinput"):
         return
     coverage = sys.modules.get("coverage")

@@ -89,7 +89,8 @@ def redacted(text: str) -> tuple[str, int]:
     lowered = text.lower()
     if any(lit in text for lit in LITERALS) or any(lit in lowered for lit in LOWER_LITERALS):
         text, keys = PATTERNS.subn(REMOVED, text)
-    return text, count + jwts + keys
+    # A plain str, even if given a subclass, whose methods could carry the secret back.
+    return str.__str__(text), count + jwts + keys
 
 
 def redact(text: str) -> str:
