@@ -39,8 +39,8 @@ AGENT_KEYS = {
 }
 RULE_KEYS = {"expect", "forbid", "pass_rate"}
 TEST_KEYS = {"name", "question", "mock", "fault", *RULE_KEYS}
-# recorded marks a mock scrimmage record wrote; args, on a recorded mock only, the arguments
-# it answers.
+# recorded marks a mock scrimmage record wrote; args, on a tool or MCP mock, the arguments
+# it answers, exactly.
 MOCK_KEYS = {"call", "returns", "type", "recorded", "args"}
 WEB_MOCK_KEYS = {"call", "method", "path", "status", "headers", "json", "text", "recorded"}
 FAULT_KEYS = {"call", "do", "when", "raises", *RULE_KEYS}
@@ -229,6 +229,7 @@ def check_references(config: Config) -> list[str]:
                     f"[[test]] {test.name!r}: {mock.call} cannot be mocked; "
                     "a model call is always real or a fault"
                 )
+        problems += dead_mocks(test)
         for entry in [*test.mocks, *test.faults]:
             if labels.kind_of(entry.call) != "tool":
                 continue  # a model, web or MCP label cannot be compared with anything yet
@@ -254,6 +255,35 @@ def check_references(config: Config) -> list[str]:
         name = entry.partition(":")[2]
         if listed and labels.kind_of(entry) == "tool" and name != "*" and name not in names:
             problems.append(f"[agent] real: {entry} names no tool in [agent] tools")
+    return problems
+
+
+def same_label(upper: str, lower: str) -> bool:
+    """Whether two mock labels name the same call: equal, or an MCP tool in its short form
+    above the same tool with its server."""
+    if upper == lower:
+        return True
+    return (
+        upper.startswith("mcp:")
+        and lower.startswith("mcp:")
+        and (upper == "mcp:" + lower.partition("/")[2])
+    )
+
+
+def dead_mocks(test: Test) -> list[str]:
+    """A mock with no args answers every call to its label, so an args mock below it never does."""
+    problems: list[str] = []
+    for i, lower in enumerate(test.mocks):
+        if lower.args is None or labels.kind_of(lower.call) not in ("tool", "mcp"):
+            continue
+        for upper in test.mocks[:i]:
+            if upper.args is None and same_label(upper.call, lower.call):
+                problems.append(
+                    f"[[test]] {test.name!r}: the mock on {upper.call} has no args, so it answers "
+                    f"every call and the mock with args below it on {lower.call} never answers; "
+                    "move the mock with no args last"
+                )
+                break
     return problems
 
 
@@ -620,15 +650,10 @@ def read_recorded(table: dict[str, object], where: str) -> bool:
     return recorded
 
 
-def read_args(table: dict[str, object], recorded: bool, where: str) -> dict[str, object] | None:
-    """The arguments a recorded mock answers. A hand-written mock answers every call."""
+def read_args(table: dict[str, object], where: str) -> dict[str, object] | None:
+    """The arguments a tool or MCP mock answers, exactly. With none, it answers every call."""
     if "args" not in table:
         return None
-    if not recorded:
-        raise ConfigError(
-            f"{where} args: works only on a mock with recorded = true, as scrimmage record "
-            f"writes it; a mock you write answers every call to its tool; see {DOCS}"
-        )
     args: object = table["args"]
     if not isinstance(args, dict):
         raise ConfigError(
@@ -648,7 +673,7 @@ def read_mock(table: dict[str, object], where: str) -> Mock:
     if kind is not None:
         kind = import_path(text(table, "type", where), f"{where} type")
     recorded = read_recorded(table, where)
-    args = read_args(table, recorded, where)
+    args = read_args(table, where)
     return Mock(call, table["returns"], kind, recorded=recorded, args=args)
 
 

@@ -170,7 +170,32 @@ recorded = false
 returns  = "hand-written"
 """
 )
-GOOD = {"minimal": MINIMAL, "every_key": EVERY_KEY, "script": SCRIPT, "recorded": RECORDED}
+HAND_ARGS = (
+    MINIMAL
+    + """
+[[test.mock]]
+call    = "tool:get_order"
+args    = {order_id = "1234"}
+returns = {status = "shipped"}
+
+[[test.mock]]
+call    = "mcp:search"
+args    = {q = "refunds"}
+returns = "none"
+
+[[test.mock]]
+call    = "tool:get_order"
+returns = {status = "unknown"}
+"""
+)
+
+GOOD = {
+    "minimal": MINIMAL,
+    "every_key": EVERY_KEY,
+    "script": SCRIPT,
+    "recorded": RECORDED,
+    "args_hand_written": HAND_ARGS,
+}
 
 
 @dataclass(frozen=True)
@@ -260,20 +285,12 @@ BAD = [
     Bad("unknown_label_kind", mock('call = "db:orders"\nreturns = 1\n'), True),
     Bad("recorded_text", mock('call = "tool:t"\nreturns = 1\nrecorded = "yes"\n'), True),
     Bad("web_recorded_number", mock('call = "http:a.acme"\nrecorded = 1\n'), True),
-    Bad("args_hand_written", mock('call = "tool:t"\nreturns = 1\nargs = {a = 1}\n'), True),
-    Bad(
-        "args_not_recorded",
-        mock('call = "tool:t"\nreturns = 1\nrecorded = false\nargs = {a = 1}\n'),
-        True,
-    ),
     Bad(
         "args_not_a_table",
         mock('call = "tool:t"\nreturns = 1\nrecorded = true\nargs = [1]\n'),
         True,
     ),
-    Bad(
-        "mcp_args_hand_written", mock('call = "mcp:search"\nreturns = 1\nargs = {q = "a"}\n'), True
-    ),
+    Bad("args_date", mock('call = "tool:t"\nreturns = 1\nargs = {when = 2026-11-10}\n'), False),
     Bad("web_mock_args", mock('call = "http:a.acme"\nrecorded = true\nargs = {q = "a"}\n'), True),
     Bad(
         "fault_not_a_fault",

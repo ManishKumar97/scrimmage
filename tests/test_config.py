@@ -514,20 +514,70 @@ def test_a_recorded_value_that_is_not_true_or_false_is_rejected(tmp_path: Path, 
 
 @pytest.mark.design("config.args_only_recorded")
 @pytest.mark.parametrize("recorded", ["", "recorded = false\n"])
-def test_args_on_a_mock_that_is_not_recorded_is_rejected(tmp_path: Path, recorded: str) -> None:
+def test_args_on_a_hand_written_mock_are_read(tmp_path: Path, recorded: str) -> None:
     text = config_cases.mock(f'call = "tool:t"\nreturns = 1\n{recorded}args = {{a = 1}}\n')
-    with pytest.raises(ConfigError) as caught:
-        load_text(tmp_path, text)
-    message = str(caught.value)
-    assert "[[test.mock]] 1 of 't' args: works only on a mock with recorded = true" in message
-    assert "docs/configuration.md" in message
+    mock = load_text(tmp_path, text).tests[0].mocks[0]
+    assert (mock.recorded, mock.args) == (False, {"a": 1})
 
 
 @pytest.mark.design("config.args_only_recorded")
-def test_args_that_are_not_a_table_and_args_on_a_web_mock_are_rejected(tmp_path: Path) -> None:
+def test_args_that_are_not_a_table_are_rejected(tmp_path: Path) -> None:
     text = config_cases.mock('call = "tool:t"\nreturns = 1\nrecorded = true\nargs = "a"\n')
     with pytest.raises(ConfigError, match="args: expected a table of the call's arguments"):
         load_text(tmp_path, text)
+
+
+@pytest.mark.design("config.args_only_recorded")
+def test_a_web_mock_with_args_is_still_rejected(tmp_path: Path) -> None:
     web = config_cases.mock('call = "http:a.acme"\nrecorded = true\nargs = {a = 1}\n')
     with pytest.raises(ConfigError, match="args: unknown setting"):
         load_text(tmp_path, web)
+
+
+@pytest.mark.design("config.args_only_recorded")
+@pytest.mark.parametrize(
+    "value", ["2026-11-10", "2026-11-10T09:00:00Z", "09:00:00", "[1, 2026-11-10]", "{d = 09:00:00}"]
+)
+def test_a_date_in_args_is_rejected(tmp_path: Path, value: str) -> None:
+    text = config_cases.mock(f'call = "tool:t"\nreturns = 1\nargs = {{when = {value}}}\n')
+    with pytest.raises(ConfigError, match=r"args\.when.*cannot be sent to the agent"):
+        load_text(tmp_path, text)
+
+
+CATCH_ALL = '[[test.mock]]\ncall = "{}"\nreturns = 1\n'
+WITH_ARGS = '[[test.mock]]\ncall = "{}"\nreturns = 2\nargs = {{a = 1}}\n'
+
+
+@pytest.mark.design("config.args_only_recorded")
+@pytest.mark.parametrize(
+    ("upper", "lower"),
+    [
+        ("tool:t", "tool:t"),
+        ("mcp:search", "mcp:docs/search"),
+        ("mcp:docs/search", "mcp:docs/search"),
+    ],
+)
+def test_a_catch_all_above_an_args_mock_on_its_label_is_a_mistake(
+    tmp_path: Path, upper: str, lower: str
+) -> None:
+    text = config_cases.test("\n" + CATCH_ALL.format(upper) + "\n" + WITH_ARGS.format(lower))
+    with pytest.raises(ConfigError, match="has no args, so it answers every call"):
+        load_text(tmp_path, text)
+
+
+@pytest.mark.design("config.args_only_recorded")
+def test_an_args_mock_above_a_catch_all_is_legal(tmp_path: Path) -> None:
+    text = config_cases.test("\n" + WITH_ARGS.format("tool:t") + "\n" + CATCH_ALL.format("tool:t"))
+    assert len(load_text(tmp_path, text).tests[0].mocks) == 2
+    both = config_cases.test("\n" + WITH_ARGS.format("tool:t") + "\n" + WITH_ARGS.format("tool:t"))
+    assert len(load_text(tmp_path, both).tests[0].mocks) == 2  # what record writes
+    other = config_cases.test("\n" + CATCH_ALL.format("tool:u") + "\n" + WITH_ARGS.format("tool:t"))
+    assert len(load_text(tmp_path, other).tests[0].mocks) == 2
+
+
+@pytest.mark.design("config.args_only_recorded")
+@pytest.mark.parametrize("key", ["ignore", "match", "pattern"])
+def test_ignore_match_and_pattern_are_unknown_keys(tmp_path: Path, key: str) -> None:
+    text = config_cases.mock(f'call = "tool:t"\nreturns = 1\nargs = {{a = 1}}\n{key} = ["a"]\n')
+    with pytest.raises(ConfigError, match=f"{key}: unknown setting"):
+        load_text(tmp_path, text)
