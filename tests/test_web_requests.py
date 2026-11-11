@@ -1485,7 +1485,7 @@ def test_a_row_of_json_replies_append_cannot_change_is_exit_2_with_the_reasons(
     assert result.code == 2, result.out
     assert "the fault never fired in any run, so the row tested nothing" in result.out
     assert "use replace with find (1 of 1 calls)" in result.out
-    line = result.records()[1][0]
+    line = row(result, "fault 1")[0]
     assert (line["action"], line["under"]) == ("mock", "mock") and "fault" not in line
     fits_the_schema(result)
 
