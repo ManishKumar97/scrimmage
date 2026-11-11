@@ -244,6 +244,7 @@ ROUTES: dict[str, tuple[str, bytes, list[tuple[str, str]]]] = {
     "/latin1": ("text/plain; charset=iso-8859-1", "caf\u00e9 12".encode("latin-1"), []),
     "/sse": ("text/event-stream", b"data: one\n\n", []),
     "/big": ("text/plain", b"x" * 5000, []),
+    "/bigchunked": ("text/plain", b"x" * 1000, []),
     "/stall": ("text/plain", b"0123456789", []),
     "/drop": ("text/plain", b"0123456789", []),
 }
@@ -295,7 +296,7 @@ class Web:
                 self.send_header("Content-Type", kind)
                 for name, value in extra:
                     self.send_header(name, value)
-                if path in ("/sse", "/stall", "/drop"):
+                if path in ("/sse", "/stall", "/drop", "/bigchunked"):
                     self.stream(path, body)
                     return
                 self.send_header("Content-Length", str(len(body)))
@@ -303,6 +304,13 @@ class Web:
                 self.wfile.write(body)
 
             def stream(self, path: str, body: bytes) -> None:
+                if path == "/bigchunked":  # five chunks and no length: only a read finds the size
+                    self.send_header("Transfer-Encoding", "chunked")
+                    self.end_headers()
+                    for _ in range(5):
+                        self.wfile.write(b"%x\r\n%s\r\n" % (len(body), body))
+                    self.wfile.write(b"0\r\n\r\n")
+                    return
                 if path == "/sse":
                     self.send_header("Transfer-Encoding", "chunked")
                     self.end_headers()
@@ -1263,6 +1271,11 @@ def test_a_body_over_the_cap_reaches_the_agent_whole_and_unchanged(
     line = web_line(sink)
     assert line["unchanged"]["why"] == "the body is over 10 MB"
     assert blob_text(sink, line) == "x" * 5000
+    # With no length to go by, the gate reads up to the cap and hands the rest on.
+    sink3, _ = gated(lib, appended())
+    with lib.Client() as client:
+        assert client.get(web.url("/bigchunked")).text == "x" * 5000
+    assert web_line(sink3)["unchanged"]["why"] == "the body is over 10 MB"
     # Said by its length too, before any read.
     sink2, _ = gated(lib, appended())
     with lib.Client() as client, client.stream("GET", web.url("/big")) as streamed:
