@@ -23,11 +23,28 @@ ANSWERS = ("", "x", "needle", "bad", "needle bad")  # empty, expect, pass, both,
 UNJUDGED = runner.NOT_JUDGED.left_out
 FAULT_ROW: Doc = {"fault": {"call": "tool:get_order", "do": "timeout"}}
 BASELINE_ROW: Doc = {"fault": None}
+REFUSALS = ("unlisted", "web_write", "blind_child", "other_python", "structure")
+# Rules about the whole run: what they read is the run's summary, not a call line.
+SUMMARY_ONLY = {
+    "not_agent",
+    "fault_not_fired",
+    "crash_on_baseline",
+    "timeout_on_baseline",
+    "rule_on_baseline",
+}
 BAD_WORDS = re.compile(r"\b(because|wrong)\b", re.IGNORECASE)
 
 
 def line(seq: int, call: str = "model:openai", action: str = "real", **extra: object) -> Doc:
-    return {"seq": seq, "proc": PROC, "call": call, "kind": "tool", "action": action, **extra}
+    return {
+        "seq": seq,
+        "proc": PROC,
+        "call": call,
+        "kind": "tool",
+        "action": action,
+        "args": {"sha256": "aa"},
+        **extra,
+    }
 
 
 def fault_line(seq: int = 2) -> Doc:
@@ -83,13 +100,15 @@ def main_of(combo: Combo) -> suggest.Suggestion | suggest.NoRule:
 def produced() -> set[Combo]:
     """Every combination the judge gives, found by running the judge, not by listing."""
     found: set[Combo] = set()
-    for outcome, fault, fired, mistake, chose, answer in itertools.product(
-        outcomes.OUTCOMES, (False, True), (False, True), (False, True), (False, True), ANSWERS
+    for outcome, fault, fired, mistake, reason, answer in itertools.product(
+        outcomes.OUTCOMES, (False, True), (False, True), (False, True), REFUSALS, ANSWERS
     ):
-        if not fault and fired:
-            continue  # the runner sets fault_fired to None on a baseline: see EXCLUDED
-        exercised = (fired or outcome == "stopped") if fault else True
-        refused = "tool:other" if fault and chose and outcome == suggest.REFUSED_CALL else None
+        flag = runner.fault_fired(fault, int(fired))  # the runner's own: None on a baseline
+        if bool(flag) != fired:
+            continue  # a baseline never fires
+        exercised = runner.is_exercised(flag, outcome)
+        chose = runner.chose_refused(fault, reason)
+        refused = "tool:other" if chose and outcome == suggest.REFUSED_CALL else None
         judgement = judge.judge_run(outcome, answer, exercised, RULES, mistake, refused)
         kinds = frozenset(b.kind for b in judgement.broken)
         found.add((outcome, judgement.verdict, judgement.left_out, kinds, fault, fired))
@@ -390,10 +409,16 @@ def test_every_suggestion_is_labelled_a_heuristic_and_cites_its_lines() -> None:
         doc = got.doc
         assert doc["heuristic"] is True and doc["code"] == got.code
         evidence = cast("list[Doc]", doc["evidence"])
-        assert evidence, combo  # the lines it read
+        assert evidence, combo  # what it read
         have = {(x["seq"], str(x["proc"])) for x in lines}
-        assert all((e["seq"], str(e["proc"])) in have for e in evidence), (combo, evidence)
-        assert all(isinstance(e["seq"], int) and e["proc"] == PROC for e in evidence)
+        for e in evidence:
+            if e == {"summary": True}:
+                assert got.code in SUMMARY_ONLY | {"empty_answer"}, (combo, e)
+                continue
+            assert (e["seq"], str(e["proc"])) in have, (combo, evidence)  # a line, never filler
+            assert isinstance(e["seq"], int) and e["proc"] == PROC
+        if got.code in SUMMARY_ONLY:  # these read nothing but the summary
+            assert evidence == [{"summary": True}], (combo, evidence)
         checked += 1
     assert checked >= 30  # one per outcome, verdict, kind set, row and fired that can happen
     run, lines, row = RULE_CASES["crash_after_fault"][0]
@@ -518,3 +543,84 @@ def test_suggest_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert list(tmp_path.iterdir()) == []
     source = Path(suggest.__file__).read_text()
     assert "scrimmage.toml" not in source and ".write" not in source
+
+
+def test_a_retry_loop_cites_the_fault_line_and_each_repeated_call() -> None:
+    run, _, row = case("timed out", "fail", None, {"timed out"})
+    lines = [line(1), fault_line(2), *more_calls(3)]
+    got = suggest.main(run, lines, row)
+    assert isinstance(got, suggest.Suggestion) and got.code == "retry_loop"
+    assert got.doc["evidence"] == [{"seq": n, "proc": PROC} for n in (2, 3, 4, 5)]
+
+
+def test_a_loop_over_other_arguments_is_not_a_retry() -> None:
+    run, _, row = case("timed out", "fail", None, {"timed out"})
+    others = [{**x, "args": {"sha256": f"b{i}"}} for i, x in enumerate(more_calls(5))]
+    got = suggest.main(run, [line(1), fault_line(2), *others], row)
+    assert isinstance(got, suggest.Suggestion) and got.code == "timeout_after_fault"
+    bare = {k: v for k, v in fault_line(2).items() if k != "args"}  # no arguments to compare
+    got = suggest.main(run, [line(1), bare, *more_calls(4)], row)
+    assert isinstance(got, suggest.Suggestion) and got.code == "timeout_after_fault"
+
+
+def test_a_mistake_on_a_refused_line_is_the_tests_not_the_agents() -> None:
+    mistake = "Ledger is a class and cannot be gated"
+    bare = {"sha256": "0", "bytes": 2, "preview": "{}"}
+    klass = line(1, "tool:Ledger", "refused", reason="unlisted", args=bare, mistake=mistake)
+    base_case = case(
+        "refused call", "left out", "refused call", fault=False, lines=[klass, line(2)]
+    )
+    base = suggest.main(*base_case)
+    assert isinstance(base, suggest.Suggestion) and base.code == "test_mistake"
+    assert mistake in base.text and base.doc["evidence"] == [{"seq": 1, "proc": PROC}]
+    blind = line(3, "process:python", "refused", reason="blind_child", mistake="no gates")
+    fault_case = case(
+        "refused call", "fail", None, {"refused"}, lines=[line(1), fault_line(2), blind]
+    )
+    fault = suggest.main(*fault_case)
+    assert isinstance(fault, suggest.Suggestion) and fault.code == "test_mistake"
+    assert fault.doc["evidence"] == [{"seq": 3, "proc": PROC}]
+    # An agent's own call to an unlisted tool also carries a mistake: that is its choice.
+    own = line(3, "tool:refund_order", "refused", reason="unlisted", mistake="add it to real")
+    chosen = suggest.main(
+        *case("refused call", "fail", None, {"refused"}, lines=[line(1), fault_line(2), own])
+    )
+    assert isinstance(chosen, suggest.Suggestion) and chosen.code == "refused_call"
+    own_base = case("refused call", "left out", "refused call", fault=False, lines=[line(1), own])
+    chosen_base = suggest.main(*own_base)
+    assert isinstance(chosen_base, suggest.Suggestion) and chosen_base.code == "refused_on_baseline"
+
+
+def test_the_wording_follows_what_the_record_shows() -> None:
+    before = suggest.main(
+        *case(
+            "refused call",
+            "fail",
+            None,
+            {"refused"},
+            lines=[line(1, "x", "refused"), fault_line(2)],
+        )
+    )
+    after = suggest.main(*RULE_CASES["refused_call"][0])
+    assert isinstance(before, suggest.Suggestion) and isinstance(after, suggest.Suggestion)
+    assert (
+        "when the fault fires" not in before.text
+        and "after the injected failure" not in before.text
+    )
+    assert "when the fault fires" in after.text and "after the injected failure" in after.text
+    base = suggest.main(*case("answered", "fail", None, {"empty"}, fault=False))
+    fault = suggest.main(*case("answered", "fail", None, {"empty"}))
+    assert isinstance(base, suggest.Suggestion) and isinstance(fault, suggest.Suggestion)
+    assert "baseline" in base.text and "fallback" not in base.text and "fallback" in fault.text
+    crashed = suggest.main(*case("crashed", "left out", judge.NOT_FIRED, lines=[line(1)]))
+    answered = suggest.main(*case("answered", "left out", judge.NOT_FIRED, lines=[line(1)]))
+    assert isinstance(crashed, suggest.Suggestion) and isinstance(answered, suggest.Suggestion)
+    assert 'ended "crashed"' in crashed.text and "ended" not in answered.text
+
+
+def test_the_runners_own_rules_decide_what_the_judge_is_given() -> None:
+    assert runner.fault_fired(False, 3) is None and runner.fault_fired(True, 0) is False
+    assert runner.is_exercised(None, "answered") and not runner.is_exercised(False, "answered")
+    assert runner.is_exercised(False, "stopped")
+    assert runner.chose_refused(True, "unlisted") and not runner.chose_refused(False, "unlisted")
+    assert not runner.chose_refused(True, "other_python")

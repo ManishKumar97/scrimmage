@@ -2045,19 +2045,19 @@
         },
         "evidence": {
           "type": "array",
-          "description": "The record lines the rule read, by seq and proc.",
+          "description": "What the rule read: a record line by seq and proc, or the run's summary line as {summary: true}.",
           "items": {
             "type": "object",
-            "required": [
-              "seq",
-              "proc"
-            ],
             "properties": {
               "seq": {
                 "type": "integer"
               },
               "proc": {
                 "description": "The process that wrote the line, as the record gives it."
+              },
+              "summary": {
+                "const": true,
+                "description": "The rule read the run's summary line: its outcome, verdict or broken rules."
               }
             }
           }

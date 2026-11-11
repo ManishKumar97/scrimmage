@@ -328,7 +328,7 @@ Each item in `suggestions`:
 | `code` | A stable name for the rule that fired. Read this, never `text`: the wording can change. |
 | `text` | The suggestion in words. It starts `suggestion (a heuristic):`. |
 | `heuristic` | Always `true`. A suggestion is a rule over the record, not a finding. |
-| `evidence` | The record lines the rule read, each as `seq` and `proc`, the line's sequence number and the process that wrote it. |
+| `evidence` | What the rule read. A record line is `seq` and `proc`, the line's sequence number and the process that wrote it. `{"summary": true}` means the rule read the run's summary line, such as its outcome, and no one call. |
 
 The main suggestion comes first, then at most one about a mock that missed.
 See [Reading a finished test](show.md#suggestions).

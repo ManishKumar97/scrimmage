@@ -50,15 +50,14 @@ class Suggestion:
     code: str
     text: str
     evidence: tuple[tuple[int, object], ...]  # (seq, proc) of each line read
+    summary: bool = False  # the rule also read the run's summary line
 
     @property
     def doc(self) -> Doc:
-        return {
-            "code": self.code,
-            "text": self.text,
-            "heuristic": True,
-            "evidence": [{"seq": seq, "proc": proc} for seq, proc in self.evidence],
-        }
+        items: list[Doc] = [{"seq": seq, "proc": proc} for seq, proc in self.evidence]
+        if self.summary:
+            items.append({"summary": True})
+        return {"code": self.code, "text": self.text, "heuristic": True, "evidence": items}
 
 
 @dataclass(frozen=True)
@@ -83,8 +82,9 @@ def said(value: object) -> str:
     return text if len(text) <= CUT else text[: CUT - 3] + "..."
 
 
-def make(code: str, text: str, *lines: Doc) -> Suggestion:
-    return Suggestion(code, f"{LABEL} {text}", cite(*lines))
+def make(code: str, text: str, *lines: Doc, summary: bool = False) -> Suggestion:
+    """Evidence is the lines the rule read, and the summary when it read that."""
+    return Suggestion(code, f"{LABEL} {text}", cite(*lines), summary)
 
 
 def with_action(lines: Sequence[Doc], action: str) -> list[Doc]:
@@ -114,10 +114,15 @@ def injected(fault_line: Doc) -> str:
 
 
 def calls_after(lines: Sequence[Doc], fault_line: Doc) -> list[Doc]:
-    """Calls to the faulted call after its fault line, in the same process.
+    """Calls to the faulted call, with the same arguments, after its fault line, in its process.
 
     A sequence number counts the lines of one process, so the order is only read there.
+    Another set of arguments is another lookup, not a retry; with no arguments recorded on
+    the fault line, nothing can be told to be the same call.
     """
+    same = args_hash(fault_line)
+    if same is None:
+        return []
     return [
         x
         for x in lines
@@ -125,7 +130,47 @@ def calls_after(lines: Sequence[Doc], fault_line: Doc) -> list[Doc]:
         and x.get("proc") == fault_line.get("proc")
         and x is not fault_line
         and seq_of(x) > seq_of(fault_line)
+        and args_hash(x) == same
     ]
+
+
+def args_hash(line: Doc) -> str | None:
+    args = line.get("args")
+    value = cast(Doc, args).get("sha256") if isinstance(args, dict) else None
+    return value if isinstance(value, str) else None
+
+
+def mistakes_in(lines: Sequence[Doc]) -> list[Doc]:
+    return [m for m in lines if "mistake" in m]
+
+
+def gate_mistakes(lines: Sequence[Doc]) -> list[Doc]:
+    """Refused lines that are the test's mistake, not a call the agent chose.
+
+    A refusal for a reason other than "unlisted" that carries a mistake is the test's own
+    setup, such as a child process with no gates. A tool no gate can reach is written as an
+    "unlisted" refusal too, but it is the first line of the run and has no arguments; an
+    agent's own call to an unlisted tool carries its arguments and comes after other work.
+    """
+    found: list[Doc] = []
+    for x in lines:
+        if x.get("action") != "refused" or "mistake" not in x:
+            continue
+        args = x.get("args")
+        bare = isinstance(args, dict) and cast(Doc, args).get("preview") == "{}"
+        if x.get("reason") != "unlisted" or (bare and x is lines[0]):
+            found.append(x)
+    return found
+
+
+def test_mistake(found: list[Doc]) -> Suggestion:
+    more = f" (and {len(found) - 1} more)" if len(found) > 1 else ""
+    return make(
+        "test_mistake",
+        f"the test itself has a mistake: {said(found[0]['mistake'])}{more}. "
+        "Fix the test before reading this run.",
+        *found,
+    )
 
 
 def main(run: Doc, lines: Sequence[Doc], row: Doc | None) -> Suggestion | NoRule:
@@ -137,7 +182,6 @@ def main(run: Doc, lines: Sequence[Doc], row: Doc | None) -> Suggestion | NoRule
         return NoRule("the run did not end, so it has no verdict")
     kinds = kinds_of(run)
     fault = fault_of(run, row)
-    last = list(lines[-1:])
     fault_lines = with_action(lines, "fault")
     refused = with_action(lines, "refused")
     x = fault_lines[0] if fault_lines else None
@@ -145,36 +189,48 @@ def main(run: Doc, lines: Sequence[Doc], row: Doc | None) -> Suggestion | NoRule
     name = said(x.get("call")) if x is not None else ""
 
     if left_out == judge.TEST_MISTAKE:  # first, so a crash never reads as the fault's doing
-        found = [m for m in lines if "mistake" in m]
+        found = mistakes_in(lines)
         if not found:
             return NoRule("the test's mistake is not among the lines read")
-        more = f" (and {len(found) - 1} more)" if len(found) > 1 else ""
-        return make(
-            "test_mistake",
-            f"the test itself has a mistake: {said(found[0]['mistake'])}{more}. "
-            "Fix the test before reading this run.",
-            *found,
-        )
+        return test_mistake(found)
     if outcome in NOT_AGENT:
         return make(
             "not_agent",
             f'this run ended with "{outcome}", which says nothing about the agent. '
             "There is nothing to fix in the agent for this run; the test's notes give the reason.",
-            *last,
+            summary=True,
         )
+    if outcome == REFUSED_CALL and gate_mistakes(lines):  # the test could not gate a call
+        return test_mistake(gate_mistakes(lines))
     if fault and left_out == judge.NOT_FIRED:
+        ended = (
+            ""
+            if outcome == "answered"
+            else f' The run ended "{outcome}", so it may have stopped first.'
+        )
         return make(
             "fault_not_fired",
             "the fault did not fire: the agent never called the faulted call, so this row "
-            "tested nothing. Check the fault's label and the test's question.",
-            *last,
+            f"tested nothing.{ended} Check the fault's label and the test's question.",
+            summary=True,
         )
     if fault and judge.REFUSED in kinds and refused:
+        first = refused[0]
+        after = x is not None and first.get("proc") == x.get("proc") and seq_of(first) > seq_of(x)
+        where = (
+            f"after the injected failure in {name} the agent called"
+            if after
+            else "in this run the agent called"
+        )
+        end = (
+            "look at why the agent reaches for it when the fault fires."
+            if after
+            else "look at why the agent reaches for it."
+        )
         return make(
             "refused_call",
-            f"under this fault the agent called {said(refused[0].get('call'))}, which the test "
-            "does not allow. Mocking it would hide this; look at why the agent reaches for it "
-            "when the fault fires.",
+            f"{where} {said(first.get('call'))}, which the test does not allow. "
+            f"Mocking it would hide this; {end}",
             *context,
             *refused,
         )
@@ -199,7 +255,7 @@ def main(run: Doc, lines: Sequence[Doc], row: Doc | None) -> Suggestion | NoRule
                 "crash_on_baseline",
                 "the agent crashed with no injected failure; the last line of its log is shown "
                 "with the run. Fix the baseline before reading the fault rows.",
-                *last,
+                summary=True,
             )
     if outcome == TIMED_OUT:
         if fault and x is not None:
@@ -225,7 +281,7 @@ def main(run: Doc, lines: Sequence[Doc], row: Doc | None) -> Suggestion | NoRule
                 "timeout_on_baseline",
                 "the run ran out of time with no injected failure. Check `run_timeout` and "
                 "the baseline before reading the fault rows.",
-                *last,
+                summary=True,
             )
     if fault and x is not None and "forbid" in kinds:
         return make(
@@ -243,17 +299,18 @@ def main(run: Doc, lines: Sequence[Doc], row: Doc | None) -> Suggestion | NoRule
             x,
         )
     if "empty" in kinds:
-        return make(
-            "empty_answer",
-            "the agent gave no answer. Give a fallback answer when a step fails.",
-            *context,
-            *last,
+        text = (
+            "the agent gave no answer. Give a fallback answer when a step fails."
+            if fault
+            else "the baseline gave no answer, with no injected failure. Find out why before "
+            "reading the fault rows."
         )
+        return make("empty_answer", text, *context, summary=True)
     if not fault and kinds & {"expect", "forbid"}:
         return make(
             "rule_on_baseline",
             "the baseline fails the test's rules. Fix it before reading the fault rows.",
-            *last,
+            summary=True,
         )
     return NoRule("no rule fits this run")
 
