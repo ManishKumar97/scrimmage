@@ -187,7 +187,7 @@ To act on a miss:
 | Setting | What it does |
 |---|---|
 | `call` | The label of the call to fail, such as `"tool:get_order"`, `"mcp:docs/search"`, `"model"` or `"http:inventory.acme.internal"`. Required. |
-| `do` | The fault: `"timeout"`; on a tool or an MCP tool `"error"`; on an MCP tool `"empty"`; on a model call or a web request `"status 429"` or any status from 400 to 599. On a tool, an MCP tool or a web request, also `"append"` and `"replace"`, which change what a call returns, and `"slow 8s"`, which delays it by that many seconds; the call itself still happens. They do not work on a model call. Required. |
+| `do` | The fault: `"timeout"`; on a tool or an MCP tool `"error"`; on an MCP tool `"empty"`; on a model call or a web request `"status 429"` or any status from 400 to 599. On a tool, an MCP tool or a web request, also `"append"` and `"replace"`, which change what a call returns, and `"slow 8s"`, which delays it by that many seconds; the call itself still happens. They do not work on a model call. See [Changing a result](changing-results.md). Required. |
 | `raises` | For `"error"` on a Python tool: the error to raise, a built-in such as `"ConnectionError"`, or `package.module:Class` from your agent's packages. Optional. |
 | `text` | With `"append"` and `"replace"`: the text to add, or to put in place. Up to 64 KiB. Required with those two, refused with any other fault. |
 | `find` | With `"replace"`: replace only this text, wherever it is, compared exactly. Without it the whole result is replaced. Optional. |
@@ -195,7 +195,7 @@ To act on a miss:
 | `method` | On a web request: fail only this method. |
 | `path` | On a web request: fail only this exact path, with no query string. |
 | `model` | On a model call: fail only calls to this model, such as `"gpt-4.1"`. The whole name your code sends, compared exactly. See [Failing one model](model-faults.md#failing-one-model). |
-| `expect` | Replaces the test's for this row. A fault that fires on every call needs this or `forbid`; with `first N` it can use the test's. See [Judging an answer](judging.md). |
+| `expect` | Replaces the test's for this row. A fault that fires on every call needs this or `forbid`, except `append` and `replace` with `find`, where the agent still gets the data; with `first N` it can use the test's. See [Judging an answer](judging.md). |
 | `forbid` | Replaces the test's for this row. `[]` drops the test's list. |
 | `pass_rate` | Replaces the test's for this row. |
 
