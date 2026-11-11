@@ -1408,23 +1408,69 @@ def test_the_record_document_change_is_additive() -> None:
     assert "runs" in defs["written_mock"]["properties"]
 
 
+def main_cells(entry: runner.RowReport) -> list[str]:
+    """A table row as main formatted it: from the counts and judge.wilson, never from JSON."""
+    row, mine, result = entry.row, entry.runs, entry.result
+    fault = "-"
+    if row.fault is not None:
+        when = "" if row.fault.when == "always" else f" {row.fault.when}"
+        fault = f"{row.fault.target} {row.fault.do}{when}"
+    rate, span = "-", "-"
+    if result.judged:
+        low, high = judge.wilson(result.passed, result.judged)
+        rate, span = f"{result.passed / result.judged:.0%}", f"{low * 100:.0f}-{high:.0%}"
+    return [
+        row.test.name,
+        row.name,
+        fault,
+        str(len(mine)),
+        "-" if row.fault is None else str(sum(bool(r.fault_fired) for r in mine)),
+        str(sum(1 for r in mine if r.outcome == "answered")),
+        f"{result.passed}/{result.judged}",
+        rate,
+        span,
+        f"{sum(r.tool_calls for r in mine) / max(len(mine), 1):.1f}",
+        f"{sum(r.cost_usd for r in mine):.5f}",
+        result.verdict,
+    ]
+
+
 @pytest.mark.design("json.text_unchanged")
 def test_text_output_is_unchanged(project: Project, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The text of `scrimmage test` is what it was: the file it now writes adds no line to it."""
-    for name in sorted(CASES):  # every case, byte for byte, through the shared renderer
+    """The text of `scrimmage test` is what main printed: the shared renderer changed no byte."""
+    for name in sorted(CASES):  # every case, byte for byte, against files main printed
         case = CASES[name]()
         out = io.StringIO()
         code = runner.report(case.config, case.results, FOLDER, out, case.runner)  # type: ignore[arg-type]
         assert f"exit {code}\n" + out.getvalue() == (GOLDEN / f"{name}.txt").read_text(), name
+        rep = build_report(case.config, case.results, FOLDER, case.runner)  # type: ignore[arg-type]
+        assert rep.table[1:] == [main_cells(entry) for entry in rep.rows], name
     monkeypatch.setattr(Runner, "one", lambda self, row: None)
     project.capsys.readouterr()
-    code = cli.main(["test", str(project.toml)])
+    cli.main(["test", str(project.toml)])
     printed = project.capsys.readouterr()
     folder = Path(printed.out.splitlines()[0].rpartition("records in ")[2])
     assert (folder / "result.json").exists() and "result.json" not in printed.out + printed.err
-    expected = io.StringIO()
-    assert runner.report(config.load(project.toml), [], folder, expected) == code
-    assert printed.out == expected.getvalue()
+
+
+@pytest.mark.design("json.text_unchanged")
+def test_every_pass_count_prints_as_main_printed_it() -> None:
+    """The rate and range columns, for every passed and judged up to 50, from the JSON's rounding.
+
+    The JSON rounds the rate and range to 4 places; the table must not format from those.
+    """
+    for judged in range(1, 51):
+        for passed in range(judged + 1):
+            low, high = judge.wilson(passed, judged)
+            expected = [f"{passed / judged:.0%}", f"{low * 100:.0f}-{high:.0%}"]
+            row = {
+                "test": "t", "row": "baseline", "fault": None, "runs": judged, "fired": None,
+                "done": judged, "passed": passed, "judged": judged, "tools": 0.0,
+                "cost_usd": 0.0, "result": "pass",
+                "rate": round(passed / judged, 4),
+                "range": [round(low, 4), round(high, 4)],
+            }  # fmt: skip
+            assert rendering.row_cells(row)[7:9] == expected, (passed, judged)
 
 
 @pytest.mark.design("json.one_document")

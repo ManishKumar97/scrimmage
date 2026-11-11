@@ -9,7 +9,9 @@ import json
 import math
 from typing import cast
 
+from scrimmage_core.judge import wilson
 from scrimmage_core.render import fault_text
+from scrimmage_core.results import shape_problems
 
 BETTER, WORSE, UNCLEAR, NO_RESULT, NEW, GONE = (
     "better",
@@ -38,10 +40,7 @@ Doc = dict[str, object]
 
 def problems_with(doc: Doc, which: str) -> list[str]:
     """Why a result cannot be compared at all, if it cannot."""
-    rows = doc.get("rows")
-    if doc.get("command") != "test" or not isinstance(rows, list):
-        return [f"the {which} result is not the result of a scrimmage test, so it has no rows"]
-    return []
+    return shape_problems(doc, which)
 
 
 def fault_key(row: Doc) -> str | None:
@@ -68,26 +67,33 @@ def side(row: Doc | None) -> Doc | None:
     if row is None:
         return None
     keys = ("passed", "judged", "rate", "range", "result")
-    return {key: row[key] for key in keys}
+    return {key: row.get(key) for key in keys}
 
 
 def newcombe(before: Doc, after: Doc) -> tuple[float, float, float]:
-    """The difference of the rates (after minus before) and its 95% interval."""
-    p1, (l1, u1) = float(str(before["rate"])), cast("list[float]", before["range"])
-    p2, (l2, u2) = float(str(after["rate"])), cast("list[float]", after["range"])
+    """The difference of the rates (after minus before) and its 95% interval.
+
+    Worked from the counts with the judge's own Wilson interval, not from the rounded rate
+    and range the rows print.
+    """
+    p1, (l1, u1) = rate_and_range(before)
+    p2, (l2, u2) = rate_and_range(after)
     d = p2 - p1
     low = d - math.sqrt((p2 - l2) ** 2 + (u1 - p1) ** 2)
     high = d + math.sqrt((u2 - p2) ** 2 + (p1 - l1) ** 2)
     return d, low, high
 
 
+def rate_and_range(side_doc: Doc) -> tuple[float, tuple[float, float]]:
+    passed, judged = int(str(side_doc["passed"])), int(str(side_doc["judged"]))
+    return passed / judged, wilson(passed, judged)
+
+
 def judge_change(before: Doc, after: Doc) -> tuple[str, tuple[float, float, float] | None]:
     """How a row changed. A side with no result is never given a rate change."""
     if before["result"] == NO_RESULT or after["result"] == NO_RESULT:
         return NO_RESULT, None
-    if not before["judged"] or not after["judged"] or before["rate"] is None:
-        return NO_RESULT, None
-    if after["rate"] is None:
+    if not before["judged"] or not after["judged"]:
         return NO_RESULT, None
     d, low, high = newcombe(before, after)
     if low > 0:
@@ -153,9 +159,9 @@ def document(earlier_path: str, earlier: Doc, compared: list[Doc]) -> Doc:
 def span(side_doc: Doc | None) -> str:
     if side_doc is None:
         return "-"
-    if side_doc["rate"] is None:
+    if not side_doc["judged"]:
         return f"{side_doc['passed']}/{side_doc['judged']} -"
-    low, high = cast("list[float]", side_doc["range"])
+    low, high = wilson(int(str(side_doc["passed"])), int(str(side_doc["judged"])))
     return f"{side_doc['passed']}/{side_doc['judged']} {low:.2f}-{high:.2f}"
 
 

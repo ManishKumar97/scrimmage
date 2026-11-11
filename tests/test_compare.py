@@ -398,3 +398,60 @@ def test_show_compares_two_finished_sets_and_runs_nothing(
     assert cli.main(["show", str(after), "--compare", str(before)]) == 0
     assert "compared with " in capsys.readouterr().out
     assert cli.main(["show", str(after), "--compare", str(project.root)]) == 2
+
+
+def test_change_equals_exact_newcombe_on_a_grid() -> None:
+    """The change for every pair of counts up to 20 runs a side, from unrounded Wilson ranges.
+
+    The rows carry ranges rounded to 4 places, and a change must not turn on that rounding.
+    """
+    for n in range(1, 21):
+        for m in range(1, 21):
+            for a in range(n + 1):
+                for b in range(m + 1):
+                    p1, p2 = a / n, b / m
+                    l1, u1 = judge.wilson(a, n)
+                    l2, u2 = judge.wilson(b, m)
+                    low = (p2 - p1) - ((p2 - l2) ** 2 + (u1 - p1) ** 2) ** 0.5
+                    high = (p2 - p1) + ((u2 - p2) ** 2 + (p1 - l1) ** 2) ** 0.5
+                    want = "better" if low > 0 else "worse" if high < 0 else "unclear"
+                    (got,) = compare.rows(
+                        result(row(a, n, result="pass")), result(row(b, m, result="pass"))
+                    )
+                    assert got["change"] == want, (a, n, b, m)
+    (zero_nine,) = compare.rows(result(row(0, 9)), result(row(9, 27)))
+    assert zero_nine["change"] == "better"
+
+
+def test_a_damaged_earlier_result_is_a_mistake_before_any_run(
+    project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def never(self: Runner) -> list[RunResult]:
+        raise AssertionError("a run was started")
+
+    monkeypatch.setattr(Runner, "run_all", never)
+    damaged = project.root / "damaged.json"
+    for rows in (
+        [{"test": "x"}],
+        ["x"],
+        [{**row(1, 1), "passed": "1"}],
+        [{**row(1, 1), "fault": 3}],
+    ):
+        damaged.write_text(json.dumps({"v": 1, "command": "test", "rows": rows}))
+        code = cli.main(["test", "--json", str(project.toml), "--compare", str(damaged)])
+        doc = json.loads(capsys.readouterr().out)
+        assert code == 2 and "damaged" in doc["mistakes"][0]["message"], rows
+
+
+def test_a_comparison_that_fails_keeps_the_tests_exit_and_warns(
+    project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    scripted(project, monkeypatch, 10, 10)
+    cli.main(["test", str(project.toml)])
+    capsys.readouterr()
+    (first,) = folders(project)
+    monkeypatch.setattr(compare, "rows", lambda *_: (_ for _ in ()).throw(KeyError("fault")))
+    code = cli.main(["test", "--json", str(project.toml), "--compare", str(first)])
+    doc = json.loads(capsys.readouterr().out)
+    assert code == 0 == doc["exit"] and doc["compare"] is None
+    assert "could not be made" in doc["warnings"][0]["message"]

@@ -6,6 +6,8 @@ Pure functions over the JSON of a row, and nothing else, so `scrimmage test` and
 
 from typing import cast
 
+from scrimmage_core.judge import wilson
+
 TABLE_WIDTH = 120
 HEAD = [
     "test",
@@ -24,6 +26,17 @@ HEAD = [
 TEST_COLUMN, FAULT_COLUMN = 0, 2
 
 
+def plain(text: str) -> str:
+    """Text for a terminal: a control character, such as ESC, BEL or CR, is shown as \\xNN.
+
+    A record or a result can hold text an agent or a file author chose, and a terminal acts on
+    these characters.
+    """
+    return "".join(
+        f"\\x{ord(c):02x}" if ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F else c for c in text
+    )
+
+
 def fault_text(fault: dict[str, object] | None) -> str:
     """The fault column: its call, the model name if it has one, what it does, and when."""
     if fault is None:
@@ -37,9 +50,10 @@ def fault_text(fault: dict[str, object] | None) -> str:
 def row_cells(row: dict[str, object]) -> list[str]:
     """One table row, from a row's JSON, in the order of HEAD."""
     rate, span = "-", "-"
-    if row["rate"] is not None:
-        low, high = cast(list[float], row["range"])
-        rate, span = f"{cast(float, row['rate']):.0%}", f"{low * 100:.0f}-{high:.0%}"
+    passed, judged = int(str(row["passed"])), int(str(row["judged"]))
+    if judged:  # from the counts, not from the rounded rate and range the JSON carries
+        low, high = wilson(passed, judged)
+        rate, span = f"{passed / judged:.0%}", f"{low * 100:.0f}-{high:.0%}"
     fired = row["fired"]
     return [
         str(row["test"]),
