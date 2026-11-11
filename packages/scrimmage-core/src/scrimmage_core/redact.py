@@ -31,10 +31,11 @@ class Secret(NamedTuple):
 # is not itself inside that quote, so the quote that closes a string is not taken for one.
 # A marker left by an earlier removal is kept alone, and removed with what follows it.
 # None, True, False, and a bare name in a call, such as f(token=tok), are code and are kept.
-FIELD = (
+NAMES = (
     r"(?:passw(?:or)?d|token|secret(?:_access_key)?|api(?:_|%5f)key"
-    r"|pgpass(?:word)?|mysql_pwd|authtoken|accesstoken)(?:=|%3d)"
+    r"|pgpass(?:word)?|mysql_pwd|authtoken|accesstoken)"
 )
+FIELD = NAMES + r"(?:=|%3d)"
 HARMLESS = (
     "next|page|continuation|pagination|sync|cursor|is|has|top|max|min|num|n|eos|bos|pad|unk|sep|cls"
 )
@@ -56,12 +57,22 @@ FORM = (
     + NAME
     + rf"(?:{MARKER}[^&\s\"'<>\\]+"
     + rf"|(?(inside)(?!)|{QUOTED})"
-    + rf"|(?!{MARKER})(?:<[^<>\"'\\]+>|(?P<value>(?(inside)|(?:\\?[\"']|<)?)[^&\s\"'<>\\]+)))"
+    + rf"|(?!{MARKER})(?:<[^<>\"'\\]+>|(?P<value>(?(inside)|(?:\\?[\"']|<)?)"
+    + r"(?:\\u[0-9a-fA-F]{4}|[^&\s\"'<>\\])+))"
+    + ")"
 )
 # The harmless prefixes, checked on the match: next_page_token is found and then kept.
 HARMLESS_NAME = re.compile(rf"(?:[A-Za-z0-9]+_)*(?:{HARMLESS})_{FIELD}", re.ASCII | re.IGNORECASE)
 CODE_VALUES = ("None", "True", "False")
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
+# A Basic credential in an Authorization header, as a header line, JSON, a command line or a
+# list of byte pairs. ASCII only, so the lowered text holds the literal.
+BASIC = r"(?ai:authorization)(?:\W|b(?=[\"'])){1,8}(?ai:basic)\s+[A-Za-z0-9+/_-]{8,}={0,2}"
+BASIC_RE = re.compile(BASIC)
+# In a JSON object or list the name and the value are separate strings, so the rules that
+# need both are tried on the pair: an Authorization header.
+AUTH_NAME = re.compile(r"(?:proxy-)?authorization", re.ASCII | re.IGNORECASE)
+LABELS = ("name", "key", "header")
 
 
 SECRETS = (
@@ -81,13 +92,7 @@ SECRETS = (
     Secret(r"xapp-[A-Za-z0-9-]{10,}", ("xapp-",)),
     # bearer tokens
     Secret(r"(?i:bearer)\s+[A-Za-z0-9._~+/=-]{16,}", ("bearer",), lowercase=True),
-    # a Basic credential in an Authorization header, as a header line, JSON, a command line
-    # or a list of byte pairs. ASCII only, so the lowered text holds the literal.
-    Secret(
-        r"(?ai:authorization)(?:\W|b(?=[\"'])){1,8}(?ai:basic)\s+[A-Za-z0-9+/_-]{8,}={0,2}",
-        ("authorization",),
-        lowercase=True,
-    ),
+    Secret(BASIC, ("authorization",), lowercase=True),
     Secret(
         FORM,
         ("password", "passwd", "token", "secret", "api_key", "api%5fkey", "pgpass", "mysql_pwd"),
@@ -130,7 +135,8 @@ def no_jwt(found: re.Match[str]) -> str:
 
 
 def code_value(found: re.Match[str]) -> bool:
-    """A value that is code: None, True, False, or a bare name as an argument of a call."""
+    """A value that is code: None, True or False alone, or a bare name as an argument of a
+    call whose name is right before its parenthesis, as in f(token=tok)."""
     value = found.group("value")
     if value is None:
         return False
@@ -138,12 +144,18 @@ def code_value(found: re.Match[str]) -> bool:
     if head is None:
         return False
     name, rest = head.group(), value[head.end() :]
-    if name in CODE_VALUES and not rest[:1].isalnum():
+    if rest[:1] not in ("", ")", ","):
+        return False
+    if name in CODE_VALUES:
         return True
     text, start = found.string, found.start()
-    argument = text[start - 1 : start] == "(" or text[start - 2 : start] == ", "
-    open_call = text.rfind("(", 0, start) > text.rfind(")", 0, start)
-    return argument and open_call and rest[:1] in ("", ")", ",") and rest == value[len(name) :]
+    if not (text[start - 1 : start] == "(" or text[start - 2 : start] == ", "):
+        return False
+    opening = text.rfind("(", 0, start)
+    named_call = opening > text.rfind(")", 0, start) and (
+        text[opening - 1 : opening].isalnum() or text[opening - 1 : opening] == "_"
+    )
+    return named_call and "." not in name
 
 
 def remove_keys(text: str) -> tuple[str, int]:
@@ -160,8 +172,13 @@ def remove_keys(text: str) -> tuple[str, int]:
     return PATTERNS.sub(replace, text), count
 
 
+ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
+
+
 def holds_candidate(text: str) -> bool:
     """Whether any pass could match: the text holds a string every match of that pass holds."""
+    if "\\u" in text:  # a JSON escape can hide a letter: p\u0061ssword
+        text = ESCAPE.sub(lambda found: chr(int(found.group(1), 16)), text)
     if "://" in text or "eyJ" in text or any(lit in text for lit in LITERALS):
         return True
     lowered = text.lower()
@@ -246,18 +263,45 @@ def structural(text: str) -> tuple[str, int] | None:
         count += more
         return kept
 
+    def labelled(node: Members, name: str, value: object) -> bool:
+        """{"name": "Authorization", "value": "Basic ..."}: the value of a header-like pair."""
+        if name != "value" or not isinstance(value, str):
+            return False
+        return any(
+            key in LABELS and isinstance(label, str) and pair_secret(label, value)
+            for key, label in node
+        )
+
     def rename(node: Members) -> Iterator[tuple[str, object]]:
         # Two names that redact to the same text would become one key, so a later one is
         # numbered. The count of keys is kept.
         taken = {name for name, _ in node}
         for name, value in node:
             kept = clean(name)
+            if pair_secret(name, value) or labelled(node, name, value):
+                value = hide(value)
             if kept != name:
                 base, number = kept, 2
                 while kept in taken:
                     kept, number = f"{base} {number}", number + 1
                 taken.add(kept)
             yield kept, walk(value)
+
+    def pair_secret(name: str, value: object) -> bool:
+        """Whether a name and the value beside it, which are two strings in JSON, are an
+        Authorization header with a Basic value. A secret-like key such as "password" is the
+        key-name rule of the recording layer, which reports it, so it is not judged here."""
+        if not isinstance(value, str) or isinstance(value, Number) or value == "":
+            return False
+        name = name.strip()
+        if AUTH_NAME.fullmatch(name):
+            return BASIC_RE.search(f"{name}: {value}") is not None
+        return False
+
+    def hide(value: object) -> object:
+        nonlocal count
+        count += 1
+        return REMOVED
 
     def walk(node: object) -> object:
         if isinstance(node, Number):
@@ -267,7 +311,10 @@ def structural(text: str) -> tuple[str, int] | None:
         if isinstance(node, Members):
             return Members(rename(node))
         if isinstance(node, list):
-            return [walk(value) for value in cast(list[object], node)]
+            items = cast(list[object], node)
+            if len(items) == 2 and isinstance(items[0], str) and pair_secret(items[0], items[1]):
+                return [items[0], hide(items[1])]
+            return [walk(value) for value in items]
         return node
 
     try:

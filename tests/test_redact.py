@@ -360,11 +360,110 @@ def without_new_passes(text: str) -> str:
 def test_the_old_module_kept_each_new_secret_and_the_new_one_removes_it(
     text: str, span: str, value: str
 ) -> None:
-    # behind a prefix, so a text that is itself JSON is judged as plain text here
+    assert value in without_new_passes(text)
+    # a text that is JSON as a whole is read as JSON, and each string is cleaned on its own
+    expected = JSON_EXPECTED.get(text)
+    if expected is None:
+        assert not parses_as_container(text), text
+        expected = text.replace(span, "[secret removed]")
+    assert redact(text) == expected
+    assert redact(redact(text)) == redact(text)
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize(
+    ("text", "span", "value"), NEW_SECRETS, ids=[f"new-{n}" for n in range(len(NEW_SECRETS))]
+)
+def test_each_new_secret_is_also_removed_in_the_middle_of_other_text(
+    text: str, span: str, value: str
+) -> None:
+    """Behind a prefix, so a text that is itself JSON is judged as plain text. This is in
+    addition to the test above, which runs every row as it is."""
     text = "log: " + text
     assert value in without_new_passes(text)
     assert redact(text) == text.replace(span, "[secret removed]")
-    assert redact(redact(text)) == redact(text)
+
+
+def parses_as_container(text: str) -> bool:
+    try:
+        return isinstance(json.loads(text), (dict, list))
+    except ValueError:
+        return False
+
+
+# What a row that is JSON as a whole comes out as: the same JSON, with the secret string removed.
+JSON_EXPECTED = {
+    '{"Authorization": "Basic dXNlcjpwYXNz"}': '{"Authorization": "[secret removed]"}',
+    '{"Authorization ": "Basic dXNlcjpwYXNz"}': '{"Authorization ": "[secret removed]"}',
+}
+# Pairs in JSON: the name and the value are two strings, so no text pattern sees both.
+JSON_PAIRS = [
+    (
+        '[["authorization", "Basic dXNlcjpwYXNz"]]',
+        '[["authorization", "[secret removed]"]]',
+    ),
+    (
+        '{"name": "Authorization", "value": "Basic dXNlcjpwYXNz"}',
+        '{"name": "Authorization", "value": "[secret removed]"}',
+    ),
+    (
+        '{"Proxy-Authorization": "Basic dXNlcjpwYXNzd29yZA=="}',
+        '{"Proxy-Authorization": "[secret removed]"}',
+    ),
+    ('{"s": "p\\u0061ssword=hunter2"}', '{"s": "[secret removed]"}'),
+    ('{"s": "password\\u003dhunter2"}', '{"s": "[secret removed]"}'),
+    ('{"s": "x password=p\\u00e4ss"}', '{"s": "x [secret removed]"}'),
+    # kept: an empty value, a counting name, a paging name, a marker, a word that is not a name
+    ('{"token": "", "max_token": "3", "next_page_token": "abc"}', None),
+    ('{"password": "[secret removed]", "author": "x"}', None),
+    ('{"Authorization": "Basic realm"}', None),
+    ('[["authorization", "Bearer"], ["token", null]]', None),
+]
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize(
+    ("text", "expected"), JSON_PAIRS, ids=[f"pair-{n}" for n in range(len(JSON_PAIRS))]
+)
+def test_a_name_and_value_that_are_two_strings_in_json_are_judged_together(
+    text: str, expected: str | None
+) -> None:
+    assert redact(text) == (text if expected is None else expected)
+    json.loads(redact(text))
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_numbers_spacing_and_unicode_are_written_back_as_they_were() -> None:
+    numbers = '{"n": [1e400, 0.10, 123456789012345678901234567890, -0.0, 1E+2], "s": "token=abc"}'
+    assert redact(numbers) == numbers.replace("token=abc", "[secret removed]")
+    spaced = '{"a": 1, "s": "token=abc", "b": [1, 2]}'
+    assert redact(spaced) == '{"a": 1, "s": "[secret removed]", "b": [1, 2]}'
+    compact = '{"a":1,"s":"token=abc","b":[1,2]}'
+    assert redact(compact) == '{"a":1,"s":"[secret removed]","b":[1,2]}'
+    raw = '{"s":"\u00e9 token=abc \u00e9"}'  # the letter itself
+    assert redact(raw) == '{"s":"\u00e9 [secret removed] \u00e9"}'
+    escaped = '{"s":"\\u00e9 token=abc \\u00e9"}'
+    assert redact(escaped) == '{"s":"\\u00e9 [secret removed] \\u00e9"}'
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize(
+    "text",
+    [
+        "set it (PASSWORD=hunter2) then",
+        "(a, PGPASSWORD=hunter2, b)",
+        "password=True-Love99",
+        "token=None:abc123",
+        "password=False/xyz",
+        "x = f(a) + (password=changeme)",
+        "user=admin, password=changeme, host=db",
+    ],
+    ids=lambda text: text[:30],
+)
+def test_only_none_true_false_and_a_bare_argument_of_a_named_call_are_code(text: str) -> None:
+    assert "[secret removed]" in redact(text)
+    assert not any(secret in redact(text) for secret in ("hunter2", "Love99", "abc123", "xyz"))
+    assert "changeme" not in redact(text)
 
 
 @pytest.mark.design("security.redaction_shapes")
@@ -528,8 +627,25 @@ def seeded_text(rng: random.Random, found: list[str]) -> str:
     return "".join(parts)
 
 
+def seeded_pair(rng: random.Random, found: list[str]) -> object:
+    """A header map, a list of pairs, or a name and a value: two strings in JSON."""
+    value = f"hunt{len(found)}x{rng.randrange(10**6)}"
+    b64 = base64.b64encode(f"u:{value}pad".encode()).decode().rstrip("=")
+    name = rng.choice(["Authorization", "authorization", "Proxy-Authorization"])
+    shapes = [
+        ({name: f"Basic {b64}", "n": 1}, b64),
+        ([[name, f"Basic {b64}"], ["x", "y"]], b64),
+        ({"name": name, "value": f"Basic {b64}"}, b64),
+    ]
+    tree, secret = rng.choice(shapes)
+    found.append(secret)
+    return tree
+
+
 def seeded_tree(rng: random.Random, found: list[str], depth: int = 0) -> object:
     kind = rng.random()
+    if rng.random() < 0.08:
+        return seeded_pair(rng, found)
     if depth >= 4 or kind < 0.45:
         if rng.random() < 0.15:
             return rng.choice([1, 2.5, -3, 1e10, True, False, None])
