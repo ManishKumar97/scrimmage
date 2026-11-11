@@ -2063,15 +2063,13 @@ def stock_args(done: Done) -> list[str]:
 def test_runs_must_be_a_whole_number_of_one_or_more(
     team: Team, value: str, json_form: bool
 ) -> None:
-    team.write(
-        STOCK + "def answer(q):\n    get_stock('a')\n    return 'ok'\n",
-        ["bot:get_stock"],
-        ("tool:get_stock",),
-    )
+    # no tool is under real, so a value that wrongly passed would start runs, not be refused
+    team.write("def answer(q):\n    return 'ok'\n", [], ())
     if json_form:
         done = team.record("--runs", value)
         assert done.code == 2 and done.doc["out"] is None
-        assert any("--runs" in m["message"] for m in done.doc["mistakes"]), done.out
+        asked = [m["message"] for m in done.doc["mistakes"]]
+        assert any("--runs: expected a whole number of 1 or more" in m for m in asked), done.out
     else:
         code, out = team.record_text("--runs", value)
         assert code == 2 and out == ""
@@ -2854,7 +2852,9 @@ TWO_FORMS = (
     STOCK
     + """
 def answer(q):
-    get_stock("a" if run_index() == 0 else "b")
+    get_stock("a")
+    if run_index() > 0:
+        get_stock("b")
     return "ok"
 """
 )
@@ -3138,3 +3138,34 @@ def test_parallel_runs_write_the_same_file_as_runs_in_order(
         mocks = team.out_path.read_text().split("[[test.mock]]", 1)[1]
         texts.append("\n".join(x for x in mocks.splitlines() if not x.startswith("#")))
     assert texts[0] == texts[1] and texts[0].count("[[test.mock]]") == 1  # two mocks, a and b
+
+
+@pytest.mark.design("record.runs_merge")
+def test_inside_one_run_a_saved_and_a_listed_call_on_one_web_key_keep_todays_rules(
+    team: Team,
+) -> None:
+    served = iter(range(100))
+
+    def reply(query: str, body: bytes) -> Route:
+        del query, body
+        if next(served) == 0:
+            return 200, {"content-type": "application/json"}, b'{"ok": true}'
+        return 503, {"content-type": "application/json"}, b'{"error": "down"}'
+
+    team.service.dynamic["/x"] = reply
+    team.write(
+        """
+def fetch(k):
+    http_get("/x")
+    http_get("/x")
+    return {"fine": True}
+
+def answer(q):
+    fetch("x")
+    return "ok"
+""",
+        ["bot:fetch"],
+        ("tool:fetch",),
+    )
+    done = team.record()
+    assert [m["status"] for m in done.mocks() if m["call"] == "http:localhost"] == [200]
