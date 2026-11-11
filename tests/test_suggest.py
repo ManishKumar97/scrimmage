@@ -400,6 +400,13 @@ def test_every_suggestion_is_labelled_a_heuristic_and_cites_its_lines() -> None:
     chosen = suggest.main(run, lines, row)
     assert isinstance(chosen, suggest.Suggestion)
     assert chosen.doc["evidence"] == [{"seq": 2, "proc": PROC}]  # the fault line, by seq and proc
+    # A rule about the whole run cites the fault line too, so a reader finds it from any code.
+    for code in ("refused_call", "empty_answer"):
+        run, lines, row = RULE_CASES[code][0]
+        got = suggest.main(run, lines, row)
+        assert isinstance(got, suggest.Suggestion)
+        fault_seq = next(x["seq"] for x in lines if x["action"] == "fault")
+        assert {"seq": fault_seq, "proc": PROC} in cast("list[Doc]", got.doc["evidence"]), code
 
 
 def test_a_test_mistake_is_never_read_as_a_crash_after_a_fault() -> None:

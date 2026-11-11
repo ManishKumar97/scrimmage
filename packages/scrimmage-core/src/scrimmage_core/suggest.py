@@ -141,6 +141,7 @@ def main(run: Doc, lines: Sequence[Doc], row: Doc | None) -> Suggestion | NoRule
     fault_lines = with_action(lines, "fault")
     refused = with_action(lines, "refused")
     x = fault_lines[0] if fault_lines else None
+    context = [x] if x is not None else []  # a rule about the whole run still cites the fault
     name = said(x.get("call")) if x is not None else ""
 
     if left_out == judge.TEST_MISTAKE:  # first, so a crash never reads as the fault's doing
@@ -174,6 +175,7 @@ def main(run: Doc, lines: Sequence[Doc], row: Doc | None) -> Suggestion | NoRule
             f"under this fault the agent called {said(refused[0].get('call'))}, which the test "
             "does not allow. Mocking it would hide this; look at why the agent reaches for it "
             "when the fault fires.",
+            *context,
             *refused,
         )
     if not fault and outcome == REFUSED_CALL and refused:
@@ -244,6 +246,7 @@ def main(run: Doc, lines: Sequence[Doc], row: Doc | None) -> Suggestion | NoRule
         return make(
             "empty_answer",
             "the agent gave no answer. Give a fallback answer when a step fails.",
+            *context,
             *last,
         )
     if not fault and kinds & {"expect", "forbid"}:
