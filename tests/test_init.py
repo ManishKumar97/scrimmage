@@ -9,7 +9,8 @@ import types
 import warnings
 from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+from types import SimpleNamespace
+from typing import Any, cast
 
 import jsonschema
 import pytest
@@ -1528,6 +1529,49 @@ def test_a_tree_over_the_file_limit_is_cut_with_a_note(
     write(tmp_path / "small", {f"m{n}.py": "X = 1\n" for n in range(3)})
     _, exact = run(capsys, str(tmp_path / "small"))
     assert "stopped" not in messages(exact, "notes")
+
+
+def test_a_timed_out_probe_is_not_a_missing_module_whatever_its_log_says(tmp_path: Path) -> None:
+    log = tmp_path / "run.log"
+    log.write_text(
+        'Traceback (most recent call last):\n  File "x.py", line 1, in f\n'
+        "ModuleNotFoundError: No module named 'evil.missing'\n"
+    )
+    for outcome, expected in (("crashed", "evil.missing"), ("timed out", None)):
+        result = cast(Any, SimpleNamespace(notices=[], outcome=outcome))
+        probe = drafting.read_probe(result, [], log, "evil.missing:answer")
+        assert probe.missing == expected, outcome
+
+
+def test_the_skipped_count_stops_at_its_bound_and_asks_nothing_of_the_files(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(drafting, "FILE_LIMIT", 2)
+    monkeypatch.setattr(drafting, "SKIP_COUNT_LIMIT", 4)
+    write(tmp_path, {f"m{n}.py": "X = 1\n" for n in range(12)})
+    seen: list[str] = []
+    real = Path.is_file
+    monkeypatch.setattr(Path, "is_file", lambda self: seen.append(self.name) or real(self))
+    _, doc = run(capsys, str(tmp_path))
+    assert "skipped at least 5 .py files" in messages(doc, "notes")
+    asked = [name for name in seen if name.startswith("m")]
+    assert asked == ["m0.py", "m1.py", "m10.py"]  # two read and one past the cap, then no more
+
+
+def test_a_log_ending_on_another_error_is_not_a_missing_module(tmp_path: Path) -> None:
+    frames = 'Traceback (most recent call last):\n  File "x.py", line 1, in f\n    import y\n'
+    log = tmp_path / "run.log"
+    log.write_text(frames + "ModuleNotFoundError: No module named 'evil.missing'\n")
+    assert drafting.missing_module(log, "evil.missing:answer") == "evil.missing"
+    assert drafting.missing_module(log, "evil.real:answer") is None
+    # a worker logged a missing module, then the program died of something else
+    log.write_text(
+        frames
+        + "ModuleNotFoundError: No module named 'evil.missing'\n\n"
+        + frames
+        + "RuntimeError: boom\n"
+    )
+    assert drafting.missing_module(log, "evil.missing:answer") is None
 
 
 def test_a_py_symlink_that_leaves_the_folder_is_not_read(
