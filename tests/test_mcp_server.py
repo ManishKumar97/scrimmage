@@ -288,3 +288,82 @@ def test_scrimmage_mcp_without_the_extra_says_how_to_install(bed: Bed) -> None:
     assert done.returncode == 2 and done.stdout == ""
     assert done.stderr == mcp_server.INSTALL + "\n"
     assert 'pip install "scrimmage-core[mcp]"' in done.stderr
+
+
+def in_subfolder(bed: Bed) -> None:
+    """The bot and its file moved one folder down, so the config's folder is not the root."""
+    sub = bed.root / "sub"
+    sub.mkdir()
+    for name in ("acme", "bot.py", "scrimmage.toml"):
+        (bed.root / name).rename(sub / name)
+
+
+def test_a_forwarded_records_path_round_trips_with_a_config_in_a_subfolder(
+    bed: Bed, fake_openai: Fake
+) -> None:
+    in_subfolder(bed)
+    bed.model(fake_openai(ACME * 6))
+    toml = bed.root / "sub" / "scrimmage.toml"
+    toml.write_text(toml.read_text().replace("[agent]\n", "[agent]\nruns = 1\n"))
+
+    async def go() -> None:
+        async with connect(bed, config="sub/scrimmage.toml") as session:
+            first = doc_of(await session.call_tool("test", {"max_cost_usd": 0.5}))
+            records = first["records"]
+            assert first["exit"] == 0 and (bed.root / records).is_dir(), first
+            shown = doc_of(await session.call_tool("show", {"target": records}))
+            assert shown["exit"] == 0 and shown["records"] == records, shown
+            later = await session.call_tool("test", {"max_cost_usd": 0.5, "compare": records})
+            assert doc_of(later)["compare"]["earlier"] == records
+
+    anyio.run(go)
+
+
+def test_a_path_outside_the_root_starts_no_child(bed: Bed, tmp_path: Path) -> None:
+    bed.shim(COUNT_STARTS)
+    (bed.root / "out").symlink_to(tmp_path)
+    values = ["../x", "/etc", "-x", "~/x", "a\x00b", "a\nb", "a\x1bb", "a/" * 512 + "b", "é" * 128]
+    calls = [
+        call
+        for value in [*values, "out", str(tmp_path / "acme-bot2")]
+        for call in (
+            ("show", {"target": value}),
+            ("show", {"compare": value}),
+            ("test", {"max_cost_usd": 0.5, "compare": value}),
+            ("init", {"folder": value}),
+        )
+    ]
+    results = call(bed, *calls)
+    for (name, arguments), result in zip(calls, results, strict=True):
+        assert result.is_error and result.structured_content is None, (name, arguments)
+    assert bed.starts() == 0
+
+
+def server_exit(bed: Bed, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [SERVER, *args], env=bed.env, cwd=bed.root, capture_output=True, text=True,
+        timeout=60, check=False, stdin=subprocess.DEVNULL,
+    )  # fmt: skip
+
+
+def test_the_root_cannot_be_slash_and_the_config_must_be_inside_it(
+    bed: Bed, tmp_path: Path
+) -> None:
+    for args, word in (
+        (["--root", "/", "--config", "etc/x.toml"], "--root"),
+        (["--root", str(bed.toml), "--config", "x.toml"], "--root"),
+        (["--root", str(tmp_path / "missing"), "--config", "x.toml"], "--root"),
+        (["--config", "../outside.toml"], "--config"),
+        (["--config", str(tmp_path / "outside.toml")], "--config"),
+        (["--root", str(bed.root)], "--config"),  # it is required
+    ):
+        done = server_exit(bed, *args)
+        assert done.returncode == 2 and word in done.stderr, (args, done.stderr)
+    (bed.root / "in").symlink_to(tmp_path)
+    done = server_exit(bed, "--config", "in/scrimmage.toml")  # a link that leads out
+    assert done.returncode == 2 and "--config" in done.stderr
+    bed.toml.unlink()  # a config that does not exist yet, for init to write, is fine
+    _, tools = listed(bed)
+    assert len(tools) == 5
+    (initialised,) = call(bed, ("init", {}))
+    assert doc_of(initialised)["exit"] == 0 and bed.toml.exists()

@@ -240,6 +240,31 @@ def positive(text: str) -> float:
     return value
 
 
+CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+PART_BYTES = 255  # the longest name one folder holds, on the file systems Linux uses
+
+
+def inside(value: str, root: Path) -> Path:
+    """A path argument as the child gets it: absolute and resolved, inside the root.
+
+    A relative value is read against the root, the coding agent's own working folder, never
+    against the config's folder. The child gets the resolved path, so its own working folder
+    cannot change what the value names, and a link swapped in later cannot move it.
+    """
+    if CONTROL.search(value) is not None:
+        raise Refused(f"{value!r}: a path may not hold a control character")
+    if value.startswith(("-", "~")):
+        raise Refused(f"{value!r}: a path may not start with - or ~; write ./{value}")
+    if len(value) > 1024 or any(
+        len(part.encode("utf-8", "surrogateescape")) > PART_BYTES for part in Path(value).parts
+    ):
+        raise Refused(f"{value[:80]!r}...: the path is too long")
+    real = Path(os.path.realpath(root / value))  # an absolute value is read as it is
+    if not real.is_relative_to(root):  # by parts, so /root-other is not inside /root
+        raise Refused(f"{value!r}: the path is outside the project folder")
+    return real
+
+
 def settings_from(argv: Sequence[str] | None) -> Settings:
     parser = argparse.ArgumentParser(
         prog="scrimmage-mcp",
@@ -391,15 +416,19 @@ class Scrimmage:
             raise Refused(f"probe: {arguments['probe']!r} is not module:function")
         return arguments
 
+    def path(self, value: str) -> str:
+        return str(inside(value, self.settings.root))
+
     def argv(self, name: str, arguments: Mapping[str, Any]) -> list[str]:
-        """The child's command line after the command's name."""
+        """The child's command line after the command's name. Every value is a --flag=value or
+        an absolute path, so none can become a flag."""
         config = str(self.settings.config)
         if name == "check":
             return [config]
         if name == "test":
             args = [config, f"--max-cost-usd={float(arguments['max_cost_usd'])!r}"]
             if "compare" in arguments:
-                args.append(f"--compare={arguments['compare']}")
+                args.append(f"--compare={self.path(arguments['compare'])}")
             return args
         if name == "record":
             args = [config, f"--max-cost-usd={float(arguments['max_cost_usd'])!r}"]
@@ -409,16 +438,16 @@ class Scrimmage:
                 args.append(f"--runs={arguments['runs']}")
             return args
         if name == "init":
-            args = [arguments["folder"]] if "folder" in arguments else []
+            args = [self.path(arguments["folder"])] if "folder" in arguments else []
             args.append(f"--out={config}")
             if "probe" in arguments:
                 args.append(f"--probe={arguments['probe']}")
             return args
-        args = [arguments["target"]] if "target" in arguments else []
+        args = [self.path(arguments["target"])] if "target" in arguments else []
         if "run" in arguments:
             args.append(f"--run={arguments['run']}")
         if "compare" in arguments:
-            args.append(f"--compare={arguments['compare']}")
+            args.append(f"--compare={self.path(arguments['compare'])}")
         return args
 
     async def command(self, name: str, arguments: dict[str, Any]) -> types.CallToolResult:

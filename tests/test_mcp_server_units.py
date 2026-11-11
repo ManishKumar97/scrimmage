@@ -4,6 +4,7 @@ Nothing here starts a process; tests/test_mcp_server.py drives the server over s
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -136,3 +137,89 @@ def test_a_run_id_or_probe_with_a_trailing_newline_is_refused(tmp_path: Path) ->
         state.checked("show", {"run": "run-0123456789ab\n"})
     with pytest.raises(mcp_server.Refused, match="probe:"):
         state.checked("init", {"probe": "acme.agent:answer\n"})
+
+
+OUTSIDE = {
+    "dotdot": "../x",
+    "absolute_outside": "/etc",
+    "leading_dash": "-x",
+    "leading_tilde": "~/x",
+    "nul": "a\x00b",
+    "newline": "a\nb",
+    "escape": "a\x1b[2Jb",
+    "too_long": "a/" * 512 + "b",
+    "part_too_long": "é" * 128,  # 256 bytes in UTF-8, in 128 characters
+}
+
+
+@pytest.mark.parametrize("value", list(OUTSIDE.values()), ids=list(OUTSIDE))
+def test_a_path_outside_the_root_is_refused(tmp_path: Path, value: str) -> None:
+    root = tmp_path / "app"
+    root.mkdir()
+    with pytest.raises(mcp_server.Refused):
+        mcp_server.inside(value, root)
+    assert mcp_server.inside("x", root) == root / "x"  # the same rule lets a plain name in
+    assert mcp_server.inside("é" * 127, root) == root / ("é" * 127)
+
+
+def test_a_sibling_folder_with_the_roots_name_as_prefix_is_outside(tmp_path: Path) -> None:
+    root, sibling = tmp_path / "app", tmp_path / "app2"
+    root.mkdir()
+    sibling.mkdir()
+    for value in (str(sibling / "x"), "../app2/x", str(sibling)):
+        with pytest.raises(mcp_server.Refused, match="outside the project folder"):
+            mcp_server.inside(value, root)
+    assert mcp_server.inside(str(root / "x"), root) == root / "x"
+    assert mcp_server.inside(str(root), root) == root
+    assert mcp_server.inside("sub/../x", root) == root / "x"
+
+
+def test_a_link_that_points_out_is_refused(tmp_path: Path) -> None:
+    root, outside = tmp_path / "app", tmp_path / "elsewhere"
+    (root / "runs").mkdir(parents=True)
+    outside.mkdir()
+    (root / "out").symlink_to(outside)
+    (root / "hop").symlink_to(root / "hop2")
+    (root / "hop2").symlink_to(root / "out")  # a chain of links that ends outside
+    (root / "in").symlink_to(root / "runs")
+    for value in ("out", "out/x", "hop", "hop/x", str(root / "out")):
+        with pytest.raises(mcp_server.Refused, match="outside the project folder"):
+            mcp_server.inside(value, root)
+    assert mcp_server.inside("in", root) == root / "runs"  # the child gets the target
+    assert mcp_server.inside("in/x", root) == root / "runs" / "x"
+
+
+def every_argv(state: mcp_server.Scrimmage, value: str) -> list[list[str]]:
+    usd = {"max_cost_usd": 0.5}
+    return [
+        state.argv("test", {**usd, "compare": value}),
+        state.argv("record", {**usd, "tests": [value], "refresh": [value], "runs": 2}),
+        state.argv("init", {"folder": value, "probe": "acme.agent:answer"}),
+        state.argv("show", {"target": value, "run": "run-0123456789ab", "compare": value}),
+        state.argv("check", {}),
+    ]
+
+
+def test_a_value_never_becomes_a_flag(tmp_path: Path) -> None:
+    state = mcp_server.Scrimmage(settings(tmp_path, allow_probe=True))
+    for argv in every_argv(state, "x"):
+        for arg in argv:
+            assert arg.startswith("/") or re.fullmatch(r"--[a-z-]+=.+", arg, re.S), (argv, arg)
+    assert every_argv(state, "x")[0][1] == "--max-cost-usd=0.5"
+    for value in ("-x", "--compare", "-"):
+        with pytest.raises(mcp_server.Refused, match="may not start with -"):
+            every_argv(state, value)
+        for name, arguments in (("record", {"max_cost_usd": 1, "tests": [value]}),):
+            with pytest.raises(mcp_server.Refused, match=r"tests\.0"):
+                state.checked(name, arguments)
+
+
+def test_a_relative_value_is_read_against_the_root(tmp_path: Path) -> None:
+    (tmp_path / "sub").mkdir()
+    state = mcp_server.Scrimmage(settings(tmp_path, config=tmp_path / "sub" / "scrimmage.toml"))
+    folder = "sub/scrimmage-runs/20261111T101500Z-a1b2c3"
+    assert state.argv("show", {"target": folder})[0] == str(tmp_path / folder)
+    assert state.argv("show", {"target": "./" + folder})[0] == str(tmp_path / folder)
+    test = state.argv("test", {"max_cost_usd": 1, "compare": folder})
+    assert test == [str(tmp_path / "sub" / "scrimmage.toml"), "--max-cost-usd=1.0",
+                    f"--compare={tmp_path / folder}"]  # fmt: skip
