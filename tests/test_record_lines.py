@@ -927,3 +927,26 @@ def test_a_slowed_line_says_how_long_it_waited_and_why_it_ended(sink: Sink) -> N
     cut = only_call(sink)
     assert cut["cut_by"] == "run stopped" and cut["result"] is None
     assert cut["slowed_ms"] >= 0 and "ScrimmageStopped" in cut["error"]
+
+
+def test_a_find_holding_a_url_with_a_query_reaches_the_gate_raw(sink: Sink) -> None:
+    """The plan keeps find as written, so the gate compares the real text. The URL's query is
+    a span the record removes, so the change is refused by name; a redacted find in the plan
+    would instead read "find is not in the result", and the mistake would be silent."""
+    from scrimmage_core import runner
+
+    url = "https://x.test/p?token=abc"
+    fault = config.Fault("tool:page", "replace", "always", text="X", find=url)
+    sent = Plan("run-1", "t", "fault 1", (), (fault,), (), ("tool:*",), 60.0).to_json()
+    assert cast(list[dict[str, Any]], sent["faults"])[0]["find"] == url
+    state.install(state.RunState(Plan.from_json(sent), sink, ALLOWED, blobs=sink))
+
+    def page(sku: str) -> str:
+        return f"see {url} now"
+
+    assert gated(page)("a") == f"see {url} now"
+    line = only_call(sink)
+    assert "fault" not in line and "url rule removes" in line["mistake"]
+    assert "token=abc" not in json.dumps(line)
+    shown = runner.fault_json(fault)
+    assert shown is not None and shown["find"] == "https://x.test/p?[removed]"

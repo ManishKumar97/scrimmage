@@ -15,7 +15,6 @@ from scrimmage_core.config import (
 )
 from scrimmage_core.judge import Rules
 from scrimmage_core.provider_openai import Rates
-from scrimmage_core.redact import redact
 
 PLAN_VERSION = 1
 
@@ -237,7 +236,7 @@ def fault_json(fault: Fault) -> dict[str, object]:
         ("path", fault.path),
         ("model", fault.model),
         ("text", fault.text),
-        ("find", None if fault.find is None else redact(fault.find)),
+        ("find", fault.find),
     ):
         if value is not None:
             doc[key] = value

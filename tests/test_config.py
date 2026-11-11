@@ -808,7 +808,7 @@ def test_the_find_is_redacted_in_the_plan_and_the_results(tmp_path: Path) -> Non
 
     key = "sk-" + "b" * 20
     fault = config.Fault("tool:t", "replace", "always", text="x", find=f"a {key}")
-    assert plan.fault_json(fault)["find"] == "a [secret removed]"
+    assert plan.fault_json(fault)["find"] == f"a {key}"  # the plan applies the fault: raw
     shown = runner.fault_json(fault)
     assert shown is not None and shown["find"] == "a [secret removed]"
     plain = config.Fault("tool:t", "replace", "always", text="x", find="late")
