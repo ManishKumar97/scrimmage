@@ -30,6 +30,8 @@ MAX_LINES = 200  # timeline lines kept for one run; the rest is a count
 MAX_LINE_BYTES = 8 * 1024 * 1024  # a record line over this is skipped, not parsed
 SUMMARY_BYTES = 16 * 1024 * 1024  # how far back from the end a summary line is looked for
 CAME_BACK = 80
+# A message's text in a chat completion's JSON: the string after its first "content".
+MODEL_TEXT = re.compile(r'"content"\s*:\s*"((?:[^"\\]|\\.)*)"')
 LOG_TAIL = 200
 LOG_READ = 64 * 1024  # the end of a .log looked at to find its last line
 OTHERS = 20  # run ids listed for one row
@@ -202,12 +204,27 @@ def came_back(line: Doc) -> str:
         elif result is not None:
             text = str(result)
         added = " ".join(redact(injected(line)).split())
+        if added and line.get("kind") == "model":  # the reply's text, not its JSON
+            said = model_said(text)
+            text = text if said is None else f"the model said {said}"
         if added:  # the real result is cut first, so what the agent got still shows
             room = max(CAME_BACK - len(added), 20)
             real = " ".join(redact(text).split())
             text = (real if len(real) <= room else real[: room - 3] + "...") + added
     text = " ".join(redact(text).split())
     return text if len(text) <= CAME_BACK else text[: CAME_BACK - 3] + "..."
+
+
+def model_said(preview: str) -> str | None:
+    """The first message text in a chat completion's preview, which may be cut short. None
+    when the preview holds none whole."""
+    found = MODEL_TEXT.search(preview)
+    if found is None:
+        return None
+    try:
+        return str(json.loads(f'"{found.group(1)}"'))
+    except ValueError:
+        return None
 
 
 def injected(line: Doc) -> str:

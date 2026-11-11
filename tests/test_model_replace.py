@@ -290,6 +290,12 @@ def test_a_model_replace_line_keeps_the_real_reply_redacted_and_the_injected_tex
     assert "replace gave the agent" in shown and SECRET not in shown.partition("gave")[0]
 
 
+def test_show_puts_what_the_model_said_beside_what_replace_gave_the_agent() -> None:
+    gate = Gate(replace())
+    ask(guard(Provider(gate.events)))
+    assert show.came_back(gate.line) == ("the model said unsafe S14; replace gave the agent: safe")
+
+
 @pytest.mark.slow
 def test_record_never_runs_a_carried_model_fault(project: Project, fake_openai: Any) -> None:
     fake: FakeOpenAI = fake_openai(["chat_answer"])
