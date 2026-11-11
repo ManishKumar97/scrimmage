@@ -176,6 +176,7 @@ class Runner:
         )
         self.answers = Path(tempfile.mkdtemp(prefix="scrimmage-answers-"))
         self.lock = threading.Lock()
+        self.ended = False  # run_all has read and cleared stop_flag; the watcher adds nothing
         self.procs: dict[str, subprocess.Popen[bytes]] = {}
         self.stopped_rows: set[tuple[str, str]] = set()
         self.row_of: dict[str, planner.Row] = {}
@@ -465,6 +466,7 @@ class Runner:
         rows = planner.rows(self.config)
         runs = self.config.agent.runs
         self.server.start()
+        self.ended = False
         release = nothing
         try:
             release = self._catch_signals()
@@ -486,9 +488,11 @@ class Runner:
                     for _ in range(runs)
                 ]
                 results += list(pool.map(self.one, rest))
-            if self.stop_flag:  # every run has ended, so it is raised where nothing drops it
-                name = self.stop_flag[0]
+            with self.lock:
+                self.ended = True  # from here the watcher notes nothing, so nothing is noted twice
+                name = self.stop_flag[0] if self.stop_flag else ""
                 self.stop_flag.clear()  # the watcher and the handler may both have noted it
+            if name:  # every run has ended, so it is raised where nothing drops it
                 raise Interrupted(name)
         finally:
             release()
@@ -571,8 +575,9 @@ class Runner:
             if not byte:
                 return
             if byte[0] in STOP_SIGNALS:
-                if not self.stop_flag:
-                    self.stop_flag.append(signal.Signals(byte[0]).name)
+                with self.lock:
+                    if not self.ended and not self.stop_flag:
+                        self.stop_flag.append(signal.Signals(byte[0]).name)
                 if not stopped:
                     stopped = True
                     self.cancel()
