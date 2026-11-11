@@ -101,6 +101,7 @@ source_modules = [
     "scrimmage_core.compare",
     "scrimmage_core.results",
     "scrimmage_core.render",
+    "scrimmage_core.suggest",
 ]
 forbidden_modules = [
     "scrimmage_core.runner",
@@ -112,6 +113,8 @@ forbidden_modules = [
     "http",
     "socket",
     "ssl",
+    "subprocess",
+    "multiprocessing",
 ]
 
 [tool.coverage.run]

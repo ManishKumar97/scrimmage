@@ -9,7 +9,7 @@ import pytest
 
 import scrimmage_core
 from conftest import doc_pages
-from scrimmage_core import cli, config, judge, mcp_gate, outcomes, record, render
+from scrimmage_core import cli, config, judge, mcp_gate, outcomes, record, render, suggest
 
 DOCS = Path(__file__).parents[1] / "docs"
 CLI_SCHEMA = json.loads(
@@ -478,3 +478,14 @@ def test_the_limits_page_names_each_gap_of_the_carried_faults() -> None:
     assert "`append`, `replace` and `slow` do not work on a model call" in page("model-faults.md")
     later = page("configuration.md").split("## Coming in later versions")[1]
     assert "`slow`," not in later and "`append`, `replace`," not in later.split("Fault options")[0]
+
+
+@pytest.mark.design("docs.suggestions")
+def test_the_show_page_lists_every_suggestion_code_and_calls_it_a_heuristic() -> None:
+    text = page("show.md").split("### Suggestions")[1].split("### What show opens")[0]
+    for code in suggest.CODES:
+        assert f"| `{code}` |" in text, code
+    assert "Every suggestion is a heuristic" in text and "`suggestion (a heuristic):`" in text
+    assert "reads `code` and not `text`" in text
+    assert 'never "because"' in text
+    assert "never edits `scrimmage.toml`" in text

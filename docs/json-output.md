@@ -284,7 +284,15 @@ The diff is in the text output only: compare `config` with `out` to see it.
       "lines": [
         {"ms": 412, "call": "tool:get_order", "kind": "tool", "action": "fault", "came_back": "TimeoutError: injected (injected)", "depth": 0, "mock_miss": false}
       ],
-      "lines_left_out": 0, "log_tail": null, "suggestions": []
+      "lines_left_out": 0, "log_tail": null,
+      "suggestions": [
+        {
+          "code": "forbid_after_fault",
+          "text": "suggestion (a heuristic): the answer holds text the test forbids, after an injected failure in tool:get_order. Scrimmage cannot see where that text came from; look at what your code gives the model when tool:get_order fails.",
+          "heuristic": true,
+          "evidence": [{"seq": 2, "proc": {"host": "h", "pid": 100, "started": "2026-11-11T10:15:00+00:00"}}]
+        }
+      ]
     }
   ],
   "compare": null,
@@ -311,7 +319,19 @@ Each run in `runs`:
 | `lines` | The run's calls in the order they started, at most 200. |
 | `lines_left_out` | How many more calls the record holds. |
 | `log_tail` | For a run that crashed or timed out, the `path` of its log and the last `line` of it, redacted and cut at 200 characters. Otherwise `null`. |
-| `suggestions` | Always empty in this release. |
+| `suggestions` | Heuristic suggestions, below. Empty for a pass, and when no rule fits. |
+
+Each item in `suggestions`:
+
+| Field | Meaning |
+|---|---|
+| `code` | A stable name for the rule that fired. Read this, never `text`: the wording can change. |
+| `text` | The suggestion in words. It starts `suggestion (a heuristic):`. |
+| `heuristic` | Always `true`. A suggestion is a rule over the record, not a finding. |
+| `evidence` | What the rule read. A record line is `seq` and `proc`, the line's sequence number and the process that wrote it. `{"summary": true}` means the rule read the run's summary line, such as its outcome, and no one call. |
+
+The main suggestion comes first, then at most one about a mock that missed.
+See [Reading a finished test](show.md#suggestions).
 
 Each item in `lines`:
 
@@ -384,7 +404,7 @@ A value that is removed or renamed comes only with a new version.
 | `outcome` | `answered`, `crashed`, `timed out`, `refused call`, `budget reached`, `not reserved`, `infrastructure error`, `stopped` | read as other |
 | `judged` | `pass`, `fail`, `left out` | read as other |
 | `kind` | `expect`, `forbid`, `empty`, `crashed`, `timed out`, `refused` | read as other |
-| `code` | `refused`, `raised`, `status`, `differs`, `nondeterministic`, `unsavable`, `null`, `placeholder`, `too_large`, `binary`, `incomplete_reply`, `secret_changed_shape`, `model_inside`, `not_finished`, `outside_tool`, `credential` | read as other |
+| `code` | `refused`, `raised`, `status`, `differs`, `nondeterministic`, `unsavable`, `null`, `placeholder`, `too_large`, `binary`, `incomplete_reply`, `secret_changed_shape`, `model_inside`, `not_finished`, `outside_tool`, `credential`; in a suggestion, `test_mistake`, `not_agent`, `fault_not_fired`, `refused_call`, `refused_on_baseline`, `crash_after_fault`, `crash_on_baseline`, `retry_loop`, `timeout_after_fault`, `timeout_on_baseline`, `forbid_after_fault`, `expect_after_fault`, `empty_answer`, `rule_on_baseline`, `mock_miss_real`, `mock_miss_refused` | read as other |
 | `rule` | `pattern`, `key_name` | read as other |
 | `found_by` | `probe`, `static` | read as other |
 | `problem` | `ambiguous`, `nested`, `not_found` | read as other |

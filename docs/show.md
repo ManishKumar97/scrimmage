@@ -41,6 +41,7 @@ outcome: answered; judged fail against the test's rules
  415  model:openai    real   answer
 answer: Your order shipped on Oct 30.
 broken: forbid "Oct 30" found
+suggestion (a heuristic): the answer holds text the test forbids, after an injected failure in tool:get_order. Scrimmage cannot see where that text came from; look at what your code gives the model when tool:get_order fails.
 ```
 
 Calls are in the order they started.
@@ -64,6 +65,57 @@ A run whose record has no summary line is shown as far as it was written, with a
 | 0 | `shown` | Something was shown, whatever the test's own result was. |
 | 2 | `mistake` | No such folder or run, a bad run id, a folder with no run records, a record or result of a version Scrimmage does not read, or a file it refuses to open. |
 | 3 | `infra` | Scrimmage itself failed. |
+
+### Suggestions
+
+A failing run gets at most one main suggestion, and then at most one about a mock that missed.
+A suggestion is a rule over the run's record lines.
+It calls no model, it writes nothing, and it never edits `scrimmage.toml` or your code.
+
+Every suggestion is a heuristic, and its text starts `suggestion (a heuristic):`.
+It has a `code` that stays the same, and `evidence`: the `seq` and `proc` of the record lines the rule read.
+A program, such as a coding agent, reads `code` and not `text`, because the wording can change.
+The text says "after", never "because": Scrimmage can show that one line came after another, and not what caused it.
+A suggestion is not a verdict.
+The verdict is the judge's, against the rules you wrote, and the suggestion only reads the record after it.
+
+The first rule that fits is the main suggestion.
+`X` is the call of the first line the gate faulted in the run.
+A rule that needs `X` does not fire in a run with no such line.
+
+| Code | Fits when | Says |
+|---|---|---|
+| `test_mistake` | The run was left out as a mistake in the test | The test has a mistake, which it names. Fix the test before reading the run. |
+| `not_agent` | The run ended `budget reached`, `not reserved`, `infrastructure error` or `stopped` | The outcome says nothing about the agent. |
+| `fault_not_fired` | A fault row, and the fault did not fire | The agent never called the faulted call, so the row tested nothing. |
+| `refused_call` | A fault row, and the agent called something the test does not allow | Look at why the agent reaches for it when the fault fires. |
+| `refused_on_baseline` | A baseline, and the run ended `refused call` | Add the call to `real`, mock it, or check why the agent made it. |
+| `crash_after_fault` | A fault row that fired, and the run crashed | Catch the error from `X`. |
+| `crash_on_baseline` | A baseline, and the run crashed | Fix the baseline first; the last line of the log is shown. |
+| `retry_loop` | A fault row that fired, the run timed out, and `X` was called 3 or more times after its fault line in that process | Cap the retries. |
+| `timeout_after_fault` | A fault row that fired, the run timed out, and `X` was called fewer than 3 times after | The time went after the injected failure; handle the error from `X` so the agent answers. |
+| `timeout_on_baseline` | A baseline, and the run timed out | Check `run_timeout` and the baseline. |
+| `forbid_after_fault` | A fault row that fired, and a `forbid` rule broke | Look at what your code gives the model when `X` fails. |
+| `expect_after_fault` | A fault row that fired, and an `expect` rule broke | Look at what the agent tells the user when `X` fails. |
+| `empty_answer` | The agent gave no answer | Give a fallback answer when a step fails. |
+| `rule_on_baseline` | A baseline, and an `expect` or `forbid` rule broke | The baseline fails the test's rules; fix it before reading the fault rows. |
+
+The second kind comes after the main one, and only when the run has a line for a call that had a mock on its label and matched none:
+
+| Code | Fits when |
+|---|---|
+| `mock_miss_real` | The call ran for real. Record the varying arguments with `record --runs`. |
+| `mock_miss_refused` | The call is not allowed to run for real, so it was refused. Record the varying arguments with `record --runs`. |
+
+A run that passed gets no suggestion.
+`show` picks the first run judged `fail` of each failing row, so a run that was left out of the rate never appears without `--run`.
+These rules therefore appear only with `--run RUN`: `test_mistake` when the judge left the run out as a mistake in the test, `not_agent`, `fault_not_fired`, and `refused_on_baseline`.
+A refusal that is the test's own mistake, such as a tool no gate can reach, reads `test_mistake` and not a refused call.
+A `retry_loop` counts only calls to `X` with the same arguments as the faulted one; a loop over other arguments is `timeout_after_fault`.
+Evidence lists only what a rule read: record lines by `seq` and `proc`, and `{"summary": true}` for a rule that read the run's summary line, such as `not_agent` or `rule_on_baseline`.
+A run that no rule fits gets none, and `suggestions` is empty.
+A fault row left out for a refusal the agent did not choose gets none either.
+Only the first 200 calls of a run are read, the same ones the timeline shows, so a fault line past them leaves a rule that needs `X` silent.
 
 ### What show opens
 

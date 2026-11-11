@@ -35,6 +35,7 @@ from scrimmage_core import (
     record,
     runner,
     show,
+    suggest,
 )
 from scrimmage_core import init as init_module
 from scrimmage_core import render as rendering
@@ -443,7 +444,9 @@ def test_each_enum_lists_every_value_the_code_gives() -> None:
     assert found["stopped_by"] == list(runner.STOPPED_BY)
     assert found["change"] == list(compare.CHANGES)
     assert found["action"] == ["real", "refused", *show.ACTIONS]  # a miss's, then a line's
-    assert set(found["code"]) == set(record.MANUAL_CODES) | set(record.SKIPPED_CODES)
+    # A record's code, then a suggestion's.
+    assert set(found["code"]) == {*record.MANUAL_CODES, *record.SKIPPED_CODES, *suggest.CODES}
+    assert len(suggest.CODES) == len(set(suggest.CODES))
     assert set(found["rule"]) == {capture.PATTERN, capture.KEY_NAME}
     source_record = Path(record.__file__).read_text()
     for code in (*record.MANUAL_CODES, *record.SKIPPED_CODES):

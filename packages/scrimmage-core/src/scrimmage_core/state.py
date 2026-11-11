@@ -444,6 +444,7 @@ class RunState:
             {},
             now_iso(),
             time.monotonic(),
+            extra={"by_config": True},  # the config caused this refusal, not the agent
         )
         with self._lock:
             self.refused = self.refused or step.call.label
