@@ -6,10 +6,15 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["scrimmage"]
 
+[project.optional-dependencies]
+# The Scrimmage MCP server. Pinned to one minor: its middleware list may change within 2.x.
+mcp = ["mcp>=2.3,<2.4"]
+
 [project.scripts]
 scrimmage = "scrimmage_core.entry:main"
 scrim = "scrimmage_core.entry:main"
 scrimmage-run = "scrimmage_core.run_command:main"
+scrimmage-mcp = "scrimmage_core.mcp_server:main"
 
 [build-system]
 requires = ["hatchling>=1.27"]

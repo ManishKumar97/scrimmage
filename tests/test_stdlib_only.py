@@ -50,9 +50,13 @@ def imported_roots(path: Path) -> set[str]:
 
 
 CASES = [(p, ours) for src, ours in ALLOWED.items() for p in sorted(src.rglob("*.py"))]
+# The Scrimmage MCP server is a command of its own, installed with the mcp extra. It never
+# loads into the team's process: it starts each Scrimmage command as a child.
+OWN_PROCESS = {"mcp_server.py": {"anyio", "jsonschema", "mcp", "mcp_types"}}
 
 
 @pytest.mark.parametrize(("path", "ours"), CASES, ids=[str(p.name) for p, _ in CASES])
 def test_imports_only_the_standard_library(path: Path, ours: set[str]) -> None:
+    ours = ours | OWN_PROCESS.get(path.name, set())
     outside = imported_roots(path) - set(sys.stdlib_module_names) - ours
     assert not outside, f"{path} imports {sorted(outside)}"
