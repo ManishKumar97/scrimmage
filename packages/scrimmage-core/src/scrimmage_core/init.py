@@ -11,6 +11,7 @@ import ast
 import importlib.machinery
 import importlib.util
 import os
+import re
 import shlex
 import sys
 import tomllib
@@ -18,6 +19,7 @@ import warnings
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from itertools import islice
 from pathlib import Path
 from typing import cast
 from urllib.parse import urlsplit
@@ -29,9 +31,11 @@ from scrimmage_core.outcomes import INFRA, MISTAKE, MISTAKES, NOTES, OK, WARNING
 from scrimmage_core.provider_openai import HOSTS
 from scrimmage_core.runner import Runner, RunResult
 
+NOT_FOUND = re.compile(r"ModuleNotFoundError: No module named '([^']+)'")
 PROBE_QUESTION = "scrimmage init probe"
 PROBE_TIMEOUT_S = 120.0
 FILE_CAP = 5 * 1024 * 1024  # a larger .py file is generated, and is not read
+SKIP_COUNT_LIMIT = 100_000  # .py names counted after the cut; more is said as "at least"
 FILE_LIMIT = 5000  # .py files read; a larger tree is cut here, in a fixed order
 SHOWN_ENTRIES = 5  # other entry points the draft names in comments
 WIDTH = len("model_hosts")  # the settings' values start in one column
@@ -99,6 +103,7 @@ class Reading:
     too_large: list[str] = field(default_factory=list[str])
     outside: list[str] = field(default_factory=list[str])  # symlinks that leave the folder
     cut_off: bool = False  # the tree had more .py files than FILE_LIMIT
+    skipped: int = 0  # the .py files after the cut, counted and not read
     src_dropped: bool = False  # a module name left out a leading src folder
     definitions: list[Definition] = field(default_factory=list[Definition])
     spec_names: set[str] = field(default_factory=set[str])
@@ -135,6 +140,7 @@ class Probe:
     outcome: str | None = None
     notice: dict[str, object] | None = None
     infra: str | None = None  # the probe itself failed: nothing is written
+    missing: str | None = None  # the probed module, or a package above it, was not found
 
     @property
     def offered(self) -> list[dict[str, object]]:
@@ -225,6 +231,12 @@ def prepare(
     if probe is not None:
         announce(f"probe: running {probe} up to its first model request")
         result = run_probe(probe, root, stop_flag)
+    if probe is not None and result.missing is not None:
+        return refused(
+            draft,
+            f"--probe {printable(probe)}: {printable(result.missing)} cannot be imported from "
+            f"{printable(root)} or the environment; install it, or fix the name",
+        )
     known = result.notice is not None and bool(result.offered)
     tools = probe_tools(result, reading) if known else static_tools(reading)
     found = Findings(
@@ -264,9 +276,15 @@ def printable(text: object) -> str:
 def read_folder(folder: Path) -> Reading:
     """Every .py file under the folder, by ast. None of them is imported or run."""
     reading = Reading()
-    for path in python_files(folder, reading):
+    paths = python_files(folder)
+    for path in paths:
+        if not usable(path, folder, reading):
+            continue
         if reading.files + len(reading.unread) + len(reading.too_large) >= FILE_LIMIT:
             reading.cut_off = True
+            # Counted by name alone, with no stat and no parse, up to a bound, so the cap
+            # still bounds the time. A name that is not a file or a symlink out is counted too.
+            reading.skipped = 1 + sum(1 for _ in islice(paths, SKIP_COUNT_LIMIT))
             break
         relative = path.relative_to(folder).as_posix()
         shown = relative.encode("utf-8", "backslashreplace").decode()
@@ -286,18 +304,25 @@ def read_folder(folder: Path) -> Reading:
     return reading
 
 
-def python_files(folder: Path, reading: Reading) -> Iterator[Path]:
-    """In a fixed order, leaving out library folders and hidden folders, and a symlink that
-    points outside the folder, which is not part of the code being read."""
+def python_files(folder: Path) -> Iterator[Path]:
+    """Every name ending in .py, in a fixed order, leaving out library folders and hidden
+    folders. Nothing is asked of the file system but the listing."""
     for parent, folders, files in os.walk(folder):
         folders[:] = sorted(name for name in folders if not probing.skipped_folder(name))
         for name in sorted(files):
-            path = Path(parent) / name
-            if name.endswith(".py") and path.is_file():  # a named pipe would never end
-                if path.is_symlink() and not path.resolve().is_relative_to(folder):
-                    reading.outside.append(path.relative_to(folder).as_posix())
-                    continue
-                yield path
+            if name.endswith(".py"):
+                yield Path(parent) / name
+
+
+def usable(path: Path, folder: Path, reading: Reading) -> bool:
+    """Whether to read it: a file, not a named pipe that would never end, and not a symlink
+    that points outside the folder, which is not part of the code being read."""
+    if not path.is_file():
+        return False
+    if path.is_symlink() and not path.resolve().is_relative_to(folder):
+        reading.outside.append(path.relative_to(folder).as_posix())
+        return False
+    return True
 
 
 def over_the_cap(path: Path) -> bool:
@@ -654,10 +679,35 @@ def run_probe(function: str, folder: Path, stop_flag: list[str] | None) -> Probe
     if not results:
         return Probe(ran=True, infra="the probe did not run")
     result = results[0]
-    return read_probe(result, runner.store.lines(result.run), runner.folder / f"{result.run}.log")
+    log = runner.folder / f"{result.run}.log"
+    return read_probe(result, runner.store.lines(result.run), log, function)
 
 
-def read_probe(result: RunResult, lines: list[dict[str, object]], log: Path) -> Probe:
+def missing_module(log: Path, function: str) -> str | None:
+    """The module the crash log's last traceback ends on, if the error says it was not found
+    and it is the probed module or a package above it. An earlier traceback, such as a worker
+    that logged one and went on, does not count, and neither does a module the function
+    itself imports and cannot find."""
+    module = function.split(":")[0]
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    _, found, last = text.rpartition("Traceback (most recent call last):")
+    if not found:
+        return None
+    # The frames are indented; the first line that is not is the exception.
+    ending = next((line for line in last.splitlines()[1:] if line[:1] not in (" ", "\t")), "")
+    named = NOT_FOUND.match(ending)
+    if named is None:
+        return None
+    name = named.group(1)
+    return name if module == name or module.startswith(name + ".") else None
+
+
+def read_probe(
+    result: RunResult, lines: list[dict[str, object]], log: Path, function: str
+) -> Probe:
     """What ended the probe: each ending has its own words."""
     notice = next((n for n in result.notices if n.get("notice") == "probe"), None)
     if notice is not None:
@@ -670,7 +720,11 @@ def read_probe(result: RunResult, lines: list[dict[str, object]], log: Path) -> 
     if outcome == "answered" or returned:
         return Probe(True, NO_MODEL_REQUEST)
     if outcome in ("crashed", "timed out"):
-        return Probe(True, f"{outcome}, see {log}")
+        return Probe(
+            True,
+            f"{outcome}, see {log}",
+            missing=missing_module(log, function) if outcome == "crashed" else None,
+        )
     if outcome == "refused call":
         return Probe(True, refused_first(lines))
     return Probe(True, outcome, infra=f"the probe could not run: {outcome}, see {log}")
@@ -843,9 +897,10 @@ def add_notes(draft: Draft, found: Findings) -> None:
             f"skipped {len(reading.outside)} .py symlinks that point outside the folder: {shown}"
         )
     if reading.cut_off:
+        more = "at least " if reading.skipped > SKIP_COUNT_LIMIT else ""
         notes.append(
-            f"read the first {FILE_LIMIT} .py files and stopped; the tree has more, so run "
-            "scrimmage init on the folder that holds the agent"
+            f"read the first {FILE_LIMIT} .py files and stopped; skipped {more}{reading.skipped} "
+            ".py files, so run scrimmage init on the folder that holds the agent"
         )
     left_out = sorted(left_out_tools(reading, tools)) if result.offered else []
     if left_out:

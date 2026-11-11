@@ -30,7 +30,7 @@ It parses the code and imports nothing, so none of your code runs.
 It skips `.venv`, `venv`, `site-packages`, `node_modules`, `scrimmage-runs` and hidden folders, and it says which files it could not read as Python.
 A file over 5 MB is treated as generated: it is skipped, and reported as too large.
 A `.py` symlink that points outside the folder is not read, and a note names it, as its target is not part of the code in the folder.
-The read stops after 5000 `.py` files, in a fixed order, and a note says so; reading 5000 small files took about 18 seconds on a busy 4-core machine, so give the folder that holds the agent.
+The read stops after 5000 `.py` files, in a fixed order, and a note says so, with `skipped N .py files` for the files it walked past and did not parse. That count is by name alone, with no stat, and stops at 100000 names, then says `at least`; counting 100000 names took about 1.2 seconds on a busy 4-core machine; reading 5000 small files took about 18 seconds on a busy 4-core machine, so give the folder that holds the agent.
 Module names are the import names of an installed package: a `src` folder is not part of them, and a folder inside a package keeps its package's name.
 When the top package cannot be imported from the folder you read, a note tells you to install it, such as with `pip install -e .`, because `scrimmage test` will need it.
 To read one part of a large checkout, give that part as the folder, such as `scrimmage init src/mypackage/domains/airline --out scrimmage.toml`.
@@ -90,7 +90,9 @@ The static read cannot name a tool made by a dict comprehension or a framework.
 `--probe` takes the function to run, as `module:function`, and runs only that function. You choose it: the command prints it first, and never runs its own guess, and it does not print or return a ready command for the guess either.
 A bare `--probe`, a script path, or anything that is not `module:function` exits 2 and runs nothing.
 When the module's top-level name cannot be found in the folder or the environment, `--probe` exits 2 with a mistake that names the module and says to install it or fix the name. Nothing is run and no draft is written.
-Only the top-level name is looked for, without importing it, so a missing submodule is found by the probe itself.
+Only the top-level name is looked for before the probe runs, without importing it.
+A missing submodule under a real package, such as `evil.missing:answer`, is found by the probe: when its crash log holds a `ModuleNotFoundError` that names the probed module or a package above it, `--probe` exits 2 with the same mistake and writes no draft.
+A module that your function imports and cannot find is your agent's crash, and stays `crashed, see <log>`.
 Scrimmage starts the function the way `scrimmage test` does, with the question `scrimmage init probe`.
 The probe stops at the first model request. That request is refused before it is sent, and the tools it offers are read from it.
 The probe costs $0 in model calls Scrimmage sees, as it sends none. A paid call through a library it does not gate is not seen.

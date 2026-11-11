@@ -1871,6 +1871,97 @@ def answer(question):
     assert not any(m.get("path") == "/wrapped" for m in done.mocks())
 
 
+def test_a_json_reply_holding_a_form_field_in_a_string_is_written_as_valid_json(
+    team: Team,
+) -> None:
+    """The body is redacted as text before it is read as JSON. A field cut at a backslash
+    would leave the quote that ends the string, and the mock would not parse."""
+    team.service.json("/cmd", {"cmd": 'curl -d "token=abc" https://a.b', "n": 1})
+    team.write(
+        """
+def cmd(name):
+    return http_get("/cmd").json()["n"]
+
+def answer(question):
+    cmd("x")
+    return "ok"
+""",
+        ["bot:cmd"],
+        ("tool:cmd",),
+    )
+    done = team.record()
+    assert done.code == 0, done.out
+    text = team.out_path.read_text()
+    assert "abc" not in text
+    mock = next(m for m in done.mocks() if m.get("path") == "/cmd")
+    assert mock["json"] == {"cmd": 'curl -d "[secret removed]" https://a.b', "n": 1}
+
+
+def test_a_basic_header_in_a_web_reply_or_a_tool_value_is_not_written(team: Team) -> None:
+    """The name and the value are two strings, so only the pair rule sees them. A HAR header
+    list, a [name, value] list and a name/value object are all judged."""
+    secret = "dXNlcjpodW50ZXIy"
+    team.service.json(
+        "/har", {"headers": [{"name": "Authorization", "value": f"Basic {secret}"}], "n": 1}
+    )
+    team.write(
+        f"""
+def har(name):
+    return http_get("/har").json()["n"]
+
+def pairs(name):
+    return [["Authorization", "Basic {secret}"], ["Accept", "*/*"]]
+
+def named(name):
+    return {{"name": "Proxy-Authorization", "value": "Basic {secret}"}}
+
+def answer(question):
+    har("x")
+    pairs("x")
+    named("x")
+    return "ok"
+""",
+        ["bot:har", "bot:pairs", "bot:named"],
+        ("tool:har", "tool:pairs", "tool:named"),
+    )
+    done = team.record()
+    assert done.code == 0, done.out
+    assert secret not in team.out_path.read_text()
+    mocks = {m.get("path") or m["call"]: m for m in done.mocks()}
+    assert mocks["/har"]["json"]["headers"][0]["value"] == "[secret removed]"
+    assert mocks["tool:pairs"]["returns"] == [
+        ["Authorization", "[secret removed]"],
+        ["Accept", "*/*"],
+    ]
+    assert mocks["tool:named"]["returns"] == {
+        "name": "Proxy-Authorization",
+        "value": "[secret removed]",
+    }
+
+
+def test_a_json_reply_ending_a_string_on_a_field_name_is_written_as_valid_json(
+    team: Team,
+) -> None:
+    """A field name at the end of a string must not take the quote that closes it."""
+    team.service.json("/note", {"note": "send token=", "n": 1})
+    team.write(
+        """
+def note(name):
+    return http_get("/note").json()["n"]
+
+def answer(question):
+    note("x")
+    return "ok"
+""",
+        ["bot:note"],
+        ("tool:note",),
+    )
+    done = team.record()
+    assert done.code == 0, done.out
+    mock = next(m for m in done.mocks() if m.get("path") == "/note")
+    assert mock["json"] == {"note": "send token=", "n": 1}
+
+
 # The arguments of a call a mock cannot be written for, and the labels a miss now covers.
 
 DOLLARS = """

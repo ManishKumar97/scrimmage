@@ -9,7 +9,8 @@ import types
 import warnings
 from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+from types import SimpleNamespace
+from typing import Any, cast
 
 import jsonschema
 import pytest
@@ -1472,6 +1473,37 @@ def test_a_probe_of_a_module_that_cannot_be_imported_is_a_mistake_and_writes_not
     assert not out.exists()
 
 
+@pytest.mark.slow
+@pytest.mark.design("init.probe_outcome")
+def test_a_probe_of_a_missing_submodule_is_a_mistake_and_writes_nothing(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write(tmp_path, {"evil/__init__.py": "", "evil/real.py": ENTRY})
+    fake = fake_openai([])
+    rc, doc = probed(capsys, tmp_path, fake, monkeypatch, "evil.missing:answer")
+    assert rc == MISTAKE and fake.received == []
+    assert "evil.missing cannot be imported" in messages(doc, "mistakes")
+    assert not (tmp_path / "draft.toml").exists()
+
+
+@pytest.mark.slow
+@pytest.mark.design("init.probe_outcome")
+def test_a_module_the_function_cannot_import_is_still_a_crash_not_a_bad_name(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write(tmp_path, {"bot.py": "import nothing_installed_here\n\n\ndef answer(q):\n    return q\n"})
+    fake = fake_openai([])
+    _, doc = probed(capsys, tmp_path, fake, monkeypatch)
+    assert "cannot be imported" not in messages(doc, "mistakes")
+    assert str(probe_of(doc)["outcome"]).startswith("crashed, see ")
+
+
 def test_a_probe_of_a_module_in_the_folder_is_still_run(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1490,11 +1522,56 @@ def test_a_tree_over_the_file_limit_is_cut_with_a_note(
     monkeypatch.setattr(drafting, "FILE_LIMIT", 3)
     write(tmp_path, {f"m{n}.py": "X = 1\n" for n in range(5)})
     _, doc = run(capsys, str(tmp_path))
-    assert "read the first 3 .py files and stopped" in messages(doc, "notes")
-    assert drafting.read_folder(tmp_path).files == 3  # the note's number is the count read
+    assert "read the first 3 .py files and stopped; skipped 2 .py files" in messages(doc, "notes")
+    reading = drafting.read_folder(tmp_path)
+    assert reading.files == 3  # the note's numbers are the count read and the count left
+    assert reading.skipped == 2
     write(tmp_path / "small", {f"m{n}.py": "X = 1\n" for n in range(3)})
     _, exact = run(capsys, str(tmp_path / "small"))
     assert "stopped" not in messages(exact, "notes")
+
+
+def test_a_timed_out_probe_is_not_a_missing_module_whatever_its_log_says(tmp_path: Path) -> None:
+    log = tmp_path / "run.log"
+    log.write_text(
+        'Traceback (most recent call last):\n  File "x.py", line 1, in f\n'
+        "ModuleNotFoundError: No module named 'evil.missing'\n"
+    )
+    for outcome, expected in (("crashed", "evil.missing"), ("timed out", None)):
+        result = cast(Any, SimpleNamespace(notices=[], outcome=outcome))
+        probe = drafting.read_probe(result, [], log, "evil.missing:answer")
+        assert probe.missing == expected, outcome
+
+
+def test_the_skipped_count_stops_at_its_bound_and_asks_nothing_of_the_files(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(drafting, "FILE_LIMIT", 2)
+    monkeypatch.setattr(drafting, "SKIP_COUNT_LIMIT", 4)
+    write(tmp_path, {f"m{n}.py": "X = 1\n" for n in range(12)})
+    seen: list[str] = []
+    real = Path.is_file
+    monkeypatch.setattr(Path, "is_file", lambda self: seen.append(self.name) or real(self))
+    _, doc = run(capsys, str(tmp_path))
+    assert "skipped at least 5 .py files" in messages(doc, "notes")
+    asked = [name for name in seen if name.startswith("m")]
+    assert asked == ["m0.py", "m1.py", "m10.py"]  # two read and one past the cap, then no more
+
+
+def test_a_log_ending_on_another_error_is_not_a_missing_module(tmp_path: Path) -> None:
+    frames = 'Traceback (most recent call last):\n  File "x.py", line 1, in f\n    import y\n'
+    log = tmp_path / "run.log"
+    log.write_text(frames + "ModuleNotFoundError: No module named 'evil.missing'\n")
+    assert drafting.missing_module(log, "evil.missing:answer") == "evil.missing"
+    assert drafting.missing_module(log, "evil.real:answer") is None
+    # a worker logged a missing module, then the program died of something else
+    log.write_text(
+        frames
+        + "ModuleNotFoundError: No module named 'evil.missing'\n\n"
+        + frames
+        + "RuntimeError: boom\n"
+    )
+    assert drafting.missing_module(log, "evil.missing:answer") is None
 
 
 def test_a_py_symlink_that_leaves_the_folder_is_not_read(
