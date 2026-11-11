@@ -6,15 +6,57 @@ The last line of every record is the run's summary.
 
 import json
 import os
+import stat
 import threading
 from pathlib import Path
 
 RECORD_VERSION = 1
 
 
+class Refused(Exception):
+    """A file that is not read: a link, another user's file, not a plain file, or too big."""
+
+
+def open_owned(path: Path, *, folder: bool = False) -> int:
+    """A read-only file descriptor for a plain file (or a folder) the caller owns.
+
+    It is looked at before it is opened, opened without following a link, and looked at again
+    once open, so a file swapped in between is refused too. Raises Refused or OSError.
+    """
+    before = os.lstat(path)
+    if stat.S_ISLNK(before.st_mode):
+        raise Refused(f"{path}: is a symbolic link, so it is not read")
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+    want = stat.S_ISDIR if folder else stat.S_ISREG
+    kind = "folder" if folder else "plain file"
+    if not want(before.st_mode):
+        raise Refused(f"{path}: is not a {kind}, so it is not read")
+    fd = os.open(path, flags | (os.O_DIRECTORY if folder else 0))
+    try:
+        after = os.fstat(fd)
+        if not want(after.st_mode):
+            raise Refused(f"{path}: is not a {kind}, so it is not read")
+        if after.st_uid != os.getuid():
+            raise Refused(f"{path}: is owned by another user, so it is not read")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def read_regular(path: Path, limit: int) -> bytes:
+    """All of a plain file the caller owns, or Refused when it is over `limit` bytes."""
+    with os.fdopen(open_owned(path), "rb") as handle:
+        data = handle.read(limit + 1)
+    if len(data) > limit:
+        raise Refused(f"{path}: is over {limit} bytes, so it is not read")
+    return data
+
+
 class RecordStore:
     def __init__(self, folder: Path) -> None:
-        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # exist_ok=False: two tests started in one second never share a folder.
+        folder.mkdir(mode=0o700, parents=True, exist_ok=False)
         os.chmod(folder, 0o700)
         self.folder = folder
         self._lock = threading.Lock()

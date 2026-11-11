@@ -90,17 +90,14 @@ def with_fake_host(toml: Path) -> None:
         toml.write_text(text.replace("[agent]\n", "[agent]\n" + FAKE_HOST, 1))
 
 
-@pytest.mark.design("docs.examples_run")
-@pytest.mark.parametrize("name", sorted(EXAMPLES))
-@pytest.mark.slow
-def test_the_page_runs_and_prints_what_it_shows(
+def check_page(
     name: str,
+    example: Example,
     tmp_path: Path,
     fake_openai: Callable[..., FakeOpenAI],
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    example = EXAMPLES[name]
     root = tmp_path / "project"
     if example.start:
         shutil.copytree(example.start, root, ignore=shutil.ignore_patterns("__pycache__"))
@@ -133,13 +130,45 @@ def test_the_page_runs_and_prints_what_it_shows(
     assert codes == example.codes
 
 
+@pytest.mark.design("docs.examples_run")
+@pytest.mark.parametrize("name", sorted(EXAMPLES))
+@pytest.mark.slow
+def test_the_page_runs_and_prints_what_it_shows(
+    name: str,
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check_page(name, EXAMPLES[name], tmp_path, fake_openai, capsys, monkeypatch)
+
+
+# The page on changing a result starts from the function agent. The fake model obeys the
+# note the fault adds, as "a@b" says, and the test row fails on the word it was told to say.
+CHANGING = "changing-results.md"
+CHANGING_RUN = Example(
+    ["acme_get_order", "acme_answer@acme_obeys"], [ROW_FAILED], base="examples/function-agent.md"
+)
+
+
+@pytest.mark.design("docs.changing_results_runs")
+@pytest.mark.slow
+def test_the_changing_results_page_runs(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check_page(CHANGING, CHANGING_RUN, tmp_path, fake_openai, capsys, monkeypatch)
+
+
 def test_every_page_with_an_output_is_run() -> None:
     pages = {
         str(p.relative_to(DOCS))
         for p in doc_pages(DOCS)
         if any(b.title == OUTPUT for b in blocks(str(p.relative_to(DOCS))))
     }
-    assert pages == set(EXAMPLES)
+    assert pages == {*EXAMPLES, CHANGING}
 
 
 def test_the_landing_page_shows_the_function_agent_as_it_runs() -> None:

@@ -2,7 +2,7 @@
 
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import NamedTuple, cast
 
 REMOVED = "[secret removed]"
@@ -11,11 +11,13 @@ URL_PART_REMOVED = "[removed]"
 
 class Secret(NamedTuple):
     """One kind of key. Every match holds one of the literals, so a text with none of them
-    needs no regex pass. lowercase: the literal is looked for in the text in lower case."""
+    needs no regex pass. lowercase: the literal is looked for in the text in lower case.
+    name is what a message calls the rule."""
 
     pattern: str
     literals: tuple[str, ...]
     lowercase: bool = False
+    name: str = ""
 
 
 # A form-encoded or keyword field: password, token, secret, secret_access_key or api_key,
@@ -78,29 +80,34 @@ LABELS = ("name", "key", "header", "field")
 
 SECRETS = (
     # OpenAI and Anthropic keys
-    Secret(r"sk-(?:proj-|ant-|svcacct-)?[A-Za-z0-9_-]{16,}", ("sk-",)),
+    Secret(r"sk-(?:proj-|ant-|svcacct-)?[A-Za-z0-9_-]{16,}", ("sk-",), name="openai-key"),
     # AWS access key ids, long-term and temporary
-    Secret(r"(?:AKIA|ASIA)[0-9A-Z]{16}", ("AKIA", "ASIA")),
+    Secret(r"(?:AKIA|ASIA)[0-9A-Z]{16}", ("AKIA", "ASIA"), name="aws-access-key"),
     # Google API keys
-    Secret(r"AIza[0-9A-Za-z_-]{35}", ("AIza",)),
+    Secret(r"AIza[0-9A-Za-z_-]{35}", ("AIza",), name="google-api-key"),
     # GitHub tokens
-    Secret(r"gh[pousr]_[A-Za-z0-9]{36,}", ("ghp_", "gho_", "ghu_", "ghs_", "ghr_")),
+    Secret(
+        r"gh[pousr]_[A-Za-z0-9]{36,}", ("ghp_", "gho_", "ghu_", "ghs_", "ghr_"), name="github-token"
+    ),
     # GitHub fine-grained tokens
-    Secret(r"github_pat_[A-Za-z0-9_]{22,}", ("github_pat_",)),
+    Secret(r"github_pat_[A-Za-z0-9_]{22,}", ("github_pat_",), name="github-token"),
     # Slack tokens, refresh tokens too
-    Secret(r"(?:xoxe\.)?xox[abeprs]-[A-Za-z0-9-]{10,}", ("xox",)),
+    Secret(r"(?:xoxe\.)?xox[abeprs]-[A-Za-z0-9-]{10,}", ("xox",), name="slack-token"),
     # Slack app-level tokens
-    Secret(r"xapp-[A-Za-z0-9-]{10,}", ("xapp-",)),
+    Secret(r"xapp-[A-Za-z0-9-]{10,}", ("xapp-",), name="slack-token"),
     # bearer tokens
-    Secret(r"(?i:bearer)\s+[A-Za-z0-9._~+/=-]{16,}", ("bearer",), lowercase=True),
-    Secret(BASIC, ("authorization",), lowercase=True),
+    Secret(
+        r"(?i:bearer)\s+[A-Za-z0-9._~+/=-]{16,}", ("bearer",), lowercase=True, name="bearer-token"
+    ),
+    Secret(BASIC, ("authorization",), lowercase=True, name="basic-credential"),
     Secret(
         FORM,
         ("password", "passwd", "token", "secret", "api_key", "api%5fkey", "pgpass", "mysql_pwd"),
         True,
+        "form-field",
     ),
     # h11 quotes the bad header
-    Secret(r"Illegal header (?:name|value) .*", ("Illegal header",)),
+    Secret(r"Illegal header (?:name|value) .*", ("Illegal header",), name="header-text"),
 )
 PATTERNS = re.compile("|".join(secret.pattern for secret in SECRETS))
 LITERALS = tuple(lit for secret in SECRETS if not secret.lowercase for lit in secret.literals)
@@ -159,13 +166,18 @@ def code_value(found: re.Match[str]) -> bool:
     return named_call and "." not in name
 
 
+def kept_as_is(found: re.Match[str]) -> bool:
+    """A match the rules find and leave: a harmless name such as next_page_token, or code."""
+    return HARMLESS_NAME.match(found.group()) is not None or code_value(found)
+
+
 def remove_keys(text: str) -> tuple[str, int]:
     """The text with every key shape replaced, and how many were."""
     count = 0
 
     def replace(found: re.Match[str]) -> str:
         nonlocal count
-        if HARMLESS_NAME.match(found.group()) or code_value(found):
+        if kept_as_is(found):
             return found.group()
         count += 1
         return REMOVED
@@ -380,3 +392,101 @@ def redacted(text: str) -> tuple[str, int]:
 
 def redact(text: str) -> str:
     return redacted(text)[0]
+
+
+class Replacement(NamedTuple):
+    """One place the rules change a text: where it was, which rule, and what the record has."""
+
+    start: int
+    end: int
+    rule: str
+    text: str
+
+
+class Piece(NamedTuple):
+    """A part of the text as the rules have left it so far. An unmodified part is the
+    original from start to end; a replaced one has the rule that did it."""
+
+    text: str
+    start: int
+    end: int
+    rule: str | None
+
+
+def cut(pieces: list[Piece], at: int) -> list[Piece]:
+    """The pieces with a boundary at this position, which is in the text as it is now. An
+    unmodified piece is split there; a replaced piece cannot be, and stays whole."""
+    pos = 0
+    for i, piece in enumerate(pieces):
+        end = pos + len(piece.text)
+        if pos < at < end and piece.rule is None:
+            k = at - pos
+            low = Piece(piece.text[:k], piece.start, piece.start + k, None)
+            high = Piece(piece.text[k:], piece.start + k, piece.end, None)
+            return [*pieces[:i], low, high, *pieces[i + 1 :]]
+        pos = end
+    return pieces
+
+
+def replace_place(pieces: list[Piece], a: int, b: int, text: str, rule: str) -> list[Piece]:
+    """Replace [a, b) of the text as it is now. A replaced piece the match only touches is
+    taken whole: what it has outside the match stays beside the new text, and the place is
+    the whole of what it came from."""
+    pieces = cut(cut(pieces, a), b)
+    starts: list[int] = []
+    pos = 0
+    for piece in pieces:
+        starts.append(pos)
+        pos += len(piece.text)
+    inside = [i for i, p in enumerate(pieces) if starts[i] < b and starts[i] + len(p.text) > a]
+    first, last = inside[0], inside[-1]
+    head = pieces[first].text[: max(a - starts[first], 0)]
+    tail = pieces[last].text[max(b - starts[last], 0) :]
+    named = next((pieces[i].rule for i in inside if pieces[i].rule is not None), None)
+    place = Piece(head + text + tail, pieces[first].start, pieces[last].end, named or rule)
+    return [*pieces[:first], place, *pieces[last + 1 :]]
+
+
+def secret_rule(found: str) -> str:
+    """Which key a matched text is. The combined pattern takes the first that matches at a
+    place, so the first whose own pattern matches the whole text is the one."""
+    for secret in SECRETS:
+        if re.fullmatch(secret.pattern, found):
+            return secret.name
+    return "secret"
+
+
+def replacements(text: str) -> list[Replacement]:
+    """Every place redact changes the text, in the text as given, each with its rule's name.
+
+    redact runs its rules one after another, each on what the one before left, so a later
+    match can sit on an earlier replacement. It is then one place here, and its text is
+    what the rules left there.
+    """
+    text = str.__str__(text)
+    if holds_candidate(text):
+        # A JSON text is read and written back as a whole, so what changes in it is not a
+        # place in the text. The whole text is one place: an edit to it is refused, as an
+        # edit that touches a removed span is.
+        read = structural(text)
+        if read is not None:
+            return [Replacement(0, len(text), "json", read[0])] if read[0] != text else []
+    pieces = [Piece(text, 0, len(text), None)]
+    passes: list[tuple[re.Pattern[str], Callable[[re.Match[str]], tuple[str, str]]]] = [
+        (URL, lambda m: (plain_url(m), "url")),
+        (JWT, lambda m: (no_jwt(m), "jwt")),
+        (PATTERNS, lambda m: (m.group() if kept_as_is(m) else REMOVED, secret_rule(m.group()))),
+    ]
+    for pattern, make in passes:
+        now = "".join(piece.text for piece in pieces)
+        found = [(m.start(), m.end(), *make(m)) for m in pattern.finditer(now)]
+        # Last first, so a place already made does not move the ones before it.
+        for a, b, new, rule in reversed(found):
+            if new != now[a:b]:
+                pieces = replace_place(pieces, a, b, new, rule)
+    return [Replacement(p.start, p.end, p.rule, p.text) for p in pieces if p.rule is not None]
+
+
+def spans(text: str) -> list[tuple[int, int, str]]:
+    """Each place redact would change the text, as (start, end, rule name)."""
+    return [(r.start, r.end, r.rule) for r in replacements(text)]

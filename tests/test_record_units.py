@@ -8,7 +8,7 @@ from typing import cast
 import pytest
 
 from scrimmage_core import config as settings
-from scrimmage_core import record, state
+from scrimmage_core import record, state, toml_write
 from scrimmage_core.judge import RunJudgement
 from scrimmage_core.plan import Row
 from scrimmage_core.runner import RunResult
@@ -77,18 +77,24 @@ def test_a_model_call_is_never_written_and_its_tool_is_never_mocked_whole(
 ) -> None:
     config = loaded(tmp_path)
     test = config.tests[1]
-    recorder = record.Recorder(test, result_for(test), tmp_path)
+    result = result_for(test)
+    recorder = record.Recorder(test, [result], tmp_path)
     found = recorder.run(
         [
-            line(
-                call="tool:helper",
-                kind="tool",
-                action="real",
-                call_id=2,
-                recorded={"code": "x", "why": "y"},
-            ),
-            line(call=label, kind="model", action="real", call_id=3, parent=2),
-            line(call=label, kind="model", action="real", call_id=4),
+            (
+                result,
+                [
+                    line(
+                        call="tool:helper",
+                        kind="tool",
+                        action="real",
+                        call_id=2,
+                        recorded={"code": "x", "why": "y"},
+                    ),
+                    line(call=label, kind="model", action="real", call_id=3, parent=2),
+                    line(call=label, kind="model", action="real", call_id=4),
+                ],
+            )
         ],
         [],
     )
@@ -122,7 +128,7 @@ def test_refresh_takes_out_the_mock_and_its_comment_and_keeps_everything_else(
     plan, problems = record.prepare(config, [], ["tool:get_order"])
     assert plan is not None and not problems
     tests = plan.config.tests
-    records = [record.TestRecord(test, result_for(test)) for test in tests]
+    records = [record.TestRecord(test, [result_for(test)]) for test in tests]
     saved = record.Saved(
         ("tool:get_order", "{}"),
         {"call": "tool:get_order", "recorded": True, "args": {}, "returns": {"id": "new"}},
@@ -164,7 +170,7 @@ def test_a_test_line_inside_a_multi_line_string_is_refused_by_the_read_back(
     config = loaded(tmp_path, text)
     plan, _ = record.prepare(config, [], [])
     assert plan is not None
-    records = [record.TestRecord(test, result_for(test)) for test in plan.config.tests]
+    records = [record.TestRecord(test, [result_for(test)]) for test in plan.config.tests]
     saved = record.Saved(
         ("tool:get_order", "{}"),
         {"call": "tool:get_order", "recorded": True, "args": {}, "returns": "x"},
@@ -198,7 +204,7 @@ def test_a_run_another_run_stopped_is_not_an_infrastructure_error(tmp_path: Path
     config = loaded(tmp_path)
     test = config.tests[1]
     result = dataclasses.replace(result_for(test), outcome="stopped")
-    found = record.TestRecord(test, result, trouble="another run stopped this one")
+    found = record.TestRecord(test, [result], trouble="another run stopped this one")
     messages: list[tuple[str, str]] = []
     assert record.test_code(found, messages) == 0
     assert [kind for kind, _ in messages] == ["notes"]
@@ -230,3 +236,87 @@ def test_a_call_waits_for_room_only_while_recording_and_only_up_to_the_bound(
     monkeypatch.setattr(state, "BLOB_WAIT_S", 0.0)
     never = Full(10**9)
     assert state.handed_over(cast(state.BlobSink, never), "s", b"", wait=True) is False
+
+
+def stray(call: str, **more: object) -> dict[str, object]:
+    return line(call=call, kind="tool", action="real", call_id=1, **more)
+
+
+@pytest.mark.design("record.runs_merge")
+def test_trees_are_built_per_run_so_call_ids_never_cross_runs(tmp_path: Path) -> None:
+    test = loaded(tmp_path).tests[1]
+    first = result_for(test)
+    second = dataclasses.replace(first, run="run-2")
+    child = line(call="http:localhost", kind="http", action="real", call_id=2, parent=1)
+    done = {"code": "x", "why": "y"}
+    recorder = record.Recorder(test, [first, second], tmp_path)
+    recorder.run(
+        [
+            (first, [stray("tool:a", recorded=done), child]),
+            (second, [stray("tool:b", recorded=done), child]),
+        ],
+        [],
+    )
+    tools = [n for n in recorder.nodes.values() if n.kind == "tool"]
+    assert [(n.label, [c.run for c in n.children]) for n in tools] == [
+        ("tool:a", [0]),
+        ("tool:b", [1]),
+    ]
+
+
+def written_mock(call: str, args: dict[str, object]) -> record.Written:
+    fields: dict[str, object] = {"call": call, "recorded": True, "args": args, "returns": 1}
+    return record.Written(record.Saved((call, str(args)), fields, "1", call), 1)
+
+
+def splice(tmp_path: Path, text: str, mocks: list[record.Written]) -> str:
+    config = loaded(tmp_path, text)
+    plan, problems = record.prepare(config, [], [])
+    assert plan is not None, problems
+    records = [
+        record.TestRecord(test, [result_for(test)], written=mocks if i == 0 else [])
+        for i, test in enumerate(plan.config.tests)
+    ]
+    built = [record.block_text(found, "2026-11-10") for found in records]
+    return record.spliced(text, plan, records, built, "2026-11-10", "scrimmage.toml")[0]
+
+
+@pytest.mark.design("record.runs_identity")
+def test_record_never_writes_a_file_check_rejects(tmp_path: Path) -> None:
+    # tool:other has a mock with no args, which answers every call: nothing below it ever does.
+    with pytest.raises(toml_write.WriterBug, match="can never answer"):
+        splice(tmp_path, FILE, [written_mock("tool:other", {"x": 1})])
+    assert splice(tmp_path, FILE, [written_mock("tool:fresh", {"id": 1})])  # a legal splice
+
+
+@pytest.mark.design("record.runs_identity")
+def test_a_written_mock_equal_to_a_kept_one_is_a_bug_and_nothing_is_written(
+    tmp_path: Path,
+) -> None:
+    kept = FILE.replace(
+        'returns = {id = "old"}', 'args = {id = 1}\nrecorded = true\nreturns = {id = "old"}'
+    )
+    with pytest.raises(toml_write.WriterBug, match="answer the same call"):
+        splice(tmp_path, kept, [written_mock("tool:get_order", {"id": 1})])
+    assert splice(tmp_path, kept, [written_mock("tool:get_order", {"id": 1.0})])  # told apart
+
+
+@pytest.mark.design("record.carried_never_recordable")
+def test_a_changed_line_is_never_recordable(tmp_path: Path) -> None:
+    config = loaded(tmp_path)
+    test = config.tests[0]
+    recorder = record.Recorder(test, [result_for(test)], tmp_path)
+    real = record.Node(line(call="tool:get_order", kind="tool", action="real"))
+    changed = record.Node(
+        line(call="tool:get_order", kind="tool", action="fault", under="real", changed={})
+    )
+    slowed = record.Node(line(call="tool:get_order", kind="tool", action="fault", under="real"))
+    assert recorder.recordable(real)
+    assert not recorder.recordable(changed)
+    assert not recorder.recordable(slowed)
+    # A web or MCP call beneath a carried fault is no more recordable than a tool.
+    web = record.Node(line(call="http:a.acme", kind="http", action="fault", under="real"))
+    mcp = record.Node(
+        line(call="mcp:a/b", kind="mcp", action="fault", under="real", recorded={"value": 1})
+    )
+    assert not recorder.recordable(web) and not recorder.recordable(mcp)

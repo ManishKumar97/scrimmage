@@ -93,6 +93,30 @@ type = "forbidden"
 source_modules = ["scrimmage"]
 forbidden_modules = ["scrimmage_core"]
 
+[[tool.importlinter.contracts]]
+name = "Reading a finished test starts nothing and opens no socket"
+type = "forbidden"
+source_modules = [
+    "scrimmage_core.show",
+    "scrimmage_core.compare",
+    "scrimmage_core.results",
+    "scrimmage_core.render",
+    "scrimmage_core.suggest",
+]
+forbidden_modules = [
+    "scrimmage_core.runner",
+    "scrimmage_core.state",
+    "scrimmage_core.http_gate",
+    "scrimmage_core.control",
+    "scrimmage_core.client",
+    "urllib",
+    "http",
+    "socket",
+    "ssl",
+    "subprocess",
+    "multiprocessing",
+]
+
 [tool.coverage.run]
 branch = true
 # The marker package is still empty; it is measured from the slice that builds it.

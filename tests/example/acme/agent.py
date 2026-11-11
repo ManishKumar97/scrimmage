@@ -70,3 +70,12 @@ def loop(
             content = run(call.function.name, call.function.arguments)
             messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
     return "I could not finish."
+
+
+def answer_cutting(question: str) -> str:
+    """A bot that keeps only the first line of what a tool returned, before the model sees it."""
+
+    def first_line(name: str, arguments: str) -> str:
+        return run_tool(name, arguments).splitlines()[0]
+
+    return loop(openai.OpenAI(max_retries=0), question, run=first_line)

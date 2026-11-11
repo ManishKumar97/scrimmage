@@ -7,7 +7,9 @@ conversation, and a retry of a request gets the same reply as its first attempt.
 
 A fixture name may start with a status, such as "429:error_429", for a real error
 reply. "a|b" serves a, or b to a conversation where a tool failed, as a model would
-change its answer. A ".sse" fixture is sent as a stream of server-sent events. Embeddings and the
+change its answer. "a@b" serves a, or b to a conversation where a tool result holds
+a note addressed to the assistant, as a model that obeys one would answer.
+A ".sse" fixture is sent as a stream of server-sent events. Embeddings and the
 Responses API each have one fixture of their own. A request it has no reply for gets an
 error, and the error is kept, so a test cannot pass by accident. This is test support
 code; it is never in a wheel.
@@ -27,6 +29,8 @@ RESPONSES_PATH = "/v1/responses"
 
 class Reply:
     def __init__(self, name: str) -> None:
+        name, _, after_note = name.partition("@")
+        self.after_note = Reply(after_note) if after_note else None
         name, _, after_failure = name.partition("|")
         self.after_failure = Reply(after_failure) if after_failure else None
         status, _, fixture = name.rpartition(":")
@@ -47,6 +51,15 @@ class Reply:
 def tool_failed(request: dict[str, Any]) -> bool:
     tools = [m for m in request.get("messages", []) if m.get("role") == "tool"]
     return any(str(m.get("content")).lower().startswith("error") for m in tools)
+
+
+NOTE_MARKER = "note to the assistant"
+
+
+def note_followed(request: dict[str, Any]) -> bool:
+    """A tool result holds a note addressed to the assistant, which an obedient model follows."""
+    tools = [m for m in request.get("messages", []) if m.get("role") == "tool"]
+    return any(NOTE_MARKER in str(m.get("content")).lower() for m in tools)
 
 
 class FakeOpenAI:
@@ -109,6 +122,8 @@ class FakeOpenAI:
                 return self._error(f"no fixture serves {path}")
             self.requests.append(request)
             self._used.add(reply.name)
+            if reply.after_note and note_followed(request):
+                return reply.after_note
             return reply.after_failure if reply.after_failure and tool_failed(request) else reply
 
     def _error(self, error: str) -> str:

@@ -10,13 +10,16 @@ import argparse
 import json
 import signal
 import sys
+import threading
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, TextIO
 
+from scrimmage_core import compare as comparing
 from scrimmage_core import config as settings
 from scrimmage_core import entry
 from scrimmage_core import plan as planner
+from scrimmage_core import results as results_file
 from scrimmage_core.errors import ConfigError
 from scrimmage_core.outcomes import (
     INFRA,
@@ -29,6 +32,7 @@ from scrimmage_core.outcomes import (
     WARNINGS,
     plural,
 )
+from scrimmage_core.render import plain
 
 if TYPE_CHECKING:
     from scrimmage_core.runner import Runner
@@ -48,6 +52,7 @@ STATUS = {
         INFRA: "infra",
     },
     "init": {OK: "written", MISTAKE: "mistake", INFRA: "infra"},
+    "show": {OK: "shown", MISTAKE: "mistake", INFRA: "infra"},
 }
 # With --json these stop the command with a document, wherever they arrive. The runner sets
 # its own handlers while runs go, and puts these back when they end.
@@ -74,17 +79,24 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
         "check", help="check scrimmage.toml without running anything", allow_abbrev=False
     )
     record = commands.add_parser(
-        "record", help="run each test once and write its calls as mocks", allow_abbrev=False
+        "record", help="run each test's baseline and write its calls as mocks", allow_abbrev=False
     )
     for command in (test, check, record):
         command.add_argument("path", nargs="?", default="scrimmage.toml", type=Path)
         command.add_argument("--json", action="store_true", help="print one JSON document")
+    test.add_argument(
+        "--compare",
+        type=Path,
+        metavar="EARLIER",
+        help="compare this test with an earlier records folder or its result.json",
+    )
     record.add_argument(
         "--test", action="append", default=[], metavar="NAME", help="record only this test"
     )
     record.add_argument(
         "--refresh", action="append", default=[], metavar="LABEL", help="record this label again"
     )
+    record.add_argument("--runs", default="1", metavar="N", help="run each test's baseline N times")
     commands.add_parser("schema", help="print the JSON Schema of scrimmage.toml")
     init = commands.add_parser(
         "init", help="draft a scrimmage.toml by reading the code", allow_abbrev=False
@@ -97,9 +109,23 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
         help="run this function up to its first model request, to read the tools it offers",
     )
     init.add_argument("--json", action="store_true", help="print one JSON document")
+    show = commands.add_parser(
+        "show", help="say what happened in a finished test", allow_abbrev=False
+    )
+    show.add_argument("target", nargs="?", type=Path, help="a records folder or its result.json")
+    show.add_argument("--run", metavar="RUN", help="show only this run, such as run-3f9a1c40b2e1")
+    show.add_argument(
+        "--compare",
+        type=Path,
+        metavar="EARLIER",
+        help="compare with an earlier records folder or its result.json",
+    )
+    show.add_argument("--json", action="store_true", help="print one JSON document")
     args = parser.parse_args(argv)
     if args.command == "init":
         return init_command(args, process)
+    if args.command == "show":
+        return show_command(args, process)
     if args.command == "schema":
         sys.stdout.write((SCHEMAS / "scrimmage-toml.v1.json").read_text())
         return OK
@@ -112,13 +138,18 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
 def chosen_command(args: argparse.Namespace) -> Callable[[Path, Found | None], int]:
     """The function that runs this command, with a command's own flags already bound."""
     if args.command == "test":
-        return run_test
+        compare = args.compare
+
+        def test(path: Path, found: Found | None) -> int:
+            return run_test(path, found, compare)
+
+        return test
     if args.command == "check":
         return run_check
-    names, refresh = list(args.test), list(args.refresh)
+    names, refresh, runs = list(args.test), list(args.refresh), str(args.runs)
 
     def record(path: Path, found: Found | None) -> int:
-        return run_record(path, found, names, refresh)
+        return run_record(path, found, names, refresh, runs)
 
     return record
 
@@ -129,9 +160,15 @@ def settle() -> None:
     A signal noted after the last stop point is dropped with it, so a later call in the
     same process does not start stopped.
     """
-    for sig in STOP_SIGNALS:
-        signal.signal(sig, signal.SIG_IGN)
+    if on_main_thread():
+        for sig in STOP_SIGNALS:
+            signal.signal(sig, signal.SIG_IGN)
     entry.pending.clear()
+
+
+def on_main_thread() -> bool:
+    """Only the main thread can set a signal handler; from another thread none is set."""
+    return threading.current_thread() is threading.main_thread()
 
 
 # With --json, a signal is noted, as while Scrimmage loads, and acted on at the next stop point.
@@ -150,11 +187,13 @@ def as_json(
     """Run a command for --json: one document on standard output, whatever happens."""
     version = scrimmage_version()
     found = Found(command, str(path))
-    previous = {sig: signal.getsignal(sig) for sig in STOP_SIGNALS}
+    handled = on_main_thread()
+    previous = {sig: signal.getsignal(sig) for sig in STOP_SIGNALS} if handled else {}
     try:
         try:
-            for sig in STOP_SIGNALS:
-                signal.signal(sig, stop)
+            if handled:
+                for sig in STOP_SIGNALS:
+                    signal.signal(sig, stop)
             stop_point()  # a signal that came while Scrimmage was still loading
             code = run(path, found)
             stop_point()  # one that came after the last stop point inside the command
@@ -197,6 +236,8 @@ def empty_test() -> dict[str, object]:
         "cost_usd": 0.0,
         "budget_usd": None,
         "stopped_by": None,
+        "result_file": None,
+        "compare": None,
     }
 
 
@@ -214,6 +255,10 @@ def empty_record() -> dict[str, object]:
     }
 
 
+def empty_show() -> dict[str, object]:
+    return {"records": None, "result": None, "runs": [], "compare": None}
+
+
 def empty_init() -> dict[str, object]:
     from scrimmage_core import init as drafting  # init brings the runner, for its probe
 
@@ -226,6 +271,7 @@ EMPTY_FIELDS = {
     "check": empty_check,
     "record": empty_record,
     "init": empty_init,
+    "show": empty_show,
 }
 
 
@@ -291,7 +337,7 @@ def read(path: Path) -> tuple[settings.Config | None, list[str]]:
 
 def say(problems: list[str], err: TextIO) -> None:
     for problem in problems:
-        print(f"scrimmage: {problem}", file=err)
+        print(plain(f"scrimmage: {problem}"), file=err)
 
 
 def unreadable(command: str, exc: Exception, found: Found | None) -> int:
@@ -305,7 +351,7 @@ def unreadable(command: str, exc: Exception, found: Found | None) -> int:
     return INFRA
 
 
-def run_test(path: Path, found: Found | None) -> int:
+def run_test(path: Path, found: Found | None, compare: Path | None = None) -> int:
     from scrimmage_core import runner as running  # the heavy import waits until a test runs
 
     try:
@@ -314,12 +360,12 @@ def run_test(path: Path, found: Found | None) -> int:
         return unreadable("test", exc, found)
     stop_point()
     if config is None:
-        if found is None:
-            say(problems, sys.stderr)
-            print("scrimmage: the test stopped before the first run", file=sys.stderr)
-        else:
-            found.messages += [(MISTAKES, problem) for problem in problems]
-        return MISTAKE
+        return test_mistakes(problems, found)
+    earlier: dict[str, object] | None = None
+    if compare is not None:  # before any run, so a bad EARLIER costs nothing
+        earlier, problems = read_earlier(compare)
+        if earlier is None:
+            return test_mistakes(problems, found)
     runner: Runner | None = None
     results: list[running.RunResult] = []
     stopped: str | None = None
@@ -341,18 +387,110 @@ def run_test(path: Path, found: Found | None) -> int:
     if stopped is not None:
         if found is None:
             print(f"scrimmage: {stopped}", file=sys.stderr)
+            if compare is not None:
+                print(f"scrimmage: {NOT_FINISHED}", file=sys.stderr)
             return INFRA
+        if compare is not None:
+            found.messages.append((NOTES, NOT_FINISHED))
         return found.fail(stopped)
     assert runner is not None
     report = running.build_report(config, results, runner.folder, runner)
+    stop_point()  # a signal that came while the report was built: no file is written
+    fields = {**running.report_json(report), "compare": None}
+    version = scrimmage_version()
+    doc = document("test", report.code, str(path), report.every_message, version, **fields)
+    # A test the budget or a bad label stopped has rows with fewer runs than planned: it is not
+    # a result to keep or to compare with.
+    finished = report.stopped_by is None
+    written, warning = save_result(runner.folder, doc) if finished else (None, None)
     if found is None:
-        return running.print_report(report, sys.stdout)
+        if warning is not None:
+            print(f"scrimmage: warning: {warning}", file=sys.stderr)
+        code = running.print_report(report, sys.stdout)
+        if compare is not None:
+            say_comparison(earlier, doc, compare, finished, None)
+        return code
+    settle()  # the file is written, so no signal may change the code the document states
     found.messages += report.every_message
-    found.fields.update(running.report_json(report))
+    if warning is not None:
+        found.messages.append((WARNINGS, warning))
+    found.fields.clear()  # the report's fields in their own order, so the file matches them
+    found.fields.update(fields, result_file=None if written is None else str(written))
+    if compare is not None:
+        found.fields["compare"] = say_comparison(earlier, doc, compare, finished, found)
     return report.code
 
 
-def run_record(path: Path, found: Found | None, names: list[str], refresh: list[str]) -> int:
+NOT_FINISHED = "the test did not finish, so it has no result to compare"
+
+
+def test_mistakes(problems: list[str], found: Found | None) -> int:
+    if found is None:
+        say(problems, sys.stderr)
+        print("scrimmage: the test stopped before the first run", file=sys.stderr)
+    else:
+        found.messages += [(MISTAKES, problem) for problem in problems]
+    return MISTAKE
+
+
+def read_earlier(path: Path) -> tuple[dict[str, object] | None, list[str]]:
+    """The earlier result named by --compare, or why it cannot be compared with."""
+    doc, problems = results_file.read(path)
+    if doc is None:
+        return None, problems
+    problems = comparing.problems_with(doc, "earlier")
+    return (None, problems) if problems else (doc, [])
+
+
+def say_comparison(
+    earlier: dict[str, object] | None,
+    later: dict[str, object],
+    path: Path,
+    finished: bool,
+    found: Found | None,
+) -> dict[str, object] | None:
+    """The comparison of two results: printed in the text form, returned for --json."""
+    if earlier is None or not finished:
+        if found is None:
+            print(f"scrimmage: {NOT_FINISHED}", file=sys.stderr)
+        else:
+            found.messages.append((NOTES, NOT_FINISHED))
+        return None
+    try:
+        compared = comparing.document(str(path), earlier, comparing.rows(earlier, later))
+    except Exception as exc:  # the test ran and has its result: a comparison never changes that
+        message = f"the comparison could not be made: {exc!r}"
+        if found is None:
+            print(f"scrimmage: warning: {message}", file=sys.stderr)
+        else:
+            found.messages.append((WARNINGS, message))
+        return None
+    if found is None:
+        for line in comparing.text(compared):
+            print(plain(line))
+    return compared
+
+
+def save_result(folder: Path, doc: dict[str, object]) -> tuple[Path | None, str | None]:
+    """result.json in the records folder: the document --json prints, but for result_file.
+
+    A write that fails is a warning and changes no exit code. Ctrl-C while it is written, in the
+    text form, removes the half file and goes on up the stack.
+    """
+    try:
+        return results_file.write(folder, doc), None
+    except (
+        OSError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        why = exc.strerror if isinstance(exc, OSError) and exc.strerror else repr(exc)
+        return None, f"{results_file.RESULT_FILE} was not written: {why}"
+
+
+def run_record(
+    path: Path, found: Found | None, names: list[str], refresh: list[str], runs: str = "1"
+) -> int:
     """One real baseline run per test, its real calls written as mocks beside the team's file."""
     from scrimmage_core import record as recording
     from scrimmage_core import runner as running
@@ -364,9 +502,11 @@ def run_record(path: Path, found: Found | None, names: list[str], refresh: list[
     stop_point()
     if config is None:
         return record_mistakes(problems, found)
-    plan, problems = recording.prepare(config, names, refresh)
+    plan, problems = recording.prepare(config, names, refresh, runs)
     if plan is None:
         return record_mistakes(problems, found)
+    if (before := recording.before_runs(plan.config)) is not None:
+        print(f"scrimmage record: {before}", file=sys.stderr if found else sys.stdout, flush=True)
     runner: Runner | None = None
     results: list[running.RunResult] = []
     stopped: str | None = None
@@ -467,6 +607,57 @@ def init_command(args: argparse.Namespace, process: bool) -> int:
         return run_init(folder, path, probe, found)
 
     return as_json("init", out, run, process) if args.json else run(out, None)
+
+
+def show_command(args: argparse.Namespace, process: bool) -> int:
+    target, run_id, compare = args.target, args.run, args.compare
+
+    def run(path: Path, found: Found | None) -> int:
+        del path
+        return run_show(target, run_id, compare, found)
+
+    shown_path = target if target is not None else Path()
+    return as_json("show", shown_path, run, process) if args.json else run(shown_path, None)
+
+
+def run_show(
+    target: Path | None, run_id: str | None, compare: Path | None, found: Found | None
+) -> int:
+    """What happened in a finished test, read from its records folder. It runs nothing."""
+    from scrimmage_core import show as showing
+
+    shown = showing.build(target, run_id, Path.cwd())
+    if found is not None and target is None and shown.records is not None:
+        found.path = str(shown.records)  # config says the folder chosen
+    compared: dict[str, object] | None = None
+    if compare is not None and not shown.mistakes:
+        earlier, problems = read_earlier(compare)
+        if earlier is None:
+            shown.mistakes += problems
+        elif shown.result is None:
+            shown.mistakes.append(f"{shown.records}: has no {results_file.RESULT_FILE} to compare")
+        else:
+            compared = comparing.document(
+                str(compare), earlier, comparing.rows(earlier, shown.result)
+            )
+    if shown.mistakes:
+        shown.code = MISTAKE
+    if found is not None:
+        found.fields.update(shown.fields, compare=compared)
+        found.messages += [(MISTAKES, m) for m in shown.mistakes]
+        found.messages += [(NOTES, n) for n in shown.notes]
+        return shown.code
+    if shown.mistakes:
+        say(shown.mistakes, sys.stderr)
+        return shown.code
+    for line in shown.text:
+        print(plain(line))
+    for note in shown.notes:
+        print(plain(f"note: {note}"))
+    if compared is not None:
+        for line in comparing.text(compared):
+            print(plain(line))
+    return shown.code
 
 
 def run_init(folder: Path, out: Path, probe: str | None, found: Found | None) -> int:

@@ -99,5 +99,6 @@ def refuse(run: RunState, python: str, argv: list[str], why: str) -> None:
         "real if it is safe."
     )
     error = run.refusal(run.refuse(step, "blind_child"), detail)
+    step.extra["by_config"] = True  # the test's setup caused this refusal, not the agent
     run.finish(step, error=error, mistake=str(error))
     raise error

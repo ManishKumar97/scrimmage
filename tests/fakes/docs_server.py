@@ -9,7 +9,7 @@ call never arrived. The mode is how its tools really behave: ok, fail, wrong, em
 import sys
 import time
 from pathlib import Path
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import (
@@ -25,6 +25,11 @@ from mcp.types import (
 class Hits(TypedDict):
     hits: list[str]
     total: int
+
+
+class Ticket(TypedDict):
+    status: Literal["open", "closed"]
+    note: str
 
 
 def serve(transport: str, name: str, log: str, mode: str, port: int = 0) -> None:
@@ -86,6 +91,11 @@ def serve(transport: str, name: str, log: str, mode: str, port: int = 0) -> None
     def title(q: str) -> str:
         received("title", q)
         return f"real title {q}"
+
+    @server.tool()
+    def ticket(q: str) -> Ticket:
+        received("ticket", q)
+        return {"status": "open", "note": f"real ticket {q}"}
 
     @server.tool(structured_output=False)
     def delete_doc(doc: str) -> str:

@@ -1,18 +1,18 @@
 # Recording replies
 
-`scrimmage record` runs each test once and writes what your real services answered as mocks, so you stop writing them by hand.
+`scrimmage record` runs each test's baseline, once or several times, and writes what your real services answered as mocks, so you stop writing them by hand.
 It never changes your file. It writes a copy beside it, `scrimmage.recorded.toml`, and shows you the diff.
 
 ## What it does
 
-1. Runs each test's baseline once, with the test's own mocks and nothing injected. Fault rows do not run.
+1. Runs each test's baseline once, or `--runs N` times, with the test's own mocks and nothing injected. Fault rows do not run.
 2. Writes each call that ran for real as a mock with `recorded = true`.
 3. Writes the copy, reads it back, and exits.
 
 Model calls run for real and cost money, within your budget, as in `scrimmage test`. They are never recorded: a scripted model reply would replace what the test exists to see.
 
 ```bash
-scrimmage record [path] [--test NAME] [--refresh LABEL] [--json]
+scrimmage record [path] [--test NAME] [--refresh LABEL] [--runs N] [--json]
 ```
 
 `--test NAME` records only that test, and can be given more than once. A name that is not in the file exits 2 before any run.
@@ -33,6 +33,77 @@ warning: the mocks hold replies from real systems, which can hold customer data;
 model calls cost $0.0012 of a budget of $5
 next: diff scrimmage.toml scrimmage.recorded.toml, then scrimmage test scrimmage.recorded.toml
 ```
+
+## Recording more than one run
+
+A model does not always send the same arguments.
+One run sees one form, and a later `scrimmage test` can send another, which misses the mock.
+`--runs N` runs each chosen test's baseline N times and writes one exact mock for each set of arguments the runs sent.
+It adds no matcher: `args` stays exact and type-strict, so `1`, `1.0`, `true` and `"1"` are four sets.
+
+```
+$ scrimmage record --runs 5
+scrimmage record: 5 runs of each of 1 test; each calls these for real: tool:check_inventory, tool:get_stock
+scrimmage record: 1 test, 5 runs each, 5 runs; records in scrimmage-runs/20261111T090000Z-1a2b3c
+order-status  5 of 5 answered  wrote 4, kept 2
+  run 1  run-28e4d3bcb0a2  answered  2 of 2 calls written
+  run 2  run-71c0aa9e4b10  answered  2 of 2 calls written
+arguments: order-status: tool:get_stock: 2 sets in 5 runs: {"sku": "SKU-42"} in 4, {"sku": "42"} in 1; each has its own mock
+model calls cost $0.0008 of a budget of $0.01, 5 runs
+```
+
+- **A run** is one baseline run of one test, as in `scrimmage test`. Three tests and `--runs 5` are 15 runs.
+- **The default is 1**, which is today's command, cost and output. The file's `runs` is for `scrimmage test` and is not read, so an unchanged `scrimmage record` never costs more.
+- **`N` is a whole number from 1 to 1000.** Anything else exits 2 before any run. The runner builds every row before it checks the budget, so the budget is not a cap on N.
+- **The budget covers every run of every test.** `max_cost_usd` is one cap for the whole command.
+- **Tools under `real` run N times.** The command names every label under `real` before the first run. With N above 1, no `max_cost_usd` and a label under `real`, it exits 2 before any run: N times an unbounded spend and N times every real call is too much to start by a flag alone. Set `max_cost_usd`, or record with `--runs 1`.
+- **Runs follow `[agent] parallel`**, as `scrimmage test` does, so they can overlap on the services under `real`. The file written does not depend on which run finished first: mocks are in the order of the runs as submitted.
+
+When the runs disagree, a mock answers only its own key and holds a reply some run got for exactly that key.
+
+| Case | What is written | Exit |
+|---|---|---|
+| Different arguments for one tool | One exact mock for each set | 0 |
+| A different tool order | The mocks of every call any run made. Order is not recorded | 0 |
+| A call seen in only some runs | Its mock. The comment and `--json` say in how many runs | 0 |
+| The same key, unequal replies | No mock. Listed `nondeterministic`, with a skeleton | 1 |
+| The same tool arguments succeeded in one run and failed in another | No mock. Listed `nondeterministic` | 1 |
+| A tool raised in one run and succeeded in another | No mock of the tool, and none of its web requests from any run | 1 |
+| A web request saved in one run and listed in another (a 503, a binary reply) | No mock from any run, the run that listed a call too. Listed `nondeterministic` | 1 |
+| A model call or credential request beneath a tool in one run only | No mock of that tool from any run. Its web requests follow their own rules | 1 if listed |
+| A refusal in one run | The refused call is listed. Every run's calls are written, the refused run's calls before the refusal too. The runs not yet started never start | 2 |
+| A run crashed or timed out | Its calls are written | 1 |
+| A run is an infrastructure error, or a Scrimmage bug was found | Nothing for the whole test | 3 |
+
+The cross-run web rule leaves out calls skipped as `outside_tool` or `credential`: those are not failures of the same request.
+A tool call listed with a code gets one skeleton for each set of arguments, so two sets listed with one code are two skeletons, each with its own `args` line.
+A call with clean arguments on a key that another run found a model call, a credential request or an unwritable call beneath is listed too, and its message names the runs it was made in.
+
+A test that a stop of the whole command cut short, with fewer runs than asked, writes nothing, and the text and `--json` say how many runs did not start.
+A stop on the budget writes nothing at all, and an earlier `scrimmage.recorded.toml` is kept byte for byte: some tests would look whole, and the old file's mocks would be lost to a half-done record.
+It exits 2, or 3 with an infrastructure error. Raise `max_cost_usd`, lower `--runs`, or record in batches with `--test`.
+This applies at N = 1 too: a budget stop used to write the calls made before the refusal.
+
+How many runs are enough depends on how often the model sends the rarer form.
+If it sends it in a fraction p of runs, here p = 0.25 as an example, the chance that N runs never see it is (1 - p) to the N:
+
+| N | Both forms seen | The rarer form never seen |
+|---|---|---|
+| 1 | 0 | 0.75 |
+| 3 | 0.56 | 0.42 |
+| 5 | 0.76 | 0.24 |
+| 10 | 0.94 | 0.06 |
+| 20 | 0.997 | 0.003 |
+
+So `--runs` makes a miss rarer. It cannot make one impossible: a form never seen while recording still misses, as [When a replay misses a mock](#when-a-replay-misses-a-mock) says.
+
+### A reply that changes with time
+
+Matching a reply is strict equality, and recording keeps it so: one reply is never frozen as if it were the only one.
+A tool whose reply holds the time changes in every run, such as `kubectl get pods` with its AGE column, a Prometheus query with sample timestamps, or a log tail.
+At N above 1 such a key is `nondeterministic` and gets no mock, where N = 1 would have written one. So more runs can write fewer mocks.
+The listing names the runs whose replies differed.
+For such a tool, record it with `--runs 1`, write its mock by hand, or leave it under `real`.
 
 ## What gets written
 
@@ -100,13 +171,13 @@ The report shows the arguments sent and the nearest mock.
 You can:
 
 1. Fix the tool description or the prompt, so the model sends one form.
-2. Add a second mock for the other value, by hand, or by running `scrimmage record` on the recorded file.
+2. Record more runs with `scrimmage record --runs N`, on your own file, so every form the model sends in those runs gets its own mock. Or add a second mock for the other value by hand.
 3. Remove `args`, so one reply answers any value.
 4. Remove the tool from `real`, so a miss stops the run.
 
 Recording again on the recorded file has limits.
 It writes to `<name>.recorded.recorded.toml`, as `record` writes `<stem>.recorded.toml`.
-It captures the other value only if the model sends it in that one run.
+It captures the other value only if the model sends it in that record's runs.
 It works only for a label under `real` by name: under `tool:*`, and for a label not listed, a miss is refused and nothing is written for that call.
 
 ## Exit codes
@@ -115,7 +186,7 @@ It works only for a label under `real` by name: under `tool:*`, and for a label 
 |---|---|
 | 0 | every call that needs a mock got one, and every run answered |
 | 1 | the file is written, and a call is listed by hand, or a run did not answer |
-| 2 | a mistake: the file, a refused call, an unseen tool, the budget, or a file layout record cannot extend |
+| 2 | a mistake: the file, `--runs`, a refused call, an unseen tool, the budget (which writes nothing), or a file layout record cannot extend |
 | 3 | an infrastructure error; nothing is written for a test whose record is incomplete, a bug in Scrimmage while it recorded, or Ctrl-C |
 
 A refused call is listed `refused`, the run's calls before it are written, and a note says the calls after it were not seen. A test with a call under `skipped` or `kept` is still `complete`.

@@ -10,6 +10,7 @@ from scrimmage_core.config import Fault, Mock
 from scrimmage_core.decide import Call, Counters, Decision, decide, fires, missed, names
 from scrimmage_core.labels import matches
 from scrimmage_core.plan import Plan
+from scrimmage_core.state import RunState
 
 GET_ORDER = Call("tool", "tool:get_order", "get_order")
 
@@ -372,3 +373,74 @@ def test_a_refused_call_with_no_mock_is_a_no_mock_miss() -> None:
     # with no mock that pins arguments in the plan, a refusal is the old refusal
     plain = make([MOCK])
     assert missed(stock, plain, decide(stock, plain, [])) is None
+
+
+APPEND = Fault("tool:get_order", "append", "always", text="x")
+
+
+def test_a_carried_fault_over_a_real_call_runs_it() -> None:
+    p = make(faults=[APPEND], real=["tool:get_order"])
+    decision = decide(GET_ORDER, p, Counters(p).note(GET_ORDER))
+    assert (decision.action, decision.under, decision.fault, decision.n) == ("fault", "real", 0, 1)
+    assert decision.mock is None
+    slow = make(faults=[Fault("tool:get_order", "slow 2s", "always")], real=["tool:*"])
+    assert decide(GET_ORDER, slow, [1]).under == "real"
+
+
+def test_a_carried_fault_over_a_mock_keeps_the_mock() -> None:
+    p = make([MOCK], [APPEND])
+    decision = decide(GET_ORDER, p, [1])
+    assert (decision.action, decision.under, decision.mock) == ("fault", "mock", 0)
+    # A fault that is not carried still replaces the call, with no mock beneath it.
+    other = decide(GET_ORDER, make([MOCK], [TIMEOUT]), [1])
+    assert (other.under, other.mock) == (None, None)
+
+
+def test_a_carried_fault_over_a_refused_call_is_refused_as_in_the_baseline() -> None:
+    p = make(faults=[APPEND], real=["tool:check_inventory"])
+    baseline = decide(GET_ORDER, make(real=["tool:check_inventory"]), [])
+    decision = decide(GET_ORDER, p, [1])
+    assert decision == baseline == Decision("refused", reason="unlisted")
+    # A mock with args that this call misses, and a name not listed, is the same refusal.
+    args = make([HAND], [APPEND])
+    assert decide(get_order_call({"order_id": "2"}), args, [1]).action == "refused"
+
+
+def test_a_carried_fault_never_lets_an_unlisted_web_write_run() -> None:
+    post = Call("http", "http:orders.acme.internal", "/refunds", None, "POST")
+    fault = Fault("http:orders.acme.internal", "append", "always", text="x")
+    p = make(faults=[fault])
+    assert decide(post, p, [1]) == Decision("refused", reason="web_write")
+    get = Call("http", "http:orders.acme.internal", "/orders/1", None, "GET")
+    assert decide(get, p, [1]).under == "real"
+    listed = make(faults=[fault], real=["http:orders.acme.internal POST"])
+    assert decide(post, listed, [1]).under == "real"
+
+
+def test_a_carried_fault_counts_its_calls_like_any_fault() -> None:
+    first = Fault("tool:get_order", "append", "first 2", text="x")
+    p = make(faults=[first], real=["tool:get_order"])
+    counters = Counters(p)
+    seen = [decide(GET_ORDER, p, counters.note(GET_ORDER)) for _ in range(3)]
+    assert [d.action for d in seen] == ["fault", "fault", "real"]
+    assert [d.n for d in seen] == [1, 2, 0]
+    # A refused call uses up its place too.
+    refused = make(faults=[first])
+    counters = Counters(refused)
+    decide(GET_ORDER, refused, counters.note(GET_ORDER))
+    assert counters.attempts == [1]
+
+
+def test_a_miss_under_a_carried_fault_keeps_its_evidence() -> None:
+    p = make([HAND], [APPEND], real=["tool:get_order"])
+    call = get_order_call({"order_id": "2"})
+    decision = decide(call, p, [1])
+    assert (decision.action, decision.under) == ("fault", "real")
+    assert missed(call, p, decision) is None  # the engine's own decision is a fault
+    found = RunState.found_miss(call, p, decision)
+    base = missed(call, make([HAND], real=["tool:get_order"]), Decision("real"))
+    assert found is not None and found == base
+    assert found.reason == "arguments" and found.differs == ("order_id",)
+    # A call a mock answers under a carried fault is not a miss.
+    same = get_order_call({"order_id": "1"})
+    assert RunState.found_miss(same, p, decide(same, p, [1])) is None

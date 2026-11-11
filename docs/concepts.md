@@ -61,6 +61,9 @@ If the tool returns its own type, Scrimmage builds that type from the mock:
 | `error` | a tool raises an error: `ToolException` under LangChain, `RuntimeError` in a hand-written loop, or the type named by `raises`; an MCP tool returns a failed result, as a real server does |
 | `timeout` | a tool raises `TimeoutError`; a model call, a web request or an MCP tool raises the library's own timeout error, as if the other side never answered |
 | `empty` | an MCP tool returns a result with no content |
+| `append` | the call happens, and the text of the fault is added at the end of what it returns |
+| `replace` | the call happens, and what it returns is replaced by the text of the fault, or the `find` text in it is |
+| `slow` | written `slow 8s`: the call happens after that many seconds, so a caller's own deadline can fire first |
 | `status` | written `status 429`: a model call gets a real HTTP error reply, and the library raises its own error, such as `RateLimitError`; a web request gets a reply with that status |
 
 A fault fires on every call it names, unless `when` narrows it to the `first N` attempts or the first `requests N`. See [Failing the model](model-faults.md).

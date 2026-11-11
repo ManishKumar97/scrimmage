@@ -506,6 +506,49 @@ def test_a_tool_with_an_artifact_is_mocked_with_a_list_of_two(
     assert result.summaries()[0]["answer"] == answer
 
 
+@pytest.mark.slow
+def test_append_on_a_content_and_artifact_tool_changes_the_content_only(project: Project) -> None:
+    pair = langchain_gate.artifact_content(("the report", {"a": "b"}))
+    assert pair[0] == "the report" and pair[1]("new") == ("new", {"a": "b"})
+    assert langchain_gate.artifact_content("not a pair")[0] == "not a pair"
+    append = (
+        '[[test.fault]]\ncall = "tool:get_report"\ndo   = "append"\ntext = "!!"\n'
+        'forbid = ["never said"]\n'
+    )
+    project.edit('returns = "shipped, Oct 30"', 'returns = ["the report", {a = "b"}]')
+    project.edit('call    = "tool:get_order"', 'call    = "tool:get_report"')
+    project.edit(STOCK_MOCK, "")
+    graph(project, "report_tool", append)
+    project.edit('answer   = "messages[-1].content"\n', "")
+    project.edit("[agent]\n", '[agent]\nmax_cost_usd = "none"\n')
+    result = project.test()
+    # The test's expect is "shipped", so the baseline cannot pass here: exit 1 is the result.
+    assert result.code == 1, result.out + result.err
+    assert row(result, "baseline")[-1]["summary"]["answer"] == "the report"  # type: ignore[index]
+    assert row(result, "fault 1")[-1]["summary"]["answer"] == "the report!!"  # type: ignore[index]
+    line = tool_lines(row(result, "fault 1"))[0]
+    assert (line["action"], line["under"], line["mock"]) == ("fault", "mock", 0)
+    assert str(line["result"]["preview"]).startswith('["the report"')  # type: ignore[index]
+    assert line["changed"]["parts"] == ["result"]  # type: ignore[index]
+
+
+@pytest.mark.slow
+def test_slow_on_a_sync_tool_in_langgraphs_thread_pool(project: Project, fake_openai: Fake) -> None:
+    slow = '[[test.fault]]\ncall = "tool:get_order"\ndo   = "slow 0.3s"\nforbid = ["never said"]\n'
+    graph(project, fault=slow)
+    result = project.test(fake_openai(ACME))
+    fault = row(result, "fault 1")
+    line = tool_lines(fault)[0]
+    assert (line["action"], line["under"]) == ("fault", "mock")
+    assert line["fault"]["do"] == "slow 0.3s"  # type: ignore[index]
+    assert int(line["slowed_ms"]) >= 250 and "cut_by" not in line  # type: ignore[arg-type]
+    assert fault[-1]["summary"]["fault_fired"] is True  # type: ignore[index]
+    # The wait was in the tool's thread: the graph went on and the model got the real answer.
+    assert fault[-1]["summary"]["answer"] == (  # type: ignore[index]
+        "Order 1234 shipped on Oct 30. SKU-42 has 12 in stock."
+    )
+
+
 @pytest.mark.design("adapter.plumbing_not_recorded")
 @pytest.mark.slow
 def test_langchains_own_arguments_are_left_out_of_the_record(project: Project) -> None:

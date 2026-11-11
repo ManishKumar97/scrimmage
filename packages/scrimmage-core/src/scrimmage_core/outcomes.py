@@ -10,3 +10,16 @@ MISTAKES, NOTES, WARNINGS, INFRA_ERRORS = "mistakes", "notes", "warnings", "infr
 
 def plural(n: int, word: str) -> str:
     return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+OUTCOMES = (
+    "answered",
+    "crashed",
+    "timed out",
+    "refused call",
+    "budget reached",
+    "not reserved",
+    "infrastructure error",
+    "stopped",
+)
+PREVIEW = 200  # how much of a value, or of an answer, a record or a document keeps

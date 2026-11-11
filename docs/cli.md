@@ -5,11 +5,13 @@
 ## scrimmage test
 
 ```bash
-scrimmage test [path/to/scrimmage.toml] [--json]
+scrimmage test [path/to/scrimmage.toml] [--compare EARLIER] [--json]
 ```
 
 Runs every test in the file, which is `scrimmage.toml` in the current folder by default.
 With `--json` it prints one JSON document in place of the table; see [JSON output](json-output.md).
+A test that finished writes `result.json` into its records folder, so `scrimmage show` can read it later.
+With `--compare EARLIER` it prints, after its own output, how each row changed from an earlier test; see [Reading a finished test](show.md).
 
 Before the first run it checks the file, and every label against `tools` when that list is set, so a typo such as `tool:get_ordr` costs nothing:
 the test stops and lists the tools it knows.
@@ -66,18 +68,20 @@ scrimmage check: 1 problem; nothing was run
 ## scrimmage record
 
 ```bash
-scrimmage record [path/to/scrimmage.toml] [--test NAME]... [--refresh LABEL]... [--json]
+scrimmage record [path/to/scrimmage.toml] [--test NAME]... [--refresh LABEL]... [--runs N] [--json]
 ```
 
-Runs each test's baseline once, with its mocks and nothing injected, and writes each real tool, MCP and web call as a mock in `scrimmage.recorded.toml`, beside your file.
+Runs each test's baseline, once or `--runs N` times, with its mocks and nothing injected, and writes each real tool, MCP and web call as a mock in `scrimmage.recorded.toml`, beside your file.
 Your file is never changed. See [Recording replies](recording.md).
 `--test NAME` records only that test. `--refresh LABEL` records a label again that already has a mock.
+`--runs N` runs each test's baseline N times, 1 by default, and writes one exact mock for each set of arguments the runs sent.
+`N` is a whole number from 1 to 1000, and the file's `runs` is not read. See [Recording more than one run](recording.md#recording-more-than-one-run).
 
 | Code | Meaning |
 |---|---|
 | 0 | Every call that needs a mock got one, and every run answered |
 | 1 | The file is written, and a call is listed by hand, or a run did not answer |
-| 2 | A mistake: the file, a refused call, an unseen tool, the budget, or a file layout record cannot extend |
+| 2 | A mistake: the file, `--runs`, a refused call, an unseen tool, the budget, or a file layout record cannot extend. A stop on the budget writes nothing |
 | 3 | An infrastructure error, including a bug in Scrimmage while it recorded; nothing is written for a test whose record is incomplete |
 
 ## scrimmage schema
@@ -89,6 +93,24 @@ scrimmage schema > scrimmage.schema.json
 Prints the JSON Schema of `scrimmage.toml` that ships with your installed Scrimmage, and exits 0.
 An editor uses it to check the file as you type; see [Checking the file in your editor](configuration.md#checking-the-file-in-your-editor).
 The schema checks the shape of the file. `scrimmage check` decides.
+
+## scrimmage show
+
+```bash
+scrimmage show [TARGET] [--run RUN] [--compare EARLIER] [--json]
+```
+
+Reads a finished test's records folder and says what happened: the table, and for each failing row the timeline of its first failing run and one suggestion, labelled a heuristic.
+`TARGET` is a records folder or its `result.json`, and the newest test's folder by default.
+`--run RUN` shows one run.
+`--compare EARLIER` compares the folder with an earlier test and runs nothing.
+It makes no model call, writes nothing, and opens no socket. See [Reading a finished test](show.md).
+
+| Code | Meaning |
+|---|---|
+| 0 | Something was shown |
+| 2 | No such folder or run, a bad run id, or a file `show` refuses to open |
+| 3 | Scrimmage's own failure |
 
 ## scrimmage init
 
@@ -111,12 +133,13 @@ The probe costs $0 in model calls Scrimmage sees; a paid call through a library 
 
 ## --json
 
-`scrimmage test --json`, `scrimmage check --json` and `scrimmage record --json` print exactly one JSON document on standard output and nothing else.
+`scrimmage test --json`, `scrimmage check --json`, `scrimmage record --json` and `scrimmage show --json` print exactly one JSON document on standard output and nothing else.
 Standard error stays empty unless Python itself fails.
 The document's `exit` field is always the process's exit code.
 Once Scrimmage has started, Ctrl-C or SIGTERM still prints the document, with exit 3.
 Scrimmage has started from the moment its entry point runs, a few tens of milliseconds after Python does; a signal before that, while Python itself starts, ends the process with no document.
 A signal after the command's result is settled is ignored, so the exit code always equals the document's `exit`.
+Called from Python, signal handling needs the main thread; from another thread, a signal does not stop the run, so wait for it.
 A mistake in the command line itself, such as an unknown flag, is still text on standard error, with exit 2.
 `scrimmage init --json` prints its one document the same way.
 [JSON output](json-output.md) describes every field.

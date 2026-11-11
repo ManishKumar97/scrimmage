@@ -17,7 +17,7 @@ import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 
 from scrimmage_core import hooks, tool_gate
 from scrimmage_core.errors import ScrimmageMockError, ScrimmageRefused
@@ -334,6 +334,15 @@ def mock_shape(tool: Any, value: object) -> object:
     )
 
 
+def artifact_content(value: object) -> tuple[object, Callable[[object], object]]:
+    """A tool with an artifact returns (content, artifact). Only the content goes to the
+    model, so it is all that an append or replace changes; the artifact is put back as it was."""
+    if isinstance(value, tuple) and len(cast("tuple[object, ...]", value)) == 2:
+        pair = cast("tuple[object, object]", value)
+        return pair[0], lambda new: (new, pair[1])
+    return tool_gate.whole(value)
+
+
 @contextlib.contextmanager
 def real_call(tool: object) -> Iterator[None]:
     token = _inside.set(tool)
@@ -358,6 +367,9 @@ def gate(method: Callable[..., Any], failure: type[Exception]) -> Callable[..., 
             failure,
             functools.partial(real_call, tool),
             functools.partial(mock_shape, tool),
+            artifact_content
+            if getattr(tool, "response_format", "content") == "content_and_artifact"
+            else tool_gate.whole,
         )
 
     return tool_gate.gate_with(method, describe)

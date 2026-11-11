@@ -23,6 +23,8 @@ Only the tool name, its arguments, the call id and the answer text are changed; 
 | `acme_answer.json` | Default | the answer text |
 | `acme_admits.json` | Default | the answer text, for a conversation where a tool failed |
 | `acme_three_orders.json` | Functions | three `get_order` calls in one reply |
+| `acme_check_inventory.json` | Functions | calls `check_inventory` with `{"sku": "SKU-42"}` |
+| `acme_obeys.json` | Default | the answer text, for a conversation where a tool result held a note to the assistant that the model obeyed |
 | `docs_search.json` | Functions | calls the MCP tool `search` with `{"q": "refunds"}` |
 | `docs_answer.json` | Default | the answer text, for the docs example on MCP tools |
 | `docs_admits.json` | Default | the answer text, for a conversation where the MCP tool failed |

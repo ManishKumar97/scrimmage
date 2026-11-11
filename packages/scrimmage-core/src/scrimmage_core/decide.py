@@ -10,13 +10,13 @@ from dataclasses import dataclass, field
 from typing import Literal, cast
 
 from scrimmage_core import capture
-from scrimmage_core.config import Fault, Mock
+from scrimmage_core.config import READ_METHODS as READ_METHODS
+from scrimmage_core.config import Fault, Mock, carried
 from scrimmage_core.labels import matches, matches_real
 from scrimmage_core.plan import Plan
 
 Action = Literal["fault", "mock", "real", "refused"]
 Kind = Literal["tool", "model", "http", "mcp", "process"]
-READ_METHODS = ("GET", "HEAD")
 
 
 @dataclass(frozen=True)
@@ -51,6 +51,9 @@ class Decision:
     mock: int | None = None  # index into plan.mocks
     n: int = 0  # the fault's number for this call: its attempt, or its request
     reason: str | None = None  # why a call was refused
+    # A carried fault (append, replace, slow) lets the call happen: what the call gets beneath
+    # it, the baseline's own answer, and mock is then that answer's mock.
+    under: Literal["real", "mock"] | None = None
 
 
 def labelled(entry: Mock | Fault, call: Call) -> bool:
@@ -159,7 +162,18 @@ class Counters:
 def decide(call: Call, plan: Plan, numbers: list[int]) -> Decision:
     for i, fault in enumerate(plan.faults):
         if names(fault, call) and fires(fault.when, numbers[i]):
-            return Decision("fault", fault=i, n=numbers[i])
+            if not carried(fault.do):
+                return Decision("fault", fault=i, n=numbers[i])
+            beneath = settled(call, plan)  # the rest of decide: what the baseline gives the call
+            if beneath.action == "refused":
+                return beneath  # a fault never makes a refused call run
+            under: Literal["real", "mock"] = "mock" if beneath.action == "mock" else "real"
+            return Decision("fault", fault=i, n=numbers[i], mock=beneath.mock, under=under)
+    return settled(call, plan)
+
+
+def settled(call: Call, plan: Plan) -> Decision:
+    """What a call gets when no fault takes it over: a mock, real, or a refusal."""
     if unknowable(call, plan):
         return Decision("refused", reason="unreadable_model")
     if call.kind == "model":
@@ -179,6 +193,13 @@ def decide(call: Call, plan: Plan, numbers: list[int]) -> Decision:
             return Decision("real")
         return Decision("refused", reason="web_write")
     return Decision("refused", reason="unlisted")
+
+
+def beneath(decision: Decision) -> Decision:
+    """The decision a carried fault sits on: what the call gets, as the baseline gives it."""
+    if decision.under is None:
+        return decision
+    return Decision(decision.under, mock=decision.mock)
 
 
 @dataclass(frozen=True)

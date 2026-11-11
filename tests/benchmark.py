@@ -400,7 +400,7 @@ def start_control(tmp: Path) -> tuple[ControlServer, dict[str, str]]:
     """A real control server with one open run, and the environment that joins it."""
     token, run = secrets.token_hex(32), "run-benchmark"
     # Its own folder each time, as a budget's check starts one per attempt.
-    records = Path(tempfile.mkdtemp(prefix="control-records-", dir=tmp))
+    records = Path(tempfile.mkdtemp(prefix="control-records-", dir=tmp)) / "records"
     server = ControlServer(token, RecordStore(records))
     server.start()
     plan = Plan(run, "benchmark", "baseline", (), (), (), (), 600.0)

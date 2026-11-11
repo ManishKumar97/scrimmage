@@ -891,3 +891,48 @@ def test_a_marker_is_removed_with_what_sticks_to_it() -> None:
     assert redact("token=[removed]hunter2") == "[secret removed]"
     assert redact("password=[secret removed]") == "password=[secret removed]"
     assert redact("password=[secret removed] x") == "password=[secret removed] x"
+
+
+def test_spans_cover_exactly_what_redact_removes() -> None:
+    for text in [*corpus(), *SAMPLES.values()]:
+        places = redact_module.replacements(text)
+        built: list[str] = []
+        at = 0
+        for place in places:
+            assert at <= place.start <= place.end <= len(text), text
+            built += [text[at : place.start], place.text]
+            at = place.end
+        built.append(text[at:])
+        assert "".join(built) == redact(text), text
+        assert redact_module.spans(text) == [(p.start, p.end, p.rule) for p in places]
+
+
+def test_a_span_names_its_rule() -> None:
+    key = "ghp_" + "a" * 36
+    text = f"token {key} and https://u:p@host/x?q=1 and Bearer {'b' * 20}"
+    found = redact_module.spans(text)
+    assert [rule for _, _, rule in found] == ["github-token", "url", "bearer-token"]
+    start, end, _ = found[0]
+    assert text[start:end] == key
+    assert redact_module.spans("nothing here") == []
+
+
+def test_a_secret_inside_a_url_query_is_one_span_of_the_url_rule() -> None:
+    text = "see https://h/x?key=sk-" + "a" * 20 + " ok"
+    assert [(r.rule, text[r.start : r.end]) for r in redact_module.replacements(text)] == [
+        ("url", "://h/x?key=sk-aaaaaaaaaaaaaaaaaaaa")
+    ]
+
+
+def test_a_json_text_that_redaction_changes_is_one_span_and_kept_names_are_none() -> None:
+    """A JSON text is written back whole, so its change is one place; a name that is found
+    and kept, such as next_page_token, is no place at all."""
+    text = '{"a": "token=abc", "n": 1}'
+    assert redact_module.spans(text) == [(0, len(text), "json")]
+    assert redact_module.replacements(text)[0].text == redact(text)
+    assert redact_module.spans('{"a": "plain", "n": 1}') == []
+    for kept in ("next_page_token=abc", "f(token=tok)", "def f(password=None):"):
+        assert redact_module.spans(kept) == []
+    assert [rule for _, _, rule in redact_module.spans("x DB_PASSWORD=hunter2")] == ["form-field"]
+    header = "Authorization: Basic dXNlcjpwYXNzd29yZA=="
+    assert [rule for _, _, rule in redact_module.spans(header)] == ["basic-credential"]

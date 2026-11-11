@@ -9,7 +9,7 @@ import pytest
 
 import scrimmage_core
 from conftest import doc_pages
-from scrimmage_core import cli, config, judge, mcp_gate, outcomes, record, runner
+from scrimmage_core import cli, config, judge, mcp_gate, outcomes, record, render, suggest
 
 DOCS = Path(__file__).parents[1] / "docs"
 CLI_SCHEMA = json.loads(
@@ -70,11 +70,11 @@ def test_the_script_shape_its_children_and_its_stopping_are_documented() -> None
 @pytest.mark.design("docs.judging")
 def test_the_rules_the_table_and_the_endings_are_documented() -> None:
     text = page("judging.md")
-    for word in sorted(config.RULE_KEYS) + runner.HEAD[3:-1]:
+    for word in sorted(config.RULE_KEYS) + render.HEAD[3:-1]:
         assert mentioned(text, word), word
     for result in (judge.PASS, judge.FAIL, judge.NO_RESULT):
         assert f"`{result}`" in text
-    assert all(f"| {outcome}" in text for outcome in runner.OUTCOMES)
+    assert all(f"| {outcome}" in text for outcome in outcomes.OUTCOMES)
     assert judge.EMPTY in text
     assert "not a promise about the next one" in text
     assert "No judging" not in page("limits.md")
@@ -84,7 +84,7 @@ def test_the_rules_the_table_and_the_endings_are_documented() -> None:
 def test_every_fault_and_outcome_is_documented() -> None:
     concepts = page("concepts.md")
     assert all(mentioned(concepts, f) for f in config.FAULTS)
-    missing = [o for o in runner.OUTCOMES if f"| {o} |" not in concepts]
+    missing = [o for o in outcomes.OUTCOMES if f"| {o} |" not in concepts]
     assert not missing, f"outcomes with no row in docs/concepts.md: {missing}"
 
 
@@ -381,3 +381,111 @@ def test_the_held_argument_form_is_documented() -> None:
         "mock with no `args` above a mock with `args`",
     ):
         assert words in text, words
+
+
+@pytest.mark.design("docs.record_runs")
+def test_recording_more_than_one_run_is_documented() -> None:
+    guide, cli_page, output, limits = (
+        page("recording.md"),
+        page("cli.md"),
+        page("json-output.md"),
+        page("limits.md"),
+    )
+    assert "[--refresh LABEL]... [--runs N] [--json]" in cli_page and "[--runs N]" in guide
+    section = guide.split("## Recording more than one run")[1].split("## What gets written")[0]
+    for words in (
+        "covers every run of every test",
+        "file's `runs`",
+        "is not read",
+        "run N times",
+        "`nondeterministic`",
+        "p = 0.25",
+        "A stop on the budget writes nothing at all",
+        "reply that changes with time",
+        "`--runs 1`, write its mock by hand, or leave it under `real`",
+    ):
+        assert words in section, words
+    assert "`scrimmage record --runs N`" in guide.split("## When a replay misses a mock")[1]
+    for name in ("runs", "runs_recorded", "argument_sets_seen", "argument_sets_written"):
+        assert f"`{name}`" in output, name
+    assert "`not_started`" in output and "`argument_sets`" in output
+    for limit in (
+        "**A form the model never sent while recording still misses.**",
+        "**One web mock answers any query, at any N.**",
+        "**A reply that changes with time is not written at N above 1.**",
+    ):
+        assert limit in limits, limit
+    for text in (guide, cli_page, limits):  # no page says a looser match exists
+        assert "looser match" not in text.replace("No looser form", "")
+
+
+@pytest.mark.design("docs.show")
+def test_the_show_page_says_what_redact_removes_and_who_may_see_the_output() -> None:
+    text = page("show.md")
+    for sentence in (
+        "`redact` removes known secret shapes, such as API keys and tokens, not customer data.",
+        "`show`'s text and `--json` can hold customer data from the records",
+        "A `--json` document handed to a coding agent may be sent to that agent's model provider.",
+    ):
+        assert sentence in text, sentence
+    commands = page("cli.md")
+    assert "## scrimmage show" in commands and "--compare" in commands and "--run" in commands
+    assert "`scrimmage show --json`" in page("json-output.md")
+    assert "signal handling needs the main thread" in commands
+
+
+@pytest.mark.design("docs.changing_results")
+def test_the_changing_results_page_covers_the_faults_the_rules_and_the_lines() -> None:
+    text = page("changing-results.md")
+    for fault in ("append", "replace", "slow"):
+        assert mentioned(text, fault), fault
+    for key in ("text", "find", "under", "unchanged", "slowed_ms", "cut_by", "under_real"):
+        assert f"`{key}`" in text or f"`{key}" in text, key
+    for words in (
+        "ZXCANARY41",
+        "not shaped like a key",
+        "leave that tool unmocked and off `real`",
+        'uses up its place in `when = "first N"`',
+        "promptfoo, garak and PyRIT",
+        "future.result(timeout=...)",
+        "(heuristic)",
+        "A mistake at the row",
+    ):
+        assert words in text, words
+    for cut in ("client timeout", "run stopped", "time limit", "cancelled"):
+        assert f"`{cut}`" in text, cut
+    assert "invented" not in text.lower()
+    assert "model-faults.md" in text
+    nav = (DOCS.parent / "mkdocs.yml").read_text()
+    assert "Changing a result: changing-results.md" in nav
+
+
+@pytest.mark.design("docs.changing_results")
+def test_the_limits_page_names_each_gap_of_the_carried_faults() -> None:
+    limits = page("limits.md")
+    for limit in (
+        "**Only text and plain data take `append` and `replace`.**",
+        "**An MCP result with several text items.**",
+        "**Web bodies that are not text or JSON.**",
+        "**`slow` outside asyncio.**",
+        "**A sync caller that gives up leaves its thread behind.**",
+        "**The plan holds `find` as written.**",
+        "**`${` in an injected text.**",
+        "**A change over text the record removes is not made.**",
+    ):
+        assert limit in limits, limit
+    assert "runs a listed real write twice" in limits
+    assert "`append`, `replace` and `slow` do not work on a model call" in page("model-faults.md")
+    later = page("configuration.md").split("## Coming in later versions")[1]
+    assert "`slow`," not in later and "`append`, `replace`," not in later.split("Fault options")[0]
+
+
+@pytest.mark.design("docs.suggestions")
+def test_the_show_page_lists_every_suggestion_code_and_calls_it_a_heuristic() -> None:
+    text = page("show.md").split("### Suggestions")[1].split("### What show opens")[0]
+    for code in suggest.CODES:
+        assert f"| `{code}` |" in text, code
+    assert "Every suggestion is a heuristic" in text and "`suggestion (a heuristic):`" in text
+    assert "reads `code` and not `text`" in text
+    assert 'never "because"' in text
+    assert "never edits `scrimmage.toml`" in text

@@ -70,7 +70,7 @@ def test_a_bad_value_names_its_table_and_key(tmp_path: Path) -> None:
     [
         ('returns = "shipped, Oct 30"', 'returns = "${X}"', "placeholders are not read"),
         ('do   = "timeout"', 'do   = "timeout"\nwhen = "once"', "'once' is not a schedule"),
-        ('do   = "timeout"', 'do   = "slow 8s"', "'slow 8s' is not a fault"),
+        ('do   = "timeout"', 'do   = "slow 8"', "'slow 8' is not a delay"),
         ('do   = "timeout"', 'do   = "status 429"', "works on a model call or a web request"),
         ('call = "tool:get_order"\ndo', 'call = "auth:a"\ndo', "'auth:a' is not a label"),
         ('call = "tool:get_order"\ndo', 'call = "model:x"\ndo', "not a known provider"),
@@ -581,3 +581,235 @@ def test_ignore_match_and_pattern_are_unknown_keys(tmp_path: Path, key: str) -> 
     text = config_cases.mock(f'call = "tool:t"\nreturns = 1\nargs = {{a = 1}}\n{key} = ["a"]\n')
     with pytest.raises(ConfigError, match=f"{key}: unknown setting"):
         load_text(tmp_path, text)
+
+
+# A carried fault on a tool the test mocks, with the keys each test then changes.
+CARRIED = '[[test.fault]]\ncall = "tool:get_order"\ndo = "{do}"\n{extra}when = "first 1"\n'
+
+
+def carried_fault(do: str, extra: str = "") -> str:
+    return CARRIED.format(do=do, extra=extra)
+
+
+@pytest.mark.parametrize("do", ["append", "replace"])
+def test_append_and_replace_need_text(tmp_path: Path, do: str) -> None:
+    with pytest.raises(ConfigError, match=rf"text: required with do = '{do}'"):
+        with_fault(tmp_path, carried_fault(do))
+    fault = with_fault(tmp_path, carried_fault(do, 'text = "x"\n')).tests[0].faults[-1]
+    assert (fault.do, fault.text, fault.find) == (do, "x", None)
+
+
+@pytest.mark.parametrize("do", ["timeout", "error", "slow 2s"])
+def test_text_and_find_work_only_with_append_and_replace(tmp_path: Path, do: str) -> None:
+    for key in ("text", "find"):
+        with pytest.raises(ConfigError, match=rf"{key}: works only with do = 'append' or 'repl"):
+            with_fault(tmp_path, carried_fault(do, f'{key} = "x"\n'))
+
+
+def test_find_works_only_with_replace(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match=r"find: works only with do = 'replace'"):
+        with_fault(tmp_path, carried_fault("append", 'text = "x"\nfind = "y"\n'))
+    fault = with_fault(tmp_path, carried_fault("replace", 'text = "x"\nfind = "y"\n'))
+    assert fault.tests[0].faults[-1].find == "y"
+    with pytest.raises(ConfigError, match=r"find: expected text that is not blank"):
+        with_fault(tmp_path, carried_fault("replace", 'text = "x"\nfind = "  "\n'))
+
+
+def test_empty_replace_text_needs_find(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match=r"text: an empty text replaces the whole result"):
+        with_fault(tmp_path, carried_fault("replace", 'text = ""\nforbid = ["a"]\n'))
+    kept = with_fault(tmp_path, carried_fault("replace", 'text = ""\nfind = "y"\n'))
+    assert kept.tests[0].faults[-1].text == ""
+    with pytest.raises(ConfigError, match=r"text: blank text adds nothing"):
+        with_fault(tmp_path, carried_fault("append", 'text = "  "\n'))
+    with pytest.raises(ConfigError, match=r"text: expected text, got 5"):
+        with_fault(tmp_path, carried_fault("append", "text = 5\n"))
+
+
+@pytest.mark.parametrize("call", ["model", "model:openai", "model:*/embeddings"])
+@pytest.mark.parametrize("do", ["append", "replace", "slow 3s"])
+def test_carried_faults_are_refused_on_a_model_call(tmp_path: Path, call: str, do: str) -> None:
+    text = f'[[test.fault]]\ncall = "{call}"\ndo = "{do}"\ntext = "x"\nforbid = ["a"]\n'
+    with pytest.raises(
+        ConfigError, match=r"do not work on a model call in this version.*model-faults"
+    ):
+        with_fault(tmp_path, text)
+    with pytest.raises(ConfigError, match=r"text: unknown setting"):
+        with_fault(tmp_path, text.replace(do, "timeout"))
+
+
+def test_append_always_needs_no_row_expect(tmp_path: Path) -> None:
+    text = '[[test.fault]]\ncall = "tool:get_order"\ndo = "append"\ntext = "x"\n'
+    assert with_fault(tmp_path, text).tests[0].faults[-1].when == "always"
+    with_find = text.replace("append", "replace") + 'find = "y"\n'
+    assert with_fault(tmp_path, with_find).tests[0].faults[-1].find == "y"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '[[test.fault]]\ncall = "tool:get_order"\ndo = "replace"\ntext = "x"\n',
+        '[[test.fault]]\ncall = "tool:get_order"\ndo = "slow 2s"\n',
+    ],
+)
+def test_a_whole_replace_always_needs_a_row_expect(tmp_path: Path, text: str) -> None:
+    with pytest.raises(ConfigError, match=r"fires on every call, so the agent never gets the data"):
+        with_fault(tmp_path, text)
+    assert with_fault(tmp_path, text + 'forbid = ["a"]\n')
+
+
+def test_slow_takes_seconds_under_run_timeout(tmp_path: Path) -> None:
+    fault = with_fault(tmp_path, carried_fault("slow 0.5s")).tests[0].faults[-1]
+    assert config.slow_seconds(fault.do) == 0.5
+    for bad, message in (
+        ("slow 0s", "must be above 0"),
+        ("slow 601s", "at most 600"),
+        ("slow 8", "is not a delay"),
+        ("slow 8 s", "is not a delay"),
+        ("slow -1s", "is not a delay"),
+        ("slow", "is not a delay"),
+    ):
+        with pytest.raises(ConfigError, match=message):
+            with_fault(tmp_path, carried_fault(bad, 'forbid = ["a"]\n'))
+    with pytest.raises(ConfigError, match=r"slow 130s is not under run_timeout, 120"):
+        with_fault(tmp_path, carried_fault("slow 130s", 'forbid = ["a"]\n'))
+    with pytest.raises(ConfigError, match=r"slow 120s is not under run_timeout, 120"):
+        with_fault(tmp_path, carried_fault("slow 120s", 'forbid = ["a"]\n'))
+    assert with_fault(tmp_path, carried_fault("slow 119s", 'forbid = ["a"]\n'))
+
+
+NOT_COVERED = '[[test.fault]]\ncall = "{call}"\ndo = "append"\ntext = "x"\n{extra}'
+
+
+@pytest.mark.parametrize(
+    ("call", "extra"),
+    [
+        ("tool:refund_order", ""),  # neither mocked nor real
+        ("mcp:docs/search", ""),
+        ("http:orders.acme.internal", 'method = "POST"\n'),
+    ],
+)
+def test_a_carried_fault_on_a_tool_nothing_lets_run_is_a_problem(
+    tmp_path: Path, call: str, extra: str
+) -> None:
+    text = NOT_COVERED.format(call=call, extra=extra)
+    with pytest.raises(
+        ConfigError, match=r"append lets the call run, so .* must be mocked or listed"
+    ):
+        with_fault(tmp_path, text)
+    with pytest.raises(ConfigError, match="must be mocked or listed"):
+        with_fault(
+            tmp_path, text.replace("append", "slow 1s").replace('text = "x"\n', 'forbid = ["a"]\n')
+        )
+
+
+@pytest.mark.parametrize(
+    ("agent_real", "mocks", "call", "extra"),
+    [
+        ('real = ["tool:*"]', "", "tool:refund_order", ""),
+        ('real = ["tool:refund_order"]', "", "tool:refund_order", ""),
+        (
+            "",
+            '[[test.mock]]\ncall = "tool:refund_order"\nreturns = "ok"\n',
+            "tool:refund_order",
+            "",
+        ),
+        ('real = ["mcp:search"]', "", "mcp:docs/search", ""),
+        ("", '[[test.mock]]\ncall = "mcp:search"\nreturns = "ok"\n', "mcp:docs/search", ""),
+        ("", "", "http:orders.acme.internal", ""),  # a web read runs on its own
+        ("", "", "http:orders.acme.internal", 'method = "GET"\n'),
+        (
+            'real = ["http:orders.acme.internal POST"]',
+            "",
+            "http:orders.acme.internal",
+            'method = "POST"\n',
+        ),
+    ],
+)
+def test_a_carried_fault_under_tool_star_is_allowed(
+    tmp_path: Path, agent_real: str, mocks: str, call: str, extra: str
+) -> None:
+    text = (
+        (EXAMPLE / "scrimmage.toml")
+        .read_text()
+        .replace('real     = ["tool:check_inventory"]', agent_real)
+    )
+    text += mocks + NOT_COVERED.format(call=call, extra=extra)
+    assert load_text(tmp_path, text).tests[0].faults[-1].call == call
+
+
+def warned(tmp_path: Path, real: str, mocks: str = "") -> list[str]:
+    text = (
+        (EXAMPLE / "scrimmage.toml")
+        .read_text()
+        .replace('real     = ["tool:check_inventory"]', f"real = {real}")
+    )
+    text += mocks + NOT_COVERED.format(call="tool:check_inventory", extra="")
+    return config.write_warnings(load_text(tmp_path, text))
+
+
+def test_an_append_row_warns_which_writes_could_run_for_real(tmp_path: Path) -> None:
+    [warning] = warned(
+        tmp_path,
+        '["tool:*", "http:orders.acme.internal POST /refunds", "http:a.acme.internal", '
+        '"http:r.acme.internal GET", "mcp:orders/update"]',
+    )
+    assert warning == (
+        "fault 2 of 'order-status' adds text the agent may obey; these would run for real "
+        "if it did: every tool not mocked, under tool:* (check_inventory, refund_order); "
+        "http:orders.acme.internal POST /refunds; http:a.acme.internal; mcp:orders/update. "
+        "Leave a write unmocked and off real to see it refused instead"
+    )
+
+
+def test_an_append_row_with_no_listed_write_has_no_warning(tmp_path: Path) -> None:
+    covered = '[[test.mock]]\ncall = "tool:check_inventory"\nreturns = "x"\n'
+    assert warned(tmp_path, '["http:r.acme.internal GET"]', covered) == []
+    # Every tool mocked: tool:* names none.
+    mocks = "".join(
+        f'[[test.mock]]\ncall = "tool:{n}"\nreturns = "x"\n'
+        for n in ("check_inventory", "refund_order")
+    )
+    assert warned(tmp_path, '["tool:*"]', mocks) == []
+
+
+def test_text_over_64_kib_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match=r"text: is over 64 KiB"):
+        with_fault(tmp_path, carried_fault("append", 'text = "' + "x" * 65537 + '"\n'))
+    with pytest.raises(ConfigError, match=r"find: is over 64 KiB"):
+        with_fault(tmp_path, carried_fault("replace", 'text = "a"\nfind = "' + "x" * 65537 + '"\n'))
+    ok = carried_fault("append", 'text = "' + "x" * 65536 + '"\n')
+    assert len(with_fault(tmp_path, ok).tests[0].faults[-1].text or "") == 65536
+
+
+def test_text_and_find_survive_the_plan(tmp_path: Path) -> None:
+    cfg = with_fault(tmp_path, carried_fault("replace", 'text = "x"\nfind = "y"\n'))
+    sent = plan.plan_for(cfg, plan.rows(cfg)[-1], "run-1").to_json()
+    assert sent["faults"] == [
+        {"call": "tool:get_order", "do": "replace", "when": "first 1", "text": "x", "find": "y"}
+    ]
+    back = plan.Plan.from_json(sent).faults[0]
+    assert (back.text, back.find) == ("x", "y")
+
+
+def test_a_tool_listed_by_name_under_real_is_named_as_a_write(tmp_path: Path) -> None:
+    [warning] = warned(tmp_path, '["tool:check_inventory", "tool:refund_order"]')
+    assert "these would run for real if it did: tool:check_inventory; tool:refund_order." in warning
+    # A mocked tool is not named, and tool:* already names the rest.
+    mock = '[[test.mock]]\ncall = "tool:check_inventory"\nreturns = "x"\n'
+    [again] = warned(tmp_path, '["tool:check_inventory", "tool:refund_order"]', mock)
+    assert "did: tool:refund_order." in again
+    [star] = warned(tmp_path, '["tool:*", "tool:refund_order"]')
+    assert star.count("refund_order") == 1
+
+
+def test_the_find_is_raw_in_the_plan_and_redacted_in_the_results(tmp_path: Path) -> None:
+    from scrimmage_core import runner
+
+    key = "sk-" + "b" * 20
+    fault = config.Fault("tool:t", "replace", "always", text="x", find=f"a {key}")
+    assert plan.fault_json(fault)["find"] == f"a {key}"  # the plan applies the fault: raw
+    shown = runner.fault_json(fault)
+    assert shown is not None and shown["find"] == "a [secret removed]"
+    plain = config.Fault("tool:t", "replace", "always", text="x", find="late")
+    assert plan.fault_json(plain)["find"] == "late"

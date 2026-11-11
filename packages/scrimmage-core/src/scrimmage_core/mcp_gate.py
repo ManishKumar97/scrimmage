@@ -12,16 +12,19 @@ carry a mark, so a message is decided here and never again at the web gate.
 import contextlib
 import copy
 import json
-from collections.abc import AsyncIterator, Callable, Coroutine
+import sys
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextvars import ContextVar
 from dataclasses import dataclass
 from types import ModuleType
 from typing import Any
 
-from scrimmage_core import capture, hooks
+from scrimmage_core import capture, changes, delay, hooks
+from scrimmage_core.config import slow_seconds
 from scrimmage_core.decide import Call
 from scrimmage_core.http_gate import MCP_TRANSPORT, endpoint_of, params, refuse
 from scrimmage_core.process_gate import EXEMPT
+from scrimmage_core.redact import redact
 from scrimmage_core.state import BlobSink, RunState, Step, blob, current
 
 SESSION = "mcp.client.session"
@@ -77,6 +80,7 @@ class Gate:
         self.tools: dict[str, set[str]] = {}  # label -> the tools it can be read as
         self.listed: set[str] = set()  # labels seen in a tools/list reply
         self.shaped: set[str] = set()  # labels whose listing declares an output schema
+        self.schemas: dict[str, dict[str, Any]] = {}  # label -> that output schema
         self.read_only: set[str] = set()  # labels the server marks as read-only
 
     def learn(self, server: str | None, reply: Any) -> None:
@@ -89,8 +93,10 @@ class Gate:
             self.listed.add(label)
             if "outputSchema" in tool:
                 self.shaped.add(label)
+                self.schemas[label] = tool["outputSchema"]
             else:
                 self.shaped.discard(label)
+                self.schemas.pop(label, None)
             if tool.get("annotations", {}).get("readOnlyHint") is True:
                 self.read_only.add(label)
 
@@ -237,6 +243,9 @@ def patch(module: ModuleType, gate: Gate) -> None:
         call = call_for(server, fields["name"] if tool_call else method)
         arguments = fields.get("arguments") if tool_call else fields
         step = decided(gate, run, call, arguments)
+        if step.decision.under is not None:
+            sending = (request, result_type, args, kw)
+            return await carry(module, gate, run, step, self, sending, send)
         if step.decision.action == "real":
             token = FORWARDING.set(step)
             keep = Kept(self, arguments, result_type) if run.recording and tool_call else None
@@ -347,6 +356,7 @@ async def carried(
     step: Step,
     sent: Coroutine[Any, Any, Any],
     keep: Kept | None = None,
+    mistake: str | None = None,
 ) -> Any:
     """Wait for the reply, real or injected, and write the call's line.
 
@@ -370,7 +380,7 @@ async def carried(
         except Exception as exc:  # recording only observes the call, so it never fails it
             found = capture.scrimmage_error(exc)
         step.extra["recorded"] = run.recorded(lambda: found)
-    run.finish(step)
+    run.finish(step, mistake=mistake)
     if cancel is not None:
         raise cancel
     return reply
@@ -401,6 +411,233 @@ async def saved(gate: Gate, step: Step, keep: Kept, reply: Any) -> dict[str, obj
         return wire_form(keep.result_type.validate_python(mock_result(value, shaped)))
 
     return capture.mcp_value(real, keep.arguments, rebuild)
+
+
+def asyncio_free_sleep() -> Callable[[float], Awaitable[None]]:
+    """anyio's sleep, which the MCP library depends on, so it is loaded whenever this gate runs.
+    It waits on asyncio and on trio alike. Not imported here: the SDK imports only the
+    standard library."""
+    return sys.modules["anyio"].sleep  # type: ignore[no-any-return]
+
+
+def read_timeout(session: Any, args: tuple[Any, ...], kw: dict[str, Any]) -> float | None:
+    """The read timeout the caller gave this request, or its session's own, if any."""
+    given = args[0] if args else kw.get("request_read_timeout_seconds")
+    return given if given is not None else getattr(session, "_session_read_timeout_seconds", None)
+
+
+UNCHECKED = changes.Unchangeable("the output schema could not be checked", "data")
+
+
+def schema_problem(
+    session: Any, gate: Gate, label: str, name: str, raw: dict[str, Any]
+) -> str | changes.Unchangeable | None:
+    """Why the changed structured content breaks the tool's output schema, if it does. It runs
+    the validator the client runs after the call, which would otherwise find this only once
+    the line said the fault fired."""
+    schema = gate.schemas.get(label)
+    if schema is None or not isinstance(raw.get("structuredContent"), dict):
+        return None
+    # A schema is held and cannot be checked: the call is not fired, so no line says it was.
+    build = getattr(session, "_output_schema_validator", None)
+    if build is None:
+        return UNCHECKED
+    try:
+        validator = build(name, schema)
+        errors = list(validator.iter_errors(raw["structuredContent"]))
+    except Exception:
+        return UNCHECKED
+    if not errors:
+        return None
+    try:
+        best = sys.modules["jsonschema.exceptions"].best_match(errors) or errors[0]
+    except (KeyError, AttributeError):
+        best = errors[0]
+    parts = getattr(best, "absolute_schema_path", ())
+    where = ".".join(str(part) for part in parts) or "the schema root"
+    shown = redact(repr(getattr(best, "instance", None)))[:80]
+    path = str(getattr(best, "json_path", "$"))
+    return (
+        f"makes structuredContent{path.removeprefix('$')} {shown}, which the tool's "
+        f"outputSchema does not allow at {where}"
+    )
+
+
+Sending = tuple[Any, Any, tuple[Any, ...], dict[str, Any]]  # request, result type, args, kwargs
+Send = Callable[..., Coroutine[Any, Any, Any]]
+
+
+async def carry(
+    module: ModuleType,
+    gate: Gate,
+    run: RunState,
+    step: Step,
+    session: Any,
+    sending: Sending,
+    send: Send,
+) -> Any:
+    """A call under a carried fault: wait if the fault is slow, then answer as the baseline
+    would, with a real call or a mock, and change the result if the fault is a change."""
+    request, result_type, args, kw = sending
+    assert step.decision.fault is not None
+    fault = run.plan.faults[step.decision.fault]
+    method = request.model_dump(by_alias=True, mode="json", exclude_none=True)["method"]
+    seconds = slow_seconds(fault.do)
+    if seconds is not None:
+
+        def timed_out() -> BaseException:
+            code = module.types.REQUEST_TIMEOUT
+            return module.MCPError(code=code, message=f"Request {method!r} timed out")
+
+        try:
+            await delay.wait_steps(
+                run,
+                step,
+                seconds,
+                asyncio_free_sleep(),
+                read_timeout=read_timeout(session, args, kw),
+                timed_out=timed_out,
+            )
+        except BaseException as exc:
+            run.finish(step, error=exc)
+            raise
+        return await beneath(gate, run, step, session, sending, send, None)
+    label = step.call.label
+    if step.decision.under == "real" and label not in gate.listed:
+        try:
+            await session.list_tools()  # its output schema, as call_tool's own check needs it
+        except BaseException as exc:
+            run.finish(step, error=exc)
+            raise
+    if label in gate.shaped and (fault.do == "append" or fault.find is None):
+        why = "always sends structured content"
+        run.unchanged(step, f"the tool declares an outputSchema, so it {why}")
+        mistake = (
+            f"{label} declares an outputSchema, so it {why} and {fault.do} has no place to put "
+            "text; use replace with find on one of its string values"
+        )
+        return await beneath(gate, run, step, session, sending, send, mistake)
+
+    def change(raw: dict[str, Any]) -> tuple[dict[str, Any], changes.Result]:
+        done = changes.change_mcp_result(raw, fault)
+        if isinstance(done, changes.Unchangeable):
+            return raw, done
+        new = as_dict(done.value)
+        broke = schema_problem(session, gate, label, step.call.name, new)
+        if isinstance(broke, changes.Unchangeable):
+            return raw, broke
+        if broke is not None:
+            return raw, changes.Unchangeable(
+                f"{fault.do} on {label} {broke}; choose text the schema accepts", "schema"
+            )
+        return new, done
+
+    done: changes.Result | None
+    if step.decision.under == "mock":
+        raw = await mock_reply(gate, run, step, session)
+        shown, done = change(raw)
+        step.extra["result"] = record(gate, parsed_form(result_type, raw))
+        try:
+            reply = await send(stand_in(session, shown), request, result_type, *args, **kw)
+        except BaseException as exc:
+            run.finish(step, error=exc)
+            raise
+    else:
+        changing = Changing(session._dispatcher, change)
+        token = FORWARDING.set(step)
+        try:
+            reply = await send(replica(session, changing), request, result_type, *args, **kw)
+        except BaseException as exc:
+            run.finish(step, error=exc)
+            raise
+        finally:
+            FORWARDING.reset(token)
+        done = changing.result
+        step.extra["result"] = record(gate, parsed_form(result_type, changing.original))
+    if isinstance(done, changes.Changed):
+        run.changed(step, done)
+        run.finish(step)
+    else:
+        assert isinstance(done, changes.Unchangeable)
+        run.unchanged(step, done.why)
+        run.finish(step, mistake=done.message(fault, label))
+    return reply
+
+
+async def beneath(
+    gate: Gate,
+    run: RunState,
+    step: Step,
+    session: Any,
+    sending: Sending,
+    send: Send,
+    mistake: str | None,
+) -> Any:
+    """The call as the baseline makes it, for a fault that changes nothing: real, or a mock."""
+    request, result_type, args, kw = sending
+    if step.decision.under == "mock":
+        raw = await mock_reply(gate, run, step, session)
+        return await carried(
+            gate,
+            run,
+            step,
+            send(stand_in(session, raw), request, result_type, *args, **kw),
+            mistake=mistake,
+        )
+    token = FORWARDING.set(step)
+    try:
+        sent = send(session, request, result_type, *args, **kw)
+        return await carried(gate, run, step, sent, mistake=mistake)
+    finally:
+        FORWARDING.reset(token)
+
+
+def as_dict(value: object) -> dict[str, Any]:
+    assert isinstance(value, dict)
+    return value  # type: ignore[return-value]
+
+
+def parsed_form(result_type: Any, raw: dict[str, Any] | None) -> object:
+    """A raw reply as the line shows a reply: parsed as the library parses it, then written as
+    JSON. A reply the library cannot parse is shown as it is."""
+    if raw is None:
+        return None
+    try:
+        if hasattr(result_type, "validate_python"):
+            return wire_form(result_type.validate_python(raw, by_name=False))
+        return wire_form(result_type.model_validate(raw, by_name=False))
+    except Exception:
+        return raw
+
+
+class Changing:
+    """Takes the place of a session's dispatcher for a real call under append or replace: the
+    request goes to the real dispatcher, and the raw reply is changed on its way to the
+    library, which then reads it as it reads a server's. The reply as the server sent it is
+    kept, for the line."""
+
+    def __init__(
+        self,
+        real: Any,
+        change: Callable[[dict[str, Any]], tuple[dict[str, Any], changes.Result]],
+    ) -> None:
+        self.real = real
+        self.change = change
+        self.original: dict[str, Any] | None = None
+        self.result: changes.Result | None = None
+
+    async def send_raw_request(self, method: str, params: Any, opts: Any) -> Any:
+        raw = await self.real.send_raw_request(method, params, opts)
+        self.original = copy.deepcopy(raw)
+        shown, self.result = self.change(raw)
+        return shown
+
+
+def replica(session: Any, dispatcher: Any) -> Any:
+    """A copy, as other tasks are using the session. send_request only reads it."""
+    copied = copy.copy(session)
+    copied._dispatcher = dispatcher  # mcp ClientSession
+    return copied
 
 
 def wire_form(reply: Any) -> object:
