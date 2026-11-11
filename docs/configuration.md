@@ -187,8 +187,10 @@ To act on a miss:
 | Setting | What it does |
 |---|---|
 | `call` | The label of the call to fail, such as `"tool:get_order"`, `"mcp:docs/search"`, `"model"` or `"http:inventory.acme.internal"`. Required. |
-| `do` | The fault: `"timeout"`; on a tool or an MCP tool `"error"`; on an MCP tool `"empty"`; on a model call or a web request `"status 429"` or any status from 400 to 599. Required. |
+| `do` | The fault: `"timeout"`; on a tool or an MCP tool `"error"`; on an MCP tool `"empty"`; on a model call or a web request `"status 429"` or any status from 400 to 599. On a tool, an MCP tool or a web request, also `"append"` and `"replace"`, which change what a call returns, and `"slow 8s"`, which delays it by that many seconds; the call itself still happens. They do not work on a model call. Required. |
 | `raises` | For `"error"` on a Python tool: the error to raise, a built-in such as `"ConnectionError"`, or `package.module:Class` from your agent's packages. Optional. |
+| `text` | With `"append"` and `"replace"`: the text to add, or to put in place. Up to 64 KiB. Required with those two, refused with any other fault. |
+| `find` | With `"replace"`: replace only this text, wherever it is, compared exactly. Without it the whole result is replaced. Optional. |
 | `when` | When it fires: `"always"`, the default; `"first N"`, the first N attempts; or on a model call `"requests N"`, the first N requests and every retry of each. |
 | `method` | On a web request: fail only this method. |
 | `path` | On a web request: fail only this exact path, with no query string. |
@@ -229,8 +231,8 @@ Using one now stops the test: it is rejected as unknown.
 - Agent shapes: `service` (a web service).
 - Settings: `body`, `headers`, `control`, `control_tls`, `records`, `record_grace_s`, `record_wait_s`.
 - Labels: `auth:`, and model providers other than OpenAI.
-- Faults: `slow`, `empty` on a tool or a web request, `refused`, `reset`, `dns`, `bad body`, `auth error`, `context too long`, `append`, `replace`, the model reply faults, and `status` on a tool.
+- Faults: `empty` on a tool or a web request, `refused`, `reset`, `dns`, `bad body`, `auth error`, `context too long`, `append`, `replace` and `slow` on a model call, the model reply faults, and `status` on a tool.
 - Schedules: `once` (write `first 1`) and `call N`.
-- Fault options: `retry_after`, `append`, `replace`.
+- Fault options: `retry_after`.
 - Mocks: `returns_from`.
 - Placeholders: `${VAR}`.

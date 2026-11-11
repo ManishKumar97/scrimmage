@@ -26,3 +26,18 @@ source = "https://aws.amazon.com/message/101925/ (AWS us-east-1, 19-20 October 2
 name = "error"
 origin = "public incident"
 source = "https://blog.cloudflare.com/18-november-2025-outage/ (Cloudflare, 18 November 2025: a bad configuration file made a core proxy module fail, so services behind it returned errors to their callers)"
+
+[[fault]]
+name = "append"
+origin = "public incident"
+source = "https://invariantlabs.ai/blog/mcp-github-vulnerability (Invariant Labs, 26 May 2025: a malicious issue in a public repository was fetched by the agent through the official GitHub MCP server, and the instructions in it made the agent leak data from private repositories)"
+
+[[fault]]
+name = "replace"
+origin = "public incident"
+source = "https://arxiv.org/abs/2509.10540 (EchoLeak, CVE-2025-32711, disclosed 11 June 2025: hidden instructions in an email, pulled into Microsoft 365 Copilot's context by its normal retrieval, made Copilot send the user's data to an attacker)"
+
+[[fault]]
+name = "slow"
+origin = "public incident"
+source = "https://status.claude.com/incidents/2pt83vlkk7x7 (Anthropic status page, 10 September 2026, Elevated latency on the Claude API for some users: slower than normal response times and some request timeouts, not errors)"

@@ -22,6 +22,7 @@ from scrimmage_core.mocks import allowed
 from scrimmage_core.provider_openai import Rates
 from scrimmage_core.redact import redact
 
+READ_METHODS = ("GET", "HEAD")  # the web requests that run for real without being listed
 AGENT_KEYS = {
     "function",
     "command",
@@ -43,19 +44,26 @@ TEST_KEYS = {"name", "question", "mock", "fault", *RULE_KEYS}
 # it answers, exactly.
 MOCK_KEYS = {"call", "returns", "type", "recorded", "args"}
 WEB_MOCK_KEYS = {"call", "method", "path", "status", "headers", "json", "text", "recorded"}
-FAULT_KEYS = {"call", "do", "when", "raises", *RULE_KEYS}
-MODEL_FAULT_KEYS = {*FAULT_KEYS, "model"}
+# text and find belong to append and replace, which do not work on a model call.
+CHANGE_KEYS = {"text", "find"}
+FAULT_KEYS = {"call", "do", "when", "raises", *CHANGE_KEYS, *RULE_KEYS}
+MODEL_FAULT_KEYS = {*(FAULT_KEYS - CHANGE_KEYS), "model"}
 MCP_MOCK_KEYS = {"call", "returns", "recorded", "args"}
-MCP_FAULT_KEYS = {"call", "do", "when", *RULE_KEYS}
-WEB_FAULT_KEYS = {"call", "do", "when", "method", "path", *RULE_KEYS}
+MCP_FAULT_KEYS = {"call", "do", "when", *CHANGE_KEYS, *RULE_KEYS}
+WEB_FAULT_KEYS = {"call", "do", "when", "method", "path", *CHANGE_KEYS, *RULE_KEYS}
 # A mock's body is sent as written, so these could only make the reply lie about it.
 BODY_HEADERS = {"content-length", "content-encoding", "transfer-encoding"}
 
 DOCS = "docs/configuration.md"
 JUDGING = "docs/judging.md"
 # The faults this version builds. Each one has an entry in docs/fault-catalog.toml.
-FAULTS = ("timeout", "status", "error", "empty")
+FAULTS = ("timeout", "status", "error", "empty", "append", "replace", "slow")
 STATUS = re.compile(r"status (?P<code>\d{3})")
+SLOW = re.compile(r"slow (?P<s>\d+(?:\.\d+)?)s")
+# These let the call happen: the fault changes what it returns, or when.
+CARRIED = ("append", "replace", "slow")
+MAX_SLOW_S = 600.0
+MAX_CHANGE_TEXT = 64 * 1024  # bytes, for text and for find
 SCHEDULE = re.compile(r"always|(?:first|requests) (?P<n>[1-9]\d*)")
 MODEL_KEYS = {"host", "provider"}
 PRICE_KEYS = {"input", "output", "cached_input"}
@@ -98,11 +106,24 @@ class Fault:
     forbid: tuple[str, ...] | None = None
     pass_rate: float | None = None
     model: str | None = None  # a model fault can be narrowed to one model name
+    text: str | None = None  # append and replace: the injected text
+    find: str | None = None  # replace: the text it puts text in place of
 
     @property
     def target(self) -> str:
         """The call as a person reads it: two rows can differ by model alone."""
         return self.call if self.model is None else f"{self.call} {self.model}"
+
+
+def carried(do: str) -> bool:
+    """Whether a fault word lets the call happen: append, replace and slow."""
+    return do.partition(" ")[0] in CARRIED
+
+
+def slow_seconds(do: str) -> float | None:
+    """The delay of a "slow 8s" fault word; None for any other."""
+    found = SLOW.fullmatch(do)
+    return None if found is None else float(found.group("s"))
 
 
 @dataclass(frozen=True)
@@ -230,6 +251,9 @@ def check_references(config: Config) -> list[str]:
                     "a model call is always real or a fault"
                 )
         problems += dead_mocks(test)
+        problems += [
+            p for fault in test.faults if (p := carried_problem(test, fault, config.agent))
+        ]
         for entry in [*test.mocks, *test.faults]:
             if labels.kind_of(entry.call) != "tool":
                 continue  # a model, web or MCP label cannot be compared with anything yet
@@ -256,6 +280,116 @@ def check_references(config: Config) -> list[str]:
         if listed and labels.kind_of(entry) == "tool" and name != "*" and name not in names:
             problems.append(f"[agent] real: {entry} names no tool in [agent] tools")
     return problems
+
+
+@dataclass(frozen=True)
+class Write:
+    """A call that could run for real and change something: what a warning names it as, and
+    the test of whether a recorded call is one of it."""
+
+    text: str
+    labels: frozenset[str] = frozenset()  # the calls it is, by label
+    host: str | None = None  # a web entry: its host label, and the method and path it names
+    method: str | None = None
+    path: str | None = None
+    any_tool: bool = False  # tool:* with no tools list: every tool label
+
+    def names(self, label: str, method: str | None, path: str | None) -> bool:
+        if self.host is not None:
+            if label != self.host or self.method not in (None, method):
+                return False
+            if self.method is None and method in READ_METHODS:
+                return False
+            return self.path in (None, path)
+        short = "mcp:" + label.partition("/")[2] if label.startswith("mcp:") else None
+        return (
+            label in self.labels
+            or short in self.labels
+            or (self.any_tool and label.startswith("tool:"))
+        )
+
+
+def real_writes(test: Test, agent: Agent) -> list[Write]:
+    """What a test lets run for real that could be a write: every tool under tool:* that the
+    test does not mock, every real web entry that is not a read, every real MCP tool. Nothing
+    tells an MCP read from a write, nor a tool's."""
+    found: list[Write] = []
+    if "tool:*" in agent.real:
+        mocked = {m.call for m in test.mocks}
+        names = [n for n in agent.tool_names() if f"tool:{n}" not in mocked]
+        if names or not agent.tools:
+            shown = f" ({', '.join(names)})" if names else ""
+            found.append(
+                Write(
+                    f"every tool not mocked, under tool:*{shown}",
+                    frozenset(f"tool:{n}" for n in names),
+                    any_tool=not agent.tools,
+                )
+            )
+    for entry in agent.real:
+        kind = labels.kind_of(entry)
+        if kind == "mcp":
+            found.append(Write(entry, frozenset({entry})))
+        elif kind == "http":
+            host, _, rest = entry.partition(" ")
+            method, _, path = rest.partition(" ")
+            if method in READ_METHODS:
+                continue
+            found.append(Write(entry, host=host, method=method or None, path=path or None))
+    return found
+
+
+def write_warnings(config: Config) -> list[str]:
+    """One warning per append or replace row: its text may ask the agent for a write, and a
+    write that real allows would then run for real in that row."""
+    out: list[str] = []
+    for test in config.tests:
+        writes = real_writes(test, config.agent)
+        if not writes:
+            continue
+        for i, fault in enumerate(test.faults, 1):
+            if fault.do not in ("append", "replace"):
+                continue
+            out.append(
+                f"fault {i} of {test.name!r} adds text the agent may obey; these would run for "
+                f"real if it did: {'; '.join(w.text for w in writes)}. Leave a write unmocked "
+                "and off real to see it refused instead"
+            )
+    return out
+
+
+def covered(test: Test, fault: Fault, agent: Agent) -> bool:
+    """Whether the baseline lets the faulted call run: a mock answers it, or real covers it.
+    Anything else is refused, in the baseline and under a carried fault alike."""
+    web = labels.kind_of(fault.call) == "http"
+    for m in test.mocks:
+        if (same_label(m.call, fault.call) or same_label(fault.call, m.call)) and (
+            not web or fault.method in (None, m.method) or m.method is None
+        ):
+            return True
+    short = "mcp:" + fault.call.partition("/")[2] if fault.call.startswith("mcp:") else None
+    real = list(agent.real)
+    return labels.matches_real(real, fault.call, fault.method, fault.path) or short in real
+
+
+def carried_problem(test: Test, fault: Fault, agent: Agent) -> str | None:
+    """A mistake in a carried fault that the whole file shows, before any model call."""
+    if not carried(fault.do):
+        return None
+    where = f"[[test]] {test.name!r}: fault on {fault.target}"
+    seconds = slow_seconds(fault.do)
+    if seconds is not None and seconds >= agent.run_timeout:
+        return f"{where}: {fault.do} is not under run_timeout, {agent.run_timeout:g}"
+    kind = labels.kind_of(fault.call)
+    if kind == "http" and fault.method in (None, *READ_METHODS):
+        return None  # a web read runs on its own
+    if kind not in ("tool", "mcp", "http") or covered(test, fault, agent):
+        return None
+    word = fault.do.partition(" ")[0]
+    return (
+        f"{where}: {word} lets the call run, so {fault.call} must be mocked or listed under "
+        "[agent] real; as written every call it names is refused"
+    )
 
 
 def same_label(upper: str, lower: str) -> bool:
@@ -680,6 +814,12 @@ def read_mock(table: dict[str, object], where: str) -> Mock:
 def read_fault(table: dict[str, object], where: str) -> Fault:
     call = labels.check(text(table, "call", where), f"{where} call")
     kind = labels.kind_of(call)
+    # First, so text on a model fault is told why, not that the key is unknown.
+    if kind == "model" and isinstance(table.get("do"), str) and carried(str(table["do"])):
+        raise ConfigError(
+            f"{where} do: append, replace and slow do not work on a model call in this "
+            "version; see docs/model-faults.md"
+        )
     known = {"http": WEB_FAULT_KEYS, "mcp": MCP_FAULT_KEYS, "model": MODEL_FAULT_KEYS}
     keys = known.get(kind, FAULT_KEYS)
     check_keys(table, keys, where)
@@ -692,6 +832,8 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
             )
         if not 400 <= int(status.group("code")) <= 599:
             raise ConfigError(f"{where} do: {do!r} is not an error status (400 to 599)")
+    elif do.startswith("slow"):
+        read_slow(do, where)
     elif do not in FAULTS or do == "status":
         raise ConfigError(f"{where} do: {do!r} is not a fault; see {DOCS}")
     if do == "error" and kind not in ("tool", "mcp"):
@@ -699,6 +841,7 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
     if do == "empty" and kind != "mcp":
         raise ConfigError(f"{where} do: 'empty' works only on an MCP tool; see {DOCS}")
     raises = read_raises(table, do, where)
+    injected, find = read_change(table, do, where)
     when = str(table.get("when", "always"))
     if not SCHEDULE.fullmatch(when):
         raise ConfigError(f"{where} when: {when!r} is not a schedule; see {DOCS}")
@@ -708,7 +851,9 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
         )
     method, path = narrowing(table, where) if kind == "http" else (None, None)
     expect, forbid = read_expect(table, where), read_forbid(table, where)
-    if when == "always" and expect is None and not forbid:
+    # The agent still gets the data under append, and under a replace of part of it.
+    gets_data = do == "append" or (do == "replace" and find is not None)
+    if when == "always" and expect is None and not forbid and not gets_data:
         raise ConfigError(
             f"{where}: this fault fires on every call, so the agent never gets the data, yet the "
             "test's expect could still pass from general knowledge. Give the fault its own "
@@ -716,7 +861,55 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
         )
     rate = read_pass_rate(table, where)
     model = labels.model_name(table["model"], where) if "model" in table else None
-    return Fault(call, do, when, raises, method, path, expect, forbid, rate, model)
+    return Fault(call, do, when, raises, method, path, expect, forbid, rate, model, injected, find)
+
+
+def read_slow(do: str, where: str) -> None:
+    """slow takes a fixed number of seconds, written with an s."""
+    seconds = slow_seconds(do)
+    if seconds is None:
+        raise ConfigError(
+            f"{where} do: {do!r} is not a delay; write seconds with an s, such as 'slow 8s'"
+        )
+    if not 0 < seconds <= MAX_SLOW_S:
+        raise ConfigError(f"{where} do: {do!r} must be above 0 and at most {MAX_SLOW_S:g} seconds")
+
+
+def change_text(table: dict[str, object], key: str, where: str) -> str:
+    value = table[key]
+    if not isinstance(value, str):
+        raise ConfigError(f"{where} {key}: expected text, got {redact(repr(value))}")
+    if len(value.encode("utf-8", "surrogatepass")) > MAX_CHANGE_TEXT:
+        raise ConfigError(f"{where} {key}: is over {MAX_CHANGE_TEXT // 1024} KiB")
+    return value
+
+
+def read_change(table: dict[str, object], do: str, where: str) -> tuple[str | None, str | None]:
+    """The text and find of an append or a replace. Any other fault takes neither."""
+    changes = do in ("append", "replace")
+    for key in sorted(CHANGE_KEYS & table.keys()):
+        if not changes:
+            raise ConfigError(f"{where} {key}: works only with do = 'append' or 'replace'")
+    if "find" in table and do != "replace":
+        raise ConfigError(f"{where} find: works only with do = 'replace'")
+    if not changes:
+        return None, None
+    if "text" not in table:
+        raise ConfigError(f"{where} text: required with do = {do!r}")
+    injected = change_text(table, "text", where)
+    find = None
+    if "find" in table:
+        find = change_text(table, "find", where)
+        if not find.strip():
+            raise ConfigError(f"{where} find: expected text that is not blank")
+    if do == "append" and not injected.strip():
+        raise ConfigError(f"{where} text: blank text adds nothing; give the text to append")
+    if do == "replace" and injected == "" and find is None:
+        raise ConfigError(
+            f"{where} text: an empty text replaces the whole result with nothing; give a find "
+            "to delete part of it"
+        )
+    return injected, find
 
 
 def takes_a_message(kind: object) -> bool:
