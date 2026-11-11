@@ -502,8 +502,8 @@ class Runner:
             if wakeup_set:
                 signal.set_wakeup_fd(old_wakeup)
             for sig, handler in previous.items():
-                if handler is not None:  # None: set outside Python, which cannot be put back
-                    signal.signal(sig, handler)  # pyright: ignore[reportArgumentType]
+                # None: set outside Python, which cannot be put back, so the default is.
+                signal.signal(sig, signal.SIG_DFL if handler is None else handler)  # pyright: ignore[reportArgumentType]
             if watcher is not None:
                 os.set_blocking(pipe[1], True)  # a full pipe must not keep the watcher waiting
                 os.write(pipe[1], END)  # the watcher returns

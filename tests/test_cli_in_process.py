@@ -235,3 +235,33 @@ def test_a_signal_noted_before_the_handlers_still_stops_the_runs(
     assert str(stopped.value) == "SIGTERM"
     assert started == []
     assert not list(Path(run.folder).glob("*.log")), "a run reached its agent"
+
+
+def test_the_noted_signal_stops_the_runs_without_waiting_for_the_watcher(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The watcher is held, so only the runner's own cancel can stop the first run."""
+    gate = threading.Event()
+    original = Runner.one
+    started: list[str] = []
+
+    def held(self: Runner, wake_read: int, forward: int) -> None:
+        del self, wake_read, forward
+        gate.wait(WAIT_S)
+
+    def watching(self: Runner, row: object) -> RunResult | None:
+        result = original(self, row)  # type: ignore[arg-type]
+        gate.set()
+        if result is not None:
+            started.append(result.run)
+        return result
+
+    monkeypatch.setattr(Runner, "_watch", held)
+    monkeypatch.setattr(Runner, "one", watching)
+    run = Runner(config.load(project.toml), stop_flag=["SIGTERM"])
+    try:
+        with pytest.raises(runner.Interrupted):
+            run.run_all()
+    finally:
+        run.server.server.server_close()
+    assert started == [] and not list(run.folder.glob("*.log"))

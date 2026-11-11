@@ -293,3 +293,18 @@ def test_a_faults_own_rule_changes_its_row_hash_and_not_the_baselines() -> None:
     after = hashes(SOURCE.replace('expect = [["unable", "sorry"]]', 'expect = [["unable"]]'))
     assert after[0] == before[0] and after[1] != before[1]
     assert results.HASH_VERSION == 1
+
+
+def test_the_open_flag_alone_refuses_a_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the look-before-open check blinded, O_NOFOLLOW still refuses a link."""
+    target = tmp_path / "real.json"
+    target.write_text("{}")
+    link = tmp_path / "link.json"
+    link.symlink_to(target)
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "lstat", os.stat)  # a link now looks like the plain file it points at
+        with pytest.raises((Refused, OSError)):
+            read_regular(link, 100)
+    assert read_regular(target, 100) == b"{}"
