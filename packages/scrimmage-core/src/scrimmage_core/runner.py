@@ -19,7 +19,7 @@ import tempfile
 import threading
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -191,6 +191,7 @@ class Runner:
         )
         self.answers = Path(tempfile.mkdtemp(prefix="scrimmage-answers-"))
         self.lock = threading.Lock()
+        self.ended = False  # run_all has read and cleared stop_flag; the watcher adds nothing
         self.procs: dict[str, subprocess.Popen[bytes]] = {}
         self.stopped_rows: set[tuple[str, str]] = set()
         self.row_of: dict[str, planner.Row] = {}
@@ -227,6 +228,7 @@ class Runner:
         for name in ("SCRIMMAGE_ROOT_PID", "SCRIMMAGE_PYTHON", "SCRIMMAGE_CHILDREN"):
             env.pop(name, None)  # the program sets the first two for itself
         env.update(
+            SCRIMMAGE_RUNNER_PID=str(os.getpid()),  # run_command asks to be stopped with it
             SCRIMMAGE_TOKEN=self.token,
             SCRIMMAGE_CONTROL_URL=self.control_url(self.server.url),
             SCRIMMAGE_RUN=run,
@@ -274,6 +276,8 @@ class Runner:
         log = owner_only(self.folder / f"{run}.log")
         out = owner_only(self.folder / f"{run}.out") if self.config.agent.command else log
         try:
+            # run_command asks Linux to kill the run when this thread exits, so runs must be
+            # started from a thread that outlives them: the pool's, which lives through run_all.
             proc = subprocess.Popen(
                 command,
                 cwd=self.config.root,
@@ -508,6 +512,7 @@ class Runner:
         rows = planner.rows(self.config)
         runs = self.config.agent.runs
         self.server.start()
+        self.ended = False
         release = nothing
         try:
             release = self._catch_signals()
@@ -529,9 +534,11 @@ class Runner:
                     for _ in range(runs)
                 ]
                 results += list(pool.map(self.one, rest))
-            if self.stop_flag:  # every run has ended, so it is raised where nothing drops it
-                name = self.stop_flag[0]
+            with self.lock:
+                self.ended = True  # from here the watcher notes nothing, so nothing is noted twice
+                name = self.stop_flag[0] if self.stop_flag else ""
                 self.stop_flag.clear()  # the watcher and the handler may both have noted it
+            if name:  # every run has ended, so it is raised where nothing drops it
                 raise Interrupted(name)
         finally:
             release()
@@ -594,8 +601,7 @@ class Runner:
         with self.lock:
             self.cancelled = True
             running = list(self.procs.values())
-        for proc in running:
-            stop_group(proc)
+        stop_groups(running)
 
     def _interrupted(self, signum: int, frame: object) -> None:
         """The runner itself was told to stop, such as a cancelled CI job. Only notes it."""
@@ -614,8 +620,9 @@ class Runner:
             if not byte:
                 return
             if byte[0] in STOP_SIGNALS:
-                if not self.stop_flag:
-                    self.stop_flag.append(signal.Signals(byte[0]).name)
+                with self.lock:
+                    if not self.ended and not self.stop_flag:
+                        self.stop_flag.append(signal.Signals(byte[0]).name)
                 if not stopped:
                     stopped = True
                     self.cancel()
@@ -838,23 +845,34 @@ def wait_run(proc: subprocess.Popen[bytes], seconds: float) -> bool:
 
 
 def stop_group(proc: subprocess.Popen[bytes]) -> None:
-    """SIGTERM to the run's process group, then SIGKILL to what is left after five seconds.
+    """One run's group stopped; see stop_groups."""
+    stop_groups([proc])
 
-    It waits on the group, not on the program: a child can outlive the program, and can
+
+def stop_groups(procs: Sequence[subprocess.Popen[bytes]]) -> None:
+    """SIGTERM to every run's process group at once, then SIGKILL to what is left after
+    five seconds in all, not five seconds for each.
+
+    It waits on the groups, not on the programs: a child can outlive the program, and can
     ignore SIGTERM after the program has gone.
     """
-    if signal_group(proc, signal.SIGTERM):
-        deadline = time.monotonic() + KILL_GRACE_S
-        while time.monotonic() < deadline:
-            proc.poll()  # a program that has ended stays in the group until it is reaped
-            if not signal_group(proc, 0):
-                break
+    waiting = [proc for proc in procs if signal_group(proc, signal.SIGTERM)]
+    deadline = time.monotonic() + KILL_GRACE_S
+    while waiting and time.monotonic() < deadline:
+        waiting = [proc for proc in waiting if group_alive(proc)]
+        if waiting:
             time.sleep(GROUP_POLL_S)
-        else:
-            signal_group(proc, signal.SIGKILL)
-    if proc.poll() is None:  # it left the group by itself
-        proc.kill()
-    proc.wait()
+    for proc in waiting:
+        signal_group(proc, signal.SIGKILL)
+    for proc in procs:
+        if proc.poll() is None:  # it left the group by itself
+            proc.kill()
+        proc.wait()
+
+
+def group_alive(proc: subprocess.Popen[bytes]) -> bool:
+    proc.poll()  # a program that has ended stays in the group until it is reaped
+    return signal_group(proc, 0)
 
 
 def signal_group(proc: subprocess.Popen[bytes], sig: int) -> bool:

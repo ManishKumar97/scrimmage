@@ -35,6 +35,7 @@ def test_an_unlisted_hosted_mcp_server_is_never_sent(project: Project) -> None:
     assert 'add "hosted:mcp/orders" to [agent] real' in result.out
     refused = next(x for x in result.records()[0] if x.get("action") == "refused")
     assert refused["reason"] == "hosted"
+    assert refused["by_config"] is True
 
 
 @pytest.mark.design("hosted.listed_runs")

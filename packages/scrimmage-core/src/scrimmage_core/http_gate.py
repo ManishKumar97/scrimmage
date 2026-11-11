@@ -74,6 +74,14 @@ MISTAKE_REASONS = (
     "unlisted",
     "ambiguous_label",
 )
+# Of those, the refusals the test's setup caused, not the agent: a later reader says so.
+SETUP_REASONS = (
+    "hosted",
+    "unreadable_body",
+    "unreadable_model",
+    "redirect_off_host",
+    "unsupported_loop",
+)
 # The MCP endpoint a transport is sending to, set only while it sends. Those messages were
 # decided at the MCP gate or are the connection's own, so the web gate does not decide them
 # again. It is the whole endpoint, not a flag: an event hook or an auth flow runs inside the
@@ -437,6 +445,8 @@ def without_faults(run: RunState, step: Step) -> None:
 def refuse(run: RunState, step: Step, detail: str) -> NoReturn:
     error = run.refusal(step, redact(detail))
     mistake = str(error) if step.decision.reason in MISTAKE_REASONS else None
+    if step.decision.reason in SETUP_REASONS:
+        step.extra["by_config"] = True  # the test's setup caused this refusal, not the agent
     run.finish(step, error=error, mistake=mistake)
     raise error
 

@@ -404,7 +404,7 @@ A value that is removed or renamed comes only with a new version.
 | `outcome` | `answered`, `crashed`, `timed out`, `refused call`, `budget reached`, `not reserved`, `infrastructure error`, `stopped` | read as other |
 | `judged` | `pass`, `fail`, `left out` | read as other |
 | `kind` | `expect`, `forbid`, `empty`, `crashed`, `timed out`, `refused` | read as other |
-| `code` | `refused`, `raised`, `status`, `differs`, `nondeterministic`, `unsavable`, `null`, `placeholder`, `too_large`, `binary`, `incomplete_reply`, `secret_changed_shape`, `model_inside`, `not_finished`, `outside_tool`, `credential`; in a suggestion, `test_mistake`, `not_agent`, `fault_not_fired`, `refused_call`, `refused_on_baseline`, `crash_after_fault`, `crash_on_baseline`, `retry_loop`, `timeout_after_fault`, `timeout_on_baseline`, `forbid_after_fault`, `expect_after_fault`, `empty_answer`, `rule_on_baseline`, `mock_miss_real`, `mock_miss_refused` | read as other |
+| `code` | `refused`, `raised`, `status`, `differs`, `nondeterministic`, `unsavable`, `null`, `placeholder`, `too_large`, `binary`, `incomplete_reply`, `secret_changed_shape`, `model_inside`, `not_finished`, `outside_tool`, `credential`; in a suggestion, `test_mistake`, `not_agent`, `fault_not_fired`, `fault_not_changed`, `refused_call`, `refused_on_baseline`, `crash_after_fault`, `crash_on_baseline`, `retry_loop`, `timeout_after_fault`, `timeout_on_baseline`, `forbid_after_fault`, `expect_after_fault`, `empty_answer`, `rule_on_baseline`, `mock_miss_real`, `mock_miss_refused` | read as other |
 | `rule` | `pattern`, `key_name` | read as other |
 | `found_by` | `probe`, `static` | read as other |
 | `problem` | `ambiguous`, `nested`, `not_found` | read as other |

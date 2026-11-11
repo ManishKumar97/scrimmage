@@ -1415,6 +1415,25 @@ def test_the_record_document_change_is_additive() -> None:
     assert "runs" in defs["written_mock"]["properties"]
 
 
+@pytest.mark.parametrize(
+    ("item", "valid"),
+    [
+        ({"seq": 3, "proc": "main"}, True),
+        ({"summary": True}, True),
+        ({}, False),
+        ({"seq": 3}, False),
+        ({"proc": "main"}, False),
+        ({"summary": True, "seq": 3}, False),
+    ],
+)
+def test_a_suggestions_evidence_item_is_a_record_line_or_the_summary(
+    item: dict[str, Any], valid: bool
+) -> None:
+    evidence = CLI_SCHEMA["$defs"]["suggestion"]["properties"]["evidence"]  # type: ignore[index]
+    checker = jsonschema.Draft202012Validator(evidence)
+    assert checker.is_valid([item]) is valid
+
+
 def main_cells(entry: runner.RowReport) -> list[str]:
     """A table row as main formatted it: from the counts and judge.wilson, never from JSON."""
     row, mine, result = entry.row, entry.runs, entry.result
