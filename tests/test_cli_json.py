@@ -755,6 +755,22 @@ def test_sigterm_while_the_file_is_read_still_gives_one_document(
     # Handlers no test could have left: so a handler a command leaves set cannot pass.
     marker_int, marker_term = signal.default_int_handler, signal.SIG_DFL
     monkeypatch.setattr(config, "load", terminated)
+    before: tuple[Any, Any] = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
+    try:
+        run_both(project, capsys, marker_int, marker_term)
+    finally:  # under a shell's &, SIGINT starts as SIG_IGN: leave both as they were
+        signal.signal(signal.SIGINT, before[0])
+        signal.signal(signal.SIGTERM, before[1])
+    # After the first signal the handler was still set, not SIG_IGN, so a second would count.
+    assert handlers == [cli.stop, cli.stop]
+
+
+def run_both(
+    project: Project,
+    capsys: pytest.CaptureFixture[str],
+    marker_int: Any,
+    marker_term: Any,
+) -> None:
     for command in ("test", "check"):
         signal.signal(signal.SIGINT, marker_int)
         signal.signal(signal.SIGTERM, marker_term)
@@ -764,8 +780,6 @@ def test_sigterm_while_the_file_is_read_still_gives_one_document(
         assert messages(doc, "infra") == ["stopped by SIGTERM"], command
         assert signal.getsignal(signal.SIGINT) is marker_int, command  # put back after it
         assert signal.getsignal(signal.SIGTERM) is marker_term, command
-    # After the first signal the handler was still set, not SIG_IGN, so a second would count.
-    assert handlers == [cli.stop, cli.stop]
 
 
 # Sends SIGTERM from inside a __del__ and spins there, so the handler runs inside it, where
