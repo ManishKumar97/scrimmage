@@ -96,7 +96,7 @@ The text of a message can change in any release.
 | `tests` | How many `[[test]]` tables the file has. |
 | `rows` | One object per table row, in the table's order. Empty when the file did not load, when a signal stopped the test, or when Scrimmage itself failed. A test a refusal stopped, such as for the budget, still has every row, and the rows that did not run have `runs` 0. |
 | `cost_usd` | What the model calls cost, in dollars. |
-| `budget_usd` | `max_cost_usd`, or `null` when the budget is off. |
+| `budget_usd` | The cost cap the test ran under: `max_cost_usd`, or the lower `--max-cost-usd`, or `null` when the budget is off. |
 | `stopped_by` | The reason a refusal stopped the whole test, such as `budget`, or `null`. |
 | `mock_misses` | The calls that had a mock on their label and matched none, one object per distinct call, below. Absent in `scrimmage record --json`. At most 200, real calls first. |
 | `mock_misses_left_out` | How many more misses than the 200 listed. |
@@ -173,14 +173,16 @@ SIGKILL cannot be caught, so it leaves no document.
 ```json
 {
   "v": 1, "scrimmage": "0.4.0", "command": "check", "exit": 0, "status": "valid", "config": "scrimmage.toml",
-  "summary": {"tests": 2, "rows": 5, "runs": 15, "tools": 4, "budget_usd": 5.0},
+  "summary": {"tests": 2, "rows": 5, "runs": 15, "tools": 4, "budget_usd": 5.0, "real": ["tool:check_inventory"], "entry": {"kind": "function", "value": "acme.agent:answer"}},
   "mistakes": [], "notes": [], "warnings": [], "infra": []
 }
 ```
 
 | Field | Meaning |
 |---|---|
-| `summary` | What the file holds: `tests`, `rows`, the `runs` a test would start, the `tools` listed and `budget_usd`. `null` when the file does not load. |
+| `summary` | What the file holds: `tests`, `rows`, the `runs` a test would start, the `tools` listed, `budget_usd`, `real` and `entry`. With `--runs N`, `runs` counts what `scrimmage record --runs N` would start: one baseline per test, N times. `null` when the file does not load. |
+| `real` | In `summary`: the labels under `[agent] real`, as the file writes them. |
+| `entry` | In `summary`: the entry point a test would start, its `kind`, `function` or `command`, and its `value`, the function or the command line. |
 
 ## scrimmage record --json
 
@@ -190,6 +192,7 @@ SIGKILL cannot be caught, so it leaves no document.
   "out": "scrimmage.recorded.toml",
   "records": "scrimmage-runs/20261107T101500Z-a1b2c3",
   "cost_usd": 0.0012,
+  "budget_usd": 5.0,
   "numbers": {"calls_seen": 4, "calls_written": 3, "runs": 1, "runs_recorded": 1, "argument_sets_seen": 1, "argument_sets_written": 1},
   "tests": [
     {
@@ -219,6 +222,7 @@ SIGKILL cannot be caught, so it leaves no document.
 | `out` | The file written, whole. `null` means nothing was written. The reason is in `mistakes` or `infra`, or, for a record with no mocks that keeps an earlier file, in `notes`, and that alone does not change the exit code, so it can be 0 and `complete`. |
 | `records` | The folder that holds this record's run, or `null` when no run started. |
 | `cost_usd` | What the model calls cost, in dollars. |
+| `budget_usd` | The cost cap the record ran under: `max_cost_usd`, or the lower `--max-cost-usd`. `null` when the budget is off or no run started. |
 | `numbers` | `calls_seen`, the real tool, MCP and web calls that no other call made, less the credential requests. `calls_written`, those whose level was written whole. |
 | `calls_seen`, `calls_written` | See `numbers`. Over every run of every test. |
 | `runs` | In `numbers`: the runs of each test that `--runs` asked for. In a test: one object per run, in the order the runs were submitted, with `run`, `outcome`, `calls_seen`, `calls_written` and `cost_usd`. In a written mock: how many runs saw its key. |
@@ -238,6 +242,7 @@ SIGKILL cannot be caught, so it leaves no document.
 | `mocks_text` | Only when the file's layout could not take the mocks: the mocks, for you to copy in. `out` is then `null`. |
 
 The diff is in the text output only: compare `config` with `out` to see it.
+With `--runs` above 1, the line the text form prints before the first run, how many runs and what each calls for real, is the first of `notes`, so standard error stays empty.
 
 ## scrimmage init --json
 

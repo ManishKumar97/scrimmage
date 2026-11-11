@@ -1807,6 +1807,7 @@ def json_fields(result: Result) -> dict[str, object]:
         "out": result.out,
         "records": str(result.folder),
         "cost_usd": round(result.spent, 8),
+        "budget_usd": result.budget,
         "numbers": {
             "calls_seen": result.seen,
             "calls_written": result.done,

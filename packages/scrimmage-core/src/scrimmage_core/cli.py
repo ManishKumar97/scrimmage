@@ -7,7 +7,11 @@ document starts with the same envelope; schemas/cli.v1.json describes it.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
+import math
+import re
+import shlex
 import signal
 import sys
 import threading
@@ -97,6 +101,15 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
         "--refresh", action="append", default=[], metavar="LABEL", help="record this label again"
     )
     record.add_argument("--runs", default="1", metavar="N", help="run each test's baseline N times")
+    check.add_argument(
+        "--runs", metavar="N", help="count the runs scrimmage record --runs N would start"
+    )
+    for command in (test, record):
+        command.add_argument(
+            "--max-cost-usd",
+            metavar="USD",
+            help="lower the file's max_cost_usd to this for this command; it never raises it",
+        )
     commands.add_parser("schema", help="print the JSON Schema of scrimmage.toml")
     init = commands.add_parser(
         "init", help="draft a scrimmage.toml by reading the code", allow_abbrev=False
@@ -138,18 +151,24 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
 def chosen_command(args: argparse.Namespace) -> Callable[[Path, Found | None], int]:
     """The function that runs this command, with a command's own flags already bound."""
     if args.command == "test":
-        compare = args.compare
+        compare, cap = args.compare, args.max_cost_usd
 
         def test(path: Path, found: Found | None) -> int:
-            return run_test(path, found, compare)
+            return run_test(path, found, compare, cap)
 
         return test
     if args.command == "check":
-        return run_check
+        record_runs = args.runs
+
+        def check(path: Path, found: Found | None) -> int:
+            return run_check(path, found, record_runs)
+
+        return check
     names, refresh, runs = list(args.test), list(args.refresh), str(args.runs)
+    record_cap = args.max_cost_usd
 
     def record(path: Path, found: Found | None) -> int:
-        return run_record(path, found, names, refresh, runs)
+        return run_record(path, found, names, refresh, runs, record_cap)
 
     return record
 
@@ -250,6 +269,7 @@ def empty_record() -> dict[str, object]:
         "out": None,
         "records": None,
         "cost_usd": 0.0,
+        "budget_usd": None,
         "numbers": {"calls_seen": 0, "calls_written": 0},
         "tests": [],
     }
@@ -335,6 +355,26 @@ def read(path: Path) -> tuple[settings.Config | None, list[str]]:
         return None, list(exc.problems)
 
 
+# A dollar amount as Python's repr prints a float: digits, a point, an exponent. Not float()
+# alone, which takes "nan", "inf", " 5" and full-width digits.
+AMOUNT = re.compile(r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?", flags=re.ASCII)
+
+
+def capped(config: settings.Config, cap: str | None) -> tuple[settings.Config | None, list[str]]:
+    """The config with max_cost_usd lowered to --max-cost-usd, once, right after the file is
+    read. Every reader takes the cap from the config, so the flag holds for all of them. The
+    lower of the two wins, so the flag never raises a cap; a file with no budget takes it."""
+    if cap is None:
+        return config, []
+    usd = float(cap) if AMOUNT.fullmatch(cap) else math.nan
+    if not (math.isfinite(usd) and usd > 0):
+        return None, [f"--max-cost-usd: expected a number of dollars above 0, got {cap!r}"]
+    file_cap = config.agent.max_cost_usd
+    lower = usd if file_cap is None else min(file_cap, usd)
+    agent = dataclasses.replace(config.agent, max_cost_usd=lower)
+    return dataclasses.replace(config, agent=agent), []
+
+
 def say(problems: list[str], err: TextIO) -> None:
     for problem in problems:
         print(plain(f"scrimmage: {problem}"), file=err)
@@ -351,7 +391,9 @@ def unreadable(command: str, exc: Exception, found: Found | None) -> int:
     return INFRA
 
 
-def run_test(path: Path, found: Found | None, compare: Path | None = None) -> int:
+def run_test(
+    path: Path, found: Found | None, compare: Path | None = None, cap: str | None = None
+) -> int:
     from scrimmage_core import runner as running  # the heavy import waits until a test runs
 
     try:
@@ -359,6 +401,8 @@ def run_test(path: Path, found: Found | None, compare: Path | None = None) -> in
     except Exception as exc:  # Scrimmage's own failure, not a mistake in the file
         return unreadable("test", exc, found)
     stop_point()
+    if config is not None:
+        config, problems = capped(config, cap)
     if config is None:
         return test_mistakes(problems, found)
     earlier: dict[str, object] | None = None
@@ -489,7 +533,12 @@ def save_result(folder: Path, doc: dict[str, object]) -> tuple[Path | None, str 
 
 
 def run_record(
-    path: Path, found: Found | None, names: list[str], refresh: list[str], runs: str = "1"
+    path: Path,
+    found: Found | None,
+    names: list[str],
+    refresh: list[str],
+    runs: str = "1",
+    cap: str | None = None,
 ) -> int:
     """One real baseline run per test, its real calls written as mocks beside the team's file."""
     from scrimmage_core import record as recording
@@ -500,13 +549,18 @@ def run_record(
     except Exception as exc:  # Scrimmage's own failure, not a mistake in the file
         return unreadable("record", exc, found)
     stop_point()
+    if config is not None:
+        config, problems = capped(config, cap)
     if config is None:
         return record_mistakes(problems, found)
     plan, problems = recording.prepare(config, names, refresh, runs)
     if plan is None:
         return record_mistakes(problems, found)
     if (before := recording.before_runs(plan.config)) is not None:
-        print(f"scrimmage record: {before}", file=sys.stderr if found else sys.stdout, flush=True)
+        if found is None:
+            print(f"scrimmage record: {before}", flush=True)
+        else:  # standard error stays empty under --json
+            found.messages.append((NOTES, before))
     runner: Runner | None = None
     results: list[running.RunResult] = []
     stopped: str | None = None
@@ -517,6 +571,7 @@ def run_record(
         if found is not None:
             found.runner = runner
             found.fields["records"] = str(runner.folder)
+            found.fields["budget_usd"] = plan.config.agent.max_cost_usd
         stop_point()
         results = runner.run_all()
     except running.Interrupted as exc:
@@ -564,8 +619,11 @@ def record_mistakes(problems: list[str], found: Found | None) -> int:
     return MISTAKE
 
 
-def run_check(path: Path, found: Found | None) -> int:
-    """The checks scrimmage test makes before its first run. It starts nothing."""
+def run_check(path: Path, found: Found | None, record_runs: str | None = None) -> int:
+    """The checks scrimmage test makes before its first run. It starts nothing.
+
+    record_runs: --runs, so the runs counted are those scrimmage record --runs N would start.
+    """
     try:
         config, problems = read(path)
     except Exception as exc:  # Scrimmage's own failure, not a mistake in the file
@@ -580,12 +638,30 @@ def run_check(path: Path, found: Found | None) -> int:
         return MISTAKE
     agent = config.agent
     rows = len(planner.rows(config))
+    runs = rows * agent.runs
+    if record_runs is not None:
+        from scrimmage_core import record as recording  # only for --runs: it brings the runner
+
+        count, problems = recording.runs_problems(config, record_runs)
+        if problems:
+            if found is not None:
+                found.messages += [(MISTAKES, problem) for problem in problems]
+                return MISTAKE
+            say(problems, sys.stderr)
+            print(f"scrimmage check: {plural(len(problems), 'problem')}; nothing was run")
+            return MISTAKE
+        runs = len(config.tests) * count  # one baseline per test, N times
+    entry_kind, entry_value = (
+        ("command", shlex.join(agent.command)) if agent.command else ("function", agent.function)
+    )
     summary: dict[str, object] = {
         "tests": len(config.tests),
         "rows": rows,
-        "runs": rows * agent.runs,
+        "runs": runs,
         "tools": len(agent.tools),
         "budget_usd": agent.max_cost_usd,
+        "real": list(agent.real),
+        "entry": {"kind": entry_kind, "value": entry_value},
     }
     if found is not None:
         found.fields["summary"] = summary
@@ -594,7 +670,7 @@ def run_check(path: Path, found: Found | None) -> int:
     budget = "no budget" if agent.max_cost_usd is None else f"a budget of ${agent.max_cost_usd:g}"
     print(
         f"scrimmage check: {path} is valid: {plural(len(config.tests), 'test')}, "
-        f"{plural(rows, 'row')}, {plural(rows * agent.runs, 'run')}, {tools}, {budget}"
+        f"{plural(rows, 'row')}, {plural(runs, 'run')}, {tools}, {budget}"
     )
     return OK
 

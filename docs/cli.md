@@ -1,15 +1,19 @@
 # Commands
 
 `scrim` is a short name for `scrimmage`: `scrim test` and `scrimmage test` are the same command.
+`python -m scrimmage_core` is the same command too, on the Python that runs it.
 
 ## scrimmage test
 
 ```bash
-scrimmage test [path/to/scrimmage.toml] [--compare EARLIER] [--json]
+scrimmage test [path/to/scrimmage.toml] [--compare EARLIER] [--max-cost-usd USD] [--json]
 ```
 
 Runs every test in the file, which is `scrimmage.toml` in the current folder by default.
 With `--json` it prints one JSON document in place of the table; see [JSON output](json-output.md).
+`--max-cost-usd USD` lowers the file's `max_cost_usd` to `USD` for this test, a number of dollars above 0.
+It never raises it: the lower of the two is the cap, and a file with `max_cost_usd = "none"` gets `USD`.
+The report and the document's `budget_usd` name the cap used.
 A test that finished writes `result.json` into its records folder, so `scrimmage show` can read it later.
 With `--compare EARLIER` it prints, after its own output, how each row changed from an earlier test; see [Reading a finished test](show.md).
 
@@ -36,10 +40,11 @@ Stopping `scrimmage test` (Ctrl-C, or a cancelled CI job) stops every run and ev
 ## scrimmage check
 
 ```bash
-scrimmage check [path/to/scrimmage.toml] [--json]
+scrimmage check [path/to/scrimmage.toml] [--json] [--runs N]
 ```
 
 Checks the file the way `scrimmage test` does before its first run, and runs nothing.
+`--runs N` counts the runs `scrimmage record --runs N` would start, one baseline per test, N times, and checks `N` as `record` does.
 `scrimmage check` reads the file only: it starts no program, no control server and no model call, and makes no `scrimmage-runs/` folder, so it costs nothing.
 It catches every bad key, value and label, a tool name that is not in `tools`, a mock's `type` outside your packages, a `command` it cannot find, a flag that would skip Scrimmage's startup file, and a row no answer can pass.
 A file `scrimmage check` passes is one `scrimmage test` starts.
@@ -68,7 +73,7 @@ scrimmage check: 1 problem; nothing was run
 ## scrimmage record
 
 ```bash
-scrimmage record [path/to/scrimmage.toml] [--test NAME]... [--refresh LABEL]... [--runs N] [--json]
+scrimmage record [path/to/scrimmage.toml] [--test NAME]... [--refresh LABEL]... [--runs N] [--json] [--max-cost-usd USD]
 ```
 
 Runs each test's baseline, once or `--runs N` times, with its mocks and nothing injected, and writes each real tool, MCP and web call as a mock in `scrimmage.recorded.toml`, beside your file.
@@ -76,6 +81,7 @@ Your file is never changed. See [Recording replies](recording.md).
 `--test NAME` records only that test. `--refresh LABEL` records a label again that already has a mock.
 `--runs N` runs each test's baseline N times, 1 by default, and writes one exact mock for each set of arguments the runs sent.
 `N` is a whole number from 1 to 1000, and the file's `runs` is not read. See [Recording more than one run](recording.md#recording-more-than-one-run).
+`--max-cost-usd USD` lowers the cost cap as it does for `scrimmage test`.
 
 | Code | Meaning |
 |---|---|

@@ -662,6 +662,31 @@
                       "$ref": "#/$defs/dollars"
                     }
                   ]
+                },
+                "real": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The labels under [agent] real, as the file writes them."
+                },
+                "entry": {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "value"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "description": "function or command."
+                    },
+                    "value": {
+                      "type": "string",
+                      "description": "The function, or the command line, the file names."
+                    }
+                  },
+                  "description": "The entry point a test would start."
                 }
               }
             }
@@ -770,6 +795,17 @@
         },
         "cost_usd": {
           "$ref": "#/$defs/dollars"
+        },
+        "budget_usd": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/dollars"
+            }
+          ],
+          "description": "The cost cap used, or null when the budget is off or no run started."
         },
         "numbers": {
           "type": "object",
