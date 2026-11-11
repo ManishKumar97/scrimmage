@@ -19,7 +19,7 @@ from typing import Any, cast
 from scrimmage_core import mocks
 from scrimmage_core.config import IMPORT_PATH
 from scrimmage_core.errors import ScrimmageMockError
-from scrimmage_core.redact import REMOVED, redacted
+from scrimmage_core.redact import REMOVED, hide_header_credentials, redacted
 
 INT64 = (-(2**63), 2**63 - 1)  # TOML integers are 64 bits
 # A string value under a key with one of these whole word parts is a secret by its name.
@@ -275,6 +275,9 @@ def clean(value: object) -> tuple[object, list[Removed]]:
                 removed.append({"key": key, "rule": KEY_NAME})
                 return REMOVED
             return text(item, key)
+        if isinstance(item, list | dict):
+            item, hidden = hide_header_credentials(cast(object, item))
+            removed.extend({"key": key, "rule": PATTERN} for _ in range(hidden))
         if isinstance(item, list):
             return [walk(x, key, secret) for x in cast(list[object], item)]
         if isinstance(item, dict):

@@ -1918,6 +1918,48 @@ def answer(question):
     assert mock["json"] == {"cmd": 'curl -d "[secret removed]" https://a.b', "n": 1}
 
 
+def test_a_basic_header_in_a_web_reply_or_a_tool_value_is_not_written(team: Team) -> None:
+    """The name and the value are two strings, so only the pair rule sees them. A HAR header
+    list, a [name, value] list and a name/value object are all judged."""
+    secret = "dXNlcjpodW50ZXIy"
+    team.service.json(
+        "/har", {"headers": [{"name": "Authorization", "value": f"Basic {secret}"}], "n": 1}
+    )
+    team.write(
+        f"""
+def har(name):
+    return http_get("/har").json()["n"]
+
+def pairs(name):
+    return [["Authorization", "Basic {secret}"], ["Accept", "*/*"]]
+
+def named(name):
+    return {{"name": "Proxy-Authorization", "value": "Basic {secret}"}}
+
+def answer(question):
+    har("x")
+    pairs("x")
+    named("x")
+    return "ok"
+""",
+        ["bot:har", "bot:pairs", "bot:named"],
+        ("tool:har", "tool:pairs", "tool:named"),
+    )
+    done = team.record()
+    assert done.code == 0, done.out
+    assert secret not in team.out_path.read_text()
+    mocks = {m.get("path") or m["call"]: m for m in done.mocks()}
+    assert mocks["/har"]["json"]["headers"][0]["value"] == "[secret removed]"
+    assert mocks["tool:pairs"]["returns"] == [
+        ["Authorization", "[secret removed]"],
+        ["Accept", "*/*"],
+    ]
+    assert mocks["tool:named"]["returns"] == {
+        "name": "Proxy-Authorization",
+        "value": "[secret removed]",
+    }
+
+
 def test_a_json_reply_ending_a_string_on_a_field_name_is_written_as_valid_json(
     team: Team,
 ) -> None:

@@ -69,10 +69,11 @@ IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
 # list of byte pairs. ASCII only, so the lowered text holds the literal.
 BASIC = r"(?ai:authorization)(?:\W|b(?=[\"'])){1,8}(?ai:basic)\s+[A-Za-z0-9+/_-]{8,}={0,2}"
 BASIC_RE = re.compile(BASIC)
-# In a JSON object or list the name and the value are separate strings, so the rules that
-# need both are tried on the pair: an Authorization header.
-AUTH_NAME = re.compile(r"(?:proxy-)?authorization", re.ASCII | re.IGNORECASE)
-LABELS = ("name", "key", "header")
+# In a JSON object or list the name and the value are separate strings, so the rule that
+# needs both is tried on the pair: an Authorization header with a Basic value. The name may
+# end in authorization after _ or -, as in HTTP_AUTHORIZATION and X-Forwarded-Authorization.
+AUTH_NAME = re.compile(r"(?:.*[_-])?authorization", re.ASCII | re.IGNORECASE)
+LABELS = ("name", "key", "header", "field")
 
 
 SECRETS = (
@@ -237,6 +238,68 @@ def encode(node: object, item: str, colon: str, ascii_only: bool) -> str:
     return json.dumps(node)
 
 
+def basic_value(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and not isinstance(value, Number)
+        and BASIC_RE.search("authorization: " + value) is not None
+    )
+
+
+def hide_basic(value: object) -> tuple[object, int]:
+    """A Basic value, or each Basic string in a list of strings, replaced."""
+    if isinstance(value, list):
+        items = [hide_basic(item) for item in cast(list[object], value)]
+        return [item for item, _ in items], sum(more for _, more in items)
+    if isinstance(value, str) and basic_value(value):
+        return REMOVED, 1
+    return value, 0
+
+
+def hide_header_credentials(node: object) -> tuple[object, int]:
+    """The node with Basic credentials removed from the header-like pairs directly in it,
+    and how many. One judgement for JSON text and for Python values: the callers walk the
+    tree and call it on each dict and list. It reads a name beside a value (a header map,
+    whose value may be a list), {"name": ..., "value": ...} and {"field": ..., "values":
+    [...]}, and a name followed by a value in any list, as in Node's rawHeaders. A node with
+    nothing to remove is returned as it is."""
+    if isinstance(node, list) and not isinstance(node, Members):
+        items: list[object] = list(cast(list[object], node))
+        found = 0
+        for at in range(len(items) - 1):
+            name = items[at]
+            if (
+                isinstance(name, str)
+                and AUTH_NAME.fullmatch(name.strip())
+                and basic_value(items[at + 1])
+            ):
+                items[at + 1] = REMOVED
+                found += 1
+        return (items, found) if found else (cast(object, node), 0)
+    if isinstance(node, Members):
+        pairs = list(node)
+    elif isinstance(node, dict):
+        pairs = list(cast(dict[str, object], node).items())
+    else:
+        return node, 0
+    labelled = any(
+        name in LABELS and isinstance(label, str) and AUTH_NAME.fullmatch(label.strip())
+        for name, label in pairs
+    )
+    out: list[tuple[str, object]] = []
+    found = 0
+    for name, value in pairs:
+        named = AUTH_NAME.fullmatch(name.strip()) is not None or (
+            labelled and name in ("value", "values")
+        )
+        value, more = hide_basic(value) if named else (value, 0)
+        found += more
+        out.append((name, value))
+    if not found:
+        return cast(object, node), 0
+    return cast(object, Members(out) if isinstance(node, Members) else dict(out)), found
+
+
 def structural(text: str) -> tuple[str, int] | None:
     """A JSON object or array, redacted string by string, so the result still parses and has
     the same keys and lengths. None if the text is not one. Only a change is written back,
@@ -263,23 +326,12 @@ def structural(text: str) -> tuple[str, int] | None:
         count += more
         return kept
 
-    def labelled(node: Members, name: str, value: object) -> bool:
-        """{"name": "Authorization", "value": "Basic ..."}: the value of a header-like pair."""
-        if name != "value" or not isinstance(value, str):
-            return False
-        return any(
-            key in LABELS and isinstance(label, str) and pair_secret(label, value)
-            for key, label in node
-        )
-
     def rename(node: Members) -> Iterator[tuple[str, object]]:
         # Two names that redact to the same text would become one key, so a later one is
         # numbered. The count of keys is kept.
         taken = {name for name, _ in node}
         for name, value in node:
             kept = clean(name)
-            if pair_secret(name, value) or labelled(node, name, value):
-                value = hide(value)
             if kept != name:
                 base, number = kept, 2
                 while kept in taken:
@@ -287,34 +339,20 @@ def structural(text: str) -> tuple[str, int] | None:
                 taken.add(kept)
             yield kept, walk(value)
 
-    def pair_secret(name: str, value: object) -> bool:
-        """Whether a name and the value beside it, which are two strings in JSON, are an
-        Authorization header with a Basic value. A secret-like key such as "password" is the
-        key-name rule of the recording layer, which reports it, so it is not judged here."""
-        if not isinstance(value, str) or isinstance(value, Number) or value == "":
-            return False
-        name = name.strip()
-        if AUTH_NAME.fullmatch(name):
-            return BASIC_RE.search(f"{name}: {value}") is not None
-        return False
-
-    def hide(value: object) -> object:
-        nonlocal count
-        count += 1
-        return REMOVED
-
     def walk(node: object) -> object:
+        nonlocal count
         if isinstance(node, Number):
             return node
         if isinstance(node, str):
             return clean(node)
         if isinstance(node, Members):
-            return Members(rename(node))
+            node, hidden = hide_header_credentials(node)
+            count += hidden
+            return Members(rename(cast(Members, node)))
         if isinstance(node, list):
-            items = cast(list[object], node)
-            if len(items) == 2 and isinstance(items[0], str) and pair_secret(items[0], items[1]):
-                return [items[0], hide(items[1])]
-            return [walk(value) for value in items]
+            node, hidden = hide_header_credentials(cast(object, node))
+            count += hidden
+            return [walk(value) for value in cast(list[object], node)]
         return node
 
     try:

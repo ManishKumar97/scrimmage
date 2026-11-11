@@ -10,6 +10,7 @@ from typing import cast
 
 import pytest
 
+from scrimmage_core import capture
 from scrimmage_core import redact as redact_module
 from scrimmage_core.redact import redact, redacted
 
@@ -631,11 +632,18 @@ def seeded_pair(rng: random.Random, found: list[str]) -> object:
     """A header map, a list of pairs, or a name and a value: two strings in JSON."""
     value = f"hunt{len(found)}x{rng.randrange(10**6)}"
     b64 = base64.b64encode(f"u:{value}pad".encode()).decode().rstrip("=")
-    name = rng.choice(["Authorization", "authorization", "Proxy-Authorization"])
+    name = rng.choice(
+        ["Authorization", "authorization", "Proxy-Authorization", "HTTP_AUTHORIZATION"]
+    )
+    basic = f"Basic {b64}"
     shapes = [
-        ({name: f"Basic {b64}", "n": 1}, b64),
-        ([[name, f"Basic {b64}"], ["x", "y"]], b64),
-        ({"name": name, "value": f"Basic {b64}"}, b64),
+        ({name: basic, "n": 1}, b64),
+        ([[name, basic], ["x", "y"]], b64),
+        ({"name": name, "value": basic}, b64),
+        ({"field": name, "values": [basic, "other"]}, b64),
+        ({name: [basic]}, b64),
+        (["Host", "example.com", name, basic, "Accept", "*/*"], b64),
+        ({"headers": [{"name": name, "value": basic}, {"name": "Host", "value": "h"}]}, b64),
     ]
     tree, secret = rng.choice(shapes)
     found.append(secret)
@@ -719,6 +727,90 @@ def test_a_text_that_parsed_as_json_still_parses_if_writing_it_back_fails(
 
     monkeypatch.setattr(redact_module, "encode", deep)
     assert json.loads(redact(text)) == "[secret removed]"
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_the_same_pair_judgement_holds_for_python_values_and_json_text() -> None:
+    """No seeded Basic pair survives, as JSON text or as Python values, and the shape of the
+    tree is kept."""
+    rng = random.Random(4747)
+    cases = 0
+    for _ in range(25_000):
+        found: list[str] = []
+        tree = seeded_tree(rng, found)
+        cleaned, _removed = capture.clean(tree)
+        # capture.clean joins two names that redact to the same text, so only the secrets and
+        # the pure pair function are compared on shape here
+        for secret in found:
+            assert secret not in json.dumps(cleaned), (secret, tree)
+        again, _count = redact_module.hide_header_credentials(tree)
+        assert shape(again) == shape(tree)
+        text = json.dumps(tree)
+        out = redact(text)
+        assert shape(json.loads(out)) == shape(tree), text
+        for secret in found:
+            assert secret not in out, (secret, text)
+        cases += 2
+    assert cases >= 50_000
+
+
+# The shape, and the rules that report it: a key that names a secret is also caught by the
+# key-name rule of capture, so those two are reported twice.
+HEADER_SHAPES: list[tuple[object, list[str]]] = [
+    ({"headers": [{"name": "Authorization", "value": "Basic dXNlcjpodW50ZXIy"}]}, ["pattern"]),
+    ([["Authorization", "Basic dXNlcjpodW50ZXIy"]], ["pattern"]),
+    ({"name": "authorization", "value": "Basic dXNlcjpodW50ZXIy"}, ["pattern"]),
+    ({"field": "Proxy-Authorization", "values": ["Basic dXNlcjpodW50ZXIy"]}, ["pattern"]),
+    ({"Authorization": ["Basic dXNlcjpodW50ZXIy"]}, ["pattern", "key_name"]),
+    ({"rawHeaders": ["Host", "x", "Authorization", "Basic dXNlcjpodW50ZXIy"]}, ["pattern"]),
+    ({"env": {"HTTP_AUTHORIZATION": "Basic dXNlcjpodW50ZXIy"}}, ["pattern", "key_name"]),
+    ({"X-Forwarded-Authorization": "Basic dXNlcjpodW50ZXIy"}, ["pattern", "key_name"]),
+]
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize(
+    ("value", "rules"), HEADER_SHAPES, ids=[f"header-{n}" for n in range(len(HEADER_SHAPES))]
+)
+def test_a_basic_header_is_removed_from_python_values_and_from_json_text(
+    value: object, rules: list[str]
+) -> None:
+    secret = "dXNlcjpodW50ZXIy"
+    cleaned, removed = capture.clean(value)
+    assert secret not in json.dumps(cleaned)
+    assert [r["rule"] for r in removed] == rules
+    assert shape(cleaned) == shape(value)
+    assert secret not in redact(json.dumps(value))
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_headers_that_are_not_a_basic_credential_are_kept() -> None:
+    for value in (
+        {"Authorization": "Bearer"},
+        {"Authorization": "Basic realm"},
+        {"Host": "Basic dXNlcjpodW50ZXIy"},
+        ["Accept", "Basic dXNlcjpodW50ZXIy"],
+        {"name": "Host", "value": "Basic dXNlcjpodW50ZXIy"},
+        {"author": "Basic dXNlcjpodW50ZXIy"},
+    ):
+        assert redact(json.dumps(value)) == json.dumps(value), value
+        if "Authorization" not in value:  # that key is a secret name, so capture hides it whole
+            cleaned, removed = capture.clean(value)
+            assert cleaned == value and removed == [], value
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_a_json_key_named_password_is_left_to_the_recording_layer() -> None:
+    """redact() judges patterns only. The side folder and the log previews use it alone, so
+    a key-named value stays there; mocks, tool values and miss evidence also get the key rule."""
+    text = '{"password": "hunter2", "token": "abc"}'
+    assert redact(text) == text
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_an_escaped_letter_after_a_field_is_part_of_its_value() -> None:
+    assert redact(r"log password=ab\u00e4cdef end") == "log [secret removed] end"
+    assert redact("log password=ab\u00e4cdef end") == "log [secret removed] end"
 
 
 @pytest.mark.design("security.redaction_shapes")
