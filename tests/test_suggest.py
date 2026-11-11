@@ -566,14 +566,18 @@ def test_a_loop_over_other_arguments_is_not_a_retry() -> None:
 def test_a_mistake_on_a_refused_line_is_the_tests_not_the_agents() -> None:
     mistake = "Ledger is a class and cannot be gated"
     bare = {"sha256": "0", "bytes": 2, "preview": "{}"}
-    klass = line(1, "tool:Ledger", "refused", reason="unlisted", args=bare, mistake=mistake)
+    klass = line(
+        1, "tool:Ledger", "refused", reason="unlisted", args=bare, mistake=mistake, by_config=True
+    )
     base_case = case(
         "refused call", "left out", "refused call", fault=False, lines=[klass, line(2)]
     )
     base = suggest.main(*base_case)
     assert isinstance(base, suggest.Suggestion) and base.code == "test_mistake"
     assert mistake in base.text and base.doc["evidence"] == [{"seq": 1, "proc": PROC}]
-    blind = line(3, "process:python", "refused", reason="blind_child", mistake="no gates")
+    blind = line(
+        3, "process:python", "refused", reason="blind_child", mistake="no gates", by_config=True
+    )
     fault_case = case(
         "refused call", "fail", None, {"refused"}, lines=[line(1), fault_line(2), blind]
     )
@@ -624,3 +628,12 @@ def test_the_runners_own_rules_decide_what_the_judge_is_given() -> None:
     assert runner.is_exercised(False, "stopped")
     assert runner.chose_refused(True, "unlisted") and not runner.chose_refused(False, "unlisted")
     assert not runner.chose_refused(True, "other_python")
+
+
+def test_a_first_call_with_no_arguments_to_an_unlisted_tool_is_the_agents_choice() -> None:
+    bare = {"sha256": "0", "bytes": 2, "preview": "{}"}
+    first = line(1, "tool:refund_order", "refused", reason="unlisted", args=bare, mistake="add it")
+    got = suggest.main(
+        *case("refused call", "left out", "refused call", fault=False, lines=[first])
+    )
+    assert isinstance(got, suggest.Suggestion) and got.code == "refused_on_baseline"

@@ -145,22 +145,16 @@ def mistakes_in(lines: Sequence[Doc]) -> list[Doc]:
 
 
 def gate_mistakes(lines: Sequence[Doc]) -> list[Doc]:
-    """Refused lines that are the test's mistake, not a call the agent chose.
+    """Refused lines the gate marked by_config: the test's setup caused them, not the agent.
 
-    A refusal for a reason other than "unlisted" that carries a mistake is the test's own
-    setup, such as a child process with no gates. A tool no gate can reach is written as an
-    "unlisted" refusal too, but it is the first line of the run and has no arguments; an
-    agent's own call to an unlisted tool carries its arguments and comes after other work.
+    A tool no gate can reach and a child process with no gates are such refusals. An agent's
+    own call to an unlisted tool also carries a mistake, but it is not marked.
     """
-    found: list[Doc] = []
-    for x in lines:
-        if x.get("action") != "refused" or "mistake" not in x:
-            continue
-        args = x.get("args")
-        bare = isinstance(args, dict) and cast(Doc, args).get("preview") == "{}"
-        if x.get("reason") != "unlisted" or (bare and x is lines[0]):
-            found.append(x)
-    return found
+    return [
+        x
+        for x in lines
+        if x.get("action") == "refused" and x.get("by_config") is True and "mistake" in x
+    ]
 
 
 def test_mistake(found: list[Doc]) -> Suggestion:

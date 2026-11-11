@@ -186,6 +186,10 @@
         "mistake": {
           "type": "string"
         },
+        "by_config": {
+          "const": true,
+          "description": "On a refused call: the test's own setup caused the refusal, not a choice of the agent."
+        },
         "start": {
           "type": "string",
           "format": "date-time"
