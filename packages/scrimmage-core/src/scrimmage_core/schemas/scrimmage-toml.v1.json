@@ -613,7 +613,7 @@
         },
         "do": {
           "type": "string",
-          "pattern": "^(timeout|status [45][0-9][0-9])$"
+          "pattern": "^(timeout|replace|slow [0-9]+(\\.[0-9]+)?s|status [45][0-9][0-9])$"
         },
         "when": {
           "type": "string",
@@ -636,8 +636,54 @@
         },
         "pass_rate": {
           "$ref": "#/$defs/pass_rate"
+        },
+        "text": {
+          "$ref": "#/$defs/change_text"
+        },
+        "find": {
+          "$ref": "#/$defs/change_find"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "do"
+            ],
+            "properties": {
+              "do": {
+                "const": "replace"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "model"
+            ]
+          },
+          "description": "replace on a model call needs the model's name."
+        },
+        {
+          "if": {
+            "required": [
+              "call"
+            ],
+            "properties": {
+              "call": {
+                "pattern": "/"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "do": {
+                "pattern": "^(timeout|status [45][0-9][0-9])$"
+              }
+            }
+          },
+          "description": "replace and slow work on a chat call, not on a call that only reads."
+        }
+      ]
     },
     "web_fault": {
       "type": "object",

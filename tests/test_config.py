@@ -627,15 +627,18 @@ def test_empty_replace_text_needs_find(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("call", ["model", "model:openai", "model:*/embeddings"])
-@pytest.mark.parametrize("do", ["append", "replace", "slow 3s"])
-def test_carried_faults_are_refused_on_a_model_call(tmp_path: Path, call: str, do: str) -> None:
-    text = f'[[test.fault]]\ncall = "{call}"\ndo = "{do}"\ntext = "x"\nforbid = ["a"]\n'
-    with pytest.raises(
-        ConfigError, match=r"do not work on a model call in this version.*model-faults"
-    ):
+def test_append_is_refused_on_a_model_call(tmp_path: Path, call: str) -> None:
+    """replace and slow work on a chat call; append never does, and a call that only reads
+    takes neither."""
+    text = f'[[test.fault]]\ncall = "{call}"\ndo = "append"\ntext = "x"\nforbid = ["a"]\n'
+    with pytest.raises(ConfigError, match=r"append does not work on a model call.*model-faults"):
         with_fault(tmp_path, text)
-    with pytest.raises(ConfigError, match=r"text: unknown setting"):
-        with_fault(tmp_path, text.replace(do, "timeout"))
+    with pytest.raises(ConfigError, match=r"text: works only with do = 'append' or 'replace'"):
+        with_fault(tmp_path, text.replace("append", "timeout"))
+    for do in ("replace", "slow 3s"):
+        if "/" in call:
+            with pytest.raises(ConfigError, match=rf"{do.split()[0]} works on a chat call"):
+                with_fault(tmp_path, text.replace("append", do) + 'model = "m"\n')
 
 
 def test_append_always_needs_no_row_expect(tmp_path: Path) -> None:

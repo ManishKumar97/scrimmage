@@ -498,6 +498,8 @@ def fault(
     """Build the failure the library would see from a real outage. Nothing is sent."""
     run = ctx.run
     plan_fault = run.plan.faults[step.decision.fault or 0]
+    # A carried fault lets the call happen, so it never comes here to be parsed as a status.
+    assert plan_fault.do == "timeout" or plan_fault.do.startswith("status "), plan_fault.do
     if plan_fault.do == "timeout":
         error = module.ReadTimeout("The read operation timed out", request=request)
         run.finish(step, error=error)
@@ -1035,13 +1037,24 @@ def left_as_it_is(ctx: Context, step: Step, extra: dict[str, object], said: Unch
         extra["mistake"] = message
 
 
+def model_op(step: Step, request: Any) -> str:
+    """What a model call is, for a change to its reply: a Responses call is a chat to the
+    engine, yet its reply has no choices to change."""
+    if path_of(request.url).rstrip("/").endswith("/responses"):
+        return "responses"
+    return str(step.call.name)
+
+
 def decided_by_headers(
     ctx: Context, step: Step, extra: dict[str, object], request: Any, response: Any
 ) -> bool:
     """Whether the headers alone rule the change out: a status, a type, an encoding, a size.
     Then the reply goes on untouched, and a stream is never read early."""
-    verdict = changes.web_kind(
-        response.status_code, str(request.method), response.headers.multi_items()
+    headers = response.headers.multi_items()
+    verdict = (
+        changes.chat_kind(response.status_code, model_op(step, request), headers)
+        if step.call.kind == "model"
+        else changes.web_kind(response.status_code, str(request.method), headers)
     )
     if isinstance(verdict, Unchangeable):
         left_as_it_is(ctx, step, extra, verdict)
@@ -1093,13 +1106,12 @@ def changed_reply(
     """The reply the agent gets once the whole body is read: changed if it can be, else as it
     was sent. The line records the original."""
     body = b"".join(chunks)
-    done = changes.change_web(
-        response.status_code,
-        str(request.method),
-        response.headers.multi_items(),
-        body,
-        fault,
-        decoded=loaded,
+    headers = response.headers.multi_items()
+    status = response.status_code
+    done = (
+        changes.change_chat(status, model_op(step, request), headers, body, fault, decoded=loaded)
+        if step.call.kind == "model"
+        else changes.change_web(status, str(request.method), headers, body, fault, decoded=loaded)
     )
     if isinstance(done, Unchangeable):
         left_as_it_is(ctx, step, extra, done)

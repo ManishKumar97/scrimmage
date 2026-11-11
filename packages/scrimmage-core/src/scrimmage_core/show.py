@@ -201,8 +201,29 @@ def came_back(line: Doc) -> str:
             text = str(cast(Doc, result).get("preview") or "")
         elif result is not None:
             text = str(result)
+        added = " ".join(redact(injected(line)).split())
+        if added:  # the real result is cut first, so what the agent got still shows
+            room = max(CAME_BACK - len(added), 20)
+            real = " ".join(redact(text).split())
+            text = (real if len(real) <= room else real[: room - 3] + "...") + added
     text = " ".join(redact(text).split())
     return text if len(text) <= CAME_BACK else text[: CAME_BACK - 3] + "..."
+
+
+def injected(line: Doc) -> str:
+    """What a carried fault gave the agent in place of the real result, which came back: the
+    fault's own text, from the line. Empty for any other line."""
+    changed, fault = line.get("changed"), line.get("fault")
+    if not isinstance(changed, dict) or not isinstance(fault, dict):
+        return ""
+    held = cast(Doc, changed).get("text")
+    text = str(cast(Doc, held).get("preview") or "") if isinstance(held, dict) else ""
+    word = str(cast(Doc, fault).get("do") or "").partition(" ")[0]
+    if word == "append":
+        return f"; append added: {text}"
+    if "find" in changed:
+        return f"; replace put this in place of its find: {text}"
+    return f"; replace gave the agent: {text}"
 
 
 def gate_of(action: str, missed: bool) -> str:

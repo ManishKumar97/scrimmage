@@ -265,3 +265,45 @@ def test_a_body_with_more_after_its_first_gzip_member_is_never_changed(tail: byt
     headers = [("content-type", "text/plain"), ("content-encoding", "gzip")]
     result = changes.change_web(200, "GET", headers, body, fault("append", "!"))
     assert isinstance(result, Unchangeable) and result.why == "the body will not unpack"
+
+
+JSON = [("content-type", "application/json")]
+
+
+@pytest.mark.parametrize(
+    ("status", "op", "headers", "body", "why"),
+    [
+        (200, "chat", [("content-type", "text/html")], b"{}", "the reply is text/html, not a"),
+        (200, "chat", [], b"{}", "the reply is of no type, not a chat completion"),
+        (200, "chat", [*JSON, ("content-encoding", "br")], b"{}", "encoded with br"),
+        (200, "chat", [*JSON, ("content-encoding", "gzip")], b"not gzip", "will not unpack"),
+        (200, "chat", JSON, b"{oops", "the body is not JSON that parses"),
+        (200, "chat", JSON, b"[]", "the reply has no choices"),
+        (200, "chat", JSON, b'{"choices": [{"message": {}}]}', "the reply has no text"),
+        (200, "chat", JSON, b'{"choices": [7]}', "the reply has no text"),
+        (500, "chat", JSON, b"{}", "the reply status is 500, which is not changed"),
+        (200, "responses", JSON, b"{}", "Chat Completions only, and this call is responses"),
+    ],
+)
+def test_a_chat_reply_that_cannot_take_a_replace_says_why(
+    status: int, op: str, headers: list[tuple[str, str]], body: bytes, why: str
+) -> None:
+    said = changes.change_chat(status, op, headers, body, fault("replace", "safe"))
+    assert isinstance(said, Unchangeable) and why in said.why
+
+
+def test_a_chat_replace_drops_the_body_headers_and_counts_its_length() -> None:
+    body = json.dumps({"choices": [{"message": {"content": "unsafe"}}]}).encode()
+    headers = [*JSON, ("transfer-encoding", "chunked"), ("x-request-id", "r1")]
+    done = changes.change_chat(200, "chat", headers, body, fault("replace", "safe"))
+    assert not isinstance(done, Unchangeable)
+    assert json.loads(done.body)["choices"][0]["message"]["content"] == "safe"
+    assert dict(done.headers) == {
+        "content-type": "application/json",
+        "x-request-id": "r1",
+        "content-length": str(len(done.body)),
+    }
+    # A find that touches a secret is not made: the line could not show what changed.
+    near = json.dumps({"choices": [{"message": {"content": f"x {KEY}"}}]}).encode()
+    said = changes.change_chat(200, "chat", JSON, near, fault("replace", "y", find=KEY[:6]))
+    assert isinstance(said, Unchangeable) and said.mistake

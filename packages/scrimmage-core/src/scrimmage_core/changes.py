@@ -24,7 +24,7 @@ MAX_DEPTH = 100  # nesting deeper than this is not changed, so no value can over
 SHOWN_PARTS = 5
 PART_CUT = 80
 
-Kind = Literal["shape", "data", "declared", "span", "schema"]
+Kind = Literal["shape", "data", "declared", "span", "schema", "unsupported"]
 
 
 @dataclass(frozen=True)
@@ -44,6 +44,8 @@ class Unchangeable:
     not, such as a find that is not in it. declared: the declared type rules out every call.
     span: the change would land on text the record removes, naming the rule. schema: the
     changed structured content breaks the tool's output schema; why is the whole message.
+    unsupported: this kind of call can never take the change, such as a streamed model reply;
+    why is the whole message.
     """
 
     why: str
@@ -53,7 +55,7 @@ class Unchangeable:
     @property
     def mistake(self) -> bool:
         """Whether this is a mistake in the test at once, not a call left out of the row."""
-        return self.kind in ("declared", "span", "schema")
+        return self.kind in ("declared", "span", "schema", "unsupported")
 
     def message(self, fault: Fault, label: str) -> str | None:
         """The mistake as the team reads it, naming the fix. None when it is no mistake."""
@@ -64,7 +66,7 @@ class Unchangeable:
             )
         if self.kind == "declared":
             return f"{label} {self.why}"
-        return self.why if self.kind == "schema" else None
+        return self.why if self.kind in ("schema", "unsupported") else None
 
 
 Result = Changed | Unchangeable
@@ -560,3 +562,99 @@ def change_web(
     kept = [(k, v) for k, v in headers if k.lower() not in (*BODY_HEADERS, "content-type")]
     kept += [("content-type", content_type), ("content-length", str(len(new_body)))]
     return WebChanged(new_body, kept, count, parts)
+
+
+STREAMED = (
+    "replace on a model call needs a reply that is not streamed; turn streaming off for this "
+    "model, or fault it another way"
+)
+
+
+def chat_kind(status: int, op: str, headers: Sequence[tuple[str, str]]) -> Unchangeable | None:
+    """None when a model reply's headers allow a replace on its text, else why not. Decided by
+    the headers alone, so a stream is never read to find out."""
+    if op != "chat":
+        return Unchangeable(
+            f"replace on a model call works on Chat Completions only, and this call is {op}; "
+            "fault it another way",
+            "unsupported",
+        )
+    kind = media_type(header(headers, "content-type") or "")
+    if kind == "text/event-stream":
+        return Unchangeable(STREAMED, "unsupported")
+    if status != 200:
+        return Unchangeable(f"the reply status is {status}, which is not changed", "data")
+    encoding = (header(headers, "content-encoding") or "").strip().lower()
+    if encoding not in PACKED:
+        return Unchangeable(f"the reply is encoded with {encoding}, which is not changed")
+    if kind != "application/json":
+        return Unchangeable(f"the reply is {kind or 'of no type'}, not a chat completion")
+    return None
+
+
+def change_chat(
+    status: int,
+    op: str,
+    headers: Sequence[tuple[str, str]],
+    body: bytes,
+    fault: Fault,
+    *,
+    decoded: bool = False,
+) -> WebChanged | Unchangeable:
+    """Replace the text of each choice of a chat completion. A choice with no text, such as
+    tool calls only or a refusal, keeps its place; a reply with no text anywhere is not
+    changed. A model's text is changed as text, even when it looks like JSON."""
+    said = chat_kind(status, op, headers)
+    if said is not None:
+        return said
+    encoding = "" if decoded else (header(headers, "content-encoding") or "")
+    plain_body = unpacked(body, encoding)
+    if plain_body is None:
+        return Unchangeable("the body will not unpack")
+    try:
+        value = json.loads(plain_body)
+    except (ValueError, RecursionError):
+        return Unchangeable("the body is not JSON that parses")
+    choices = cast("dict[str, object]", value).get("choices") if isinstance(value, dict) else None
+    if not isinstance(choices, list):
+        return Unchangeable("the reply has no choices")
+    count, parts, missed = 0, list[str](), list[Unchangeable]()
+    for i, choice in enumerate(cast("list[object]", choices)):
+        message = (
+            cast("dict[str, object]", choice).get("message") if isinstance(choice, dict) else None
+        )
+        if not isinstance(message, dict):
+            continue
+        message = cast("dict[str, object]", message)
+        text = message.get("content")
+        if not isinstance(text, str) or not text:  # tool calls often come with ""
+            continue
+        done = change_text(text, fault, f"choices[{i}].message.content", sniff=False)
+        if isinstance(done, Unchangeable):
+            missed.append(done)
+            continue
+        message["content"] = done.value
+        count += done.count
+        parts += done.parts
+    if not count:
+        if missed:
+            return next((m for m in missed if m.mistake), missed[0])
+        return Unchangeable(no_text(cast("list[object]", choices)), "data")
+    new_body = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    kept = [(k, v) for k, v in headers if k.lower() not in BODY_HEADERS]
+    kept.append(("content-length", str(len(new_body))))
+    return WebChanged(new_body, kept, count, tuple(parts[:SHOWN_PARTS]))
+
+
+def no_text(choices: list[object]) -> str:
+    """Why a chat completion had no text to change, from its first choice."""
+    first = (
+        cast("dict[str, object]", choices[0]) if choices and isinstance(choices[0], dict) else {}
+    )
+    message = first.get("message")
+    held = cast("dict[str, object]", message) if isinstance(message, dict) else {}
+    if held.get("refusal"):
+        return "the reply is a refusal with no text"
+    if held.get("tool_calls"):
+        return "the reply has only tool calls and no text"
+    return "the reply has no text"

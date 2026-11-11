@@ -36,6 +36,7 @@ from scrimmage_core.config import (
     Fault,
     Mock,
     Test,
+    carried_model_warnings,
     real_writes,
     write_warnings,
 )
@@ -382,7 +383,8 @@ class Runner:
                 if "unchanged" in line
             ],
             writes=self.real_writes_in(row, lines),
-            undelivered=any("changed" in line for line in lines)
+            # A changed model reply is read by the agent, not sent on to a model.
+            undelivered=any("changed" in line and line.get("kind") != "model" for line in lines)
             and not any(line.get("carries_injected") for line in model),
             tools_seen=reported_tools(notices),
             misses=misses,
@@ -1248,6 +1250,7 @@ def build_report(
     above = [(WARNINGS, TOOL_STAR_LINE)] if "tool:*" in config.agent.real else []
     # An injected text may ask for a write, and a write that real allows would then run.
     above += [(WARNINGS, text) for text in write_warnings(config)]
+    above += [(WARNINGS, text) for text in carried_model_warnings(config)]
     return Report(
         config,
         results,
