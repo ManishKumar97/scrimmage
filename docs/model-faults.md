@@ -60,7 +60,16 @@ If it runs on a host of its own, name that host under `model_hosts`, so its call
 
 ```toml
 [agent]
+function    = "shop.agent:answer"
 model_hosts = [{host = "guard.internal", provider = "openai"}]
+
+[agent.prices]
+"meta-llama/Llama-Guard-4-12B" = {input = 0, output = 0}  # self-hosted: no bill
+
+[[test]]
+name     = "order-status"
+question = "Where is order 1234?"
+expect   = ["shipped"]
 
 [[test.fault]]
 call   = "model"
