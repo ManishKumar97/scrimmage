@@ -68,19 +68,20 @@ def test_cancel_stops_every_run_in_one_grace_period_not_one_each(
         run.server.server.server_close()
 
 
-def running_sleep(pid: int) -> bool:
+def running_program(pid: int) -> bool:
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as cmdline:
-            return cmdline.read().startswith(b"sleep\0")
+            return cmdline.read().startswith(b"sh\0")
     except FileNotFoundError:
         return False
 
 
 MINI_RUNNER = """
+SH = "trap '' TERM; while :; do sleep 1; done"
 import os, subprocess, sys, time
 env = {**os.environ, "SCRIMMAGE_RUNNER_PID": str(os.getpid())}
 proc = subprocess.Popen(
-    [sys.executable, "-m", "scrimmage_core.run_command", "sleep", "600"],
+    [sys.executable, "-m", "scrimmage_core.run_command", "sh", "-c", SH],
     env=env, start_new_session=True,
 )
 print(proc.pid, flush=True)
@@ -96,7 +97,9 @@ def test_a_run_ends_when_its_runner_is_killed() -> None:
         assert mini.stdout is not None
         pid = int(mini.stdout.readline())  # the run is started
         ready = time.monotonic() + BOUND_S
-        while not running_sleep(pid):  # the event: run_command has become the program
+        while not running_program(
+            pid
+        ):  # the event: run_command has become the program, which ignores SIGTERM
             assert time.monotonic() < ready and not gone(pid), "the run never started"
             time.sleep(0.01)
         mini.kill()  # SIGKILL: nothing in the runner gets to stop its runs

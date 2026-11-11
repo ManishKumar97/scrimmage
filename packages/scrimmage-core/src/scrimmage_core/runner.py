@@ -276,6 +276,8 @@ class Runner:
         log = owner_only(self.folder / f"{run}.log")
         out = owner_only(self.folder / f"{run}.out") if self.config.agent.command else log
         try:
+            # run_command asks Linux to kill the run when this thread exits, so runs must be
+            # started from a thread that outlives them: the pool's, which lives through run_all.
             proc = subprocess.Popen(
                 command,
                 cwd=self.config.root,
