@@ -8,6 +8,8 @@ a mock, as those are the team's to say, and it never replaces a file.
 """
 
 import ast
+import importlib.machinery
+import importlib.util
 import os
 import shlex
 import sys
@@ -30,6 +32,7 @@ from scrimmage_core.runner import Runner, RunResult
 PROBE_QUESTION = "scrimmage init probe"
 PROBE_TIMEOUT_S = 120.0
 FILE_CAP = 5 * 1024 * 1024  # a larger .py file is generated, and is not read
+FILE_LIMIT = 5000  # .py files read; a larger tree is cut here, in a fixed order
 SHOWN_ENTRIES = 5  # other entry points the draft names in comments
 WIDTH = len("model_hosts")  # the settings' values start in one column
 QUESTION_NAMES = ("question", "query", "prompt", "message", "text", "input", "user_input")
@@ -94,6 +97,8 @@ class Reading:
     files: int = 0
     unread: list[str] = field(default_factory=list[str])
     too_large: list[str] = field(default_factory=list[str])
+    outside: list[str] = field(default_factory=list[str])  # symlinks that leave the folder
+    cut_off: bool = False  # the tree had more .py files than FILE_LIMIT
     src_dropped: bool = False  # a module name left out a leading src folder
     definitions: list[Definition] = field(default_factory=list[Definition])
     spec_names: set[str] = field(default_factory=set[str])
@@ -202,6 +207,14 @@ def prepare(
     if not out.parent.is_dir():
         return refused(draft, f"cannot write {out}: its folder does not exist")
     root = folder.resolve()
+    if probe is not None and not has_module(probe, root):
+        top = probe.split(":")[0].split(".")[0]
+        return refused(
+            draft,
+            f"--probe {printable(probe)}: {printable(top)} cannot be imported from "
+            f"{printable(root)} or the environment; install it, or fix the name. "
+            "Nothing was run",
+        )
     reading = read_folder(root)
     entries = sorted(entry_points(reading), key=lambda c: (c.rank, c.order))
     if probe is not None:
@@ -219,6 +232,17 @@ def prepare(
     )
     fill(draft, found)
     return draft
+
+
+def has_module(function: str, folder: Path) -> bool:
+    """Whether the function's top-level module can be found, without importing it."""
+    top = function.split(":")[0].split(".")[0]
+    try:
+        found = importlib.util.find_spec(top)
+        found = found or importlib.machinery.PathFinder.find_spec(top, [str(folder)])
+    except (ImportError, ValueError):
+        return False
+    return found is not None
 
 
 def refused(draft: Draft, message: str, last: str = "nothing was written") -> Draft:
@@ -240,7 +264,10 @@ def printable(text: object) -> str:
 def read_folder(folder: Path) -> Reading:
     """Every .py file under the folder, by ast. None of them is imported or run."""
     reading = Reading()
-    for path in python_files(folder):
+    for path in python_files(folder, reading):
+        if reading.files + len(reading.unread) + len(reading.too_large) >= FILE_LIMIT:
+            reading.cut_off = True
+            break
         relative = path.relative_to(folder).as_posix()
         shown = relative.encode("utf-8", "backslashreplace").decode()
         if over_the_cap(path):
@@ -259,13 +286,17 @@ def read_folder(folder: Path) -> Reading:
     return reading
 
 
-def python_files(folder: Path) -> Iterator[Path]:
-    """In a fixed order, leaving out library folders and hidden folders."""
+def python_files(folder: Path, reading: Reading) -> Iterator[Path]:
+    """In a fixed order, leaving out library folders and hidden folders, and a symlink that
+    points outside the folder, which is not part of the code being read."""
     for parent, folders, files in os.walk(folder):
         folders[:] = sorted(name for name in folders if not probing.skipped_folder(name))
         for name in sorted(files):
             path = Path(parent) / name
             if name.endswith(".py") and path.is_file():  # a named pipe would never end
+                if path.is_symlink() and not path.resolve().is_relative_to(folder):
+                    reading.outside.append(path.relative_to(folder).as_posix())
+                    continue
                 yield path
 
 
@@ -806,6 +837,16 @@ def add_notes(draft: Draft, found: Findings) -> None:
     if reading.too_large:
         shown = ", ".join(reading.too_large[:5])
         notes.append(f"skipped {len(reading.too_large)} files over 5 MB as too large: {shown}")
+    if reading.outside:
+        shown = ", ".join(reading.outside[:5])
+        notes.append(
+            f"skipped {len(reading.outside)} .py symlinks that point outside the folder: {shown}"
+        )
+    if reading.cut_off:
+        notes.append(
+            f"read the first {FILE_LIMIT} .py files and stopped; the tree has more, so run "
+            "scrimmage init on the folder that holds the agent"
+        )
     left_out = sorted(left_out_tools(reading, tools)) if result.offered else []
     if left_out:
         notes.append(

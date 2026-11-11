@@ -53,3 +53,14 @@ A wait for an event has a ceiling of 30 s or more, which only ends a test whose 
 Run it on an otherwise idle machine.
 `--rounds N` and `--section NAME` narrow it; `--section profile` shows where a gated call spends its time.
 `tests/test_benchmark_budgets.py`, in the slow tier, fails when a cost goes over its ceiling.
+
+### What the request count does not see
+
+`test_a_gated_call_waits_on_the_expected_requests_to_the_runner` counts requests to the runner in a window of 20 calls, after 10 warm-up calls.
+A round trip made only in the first 10 calls, or less often than once in 20 calls, is outside the window and passes.
+A cost paid once per process, such as a request at the first call of a kind, is not caught by it.
+The time ceilings catch such a cost only when it is large.
+
+The count skips requests made on the sender thread, which carry record lines in the background.
+So a gate that blocks until the sender has delivered a line is not counted, and nothing here would fail if one were added.
+The test that sets the sender's window to an hour is the check for a wait of that kind at exit; see `docs/benchmarks.md`.

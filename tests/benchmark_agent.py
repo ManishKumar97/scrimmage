@@ -31,6 +31,7 @@ COUNTS = {
     "tool_sync": 3000,
     "tool_async": 3000,
     "tool_mock": 3000,
+    "tool_miss": 3000,
     "http_sync": 1000,
     "http_async": 1000,
     "http_mock": 1000,
@@ -66,6 +67,10 @@ async def tool_async(order_id: str) -> dict[str, str]:
 
 
 def tool_mock(order_id: str) -> dict[str, str]:
+    return {"order_id": order_id, "status": "shipped"}
+
+
+def tool_miss(order_id: str) -> dict[str, str]:
     return {"order_id": order_id, "status": "shipped"}
 
 
@@ -165,6 +170,11 @@ def case_tool_mock(rec: Recorder) -> None:
     rec.take("tool_mock", lambda: tool_mock("A1"))
 
 
+def case_tool_miss(rec: Recorder) -> None:
+    # The run holds a mock of this tool for order A1 only, so this call matches none.
+    rec.take("tool_miss", lambda: tool_miss("Z9"))
+
+
 def case_http_sync(rec: Recorder) -> None:
     import httpx
 
@@ -230,6 +240,7 @@ CASES: dict[str, Callable[[Recorder], None]] = {
     "tool_sync": case_tool_sync,
     "tool_async": case_tool_async,
     "tool_mock": case_tool_mock,
+    "tool_miss": case_tool_miss,
     "http_sync": case_http_sync,
     "http_async": case_http_async,
     "http_mock": case_http_mock,

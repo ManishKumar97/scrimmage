@@ -40,6 +40,7 @@ The table gives the time added at the median and at the 99th percentile, in micr
 
 A mocked call makes no real call, so it has no ungated row to compare with.
 A mocked tool call takes 48.0 µs at the median, and a mocked web request 185.5 µs.
+A call that misses a mock with `args`, on a tool under `real` by name, runs for real and adds about 126 µs, as it looks for the nearest mock and keeps the evidence.
 
 A gated model call with a budget on makes one extra signed request to the runner, to reserve the call's money.
 That is the largest part of the time it adds.
@@ -121,6 +122,7 @@ Nothing enforces a smaller slowdown.
 | Measure | Ceiling |
 |---|---|
 | Tool call, added | 500 µs |
+| Tool call that misses a mock, added | 1.5 ms |
 | Web request, added | 6 ms sync, 7 ms async |
 | Model call with a budget, added | 20 ms |
 | MCP tool call, added | 6 ms |

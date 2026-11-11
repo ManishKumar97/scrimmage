@@ -24,6 +24,8 @@ from scrimmage_core.outcomes import INFRA, MISTAKE, OK
 
 SCHEMA = json.loads((Path(scrimmage_core.__file__).parent / "schemas" / "cli.v1.json").read_text())
 
+# A ceiling only: it ends a read that would otherwise never return.
+PIPE_TIMEOUT_S = 60
 ENTRY = "import openai\n\n\ndef answer(question):\n    return question\n"
 SCRIPT = (
     "import sys\n\n\ndef main():\n    print(sys.argv[1])\n\n\n"
@@ -1250,11 +1252,20 @@ def test_a_file_over_the_cap_is_too_large_not_unreadable(
     assert "could not read" not in notes
 
 
-def test_a_named_pipe_is_not_opened(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.slow
+def test_a_named_pipe_is_not_opened(tmp_path: Path) -> None:
+    """In a process of its own: without the guard the read never returns, so a regression
+    fails at the timeout and run() kills the child, where a hang here would leave it."""
     write(tmp_path, {"bot.py": ENTRY})
     os.mkfifo(tmp_path / "pipe.py")
-    code, doc = run(capsys, str(tmp_path))  # a pipe opened for reading would never return
-    assert code == OK and doc["entry"] is not None
+    done = subprocess.run(
+        [sys.executable, "-m", "scrimmage_core.cli", "init", "--json", str(tmp_path)],
+        capture_output=True,
+        timeout=PIPE_TIMEOUT_S,
+        check=False,
+    )
+    doc = json.loads(done.stdout)
+    assert done.returncode == OK and doc["entry"] is not None
 
 
 def test_a_name_in_both_arms_of_an_if_is_one_path(
@@ -1416,3 +1427,86 @@ def test_an_unreadable_file_name_is_stored_as_text(tmp_path: Path) -> None:
     with open(bytes(tmp_path) + b"/bad\xff.py", "w") as handle:
         handle.write("X = 1\n")
     assert drafting.read_folder(tmp_path).unread == ["bad\\udcff.py"]
+
+
+@pytest.mark.slow
+def test_a_caught_refusal_in_a_normal_run_lets_the_code_after_it_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The probe ends a program at its first refusal. A scrimmage test must not: the agent's
+    own handler runs, as it would in production."""
+    marker = tmp_path / "fallback-ran"
+    code = (
+        "import httpx\n\n\ndef answer(question):\n    try:\n"
+        '        httpx.post("http://127.0.0.1:1/v1/messages", json={})\n'
+        "    except Exception:\n"
+        f"        open({str(marker)!r}, 'w').close()\n"
+        "    return 'done'\n"
+    )
+    write(tmp_path, {"bot.py": code})
+    (tmp_path / "scrimmage.toml").write_text(
+        '[agent]\nfunction = "bot:answer"\nruns = 1\nmax_cost_usd = "none"\n\n'
+        '[[test]]\nname = "t"\nquestion = "go"\nexpect = ["done"]\n'
+    )
+    capsys.readouterr()
+    cli.main(["test", "--json", str(tmp_path / "scrimmage.toml")])
+    out = json.loads(capsys.readouterr().out)
+    assert marker.exists()
+    assert "refused call" in json.dumps(out)
+
+
+def test_a_probe_of_a_module_that_cannot_be_imported_is_a_mistake_and_writes_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def never(*args: object) -> None:
+        raise AssertionError("nothing may run for a module that is not there")
+
+    monkeypatch.setattr(drafting, "run_probe", never)
+    write(tmp_path, {"bot.py": ENTRY})
+    out = tmp_path / "draft.toml"
+    rc, doc = run(capsys, str(tmp_path), "--probe", "nope_nothing:nope", "--out", str(out))
+    assert rc == MISTAKE
+    assert "nope_nothing cannot be imported" in messages(doc, "mistakes")
+    assert "install it" in messages(doc, "mistakes")
+    assert probe_of(doc)["ran"] is False
+    assert not out.exists()
+
+
+def test_a_probe_of_a_module_in_the_folder_is_still_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ran: list[str] = []
+    monkeypatch.setattr(
+        drafting, "run_probe", lambda function, *a: ran.append(function) or drafting.Probe(True)
+    )
+    write(tmp_path, {"bot.py": ENTRY})
+    run(capsys, str(tmp_path), "--probe", "bot:answer")
+    assert ran == ["bot:answer"]
+
+
+def test_a_tree_over_the_file_limit_is_cut_with_a_note(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(drafting, "FILE_LIMIT", 3)
+    write(tmp_path, {f"m{n}.py": "X = 1\n" for n in range(5)})
+    _, doc = run(capsys, str(tmp_path))
+    assert "read the first 3 .py files and stopped" in messages(doc, "notes")
+    assert drafting.read_folder(tmp_path).files == 3  # the note's number is the count read
+    write(tmp_path / "small", {f"m{n}.py": "X = 1\n" for n in range(3)})
+    _, exact = run(capsys, str(tmp_path / "small"))
+    assert "stopped" not in messages(exact, "notes")
+
+
+def test_a_py_symlink_that_leaves_the_folder_is_not_read(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write(tmp_path / "elsewhere", {"secret.py": ENTRY})
+    write(tmp_path / "code", {"inside.py": "X = 1\n"})
+    (tmp_path / "code" / "out.py").symlink_to(tmp_path / "elsewhere" / "secret.py")
+    (tmp_path / "code" / "in.py").symlink_to(tmp_path / "code" / "inside.py")
+    reading = drafting.read_folder((tmp_path / "code").resolve())
+    assert reading.outside == ["out.py"] and reading.files == 2
+    _, doc = run(capsys, str(tmp_path / "code"))
+    notes = messages(doc, "notes")
+    assert "skipped 1 .py symlinks that point outside the folder: out.py" in notes
+    assert doc["entry"] is None

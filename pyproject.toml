@@ -34,6 +34,8 @@ dev = [
     "mcp>=2.3.0",
     "fastmcp>=4.1.6",
     "pytest-xdist>=3.8.0",
+    # tests/test_docs_site.py builds the site, so a plain pytest needs mkdocs.
+    {include-group = "docs"},
 ]
 docs = [
     "mkdocs>=1.6.1,<2",
