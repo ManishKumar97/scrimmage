@@ -86,6 +86,21 @@ def answer(question: str) -> str:
     return asyncio.run(go())
 
 
+def answer_with_a_deadline(question: str) -> str:
+    """The bot gives up on its own, as a caller of a guard does: with a deadline and a fallback."""
+    deadline = float(os.environ.get("DOCS_DEADLINE", "0.5"))
+
+    async def go() -> str:
+        async with connected() as session:
+            await session.list_tools()
+            try:
+                return await asyncio.wait_for(search(session), timeout=deadline)
+            except TimeoutError:
+                return "deadline passed, so the fallback"
+
+    return asyncio.run(go())
+
+
 def answer_twice(question: str) -> str:
     async def go() -> str:
         async with connected() as session:

@@ -152,3 +152,5 @@ _.fast_tests_start_no_process  # tests/conftest.py: an autouse fixture, which py
 _.pytestmark  # tests/test_cli_json.py and test_check.py: pytest reads it from the module
 _.nothing_pending  # tests/test_cli_in_process.py and test_results.py: an autouse fixture
 _.tz  # tests/test_results.py: the argument datetime.now is called with, which a stand-in ignores
+_.answer_with_a_deadline  # tests/example/acme/docs_bot.py: a test's scrimmage.toml names it
+_.close_connection  # tests/test_web_requests.py: http.server reads it to end a connection

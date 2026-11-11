@@ -8,6 +8,7 @@ text the record would remove is not made, because the line could then not show w
 agent saw.
 """
 
+import copy
 import json
 import types
 import typing
@@ -22,7 +23,7 @@ MAX_DEPTH = 100  # nesting deeper than this is not changed, so no value can over
 SHOWN_PARTS = 5
 PART_CUT = 80
 
-Kind = Literal["shape", "data", "declared", "span"]
+Kind = Literal["shape", "data", "declared", "span", "schema"]
 
 
 @dataclass(frozen=True)
@@ -40,7 +41,8 @@ class Unchangeable:
 
     shape: the value's type has no place for this change. data: the type has, this value does
     not, such as a find that is not in it. declared: the declared type rules out every call.
-    span: the change would land on text the record removes, naming the rule.
+    span: the change would land on text the record removes, naming the rule. schema: the
+    changed structured content breaks the tool's output schema; why is the whole message.
     """
 
     why: str
@@ -50,7 +52,7 @@ class Unchangeable:
     @property
     def mistake(self) -> bool:
         """Whether this is a mistake in the test at once, not a call left out of the row."""
-        return self.kind in ("declared", "span")
+        return self.kind in ("declared", "span", "schema")
 
     def message(self, fault: Fault, label: str) -> str | None:
         """The mistake as the team reads it, naming the fix. None when it is no mistake."""
@@ -61,7 +63,7 @@ class Unchangeable:
             )
         if self.kind == "declared":
             return f"{label} {self.why}"
-        return None
+        return self.why if self.kind == "schema" else None
 
 
 Result = Changed | Unchangeable
@@ -328,3 +330,85 @@ def change(value: object, fault: Fault, declared: object = None, where: str = "r
     if type(value) in (dict, list, tuple):
         return change_data(value, fault, "$")
     return Unchangeable(f"the tool returned a {type(value).__name__}, which has no text to change")
+
+
+def text_items(raw: dict[str, object]) -> list[int]:
+    """The places of the text items of an MCP result's content."""
+    content = raw.get("content")
+    if not isinstance(content, list):
+        return []
+    return [
+        i
+        for i, item in enumerate(cast("list[object]", content))
+        if isinstance(item, dict)
+        and cast("dict[str, object]", item).get("type") == "text"
+        and isinstance(cast("dict[str, object]", item).get("text"), str)
+    ]
+
+
+def change_mcp_result(raw: dict[str, object], fault: Fault) -> Result:
+    """Change an MCP tool result as a server sends it, on its text items and its structured
+    content. An agent may read either, so with both, a find must change both to count.
+
+    append: the last text item, unless it is JSON or there is structured content. replace with
+    no find: every text item becomes one item holding the text, other items kept; with
+    structured content it cannot. replace with find: every text item, the JSON way for a JSON
+    one, and every string value of the structured content.
+    """
+    if raw.get("isError") is True:
+        return Unchangeable("the result is an error result", "data")
+    structured = raw.get("structuredContent")
+    has_structured = isinstance(structured, dict)
+    places_ = text_items(raw)
+    if not places_ and not has_structured:
+        return Unchangeable("the result has no text and no structured content")
+    new = copy.deepcopy(raw)
+    items = cast("list[dict[str, object]]", new.get("content") or [])
+    if fault.do == "append" or fault.find is None:
+        if has_structured:
+            return Unchangeable(
+                "the result has structured content, which "
+                f"{fault.do} cannot change; use replace with find"
+            )
+        if fault.do == "append":
+            i = places_[-1]
+            done = change_text(str(items[i]["text"]), fault, f"content[{i}].text")
+            if isinstance(done, Unchangeable):
+                return done
+            items[i]["text"] = done.value
+            return Changed(new, 1, done.parts)
+        first = places_[0]
+        items[first]["text"] = fault.text or ""
+        for i in reversed(places_[1:]):
+            del items[i]
+        return Changed(
+            new, len(places_), tuple(f"content[{i}].text" for i in places_[:SHOWN_PARTS])
+        )
+    count = 0
+    parts: list[str] = []
+    in_content = False
+    for i in places_:
+        done = change_text(str(items[i]["text"]), fault, f"content[{i}].text")
+        if isinstance(done, Changed):
+            items[i]["text"] = done.value
+            count, parts, in_content = count + done.count, [*parts, *done.parts], True
+        elif done.kind == "span":
+            return done
+    in_structured = False
+    if has_structured:
+        done = change_data(cast("dict[str, object]", structured), fault, "structuredContent")
+        if isinstance(done, Changed):
+            new["structuredContent"] = done.value
+            count, parts, in_structured = count + done.count, [*parts, *done.parts], True
+        elif done.kind == "span":
+            return done
+    if has_structured and places_:
+        if in_structured and not in_content:
+            return Unchangeable("find is only in structuredContent, not in content", "data")
+        if in_content and not in_structured:
+            return Unchangeable("find is only in content, not in structuredContent", "data")
+    if not in_content and not in_structured:
+        return Unchangeable("find is not in the result", "data")
+    return Changed(new, count, tuple(parts[:SHOWN_PARTS]))
+
+
