@@ -11,6 +11,7 @@ import ast
 import importlib.machinery
 import importlib.util
 import os
+import re
 import shlex
 import sys
 import tomllib
@@ -29,6 +30,7 @@ from scrimmage_core.outcomes import INFRA, MISTAKE, MISTAKES, NOTES, OK, WARNING
 from scrimmage_core.provider_openai import HOSTS
 from scrimmage_core.runner import Runner, RunResult
 
+NOT_FOUND = re.compile(r"^ModuleNotFoundError: No module named '([^']+)'", re.MULTILINE)
 PROBE_QUESTION = "scrimmage init probe"
 PROBE_TIMEOUT_S = 120.0
 FILE_CAP = 5 * 1024 * 1024  # a larger .py file is generated, and is not read
@@ -136,6 +138,7 @@ class Probe:
     outcome: str | None = None
     notice: dict[str, object] | None = None
     infra: str | None = None  # the probe itself failed: nothing is written
+    missing: str | None = None  # the probed module, or a package above it, was not found
 
     @property
     def offered(self) -> list[dict[str, object]]:
@@ -226,6 +229,12 @@ def prepare(
     if probe is not None:
         announce(f"probe: running {probe} up to its first model request")
         result = run_probe(probe, root, stop_flag)
+    if probe is not None and result.missing is not None:
+        return refused(
+            draft,
+            f"--probe {printable(probe)}: {printable(result.missing)} cannot be imported from "
+            f"{printable(root)} or the environment; install it, or fix the name",
+        )
     known = result.notice is not None and bool(result.offered)
     tools = probe_tools(result, reading) if known else static_tools(reading)
     found = Findings(
@@ -657,10 +666,27 @@ def run_probe(function: str, folder: Path, stop_flag: list[str] | None) -> Probe
     if not results:
         return Probe(ran=True, infra="the probe did not run")
     result = results[0]
-    return read_probe(result, runner.store.lines(result.run), runner.folder / f"{result.run}.log")
+    log = runner.folder / f"{result.run}.log"
+    return read_probe(result, runner.store.lines(result.run), log, function)
 
 
-def read_probe(result: RunResult, lines: list[dict[str, object]], log: Path) -> Probe:
+def missing_module(log: Path, function: str) -> str | None:
+    """The module the crash log says was not found, if it is the probed module or a package
+    above it. A module that the function itself imports and cannot find is the agent's crash."""
+    module = function.split(":")[0]
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for name in NOT_FOUND.findall(text):
+        if module == name or module.startswith(name + "."):
+            return name
+    return None
+
+
+def read_probe(
+    result: RunResult, lines: list[dict[str, object]], log: Path, function: str
+) -> Probe:
     """What ended the probe: each ending has its own words."""
     notice = next((n for n in result.notices if n.get("notice") == "probe"), None)
     if notice is not None:
@@ -673,7 +699,7 @@ def read_probe(result: RunResult, lines: list[dict[str, object]], log: Path) -> 
     if outcome == "answered" or returned:
         return Probe(True, NO_MODEL_REQUEST)
     if outcome in ("crashed", "timed out"):
-        return Probe(True, f"{outcome}, see {log}")
+        return Probe(True, f"{outcome}, see {log}", missing=missing_module(log, function))
     if outcome == "refused call":
         return Probe(True, refused_first(lines))
     return Probe(True, outcome, infra=f"the probe could not run: {outcome}, see {log}")

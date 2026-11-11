@@ -1472,6 +1472,37 @@ def test_a_probe_of_a_module_that_cannot_be_imported_is_a_mistake_and_writes_not
     assert not out.exists()
 
 
+@pytest.mark.slow
+@pytest.mark.design("init.probe_outcome")
+def test_a_probe_of_a_missing_submodule_is_a_mistake_and_writes_nothing(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write(tmp_path, {"evil/__init__.py": "", "evil/real.py": ENTRY})
+    fake = fake_openai([])
+    rc, doc = probed(capsys, tmp_path, fake, monkeypatch, "evil.missing:answer")
+    assert rc == MISTAKE and fake.received == []
+    assert "evil.missing cannot be imported" in messages(doc, "mistakes")
+    assert not (tmp_path / "draft.toml").exists()
+
+
+@pytest.mark.slow
+@pytest.mark.design("init.probe_outcome")
+def test_a_module_the_function_cannot_import_is_still_a_crash_not_a_bad_name(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write(tmp_path, {"bot.py": "import nothing_installed_here\n\n\ndef answer(q):\n    return q\n"})
+    fake = fake_openai([])
+    _, doc = probed(capsys, tmp_path, fake, monkeypatch)
+    assert "cannot be imported" not in messages(doc, "mistakes")
+    assert str(probe_of(doc)["outcome"]).startswith("crashed, see ")
+
+
 def test_a_probe_of_a_module_in_the_folder_is_still_run(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
