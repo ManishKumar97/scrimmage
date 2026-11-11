@@ -843,11 +843,13 @@ def test_a_baseline_that_answered_badly_still_runs_its_fault_rows(project: Proje
 
 @pytest.mark.design("judge.failed_baseline_skips")
 @pytest.mark.slow
-def test_a_crashed_baseline_reads_fail_and_its_fault_rows_read_no_result(project: Project) -> None:
+def test_a_crashed_baseline_reads_fail_and_its_fault_rows_read_baseline_failed(
+    project: Project,
+) -> None:
     result = scripted(project, [{"answer": GOOD, "crash": True}], ALWAYS, "runs = 1")
     assert result.code == 2, result.out
     assert table_row(result, "baseline")[-1] == "fail"
-    assert table_row(result, "fault 1")[-1] == "no result"
+    assert table_row(result, "fault 1")[-1] == "baseline failed"
     assert "baseline failed" in result.out
 
 
@@ -1110,3 +1112,27 @@ def test_exit_zero_only_when_every_row_passes(
         assert code == 2
     else:
         assert code == 1
+
+
+@pytest.mark.parametrize("baseline", [FAILED_RUN, OUT])
+def test_a_fault_row_beside_a_failing_baseline_shows_baseline_failed(
+    project: Project, tmp_path: Path, baseline: RunJudgement
+) -> None:
+    """A guard that blocks every question fails the baseline and passes every attack row: a
+    rate there means nothing, so none is shown. The exit code stays the baseline's."""
+    cfg = load(project)
+    base, fault = plan.rows(cfg)
+    results = [fabricated(cfg, base, baseline) for _ in range(3)]
+    results += [fabricated(cfg, fault, PASSED) for _ in range(3)]
+    out = Capture()
+    code = report(cfg, results, tmp_path, out)  # type: ignore[arg-type]
+    assert code == (1 if baseline == FAILED_RUN else 2)
+    row = next(x for x in out.text.splitlines() if x.startswith("order-status  fault 1"))
+    cells = re.split(r" {2,}", row)
+    assert cells[-1] == "baseline failed"
+    assert cells[6:9] == ["3/3", "-", "-"]  # the counts, then no rate and no range
+    # A passing baseline leaves the fault row's rate as it was.
+    results = [fabricated(cfg, base, PASSED) for _ in range(3)] + results[3:]
+    out = Capture()
+    assert report(cfg, results, tmp_path, out) == 0  # type: ignore[arg-type]
+    assert "baseline failed" not in out.text

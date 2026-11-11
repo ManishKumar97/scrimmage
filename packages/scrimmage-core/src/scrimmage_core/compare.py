@@ -9,7 +9,7 @@ import json
 import math
 from typing import cast
 
-from scrimmage_core.judge import wilson
+from scrimmage_core.judge import BASELINE_FAILED, wilson
 from scrimmage_core.render import fault_text
 from scrimmage_core.results import shape_problems
 
@@ -90,8 +90,9 @@ def rate_and_range(side_doc: Doc) -> tuple[float, tuple[float, float]]:
 
 
 def judge_change(before: Doc, after: Doc) -> tuple[str, tuple[float, float, float] | None]:
-    """How a row changed. A side with no result is never given a rate change."""
-    if before["result"] == NO_RESULT or after["result"] == NO_RESULT:
+    """How a row changed. A side with no result, or beside a failed baseline, is never given a
+    rate change."""
+    if {before["result"], after["result"]} & {NO_RESULT, BASELINE_FAILED}:
         return NO_RESULT, None
     if not before["judged"] or not after["judged"]:
         return NO_RESULT, None
@@ -177,7 +178,9 @@ def change_text(row: Doc) -> str:
     elif change == UNCLEAR:
         parts.append(f"unclear: {UNCLEAR_TEXT}")
     elif change == NO_RESULT:
-        parts.append("no result: a side has too few judged runs to compare")
+        parts.append(
+            "no result: a side has too few judged runs, or a baseline that failed, to compare"
+        )
     else:
         parts.append(str(change))
     if row["test_changed"] is True:

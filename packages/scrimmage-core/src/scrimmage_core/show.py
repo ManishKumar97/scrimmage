@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import BinaryIO, cast
 
 from scrimmage_core import results, suggest
+from scrimmage_core.judge import BASELINE_FAILED
 from scrimmage_core.outcomes import PREVIEW, plural
 from scrimmage_core.records import RECORD_VERSION, Refused, open_owned
 from scrimmage_core.redact import redact
@@ -396,10 +397,11 @@ def run_text(doc: Doc, row: Doc | None) -> list[str]:
 
 
 def failing_first(rows: list[Doc]) -> list[tuple[Doc, str]]:
-    """For each failing row, its first failing run."""
+    """For each failing row, its first failing run. A row beside a failed baseline shows no
+    rate, yet its failing runs are still worth reading."""
     found: list[tuple[Doc, str]] = []
     for row in rows:
-        if row["result"] != "fail":
+        if row["result"] not in ("fail", BASELINE_FAILED):
             continue
         details = cast("list[Doc]", row.get("run_details") or [])
         run = next((str(d["run"]) for d in details if d["judged"] == "fail"), None)

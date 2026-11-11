@@ -135,12 +135,12 @@ Each row's keys are the table's column names, with `cost_usd` for `cost`:
 | `done` | Runs that ended with an answer. |
 | `passed` | Judged runs that passed. |
 | `judged` | Runs that were judged. |
-| `rate` | `passed` over `judged`, rounded to 4 places. `null` when no run was judged. |
-| `range` | The 95% Wilson interval of the rate, as two fractions rounded to 4 places. `null` when no run was judged. |
+| `rate` | `passed` over `judged`, rounded to 4 places. `null` when no run was judged, or when `result` is `baseline failed`. |
+| `range` | The 95% Wilson interval of the rate, as two fractions rounded to 4 places. `null` when `rate` is. |
 | `pass_rate` | The share of judged runs the row needs to pass. |
 | `tools` | Tool calls per run, on average. |
 | `cost_usd` | What this row's model calls cost. |
-| `result` | The row's result. |
+| `result` | The row's result. `baseline failed` on a fault row whose test's baseline did not pass; see [Judging](judging.md#a-fault-row-beside-a-failing-baseline). |
 | `broken` | Each rule a run broke: its `kind`, its `text` and every `runs` name that broke it, the most broken first. |
 | `mock_miss_count` | The calls in this row's runs that had a mock on their label and matched none. |
 | `run_details` | One object per run, below. |
@@ -400,7 +400,7 @@ A value that is removed or renamed comes only with a new version.
 |---|---|---|
 | `command` | `test`, `check`, `record`, `init`, `show` | read as other |
 | `status` | `passed`, `failed`, `valid`, `complete`, `incomplete`, `written`, `shown`, `mistake`, `infra` | read as other |
-| `result` | `pass`, `fail`, `no result` | read as other |
+| `result` | `pass`, `fail`, `no result`, `baseline failed` | read as other |
 | `outcome` | `answered`, `crashed`, `timed out`, `refused call`, `budget reached`, `not reserved`, `infrastructure error`, `stopped` | read as other |
 | `judged` | `pass`, `fail`, `left out` | read as other |
 | `kind` | `expect`, `forbid`, `empty`, `crashed`, `timed out`, `refused` | read as other |

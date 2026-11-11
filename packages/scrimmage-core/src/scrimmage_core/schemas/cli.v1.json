@@ -442,7 +442,8 @@
               "enum": [
                 "pass",
                 "fail",
-                "no result"
+                "no result",
+                "baseline failed"
               ]
             },
             {
@@ -2178,7 +2179,8 @@
                       "enum": [
                         "pass",
                         "fail",
-                        "no result"
+                        "no result",
+                        "baseline failed"
                       ]
                     },
                     {
@@ -2246,7 +2248,8 @@
                       "enum": [
                         "pass",
                         "fail",
-                        "no result"
+                        "no result",
+                        "baseline failed"
                       ]
                     },
                     {
@@ -2309,7 +2312,7 @@
               "$comment": "open: a value this release does not know; read as other"
             }
           ],
-          "description": "better: the interval is above 0. worse: below 0. unclear: it holds 0, so these runs cannot tell the rates apart. no result: a side has too few judged runs. new, gone: the row is on one side only."
+          "description": "better: the interval is above 0. worse: below 0. unclear: it holds 0, so these runs cannot tell the rates apart. no result: a side has too few judged runs, or is a fault row beside a failed baseline. new, gone: the row is on one side only."
         },
         "result_change": {
           "type": [

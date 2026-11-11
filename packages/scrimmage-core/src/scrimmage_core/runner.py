@@ -870,15 +870,26 @@ def signal_group(proc: subprocess.Popen[bytes], sig: int) -> bool:
 
 @dataclass(frozen=True)
 class RowReport:
-    """One row's runs and its result, which the table, the notes and the exit code all read."""
+    """One row's runs and its result, which the table, the notes and the exit code all read.
+
+    baseline_failed marks a fault row whose test's baseline did not pass. The table and the
+    JSON then show `baseline failed` and no rate; the exit code still reads result, so it is
+    the same as without the mark.
+    """
 
     row: planner.Row
     runs: list[RunResult]
     result: judge.RowResult
+    baseline_failed: bool = False
 
     @property
     def where(self) -> str:
         return f"{self.row.test.name} {self.row.name}"
+
+    @property
+    def shown(self) -> str:
+        """The verdict the table and the JSON give."""
+        return judge.BASELINE_FAILED if self.baseline_failed else self.result.verdict
 
     @property
     def refused(self) -> bool:
@@ -893,7 +904,10 @@ def row_reports(config: Config, results: list[RunResult]) -> list[RowReport]:
         result = judge.judge_row(
             [r.judgement for r in mine], config.agent.runs, row.rules.pass_rate, refused
         )
-        reports.append(RowReport(row, mine, result))
+        # The baseline is its test's first row, so it is judged before its fault rows.
+        baseline = next(r for r in reports if r.row.test == row.test) if row.fault else None
+        failed = baseline is not None and baseline.result.verdict != judge.PASS
+        reports.append(RowReport(row, mine, result, failed))
     return reports
 
 
@@ -976,7 +990,7 @@ def rule_lines(report: RowReport, folder: Path) -> list[str]:
     if not most:
         return []
     row, rate = report.result, report.row.rules.pass_rate
-    word = "fail" if row.verdict == judge.FAIL else "note"
+    word = "fail" if report.shown == judge.FAIL else "note"
     head = f"{word}: {report.where}: {row.passed}/{row.judged} passed, pass_rate is {rate:g}"
     calls = [b.text for r in report.runs for b in r.judgement.broken if b.kind == judge.REFUSED]
     if calls:
@@ -1385,7 +1399,7 @@ def row_json(entry: RowReport, agent: Agent) -> dict[str, object]:
     fault = row.fault
     rate: float | None = None
     span: list[float] | None = None
-    if result.judged:
+    if result.judged and not entry.baseline_failed:
         low, high = judge.wilson(result.passed, result.judged)
         rate, span = round(result.passed / result.judged, 4), [round(low, 4), round(high, 4)]
     return {
@@ -1402,7 +1416,7 @@ def row_json(entry: RowReport, agent: Agent) -> dict[str, object]:
         "pass_rate": row.rules.pass_rate,
         "tools": round(sum(r.tool_calls for r in mine) / max(len(mine), 1), 4),
         "cost_usd": round(sum(r.cost_usd for r in mine), 8),
-        "result": result.verdict,
+        "result": entry.shown,
         "broken": [
             {"kind": rule.kind, "text": rule.text, "runs": [r.run for r in runs]}
             for rule, runs in broken_runs(entry)

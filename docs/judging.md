@@ -122,6 +122,15 @@ With `runs = 3`, 0.8 means all judged runs, as 2 of 3 is below it.
 
 Runs of a row whose baseline answered badly still happen. Only a baseline that crashed, timed out, was refused or reached the budget in every run skips its fault rows.
 
+## A fault row beside a failing baseline
+
+When a test's baseline row does not pass, each of its fault rows shows `baseline failed` in place of its result, and no rate or range.
+Its runs still run and are recorded, and its passed and judged counts still show.
+A rate beside a failing baseline says little: the agent already fails without the fault.
+For example, a guardrail that blocks every question fails the baseline, and would pass every attack row at 100%.
+The exit code does not change: the baseline row already gives it.
+`scrimmage show --compare` reads such a row as `no result`.
+
 ## The table
 
 ```text

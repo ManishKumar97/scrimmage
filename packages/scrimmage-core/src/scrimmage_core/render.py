@@ -6,7 +6,7 @@ Pure functions over the JSON of a row, and nothing else, so `scrimmage test` and
 
 from typing import cast
 
-from scrimmage_core.judge import wilson
+from scrimmage_core.judge import BASELINE_FAILED, wilson
 
 TABLE_WIDTH = 120
 HEAD = [
@@ -51,7 +51,9 @@ def row_cells(row: dict[str, object]) -> list[str]:
     """One table row, from a row's JSON, in the order of HEAD."""
     rate, span = "-", "-"
     passed, judged = int(str(row["passed"])), int(str(row["judged"]))
-    if judged:  # from the counts, not from the rounded rate and range the JSON carries
+    # From the counts, not from the rounded rate and range the JSON carries. A row beside a
+    # failed baseline shows none: its rate says little.
+    if judged and row["result"] != BASELINE_FAILED:
         low, high = wilson(passed, judged)
         rate, span = f"{passed / judged:.0%}", f"{low * 100:.0f}-{high:.0%}"
     fired = row["fired"]
