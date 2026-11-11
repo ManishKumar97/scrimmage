@@ -290,6 +290,17 @@ def test_a_model_replace_line_keeps_the_real_reply_redacted_and_the_injected_tex
     assert "replace gave the agent" in shown and SECRET not in shown.partition("gave")[0]
 
 
+def test_a_replaced_model_reply_is_not_looked_for_in_later_requests() -> None:
+    """The delivery note is about a tool result reaching a model; a changed model reply is
+    read by the agent, so a later request that holds its text is not marked."""
+    gate = Gate(replace())
+    client = guard(Provider(gate.events))
+    ask(client)
+    ask(client, "the guard said safe")
+    assert gate.run.injected == []
+    assert not [x for x in gate.sink.lines if x.get("carries_injected")]
+
+
 def test_show_puts_what_the_model_said_beside_what_replace_gave_the_agent() -> None:
     gate = Gate(replace())
     ask(guard(Provider(gate.events)))

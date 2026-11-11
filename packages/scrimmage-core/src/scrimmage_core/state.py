@@ -539,7 +539,8 @@ class RunState:
                 "bytes": len(raw),
             }
         step.changed = shown
-        if fault.text and fault.text not in self.injected:
+        # A changed model reply is read by the agent, not sent on, so it is not looked for.
+        if fault.text and fault.text not in self.injected and step.call.kind != "model":
             self.injected.append(fault.text)
 
     def finish(
