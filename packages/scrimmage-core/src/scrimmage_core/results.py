@@ -90,3 +90,65 @@ def row_hash(test: Test, fault: Fault | None, agent: Agent) -> str:
         doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def is_count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def is_number(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def row_problem(row: object, *, full: bool) -> str | None:
+    """Why a row of a result is not a row `scrimmage test --json` prints, or None.
+
+    A result is a file anyone can edit, so what is read from it is checked before it is used.
+    `full` also checks what the table needs: every column, and the runs behind the row.
+    """
+    if not isinstance(row, dict):
+        return "a row is not an object"
+    doc = cast(dict[str, object], row)
+    for key in ("test", "row", "result"):
+        if not isinstance(doc.get(key), str):
+            return f"a row has no text {key!r}"
+    fault = doc.get("fault", False)
+    if fault is not None and not isinstance(fault, dict):
+        return "a row has no fault, or null"
+    passed, judged = doc.get("passed"), doc.get("judged")
+    if not is_count(passed) or not is_count(judged) or cast(int, passed) > cast(int, judged):
+        return "a row has no passed and judged counts"
+    if not full:
+        return None
+    if isinstance(fault, dict):
+        parts = cast(dict[str, object], fault)
+        if not all(isinstance(parts.get(k), str) for k in ("call", "do", "when")):
+            return "a row's fault has no call, do and when"
+    if not is_count(doc.get("runs")) or not is_count(doc.get("done")):
+        return "a row has no runs and done counts"
+    if not (doc.get("fired") is None or is_count(doc.get("fired"))):
+        return "a row's fired is not a count"
+    if not is_number(doc.get("tools")) or not is_number(doc.get("cost_usd")):
+        return "a row has no tools and cost_usd numbers"
+    details = doc.get("run_details", [])
+    if not isinstance(details, list):
+        return "a row's run_details is not a list"
+    for detail in cast("list[object]", details):
+        if not isinstance(detail, dict) or not isinstance(
+            cast(dict[str, object], detail).get("run"), str
+        ):
+            return "a run in run_details has no run name"
+    return None
+
+
+def shape_problems(doc: dict[str, object], which: str, *, full: bool = False) -> list[str]:
+    """Why a result cannot be compared or shown, if it cannot: not a test's, or a bad row."""
+    rows = doc.get("rows")
+    if doc.get("command") != "test" or not isinstance(rows, list):
+        return [f"the {which} result is not the result of a scrimmage test, so it has no rows"]
+    for row in cast("list[object]", rows):
+        if (why := row_problem(row, full=full)) is not None:
+            return [f"the {which} result is damaged: {why}"]
+    if full and not is_count(doc.get("tests")):
+        return [f"the {which} result is damaged: it has no tests count"]
+    return []

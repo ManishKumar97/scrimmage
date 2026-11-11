@@ -32,6 +32,7 @@ from scrimmage_core.outcomes import (
     WARNINGS,
     plural,
 )
+from scrimmage_core.render import plain
 
 if TYPE_CHECKING:
     from scrimmage_core.runner import Runner
@@ -336,7 +337,7 @@ def read(path: Path) -> tuple[settings.Config | None, list[str]]:
 
 def say(problems: list[str], err: TextIO) -> None:
     for problem in problems:
-        print(f"scrimmage: {problem}", file=err)
+        print(plain(f"scrimmage: {problem}"), file=err)
 
 
 def unreadable(command: str, exc: Exception, found: Found | None) -> int:
@@ -455,10 +456,18 @@ def say_comparison(
         else:
             found.messages.append((NOTES, NOT_FINISHED))
         return None
-    compared = comparing.document(str(path), earlier, comparing.rows(earlier, later))
+    try:
+        compared = comparing.document(str(path), earlier, comparing.rows(earlier, later))
+    except Exception as exc:  # the test ran and has its result: a comparison never changes that
+        message = f"the comparison could not be made: {exc!r}"
+        if found is None:
+            print(f"scrimmage: warning: {message}", file=sys.stderr)
+        else:
+            found.messages.append((WARNINGS, message))
+        return None
     if found is None:
         for line in comparing.text(compared):
-            print(line)
+            print(plain(line))
     return compared
 
 
@@ -642,12 +651,12 @@ def run_show(
         say(shown.mistakes, sys.stderr)
         return shown.code
     for line in shown.text:
-        print(line)
+        print(plain(line))
     for note in shown.notes:
-        print(f"note: {note}")
+        print(plain(f"note: {note}"))
     if compared is not None:
         for line in comparing.text(compared):
-            print(line)
+            print(plain(line))
     return shown.code
 
 
