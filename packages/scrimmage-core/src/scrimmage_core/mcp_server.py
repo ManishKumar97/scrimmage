@@ -18,11 +18,13 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from importlib import metadata, resources
 from pathlib import Path
 from typing import Any, cast
+
+from scrimmage_core.redact import redact
 
 INSTALL = 'scrimmage-mcp needs the mcp extra; install it with: pip install "scrimmage-core[mcp]"'
 
@@ -44,6 +46,7 @@ DOC_CAP = 16 * 2**20  # a child's standard output kept whole up to this; more is
 STDERR_KEPT = 64 * 1024  # the tail of a child's standard error kept, never forwarded
 MAX_CHILDREN = 4  # children at once, in all; a fifth call waits for a slot
 KILL_REAP_S = 5.0  # after SIGKILL, how long to wait for the pipes to close
+TAIL_CHARS = 200  # of a child's last line on standard error, as show cuts a log line
 # How long a stopped child has to print its document: the runner's own grace to stop its
 # runs, KILL_GRACE_S, plus 10 s for the report on a loaded machine. Written out, as this
 # module never imports the runner.
@@ -224,6 +227,158 @@ class Settings:
     allow_no_budget: bool
     allow_probe: bool
     call_timeout: float
+    aliases: tuple[str, ...] = ()  # the root as the person gave it, when that differs
+
+
+# A path in text ends at / or at a character no file name in a message holds.
+AFTER = r"(?=/|$|[\s\"'`:,;)\]}>])"
+BEFORE = r"(?<![\w.~/-])"  # and starts where no longer path name goes on before it
+
+
+def path_rule(roots: Sequence[str], homes: Sequence[str]) -> Callable[[str], str]:
+    """Replaces the root with . and the home folder with ~, only where a path starts and ends,
+    the longest first: so with the root /home/u/app, /home/u/app/x is ./x, and /home/u/app2/x
+    is ~/app2/x, never .2/x. A document then names paths the coding agent can open from its own
+    working folder, and no folder of the person's outside the project."""
+    swaps = {home: "~" for home in homes} | {root: "." for root in roots}
+    order = sorted((form for form in swaps if form not in ("", "/")), key=len, reverse=True)
+    if not order:
+        return lambda value: value
+    pattern = re.compile(BEFORE + "(" + "|".join(map(re.escape, order)) + ")" + AFTER)
+    return lambda value: pattern.sub(lambda found: swaps[found.group(1)], value)
+
+
+def every_string(node: object, change: Callable[[str], str]) -> Any:
+    if isinstance(node, str):
+        return change(node)
+    if isinstance(node, list):
+        return [every_string(item, change) for item in cast(list[object], node)]
+    if isinstance(node, dict):
+        return {k: every_string(v, change) for k, v in cast(dict[str, object], node).items()}
+    return node
+
+
+LISTS = ("mistakes", "notes", "warnings", "infra")
+
+
+def forwarded(doc: Mapping[str, Any], paths: Callable[[str], str]) -> dict[str, Any]:
+    """The document as the client gets it: the path rule on every string, and redact on every
+    message, which the CLI writes as it finds it. Nothing else is redacted: a hash such as
+    test_sha256 must reach a later compare unchanged, and the other fields are redacted where
+    they are made."""
+    out = cast(dict[str, Any], every_string(doc, paths))
+    for name in LISTS:
+        if isinstance(out.get(name), list):
+            out[name] = [redacted_message(item) for item in cast(list[object], out[name])]
+    return out
+
+
+def redacted_message(item: object) -> object:
+    if not isinstance(item, dict):
+        return item
+    message = cast(dict[str, object], item)
+    text = message.get("message")
+    return {**message, "message": redact(text)} if isinstance(text, str) else message
+
+
+def cap_text(usd: object) -> str:
+    return f"${usd:g}" if isinstance(usd, int | float) else "none"
+
+
+def spent_text(usd: object) -> str:
+    return f"${usd:.4f}" if isinstance(usd, int | float) else "$0.0000"
+
+
+def counted(items: Sequence[Mapping[str, Any]], key: str, order: Sequence[str]) -> str:
+    """How many items hold each value of key, in the given order, then any other."""
+    seen = [str(item.get(key)) for item in items]
+    values = [*order, *sorted(set(seen) - set(order))]
+    return ", ".join(f"{seen.count(value)} {value}" for value in values if value in seen)
+
+
+RESULTS = ("pass", "fail", "no result")
+CHANGES = ("better", "worse", "unclear", "no result", "new", "gone")
+
+
+def summary_lines(doc: Mapping[str, Any], guard: Mapping[str, Any]) -> list[str]:
+    """What the result says first, in plain lines. Built from the document's fields only, never
+    from message text, and in the judge's words: pass, fail, no result."""
+    command = str(doc.get("command"))
+    lines = [f"{command}: {doc.get('status')} (exit {doc.get('exit')})"]
+    found = doc.get("summary") if command == "check" else None
+    summary = cast(dict[str, Any], found) if isinstance(found, dict) else None
+    real: object = guard.get("real") if summary is None else summary.get("real")
+    real_line = (
+        f"real: {', '.join(map(str, cast(list[object], real))) or 'nothing'}"
+        if isinstance(real, list)
+        else ""
+    )
+    if command == "check":
+        if summary is not None:
+            lines.append(
+                f"tests {summary.get('tests')}, rows {summary.get('rows')}, "
+                f"runs {summary.get('runs')}"
+            )
+            lines += [line for line in (entry_line(summary.get("entry")),) if line]
+            lines.append(f"cost cap: {cap_text(summary.get('budget_usd'))}")
+            lines.append(real_line or "real: nothing")
+    elif command == "test":
+        rows = cast(list[Mapping[str, Any]], doc.get("rows") or [])
+        lines.append(f"rows: {counted(rows, 'result', RESULTS) or 'none ran'}")
+        lines.append(
+            f"spent {spent_text(doc.get('cost_usd'))} of a {cap_text(doc.get('budget_usd'))} cap"
+        )
+        lines += [line for line in (real_line,) if line]
+        if doc.get("stopped_by") is not None:
+            lines.append(f"stopped by: {doc['stopped_by']}")
+        if doc.get("records") is not None:
+            lines.append(f"records: {doc['records']}")
+        lines += compared(doc)
+    elif command == "record":
+        numbers = cast(Mapping[str, Any], doc.get("numbers") or {})
+        lines.append(
+            f"calls written: {numbers.get('calls_written')} of {numbers.get('calls_seen')}"
+        )
+        lines.append(f"out: {doc.get('out') or 'nothing was written'}")
+        lines.append(
+            f"spent {spent_text(doc.get('cost_usd'))} of a {cap_text(doc.get('budget_usd'))} cap"
+        )
+        lines += [line for line in (real_line,) if line]
+    elif command == "init":
+        lines.append(f"out: {doc.get('out') or 'nothing was written'}")
+        entry = doc.get("entry")
+        if isinstance(entry, dict):
+            point = cast(dict[str, Any], entry)
+            guess = " (a guess, never run)" if point.get("guess") else ""
+            lines.append(f"entry: {point.get('kind')} {point.get('value')}{guess}")
+        probe = doc.get("probe")
+        if isinstance(probe, dict) and cast(dict[str, Any], probe).get("ran"):
+            lines.append("probe ran your code up to its first model request")
+    elif command == "show":
+        runs = cast(list[Mapping[str, Any]], doc.get("runs") or [])
+        lines.append(f"runs shown: {len(runs)}")
+        for run in runs:
+            for suggestion in cast(list[Mapping[str, Any]], run.get("suggestions") or []):
+                lines.append(f"suggestion: {suggestion.get('code')} (a heuristic)")
+        lines += compared(doc)
+    counts = [f"{name} {len(doc.get(name) or [])}" for name in LISTS]
+    lines.append("messages: " + ", ".join(counts))
+    return lines
+
+
+def entry_line(entry: object) -> str:
+    if not isinstance(entry, dict):
+        return ""
+    point = cast(dict[str, Any], entry)
+    return f"entry: {point.get('kind')} {point.get('value')}"
+
+
+def compared(doc: Mapping[str, Any]) -> list[str]:
+    found = doc.get("compare")
+    if not isinstance(found, dict):
+        return []
+    rows = cast(list[Mapping[str, Any]], cast(dict[str, Any], found).get("rows") or [])
+    return [f"compare: {counted(rows, 'change', CHANGES) or 'no rows compared'}"]
 
 
 class Refused(Exception):
@@ -294,12 +449,15 @@ def settings_from(argv: Sequence[str] | None) -> Settings:
         help="stop a command that runs longer than this, in seconds (default 1800)",
     )
     args = parser.parse_args(argv)
+    given = os.path.abspath(args.root) if args.root is not None else os.environ.get("PWD", "")
     root = Path(os.path.realpath(args.root if args.root is not None else os.getcwd()))
     if root == Path(root.anchor) or not root.is_dir():
         parser.error(f"--root: {root} is not a project folder")
     config = Path(os.path.realpath(root / args.config))
     if not config.is_relative_to(root):
         parser.error(f"--config: {args.config} is not inside {root}")
+    # The root as the person spelled it, such as through a link, names the same folder.
+    same = given and given != str(root) and os.path.realpath(given) == str(root)
     return Settings(
         root,
         config,
@@ -307,6 +465,7 @@ def settings_from(argv: Sequence[str] | None) -> Settings:
         args.allow_no_budget,
         args.allow_probe,
         args.call_timeout,
+        (given,) if same else (),
     )
 
 
@@ -326,6 +485,7 @@ class Child:
     started: float
     out: bytearray = field(default_factory=bytearray)
     err: bytearray = field(default_factory=bytearray)
+    err_bytes: int = 0  # all it wrote to standard error, of which err keeps the tail
     too_large: bool = False
     done: anyio.Event = field(default_factory=anyio.Event)  # both pipes closed, and it exited
     wake: anyio.Event = field(default_factory=anyio.Event)  # done, or its output is too large
@@ -345,6 +505,7 @@ class Ran:
     problem: str | None  # why there is no document
     tail: str  # the last line of its standard error
     seconds: float
+    err_bytes: int = 0
 
 
 def is_error(code: int) -> bool:
@@ -367,6 +528,11 @@ class Scrimmage:
             name: jsonschema.Draft202012Validator(input_schema(name, settings.allow_probe))
             for name in COMMANDS
         }
+        home = os.path.expanduser("~")
+        self.paths = path_rule(
+            [str(settings.root), *settings.aliases], sorted({home, os.path.realpath(home)})
+        )
+        self.spent = 0.0  # what this server's calls have spent, as they are counted
 
     def tools(self) -> list[types.Tool]:
         probe = self.settings.allow_probe
@@ -452,24 +618,42 @@ class Scrimmage:
 
     async def command(self, name: str, arguments: dict[str, Any]) -> types.CallToolResult:
         ran = await self.run(name, self.argv(name, arguments))
-        return self.result(ran)
+        return self.result(ran, {})
 
-    def result(self, ran: Ran) -> types.CallToolResult:
+    def result(self, ran: Ran, guard: Mapping[str, Any]) -> types.CallToolResult:
+        session = f"session: spent {spent_text(self.spent)} of ${self.settings.max_session_usd:g}"
         if ran.doc is None:
             line = f"{ran.command}: the command printed no document (exit {ran.code}): "
             return types.CallToolResult(
-                content=[text(line + (ran.problem or "") + self.tail_text(ran))], is_error=True
+                content=[text(f"{line}{ran.problem}{self.tail_text(ran)}\n{session}")],
+                is_error=True,
             )
-        doc = ran.doc
-        summary = f"{ran.command}: {doc['status']} (exit {doc['exit']})"
+        doc = forwarded(ran.doc, self.paths)
+        lines = [*summary_lines(doc, guard), session]
         return types.CallToolResult(
-            content=[text(summary), text(json.dumps(doc, indent=1))],
+            content=[text("\n".join(lines)), text(json.dumps(doc, ensure_ascii=False))],
             structured_content=doc,
             is_error=is_error(int(doc["exit"])),
         )
 
+    def tail(self, ran: Ran) -> str:
+        """The last line the child wrote to standard error, as safe to show as a message."""
+        return redact(self.paths(ran.tail))[:TAIL_CHARS]
+
     def tail_text(self, ran: Ran) -> str:
-        return f"; its last line on standard error: {ran.tail}" if ran.tail else ""
+        return f"; its last line on standard error: {self.tail(ran)}" if ran.tail else ""
+
+    def log(self, ran: Ran) -> None:
+        """One line per call on the server's own standard error, which the client keeps in its
+        local log. A cancelled call's document reaches only this line."""
+        doc = ran.doc or {}
+        line = (
+            f"scrimmage-mcp: {ran.command}: exit {ran.code} in {ran.seconds:.1f} s, "
+            f"cost_usd {doc.get('cost_usd', 0.0)}, {ran.err_bytes} bytes on standard error"
+        )
+        if ran.doc is None:
+            line += f", no document: {ran.problem}{self.tail_text(ran)}"
+        print(line, file=sys.stderr, flush=True)
 
     async def run(self, command: str, args: list[str]) -> Ran:
         """Run one scrimmage command as a child and read its one document."""
@@ -481,10 +665,13 @@ class Scrimmage:
                     await self.stop(child)
             except BaseException:  # a cancelled call: the child is stopped before it goes on
                 await self.stop(child)
+                self.log(self.read(command, child))
                 raise
             finally:
                 self.children.pop(child.pid, None)
-            return self.read(command, child)
+            ran = self.read(command, child)
+            self.log(ran)
+            return ran
 
     async def start(self, command: str, args: list[str]) -> Child:
         """Start the child and track it in one shielded step, so a cancel that lands while it
@@ -536,6 +723,7 @@ class Scrimmage:
         assert stream is not None
         async for chunk in stream:
             child.err += chunk
+            child.err_bytes += len(chunk)
             del child.err[:-STDERR_KEPT]
 
     async def stop(self, child: Child) -> None:
@@ -564,17 +752,21 @@ class Scrimmage:
         code = child.proc.returncode
         lines = child.err.decode("utf-8", "replace").splitlines()
         tail = next((line.strip() for line in reversed(lines) if line.strip()), "")
+        doc: object = None
+        problem: str | None = None
         if child.too_large:
             problem = f"its document was over {DOC_CAP // 2**20} MB"
-            return Ran(command, code, None, problem, tail, seconds)
-        try:
-            doc = json.loads(child.out)
-        except ValueError:
-            return Ran(command, code, None, "its standard output is not JSON", tail, seconds)
-        if not isinstance(doc, dict) or cast(dict[str, Any], doc).get("exit") != code:
+        else:
+            try:
+                doc = json.loads(child.out)
+            except ValueError:
+                problem = "its standard output is not JSON"
+        if problem is None and (
+            not isinstance(doc, dict) or cast(dict[str, Any], doc).get("exit") != code
+        ):
             problem = "its standard output is not a document whose exit is the child's"
-            return Ran(command, code, None, problem, tail, seconds)
-        return Ran(command, code, cast(dict[str, Any], doc), None, tail, seconds)
+        found = cast(dict[str, Any], doc) if problem is None else None
+        return Ran(command, code, found, problem, tail, seconds, child.err_bytes)
 
 
 def without_telemetry(server: Server[Any]) -> None:

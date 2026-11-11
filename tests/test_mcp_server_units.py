@@ -223,3 +223,111 @@ def test_a_relative_value_is_read_against_the_root(tmp_path: Path) -> None:
     test = state.argv("test", {"max_cost_usd": 1, "compare": folder})
     assert test == [str(tmp_path / "sub" / "scrimmage.toml"), "--max-cost-usd=1.0",
                     f"--compare={tmp_path / folder}"]  # fmt: skip
+
+
+ROOT, HOME = "/home/u/app", "/home/u"
+PATHS = mcp_server.path_rule([ROOT, "/srv/link-to-app"], [HOME])
+
+
+def test_the_root_and_home_are_replaced_in_every_string() -> None:
+    doc = {
+        "records": f"{ROOT}/scrimmage-runs/T",
+        "config": f"{ROOT}/scrimmage.toml",
+        f"{ROOT}/key": "keys are not values",
+        "runs": [{"log_tail": {"path": f"{ROOT}/scrimmage-runs/T/run-1.log"}}, 3, None],
+        "compare": {"earlier": "/srv/link-to-app/scrimmage-runs/S"},
+        "infra": [{"message": f"cannot read {HOME}/.config/x: denied"}],
+        "out": f"{HOME}/elsewhere/scrimmage.recorded.toml",
+    }
+    assert mcp_server.every_string(doc, PATHS) == {
+        "records": "./scrimmage-runs/T",
+        "config": "./scrimmage.toml",
+        f"{ROOT}/key": "keys are not values",
+        "runs": [{"log_tail": {"path": "./scrimmage-runs/T/run-1.log"}}, 3, None],
+        "compare": {"earlier": "./scrimmage-runs/S"},  # the root as given, through a link
+        "infra": [{"message": "cannot read ~/.config/x: denied"}],
+        "out": "~/elsewhere/scrimmage.recorded.toml",
+    }
+
+
+def test_a_path_is_replaced_only_at_a_boundary_longest_first() -> None:
+    cases = {
+        f"{ROOT}/x": "./x",
+        ROOT: ".",
+        f"{HOME}/app2/x": "~/app2/x",  # a sibling with the root's name as its prefix
+        f"{HOME}/appx": "~/appx",
+        HOME: "~",
+        f"'{ROOT}/x' and \"{ROOT}\"": "'./x' and \".\"",
+        f"at {ROOT}: no, ({ROOT}/a), {ROOT}, [{ROOT}]": "at .: no, (./a), ., [.]",
+        f"/srv{ROOT}/x": f"/srv{ROOT}/x",  # inside a longer path, not the root
+        f"x{ROOT}": f"x{ROOT}",
+        f"{ROOT}.bak": "~/app.bak",
+        "/home/user/x": "/home/user/x",
+    }
+    for value, expected in cases.items():
+        assert PATHS(value) == expected, value
+    same = mcp_server.path_rule([HOME], [HOME])  # a project in the home folder itself
+    assert same(f"{HOME}/x") == "./x"
+    assert mcp_server.path_rule([], [])("/x") == "/x"
+
+
+SK = "sk-proj-" + "a1B2c3D4e5F6g7H8i9J0"
+LOOKS_LIKE_A_KEY = "AKIA" + "0123456789ABCDEF"  # what a hash field must keep, whatever it holds
+
+
+def test_every_message_is_redacted_and_nothing_else_is() -> None:
+    doc, _ = case_result("failing")
+    doc = {
+        **doc,
+        **{name: [{"message": f"{name}: the key {SK} leaked"}] for name in mcp_server.LISTS},
+    }
+    rows = cast(list[dict[str, Any]], doc["rows"])
+    rows[0]["test_sha256"] = LOOKS_LIKE_A_KEY
+    rows[0]["run_details"][0]["answer_preview"] = f"preview {SK}"  # redacted where it is made
+    out = mcp_server.forwarded(doc, PATHS)
+    for name in mcp_server.LISTS:
+        assert out[name] == [{"message": f"{name}: the key [secret removed] leaked"}], name
+    assert out["rows"][0]["test_sha256"] == LOOKS_LIKE_A_KEY
+    assert out["rows"][0]["run_details"][0]["answer_preview"] == f"preview {SK}"
+    assert doc["mistakes"][0]["message"].endswith(f"{SK} leaked")  # the input is not changed
+
+
+def test_the_summary_comes_from_fields_and_never_says_wrong(
+    project: Project, tmp_path: Path
+) -> None:
+    said = "this message text must not reach the summary"
+    guard = {"real": ["tool:check_inventory"]}
+    lines: list[str] = []
+    for name in sorted(CASES):
+        doc, _ = case_result(name)
+        for kind in mcp_server.LISTS:
+            doc[kind] = [{"message": said}]
+        lines += mcp_server.summary_lines(doc, guard)
+    assert lines and not [line for line in lines if said in line or "wrong" in line.lower()]
+    found, _ = case_result("failing")
+    failing = cast(dict[str, Any], found)
+    assert mcp_server.summary_lines(failing, guard) == [
+        "test: failed (exit 1)",
+        f"rows: {mcp_server.counted(failing['rows'], 'result', mcp_server.RESULTS)}",
+        f"spent ${failing['cost_usd']:.4f} of a $5 cap",
+        "real: tool:check_inventory",
+        f"records: {failing['records']}",
+        f"messages: mistakes 0, notes {len(failing['notes'])}, warnings 0, infra 0",
+    ]
+    project.capsys.readouterr()
+    cli.main(["check", "--json", str(project.toml)])
+    check = json.loads(project.capsys.readouterr().out)
+    assert mcp_server.summary_lines(check, {})[1:5] == [
+        "tests 1, rows 2, runs 6",
+        "entry: function acme.agent:answer",
+        "cost cap: $5",
+        "real: tool:check_inventory",
+    ]
+    check["summary"]["budget_usd"] = None
+    check["summary"]["real"] = []
+    assert mcp_server.summary_lines(check, {})[3:5] == ["cost cap: none", "real: nothing"]
+    folder, _, _ = write_folder(tmp_path)
+    project.capsys.readouterr()
+    cli.main(["show", str(folder), "--json"])
+    shown = mcp_server.summary_lines(json.loads(project.capsys.readouterr().out), {})
+    assert any(line.endswith("(a heuristic)") for line in shown), shown
