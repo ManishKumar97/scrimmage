@@ -54,7 +54,7 @@ model calls cost $0.0008 of a budget of $0.01, 5 runs
 
 - **A run** is one baseline run of one test, as in `scrimmage test`. Three tests and `--runs 5` are 15 runs.
 - **The default is 1**, which is today's command, cost and output. The file's `runs` is for `scrimmage test` and is not read, so an unchanged `scrimmage record` never costs more.
-- **`N` is a whole number of 1 or more.** Anything else exits 2 before any run. There is no upper cap; the budget is the cap.
+- **`N` is a whole number from 1 to 1000.** Anything else exits 2 before any run. The runner builds every row before it checks the budget, so the budget is not a cap on N.
 - **The budget covers every run of every test.** `max_cost_usd` is one cap for the whole command.
 - **Tools under `real` run N times.** The command names every label under `real` before the first run. With N above 1, no `max_cost_usd` and a label under `real`, it exits 2 before any run: N times an unbounded spend and N times every real call is too much to start by a flag alone. Set `max_cost_usd`, or record with `--runs 1`.
 - **Runs follow `[agent] parallel`**, as `scrimmage test` does, so they can overlap on the services under `real`. The file written does not depend on which run finished first: mocks are in the order of the runs as submitted.
@@ -69,11 +69,15 @@ When the runs disagree, a mock answers only its own key and holds a reply some r
 | The same key, unequal replies | No mock. Listed `nondeterministic`, with a skeleton | 1 |
 | The same tool arguments succeeded in one run and failed in another | No mock. Listed `nondeterministic` | 1 |
 | A tool raised in one run and succeeded in another | No mock of the tool, and none of its web requests from any run | 1 |
-| A web request saved in one run and listed in another (a 503, a binary reply) | No mock. Listed `nondeterministic` | 1 |
+| A web request saved in one run and listed in another (a 503, a binary reply) | No mock from any run, the run that listed a call too. Listed `nondeterministic` | 1 |
 | A model call or credential request beneath a tool in one run only | No mock of that tool from any run. Its web requests follow their own rules | 1 if listed |
 | A refusal in one run | The refused call is listed. Every run's calls are written, the refused run's calls before the refusal too. The runs not yet started never start | 2 |
 | A run crashed or timed out | Its calls are written | 1 |
 | A run is an infrastructure error, or a Scrimmage bug was found | Nothing for the whole test | 3 |
+
+The cross-run web rule leaves out calls skipped as `outside_tool` or `credential`: those are not failures of the same request.
+A tool call listed with a code gets one skeleton for each set of arguments, so two sets listed with one code are two skeletons, each with its own `args` line.
+A call with clean arguments on a key that another run found a model call, a credential request or an unwritable call beneath is listed too, and its message names the runs it was made in.
 
 A test that a stop of the whole command cut short, with fewer runs than asked, writes nothing, and the text and `--json` say how many runs did not start.
 A stop on the budget writes nothing at all, and an earlier `scrimmage.recorded.toml` is kept byte for byte: some tests would look whole, and the old file's mocks would be lost to a half-done record.
