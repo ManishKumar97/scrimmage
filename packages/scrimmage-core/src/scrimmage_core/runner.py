@@ -5,6 +5,7 @@ refused call and a test the budget stopped included; 3 for an infrastructure err
 higher code wins, as a mistake or an error makes the rates not worth trusting.
 """
 
+import contextlib
 import dataclasses
 import json
 import os
@@ -472,15 +473,9 @@ class Runner:
         rows = planner.rows(self.config)
         runs = self.config.agent.runs
         self.server.start()
-        self.wake_read, self.wake = os.pipe()
-        os.set_blocking(self.wake, False)  # set_wakeup_fd needs it, and a full pipe is fine
-        watcher = threading.Thread(target=self._watch, name="scrimmage-stop", daemon=True)
-        watcher.start()
-        previous = {sig: signal.signal(sig, self._interrupted) for sig in STOP_SIGNALS}
-        old_wakeup = signal.set_wakeup_fd(self.wake)
-        if self.stop_flag:  # noted just before the handlers above were set
-            os.write(self.wake, bytes([STOP_SIGNALS[0]]))
+        release = nothing
         try:
+            release = self._catch_signals()
             with ThreadPoolExecutor(max_workers=self.config.agent.parallel) as pool:
                 base = [row for row in rows if row.fault is None for _ in range(runs)]
                 results: list[RunResult | None] = []
@@ -504,18 +499,60 @@ class Runner:
                 self.stop_flag.clear()  # the watcher and the handler may both have noted it
                 raise Interrupted(name)
         finally:
-            # Handlers first: from here a signal goes to the caller's, never to a closed pipe.
-            signal.set_wakeup_fd(old_wakeup)
-            for sig, handler in previous.items():
-                signal.signal(sig, handler)
-            os.write(self.wake, END)  # the watcher returns
-            watcher.join()
-            os.close(self.wake)
-            os.close(self.wake_read)
+            release()
             self.cancel()
             self.server.stop()
             shutil.rmtree(self.answers, ignore_errors=True)
         return [r for r in results if r is not None]
+
+    def _catch_signals(self) -> Callable[[], None]:
+        """Stop the runs on SIGINT or SIGTERM. Returns the function that puts everything back.
+
+        Python lets only the main thread set a handler or a wakeup fd. From another thread
+        nothing is set, and the runs stop only through stop_flag and cancel().
+        """
+        if threading.current_thread() is not threading.main_thread():
+            return nothing
+        previous: dict[signal.Signals, object] = {}
+        pipe = (-1, -1)
+        old_wakeup = -1
+        wakeup_set = False
+        watcher: threading.Thread | None = None
+
+        def release() -> None:
+            # Handlers and the wakeup fd first: from here a signal goes to the caller's, never
+            # to a closed pipe.
+            if wakeup_set:
+                signal.set_wakeup_fd(old_wakeup)
+            for sig, handler in previous.items():
+                if handler is not None:  # None: set outside Python, which cannot be put back
+                    signal.signal(sig, handler)  # pyright: ignore[reportArgumentType]
+            if watcher is not None:
+                os.set_blocking(pipe[1], True)  # a full pipe must not keep the watcher waiting
+                os.write(pipe[1], END)  # the watcher returns
+                watcher.join()
+            for fd in pipe:
+                if fd != -1:
+                    os.close(fd)
+
+        try:
+            for sig in STOP_SIGNALS:
+                previous[sig] = signal.signal(sig, self._interrupted)
+            pipe = os.pipe()
+            os.set_blocking(pipe[1], False)  # set_wakeup_fd needs it, and a full pipe is fine
+            old_wakeup = signal.set_wakeup_fd(pipe[1])
+            wakeup_set = True
+            watcher = threading.Thread(
+                target=self._watch, args=(pipe[0], old_wakeup), name="scrimmage-stop", daemon=True
+            )
+            watcher.start()
+            if self.stop_flag:  # noted just before the handlers above were set
+                os.write(pipe[1], bytes([STOP_SIGNALS[0]]))
+                self.cancel()  # at once: no run may start before the watcher has read the byte
+        except BaseException:
+            release()
+            raise
+        return release
 
     def cancel(self) -> None:
         """Start no more runs and stop every run still going, with its children."""
@@ -531,14 +568,29 @@ class Runner:
         if not self.stop_flag:
             self.stop_flag.append(signal.Signals(signum).name)
 
-    def _watch(self) -> None:
-        """Stop every run once a stop signal comes; at the end of run_all, return."""
-        while (byte := os.read(self.wake_read, 1)) != END:
-            if byte[0] in STOP_SIGNALS:  # the wakeup fd also carries other caught signals
+    def _watch(self, wake_read: int, forward: int) -> None:
+        """Stop every run once a stop signal comes; at the end of run_all, return.
+
+        The wakeup fd also carries every other signal a caller catches. Each is passed on to the
+        fd the caller had, as Python's own handler would have written it, until the end.
+        """
+        stopped = False
+        while (byte := os.read(wake_read, 1)) != END:
+            if not byte:
+                return
+            if byte[0] in STOP_SIGNALS:
                 if not self.stop_flag:
                     self.stop_flag.append(signal.Signals(byte[0]).name)
-                self.cancel()
-                return
+                if not stopped:
+                    stopped = True
+                    self.cancel()
+            elif forward != -1:
+                with contextlib.suppress(OSError):  # a full or closed pipe drops the byte
+                    os.write(forward, byte)
+
+
+def nothing() -> None:
+    """The release of a signal setup that set nothing."""
 
 
 def real_error(line: dict[str, object]) -> str | None:

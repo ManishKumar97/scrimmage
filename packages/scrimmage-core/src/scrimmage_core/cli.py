@@ -10,6 +10,7 @@ import argparse
 import json
 import signal
 import sys
+import threading
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, TextIO
@@ -130,9 +131,15 @@ def settle() -> None:
     A signal noted after the last stop point is dropped with it, so a later call in the
     same process does not start stopped.
     """
-    for sig in STOP_SIGNALS:
-        signal.signal(sig, signal.SIG_IGN)
+    if on_main_thread():
+        for sig in STOP_SIGNALS:
+            signal.signal(sig, signal.SIG_IGN)
     entry.pending.clear()
+
+
+def on_main_thread() -> bool:
+    """Only the main thread can set a signal handler; from another thread none is set."""
+    return threading.current_thread() is threading.main_thread()
 
 
 # With --json, a signal is noted, as while Scrimmage loads, and acted on at the next stop point.
@@ -151,11 +158,13 @@ def as_json(
     """Run a command for --json: one document on standard output, whatever happens."""
     version = scrimmage_version()
     found = Found(command, str(path))
-    previous = {sig: signal.getsignal(sig) for sig in STOP_SIGNALS}
+    handled = on_main_thread()
+    previous = {sig: signal.getsignal(sig) for sig in STOP_SIGNALS} if handled else {}
     try:
         try:
-            for sig in STOP_SIGNALS:
-                signal.signal(sig, stop)
+            if handled:
+                for sig in STOP_SIGNALS:
+                    signal.signal(sig, stop)
             stop_point()  # a signal that came while Scrimmage was still loading
             code = run(path, found)
             stop_point()  # one that came after the last stop point inside the command
