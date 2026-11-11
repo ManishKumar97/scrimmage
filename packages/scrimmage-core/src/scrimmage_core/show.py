@@ -159,7 +159,9 @@ def summary_of(path: Path) -> Doc | None:
                 line = json.loads(tail[-1])
             except ValueError:
                 return None
-            return cast(Doc, line) if isinstance(line, dict) and "summary" in line else None
+            if isinstance(line, dict) and isinstance(cast(Doc, line).get("summary"), dict):
+                return cast(Doc, line)
+            return None
         if window >= size or window >= SUMMARY_BYTES:
             return None
         window *= 4
@@ -172,8 +174,13 @@ def known(line: Doc) -> bool:
 def started_at(line: Doc) -> float:
     try:
         return datetime.fromisoformat(str(line["start"])).timestamp()
-    except (KeyError, ValueError):
+    except (KeyError, ValueError, TypeError, OverflowError):
         return 0.0
+
+
+def seq_of(line: Doc) -> int:
+    value = line.get("seq")
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
 def proc_text(line: Doc) -> str:
@@ -236,13 +243,16 @@ def timeline(path: Path) -> tuple[list[Doc], int, int, bool]:
                 continue
             if "summary" in doc or "action" not in doc:
                 continue
+            if not all(isinstance(doc.get(k), str) for k in ("action", "call")):
+                skipped += 1
+                continue
             kept.append(doc)
     return kept, left_out, skipped, bad_version
 
 
 def ordered(lines: list[Doc]) -> list[tuple[int, Doc]]:
     """Lines by start, process and sequence; a line with a parent sits under it, indented."""
-    lines = sorted(lines, key=lambda x: (started_at(x), proc_text(x), int(str(x.get("seq") or 0))))
+    lines = sorted(lines, key=lambda x: (started_at(x), proc_text(x), seq_of(x)))
     ids = {str(x["call_id"]) for x in lines if x.get("call_id") is not None}
     children: dict[str, list[Doc]] = {}
     roots: list[Doc] = []
@@ -469,6 +479,11 @@ def build(target: Path | None, run: str | None, root: Path) -> Shown:
     except Refused as exc:
         shown.mistakes.append(str(exc))
         shown.code = 2
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        shown.mistakes.append(
+            f"{folder}: a record or result has a shape Scrimmage does not read: {exc!r}"
+        )
+        shown.code = 2
     except OSError as exc:
         shown.mistakes.append(f"{folder}: {exc.strerror}")
         shown.code = 2
@@ -487,6 +502,9 @@ def read_into(
             raise Refused(
                 f"{result_path}: is the result of scrimmage {doc.get('command')}, not test"
             )
+        problems = results.shape_problems(doc, "result", full=True)
+        if problems:
+            raise Refused(f"{result_path}: {problems[0]}")
         shown.result = doc
     rows = cast("list[Doc]", shown.result["rows"]) if shown.result is not None else []
     by_run = {str(d["run"]): r for r in rows for d in cast("list[Doc]", r.get("run_details") or [])}

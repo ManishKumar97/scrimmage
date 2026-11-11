@@ -448,3 +448,48 @@ def test_a_real_test_leaves_a_folder_show_can_read(
     assert done.code == 0 and "order-status" in done.out
     table = [line for line in result.out.splitlines()[1:] if line]
     assert "".join(table[:3]) in "".join(done.out.splitlines()[1:])
+
+
+def test_a_control_character_in_a_record_is_shown_escaped(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    folder, _, _ = write_folder(tmp_path)
+    run = BASELINE_FAIL
+    preview = {"sha256": "0", "bytes": 1, "preview": "a\rb\x07"}
+    lines = [
+        at(1, 0, call="tool:\x1b[2Jget", result=preview),
+        summary_line(run, "order-status", "baseline", answer="\x1b]0;t\x07done", judged="fail"),
+    ]
+    write_lines(folder, run, lines)
+    done = shown(capsys, str(folder), "--run", run)
+    assert not any(c in done.out for c in "\x1b\x07\r")
+    assert "\\x1b[2Jget" in done.out and "a b\\x07" in done.out
+    assert "\\x1b]0;t\\x07done" in done.out
+
+
+def test_well_formed_json_of_the_wrong_shape_is_never_exit_3(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    folder, doc, _ = write_folder(tmp_path)
+    run = BASELINE_FAIL
+    path = folder / f"{run}.jsonl"
+    good = path.read_text().splitlines()
+    odd = [
+        "[1, 2]",
+        "3",
+        '{"v": 1, "action": 5, "call": []}',
+        '{"v": 1, "action": "real", "call": "c", "seq": "x", "start": 7}',
+    ]
+    path.write_text("\n".join([*good[:1], *odd, *good[1:-1], '{"v": 1, "summary": "text"}']) + "\n")
+    done = shown(capsys, str(folder), "--run", run)
+    assert done.code == 0, done.err
+    assert "could not be read" in done.out and "did not end" in done.out
+    result = folder / results.RESULT_FILE
+    first = cast("list[Doc]", doc["rows"])[0]
+    for rows in ([{"test": "x"}], ["x"], [{**first, "passed": "9"}]):
+        result.write_text(json.dumps({**doc, "rows": rows}))
+        bad = shown(capsys, str(folder), "--json")
+        assert bad.code == 2 and bad.doc["status"] == "mistake", rows
+        assert "is damaged" in str(bad.doc["mistakes"]), rows
+    result.write_text(json.dumps({**doc, "tests": "many"}))
+    assert shown(capsys, str(folder)).code == 2
