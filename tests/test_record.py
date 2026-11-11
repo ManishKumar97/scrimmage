@@ -2632,6 +2632,9 @@ def answer(q):
     code = "model_inside" if beneath == "model" else "nondeterministic"
     said = [m["message"] for m in done.manual(code) if m["call"] == "tool:inner"]
     assert any("this call was made in run-" in m for m in said), said
+    # the clean call never reached the forbidden call itself, so its reason says another run did
+    clean = [m for m in said if "this call was made in run-" in m]
+    assert all("in another run" in m for m in clean), clean
 
 
 @pytest.mark.design("record.runs_merge")

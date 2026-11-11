@@ -877,11 +877,8 @@ class Recorder:
             what, code = "made a call that cannot be written", NONDETERMINISTIC
         runs = self.record.sets[node.label][self.argkeys[id(node)]].runs
         ids = runs_text([self.record.results[i].run for i in sorted(runs)])
-        why = (
-            f"a call under it {what}"
-            if code == MODEL_INSIDE
-            else f"a call under it {what} in another run"
-        )
+        # This call was clean; only another run of it found the forbidden call beneath.
+        why = f"a call under it {what} in another run"
         if len(self.record.results) > 1:
             why += f"; this call was made in {ids}"
         return Listed(code, why)
