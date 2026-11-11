@@ -99,6 +99,7 @@ class Reading:
     too_large: list[str] = field(default_factory=list[str])
     outside: list[str] = field(default_factory=list[str])  # symlinks that leave the folder
     cut_off: bool = False  # the tree had more .py files than FILE_LIMIT
+    skipped: int = 0  # the .py files after the cut, counted and not read
     src_dropped: bool = False  # a module name left out a leading src folder
     definitions: list[Definition] = field(default_factory=list[Definition])
     spec_names: set[str] = field(default_factory=set[str])
@@ -264,9 +265,11 @@ def printable(text: object) -> str:
 def read_folder(folder: Path) -> Reading:
     """Every .py file under the folder, by ast. None of them is imported or run."""
     reading = Reading()
-    for path in python_files(folder, reading):
+    paths = python_files(folder, reading)
+    for path in paths:
         if reading.files + len(reading.unread) + len(reading.too_large) >= FILE_LIMIT:
             reading.cut_off = True
+            reading.skipped = 1 + sum(1 for _ in paths)  # walked and counted, never parsed
             break
         relative = path.relative_to(folder).as_posix()
         shown = relative.encode("utf-8", "backslashreplace").decode()
@@ -844,8 +847,8 @@ def add_notes(draft: Draft, found: Findings) -> None:
         )
     if reading.cut_off:
         notes.append(
-            f"read the first {FILE_LIMIT} .py files and stopped; the tree has more, so run "
-            "scrimmage init on the folder that holds the agent"
+            f"read the first {FILE_LIMIT} .py files and stopped; skipped {reading.skipped} "
+            ".py files, so run scrimmage init on the folder that holds the agent"
         )
     left_out = sorted(left_out_tools(reading, tools)) if result.offered else []
     if left_out:
