@@ -110,6 +110,13 @@ SAMPLES = {
     "xox": "xoxb-" + "1" * 10,
     "xapp-": "xapp-" + "2" * 10,
     "bearer": "bearer " + "f" * 16,
+    "authorization": "Authorization: Basic dXNlcjpwYXNz",
+    "password": "password=hunter2",
+    "passwd": "passwd=hunter2",
+    "token": "token=hunter2",
+    "secret": "secret=hunter2",
+    "api_key": "api_key=hunter2",
+    "api%5fkey": "api%5Fkey%3Dhunter2",
     "Illegal header": "Illegal header value b'x'",
 }
 JWT_SAMPLE = (
@@ -146,6 +153,11 @@ def corpus() -> list[str]:
         "BeArEr " + "g" * 20,
         "BEARER\t" + "h" * 16,
         "bearer",
+        "Authorization: Basic dXNlcjpwYXNz",
+        "PASSWORD=hunter2",
+        "api%5Fkey%3Dhunter2",
+        "password=",
+        "token=[secret removed]",
         "Bearer " + chr(0x17F) + "i" * 16,
         chr(0x17F),
         chr(0x130),
@@ -207,3 +219,122 @@ def test_redacted_gives_a_plain_str_even_when_no_pass_runs() -> None:
     for text in (Marked("nothing here"), Marked("sk-" + "a" * 20)):
         assert type(redacted(text)[0]) is str
         assert type(redact(text)) is str
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_the_ascii_only_patterns_match_no_letter_that_lowers_to_another() -> None:
+    """Basic and the form fields are found by lowering the text. With the ASCII flag a
+    letter matches only itself in either case, so no look-alike can slip past the check."""
+    for letter in set("authorizationbasicpasswdtokensecretapi_key"):
+        matcher = re.compile(f"(?ai:{letter})")
+        for code in range(sys.maxunicode + 1):
+            char = chr(code)
+            if matcher.fullmatch(char):
+                assert char.lower() == letter, (hex(code), letter)
+
+
+NEW_LITERALS = {"authorization", "password", "passwd", "token", "secret", "api_key", "api%5fkey"}
+B64 = "dXNlcjpwYXNz"
+# The text, the part of it that is removed, and the secret that must not be left.
+NEW_SECRETS = [
+    ("Authorization: Basic dXNlcjpwYXNz", "Authorization: Basic dXNlcjpwYXNz", B64),
+    ("authorization: basic dXNlcjpwYXNz==", "authorization: basic dXNlcjpwYXNz==", B64),
+    ("-H 'Authorization: Basic dXNlcjpwYXNz'", "Authorization: Basic dXNlcjpwYXNz", B64),
+    ('{"Authorization": "Basic dXNlcjpwYXNz"}', 'Authorization": "Basic dXNlcjpwYXNz', B64),
+    (
+        '{"Authorization ": "Basic dXNlcjpwYXNz"}',
+        'Authorization ": "Basic dXNlcjpwYXNz',
+        B64,
+    ),
+    ("password=hunter2", "password=hunter2", "hunter2"),
+    ("PASSWORD=hunter2", "PASSWORD=hunter2", "hunter2"),
+    ("passwd=hunter2&x=1", "passwd=hunter2", "hunter2"),
+    ("token=hunter2", "token=hunter2", "hunter2"),
+    ("access_token=hunter2", "access_token=hunter2", "hunter2"),
+    ("secret=hunter2", "secret=hunter2", "hunter2"),
+    ("client_secret=hunter2", "secret=hunter2", "hunter2"),
+    ("api_key=hunter2", "api_key=hunter2", "hunter2"),
+    ("API_KEY=hunter2", "API_KEY=hunter2", "hunter2"),
+    ("api%5Fkey=hunter2", "api%5Fkey=hunter2", "hunter2"),
+    ("password%3Dhunter2", "password%3Dhunter2", "hunter2"),
+    ("password=hun%20ter%2B2", "password=hun%20ter%2B2", "hun%20ter%2B2"),
+    ("grant_type=password&password=p%40ss&u=a", "password=p%40ss", "p%40ss"),
+]
+
+
+def without_new_passes(text: str) -> str:
+    """The module as it was before: the same three passes, minus the two new secrets."""
+    old = re.compile(
+        "|".join(
+            secret.pattern
+            for secret in redact_module.SECRETS
+            if not NEW_LITERALS & set(secret.literals)
+        )
+    )
+    text = redact_module.URL.sub(redact_module.plain_url, text)
+    text = redact_module.JWT.sub(redact_module.no_jwt, text)
+    return old.sub(redact_module.REMOVED, text)
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize(("text", "span", "value"), NEW_SECRETS)
+def test_the_old_module_kept_each_new_secret_and_the_new_one_removes_it(
+    text: str, span: str, value: str
+) -> None:
+    assert value in without_new_passes(text)
+    assert redact(text) == text.replace(span, "[secret removed]")
+    assert redact(redact(text)) == redact(text)
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_the_only_difference_from_the_old_module_is_the_new_secrets_removed() -> None:
+    rng = random.Random(20261111)
+    # texts from the old corpus, with none of the new kinds in them
+    benign = [t for t in corpus() if not any(lit in t.lower() for lit in NEW_LITERALS)][:400]
+    assert len(benign) == 400
+    for _ in range(3000):
+        parts: list[str] = []
+        expected: list[str] = []
+        for _ in range(rng.randint(1, 6)):
+            if rng.random() < 0.5:
+                text, span, _ = rng.choice(NEW_SECRETS)
+                parts.append(text)
+                expected.append(text.replace(span, redact_module.REMOVED))
+            else:
+                part = rng.choice(benign)
+                parts.append(part)
+                expected.append(part)
+        # A newline ends an "Illegal header" line, and a # ends a bearer token, so a part
+        # is judged alone: the old module already removed a field that a bearer ran into.
+        text = "\n# ".join(parts)
+        assert redact(text) == without_new_passes("\n# ".join(expected)), text
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize(
+    "text",
+    [
+        "password=",
+        "password=&user=a",
+        "password= ",
+        "token=",
+        "secret=\n",
+        "please reset your password at the desk",
+        "Reset your password at https://example.com/account",
+        "the secret is out",
+        "https://example.com/oauth/token",
+        "https://example.com/api/token/refresh",
+        "/v1/auth/token/lookup",
+        "a token bucket limits the rate",
+        "password: hunter2",
+        "basic usage, see Authorization in the docs",
+        "Authorization: Basic",
+        "Authorization: Basic abc",
+        "the basic dXNlcjpwYXNz is prose",
+        "password=[secret removed]",
+        "token=[removed]",
+        "pa\u017f\u017fword=hunter2",  # long s is not an s
+    ],
+)
+def test_prose_empty_values_and_paths_are_kept(text: str) -> None:
+    assert redact(text) == text

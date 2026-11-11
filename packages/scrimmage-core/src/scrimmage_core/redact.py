@@ -33,6 +33,21 @@ SECRETS = (
     Secret(r"xapp-[A-Za-z0-9-]{10,}", ("xapp-",)),
     # bearer tokens
     Secret(r"(?i:bearer)\s+[A-Za-z0-9._~+/=-]{16,}", ("bearer",), lowercase=True),
+    # a Basic credential in an Authorization header, as a header line, JSON or a command
+    # line. ASCII only, so the lowered text holds the literal for every match.
+    Secret(
+        r"(?ai:authorization)\W{1,8}(?ai:basic)\s+[A-Za-z0-9+/_-]{4,}={0,2}",
+        ("authorization",),
+        lowercase=True,
+    ),
+    # form-encoded password, token and secret, with = or %3D, and api%5Fkey. An empty value
+    # does not match, and neither does one an earlier pass has already removed.
+    Secret(
+        r"(?ai:passw(?:or)?d|(?:access_)?token|secret|api(?:_|%5f)key)(?ai:=|%3d)"
+        r"(?!\[(?:secret )?removed\])[^&\s\"'<>]+",
+        ("password", "passwd", "token", "secret", "api_key", "api%5fkey"),
+        lowercase=True,
+    ),
     # h11 quotes the bad header
     Secret(r"Illegal header (?:name|value) .*", ("Illegal header",)),
 )

@@ -135,6 +135,14 @@ SHAPES = {
     "slack rotating token": ("xo" + "xe.xoxp-", LETTERS),
     "slack app-level token": ("xa" + "pp-", LETTERS),
     "bearer token": ("Bearer ", LETTERS),
+    "basic credential": ("Authorization: Basic ", "dXNlcjpwYXNz"),
+    "form password": ("password=", "hunter2"),
+    "form passwd": ("passwd=", "hunter2"),
+    "form token": ("token=", "hunter2"),
+    "form access token": ("access_token=", "hunter2"),
+    "form secret": ("secret=", "hunter2"),
+    "form api key": ("api_key=", "hunter2"),
+    "form encoded password": ("password%3D", "hunter2"),
     "json web token": ("ey" + "J", f"{LETTERS}.ey{LETTERS}.{LETTERS}"),
 }
 
@@ -150,7 +158,9 @@ def test_each_listed_secret_shape_is_removed(shape: str) -> None:
 @pytest.mark.design("security.redaction_gap")
 def test_a_secret_with_no_known_shape_passes_through_redaction() -> None:
     """A known limit, stated on the security page: only known shapes are removed."""
-    assert redact("password=hunter2") == "password=hunter2"
+    assert redact("pw is hunter2") == "pw is hunter2"
+    assert redact("pass=hunter2") == "pass=hunter2"
+    assert redact("password: hunter2") == "password: hunter2"
 
 
 @pytest.mark.design("security.page_numbers")

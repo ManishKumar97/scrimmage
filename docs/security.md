@@ -97,9 +97,15 @@ Every gated call is written to a record in `scrimmage-runs/`, next to your `scri
     - GitHub tokens: `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` and `github_pat_`;
     - Slack tokens: `xoxa-`, `xoxb-`, `xoxe-`, `xoxp-`, `xoxr-`, `xoxs-`, `xoxe.xoxp-` and `xapp-`;
     - bearer tokens: `Bearer` and the value after it;
+    - a Basic credential: `Authorization` and `Basic` and the value after them, in a header line, in JSON or in a command line;
+    - form-encoded fields: `password=`, `passwd=`, `token=`, `access_token=`, `secret=` and `api_key=` and the value after them, in any letter case, with `=` written as `%3D` or `_` in `api_key` as `%5F`;
     - JSON Web Tokens, which start with `eyJ`.
 
-  *Checked by: `tests/test_security_claims.py::test_each_listed_secret_shape_is_removed`, `tests/test_redact.py::test_a_jwt_is_removed_after_any_separator`*
+  *Checked by: `tests/test_security_claims.py::test_each_listed_secret_shape_is_removed`, `tests/test_redact.py::test_a_jwt_is_removed_after_any_separator`, `tests/test_redact.py::test_the_old_module_kept_each_new_secret_and_the_new_one_removes_it`, `tests/test_redact.py::test_the_only_difference_from_the_old_module_is_the_new_secrets_removed`*
+
+  A form field with an empty value, prose such as "reset your password at", and a URL path that holds the word `token` are left as written.
+
+  *Checked by: `tests/test_redact.py::test_prose_empty_values_and_paths_are_kept`*
 
 - In any URL that is recorded, the query, the fragment and a user name or password are replaced with `[removed]`.
 
@@ -169,7 +175,7 @@ See [Failing the model, and keeping a budget](model-faults.md).
 - **A provider that is not OpenAI's format.** Listing its host under `real` lets its calls through as web requests, which no budget counts.
 - **Calls Scrimmage does not see.** A program on another Python, or a Python child started through a shell, is not gated.
 - **Secrets of an unknown shape.** Redaction removes the shapes listed above only.
-  A plain `password=hunter2` in a tool's result or a command line is recorded as written.
+  A `password: hunter2` with a colon, a `pass=hunter2` and a bare `pw is hunter2` are recorded as written.
   Pass secrets in the environment, which is never recorded.
 
   *Checked by: `tests/test_security_claims.py::test_a_secret_with_no_known_shape_passes_through_redaction`*
