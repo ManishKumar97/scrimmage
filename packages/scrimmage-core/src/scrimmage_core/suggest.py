@@ -29,6 +29,7 @@ MAIN_CODES = (
     "test_mistake",
     "not_agent",
     "fault_not_fired",
+    "fault_not_changed",
     "refused_call",
     "refused_on_baseline",
     "crash_after_fault",
@@ -157,6 +158,17 @@ def gate_mistakes(lines: Sequence[Doc]) -> list[Doc]:
     ]
 
 
+def unchanged_lines(lines: Sequence[Doc]) -> list[Doc]:
+    """Lines whose fault the gate could not carry out; S13a1 writes `unchanged` on them."""
+    return [x for x in lines if isinstance(x.get("unchanged"), dict)]
+
+
+def why_unchanged(line: Doc) -> str:
+    """The gate's own words, as written."""
+    carried = cast(Doc, line["unchanged"])
+    return str(carried.get("why", "")) or "no reason was given"
+
+
 def test_mistake(found: list[Doc]) -> Suggestion:
     more = f" (and {len(found) - 1} more)" if len(found) > 1 else ""
     return make(
@@ -199,6 +211,15 @@ def main(run: Doc, lines: Sequence[Doc], row: Doc | None) -> Suggestion | NoRule
     first_by_config = bool(refused) and refused[0].get("by_config") is True
     if outcome == REFUSED_CALL and first_by_config and (found := gate_mistakes(lines)):
         return test_mistake(found)
+    if fault and left_out == judge.NOT_FIRED and (carried := unchanged_lines(lines)):
+        first = carried[0]
+        return make(
+            "fault_not_changed",
+            f"the agent made the faulted call, but the fault could not change it: "
+            f"{why_unchanged(first)}. The call ran as it would without the fault, so this "
+            "row tested nothing.",
+            first,
+        )
     if fault and left_out == judge.NOT_FIRED:
         ended = (
             ""

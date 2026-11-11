@@ -267,7 +267,8 @@ def test_every_failing_combination_gets_exactly_one_main_suggestion_or_no_rule()
             seen["suggestion"] += 1
     # Every rule is reached by a real combination, but the retry loop: it differs from the
     # timeout after a fault by the count of lines, which is no dimension of a combination.
-    assert codes == set(suggest.MAIN_CODES) - {"retry_loop"}
+    # The unchanged fault is told by a field on a line, which is no dimension either.
+    assert codes == set(suggest.MAIN_CODES) - {"retry_loop", "fault_not_changed"}
     assert seen["suggestion"] > 0 and seen["no rule"] > 0
     assert len(list(every_combo())) - sum(map(is_excluded, every_combo())) == sum(seen.values())
 
@@ -297,6 +298,8 @@ def more_calls(n: int, proc: Doc = PROC) -> list[Doc]:
     return [{**line(3 + i, "tool:get_order"), "proc": proc} for i in range(n)]
 
 
+WHY = "the reply is image/png, which is not text or JSON"
+UNCHANGED = line(2, "tool:get_order", unchanged={"do": "append", "why": WHY})
 MISS = {"nearest": None}
 # code: the run with its evidence, and the same run with that evidence taken away.
 RULE_CASES: dict[str, tuple[Case, Case]] = {
@@ -311,6 +314,10 @@ RULE_CASES: dict[str, tuple[Case, Case]] = {
     "fault_not_fired": (
         case("answered", "left out", judge.NOT_FIRED, lines=[line(1)]),
         case("answered", "fail", None, {"forbid"}, lines=[line(1)]),
+    ),
+    "fault_not_changed": (
+        case("answered", "left out", judge.NOT_FIRED, lines=[line(1), UNCHANGED]),
+        case("answered", "left out", judge.NOT_FIRED, lines=[line(1)]),
     ),
     "refused_call": (
         case(
@@ -378,6 +385,14 @@ def test_each_rule_fires_on_its_evidence_and_not_without_it(code: str) -> None:
     assert isinstance(got, suggest.Suggestion) and got.code == code, got
     lacking = suggest.main(*without)
     assert not (isinstance(lacking, suggest.Suggestion) and lacking.code == code), lacking
+
+
+def test_an_unchanged_fault_quotes_the_gates_reason_and_cites_its_line() -> None:
+    got = suggest.main(*RULE_CASES["fault_not_changed"][0])
+    assert isinstance(got, suggest.Suggestion) and got.code == "fault_not_changed"
+    assert WHY in got.text and got.doc["evidence"] == [{"seq": 2, "proc": PROC}]
+    never = suggest.main(*RULE_CASES["fault_not_changed"][1])  # the call was never made
+    assert isinstance(never, suggest.Suggestion) and never.code == "fault_not_fired"
 
 
 def test_every_main_rule_has_a_case() -> None:
