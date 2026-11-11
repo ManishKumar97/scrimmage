@@ -5,6 +5,7 @@ own client retries, and what it does when a rail's call fails. The docs page on 
 states these findings; this file is what keeps them true.
 """
 
+import importlib.util
 from collections.abc import Callable
 from typing import Any
 
@@ -13,9 +14,15 @@ import pytest
 from conftest import Project, Result
 from fakes.openai_server import CHAT_PATH, FakeOpenAI, Guard, Obeys
 
-pytest.importorskip("nemoguardrails")  # it does not install on Python 3.14 yet
-
-pytestmark = pytest.mark.slow
+# Found, never imported here: only the agent's own process imports NeMo. It is the `nemo`
+# dependency group, which a plain `uv sync` leaves out, and it does not install on 3.14 yet.
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.skipif(
+        importlib.util.find_spec("nemoguardrails") is None,
+        reason="nemoguardrails is not installed; run uv sync --group nemo",
+    ),
+]
 
 Fake = Callable[..., FakeOpenAI]
 RAIL, MAIN = "gpt-4.1-nano", "gpt-4o-mini"
@@ -23,8 +30,8 @@ CHAT_LABEL = "model:openai"  # a chat call to a host under model_hosts with prov
 MARKER = "BLOCKME"  # a question holding it is what the fake rail model blocks
 BLOCKED = "I'm sorry, I can't respond to that."  # NeMo's own refusal, from its flows
 UNAVAILABLE = "Sorry, the safety check is unavailable"  # railed.py's text when NeMo raises
-# NeMo's own client makes one attempt and two retries (max_retries = 2) on a timeout or a
-# 500, and marks none of them as a retry.
+# NeMo's own client makes one attempt and two retries (max_retries = 2) on a timeout, a 429
+# or a 500, and marks none of them as a retry.
 NEMO_ATTEMPTS = 3
 QUESTION = "What is the status of order 1042?"
 
@@ -39,9 +46,15 @@ def fake_for(fake_openai: Fake) -> FakeOpenAI:
     )
 
 
-def run(project: Project, fake: FakeOpenAI, faults: str = "", question: str = QUESTION) -> Result:
+def run(
+    project: Project,
+    fake: FakeOpenAI,
+    faults: str = "",
+    question: str = QUESTION,
+    function: str = "answer",
+) -> Result:
     project.toml.write_text(
-        '[agent]\nfunction = "acme.railed:answer"\n'
+        f'[agent]\nfunction = "acme.railed:{function}"\n'
         'tools = ["acme.tools:get_order", "acme.tools:refund_order"]\nruns = 1\n'
         'model_hosts = [{host = "127.0.0.1", provider = "openai"}]\n\n'
         f'[[test]]\nname = "order"\nquestion = "{question}"\nexpect = ["shipped"]\n\n'
@@ -108,11 +121,12 @@ def test_a_rail_timeout_fires_on_the_rail_model_only(project: Project, fake_open
     assert not [c for c in main if c[1] == RAIL and c[2] == "fault"]
 
 
+@pytest.mark.parametrize("status", ["status 500", "status 429"])
 def test_a_rail_status_500_is_tried_as_many_times_as_nemo_retries(
-    project: Project, fake_openai: Fake
+    project: Project, fake_openai: Fake, status: str
 ) -> None:
     fake = fake_for(fake_openai)
-    result = run(project, fake, fault(RAIL, "status 500"))
+    result = run(project, fake, fault(RAIL, status))
     lines = [x for x in row(result, "fault 1") if "call" in x]
     assert [(x["model"], x["action"]) for x in lines] == [(RAIL, "fault")] * NEMO_ATTEMPTS
     # NeMo marks no attempt as a retry, so the gate reads every one as a first attempt.
@@ -129,6 +143,20 @@ def test_a_blocked_input_answers_with_the_rails_block_message(
     summary = row(result, "baseline")[-1]["summary"]
     assert summary["answer"] == BLOCKED
     assert calls(row(result, "baseline")) == [(CHAT_LABEL, RAIL, "real")]  # the bot never ran
+
+
+def test_a_failed_rail_raises_from_generate_too(project: Project, fake_openai: Fake) -> None:
+    """generate, NeMo's main call, raises as check does: with nothing to catch it, the run
+    crashes, and its log names NeMo's own error."""
+    fake = fake_for(fake_openai)
+    result = run(project, fake, fault(RAIL, "status 500"), function="generated")
+    summary = row(result, "fault 1")[-1]["summary"]
+    assert summary["outcome"] == "crashed", result.out
+    run_name = str(row(result, "fault 1")[-1]["run"])
+    logs = list((result.root / "scrimmage-runs").glob(f"*/{run_name}.log"))
+    assert logs and "LLMCallException" in logs[0].read_text()
+    # With the rail healthy, generate hands the question back: the input rail passed it.
+    assert row(result, "baseline")[-1]["summary"]["answer"] == QUESTION
 
 
 def test_what_nemo_does_when_the_rail_call_fails(project: Project, fake_openai: Fake) -> None:

@@ -308,10 +308,10 @@ They hold what follows.
 - **A model per rail.** `self check input` and `self check output` take a model of their own, with `type: self_check_input` and `type: self_check_output` in the `models` list.
   Give each rail its own model name to fault it apart from the main model.
 - **What each rail reads.** The input rail reads the question and the output rail reads the answer.
-  The version's tool-result rail, `rails.tool_input`, ships one flow, `tool result validation`, which checks a result's shape and makes no model call.
-  So an attack in a tool result meets NeMo's model only through the output rail, after the tool loop: the output rail can block the answer, never the refund.
+  So with these two rails, an attack in a tool result meets NeMo's model only through the output rail, after the tool loop: the output rail can block the answer, never the refund.
+  NeMo's rails on tool calls and tool results are not tested here.
 - **Its block message.** A rail that blocks answers `I'm sorry, I can't respond to that.`
-- **Its retries.** NeMo's client tries a failed call three times: once, then twice more on a timeout, a connection error or a 408, 409, 429, 500, 502, 503 or 504 status.
+- **Its retries.** NeMo's client tries a failed call three times: once, then twice more, on a timeout and on a 429 or a 500 status.
   It marks none of them as a retry, so use `first N` or `always` on a rail; `requests N` is a mistake there and says so.
 - **A failed rail.** When a rail's call fails, NeMo raises, from `generate` and from `check`.
   It has no fail-open or fail-closed setting of its own, so what your user sees is your code's choice: catch it, and return your own text.

@@ -10,6 +10,19 @@ The suite has two tiers.
 A test that starts a process must be marked `@pytest.mark.slow`, or `pytestmark = pytest.mark.slow` for a whole file.
 A fixture in `conftest.py` checks this: a test not marked slow that starts a process fails, naming the rule.
 
+## The NeMo Guardrails tests
+
+`tests/test_nemo_rails.py` runs the real NeMo Guardrails library, which is its own dependency group, `nemo`.
+A plain `uv sync` leaves it out, as it brings 36 packages and about 195 MB, among them onnxruntime, numpy and tokenizers, so those tests skip.
+To run them, install the group, then run the file:
+
+```sh
+uv sync --group nemo && uv run pytest tests/test_nemo_rails.py
+```
+
+A later plain `uv sync` removes the group again.
+The group does not install on Python 3.14 yet.
+
 ## While you work
 
 Run the fast tier, then the slow tests of the area you changed:

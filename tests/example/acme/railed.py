@@ -1,3 +1,5 @@
+# pyright: reportMissingImports=false
+# NeMo is the `nemo` dependency group, which a plain `uv sync` leaves out.
 """Acme's shop bot behind NeMo Guardrails: an input rail, the bot's own tool loop, an output rail.
 
 NeMo checks the question and the answer. The tool loop between them is the bot's own: the
@@ -29,6 +31,14 @@ def rails() -> LLMRails:
         for model in config.models:
             model.parameters["base_url"] = base
     return LLMRails(config)
+
+
+def generated(question: str) -> str:
+    """NeMo's own generate with only the input rails, and nothing to catch what it raises:
+    the question back when the rail passes it, or the block message."""
+    options = {"rails": {"input": True, "output": False, "dialog": False, "retrieval": False}}
+    reply = rails().generate(messages=[{"role": "user", "content": question}], options=options)
+    return str(reply.response[0]["content"])  # type: ignore[index, union-attr]
 
 
 def answer(question: str) -> str:
