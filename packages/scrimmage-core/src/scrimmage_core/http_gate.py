@@ -36,7 +36,7 @@ from scrimmage_core.budget import ASK_MAX_S, Held, Shortfall
 from scrimmage_core.changes import Changed, Unchangeable
 from scrimmage_core.client import ControlError
 from scrimmage_core.config import Fault, slow_seconds
-from scrimmage_core.decide import READ_METHODS, Call, Decision
+from scrimmage_core.decide import READ_METHODS, Call, Decision, names, schedule
 from scrimmage_core.errors import ScrimmageRefused
 from scrimmage_core.judge import normal
 from scrimmage_core.labels import shown_name
@@ -66,6 +66,12 @@ WAIT_STEP_S = 0.25  # how soon a waiting call asks again when the runner sends n
 JITTER = random.Random()  # its own, so the team's program keeps its random sequence
 if hasattr(os, "register_at_fork"):  # forked children do not ask in step
     os.register_at_fork(after_in_child=JITTER.seed)
+# The openai library numbers each attempt of a request; 0 is the first.
+RETRY_HEADER = "x-stainless-retry-count"
+UNMARKED = (
+    "this model call's library does not mark its retries, so requests N counted each attempt "
+    "as a request; use first N or always"
+)
 RUN_MARGIN_S = 10.0  # a wait on other runs ends this long before the run's time limit
 SHOWN_HOLDS = 5  # holds a refusal names
 WEB_CAP = changes.WEB_CAP  # a reply body over this is not read to be changed
@@ -315,13 +321,14 @@ def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call:
     op = openai_table.op_for(str(request.url.path), method) if provider is not None else None
     if provider is None or op is None:
         return Call("http", f"http:{host}", path_of(request.url), provider, method)
+    marked = RETRY_HEADER in request.headers
     try:
-        retry = max(0, int(request.headers.get("x-stainless-retry-count", "0")))
+        retry = max(0, int(request.headers.get(RETRY_HEADER, "0")))
     except ValueError:
         retry = 0
     label = f"model:{provider}" if op == "chat" else f"model:{provider}/{op}"
     key = f"{who}:{hashlib.sha256(body).hexdigest()}"
-    return Call("model", label, op, provider, method, retry, key)
+    return Call("model", label, op, provider, method, retry, key, marked=marked)
 
 
 def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, object]] | None:
@@ -349,6 +356,8 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
         extra["stream"] = (fields or {}).get("stream") is True
     step = run.decide(call, {})
     step.extra = extra
+    if call.kind == "model" and not call.marked and counts_requests(run.plan, call):
+        extra["mistake"] = UNMARKED
     if not ctx.faults and step.decision.action in ("fault", "mock"):
         without_faults(run, step)
     where = f"{call.method} {path_of(request.url)}"
@@ -389,6 +398,11 @@ def model_path_notice(ctx: Context, call: Call, where: str) -> None:
             '"openai"} to [agent] model_hosts'
         ),
     )
+
+
+def counts_requests(plan: Plan, call: Call) -> bool:
+    """Whether a requests N fault names this call."""
+    return any(names(f, call) and schedule(f.when)[0] == "requests" for f in plan.faults)
 
 
 def carries(injected: list[str], fields: dict[str, object]) -> bool:
