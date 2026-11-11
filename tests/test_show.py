@@ -222,6 +222,30 @@ def test_show_never_says_wrong(tmp_path: Path, capsys: pytest.CaptureFixture[str
     assert "judged fail against the test's rules" in shown(capsys, str(folder)).out
 
 
+@pytest.mark.design("suggest.in_show")
+def test_a_failing_run_shows_its_suggestion_in_text_and_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    folder, _, _ = write_folder(tmp_path)
+    text = shown(capsys, str(folder)).out.splitlines()
+    mine = [line for line in text if line.startswith("suggestion (a heuristic):")]
+    assert len(mine) == 2  # one for each failing row's first failing run, none for the rest
+    assert mine[0].startswith("suggestion (a heuristic): the baseline fails the test's rules")
+    assert "after an injected failure in tool:get_order" in mine[1]
+    as_json = shown(capsys, str(folder), "--json")
+    runs = {str(r["run"]): r for r in cast("list[Doc]", as_json.doc["runs"])}
+    baseline = cast("list[Doc]", runs[BASELINE_FAIL]["suggestions"])
+    crashed = cast("list[Doc]", runs[FAULT_CRASH]["suggestions"])
+    assert [s["code"] for s in baseline] == ["rule_on_baseline"]
+    assert [s["code"] for s in crashed] == ["crash_after_fault"]
+    assert all(s["heuristic"] is True for s in (*baseline, *crashed))
+    # The evidence is the fault line: seq 2 of the run's process.
+    proc = at(0, 0)["proc"]
+    assert crashed[0]["evidence"] == [{"seq": 2, "proc": proc}]
+    one = shown(capsys, str(folder), "--run", FAULT_CRASH)  # the same suggestion with --run
+    assert any(line.startswith("suggestion (a heuristic):") for line in one.out.splitlines())
+
+
 def printed_table(text: str) -> list[str]:
     """The lines of a test's text from its table through the "range:" line."""
     lines = text.splitlines()

@@ -100,7 +100,7 @@ The schema checks the shape of the file. `scrimmage check` decides.
 scrimmage show [TARGET] [--run RUN] [--compare EARLIER] [--json]
 ```
 
-Reads a finished test's records folder and says what happened: the table, and for each failing row the timeline of its first failing run.
+Reads a finished test's records folder and says what happened: the table, and for each failing row the timeline of its first failing run and one suggestion, labelled a heuristic.
 `TARGET` is a records folder or its `result.json`, and the newest test's folder by default.
 `--run RUN` shows one run.
 `--compare EARLIER` compares the folder with an earlier test and runs nothing.

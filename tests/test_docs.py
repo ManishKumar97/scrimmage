@@ -9,7 +9,7 @@ import pytest
 
 import scrimmage_core
 from conftest import doc_pages
-from scrimmage_core import cli, config, judge, mcp_gate, outcomes, record, render
+from scrimmage_core import cli, config, judge, mcp_gate, outcomes, record, render, suggest
 
 DOCS = Path(__file__).parents[1] / "docs"
 CLI_SCHEMA = json.loads(
@@ -432,3 +432,14 @@ def test_the_show_page_says_what_redact_removes_and_who_may_see_the_output() -> 
     assert "## scrimmage show" in commands and "--compare" in commands and "--run" in commands
     assert "`scrimmage show --json`" in page("json-output.md")
     assert "signal handling needs the main thread" in commands
+
+
+@pytest.mark.design("docs.suggestions")
+def test_the_show_page_lists_every_suggestion_code_and_calls_it_a_heuristic() -> None:
+    text = page("show.md").split("### Suggestions")[1].split("### What show opens")[0]
+    for code in suggest.CODES:
+        assert f"| `{code}` |" in text, code
+    assert "Every suggestion is a heuristic" in text and "`suggestion (a heuristic):`" in text
+    assert "reads `code` and not `text`" in text
+    assert 'never "because"' in text
+    assert "never edits `scrimmage.toml`" in text

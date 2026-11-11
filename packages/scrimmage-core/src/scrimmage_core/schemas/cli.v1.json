@@ -1990,8 +1990,77 @@
         },
         "suggestions": {
           "type": "array",
-          "description": "Empty in this release.",
-          "maxItems": 0
+          "description": "Heuristic suggestions for a failing run: the main one first, then at most one about a mock that missed. Empty for a pass, and when no rule fits.",
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/suggestion"
+          }
+        }
+      }
+    },
+    "suggestion": {
+      "type": "object",
+      "description": "A heuristic rule over a run's record. It names no cause: its text says what came after what. Read code, never the text.",
+      "required": [
+        "code",
+        "text",
+        "heuristic",
+        "evidence"
+      ],
+      "properties": {
+        "code": {
+          "anyOf": [
+            {
+              "enum": [
+                "test_mistake",
+                "not_agent",
+                "fault_not_fired",
+                "refused_call",
+                "refused_on_baseline",
+                "crash_after_fault",
+                "crash_on_baseline",
+                "retry_loop",
+                "timeout_after_fault",
+                "timeout_on_baseline",
+                "forbid_after_fault",
+                "expect_after_fault",
+                "empty_answer",
+                "rule_on_baseline",
+                "mock_miss_real",
+                "mock_miss_refused"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
+          ]
+        },
+        "text": {
+          "type": "string",
+          "description": "Starts with: suggestion (a heuristic):"
+        },
+        "heuristic": {
+          "const": true
+        },
+        "evidence": {
+          "type": "array",
+          "description": "The record lines the rule read, by seq and proc.",
+          "items": {
+            "type": "object",
+            "required": [
+              "seq",
+              "proc"
+            ],
+            "properties": {
+              "seq": {
+                "type": "integer"
+              },
+              "proc": {
+                "description": "The process that wrote the line, as the record gives it."
+              }
+            }
+          }
         }
       }
     },
