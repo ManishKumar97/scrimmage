@@ -307,3 +307,26 @@ def test_a_chat_replace_drops_the_body_headers_and_counts_its_length() -> None:
     near = json.dumps({"choices": [{"message": {"content": f"x {KEY}"}}]}).encode()
     said = changes.change_chat(200, "chat", JSON, near, fault("replace", "y", find=KEY[:6]))
     assert isinstance(said, Unchangeable) and said.mistake
+
+
+def test_a_replace_in_a_json_text_inside_data_is_judged_per_string() -> None:
+    """The URL's query is removed by redaction, but an edit to the msg string touches none of
+    it. The whole JSON text is not one removed span."""
+    body = json.dumps({"msg": "hello", "next": "https://api.example.com/items?page=2"})
+    done = changed(changes.change_data({"body": body}, fault("replace", "HI", "hello")))
+    assert isinstance(done.value, dict)
+    assert json.loads(done.value["body"]) == {
+        "msg": "HI",
+        "next": "https://api.example.com/items?page=2",
+    }
+
+
+def test_a_replace_that_touches_a_secret_in_a_json_text_inside_data_is_refused() -> None:
+    body = json.dumps({"msg": "hello", "key": KEY})
+    clash = left(changes.change_data({"body": body}, fault("replace", "y", KEY[4:9])))
+    assert (clash.kind, clash.rule) == ("span", "json")
+    # a string that holds a removed span is one place, so an edit beside the secret in it is
+    # refused too
+    body = json.dumps({"msg": f"hello {KEY}"})
+    clash = left(changes.change_data({"body": body}, fault("replace", "y", "hello")))
+    assert clash.kind == "span"
