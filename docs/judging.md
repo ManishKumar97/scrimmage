@@ -131,6 +131,7 @@ Its runs still run and are recorded, and its passed and judged counts still show
 A rate beside a failing baseline says little: the agent already fails without the fault.
 For example, a guardrail that blocks every question fails the baseline, and would pass every attack row at 100%.
 The exit code does not change: the baseline row already gives it.
+The lines under the table still name each broken rule of such a row, a refused call too, but they start with `note:`, and a refusal's line ends "its baseline did not pass".
 `scrimmage show --compare` reads such a row as `no result`.
 
 ## The table

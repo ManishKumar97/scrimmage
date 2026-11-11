@@ -511,9 +511,11 @@ def rule_head(row: dict[str, object]) -> str:
         advice = (
             "See the line below" if call == runner.PROCESS_LABEL else "Mocking it would hide this"
         )
+        word = "fail" if row["result"] == judge.FAIL else "note"
+        beside = "; its baseline did not pass" if row["result"] == judge.BASELINE_FAILED else ""
         return (
-            f"fail: {where}: under this fault the agent called {call}, which the test does not "
-            f"allow. {advice}"
+            f"{word}: {where}: under this fault the agent called {call}, which the test does not "
+            f"allow{beside}. {advice}"
         )
     word = "fail" if row["result"] == judge.FAIL else "note"
     rate = cast(float, row["pass_rate"])

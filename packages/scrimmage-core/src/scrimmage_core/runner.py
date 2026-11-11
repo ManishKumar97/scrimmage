@@ -1019,9 +1019,11 @@ def rule_lines(report: RowReport, folder: Path) -> list[str]:
     if calls:
         call = calls[0].removeprefix(f"{judge.REFUSED} ")
         advice = "See the line below" if call == PROCESS_LABEL else "Mocking it would hide this"
+        # Beside a failed baseline the row is not read as a fail, though the call was refused.
+        beside = "; its baseline did not pass" if report.baseline_failed else ""
         head = (
-            f"fail: {report.where}: under this fault the agent called {call}, which the test "
-            f"does not allow. {advice}"
+            f"{word}: {report.where}: under this fault the agent called {call}, which the test "
+            f"does not allow{beside}. {advice}"
         )
     return [
         head,
