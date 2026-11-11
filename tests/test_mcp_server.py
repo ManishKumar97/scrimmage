@@ -652,3 +652,278 @@ def test_a_child_that_fills_its_stderr_does_not_block(bed: Bed, modes: Modes) ->
     result = anyio.run(go)
     assert not result.is_error and doc_of(result)["status"] == "valid"
     assert f", {4 * 2**20} bytes on standard error" in bed.log.read_text()
+
+
+# A price at which one call's reservation, its 4096 output tokens, is about $0.04: no call
+# fits under a cap of a few tenths of a cent, so a test stops on its budget with $0 spent.
+PRICED = "[agent.prices]\ngpt-4o-mini = {input = 10, output = 10}\n\n[[test]]\n"
+
+
+def capped(bed: Bed, cap: str) -> None:
+    bed.edit("[agent]\n", f"[agent]\nmax_cost_usd = {cap}\nruns = 1\n")
+    bed.edit("[[test]]\n", PRICED)
+
+
+def guard_of(result: types.CallToolResult) -> dict[str, Any]:
+    assert result.meta is not None, texts(result)
+    return cast(dict[str, Any], result.meta[mcp_server.GUARD])
+
+
+def test_no_budget_is_refused_before_any_run(bed: Bed, fake_openai: Fake) -> None:
+    bed.shim(COUNT_STARTS)
+    bed.edit("[agent]\n", '[agent]\nmax_cost_usd = "none"\n')
+    fake = fake_openai([])
+    bed.model(fake)
+    refused = call(bed, ("test", {"max_cost_usd": 5}), ("record", {"max_cost_usd": 5}))
+    for result in refused:
+        assert result.is_error and result.structured_content is None
+        assert (
+            'max_cost_usd = "none"' in texts(result)[0] and "--allow-no-budget" in texts(result)[0]
+        )
+    assert fake.paths == [] and not (bed.root / "scrimmage-runs").exists()
+    assert bed.starts() == 2  # the two checks, and nothing after them
+
+
+def test_no_budget_runs_with_the_server_flag_capped_by_the_argument(
+    bed: Bed, fake_openai: Fake
+) -> None:
+    capped(bed, '"none"')
+    bed.model(fake_openai([]))
+    (result,) = call(bed, ("test", {"max_cost_usd": 0.004}), server=("--allow-no-budget",))
+    doc = doc_of(result)
+    assert doc["budget_usd"] == 0.004 and doc["stopped_by"] == "budget", doc
+    assert guard_of(result)["file_max_cost_usd"] is None
+    assert guard_of(result)["max_cost_usd"] == 0.004
+
+
+def test_max_cost_usd_is_required_on_test_and_record(bed: Bed) -> None:
+    bed.shim(COUNT_STARTS)
+    for result in call(bed, ("test", {}), ("record", {"runs": 2})):
+        assert result.is_error and "'max_cost_usd' is a required property" in texts(result)[0]
+    assert bed.starts() == 0
+
+
+def test_a_file_cap_above_the_argument_is_refused(bed: Bed) -> None:
+    bed.shim(COUNT_STARTS)
+    (result,) = call(bed, ("test", {"max_cost_usd": 0.5}))  # the file's cap is the $5 default
+    assert result.is_error and result.structured_content is None
+    said = texts(result)[0]
+    assert "$5" in said and "$0.5" in said and "at least $5" in said
+    assert bed.starts() == 1 and not (bed.root / "scrimmage-runs").exists()  # only the check
+
+
+RAISE_CAP = IN_CHILD + (
+    "import atexit, os, pathlib\n"
+    "def edit(old=os.environ['OLD_CAP'], new=os.environ['NEW_CAP']):\n"
+    "    toml = pathlib.Path('scrimmage.toml')\n"
+    "    toml.write_text(toml.read_text().replace(old, new))\n"
+    "if child and sys.orig_argv[4] == 'check':\n"
+    "    atexit.register(edit)  # after the check's document, before the test reads the file\n"
+)
+
+
+def test_a_cap_raised_after_the_check_is_still_held_to_the_argument(
+    bed: Bed, fake_openai: Fake
+) -> None:
+    capped(bed, "0.004")
+    bed.shim(RAISE_CAP)
+    bed.env.update(OLD_CAP="max_cost_usd = 0.004", NEW_CAP="max_cost_usd = 5")
+    bed.model(fake_openai([]))
+    (result,) = call(bed, ("test", {"max_cost_usd": 0.004}))
+    assert "max_cost_usd = 5" in bed.toml.read_text()  # the file did change after the check
+    doc = doc_of(result)
+    assert doc["budget_usd"] == 0.004 and doc["stopped_by"] == "budget", doc
+
+
+def test_a_cap_changed_during_the_call_is_said_against_the_lower_of_file_and_argument(
+    bed: Bed, fake_openai: Fake
+) -> None:
+    capped(bed, "0.002")
+    bed.model(fake_openai([]))
+    (same,) = call(bed, ("test", {"max_cost_usd": 0.004}))
+    assert doc_of(same)["budget_usd"] == 0.002
+    assert "is not the" not in texts(same)[0]  # the cap used is the lower one, as expected
+    bed.shim(RAISE_CAP)
+    bed.env.update(OLD_CAP="max_cost_usd = 0.002", NEW_CAP="max_cost_usd = 0.003")
+    (changed,) = call(bed, ("test", {"max_cost_usd": 0.004}))
+    assert doc_of(changed)["budget_usd"] == 0.003
+    assert "the cost cap used, $0.003, is not the $0.002 the check found" in texts(changed)[0]
+
+
+def test_a_failing_check_stops_a_spend_and_returns_the_check_document(bed: Bed) -> None:
+    bed.shim(COUNT_STARTS)
+    bed.edit('name     = "order-status"', 'name     = ""')
+    for name in ("test", "record"):
+        (result,) = call(bed, (name, {"max_cost_usd": 5}))
+        doc = doc_of(result)
+        assert result.is_error and (doc["command"], doc["exit"]) == ("check", 2)
+        assert texts(result)[0].startswith(f"{name}: check found problems; nothing was run")
+    assert bed.starts() == 2 and not (bed.root / "scrimmage-runs").exists()
+
+
+def test_the_cap_entry_and_real_are_in_every_check_test_and_record_result(
+    bed: Bed, fake_openai: Fake
+) -> None:
+    bed.edit("[agent]\n", "[agent]\nruns = 1\n")
+    bed.model(fake_openai(ACME * 2))
+    entry = {"kind": "function", "value": "acme.agent:answer"}
+    results = call(bed, ("check", {}), ("test", {"max_cost_usd": 5}))
+    record_bot(bed, "'paid'")
+    bed.model(fake_openai(["chat_answer"]))
+    results += call(bed, ("record", {"max_cost_usd": 6}))
+    for result, usd, point, real in zip(
+        results,
+        (None, 5, 6),
+        (entry, entry, {"kind": "function", "value": "acme.invoices:answer"}),
+        ("tool:check_inventory", "tool:check_inventory", "tool:get_invoice"),
+        strict=True,
+    ):
+        guard = guard_of(result)
+        assert guard["max_cost_usd"] == usd and guard["file_max_cost_usd"] == 5.0
+        assert guard["entry"] == point and guard["real"] == [real]
+        assert guard["checked_by"]["status"] == "valid"
+        assert guard["session_cap_usd"] == 10.0
+        said = texts(result)[0]
+        assert f"entry: function {point['value']}" in said and f"real: {real}" in said
+        assert "cost cap: $5" in said or "of a $5 cap" in said, said
+
+
+def test_the_session_ceiling_refuses_the_call_that_could_pass_it(
+    bed: Bed, fake_openai: Fake
+) -> None:
+    capped(bed, "0.004")
+    bed.shim(COUNT_STARTS)
+    bed.model(fake_openai([]))
+    usd = {"max_cost_usd": 0.004}
+    first, second, third = call(
+        bed, ("test", usd), ("test", usd), ("test", usd), server=("--max-session-usd", "0.01")
+    )
+    assert guard_of(first)["session_spent_usd"] == 0.004
+    assert guard_of(second)["session_spent_usd"] == 0.008
+    assert third.is_error and third.structured_content is None
+    said = texts(third)[0]
+    assert "$0.004" in said and "$0.0080" in said and "$0.01" in said
+    assert bed.starts() == 4  # a check and a test for each of the first two
+
+
+def test_a_stopped_spend_counts_at_least_its_argument(bed: Bed, fake_openai: Fake) -> None:
+    capped(bed, "0.004")
+    bed.model(fake_openai([]))
+    (result,) = call(bed, ("test", {"max_cost_usd": 0.004}))
+    doc = doc_of(result)
+    assert doc["stopped_by"] == "budget" and doc["cost_usd"] == 0.0
+    assert guard_of(result)["session_spent_usd"] == 0.004
+    assert "session: spent $0.0040 of $10" in texts(result)[0]
+
+
+TEST_DIES = IN_CHILD + "if child and sys.orig_argv[4] == 'test':\n    import os\n    os._exit(5)\n"
+
+
+def test_a_spend_with_no_document_counts_its_argument(bed: Bed) -> None:
+    bed.shim(TEST_DIES)
+    died, after = call(bed, ("test", {"max_cost_usd": 5}), ("check", {}))
+    assert died.is_error and died.structured_content is None
+    assert guard_of(died)["session_spent_usd"] == 5.0
+    assert guard_of(after)["session_spent_usd"] == 5.0
+
+
+async def appear(path: Path) -> None:
+    """Wait for a marker a run writes; the ceiling only ends a test whose run never got there."""
+    with anyio.fail_after(120):
+        while not path.exists():
+            await anyio.sleep(0.02)
+
+
+def hang(bed: Bed, function: str = "acme.slow:hang") -> None:
+    bed.edit('function = "acme.agent:answer"', f'function = "{function}"\nruns = 1\n')
+    bed.edit(bed.toml.read_text().split("[[test.fault]]")[1], "")
+    bed.edit("[[test.fault]]", "")
+
+
+SECOND = {
+    "test": {"max_cost_usd": 5},
+    "record": {"max_cost_usd": 5},
+    "init with probe": {"probe": "acme.agent:answer"},
+}
+
+
+@pytest.mark.parametrize("second", list(SECOND))
+def test_a_second_spend_while_one_runs_is_refused(bed: Bed, second: str) -> None:
+    hang(bed)
+
+    async def go() -> types.CallToolResult:
+        got: list[types.CallToolResult] = []
+        async with connect(bed, "--allow-probe") as session, anyio.create_task_group() as group:
+            group.start_soon(session.call_tool, "test", {"max_cost_usd": 5})
+            await appear(bed.root / "hanging")
+            got.append(await session.call_tool(second.split()[0], SECOND[second]))
+            group.cancel_scope.cancel()
+        return got[0]
+
+    refused = anyio.run(go)
+    assert refused.is_error and texts(refused) == [mcp_server.BUSY]
+
+
+def alive(pid: int) -> bool:
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except FileNotFoundError:
+        return False
+    return state != "Z"
+
+
+def test_the_lock_is_held_until_a_cancelled_spend_has_stopped(bed: Bed) -> None:
+    hang(bed, "acme.slow:stubborn")  # its run ignores SIGTERM, so only SIGKILL stops it
+
+    async def go() -> tuple[int, int, types.CallToolResult]:
+        async with connect(bed) as session:
+            async with anyio.create_task_group() as group:
+                group.start_soon(session.call_tool, "test", {"max_cost_usd": 5})
+                await appear(bed.root / "ignoring")
+                group.cancel_scope.cancel()  # the client cancels the call
+            run = int((bed.root / "ignoring").read_text())
+            busy = 0
+            while True:
+                after = await session.call_tool("record", {"max_cost_usd": 5, "tests": ["x"]})
+                if texts(after) != [mcp_server.BUSY]:
+                    return run, busy, after
+                busy += 1
+                await anyio.sleep(0.05)
+
+    run, busy, after = anyio.run(go)
+    assert busy > 0  # the first call's stop held the lock
+    assert not alive(run)  # and the next spend started only once its run was gone
+    assert doc_of(after)["command"] == "record" and doc_of(after)["exit"] == 2
+
+
+def test_check_and_show_run_while_a_test_runs(bed: Bed) -> None:
+    hang(bed)
+
+    async def go() -> list[types.CallToolResult]:
+        reads: list[types.CallToolResult] = []
+        async with connect(bed) as session, anyio.create_task_group() as group:
+            group.start_soon(session.call_tool, "test", {"max_cost_usd": 5})
+            await appear(bed.root / "hanging")
+            reads += [await session.call_tool("check", {}), await session.call_tool("show", {})]
+            group.cancel_scope.cancel()
+        return reads
+
+    check, shown = anyio.run(go)
+    assert doc_of(check)["status"] == "valid"
+    assert doc_of(shown)["command"] == "show"  # a document, not a refusal
+
+
+def test_probe_runs_only_with_the_server_flag(bed: Bed) -> None:
+    bed.shim(COUNT_STARTS)
+    (refused,) = call(bed, ("init", {"probe": "acme.agent:answer"}))
+    assert refused.is_error and "probe" in texts(refused)[0] and bed.starts() == 0
+
+    async def go() -> types.CallToolResult:
+        async with connect(bed, "--allow-probe", config="draft.toml") as session:
+            return await session.call_tool("init", {"probe": "acme.agent:answer"})
+
+    probed = anyio.run(go)
+    doc = doc_of(probed)
+    assert doc["exit"] == 0 and doc["probe"]["ran"] is True, texts(probed)
+    assert "probe ran your code up to its first model request" in texts(probed)[0]
+    assert bed.starts() == 1

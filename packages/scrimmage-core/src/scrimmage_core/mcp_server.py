@@ -328,7 +328,7 @@ def summary_lines(doc: Mapping[str, Any], guard: Mapping[str, Any]) -> list[str]
         lines.append(
             f"spent {spent_text(doc.get('cost_usd'))} of a {cap_text(doc.get('budget_usd'))} cap"
         )
-        lines += [line for line in (real_line,) if line]
+        lines += [line for line in (entry_line(guard.get("entry")), real_line) if line]
         if doc.get("stopped_by") is not None:
             lines.append(f"stopped by: {doc['stopped_by']}")
         if doc.get("records") is not None:
@@ -343,7 +343,7 @@ def summary_lines(doc: Mapping[str, Any], guard: Mapping[str, Any]) -> list[str]
         lines.append(
             f"spent {spent_text(doc.get('cost_usd'))} of a {cap_text(doc.get('budget_usd'))} cap"
         )
-        lines += [line for line in (real_line,) if line]
+        lines += [line for line in (entry_line(guard.get("entry")), real_line) if line]
     elif command == "init":
         lines.append(f"out: {doc.get('out') or 'nothing was written'}")
         entry = doc.get("entry")
@@ -508,6 +508,29 @@ class Ran:
     err_bytes: int = 0
 
 
+GUARD = "scrimmage/guard"  # the _meta key of what the spending guards checked
+BUSY = (
+    "a test, record or probe is already running in this server, and it runs one at a time; "
+    "wait for its result, then call again"
+)
+
+
+def checked_guard(doc: Mapping[str, Any] | None) -> dict[str, Any]:
+    """What a check document says a spend would run under: the file's cap, its entry point
+    and the labels under real."""
+    found = None if doc is None else doc.get("summary")
+    if not isinstance(found, dict):
+        return {}
+    summary = cast(dict[str, Any], found)
+    assert doc is not None
+    return {
+        "file_max_cost_usd": summary.get("budget_usd"),
+        "entry": summary.get("entry"),
+        "real": summary.get("real"),
+        "checked_by": {"command": "check", "exit": doc.get("exit"), "status": doc.get("status")},
+    }
+
+
 def is_error(code: int) -> bool:
     return code in (MISTAKE, INFRA)
 
@@ -533,6 +556,7 @@ class Scrimmage:
             [str(settings.root), *settings.aliases], sorted({home, os.path.realpath(home)})
         )
         self.spent = 0.0  # what this server's calls have spent, as they are counted
+        self.spending = False  # a test, record or probe holds it from its check to its count
 
     def tools(self) -> list[types.Tool]:
         probe = self.settings.allow_probe
@@ -617,23 +641,112 @@ class Scrimmage:
         return args
 
     async def command(self, name: str, arguments: dict[str, Any]) -> types.CallToolResult:
-        ran = await self.run(name, self.argv(name, arguments))
-        return self.result(ran, {})
+        args = self.argv(name, arguments)
+        if name not in ("test", "record") and not (name == "init" and "probe" in arguments):
+            ran = await self.run(name, args)
+            return self.result(ran, checked_guard(ran.doc) if name == "check" else {})
+        # One spend at a time, held from the check to the end of the stop and the count, so a
+        # cancelled call's runs are gone before the next spend can start.
+        if self.spending:
+            raise Refused(BUSY)
+        self.spending = True
+        try:
+            if name == "init":
+                ran = await self.run(name, args)
+                return self.result(ran, {})
+            return await self.spend(name, args, arguments)
+        finally:
+            self.spending = False
 
-    def result(self, ran: Ran, guard: Mapping[str, Any]) -> types.CallToolResult:
-        session = f"session: spent {spent_text(self.spent)} of ${self.settings.max_session_usd:g}"
+    async def spend(
+        self, name: str, args: list[str], arguments: Mapping[str, Any]
+    ) -> types.CallToolResult:
+        """test or record, after the checks a spend needs. The cap the person approved, the
+        max_cost_usd argument, goes to the child, whose ledger then holds it whatever the
+        file says by the time the child reads it."""
+        usd = float(arguments["max_cost_usd"])
+        ceiling = self.settings.max_session_usd
+        if self.spent + usd > ceiling:
+            raise Refused(
+                f"this call may spend up to ${usd:g}, and this server has spent "
+                f"{spent_text(self.spent)} of its ${ceiling:g} ceiling for the session; call "
+                "with a lower max_cost_usd, or restart the server with a higher "
+                "--max-session-usd"
+            )
+        runs = [f"--runs={arguments['runs']}"] if "runs" in arguments else []
+        check = await self.run("check", [str(self.settings.config), *runs])
+        if check.doc is None or is_error(int(check.doc["exit"])):
+            return self.result(check, {}, first=f"{name}: check found problems; nothing was run")
+        guard = checked_guard(check.doc)
+        file_cap = guard["file_max_cost_usd"]
+        if file_cap is None and not self.settings.allow_no_budget:
+            raise Refused(
+                'scrimmage.toml has max_cost_usd = "none", and this server runs test and '
+                "record only with a cost cap in the file. Set max_cost_usd in [agent], or "
+                "start the server with --allow-no-budget"
+            )
+        if file_cap is not None and file_cap > usd:
+            raise Refused(
+                f"the file's cost cap is ${file_cap:g}, above the ${usd:g} this call allows; "
+                f"lower max_cost_usd in the file, or call again with max_cost_usd of at least "
+                f"${file_cap:g}, which the person approves"
+            )
+        guard["max_cost_usd"] = usd
+        ran = await self.run(name, args, spend=usd)
+        # The file may have changed since the check: the child's cap is still at most usd.
+        expected = usd if file_cap is None else min(file_cap, usd)
+        used = None if ran.doc is None else ran.doc.get("budget_usd")
+        extra = [] if used in (None, expected) else [
+            f"the cost cap used, {cap_text(used)}, is not the {cap_text(expected)} the check "
+            "found: scrimmage.toml changed after the check"
+        ]  # fmt: skip
+        return self.result(ran, guard, extra=extra)
+
+    def count(self, ran: Ran, usd: float) -> None:
+        """Add what a spending call may have spent to the session. A stopped call's cost_usd
+        leaves out the calls still held in flight, so it counts at least its argument, and a
+        call with no document counts all of it."""
+        doc = ran.doc
+        if doc is None:
+            self.spent += usd
+            return
+        cost = float(doc.get("cost_usd") or 0.0)
+        stopped = doc.get("status") == "infra" or doc.get("stopped_by") is not None
+        self.spent += max(cost, usd) if stopped else cost
+
+    def result(
+        self,
+        ran: Ran,
+        guard: Mapping[str, Any],
+        *,
+        first: str | None = None,
+        extra: Sequence[str] = (),
+    ) -> types.CallToolResult:
+        ceiling = self.settings.max_session_usd
+        session = f"session: spent {spent_text(self.spent)} of ${ceiling:g}"
+        meta = {
+            GUARD: {
+                "max_cost_usd": guard.get("max_cost_usd"),
+                "file_max_cost_usd": guard.get("file_max_cost_usd"),
+                "entry": guard.get("entry"),
+                "real": guard.get("real"),
+                "session_spent_usd": round(self.spent, 8),
+                "session_cap_usd": ceiling,
+                **({"checked_by": guard["checked_by"]} if "checked_by" in guard else {}),
+            }
+        }
+        heading = [first] if first is not None else []
         if ran.doc is None:
             line = f"{ran.command}: the command printed no document (exit {ran.code}): "
-            return types.CallToolResult(
-                content=[text(f"{line}{ran.problem}{self.tail_text(ran)}\n{session}")],
-                is_error=True,
-            )
+            said = "\n".join([*heading, f"{line}{ran.problem}{self.tail_text(ran)}", session])
+            return types.CallToolResult(content=[text(said)], is_error=True, _meta=meta)
         doc = forwarded(ran.doc, self.paths)
-        lines = [*summary_lines(doc, guard), session]
+        lines = [*heading, *summary_lines(doc, guard), *extra, session]
         return types.CallToolResult(
             content=[text("\n".join(lines)), text(json.dumps(doc, ensure_ascii=False))],
             structured_content=doc,
-            is_error=is_error(int(doc["exit"])),
+            is_error=first is not None or is_error(int(doc["exit"])),
+            _meta=meta,
         )
 
     def tail(self, ran: Ran) -> str:
@@ -655,8 +768,9 @@ class Scrimmage:
             line += f", no document: {ran.problem}{self.tail_text(ran)}"
         print(line, file=sys.stderr, flush=True)
 
-    async def run(self, command: str, args: list[str]) -> Ran:
-        """Run one scrimmage command as a child and read its one document."""
+    async def run(self, command: str, args: list[str], spend: float | None = None) -> Ran:
+        """Run one scrimmage command as a child and read its one document. spend: the most a
+        spending call may cost, added to the session when it ends, however it ends."""
         async with self.slots:
             child = await self.start(command, args)
             try:
@@ -665,13 +779,18 @@ class Scrimmage:
                     await self.stop(child)
             except BaseException:  # a cancelled call: the child is stopped before it goes on
                 await self.stop(child)
-                self.log(self.read(command, child))
+                self.ended(self.read(command, child), spend)
                 raise
             finally:
                 self.children.pop(child.pid, None)
             ran = self.read(command, child)
-            self.log(ran)
+            self.ended(ran, spend)
             return ran
+
+    def ended(self, ran: Ran, spend: float | None) -> None:
+        if spend is not None:
+            self.count(ran, spend)
+        self.log(ran)
 
     async def start(self, command: str, args: list[str]) -> Child:
         """Start the child and track it in one shielded step, so a cancel that lands while it
