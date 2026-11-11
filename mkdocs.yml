@@ -95,6 +95,7 @@ nav:
       - MCP tools: mcp.md
       - Judging an answer: judging.md
       - Changing a result: changing-results.md
+      - Testing your guardrails: guardrails.md
       - Recording replies: recording.md
       - Reading a finished test: show.md
   - Reference:
