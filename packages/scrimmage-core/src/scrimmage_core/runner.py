@@ -122,6 +122,13 @@ def chose_refused(has_fault: bool, first_refusal: str) -> bool:
     return has_fault and first_refusal in CHOSEN_CALLS
 
 
+def ends_its_row(has_fault: bool, first_refusal: str, by_config: bool) -> bool:
+    """Whether a run's first refusal stops the rest of its row. A call the agent chose under
+    a fault does not, so the row counts every run; a refusal the test's setup caused does,
+    whatever its reason, as every run would meet it again."""
+    return by_config or not chose_refused(has_fault, first_refusal)
+
+
 @dataclass
 class RunResult:
     run: str
@@ -214,7 +221,9 @@ class Runner:
         its rate counts every run, such as an attack the agent obeyed in 8 of 10."""
         with self.lock:
             row = self.row_of[run]
-            if not chose_refused(row.fault is not None, reason):
+            known = self.server.runs.get(run)
+            setup = known is not None and known.setup_refused
+            if ends_its_row(row.fault is not None, reason, setup):
                 self.stopped_rows.add((row.test.name, row.name))
             proc = self.procs.get(run)
             stop_test = reason in STOP_TEST and self.stopped_by is None

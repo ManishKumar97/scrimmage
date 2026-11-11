@@ -774,6 +774,19 @@ def test_a_refusal_on_the_baseline_still_ends_its_row(project: Project) -> None:
     assert [run[-1]["row"] for run in result.records()] == ["baseline"]  # its row stopped
 
 
+@pytest.mark.slow
+def test_a_setup_refusal_on_a_fault_row_still_ends_its_row(project: Project) -> None:
+    """A child started with no gate is refused as blind_child, a reason the agent can choose,
+    yet the test's setup caused it and every run would meet it again, so its row stops."""
+    steps = [{"answer": GOOD}] * 3 + [{"answer": GOOD, "fired": True, "blind": True}] * 3
+    result = scripted(project, steps, ALWAYS, "runs = 3")
+    assert result.code == 2, result.out
+    rows = [run[-1]["row"] for run in result.records()]
+    assert rows.count("baseline") == 3 and rows.count("fault 1") == 1, result.out  # one started
+    blind = [x for run in result.records() for x in run if x.get("reason") == "blind_child"]
+    assert [x["by_config"] for x in blind] == [True]
+
+
 @pytest.mark.parametrize(
     ("step", "shown"),
     [("post", "http:payments.example.invalid"), ("blind", "process:python")],

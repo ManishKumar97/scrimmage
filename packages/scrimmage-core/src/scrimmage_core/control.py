@@ -44,6 +44,7 @@ class Run:
     # Lines each process said it made, from its last batch, keyed like proc_key.
     made: dict[str, int] = field(default_factory=dict[str, int])
     refusals: list[str] = field(default_factory=list[str])  # the reason of each refusal
+    setup_refused: bool = False  # the first refusal was the test's setup, not the agent
     # When the run opened, just before its program started: the runner's run_timeout counts
     # from about here. Monotonic, so it is read only as a difference on this process's clock.
     opened: float = field(default_factory=time.monotonic)
@@ -214,6 +215,9 @@ class ControlServer:
                 str(x.get("reason", "unlisted")) for x in mine if x.get("action") == "refused"
             ]
             first = not state.refused and bool(reasons)
+            if first:
+                lead = next(x for x in mine if x.get("action") == "refused")
+                state.setup_refused = lead.get("by_config") is True
             state.refused = state.refused or first
             state.refusals += reasons
             broken = not state.broken and any(x.get("notice") == "structure" for x in mine)
