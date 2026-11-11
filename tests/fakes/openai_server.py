@@ -9,9 +9,9 @@ A fixture name may start with a status, such as "429:error_429", for a real erro
 reply. "a|b" serves a, or b to a conversation where a tool failed, as a model would
 change its answer. "a@b" serves a, or b to a conversation where a tool result holds
 a note addressed to the assistant, as a model that obeys one would answer.
-A ".sse" fixture is sent as a stream of server-sent events. Embeddings and the
-Responses API each have one fixture of their own. A request it has no reply for gets an
-error, and the error is kept, so a test cannot pass by accident. This is test support
+A ".sse" fixture is sent as a stream of server-sent events. Embeddings, moderations and
+the Responses API each have one fixture of their own. A request it has no reply for gets
+an error, and the error is kept, so a test cannot pass by accident. This is test support
 code; it is never in a wheel.
 
 `by_model` answers a chat request by what it holds, not by its turn: a request whose
@@ -32,6 +32,7 @@ FIXTURES = Path(__file__).parents[1] / "fixtures" / "openai"
 CHAT_PATH = "/v1/chat/completions"
 EMBEDDINGS_PATH = "/v1/embeddings"
 RESPONSES_PATH = "/v1/responses"
+MODERATIONS_PATH = "/v1/moderations"
 
 
 class Reply:
@@ -147,12 +148,14 @@ class FakeOpenAI:
         *,
         embedding: str | None = None,
         response: str | None = None,
+        moderation: str | None = None,
         by_model: dict[str, Rule] | None = None,
     ) -> None:
         self._by_model = dict(by_model or {})
         self._replies = [Reply(name) for name in replies]
         self._embedding = Reply(embedding) if embedding else None
         self._response = Reply(response) if response else None
+        self._moderation = Reply(moderation) if moderation else None
         self._used: set[str] = set()
         self._lock = threading.Lock()
         self.requests: list[dict[str, Any]] = []
@@ -173,7 +176,7 @@ class FakeOpenAI:
     def unused(self) -> list[str]:
         """Fixtures the test listed that no request asked for."""
         listed = [r.name for r in self._replies] + [
-            r.name for r in (self._embedding, self._response) if r is not None
+            r.name for r in (self._embedding, self._response, self._moderation) if r is not None
         ]
         with self._lock:
             return [name for name in dict.fromkeys(listed) if name not in self._used]
@@ -190,7 +193,11 @@ class FakeOpenAI:
         with self._lock:
             self.paths.append(path)
             request = json.loads(body) if body else {}
-            single = {EMBEDDINGS_PATH: self._embedding, RESPONSES_PATH: self._response}
+            single = {
+                EMBEDDINGS_PATH: self._embedding,
+                RESPONSES_PATH: self._response,
+                MODERATIONS_PATH: self._moderation,
+            }
             if path in single:
                 reply = single[path]
                 if reply is None:
