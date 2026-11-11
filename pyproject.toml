@@ -34,6 +34,9 @@ dev = [
     "mcp>=2.3.0",
     "fastmcp>=4.1.6",
     "pytest-xdist>=3.8.0",
+    # tests/test_nemo_rails.py runs the real library. Pinned, as the tests hold what this
+    # version does; it does not install on 3.14 yet, so those tests skip there.
+    "nemoguardrails==0.24.1 ; python_full_version < '3.14'",
     # tests/test_docs_site.py builds the site, so a plain pytest needs mkdocs.
     {include-group = "docs"},
 ]

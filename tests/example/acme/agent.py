@@ -52,14 +52,16 @@ def loop(
     run: Callable[[str, str], str] = run_tool,
     system: str | None = None,
     model: str = "gpt-4o-mini",
+    specs: list[dict[str, Any]] = SPECS,
+    turns: int = 8,
 ) -> str:
     messages: list[Any] = [{"role": "system", "content": system}] if system else []
     messages.append({"role": "user", "content": question})
-    for _ in range(8):
+    for _ in range(turns):
         reply = client.chat.completions.create(
             model=model,
             messages=messages,
-            tools=SPECS,  # type: ignore[arg-type]
+            tools=specs,  # type: ignore[arg-type]
         )
         message = reply.choices[0].message
         if not message.tool_calls:
