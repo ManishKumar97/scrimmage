@@ -6,6 +6,7 @@ import random
 import re
 import sys
 import time
+from typing import cast
 
 import pytest
 
@@ -118,6 +119,8 @@ SAMPLES = {
     "secret": "secret=hunter2",
     "api_key": "api_key=hunter2",
     "api%5fkey": "api%5Fkey%3Dhunter2",
+    "pgpass": "PGPASS=hunter2",
+    "mysql_pwd": "MYSQL_PWD=hunter2",
     "Illegal header": "Illegal header value b'x'",
 }
 JWT_SAMPLE = (
@@ -137,7 +140,7 @@ def reference(text: str) -> tuple[str, int]:
 
     text = redact_module.URL.sub(url, text)
     text, jwts = redact_module.JWT.subn(redact_module.no_jwt, text)
-    text, keys = redact_module.PATTERNS.subn(redact_module.REMOVED, text)
+    text, keys = redact_module.remove_keys(text)
     return text, count + jwts + keys
 
 
@@ -262,7 +265,17 @@ HARMLESS_NAMES = [
     "Next_Page_Token",
 ]
 
-NEW_LITERALS = {"authorization", "password", "passwd", "token", "secret", "api_key", "api%5fkey"}
+NEW_LITERALS = {
+    "authorization",
+    "password",
+    "passwd",
+    "token",
+    "secret",
+    "api_key",
+    "api%5fkey",
+    "pgpass",
+    "mysql_pwd",
+}
 B64 = "dXNlcjpwYXNz"
 # The text, the part of it that is removed, and the secret that must not be left.
 NEW_SECRETS = [
@@ -302,7 +315,21 @@ NEW_SECRETS = [
     ('curl -d "token=abc"', "token=abc", "abc"),
     ("a\ntoken=abc", "token=abc", "abc"),
     ("password=hunter2, then", "password=hunter2,", "hunter2"),
-    ("f(token=tok1)", "token=tok1)", "tok1"),
+    ("PGPASSWORD=hunter2", "PGPASSWORD=hunter2", "hunter2"),
+    ("PGPASS=hunter2", "PGPASS=hunter2", "hunter2"),
+    ("MYSQL_PWD=hunter2", "MYSQL_PWD=hunter2", "hunter2"),
+    ("NGROK_AUTHTOKEN=hunter2", "NGROK_AUTHTOKEN=hunter2", "hunter2"),
+    ("authtoken=hunter2", "authtoken=hunter2", "hunter2"),
+    ("accesstoken=hunter2", "accesstoken=hunter2", "hunter2"),
+    ("password=[secret removed]hunter2", "password=[secret removed]hunter2", "hunter2"),
+    ("token=[removed]hunter2", "token=[removed]hunter2", "hunter2"),
+    ("password='a\\b'", "password='a\\b'", "a\\b"),
+    ("password='a\"b'", "password='a\"b'", 'a"b'),
+    ('password="a\'b"', 'password="a\'b"', "a'b"),
+    ("password=<unclosed more", "password=<unclosed", "unclosed"),
+    ("user=admin, password=changeme, host=db", "password=changeme,", "changeme"),
+    ("password=Summer.Time", "password=Summer.Time", "Summer.Time"),
+    ("DB_HOST=db\\nDB_PASSWORD=hunter2\\n", "DB_PASSWORD=hunter2", "hunter2"),
     ("DB_PASSWORD=hunter2", "DB_PASSWORD=hunter2", "hunter2"),
     ("AWS_SECRET_ACCESS_KEY=abc", "AWS_SECRET_ACCESS_KEY=abc", "abc"),
     ("GITHUB_TOKEN=ghp_x", "GITHUB_TOKEN=ghp_x", "ghp_x"),
@@ -327,10 +354,14 @@ def without_new_passes(text: str) -> str:
 
 
 @pytest.mark.design("security.redaction_shapes")
-@pytest.mark.parametrize(("text", "span", "value"), NEW_SECRETS)
+@pytest.mark.parametrize(
+    ("text", "span", "value"), NEW_SECRETS, ids=[f"new-{n}" for n in range(len(NEW_SECRETS))]
+)
 def test_the_old_module_kept_each_new_secret_and_the_new_one_removes_it(
     text: str, span: str, value: str
 ) -> None:
+    # behind a prefix, so a text that is itself JSON is judged as plain text here
+    text = "log: " + text
     assert value in without_new_passes(text)
     assert redact(text) == text.replace(span, "[secret removed]")
     assert redact(redact(text)) == redact(text)
@@ -375,8 +406,8 @@ def test_the_new_secrets_leave_what_the_other_passes_remove_as_it_was() -> None:
                 expected.append(part)
         # A newline ends an "Illegal header" line, and a # ends a bearer token, so a part
         # is judged alone: the old module already removed a field that a bearer ran into.
-        text = "\n# ".join(parts)
-        assert redact(text) == without_new_passes("\n# ".join(expected)), text
+        text = "log:\n# " + "\n# ".join(parts)
+        assert redact(text) == without_new_passes("log:\n# " + "\n# ".join(expected)), text
 
 
 @pytest.mark.design("security.redaction_shapes")
@@ -402,6 +433,17 @@ def test_the_new_secrets_leave_what_the_other_passes_remove_as_it_was() -> None:
         "mytoken=5",
         "def f(password=None):",
         "f(token=tok, n=1)",
+        "f(token=tok1)",
+        "x = f(a, password=secret_value)",
+        "f(password=True) and token=False",
+        '{"a": "password=", "b": "x"}',
+        '{"password=": "x"}',
+        '["token=", "hello"]',
+        'see {"a": "password=", "b": "x"} here',
+        'see {"password=": "x", "n": 1} here',
+        'see ["token=", "hello"] here',
+        '{"note": "send token="}',
+        "password=[secret removed]",
         "authorization basic info",
         "Authorization: Basic realm",
         'password=""',
@@ -422,3 +464,162 @@ def test_the_new_secrets_leave_what_the_other_passes_remove_as_it_was() -> None:
 )
 def test_prose_empty_values_and_paths_are_kept(text: str) -> None:
     assert redact(text) == text
+
+
+SEEDED = [
+    "password={v}",
+    "PASSWORD={v}",
+    "token={v}&x=1",
+    "DB_PASSWORD='{v}'",
+    'export API_KEY="{v}"',
+    'curl -d "token={v}"',
+    "client_secret={v}",
+    "password%3D{v}",
+    "AWS_SECRET_ACCESS_KEY={v}",
+    "PGPASSWORD={v}",
+    "password=<{v}>",
+    "password=[secret removed]{v}",
+    "Authorization: Basic {b}",
+    "Bearer {b}{b}",
+    "sk-proj-{b}{b}",
+    "https://u:{v}@a.b/c?k=1",
+    "postgres://u:{v}@db/x",
+]
+JUNK = [
+    '"',
+    "'",
+    "\\",
+    "\n",
+    "\t",
+    "\r",
+    "\\n",
+    "\\\\",
+    "é",
+    "\N{LINE SEPARATOR}",
+    "\U0001f600",
+    ", ",
+    ": ",
+    "{",
+    "[",
+    "<",
+    ">",
+    "password=",
+    "token=",
+    "x",
+    " ",
+    "",
+]
+EMPTY_FIELDS = ["password=", "token=", "secret=", "api_key="]
+
+
+def seeded_text(rng: random.Random, found: list[str]) -> str:
+    parts: list[str] = []
+    for _ in range(rng.randint(0, 5)):
+        if rng.random() < 0.4:
+            value = f"hunt{len(found)}x{rng.randrange(10**6)}"
+            b64 = base64.b64encode(f"u:{value}pad".encode()).decode().rstrip("=")
+            template = rng.choice(SEEDED)
+            # the secret is the base64 text for the header shapes, else the plain value
+            found.append(b64 if "{b}" in template else value)
+            # a space on each side, so a name is never glued to a letter by the junk
+            parts.append(" " + template.format(v=value, b=b64) + " ")
+        else:
+            parts.append(rng.choice(JUNK + EMPTY_FIELDS))
+    return "".join(parts)
+
+
+def seeded_tree(rng: random.Random, found: list[str], depth: int = 0) -> object:
+    kind = rng.random()
+    if depth >= 4 or kind < 0.45:
+        if rng.random() < 0.15:
+            return rng.choice([1, 2.5, -3, 1e10, True, False, None])
+        return seeded_text(rng, found)
+    if kind < 0.7:
+        return [seeded_tree(rng, found, depth + 1) for _ in range(rng.randint(0, 4))]
+    keys = [seeded_text(rng, found) or "k" for _ in range(rng.randint(0, 4))]
+    return {key: seeded_tree(rng, found, depth + 1) for key in dict.fromkeys(keys)}
+
+
+def shape(node: object) -> object:
+    """The structure without the strings: key count and order, list lengths, other values."""
+    if isinstance(node, dict):
+        return [shape(v) for v in cast("dict[str, object]", node).values()]
+    if isinstance(node, list):
+        return ["list", *(shape(v) for v in cast("list[object]", node))]
+    return "text" if isinstance(node, str) else node
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_redacted_json_parses_with_the_same_structure_and_no_seeded_secret() -> None:
+    rng = random.Random(4646)
+    cases = 0
+    for _ in range(12_500):
+        found: list[str] = []
+        tree = seeded_tree(rng, found)
+        if not isinstance(tree, (dict, list)):
+            tree = [tree]
+        for ascii_only in (True, False):
+            for spaced in (True, False):
+                text = json.dumps(
+                    tree, ensure_ascii=ascii_only, separators=None if spaced else (",", ":")
+                )
+                out = redact(text)
+                back = json.loads(out)
+                assert shape(back) == shape(tree), text
+                for secret in found:
+                    assert secret not in out, (secret, text)
+                cases += 1
+    assert cases >= 20_000
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_json_with_a_field_name_at_the_end_of_a_string_keeps_its_strings_apart() -> None:
+    for text in (
+        '{"a": "password=", "b": "x"}',
+        '{"password=": "x"}',
+        '["token=", "hello"]',
+        '{"a": "send token=", "n": 1}',
+    ):
+        assert redact(text) == text
+    out = json.loads(redact('["token=abc", "hello", {"password=hunter2": 1, "token=zzz": 2}]'))
+    assert out[1] == "hello" and len(out) == 3
+    assert len(out[2]) == 2 and "hunter2" not in str(out) and "zzz" not in str(out)
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_a_text_that_parsed_as_json_still_parses_if_writing_it_back_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = json.dumps({"note": "token=abc", "n": 1})
+
+    def broken(*args: object) -> str:
+        return '{"note": '
+
+    monkeypatch.setattr(redact_module, "encode", broken)
+    assert json.loads(redact(text)) == "[secret removed]"
+
+    def deep(*args: object) -> str:
+        raise RecursionError
+
+    monkeypatch.setattr(redact_module, "encode", deep)
+    assert json.loads(redact(text)) == "[secret removed]"
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_json_is_read_only_after_a_pre_check_finds_something(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def never(*args: object, **kwargs: object) -> object:
+        raise AssertionError("a clean text must not be parsed")
+
+    monkeypatch.setattr(json, "loads", never)
+    clean = json.dumps({"a": ["plain words", 1] * 40})
+    assert redacted(clean) == (clean, 0)
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_a_marker_is_removed_with_what_sticks_to_it() -> None:
+    assert redact("password=[secret removed]hunter2") == "[secret removed]"
+    assert redact("token=[removed]hunter2") == "[secret removed]"
+    assert redact("password=[secret removed]") == "password=[secret removed]"
+    assert redact("password=[secret removed] x") == "password=[secret removed] x"

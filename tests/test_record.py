@@ -1918,6 +1918,29 @@ def answer(question):
     assert mock["json"] == {"cmd": 'curl -d "[secret removed]" https://a.b', "n": 1}
 
 
+def test_a_json_reply_ending_a_string_on_a_field_name_is_written_as_valid_json(
+    team: Team,
+) -> None:
+    """A field name at the end of a string must not take the quote that closes it."""
+    team.service.json("/note", {"note": "send token=", "n": 1})
+    team.write(
+        """
+def note(name):
+    return http_get("/note").json()["n"]
+
+def answer(question):
+    note("x")
+    return "ok"
+""",
+        ["bot:note"],
+        ("tool:note",),
+    )
+    done = team.record()
+    assert done.code == 0, done.out
+    mock = next(m for m in done.mocks() if m.get("path") == "/note")
+    assert mock["json"] == {"note": "send token=", "n": 1}
+
+
 # The arguments of a call a mock cannot be written for, and the labels a miss now covers.
 
 DOLLARS = """
