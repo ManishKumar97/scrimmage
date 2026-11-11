@@ -644,9 +644,22 @@ def seeded_pair(rng: random.Random, found: list[str]) -> object:
         ({name: [basic]}, b64),
         (["Host", "example.com", name, basic, "Accept", "*/*"], b64),
         ({"headers": [{"name": name, "value": basic}, {"name": "Host", "value": "h"}]}, b64),
+        ([{"Key": name, "Value": [basic]}], b64),
+        ([{"Name": name, "Value": basic}], b64),
+        ({f"{name}:": basic}, b64),
+        ([name, [basic]], b64),
     ]
     tree, secret = rng.choice(shapes)
     found.append(secret)
+    if rng.random() < 0.4:
+        # an object beside the Basic value, holding a second secret that must be cleaned too
+        other = f"hunt{len(found)}y{rng.randrange(10**6)}"
+        found.append(other)
+        beside = {"k": f" password={other} ", "n": 1}
+        if rng.random() < 0.5:
+            tree = {name: [beside, basic]}
+        else:
+            tree = {"Key": name, "Value": [beside, basic]}
     return tree
 
 
@@ -660,8 +673,9 @@ def seeded_tree(rng: random.Random, found: list[str], depth: int = 0) -> object:
         return seeded_text(rng, found)
     if kind < 0.7:
         return [seeded_tree(rng, found, depth + 1) for _ in range(rng.randint(0, 4))]
-    keys = [seeded_text(rng, found) or "k" for _ in range(rng.randint(0, 4))]
-    return {key: seeded_tree(rng, found, depth + 1) for key in dict.fromkeys(keys)}
+    # a number after each name keeps two names apart even when both are redacted
+    keys = [f"{seeded_text(rng, found)} #{n}" for n in range(rng.randint(0, 4))]
+    return {key: seeded_tree(rng, found, depth + 1) for key in keys}
 
 
 def shape(node: object) -> object:
@@ -739,8 +753,7 @@ def test_the_same_pair_judgement_holds_for_python_values_and_json_text() -> None
         found: list[str] = []
         tree = seeded_tree(rng, found)
         cleaned, _removed = capture.clean(tree)
-        # capture.clean joins two names that redact to the same text, so only the secrets and
-        # the pure pair function are compared on shape here
+        assert shape(cleaned) == shape(tree), tree
         for secret in found:
             assert secret not in json.dumps(cleaned), (secret, tree)
         again, _count = redact_module.hide_header_credentials(tree)
@@ -754,6 +767,28 @@ def test_the_same_pair_judgement_holds_for_python_values_and_json_text() -> None
     assert cases >= 50_000
 
 
+@pytest.mark.design("security.redaction_shapes")
+def test_objects_beside_a_basic_value_and_pascal_case_labels_on_both_paths() -> None:
+    """A second seed, with a pair in every tree: an object in the same list as the Basic
+    value keeps its numbers and has its own secrets cleaned, on JSON text and Python values."""
+    rng = random.Random(5151)
+    cases = 0
+    for _ in range(30_000):
+        found: list[str] = []
+        tree = {"wrap": [seeded_pair(rng, found), seeded_tree(rng, found)]}
+        cleaned, _removed = capture.clean(tree)
+        assert shape(cleaned) == shape(tree), tree
+        for secret in found:
+            assert secret not in json.dumps(cleaned), (secret, tree)
+        text = json.dumps(tree)
+        out = redact(text)
+        assert shape(json.loads(out)) == shape(tree), text
+        for secret in found:
+            assert secret not in out, (secret, text)
+        cases += 2
+    assert cases >= 60_000
+
+
 # The shape, and the rules that report it: a key that names a secret is also caught by the
 # key-name rule of capture, so those two are reported twice.
 HEADER_SHAPES: list[tuple[object, list[str]]] = [
@@ -765,6 +800,14 @@ HEADER_SHAPES: list[tuple[object, list[str]]] = [
     ({"rawHeaders": ["Host", "x", "Authorization", "Basic dXNlcjpodW50ZXIy"]}, ["pattern"]),
     ({"env": {"HTTP_AUTHORIZATION": "Basic dXNlcjpodW50ZXIy"}}, ["pattern", "key_name"]),
     ({"X-Forwarded-Authorization": "Basic dXNlcjpodW50ZXIy"}, ["pattern", "key_name"]),
+    ([{"Key": "Authorization", "Value": ["Basic dXNlcjpodW50ZXIy"]}], ["pattern"]),
+    ([{"Name": "Authorization", "Value": "Basic dXNlcjpodW50ZXIy"}], ["pattern"]),
+    ({"Authorization:": "Basic dXNlcjpodW50ZXIy"}, ["pattern", "key_name"]),
+    (["Authorization", ["Basic dXNlcjpodW50ZXIy"]], ["pattern"]),
+    (
+        {"Authorization": [{"note": "password=hunter2xyz", "n": 1}, "Basic dXNlcjpodW50ZXIy"]},
+        ["pattern", "key_name", "key_name"],
+    ),
 ]
 
 
@@ -781,6 +824,23 @@ def test_a_basic_header_is_removed_from_python_values_and_from_json_text(
     assert [r["rule"] for r in removed] == rules
     assert shape(cleaned) == shape(value)
     assert secret not in redact(json.dumps(value))
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_an_object_in_a_header_list_is_cleaned_and_keeps_its_numbers() -> None:
+    """The object is a parsed JSON object, which is a list too. It must go through the walk."""
+    text = '{"Authorization": [{"note": "password=hunter2xyz", "n": 1}, "Basic dXNlcjpodW50ZXIy"]}'
+    assert redact(text) == (
+        '{"Authorization": [{"note": "[secret removed]", "n": 1}, "[secret removed]"]}'
+    )
+    text = (
+        '{"name": "Authorization", "values": '
+        '[{"url": "https://u:pw@h/x?token=abc"}, "Basic dXNlcjpodW50ZXIy"]}'
+    )
+    assert redact(text) == (
+        '{"name": "Authorization", "values": '
+        '[{"url": "https://[removed]@h/x?[removed]"}, "[secret removed]"]}'
+    )
 
 
 @pytest.mark.design("security.redaction_shapes")

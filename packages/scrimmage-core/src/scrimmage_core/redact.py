@@ -247,13 +247,19 @@ def basic_value(value: object) -> bool:
 
 
 def hide_basic(value: object) -> tuple[object, int]:
-    """A Basic value, or each Basic string in a list of strings, replaced."""
-    if isinstance(value, list):
+    """A Basic value, or each Basic string in a list of strings, replaced. A parsed JSON
+    object is a Members, which is a list too, and is left to the walk."""
+    if isinstance(value, list) and not isinstance(value, Members):
         items = [hide_basic(item) for item in cast(list[object], value)]
         return [item for item, _ in items], sum(more for _, more in items)
     if isinstance(value, str) and basic_value(value):
         return REMOVED, 1
     return value, 0
+
+
+def authorization(name: object) -> bool:
+    """Whether a name is an Authorization header's: a trailing colon and spaces are ignored."""
+    return isinstance(name, str) and AUTH_NAME.fullmatch(name.strip().rstrip(":")) is not None
 
 
 def hide_header_credentials(node: object) -> tuple[object, int]:
@@ -268,13 +274,9 @@ def hide_header_credentials(node: object) -> tuple[object, int]:
         found = 0
         for at in range(len(items) - 1):
             name = items[at]
-            if (
-                isinstance(name, str)
-                and AUTH_NAME.fullmatch(name.strip())
-                and basic_value(items[at + 1])
-            ):
-                items[at + 1] = REMOVED
-                found += 1
+            if authorization(name):
+                items[at + 1], more = hide_basic(items[at + 1])
+                found += more
         return (items, found) if found else (cast(object, node), 0)
     if isinstance(node, Members):
         pairs = list(node)
@@ -282,16 +284,11 @@ def hide_header_credentials(node: object) -> tuple[object, int]:
         pairs = list(cast(dict[str, object], node).items())
     else:
         return node, 0
-    labelled = any(
-        name in LABELS and isinstance(label, str) and AUTH_NAME.fullmatch(label.strip())
-        for name, label in pairs
-    )
+    labelled = any(name.lower() in LABELS and authorization(label) for name, label in pairs)
     out: list[tuple[str, object]] = []
     found = 0
     for name, value in pairs:
-        named = AUTH_NAME.fullmatch(name.strip()) is not None or (
-            labelled and name in ("value", "values")
-        )
+        named = authorization(name) or (labelled and name.lower() in ("value", "values"))
         value, more = hide_basic(value) if named else (value, 0)
         found += more
         out.append((name, value))
@@ -349,6 +346,8 @@ def structural(text: str) -> tuple[str, int] | None:
             node, hidden = hide_header_credentials(node)
             count += hidden
             return Members(rename(cast(Members, node)))
+        if isinstance(node, tuple):
+            return tuple(walk(value) for value in cast(tuple[object, ...], node))
         if isinstance(node, list):
             node, hidden = hide_header_credentials(cast(object, node))
             count += hidden
