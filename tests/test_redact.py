@@ -1,6 +1,7 @@
 """What redact removes from a recorded text."""
 
 import base64
+import json
 import random
 import re
 import sys
@@ -221,16 +222,30 @@ def test_redacted_gives_a_plain_str_even_when_no_pass_runs() -> None:
         assert type(redact(text)) is str
 
 
+LOOKALIKES = "\u017f\u212a\u0130\u0131"  # long s, Kelvin sign, dotted and dotless i
+
+
 @pytest.mark.design("security.redaction_shapes")
-def test_the_ascii_only_patterns_match_no_letter_that_lowers_to_another() -> None:
-    """Basic and the form fields are found by lowering the text. With the ASCII flag a
-    letter matches only itself in either case, so no look-alike can slip past the check."""
-    for letter in set("authorizationbasicpasswdtokensecretapi_key"):
-        matcher = re.compile(f"(?ai:{letter})")
-        for code in range(sys.maxunicode + 1):
-            char = chr(code)
-            if matcher.fullmatch(char):
-                assert char.lower() == letter, (hex(code), letter)
+def test_a_lookalike_letter_never_matches_a_lowercase_pattern_the_pre_check_misses() -> None:
+    """The pre-check lowers the text and looks for a literal. A pattern that a look-alike such
+    as the long s can match, but whose literal the lowered text lacks, would leak the secret
+    with no pass run. Each lowercase kind needs its ASCII flag."""
+    tried = 0
+    for secret in redact_module.SECRETS:
+        if not secret.lowercase:
+            continue
+        for literal in secret.literals:
+            sample = SAMPLES[literal]
+            for at, letter in enumerate(sample):
+                for mark in LOOKALIKES:
+                    if re.fullmatch(f"(?i:{re.escape(letter)})", mark) is None:
+                        continue
+                    tried += 1
+                    changed = sample[:at] + mark + sample[at + 1 :]
+                    if redact_module.PATTERNS.search(changed):
+                        lowered = changed.lower()
+                        assert any(lit in lowered for lit in redact_module.LOWER_LITERALS), changed
+    assert tried > 0
 
 
 NEW_LITERALS = {"authorization", "password", "passwd", "token", "secret", "api_key", "api%5fkey"}
@@ -246,19 +261,34 @@ NEW_SECRETS = [
         'Authorization ": "Basic dXNlcjpwYXNz',
         B64,
     ),
+    (
+        "[(b'Authorization', b'Basic dXNlcjpwYXNz')]",
+        "Authorization', b'Basic dXNlcjpwYXNz",
+        B64,
+    ),
     ("password=hunter2", "password=hunter2", "hunter2"),
     ("PASSWORD=hunter2", "PASSWORD=hunter2", "hunter2"),
     ("passwd=hunter2&x=1", "passwd=hunter2", "hunter2"),
     ("token=hunter2", "token=hunter2", "hunter2"),
     ("access_token=hunter2", "access_token=hunter2", "hunter2"),
+    ("client_secret=hunter2", "client_secret=hunter2", "hunter2"),
+    ("refresh_token=hunter2", "refresh_token=hunter2", "hunter2"),
+    ("csrf_token=hunter2", "csrf_token=hunter2", "hunter2"),
     ("secret=hunter2", "secret=hunter2", "hunter2"),
-    ("client_secret=hunter2", "secret=hunter2", "hunter2"),
     ("api_key=hunter2", "api_key=hunter2", "hunter2"),
     ("API_KEY=hunter2", "API_KEY=hunter2", "hunter2"),
     ("api%5Fkey=hunter2", "api%5Fkey=hunter2", "hunter2"),
     ("password%3Dhunter2", "password%3Dhunter2", "hunter2"),
     ("password=hun%20ter%2B2", "password=hun%20ter%2B2", "hun%20ter%2B2"),
     ("grant_type=password&password=p%40ss&u=a", "password=p%40ss", "p%40ss"),
+    ("password='hunter2'", "password='hunter2'", "hunter2"),
+    ('password="hunter2"', 'password="hunter2"', "hunter2"),
+    ('password="two words"', 'password="two words"', "two words"),
+    ("password=<hunter2>", "password=<hunter2>", "hunter2"),
+    ('curl -d "token=abc"', "token=abc", "abc"),
+    ("a\ntoken=abc", "token=abc", "abc"),
+    ("password=hunter2, then", "password=hunter2,", "hunter2"),
+    ("f(token=tok1)", "token=tok1)", "tok1"),
 ]
 
 
@@ -287,11 +317,30 @@ def test_the_old_module_kept_each_new_secret_and_the_new_one_removes_it(
 
 
 @pytest.mark.design("security.redaction_shapes")
-def test_the_only_difference_from_the_old_module_is_the_new_secrets_removed() -> None:
-    rng = random.Random(20261111)
+def test_redacted_json_text_is_still_json() -> None:
+    """A reply body is redacted as text before it is read as JSON, so a cut that takes in a
+    backslash or a quote would leave a body that does not parse."""
+    for text, _span, _value in NEW_SECRETS:
+        assert json.loads(redact(json.dumps(text))) == redact(text)
+        held = {"a": text, "b": [text, 1], "c": {"d": text}}
+        assert json.loads(redact(json.dumps(held))) == {
+            "a": redact(text),
+            "b": [redact(text), 1],
+            "c": {"d": redact(text)},
+        }
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_the_new_secrets_leave_what_the_other_passes_remove_as_it_was() -> None:
+    """The benign texts hold none of the new literals, so they are redacted exactly as before.
+    Next to a new secret the rest is still redacted as before. This does not show that a text
+    holding a new literal changes only in the secret: the kept tests do."""
+    rng = random.Random(20261112)
     # texts from the old corpus, with none of the new kinds in them
     benign = [t for t in corpus() if not any(lit in t.lower() for lit in NEW_LITERALS)][:400]
     assert len(benign) == 400
+    for text in benign:
+        assert redact(text) == without_new_passes(text), text
     for _ in range(3000):
         parts: list[str] = []
         expected: list[str] = []
@@ -322,6 +371,20 @@ def test_the_only_difference_from_the_old_module_is_the_new_secrets_removed() ->
         "please reset your password at the desk",
         "Reset your password at https://example.com/account",
         "the secret is out",
+        "next_page_token=abc",
+        "page_token=CgQ",
+        "is_secret=true",
+        "top_secret=false",
+        "eos_token=2",
+        "pad_token=0",
+        "max_token=100",
+        "mytoken=5",
+        "def f(password=None):",
+        "f(token=tok, n=1)",
+        "authorization basic info",
+        "Authorization: Basic realm",
+        'password=""',
+        "password=''",
         "https://example.com/oauth/token",
         "https://example.com/api/token/refresh",
         "/v1/auth/token/lookup",

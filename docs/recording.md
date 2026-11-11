@@ -69,7 +69,7 @@ This is a heuristic, and it is labelled as one. It is whole word parts only, so 
 A word about the secret, as in `session_id` or `token_type`, is kept too. See `docs/limits.md` for what that costs.
 Each removal is a `removed:` line and an entry in `removed`, so the reviewer sees it.
 A call whose arguments held a secret, or a request whose path did, is not written at all: a mock of it could never match the real call.
-A single recorded web mock answers every query and every body on its path, so a form body or an XML reply with `password=` in it is not cleaned, and the mock answers a different request the same way.
+A `password=` or `token=` field in a reply body is removed, as it is anywhere in a recorded string, and so is the value after `Authorization: Basic`. An XML element value, as in `<password>hunter2</password>`, is not cleaned, as no pattern reads it. A request body is not written into the mock, and a single recorded web mock answers every query and every body on its path, so a mock answers a different request the same way.
 Every record prints the warning that the mocks can hold customer data. No rule can promise there is none; review them.
 
 ## Reading the output

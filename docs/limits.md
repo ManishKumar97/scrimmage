@@ -87,7 +87,11 @@
 - **`scrimmage record` runs one baseline.** A call a later run would make is not seen; a recorded tool mock answers only the arguments it saw, so a new argument is a miss; see the exact-match entry above.
 - **A web mock cannot match a query or a body.** Two GETs that differ only by query, or POSTs with different bodies, get `differs` and are listed by hand when their replies differ.
 - **A value that changes between runs is frozen by its mock.** That is what a mock is for. A value that changes within one run is listed `nondeterministic`.
-- **A form field is cut at the first space, quote or `&`.** `password=hunter2` is removed, but `password=two words` leaves ` words`, and `password: hunter2` with a colon is not matched. Redaction is a heuristic on known shapes.
+- **A form field is cut at the first space, quote or `&`.** `password=hunter2` and a quoted `password='two words'` are removed, but an unquoted `password=two words` leaves ` words`, and `password: hunter2` with a colon is not matched.
+  A name with a prefix other than `client_`, `refresh_`, `id_`, `csrf_`, `auth_` or `access_`, such as `DB_PASSWORD=`, is not matched, as `_` before a name keeps `is_secret` and `max_token` out.
+  A value of letters only, followed by `,` or `)`, such as `password=hunter)`, is taken for code and kept.
+  `Authorization=Basic%20...`, a double-encoded `password%253D`, and a multipart body with `name="password"` on one line and the value on another are not cleaned.
+  Redaction is a heuristic on known shapes.
 
   *Checked by: `tests/test_redact.py::test_the_old_module_kept_each_new_secret_and_the_new_one_removes_it`, `tests/test_redact.py::test_prose_empty_values_and_paths_are_kept`*
 

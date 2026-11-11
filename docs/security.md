@@ -98,12 +98,12 @@ Every gated call is written to a record in `scrimmage-runs/`, next to your `scri
     - Slack tokens: `xoxa-`, `xoxb-`, `xoxe-`, `xoxp-`, `xoxr-`, `xoxs-`, `xoxe.xoxp-` and `xapp-`;
     - bearer tokens: `Bearer` and the value after it;
     - a Basic credential: `Authorization` and `Basic` and the value after them, in a header line, in JSON or in a command line;
-    - form-encoded fields: `password=`, `passwd=`, `token=`, `access_token=`, `secret=` and `api_key=` and the value after them, in any letter case, with `=` written as `%3D` or `_` in `api_key` as `%5F`;
+    - form-encoded and keyword fields: `password=`, `passwd=`, `token=`, `secret=` and `api_key=` and the value after them, with a `client_`, `refresh_`, `id_`, `csrf_`, `auth_` or `access_` before the name if you like, in any letter case, with `=` written as `%3D` and `_` in `api_key` as `%5F`; the value may be quoted with `'` or `"`, or in `<...>`, and a field that is only part of a JSON string leaves the JSON valid;
     - JSON Web Tokens, which start with `eyJ`.
 
-  *Checked by: `tests/test_security_claims.py::test_each_listed_secret_shape_is_removed`, `tests/test_redact.py::test_a_jwt_is_removed_after_any_separator`, `tests/test_redact.py::test_the_old_module_kept_each_new_secret_and_the_new_one_removes_it`, `tests/test_redact.py::test_the_only_difference_from_the_old_module_is_the_new_secrets_removed`*
+  *Checked by: `tests/test_security_claims.py::test_each_listed_secret_shape_is_removed`, `tests/test_redact.py::test_a_jwt_is_removed_after_any_separator`, `tests/test_redact.py::test_the_old_module_kept_each_new_secret_and_the_new_one_removes_it`, `tests/test_redact.py::test_redacted_json_text_is_still_json`, `tests/test_record.py::test_a_json_reply_holding_a_form_field_in_a_string_is_written_as_valid_json`*
 
-  A form field with an empty value, prose such as "reset your password at", and a URL path that holds the word `token` are left as written.
+  A form field with an empty value, prose such as "reset your password at", a URL path that holds the word `token`, and names such as `next_page_token`, `is_secret`, `max_token` and `mytoken` are left as written, and so is `def f(password=None):`.
 
   *Checked by: `tests/test_redact.py::test_prose_empty_values_and_paths_are_kept`*
 

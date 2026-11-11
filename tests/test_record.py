@@ -1892,6 +1892,32 @@ def answer(question):
     assert not any(m.get("path") == "/wrapped" for m in done.mocks())
 
 
+def test_a_json_reply_holding_a_form_field_in_a_string_is_written_as_valid_json(
+    team: Team,
+) -> None:
+    """The body is redacted as text before it is read as JSON. A field cut at a backslash
+    would leave the quote that ends the string, and the mock would not parse."""
+    team.service.json("/cmd", {"cmd": 'curl -d "token=abc" https://a.b', "n": 1})
+    team.write(
+        """
+def cmd(name):
+    return http_get("/cmd").json()["n"]
+
+def answer(question):
+    cmd("x")
+    return "ok"
+""",
+        ["bot:cmd"],
+        ("tool:cmd",),
+    )
+    done = team.record()
+    assert done.code == 0, done.out
+    text = team.out_path.read_text()
+    assert "abc" not in text
+    mock = next(m for m in done.mocks() if m.get("path") == "/cmd")
+    assert mock["json"] == {"cmd": 'curl -d "[secret removed]" https://a.b', "n": 1}
+
+
 # The arguments of a call a mock cannot be written for, and the labels a miss now covers.
 
 DOLLARS = """

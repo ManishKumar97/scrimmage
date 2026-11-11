@@ -143,6 +143,10 @@ SHAPES = {
     "form secret": ("secret=", "hunter2"),
     "form api key": ("api_key=", "hunter2"),
     "form encoded password": ("password%3D", "hunter2"),
+    "form quoted password": ("password=", "'hunter2'"),
+    "form double quoted secret": ("secret=", '"hunter 2"'),
+    "form bracketed token": ("token=", "<hunter2>"),
+    "form client secret": ("client_secret=", "hunter2"),
     "json web token": ("ey" + "J", f"{LETTERS}.ey{LETTERS}.{LETTERS}"),
 }
 

@@ -16,6 +16,24 @@ class Secret(NamedTuple):
     lowercase: bool = False
 
 
+# A form-encoded or keyword field: password, token, secret or api_key, with = or %3D. The
+# name starts at a boundary, so mytoken, is_secret, next_page_token and top_secret are kept;
+# only client_, refresh_, id_, csrf_, auth_ and access_ may come before it with a _. After a
+# JSON \n the name also starts. The value is a quoted string up to its closing quote, a <...>
+# or a run of characters that is not a space, &, quote, bracket or backslash, so a field cut
+# from JSON text leaves the JSON valid. A value already removed is left, and so is a bare
+# name followed by , or ), which is code: f(password=None).
+FORM = (
+    r"(?:(?<![A-Za-z0-9_])|(?<=\\[nrt]))"
+    r"(?ai:(?:(?:client|refresh|id|csrf|auth|access)_)?"
+    r"(?:passw(?:or)?d|token|secret|api(?:_|%5f)key)(?:=|%3d))"
+    r"(?!\[(?:secret )?removed\](?:[&\s\"'<>\\]|$))"
+    r"(?:(?P<quote>\\?[\"'])[^\"'\\]+(?P=quote)"
+    r"|<[^<>\"'\\]+>"
+    r"|(?![A-Za-z_.]+[),])(?:\\?[\"'])?[^&\s\"'<>\\]+)"
+)
+
+
 SECRETS = (
     # OpenAI and Anthropic keys
     Secret(r"sk-(?:proj-|ant-|svcacct-)?[A-Za-z0-9_-]{16,}", ("sk-",)),
@@ -33,21 +51,14 @@ SECRETS = (
     Secret(r"xapp-[A-Za-z0-9-]{10,}", ("xapp-",)),
     # bearer tokens
     Secret(r"(?i:bearer)\s+[A-Za-z0-9._~+/=-]{16,}", ("bearer",), lowercase=True),
-    # a Basic credential in an Authorization header, as a header line, JSON or a command
-    # line. ASCII only, so the lowered text holds the literal for every match.
+    # a Basic credential in an Authorization header, as a header line, JSON, a command line
+    # or a list of byte pairs. ASCII only, so the lowered text holds the literal.
     Secret(
-        r"(?ai:authorization)\W{1,8}(?ai:basic)\s+[A-Za-z0-9+/_-]{4,}={0,2}",
+        r"(?ai:authorization)(?:\W|b(?=[\"'])){1,8}(?ai:basic)\s+[A-Za-z0-9+/_-]{8,}={0,2}",
         ("authorization",),
         lowercase=True,
     ),
-    # form-encoded password, token and secret, with = or %3D, and api%5Fkey. An empty value
-    # does not match, and neither does one an earlier pass has already removed.
-    Secret(
-        r"(?ai:passw(?:or)?d|(?:access_)?token|secret|api(?:_|%5f)key)(?ai:=|%3d)"
-        r"(?!\[(?:secret )?removed\])[^&\s\"'<>]+",
-        ("password", "passwd", "token", "secret", "api_key", "api%5fkey"),
-        lowercase=True,
-    ),
+    Secret(FORM, ("password", "passwd", "token", "secret", "api_key", "api%5fkey"), True),
     # h11 quotes the bad header
     Secret(r"Illegal header (?:name|value) .*", ("Illegal header",)),
 )
