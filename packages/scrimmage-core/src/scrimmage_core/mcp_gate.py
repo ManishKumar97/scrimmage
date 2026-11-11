@@ -453,7 +453,8 @@ def schema_problem(
         best = sys.modules["jsonschema.exceptions"].best_match(errors) or errors[0]
     except (KeyError, AttributeError):
         best = errors[0]
-    where = ".".join(str(part) for part in getattr(best, "absolute_schema_path", ()))
+    parts = getattr(best, "absolute_schema_path", ())
+    where = ".".join(str(part) for part in parts) or "the schema root"
     shown = redact(repr(getattr(best, "instance", None)))[:80]
     path = str(getattr(best, "json_path", "$"))
     return (

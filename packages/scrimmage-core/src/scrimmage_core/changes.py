@@ -493,6 +493,8 @@ def unpacked(raw: bytes, encoding: str) -> bytes | None:
         return None
     if not unpack.eof and len(body) <= WEB_CAP:
         return None  # the stream ended early: a cut-off body must not pass for a whole one
+    if unpack.unused_data:
+        return None  # a second gzip member or trailing bytes: changing the first loses the rest
     return body
 
 

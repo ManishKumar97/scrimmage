@@ -149,6 +149,7 @@ _._handle_resumption_request  # tests/test_mcp.py: a stand-in the MCP gate wraps
 _.handle_get_stream  # tests/test_mcp.py: a stand-in the MCP gate wraps by name
 _.signals_kept  # tests/conftest.py: a fixture, which pytest.mark.usefixtures names as text
 _.fast_tests_start_no_process  # tests/conftest.py: an autouse fixture, which pytest runs by itself
+_.no_sender_thread_outlives_its_test  # tests/conftest.py: an autouse fixture, run by pytest
 _.pytestmark  # tests/test_cli_json.py and test_check.py: pytest reads it from the module
 _.nothing_pending  # tests/test_cli_in_process.py and test_results.py: an autouse fixture
 _.tz  # tests/test_results.py: the argument datetime.now is called with, which a stand-in ignores

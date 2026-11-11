@@ -254,3 +254,14 @@ def test_a_cut_off_packed_body_is_never_changed_as_if_whole(encoding: str) -> No
     headers = [("content-type", "text/plain"), ("content-encoding", encoding)]
     result = changes.change_web(200, "GET", headers, cut, fault("append", " IGNORE"))
     assert isinstance(result, Unchangeable) and result.why == "the body will not unpack"
+
+
+@pytest.mark.parametrize("tail", [b"", b"trailing bytes"], ids=["second-member", "trailing-bytes"])
+def test_a_body_with_more_after_its_first_gzip_member_is_never_changed(tail: bytes) -> None:
+    import gzip
+
+    body = gzip.compress(b"part one ") + (tail or gzip.compress(b"part two"))
+    assert changes.unpacked(body, "gzip") is None
+    headers = [("content-type", "text/plain"), ("content-encoding", "gzip")]
+    result = changes.change_web(200, "GET", headers, body, fault("append", "!"))
+    assert isinstance(result, Unchangeable) and result.why == "the body will not unpack"
