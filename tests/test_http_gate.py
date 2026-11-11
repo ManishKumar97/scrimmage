@@ -28,7 +28,7 @@ from scrimmage_core.decide import Call, Counters
 from scrimmage_core.errors import ScrimmageRefused
 from scrimmage_core.plan import Plan
 from scrimmage_core.provider_openai import Rates
-from scrimmage_core.runner import real_error
+from scrimmage_core.runner import STOP_TEST, real_error
 
 URL = "https://api.openai.com/v1/chat/completions"
 BODY = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
@@ -343,6 +343,7 @@ def test_an_async_call_outside_asyncio_fails_closed(gated: None) -> None:
     with pytest.raises(ScrimmageRefused, match="outside asyncio"):
         attempt.send(None)  # driven by hand, as a loop other than asyncio would
     assert sink.lines[0]["reason"] == "unsupported_loop"
+    assert sink.lines[0]["by_config"] is True
 
 
 def test_a_negative_retry_header_counts_as_a_first_attempt(gated: None) -> None:
@@ -695,6 +696,7 @@ def test_a_redirect_off_the_model_hosts_is_refused_and_named(gated: None) -> Non
     with pytest.raises(ScrimmageRefused, match="localhost, which is not a model host"):
         c.post(URL, json=BODY)
     line = sink.lines[0]
+    assert line["by_config"] is True
     assert (line["action"], line["reason"]) == ("refused", "redirect_off_host")
     assert "localhost" in str(line["mistake"])
     assert budget.ledger.reserved > 0 and len(sink.settles) == 1
@@ -941,6 +943,7 @@ def test_a_chat_body_the_gate_cannot_read_is_refused(gated: None, content: bytes
     with pytest.raises(ScrimmageRefused, match="cannot read"):
         client().post(URL, content=content)
     assert sink.lines[0]["reason"] == "unreadable_body"
+    assert sink.lines[0]["by_config"] is True
 
 
 def test_a_streamed_chat_body_is_refused(gated: None) -> None:
@@ -1146,6 +1149,7 @@ def test_a_call_with_no_readable_name_is_refused_and_never_sent(
         sends(seen).post(EMBEDDINGS, **send)
     assert seen == []
     assert sink.lines[0]["reason"] == "unreadable_model"
+    assert sink.lines[0]["by_config"] is True
     assert "mistake" in sink.lines[0]
 
 
@@ -1314,3 +1318,15 @@ def test_a_web_read_and_a_web_write_that_miss_write_the_evidence() -> None:
     validator = jsonschema.Draft202012Validator(json.loads(path.read_text()))
     for line in (first, second):
         validator.validate(line)
+
+
+def test_the_setup_reasons_are_mistakes_the_agent_did_not_choose() -> None:
+    assert set(http_gate.SETUP_REASONS) <= set(http_gate.MISTAKE_REASONS)
+    assert not set(http_gate.SETUP_REASONS) & set(STOP_TEST)
+    assert set(http_gate.SETUP_REASONS) == {
+        "hosted",
+        "unreadable_body",
+        "unreadable_model",
+        "redirect_off_host",
+        "unsupported_loop",
+    }

@@ -14,7 +14,7 @@ from conftest import ACME, Project
 from fakes.openai_server import FakeOpenAI
 from scrimmage_core import config, labels, state, tool_gate
 from scrimmage_core.config import Fault, Mock
-from scrimmage_core.errors import ConfigError
+from scrimmage_core.errors import ConfigError, ScrimmageRefused
 from test_tool_gate import Lines, install
 
 Fake = Callable[..., FakeOpenAI]
@@ -267,6 +267,12 @@ def test_a_class_listed_as_a_tool_is_refused_with_the_form_to_use(lines: Lines) 
     assert "shop_tools:Base.method" in str(caught.value)
     assert module.Base("s3cret").get_order("1") == "real 1"  # nothing was recorded as a tool
     assert lines.lines[0]["call"] == "tool:Base" and lines.lines[0]["action"] == "refused"
+    assert lines.lines[0]["by_config"] is True  # the test's setup caused it
+    own = Lines()  # an agent's own call to a tool nobody listed is its choice, not the setup's
+    install(own)
+    with pytest.raises(ScrimmageRefused):
+        tool_gate.gate(lambda: "real", "plain")()
+    assert own.lines[0]["action"] == "refused" and "by_config" not in own.lines[0]
 
 
 def test_a_missing_class_in_a_file_imported_under_another_name_is_left_alone() -> None:
