@@ -87,7 +87,7 @@ def apply(root: Path, block: Block) -> None:
 
 def with_fake_host(toml: Path) -> None:
     text = toml.read_text()
-    if "model_hosts" not in text:
+    if not re.search(r"^model_hosts", text, re.M):  # a commented line names nothing
         toml.write_text(text.replace("[agent]\n", "[agent]\n" + FAKE_HOST, 1))
 
 

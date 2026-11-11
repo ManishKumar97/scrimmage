@@ -131,6 +131,8 @@ def loop(question: str) -> str:
 function     = "shop.agent:answer"
 tools        = ["shop.tools:get_order", "shop.tools:refund_order"]
 max_cost_usd = 2.00
+# With GUARD_URL set to the guard's own host, name that host, so its calls are model calls:
+# model_hosts = [{host = "guard.internal", provider = "openai"}]
 
 [agent.prices]
 "llama-guard-4" = {input = 0, output = 0}  # self-hosted: no bill
