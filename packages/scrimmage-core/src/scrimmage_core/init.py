@@ -207,9 +207,14 @@ def prepare(
     if not out.parent.is_dir():
         return refused(draft, f"cannot write {out}: its folder does not exist")
     root = folder.resolve()
-    unimportable = probe if probe is not None and not has_module(probe, root) else None
-    if unimportable is not None:
-        probe = None  # nothing is run for it, and it is not drafted as the function
+    if probe is not None and not has_module(probe, root):
+        top = probe.split(":")[0].split(".")[0]
+        return refused(
+            draft,
+            f"--probe {printable(probe)}: {printable(top)} cannot be imported from "
+            f"{printable(root)} or the environment; install it, or fix the name. "
+            "Nothing was run",
+        )
     reading = read_folder(root)
     entries = sorted(entry_points(reading), key=lambda c: (c.rank, c.order))
     if probe is not None:
@@ -226,16 +231,6 @@ def prepare(
         folder, reading, entries, chosen, result, tools, model_hosts(result, reading), probe
     )
     fill(draft, found)
-    if unimportable is not None:
-        top = unimportable.split(":")[0].split(".")[0]
-        draft.messages.append(
-            (
-                WARNINGS,
-                f"--probe {printable(unimportable)} was not run or drafted: {printable(top)} "
-                f"cannot be imported from {printable(root)} or the environment; "
-                "install it, or check the name",
-            )
-        )
     return draft
 
 

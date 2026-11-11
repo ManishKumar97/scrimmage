@@ -1455,7 +1455,7 @@ def test_a_caught_refusal_in_a_normal_run_lets_the_code_after_it_run(
     assert "refused call" in json.dumps(out)
 
 
-def test_a_probe_of_a_module_that_cannot_be_imported_is_said_and_not_drafted(
+def test_a_probe_of_a_module_that_cannot_be_imported_is_a_mistake_and_writes_nothing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def never(*args: object) -> None:
@@ -1465,10 +1465,11 @@ def test_a_probe_of_a_module_that_cannot_be_imported_is_said_and_not_drafted(
     write(tmp_path, {"bot.py": ENTRY})
     out = tmp_path / "draft.toml"
     rc, doc = run(capsys, str(tmp_path), "--probe", "nope_nothing:nope", "--out", str(out))
-    assert rc == OK
-    assert "nope_nothing cannot be imported" in messages(doc, "warnings")
-    assert probe_of(doc)["ran"] is False and probe_of(doc)["function"] is None
-    assert "nope_nothing" not in out.read_text()
+    assert rc == MISTAKE
+    assert "nope_nothing cannot be imported" in messages(doc, "mistakes")
+    assert "install it" in messages(doc, "mistakes")
+    assert probe_of(doc)["ran"] is False
+    assert not out.exists()
 
 
 def test_a_probe_of_a_module_in_the_folder_is_still_run(

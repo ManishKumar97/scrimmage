@@ -89,7 +89,7 @@ scrimmage init --probe support.agent:answer
 The static read cannot name a tool made by a dict comprehension or a framework.
 `--probe` takes the function to run, as `module:function`, and runs only that function. You choose it: the command prints it first, and never runs its own guess, and it does not print or return a ready command for the guess either.
 A bare `--probe`, a script path, or anything that is not `module:function` exits 2 and runs nothing.
-When the module's top-level name cannot be found in the folder or the environment, nothing is run: a warning says so, and the draft does not name that function.
+When the module's top-level name cannot be found in the folder or the environment, `--probe` exits 2 with a mistake that names the module and says to install it or fix the name. Nothing is run and no draft is written.
 Only the top-level name is looked for, without importing it, so a missing submodule is found by the probe itself.
 Scrimmage starts the function the way `scrimmage test` does, with the question `scrimmage init probe`.
 The probe stops at the first model request. That request is refused before it is sent, and the tools it offers are read from it.
