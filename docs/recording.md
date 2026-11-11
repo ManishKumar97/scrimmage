@@ -139,6 +139,7 @@ Because a recording is meant for git, a tool's value, an MCP result and a JSON w
 This is a heuristic, and it is labelled as one. It is whole word parts only, so `author` and `token_count` are kept, and only strings are replaced, as a number is never a secret.
 A word about the secret, as in `session_id` or `token_type`, is kept too. See `docs/limits.md` for what that costs.
 Each removal is a `removed:` line and an entry in `removed`, so the reviewer sees it.
+A value can be listed twice: a Basic credential under a header key such as `Authorization` is removed by the pattern and again by the key-name rule, so it has a `pattern` and a `key_name` entry.
 A call whose arguments held a secret, or a request whose path did, is not written at all: a mock of it could never match the real call.
 A `password=` or `token=` field in a reply body is removed, as it is anywhere in a recorded string, and so is the value after `Authorization: Basic`. An XML element value, as in `<password>hunter2</password>`, is not cleaned, as no pattern reads it. A request body is not written into the mock, and a single recorded web mock answers every query and every body on its path, so a mock answers a different request the same way.
 Every record prints the warning that the mocks can hold customer data. No rule can promise there is none; review them.

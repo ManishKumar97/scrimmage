@@ -97,7 +97,7 @@ Every gated call is written to a record in `scrimmage-runs/`, next to your `scri
     - GitHub tokens: `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` and `github_pat_`;
     - Slack tokens: `xoxa-`, `xoxb-`, `xoxe-`, `xoxp-`, `xoxr-`, `xoxs-`, `xoxe.xoxp-` and `xapp-`;
     - bearer tokens: `Bearer` and the value after it;
-    - a Basic credential: `Authorization` and `Basic` and the value after them, in a header line, in JSON (as a header map, a list of pairs, or a name and a value) or in a command line;
+    - a Basic credential: `Authorization` and `Basic` and a value of 8 or more characters after them (a shorter word, as in `Authorization: Basic realm`, is kept), in a header line, in JSON (as a header map, a list of pairs, or a name and a value) or in a command line;
     - form-encoded and keyword fields: `password=`, `passwd=`, `token=`, `secret=` and `api_key=` and the value after them, with any `NAME_` before it, as in `DB_PASSWORD=`, `GITHUB_TOKEN=`, `AWS_SECRET_ACCESS_KEY=` and `client_secret=`, in any letter case, with `=` written as `%3D` and `_` in `api_key` as `%5F`; the value may be quoted with `'` or `"`, or in `<...>`; the env names `PGPASSWORD`, `PGPASS`, `MYSQL_PWD`, `authtoken` and `accesstoken` are removed too;
     - JSON Web Tokens, which start with `eyJ`.
 
@@ -111,6 +111,8 @@ Every gated call is written to a record in `scrimmage-runs/`, next to your `scri
   It reads a header map (the value may be a list, and an object beside the Basic value in that list is cleaned as usual), and an object with a label (`name`, `key`, `header` or `field`) set to Authorization and a `value` or `values` beside it, in any letter case, so .NET's `{"Key": ..., "Value": ...}` is read.
   It also reads a name followed by a value in any list, as in `["Host", "x", "Authorization", "Basic ..."]`, with the value one list deeper if need be, and a name with a trailing colon.
   The name may end in `authorization` after `_` or `-`, as in `HTTP_AUTHORIZATION` and `X-Forwarded-Authorization`.
+  Rule names in messages: `openai-key`, `aws-access-key`, `google-api-key`, `github-token`, `slack-token`, `bearer-token`, `basic-credential`, `form-field`, `header-text`, `url`, `jwt`, `json`, `secret`.
+  A refusal that says a change touches text a rule removes names one of these.
   Which rule runs where: the patterns above run on all recorded text.
   The key-name rule, which replaces a string under a key such as `"password"`, runs for mocks (web JSON replies, tool values and MCP values) and for miss evidence, and it reports what it removed.
   The side folder of blobs and the `.log` previews pass through the patterns only, so a JSON key such as `"password": "x"` stays there word for word.

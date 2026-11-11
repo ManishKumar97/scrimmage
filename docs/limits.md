@@ -108,7 +108,10 @@
   `Authorization=Basic%20...`, a double-encoded `password%253D`, and a multipart body with `name="password"` on one line and the value on another are not cleaned.
   JSON inside other text, as in `Result: {...}`, or across NDJSON lines, is not read as JSON: it goes through the patterns, which cut at a quote, and the result can come out broken. Only a text that is JSON as a whole is kept valid.
   A JSON text that is redacted is written back with the input's spacing where it can be told, but pretty-printed JSON comes back on one line, and a `\u` escape style follows whether the input held any `\u`, so a text may be written with different escapes. Numbers are kept as written.
-  Two keys that redact to the same text are kept apart by a suffix: the second becomes `[secret removed] 2`.
+  Two keys that redact to the same text are kept apart by a suffix, in JSON text and in recorded mocks and tool values: the second becomes `[secret removed] 2`.
+  A backslash followed by `n` or `r` ends a form value, since it is a line break in escaped text; any other backslash, as in `PGPASSWORD=p\$ss` or `password=hun\ter2`, is part of the value.
+  The paging and tokenizer prefixes (`next_`, `page_`, `sync_`, `cursor_`, `eos_`, `pad_` and the rest) are kept only before `token`: `SYNC_PASSWORD=` and `next_secret=` are removed.
+  An edit to a string that holds a removed secret inside a JSON text is refused as a whole, even beside the secret; the other strings of that JSON text stay open.
   Redaction is a heuristic on known shapes.
 
   *Checked by: `tests/test_redact.py::test_the_old_module_kept_each_new_secret_and_the_new_one_removes_it`, `tests/test_redact.py::test_prose_empty_values_and_paths_are_kept`*
