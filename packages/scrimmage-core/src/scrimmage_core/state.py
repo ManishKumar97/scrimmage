@@ -225,7 +225,7 @@ class RunState:
         """Whether the call is a miss. This runs on the agent's call, so a failure in it must
         not reach the agent: the decision stands and the miss is marked unreadable."""
         try:
-            return missed(call, plan, decision)
+            return missed(call, plan, engine.beneath(decision))
         except Exception:
             return engine.Miss("unreadable")
 
