@@ -38,9 +38,10 @@ NAMES = (
     r"|pgpass(?:word)?|mysql_pwd|authtoken|accesstoken)"
 )
 FIELD = NAMES + r"(?:=|%3d)"
-HARMLESS = (
-    "next|page|continuation|pagination|sync|cursor|is|has|top|max|min|num|n|eos|bos|pad|unk|sep|cls"
-)
+# Before any field name: is_secret, top_password, max_token. Before token only: the paging
+# names (next_page_token) and the tokenizer names (eos_token). SYNC_PASSWORD is a password.
+HARMLESS = "is|has|top|max|min|num|n"
+HARMLESS_TOKEN = "next|page|continuation|pagination|sync|cursor|eos|bos|pad|unk|sep|cls"
 MARKER = r"\[(?:secret )?removed\]"
 NAME = (
     r"(?:(?<![A-Za-z0-9_\\])|(?<=\\[nrt]))"
@@ -60,11 +61,14 @@ FORM = (
     + rf"(?:{MARKER}[^&\s\"'<>\\]+"
     + rf"|(?(inside)(?!)|{QUOTED})"
     + rf"|(?!{MARKER})(?:<[^<>\"'\\]+>|(?P<value>(?(inside)|(?:\\?[\"']|<)?)"
-    + r"(?:\\u[0-9a-fA-F]{4}|[^&\s\"'<>\\])+))"
+    + r"(?:\\u[0-9a-fA-F]{4}|\\(?![\"'nr])|[^&\s\"'<>\\])+))"
     + ")"
 )
 # The harmless prefixes, checked on the match: next_page_token is found and then kept.
-HARMLESS_NAME = re.compile(rf"(?:[A-Za-z0-9]+_)*(?:{HARMLESS})_{FIELD}", re.ASCII | re.IGNORECASE)
+HARMLESS_NAME = re.compile(
+    rf"(?:[A-Za-z0-9]+_)*(?:(?:{HARMLESS})_{FIELD}|(?:{HARMLESS_TOKEN})_token(?:=|%3d))",
+    re.ASCII | re.IGNORECASE,
+)
 CODE_VALUES = ("None", "True", "False")
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
 # A Basic credential in an Authorization header, as a header line, JSON, a command line or a
@@ -309,6 +313,18 @@ def hide_header_credentials(node: object) -> tuple[object, int]:
     return cast(object, Members(out) if isinstance(node, Members) else dict(out)), found
 
 
+def numbered(kept: str, name: str, taken: set[str]) -> str:
+    """The name a key has after redaction. Two names that redact to the same text would
+    become one key, so a later one is numbered ("[secret removed] 2") and the count of keys is
+    kept. taken holds every name in the object and is added to."""
+    if kept != name:
+        base, number = kept, 2
+        while kept in taken:
+            kept, number = f"{base} {number}", number + 1
+        taken.add(kept)
+    return kept
+
+
 def structural(text: str) -> tuple[str, int] | None:
     """A JSON object or array, redacted string by string, so the result still parses and has
     the same keys and lengths. None if the text is not one. Only a change is written back,
@@ -336,17 +352,9 @@ def structural(text: str) -> tuple[str, int] | None:
         return kept
 
     def rename(node: Members) -> Iterator[tuple[str, object]]:
-        # Two names that redact to the same text would become one key, so a later one is
-        # numbered. The count of keys is kept.
         taken = {name for name, _ in node}
         for name, value in node:
-            kept = clean(name)
-            if kept != name:
-                base, number = kept, 2
-                while kept in taken:
-                    kept, number = f"{base} {number}", number + 1
-                taken.add(kept)
-            yield kept, walk(value)
+            yield numbered(clean(name), name, taken), walk(value)
 
     def walk(node: object) -> object:
         nonlocal count
@@ -358,8 +366,6 @@ def structural(text: str) -> tuple[str, int] | None:
             node, hidden = hide_header_credentials(node)
             count += hidden
             return Members(rename(cast(Members, node)))
-        if isinstance(node, tuple):
-            return tuple(walk(value) for value in cast(tuple[object, ...], node))
         if isinstance(node, list):
             node, hidden = hide_header_credentials(cast(object, node))
             count += hidden
@@ -456,6 +462,65 @@ def secret_rule(found: str) -> str:
     return "secret"
 
 
+STRING_LITERAL = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def document_strings(node: object) -> Iterator[str]:
+    """Every string of a parsed JSON text, names and values, in the order of the text."""
+    if isinstance(node, Number):
+        return
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, Members):
+        for name, value in node:
+            yield name
+            yield from document_strings(value)
+    elif isinstance(node, list):
+        for value in cast(list[object], node):
+            yield from document_strings(value)
+
+
+def json_places(text: str) -> list[Replacement] | None:
+    """For a text that is JSON as a whole: each string literal that redaction changes, as a
+    place in the text, rule "json". None if the text is not JSON as a whole. If the strings
+    cannot be lined up with the literals, the whole text is the one place."""
+    read = structural(text)
+    if read is None:
+        return None
+    if read[0] == text:
+        return []
+    body, lead = text.strip(), len(text) - len(text.lstrip())
+
+    def parsed(source: str) -> object:
+        return json.loads(
+            source,
+            parse_int=Number,
+            parse_float=Number,
+            parse_constant=Number,
+            object_pairs_hook=Members,
+        )
+
+    try:
+        before = list(document_strings(parsed(body)))
+        after = list(document_strings(parsed(read[0].strip())))
+    except (ValueError, RecursionError):
+        before, after = [], []
+    literals = list(STRING_LITERAL.finditer(body))
+    if not before or len(before) != len(after) or len(before) != len(literals):
+        return [Replacement(0, len(text), "json", read[0])]
+    ascii_only = "\\u" in body
+    return [
+        Replacement(
+            lead + found.start(),
+            lead + found.end(),
+            "json",
+            json.dumps(new, ensure_ascii=ascii_only),
+        )
+        for found, old, new in zip(literals, before, after, strict=True)
+        if old != new
+    ]
+
+
 def replacements(text: str) -> list[Replacement]:
     """Every place redact changes the text, in the text as given, each with its rule's name.
 
@@ -465,12 +530,11 @@ def replacements(text: str) -> list[Replacement]:
     """
     text = str.__str__(text)
     if holds_candidate(text):
-        # A JSON text is read and written back as a whole, so what changes in it is not a
-        # place in the text. The whole text is one place: an edit to it is refused, as an
-        # edit that touches a removed span is.
-        read = structural(text)
-        if read is not None:
-            return [Replacement(0, len(text), "json", read[0])] if read[0] != text else []
+        # A JSON text is read and written back as a whole, so its places are the strings
+        # in it that the rules change, each judged on its own.
+        places = json_places(text)
+        if places is not None:
+            return places
     pieces = [Piece(text, 0, len(text), None)]
     passes: list[tuple[re.Pattern[str], Callable[[re.Match[str]], tuple[str, str]]]] = [
         (URL, lambda m: (plain_url(m), "url")),

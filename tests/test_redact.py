@@ -6,6 +6,7 @@ import random
 import re
 import sys
 import time
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -13,6 +14,8 @@ import pytest
 from scrimmage_core import capture
 from scrimmage_core import redact as redact_module
 from scrimmage_core.redact import redact, redacted
+
+ROOT = Path(__file__).parents[1]
 
 
 @pytest.mark.design("redact.urls")
@@ -337,6 +340,15 @@ NEW_SECRETS = [
     ("MY_API_KEY=k", "MY_API_KEY=k", "k"),
     ("export DB_PASSWORD='x'", "DB_PASSWORD='x'", "'x'"),
     ("a_b_c_secret=zz", "a_b_c_secret=zz", "zz"),
+    ("SYNC_PASSWORD=hunter2", "SYNC_PASSWORD=hunter2", "hunter2"),
+    ("NEXT_PASSWORD=hunter2", "NEXT_PASSWORD=hunter2", "hunter2"),
+    ("next_secret=hunter2", "next_secret=hunter2", "hunter2"),
+    ("cursor_api_key=hunter2", "cursor_api_key=hunter2", "hunter2"),
+    ("DB_SYNC_PASSWORD=hunter2", "DB_SYNC_PASSWORD=hunter2", "hunter2"),
+    ("page_password=hunter2", "page_password=hunter2", "hunter2"),
+    ("PAD_SECRET=hunter2", "PAD_SECRET=hunter2", "hunter2"),
+    ("password=hun\\ter2zz", "password=hun\\ter2zz", "ter2zz"),
+    ("PGPASSWORD=p\\$ss and more", "PGPASSWORD=p\\$ss", "p\\$ss"),
 ]
 
 
@@ -673,9 +685,9 @@ def seeded_tree(rng: random.Random, found: list[str], depth: int = 0) -> object:
         return seeded_text(rng, found)
     if kind < 0.7:
         return [seeded_tree(rng, found, depth + 1) for _ in range(rng.randint(0, 4))]
-    # a number after each name keeps two names apart even when both are redacted
-    keys = [f"{seeded_text(rng, found)} #{n}" for n in range(rng.randint(0, 4))]
-    return {key: seeded_tree(rng, found, depth + 1) for key in keys}
+    # Two names can redact to the same text: the walks number the later one.
+    keys = [seeded_text(rng, found) or "k" for _ in range(rng.randint(0, 4))]
+    return {key: seeded_tree(rng, found, depth + 1) for key in dict.fromkeys(keys)}
 
 
 def shape(node: object) -> object:
@@ -927,12 +939,46 @@ def test_a_secret_inside_a_url_query_is_one_span_of_the_url_rule() -> None:
 def test_a_json_text_that_redaction_changes_is_one_span_and_kept_names_are_none() -> None:
     """A JSON text is written back whole, so its change is one place; a name that is found
     and kept, such as next_page_token, is no place at all."""
-    text = '{"a": "token=abc", "n": 1}'
-    assert redact_module.spans(text) == [(0, len(text), "json")]
-    assert redact_module.replacements(text)[0].text == redact(text)
+    text = '{"a": "token=abc", "n": 1, "b": "plain"}'
+    # Only the string that the rules change is a place; "plain" and the number are not.
+    assert redact_module.spans(text) == [(6, 17, "json")]
+    assert redact_module.replacements(text)[0].text == '"[secret removed]"'
     assert redact_module.spans('{"a": "plain", "n": 1}') == []
     for kept in ("next_page_token=abc", "f(token=tok)", "def f(password=None):"):
         assert redact_module.spans(kept) == []
     assert [rule for _, _, rule in redact_module.spans("x DB_PASSWORD=hunter2")] == ["form-field"]
     header = "Authorization: Basic dXNlcjpwYXNzd29yZA=="
     assert [rule for _, _, rule in redact_module.spans(header)] == ["basic-credential"]
+
+
+def test_two_names_that_redact_alike_are_numbered_on_both_paths() -> None:
+    """The second must not overwrite the first, in a mock or in redacted JSON text."""
+    names = {"token=abc": 1, "token=xyz": 2, "plain": 3}
+    cleaned, _removed = capture.clean(names)
+    assert cleaned == {"[secret removed]": 1, "[secret removed] 2": 2, "plain": 3}
+    assert json.loads(redact(json.dumps(names))) == cleaned
+    taken = {"[secret removed]", "[secret removed] 2"}
+    assert redact_module.numbered("[secret removed]", "token=q", taken) == "[secret removed] 3"
+
+
+def test_a_backslash_n_or_r_ends_a_value_and_other_backslashes_are_in_it() -> None:
+    assert redact(r"password=ab\ncd") == r"[secret removed]\ncd"
+    assert redact(r"password=ab\rcd") == r"[secret removed]\rcd"
+    assert redact(r"password=ab\tcd ok") == "[secret removed] ok"
+    assert redact(r"x password=ab\"cd") == r"x [secret removed]\"cd"
+    assert redact("password=ab\\$cd\\") == "[secret removed]"
+
+
+def security_rule_names() -> set[str]:
+    page = (ROOT / "docs" / "security.md").read_text()
+    line = next(
+        row for row in page.splitlines() if row.strip().startswith("Rule names in messages:")
+    )
+    return set(re.findall(r"`([a-z-]+)`", line))
+
+
+def test_the_rule_names_on_the_security_page_are_the_ones_in_messages() -> None:
+    """A refusal says which rule removes the text; the page lists every name it can use."""
+    names = {secret.name for secret in redact_module.SECRETS} | {"url", "jwt", "json", "secret"}
+    assert "" not in names
+    assert security_rule_names() == names

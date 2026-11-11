@@ -19,7 +19,7 @@ from typing import Any, cast
 from scrimmage_core import mocks
 from scrimmage_core.config import IMPORT_PATH
 from scrimmage_core.errors import ScrimmageMockError
-from scrimmage_core.redact import REMOVED, hide_header_credentials, redacted
+from scrimmage_core.redact import REMOVED, hide_header_credentials, numbered, redacted
 
 INT64 = (-(2**63), 2**63 - 1)  # TOML integers are 64 bits
 # A string value under a key with one of these whole word parts is a secret by its name.
@@ -282,10 +282,13 @@ def clean(value: object) -> tuple[object, list[Removed]]:
             return [walk(x, key, secret) for x in cast(list[object], item)]
         if isinstance(item, dict):
             out: dict[str, object] = {}
-            for name, inner in cast(dict[str, object], item).items():
-                name = text(name, key)
+            table = cast(dict[str, object], item)
+            taken = set(table)
+            for name, inner in table.items():
+                # Two names that redact to the same text are numbered, not merged.
+                kept = numbered(text(name, key), name, taken)
                 # A table under a secret key is secret all the way down; a number never is.
-                out[name] = walk(inner, name, secret or secret_key(name))
+                out[kept] = walk(inner, kept, secret or secret_key(kept))
             return out
         return item
 
