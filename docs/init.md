@@ -30,7 +30,7 @@ It parses the code and imports nothing, so none of your code runs.
 It skips `.venv`, `venv`, `site-packages`, `node_modules`, `scrimmage-runs` and hidden folders, and it says which files it could not read as Python.
 A file over 5 MB is treated as generated: it is skipped, and reported as too large.
 A `.py` symlink that points outside the folder is not read, and a note names it, as its target is not part of the code in the folder.
-The read stops after 5000 `.py` files, in a fixed order, and a note says so; a tree of 30,000 files takes about 26 seconds, so give the folder that holds the agent.
+The read stops after 5000 `.py` files, in a fixed order, and a note says so; reading 5000 small files took about 18 seconds on a busy 4-core machine, so give the folder that holds the agent.
 Module names are the import names of an installed package: a `src` folder is not part of them, and a folder inside a package keeps its package's name.
 When the top package cannot be imported from the folder you read, a note tells you to install it, such as with `pip install -e .`, because `scrimmage test` will need it.
 To read one part of a large checkout, give that part as the folder, such as `scrimmage init src/mypackage/domains/airline --out scrimmage.toml`.

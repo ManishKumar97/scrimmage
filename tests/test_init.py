@@ -1491,6 +1491,7 @@ def test_a_tree_over_the_file_limit_is_cut_with_a_note(
     write(tmp_path, {f"m{n}.py": "X = 1\n" for n in range(5)})
     _, doc = run(capsys, str(tmp_path))
     assert "read the first 3 .py files and stopped" in messages(doc, "notes")
+    assert drafting.read_folder(tmp_path).files == 3  # the note's number is the count read
     write(tmp_path / "small", {f"m{n}.py": "X = 1\n" for n in range(3)})
     _, exact = run(capsys, str(tmp_path / "small"))
     assert "stopped" not in messages(exact, "notes")
