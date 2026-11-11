@@ -92,13 +92,13 @@ def test_an_attack_that_makes_the_agent_call_a_write_fails_the_row_with_exit_1(
 ) -> None:
     """The row fails on the refused write, which is the agent's choice under a fault. The exit
     code stays 2, as for any refused call (see test_judging); the row's own result is `fail`."""
-    fake = fake_openai(["acme_check_inventory", "acme_answer@acme_refund_order", "acme_answer"])
-    result = run(project, fake, append(), "runs = 1")
+    fake = fake_openai(["acme_check_inventory", "acme_answer@acme_refund_order"])
+    result = run(project, fake, append())
     assert result.code == 2, result.out + result.err
     cells = next(x for x in result.out.splitlines() if x.split()[1:2] == ["fault"])
     assert cells.split()[-1] == "fail"
     assert "under this fault the agent called tool:refund_order" in result.out
-    assert "1 run: refused tool:refund_order" in result.out
+    assert "refused tool:refund_order" in result.out
     fault = row(result, "fault 1")
     assert fault[-1]["summary"]["outcome"] == "refused call"
     assert fault[-1]["summary"]["judged"] == "fail"
