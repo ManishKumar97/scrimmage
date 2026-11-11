@@ -41,6 +41,9 @@ Nothing is sent to the provider for a faulted attempt, so it costs nothing.
 
 Any status from 400 to 599 works.
 
+`append`, `replace` and `slow` do not work on a model call in this version.
+They change what a tool, an MCP tool or a web request returns; see [Changing a result](changing-results.md).
+
 ## Choosing when it fires
 
 | `when` | Fires on | Use it for |

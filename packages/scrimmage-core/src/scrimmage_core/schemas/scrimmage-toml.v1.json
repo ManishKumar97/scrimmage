@@ -428,18 +428,47 @@
         }
       },
       "if": {
-        "anyOf": [
+        "allOf": [
+          {
+            "anyOf": [
+              {
+                "not": {
+                  "required": [
+                    "when"
+                  ]
+                }
+              },
+              {
+                "properties": {
+                  "when": {
+                    "const": "always"
+                  }
+                }
+              }
+            ]
+          },
           {
             "not": {
               "required": [
-                "when"
-              ]
+                "do"
+              ],
+              "properties": {
+                "do": {
+                  "const": "append"
+                }
+              }
             }
           },
           {
-            "properties": {
-              "when": {
-                "const": "always"
+            "not": {
+              "required": [
+                "do",
+                "find"
+              ],
+              "properties": {
+                "do": {
+                  "const": "replace"
+                }
               }
             }
           }
@@ -513,6 +542,9 @@
           "else": {
             "$ref": "#/$defs/tool_fault"
           }
+        },
+        {
+          "$ref": "#/$defs/change_rules"
         }
       ]
     },
@@ -533,9 +565,18 @@
           "$ref": "#/$defs/tool_label"
         },
         "do": {
-          "enum": [
-            "timeout",
-            "error"
+          "anyOf": [
+            {
+              "enum": [
+                "timeout",
+                "error",
+                "append",
+                "replace"
+              ]
+            },
+            {
+              "$ref": "#/$defs/slow"
+            }
           ]
         },
         "when": {
@@ -554,6 +595,12 @@
         },
         "pass_rate": {
           "$ref": "#/$defs/pass_rate"
+        },
+        "text": {
+          "$ref": "#/$defs/change_text"
+        },
+        "find": {
+          "$ref": "#/$defs/change_find"
         }
       }
     },
@@ -601,7 +648,7 @@
         },
         "do": {
           "type": "string",
-          "pattern": "^(timeout|status [45][0-9][0-9])$"
+          "pattern": "^(timeout|append|replace|slow [0-9]+(\\.[0-9]+)?s|status [45][0-9][0-9])$"
         },
         "when": {
           "$ref": "#/$defs/schedule"
@@ -620,6 +667,12 @@
         },
         "pass_rate": {
           "$ref": "#/$defs/pass_rate"
+        },
+        "text": {
+          "$ref": "#/$defs/change_text"
+        },
+        "find": {
+          "$ref": "#/$defs/change_find"
         }
       }
     },
@@ -631,10 +684,19 @@
           "$ref": "#/$defs/mcp_label"
         },
         "do": {
-          "enum": [
-            "timeout",
-            "error",
-            "empty"
+          "anyOf": [
+            {
+              "enum": [
+                "timeout",
+                "error",
+                "empty",
+                "append",
+                "replace"
+              ]
+            },
+            {
+              "$ref": "#/$defs/slow"
+            }
           ]
         },
         "when": {
@@ -648,6 +710,12 @@
         },
         "pass_rate": {
           "$ref": "#/$defs/pass_rate"
+        },
+        "text": {
+          "$ref": "#/$defs/change_text"
+        },
+        "find": {
+          "$ref": "#/$defs/change_find"
         }
       }
     },
@@ -680,6 +748,74 @@
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/value"
+          }
+        }
+      ]
+    },
+    "slow": {
+      "type": "string",
+      "pattern": "^slow [0-9]+(\\.[0-9]+)?s$"
+    },
+    "change_text": {
+      "type": "string",
+      "maxLength": 65536,
+      "not": {
+        "pattern": "\\$\\{"
+      },
+      "description": "Text with no ${. At most 64 KiB."
+    },
+    "change_find": {
+      "$ref": "#/$defs/change_text",
+      "pattern": "\\S"
+    },
+    "change_rules": {
+      "description": "text goes with append and replace, and find with replace.",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "do"
+            ],
+            "properties": {
+              "do": {
+                "enum": [
+                  "append",
+                  "replace"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "text"
+            ]
+          }
+        },
+        {
+          "dependentSchemas": {
+            "text": {
+              "required": [
+                "do"
+              ],
+              "properties": {
+                "do": {
+                  "enum": [
+                    "append",
+                    "replace"
+                  ]
+                }
+              }
+            },
+            "find": {
+              "required": [
+                "do"
+              ],
+              "properties": {
+                "do": {
+                  "const": "replace"
+                }
+              }
+            }
           }
         }
       ]

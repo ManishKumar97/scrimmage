@@ -434,6 +434,52 @@ def test_the_show_page_says_what_redact_removes_and_who_may_see_the_output() -> 
     assert "signal handling needs the main thread" in commands
 
 
+@pytest.mark.design("docs.changing_results")
+def test_the_changing_results_page_covers_the_faults_the_rules_and_the_lines() -> None:
+    text = page("changing-results.md")
+    for fault in ("append", "replace", "slow"):
+        assert mentioned(text, fault), fault
+    for key in ("text", "find", "under", "unchanged", "slowed_ms", "cut_by", "under_real"):
+        assert f"`{key}`" in text or f"`{key}" in text, key
+    for words in (
+        "ZXCANARY41",
+        "not shaped like a key",
+        "leave that tool unmocked and off `real`",
+        'uses up its place in `when = "first N"`',
+        "promptfoo, garak and PyRIT",
+        "future.result(timeout=...)",
+        "(heuristic)",
+        "A mistake at the row",
+    ):
+        assert words in text, words
+    for cut in ("client timeout", "run stopped", "time limit", "cancelled"):
+        assert f"`{cut}`" in text, cut
+    assert "invented" not in text.lower()
+    assert "model-faults.md" in text
+    nav = (DOCS.parent / "mkdocs.yml").read_text()
+    assert "Changing a result: changing-results.md" in nav
+
+
+@pytest.mark.design("docs.changing_results")
+def test_the_limits_page_names_each_gap_of_the_carried_faults() -> None:
+    limits = page("limits.md")
+    for limit in (
+        "**Only text and plain data take `append` and `replace`.**",
+        "**An MCP result with several text items.**",
+        "**Web bodies that are not text or JSON.**",
+        "**`slow` outside asyncio.**",
+        "**A sync caller that gives up leaves its thread behind.**",
+        "**The plan holds `find` as written.**",
+        "**`${` in an injected text.**",
+        "**A change over text the record removes is not made.**",
+    ):
+        assert limit in limits, limit
+    assert "runs a listed real write twice" in limits
+    assert "`append`, `replace` and `slow` do not work on a model call" in page("model-faults.md")
+    later = page("configuration.md").split("## Coming in later versions")[1]
+    assert "`slow`," not in later and "`append`, `replace`," not in later.split("Fault options")[0]
+
+
 @pytest.mark.design("docs.suggestions")
 def test_the_show_page_lists_every_suggestion_code_and_calls_it_a_heuristic() -> None:
     text = page("show.md").split("### Suggestions")[1].split("### What show opens")[0]

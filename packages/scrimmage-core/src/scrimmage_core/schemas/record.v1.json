@@ -152,7 +152,7 @@
           "properties": {
             "do": {
               "type": "string",
-              "pattern": "^(timeout|error|empty|status [45][0-9]{2})$"
+              "pattern": "^(timeout|error|empty|append|replace|slow [0-9]+(\\.[0-9]+)?s|status [45][0-9]{2})$"
             },
             "when": {
               "type": "string",
@@ -461,6 +461,75 @@
               ]
             }
           }
+        },
+        "under": {
+          "enum": [
+            "real",
+            "mock"
+          ],
+          "description": "A carried fault (append, replace, slow): what the call got beneath it."
+        },
+        "changed": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "text",
+            "count",
+            "parts"
+          ],
+          "properties": {
+            "text": {
+              "$ref": "#/$defs/content",
+              "description": "The fault's own text, never redacted."
+            },
+            "find": {
+              "$ref": "#/$defs/content",
+              "description": "The find text: its preview is redacted, its sha256 is of the raw text."
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "parts": {
+              "type": "array",
+              "maxItems": 5,
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "unchanged": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "do",
+            "why"
+          ],
+          "properties": {
+            "do": {
+              "type": "string"
+            },
+            "why": {
+              "type": "string"
+            }
+          }
+        },
+        "slowed_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cut_by": {
+          "enum": [
+            "client timeout",
+            "run stopped",
+            "time limit",
+            "cancelled"
+          ]
+        },
+        "carries_injected": {
+          "const": true,
+          "description": "A model request that holds the text a fault put in a result (a heuristic)."
         }
       }
     },
@@ -527,7 +596,8 @@
                 "real",
                 "mock",
                 "fault",
-                "refused"
+                "refused",
+                "under_real"
               ],
               "properties": {
                 "real": {
@@ -543,6 +613,10 @@
                   "minimum": 0
                 },
                 "refused": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "under_real": {
                   "type": "integer",
                   "minimum": 0
                 }
