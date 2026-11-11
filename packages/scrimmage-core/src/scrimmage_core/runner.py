@@ -133,6 +133,8 @@ class RunResult:
     unchanged: list[str] = field(default_factory=list[str])
     # Calls that ran for real in an append or replace row and could be writes, by name.
     writes: dict[str, int] = field(default_factory=dict[str, int])
+    # A fault changed a result and no model request after it carried the text: a heuristic.
+    undelivered: bool = False
 
     @property
     def miss_count(self) -> int:
@@ -358,14 +360,15 @@ class Runner:
             notices=notices,
             real_errors=real_errors,
             hosted_reads=sum(1 for line in model if "hosted_reads" in line),
-            # A mock under a carried fault was used too, and its line has the mock key.
-            mocked={int(str(line["mock"])) for line in lines if "mock" in line},
+            mocked=used_mocks(lines),
             unchanged=[
                 str(cast(dict[str, object], line["unchanged"])["why"])
                 for line in lines
                 if "unchanged" in line
             ],
             writes=self.real_writes_in(row, lines),
+            undelivered=any("changed" in line for line in lines)
+            and not any(line.get("carries_injected") for line in model),
             tools_seen=reported_tools(notices),
             misses=misses,
             tool_calls=sum(1 for line in lines if line.get("kind") in ("tool", "mcp")),
@@ -879,6 +882,12 @@ def row_reports(config: Config, results: list[RunResult]) -> list[RowReport]:
     return reports
 
 
+def used_mocks(lines: list[dict[str, object]]) -> set[int]:
+    """The mocks a run used, by place. A mock under a carried fault was used too: its line is a
+    fault's, and has the mock key all the same."""
+    return {int(str(line["mock"])) for line in lines if "mock" in line}
+
+
 def written_name(label: str, method: object, path: object) -> str:
     """A call as a note names it: a tool by its name, a web request by method and path."""
     if label.startswith("http:"):
@@ -1049,6 +1058,12 @@ def build_report(
                 )
             if row.fault.model is not None and (why := unused_model(row.fault, ran)):
                 mistakes.append(f"{where}: {why}")
+        lost = sum(r.undelivered for r in mine)
+        if lost:
+            notes.append(
+                f"{where}: in {lost} of {len(mine)} runs the injected text never reached a model "
+                "request; the agent may cut or rewrite tool results (heuristic)"
+            )
         written: Counter[str] = Counter()
         for r in mine:
             written.update(r.writes)

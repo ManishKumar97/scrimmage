@@ -522,6 +522,10 @@
             "time limit",
             "cancelled"
           ]
+        },
+        "carries_injected": {
+          "const": true,
+          "description": "A model request that holds the text a fault put in a result (a heuristic)."
         }
       }
     },

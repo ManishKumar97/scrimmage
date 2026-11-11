@@ -155,6 +155,9 @@ class RunState:
         # Set when the run is stopped or has ended while this process lives on, so a call
         # that is only waiting, such as a slowed one, ends at once and does not run.
         self.stopped = threading.Event()
+        # The text each changed call put in a result, so a later model request can be
+        # looked at for it: a heuristic note when it never got there.
+        self.injected: list[str] = []
         self.end_program: Callable[[], None] = lambda: None  # set where a run has a sender
         if plan is not None:
             self._arrived(plan)
@@ -519,6 +522,8 @@ class RunState:
                 "bytes": len(raw),
             }
         step.changed = shown
+        if fault.text and fault.text not in self.injected:
+            self.injected.append(fault.text)
 
     def finish(
         self,

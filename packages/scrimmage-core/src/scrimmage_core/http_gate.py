@@ -27,7 +27,7 @@ import zlib
 from collections.abc import Callable, Iterator
 from contextvars import ContextVar
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, NoReturn, Protocol
+from typing import TYPE_CHECKING, Any, NoReturn, Protocol, cast
 
 from scrimmage_core import changes, credentials, delay, hooks, threads
 from scrimmage_core import probe as probing
@@ -38,6 +38,7 @@ from scrimmage_core.client import ControlError
 from scrimmage_core.config import Fault, slow_seconds
 from scrimmage_core.decide import READ_METHODS, Call, Decision
 from scrimmage_core.errors import ScrimmageRefused
+from scrimmage_core.judge import normal
 from scrimmage_core.labels import shown_name
 from scrimmage_core.plan import Plan
 from scrimmage_core.redact import redact, redacted
@@ -333,6 +334,8 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
         extra["provider"] = call.provider
     if call.kind == "model":
         extra.update(model=call.model or "", retry=call.retry)
+        if run.injected and fields is not None and carries(run.injected, fields):
+            extra["carries_injected"] = True
         extra["stream"] = (fields or {}).get("stream") is True
     step = run.decide(call, {})
     step.extra = extra
@@ -355,6 +358,32 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
             )
         check_tools(ctx, run, step, fields, str(request.url.path))
     return step, extra
+
+
+def carries(injected: list[str], fields: dict[str, object]) -> bool:
+    """Whether a chat request holds a text a fault put in a result. Only the strings of the
+    parsed body are searched, each message's content as text or as parts, compared as a rule
+    compares text; the raw body would hold the text escaped. A heuristic."""
+    messages = fields.get("messages")
+    if not isinstance(messages, list):
+        return False
+    wanted = [normal(text) for text in injected]
+    for message in cast("list[object]", messages):
+        if not isinstance(message, dict):
+            continue
+        content = cast("dict[str, object]", message).get("content")
+        parts = cast("list[object]", content) if isinstance(content, list) else [content]
+        for part in parts:
+            text = (
+                part
+                if isinstance(part, str)
+                else cast("dict[str, object]", part).get("text")
+                if isinstance(part, dict)
+                else None
+            )
+            if isinstance(text, str) and any(w in normal(text) for w in wanted):
+                return True
+    return False
 
 
 def stop_probe(
