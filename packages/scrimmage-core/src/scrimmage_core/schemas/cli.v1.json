@@ -292,7 +292,9 @@
                 "model",
                 "method",
                 "path",
-                "raises"
+                "raises",
+                "text",
+                "find"
               ],
               "properties": {
                 "call": {
@@ -357,6 +359,18 @@
                     "null"
                   ],
                   "description": "The fault's own pass_rate, or null when it uses the test's."
+                },
+                "text": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "find": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               }
             }

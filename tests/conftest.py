@@ -6,6 +6,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -68,6 +69,19 @@ def noted_process_start(self: multiprocessing.process.BaseProcess) -> None:
 
 
 multiprocessing.process.BaseProcess.start = noted_process_start
+
+
+@pytest.fixture(autouse=True)
+def no_sender_thread_outlives_its_test() -> Iterator[None]:
+    """A record sender left running posts to a closed port for the rest of the session, and
+    a later, unrelated test then fails on its exception. So a test stops what it starts."""
+    before = {t for t in threading.enumerate() if t.name == "scrimmage-sender"}
+    yield
+    left = [t for t in threading.enumerate() if t.name == "scrimmage-sender" and t not in before]
+    for thread in left:
+        thread.join(5)  # one that is stopping gets its batch window to finish
+    if alive := [t for t in left if t.is_alive()]:
+        pytest.fail(f"this test leaves {len(alive)} scrimmage-sender thread(s) running")
 
 
 @pytest.fixture(autouse=True)

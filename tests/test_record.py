@@ -3225,3 +3225,39 @@ def answer(q):
     )
     done = team.record()
     assert [m["status"] for m in done.mocks() if m["call"] == "http:localhost"] == [200]
+
+
+@pytest.mark.design("record.carried_never_run")
+def test_a_carried_fault_is_never_run_by_record(team: Team) -> None:
+    """record runs baselines only, so an append, a replace or a slow in the team's file never
+    runs, and the mock it writes holds the real value, not a changed one."""
+    team.write(
+        """
+def get_order(order_id):
+    return {"order_id": order_id, "status": "shipped"}
+
+def answer(question):
+    get_order("1")
+    return "ok"
+""",
+        ["bot:get_order"],
+        ("tool:get_order",),
+        tests=(
+            ONE_TEST
+            + '[[test.fault]]\ncall = "tool:get_order"\ndo = "append"\ntext = "INJECTED"\n'
+            + 'forbid = ["x"]\n'
+            + '[[test.fault]]\ncall = "tool:get_order"\ndo = "replace"\nfind = "shipped"\n'
+            + 'text = "INJECTED"\n'
+            + '[[test.fault]]\ncall = "tool:get_order"\ndo = "slow 30s"\nforbid = ["x"]\n'
+        ),
+    )
+    done = team.record()
+    assert done.code == 0, done.out
+    lines = lines_of(done)
+    calls = [x for x in lines if "call" in x]
+    assert [(x["action"], "fault" in x, "under" in x, "changed" in x) for x in calls] == [
+        ("real", False, False, False)
+    ]
+    assert all(x.get("row", "baseline") == "baseline" for x in lines)
+    written = tomllib.loads(team.out_path.read_text())["test"][0]["mock"]
+    assert [m["returns"] for m in written] == [{"order_id": "1", "status": "shipped"}]

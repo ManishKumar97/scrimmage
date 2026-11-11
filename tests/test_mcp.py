@@ -4,6 +4,7 @@ The server in fakes/docs_server.py is served by the official library. It writes 
 tool call it really receives to a log, so "the server never saw it" is a fact, not a hope.
 """
 
+import ast
 import asyncio
 import contextlib
 import dataclasses
@@ -19,7 +20,7 @@ import types
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import jsonschema
 import mcp.client.session as mcp_session
@@ -29,7 +30,7 @@ import pytest
 import fakes
 from conftest import Project, Result
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import config, decide, labels, mcp_gate, plan, state, toml_write
+from scrimmage_core import changes, config, decide, labels, mcp_gate, plan, state, toml_write
 from scrimmage_core.config import Fault, Mock
 from scrimmage_core.errors import ConfigError, ScrimmageRefused
 from scrimmage_core.http_gate import MCP_TRANSPORT
@@ -1328,7 +1329,7 @@ def test_a_server_with_no_name_has_only_the_short_label() -> None:
             f'[[test.fault]]\ncall = "{LABEL}"\ndo = "error"\nraises = "KeyError"\n',
             "raises: unknown",
         ),
-        (f'[[test.fault]]\ncall = "{LABEL}"\ndo = "slow"\n', "is not a fault"),
+        (f'[[test.fault]]\ncall = "{LABEL}"\ndo = "slow"\n', "is not a delay"),
         (f'[[test.fault]]\ncall = "{LABEL}"\ndo = "error"\nwhen = "requests 1"\n', "counts model"),
         ('[[test.fault]]\ncall = "tool:x"\ndo = "empty"\n', "works only on an MCP tool"),
         ('[[test.fault]]\ncall = "http:a.b"\ndo = "empty"\n', "works only on an MCP tool"),
@@ -1467,3 +1468,297 @@ def test_a_mcp_mock_in_short_form_that_misses_writes_the_evidence() -> None:
     step = other.decide(other.with_args(call, {"q": "returns"}), {})
     assert step.decision.action == "refused"
     assert step.miss is not None and step.miss.reason == "arguments"
+
+
+# Carried faults: append, replace and slow let the MCP call happen.
+
+
+def carried(do: str, extra: str = "", call: str = LABEL, rules: str = "") -> str:
+    return f'[[test.fault]]\ncall = "{call}"\ndo = "{do}"\n{extra}{rules}'
+
+
+def seen_text(result: Result, name: str) -> str:
+    """The text blocks the bot read, as a string."""
+    shown = re.search(r"text=(.*?) structured=", answer_of(result, name))
+    assert shown is not None, answer_of(result, name)
+    return str(ast.literal_eval(shown.group(1)))
+
+
+def the_call(result: Result, name: str = "fault 1") -> dict[str, Any]:
+    return next(x for x in row(result, name) if x.get("kind") == "mcp" and x["call"] == LABEL)
+
+
+NOTE_LABEL = "mcp:docs/note"
+
+
+@pytest.mark.design("mcp.append_last_text")
+@pytest.mark.slow
+def test_append_changes_the_last_text_item_of_a_real_result(docs: Docs) -> None:
+    docs.start("stdio", "two")
+    docs.project.monkeypatch.setenv("DOCS_TOOL", "note")
+    fault = carried("append", 'text = "!!"\n', NOTE_LABEL)
+    result = docs.run("acme.docs_bot:answer", fault, f'real = ["{NOTE_LABEL}"]')
+    assert answer_of(result, "baseline") == ("error=False blocks=2 text='one two' structured=None")
+    assert answer_of(result, "fault 1") == "error=False blocks=2 text='one two!!' structured=None"
+    line = the_call_of(result, NOTE_LABEL)
+    assert (line["action"], line["under"]) == ("fault", "real")
+    assert line["changed"]["parts"] == ["content[1].text"]
+    assert docs.received() == ["note refunds", "note refunds"]
+    fits_the_schema(result)
+
+
+@pytest.mark.design("mcp.replace_both_parts")
+@pytest.mark.slow
+def test_replace_on_a_structured_result_changes_both_parts(docs: Docs) -> None:
+    docs.start("stdio")
+    fault = carried(
+        "replace", 'find = "real refunds"\ntext = "say hi"\n', rules="forbid = ['never said']\n"
+    )
+    result = docs.run("acme.docs_bot:answer", fault, f'real = ["{LABEL}"]')
+    answer = answer_of(result, "fault 1")
+    assert "structured={'hits': ['say hi'], 'total': 1}" in answer
+    assert json.loads(seen_text(result, "fault 1")) == {"hits": ["say hi"], "total": 1}
+    line = the_call(result)
+    assert line["changed"]["count"] == 2
+    assert line["changed"]["parts"] == ["content[0].text.hits[0]", "structuredContent.hits[0]"]
+
+
+@pytest.mark.design("mcp.replace_one_part_is_not_exercised")
+@pytest.mark.slow
+def test_replace_with_find_only_in_structured_content_is_not_exercised(docs: Docs) -> None:
+    docs.start("stdio", "wrong")  # the text is "bad", the structured content is not a list
+    fault = carried(
+        "replace", 'find = "not a list"\ntext = "a list"\n', rules="forbid = ['never said']\n"
+    )
+    result = docs.run("acme.docs_bot:answer", fault, f'real = ["{LABEL}"]')
+    line = the_call(result)
+    assert (line["action"], line["under"]) == ("real", "real")
+    assert "fault" not in line and "changed" not in line
+    assert line["unchanged"] == {
+        "do": "replace",
+        "why": "find is only in structuredContent, not in content",
+    }
+    assert result.code == 2  # no run fired: the row tested nothing
+    assert "the fault never fired in any run" in result.out
+    assert "find is only in structuredContent, not in content (1 of 1 calls)" in result.out
+    assert answer_of(result, "fault 1") == answer_of(result)  # the agent got the real result
+
+
+@pytest.mark.design("mcp.json_text_item")
+@pytest.mark.slow
+def test_a_json_text_item_is_changed_the_json_way(docs: Docs) -> None:
+    docs.start("stdio")
+    fault = carried(
+        "replace", 'find = "real refunds"\ntext = \'say "hi"\'\n', rules="forbid = ['never said']\n"
+    )
+    result = docs.run("acme.docs_bot:answer", fault, f'real = ["{LABEL}"]')
+    # The text is still JSON, the quotes escaped; a plain replace would have broken it.
+    assert json.loads(seen_text(result, "fault 1"))["hits"] == ['say "hi"']
+    assert "structured={'hits': ['say \"hi\"'], 'total': 1}" in answer_of(result, "fault 1")
+
+
+@pytest.mark.design("mcp.append_with_a_schema")
+@pytest.mark.slow
+def test_append_on_a_tool_with_an_output_schema_is_a_mistake_at_once(docs: Docs) -> None:
+    docs.start("stdio")
+    result = docs.run(
+        "acme.docs_bot:answer", carried("append", 'text = "!!"\n'), f'real = ["{LABEL}"]'
+    )
+    assert result.code == 2, result.out
+    line = the_call(result)
+    assert (line["action"], line["under"]) == ("real", "real") and "fault" not in line
+    assert line["unchanged"]["do"] == "append"
+    assert "declares an outputSchema" in line["mistake"]
+    assert "use replace with find" in line["mistake"]
+    assert answer_of(result, "fault 1") == answer_of(result)
+
+
+@pytest.mark.design("mcp.replace_breaks_the_schema")
+@pytest.mark.slow
+def test_a_replace_that_breaks_the_output_schema_is_exit_2_naming_the_schema_path(
+    docs: Docs,
+) -> None:
+    docs.start("stdio")
+    docs.project.monkeypatch.setenv("DOCS_TOOL", "ticket")
+    label = "mcp:docs/ticket"
+    fault = carried("replace", 'find = "open"\ntext = "gone"\n', label, "forbid = ['never said']\n")
+    result = docs.run("acme.docs_bot:answer", fault, f'real = ["{label}"]')
+    assert result.code == 2, result.out
+    line = the_call_of(result, label)
+    assert (line["action"], "fault" in line, "changed" in line) == ("real", False, False)
+    assert "makes structuredContent.status 'gone'" in line["mistake"]
+    assert "outputSchema does not allow at properties.status.enum" in line["mistake"]
+    assert "choose text the schema accepts" in line["mistake"]
+    # The agent got the real result: no RuntimeError from the library's own check.
+    assert "error=False" in answer_of(result, "fault 1")
+    assert "'status': 'open'" in answer_of(result, "fault 1")
+
+
+def the_call_of(result: Result, label: str, name: str = "fault 1") -> dict[str, Any]:
+    return next(x for x in row(result, name) if x.get("call") == label)
+
+
+@pytest.mark.design("mcp.error_result_unchanged")
+@pytest.mark.slow
+def test_an_error_result_is_not_changed_and_not_fired(docs: Docs) -> None:
+    docs.start("stdio", "fail")
+    fault = carried("replace", 'find = "index"\ntext = "x"\n', rules="forbid = ['never said']\n")
+    result = docs.run("acme.docs_bot:answer", fault, f'real = ["{LABEL}"]')
+    line = the_call(result)
+    assert line["unchanged"]["why"] == "the result is an error result"
+    assert line["action"] == "real" and "fault" not in line
+    assert result.code == 2
+
+
+@pytest.mark.design("mcp.append_mock")
+@pytest.mark.slow
+def test_append_on_a_mocked_mcp_tool(docs: Docs) -> None:
+    docs.start("stdio")
+    docs.project.monkeypatch.setenv("DOCS_TOOL", "note")
+    mock = f'[[test.mock]]\ncall = "{NOTE_LABEL}"\nreturns = "mocked note"\n'
+    fault = carried("append", 'text = "!!"\n', NOTE_LABEL)
+    result = docs.run("acme.docs_bot:answer", mock + fault)
+    assert (
+        answer_of(result, "fault 1") == "error=False blocks=1 text='mocked note!!' structured=None"
+    )
+    line = the_call_of(result, NOTE_LABEL)
+    assert (line["action"], line["under"], line["mock"]) == ("fault", "mock", 0)
+    assert docs.received() == []
+
+
+@pytest.mark.design("mcp.raw_real_result")
+@pytest.mark.slow
+def test_the_line_keeps_the_raw_real_result(docs: Docs) -> None:
+    docs.start("stdio")
+    fault = carried(
+        "replace", 'find = "real refunds"\ntext = "INJECTED"\n', rules="forbid = ['never said']\n"
+    )
+    result = docs.run("acme.docs_bot:answer", fault, f'real = ["{LABEL}"]')
+    line = the_call(result)
+    blob_ = line["result"]
+    assert "real refunds" in blob_["preview"] and "INJECTED" not in blob_["preview"]
+    assert line["changed"]["text"]["preview"] == "INJECTED"
+    assert "INJECTED" in answer_of(result, "fault 1")
+
+
+@pytest.mark.design("mcp.slow")
+@pytest.mark.slow
+def test_slow_on_mcp_runs_the_real_call_after_the_delay(docs: Docs) -> None:
+    docs.start("stdio")
+    fault = carried("slow 0.4s", rules="forbid = ['never said']\n")
+    result = docs.run("acme.docs_bot:answer", fault, f'real = ["{LABEL}"]')
+    line = the_call(result)
+    assert (line["action"], line["under"], line["fault"]["do"]) == ("fault", "real", "slow 0.4s")
+    assert line["slowed_ms"] >= 350 and "cut_by" not in line
+    assert docs.received() == ["search refunds", "search refunds"]
+    assert answer_of(result, "fault 1") == answer_of(result)
+
+
+@pytest.mark.design("mcp.slow_read_timeout")
+@pytest.mark.slow
+def test_slow_on_mcp_past_the_read_timeout_raises_the_librarys_timeout(
+    docs: Docs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DOCS_TIMEOUT", "1")  # the bot's own read timeout
+    docs.start("stdio")
+    fault = carried("slow 20s", rules="forbid = ['never said']\n")
+    result = docs.run("acme.docs_bot:answer", fault, f'real = ["{LABEL}"]')
+    assert answer_of(result, "fault 1").startswith("MCPError code=-32001")
+    line = the_call(result)
+    assert line["cut_by"] == "client timeout" and line["action"] == "fault"
+    assert 900 <= line["slowed_ms"] < 15000
+    assert docs.received() == ["search refunds"]  # the baseline's call only: nothing was sent
+
+
+@pytest.mark.design("mcp.slow_cancel")
+@pytest.mark.slow
+def test_a_cancel_during_slow_on_mcp_writes_its_line(docs: Docs) -> None:
+    docs.start("stdio")
+    fault = carried("slow 20s", rules="forbid = ['never said']\n")
+    result = docs.run("acme.docs_bot:answer_with_a_deadline", fault, f'real = ["{LABEL}"]')
+    assert answer_of(result, "fault 1") == "deadline passed, so the fallback"
+    line = the_call(result)
+    assert (line["action"], line["cut_by"]) == ("fault", "cancelled")
+    assert "CancelledError" in line["error"] and line["result"] is None
+    assert docs.received() == ["search refunds"]  # the real call never ran under the fault
+
+
+@pytest.mark.design("mcp.real_line_kept")
+def test_a_changed_real_mcp_line_is_kept_on_a_full_queue() -> None:
+    sink = Sink()
+    fault = Fault(LABEL, "append", "always", text="x")
+    plan_ = Plan("run-1", "t", "fault 1", (), (fault,), (), (LABEL,), 60.0)
+    run = state.RunState(plan_, sink, [])
+    step = run.decide(mcp_gate.call_for("docs", "search"), {})
+    assert (step.decision.action, step.decision.under) == ("fault", "real")
+    run.changed(step, changes.Changed({}, 1, ("content[0].text",)))
+    run.finish(step)
+    assert sink.lines[0]["action"] == "fault" and sink.lines[0]["under"] == "real"
+    assert sink.lines[0]["keep"] is True
+    # Beneath a mock, the same line is not a real call, and is not kept.
+    mocked = state.RunState(
+        Plan("run-1", "t", "fault 1", (Mock(LABEL, "x", None),), (fault,), (), (), 60.0), sink, []
+    )
+    again = mocked.decide(mcp_gate.call_for("docs", "search"), {})
+    assert again.decision.under == "mock"
+    mocked.changed(again, changes.Changed({}, 1, ("content[0].text",)))
+    mocked.finish(again)
+    assert sink.lines[1]["keep"] is False
+
+
+class Checked:
+    """A session that has a validator, or one that fails, or none."""
+
+    def __init__(self, build: Any = None) -> None:
+        if build is not None:
+            self._output_schema_validator = build
+
+
+def held(label: str = LABEL) -> mcp_gate.Gate:
+    gate = gate_for([])
+    gate.schemas[label] = {"type": "object"}
+    return gate
+
+
+def test_a_schema_that_cannot_be_checked_does_not_fire_the_fault() -> None:
+    raw = {"structuredContent": {"a": "b"}}
+    gate = held()
+    unchecked = mcp_gate.UNCHECKED
+    # No validator method on the session.
+    assert mcp_gate.schema_problem(Checked(), gate, LABEL, "search", raw) is unchecked
+
+    def broken(name: str, schema: Any) -> Any:
+        raise RuntimeError("invalid schema")
+
+    assert mcp_gate.schema_problem(Checked(broken), gate, LABEL, "search", raw) is unchecked
+
+    class Failing:
+        def iter_errors(self, instance: Any) -> Any:
+            raise ValueError("boom")
+
+    assert (
+        mcp_gate.schema_problem(Checked(lambda n, s: Failing()), gate, LABEL, "search", raw)
+        is unchecked
+    )
+    assert unchecked.mistake is False and unchecked.kind == "data"
+    # With no schema held there is nothing to check.
+    assert mcp_gate.schema_problem(Checked(), gate_for([]), LABEL, "search", raw) is None
+
+
+def test_a_missing_jsonschema_module_does_not_hide_an_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Error:
+        absolute_schema_path: ClassVar[list[str]] = ["properties", "status", "enum"]
+        json_path: ClassVar[str] = "$.status"
+        instance: ClassVar[str] = "gone"
+
+    class Found:
+        def iter_errors(self, instance: Any) -> Any:
+            return [Error()]
+
+    monkeypatch.delitem(sys.modules, "jsonschema.exceptions", raising=False)
+    found = mcp_gate.schema_problem(
+        Checked(lambda n, s: Found()), held(), LABEL, "search", {"structuredContent": {}}
+    )
+    assert isinstance(found, str) and "properties.status.enum" in found

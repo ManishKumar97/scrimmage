@@ -29,7 +29,16 @@ from typing import TextIO, cast
 from scrimmage_core import judge, labels
 from scrimmage_core import plan as planner
 from scrimmage_core.budget import Ledger
-from scrimmage_core.config import QUESTION, Agent, Config, Fault, Mock, Test
+from scrimmage_core.config import (
+    QUESTION,
+    Agent,
+    Config,
+    Fault,
+    Mock,
+    Test,
+    real_writes,
+    write_warnings,
+)
 from scrimmage_core.control import ControlServer, proc_key
 from scrimmage_core.outcomes import (  # the runner's names for them
     INFRA,
@@ -135,6 +144,12 @@ class RunResult:
     budget: dict[str, object] | None = None  # the numbers of its first refusal, if for the budget
     budget_reason: str = ""  # the reason of its first refusal for the budget
     judgement: judge.RunJudgement = NOT_JUDGED
+    # Why each call a carried fault could not change was left as it was, one entry per call.
+    unchanged: list[str] = field(default_factory=list[str])
+    # Calls that ran for real in an append or replace row and could be writes, by name.
+    writes: dict[str, int] = field(default_factory=dict[str, int])
+    # A fault changed a result and no model request after it carried the text: a heuristic.
+    undelivered: bool = False
 
     @property
     def miss_count(self) -> int:
@@ -334,6 +349,8 @@ class Runner:
             a: sum(1 for line in lines if line.get("action") == a)
             for a in ("real", "mock", "fault", "refused")
         }
+        # How many calls had their real code or request run beneath a carried fault.
+        calls["under_real"] = sum(1 for line in lines if line.get("under") == "real")
         fired = fault_fired(row.fault is not None, calls["fault"])
         mistakes = [str(line["mistake"]) for line in lines if "mistake" in line]
         misses = [
@@ -358,7 +375,15 @@ class Runner:
             notices=notices,
             real_errors=real_errors,
             hosted_reads=sum(1 for line in model if "hosted_reads" in line),
-            mocked={int(str(line["mock"])) for line in lines if line.get("action") == "mock"},
+            mocked=used_mocks(lines),
+            unchanged=[
+                str(cast(dict[str, object], line["unchanged"])["why"])
+                for line in lines
+                if "unchanged" in line
+            ],
+            writes=self.real_writes_in(row, lines),
+            undelivered=any("changed" in line for line in lines)
+            and not any(line.get("carries_injected") for line in model),
             tools_seen=reported_tools(notices),
             misses=misses,
             tool_calls=sum(1 for line in lines if line.get("kind") in ("tool", "mcp")),
@@ -392,6 +417,24 @@ class Runner:
         self.store.close_run(run, row.test.name, row.name, summary)
         self.check_labels(result)
         return result
+
+    def real_writes_in(self, row: planner.Row, lines: list[dict[str, object]]) -> dict[str, int]:
+        """The calls of an append or replace row that ran for real and could be writes: the
+        ones the load warning names, counted by name."""
+        if row.fault is None or row.fault.do not in ("append", "replace"):
+            return {}
+        listed = real_writes(row.test, self.config.agent)
+        found: Counter[str] = Counter()
+        for line in lines:
+            if line.get("action") != "real" and line.get("under") != "real":
+                continue
+            label, method, path = str(line.get("call")), line.get("method"), line.get("path")
+            if any(
+                w.names(label, str(method) if method else None, str(path) if path else None)
+                for w in listed
+            ):
+                found[written_name(label, method, path)] += 1
+        return dict(found)
 
     def answer_of(self, run: str, code: int) -> str | None:
         """The answer file, or for a script that ended well its last printed line."""
@@ -854,6 +897,30 @@ def row_reports(config: Config, results: list[RunResult]) -> list[RowReport]:
     return reports
 
 
+def used_mocks(lines: list[dict[str, object]]) -> set[int]:
+    """The mocks a run used, by place. A mock under a carried fault was used too: its line is a
+    fault's, and has the mock key all the same."""
+    return {int(str(line["mock"])) for line in lines if "mock" in line}
+
+
+def written_name(label: str, method: object, path: object) -> str:
+    """A call as a note names it: a tool by its name, a web request by method and path."""
+    if label.startswith("http:"):
+        return f"{method} {label.removeprefix('http:')}{path}"
+    return label.removeprefix("tool:")
+
+
+def times(n: int) -> str:
+    return {1: "once", 2: "twice"}.get(n, f"{n} times")
+
+
+def why_unchanged(runs: list[RunResult]) -> str:
+    """The reasons calls were left as they were, counted. Empty when none were."""
+    reasons = Counter(why for r in runs for why in r.unchanged)
+    total = sum(reasons.values())
+    return "; ".join(f"{why} ({n} of {total} calls)" for why, n in reasons.most_common())
+
+
 def no_result_reason(report: RowReport, runs: int) -> str:
     """Why a row has no result. Only runs left out as unfired call for firing the fault."""
     unfired = any(r.judgement.left_out == judge.NOT_FIRED for r in report.runs)
@@ -992,7 +1059,11 @@ def build_report(
             notes.append(f"{where}: {verdict.judged} of {config.agent.runs} runs judged")
         ran = [r for r in mine if r.outcome != "stopped"]
         if row.fault is not None and ran and not any(r.fault_fired for r in ran):
-            mistakes.append(f"{where}: the fault never fired in any run, so the row tested nothing")
+            reasons = why_unchanged(ran)
+            mistakes.append(
+                f"{where}: the fault never fired in any run, so the row tested nothing"
+                + (f". The calls it could not change: {reasons}" if reasons else "")
+            )
             mixed = [m.call for m in row.test.mocks if labels.kind_of(m.call) == "tool"]
             if labels.kind_of(row.fault.call) in ("http", "mcp") and mixed:
                 mistakes.append(
@@ -1002,6 +1073,22 @@ def build_report(
                 )
             if row.fault.model is not None and (why := unused_model(row.fault, ran)):
                 mistakes.append(f"{where}: {why}")
+        lost = sum(r.undelivered for r in mine)
+        if lost:
+            notes.append(
+                f"{where}: in {lost} of {len(mine)} runs the injected text never reached a model "
+                "request; the agent may cut or rewrite tool results (heuristic)"
+            )
+        written: Counter[str] = Counter()
+        for r in mine:
+            written.update(r.writes)
+        if written:
+            names = ", ".join(f"{name} {times(n)}" for name, n in sorted(written.items()))
+            count = sum(written.values())
+            notes.append(
+                f"{where}: {count} real write{'s' if count != 1 else ''} ran ({names}); "
+                "see the record"
+            )
         notes += [
             f"{where}: {r.run}: {line['message']}"
             for r in mine
@@ -1145,6 +1232,8 @@ def build_report(
         code = ROW_FAILED
     # The team's own statement that writes may run, so it is said first, not under the table.
     above = [(WARNINGS, TOOL_STAR_LINE)] if "tool:*" in config.agent.real else []
+    # An injected text may ask for a write, and a write that real allows would then run.
+    above += [(WARNINGS, text) for text in write_warnings(config)]
     return Report(
         config,
         results,
@@ -1282,6 +1371,8 @@ def fault_json(fault: Fault | None) -> dict[str, object] | None:
         "method": fault.method,
         "path": fault.path,
         "raises": fault.raises,
+        "text": fault.text,
+        "find": None if fault.find is None else redact(fault.find),
         "expect": None if fault.expect is None else [list(item) for item in fault.expect],
         "forbid": None if fault.forbid is None else list(fault.forbid),
         "pass_rate": fault.pass_rate,

@@ -207,3 +207,34 @@ def test_redacted_gives_a_plain_str_even_when_no_pass_runs() -> None:
     for text in (Marked("nothing here"), Marked("sk-" + "a" * 20)):
         assert type(redacted(text)[0]) is str
         assert type(redact(text)) is str
+
+
+def test_spans_cover_exactly_what_redact_removes() -> None:
+    for text in [*corpus(), *SAMPLES.values()]:
+        places = redact_module.replacements(text)
+        built: list[str] = []
+        at = 0
+        for place in places:
+            assert at <= place.start <= place.end <= len(text), text
+            built += [text[at : place.start], place.text]
+            at = place.end
+        built.append(text[at:])
+        assert "".join(built) == redact(text), text
+        assert redact_module.spans(text) == [(p.start, p.end, p.rule) for p in places]
+
+
+def test_a_span_names_its_rule() -> None:
+    key = "ghp_" + "a" * 36
+    text = f"token {key} and https://u:p@host/x?q=1 and Bearer {'b' * 20}"
+    found = redact_module.spans(text)
+    assert [rule for _, _, rule in found] == ["github-token", "url", "bearer-token"]
+    start, end, _ = found[0]
+    assert text[start:end] == key
+    assert redact_module.spans("nothing here") == []
+
+
+def test_a_secret_inside_a_url_query_is_one_span_of_the_url_rule() -> None:
+    text = "see https://h/x?key=sk-" + "a" * 20 + " ok"
+    assert [(r.rule, text[r.start : r.end]) for r in redact_module.replacements(text)] == [
+        ("url", "://h/x?key=sk-aaaaaaaaaaaaaaaaaaaa")
+    ]

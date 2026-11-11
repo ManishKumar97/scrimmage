@@ -299,3 +299,24 @@ def test_a_written_mock_equal_to_a_kept_one_is_a_bug_and_nothing_is_written(
     with pytest.raises(toml_write.WriterBug, match="answer the same call"):
         splice(tmp_path, kept, [written_mock("tool:get_order", {"id": 1})])
     assert splice(tmp_path, kept, [written_mock("tool:get_order", {"id": 1.0})])  # told apart
+
+
+@pytest.mark.design("record.carried_never_recordable")
+def test_a_changed_line_is_never_recordable(tmp_path: Path) -> None:
+    config = loaded(tmp_path)
+    test = config.tests[0]
+    recorder = record.Recorder(test, [result_for(test)], tmp_path)
+    real = record.Node(line(call="tool:get_order", kind="tool", action="real"))
+    changed = record.Node(
+        line(call="tool:get_order", kind="tool", action="fault", under="real", changed={})
+    )
+    slowed = record.Node(line(call="tool:get_order", kind="tool", action="fault", under="real"))
+    assert recorder.recordable(real)
+    assert not recorder.recordable(changed)
+    assert not recorder.recordable(slowed)
+    # A web or MCP call beneath a carried fault is no more recordable than a tool.
+    web = record.Node(line(call="http:a.acme", kind="http", action="fault", under="real"))
+    mcp = record.Node(
+        line(call="mcp:a/b", kind="mcp", action="fault", under="real", recorded={"value": 1})
+    )
+    assert not recorder.recordable(web) and not recorder.recordable(mcp)
