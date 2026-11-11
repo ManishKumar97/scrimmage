@@ -19,7 +19,7 @@ import tempfile
 import threading
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -213,6 +213,7 @@ class Runner:
         for name in ("SCRIMMAGE_ROOT_PID", "SCRIMMAGE_PYTHON", "SCRIMMAGE_CHILDREN"):
             env.pop(name, None)  # the program sets the first two for itself
         env.update(
+            SCRIMMAGE_RUNNER_PID=str(os.getpid()),  # run_command asks to be stopped with it
             SCRIMMAGE_TOKEN=self.token,
             SCRIMMAGE_CONTROL_URL=self.control_url(self.server.url),
             SCRIMMAGE_RUN=run,
@@ -555,8 +556,7 @@ class Runner:
         with self.lock:
             self.cancelled = True
             running = list(self.procs.values())
-        for proc in running:
-            stop_group(proc)
+        stop_groups(running)
 
     def _interrupted(self, signum: int, frame: object) -> None:
         """The runner itself was told to stop, such as a cancelled CI job. Only notes it."""
@@ -800,23 +800,34 @@ def wait_run(proc: subprocess.Popen[bytes], seconds: float) -> bool:
 
 
 def stop_group(proc: subprocess.Popen[bytes]) -> None:
-    """SIGTERM to the run's process group, then SIGKILL to what is left after five seconds.
+    """One run's group stopped; see stop_groups."""
+    stop_groups([proc])
 
-    It waits on the group, not on the program: a child can outlive the program, and can
+
+def stop_groups(procs: Sequence[subprocess.Popen[bytes]]) -> None:
+    """SIGTERM to every run's process group at once, then SIGKILL to what is left after
+    five seconds in all, not five seconds for each.
+
+    It waits on the groups, not on the programs: a child can outlive the program, and can
     ignore SIGTERM after the program has gone.
     """
-    if signal_group(proc, signal.SIGTERM):
-        deadline = time.monotonic() + KILL_GRACE_S
-        while time.monotonic() < deadline:
-            proc.poll()  # a program that has ended stays in the group until it is reaped
-            if not signal_group(proc, 0):
-                break
+    waiting = [proc for proc in procs if signal_group(proc, signal.SIGTERM)]
+    deadline = time.monotonic() + KILL_GRACE_S
+    while waiting and time.monotonic() < deadline:
+        waiting = [proc for proc in waiting if group_alive(proc)]
+        if waiting:
             time.sleep(GROUP_POLL_S)
-        else:
-            signal_group(proc, signal.SIGKILL)
-    if proc.poll() is None:  # it left the group by itself
-        proc.kill()
-    proc.wait()
+    for proc in waiting:
+        signal_group(proc, signal.SIGKILL)
+    for proc in procs:
+        if proc.poll() is None:  # it left the group by itself
+            proc.kill()
+        proc.wait()
+
+
+def group_alive(proc: subprocess.Popen[bytes]) -> bool:
+    proc.poll()  # a program that has ended stays in the group until it is reaped
+    return signal_group(proc, 0)
 
 
 def signal_group(proc: subprocess.Popen[bytes], sig: int) -> bool:
