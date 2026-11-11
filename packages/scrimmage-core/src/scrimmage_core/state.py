@@ -25,11 +25,11 @@ from scrimmage_core import capture
 from scrimmage_core import decide as engine
 from scrimmage_core.decide import missed
 from scrimmage_core.errors import ScrimmageRefused, ScrimmageStopped, ScrimmageTimeLimit
+from scrimmage_core.outcomes import PREVIEW
 from scrimmage_core.plan import Plan
 from scrimmage_core.records import RECORD_VERSION
 from scrimmage_core.redact import redact
 
-PREVIEW = 200
 BLOB_CAP = 10 * 1024 * 1024  # a side-folder item keeps its first 10 MB and is marked cut
 BLOB_WAIT_S = 10.0  # the longest a recording call waits for room for its saved value
 BLOB_POLL_S = 0.005

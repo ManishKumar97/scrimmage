@@ -28,8 +28,9 @@ from scrimmage_core import runner as running
 from scrimmage_core.control import proc_key
 from scrimmage_core.decide import READ_METHODS
 from scrimmage_core.errors import ConfigError
+from scrimmage_core.outcomes import PREVIEW
 from scrimmage_core.redact import REMOVED, URL_PART_REMOVED
-from scrimmage_core.state import BLOB_CAP, BLOB_WAIT_S, PREVIEW
+from scrimmage_core.state import BLOB_CAP, BLOB_WAIT_S
 
 MAX_RUNS = 1000  # the runner builds every row before it checks the budget
 CAP = 64 * 1024  # a mock's value, as TOML, is at most this long: a reviewer must read it

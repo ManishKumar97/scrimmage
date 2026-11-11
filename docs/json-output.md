@@ -1,6 +1,6 @@
 # JSON output
 
-`scrimmage test --json`, `scrimmage check --json` and `scrimmage record --json` print one JSON document on standard output and nothing else.
+`scrimmage test --json`, `scrimmage check --json`, `scrimmage record --json` and `scrimmage show --json` print one JSON document on standard output and nothing else.
 They are for a coding agent or a CI step that reads the result, not the table.
 Read the document with one `json.loads` of standard output, then act on its fields and their stable values, never on message text.
 
@@ -33,7 +33,7 @@ Every command's document starts with the same fields:
 |---|---|
 | `v` | The version of this format, 1. |
 | `scrimmage` | The installed Scrimmage version, so a document can be traced to the release that made it. `unknown` when Scrimmage runs with no package metadata, such as from a source tree. |
-| `command` | `test`, `check`, `record` or `init`. |
+| `command` | `test`, `check`, `record`, `init` or `show`. |
 | `exit` | The process's exit code. Always equal to it. |
 | `status` | A word for the exit code, per command; see below. |
 | `config` | The file read, as given on the command line. |
@@ -52,6 +52,7 @@ The text of a message can change in any release.
 | `check` | `valid` | | `mistake` | `infra` |
 | `record` | `complete` | `incomplete` | `mistake` | `infra` |
 | `init` | `written` | | `mistake` | `infra` |
+| `show` | `shown` | | `mistake` | `infra` |
 
 ## scrimmage test --json
 
@@ -99,6 +100,8 @@ The text of a message can change in any release.
 | `stopped_by` | The reason a refusal stopped the whole test, such as `budget`, or `null`. |
 | `mock_misses` | The calls that had a mock on their label and matched none, one object per distinct call, below. Absent in `scrimmage record --json`. At most 200, real calls first. |
 | `mock_misses_left_out` | How many more misses than the 200 listed. |
+| `result_file` | The `result.json` this test wrote into `records`: the same document, but for this field, which the file leaves out, and `compare`, which is always `null` in the file. `null` when it was not written: a write failed, or the test did not finish. See [Reading a finished test](show.md). |
+| `compare` | `null`, or with `--compare` the comparison with the earlier test, below. |
 
 Each object in `mock_misses`:
 
@@ -126,7 +129,7 @@ Each row's keys are the table's column names, with `cost_usd` for `cost`:
 |---|---|
 | `test` | The test's name. |
 | `row` | `baseline`, or `fault N`. |
-| `fault` | The row's fault: `call`, `do`, `when`, and `model`, `method`, `path` and `raises`, each `null` unless the fault sets it. `null` on a baseline. |
+| `fault` | The row's fault: `call`, `do`, `when`, and `model`, `method`, `path`, `raises`, `expect`, `forbid` and `pass_rate`, each `null` unless the fault sets it. `expect`, `forbid` and `pass_rate` are the fault's own rules, which judge the row in place of the test's. `null` on a baseline. |
 | `runs` | Runs that ran. |
 | `fired` | Runs in which the fault fired. `null` on a baseline. |
 | `done` | Runs that ended with an answer. |
@@ -141,6 +144,8 @@ Each row's keys are the table's column names, with `cost_usd` for `cost`:
 | `broken` | Each rule a run broke: its `kind`, its `text` and every `runs` name that broke it, the most broken first. |
 | `mock_miss_count` | The calls in this row's runs that had a mock on their label and matched none. |
 | `run_details` | One object per run, below. |
+| `test_sha256` | A hash of what the row was tested by: the question, the rules that judge the row, the mocks, `run_timeout`, `real` and `tools`. Not the agent's code. A comparison uses it to tell a changed test from a changed agent. |
+| `test_sha256_v` | The format of `test_sha256`, 1. A comparison across two formats cannot tell whether the test changed. |
 
 Each run in `run_details`:
 
@@ -262,6 +267,107 @@ The diff is in the text output only: compare `config` with `out` to see it.
 | `unresolved` | Each name that could not be mapped to one path: `name`, `candidates`, every path it could be, and `problem`. |
 | `model_hosts` | Each host to name under `model_hosts`: `host`, `provider` and `found_by`. The built-in OpenAI host is left out. |
 
+## scrimmage show --json
+
+```json
+{
+  "v": 1, "scrimmage": "0.4.0", "command": "show", "exit": 0, "status": "shown",
+  "config": "scrimmage-runs/20261111T101500Z-a1b2c3",
+  "records": "scrimmage-runs/20261111T101500Z-a1b2c3",
+  "result": {"v": 1, "command": "test", "rows": ["..."]},
+  "runs": [
+    {
+      "run": "run-3f9a1c40b2e1", "test": "order-status", "row": "fault 1",
+      "outcome": "answered", "judged": "fail", "left_out": null,
+      "broken": [{"kind": "forbid", "text": "forbid \"Oct 30\" found"}],
+      "answer_preview": "Your order shipped on Oct 30.",
+      "lines": [
+        {"ms": 412, "call": "tool:get_order", "kind": "tool", "action": "fault", "came_back": "TimeoutError: injected (injected)", "depth": 0, "mock_miss": false}
+      ],
+      "lines_left_out": 0, "log_tail": null, "suggestions": []
+    }
+  ],
+  "compare": null,
+  "mistakes": [], "notes": [], "warnings": [], "infra": []
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `config` | `TARGET` as given, or the folder chosen when there was none. |
+| `records` | The folder read. `null` when none was found. |
+| `result` | The folder's `result.json`, which is a `scrimmage test --json` document. `null` when the folder has none. |
+| `runs` | The runs shown: the first failing run of each failing row, or the one run `--run` named. Empty when there is nothing to show. |
+| `compare` | `null`, or with `--compare` the comparison, below. |
+
+Each run in `runs`:
+
+| Field | Meaning |
+|---|---|
+| `run`, `test`, `row` | The run, and the test and row its record names. |
+| `outcome`, `judged`, `left_out` | As in `run_details`. All `null` when the run's record has no summary line, which a note says. |
+| `broken` | The rules the run broke, each with its `kind` and `text`. |
+| `answer_preview` | The answer with secrets removed, cut at 200 characters. `null` with no answer. |
+| `lines` | The run's calls in the order they started, at most 200. |
+| `lines_left_out` | How many more calls the record holds. |
+| `log_tail` | For a run that crashed or timed out, the `path` of its log and the last `line` of it, redacted and cut at 200 characters. Otherwise `null`. |
+| `suggestions` | Always empty in this release. |
+
+Each item in `lines`:
+
+| Field | Meaning |
+|---|---|
+| `ms` | Milliseconds from the run's first call. |
+| `call` | The call's label. |
+| `kind` | The kind of call, such as `model`, `tool` or `http`. |
+| `action` | What the gate did: `real`, `mock`, `fault` or `refused`. |
+| `came_back` | The call's error, or the start of its result, with secrets removed, cut at 80 characters. |
+| `depth` | 0, or 1 and more for a call made inside another, such as a web request inside a tool. |
+| `mock_miss` | `true` when the call had a mock on its label and matched none. |
+
+Exit 0 is `shown`, whatever the test's own result was.
+Exit 2 is `mistake`: no folder, no such run, a bad run id, a folder with no run records, a record or result of a version Scrimmage does not read, or a file it refuses to open because it is a link, another user's, not a plain file or too large.
+Exit 3 is `infra`.
+`show`'s output can hold customer data from the records; see [Reading a finished test](show.md#redaction-and-what-can-still-be-in-the-output).
+
+### compare
+
+`scrimmage test --compare EARLIER --json` and `scrimmage show --compare EARLIER --json` fill `compare`:
+
+```json
+{
+  "earlier": "scrimmage-runs/20261110T090000Z-9f8e7d",
+  "earlier_scrimmage": "0.4.0",
+  "rows_compared": 1,
+  "rows": [
+    {
+      "test": "order-status", "fault": {"call": "tool:get_order", "do": "timeout", "when": "always"}, "n": 1,
+      "row_before": "fault 1", "row_after": "fault 1",
+      "before": {"passed": 0, "judged": 3, "rate": 0.0, "range": [0.0, 0.5615], "result": "fail"},
+      "after": {"passed": 3, "judged": 3, "rate": 1.0, "range": [0.4385, 1.0], "result": "pass"},
+      "difference": {"value": 1.0, "range": [0.2052, 1.0]},
+      "change": "better", "result_change": "fail -> pass", "test_changed": false
+    }
+  ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `earlier`, `earlier_scrimmage` | The `EARLIER` given, and the Scrimmage version that made it. |
+| `rows_compared` | How many rows are listed, new and gone ones included. |
+| `rows` | One object per row, the rows whose result went from `pass` to `fail` first. |
+| `test`, `fault`, `n` | The row's key: its test, its fault with every `null` field left out, and its place among the test's rows with an identical fault. `fault` is `null` on a baseline. Names such as `fault 2` are not the key, because they are only a place. |
+| `row_before`, `row_after` | The row's name on each side. `null` on the side that does not have it. |
+| `before`, `after` | That side's `passed`, `judged`, `rate`, `range` and `result`. `null` when the row is on the other side only. |
+| `difference` | After minus before as `value`, with a 95% interval as `range`, Newcombe's method 10 from the two Wilson ranges. `null` when the rows cannot be compared by rate. |
+| `change` | `better`, `worse`, `unclear`, `no result`, `new` or `gone`; see [Reading a finished test](show.md#telling-two-rates-apart). Act on this field, not on the text. |
+| `result_change` | The judge's result on each side, such as `pass -> fail`. `null` for a new or gone row. |
+| `test_changed` | `true` when the row's `test_sha256` differs. `null` when the hashes cannot be compared. |
+
+A comparison changes no `status` or `exit`.
+`compare` is `null` without `--compare`, and when the later test did not finish; a note says why.
+
 ## Values that can grow
 
 Within version 1, fields are only added: none is renamed, removed or given another type.
@@ -272,8 +378,8 @@ A value that is removed or renamed comes only with a new version.
 
 | Field | Values today | A value it does not know |
 |---|---|---|
-| `command` | `test`, `check`, `record`, `init` | read as other |
-| `status` | `passed`, `failed`, `valid`, `complete`, `incomplete`, `written`, `mistake`, `infra` | read as other |
+| `command` | `test`, `check`, `record`, `init`, `show` | read as other |
+| `status` | `passed`, `failed`, `valid`, `complete`, `incomplete`, `written`, `shown`, `mistake`, `infra` | read as other |
 | `result` | `pass`, `fail`, `no result` | read as other |
 | `outcome` | `answered`, `crashed`, `timed out`, `refused call`, `budget reached`, `not reserved`, `infrastructure error`, `stopped` | read as other |
 | `judged` | `pass`, `fail`, `left out` | read as other |
@@ -283,7 +389,8 @@ A value that is removed or renamed comes only with a new version.
 | `found_by` | `probe`, `static` | read as other |
 | `problem` | `ambiguous`, `nested`, `not_found` | read as other |
 | `reason` | `arguments`, `request`, `no_mock`, `unreadable` | read as other |
-| `action` | `real`, `refused` | read as other |
+| `action` | `real`, `refused` in a mock miss; `real`, `mock`, `fault`, `refused` in a line of a run | read as other |
+| `change` | `better`, `worse`, `unclear`, `no result`, `new`, `gone` | read as other |
 | `stopped_by` | `budget`, `budget_held`, `no_price`, `unknown_tool_type`, `unseen_tool`, `structure`, `ambiguous_label`, `unknown_label` | read as other |
 
 `cli.v1.json` lists the values of the release that ships it, and also takes any other text there, so a reader may check a document against any version 1 copy of the schema.

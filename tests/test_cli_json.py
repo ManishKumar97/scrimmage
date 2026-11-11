@@ -24,9 +24,22 @@ import scrimmage_core
 from conftest import ACME, Project
 from fakes.openai_server import FakeOpenAI
 from report_cases import CASES, FOLDER, GOLDEN
-from scrimmage_core import capture, cli, config, entry, judge, outcomes, record, runner
+from scrimmage_core import (
+    capture,
+    cli,
+    compare,
+    config,
+    entry,
+    judge,
+    outcomes,
+    record,
+    runner,
+    show,
+)
 from scrimmage_core import init as init_module
+from scrimmage_core import render as rendering
 from scrimmage_core.runner import Runner, build_report, print_report, report_json
+from show_cases import faulted_run, real_id, write_folder
 
 Fake = Callable[..., FakeOpenAI]
 pytestmark = pytest.mark.usefixtures("signals_kept")
@@ -423,11 +436,13 @@ def test_each_enum_lists_every_value_the_code_gives() -> None:
         status = cast(dict[str, object], defs[command]["properties"])["status"]
         assert enums(status) == {"": list(words.values())}, command
     assert found["command"] == [*cli.STATUS, *cli.STATUS]  # each command's own, then the envelope's
-    assert found["result"] == list(judge.VERDICTS)
+    assert found["result"] == list(judge.VERDICTS) * 3  # a row's, and a compared side's two
     assert found["judged"] == list(judge.RUN_VERDICTS)
-    assert found["outcome"] == list(runner.OUTCOMES)
+    assert found["outcome"] == list(outcomes.OUTCOMES)
     assert found["kind"] == list(judge.KINDS)
     assert found["stopped_by"] == list(runner.STOPPED_BY)
+    assert found["change"] == list(compare.CHANGES)
+    assert found["action"] == ["real", "refused", *show.ACTIONS]  # a miss's, then a line's
     assert set(found["code"]) == set(record.MANUAL_CODES) | set(record.SKIPPED_CODES)
     assert set(found["rule"]) == {capture.PATTERN, capture.KEY_NAME}
     source_record = Path(record.__file__).read_text()
@@ -436,8 +451,8 @@ def test_each_enum_lists_every_value_the_code_gives() -> None:
     assert found["found_by"] == [*init_module.FOUND_BY] * 3  # a tool's, an adapter tool's, a host's
     assert found["problem"] == list(init_module.PROBLEMS)
     source = Path(runner.__file__)
-    outcomes = constants_assigned(source, "one", "outcome")
-    assert outcomes and outcomes <= set(runner.OUTCOMES)  # an empty lookup proves nothing
+    assigned = constants_assigned(source, "one", "outcome")
+    assert assigned and assigned <= set(outcomes.OUTCOMES)  # an empty lookup proves nothing
     reasons = stopped_by_values(source)
     assert runner.UNKNOWN_LABEL in reasons and reasons <= set(runner.STOPPED_BY), reasons
     assert broken_kinds(Path(judge.__file__)) <= set(judge.KINDS)
@@ -514,14 +529,14 @@ def text_head(doc: dict[str, object], folder: Path) -> list[str]:
     warnings = messages(doc, "warnings")
     if warnings[:1] == [runner.TOOL_STAR_LINE]:  # the one warning said above the table
         lines.append(f"warning: {runner.TOOL_STAR_LINE}")
-    table = [runner.HEAD, *(cells(row) for row in rows)]
-    widths = runner.fitted(table)
+    table = [rendering.HEAD, *(cells(row) for row in rows)]
+    widths = rendering.fitted(table)
     lines += [
-        "  ".join(runner.cut(c, w).ljust(w) for c, w in zip(line, widths, strict=True)).rstrip()
+        "  ".join(rendering.cut(c, w).ljust(w) for c, w in zip(line, widths, strict=True)).rstrip()
         for line in table
     ]
     for row, line in zip(rows, table[1:], strict=True):
-        test, fault = runner.TEST_COLUMN, runner.FAULT_COLUMN
+        test, fault = rendering.TEST_COLUMN, rendering.FAULT_COLUMN
         if len(line[test]) > widths[test] or len(line[fault]) > widths[fault]:
             lines.append(f"full name: {row['test']} {row['row']}: {line[fault]}")
     lines.append("range: a 95% Wilson interval, from these runs alone")
@@ -612,6 +627,9 @@ def test_the_json_rows_and_lists_say_what_the_table_says(
         "method": None,
         "path": None,
         "raises": None,
+        "expect": None,
+        "forbid": ["never said"],
+        "pass_rate": None,
     }
     # T1: tools that are methods on a class.
     project.edit('function = "acme.agent:answer"', 'function = "acme.toolkit:answer"')
@@ -688,6 +706,9 @@ def test_a_fault_row_names_its_method_path_and_raises() -> None:
         "method": None,
         "path": None,
         "raises": None,
+        "expect": None,
+        "forbid": ["Oct 30"],
+        "pass_rate": None,
     }
 
 
@@ -1385,3 +1406,134 @@ def test_the_record_document_change_is_additive() -> None:
     )
     assert {"runs", "not_started", "argument_sets"} <= set(defs["record_test"]["properties"])
     assert "runs" in defs["written_mock"]["properties"]
+
+
+def main_cells(entry: runner.RowReport) -> list[str]:
+    """A table row as main formatted it: from the counts and judge.wilson, never from JSON."""
+    row, mine, result = entry.row, entry.runs, entry.result
+    fault = "-"
+    if row.fault is not None:
+        when = "" if row.fault.when == "always" else f" {row.fault.when}"
+        fault = f"{row.fault.target} {row.fault.do}{when}"
+    rate, span = "-", "-"
+    if result.judged:
+        low, high = judge.wilson(result.passed, result.judged)
+        rate, span = f"{result.passed / result.judged:.0%}", f"{low * 100:.0f}-{high:.0%}"
+    return [
+        row.test.name,
+        row.name,
+        fault,
+        str(len(mine)),
+        "-" if row.fault is None else str(sum(bool(r.fault_fired) for r in mine)),
+        str(sum(1 for r in mine if r.outcome == "answered")),
+        f"{result.passed}/{result.judged}",
+        rate,
+        span,
+        f"{sum(r.tool_calls for r in mine) / max(len(mine), 1):.1f}",
+        f"{sum(r.cost_usd for r in mine):.5f}",
+        result.verdict,
+    ]
+
+
+@pytest.mark.design("json.text_unchanged")
+def test_text_output_is_unchanged(project: Project, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The text of `scrimmage test` is what main printed: the shared renderer changed no byte."""
+    for name in sorted(CASES):  # every case, byte for byte, against files main printed
+        case = CASES[name]()
+        out = io.StringIO()
+        code = runner.report(case.config, case.results, FOLDER, out, case.runner)  # type: ignore[arg-type]
+        assert f"exit {code}\n" + out.getvalue() == (GOLDEN / f"{name}.txt").read_text(), name
+        rep = build_report(case.config, case.results, FOLDER, case.runner)  # type: ignore[arg-type]
+        assert rep.table[1:] == [main_cells(entry) for entry in rep.rows], name
+    monkeypatch.setattr(Runner, "one", lambda self, row: None)
+    project.capsys.readouterr()
+    cli.main(["test", str(project.toml)])
+    printed = project.capsys.readouterr()
+    folder = Path(printed.out.splitlines()[0].rpartition("records in ")[2])
+    assert (folder / "result.json").exists() and "result.json" not in printed.out + printed.err
+
+
+@pytest.mark.design("json.text_unchanged")
+def test_every_pass_count_prints_as_main_printed_it() -> None:
+    """The rate and range columns, for every passed and judged up to 50, from the JSON's rounding.
+
+    The JSON rounds the rate and range to 4 places; the table must not format from those.
+    """
+    for judged in range(1, 51):
+        for passed in range(judged + 1):
+            low, high = judge.wilson(passed, judged)
+            expected = [f"{passed / judged:.0%}", f"{low * 100:.0f}-{high:.0%}"]
+            row = {
+                "test": "t", "row": "baseline", "fault": None, "runs": judged, "fired": None,
+                "done": judged, "passed": passed, "judged": judged, "tools": 0.0,
+                "cost_usd": 0.0, "result": "pass",
+                "rate": round(passed / judged, 4),
+                "range": [round(low, 4), round(high, 4)],
+            }  # fmt: skip
+            assert rendering.row_cells(row)[7:9] == expected, (passed, judged)
+
+
+@pytest.mark.design("json.one_document")
+@pytest.mark.parametrize("code", [0, 2, 3])
+def test_one_document(
+    code: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`scrimmage show --json` prints one document that fits the schema at each exit code."""
+    folder, _, _ = write_folder(tmp_path)
+    target = {0: folder, 2: tmp_path / "nowhere", 3: folder}[code]
+    if code == 3:
+
+        def broken(*_: object) -> None:
+            raise RuntimeError("show broke")
+
+        monkeypatch.setattr(show, "build", broken)
+    capsys.readouterr()
+    assert cli.main(["show", str(target), "--json"]) == code
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    doc = json.loads(captured.out)
+    validate(doc)
+    assert doc["command"] == "show" and doc["exit"] == code
+    assert doc["status"] == cli.STATUS["show"][code]
+    assert doc["config"] == str(target)
+    if code == 0:
+        assert doc["records"] == str(folder) and len(doc["runs"]) == 2
+    else:
+        assert doc["runs"] == [] and doc["result"] is None and doc["compare"] is None
+    if code == 3:
+        assert "show broke" in messages(doc, "infra")[0]
+
+
+@pytest.mark.design("json.same_as_table")
+@pytest.mark.parametrize("name", sorted(CASES))
+def test_same_as_table(name: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The rows `show --json` gives print as the table does, cell for cell."""
+    folder, _, _ = write_folder(tmp_path, case=name)
+    capsys.readouterr()
+    assert cli.main(["show", str(folder), "--json"]) == 0
+    doc = json.loads(capsys.readouterr().out)
+    validate(doc)
+    rows = cast(list[dict[str, object]], doc["result"]["rows"])
+    assert [rendering.row_cells(row) for row in rows] == [cells(row) for row in rows]
+
+
+def test_the_files_and_the_comparison_fit_the_schema(
+    project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(Runner, "one", lambda self, row: None)
+    assert cli.main(["test", "--json", str(project.toml)]) == 2
+    first = json.loads(capsys.readouterr().out)
+    validate(first)
+    saved = json.loads(Path(first["result_file"]).read_text())
+    validate(saved)  # the file is a document of its own, but for result_file
+    assert "result_file" not in saved and saved["compare"] is None
+    assert cli.main(["test", "--json", str(project.toml), "--compare", first["records"]]) == 2
+    second = json.loads(capsys.readouterr().out)
+    validate(second)
+    assert second["compare"]["earlier"] == first["records"]
+    for made in (first, second):  # the patched runs left no records; show wants some
+        faulted_run(Path(made["records"]), real_id(made["records"]), "order-status", "baseline")
+    assert cli.main(["show", second["records"], "--compare", first["records"], "--json"]) == 0
+    shown = json.loads(capsys.readouterr().out)
+    validate(shown)
+    assert shown["compare"]["rows_compared"] == len(second["rows"])

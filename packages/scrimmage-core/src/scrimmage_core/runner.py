@@ -5,6 +5,7 @@ refused call and a test the budget stopped included; 3 for an infrastructure err
 higher code wins, as a mistake or an error makes the rates not worth trusting.
 """
 
+import contextlib
 import dataclasses
 import json
 import os
@@ -37,29 +38,22 @@ from scrimmage_core.outcomes import (  # the runner's names for them
     MISTAKES,
     NOTES,
     OK,
+    PREVIEW,
     ROW_FAILED,
     WARNINGS,
     plural,
 )
 from scrimmage_core.records import RECORD_VERSION, RecordStore
 from scrimmage_core.redact import redact
-from scrimmage_core.state import COMMAND_CAP, PREVIEW, now_iso
+from scrimmage_core.render import HEAD, miss_text, row_cells, table_lines
+from scrimmage_core.results import HASH_VERSION, row_hash
+from scrimmage_core.state import COMMAND_CAP, now_iso
 
 END = b"\x00"  # ends the stop watcher; no signal has the number 0
 TAIL_BYTES = 1024 * 1024  # how much of a script's output is read to find its last line
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 KILL_GRACE_S = 5.0
 GROUP_POLL_S = 0.01
-OUTCOMES = (
-    "answered",
-    "crashed",
-    "timed out",
-    "refused call",
-    "budget reached",
-    "not reserved",
-    "infrastructure error",
-    "stopped",
-)
 # A refusal for one of these reasons stops the whole test, not only its row.
 STOP_TEST = (
     "budget",
@@ -86,24 +80,8 @@ PROCESS_LABEL = "process:python"
 # A baseline whose every run ended so cannot be compared with, so its faults are skipped.
 FAILED = ("crashed", "timed out", "refused call", "budget reached", "not reserved")
 BUDGET_REASONS = ("budget", "budget_held")  # refusals for the budget
-TABLE_WIDTH = 120
 SHOWN_RUNS = 3  # how many runs a line names for one broken rule
 SHOWN_NAMES = 5  # how many model names a line lists
-HEAD = [
-    "test",
-    "row",
-    "fault",
-    "runs",
-    "fired",
-    "done",
-    "passed",
-    "rate",
-    "range",
-    "tools",
-    "cost",
-    "result",
-]
-TEST_COLUMN, FAULT_COLUMN = 0, 2
 # The lists a report's messages go in, and the word each line starts with in the text.
 PREFIXES = {
     MISTAKES: "test mistake",
@@ -170,8 +148,8 @@ class Runner:
         runs = config.root / "scrimmage-runs"
         runs.mkdir(mode=0o700, exist_ok=True)
         os.chmod(runs, 0o700)  # records hold customer data: only their owner may list them
-        self.folder = runs / f"{stamp}-{secrets.token_hex(3)}"
-        self.store = RecordStore(self.folder)
+        self.store = new_store(runs, stamp)
+        self.folder = self.store.folder
         # Records can hold customer data, so they stay out of the team's git repo.
         ignore = runs / ".gitignore"
         if not ignore.exists():
@@ -472,15 +450,9 @@ class Runner:
         rows = planner.rows(self.config)
         runs = self.config.agent.runs
         self.server.start()
-        self.wake_read, self.wake = os.pipe()
-        os.set_blocking(self.wake, False)  # set_wakeup_fd needs it, and a full pipe is fine
-        watcher = threading.Thread(target=self._watch, name="scrimmage-stop", daemon=True)
-        watcher.start()
-        previous = {sig: signal.signal(sig, self._interrupted) for sig in STOP_SIGNALS}
-        old_wakeup = signal.set_wakeup_fd(self.wake)
-        if self.stop_flag:  # noted just before the handlers above were set
-            os.write(self.wake, bytes([STOP_SIGNALS[0]]))
+        release = nothing
         try:
+            release = self._catch_signals()
             with ThreadPoolExecutor(max_workers=self.config.agent.parallel) as pool:
                 base = [row for row in rows if row.fault is None for _ in range(runs)]
                 results: list[RunResult | None] = []
@@ -504,18 +476,60 @@ class Runner:
                 self.stop_flag.clear()  # the watcher and the handler may both have noted it
                 raise Interrupted(name)
         finally:
-            # Handlers first: from here a signal goes to the caller's, never to a closed pipe.
-            signal.set_wakeup_fd(old_wakeup)
-            for sig, handler in previous.items():
-                signal.signal(sig, handler)
-            os.write(self.wake, END)  # the watcher returns
-            watcher.join()
-            os.close(self.wake)
-            os.close(self.wake_read)
+            release()
             self.cancel()
             self.server.stop()
             shutil.rmtree(self.answers, ignore_errors=True)
         return [r for r in results if r is not None]
+
+    def _catch_signals(self) -> Callable[[], None]:
+        """Stop the runs on SIGINT or SIGTERM. Returns the function that puts everything back.
+
+        Python lets only the main thread set a handler or a wakeup fd. From another thread
+        nothing is set, and the runs stop only through stop_flag and cancel().
+        """
+        if threading.current_thread() is not threading.main_thread():
+            return nothing
+        previous: dict[signal.Signals, object] = {}
+        pipe = (-1, -1)
+        old_wakeup = -1
+        wakeup_set = False
+        watcher: threading.Thread | None = None
+
+        def release() -> None:
+            # Handlers and the wakeup fd first: from here a signal goes to the caller's, never
+            # to a closed pipe.
+            if wakeup_set:
+                signal.set_wakeup_fd(old_wakeup)
+            for sig, handler in previous.items():
+                # None: set outside Python, which cannot be put back, so the default is.
+                signal.signal(sig, signal.SIG_DFL if handler is None else handler)  # pyright: ignore[reportArgumentType]
+            if watcher is not None:
+                os.set_blocking(pipe[1], True)  # a full pipe must not keep the watcher waiting
+                os.write(pipe[1], END)  # the watcher returns
+                watcher.join()
+            for fd in pipe:
+                if fd != -1:
+                    os.close(fd)
+
+        try:
+            for sig in STOP_SIGNALS:
+                previous[sig] = signal.signal(sig, self._interrupted)
+            pipe = os.pipe()
+            os.set_blocking(pipe[1], False)  # set_wakeup_fd needs it, and a full pipe is fine
+            old_wakeup = signal.set_wakeup_fd(pipe[1])
+            wakeup_set = True
+            watcher = threading.Thread(
+                target=self._watch, args=(pipe[0], old_wakeup), name="scrimmage-stop", daemon=True
+            )
+            watcher.start()
+            if self.stop_flag:  # noted just before the handlers above were set
+                os.write(pipe[1], bytes([STOP_SIGNALS[0]]))
+                self.cancel()  # at once: no run may start before the watcher has read the byte
+        except BaseException:
+            release()
+            raise
+        return release
 
     def cancel(self) -> None:
         """Start no more runs and stop every run still going, with its children."""
@@ -531,14 +545,47 @@ class Runner:
         if not self.stop_flag:
             self.stop_flag.append(signal.Signals(signum).name)
 
-    def _watch(self) -> None:
-        """Stop every run once a stop signal comes; at the end of run_all, return."""
-        while (byte := os.read(self.wake_read, 1)) != END:
-            if byte[0] in STOP_SIGNALS:  # the wakeup fd also carries other caught signals
+    def _watch(self, wake_read: int, forward: int) -> None:
+        """Stop every run once a stop signal comes; at the end of run_all, return.
+
+        The wakeup fd also carries every other signal a caller catches. Each is passed on to the
+        fd the caller had, as Python's own handler would have written it, until the end.
+        """
+        stopped = False
+        while (byte := os.read(wake_read, 1)) != END:
+            if not byte:
+                return
+            if byte[0] in STOP_SIGNALS:
                 if not self.stop_flag:
                     self.stop_flag.append(signal.Signals(byte[0]).name)
-                self.cancel()
-                return
+                if not stopped:
+                    stopped = True
+                    self.cancel()
+            elif forward != -1:
+                with contextlib.suppress(OSError):  # a full or closed pipe drops the byte
+                    os.write(forward, byte)
+
+
+FOLDER_TRIES = 5
+
+
+def folder_suffix() -> str:
+    return secrets.token_hex(3)
+
+
+def new_store(runs: Path, stamp: str) -> RecordStore:
+    """A new records folder. One that exists already, from a test started in the same second
+    with the same suffix, is never shared: a new suffix is drawn, a few times."""
+    for _ in range(FOLDER_TRIES):
+        try:
+            return RecordStore(runs / f"{stamp}-{folder_suffix()}")
+        except FileExistsError:
+            continue
+    raise RuntimeError(f"could not make a new records folder in {runs}: {FOLDER_TRIES} tries")
+
+
+def nothing() -> None:
+    """The release of a signal setup that set nothing."""
 
 
 def real_error(line: dict[str, object]) -> str | None:
@@ -792,58 +839,6 @@ def row_reports(config: Config, results: list[RunResult]) -> list[RowReport]:
     return reports
 
 
-def fault_text(row: planner.Row) -> str:
-    if row.fault is None:
-        return "-"
-    when = "" if row.fault.when == "always" else f" {row.fault.when}"
-    return f"{row.fault.target} {row.fault.do}{when}"
-
-
-def row_cells(report: RowReport) -> list[str]:
-    row, mine, result = report.row, report.runs, report.result
-    fault = fault_text(row)
-    fired = "-" if row.fault is None else str(sum(bool(r.fault_fired) for r in mine))
-    rate, span = "-", "-"
-    if result.judged:
-        low, high = judge.wilson(result.passed, result.judged)
-        rate, span = f"{result.passed / result.judged:.0%}", f"{low * 100:.0f}-{high:.0%}"
-    tools = sum(r.tool_calls for r in mine) / max(len(mine), 1)
-    return [
-        row.test.name,
-        row.name,
-        fault,
-        str(len(mine)),
-        fired,
-        str(sum(1 for r in mine if r.outcome == "answered")),
-        f"{result.passed}/{result.judged}",
-        rate,
-        span,
-        f"{tools:.1f}",
-        f"{sum(r.cost_usd for r in mine):.5f}",
-        result.verdict,
-    ]
-
-
-def fitted(table: list[list[str]]) -> list[int]:
-    """Column widths within TABLE_WIDTH. Only the test and fault names can be cut, as every
-    line under the table gives them in full; the shorter one keeps its width if it can."""
-    widths = [max(len(line[i]) for line in table) for i in range(len(HEAD))]
-    test, fault = widths[TEST_COLUMN], widths[FAULT_COLUMN]
-    room = TABLE_WIDTH - sum(widths) + test + fault - 2 * (len(HEAD) - 1)
-    if test + fault > room:
-        widths[TEST_COLUMN] = min(test, max(room // 2, room - fault))
-        widths[FAULT_COLUMN] = room - widths[TEST_COLUMN]
-    return widths
-
-
-def cut(text: str, width: int) -> str:
-    """Cut from the middle, so a fault's schedule and the end of a long name still show."""
-    if len(text) <= width:
-        return text
-    kept = width - 3
-    return f"{text[: kept // 2]}...{text[-(kept - kept // 2) :]}"
-
-
 def no_result_reason(report: RowReport, runs: int) -> str:
     """Why a row has no result. Only runs left out as unfired call for firing the fault."""
     unfired = any(r.judgement.left_out == judge.NOT_FIRED for r in report.runs)
@@ -967,7 +962,7 @@ def build_report(
     """What a run of tests found. judged=False is for scrimmage record, whose one run is not a
     rate: a row with no result, a failed rule and a mock no run used are then not mistakes."""
     reports = row_reports(config, results)
-    table = [HEAD, *map(row_cells, reports)]
+    table = [HEAD, *(row_cells(row_json(entry, config.agent)) for entry in reports)]
     mistakes: list[str] = []
     notes: list[str] = []
     failures: list[str] = []
@@ -1155,49 +1150,6 @@ def build_report(
 MISS_JSON, MISS_LINES = 200, 20
 
 
-def nearest_text(doc: dict[str, object]) -> str:
-    """The nearest mock as a person reads it, labelled as a heuristic."""
-    near = cast("dict[str, object] | None", doc["nearest"])
-    if near is None:
-        return ""
-    if doc["reason"] == "request":
-        request = " ".join(str(part) for part in (near["method"], near["path"]) if part)
-        return f"; nearest mock (heuristic: most path segments alike): {request or 'any request'}"
-    keys = cast(list[str], near["differs"])
-    more = int(str(near["differs_left_out"]))
-    differs = f", differs at {', '.join(keys)}{f' and {more} more' if more else ''}" if keys else ""
-    shown = near["args"] if near["args"] is not None else "arguments not readable"
-    return f"; nearest mock (heuristic: fewest differing arguments): {shown}{differs}"
-
-
-def miss_text(doc: dict[str, object], where: str) -> str:
-    """One warning line for a group of misses. It states what happened and that the nearest
-    mock is a guess; it never says the agent or the mock is wrong."""
-    call, ran = str(doc["call"]), doc["action"] == "real"
-    seen = f" with {doc['seen']}" if doc["seen"] is not None else ""
-    tail = f" ({where})"
-    if doc["reason"] == "request":
-        request = f"{call} {doc['method']} {doc['path']}"
-        verdict = "ran for real" if ran else "was refused"
-        return (
-            f"{request} {verdict}, though the test has mocks for that host; "
-            f"none matched its method and path{nearest_text(doc)}{tail}"
-        )
-    if doc["reason"] == "no_mock":
-        return (
-            f"{call}{seen} has no mock in this test and was refused, and the test has mocks "
-            f"that match arguments{tail}"
-        )
-    if doc["reason"] == "unreadable":
-        return f"{call} missed a mock, but the evidence could not be built{tail}"
-    verdict = (
-        "matched no mock and ran for real, as it is under [agent] real"
-        if ran
-        else "matched no mock and was refused, as it is not under [agent] real by name"
-    )
-    return f"{call}{seen} {verdict}{nearest_text(doc)}; values cleaned by a heuristic{tail}"
-
-
 def miss_groups(results: list[RunResult]) -> list[tuple[dict[str, object], str]]:
     """The misses of every run, one group for the same call, evidence and nearest mock, as
     (the --json form, the warning line). A group counts distinct runs. Calls that ran for
@@ -1266,17 +1218,8 @@ def print_report(found: Report, out: TextIO) -> int:
     )
     for kind, text in found.above:
         print(f"{PREFIXES[kind]}: {text}", file=out)
-    widths = fitted(found.table)
-    for line in found.table:
-        print(
-            "  ".join(cut(cell, w).ljust(w) for cell, w in zip(line, widths, strict=True)).rstrip(),
-            file=out,
-        )
-    for entry, line in zip(found.rows, found.table[1:], strict=True):
-        if len(line[TEST_COLUMN]) > widths[TEST_COLUMN] or (
-            len(line[FAULT_COLUMN]) > widths[FAULT_COLUMN]
-        ):
-            print(f"full name: {entry.where}: {line[FAULT_COLUMN]}", file=out)
+    for line in table_lines(found.table, [entry.where for entry in found.rows]):
+        print(line, file=out)
     print("range: a 95% Wilson interval, from these runs alone", file=out)
     for line in found.failures:
         print(line, file=out)
@@ -1303,7 +1246,7 @@ def report_json(found: Report) -> dict[str, object]:
     return {
         "records": str(found.folder),
         "tests": len(found.config.tests),
-        "rows": [row_json(entry, found.folder) for entry in found.rows],
+        "rows": [row_json(entry, found.config.agent) for entry in found.rows],
         "cost_usd": round(found.spent, 8),
         "budget_usd": found.config.agent.max_cost_usd,
         "stopped_by": found.stopped_by,
@@ -1312,7 +1255,25 @@ def report_json(found: Report) -> dict[str, object]:
     }
 
 
-def row_json(entry: RowReport, folder: Path) -> dict[str, object]:
+def fault_json(fault: Fault | None) -> dict[str, object] | None:
+    """A row's fault, with the rules that judge the row in place of the test's, or null."""
+    if fault is None:
+        return None
+    return {
+        "call": fault.call,
+        "do": fault.do,
+        "when": fault.when,
+        "model": fault.model,
+        "method": fault.method,
+        "path": fault.path,
+        "raises": fault.raises,
+        "expect": None if fault.expect is None else [list(item) for item in fault.expect],
+        "forbid": None if fault.forbid is None else list(fault.forbid),
+        "pass_rate": fault.pass_rate,
+    }
+
+
+def row_json(entry: RowReport, agent: Agent) -> dict[str, object]:
     """One table row, by the table's own column names, with its runs and broken rules."""
     row, mine, result = entry.row, entry.runs, entry.result
     fault = row.fault
@@ -1324,17 +1285,7 @@ def row_json(entry: RowReport, folder: Path) -> dict[str, object]:
     return {
         "test": row.test.name,
         "row": row.name,
-        "fault": None
-        if fault is None
-        else {
-            "call": fault.call,
-            "do": fault.do,
-            "when": fault.when,
-            "model": fault.model,
-            "method": fault.method,
-            "path": fault.path,
-            "raises": fault.raises,
-        },
+        "fault": fault_json(fault),
         "runs": len(mine),
         "fired": None if fault is None else sum(bool(r.fault_fired) for r in mine),
         "done": sum(1 for r in mine if r.outcome == "answered"),
@@ -1352,6 +1303,8 @@ def row_json(entry: RowReport, folder: Path) -> dict[str, object]:
         ],
         "mock_miss_count": sum(r.miss_count for r in mine),
         "run_details": [run_json(r) for r in mine],
+        "test_sha256": row_hash(row.test, fault, agent),
+        "test_sha256_v": HASH_VERSION,
     }
 
 

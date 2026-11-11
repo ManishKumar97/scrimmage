@@ -9,7 +9,7 @@ import pytest
 
 import scrimmage_core
 from conftest import doc_pages
-from scrimmage_core import cli, config, judge, mcp_gate, outcomes, record, runner
+from scrimmage_core import cli, config, judge, mcp_gate, outcomes, record, render
 
 DOCS = Path(__file__).parents[1] / "docs"
 CLI_SCHEMA = json.loads(
@@ -70,11 +70,11 @@ def test_the_script_shape_its_children_and_its_stopping_are_documented() -> None
 @pytest.mark.design("docs.judging")
 def test_the_rules_the_table_and_the_endings_are_documented() -> None:
     text = page("judging.md")
-    for word in sorted(config.RULE_KEYS) + runner.HEAD[3:-1]:
+    for word in sorted(config.RULE_KEYS) + render.HEAD[3:-1]:
         assert mentioned(text, word), word
     for result in (judge.PASS, judge.FAIL, judge.NO_RESULT):
         assert f"`{result}`" in text
-    assert all(f"| {outcome}" in text for outcome in runner.OUTCOMES)
+    assert all(f"| {outcome}" in text for outcome in outcomes.OUTCOMES)
     assert judge.EMPTY in text
     assert "not a promise about the next one" in text
     assert "No judging" not in page("limits.md")
@@ -84,7 +84,7 @@ def test_the_rules_the_table_and_the_endings_are_documented() -> None:
 def test_every_fault_and_outcome_is_documented() -> None:
     concepts = page("concepts.md")
     assert all(mentioned(concepts, f) for f in config.FAULTS)
-    missing = [o for o in runner.OUTCOMES if f"| {o} |" not in concepts]
+    missing = [o for o in outcomes.OUTCOMES if f"| {o} |" not in concepts]
     assert not missing, f"outcomes with no row in docs/concepts.md: {missing}"
 
 
@@ -417,3 +417,18 @@ def test_recording_more_than_one_run_is_documented() -> None:
         assert limit in limits, limit
     for text in (guide, cli_page, limits):  # no page says a looser match exists
         assert "looser match" not in text.replace("No looser form", "")
+
+
+@pytest.mark.design("docs.show")
+def test_the_show_page_says_what_redact_removes_and_who_may_see_the_output() -> None:
+    text = page("show.md")
+    for sentence in (
+        "`redact` removes known secret shapes, such as API keys and tokens, not customer data.",
+        "`show`'s text and `--json` can hold customer data from the records",
+        "A `--json` document handed to a coding agent may be sent to that agent's model provider.",
+    ):
+        assert sentence in text, sentence
+    commands = page("cli.md")
+    assert "## scrimmage show" in commands and "--compare" in commands and "--run" in commands
+    assert "`scrimmage show --json`" in page("json-output.md")
+    assert "signal handling needs the main thread" in commands
