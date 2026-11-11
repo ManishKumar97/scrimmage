@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import BinaryIO, cast
 
-from scrimmage_core import results
+from scrimmage_core import results, suggest
 from scrimmage_core.outcomes import PREVIEW, plural
 from scrimmage_core.records import RECORD_VERSION, Refused, open_owned
 from scrimmage_core.redact import redact
@@ -334,6 +334,7 @@ def run_doc(folder: Path, run: str, path: Path, row: Doc | None) -> tuple[Doc, l
         "log_tail": log_tail(folder, run) if outcome in BAD_ENDS else None,
         "suggestions": [],
     }
+    doc["suggestions"] = [s.doc for s in suggest.for_run(doc, kept, row)]
     return doc, notes
 
 
@@ -390,6 +391,7 @@ def run_text(doc: Doc, row: Doc | None) -> list[str]:
         last = tail["line"] if tail["line"] is not None else "(empty)"
         lines.append(f"log: {last}")
         lines.append(f"log file: {tail['path']}")
+    lines += [str(s["text"]) for s in cast("list[Doc]", doc["suggestions"])]
     return lines
 
 

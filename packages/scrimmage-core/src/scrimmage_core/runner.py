@@ -97,6 +97,21 @@ INFRA_LINE = (
 NOT_JUDGED = judge.RunJudgement(left_out="not judged")
 
 
+def is_exercised(fired: bool | None, outcome: str) -> bool:
+    """A run tested its fault: it fired (or the row has none), or the test was stopped."""
+    return fired is not False or outcome == "stopped"
+
+
+def fault_fired(has_fault: bool, fault_lines: int) -> bool | None:
+    """None on a baseline, else whether the gate injected the fault at least once."""
+    return fault_lines > 0 if has_fault else None
+
+
+def chose_refused(has_fault: bool, first_refusal: str) -> bool:
+    """The agent chose a call the test does not allow, under a fault."""
+    return has_fault and first_refusal in CHOSEN_CALLS
+
+
 @dataclass
 class RunResult:
     run: str
@@ -127,7 +142,7 @@ class RunResult:
 
     @property
     def exercised(self) -> bool:
-        return self.fault_fired is not False or self.outcome == "stopped"
+        return is_exercised(self.fault_fired, self.outcome)
 
 
 class Runner:
@@ -319,7 +334,7 @@ class Runner:
             a: sum(1 for line in lines if line.get("action") == a)
             for a in ("real", "mock", "fault", "refused")
         }
-        fired = None if row.fault is None else calls["fault"] > 0
+        fired = fault_fired(row.fault is not None, calls["fault"])
         mistakes = [str(line["mistake"]) for line in lines if "mistake" in line]
         misses = [
             {
@@ -352,7 +367,7 @@ class Runner:
             budget_reason="" if refusal is None else str(refusal["reason"]),
         )
         # Here the raw answer is still at hand. The record only ever gets the redacted one.
-        chose = row.fault is not None and (state.refusals or [""])[0] in CHOSEN_CALLS
+        chose = chose_refused(row.fault is not None, (state.refusals or [""])[0])
         refused = [str(line["call"]) for line in lines if line.get("action") == "refused"]
         result.judgement = judge.judge_run(
             outcome,
