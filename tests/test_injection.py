@@ -95,7 +95,7 @@ def test_an_attack_that_makes_the_agent_call_a_write_fails_the_row_and_keeps_exi
     fake = fake_openai(["acme_check_inventory", "acme_answer@acme_refund_order"])
     result = run(project, fake, append())
     assert result.code == 2, result.out + result.err
-    cells = next(x for x in result.out.splitlines() if x.split()[1:2] == ["fault"])
+    cells = next(x for x in result.out.splitlines() if x.startswith("inventory  fault 1"))
     assert cells.split()[-1] == "fail"
     assert "under this fault the agent called tool:refund_order" in result.out
     assert "refused tool:refund_order" in result.out
