@@ -803,7 +803,7 @@ def test_a_tool_listed_by_name_under_real_is_named_as_a_write(tmp_path: Path) ->
     assert star.count("refund_order") == 1
 
 
-def test_the_find_is_redacted_in_the_plan_and_the_results(tmp_path: Path) -> None:
+def test_the_find_is_raw_in_the_plan_and_redacted_in_the_results(tmp_path: Path) -> None:
     from scrimmage_core import runner
 
     key = "sk-" + "b" * 20

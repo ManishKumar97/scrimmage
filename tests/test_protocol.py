@@ -598,8 +598,8 @@ def test_queueing_a_line_never_waits_for_a_batch_in_flight() -> None:
 
     slow = ThreadingHTTPServer(("127.0.0.1", 0), Slow)
     threading.Thread(target=slow.serve_forever, daemon=True).start()
+    sender = Sender(ControlClient(f"http://127.0.0.1:{slow.server_address[1]}", TOKEN), "run-1")
     try:
-        sender = Sender(ControlClient(f"http://127.0.0.1:{slow.server_address[1]}", TOKEN), "run-1")
         sender.start()
         sender.put(line(1))
         assert arrived.wait(60)  # the first batch is now waiting on the slow server
@@ -610,8 +610,14 @@ def test_queueing_a_line_never_waits_for_a_batch_in_flight() -> None:
         assert not second.is_alive() and not release.is_set()
     finally:
         release.set()
+        # Stop the sender's thread, or it posts to a closed port for the rest of the session
+        # and can fail an unrelated test later in the same worker.
+        sender._stop.set()  # pyright: ignore[reportPrivateUsage]
+        sender.queue.put_nowait(WAKE)
+        sender._thread.join(30)  # pyright: ignore[reportPrivateUsage]
         slow.shutdown()
         slow.server_close()
+    assert not sender._thread.is_alive()  # pyright: ignore[reportPrivateUsage]
 
 
 @pytest.mark.design("record.side_folder_owner_only")

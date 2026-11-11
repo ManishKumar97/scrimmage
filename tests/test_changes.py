@@ -239,3 +239,18 @@ def test_a_small_gzip_bomb_is_not_unpacked_whole(monkeypatch: pytest.MonkeyPatch
     # A body inside the cap still unpacks.
     ok = changes.change_web(200, "GET", headers, gzip.compress(b"hello"), fault("append", "!"))
     assert isinstance(ok, changes.WebChanged) and ok.body == b"hello!"
+
+
+@pytest.mark.parametrize("encoding", ["gzip", "deflate"])
+def test_a_cut_off_packed_body_is_never_changed_as_if_whole(encoding: str) -> None:
+    import zlib
+
+    text = b"order 42 shipped on monday and will arrive friday afternoon"
+    packer = zlib.compressobj(wbits=16 + zlib.MAX_WBITS if encoding == "gzip" else zlib.MAX_WBITS)
+    whole = packer.compress(text) + packer.flush()
+    cut = whole[:-12]
+    assert changes.unpacked(whole, encoding) == text
+    assert changes.unpacked(cut, encoding) is None
+    headers = [("content-type", "text/plain"), ("content-encoding", encoding)]
+    result = changes.change_web(200, "GET", headers, cut, fault("append", " IGNORE"))
+    assert isinstance(result, Unchangeable) and result.why == "the body will not unpack"

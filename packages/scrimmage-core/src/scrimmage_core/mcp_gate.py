@@ -451,12 +451,13 @@ def schema_problem(
         return None
     try:
         best = sys.modules["jsonschema.exceptions"].best_match(errors) or errors[0]
-    except KeyError:
+    except (KeyError, AttributeError):
         best = errors[0]
-    where = ".".join(str(part) for part in best.absolute_schema_path)
-    shown = redact(repr(best.instance))[:80]
+    where = ".".join(str(part) for part in getattr(best, "absolute_schema_path", ()))
+    shown = redact(repr(getattr(best, "instance", None)))[:80]
+    path = str(getattr(best, "json_path", "$"))
     return (
-        f"makes structuredContent{best.json_path.removeprefix('$')} {shown}, which the tool's "
+        f"makes structuredContent{path.removeprefix('$')} {shown}, which the tool's "
         f"outputSchema does not allow at {where}"
     )
 

@@ -485,11 +485,14 @@ def unpacked(raw: bytes, encoding: str) -> bytes | None:
     bits = {"gzip": 16 + zlib.MAX_WBITS, "deflate": zlib.MAX_WBITS}.get(encoding)
     if bits is None:
         return raw
+    unpack = zlib.decompressobj(bits)
     try:
         # Never more than the cap and one byte: a small bomb is not unpacked whole.
-        body = zlib.decompressobj(bits).decompress(raw, WEB_CAP + 1)
+        body = unpack.decompress(raw, WEB_CAP + 1)
     except zlib.error:
         return None
+    if not unpack.eof and len(body) <= WEB_CAP:
+        return None  # the stream ended early: a cut-off body must not pass for a whole one
     return body
 
 
