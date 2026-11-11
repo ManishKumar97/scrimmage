@@ -194,8 +194,11 @@ def main(run: Doc, lines: Sequence[Doc], row: Doc | None) -> Suggestion | NoRule
             "There is nothing to fix in the agent for this run; the test's notes give the reason.",
             summary=True,
         )
-    if outcome == REFUSED_CALL and gate_mistakes(lines):  # the test could not gate a call
-        return test_mistake(gate_mistakes(lines))
+    # The test could not gate a call. Only when it was the first refusal: an agent's chosen
+    # refusal followed by a blind child still reads as the agent's.
+    first_by_config = bool(refused) and refused[0].get("by_config") is True
+    if outcome == REFUSED_CALL and first_by_config and (found := gate_mistakes(lines)):
+        return test_mistake(found)
     if fault and left_out == judge.NOT_FIRED:
         ended = (
             ""

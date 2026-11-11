@@ -110,7 +110,7 @@ The second kind comes after the main one, and only when the run has a line for a
 A run that passed gets no suggestion.
 `show` picks the first run judged `fail` of each failing row, so a run that was left out of the rate never appears without `--run`.
 These rules therefore appear only with `--run RUN`: `test_mistake` when the judge left the run out as a mistake in the test, `not_agent`, `fault_not_fired`, and `refused_on_baseline`.
-A refusal that is the test's own mistake, such as a tool no gate can reach, reads `test_mistake` and not a refused call.
+A refusal that is the test's own mistake, such as a tool no gate can reach or a hosted tool the test did not allow, reads `test_mistake` and not a refused call.
 A `retry_loop` counts only calls to `X` with the same arguments as the faulted one; a loop over other arguments is `timeout_after_fault`.
 Evidence lists only what a rule read: record lines by `seq` and `proc`, and `{"summary": true}` for a rule that read the run's summary line, such as `not_agent` or `rule_on_baseline`.
 A run that no rule fits gets none, and `suggestions` is empty.

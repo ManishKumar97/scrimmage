@@ -590,6 +590,11 @@ def test_a_mistake_on_a_refused_line_is_the_tests_not_the_agents() -> None:
         *case("refused call", "fail", None, {"refused"}, lines=[line(1), fault_line(2), own])
     )
     assert isinstance(chosen, suggest.Suggestion) and chosen.code == "refused_call"
+    chose_then_blind = suggest.main(
+        *case("refused call", "fail", None, {"refused"}, lines=[line(1), fault_line(2), own, blind])
+    )
+    assert isinstance(chose_then_blind, suggest.Suggestion)
+    assert chose_then_blind.code == "refused_call"  # the first refusal was the agent's
     own_base = case("refused call", "left out", "refused call", fault=False, lines=[line(1), own])
     chosen_base = suggest.main(*own_base)
     assert isinstance(chosen_base, suggest.Suggestion) and chosen_base.code == "refused_on_baseline"

@@ -2059,7 +2059,21 @@
                 "const": true,
                 "description": "The rule read the run's summary line: its outcome, verdict or broken rules."
               }
-            }
+            },
+            "oneOf": [
+              {
+                "required": [
+                  "seq",
+                  "proc"
+                ]
+              },
+              {
+                "required": [
+                  "summary"
+                ],
+                "additionalProperties": false
+              }
+            ]
           }
         }
       }
