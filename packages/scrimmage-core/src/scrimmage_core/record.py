@@ -29,8 +29,9 @@ from scrimmage_core.control import proc_key
 from scrimmage_core.decide import READ_METHODS
 from scrimmage_core.errors import ConfigError
 from scrimmage_core.redact import REMOVED, URL_PART_REMOVED
-from scrimmage_core.state import BLOB_WAIT_S
+from scrimmage_core.state import BLOB_CAP, BLOB_WAIT_S, PREVIEW
 
+MAX_RUNS = 1000  # the runner builds every row before it checks the budget
 CAP = 64 * 1024  # a mock's value, as TOML, is at most this long: a reviewer must read it
 BIG_DIFF = 1000  # added lines a person can review at once
 SHOWN = 200  # how much of a call's arguments a comment shows
@@ -128,6 +129,7 @@ class Saved:
     path: str | None = None
     asked: tuple[str, str] = ("", "")  # a web call's query and body hashes
     removed: list[Fields] = field(default_factory=list[Fields])
+    run: int = 0  # the run, by submission order, whose call made it
 
 
 Outcome = Saved | Listed
@@ -139,6 +141,7 @@ class Node:
 
     line: Line
     children: "list[Node]" = field(default_factory=lambda: list[Node]())
+    run: int = 0  # the run, by submission order, this call belongs to
 
     @property
     def kind(self) -> str:
@@ -173,6 +176,7 @@ class Written:
 
     saved: Saved
     calls: int
+    runs: int = 1  # the distinct runs that saw this mock's key
 
 
 @dataclass
@@ -189,11 +193,21 @@ class ManualEntry:
 
 
 @dataclass
+class ArgumentSet:
+    """One tool or MCP call's exact arguments, over every run of a test."""
+
+    runs: set[int] = field(default_factory=set[int])
+    shown: str | None = None  # the arguments, cleaned, for the text
+    code: str | None = None  # why it has no mock, if listed
+    key: tuple[str, ...] | None = None  # the key of its tool-level mock, if it has one
+
+
+@dataclass
 class TestRecord:
     """What record found for one test."""
 
     test: settings.Test
-    result: running.RunResult
+    results: list[running.RunResult]
     written: list[Written] = field(default_factory=list[Written])
     kept: list[Fields] = field(default_factory=list[Fields])
     skipped: dict[tuple[object, ...], Fields] = field(
@@ -205,6 +219,21 @@ class TestRecord:
     seen: int = 0
     done: int = 0
     trouble: str | None = None  # why nothing is written for this test
+    per_run: dict[int, tuple[int, int]] = field(default_factory=dict[int, tuple[int, int]])
+    sets: dict[str, dict[str, "ArgumentSet"]] = field(
+        default_factory=dict[str, dict[str, "ArgumentSet"]]
+    )
+    asked: int = 1  # the runs asked for, of which len(results) started
+    cut: bool = False  # a stop of the whole command left this test with fewer runs than asked
+
+    @property
+    def result(self) -> running.RunResult:
+        """The first run that did not answer, else the first: what the test's line shows."""
+        return next((r for r in self.results if r.outcome != "answered"), self.results[0])
+
+    @property
+    def not_started(self) -> int:
+        return max(self.asked - len(self.results), 0)
 
 
 @dataclass
@@ -532,41 +561,116 @@ def walk(nodes: list[Node]) -> list[Node]:
     return out
 
 
-class Recorder:
-    """Turns one test's lines into its mocks, its listed calls and its numbers."""
+def arguments_key(line: Line, folder: Path) -> str:
+    """A tool or MCP call's arguments as canonical JSON, the key a mock uses. Read from the
+    preview if it holds them whole, else from the side-folder item if one is there; a hash of
+    the whole text only when neither can be read."""
+    arguments = cast(Fields, line.get("args") or {})
+    size = int(cast(int, arguments.get("bytes") or 0))
+    preview = arguments.get("preview")
+    texts: list[str] = []
+    if isinstance(preview, str) and size <= PREVIEW and len(preview.encode()) == size:
+        texts.append(preview)
+    elif 0 < size <= BLOB_CAP and isinstance(arguments.get("sha256"), str):
+        try:
+            texts.append((folder / "blobs" / str(arguments["sha256"])).read_bytes().decode())
+        except (OSError, UnicodeDecodeError):
+            texts = []  # no item to read: the hash below stands for the arguments
+    for text in texts:
+        try:
+            return json.dumps(json.loads(text), ensure_ascii=False, sort_keys=True)
+        except (ValueError, RecursionError):
+            pass
+    return f"sha256:{arguments.get('sha256')}"
 
-    def __init__(self, test: settings.Test, result: running.RunResult, folder: Path) -> None:
-        self.record = TestRecord(test, result)
+
+def runs_text(names: list[str]) -> str:
+    """Up to three run ids, then a count of the rest."""
+    if len(names) <= 3:
+        return " and ".join([", ".join(names[:-1]), names[-1]] if len(names) > 1 else names)
+    return f"{', '.join(names[:3])} and {len(names) - 3} more"
+
+
+class Recorder:
+    """Turns one test's lines, over all its runs, into its mocks, its listed calls and its
+    numbers. Each run has its own tree: a call_id restarts in every run, and a pid can be
+    reused, so one tree over all the lines could attach a call to another run's tool."""
+
+    def __init__(self, test: settings.Test, results: list[running.RunResult], folder: Path) -> None:
+        self.record = TestRecord(test, results)
         self.folder = folder
         self.outcomes: dict[int, Outcome] = {}
         self.nodes: dict[int, Node] = {}
+        self.argkeys: dict[int, str] = {}
         self.chosen: list[Saved] = []
         self.places: list[int] = []
+        self.forbidden: dict[tuple[str, str], set[str]] = {}
+        self.raised: set[int] = set()  # calls on a key that raised in some run
 
-    def run(self, lines: list[Line], places: list[int]) -> TestRecord:
+    def run(
+        self, runs: list[tuple[running.RunResult, list[Line]]], places: list[int]
+    ) -> TestRecord:
         self.places = places
-        roots, orphans = tree([line for line in lines if "call" in line])
-        self.classify(walk(roots) + orphans)
+        roots: list[Node] = []
+        orphans: list[Node] = []
+        everything: list[Node] = []
+        for index, (_, lines) in enumerate(runs):
+            mine, lost = tree([line for line in lines if "call" in line])
+            found = walk(mine) + lost
+            for node in found:
+                node.run = index
+            roots += mine
+            orphans += lost
+            everything += found
+        self.classify(everything)
+        self.find_raised()
         self.settle_groups()
         self.settle_siblings()
+        self.settle_web_runs()
+        # A first pass learns what is forbidden beneath each key in any run, and is thrown away.
+        sets = self.record.sets
+        self.pass_over(roots, orphans)
+        self.record = TestRecord(
+            self.record.test, self.record.results, sets=sets, asked=self.record.asked
+        )
+        for chosen in sets.values():
+            for each in chosen.values():
+                each.code = None
+        self.chosen = []
+        self.pass_over(roots, orphans)
+        self.write_groups()
+        self.mark_bugs()
+        return self.record
+
+    def pass_over(self, roots: list[Node], orphans: list[Node]) -> None:
         for node in roots:
             self.root(node)
         for node in orphans:
             self.note_orphan(node)
-        self.write_groups()
-        self.mark_bugs()
-        return self.record
 
     def classify(self, nodes: list[Node]) -> None:
         for node in nodes:
             if not self.recordable(node):
                 continue
             self.nodes[id(node)] = node
-            self.outcomes[id(node)] = (
+            outcome = (
                 credential_or_outside(node.line)
                 if node.kind == "http" and node.line.get("parent") is None
                 else outcome_of(node, self.folder)
             )
+            if isinstance(outcome, Saved):
+                outcome.run = node.run
+            self.outcomes[id(node)] = outcome
+            if node.kind in ("tool", "mcp"):
+                key = outcome.key[1] if isinstance(outcome, Saved) else self.derived_key(node)
+                self.argkeys[id(node)] = key
+                chosen = self.record.sets.setdefault(node.label, {}).setdefault(key, ArgumentSet())
+                chosen.runs.add(node.run)
+                if chosen.shown is None:
+                    chosen.shown = shown_arguments(node.line)
+
+    def derived_key(self, node: Node) -> str:
+        return arguments_key(node.line, self.folder)
 
     def recordable(self, node: Node) -> bool:
         """Whether a real call can have a mock: a tool or MCP call that was a tool call, or a
@@ -580,10 +684,32 @@ class Recorder:
             node.kind == "mcp" and ("recorded" in node.line or "error" in node.line)
         )
 
+    def run_ids(self, members: list[Node]) -> str:
+        ids = self.record.results
+        return runs_text([ids[i].run for i in sorted({m.run for m in members})])
+
+    def find_raised(self) -> None:
+        """A tool key that raised in one run and has calls in another: none of its calls writes
+        its web requests. Decided per key, whatever happens to the other calls' replies."""
+        groups: dict[tuple[str, str], list[Node]] = {}
+        for node_id in self.outcomes:
+            node = self.nodes[node_id]
+            if node.kind in ("tool", "mcp"):
+                groups.setdefault((node.label, self.argkeys[node_id]), []).append(node)
+        for members in groups.values():
+            raised = [
+                n
+                for n in members
+                if isinstance(o := self.outcomes[id(n)], Listed) and o.code == RAISED
+            ]
+            if raised and len(raised) < len(members):
+                self.raised.update(id(n) for n in members)
+
     def settle_groups(self) -> None:
-        """Several calls with one key share a mock if they got equal replies. If not, tool and
-        MCP calls are nondeterministic, and web calls are too unless their queries or bodies
-        differ: a web mock cannot match those, so that is differs."""
+        """Several calls with one key share a mock if they got equal replies, in one run or
+        across runs. If not, tool and MCP calls are nondeterministic, and web calls are too
+        unless their queries or bodies differ: a web mock cannot match those, so that is
+        differs."""
         groups: dict[tuple[str, ...], list[Node]] = {}
         for node_id, outcome in self.outcomes.items():
             if isinstance(outcome, Saved):
@@ -603,18 +729,20 @@ class Recorder:
                 else "calls with different queries or bodies got different replies, and a web "
                 "mock cannot match a query or a body"
             )
+            if code == NONDETERMINISTIC and len(self.record.results) > 1:
+                why += f" in {self.run_ids(members)}"
             for member in members:
                 self.outcomes[id(member)] = Listed(code, why)
 
     def settle_siblings(self) -> None:
-        """A tool or MCP call that succeeded once and failed once on the same arguments has no
-        one reply, so the group is nondeterministic. Web keeps its own 503-then-200 rule."""
+        """A tool or MCP call that succeeded once and failed once on the same arguments, in one
+        run or across runs, has no one reply, so the group is nondeterministic. not_finished
+        is not in the rule: an orphan did not fail."""
         groups: dict[tuple[str, str], list[Node]] = {}
         for node_id in self.outcomes:
             node = self.nodes[node_id]
             if node.kind in ("tool", "mcp"):
-                sha = str(cast(Fields, node.line.get("args") or {}).get("sha256"))
-                groups.setdefault((node.label, sha), []).append(node)
+                groups.setdefault((node.label, self.argkeys[node_id]), []).append(node)
         for members in groups.values():
             found = [self.outcomes[id(n)] for n in members]
             listed = [o for o in found if isinstance(o, Listed) and o.code in SIBLING_CODES]
@@ -624,6 +752,29 @@ class Recorder:
             why = "the same arguments succeeded once and failed once, so no one reply stands"
             for member in members:
                 self.outcomes[id(member)] = Listed(NONDETERMINISTIC, why, blocks=blocks)
+
+    def settle_web_runs(self) -> None:
+        """A web key with a call saved in one run and a call listed in another has no one reply
+        either. Inside one run the web rules stay as they were."""
+        groups: dict[tuple[str, str, str], list[Node]] = {}
+        for node_id in self.outcomes:
+            node = self.nodes[node_id]
+            if node.kind == "http":
+                key = (node.label, str(node.line.get("method")), str(node.line.get("path")))
+                groups.setdefault(key, []).append(node)
+        for members in groups.values():
+            saved = [n for n in members if isinstance(self.outcomes[id(n)], Saved)]
+            listed = [
+                n
+                for n in members
+                if isinstance(o := self.outcomes[id(n)], Listed) and o.code not in SKIPPED_CODES
+            ]
+            blocks = any(cast(Listed, self.outcomes[id(n)]).blocks for n in listed)
+            why = "the same request got a reply in one run and none to copy in another"
+            if not any(n.run != s.run for s in saved for n in listed):
+                continue
+            for node in saved:  # every run's, the run that listed a call too
+                self.outcomes[id(node)] = Listed(NONDETERMINISTIC, why, blocks=blocks)
 
     def root(self, node: Node) -> None:
         if node.action == "mock":
@@ -635,23 +786,29 @@ class Recorder:
         elif node.kind == "http" and "provider" not in node.line:
             self.root_web(node)
         elif node.kind in ("tool", "mcp") and id(node) in self.outcomes:
-            self.record.seen += 1
             verdict = self.level(node)
-            if verdict.whole:
-                self.record.done += 1
+            self.tally(node, verdict.whole)
             self.chosen += verdict.mocks
+
+    def tally(self, node: Node, whole: bool | None = None) -> None:
+        """Count a call that needed a mock, for the test and for its run; whole if written."""
+        self.record.seen += 1
+        done = 1 if whole else 0
+        self.record.done += done
+        seen, got = self.record.per_run.get(node.run, (0, 0))
+        self.record.per_run[node.run] = (seen + 1, got + done)
 
     def root_web(self, node: Node) -> None:
         outcome = self.outcomes[id(node)]
         if cast(Listed, outcome).code == CREDENTIAL:
             self.skip(node, CREDENTIAL)
             return
-        self.record.seen += 1
+        self.tally(node)
         self.skip(node, OUTSIDE_TOOL)
 
     def note_orphan(self, node: Node) -> None:
         if node.action == "real" and node.kind in ("tool", "mcp", "http"):
-            self.record.seen += 1
+            self.tally(node)
             self.manual(node, Listed(NOT_FINISHED, "the tool that made it never finished"))
 
     def level(self, node: Node) -> Verdict:
@@ -663,12 +820,20 @@ class Recorder:
         if isinstance(own, Listed) and own.code == CREDENTIAL:
             self.skip(node, CREDENTIAL)
             return Verdict(True, [], {CREDENTIAL_BENEATH})
+        key = (node.label, self.argkeys.get(id(node), ""))
+        here: set[str] = (
+            self.forbidden.setdefault(key, set()) if id(node) in self.argkeys else set[str]()
+        )
         if not node.children:
-            return self.leaf(node, own)
+            verdict = self.leaf(node, own, set(here))
+            here |= verdict.forbidden
+            return verdict
         verdicts = [self.child_verdict(child) for child in node.children]
         forbidden = {name for verdict in verdicts for name in verdict.forbidden}
+        here |= forbidden
+        forbidden = set(here)  # what any run found beneath a call on this key
         mocks = [saved for verdict in verdicts for saved in verdict.mocks]
-        if isinstance(own, Listed) and node.line.get("error"):
+        if isinstance(own, Listed) and (node.line.get("error") or id(node) in self.raised):
             self.manual(node, own)
             return Verdict(False, [], forbidden | self.own_forbidden(own))
         if MODEL_BENEATH in forbidden:
@@ -691,13 +856,32 @@ class Recorder:
     def own_forbidden(self, own: Listed) -> set[str]:
         return {FROZEN_BENEATH} if own.blocks else set()
 
-    def leaf(self, node: Node, own: Outcome | None) -> Verdict:
+    def leaf(self, node: Node, own: Outcome | None, beneath: set[str]) -> Verdict:
+        if isinstance(own, Saved) and beneath & {MODEL_BENEATH, CREDENTIAL_BENEATH, FROZEN_BENEATH}:
+            self.manual(node, self.forbidden_listing(node, beneath))
+            return Verdict(False, [], beneath)
         if isinstance(own, Saved):
             return Verdict(True, [own])
         if own is None:
             return Verdict(False, [])
         self.manual(node, own)
         return Verdict(False, [], self.own_forbidden(own))
+
+    def forbidden_listing(self, node: Node, beneath: set[str]) -> Listed:
+        """Why a clean call gets no mock: another run found something forbidden beneath it."""
+        if MODEL_BENEATH in beneath:
+            what, code = "reached the model", MODEL_INSIDE
+        elif CREDENTIAL_BENEATH in beneath:
+            what, code = "made a credential request", NONDETERMINISTIC
+        else:
+            what, code = "made a call that cannot be written", NONDETERMINISTIC
+        runs = self.record.sets[node.label][self.argkeys[id(node)]].runs
+        ids = runs_text([self.record.results[i].run for i in sorted(runs)])
+        # This call was clean; only another run of it found the forbidden call beneath.
+        why = f"a call under it {what} in another run"
+        if len(self.record.results) > 1:
+            why += f"; this call was made in {ids}"
+        return Listed(code, why)
 
     def child_verdict(self, child: Node) -> Verdict:
         """A call a tool made. What is not a kind known here is forbidden, so a new one is safe."""
@@ -752,13 +936,24 @@ class Recorder:
         entry["calls"] = int(cast(int, entry["calls"])) + 1
 
     def entry_key(self, node: Node, listed: Listed) -> tuple[object, ...]:
-        return (node.label, node.line.get("method"), node.line.get("path"), listed.code, listed.why)
+        """One skeleton per call and code; a tool or MCP call also per set of arguments."""
+        return (
+            node.label,
+            node.line.get("method"),
+            node.line.get("path"),
+            listed.code,
+            listed.why,
+            self.argkeys.get(id(node)),
+        )
 
     def manual(self, node: Node, listed: Listed) -> None:
         method, path = node.line.get("method"), node.line.get("path")
         if listed.code == capture.SCRIMMAGE_ERROR:
             return  # a bug in Scrimmage, not a call for the team: mark_bugs makes it exit 3
         key = self.entry_key(node, listed)
+        if id(node) in self.argkeys:
+            chosen = self.record.sets[node.label][self.argkeys[id(node)]]
+            chosen.code = chosen.code or listed.code
         if key not in self.record.manual:
             self.record.manual[key] = ManualEntry(
                 node.label,
@@ -774,11 +969,18 @@ class Recorder:
 
     def write_groups(self) -> None:
         counts: Counter[tuple[str, ...]] = Counter(saved.key for saved in self.chosen)
-        seen: set[tuple[str, ...]] = set()
+        runs: dict[tuple[str, ...], set[int]] = {}
         for saved in self.chosen:
+            runs.setdefault(saved.key, set()).add(saved.run)
+        seen: set[tuple[str, ...]] = set()
+        for saved in self.chosen:  # first seen: by run, then by line
             if saved.key not in seen:
                 seen.add(saved.key)
-                self.record.written.append(Written(saved, counts[saved.key]))
+                self.record.written.append(Written(saved, counts[saved.key], len(runs[saved.key])))
+        for item in self.record.written:
+            if "args" in item.saved.fields:
+                label, key = item.saved.key
+                self.record.sets.get(label, {}).get(key, ArgumentSet()).key = item.saved.key
 
     def mark_bugs(self) -> None:
         bugs = [o for o in self.outcomes.values() if isinstance(o, Listed)]
@@ -829,16 +1031,36 @@ def exact_arguments(line: Line) -> dict[str, object] | None:
     return cast(dict[str, object], cleaned)
 
 
+def runs_problems(config: settings.Config, runs: str) -> tuple[int, list[str]]:
+    """How many runs of each test, or why --runs cannot be that. Text, not int(): int() takes
+    "1_0", " 5" and a full-width digit."""
+    if re.fullmatch(r"[1-9][0-9]*", runs, flags=re.ASCII) is None:
+        return 1, [f"--runs: expected a whole number of 1 or more, got {runs!r}"]
+    count = int(runs)
+    if count > MAX_RUNS:
+        return 1, [f"--runs: at most {MAX_RUNS} runs of each test, got {count}"]
+    real = list(config.agent.real)
+    if count > 1 and config.agent.max_cost_usd is None and real:
+        return count, [
+            f"--runs {count} with no max_cost_usd would call {' and '.join(real)} for real "
+            f"{count} times with no limit on model spend; set max_cost_usd in [agent], or "
+            "record with --runs 1"
+        ]
+    return count, []
+
+
 def prepare(
-    config: settings.Config, names: list[str], refresh: list[str]
+    config: settings.Config, names: list[str], refresh: list[str], runs: str = "1"
 ) -> tuple[Plan | None, list[str]]:
-    """The baselines to run, or the problems with --test and --refresh, before any run."""
+    """The baselines to run, or the problems with the flags, before any run."""
     known = [test.name for test in config.tests]
     problems = [
         f"--test {name!r} names no test in this file; the tests are {', '.join(known)}"
         for name in names
         if name not in known
     ]
+    count, more = runs_problems(config, runs)
+    problems += more
     chosen = [test for test in config.tests if not names or test.name in names]
     for label in refresh:
         problems += refresh_problems(label, chosen, config)
@@ -856,7 +1078,7 @@ def prepare(
         refreshed[test.name] = sorted(taken)
         mocks = tuple(test.mocks[i] for i in kept)
         tests.append(dataclasses.replace(test, mocks=mocks, faults=()))
-    agent = dataclasses.replace(config.agent, runs=1)
+    agent = dataclasses.replace(config.agent, runs=count)
     baselines = dataclasses.replace(config, agent=agent, tests=tuple(tests))
     return Plan(baselines, config, places, refreshed), []
 
@@ -903,6 +1125,7 @@ class Result:
     budget: float | None
     mocks_text: str | None = None
     diff: list[str] = field(default_factory=list[str])
+    runs: int = 1  # the runs asked for, of each test
 
     @property
     def seen(self) -> int:
@@ -917,6 +1140,64 @@ class Result:
     def wrote(self) -> int:
         return sum(len(r.written) for r in self.records if r.trouble is None)
 
+    @property
+    def ran(self) -> int:
+        """The runs that started, over all tests."""
+        return sum(len(r.results) for r in self.records)
+
+
+def budget_stop(results: list[running.RunResult], stopped_by: str | None) -> bool:
+    return stopped_by in running.BUDGET_REASONS or any(
+        r.outcome in ("budget reached", "not reserved") for r in results
+    )
+
+
+NO_RESULT_TAIL = "; rows without runs have no result"
+
+
+def budget_stopped(
+    plan: Plan,
+    path: Path,
+    runner: running.Runner,
+    by_name: dict[str, list[running.RunResult]],
+    report: running.Report,
+) -> Result:
+    """A stop on the budget writes nothing, whatever finished: some tests would look whole and
+    an earlier record's mocks would be lost to a half-done one."""
+    asked = plan.config.agent.runs
+    records = [
+        TestRecord(test, mine, trouble="the budget stopped the record", asked=asked, cut=True)
+        for test in plan.config.tests
+        if (mine := by_name.get(test.name))
+    ]
+    counts = [
+        f"{sum(r.outcome == 'answered' for r in by_name.get(test.name, []))} of {asked}"
+        for test in plan.config.tests
+    ]
+    parts = [
+        f"{count} runs of {test.name}" if i == 0 else f"{count} of {test.name}"
+        for i, (count, test) in enumerate(zip(counts, plan.config.tests, strict=True))
+    ]
+    told = parts[0] if len(parts) == 1 else f"{', '.join(parts[:-1])} and {parts[-1]}"
+    line = (
+        f"the budget stopped the record after {told} (${report.spent:.4f} spent); nothing was "
+        "written, and an earlier record's file is kept; raise max_cost_usd or lower --runs"
+    )
+    messages = [(kind, text) for kind, text in report.messages if not text.endswith(NO_RESULT_TAIL)]
+    messages.append((outcomes.MISTAKES, line))
+    return Result(
+        max(report.code, outcomes.MISTAKE),
+        None,
+        str(path),
+        runner.folder,
+        records,
+        messages,
+        report.above,
+        report.spent,
+        plan.full.agent.max_cost_usd,
+        runs=asked,
+    )
+
 
 def finish(
     plan: Plan,
@@ -928,14 +1209,18 @@ def finish(
     """Group and write each test's mocks, one test at a time, and read the file back."""
     folder = runner.folder
     records: list[TestRecord] = []
-    by_name = {r.row.test.name: r for r in results}
+    by_name: dict[str, list[running.RunResult]] = {}
+    for found_run in results:
+        by_name.setdefault(found_run.row.test.name, []).append(found_run)
+    if budget_stop(results, report.stopped_by):
+        return budget_stopped(plan, path, runner, by_name, report)
     notes: list[tuple[str, str]] = []
     for test in plan.config.tests:
-        result = by_name.get(test.name)
-        if result is None:
+        mine = by_name.get(test.name)
+        if not mine:
             notes.append((outcomes.NOTES, f"{test.name}: it did not run, so nothing was written"))
             continue
-        records.append(record_test(test, result, folder, plan, runner, notes))
+        records.append(record_test(test, mine, folder, plan, runner, notes, report.stopped_by))
     messages: list[tuple[str, str]] = [(outcomes.WARNINGS, CUSTOMER_DATA), *notes]
     messages += report.messages
     messages += [(outcomes.NOTES, text) for text in real_with_args(plan, records)]
@@ -954,6 +1239,7 @@ def finish(
         report.above,
         report.spent,
         plan.full.agent.max_cost_usd,
+        runs=plan.config.agent.runs,
     )
     if not records or all(r.trouble is not None for r in records):
         return result
@@ -979,65 +1265,82 @@ def real_with_args(plan: Plan, records: list[TestRecord]) -> list[str]:
 
 def record_test(
     test: settings.Test,
-    result: running.RunResult,
+    results: list[running.RunResult],
     folder: Path,
     plan: Plan,
     runner: running.Runner,
     notes: list[tuple[str, str]],
+    stopped_by: str | None = None,
 ) -> TestRecord:
-    """One test's mocks from its one run. A run that may have lost lines writes nothing."""
+    """One test's mocks from all its runs. A run that may have lost lines, or a test a stop of
+    the whole command cut short, writes nothing."""
     places = plan.places[test.name]
-    lines = runner.store.lines(result.run)
-    recorder = Recorder(test, result, folder)
-    if result.outcome in ("infrastructure error", "stopped"):
-        record = recorder.record
+    asked = plan.config.agent.runs
+    recorder = Recorder(test, results, folder)
+    record = recorder.record
+    record.asked = asked
+    outs = {r.outcome for r in results}
+    if "infrastructure error" in outs:
+        record.trouble = "its record is incomplete"
+        return record
+    if "stopped" in outs:
+        record.trouble = "another run stopped this one, so its record is not whole"
+        return record
+    if stopped_by is not None and len(results) < asked:
+        record.cut = True
         record.trouble = (
-            "another run stopped this one, so its record is not whole"
-            if result.outcome == "stopped"
-            else "its record is incomplete"
+            f"stopped by {stopped_by}; {record.not_started} of {asked} runs did not start, "
+            "so its record is not whole"
         )
         return record
+    runs = [(r, runner.store.lines(r.run)) for r in results]
     try:
-        record = recorder.run(lines, places)
+        record = recorder.run(runs, places)
     except Incomplete as exc:
         record = recorder.record
         record.trouble, record.written = f"its record is incomplete: {exc}", []
         return record
-    if result.outcome == "answered":
+    for result in results:
+        if result.outcome != "answered":
+            continue
         for broken in result.judgement.broken:
-            notes.append(
-                (
-                    outcomes.NOTES,
-                    f"{test.name}: the recorded run's answer broke a rule: {broken.text}; "
-                    "check the mocks before trusting them",
-                )
+            text = (
+                f"{test.name}: the recorded run's answer broke a rule: {broken.text}; "
+                "check the mocks before trusting them"
             )
+            if (outcomes.NOTES, text) not in notes:
+                notes.append((outcomes.NOTES, text))
     return record
 
 
 def test_code(found: TestRecord, messages: list[tuple[str, str]]) -> int:
-    """The test's part of the exit code, and the lines that go with it."""
+    """The test's part of the exit code, and the lines that go with it. Every run decides."""
     name = found.test.name
-    outcome = found.result.outcome
-    if outcome == "stopped":  # a refusal elsewhere stopped it, and the report says which
-        messages.append((outcomes.NOTES, f"{name}: {found.trouble}, so nothing was written for it"))
-        return outcomes.OK
+    outs = [r.outcome for r in found.results]
     if found.trouble is not None:
+        if "infrastructure error" not in outs and ("stopped" in outs or found.cut):
+            # a refusal or a stop elsewhere ended it, and the report says which
+            messages.append(
+                (outcomes.NOTES, f"{name}: {found.trouble}, so nothing was written for it")
+            )
+            return outcomes.OK
         messages.append(
             (outcomes.INFRA_ERRORS, f"{name}: {found.trouble}, so nothing was written for it")
         )
         return outcomes.INFRA
-    if outcome == "refused call":
-        messages.append(
-            (
-                outcomes.NOTES,
-                f"{name}: the run stopped at the refusal, so calls after it were not seen",
-            )
+    code = outcomes.OK
+    if "refused call" in outs:
+        first, missing = outs.index("refused call") + 1, found.not_started
+        text = (
+            f"{name}: run {first} stopped at a refusal; {missing} of {found.asked} runs did not "
+            "start"
+            if missing
+            else f"{name}: the run stopped at the refusal, so calls after it were not seen"
         )
-        return outcomes.OK
-    if outcome in ("crashed", "timed out"):
-        return outcomes.ROW_FAILED
-    return outcomes.OK
+        messages.append((outcomes.NOTES, text))
+    if any(outcome in ("crashed", "timed out") for outcome in outs):
+        code = outcomes.ROW_FAILED
+    return code
 
 
 def write_file(result: Result, plan: Plan, path: Path) -> Result:
@@ -1130,7 +1433,13 @@ def block_text(found: TestRecord, when: str) -> str:
     for item in found.written:
         saved = item.saved
         ending = "1 call" if item.calls == 1 else f"{item.calls} calls"
-        comment = f"scrimmage record, {when}, {found.result.run}: {saved.where}, {ending}."
+        first = found.results[saved.run]
+        named = first.run
+        if len(found.results) > 1:
+            ending += f" in {item.runs} of {len(found.results)} runs"
+            if first.outcome != "answered":
+                named += f" ({first.outcome})"
+        comment = f"scrimmage record, {when}, {named}: {saved.where}, {ending}."
         if "args" in saved.fields:
             comment += " It answers only these arguments."
         parts.append(toml_write.mock(saved.fields, [comment]))
@@ -1289,9 +1598,38 @@ def read_back(team_text: str, new_text: str, plan: Plan, records: list[TestRecor
         else:
             table.pop("mock", None)
     where = capture.differ(team, found, "file")
-    if where is None:
-        return None
-    return "the file's layout cannot take the mocks: reading it back differed"
+    if where is not None:
+        return "the file's layout cannot take the mocks: reading it back differed"
+    guard(records)
+    return None
+
+
+def mock_identity(mock: settings.Mock) -> tuple[object, ...]:
+    """What a mock answers: its label, its method and path, and its arguments, told apart by
+    type (1, 1.0, true and "1" are four)."""
+    args = None if mock.args is None else json.dumps(mock.args, sort_keys=True)
+    return (mock.call, mock.method, mock.path, args)
+
+
+def guard(records: list[TestRecord]) -> None:
+    """The mocks of each test, team and written, must pass the order check scrimmage check
+    makes and have no two that answer the same call. A failure is a bug in Scrimmage."""
+    for record in records:
+        if record.trouble is not None:
+            continue
+        added = [settings.read_mock(w.saved.fields, "the mock") for w in record.written]
+        mocks = (*record.test.mocks, *added)
+        problems = settings.dead_mocks(dataclasses.replace(record.test, mocks=mocks))
+        if problems:
+            raise toml_write.WriterBug(
+                f"scrimmage wrote a mock that can never answer: {problems[0]}"
+            )
+        identities = [mock_identity(mock) for mock in mocks]
+        for mock in added:
+            if identities.count(mock_identity(mock)) > 1:
+                raise toml_write.WriterBug(
+                    f"scrimmage wrote two mocks that answer the same call: {mock.call}"
+                )
 
 
 def write_atomically(team: Path, out: Path, text: str) -> None:
@@ -1309,19 +1647,27 @@ def write_atomically(team: Path, out: Path, text: str) -> None:
 
 def print_result(result: Result, config: settings.Config) -> None:
     """The result as text, in the order a reviewer reads it."""
-    tests, runs = (
-        outcomes.plural(len(config.tests), "test"),
-        outcomes.plural(len(result.records), "run"),
-    )
-    print(f"scrimmage record: {tests}, {runs}; records in {result.folder}")
+    many = result.runs > 1
+    tests = outcomes.plural(len(config.tests), "test")
+    ran = result.ran if many else len(result.records)
+    runs = outcomes.plural(ran, "run")
+    each = f"{result.runs} runs each, " if many else ""
+    print(f"scrimmage record: {tests}, {each}{runs}; records in {result.folder}")
     for kind, text in result.above:
         print(f"{running.PREFIXES[kind]}: {text}")
     for found in result.records:
         print(test_line(found))
+        if many:
+            for line in run_lines(found):
+                print(line)
     if result.out is not None:
         wrote = outcomes.plural(result.wrote, "mock")
         print(f"wrote {wrote} to {result.out}; {result.team} is unchanged")
     print(f"recorded {result.done} of {result.seen} calls that needed a mock")
+    for found in result.records:
+        if many and found.trouble is None:
+            for line in argument_lines(found):
+                print(line)
     for found in result.records:
         for line in by_hand_lines(found):
             print(line)
@@ -1331,7 +1677,8 @@ def print_result(result: Result, config: settings.Config) -> None:
         print(result.mocks_text)
     budget = result.budget
     limit = "no budget" if budget is None else f"a budget of ${budget:g}"
-    print(f"model calls cost ${result.spent:.4f} of {limit}")
+    more = f", {outcomes.plural(result.ran, 'run')}" if many else ""
+    print(f"model calls cost ${result.spent:.4f} of {limit}{more}")
     if result.out is not None:
         print(f"next: diff {result.team} {result.out}, then scrimmage test {result.out}")
         for line in result.diff:
@@ -1350,13 +1697,59 @@ def test_line(found: TestRecord) -> str:
     if found.trouble is not None:
         parts = ["nothing written"]
     tail = ", ".join(parts) or "no calls to write"
+    if found.asked > 1:
+        answered = sum(r.outcome == "answered" for r in found.results)
+        return f"{found.test.name}  {answered} of {found.asked} answered  {tail}"
     return f"{found.test.name}  {found.result.run}  {found.result.outcome}  {tail}"
+
+
+def run_lines(found: TestRecord) -> list[str]:
+    """One line a run, for a test that ran more than once."""
+    out: list[str] = []
+    for index, run in enumerate(found.results):
+        seen, got = found.per_run.get(index, (0, 0))
+        tail = "nothing written" if found.trouble is not None else f"{got} of {seen} calls written"
+        out.append(f"  run {index + 1}  {run.run}  {run.outcome}  {tail}")
+    return out
+
+
+def argument_lines(found: TestRecord) -> list[str]:
+    """For each label that was called with two or more sets of arguments, the sets."""
+    out: list[str] = []
+    for label, sets in found.sets.items():
+        if len(sets) < 2:
+            continue
+        each = ", ".join(
+            f"{item.shown or '(arguments not shown)'} in {len(item.runs)}" for item in sets.values()
+        )
+        have = sum(item.key is not None for item in sets.values())
+        ending = (
+            "each has its own mock" if have == len(sets) else f"{have} of {len(sets)} have a mock"
+        )
+        out.append(
+            f"arguments: {found.test.name}: {label}: {len(sets)} sets in "
+            f"{outcomes.plural(len(found.results), 'run')}: {each}; {ending}"
+        )
+    return out
+
+
+def before_runs(config: settings.Config) -> str | None:
+    """The line said before the first run of a record of several: how many, and what is real."""
+    count = config.agent.runs
+    if count == 1:
+        return None
+    real = ", ".join(config.agent.real)
+    each = f"{count} runs of each of {outcomes.plural(len(config.tests), 'test')}"
+    return (
+        f"{each}; each calls these for real: {real}" if real else f"{each}; nothing is under real"
+    )
 
 
 def by_hand_lines(found: TestRecord) -> list[str]:
     name = found.test.name
+    with_arguments = found.asked > 1
     out = [
-        f"by hand: {name}: {entry.call}: {entry.message}"
+        f"by hand: {name}: {entry.call}{asked_with(entry, with_arguments)}: {entry.message}"
         if entry.instead is None
         else f"instead: {name}: {entry.call}: {entry.message}; {entry.instead} stands for it"
         for entry in found.manual.values()
@@ -1377,6 +1770,10 @@ def by_hand_lines(found: TestRecord) -> list[str]:
     return out
 
 
+def asked_with(entry: ManualEntry, show: bool) -> str:
+    return f" with {entry.shown}" if show and entry.shown is not None else ""
+
+
 def removal_text(removal: Fields) -> str:
     key = removal.get("key")
     if removal.get("rule") == capture.KEY_NAME:
@@ -1390,11 +1787,33 @@ def removal_text(removal: Fields) -> str:
 
 def json_fields(result: Result) -> dict[str, object]:
     """The fields scrimmage record --json adds to the envelope."""
+    written = result.out is not None
+    seen_sets = {
+        (label, key)
+        for found in result.records
+        for label, sets in found.sets.items()
+        for key in sets
+    }
+    wrote_sets = {
+        (label, key)
+        for found in result.records
+        if written and found.trouble is None
+        for label, sets in found.sets.items()
+        for key, item in sets.items()
+        if item.key is not None
+    }
     doc: dict[str, object] = {
         "out": result.out,
         "records": str(result.folder),
         "cost_usd": round(result.spent, 8),
-        "numbers": {"calls_seen": result.seen, "calls_written": result.done},
+        "numbers": {
+            "calls_seen": result.seen,
+            "calls_written": result.done,
+            "runs": result.runs,
+            "runs_recorded": sum(len(r.results) for r in result.records if r.trouble is None),
+            "argument_sets_seen": len(seen_sets),
+            "argument_sets_written": len(wrote_sets),
+        },
         "tests": [test_json(found) for found in result.records],
     }
     if result.mocks_text is not None:
@@ -1402,17 +1821,53 @@ def json_fields(result: Result) -> dict[str, object]:
     return doc
 
 
+def mock_place(found: TestRecord, key: tuple[str, ...] | None) -> int | None:
+    """Where a tool-level mock sits among the output test's mocks, counting from 1."""
+    for index, item in enumerate(found.written):
+        if key is not None and item.saved.key == key:
+            return len(found.test.mocks) + index + 1
+    return None
+
+
+def argument_sets_json(found: TestRecord) -> list[dict[str, object]]:
+    """Per label, how its calls split by arguments. No argument value is in it."""
+    return [
+        {
+            "call": label,
+            "seen": len(sets),
+            "written": sum(item.key is not None for item in sets.values()),
+            "sets": [
+                {"runs": len(item.runs), "mock": mock_place(found, item.key), "code": item.code}
+                for item in sets.values()
+            ],
+        }
+        for label, sets in found.sets.items()
+    ]
+
+
 def test_json(found: TestRecord) -> dict[str, object]:
     return {
         "test": found.test.name,
         "run": found.result.run,
         "outcome": found.result.outcome,
+        "runs": [
+            {
+                "run": run.run,
+                "outcome": run.outcome,
+                "calls_seen": found.per_run.get(index, (0, 0))[0],
+                "calls_written": 0 if found.trouble else found.per_run.get(index, (0, 0))[1],
+                "cost_usd": round(run.cost_usd, 8),
+            }
+            for index, run in enumerate(found.results)
+        ],
+        "not_started": found.not_started,
         "written": [
             {
                 "call": item.saved.fields["call"],
                 "method": item.saved.method,
                 "path": item.saved.path,
                 "calls": item.calls,
+                "runs": item.runs,
                 "removed": item.saved.removed,
             }
             for item in found.written
@@ -1431,4 +1886,5 @@ def test_json(found: TestRecord) -> dict[str, object]:
             }
             for entry in found.manual.values()
         ],
+        "argument_sets": argument_sets_json(found),
     }

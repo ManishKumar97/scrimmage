@@ -66,18 +66,20 @@ scrimmage check: 1 problem; nothing was run
 ## scrimmage record
 
 ```bash
-scrimmage record [path/to/scrimmage.toml] [--test NAME]... [--refresh LABEL]... [--json]
+scrimmage record [path/to/scrimmage.toml] [--test NAME]... [--refresh LABEL]... [--runs N] [--json]
 ```
 
-Runs each test's baseline once, with its mocks and nothing injected, and writes each real tool, MCP and web call as a mock in `scrimmage.recorded.toml`, beside your file.
+Runs each test's baseline, once or `--runs N` times, with its mocks and nothing injected, and writes each real tool, MCP and web call as a mock in `scrimmage.recorded.toml`, beside your file.
 Your file is never changed. See [Recording replies](recording.md).
 `--test NAME` records only that test. `--refresh LABEL` records a label again that already has a mock.
+`--runs N` runs each test's baseline N times, 1 by default, and writes one exact mock for each set of arguments the runs sent.
+`N` is a whole number from 1 to 1000, and the file's `runs` is not read. See [Recording more than one run](recording.md#recording-more-than-one-run).
 
 | Code | Meaning |
 |---|---|
 | 0 | Every call that needs a mock got one, and every run answered |
 | 1 | The file is written, and a call is listed by hand, or a run did not answer |
-| 2 | A mistake: the file, a refused call, an unseen tool, the budget, or a file layout record cannot extend |
+| 2 | A mistake: the file, `--runs`, a refused call, an unseen tool, the budget, or a file layout record cannot extend. A stop on the budget writes nothing |
 | 3 | An infrastructure error, including a bug in Scrimmage while it recorded; nothing is written for a test whose record is incomplete |
 
 ## scrimmage schema

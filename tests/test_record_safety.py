@@ -6,13 +6,16 @@ import dataclasses
 import decimal
 import hashlib
 import json
+from collections.abc import Callable
 from typing import cast
 
 import pydantic
 import pytest
 
+from fakes.openai_server import FakeOpenAI
 from scrimmage_core import capture, mcp_gate, state
 from scrimmage_core.decide import Call
+from test_record import SK, Team, many, team
 from test_record_lines import (
     Sink,
     expect_scrimmage_error,
@@ -24,7 +27,7 @@ from test_record_lines import (
     sink,
 )
 
-__all__ = ["expect_scrimmage_error", "no_scrimmage_error", "sink"]  # fixtures, used by name
+__all__ = ["expect_scrimmage_error", "no_scrimmage_error", "sink", "team"]  # fixtures, used by name
 
 
 # Recording only observes a call, so nothing in it may fail the agent's call.
@@ -413,3 +416,86 @@ def test_an_mcp_text_that_is_json_with_a_secret_is_not_saved() -> None:
     assert capture.mcp_value(real, {"q": "x"}, rebuild)["code"] == "secret_changed_shape"
     fine = {"content": [{"type": "text", "text": json.dumps({"v": 1})}]}
     assert "code" not in capture.mcp_value(fine, {"q": "x"}, rebuild)
+
+
+# Every run of a record of several is cleaned alike.
+
+PASSWORD = "hunter2-x7Qp9"
+
+
+@pytest.mark.slow
+@pytest.mark.design("record.runs_safety")
+@pytest.mark.parametrize(
+    ("reply", "arguments", "removed"),
+    [
+        ('{"password": PASSWORD} if n == 2 else {"ok": n}', "", True),
+        ('{"note": "key is " + SECRET_KEY} if n == 1 else {"ok": n}', "", True),
+        ('{"blob": json.dumps({"password": PASSWORD})} if n == 3 else {"ok": n}', "", False),
+        ('{"ok": n}', ", token=PASSWORD if n == 2 else 'fine'", False),
+    ],
+    ids=["key_name_in_run_3", "pattern_in_run_2", "json_text_in_run_4", "argument_in_run_3"],
+)
+def test_no_secret_reaches_the_file_from_any_run(
+    team: Team,
+    fake_openai: Callable[..., FakeOpenAI],
+    reply: str,
+    arguments: str,
+    removed: bool,
+) -> None:
+    many(
+        team,
+        fake_openai,
+        f"""
+PASSWORD = {PASSWORD!r}
+SECRET_KEY = {SK!r}
+
+def get_cfg(k, token=None):
+    n = int(k[1:])
+    return {reply}
+
+def answer(q):
+    ask_model()
+    n = run_index()
+    get_cfg(f"r{{n}}"{arguments})
+    return "ok"
+""",
+        ["bot:get_cfg"],
+        ("tool:get_cfg",),
+    )
+    done = team.record("--runs", "4")
+    text = team.out_path.read_text()
+    assert PASSWORD not in text + done.out and SK not in text + done.out
+    if removed:
+        assert any(w["removed"] for w in done.test["written"])
+    else:
+        assert done.manual("secret_changed_shape") or done.manual("unsavable")
+
+
+@pytest.mark.slow
+@pytest.mark.design("record.runs_safety")
+def test_a_credential_request_in_one_run_is_never_written(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    team.service.routes["/oauth2/token"] = (200, {}, b'{"access_token": "live-token-value"}')
+    many(
+        team,
+        fake_openai,
+        """
+def connect(k):
+    if k == "r1":
+        httpx.post(SERVICE + "/oauth2/token", timeout=30, json={})
+    return {"connected": True}
+
+def answer(q):
+    ask_model()
+    connect(f"r{run_index()}")
+    return "ok"
+""",
+        ["bot:connect"],
+        ("tool:connect", "http:localhost POST /oauth2/token"),
+    )
+    done = team.record("--runs", "3")
+    assert done.skipped("credential"), done.out
+    text = team.out_path.read_text() if team.out_path.exists() else ""
+    assert "live-token-value" not in text + done.out
+    assert "/oauth2/token" not in [m.get("path") for m in done.mocks()]

@@ -1,8 +1,12 @@
 """scrimmage record end to end: real runs of a small bot against a local service."""
 
 import contextlib
+import dataclasses
 import difflib
+import hashlib
 import json
+import os
+import re
 import signal
 import threading
 import tomllib
@@ -21,9 +25,11 @@ from conftest import Project, TimeLimit
 from fakes.openai_server import FakeOpenAI
 from scrimmage_core import capture, toml_write
 from scrimmage_core import record as recording
+from scrimmage_core import runner as running
 from scrimmage_core.cli import main
 from scrimmage_core.control import ControlServer
 from test_cli_json import validate
+from test_record_units import loaded, result_for
 
 pytestmark = pytest.mark.slow
 
@@ -120,6 +126,12 @@ class Done:
         return [str(w["call"]) for w in self.test["written"]]
 
     @property
+    def counts(self) -> dict[str, int]:
+        """The numbers the slice began with: calls seen and calls written."""
+        numbers = self.doc["numbers"]
+        return {"calls_seen": numbers["calls_seen"], "calls_written": numbers["calls_written"]}
+
+    @property
     def output(self) -> dict[str, Any]:
         return tomllib.loads(self.team.out_path.read_text())
 
@@ -170,7 +182,8 @@ class Team:
         code = main(["record", str(self.toml), "--json", *flags])
         captured = self.project.capsys.readouterr()
         doc = json.loads(captured.out)  # standard output is one document
-        assert captured.err == "", captured.err
+        # a record of several runs says what is real on standard error, before the first run
+        assert captured.err == "" or captured.err.startswith("scrimmage record: "), captured.err
         assert doc["command"] == "record" and doc["exit"] == code
         validate(doc)  # the shipped schema and the tests' closed copy of it
         if doc["out"] is not None:
@@ -255,7 +268,7 @@ def answer(question):
     call = next(line for line in lines if "call" in line)
     assert "recorded" in call and call["action"] == "real" and "fault" not in call
     assert done.doc["status"] == "complete" and done.doc["out"] == str(team.out_path)
-    assert done.doc["numbers"] == {"calls_seen": 1, "calls_written": 1}
+    assert done.counts == {"calls_seen": 1, "calls_written": 1}
     assert any("customer data" in w["message"] for w in done.doc["warnings"])
     # the output is the team's file plus exactly this mock, its comments kept in order.
     output = tomllib.loads(team.out_path.read_text())
@@ -393,7 +406,7 @@ def answer(question):
     assert done.code == 1, done.out  # a call is listed under manual, as C.J3.19 says
     assert [m["call"] for m in done.mocks()] == ["tool:picture", "tool:pressed"]
     assert {m["path"] for m in done.manual("binary")} == {"/png", "/br"}
-    assert done.doc["numbers"] == {"calls_seen": 2, "calls_written": 2}
+    assert done.counts == {"calls_seen": 2, "calls_written": 2}
     text = team.out_path.read_text()
     assert "A mock of tool:picture" in text
     code, out = team.test_output()
@@ -475,7 +488,7 @@ def answer(question):
     assert outside == {"/a", "/secret"}
     assert [s["path"] for s in done.skipped("credential")] == ["/v1/secret/data/db"]
     # The credential request does not count. The tool, /a and /secret do; only the tool is written.
-    assert done.doc["numbers"] == {"calls_seen": 3, "calls_written": 1}
+    assert done.counts == {"calls_seen": 3, "calls_written": 1}
     code, out = team.test_output()
     assert code == 0, out
     assert ("GET", "/a", "") not in team.service.requests  # the tool's mock answers it
@@ -898,7 +911,7 @@ def answer(question):
     assert mocks["tool:marker"]["returns"] == fake
     assert "fault" not in done.output["test"][0]
     assert any("broke a rule" in n["message"] for n in done.doc["notes"])
-    assert done.doc["numbers"] == {"calls_seen": 5, "calls_written": 2}
+    assert done.counts == {"calls_seen": 5, "calls_written": 2}
     text = team.out_path.read_text()
     for call in ("tool:dollars", "tool:nothing", "tool:pic"):
         assert f'# call    = "{call}"' in text
@@ -1021,40 +1034,6 @@ def answer(question):
     assert done.test["outcome"] == "infrastructure error"
     assert done.test["written"] == []
     assert any("nothing was written" in i["message"] for i in done.doc["infra"])
-
-
-@pytest.mark.design("record.budget_stop")
-def test_a_budget_stop_exits_2_and_keeps_the_mocks_of_runs_that_ended(
-    team: Team, fake_openai: Callable[..., FakeOpenAI]
-) -> None:
-    fake = fake_openai([])  # refused before it is sent, so the fake gets no request
-    team.write(
-        """
-import openai
-
-def read_stock(sku):
-    return {"count": 3}
-
-def answer(question):
-    read_stock("a")
-    openai.OpenAI().chat.completions.create(
-        model="gpt-4o-mini", messages=[{"role": "user", "content": "a very long " * 2000}]
-    )
-    return "ok"
-""",
-        ["bot:read_stock"],
-        ("tool:read_stock",),
-        agent_extra=(
-            'max_cost_usd = 0.000001\nmodel_hosts = [{host = "127.0.0.1", provider = "openai"}]\n'
-        ),
-    )
-    team.project.monkeypatch.setenv("OPENAI_BASE_URL", fake.base_url)
-    team.project.monkeypatch.setenv("OPENAI_API_KEY", "test")
-    done = team.record()
-    assert done.code == 2, done.out
-    assert done.test["outcome"] == "budget reached" or done.test["outcome"] == "not reserved"
-    assert done.written_calls() == ["tool:read_stock"]
-    assert done.doc["out"] == str(team.out_path)
 
 
 @pytest.mark.design("record.huge_reply")
@@ -1365,7 +1344,7 @@ def answer(question):
         ("tool:a", "tool:b", "tool:c", "tool:pic"),
     )
     done = team.record()
-    assert done.doc["numbers"] == {"calls_seen": 4, "calls_written": 3}, done.out
+    assert done.counts == {"calls_seen": 4, "calls_written": 3}, done.out
     assert done.code == 1
     code, out = team.record_text()
     assert "recorded 3 of 4 calls that needed a mock" in out and code == 1
@@ -1428,12 +1407,12 @@ def answer(question):
 
 
 def test_a_credential_reply_never_reaches_the_file_through_a_tool_mock(team: Team) -> None:
-    team.service.routes["/oauth/token"] = (200, {}, b'{"access_token": "live-token-value"}')
+    team.service.routes["/oauth2/token"] = (200, {}, b'{"access_token": "live-token-value"}')
     team.service.routes["/png"] = (200, {"content-type": "image/png"}, b"\x89PNG\r\n\xff\xfe")
     team.write(
         """
 def connect(name):
-    token = httpx.post(SERVICE + "/oauth/token", timeout=30, json={}).json()["access_token"]
+    token = httpx.post(SERVICE + "/oauth2/token", timeout=30, json={}).json()["access_token"]
     http_get("/png")
     return {"db_pw": token}
 
@@ -1442,15 +1421,15 @@ def answer(question):
     return "ok"
 """,
         ["bot:connect"],
-        ("tool:connect", "http:localhost POST /oauth/token"),
+        ("tool:connect", "http:localhost POST /oauth2/token"),
     )
     done = team.record()
     assert done.code == 1, done.out
     assert not any(m["call"] == "tool:connect" for m in done.mocks())
     assert "live-token-value" not in team.out_path.read_text()
-    assert [s["path"] for s in done.skipped("credential")] == ["/oauth/token"]
+    assert [s["path"] for s in done.skipped("credential")] == ["/oauth2/token"]
     assert [m["path"] for m in done.manual("binary")] == ["/png"]
-    assert done.doc["numbers"] == {"calls_seen": 1, "calls_written": 0}
+    assert done.counts == {"calls_seen": 1, "calls_written": 0}
 
 
 @pytest.mark.parametrize(
@@ -1684,7 +1663,7 @@ def answer(question):
     )
     done = team.record()
     assert done.code == 0, done.out
-    assert done.doc["numbers"] == {"calls_seen": 350, "calls_written": 350}
+    assert done.counts == {"calls_seen": 350, "calls_written": 350}
 
 
 def test_a_body_of_newlines_is_measured_as_toml(team: Team) -> None:
@@ -2004,3 +1983,1245 @@ def test_record_on_a_recorded_file_writes_a_missed_call_under_real_by_name(team:
     assert done.written_calls() == ["tool:get_order"]
     args = [m["args"] for m in done.mocks()]
     assert args == [{"order_id": "5678"}, {"order_id": "1"}]
+
+
+# Several runs of each test: scrimmage record --runs N.
+
+COUNTER = """
+import fcntl
+
+def run_index():
+    with open(os.environ["COUNTER"], "a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.seek(0)
+        n = len(f.read().split())
+        f.write("x\\n")
+    return n
+"""
+MODEL_CALL = (
+    """
+import openai
+
+def ask_model():
+    openai.OpenAI().chat.completions.create(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}]
+    )
+"""
+    + COUNTER
+)
+BUDGET = 'max_cost_usd = 1.0\nmodel_hosts = [{host = "127.0.0.1", provider = "openai"}]\n'
+STOCK = """
+def get_stock(sku):
+    return {"count": 3, "sku": sku}
+"""
+
+
+def many(
+    team: Team,
+    fake_openai: Callable[..., FakeOpenAI],
+    code: str,
+    tools: list[str],
+    real: tuple[str, ...],
+    tests: str | None = None,
+    extra: str = "",
+) -> FakeOpenAI:
+    """A bot that asks the model once a run, so a budget can stand, and tells its runs apart
+    with a counter file. The runs go one at a time unless the settings say otherwise."""
+    fake = fake_openai(["chat_answer"])
+    patch = team.project.monkeypatch
+    patch.setenv("OPENAI_BASE_URL", fake.base_url)
+    patch.setenv("OPENAI_API_KEY", "test")
+    patch.setenv("COUNTER", str(team.root / "count.txt"))
+    settings = extra if "parallel" in extra else "parallel = 1\n" + extra
+    team.write(
+        MODEL_CALL + code,
+        tools,
+        real,
+        tests=tests,
+        agent_extra=BUDGET + settings + "run_timeout = 60\n",
+    )
+    return fake
+
+
+def answering(*calls: str) -> str:
+    """A bot that asks the model once, makes these calls, and answers ok."""
+    body = "".join(f"    {call}\n" for call in calls)
+    return STOCK + "def answer(q):\n    ask_model()\n" + body + "    return 'ok'\n"
+
+
+def run_ids(done: Done) -> list[str]:
+    return [r["run"] for r in done.test["runs"]]
+
+
+def stock_args(done: Done) -> list[str]:
+    return [m["args"]["sku"] for m in done.mocks() if m["call"] == "tool:get_stock"]
+
+
+@pytest.mark.design("record.runs_flag")
+@pytest.mark.parametrize("json_form", [True, False])
+@pytest.mark.parametrize("value", ["0", "-1", "1.5", "x", "", "1e3", "1_0", " 5", chr(0xFF15)])
+def test_runs_must_be_a_whole_number_of_one_or_more(
+    team: Team, value: str, json_form: bool
+) -> None:
+    # no tool is under real, so a value that wrongly passed would start runs, not be refused
+    team.write("def answer(q):\n    return 'ok'\n", [], ())
+    if json_form:
+        done = team.record("--runs", value)
+        assert done.code == 2 and done.doc["out"] is None
+        asked = [m["message"] for m in done.doc["mistakes"]]
+        assert any("--runs: expected a whole number of 1 or more" in m for m in asked), done.out
+    else:
+        code, out = team.record_text("--runs", value)
+        assert code == 2 and out == ""
+    assert not (team.root / "scrimmage-runs").exists()
+    assert not team.out_path.exists()
+
+
+@pytest.mark.design("record.runs_flag")
+def test_more_than_one_run_with_real_tools_and_no_budget_is_refused(team: Team) -> None:
+    team.write(
+        STOCK + "def answer(q):\n    get_stock('a')\n    return 'ok'\n",
+        ["bot:get_stock"],
+        ("tool:get_stock",),
+    )
+    done = team.record("--runs", "2")
+    assert done.code == 2 and done.doc["out"] is None
+    (mistake,) = [m["message"] for m in done.doc["mistakes"]]
+    assert "tool:get_stock" in mistake and "max_cost_usd" in mistake and "--runs 1" in mistake
+    assert not (team.root / "scrimmage-runs").exists()
+    one = team.record("--runs", "1")  # one run with no budget is today's command
+    assert one.code == 0, one.out
+
+
+@pytest.mark.design("record.runs_flag")
+def test_tools_under_real_are_named_before_the_runs_start(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    many(
+        team,
+        fake_openai,
+        STOCK + "def answer(q):\n    ask_model()\n    get_stock('a')\n    return 'ok'\n",
+        ["bot:get_stock"],
+        ("tool:get_stock",),
+    )
+    named = "scrimmage record: 2 runs of each of 1 test; each calls these for real: tool:get_stock"
+    done = team.record("--runs", "2")  # standard output is one document
+    assert done.err.splitlines() == [named]
+    code, out = team.record_text("--runs", "2")
+    assert code == 0, out
+    first, second = out.splitlines()[:2]
+    assert first == named and second.startswith("scrimmage record: 1 test, 2 runs each, 2 runs;")
+
+
+@pytest.mark.design("record.runs_flag")
+def test_runs_runs_each_baseline_n_times_and_no_fault_rows(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    two = (
+        '[[test]]\nname     = "t1"\nquestion = "q"\nexpect   = ["ok"]\n'
+        '[[test.fault]]\ncall = "tool:get_stock"\ndo   = "error"\nwhen = "first 1"\n'
+        '[[test]]\nname     = "t2"\nquestion = "q"\nexpect   = ["ok"]\n'
+    )
+    many(
+        team,
+        fake_openai,
+        STOCK + "def answer(q):\n    ask_model()\n    get_stock('a')\n    return 'ok'\n",
+        ["bot:get_stock"],
+        ("tool:get_stock",),
+        tests=two,
+    )
+    done = team.record("--runs", "3")
+    assert done.code == 0, done.out
+    assert len(list(team.root.glob("scrimmage-runs/*/*.jsonl"))) == 6
+    assert done.doc["numbers"]["runs"] == 3 and done.doc["numbers"]["runs_recorded"] == 6
+    assert [len(t["runs"]) for t in done.doc["tests"]] == [3, 3]
+    for path in team.root.glob("scrimmage-runs/*/*.jsonl"):
+        assert all("fault" not in json.loads(text) for text in path.read_text().splitlines())
+
+
+@pytest.mark.design("record.runs_flag")
+def test_record_ignores_the_files_runs_setting(team: Team) -> None:
+    team.write(
+        STOCK + "def answer(q):\n    get_stock('a')\n    return 'ok'\n",
+        ["bot:get_stock"],
+        ("tool:get_stock",),
+        agent_extra="runs     = 7\n",
+    )
+    done = team.record()
+    assert done.code == 0 and done.doc["numbers"]["runs"] == 1
+    assert len(list(team.root.glob("scrimmage-runs/*/*.jsonl"))) == 1
+
+
+@pytest.mark.design("record.runs_flag")
+def test_one_run_by_default_gives_todays_output(team: Team) -> None:
+    team.service.json("/stock/1", {"count": 3})
+    team.write(
+        """
+def get_order(order_id):
+    return {"order_id": order_id, "status": "shipped"}
+
+def stock(sku):
+    return http_get(f"/stock/{sku}").json()["count"]
+
+def answer(question):
+    get_order("1")
+    return f"ok {stock('1')}"
+""",
+        ["bot:get_order", "bot:stock"],
+        ("tool:get_order", "tool:stock"),
+    )
+    done = team.record()
+    assert done.code == 0, done.out
+    code, text = team.record_text()
+    assert code == 0
+    for_json = {k: v for k, v in done.doc.items() if k in ("numbers", "tests", "out")}
+    for_json["numbers"] = {k: for_json["numbers"][k] for k in ("calls_seen", "calls_written")}
+    for_json["tests"] = [without_new(t) for t in for_json["tests"]]
+    got = {
+        "json": normal(json.dumps(for_json, indent=1, sort_keys=True), team),
+        "text": normal(text, team),
+    }
+    fixture = json.loads((Path(__file__).parent / "fixtures/record_default.json").read_text())
+    assert got == fixture
+
+
+def without_new(test: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in test.items() if k not in ("runs", "not_started", "argument_sets")} | {
+        "written": [{k: v for k, v in w.items() if k != "runs"} for w in test["written"]]
+    }
+
+
+def normal(text: str, team: Team) -> str:
+    """A run's text with what changes from one run to the next replaced."""
+    text = text.replace(str(team.root), "ROOT")
+    text = re.sub(r"run-[0-9a-f]{12}", "RUN", text)
+    text = re.sub(r"scrimmage-runs/[0-9TZ]+-[0-9a-f]+", "scrimmage-runs/FOLDER", text)
+    return re.sub(r"\d{4}-\d{2}-\d{2}", "DATE", text)
+
+
+# One Recorder over every run.
+
+
+@pytest.mark.design("record.runs_merge")
+def test_two_runs_with_different_arguments_write_one_exact_mock_each(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    marker = team.root / "real-calls.txt"
+    many(
+        team,
+        fake_openai,
+        """
+def get_stock(sku):
+    with open(os.environ["MARKER"], "a") as f:
+        f.write("x")
+    return {"count": 3, "sku": sku}
+
+def answer(q):
+    ask_model()
+    get_stock("a" if run_index() % 2 == 0 else "b")
+    return "ok"
+""",
+        ["bot:get_stock"],
+        ("tool:get_stock",),
+        extra="runs = 4\n",
+    )
+    team.project.monkeypatch.setenv("MARKER", str(marker))
+    done = team.record("--runs", "2")
+    assert done.code == 0, done.out
+    assert sorted(stock_args(done)) == ["a", "b"] and done.counts == {
+        "calls_seen": 2,
+        "calls_written": 2,
+    }
+    assert done.doc["numbers"]["argument_sets_seen"] == 2
+    assert done.doc["numbers"]["argument_sets_written"] == 2
+    marker.write_text("")
+    code, out = team.test_output()  # four runs, both forms: each hits a mock
+    assert code == 0, out
+    assert marker.read_text() == "", "a real tool ran in the test"
+
+
+@pytest.mark.design("record.runs_merge")
+def test_the_same_arguments_in_every_run_write_one_mock_with_every_call_counted(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    many(
+        team,
+        fake_openai,
+        STOCK + "def answer(q):\n    ask_model()\n    get_stock('a')\n    return 'ok'\n",
+        ["bot:get_stock"],
+        ("tool:get_stock",),
+    )
+    done = team.record("--runs", "3")
+    assert done.code == 0, done.out
+    (written,) = done.test["written"]
+    assert written["calls"] == 3 and written["runs"] == 3
+    assert done.counts == {"calls_seen": 3, "calls_written": 3}
+
+
+@pytest.mark.design("record.runs_merge")
+def test_a_reply_that_differs_for_the_same_arguments_across_runs_is_not_written(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    many(
+        team,
+        fake_openai,
+        """
+def flaky(k):
+    return {"run": RUN}
+
+def steady(k):
+    return {"fine": True}
+
+def answer(q):
+    global RUN
+    ask_model()
+    RUN = run_index()
+    flaky("x")
+    steady("y")
+    return "ok"
+""",
+        ["bot:flaky", "bot:steady"],
+        ("tool:flaky", "tool:steady"),
+    )
+    done = team.record("--runs", "2")
+    assert done.code == 1, done.out
+    assert done.written_calls() == ["tool:steady"]
+    (entry,) = done.manual("nondeterministic")
+    assert entry["call"] == "tool:flaky" and "different replies" in entry["message"]
+    assert all(run in entry["message"] for run in run_ids(done))
+    assert '# args    = {k = "x"}' in team.out_path.read_text()
+
+
+@pytest.mark.design("record.runs_merge")
+def test_a_web_reply_that_differs_across_runs_is_not_written(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    served = iter(range(100))
+
+    def next_reply(query: str, body: bytes) -> Route:
+        del query, body
+        return 200, {"content-type": "application/json"}, json.dumps({"n": next(served)}).encode()
+
+    team.service.dynamic["/n"] = next_reply
+    team.service.json("/fixed", {"same": 1})
+    many(
+        team,
+        fake_openai,
+        """
+def fetch(k):
+    http_get("/n")
+    http_get("/fixed")
+    return {"fine": True}
+
+def answer(q):
+    ask_model()
+    fetch("x")
+    return "ok"
+""",
+        ["bot:fetch"],
+        ("tool:fetch",),
+    )
+    done = team.record("--runs", "2")
+    assert done.code == 1, done.out
+    assert [m["path"] for m in done.manual("nondeterministic")] == ["/n"]
+    assert [m["path"] for m in done.mocks() if "path" in m] == []  # no web mock; the tool's stands
+    assert done.written_calls() == ["tool:fetch"]
+
+
+@pytest.mark.design("record.runs_merge")
+def test_a_call_seen_in_some_runs_is_written_and_says_in_how_many(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    many(
+        team,
+        fake_openai,
+        STOCK
+        + """
+def answer(q):
+    ask_model()
+    n = run_index()
+    get_stock("a")
+    if n == 1:
+        get_stock("b")
+    return "ok"
+""",
+        ["bot:get_stock"],
+        ("tool:get_stock",),
+    )
+    done = team.record("--runs", "3")
+    assert done.code == 0, done.out
+    assert stock_args(done) == ["a", "b"]
+    assert [w["runs"] for w in done.test["written"]] == [3, 1]
+    assert 'tool:get_stock with {"sku": "b"}, 1 call in 1 of 3 runs.' in team.out_path.read_text()
+
+
+@pytest.mark.design("record.runs_merge")
+def test_runs_with_different_tool_orders_write_the_same_mocks(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    many(
+        team,
+        fake_openai,
+        STOCK
+        + """
+def answer(q):
+    ask_model()
+    order = ["a", "b"] if run_index() % 2 == 0 else ["b", "a"]
+    for sku in order:
+        get_stock(sku)
+    return "ok"
+""",
+        ["bot:get_stock"],
+        ("tool:get_stock",),
+    )
+    done = team.record("--runs", "2")
+    assert done.code == 0, done.out
+    assert sorted(stock_args(done)) == ["a", "b"] and done.counts["calls_written"] == 4
+
+
+@pytest.mark.design("record.runs_merge")
+def test_a_success_and_a_failure_on_the_same_arguments_in_two_runs_write_no_mock(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    many(
+        team,
+        fake_openai,
+        """
+def lookup(k):
+    if RUN == 1:
+        raise RuntimeError("down")
+    return {"found": k}
+
+def steady(k):
+    return {"fine": k}
+
+def answer(q):
+    global RUN
+    ask_model()
+    RUN = run_index()
+    try:
+        lookup("x")
+    except RuntimeError:
+        pass
+    steady("y")
+    return "ok"
+""",
+        ["bot:lookup", "bot:steady"],
+        ("tool:lookup", "tool:steady"),
+    )
+    done = team.record("--runs", "2")
+    assert done.code == 1, done.out
+    assert done.written_calls() == ["tool:steady"]
+    assert [m["call"] for m in done.manual("nondeterministic")] == ["tool:lookup"]
+
+
+def stored(folder: Path, value: object, text: str | None = None) -> dict[str, object]:
+    data = (text if text is not None else json.dumps(value, sort_keys=True)).encode()
+    sha = hashlib.sha256(data).hexdigest()
+    (folder / "blobs").mkdir(exist_ok=True)
+    (folder / "blobs" / sha).write_bytes(data)
+    return {"sha256": sha, "bytes": len(data), "preview": data.decode()}
+
+
+def tool_line(
+    folder: Path, call_id: int, args_text: str, reply: object, error: str | None = None
+) -> dict[str, object]:
+    args = stored(folder, None, args_text)
+    line: dict[str, object] = {
+        "call": "tool:t",
+        "kind": "tool",
+        "action": "real",
+        "call_id": call_id,
+        "proc": {"pid": 1},
+        "args": args,
+    }
+    if error is not None:
+        line["error"] = error
+    else:
+        line["recorded"] = {"value": stored(folder, reply), "args": args}
+    return line
+
+
+def two_runs(
+    tmp_path: Path, first: dict[str, object], second: dict[str, object]
+) -> recording.TestRecord:
+    config = loaded(tmp_path)
+    test = config.tests[1]
+    runs = [result_for(test), result_for(test)]
+    runs[1] = dataclasses.replace(runs[1], run="run-2")
+    return recording.Recorder(test, runs, tmp_path).run(
+        [(runs[0], [first]), (runs[1], [second])], []
+    )
+
+
+@pytest.mark.design("record.runs_merge")
+def test_siblings_with_equal_arguments_in_another_key_order_are_one_group(tmp_path: Path) -> None:
+    saved = tool_line(tmp_path, 1, '{"a": 1, "b": 2}', {"ok": True})
+    failed = tool_line(tmp_path, 1, '{"b": 2, "a": 1}', None, error="RuntimeError: down")
+    assert saved["args"] != failed["args"]  # two hashes of one set of arguments
+    found = two_runs(tmp_path, saved, failed)
+    assert found.written == []
+    assert [e.code for e in found.manual.values()] == ["nondeterministic"]
+
+
+@pytest.mark.design("record.runs_merge")
+def test_a_call_whose_tool_never_finished_is_not_a_sibling_failure(tmp_path: Path) -> None:
+    saved = tool_line(tmp_path, 1, '{"a": 1}', {"ok": True})
+    stopped = tool_line(tmp_path, 1, '{"a": 1}', None, error="ScrimmageStopped: the run ended")
+    found = two_runs(tmp_path, saved, stopped)
+    assert [w.saved.fields["args"] for w in found.written] == [{"a": 1}]
+    assert [e.code for e in found.manual.values()] == ["not_finished"]
+
+
+@pytest.mark.design("record.runs_merge")
+@pytest.mark.parametrize("bad", ["status", "binary"])
+@pytest.mark.parametrize("bad_first", [False, True])
+def test_a_web_call_listed_in_one_run_blocks_its_saved_twin_in_another(
+    team: Team, fake_openai: Callable[..., FakeOpenAI], bad: str, bad_first: bool
+) -> None:
+    served = iter(range(100))
+
+    def reply(query: str, body: bytes) -> Route:
+        del query, body
+        good = (next(served) == 0) != bad_first
+        if good:
+            return 200, {"content-type": "application/json"}, b'{"ok": true}'
+        if bad == "status":
+            return 503, {"content-type": "application/json"}, b'{"error": "down"}'
+        return 200, {"content-type": "image/png"}, b"\x89PNG\r\n\xff\xfe"
+
+    team.service.dynamic["/x"] = reply
+    many(
+        team,
+        fake_openai,
+        """
+def fetch(k):
+    http_get("/x")
+    return {"fine": True}
+
+def answer(q):
+    ask_model()
+    fetch("x")
+    return "ok"
+""",
+        ["bot:fetch"],
+        ("tool:fetch",),
+    )
+    done = team.record("--runs", "2")
+    assert done.code == 1, done.out
+    assert [m for m in done.mocks() if m["call"] == "http:localhost"] == []
+
+
+@pytest.mark.design("record.runs_merge")
+@pytest.mark.parametrize("later", ["the same reply", "a different reply each run"])
+def test_web_children_of_a_tool_that_raised_in_another_run_are_not_written(
+    team: Team, fake_openai: Callable[..., FakeOpenAI], later: str
+) -> None:
+    team.service.json("/x", {"v": 1})
+    reply = '{"fine": True}' if later == "the same reply" else '{"t": RUN}'
+    many(
+        team,
+        fake_openai,
+        f"""
+def fetch(k):
+    http_get("/x")
+    if RUN == 1:
+        raise RuntimeError("after the request")
+    return {reply}
+
+def answer(q):
+    global RUN
+    ask_model()
+    RUN = run_index()
+    try:
+        fetch("x")
+    except RuntimeError:
+        pass
+    return "ok"
+""",
+        ["bot:fetch"],
+        ("tool:fetch",),
+    )
+    done = team.record("--runs", "3")
+    assert done.code == 1, done.out
+    assert done.mocks() == []
+    assert "tool:fetch" in {m["call"] for m in done.manual("nondeterministic")}
+
+
+@pytest.mark.design("record.runs_merge")
+@pytest.mark.parametrize("bad", ["status", "binary"])
+def test_a_web_key_with_a_retry_in_one_run_is_blocked_in_every_run(
+    team: Team, fake_openai: Callable[..., FakeOpenAI], bad: str
+) -> None:
+    served = iter(range(100))
+
+    def reply(query: str, body: bytes) -> Route:
+        del query, body
+        if next(served) == 0:  # the first request of the first run fails; its retry works
+            if bad == "status":
+                return 503, {"content-type": "application/json"}, b'{"error": "down"}'
+            return 200, {"content-type": "image/png"}, b"\x89PNG\r\n\xff\xfe"
+        return 200, {"content-type": "application/json"}, b'{"ok": true}'
+
+    team.service.dynamic["/x"] = reply
+    many(
+        team,
+        fake_openai,
+        """
+def fetch(k):
+    r = http_get("/x")
+    if r.status_code != 200 or r.headers["content-type"] != "application/json":
+        http_get("/x")
+    return {"fine": True}
+
+def answer(q):
+    ask_model()
+    fetch("x")
+    return "ok"
+""",
+        ["bot:fetch"],
+        ("tool:fetch",),
+    )
+    done = team.record("--runs", "2")
+    assert done.code == 1, done.out
+    assert [m for m in done.mocks() if m["call"] == "http:localhost"] == []
+
+
+@pytest.mark.design("record.runs_flag")
+def test_runs_has_a_cap(team: Team) -> None:
+    team.write("def answer(q):\n    return 'ok'\n", [], ())
+    done = team.record("--runs", "1001")
+    assert done.code == 2 and not (team.root / "scrimmage-runs").exists()
+    assert any("at most 1000" in m["message"] for m in done.doc["mistakes"])
+
+
+@pytest.mark.design("record.runs_merge")
+@pytest.mark.parametrize("beneath", ["model", "credential"])
+def test_a_tool_with_a_model_call_beneath_in_one_run_gets_no_tool_mock_from_another_run(
+    team: Team, fake_openai: Callable[..., FakeOpenAI], beneath: str
+) -> None:
+    team.service.routes["/oauth2/token"] = (200, {}, b'{"access_token": "live-token-value"}')
+    inside = (
+        "ask_model()"
+        if beneath == "model"
+        else 'httpx.post(SERVICE + "/oauth2/token", timeout=30, json={})'
+    )
+    many(
+        team,
+        fake_openai,
+        f"""
+def inner(k):
+    if RUN == 0:
+        {inside}
+    return {{"same": True}}
+
+def answer(q):
+    global RUN
+    ask_model()
+    RUN = run_index()
+    inner("x")
+    return "ok"
+""",
+        ["bot:inner"],
+        ("tool:inner", "http:localhost POST /oauth2/token"),
+    )
+    done = team.record("--runs", "2")
+    assert "tool:inner" not in done.written_calls() and done.mocks() == []
+    assert bool(done.skipped("credential")) == (beneath == "credential")
+    # the clean call in the other run is listed too, and its skeleton names the runs it was made in
+    code = "model_inside" if beneath == "model" else "nondeterministic"
+    said = [m["message"] for m in done.manual(code) if m["call"] == "tool:inner"]
+    assert any("this call was made in run-" in m for m in said), said
+    # the clean call never reached the forbidden call itself, so its reason says another run did
+    clean = [m for m in said if "this call was made in run-" in m]
+    assert all("in another run" in m for m in clean), clean
+
+
+@pytest.mark.design("record.runs_merge")
+def test_a_time_varying_tool_is_not_written_and_the_text_names_the_runs_that_differed(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    many(
+        team,
+        fake_openai,
+        STOCK
+        + """
+def now(k):
+    return {"tick": TICK}
+
+def answer(q):
+    global TICK
+    ask_model()
+    TICK = run_index()
+    now("x")
+    get_stock("a")
+    return "ok"
+""",
+        ["bot:now", "bot:get_stock"],
+        ("tool:now", "tool:get_stock"),
+    )
+    code, out = team.record_text("--runs", "3")
+    assert code == 1, out
+    ids = re.findall(
+        r"run-[0-9a-f]{12}", next(x for x in out.splitlines() if x.startswith("by hand:"))
+    )
+    assert len(set(ids)) == 3
+    assert (
+        'by hand: t: tool:now with {"k": "x"}: the same call got different replies in run-' in out
+    )
+    mocks = tomllib.loads(team.out_path.read_text())["test"][0]["mock"]
+    assert [m["call"] for m in mocks] == ["tool:get_stock"]
+
+
+@pytest.mark.design("record.runs_merge")
+def test_each_listed_argument_set_gets_its_own_skeleton(team: Team) -> None:
+    team.write(
+        """
+def boom(key):
+    raise RuntimeError("down")
+
+def answer(q):
+    for key in ("a", "b"):
+        try:
+            boom(key)
+        except RuntimeError:
+            pass
+    return "ok"
+""",
+        ["bot:boom"],
+        ("tool:boom",),
+    )
+    done = team.record()
+    assert done.code == 1, done.out
+    text = team.out_path.read_text()
+    assert '# args    = {key = "a"}' in text and '# args    = {key = "b"}' in text
+    assert len(done.manual("raised")) == 2
+
+
+@pytest.mark.design("record.runs_merge")
+def test_an_incomplete_run_writes_nothing_for_its_test_and_exits_3(
+    team: Team, fake_openai: Callable[..., FakeOpenAI], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    many(
+        team,
+        fake_openai,
+        STOCK + "def answer(q):\n    ask_model()\n    get_stock('a')\n    return 'ok'\n",
+        ["bot:get_stock"],
+        ("tool:get_stock",),
+    )
+    real_close = ControlServer.close_run
+    closed: list[str] = []
+
+    def drop_a_line_in_the_second(self: Any, run: str) -> Any:
+        state = real_close(self, run)
+        closed.append(run)
+        if len(closed) == 2:
+            state.dropped = 1
+        return state
+
+    monkeypatch.setattr(ControlServer, "close_run", drop_a_line_in_the_second)
+    done = team.record("--runs", "3")
+    assert done.code == 3, done.out
+    assert done.doc["out"] is None and not team.out_path.exists()
+    assert any("nothing was written" in i["message"] for i in done.doc["infra"])
+
+
+@pytest.mark.design("record.runs_merge")
+def test_a_scrimmage_error_in_one_run_writes_nothing_for_its_test(
+    team: Team, fake_openai: Callable[..., FakeOpenAI], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    many(
+        team,
+        fake_openai,
+        STOCK + "def answer(q):\n    ask_model()\n    get_stock('a')\n    return 'ok'\n",
+        ["bot:get_stock"],
+        ("tool:get_stock",),
+    )
+    real = recording.tool_outcome
+    seen: list[int] = []
+
+    def buggy(line: dict[str, object], folder: Path) -> recording.Outcome:
+        found = real(line, folder)
+        seen.append(1)
+        if len(seen) == 2:  # the second run's call, not the first's
+            return recording.Listed(capture.SCRIMMAGE_ERROR, "Scrimmage failed: X")
+        return found
+
+    monkeypatch.setattr(recording, "tool_outcome", buggy)
+    done = team.record("--runs", "2")
+    assert done.code == 3, done.out
+    assert done.doc["out"] is None and not team.out_path.exists()
+
+
+# Refusals, the budget and other stops.
+
+STOP_BOT = """
+import openai
+
+def read_stock(sku):
+    return {"count": 3}
+
+def answer(question):
+    read_stock("a")
+    openai.OpenAI().chat.completions.create(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": "a very long " * 2000}]
+    )
+    return "ok"
+"""
+TIGHT = 'max_cost_usd = 0.000001\nmodel_hosts = [{host = "127.0.0.1", provider = "openai"}]\n'
+
+
+@pytest.mark.design("record.runs_refusal")
+def test_a_refusal_in_one_run_stops_the_row_lists_the_call_and_writes_the_earlier_runs(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    marker = team.root / "refund-ran.txt"
+    many(
+        team,
+        fake_openai,
+        """
+def read_stock(sku):
+    return {"count": 3}
+
+def refund_order(order_id):
+    open(os.environ["MARKER"], "w").write("it ran")
+
+def answer(q):
+    ask_model()
+    n = run_index()
+    read_stock(f"r{n}")
+    if n == 2:
+        refund_order("1")
+    return "ok"
+""",
+        ["bot:read_stock", "bot:refund_order"],
+        ("tool:read_stock",),
+    )
+    team.project.monkeypatch.setenv("MARKER", str(marker))
+    done = team.record("--runs", "5")
+    assert done.code == 2, done.out
+    assert [m["args"]["sku"] for m in done.mocks()] == [
+        "r0",
+        "r1",
+        "r2",
+    ]  # run 3 wrote its first call
+    assert [m["call"] for m in done.manual("refused")] == ["tool:refund_order"]
+    assert not marker.exists()
+    assert done.test["not_started"] == 2 and len(done.test["runs"]) == 3
+    assert any(
+        "run 3 stopped at a refusal; 2 of 5 runs did not start" in n["message"]
+        for n in done.doc["notes"]
+    )
+
+
+@pytest.mark.design("record.runs_budget")
+def test_a_budget_stop_writes_nothing_and_keeps_the_existing_file(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    two = ONE_TEST + '[[test]]\nname     = "t2"\nquestion = "q"\nexpect   = ["ok"]\n'
+    team.write(STOP_BOT, ["bot:read_stock"], ("tool:read_stock",), tests=two, agent_extra=TIGHT)
+    patch = team.project.monkeypatch
+    patch.setenv("OPENAI_BASE_URL", fake_openai([]).base_url)
+    patch.setenv("OPENAI_API_KEY", "test")
+    earlier = (
+        "# Written by scrimmage record from scrimmage.toml on 2026-01-01. Review it.\n"
+        + team.toml.read_text()
+    )
+    team.out_path.write_text(earlier)
+    done = team.record("--runs", "3")
+    assert done.code == 2, done.out
+    assert done.doc["out"] is None and team.out_path.read_text() == earlier
+    (line,) = [m["message"] for m in done.doc["mistakes"] if "budget stopped" in m["message"]]
+    assert "after 0 of 3 runs of t and 0 of 3 of t2" in line and "nothing was written" in line
+    assert not any("rows without runs" in m["message"] for m in done.doc["mistakes"])
+
+
+@pytest.mark.design("record.runs_budget")
+def test_a_budget_stop_with_one_run_writes_nothing(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    fake = fake_openai([])
+    team.write(STOP_BOT, ["bot:read_stock"], ("tool:read_stock",), agent_extra=TIGHT)
+    team.project.monkeypatch.setenv("OPENAI_BASE_URL", fake.base_url)
+    team.project.monkeypatch.setenv("OPENAI_API_KEY", "test")
+    done = team.record()
+    assert done.code == 2, done.out
+    assert done.test["outcome"] in ("budget reached", "not reserved")
+    assert done.doc["out"] is None and not team.out_path.exists()
+    assert done.test["written"] == [] and done.counts["calls_written"] == 0
+
+
+@pytest.mark.design("record.runs_budget")
+def test_a_budget_stop_with_an_infrastructure_error_exits_3(
+    team: Team, fake_openai: Callable[..., FakeOpenAI], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = fake_openai([])
+    team.write(STOP_BOT, ["bot:read_stock"], ("tool:read_stock",), agent_extra=TIGHT)
+    team.project.monkeypatch.setenv("OPENAI_BASE_URL", fake.base_url)
+    team.project.monkeypatch.setenv("OPENAI_API_KEY", "test")
+    real_close = ControlServer.close_run
+
+    def drop_a_line(self: Any, run: str) -> Any:
+        state = real_close(self, run)
+        state.dropped = 1
+        return state
+
+    monkeypatch.setattr(ControlServer, "close_run", drop_a_line)
+    done = team.record()
+    assert done.code == 3, done.out
+    assert done.doc["out"] is None and not team.out_path.exists()
+
+
+@pytest.mark.design("record.runs_budget")
+@pytest.mark.parametrize("reason", ["unseen_tool", "unknown_label"])
+def test_a_test_cut_short_by_any_stop_writes_nothing_and_says_how_many_did_not_start(
+    team: Team, fake_openai: Callable[..., FakeOpenAI], monkeypatch: pytest.MonkeyPatch, reason: str
+) -> None:
+    many(
+        team,
+        fake_openai,
+        STOCK + "def answer(q):\n    ask_model()\n    get_stock('a')\n    return 'ok'\n",
+        ["bot:get_stock"],
+        ("tool:get_stock",),
+    )
+    real_one = running.Runner.one
+
+    def stopping(self: running.Runner, row: Any) -> Any:
+        """The stop the runner makes for this reason, after the first run, as it makes it."""
+        result = real_one(self, row)
+        if self.stopped_by is None:
+            self.stopped_by = reason
+            self.cancel()
+        return result
+
+    monkeypatch.setattr(running.Runner, "one", stopping)
+    done = team.record("--runs", "3")
+    assert done.doc["out"] is None and not team.out_path.exists()
+    assert done.test["not_started"] == 2 and len(done.test["runs"]) == 1
+    text = " ".join(n["message"] for n in done.doc["notes"])
+    assert f"stopped by {reason}; 2 of 3 runs did not start" in text
+
+
+# Identity, order, the comment.
+
+TWO_FORMS = (
+    STOCK
+    + """
+def answer(q):
+    get_stock("a")
+    if run_index() > 0:
+        get_stock("b")
+    return "ok"
+"""
+)
+
+
+@pytest.mark.design("record.runs_identity")
+def test_rerecording_a_recorded_file_adds_only_unseen_argument_sets(team: Team) -> None:
+    team.project.monkeypatch.setenv("COUNTER", str(team.root / "count.txt"))
+    team.write(COUNTER + TWO_FORMS, ["bot:get_stock"], ("tool:get_stock",))
+    first = team.record()
+    assert first.code == 0 and stock_args(first) == ["a"]
+    again = main(["record", str(team.out_path), "--json"])
+    captured = team.project.capsys.readouterr()
+    doc = json.loads(captured.out)
+    assert again == 0 and doc["out"] == str(team.root / "scrimmage.recorded.recorded.toml")
+    mocks = tomllib.loads(Path(doc["out"]).read_text())["test"][0]["mock"]
+    assert [m["args"]["sku"] for m in mocks] == ["a", "b"]  # a kept, b added, a not written twice
+
+
+@pytest.mark.design("record.runs_identity")
+@pytest.mark.parametrize("value", ["1", "1.0", "True", '"1"'])
+def test_no_two_mocks_in_the_output_answer_the_same_exact_arguments(
+    team: Team, fake_openai: Callable[..., FakeOpenAI], value: str
+) -> None:
+    many(
+        team,
+        fake_openai,
+        f"""
+def get_stock(k):
+    return {{"k": 1}}
+
+def answer(q):
+    ask_model()
+    get_stock([1, 1.0, True, "1"][run_index()])
+    get_stock({value})
+    return "ok"
+""",
+        ["bot:get_stock"],
+        ("tool:get_stock",),
+    )
+    done = team.record("--runs", "4")
+    assert done.code == 0, done.out
+    kinds = sorted(type(m["args"]["k"]).__name__ for m in done.mocks())
+    assert kinds == ["bool", "float", "int", "str"], "four sets, four mocks, told apart by type"
+    assert sum(w["calls"] for w in done.test["written"]) == 8
+
+
+@pytest.mark.design("record.runs_identity")
+def test_mock_order_follows_the_run_submitted_first_not_the_one_that_finished_first(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    fifo = team.root / "meet"
+    os.mkfifo(fifo)
+    team.project.monkeypatch.setenv("MEET", str(fifo))
+    many(
+        team,
+        fake_openai,
+        STOCK
+        + """
+def answer(q):
+    ask_model()
+    n = run_index()
+    if n == 0:  # the first to start makes its call after the second has made and ended its own
+        open(os.environ["MEET"], "rb").read(1)
+    get_stock(os.environ["SCRIMMAGE_RUN"])
+    if n == 1:
+        open(os.environ["MEET"], "wb").write(b"x")
+    return "ok"
+""",
+        ["bot:get_stock"],
+        ("tool:get_stock",),
+        extra="parallel = 2\n",
+    )
+    done = team.record("--runs", "2")
+    assert done.code == 0, done.out
+    assert stock_args(done) == run_ids(
+        done
+    )  # the mocks follow the runs, as tests[].runs lists them
+
+
+@pytest.mark.design("record.runs_identity")
+def test_a_mock_comment_says_in_how_many_runs_its_call_was_seen(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    many(
+        team,
+        fake_openai,
+        answering("get_stock('a' if run_index() == 1 else 'b')"),
+        ["bot:get_stock"],
+        ("tool:get_stock",),
+    )
+    done = team.record("--runs", "3")
+    text = team.out_path.read_text()
+    assert 'tool:get_stock with {"sku": "a"}, 1 call in 1 of 3 runs.' in text
+    assert 'tool:get_stock with {"sku": "b"}, 2 calls in 2 of 3 runs.' in text
+    assert done.code == 0
+
+
+@pytest.mark.design("record.runs_identity")
+def test_a_mock_comment_names_its_runs_outcome_when_it_did_not_answer(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    many(
+        team,
+        fake_openai,
+        STOCK
+        + """
+def answer(q):
+    ask_model()
+    get_stock("a")
+    if run_index() == 0:
+        raise RuntimeError("the first run crashes after its call")
+    return "ok"
+""",
+        ["bot:get_stock"],
+        ("tool:get_stock",),
+    )
+    done = team.record("--runs", "2")
+    assert done.code == 1, done.out
+    first = run_ids(done)[0]
+    assert f"{first} (crashed): tool:get_stock" in team.out_path.read_text()
+
+
+# Output.
+
+
+@pytest.mark.design("record.runs_output")
+def test_record_json_counts_calls_per_run_and_in_total(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    many(
+        team,
+        fake_openai,
+        answering("get_stock(f'r{run_index()}')"),
+        ["bot:get_stock"],
+        ("tool:get_stock",),
+    )
+    done = team.record("--runs", "3")
+    assert done.counts == {"calls_seen": 3, "calls_written": 3}
+    assert done.doc["numbers"]["runs"] == 3 and done.doc["numbers"]["runs_recorded"] == 3
+    runs = done.test["runs"]
+    assert [(r["calls_seen"], r["calls_written"], r["outcome"]) for r in runs] == [
+        (1, 1, "answered")
+    ] * 3
+    assert abs(sum(r["cost_usd"] for r in runs) - done.doc["cost_usd"]) < 1e-6
+    assert done.test["outcome"] == "answered" and done.test["run"] == runs[0]["run"]
+
+
+@pytest.mark.design("record.runs_output")
+def test_record_json_names_argument_sets_per_call_without_values(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    many(
+        team,
+        fake_openai,
+        answering("get_stock('sku-VALUE-1' if run_index() == 0 else 'sku-VALUE-2')"),
+        ["bot:get_stock"],
+        ("tool:get_stock",),
+    )
+    done = team.record("--runs", "3")
+    (sets,) = done.test["argument_sets"]
+    assert sets["call"] == "tool:get_stock" and sets["seen"] == 2 and sets["written"] == 2
+    assert sets["sets"] == [
+        {"runs": 1, "mock": 1, "code": None},
+        {"runs": 2, "mock": 2, "code": None},
+    ]
+    assert "VALUE" not in json.dumps(done.doc)
+    assert done.doc["numbers"]["argument_sets_seen"] == 2
+
+
+@pytest.mark.design("record.runs_output")
+def test_record_text_prints_each_run_and_each_calls_argument_sets(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    many(
+        team,
+        fake_openai,
+        answering("get_stock('b' if run_index() == 2 else 'a')"),
+        ["bot:get_stock"],
+        ("tool:get_stock",),
+    )
+    code, out = team.record_text("--runs", "3")
+    assert code == 0, out
+    assert "scrimmage record: 1 test, 3 runs each, 3 runs; records in" in out
+    assert re.search(r"^t  3 of 3 answered  wrote 2$", out, re.M)
+    assert (
+        len(
+            re.findall(
+                r"^  run [123]  run-[0-9a-f]{12}  answered  1 of 1 calls written$", out, re.M
+            )
+        )
+        == 3
+    )
+    assert (
+        'arguments: t: tool:get_stock: 2 sets in 3 runs: {"sku": "a"} in 2, {"sku": "b"} in 1; '
+        "each has its own mock"
+    ) in out
+    assert re.search(r"model calls cost \$[0-9.]+ of a budget of \$1, 3 runs$", out, re.M)
+
+
+@pytest.mark.design("record.runs_output")
+def test_a_tests_outcome_is_its_first_run_that_did_not_answer(tmp_path: Path) -> None:
+    test = loaded(tmp_path).tests[1]
+    answered, crashed = result_for(test), result_for(test)
+    runs = [
+        dataclasses.replace(answered, run="run-a"),
+        dataclasses.replace(crashed, run="run-b", outcome="crashed"),
+        dataclasses.replace(answered, run="run-c", outcome="timed out"),
+    ]
+    found = recording.TestRecord(test, runs, asked=3)
+    shown = recording.test_json(found)
+    assert (shown["run"], shown["outcome"]) == ("run-b", "crashed")
+    assert recording.TestRecord(test, runs[:1]).result.run == "run-a"
+
+
+# Parallel.
+
+
+@pytest.mark.design("record.runs_parallel")
+def test_runs_follow_the_files_parallel_setting(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    fifo = team.root / "meet"
+    os.mkfifo(fifo)
+    team.project.monkeypatch.setenv("MEET", str(fifo))
+    team.project.monkeypatch.setenv("ALIVE", str(team.root / "alive.json"))
+    many(
+        team,
+        fake_openai,
+        STOCK
+        + """
+def alive(change):
+    with open(os.environ["ALIVE"], "a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.seek(0)
+        now, top = json.loads(f.read() or "[0, 0]")
+        now += change
+        f.seek(0)
+        f.truncate()
+        f.write(json.dumps([now, max(top, now)]))
+
+def answer(q):
+    ask_model()
+    n = run_index()
+    alive(1)
+    if n == 0:  # waits for run 1 to be alive too: they overlap only if two run at once
+        open(os.environ["MEET"], "rb").read(1)
+    elif n == 1:
+        with open(os.environ["MEET"], "wb") as f:
+            f.write(b"x")
+    get_stock(f"r{n}")
+    alive(-1)
+    return "ok"
+""",
+        ["bot:get_stock"],
+        ("tool:get_stock",),
+        extra="parallel = 2\n",
+    )
+    done = team.record("--runs", "4")
+    assert done.code == 0, done.out
+    assert json.loads((team.root / "alive.json").read_text())[1] == 2
+
+
+@pytest.mark.design("record.runs_parallel")
+def test_parallel_runs_write_the_same_file_as_runs_in_order(
+    team: Team, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    code = answering("get_stock('a')", "get_stock('b')")
+    texts: list[str] = []
+    for parallel in (1, 4):
+        many(
+            team,
+            fake_openai,
+            code,
+            ["bot:get_stock"],
+            ("tool:get_stock",),
+            extra=f"parallel = {parallel}\n",
+        )
+        done = team.record("--runs", "4")
+        assert done.code == 0, done.out
+        mocks = team.out_path.read_text().split("[[test.mock]]", 1)[1]
+        texts.append("\n".join(x for x in mocks.splitlines() if not x.startswith("#")))
+    assert texts[0] == texts[1] and texts[0].count("[[test.mock]]") == 1  # two mocks, a and b
+
+
+@pytest.mark.design("record.runs_merge")
+def test_inside_one_run_a_saved_and_a_listed_call_on_one_web_key_keep_todays_rules(
+    team: Team,
+) -> None:
+    served = iter(range(100))
+
+    def reply(query: str, body: bytes) -> Route:
+        del query, body
+        if next(served) == 0:
+            return 200, {"content-type": "application/json"}, b'{"ok": true}'
+        return 503, {"content-type": "application/json"}, b'{"error": "down"}'
+
+    team.service.dynamic["/x"] = reply
+    team.write(
+        """
+def fetch(k):
+    http_get("/x")
+    http_get("/x")
+    return {"fine": True}
+
+def answer(q):
+    fetch("x")
+    return "ok"
+""",
+        ["bot:fetch"],
+        ("tool:fetch",),
+    )
+    done = team.record()
+    assert [m["status"] for m in done.mocks() if m["call"] == "http:localhost"] == [200]

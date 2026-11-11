@@ -755,6 +755,22 @@ def test_sigterm_while_the_file_is_read_still_gives_one_document(
     # Handlers no test could have left: so a handler a command leaves set cannot pass.
     marker_int, marker_term = signal.default_int_handler, signal.SIG_DFL
     monkeypatch.setattr(config, "load", terminated)
+    before: tuple[Any, Any] = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
+    try:
+        run_both(project, capsys, marker_int, marker_term)
+    finally:  # under a shell's &, SIGINT starts as SIG_IGN: leave both as they were
+        signal.signal(signal.SIGINT, before[0])
+        signal.signal(signal.SIGTERM, before[1])
+    # After the first signal the handler was still set, not SIG_IGN, so a second would count.
+    assert handlers == [cli.stop, cli.stop]
+
+
+def run_both(
+    project: Project,
+    capsys: pytest.CaptureFixture[str],
+    marker_int: Any,
+    marker_term: Any,
+) -> None:
     for command in ("test", "check"):
         signal.signal(signal.SIGINT, marker_int)
         signal.signal(signal.SIGTERM, marker_term)
@@ -764,8 +780,6 @@ def test_sigterm_while_the_file_is_read_still_gives_one_document(
         assert messages(doc, "infra") == ["stopped by SIGTERM"], command
         assert signal.getsignal(signal.SIGINT) is marker_int, command  # put back after it
         assert signal.getsignal(signal.SIGTERM) is marker_term, command
-    # After the first signal the handler was still set, not SIG_IGN, so a second would count.
-    assert handlers == [cli.stop, cli.stop]
 
 
 # Sends SIGTERM from inside a __del__ and spins there, so the handler runs inside it, where
@@ -1310,3 +1324,64 @@ def test_a_miss_counts_on_its_row_and_run_with_no_change_to_status_or_exit() -> 
         assert {k: v for k, v in new.items() if k not in ("mock_miss_count", "run_details")} == {
             k: v for k, v in old.items() if k not in ("mock_miss_count", "run_details")
         }
+
+
+# The record document as it was before --runs: its required lists and the types of its fields.
+RECORD_BEFORE: dict[str, tuple[list[str], dict[str, object]]] = {
+    "record": (
+        [
+            "v",
+            "scrimmage",
+            "command",
+            "exit",
+            "status",
+            "config",
+            "out",
+            "records",
+            "cost_usd",
+            "numbers",
+            "tests",
+            "mistakes",
+            "notes",
+            "warnings",
+            "infra",
+        ],
+        {
+            "config": "string",
+            "out": ["string", "null"],
+            "records": ["string", "null"],
+            "numbers": "object",
+            "tests": "array",
+            "mocks_text": "string",
+        },
+    ),
+    "record_test": (
+        ["test", "run", "outcome", "written", "kept", "skipped", "manual"],
+        {"test": "string", "run": "string", "written": "array", "kept": "array"},
+    ),
+    "written_mock": (
+        ["call", "method", "path", "calls", "removed"],
+        {
+            "call": "string",
+            "method": ["string", "null"],
+            "path": ["string", "null"],
+            "calls": "integer",
+        },
+    ),
+}
+
+
+def test_the_record_document_change_is_additive() -> None:
+    defs = cast(dict[str, dict[str, Any]], CLI_SCHEMA["$defs"])
+    for name, (required, types) in RECORD_BEFORE.items():
+        found = defs[name]
+        assert found["required"] == required, name  # nothing new is required, nothing dropped
+        for field, kind in types.items():
+            assert found["properties"][field]["type"] == kind, (name, field)
+    numbers = defs["record"]["properties"]["numbers"]
+    assert numbers["required"] == ["calls_seen", "calls_written"]
+    assert {"runs", "runs_recorded", "argument_sets_seen", "argument_sets_written"} <= set(
+        numbers["properties"]
+    )
+    assert {"runs", "not_started", "argument_sets"} <= set(defs["record_test"]["properties"])
+    assert "runs" in defs["written_mock"]["properties"]
