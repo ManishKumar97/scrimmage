@@ -42,7 +42,16 @@ from scrimmage_core.judge import normal
 from scrimmage_core.labels import shown_name
 from scrimmage_core.plan import Plan
 from scrimmage_core.redact import redact, redacted
-from scrimmage_core.state import BLOB_CAP, BlobSink, RunState, Step, blob, current, error_text
+from scrimmage_core.state import (
+    BLOB_CAP,
+    BlobSink,
+    RunState,
+    Step,
+    blob,
+    current,
+    error_text,
+    model_path_hint,
+)
 
 if TYPE_CHECKING:
     import asyncio
@@ -108,6 +117,7 @@ class Context:
         self.faults = True  # false when the library has lost what faults are built from
         self.open: set[Callable[[bool], None]] = set()  # replies not read to their end
         self.root = probing.here()  # the folder the probe's paths are looked for under
+        self.model_paths: set[str] = set()  # model paths run as web requests, noted once each
 
     def close_open(self) -> None:
         """At exit: a reply the agent never finished reading is still a call that was made."""
@@ -344,6 +354,8 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
     where = f"{call.method} {path_of(request.url)}"
     if step.decision.action == "refused":
         refuse(run, step, where)
+    if step.decision.action == "real" and call.kind == "http":
+        model_path_notice(ctx, call, where)
     if call.kind == "model" and run.plan.probe:
         stop_probe(ctx, run, step, fields, request.url)
     if call.kind == "model" and call.name == "chat":
@@ -358,6 +370,25 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
             )
         check_tools(ctx, run, step, fields, str(request.url.path))
     return step, extra
+
+
+def model_path_notice(ctx: Context, call: Call, where: str) -> None:
+    """A POST to a model's path ran for real as a web request: real lists its host. It is then
+    never budgeted, nor faulted by model name. Said once per path, as a run notice."""
+    hint = model_path_hint(call.label, where)
+    if hint is None or where in ctx.model_paths:
+        return
+    ctx.model_paths.add(where)
+    host = call.label.removeprefix("http:")
+    ctx.run.notice(
+        "model_path",
+        "scrimmage",
+        redact(
+            f"{call.label} {where} ran for real as a web request, so it was never budgeted or "
+            f'faulted by model name; if it is a model call, add {{host = "{host}", provider = '
+            '"openai"} to [agent] model_hosts'
+        ),
+    )
 
 
 def carries(injected: list[str], fields: dict[str, object]) -> bool:

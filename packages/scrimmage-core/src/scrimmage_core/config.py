@@ -224,6 +224,24 @@ def load(path: Path) -> Config:
     return config
 
 
+def model_paths_in_real(agent: Agent) -> list[str]:
+    """A real entry that names a model's path as a web request: it would run unbudgeted."""
+    found: list[str] = []
+    for entry in agent.real:
+        if labels.kind_of(entry) != "http":
+            continue
+        label, _, rest = entry.partition(" ")
+        method, _, path = rest.partition(" ")
+        if path and provider_openai.op_for(path, method) is not None:
+            host = label.removeprefix("http:")
+            found.append(
+                f"[agent] real: {entry!r} lists a model call as a web request, which is never "
+                f'budgeted or faulted; name the host under model_hosts as {{host = "{host}", '
+                'provider = "openai"} and take it out of real'
+            )
+    return found
+
+
 def check_references(config: Config) -> list[str]:
     """Compare values across the file, before the first run, so a typo costs no model calls."""
     names = config.agent.tool_names()
@@ -239,6 +257,7 @@ def check_references(config: Config) -> list[str]:
             "program would run with no gates; remove it"
         )
     problems += [p for test in config.tests if (p := bad_question(test, config.agent))]
+    problems += model_paths_in_real(config.agent)
     for test in config.tests:
         for fault in (None, *test.faults):
             if why := impossible(test.rules_for(fault)):

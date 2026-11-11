@@ -1226,6 +1226,15 @@ def build_report(
         )
     if silent:
         notes.append(f"{plural(len(silent), 'run')} answered with no model call")
+    # A model's path run as a web request: once per test, however many runs said it.
+    notes += sorted(
+        {
+            f"{r.row.test.name}: {line.get('message')}"
+            for r in results
+            for line in r.notices
+            if line.get("notice") == "model_path"
+        }
+    )
     newer = sorted(
         {
             str(line.get("message"))

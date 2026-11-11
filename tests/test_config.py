@@ -816,3 +816,17 @@ def test_the_find_is_raw_in_the_plan_and_redacted_in_the_results(tmp_path: Path)
     assert shown is not None and shown["find"] == "a [secret removed]"
     plain = config.Fault("tool:t", "replace", "always", text="x", find="late")
     assert plan.fault_json(plain)["find"] == "late"
+
+
+def test_real_cannot_list_a_model_path_as_a_web_request(tmp_path: Path) -> None:
+    text = (
+        '[agent]\nfunction = "acme.agent:answer"\n'
+        'real = ["http:guard.internal POST /v1/chat/completions"]\n'
+        '\n[[test]]\nname = "t"\nquestion = "q"\nexpect = ["ok"]\n'
+    )
+    with pytest.raises(ConfigError, match="lists a model call as a web request") as caught:
+        load_text(tmp_path, text)
+    assert '{host = "guard.internal", provider = "openai"}' in str(caught.value)
+    # Another web write, or the host and method alone, is the team's to list.
+    for entry in ("POST /v1/refunds", "POST"):
+        assert load_text(tmp_path, text.replace("POST /v1/chat/completions", entry))

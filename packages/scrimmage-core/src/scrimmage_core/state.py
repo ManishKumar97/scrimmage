@@ -23,6 +23,7 @@ from typing import Protocol, cast
 
 from scrimmage_core import capture
 from scrimmage_core import decide as engine
+from scrimmage_core import provider_openai as openai_table
 from scrimmage_core.changes import Changed
 from scrimmage_core.decide import missed
 from scrimmage_core.errors import ScrimmageRefused, ScrimmageStopped, ScrimmageTimeLimit
@@ -114,6 +115,20 @@ class Step:
 
 def this_process() -> dict[str, object]:
     return {"host": socket.gethostname(), "pid": os.getpid(), "started": now_iso()}
+
+
+def model_path_hint(label: str, detail: str) -> str | None:
+    """For a POST to a model's path on a host no one named: where to name it. None for any
+    other request. Listed under real it would run as a plain web request, never budgeted."""
+    method, _, path = detail.partition(" ")
+    if not label.startswith("http:") or openai_table.op_for(path, method) is None:
+        return None
+    host = label.removeprefix("http:")
+    return (
+        f"{label} {detail} is a model request to a host not under [agent] model_hosts, so it "
+        f'was refused as a web write. Add {{host = "{host}", provider = "openai"}} to [agent] '
+        "model_hosts; a model call listed under real is never budgeted or faulted by model name."
+    )
 
 
 class RunState:
@@ -331,7 +346,8 @@ class RunState:
                 f'arguments, or add "{label}" to real if it is safe to run for real.'
             ),
             "web_write": (
-                f"{label} {detail} is a web request that can change data, and this test "
+                model_path_hint(label, detail)
+                or f"{label} {detail} is a web request that can change data, and this test "
                 "neither mocks it nor lists it under [agent] real. Mock it in the test, or "
                 f'add "{label} {detail}" to real if it is safe to run for real.'
             ),
