@@ -2513,19 +2513,21 @@ def answer(q):
 
 
 @pytest.mark.design("record.runs_merge")
+@pytest.mark.parametrize("later", ["the same reply", "a different reply each run"])
 def test_web_children_of_a_tool_that_raised_in_another_run_are_not_written(
-    team: Team, fake_openai: Callable[..., FakeOpenAI]
+    team: Team, fake_openai: Callable[..., FakeOpenAI], later: str
 ) -> None:
     team.service.json("/x", {"v": 1})
+    reply = '{"fine": True}' if later == "the same reply" else '{"t": RUN}'
     many(
         team,
         fake_openai,
-        """
+        f"""
 def fetch(k):
     http_get("/x")
     if RUN == 1:
         raise RuntimeError("after the request")
-    return {"fine": True}
+    return {reply}
 
 def answer(q):
     global RUN
@@ -2540,10 +2542,57 @@ def answer(q):
         ["bot:fetch"],
         ("tool:fetch",),
     )
-    done = team.record("--runs", "2")
+    done = team.record("--runs", "3")
     assert done.code == 1, done.out
     assert done.mocks() == []
     assert "tool:fetch" in {m["call"] for m in done.manual("nondeterministic")}
+
+
+@pytest.mark.design("record.runs_merge")
+@pytest.mark.parametrize("bad", ["status", "binary"])
+def test_a_web_key_with_a_retry_in_one_run_is_blocked_in_every_run(
+    team: Team, fake_openai: Callable[..., FakeOpenAI], bad: str
+) -> None:
+    served = iter(range(100))
+
+    def reply(query: str, body: bytes) -> Route:
+        del query, body
+        if next(served) == 0:  # the first request of the first run fails; its retry works
+            if bad == "status":
+                return 503, {"content-type": "application/json"}, b'{"error": "down"}'
+            return 200, {"content-type": "image/png"}, b"\x89PNG\r\n\xff\xfe"
+        return 200, {"content-type": "application/json"}, b'{"ok": true}'
+
+    team.service.dynamic["/x"] = reply
+    many(
+        team,
+        fake_openai,
+        """
+def fetch(k):
+    r = http_get("/x")
+    if r.status_code != 200 or r.headers["content-type"] != "application/json":
+        http_get("/x")
+    return {"fine": True}
+
+def answer(q):
+    ask_model()
+    fetch("x")
+    return "ok"
+""",
+        ["bot:fetch"],
+        ("tool:fetch",),
+    )
+    done = team.record("--runs", "2")
+    assert done.code == 1, done.out
+    assert [m for m in done.mocks() if m["call"] == "http:localhost"] == []
+
+
+@pytest.mark.design("record.runs_flag")
+def test_runs_has_a_cap(team: Team) -> None:
+    team.write("def answer(q):\n    return 'ok'\n", [], ())
+    done = team.record("--runs", "1001")
+    assert done.code == 2 and not (team.root / "scrimmage-runs").exists()
+    assert any("at most 1000" in m["message"] for m in done.doc["mistakes"])
 
 
 @pytest.mark.design("record.runs_merge")
@@ -2579,6 +2628,10 @@ def answer(q):
     done = team.record("--runs", "2")
     assert "tool:inner" not in done.written_calls() and done.mocks() == []
     assert bool(done.skipped("credential")) == (beneath == "credential")
+    # the clean call in the other run is listed too, and its skeleton names the runs it was made in
+    code = "model_inside" if beneath == "model" else "nondeterministic"
+    said = [m["message"] for m in done.manual(code) if m["call"] == "tool:inner"]
+    assert any("this call was made in run-" in m for m in said), said
 
 
 @pytest.mark.design("record.runs_merge")

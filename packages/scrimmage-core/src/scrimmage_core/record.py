@@ -31,6 +31,7 @@ from scrimmage_core.errors import ConfigError
 from scrimmage_core.redact import REMOVED, URL_PART_REMOVED
 from scrimmage_core.state import BLOB_CAP, BLOB_WAIT_S, PREVIEW
 
+MAX_RUNS = 1000  # the runner builds every row before it checks the budget
 CAP = 64 * 1024  # a mock's value, as TOML, is at most this long: a reviewer must read it
 BIG_DIFF = 1000  # added lines a person can review at once
 SHOWN = 200  # how much of a call's arguments a comment shows
@@ -622,6 +623,7 @@ class Recorder:
             orphans += lost
             everything += found
         self.classify(everything)
+        self.find_raised()
         self.settle_groups()
         self.settle_siblings()
         self.settle_web_runs()
@@ -686,6 +688,23 @@ class Recorder:
         ids = self.record.results
         return runs_text([ids[i].run for i in sorted({m.run for m in members})])
 
+    def find_raised(self) -> None:
+        """A tool key that raised in one run and has calls in another: none of its calls writes
+        its web requests. Decided per key, whatever happens to the other calls' replies."""
+        groups: dict[tuple[str, str], list[Node]] = {}
+        for node_id in self.outcomes:
+            node = self.nodes[node_id]
+            if node.kind in ("tool", "mcp"):
+                groups.setdefault((node.label, self.argkeys[node_id]), []).append(node)
+        for members in groups.values():
+            raised = [
+                n
+                for n in members
+                if isinstance(o := self.outcomes[id(n)], Listed) and o.code == RAISED
+            ]
+            if raised and len(raised) < len(members):
+                self.raised.update(id(n) for n in members)
+
     def settle_groups(self) -> None:
         """Several calls with one key share a mock if they got equal replies, in one run or
         across runs. If not, tool and MCP calls are nondeterministic, and web calls are too
@@ -731,11 +750,8 @@ class Recorder:
                 continue
             blocks = any(o.blocks for o in listed)
             why = "the same arguments succeeded once and failed once, so no one reply stands"
-            raised = any(n.line.get("error") for n in members)
             for member in members:
                 self.outcomes[id(member)] = Listed(NONDETERMINISTIC, why, blocks=blocks)
-                if raised:
-                    self.raised.add(id(member))
 
     def settle_web_runs(self) -> None:
         """A web key with a call saved in one run and a call listed in another has no one reply
@@ -755,9 +771,10 @@ class Recorder:
             ]
             blocks = any(cast(Listed, self.outcomes[id(n)]).blocks for n in listed)
             why = "the same request got a reply in one run and none to copy in another"
-            for node in saved:
-                if any(n.run != node.run for n in listed):
-                    self.outcomes[id(node)] = Listed(NONDETERMINISTIC, why, blocks=blocks)
+            if not any(n.run != s.run for s in saved for n in listed):
+                continue
+            for node in saved:  # every run's, the run that listed a call too
+                self.outcomes[id(node)] = Listed(NONDETERMINISTIC, why, blocks=blocks)
 
     def root(self, node: Node) -> None:
         if node.action == "mock":
@@ -841,13 +858,33 @@ class Recorder:
 
     def leaf(self, node: Node, own: Outcome | None, beneath: set[str]) -> Verdict:
         if isinstance(own, Saved) and beneath & {MODEL_BENEATH, CREDENTIAL_BENEATH, FROZEN_BENEATH}:
-            return Verdict(False, [], beneath)  # a run found something forbidden beneath this key
+            self.manual(node, self.forbidden_listing(node, beneath))
+            return Verdict(False, [], beneath)
         if isinstance(own, Saved):
             return Verdict(True, [own])
         if own is None:
             return Verdict(False, [])
         self.manual(node, own)
         return Verdict(False, [], self.own_forbidden(own))
+
+    def forbidden_listing(self, node: Node, beneath: set[str]) -> Listed:
+        """Why a clean call gets no mock: another run found something forbidden beneath it."""
+        if MODEL_BENEATH in beneath:
+            what, code = "reached the model", MODEL_INSIDE
+        elif CREDENTIAL_BENEATH in beneath:
+            what, code = "made a credential request", NONDETERMINISTIC
+        else:
+            what, code = "made a call that cannot be written", NONDETERMINISTIC
+        runs = self.record.sets[node.label][self.argkeys[id(node)]].runs
+        ids = runs_text([self.record.results[i].run for i in sorted(runs)])
+        why = (
+            f"a call under it {what}"
+            if code == MODEL_INSIDE
+            else f"a call under it {what} in another run"
+        )
+        if len(self.record.results) > 1:
+            why += f"; this call was made in {ids}"
+        return Listed(code, why)
 
     def child_verdict(self, child: Node) -> Verdict:
         """A call a tool made. What is not a kind known here is forbidden, so a new one is safe."""
@@ -1003,6 +1040,8 @@ def runs_problems(config: settings.Config, runs: str) -> tuple[int, list[str]]:
     if re.fullmatch(r"[1-9][0-9]*", runs, flags=re.ASCII) is None:
         return 1, [f"--runs: expected a whole number of 1 or more, got {runs!r}"]
     count = int(runs)
+    if count > MAX_RUNS:
+        return 1, [f"--runs: at most {MAX_RUNS} runs of each test, got {count}"]
     real = list(config.agent.real)
     if count > 1 and config.agent.max_cost_usd is None and real:
         return count, [
