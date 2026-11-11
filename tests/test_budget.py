@@ -261,7 +261,7 @@ def test_a_budget_that_cannot_cover_a_call_stops_the_test(
 )
 @pytest.mark.slow
 def test_a_stop_at_default_parallel_exits_2_not_3(
-    project: Project, function: str, extra: str, fixtures: dict[str, str], message: str
+    project: Project, function: str, extra: str, fixtures: dict[str, Any], message: str
 ) -> None:
     project.edit(
         'function = "acme.agent:answer"',
