@@ -248,6 +248,20 @@ def test_a_lookalike_letter_never_matches_a_lowercase_pattern_the_pre_check_miss
     assert tried > 0
 
 
+# Every name that is kept: the paging names, the is_ style prefixes and the tokenizer names.
+HARMLESS_NAMES = [
+    *(f"{word}_token" for word in ("next", "page", "continuation", "pagination", "sync", "cursor")),
+    *(
+        f"{word}_{kind}"
+        for word in ("is", "has", "top", "max", "min", "num", "n")
+        for kind in ("secret", "token")
+    ),
+    *(f"{word}_token" for word in ("eos", "bos", "pad", "unk", "sep", "cls")),
+    "IS_SECRET",
+    "DB_IS_SECRET",
+    "Next_Page_Token",
+]
+
 NEW_LITERALS = {"authorization", "password", "passwd", "token", "secret", "api_key", "api%5fkey"}
 B64 = "dXNlcjpwYXNz"
 # The text, the part of it that is removed, and the secret that must not be left.
@@ -289,6 +303,12 @@ NEW_SECRETS = [
     ("a\ntoken=abc", "token=abc", "abc"),
     ("password=hunter2, then", "password=hunter2,", "hunter2"),
     ("f(token=tok1)", "token=tok1)", "tok1"),
+    ("DB_PASSWORD=hunter2", "DB_PASSWORD=hunter2", "hunter2"),
+    ("AWS_SECRET_ACCESS_KEY=abc", "AWS_SECRET_ACCESS_KEY=abc", "abc"),
+    ("GITHUB_TOKEN=ghp_x", "GITHUB_TOKEN=ghp_x", "ghp_x"),
+    ("MY_API_KEY=k", "MY_API_KEY=k", "k"),
+    ("export DB_PASSWORD='x'", "DB_PASSWORD='x'", "'x'"),
+    ("a_b_c_secret=zz", "a_b_c_secret=zz", "zz"),
 ]
 
 
@@ -371,6 +391,7 @@ def test_the_new_secrets_leave_what_the_other_passes_remove_as_it_was() -> None:
         "please reset your password at the desk",
         "Reset your password at https://example.com/account",
         "the secret is out",
+        *(f"{name}=abc" for name in HARMLESS_NAMES),
         "next_page_token=abc",
         "page_token=CgQ",
         "is_secret=true",

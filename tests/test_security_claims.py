@@ -147,6 +147,10 @@ SHAPES = {
     "form double quoted secret": ("secret=", '"hunter 2"'),
     "form bracketed token": ("token=", "<hunter2>"),
     "form client secret": ("client_secret=", "hunter2"),
+    "environment password": ("DB_PASSWORD=", "hunter2"),
+    "environment aws secret": ("AWS_SECRET_ACCESS_KEY=", "abc123"),
+    "environment github token": ("GITHUB_TOKEN=", "x1"),
+    "environment api key": ("MY_API_KEY=", "k1"),
     "json web token": ("ey" + "J", f"{LETTERS}.ey{LETTERS}.{LETTERS}"),
 }
 
@@ -165,6 +169,26 @@ def test_a_secret_with_no_known_shape_passes_through_redaction() -> None:
     assert redact("pw is hunter2") == "pw is hunter2"
     assert redact("pass=hunter2") == "pass=hunter2"
     assert redact("password: hunter2") == "password: hunter2"
+
+
+@pytest.mark.design("security.redaction_exempt")
+def test_names_that_are_not_credentials_are_kept() -> None:
+    """The names the security page lists as exempt, and a name glued to a word."""
+    for text in (
+        "next_page_token=abc",
+        "page_token=abc",
+        "is_secret=true",
+        "has_token=1",
+        "top_secret=false",
+        "max_token=100",
+        "min_token=1",
+        "num_token=3",
+        "n_token=3",
+        "eos_token=2",
+        "pad_token=0",
+        "mytoken=5",
+    ):
+        assert redact(text) == text
 
 
 @pytest.mark.design("security.page_numbers")

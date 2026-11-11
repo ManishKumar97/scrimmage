@@ -16,17 +16,24 @@ class Secret(NamedTuple):
     lowercase: bool = False
 
 
-# A form-encoded or keyword field: password, token, secret or api_key, with = or %3D. The
-# name starts at a boundary, so mytoken, is_secret, next_page_token and top_secret are kept;
-# only client_, refresh_, id_, csrf_, auth_ and access_ may come before it with a _. After a
-# JSON \n the name also starts. The value is a quoted string up to its closing quote, a <...>
-# or a run of characters that is not a space, &, quote, bracket or backslash, so a field cut
-# from JSON text leaves the JSON valid. A value already removed is left, and so is a bare
-# name followed by , or ), which is code: f(password=None).
+# A form-encoded or keyword field: password, token, secret, secret_access_key or api_key,
+# with = or %3D. Any NAME_ prefix may come before the name, so DB_PASSWORD, GITHUB_TOKEN and
+# client_secret match: a leak reaches a repository, and a false positive only makes a call
+# unwritable. A name directly after a letter or digit, as in mytoken, is not a name. These
+# prefixes are harmless and are kept: the paging names (next_page_token), is_, has_, top_,
+# max_, min_, num_ and n_, and the tokenizer names (eos_token, pad_token). After a JSON \n
+# the name also starts. The value is a quoted string up to its closing quote, a <...> or a
+# run of characters that is not a space, &, quote, bracket or backslash, so a field cut from
+# JSON text leaves the JSON valid. A value already removed is left, and so is a bare name
+# followed by , or ), which is code: f(password=None).
+FIELD = r"(?:passw(?:or)?d|token|secret(?:_access_key)?|api(?:_|%5f)key)(?:=|%3d)"
+HARMLESS = (
+    "next|page|continuation|pagination|sync|cursor|is|has|top|max|min|num|n|eos|bos|pad|unk|sep|cls"
+)
 FORM = (
     r"(?:(?<![A-Za-z0-9_])|(?<=\\[nrt]))"
-    r"(?ai:(?:(?:client|refresh|id|csrf|auth|access)_)?"
-    r"(?:passw(?:or)?d|token|secret|api(?:_|%5f)key)(?:=|%3d))"
+    rf"(?!(?ai:(?:[A-Za-z0-9]+_)*(?:{HARMLESS})_{FIELD}))"
+    rf"(?ai:(?:[A-Za-z0-9]+_)*{FIELD})"
     r"(?!\[(?:secret )?removed\](?:[&\s\"'<>\\]|$))"
     r"(?:(?P<quote>\\?[\"'])[^\"'\\]+(?P=quote)"
     r"|<[^<>\"'\\]+>"

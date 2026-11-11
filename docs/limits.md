@@ -88,7 +88,7 @@
 - **A web mock cannot match a query or a body.** Two GETs that differ only by query, or POSTs with different bodies, get `differs` and are listed by hand when their replies differ.
 - **A value that changes between runs is frozen by its mock.** That is what a mock is for. A value that changes within one run is listed `nondeterministic`.
 - **A form field is cut at the first space, quote or `&`.** `password=hunter2` and a quoted `password='two words'` are removed, but an unquoted `password=two words` leaves ` words`, and `password: hunter2` with a colon is not matched.
-  A name with a prefix other than `client_`, `refresh_`, `id_`, `csrf_`, `auth_` or `access_`, such as `DB_PASSWORD=`, is not matched, as `_` before a name keeps `is_secret` and `max_token` out.
+  Any `NAME_` prefix is matched, as in `DB_PASSWORD=`, so a harmless field that ends in one of these words and is not on the exempt list, such as `my_token=5`, is removed too; a call that holds one cannot be written as a mock. The exempt names are on the security page.
   A value of letters only, followed by `,` or `)`, such as `password=hunter)`, is taken for code and kept.
   `Authorization=Basic%20...`, a double-encoded `password%253D`, and a multipart body with `name="password"` on one line and the value on another are not cleaned.
   Redaction is a heuristic on known shapes.
