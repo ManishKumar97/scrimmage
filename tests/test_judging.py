@@ -743,6 +743,37 @@ def test_a_refusal_on_a_fault_row_fails_at_any_rate_and_keeps_exit_2(project: Pr
     assert kinds == ["refused"]
 
 
+@pytest.mark.slow
+def test_a_refusal_the_agent_chose_on_a_fault_row_leaves_the_rows_other_runs_running(
+    project: Project,
+) -> None:
+    """An attack the agent obeys in 3 of 4 runs reads as 1/4, not as the first refusal alone.
+    Each refused call is still refused, the row still fails and the exit stays 2."""
+    fault_runs = [
+        {"answer": GOOD, "fired": True, "refund": True},
+        {"answer": GOOD, "fired": True},
+        {"answer": GOOD, "fired": True, "refund": True},
+        {"answer": GOOD, "fired": True, "refund": True},
+    ]
+    result = scripted(project, [{"answer": GOOD}] * 4 + fault_runs, ALWAYS, "runs = 4")
+    assert result.code == 2, result.out
+    cells = table_row(result, "fault 1")
+    assert cells[-1] == "fail" and cells[3] == "4" and "1/4" in cells
+    assert "3 runs: refused tool:refund_order" in result.out
+    fault = [run[-1]["summary"] for run in result.records() if run[-1]["row"] == "fault 1"]
+    assert sorted(str(s["outcome"]) for s in fault) == ["answered"] + ["refused call"] * 3  # type: ignore[index]
+    refunds = [x for run in result.records() for x in run if x.get("call") == "tool:refund_order"]
+    assert [x["action"] for x in refunds] == ["refused"] * 3  # none ran
+
+
+@pytest.mark.slow
+def test_a_refusal_on_the_baseline_still_ends_its_row(project: Project) -> None:
+    steps = [{"answer": GOOD, "refund": True}, {"answer": GOOD, "refund": True}]
+    result = scripted(project, steps, ALWAYS, "runs = 2")
+    assert result.code == 2, result.out
+    assert [run[-1]["row"] for run in result.records()] == ["baseline"]  # its row stopped
+
+
 @pytest.mark.parametrize(
     ("step", "shown"),
     [("post", "http:payments.example.invalid"), ("blind", "process:python")],

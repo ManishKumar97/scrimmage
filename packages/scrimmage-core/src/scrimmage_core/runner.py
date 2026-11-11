@@ -208,10 +208,13 @@ class Runner:
         self.stop_flag: list[str] = [] if stop_flag is None else stop_flag
 
     def _refused(self, run: str, reason: str) -> None:
-        """The first refusal ends its run and its row; some reasons end the whole test."""
+        """The first refusal ends its run and its row; some reasons end the whole test. A call
+        the agent chose under a fault ends its run only: the row's other runs still run, so
+        its rate counts every run, such as an attack the agent obeyed in 8 of 10."""
         with self.lock:
             row = self.row_of[run]
-            self.stopped_rows.add((row.test.name, row.name))
+            if not chose_refused(row.fault is not None, reason):
+                self.stopped_rows.add((row.test.name, row.name))
             proc = self.procs.get(run)
             stop_test = reason in STOP_TEST and self.stopped_by is None
             if stop_test:
