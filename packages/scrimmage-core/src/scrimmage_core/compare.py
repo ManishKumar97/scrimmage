@@ -160,7 +160,7 @@ def document(earlier_path: str, earlier: Doc, compared: list[Doc]) -> Doc:
 def span(side_doc: Doc | None) -> str:
     if side_doc is None:
         return "-"
-    if not side_doc["judged"]:
+    if not side_doc["judged"] or side_doc.get("result") == BASELINE_FAILED:
         return f"{side_doc['passed']}/{side_doc['judged']} -"
     low, high = wilson(int(str(side_doc["passed"])), int(str(side_doc["judged"])))
     return f"{side_doc['passed']}/{side_doc['judged']} {low:.2f}-{high:.2f}"
