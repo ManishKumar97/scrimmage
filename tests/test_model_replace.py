@@ -134,7 +134,12 @@ def test_replace_on_a_gzip_reply() -> None:
 def test_a_longer_replacement_is_read_whole() -> None:
     long = "safe " * 4000
     gate = Gate(replace(long))
-    assert ask(guard(Provider(gate.events))) == long
+    raw = guard(Provider(gate.events)).chat.completions.with_raw_response.create(
+        model=GUARD, messages=[{"role": "user", "content": "x"}]
+    )
+    assert raw.parse().choices[0].message.content == long
+    # The length the reply declares is the new body's, not the real one's.
+    assert raw.headers["content-length"] == str(len(raw.http_response.content))
 
 
 def stream_reply(request: httpx2.Request) -> httpx2.Response:
@@ -277,6 +282,8 @@ def test_a_model_replace_line_keeps_the_real_reply_redacted_and_the_injected_tex
     assert ask(guard(provider)) == injected  # the agent got the injected text as written
     line = gate.line
     assert SECRET not in json.dumps(line["result"])  # the real reply's preview is redacted
+    real = json.loads(gate.result())["choices"][0]["message"]["content"]
+    assert real.startswith("no ") and "safe" not in real  # the line holds the real reply
     assert line["changed"]["text"]["preview"] == injected  # the fault's own text is whole
     # show puts the two side by side, from the line alone.
     shown = show.came_back(line)
