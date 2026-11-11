@@ -60,7 +60,7 @@ FIRST_LINE = "import time; print(time.time_ns())"
 
 # The enforced ceilings: what a change may never cost, in the unit the name says.
 # They are wide, so a busy machine does not reach them: 11.6x today's quiet cost for a tool
-# call, 19.6x for sync HTTP, 20.1x async, 23x MCP, 12.2x for a sync model call, 9.7x async,
+# call, 19.6x for sync HTTP, 20.1x async, 23x MCP, 12.2x for a sync model call, 11x async,
 # and 10.6x to 12.3x for the CLI. Only the tool ceiling catches one added round trip to the
 # runner: HTTP needs about 5.7 ms added and a model call about 18 ms. ROUND_TRIPS catches those.
 # "Seen under load" is the worst of 3 attempts with 16 busy loops on the 4 CPUs.
@@ -75,8 +75,8 @@ CALL_BUDGETS_US = {
     # the 2x rule. 7500 is 2.10x.
     "http_async": 7500.0,  # 373 µs quiet, 3.6 ms seen under load
     "model_sync": 20000.0,  # 1.6 ms quiet with the budget on, 5.9 ms seen under load
-    # 11.4 ms seen under load puts 20000 at 1.75x, also under the 2x rule. Not raised here.
-    "model_async": 20000.0,  # 2.1 ms quiet, 11.4 ms seen under load
+    # Raised from 20000: 11.4 ms was seen under load, and 20000 was 1.75x that. 23000 is 2.02x.
+    "model_async": 23000.0,  # 2.1 ms quiet, 11.4 ms seen under load
     "mcp_async": 6000.0,  # 257 µs quiet, 4.3 ms seen under load
 }
 PROCESS_BUDGETS_MS = {

@@ -39,6 +39,8 @@ The table gives the time added at the median and at the 99th percentile, in micr
 | Model call, async, budget off | 1543.7 | 2155.2 | 614.2 (531.1 to 621.6) | 1761.0 | 2762.6 | 1047.4 (881.6 to 2331.6) |
 | MCP tool call, stdio, async | 1305.5 | 1564.3 | 257.3 (220.9 to 270.3) | 1444.6 | 2198.2 | 725.0 (628.4 to 1004.7) |
 
+The args miss row comes from a separate run on 2026-11-11, made while other work shared the machine, so it is noisier than the other rows, which come from an earlier run.
+
 A mocked call makes no real call, so it has no ungated row to compare with.
 A mocked tool call takes 48.0 µs at the median, and a mocked web request 185.5 µs.
 A call that misses a mock with `args`, on a tool under `real` by name, runs for real and adds about 132 µs, as it looks for the nearest mock and keeps the evidence.
