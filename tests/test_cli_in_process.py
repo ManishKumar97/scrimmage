@@ -112,6 +112,35 @@ def test_host_signals_after_a_stop_signal_still_fire_until_the_run_ends(
     assert [item["message"] for item in infra] == ["stopped by SIGTERM; every run was stopped"]
 
 
+def test_a_stop_signal_read_by_a_late_watcher_is_reported_once(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The watcher is held until run_all has cleared the flag, as on a busy machine."""
+    cleared = threading.Event()
+    original_watch = Runner._watch  # pyright: ignore[reportPrivateUsage]
+    original_catch = Runner._catch_signals  # pyright: ignore[reportPrivateUsage]
+
+    def late(self: Runner, wake_read: int, forward: int) -> None:
+        cleared.wait(WAIT_S)
+        original_watch(self, wake_read, forward)
+
+    def catching(self: Runner) -> Callable[[], None]:
+        release = original_catch(self)
+
+        def after_the_clear() -> None:
+            cleared.set()  # release runs once run_all has read and cleared the flag
+            release()
+
+        return after_the_clear
+
+    monkeypatch.setattr(Runner, "_watch", late)
+    monkeypatch.setattr(Runner, "_catch_signals", catching)
+    on_first_run(monkeypatch, lambda: os.kill(os.getpid(), signal.SIGTERM))
+    assert cli.main(["test", "--json", str(project.toml)]) == 3
+    infra = cast(list[dict[str, str]], document(project)["infra"])
+    assert [item["message"] for item in infra] == ["stopped by SIGTERM; every run was stopped"]
+
+
 def test_a_full_host_wakeup_pipe_drops_the_byte_and_the_run_goes_on(
     project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:

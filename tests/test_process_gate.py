@@ -57,6 +57,7 @@ def test_a_python_child_with_its_own_environment_is_refused(project: Project, ho
         "blind_child",
     )
     assert "Pass env={**os.environ}" in result.out and 'add "process:python"' in result.out
+    assert line["by_config"] is True  # the test's setup caused it, not the agent
     jsonschema.Draft202012Validator(RECORD).validate(line)
 
 

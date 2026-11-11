@@ -2030,6 +2030,7 @@
                 "test_mistake",
                 "not_agent",
                 "fault_not_fired",
+                "fault_not_changed",
                 "refused_call",
                 "refused_on_baseline",
                 "crash_after_fault",
@@ -2074,7 +2075,26 @@
                 "const": true,
                 "description": "The rule read the run's summary line: its outcome, verdict or broken rules."
               }
-            }
+            },
+            "oneOf": [
+              {
+                "required": [
+                  "seq",
+                  "proc"
+                ]
+              },
+              {
+                "required": [
+                  "summary"
+                ],
+                "properties": {
+                  "summary": {
+                    "const": true
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
           }
         }
       }
