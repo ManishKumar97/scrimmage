@@ -100,7 +100,7 @@ The text of a message can change in any release.
 | `stopped_by` | The reason a refusal stopped the whole test, such as `budget`, or `null`. |
 | `mock_misses` | The calls that had a mock on their label and matched none, one object per distinct call, below. Absent in `scrimmage record --json`. At most 200, real calls first. |
 | `mock_misses_left_out` | How many more misses than the 200 listed. |
-| `result_file` | The `result.json` this test wrote into `records`: the same document, but for this field. `null` when it was not written: a write failed, or the test did not finish. See [Reading a finished test](show.md). |
+| `result_file` | The `result.json` this test wrote into `records`: the same document, but for this field, which the file leaves out, and `compare`, which is always `null` in the file. `null` when it was not written: a write failed, or the test did not finish. See [Reading a finished test](show.md). |
 | `compare` | `null`, or with `--compare` the comparison with the earlier test, below. |
 
 Each object in `mock_misses`:
