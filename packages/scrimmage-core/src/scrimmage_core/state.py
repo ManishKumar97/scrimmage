@@ -23,6 +23,7 @@ from typing import Protocol, cast
 
 from scrimmage_core import capture
 from scrimmage_core import decide as engine
+from scrimmage_core.changes import Changed
 from scrimmage_core.decide import missed
 from scrimmage_core.errors import ScrimmageRefused, ScrimmageStopped, ScrimmageTimeLimit
 from scrimmage_core.outcomes import PREVIEW
@@ -59,19 +60,20 @@ def now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def content(value: object) -> dict[str, object]:
+def content(value: object, *, clean: bool = True) -> dict[str, object]:
     """Hash, size and preview of a recorded value, with secrets removed first.
 
     The call is only observed, so no value may fail it: one that holds itself, is nested
     deeper than the stack, holds a lone surrogate or has a repr that fails is still
-    recorded, as far as it can be.
+    recorded, as far as it can be. clean=False keeps the text as it is: the injected text of
+    a fault, which the team wrote and the line must show as written.
     """
     try:
         text = value if isinstance(value, str) else json.dumps(value, default=shown, sort_keys=True)
     except Exception as exc:  # a value that holds itself, nests too deep, or will not sort
         text = f"<a {type(value).__name__} Scrimmage could not write as JSON: {type(exc).__name__}>"
     # A lone surrogate, such as an undecodable byte in a file name, has no UTF-8 form.
-    text = redact(text).encode("utf-8", "backslashreplace").decode()
+    text = (redact(text) if clean else text).encode("utf-8", "backslashreplace").decode()
     data = text.encode()
     return {
         "sha256": hashlib.sha256(data).hexdigest(),
@@ -101,6 +103,13 @@ class Step:
     call_id: int | None = None  # in a recording run: this call's number in its process
     parent: int | None = None  # the real tool call this one was made inside, if any
     miss: engine.Miss | None = None  # the call had a mock on its label and no mock named it
+    # A carried fault (append, replace, slow), as the line says it: what changed, why nothing
+    # did, how long the call waited and what ended the wait early.
+    changed: dict[str, object] | None = None
+    unchanged: dict[str, object] | None = None
+    slowed_ms: int | None = None
+    cut_by: str | None = None
+    waiting_since: float | None = None  # while a slowed call waits: when it began
 
 
 def this_process() -> dict[str, object]:
@@ -143,6 +152,9 @@ class RunState:
         self._lock = threading.Lock()
         self._unannounced = self.child  # a child says what it is on its first line
         self.live: dict[int, Step] = {}  # calls decided and not yet finished
+        # Set when the run is stopped or has ended while this process lives on, so a call
+        # that is only waiting, such as a slowed one, ends at once and does not run.
+        self.stopped = threading.Event()
         self.end_program: Callable[[], None] = lambda: None  # set where a run has a sender
         if plan is not None:
             self._arrived(plan)
@@ -356,6 +368,7 @@ class RunState:
     def run_closed(self) -> None:
         """The run ended and this process lived on, so nothing it does can be recorded."""
         self.refused = self.refused or CLOSED
+        self.stopped.set()
 
     def forked(self) -> None:
         """This process is a copy of its parent, so nothing it holds about the process is true.
@@ -371,6 +384,7 @@ class RunState:
         self._ids = 0
         self.live = {}
         self._unannounced = True
+        self.stopped = threading.Event()  # a copy of the parent's event is the parent's
         if self._plan is not None:
             self._take(self._plan)
 
@@ -389,9 +403,13 @@ class RunState:
 
     def stop_open(self) -> None:
         """A call going on when the run is stopped would leave no line, so it gets one here."""
+        self.stopped.set()
         with self._lock:
             steps, self.live = list(self.live.values()), {}
         for step in steps:
+            if step.waiting_since is not None:  # a slowed call that was still waiting
+                step.cut_by = "run stopped"
+                step.slowed_ms = int((time.monotonic() - step.waiting_since) * 1000)
             self._write(step, error=ScrimmageStopped("the run was stopped during this call"))
 
     def _head(self) -> dict[str, object]:
@@ -472,6 +490,36 @@ class RunState:
             line.update(extra)
         self.sink.put(line, keep=True)
 
+    def unchanged(self, step: Step, why: str) -> None:
+        """A carried fault could not change this call: it gets what the baseline gives it, and
+        the line says why. The call is the baseline's, so it is not a fired fault."""
+        decision = step.decision
+        fault = None if decision.fault is None else self.plan.faults[decision.fault]
+        if decision.under is not None:
+            step.decision = engine.Decision(
+                decision.under, mock=decision.mock, under=decision.under
+            )
+        step.unchanged = {"do": "" if fault is None else fault.do, "why": why}
+
+    def changed(self, step: Step, done: Changed) -> None:
+        """Say what a carried fault changed. The text is the fault's own, shown as written;
+        find is cleaned for its preview and hashed as written."""
+        assert step.decision.fault is not None
+        fault = self.plan.faults[step.decision.fault]
+        shown: dict[str, object] = {
+            "text": content(fault.text or "", clean=False),
+            "count": done.count,
+            "parts": list(done.parts),
+        }
+        if fault.find is not None:
+            raw = fault.find.encode("utf-8", "backslashreplace")
+            shown["find"] = {
+                **content(fault.find),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "bytes": len(raw),
+            }
+        step.changed = shown
+
     def finish(
         self,
         step: Step,
@@ -516,6 +564,16 @@ class RunState:
             line["fault"] = {"do": fault.do, "when": fault.when, "n": decision.n}
         if decision.mock is not None:
             line["mock"] = decision.mock
+        if decision.under is not None:
+            line["under"] = decision.under
+        if step.changed is not None:
+            line["changed"] = step.changed
+        if step.unchanged is not None:
+            line["unchanged"] = step.unchanged
+        if step.slowed_ms is not None:
+            line["slowed_ms"] = step.slowed_ms
+        if step.cut_by is not None:
+            line["cut_by"] = step.cut_by
         if decision.action == "refused":
             line["reason"] = decision.reason or "unlisted"
         if mistake is not None:
@@ -532,8 +590,10 @@ class RunState:
         if self.recording and step.call.kind in ("tool", "mcp") and step.call.args is None:
             line["args_not_plain"] = True  # the preview holds a repr, which no mock can match
         write = step.call.kind == "http" and step.call.method not in engine.READ_METHODS
-        # Nothing tells an MCP read from an MCP write, so a real one is kept as a write is.
-        write = write or (step.call.kind == "mcp" and decision.action == "real")
+        # Nothing tells an MCP read from an MCP write, so a real one is kept as a write is,
+        # also when a carried fault changed or delayed it.
+        ran = decision.action == "real" or decision.under == "real"
+        write = write or (step.call.kind == "mcp" and ran)
         write = write or step.call.kind == "process"
         keep = decision.action == "refused" or step.call.kind == "model" or write
         keep = keep or "mock_miss" in line

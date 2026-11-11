@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import Any, NoReturn
 
-from scrimmage_core import capture, hooks, mocks
-from scrimmage_core.config import Fault
+from scrimmage_core import capture, changes, delay, hooks, mocks
+from scrimmage_core.config import Fault, slow_seconds
 from scrimmage_core.errors import ScrimmageMockError
 from scrimmage_core.state import RunState, Step, current, inside
 
@@ -79,6 +79,11 @@ def injected(state: RunState, fault: Fault, name: str, failure: type[Exception])
     return kind(f"{name} failed")
 
 
+def whole(value: object) -> tuple[object, Callable[[object], object]]:
+    """The part of a result a change acts on is the whole of it."""
+    return value, lambda new: new
+
+
 @dataclass(frozen=True)
 class Gated:
     """What a gate needs to know about one call."""
@@ -89,6 +94,9 @@ class Gated:
     failure: type[Exception] = RuntimeError  # what the caller treats as a tool failure
     during: Callable[[], AbstractContextManager[object]] = nullcontext  # around the real call
     shape: Callable[[object], object] = lambda value: value  # a mock, as the caller expects it
+    # The part of a result an append or replace acts on, and how to put the changed part
+    # back. A tool that returns (content, artifact) changes the content only.
+    content: Callable[[object], tuple[object, Callable[[object], object]]] = whole
 
 
 Describe = Callable[[tuple[Any, ...], dict[str, Any]], Gated | None]
@@ -114,15 +122,46 @@ def apply(state: RunState, step: Step, gated: Gated) -> object:
             raise problem from exc
         state.finish(step, error=error)
         raise error
-    assert decision.mock is not None
-    mock = state.plan.mocks[decision.mock]
+    value = build_mock(state, step, gated)
+    state.finish(step, result=value)
+    return value
+
+
+def build_mock(state: RunState, step: Step, gated: Gated) -> object:
+    """The mock's value as the caller expects it. A mock that does not fit is a mistake."""
+    assert step.decision.mock is not None
+    mock = state.plan.mocks[step.decision.mock]
     try:
-        value = gated.shape(mocks.build(mock.returns, mock.type, gated.tool, state.allowed))
+        return gated.shape(mocks.build(mock.returns, mock.type, gated.tool, state.allowed))
     except ScrimmageMockError as exc:
         state.finish(step, error=exc, mistake=str(exc))
         raise
+
+
+def carried_end(
+    state: RunState, step: Step, gated: Gated, value: object, mistake: str | None = None
+) -> object:
+    """The end of a call under a carried fault: the value, changed if the fault is a change
+    and the value can take it. A value it cannot take goes back as it is, and the line says
+    why, so the call is not counted as a fired fault."""
+    if step.unchanged is not None:  # the fault could not be carried out at all
+        state.finish(step, result=value, mistake=mistake)
+        return value
+    assert step.decision.fault is not None
+    fault = state.plan.faults[step.decision.fault]
+    if slow_seconds(fault.do) is not None:
+        state.finish(step, result=value)
+        return value
+    part, put = gated.content(value)
+    declared = None if gated.content is not whole else changes.declared_return(gated.tool)
+    done = changes.change(part, fault, declared)
+    if isinstance(done, changes.Unchangeable):
+        state.unchanged(step, done.why)
+        state.finish(step, result=value, mistake=done.message(fault, step.call.label))
+        return value
+    state.changed(step, done)
     state.finish(step, result=value)
-    return value
+    return put(done.value)
 
 
 def ended(state: RunState, step: Step, gated: Gated, result: object) -> None:
@@ -134,6 +173,69 @@ def ended(state: RunState, step: Step, gated: Gated, result: object) -> None:
             )
         )
     state.finish(step, result=result)
+
+
+def carry_sync(
+    state: RunState,
+    step: Step,
+    gated: Gated,
+    tool: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> object:
+    """A call under a carried fault: wait if the fault is slow, then run the tool or build
+    the mock as the baseline would, then change the value if the fault is a change."""
+    assert step.decision.fault is not None
+    seconds = slow_seconds(state.plan.faults[step.decision.fault].do)
+    if seconds is not None:
+        try:
+            delay.wait_sync(state, step, seconds)
+        except BaseException as exc:
+            state.finish(step, error=exc)
+            raise
+    if step.decision.under == "mock":
+        return carried_end(state, step, gated, build_mock(state, step, gated))
+    try:
+        with inside(step), gated.during():
+            value = tool(*args, **kwargs)
+    except BaseException as exc:
+        state.finish(step, error=exc)
+        raise
+    return carried_end(state, step, gated, value)
+
+
+async def carry_async(
+    state: RunState,
+    step: Step,
+    gated: Gated,
+    tool: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> object:
+    """carry_sync for an async tool. The wait is on the event loop, in steps, so a deadline
+    the caller sets with asyncio.wait_for cancels it and the tool never runs."""
+    assert step.decision.fault is not None
+    seconds = slow_seconds(state.plan.faults[step.decision.fault].do)
+    mistake = None
+    sleep = delay.asyncio_sleep() if seconds is not None else None
+    if seconds is not None and sleep is None:
+        state.unchanged(step, "slow on an async tool needs asyncio")
+        mistake = "slow on an async tool needs asyncio, not trio; the call was not slowed"
+    elif seconds is not None and sleep is not None:
+        try:
+            await delay.wait_steps(state, step, seconds, sleep)
+        except BaseException as exc:
+            state.finish(step, error=exc)
+            raise
+    if step.decision.under == "mock":
+        return carried_end(state, step, gated, build_mock(state, step, gated), mistake)
+    try:
+        with inside(step), gated.during():
+            value = await tool(*args, **kwargs)
+    except BaseException as exc:
+        state.finish(step, error=exc)
+        raise
+    return carried_end(state, step, gated, value, mistake)
 
 
 def gate_with(tool: Callable[..., Any], describe: Describe) -> Callable[..., Any]:
@@ -150,6 +252,8 @@ def gate_with(tool: Callable[..., Any], describe: Describe) -> Callable[..., Any
             if state is None or gated is None:
                 return await tool(*args, **kwargs)
             step = state.begin(gated.name, gated.arguments)
+            if step.decision.under is not None:
+                return await carry_async(state, step, gated, tool, args, kwargs)
             if step.decision.action != "real":
                 return apply(state, step, gated)
             try:
@@ -170,6 +274,8 @@ def gate_with(tool: Callable[..., Any], describe: Describe) -> Callable[..., Any
         if state is None or gated is None:
             return tool(*args, **kwargs)
         step = state.begin(gated.name, gated.arguments)
+        if step.decision.under is not None:
+            return carry_sync(state, step, gated, tool, args, kwargs)
         if step.decision.action != "real":
             return apply(state, step, gated)
         try:
