@@ -171,6 +171,10 @@ class Sender:
         # Settlements have their own line, with no limit: each is small, and losing one
         # would leave money reserved for the rest of the test.
         self.settles: deque[dict[str, object]] = deque()
+        # The thread draining at exit, which holds _sending over the network; and what a
+        # SIGTERM that arrived inside that drain left to do when it ends.
+        self.draining: int | None = None
+        self.after_drain: Callable[[], None] | None = None
         self._counts = threading.Lock()  # made and dropped; never held over the network
         self._sending = threading.Lock()  # one batch in flight at a time
         self._stop = threading.Event()
@@ -243,9 +247,29 @@ class Sender:
             with contextlib.suppress(queue.Full):  # a full queue means get is not waiting
                 self.queue.put_nowait(WAKE)
             self._thread.join(timeout=2 * TIMEOUT_S)
-        while self._send_batch(block=False):
-            pass
-        self._send_batch(block=False, final=True)
+        self.draining = threading.get_ident()
+        try:
+            while self._send_batch(block=False):
+                pass
+            self._send_batch(block=False, final=True)
+        finally:
+            self.draining = None
+            after, self.after_drain = self.after_drain, None
+            if after is not None:
+                after()
+
+    def defer_to_drain(self, then: Callable[[], None]) -> bool:
+        """Called by a signal handler: if this thread is inside the exit drain, run then when
+        the drain ends and return True. The drain holds the send lock, and the handler runs on
+        this very thread, so anything it waited for that needs the lock would wait for nothing.
+        A handler runs between two steps of the drain, so no lock is needed here.
+
+        It holds one drain at a time. A second thread flushing at once replaces draining, and
+        a signal then takes the old path, which is no worse than before this was added."""
+        if self.draining != threading.get_ident():
+            return False
+        self.after_drain = then
+        return True
 
     def _loop(self) -> None:
         while not self._stop.is_set():

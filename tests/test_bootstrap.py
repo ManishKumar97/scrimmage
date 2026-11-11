@@ -339,3 +339,26 @@ def test_a_child_process_keeps_the_mocks_but_fires_no_faults(control: ControlSer
     child = python(code, as_child(control))
     assert (root.stdout.strip(), child.stdout.strip()) == ("1", "0")
     assert child.stderr == ""
+
+
+@pytest.mark.design("boot.probe_ends_program")
+def test_a_stream_whose_flush_raises_systemexit_still_ends_a_probe(
+    control: ControlServer, tmp_path: Path
+) -> None:
+    control.open_run("run-1", "baseline", plan())
+    after = tmp_path / "after-refusal"
+    code = (
+        "import sys\n"
+        "from scrimmage_core.state import current\n"
+        "class Stream:\n"
+        "    def write(self, text): return len(text)\n"
+        "    def flush(self): raise SystemExit(5)\n"
+        "sys.stdout = Stream()\n"
+        "try:\n"
+        "    current().end_program()\n"
+        "except BaseException:\n"  # an agent that catches everything
+        "    pass\n"
+        f"open({str(after)!r}, 'w').close()\n"
+    )
+    result = python(code, joined(control))
+    assert result.returncode == 0 and not after.exists(), result.stderr

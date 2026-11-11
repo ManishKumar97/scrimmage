@@ -75,12 +75,18 @@ def runs_as_main(module: str, target: str | None, folders: list[str]) -> bool:
     return os.path.realpath(spec.origin) == os.path.realpath(sys.argv[0])
 
 
-def handle_sigterm(last_lines: Callable[[], None]) -> None:
+def handle_sigterm(last_lines: Callable[[], None], sender: Sender) -> None:
     """On SIGTERM send the last record lines, then end as Python would have with no handler.
 
     The handler runs on the main thread, which may hold a lock the lines need, so a thread
     does the sending and the wait for it has a limit. A program with a handler of its own
     replaces this one. The sender thread has then sent all but the last 100 ms.
+
+    A signal that arrives while this thread is itself sending the exit batches waits for them
+    to end: they hold the send lock, and the thread that would send the rest needs it. That
+    wait has no limit of its own, so a drain stuck on a silent runner ends at the runner's
+    SIGKILL, exit 137, about a second later than the four seconds above. No line is lost to
+    it that the old path kept.
     """
     if signal.getsignal(signal.SIGTERM) is not signal.SIG_DFL:
         return
@@ -88,14 +94,19 @@ def handle_sigterm(last_lines: Callable[[], None]) -> None:
     def on_term(signum: int, frame: FrameType | None) -> None:
         del frame
         signal.signal(signum, signal.SIG_IGN)  # the runner may send it twice
-        try:
-            worker = threading.Thread(target=last_lines, daemon=True)
-            threads.start(worker)
-            worker.join(TERM_WAIT_S)
-        except RuntimeError:  # Python is already shutting down, so no new thread
-            pass
-        signal.signal(signum, signal.SIG_DFL)
-        os.kill(os.getpid(), signum)
+
+        def end() -> None:
+            try:
+                worker = threading.Thread(target=last_lines, daemon=True)
+                threads.start(worker)
+                worker.join(TERM_WAIT_S)
+            except RuntimeError:  # Python is already shutting down, so no new thread
+                pass
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+
+        if not sender.defer_to_drain(end):
+            end()
 
     signal.signal(signal.SIGTERM, on_term)
 
@@ -187,7 +198,8 @@ def start(*, child: bool = False, target: str | None = None) -> None:
         process, which ends it before anything after that point.
         """
         for stream in (sys.stdout, sys.stderr):
-            with contextlib.suppress(Exception):  # a stream the agent closed or replaced
+            with contextlib.suppress(BaseException):  # a stream the agent closed or replaced, even
+                # one whose flush raises SystemExit: os._exit below must still run
                 stream.flush()
         last_lines()
         os._exit(0)
@@ -200,7 +212,7 @@ def start(*, child: bool = False, target: str | None = None) -> None:
         sender.eager = True
 
     process_gate.install(run_state, before_exec)
-    handle_sigterm(last_lines)
+    handle_sigterm(last_lines, sender)
     if plan is not None:
         print(
             f"scrimmage: active for run {run} ({plan.test}, {plan.row}); "

@@ -10,6 +10,7 @@ import os
 import re
 import sys
 from collections.abc import Awaitable, Mapping, Sequence
+from types import ModuleType
 from typing import cast
 
 from scrimmage_core.state import current
@@ -57,6 +58,23 @@ def pick(value: object, path: str) -> object:
     return value
 
 
+def _standard_asyncio(path: list[str]) -> ModuleType:
+    """asyncio, imported only for an async agent, from the path the agent did not change.
+
+    A sync agent never imports it, so a stray asyncio.py never runs for one, and its start
+    does not pay for the import.
+    """
+    loaded = sys.modules.get("asyncio")
+    if loaded is not None:
+        return loaded  # the agent imported it itself, so it is the one the agent uses
+    saved = sys.path[:]
+    sys.path[:] = path
+    try:
+        return importlib.import_module("asyncio")
+    finally:
+        sys.path[:] = saved
+
+
 def main(argv: list[str]) -> int:
     if len(argv) not in (3, 4):
         print(
@@ -64,13 +82,16 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 2
+    # The path as it was before the agent ran, without the folder python -m put first.
+    # A team file named asyncio.py in that folder, or in one the agent adds, must not stand
+    # in for the standard library's.
+    here = os.getcwd()
+    before = [p for p in sys.path if p not in ("", here)]
     module, _, name = argv[1].partition(":")
     function = getattr(importlib.import_module(module), name)
     result = function(argv[2])
     if inspect.isawaitable(result):
-        import asyncio
-
-        result = asyncio.run(_wait(result))
+        result = _standard_asyncio(before).run(_wait(result))
     try:
         if len(argv) == 4:
             result = pick(result, argv[3])

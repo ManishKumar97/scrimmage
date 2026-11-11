@@ -5,6 +5,7 @@ import dataclasses
 import hashlib
 import http.client
 import json
+import os
 import queue
 import signal
 import stat
@@ -725,3 +726,53 @@ def test_a_burst_of_settlements_all_arrive(tmp_path: Path) -> None:
         assert (ledger.reserved, ledger.spent) == (0.0, 100.0)
     finally:
         control.stop()
+
+
+class Died(BaseException):
+    """Stands for the process ending: the test's os.kill raises it."""
+
+
+def test_a_sigterm_inside_the_exit_drain_loses_no_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The handler runs on the thread that holds the send lock, and the worker it starts to
+    send the last lines needs that lock. The drain must end first, then the process."""
+    from scrimmage_core import bootstrap
+
+    delivered: list[dict[str, object]] = []
+    finals: list[object] = []
+
+    class Stub(ControlClient):
+        def __init__(self) -> None:
+            super().__init__("http://127.0.0.1:1", TOKEN)
+            self.first = True
+
+        def request(
+            self, method: str, path: str, payload: object = None
+        ) -> tuple[int, dict[str, object]]:
+            if self.first:
+                self.first = False
+                handler = signal.getsignal(signal.SIGTERM)
+                assert callable(handler)
+                handler(signal.SIGTERM, None)  # the signal arrives inside the first send
+            batch = payload if isinstance(payload, dict) else {}
+            delivered.extend(batch["lines"])
+            if "made" in batch:
+                finals.append(batch["made"])
+            return 200, {}
+
+    def kill(pid: int, signum: int) -> None:
+        raise Died
+
+    monkeypatch.setattr(bootstrap, "TERM_WAIT_S", 0.2)  # a stalled worker fails fast, not slow
+    monkeypatch.setattr(os, "kill", kill)
+    before = signal.getsignal(signal.SIGTERM)
+    sender = Sender(Stub(), "run-1")
+    for seq in range(1, 701):
+        sender.put(line(seq))
+    bootstrap.handle_sigterm(sender.flush, sender)
+    try:
+        with pytest.raises(Died):
+            sender.flush()
+    finally:
+        signal.signal(signal.SIGTERM, before)
+    assert sorted({int(str(entry["seq"])) for entry in delivered}) == list(range(1, 701))
+    assert finals and finals[0] == 700
