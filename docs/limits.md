@@ -89,10 +89,13 @@
 - **A value that changes between runs is frozen by its mock.** That is what a mock is for. A value that changes within one run is listed `nondeterministic`.
 - **A form field is cut at the first space, quote or `&`.** `password=hunter2` and a quoted `password='two words'` are removed, but an unquoted `password=two words` leaves ` words`, and `password: hunter2` with a colon is not matched.
   Any `NAME_` prefix is matched, as in `DB_PASSWORD=`, so a harmless field that ends in one of these words and is not on the exempt list, such as `my_token=5`, is removed too; a call that holds one cannot be written as a mock. The exempt names are on the security page.
-  `None`, `True` and `False` as a value are taken for code and kept, and so is a bare name in a call, as in `f(password=changeme)`, when it follows `(` or `, ` inside an open call. `user=admin, password=changeme, host=db` outside a call, and `password=Summer.Time`, are removed.
+  `None`, `True` and `False` alone as a value are taken for code and kept, and so is a bare name as an argument of a call that has a name, as in `f(password=changeme)`. A parenthesis with no name before it, as in `set it (PASSWORD=hunter2) then`, is not a call. `user=admin, password=changeme, host=db` outside a call, and `password=Summer.Time`, are removed.
   Other names glued to a word are kept: `PGPASSWORD`, `PGPASS`, `MYSQL_PWD`, `authtoken` and `accesstoken` are removed by name, but `mytoken=5`, `dbpassword=x` and similar are not.
   A raw quote after a field name that sits inside a quote, as in a JSON fragment cut out of its string, does not open a value.
   `Authorization=Basic%20...`, a double-encoded `password%253D`, and a multipart body with `name="password"` on one line and the value on another are not cleaned.
+  JSON inside other text, as in `Result: {...}`, or across NDJSON lines, is not read as JSON: it goes through the patterns, which cut at a quote, and the result can come out broken. Only a text that is JSON as a whole is kept valid.
+  A JSON text that is redacted is written back with the input's spacing where it can be told, but pretty-printed JSON comes back on one line, and a `\u` escape style follows whether the input held any `\u`, so a text may be written with different escapes. Numbers are kept as written.
+  Two keys that redact to the same text are kept apart by a suffix: the second becomes `[secret removed] 2`.
   Redaction is a heuristic on known shapes.
 
   *Checked by: `tests/test_redact.py::test_the_old_module_kept_each_new_secret_and_the_new_one_removes_it`, `tests/test_redact.py::test_prose_empty_values_and_paths_are_kept`*

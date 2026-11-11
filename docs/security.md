@@ -97,20 +97,21 @@ Every gated call is written to a record in `scrimmage-runs/`, next to your `scri
     - GitHub tokens: `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` and `github_pat_`;
     - Slack tokens: `xoxa-`, `xoxb-`, `xoxe-`, `xoxp-`, `xoxr-`, `xoxs-`, `xoxe.xoxp-` and `xapp-`;
     - bearer tokens: `Bearer` and the value after it;
-    - a Basic credential: `Authorization` and `Basic` and the value after them, in a header line, in JSON or in a command line;
+    - a Basic credential: `Authorization` and `Basic` and the value after them, in a header line, in JSON (as a header map, a list of pairs, or a name and a value) or in a command line;
     - form-encoded and keyword fields: `password=`, `passwd=`, `token=`, `secret=` and `api_key=` and the value after them, with any `NAME_` before it, as in `DB_PASSWORD=`, `GITHUB_TOKEN=`, `AWS_SECRET_ACCESS_KEY=` and `client_secret=`, in any letter case, with `=` written as `%3D` and `_` in `api_key` as `%5F`; the value may be quoted with `'` or `"`, or in `<...>`; the env names `PGPASSWORD`, `PGPASS`, `MYSQL_PWD`, `authtoken` and `accesstoken` are removed too;
     - JSON Web Tokens, which start with `eyJ`.
 
   *Checked by: `tests/test_security_claims.py::test_each_listed_secret_shape_is_removed`, `tests/test_redact.py::test_a_jwt_is_removed_after_any_separator`, `tests/test_redact.py::test_the_old_module_kept_each_new_secret_and_the_new_one_removes_it`, `tests/test_redact.py::test_a_marker_is_removed_with_what_sticks_to_it`, `tests/test_record.py::test_a_json_reply_holding_a_form_field_in_a_string_is_written_as_valid_json`*
 
   A form field with an empty value, prose such as "reset your password at", a URL path that holds the word `token`, and these names are left as written: the paging names (`next_page_token`, `page_token`), anything after `is_`, `has_`, `top_`, `max_`, `min_`, `num_` or `n_`, the tokenizer names (`eos_token`, `bos_token`, `pad_token`, `unk_token`, `sep_token`, `cls_token`) and a name glued to a word, such as `mytoken`.
-  `None`, `True` and `False` as a value, and a bare name as an argument in a call, such as `f(token=tok)`, are code and are left as written.
-  A field name at the end of a JSON string cannot run into the next string: a JSON object, array or string is read first and each string in it is cleaned on its own, so the result still parses, with the same keys and list lengths, and only a change is written back.
+  `None`, `True` and `False` alone as a value, and a bare name as an argument of a call that has a name, such as `f(token=tok)`, are code and are left as written.
+  For a text that is JSON as a whole, a field name at the end of a string cannot run into the next string: the JSON object, array or string is read first and each string in it is cleaned on its own, so the result still parses, with the same keys and list lengths, and only a change is written back.
+  In JSON a name and its value are two strings, so `Authorization` with a Basic value is judged as a pair, as a header map, a list of two strings, and a `{"name": ..., "value": ...}` object.
+  A key such as `"password"` is not judged here: the key-name rule of recording does that, and reports it.
+  A `\u` escape is decoded before the check, so `p\u0061ssword=x` in JSON is found.
   If writing it back fails, the whole text is replaced by a JSON string `"[secret removed]"` and never left broken.
 
-  *Checked by: `tests/test_redact.py::test_redacted_json_parses_with_the_same_structure_and_no_seeded_secret`, `tests/test_redact.py::test_a_text_that_parsed_as_json_still_parses_if_writing_it_back_fails`, `tests/test_redact.py::test_json_with_a_field_name_at_the_end_of_a_string_keeps_its_strings_apart`, `tests/test_security_claims.py::test_names_that_are_not_credentials_are_kept`, `tests/test_redact.py::test_prose_empty_values_and_paths_are_kept`*
-
-  *Checked by: `tests/test_security_claims.py::test_names_that_are_not_credentials_are_kept`, `tests/test_redact.py::test_prose_empty_values_and_paths_are_kept`*
+  *Checked by: `tests/test_redact.py::test_redacted_json_parses_with_the_same_structure_and_no_seeded_secret`, `tests/test_redact.py::test_a_text_that_parsed_as_json_still_parses_if_writing_it_back_fails`, `tests/test_redact.py::test_json_with_a_field_name_at_the_end_of_a_string_keeps_its_strings_apart`, `tests/test_security_claims.py::test_names_that_are_not_credentials_are_kept`, `tests/test_redact.py::test_prose_empty_values_and_paths_are_kept`, `tests/test_redact.py::test_a_name_and_value_that_are_two_strings_in_json_are_judged_together`, `tests/test_redact.py::test_numbers_spacing_and_unicode_are_written_back_as_they_were`, `tests/test_redact.py::test_only_none_true_false_and_a_bare_argument_of_a_named_call_are_code`*
 
 - In any URL that is recorded, the query, the fragment and a user name or password are replaced with `[removed]`.
 
