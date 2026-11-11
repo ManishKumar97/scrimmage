@@ -29,11 +29,13 @@ from contextvars import ContextVar
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, NoReturn, Protocol
 
-from scrimmage_core import credentials, hooks, threads
+from scrimmage_core import changes, credentials, delay, hooks, threads
 from scrimmage_core import probe as probing
 from scrimmage_core import provider_openai as openai_table
 from scrimmage_core.budget import ASK_MAX_S, Held, Shortfall
+from scrimmage_core.changes import Changed, Unchangeable
 from scrimmage_core.client import ControlError
+from scrimmage_core.config import Fault, slow_seconds
 from scrimmage_core.decide import READ_METHODS, Call, Decision
 from scrimmage_core.errors import ScrimmageRefused
 from scrimmage_core.labels import shown_name
@@ -56,6 +58,7 @@ if hasattr(os, "register_at_fork"):  # forked children do not ask in step
     os.register_at_fork(after_in_child=JITTER.seed)
 RUN_MARGIN_S = 10.0  # a wait on other runs ends this long before the run's time limit
 SHOWN_HOLDS = 5  # holds a refusal names
+WEB_CAP = changes.WEB_CAP  # a reply body over this is not read to be changed
 # A refusal the team must act on: the message reaches the run table.
 MISTAKE_REASONS = (
     "no_price",
@@ -175,10 +178,15 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
         if prepared is None:
             return sync_send(self, request)
         step, extra = prepared
-        if step.decision.action == "fault":
+        change = None
+        mode = step.decision.action
+        if step.decision.under is not None:  # a carried fault: the call goes as the baseline's
+            mode = step.decision.under
+            change = slowed_sync(ctx, module, step, request)
+        if mode == "fault":
             return fault(ctx, module, self, step, request, extra)
-        if step.decision.action == "mock":
-            return mocked(ctx, module, self, step, request, extra)
+        if mode == "mock":
+            return mocked(ctx, module, self, step, request, extra, change)
         reservation = reserve(ctx, step, request, extra)
         try:
             response = sync_send(self, request)
@@ -190,6 +198,10 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
             with contextlib.suppress(Exception):  # the refusal says why it was dropped
                 response.close()
             redirected_away(ctx, step, request, extra, reservation, target)
+        if change is not None:
+            return changed_sync(
+                ctx, module, self, step, request, response, extra, reservation, change
+            )
         capture(ctx, module, step, request, response, extra, reservation, sync=True)
         return response
 
@@ -214,10 +226,15 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
                 "this model call runs outside asyncio, such as under trio, which Scrimmage "
                 "does not support yet, so it could not be budgeted; run the agent on asyncio",
             )
-        if step.decision.action == "fault":
+        change = None
+        mode = step.decision.action
+        if step.decision.under is not None:  # a carried fault: the call goes as the baseline's
+            mode = step.decision.under
+            change = await slowed_async(ctx, module, step, request, extra)
+        if mode == "fault":
             return fault(ctx, module, self, step, request, extra)
-        if step.decision.action == "mock":
-            return mocked(ctx, module, self, step, request, extra)
+        if mode == "mock":
+            return mocked(ctx, module, self, step, request, extra, change)
         reservation = None
         if step.call.kind == "model":
             reservation = await reserve_off_the_loop(ctx, step, request, extra)
@@ -233,6 +250,10 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
                 redirected_away(ctx, step, request, extra, reservation, target)
             except ScrimmageRefused as refusal:
                 raise (cancel or refusal) from None
+        if change is not None:
+            return await changed_async(
+                ctx, module, self, step, request, response, extra, reservation, change
+            )
         capture(ctx, module, step, request, response, extra, reservation, sync=False)
         return response
 
@@ -477,12 +498,15 @@ def reply(
     request: Any,
     extra: dict[str, object],
     answer: tuple[int, dict[str, str], bytes],
+    original: bytes | None = None,
 ) -> Any:
     """Record and build a reply the gate made, left unread as a real one is, so iter_raw
-    works on it. Like a real server's, a HEAD reply states its length and has no body."""
+    works on it. Like a real server's, a HEAD reply states its length and has no body.
+    original: the body the line records, when the agent gets another, a changed one."""
     status, headers, body = answer
     sent = b"" if request.method == "HEAD" else body
-    extra.update(status=status, result=blob(sent, ctx.sender))
+    recorded = sent if original is None or request.method == "HEAD" else original
+    extra.update(status=status, result=blob(recorded, ctx.sender))
     ctx.run.finish(step)
     if status >= 200 and status not in (204, 304):
         headers = {**headers, "content-length": str(len(body))}
@@ -504,8 +528,10 @@ def mocked(
     step: Step,
     request: Any,
     extra: dict[str, object],
+    change: Fault | None = None,
 ) -> Any:
-    """Build the test's fixed reply. Nothing is sent."""
+    """Build the test's fixed reply. Nothing is sent. change: the fault that changes the
+    reply on its way to the agent, while the line records the mock's own."""
     mock = ctx.run.plan.mocks[step.decision.mock or 0]
     headers = dict(mock.headers)
     kind = None
@@ -519,7 +545,17 @@ def mocked(
     if kind is not None and "content-type" not in {name.lower() for name in headers}:
         headers["content-type"] = kind
     answer = (mock.status, headers, body)
-    response = reply(ctx, module, client, step, request, extra, answer)
+    original = None
+    if change is not None:
+        done = changes.change_web(
+            mock.status, str(request.method), list(headers.items()), body, change
+        )
+        if isinstance(done, Unchangeable):
+            left_as_it_is(ctx, step, extra, done)
+        else:
+            ctx.run.changed(step, Changed(None, done.count, done.parts))
+            answer, original = (mock.status, dict(done.headers), done.body), body
+    response = reply(ctx, module, client, step, request, extra, answer, original)
     client.cookies.extract_cookies(response)  # the step a real reply goes through
     return response
 
@@ -901,6 +937,298 @@ def settle(ctx: Context, reservation: int | None, usd: float) -> None:
         ctx.sender.put_settle(reservation, usd)
 
 
+def timeout_of(request: Any) -> float | None:
+    """The read timeout the request carries, which a slow server would run into."""
+    timeout = request.extensions.get("timeout") or {}
+    value = timeout.get("read")
+    return None if value is None else float(value)
+
+
+def slow_fault(ctx: Context, step: Step) -> tuple[Fault, float | None]:
+    fault = ctx.run.plan.faults[step.decision.fault or 0]
+    return fault, slow_seconds(fault.do)
+
+
+def slowed_sync(ctx: Context, module: ModuleType, step: Step, request: Any) -> Fault | None:
+    """Under a carried fault, before the request is sent: wait if the fault is slow. Returns
+    the fault if it changes the reply. A wait cut short ends the call, with its line."""
+    fault, seconds = slow_fault(ctx, step)
+    if seconds is None:
+        return fault
+
+    def timed_out() -> BaseException:
+        return module.ReadTimeout("The read operation timed out", request=request)
+
+    try:
+        delay.wait_sync(
+            ctx.run, step, seconds, read_timeout=timeout_of(request), timed_out=timed_out
+        )
+    except BaseException as exc:
+        ctx.run.finish(step, error=exc)
+        raise
+    return None
+
+
+async def slowed_async(
+    ctx: Context, module: ModuleType, step: Step, request: Any, extra: dict[str, object]
+) -> Fault | None:
+    """slowed_sync on the event loop, in steps, so the caller's own deadline cancels the wait."""
+    fault, seconds = slow_fault(ctx, step)
+    if seconds is None:
+        return fault
+    sleep = delay.asyncio_sleep()
+    if sleep is None:
+        ctx.run.unchanged(step, "slow on an async web request needs asyncio")
+        extra["mistake"] = (
+            "slow on an async web request needs asyncio, not trio; the request was not slowed"
+        )
+        return None
+
+    def timed_out() -> BaseException:
+        return module.ReadTimeout("The read operation timed out", request=request)
+
+    try:
+        await delay.wait_steps(
+            ctx.run, step, seconds, sleep, read_timeout=timeout_of(request), timed_out=timed_out
+        )
+    except BaseException as exc:
+        ctx.run.finish(step, error=exc)
+        raise
+    return None
+
+
+def left_as_it_is(ctx: Context, step: Step, extra: dict[str, object], said: Unchangeable) -> None:
+    """The reply cannot take the change: the agent gets it as it is, and the line says why."""
+    fault = ctx.run.plan.faults[step.decision.fault or 0]
+    ctx.run.unchanged(step, said.why)
+    message = said.message(fault, step.call.label)
+    if message is not None:
+        extra["mistake"] = message
+
+
+def decided_by_headers(
+    ctx: Context, step: Step, extra: dict[str, object], request: Any, response: Any
+) -> bool:
+    """Whether the headers alone rule the change out: a status, a type, an encoding, a size.
+    Then the reply goes on untouched, and a stream is never read early."""
+    verdict = changes.web_kind(
+        response.status_code, str(request.method), response.headers.multi_items()
+    )
+    if isinstance(verdict, Unchangeable):
+        left_as_it_is(ctx, step, extra, verdict)
+        return True
+    length = response.headers.get("content-length", "")
+    if length.isdigit() and int(length) > WEB_CAP:
+        left_as_it_is(ctx, step, extra, Unchangeable("the body is over 10 MB", "data"))
+        return True
+    return False
+
+
+def rebuilt(
+    module: ModuleType,
+    client: Any,
+    request: Any,
+    response: Any,
+    headers: Any,
+    stream: Any,
+) -> Any:
+    """A reply like the real one, with another body and the headers that go with it."""
+    new = module.Response(
+        response.status_code,
+        headers=headers,
+        stream=stream,
+        request=request,
+        extensions=response.extensions,
+        default_encoding=client._default_encoding,  # httpx and httpx2 BaseClient
+    )
+    try:
+        new.elapsed = response.elapsed
+    except RuntimeError:  # the real reply is not closed yet, so it has no elapsed time
+        new.elapsed = datetime.timedelta(0)
+    return new
+
+
+def changed_reply(
+    ctx: Context,
+    module: ModuleType,
+    client: Any,
+    step: Step,
+    request: Any,
+    response: Any,
+    extra: dict[str, object],
+    fault: Fault,
+    chunks: list[bytes],
+    *,
+    loaded: bool,
+) -> Any:
+    """The reply the agent gets once the whole body is read: changed if it can be, else as it
+    was sent. The line records the original."""
+    body = b"".join(chunks)
+    done = changes.change_web(
+        response.status_code,
+        str(request.method),
+        response.headers.multi_items(),
+        body,
+        fault,
+        decoded=loaded,
+    )
+    if isinstance(done, Unchangeable):
+        left_as_it_is(ctx, step, extra, done)
+        headers = response.headers.multi_items()
+        if loaded:  # its content is unpacked, so the encoding no longer holds
+            kept = [(k, v) for k, v in headers if k.lower() not in changes.BODY_HEADERS]
+            headers = [*kept, ("content-length", str(len(body)))]
+        return rebuilt(module, client, request, response, headers, module.ByteStream(body))
+    ctx.run.changed(step, Changed(None, done.count, done.parts))
+    return rebuilt(module, client, request, response, done.headers, module.ByteStream(done.body))
+
+
+def replaying(
+    module: ModuleType, response: Any, chunks: list[bytes], rest: Any, *, sync: bool
+) -> Any:
+    """A stream that gives the chunks already read, then the rest of the real one. A body over
+    the cap goes on to the agent whole this way, with nothing buffered past the cap."""
+    base = module.SyncByteStream if sync else module.AsyncByteStream
+
+    class Replay(base):  # type: ignore[valid-type, misc]
+        def __iter__(self) -> Iterator[bytes]:
+            yield from chunks
+            yield from rest
+
+        async def __aiter__(self) -> Any:
+            for chunk in chunks:
+                yield chunk
+            async for chunk in rest:
+                yield chunk
+
+        def close(self) -> None:
+            response.close()
+
+        async def aclose(self) -> None:
+            await response.aclose()
+
+    return Replay()
+
+
+def changed_sync(
+    ctx: Context,
+    module: ModuleType,
+    client: Any,
+    step: Step,
+    request: Any,
+    response: Any,
+    extra: dict[str, object],
+    reservation: int | None,
+    fault: Fault,
+) -> Any:
+    """Read the reply's body, raw, and give the agent a changed copy. The reply is read only
+    if its headers allow a change, and only up to the cap."""
+    if decided_by_headers(ctx, step, extra, request, response):
+        capture(ctx, module, step, request, response, extra, reservation, sync=True)
+        return response
+    loaded = getattr(response, "_content", None)
+    chunks: list[bytes] = [] if loaded is None else [loaded]
+    rest = None
+    size = 0
+    if loaded is None:
+        rest = response.iter_raw()
+        try:
+            for chunk in rest:
+                chunks.append(chunk)
+                size += len(chunk)
+                if size > WEB_CAP:
+                    break
+            else:
+                rest = None
+        except BaseException as exc:
+            capture(ctx, module, step, request, response, extra, reservation, sync=True,
+                    raw=chunks, error=exc)  # fmt: skip
+            raise
+    if rest is not None:  # over the cap: it goes on whole, and is not changed
+        left_as_it_is(ctx, step, extra, Unchangeable("the body is over 10 MB", "data"))
+        stream = replaying(module, response, chunks, rest, sync=True)
+        new = rebuilt(module, client, request, response, response.headers.multi_items(), stream)
+        capture(ctx, module, step, request, new, extra, reservation, sync=True)
+        return new
+    new = changed_reply(
+        ctx,
+        module,
+        client,
+        step,
+        request,
+        response,
+        extra,
+        fault,
+        chunks,
+        loaded=loaded is not None,
+    )
+    capture(ctx, module, step, request, response, extra, reservation, sync=True, raw=chunks)
+    return new
+
+
+async def changed_async(
+    ctx: Context,
+    module: ModuleType,
+    client: Any,
+    step: Step,
+    request: Any,
+    response: Any,
+    extra: dict[str, object],
+    reservation: int | None,
+    fault: Fault,
+) -> Any:
+    """changed_sync for an async client. A cancel while the body is read closes the reply,
+    writes the line and goes on up."""
+    import asyncio
+
+    if decided_by_headers(ctx, step, extra, request, response):
+        capture(ctx, module, step, request, response, extra, reservation, sync=False)
+        return response
+    loaded = getattr(response, "_content", None)
+    chunks: list[bytes] = [] if loaded is None else [loaded]
+    rest = None
+    size = 0
+    if loaded is None:
+        rest = response.aiter_raw()
+        try:
+            async for chunk in rest:
+                chunks.append(chunk)
+                size += len(chunk)
+                if size > WEB_CAP:
+                    break
+            else:
+                rest = None
+        except asyncio.CancelledError as cancel:
+            await close_keeping_cancel(response)
+            capture(ctx, module, step, request, response, extra, reservation, sync=False,
+                    raw=chunks, error=cancel)  # fmt: skip
+            raise
+        except BaseException as exc:
+            capture(ctx, module, step, request, response, extra, reservation, sync=False,
+                    raw=chunks, error=exc)  # fmt: skip
+            raise
+    if rest is not None:
+        left_as_it_is(ctx, step, extra, Unchangeable("the body is over 10 MB", "data"))
+        stream = replaying(module, response, chunks, rest, sync=False)
+        new = rebuilt(module, client, request, response, response.headers.multi_items(), stream)
+        capture(ctx, module, step, request, new, extra, reservation, sync=False)
+        return new
+    new = changed_reply(
+        ctx,
+        module,
+        client,
+        step,
+        request,
+        response,
+        extra,
+        fault,
+        chunks,
+        loaded=loaded is not None,
+    )
+    capture(ctx, module, step, request, response, extra, reservation, sync=False, raw=chunks)
+    return new
+
+
 def capture(
     ctx: Context,
     module: ModuleType,
@@ -911,8 +1239,13 @@ def capture(
     reservation: int | None,
     *,
     sync: bool,
+    raw: list[bytes] | None = None,
+    error: BaseException | None = None,
 ) -> None:
-    """Watch the reply's body go by, unchanged, and record the call when it ends."""
+    """Watch the reply's body go by, unchanged, and record the call when it ends.
+
+    raw: the body was read already, in these chunks, so the line records the original while the
+    agent gets another reply. error: the read failed, or was cancelled, and this is why."""
     lock = threading.Lock()
     done: list[bool] = []
     chunks: list[bytes] = []
@@ -939,6 +1272,13 @@ def capture(
         ctx.run.finish(step)
         settle(ctx, reservation, usd)
 
+    if raw is not None:
+        for chunk in raw:
+            keep(chunk)
+        if error is not None:
+            extra["error"] = error_text(step.call, error)
+        finish(error is None)
+        return
     loaded = getattr(response, "_content", None)  # a reply already in memory has no stream
     if loaded is not None:
         keep(loaded)

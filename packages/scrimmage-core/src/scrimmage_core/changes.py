@@ -12,6 +12,7 @@ import copy
 import json
 import types
 import typing
+import zlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
@@ -412,3 +413,142 @@ def change_mcp_result(raw: dict[str, object], fault: Fault) -> Result:
     return Changed(new, count, tuple(parts[:SHOWN_PARTS]))
 
 
+WEB_CAP = 10 * 1024 * 1024  # a body over this is not read to be changed
+PACKED = ("", "identity", "gzip", "deflate")  # content-encodings a body is read through
+BODY_HEADERS = ("content-length", "content-encoding", "transfer-encoding")
+
+
+@dataclass(frozen=True)
+class WebChanged:
+    """A changed reply: the body, the headers it goes with, and what changed."""
+
+    body: bytes
+    headers: list[tuple[str, str]]
+    count: int
+    parts: tuple[str, ...]
+
+
+def header(headers: Sequence[tuple[str, str]], name: str) -> str | None:
+    for key, value in headers:
+        if key.lower() == name:
+            return value
+    return None
+
+
+def media_type(content_type: str) -> str:
+    return content_type.partition(";")[0].strip().lower()
+
+
+def charset_of(content_type: str) -> str | None:
+    for part in content_type.split(";")[1:]:
+        key, _, value = part.partition("=")
+        if key.strip().lower() == "charset":
+            return value.strip().strip('"') or None
+    return None
+
+
+def with_charset(content_type: str, charset: str) -> str:
+    """The content type with its charset set; added if it named none."""
+    kept = [content_type.split(";")[0].strip()]
+    kept += [
+        part.strip()
+        for part in content_type.split(";")[1:]
+        if part.partition("=")[0].strip().lower() != "charset"
+    ]
+    return "; ".join([*kept, f"charset={charset}"])
+
+
+def web_kind(status: int, method: str, headers: Sequence[tuple[str, str]]) -> str | Unchangeable:
+    """ "text" or "json" when the reply's headers allow a change, else why not. Decided by the
+    headers alone, so a stream is never read to find out."""
+    if method.upper() == "HEAD":
+        return Unchangeable("the request was a HEAD, which has no body", "data")
+    if not 200 <= status < 300 or status == 204:
+        return Unchangeable(f"the reply status is {status}, which is not changed", "data")
+    encoding = (header(headers, "content-encoding") or "").strip().lower()
+    if encoding not in PACKED:
+        return Unchangeable(f"the reply is encoded with {encoding}, which is not changed")
+    declared = header(headers, "content-type")
+    if declared is None:
+        return Unchangeable("the reply has no content-type, so its body is not read as text")
+    kind = media_type(declared)
+    if kind == "application/json" or (kind.startswith("application/") and kind.endswith("+json")):
+        return "json"
+    if kind.startswith("text/") and kind != "text/event-stream":
+        return "text"
+    return Unchangeable(f"the reply is {kind}, which is not text or JSON")
+
+
+def unpacked(raw: bytes, encoding: str) -> bytes | None:
+    """The body with gzip or deflate undone; None if it will not unpack."""
+    encoding = encoding.strip().lower()
+    try:
+        if encoding == "gzip":
+            return zlib.decompress(raw, 16 + zlib.MAX_WBITS)
+        if encoding == "deflate":
+            return zlib.decompress(raw)
+    except zlib.error:
+        return None
+    return raw
+
+
+def change_web(
+    status: int,
+    method: str,
+    headers: Sequence[tuple[str, str]],
+    body: bytes,
+    fault: Fault,
+    *,
+    decoded: bool = False,
+) -> WebChanged | Unchangeable:
+    """Change a web reply. A text reply is changed as text, and a JSON one as data, with find
+    only. The new body goes with new headers: no encoding, the right length, and a charset that
+    can hold the text. decoded: the body is already unpacked, as a reply read in memory is."""
+    kind = web_kind(status, method, headers)
+    if isinstance(kind, Unchangeable):
+        return kind
+    encoding = "" if decoded else (header(headers, "content-encoding") or "")
+    plain_body = unpacked(body, encoding)
+    if plain_body is None:
+        return Unchangeable("the body will not unpack")
+    declared = header(headers, "content-type") or ""
+    charset = charset_of(declared)
+    try:
+        text = plain_body.decode(charset or "utf-8")
+    except (UnicodeDecodeError, LookupError):
+        return Unchangeable("the body cannot be decoded with its charset")
+    content_type = declared
+    if kind == "json":
+        try:
+            value = json.loads(text)
+        except (ValueError, RecursionError):
+            return Unchangeable("the body is not JSON that parses")
+        done = change_data(value, fault, "$")
+        if isinstance(done, Unchangeable):
+            return done
+        try:
+            written = json.dumps(
+                done.value, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+            )
+        except (ValueError, RecursionError):
+            return Unchangeable(
+                "the JSON holds NaN or Infinity, which cannot be written back", "data"
+            )
+        if charset and charset.lower().replace("_", "-") not in ("utf-8", "utf8"):
+            content_type = with_charset(declared, "utf-8")
+        new_body = written.encode("utf-8")
+        count, parts = done.count, done.parts
+    else:
+        said = change_text(text, fault, "body")
+        if isinstance(said, Unchangeable):
+            return said
+        try:
+            new_body = str(said.value).encode(charset or "utf-8")
+        except UnicodeEncodeError:
+            # Sent as UTF-8, and the type says so, as a server that changed its mind would.
+            new_body = str(said.value).encode("utf-8")
+            content_type = with_charset(declared, "utf-8")
+        count, parts = said.count, said.parts
+    kept = [(k, v) for k, v in headers if k.lower() not in (*BODY_HEADERS, "content-type")]
+    kept += [("content-type", content_type), ("content-length", str(len(new_body)))]
+    return WebChanged(new_body, kept, count, parts)
