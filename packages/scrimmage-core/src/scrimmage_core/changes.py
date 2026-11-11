@@ -482,14 +482,15 @@ def web_kind(status: int, method: str, headers: Sequence[tuple[str, str]]) -> st
 def unpacked(raw: bytes, encoding: str) -> bytes | None:
     """The body with gzip or deflate undone; None if it will not unpack."""
     encoding = encoding.strip().lower()
+    bits = {"gzip": 16 + zlib.MAX_WBITS, "deflate": zlib.MAX_WBITS}.get(encoding)
+    if bits is None:
+        return raw
     try:
-        if encoding == "gzip":
-            return zlib.decompress(raw, 16 + zlib.MAX_WBITS)
-        if encoding == "deflate":
-            return zlib.decompress(raw)
+        # Never more than the cap and one byte: a small bomb is not unpacked whole.
+        body = zlib.decompressobj(bits).decompress(raw, WEB_CAP + 1)
     except zlib.error:
         return None
-    return raw
+    return body
 
 
 def change_web(
@@ -511,6 +512,8 @@ def change_web(
     plain_body = unpacked(body, encoding)
     if plain_body is None:
         return Unchangeable("the body will not unpack")
+    if len(plain_body) > WEB_CAP:
+        return Unchangeable("the body is over 10 MB", "data")
     declared = header(headers, "content-type") or ""
     charset = charset_of(declared)
     try:

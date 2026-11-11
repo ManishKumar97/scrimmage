@@ -426,26 +426,33 @@ def read_timeout(session: Any, args: tuple[Any, ...], kw: dict[str, Any]) -> flo
     return given if given is not None else getattr(session, "_session_read_timeout_seconds", None)
 
 
+UNCHECKED = changes.Unchangeable("the output schema could not be checked", "data")
+
+
 def schema_problem(
     session: Any, gate: Gate, label: str, name: str, raw: dict[str, Any]
-) -> str | None:
+) -> str | changes.Unchangeable | None:
     """Why the changed structured content breaks the tool's output schema, if it does. It runs
     the validator the client runs after the call, which would otherwise find this only once
     the line said the fault fired."""
     schema = gate.schemas.get(label)
     if schema is None or not isinstance(raw.get("structuredContent"), dict):
         return None
+    # A schema is held and cannot be checked: the call is not fired, so no line says it was.
     build = getattr(session, "_output_schema_validator", None)
     if build is None:
-        return None
+        return UNCHECKED
     try:
         validator = build(name, schema)
         errors = list(validator.iter_errors(raw["structuredContent"]))
-    except Exception:  # an invalid schema fails in the client's own check, as it always did
-        return None
+    except Exception:
+        return UNCHECKED
     if not errors:
         return None
-    best = sys.modules["jsonschema.exceptions"].best_match(errors) or errors[0]
+    try:
+        best = sys.modules["jsonschema.exceptions"].best_match(errors) or errors[0]
+    except KeyError:
+        best = errors[0]
     where = ".".join(str(part) for part in best.absolute_schema_path)
     shown = redact(repr(best.instance))[:80]
     return (
@@ -515,6 +522,8 @@ async def carry(
             return raw, done
         new = as_dict(done.value)
         broke = schema_problem(session, gate, label, step.call.name, new)
+        if isinstance(broke, changes.Unchangeable):
+            return raw, broke
         if broke is not None:
             return raw, changes.Unchangeable(
                 f"{fault.do} on {label} {broke}; choose text the schema accepts", "schema"

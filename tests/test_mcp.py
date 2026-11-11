@@ -20,7 +20,7 @@ import types
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import jsonschema
 import mcp.client.session as mcp_session
@@ -1704,3 +1704,61 @@ def test_a_changed_real_mcp_line_is_kept_on_a_full_queue() -> None:
     mocked.changed(again, changes.Changed({}, 1, ("content[0].text",)))
     mocked.finish(again)
     assert sink.lines[1]["keep"] is False
+
+
+class Checked:
+    """A session that has a validator, or one that fails, or none."""
+
+    def __init__(self, build: Any = None) -> None:
+        if build is not None:
+            self._output_schema_validator = build
+
+
+def held(label: str = LABEL) -> mcp_gate.Gate:
+    gate = gate_for([])
+    gate.schemas[label] = {"type": "object"}
+    return gate
+
+
+def test_a_schema_that_cannot_be_checked_does_not_fire_the_fault() -> None:
+    raw = {"structuredContent": {"a": "b"}}
+    gate = held()
+    unchecked = mcp_gate.UNCHECKED
+    # No validator method on the session.
+    assert mcp_gate.schema_problem(Checked(), gate, LABEL, "search", raw) is unchecked
+
+    def broken(name: str, schema: Any) -> Any:
+        raise RuntimeError("invalid schema")
+
+    assert mcp_gate.schema_problem(Checked(broken), gate, LABEL, "search", raw) is unchecked
+
+    class Failing:
+        def iter_errors(self, instance: Any) -> Any:
+            raise ValueError("boom")
+
+    assert (
+        mcp_gate.schema_problem(Checked(lambda n, s: Failing()), gate, LABEL, "search", raw)
+        is unchecked
+    )
+    assert unchecked.mistake is False and unchecked.kind == "data"
+    # With no schema held there is nothing to check.
+    assert mcp_gate.schema_problem(Checked(), gate_for([]), LABEL, "search", raw) is None
+
+
+def test_a_missing_jsonschema_module_does_not_hide_an_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Error:
+        absolute_schema_path: ClassVar[list[str]] = ["properties", "status", "enum"]
+        json_path: ClassVar[str] = "$.status"
+        instance: ClassVar[str] = "gone"
+
+    class Found:
+        def iter_errors(self, instance: Any) -> Any:
+            return [Error()]
+
+    monkeypatch.delitem(sys.modules, "jsonschema.exceptions", raising=False)
+    found = mcp_gate.schema_problem(
+        Checked(lambda n, s: Found()), held(), LABEL, "search", {"structuredContent": {}}
+    )
+    assert isinstance(found, str) and "properties.status.enum" in found

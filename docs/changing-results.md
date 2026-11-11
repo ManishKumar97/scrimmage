@@ -85,6 +85,7 @@ Mocking the write would hide it: the bot would refund, the mock would say done, 
 An attack written as a `[[test.mock]]` instead of a fault is a mistake in the test.
 A mock answers in the baseline row too, so a bot that follows the note there makes a call the test does not allow, and the whole test stops with exit code 2.
 A fault is only in its own row, which is why the attack goes there.
+A refused write under a fault also exits 2, but the report tells them apart: the fault row's verdict is `fail`, with a `refused` broken rule, while the baseline passes.
 
 `append` and `replace` let the call run, so a write that `real` allows would run for real if the bot obeyed the note.
 With `real = ["tool:*"]` in the example above, Scrimmage says so before the table, and names the writes:
@@ -93,7 +94,7 @@ With `real = ["tool:*"]` in the example above, Scrimmage says so before the tabl
 warning: fault 1 of 'order-status' adds text the agent may obey; these would run for real if it did: every tool not mocked, under tool:* (refund_order). Leave a write unmocked and off real to see it refused instead
 ```
 
-It names every tool under `tool:*` that the test does not mock, every web write listed under `real`, and every MCP tool listed under `real`, because nothing tells an MCP read from a write.
+It names every tool under `tool:*` or listed by name under `real` that the test does not mock, every web write listed under `real`, and every MCP tool listed under `real`, because nothing tells an MCP read from a write.
 
 When a row ran a call of that list for real, the report says how many, and which: "fault 1: 2 real writes ran (refund_order twice); see the record".
 Each such call is a line in the record with `under` set to `real`.

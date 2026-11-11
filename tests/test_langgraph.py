@@ -522,8 +522,10 @@ def test_append_on_a_content_and_artifact_tool_changes_the_content_only(project:
     project.edit('answer   = "messages[-1].content"\n', "")
     project.edit("[agent]\n", '[agent]\nmax_cost_usd = "none"\n')
     result = project.test()
-    answers = [x["answer"] for x in result.summaries()]
-    assert answers == ["the report", "the report!!"], result.out + result.err
+    # The test's expect is "shipped", so the baseline cannot pass here: exit 1 is the result.
+    assert result.code == 1, result.out + result.err
+    assert row(result, "baseline")[-1]["summary"]["answer"] == "the report"  # type: ignore[index]
+    assert row(result, "fault 1")[-1]["summary"]["answer"] == "the report!!"  # type: ignore[index]
     line = tool_lines(row(result, "fault 1"))[0]
     assert (line["action"], line["under"], line["mock"]) == ("fault", "mock", 0)
     assert str(line["result"]["preview"]).startswith('["the report"')  # type: ignore[index]

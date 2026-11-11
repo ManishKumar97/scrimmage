@@ -763,7 +763,8 @@ def test_an_append_row_warns_which_writes_could_run_for_real(tmp_path: Path) -> 
 
 
 def test_an_append_row_with_no_listed_write_has_no_warning(tmp_path: Path) -> None:
-    assert warned(tmp_path, '["tool:check_inventory", "http:r.acme.internal GET"]') == []
+    covered = '[[test.mock]]\ncall = "tool:check_inventory"\nreturns = "x"\n'
+    assert warned(tmp_path, '["http:r.acme.internal GET"]', covered) == []
     # Every tool mocked: tool:* names none.
     mocks = "".join(
         f'[[test.mock]]\ncall = "tool:{n}"\nreturns = "x"\n'
@@ -789,3 +790,26 @@ def test_text_and_find_survive_the_plan(tmp_path: Path) -> None:
     ]
     back = plan.Plan.from_json(sent).faults[0]
     assert (back.text, back.find) == ("x", "y")
+
+
+def test_a_tool_listed_by_name_under_real_is_named_as_a_write(tmp_path: Path) -> None:
+    [warning] = warned(tmp_path, '["tool:check_inventory", "tool:refund_order"]')
+    assert "these would run for real if it did: tool:check_inventory; tool:refund_order." in warning
+    # A mocked tool is not named, and tool:* already names the rest.
+    mock = '[[test.mock]]\ncall = "tool:check_inventory"\nreturns = "x"\n'
+    [again] = warned(tmp_path, '["tool:check_inventory", "tool:refund_order"]', mock)
+    assert "did: tool:refund_order." in again
+    [star] = warned(tmp_path, '["tool:*", "tool:refund_order"]')
+    assert star.count("refund_order") == 1
+
+
+def test_the_find_is_redacted_in_the_plan_and_the_results(tmp_path: Path) -> None:
+    from scrimmage_core import runner
+
+    key = "sk-" + "b" * 20
+    fault = config.Fault("tool:t", "replace", "always", text="x", find=f"a {key}")
+    assert plan.fault_json(fault)["find"] == "a [secret removed]"
+    shown = runner.fault_json(fault)
+    assert shown is not None and shown["find"] == "a [secret removed]"
+    plain = config.Fault("tool:t", "replace", "always", text="x", find="late")
+    assert plan.fault_json(plain)["find"] == "late"

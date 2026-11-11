@@ -1357,7 +1357,7 @@ def fault_json(fault: Fault | None) -> dict[str, object] | None:
         "path": fault.path,
         "raises": fault.raises,
         "text": fault.text,
-        "find": fault.find,
+        "find": None if fault.find is None else redact(fault.find),
         "expect": None if fault.expect is None else [list(item) for item in fault.expect],
         "forbid": None if fault.forbid is None else list(fault.forbid),
         "pass_rate": fault.pass_rate,

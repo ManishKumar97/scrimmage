@@ -224,3 +224,18 @@ def test_an_append_whose_joint_makes_a_new_secret_span_is_not_made() -> None:
     # A secret in the real text away from the joint does not matter.
     done = changed(changes.change_text(f"{KEY} done", fault("append", "!")))
     assert str(done.value).endswith("done!")
+
+
+def test_a_small_gzip_bomb_is_not_unpacked_whole(monkeypatch: pytest.MonkeyPatch) -> None:
+    import gzip
+
+    monkeypatch.setattr(changes, "WEB_CAP", 1000)
+    bomb = gzip.compress(b"x" * 5_000_000)
+    assert len(bomb) < 10_000
+    headers = [("content-type", "text/plain"), ("content-encoding", "gzip")]
+    result = changes.change_web(200, "GET", headers, bomb, fault("append"))
+    assert isinstance(result, Unchangeable) and result.why == "the body is over 10 MB"
+    assert len(changes.unpacked(bomb, "gzip") or b"") == 1001
+    # A body inside the cap still unpacks.
+    ok = changes.change_web(200, "GET", headers, gzip.compress(b"hello"), fault("append", "!"))
+    assert isinstance(ok, changes.WebChanged) and ok.body == b"hello!"

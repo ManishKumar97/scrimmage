@@ -310,9 +310,9 @@ class Write:
 
 
 def real_writes(test: Test, agent: Agent) -> list[Write]:
-    """What a test lets run for real that could be a write: every tool under tool:* that the
-    test does not mock, every real web entry that is not a read, every real MCP tool. Nothing
-    tells an MCP read from a write, nor a tool's."""
+    """What a test lets run for real that could be a write: every tool under tool:* or listed by
+    name that the test does not mock, every real web entry that is not a read, every real MCP
+    tool. Nothing tells an MCP read from a write, nor a tool's."""
     found: list[Write] = []
     if "tool:*" in agent.real:
         mocked = {m.call for m in test.mocks}
@@ -328,7 +328,11 @@ def real_writes(test: Test, agent: Agent) -> list[Write]:
             )
     for entry in agent.real:
         kind = labels.kind_of(entry)
-        if kind == "mcp":
+        if kind == "tool" and entry != "tool:*" and "tool:*" not in agent.real:
+            # An obeyed injection runs a tool listed by name for real as well.
+            if entry not in {m.call for m in test.mocks}:
+                found.append(Write(entry, frozenset({entry})))
+        elif kind == "mcp":
             found.append(Write(entry, frozenset({entry})))
         elif kind == "http":
             host, _, rest = entry.partition(" ")

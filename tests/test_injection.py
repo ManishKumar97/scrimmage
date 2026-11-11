@@ -87,7 +87,7 @@ def test_the_model_is_sent_the_appended_text_in_the_tool_message(
 
 
 @pytest.mark.slow
-def test_an_attack_that_makes_the_agent_call_a_write_fails_the_row_with_exit_1(
+def test_an_attack_that_makes_the_agent_call_a_write_fails_the_row_and_keeps_exit_2(
     project: Project, fake_openai: Fake
 ) -> None:
     """The row fails on the refused write, which is the agent's choice under a fault. The exit
