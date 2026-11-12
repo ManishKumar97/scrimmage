@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
@@ -171,7 +172,7 @@ def test_a_process_pool_made_before_the_run_is_refused_under_a_run(
         # the plain calls woke it many times, and the run's work must still never have run.
         assert not (tmp_path / "written").exists()
     finally:
-        executor.shutdown(wait=False, cancel_futures=True)  # never waits on a stuck task
+        shut(executor)
         bounded(pool.terminate)
         stopped(pool)
 
@@ -819,6 +820,21 @@ def test_a_process_pools_stop_under_a_run_is_refused_and_leaves_the_pool_as_it_w
         stopped(pool)
 
 
+def shut(executor: Any, within: float = 20.0) -> None:
+    """executor.shutdown, bounded: it never waits on a stuck task, and a worker a broken
+    pool never stops is killed, so the test fails here instead of the suite hanging at exit."""
+    workers: list[Any] = list((executor._processes or {}).values())
+    plain(lambda: executor.shutdown(wait=False, cancel_futures=True))
+    deadline = time.monotonic() + within
+    for worker in workers:
+        worker.join(max(0.0, deadline - time.monotonic()))
+    left = [worker for worker in workers if worker.is_alive()]
+    for worker in left:
+        worker.kill()
+        worker.join(5)
+    assert not left, "the executor's workers outlived its shutdown"
+
+
 def stopped(pool: Any, within: float = 20.0) -> None:
     """pool.join, bounded: a pool left half closed fails here instead of hanging the test."""
     done = threading.Thread(target=pool.join, daemon=True)
@@ -913,9 +929,7 @@ def test_a_process_pools_manager_thread_carries_a_plain_task_while_a_run_is_open
         assert plain(lambda: executor.submit(len, "abc").result(10)) == 3
         assert lines(run) == []
     finally:
-        plain(
-            lambda: executor.shutdown(wait=False, cancel_futures=True)
-        )  # never waits on a stuck task
+        shut(executor)
 
 
 @pytest.mark.design("service.mcp_stdio_decided")
