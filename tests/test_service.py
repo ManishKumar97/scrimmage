@@ -339,6 +339,34 @@ def test_a_sync_endpoint_finds_its_plan_through_anyio(lab: Lab) -> None:
     assert calls and calls[0]["action"] == "mock" and calls[0]["run"] == name
 
 
+@pytest.mark.design("service.tools_listed_at_startup")
+def test_mcp_tools_listed_at_startup_are_seen_by_a_run(lab: Lab, tmp_path: Path) -> None:
+    import fakes
+    from fakes.openai_server import FakeOpenAI
+
+    fake = FakeOpenAI(["acme_answer"])
+    fake.start()
+    try:
+        service = lab.start(
+            app="acme.service_mcp:app",
+            OPENAI_BASE_URL=fake.base_url,
+            OPENAI_API_KEY="test",
+            DOCS_SERVER=str(Path(fakes.__file__).parent / "docs_server.py"),
+            DOCS_LOG=str(tmp_path / "docs.log"),
+        )
+        name, headers = lab.open(real=("process:uname",))
+        status, reply = service.post("/chat", {"message": "Where is order 1234?"}, headers)
+    finally:
+        fake.stop()
+    assert status == 200, (reply, service.text[-3000:])
+    offered = [t["function"]["name"] for t in fake.requests[0]["tools"]]
+    assert "search" in offered  # listed in the lifespan, before any run, and offered here
+    lines = lab.lines(name)
+    models = [x for x in lines if x.get("call") == "model:openai"]
+    assert models and models[0]["action"] == "real", lines
+    assert not any(x.get("reason") == "unseen_tool" for x in lines)
+
+
 # scrimmage test against a service: the probe, the setup request, each run's POST.
 
 FILE = """[agent]
