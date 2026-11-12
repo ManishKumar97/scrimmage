@@ -956,12 +956,14 @@ def test_a_streamed_chat_body_is_refused(gated: None) -> None:
 def test_at_exit_a_reply_never_read_is_recorded_and_settled(gated: None) -> None:
     budget = Budget(limit=1.0)
     sink, ctx = install(make_plan(budget=1.0), budget)
+    run = state.current()  # a reply not read to its end is its run's, not the process's
+    assert run is not None
     c = httpx2.Client(transport=httpx2.MockTransport(streaming))
     response = c.send(c.build_request("POST", URL, json=BODY), stream=True)
-    assert sink.lines == [] and len(ctx.open) == 1
+    assert sink.lines == [] and len(run.open) == 1
     ctx.close_open()
     assert sink.lines[0]["reply_incomplete"] is True and len(sink.settles) == 1
-    assert ctx.open == set()
+    assert run.open == set()
     response.close()
     assert len(sink.lines) == 1  # finished once
 
@@ -994,7 +996,8 @@ def test_identical_requests_from_two_senders_keep_their_own_numbers(gated: None)
     _, ctx = install(make_plan())
     request, _ = two_calls()
     body = http_gate.body_of(request) or b""
-    one, two = (http_gate.describe(ctx, request, who, body) for who in ("sender-a", "sender-b"))
+    bound = ctx.bound(cast(state.RunState, state.current()))
+    one, two = (http_gate.describe(bound, request, who, body) for who in ("sender-a", "sender-b"))
     assert one is not None and two is not None and one.key != two.key
 
 
@@ -1005,8 +1008,9 @@ def test_two_requests_from_one_sender_keep_their_own_numbers(gated: None) -> Non
     first, second = two_calls()
     first_body, second_body = (http_gate.body_of(r) or b"" for r in (first, second))
     counters = Counters(plan)
-    a = http_gate.describe(ctx, first, "sender-a", first_body)
-    b = http_gate.describe(ctx, second, "sender-a", second_body)
+    bound = ctx.bound(cast(state.RunState, state.current()))
+    a = http_gate.describe(bound, first, "sender-a", first_body)
+    b = http_gate.describe(bound, second, "sender-a", second_body)
     assert a is not None and b is not None
     counters.note(a)
     counters.note(b)

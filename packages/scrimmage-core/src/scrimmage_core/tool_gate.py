@@ -16,6 +16,7 @@ from types import ModuleType
 from typing import Any, NoReturn
 
 from scrimmage_core import capture, changes, delay, hooks, mocks
+from scrimmage_core import state as states
 from scrimmage_core.config import Fault, slow_seconds
 from scrimmage_core.errors import ScrimmageMockError
 from scrimmage_core.state import RunState, Step, current, inside
@@ -306,8 +307,19 @@ class ListedToolMissing(ImportError):
     """A tool under [agent] tools is not in its module. The import fails on purpose."""
 
 
+class Ungated(Exception):
+    """In a service with no run: the tool is left as it is, and the process is broken."""
+
+
 def cannot_gate(name: str, message: str) -> NoReturn:
+    """A listed tool no gate can reach. Under a run the run is refused and the import
+    fails. A service that imports it with no run stops before it listens; once listening,
+    it is marked broken, so no run request is served and plain requests are untouched."""
     run = current()
+    process = states.process()
+    if run is None and process is not None and process.service:
+        process.structure("scrimmage", message, process.stop)
+        raise Ungated(message)
     if run is not None:
         run.cannot_gate(name, message)
     raise ListedToolMissing(message)
@@ -324,36 +336,50 @@ def swap(
     listed is the name the tools list gives this file, when it was imported by another.
     """
     for name in names:
-        class_name, dot, method = name.partition(".")
-        tool = getattr(module, class_name, None)
-        if listed is not None and tool is None:
-            continue
-        path = f"{listed or module.__name__}:{name}"
-        seen = (renamed or {}).get(path, method or name)
-        if dot:
-            # A method listed under its own name keeps it, even if it is an alias of another.
-            mine = {n.partition(".")[2] for n in names if n.partition(".")[0] == class_name}
-            swap_method(tool, path, method, seen, mine - {method})
-            continue
-        if hasattr(tool, "invoke") and hasattr(tool, "_run"):
-            run = current()
-            if run is not None:  # a framework's tool object: only its adapter can vouch for it
-                run.listed.discard(seen)
-            continue
-        if isinstance(tool, type):  # calling it makes an object: no tool ran
-            cannot_gate(
-                seen,
-                f"{path} is listed under [agent] tools, but it is a class, so it cannot be "
-                f"gated as a tool; list each of its tool methods as {path}.method",
-            )
-        if not callable(tool):
-            cannot_gate(
-                name,
-                f"{module.__name__}:{name} is listed under [agent] tools, but "
-                f"{module.__name__} has no function {name}",
-            )
-        if not is_gate(tool):
-            setattr(module, name, gate(tool, seen))
+        try:
+            swap_one(module, names, name, renamed, listed)
+        except Ungated:
+            continue  # a service that listens already: its run requests are refused
+
+
+def swap_one(
+    module: ModuleType,
+    names: list[str],
+    name: str,
+    renamed: dict[str, str] | None,
+    listed: str | None,
+) -> None:
+    class_name, dot, method = name.partition(".")
+    tool = getattr(module, class_name, None)
+    if listed is not None and tool is None:
+        return
+    path = f"{listed or module.__name__}:{name}"
+    seen = (renamed or {}).get(path, method or name)
+    if dot:
+        # A method listed under its own name keeps it, even if it is an alias of another.
+        mine = {n.partition(".")[2] for n in names if n.partition(".")[0] == class_name}
+        swap_method(tool, path, method, seen, mine - {method})
+        return
+    if hasattr(tool, "invoke") and hasattr(tool, "_run"):
+        run = current()
+        process = run.process if run is not None else states.process()
+        if process is not None:  # a framework's tool object: only its adapter can vouch for it
+            process.listed.discard(seen)
+        return
+    if isinstance(tool, type):  # calling it makes an object: no tool ran
+        cannot_gate(
+            seen,
+            f"{path} is listed under [agent] tools, but it is a class, so it cannot be "
+            f"gated as a tool; list each of its tool methods as {path}.method",
+        )
+    if not callable(tool):
+        cannot_gate(
+            name,
+            f"{module.__name__}:{name} is listed under [agent] tools, but "
+            f"{module.__name__} has no function {name}",
+        )
+    if not is_gate(tool):
+        setattr(module, name, gate(tool, seen))
 
 
 def swap_method(

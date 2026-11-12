@@ -189,7 +189,7 @@ def _start() -> None:
 
     from scrimmage_core import bootstrap
 
-    bootstrap.start(child=not root, target=_target())
+    bootstrap.start(mode="program" if root else "child", target=_target())
 
 
 if os.environ.get("SCRIMMAGE_TOKEN"):

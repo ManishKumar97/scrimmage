@@ -1103,7 +1103,7 @@ def test_a_changed_library_stops_the_program(change: dict[str, Any]) -> None:
     gate = gate_for(stops)
     mcp_gate.patch(module, gate)
     assert stops and "does not have the functions Scrimmage gates" in stops[0]
-    assert cast(Sink, gate.run.sink).lines[0]["notice"] == "structure"
+    assert cast(Sink, cast(state.RunState, gate.process.own).sink).lines[0]["notice"] == "structure"
     assert not getattr(module.ClientSession.send_request, mcp_gate.GATED, False)
 
 
@@ -1161,7 +1161,7 @@ def test_mcp_1_stops_a_program_that_only_imports_it(docs: Docs) -> None:
 def test_a_newer_version_warns_and_a_tested_one_does_not(monkeypatch: pytest.MonkeyPatch) -> None:
     module = library()
     gate = gate_for([])
-    sink = cast(Sink, gate.run.sink)
+    sink = cast(Sink, cast(state.RunState, gate.process.own).sink)
     monkeypatch.setattr(mcp_gate, "version", lambda: (9, 0))
     mcp_gate.patch(module, gate)
     assert sink.lines[0]["notice"] == "newer_version"

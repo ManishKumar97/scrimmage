@@ -14,7 +14,7 @@ import sys
 import threading
 from collections.abc import Callable
 from types import FrameType
-from typing import NoReturn
+from typing import Literal, NoReturn
 
 from scrimmage_core import (
     http_gate,
@@ -31,6 +31,8 @@ from scrimmage_core.mocks import allowed
 from scrimmage_core.plan import Plan, no_plan, tools_from
 
 TERM_WAIT_S = 4.0  # under the runner's five seconds before SIGKILL
+# What a process is: the program the runner started, a child of it, or a service process.
+Mode = Literal["program", "child", "service"]
 
 
 def stop(message: str) -> NoReturn:
@@ -111,7 +113,8 @@ def handle_sigterm(last_lines: Callable[[], None], sender: Sender) -> None:
     signal.signal(signal.SIGTERM, on_term)
 
 
-def start(*, child: bool = False, target: str | None = None) -> None:
+def start(*, mode: Mode = "program", target: str | None = None) -> None:
+    child = mode == "child"
     token = os.environ["SCRIMMAGE_TOKEN"]
     url = os.environ.get("SCRIMMAGE_CONTROL_URL", "")
     run = os.environ.get("SCRIMMAGE_RUN", "")
@@ -141,7 +144,11 @@ def start(*, child: bool = False, target: str | None = None) -> None:
     tools, renames = tools_from(os.environ.get("SCRIMMAGE_TOOLS", ""))
     names = tuple(labels.tool_name(path, dict(renames)) for path in tools)
     sender = Sender(client, run, eager=child)
-    run_state = state.RunState(plan, sender, prefixes, load=load, tools=names, blobs=sender)
+    process = state.ProcessState(names if plan is None else plan.tool_names())
+    process.stop = stop
+    run_state = state.RunState(
+        plan, sender, prefixes, load=load, tools=names, blobs=sender, process=process
+    )
     sender.proc = run_state.proc
     sender.on_closed = run_state.run_closed
     if plan is not None:
@@ -174,14 +181,13 @@ def start(*, child: bool = False, target: str | None = None) -> None:
         sender.flush()
         stop(message)
 
-    ctx = http_gate.install(run_state, client, sender, cannot_gate)
-    langchain_gate.install(run_state, cannot_gate)
-    mcp_gate.install(run_state, sender, cannot_gate)
+    ctx = http_gate.install(process, client, sender, cannot_gate)
+    langchain_gate.install(process, cannot_gate)
+    mcp_gate.install(process, sender, cannot_gate)
 
     def forked() -> None:
-        run_state.forked()
+        run_state.forked()  # which drops the replies the parent is reading
         sender.forked(run_state.proc)
-        ctx.open.clear()  # replies the parent is reading
 
     os.register_at_fork(after_in_child=forked)
 
@@ -211,7 +217,7 @@ def start(*, child: bool = False, target: str | None = None) -> None:
         last_lines()
         sender.eager = True
 
-    process_gate.install(run_state, before_exec)
+    process_gate.install(before_exec)
     handle_sigterm(last_lines, sender)
     if plan is not None:
         print(

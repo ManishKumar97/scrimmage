@@ -17,12 +17,12 @@ from typing import Any, cast
 from scrimmage_core import python_args
 from scrimmage_core.decide import Call
 from scrimmage_core.labels import PROCESS as LABEL
-from scrimmage_core.state import RunState
+from scrimmage_core.state import RunState, carried, current
 
 BOOT = os.path.join("scrimmage_core", "_boot")  # the runner's, which may be in another venv
 EVENTS = ("subprocess.Popen", "os.exec", "os.posix_spawn")  # os.spawnv is exec here
 # The MCP gate decides a stdio server's calls, so its own start of the server is not blind.
-EXEMPT: ContextVar[bool] = ContextVar("scrimmage_process_exempt", default=False)
+EXEMPT: ContextVar[bool] = carried(ContextVar("scrimmage_process_exempt", default=False))
 
 
 def command(event: str, args: tuple[Any, ...]) -> tuple[str, list[str], str, dict[str, str]]:
@@ -70,9 +70,21 @@ def why_blind(env: dict[str, str], args: list[str]) -> str | None:
     return f"{flag} skips Scrimmage's startup file" if flag else None
 
 
-def install(run: RunState, before_exec: Callable[[], None]) -> None:
+def install(before_exec: Callable[[], None]) -> None:
+    sys.addaudithook(hook_for(before_exec))
+
+
+def hook_for(before_exec: Callable[[], None]) -> Callable[[str, tuple[Any, ...]], None]:
+    """The audit hook. The run is read at each start, so a child is refused or recorded
+    against the run that started it, not the first one this process served."""
+
     def hook(event: str, args: tuple[Any, ...]) -> None:
         if event not in EVENTS:
+            return
+        run = current()
+        if run is None:
+            if event == "os.exec":
+                before_exec()
             return
         program, argv, folder, env = command(event, args)
         found = program if "/" in program else shutil.which(program, path=env.get("PATH"))
@@ -85,7 +97,7 @@ def install(run: RunState, before_exec: Callable[[], None]) -> None:
         if event == "os.exec":
             before_exec()
 
-    sys.addaudithook(hook)
+    return hook
 
 
 def refuse(run: RunState, python: str, argv: list[str], why: str) -> None:

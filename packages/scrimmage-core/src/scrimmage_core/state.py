@@ -1,8 +1,14 @@
-"""Run state: this process's plan, counters, record and the refused-run poison.
+"""Run state: a run's plan, counters, record and the refused-run poison, and what the
+process knows apart from any run.
 
 A function or a script is one run per process, so the plan lives in one slot shared by
 the whole process. A child process has no plan until its first gated call, so a short
 command that makes no calls costs nothing.
+
+A service is one process that serves many runs, and plain requests, at once. There each
+request's run is in a context variable, SLOT, which the entry gate sets on every request;
+what the process learns, such as the tools a framework made at startup, is in its
+ProcessState, which every run reads.
 """
 
 import dataclasses
@@ -14,12 +20,12 @@ import socket
 import sys
 import threading
 import time
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Protocol, cast
+from typing import Any, NamedTuple, Protocol, TypeVar, cast
 
 from scrimmage_core import capture
 from scrimmage_core import decide as engine
@@ -43,6 +49,42 @@ COMMAND_CAP = 1000  # a process's line keeps this much of its command, which can
 # which copy it, but not a thread or a pool the tool starts itself. A forked child inherits
 # it, so it holds the process too: a call in another process names no parent.
 PARENT: ContextVar[tuple[int, int] | None] = ContextVar("scrimmage_parent", default=None)
+# Every context variable Scrimmage defines. A thread or a pool task a run starts carries
+# these, and only these, so the team's own variables are never changed by Scrimmage.
+CARRIED: list[ContextVar[Any]] = [PARENT]
+V = TypeVar("V")
+
+
+def carried(var: ContextVar[V]) -> ContextVar[V]:
+    """Register one of Scrimmage's context variables, so a run's threads carry it."""
+    CARRIED.append(var)
+    return var
+
+
+class Marker:
+    """A value of SLOT that is not a run: a plain request, or code outside any request."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def __repr__(self) -> str:
+        return self.name
+
+
+PLAIN = Marker("PLAIN")  # code that belongs to a request with no run
+OUTSIDE = Marker("OUTSIDE")  # outside any request: startup, lifespan, a pool between tasks
+
+
+class Joined(NamedTuple):
+    """Code that belongs to a run, and that run's state."""
+
+    run: str
+    state: "RunState"
+
+
+# The run this code belongs to, in a service. Unset for a function or a script, which keep
+# their one run in the process slot below.
+SLOT: ContextVar["Joined | Marker | None"] = carried(ContextVar("scrimmage_slot", default=None))
 
 
 class LineSink(Protocol):
@@ -133,6 +175,89 @@ def model_path_hint(label: str, detail: str) -> str | None:
     )
 
 
+def newer_version_message(
+    library: str, found: tuple[int, int] | None, tested: tuple[tuple[int, int], tuple[int, int]]
+) -> str | None:
+    """The note for a library newer than the versions this release was tested with."""
+    oldest, newest = tested
+    if found is None or found <= newest:
+        return None
+    return (
+        f"{library} {found[0]}.{found[1]} is newer than the versions this release was "
+        f"tested with ({oldest[0]}.{oldest[1]} to {newest[0]}.{newest[1]})"
+    )
+
+
+def stop_process(message: str) -> None:
+    """End this process at once: a gate cannot work, so nothing may run without it."""
+    print(f"scrimmage: {message}; the program stops", file=sys.stderr)
+    sys.stderr.flush()
+    os._exit(1)
+
+
+class ProcessState:
+    """What this process knows, whatever run it serves: the names its gates reach, what it
+    noted at startup, and whether its gates still work.
+
+    A function or a script has one of these and one run. A service has one and many runs,
+    so a tool a framework made at startup, before any run, is seen by every later run.
+    """
+
+    def __init__(self, tools: Iterable[str] = (), *, service: bool = False) -> None:
+        self.listed = set(tools)  # names gates will reach
+        self.adapted: set[str] = set()  # names a framework's adapter has checked
+        self.blocked: dict[str, str] = {}  # names a call could skip a gate by, and why
+        self.rechecks: list[Callable[[], None]] = []  # an adapter's check of its tools
+        self.service = service
+        # Notices made with no run, such as a library version at import: the startup report.
+        self.report: list[dict[str, object]] = []
+        # A service listens from the entry gate's first call. A gate that breaks after that
+        # marks the process broken instead of ending it: run requests are then refused.
+        self.listening = False
+        self.broken: str | None = None
+        self.stop: Callable[[str], None] = stop_process  # ends it, before a service listens
+        # A function's or a script's one run. A service has none: its runs come and go.
+        self.own: RunState | None = None
+        self.lock = threading.Lock()
+
+    def current(self) -> "RunState | None":
+        """The run this code belongs to; in a function or a script, always its one run."""
+        run = current()
+        return run if run is not None or self.service else self.own
+
+    def notice(self, kind: str, library: str, message: str) -> None:
+        """A notice that may come with no run: it goes to the run, if there is one, else to
+        the startup report and stderr."""
+        run = self.current()
+        if run is not None:
+            run.notice(kind, library, message)
+            return
+        with self.lock:
+            self.report.append({"notice": kind, "library": library, "message": message})
+        print(f"scrimmage: {library}: {message}", file=sys.stderr)
+
+    def newer_version(
+        self,
+        library: str,
+        found: tuple[int, int] | None,
+        tested: tuple[tuple[int, int], tuple[int, int]],
+    ) -> None:
+        message = newer_version_message(library, found, tested)
+        if message is not None:
+            self.notice("newer_version", library, message)
+
+    def structure(self, library: str, message: str, stop: Callable[[str], None]) -> None:
+        """A library its gate cannot work with. The process stops, so nothing runs ungated;
+        in a service that is already listening it is marked broken instead, so every run
+        request is refused and plain requests go on untouched."""
+        self.notice("structure", library, message)
+        if self.service and self.listening:
+            with self.lock:
+                self.broken = self.broken or message
+            return
+        stop(message)
+
+
 class RunState:
     counters: engine.Counters
 
@@ -145,8 +270,12 @@ class RunState:
         load: Callable[[], Plan] | None = None,
         tools: tuple[str, ...] = (),
         blobs: BlobSink | None = None,
+        process: ProcessState | None = None,
     ) -> None:
-        """A child passes no plan: load fetches it, and tools names its gates until then."""
+        """A child passes no plan: load fetches it, and tools names its gates until then.
+
+        process: what the process knows, shared by all its runs; with none, a run of its own.
+        """
         self.child = plan is None
         self._plan: Plan | None = None
         self._load = load
@@ -155,10 +284,11 @@ class RunState:
         self._plan_lock = threading.Lock()
         self.sink = sink
         self.blobs = blobs  # where a recorded value's content goes
-        self.listed = set(tools if plan is None else plan.tool_names())  # names gates will reach
-        self.adapted: set[str] = set()  # names a framework's adapter has checked
-        self.blocked: dict[str, str] = {}  # names a call could skip a gate by, and why
-        self.rechecks: list[Callable[[], None]] = []  # an adapter's check of its tools
+        if process is None:
+            process = ProcessState(tools if plan is None else plan.tool_names())
+        if not process.service and process.own is None:
+            process.own = self
+        self.process = process
         self.allowed = allowed
         self.began = time.monotonic()  # until a plan says how long the run has been going
         self.refused: str | None = None
@@ -176,6 +306,10 @@ class RunState:
         # looked at for it: a heuristic note when it never got there.
         self.injected: list[str] = []
         self.end_program: Callable[[], None] = lambda: None  # set where a run has a sender
+        # The web gate's replies not read to their end, and the model paths it ran as web
+        # requests, each noted once: both belong to this run, never to the process.
+        self.open: set[Callable[[bool], None]] = set()
+        self.model_paths: set[str] = set()
         if plan is not None:
             self._arrived(plan)
 
@@ -214,15 +348,37 @@ class RunState:
             return fetched
 
     @property
+    def listed(self) -> set[str]:
+        return self.process.listed
+
+    @property
+    def adapted(self) -> set[str]:
+        return self.process.adapted
+
+    @property
+    def blocked(self) -> dict[str, str]:
+        return self.process.blocked
+
+    @property
+    def rechecks(self) -> list[Callable[[], None]]:
+        return self.process.rechecks
+
+    @property
     def seen(self) -> set[str]:
-        """Names a gate reaches, as the model sees them. A request carries only names, so
-        one tool that can skip its gate blocks every tool of that name."""
+        """Names a gate reaches, as the model sees them, as the process knows them: a tool
+        learned before any run is seen by every run. A request carries only names, so one
+        tool that can skip its gate blocks every tool of that name."""
         return (self.listed | self.adapted) - self.blocked.keys()
 
     def recheck_tools(self) -> None:
         """Bring the names up to date: a class can change after its tools were made."""
         for recheck in self.rechecks:
             recheck()
+
+    def close_open(self) -> None:
+        """A reply the agent never finished reading is still a call that was made."""
+        for finish in list(self.open):
+            finish(False)
 
     def check_time(self) -> None:
         """The time limit counts from when the runner started the run, as the plan says.
@@ -404,6 +560,7 @@ class RunState:
         self._seq = 0
         self._ids = 0
         self.live = {}
+        self.open = set()  # replies the parent is reading
         self._unannounced = True
         self.stopped = threading.Event()  # a copy of the parent's event is the parent's
         if self._plan is not None:
@@ -476,14 +633,9 @@ class RunState:
         tested: tuple[tuple[int, int], tuple[int, int]],
     ) -> None:
         """Note a library newer than the versions this release was tested with."""
-        oldest, newest = tested
-        if found is not None and found > newest:
-            self.notice(
-                "newer_version",
-                library,
-                f"{library} {found[0]}.{found[1]} is newer than the versions this release was "
-                f"tested with ({oldest[0]}.{oldest[1]} to {newest[0]}.{newest[1]})",
-            )
+        message = newer_version_message(library, found, tested)
+        if message is not None:
+            self.notice("newer_version", library, message)
 
     def next_seq(self) -> int:
         with self._lock:
@@ -787,12 +939,40 @@ def inside(step: Step) -> Generator[None]:
 
 
 _current: RunState | None = None
+_process: ProcessState | None = None
 
 
 def install(state: "RunState | None") -> None:
-    global _current
+    """The process slot: a function's or a script's one run, and its process."""
+    global _current, _process
     _current = state
+    _process = None if state is None else state.process
+
+
+def install_process(process: ProcessState | None) -> None:
+    """A service's process, which has no run of its own."""
+    global _current, _process
+    _current = None
+    _process = process
+
+
+def process() -> ProcessState | None:
+    return _process
+
+
+def in_service() -> bool:
+    return _process is not None and _process.service
 
 
 def current() -> RunState | None:
+    """The run this code belongs to, read at every gated call.
+
+    In a service, the slot: a run's state, or None for a plain request and for code outside
+    any request. A function or a script keeps its one run in the process slot.
+    """
+    slot = SLOT.get()
+    if isinstance(slot, Joined):
+        return slot.state
+    if slot is PLAIN or in_service():
+        return None
     return _current
