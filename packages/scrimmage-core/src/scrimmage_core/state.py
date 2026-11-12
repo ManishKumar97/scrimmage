@@ -30,7 +30,7 @@ from scrimmage_core.errors import ScrimmageRefused, ScrimmageStopped, ScrimmageT
 from scrimmage_core.outcomes import PREVIEW
 from scrimmage_core.plan import Plan
 from scrimmage_core.records import RECORD_VERSION
-from scrimmage_core.redact import redact
+from scrimmage_core.redact import redact, redact_decoded, redacted
 
 BLOB_CAP = 10 * 1024 * 1024  # a side-folder item keeps its first 10 MB and is marked cut
 BLOB_WAIT_S = 10.0  # the longest a recording call waits for room for its saved value
@@ -73,8 +73,10 @@ def content(value: object, *, clean: bool = True) -> dict[str, object]:
         text = value if isinstance(value, str) else json.dumps(value, default=shown, sort_keys=True)
     except Exception as exc:  # a value that holds itself, nests too deep, or will not sort
         text = f"<a {type(value).__name__} Scrimmage could not write as JSON: {type(exc).__name__}>"
+    if clean:  # a Python string has no escapes left in it; JSON text is read as JSON
+        text = redacted(text, decoded=isinstance(value, str))[0]
     # A lone surrogate, such as an undecodable byte in a file name, has no UTF-8 form.
-    text = (redact(text) if clean else text).encode("utf-8", "backslashreplace").decode()
+    text = text.encode("utf-8", "backslashreplace").decode()
     data = text.encode()
     return {
         "sha256": hashlib.sha256(data).hexdigest(),
@@ -651,7 +653,10 @@ def miss_evidence(call: engine.Call, plan: Plan, miss: engine.Miss | None) -> di
             "args": None if mock.args is None else capture.shown_args(mock.args, differs),
             "method": mock.method,
             "path": None if mock.path is None else redact(mock.path)[:PATH_CUT],
-            "differs": [redact(capture.cleaned_text(k))[:KEY_CUT] for k in differs[:DIFFERS_CAP]],
+            "differs": [
+                redact(capture.cleaned_text(k, decoded=True))[:KEY_CUT]
+                for k in differs[:DIFFERS_CAP]
+            ],
             "differs_left_out": max(len(differs) - DIFFERS_CAP, 0),
         }
     web = miss.reason == "request"
@@ -714,8 +719,8 @@ def error_text(call: engine.Call, error: BaseException) -> str:
 
 def scrub(value: object) -> object:
     """Remove secrets from the text a gate puts on a line, such as a model name or a path."""
-    if isinstance(value, str):
-        return redact(value)
+    if isinstance(value, str):  # a value the gate read, such as a model name out of the body
+        return redact_decoded(value)
     if isinstance(value, list):
         return [scrub(item) for item in cast(list[object], value)]
     return value

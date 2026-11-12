@@ -64,6 +64,27 @@ FORM = (
     + r"(?:\\u[0-9a-fA-F]{4}|\\(?![\"'nr])|[^&\s\"'<>\\])+))"
     + ")"
 )
+# Where FORM's value ends, a removed value may go on past an escape, as in abc\"2zz. It goes
+# on only when more of the value follows the escape: one before a space, a bracket, a comma,
+# a colon or the end closes an escaped string instead, as the second \" in {\"a\":\"b\"}.
+GOES_ON = r"""(?=[^&\s"'<>\\,;:()\[\]{}])"""
+
+
+def continuation(escape: str) -> re.Pattern[str]:
+    """What a value goes on with where FORM's value ends: escapes with more of the value
+    after them, and the value between them. Each step reads only the text ahead, so where it
+    stops does not depend on where it started, as long as it starts between two steps."""
+    step = rf"\\u[0-9a-fA-F]{{4}}|(?:{escape}){GOES_ON}|\\(?![\"'nr])|[^&\s\"'<>\\]"
+    return re.compile(rf"(?:{step})*")
+
+
+# In raw text an escaped quote goes on, and a \n or \r is a line break that ends the value.
+# In a string read out of JSON, or a Python string, every escape is already undone: a \n
+# there is a backslash and a letter, as in C:\new, and a raw quote is a character, as \"
+# became one, unless the name sits inside a quote, which the quote then closes.
+GOES_ON_RAW = continuation(r"\\[\"']")
+GOES_ON_DECODED = continuation(r"\\[\"'nr]|[\"']")
+GOES_ON_DECODED_INSIDE = continuation(r"\\[\"'nr]")
 # The harmless prefixes, checked on the match: next_page_token is found and then kept.
 HARMLESS_NAME = re.compile(
     rf"(?:[A-Za-z0-9]+_)*(?:(?:{HARMLESS})_{FIELD}|(?:{HARMLESS_TOKEN})_token(?:=|%3d))",
@@ -146,10 +167,11 @@ def no_jwt(found: re.Match[str]) -> str:
     return found.group(1).removesuffix("eyJ") + REMOVED
 
 
-def code_value(found: re.Match[str]) -> bool:
+def code_value(found: re.Match[str], value: str | None = None) -> bool:
     """A value that is code: None, True or False alone, or a bare name as an argument of a
-    call whose name is right before its parenthesis, as in f(token=tok)."""
-    value = found.group("value")
+    call whose name is right before its parenthesis, as in f(token=tok). value: the value
+    with what it goes on with, when that is more than the match holds."""
+    value = found.group("value") if value is None else value
     if value is None:
         return False
     head = IDENTIFIER.match(value)
@@ -170,23 +192,59 @@ def code_value(found: re.Match[str]) -> bool:
     return named_call and "." not in name
 
 
-def kept_as_is(found: re.Match[str]) -> bool:
-    """A match the rules find and leave: a harmless name such as next_page_token, or code."""
-    return HARMLESS_NAME.match(found.group()) is not None or code_value(found)
+def key_removals(text: str, decoded: bool = False) -> list[tuple[int, int, str]]:
+    """Each place the key shapes remove, as (start, end, its first match's text), in order.
+
+    The matches are the patterns' own, each value ending where FORM's does. A match that is
+    kept, such as next_page_token=x, keeps only that, so the text after it is read by every
+    rule as any other text is, and it never shields a secret after it. A removed value also
+    takes what it goes on with past an escape, as in abc\"2zz, and a secret found in that is
+    joined into the same place.
+    """
+    places: list[tuple[int, int, str]] = []
+    # The last read of each continuation: from where, and to where. One per pattern, as names
+    # inside and outside a quote can alternate, each reading with its own pattern.
+    went_on: dict[re.Pattern[str], tuple[int, int]] = {}
+    for found in PATTERNS.finditer(text):
+        end = found.end()
+        value = found.group("value")
+        if value is not None and found.end("value") == end:
+            goes_on = GOES_ON_RAW
+            if decoded:
+                inside = found.group("inside") is not None
+                goes_on = GOES_ON_DECODED_INSIDE if inside else GOES_ON_DECODED
+            since, to = went_on.get(goes_on, (0, 0))
+            # A continuation stops at the same place from any step inside it, so one read is
+            # enough for a run of names inside one value: that keeps the whole pass linear.
+            if not since <= end < to:
+                to = cast(re.Match[str], goes_on.match(text, end)).end()
+                went_on[goes_on] = (end, to)
+            # Its first character is all code_value reads past the value: an escape is never
+            # part of a name. Copying the rest would make a run of names quadratic.
+            value += text[end : min(to, end + 1)]
+            end = to
+        # Kept: a harmless name such as next_page_token, or code.
+        if HARMLESS_NAME.match(found.group()) is not None or code_value(found, value):
+            continue
+        if places and found.start() < places[-1][1]:  # it starts in a place already removed
+            start, last, first = places[-1]
+            places[-1] = (start, max(last, end), first)
+        else:
+            places.append((found.start(), end, found.group()))
+    return places
 
 
-def remove_keys(text: str) -> tuple[str, int]:
-    """The text with every key shape replaced, and how many were."""
-    count = 0
-
-    def replace(found: re.Match[str]) -> str:
-        nonlocal count
-        if kept_as_is(found):
-            return found.group()
-        count += 1
-        return REMOVED
-
-    return PATTERNS.sub(replace, text), count
+def remove_keys(text: str, decoded: bool = False) -> tuple[str, int]:
+    """The text with every key shape replaced, and how many places were. decoded: the text is
+    a string read out of JSON."""
+    out: list[str] = []
+    at = 0
+    places = key_removals(text, decoded)
+    for start, end, _first in places:
+        out += [text[at:start], REMOVED]
+        at = end
+    out.append(text[at:])
+    return "".join(out), len(places)
 
 
 ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
@@ -202,7 +260,7 @@ def holds_candidate(text: str) -> bool:
     return any(lit in lowered for lit in LOWER_LITERALS)
 
 
-def plain(text: str) -> tuple[str, int]:
+def plain(text: str, decoded: bool = False) -> tuple[str, int]:
     """The three passes on text that is not read as JSON. Each pass runs only if the text, as
     the pass before left it, holds a string every match of that pass contains."""
     count = 0
@@ -220,7 +278,7 @@ def plain(text: str) -> tuple[str, int]:
         text, jwts = JWT.subn(no_jwt, text)
     lowered = text.lower()
     if any(lit in text for lit in LITERALS) or any(lit in lowered for lit in LOWER_LITERALS):
-        text, keys = remove_keys(text)
+        text, keys = remove_keys(text, decoded)
     return text, count + jwts + keys
 
 
@@ -347,7 +405,7 @@ def structural(text: str) -> tuple[str, int] | None:
 
     def clean(value: str) -> str:
         nonlocal count
-        kept, more = redacted(value)
+        kept, more = redacted(value, decoded=True)
         count += more
         return kept
 
@@ -385,19 +443,26 @@ def structural(text: str) -> tuple[str, int] | None:
     return lead + written + text[len(text.rstrip()) :], count
 
 
-def redacted(text: str) -> tuple[str, int]:
+def redacted(text: str, *, decoded: bool = False) -> tuple[str, int]:
     """The text with secrets removed, and how many places were removed. A JSON object,
-    array or string is read and its strings are redacted, so it stays valid JSON."""
+    array or string is read and its strings are redacted, so it stays valid JSON. decoded:
+    the text is a string read out of JSON, so a backslash in it is only a character."""
     done: tuple[str, int] = (text, 0)
     if holds_candidate(text):
         found = structural(text)
-        done = found if found is not None else plain(text)
+        done = found if found is not None else plain(text, decoded)
     # A plain str, even if given a subclass, whose methods could carry the secret back.
     return str.__str__(done[0]), done[1]
 
 
 def redact(text: str) -> str:
     return redacted(text)[0]
+
+
+def redact_decoded(text: str) -> str:
+    """redact for a Python value's string, such as the agent's answer: it has no escapes left
+    in it, so a backslash in it is only a character."""
+    return redacted(text, decoded=True)[0]
 
 
 class Replacement(NamedTuple):
@@ -536,14 +601,15 @@ def replacements(text: str) -> list[Replacement]:
         if places is not None:
             return places
     pieces = [Piece(text, 0, len(text), None)]
-    passes: list[tuple[re.Pattern[str], Callable[[re.Match[str]], tuple[str, str]]]] = [
-        (URL, lambda m: (plain_url(m), "url")),
-        (JWT, lambda m: (no_jwt(m), "jwt")),
-        (PATTERNS, lambda m: (m.group() if kept_as_is(m) else REMOVED, secret_rule(m.group()))),
+    passes: list[Callable[[str], list[tuple[int, int, str, str]]]] = [
+        lambda now: [(m.start(), m.end(), plain_url(m), "url") for m in URL.finditer(now)],
+        lambda now: [(m.start(), m.end(), no_jwt(m), "jwt") for m in JWT.finditer(now)],
+        # The same places remove_keys removes.
+        lambda now: [(a, b, REMOVED, secret_rule(first)) for a, b, first in key_removals(now)],
     ]
-    for pattern, make in passes:
+    for places in passes:
         now = "".join(piece.text for piece in pieces)
-        found = [(m.start(), m.end(), *make(m)) for m in pattern.finditer(now)]
+        found = places(now)
         # Last first, so a place already made does not move the ones before it.
         for a, b, new, rule in reversed(found):
             if new != now[a:b]:

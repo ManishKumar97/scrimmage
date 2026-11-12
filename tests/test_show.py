@@ -461,6 +461,19 @@ def test_show_redacts_a_secret_that_reached_a_preview(
         assert secret not in done.out and "[secret removed]" in done.out, args
 
 
+def test_an_answer_is_redacted_as_the_python_string_it_was(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The answer was a Python string, so its backslash-n is a backslash and a letter."""
+    folder, _, _ = write_folder(tmp_path)
+    run = BASELINE_FAIL
+    answer = "password=C:\\new2zz shipped"
+    write_lines(folder, run, [summary_line(run, "order-status", "baseline", answer=answer)])
+    for args in (["--run", run], ["--run", run, "--json"]):
+        done = shown(capsys, str(folder), *args)
+        assert "2zz" not in done.out and "[secret removed]" in done.out, args
+
+
 @pytest.mark.slow
 def test_a_real_test_leaves_a_folder_show_can_read(
     project: Project, fake_openai: Fake, capsys: pytest.CaptureFixture[str]

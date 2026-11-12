@@ -1,7 +1,7 @@
 # NeMo Guardrails' example bot "abc", from nemoguardrails 0.24.1
 # (nemoguardrails/examples/bots/abc), copied unchanged except for these lines:
 # - models: main is gpt-4o-mini, not gpt-4.
-# - models: two entries added, self_check_input and self_check_output on gpt-4.1-nano,
+# - models: two entries added, self_check_input and self_check_output on gpt-4.1-mini,
 #   so each rail calls a model of its own name.
 # - this comment.
 # Left out: kb/ (a knowledge base, embedded by a model download) and
@@ -32,10 +32,10 @@ models:
     model: gpt-4o-mini
   - type: self_check_input
     engine: openai
-    model: gpt-4.1-nano
+    model: gpt-4.1-mini
   - type: self_check_output
     engine: openai
-    model: gpt-4.1-nano
+    model: gpt-4.1-mini
 
 rails:
   input:

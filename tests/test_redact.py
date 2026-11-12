@@ -6,12 +6,13 @@ import random
 import re
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
 import pytest
 
-from scrimmage_core import capture
+from scrimmage_core import capture, state
 from scrimmage_core import redact as redact_module
 from scrimmage_core.redact import redact, redacted
 
@@ -181,6 +182,16 @@ def corpus() -> list[str]:
         "_",
         "xoxe." + SAMPLES["xox"],
         "plain words",
+        r"password=abc\"2zz",
+        r"password=abc\'2zz",
+        r"password=C:\new2zz",
+        # a value kept on purpose, then an escape, then a secret field
+        r"next_page_token=x\"",
+        "next_page_token=x\\n",
+        'next_page_token=x"',
+        "f(token=tok)\\n",
+        r"next_page_token=x\"password=hunter2",
+        "f(token=tok)\\npassword=hunter2",
     ]
     out: list[str] = []
     for _ in range(5000):
@@ -591,6 +602,13 @@ SEEDED = [
     "PGPASSWORD={v}",
     "password=<{v}>",
     "password=[secret removed]{v}",
+    "password=C:\\new{v}",  # a backslash and a letter in a string, as in a Windows path
+    # a value kept on purpose before a secret field, which must not run on into it
+    'next_page_token=x\\"password={v}',
+    "next_page_token=x\\npassword={v}",
+    'next_page_token=x"password={v}',
+    "f(token=tok)\\npassword={v}",
+    'password=abc\\"{v}',
     "Authorization: Basic {b}",
     "Bearer {b}{b}",
     "sk-proj-{b}{b}",
@@ -622,10 +640,37 @@ JUNK = [
     "",
 ]
 EMPTY_FIELDS = ["password=", "token=", "secret=", "api_key="]
+PATH_TEMPLATE = "password=C:\\new{v}"
+# The one skip in the seeded fuzz, kept narrow: a secret of PATH_TEMPLATE in a string that
+# is one whole JSON string literal. Such a string is read as JSON, so its \\n is a line break
+# and ends the value there, as on main: see "one whole JSON string literal" in
+# docs/limits.md. test_a_whole_json_string_literal_is_read_as_json pins it.
+LITERAL_PATH_SECRETS: set[str] = set()
+
+
+def is_json_string(text: str) -> bool:
+    try:
+        return isinstance(json.loads(text), str)
+    except ValueError:
+        return False
+
+
+def to_check(found: list[str], tally: list[int]) -> list[str]:
+    """The seeded secrets a fuzz checks: all but the skip above, which tally counts."""
+    checked = [secret for secret in found if secret not in LITERAL_PATH_SECRETS]
+    tally[0] += len(found) - len(checked)
+    tally[1] += len(found)
+    return checked
+
+
+def few_skipped(tally: list[int]) -> bool:
+    """The skip stays under 1% of the seeded secrets, so it cannot hide a broad leak."""
+    return tally[0] < 0.01 * tally[1]
 
 
 def seeded_text(rng: random.Random, found: list[str]) -> str:
     parts: list[str] = []
+    paths: list[str] = []
     for _ in range(rng.randint(0, 5)):
         if rng.random() < 0.4:
             value = f"hunt{len(found)}x{rng.randrange(10**6)}"
@@ -633,11 +678,16 @@ def seeded_text(rng: random.Random, found: list[str]) -> str:
             template = rng.choice(SEEDED)
             # the secret is the base64 text for the header shapes, else the plain value
             found.append(b64 if "{b}" in template else value)
+            if template == PATH_TEMPLATE:
+                paths.append(value)
             # a space on each side, so a name is never glued to a letter by the junk
             parts.append(" " + template.format(v=value, b=b64) + " ")
         else:
             parts.append(rng.choice(JUNK + EMPTY_FIELDS))
-    return "".join(parts)
+    text = "".join(parts)
+    if paths and is_json_string(text):
+        LITERAL_PATH_SECRETS.update(paths)
+    return text
 
 
 def seeded_pair(rng: random.Random, found: list[str]) -> object:
@@ -703,9 +753,12 @@ def shape(node: object) -> object:
 def test_redacted_json_parses_with_the_same_structure_and_no_seeded_secret() -> None:
     rng = random.Random(4646)
     cases = 0
+    tally = [0, 0]
+    LITERAL_PATH_SECRETS.clear()  # each fuzz skips only the secrets it seeded itself
     for _ in range(12_500):
         found: list[str] = []
         tree = seeded_tree(rng, found)
+        found = to_check(found, tally)
         if not isinstance(tree, (dict, list)):
             tree = [tree]
         for ascii_only in (True, False):
@@ -720,6 +773,7 @@ def test_redacted_json_parses_with_the_same_structure_and_no_seeded_secret() -> 
                     assert secret not in out, (secret, text)
                 cases += 1
     assert cases >= 20_000
+    assert few_skipped(tally), tally
 
 
 @pytest.mark.design("security.redaction_shapes")
@@ -761,9 +815,12 @@ def test_the_same_pair_judgement_holds_for_python_values_and_json_text() -> None
     tree is kept."""
     rng = random.Random(4747)
     cases = 0
+    tally = [0, 0]
+    LITERAL_PATH_SECRETS.clear()  # each fuzz skips only the secrets it seeded itself
     for _ in range(25_000):
         found: list[str] = []
         tree = seeded_tree(rng, found)
+        found = to_check(found, tally)
         cleaned, _removed = capture.clean(tree)
         assert shape(cleaned) == shape(tree), tree
         for secret in found:
@@ -777,6 +834,7 @@ def test_the_same_pair_judgement_holds_for_python_values_and_json_text() -> None
             assert secret not in out, (secret, text)
         cases += 2
     assert cases >= 50_000
+    assert few_skipped(tally), tally
 
 
 @pytest.mark.design("security.redaction_shapes")
@@ -785,9 +843,12 @@ def test_objects_beside_a_basic_value_and_pascal_case_labels_on_both_paths() -> 
     value keeps its numbers and has its own secrets cleaned, on JSON text and Python values."""
     rng = random.Random(5151)
     cases = 0
+    tally = [0, 0]
+    LITERAL_PATH_SECRETS.clear()  # each fuzz skips only the secrets it seeded itself
     for _ in range(30_000):
         found: list[str] = []
         tree = {"wrap": [seeded_pair(rng, found), seeded_tree(rng, found)]}
+        found = to_check(found, tally)
         cleaned, _removed = capture.clean(tree)
         assert shape(cleaned) == shape(tree), tree
         for secret in found:
@@ -799,6 +860,7 @@ def test_objects_beside_a_basic_value_and_pascal_case_labels_on_both_paths() -> 
             assert secret not in out, (secret, text)
         cases += 2
     assert cases >= 60_000
+    assert few_skipped(tally), tally
 
 
 # The shape, and the rules that report it: a key that names a secret is also caught by the
@@ -906,7 +968,16 @@ def test_a_marker_is_removed_with_what_sticks_to_it() -> None:
 
 
 def test_spans_cover_exactly_what_redact_removes() -> None:
-    for text in [*corpus(), *SAMPLES.values()]:
+    # The corpus is plain text, as its reference needs; the JSON leak is added whole here.
+    leaks = [
+        ESCAPED_QUOTE_LEAK,
+        DECODED_BACKSLASH_LEAK,
+        json.dumps(ESCAPED_QUOTE_LEAK),
+        f'"{ESCAPED_QUOTE_LEAK}"',
+        *KEPT_BEFORE_SECRET,
+        *(json.dumps({"log": text}) for text in KEPT_BEFORE_SECRET),
+    ]
+    for text in [*corpus(), *SAMPLES.values(), *leaks]:
         places = redact_module.replacements(text)
         built: list[str] = []
         at = 0
@@ -965,8 +1036,209 @@ def test_a_backslash_n_or_r_ends_a_value_and_other_backslashes_are_in_it() -> No
     assert redact(r"password=ab\ncd") == r"[secret removed]\ncd"
     assert redact(r"password=ab\rcd") == r"[secret removed]\rcd"
     assert redact(r"password=ab\tcd ok") == "[secret removed] ok"
-    assert redact(r"x password=ab\"cd") == r"x [secret removed]\"cd"
+    assert redact(r"x password=ab\"cd") == "x [secret removed]"
     assert redact("password=ab\\$cd\\") == "[secret removed]"
+
+
+# A value kept on purpose, an escape or a quote, then a secret field: the kept value must
+# not take the secret in with it.
+KEPT_BEFORE_SECRET = [
+    r"next_page_token=abc\"password=hunter2",
+    r"is_secret=True\"api_key=sk_live_zz",
+    "next_page_token=Q2F\\npassword=hunter2",
+    'next_page_token=abc"password=hunter2',
+    "f(token=tok)\\npassword=hunter2",
+]
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize("text", KEPT_BEFORE_SECRET)
+def test_a_kept_value_never_runs_on_into_a_secret_field_after_it(text: str) -> None:
+    secret = text.rpartition("=")[2]
+    kept = text.partition("=")[0]
+    outs = {
+        "plain": redact(text),
+        "decoded": redacted(text, decoded=True)[0],
+        "json": redact(json.dumps({"log": text})),
+        "python value": json.dumps(capture.clean({"v": text})[0]),
+        "preview": str(state.content(text)["preview"]),
+        "miss": str(capture.shown_args({"v": text}, ["v"])),
+    }
+    for where, out in outs.items():
+        assert secret not in out, (where, out)
+        assert kept in out, (where, out)  # the kept name itself stays
+
+
+# One character of glue between the escape and the next secret, so it never starts right
+# after the escape: the value of a kept match must still end where it would without it.
+GLUED_AFTER_KEPT = [
+    (r"is_secret=True\"sk-" + "Q" * 24, "Q" * 24),
+    (r"next_page_token=a\"b,password=HUNTER2", "HUNTER2"),
+    (r"next_page_token=a\'b.Bearer " + "Q" * 20, "Q" * 20),
+    ("next_page_token=a\\nAuthorization: Basic UVFRUVFRUVFRUQ==", "UVFRUVFRUVFRUQ"),
+]
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_code_with_an_escape_and_more_value_after_it_is_not_code() -> None:
+    """True alone is code; True\\"2zz is a value, judged with what it goes on with."""
+    assert redact(r"password=True\"2zz") == "[secret removed]"
+    assert redacted("password=None\\n2zz", decoded=True)[0] == "[secret removed]"
+    assert redact("x password=True ok") == "x password=True ok"
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize(("text", "secret"), GLUED_AFTER_KEPT)
+def test_a_kept_value_shields_no_secret_one_glue_character_on(text: str, secret: str) -> None:
+    for out in (redact(text), redacted(text, decoded=True)[0], redact(json.dumps({"l": text}))):
+        assert secret not in out and text.partition("=")[0] in out, out
+
+
+KEPT_PREFIXES = [
+    "next_page_token=a",
+    "is_secret=True",
+    "eos_token=x",
+    "cursor_token=Q2F",
+    "f(token=tok",
+]
+ESCAPES = ['\\"', "\\'", "\\n", "\\r", '"', "'"]
+GLUES = ["", "b", "bb_", "%20", *",.-/|=:;()%", *(f"b{c}" for c in ",.-/|=:;()")]
+SECRET_SHAPES = [
+    ("password=HUNTER2", "HUNTER2"),
+    ("token=HUNTER2", "HUNTER2"),
+    ("sk-" + "Q" * 24, "Q" * 24),
+    ("AKIA" + "Q" * 16, "Q" * 16),
+    ("ghp_" + "Q" * 36, "Q" * 36),
+    ("Bearer " + "Q" * 20, "Q" * 20),
+    ("Authorization: Basic UVFRUVFRUVFRUQ==", "UVFRUVFRUVFRUQ"),
+    ("eyJ" + "Q" * 10 + ".eyJ" + "Q" * 10 + "." + "Q" * 10, "Q" * 10),
+]
+
+
+def by_design_not_a_secret(glue: str, shape: str) -> bool:
+    """A field name glued to a letter or digit is not a name, and one right after a named
+    call's parenthesis is code, as in b(password=x): both are kept on purpose, on main too."""
+    return "=" in shape and (glue[-1:].isalnum() or glue.endswith("("))
+
+
+class CountedScan:
+    """A continuation pattern that counts the characters its matches read."""
+
+    def __init__(self, pattern: re.Pattern[str]) -> None:
+        self.pattern = pattern
+        self.read = 0
+
+    def match(self, text: str, at: int) -> re.Match[str] | None:
+        found = self.pattern.match(text, at)
+        self.read += 0 if found is None else found.end() - at
+        return found
+
+
+def continuation_reads(monkeypatch: pytest.MonkeyPatch, clean: Callable[[], object]) -> int:
+    counted = [
+        CountedScan(getattr(redact_module, name))
+        for name in ("GOES_ON_RAW", "GOES_ON_DECODED", "GOES_ON_DECODED_INSIDE")
+    ]
+    with monkeypatch.context() as patched:
+        for name, scan in zip(
+            ("GOES_ON_RAW", "GOES_ON_DECODED", "GOES_ON_DECODED_INSIDE"), counted, strict=True
+        ):
+            patched.setattr(redact_module, name, scan)
+        clean()
+    return sum(scan.read for scan in counted)
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize("path", ["python value", "json text"])
+def test_continuations_are_read_in_linear_time_when_quotes_alternate(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """Names outside and inside a quote alternate, so each reads with its own continuation.
+    Each must reuse its own last read, or every name reads on to the end of the text."""
+
+    def reads(n: int) -> tuple[int, int]:
+        text = ',token=a\\nb"token=a\\nb' * n
+        if path == "python value":
+            return continuation_reads(monkeypatch, lambda: capture.clean({"v": text})), len(text)
+        whole = json.dumps({"v": text})
+        return continuation_reads(monkeypatch, lambda: redact(whole)), len(whole)
+
+    small, small_len = reads(500)
+    large, large_len = reads(1000)
+    assert small > 0
+    assert small <= 2 * small_len and large <= 2 * large_len, (small, large)
+    assert large <= 2.2 * small, (small, large)
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_no_kept_value_shields_a_secret_after_an_escape_and_any_glue() -> None:
+    """Every kept prefix, escape or quote, glue and secret shape, in plain text, in a string
+    read out of JSON, and in JSON text: the secret goes, and a kept name stays."""
+    modes = {
+        "plain": redact,
+        "decoded": lambda text: redacted(text, decoded=True)[0],
+        "json": lambda text: redact(json.dumps({"l": text})),
+    }
+    checked = 0
+    for prefix in KEPT_PREFIXES:
+        for escape in ESCAPES:
+            for glue in GLUES:
+                for shape, secret in SECRET_SHAPES:
+                    if by_design_not_a_secret(glue, shape):
+                        continue
+                    text = prefix + escape + glue + shape
+                    for mode, clean in modes.items():
+                        out = clean(text)
+                        assert secret not in out, (mode, text, out)
+                        if not prefix.startswith("f("):  # code with an escape after it goes
+                            assert prefix.partition("=")[0] in out, (mode, text, out)
+                    checked += 1
+    assert checked > 5000, checked
+
+
+ESCAPED_QUOTE_LEAK = r"password=abc\"2zz"  # a quote escaped inside a value
+DECODED_BACKSLASH_LEAK = '{"q": "password=C:\\\\new2zz"}'  # the string is password=C:\new2zz
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize("quote", ['"', "'"])
+def test_an_escaped_quote_with_more_of_the_value_after_it_is_in_the_value(quote: str) -> None:
+    text = ESCAPED_QUOTE_LEAK.replace('"', quote)
+    assert redact(text) == "[secret removed]"
+    assert redact(f"x {text} y") == "x [secret removed] y"
+    # One that closes an escaped string still ends the value, so the text around it is kept.
+    assert redact(r"{\"a\":\"password=abc\",\"b\":1}") == r"{\"a\":\"[secret removed]\",\"b\":1}"
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_a_backslash_n_in_a_string_read_out_of_json_is_in_the_value() -> None:
+    """In JSON text \\n is a line break; once the string is read out it is a backslash and a
+    letter, as in a Windows path."""
+    assert json.loads(DECODED_BACKSLASH_LEAK)["q"] == "password=C:\\new2zz"
+    assert json.loads(redact(DECODED_BACKSLASH_LEAK)) == {"q": "[secret removed]"}
+    assert "2zz" not in redact(DECODED_BACKSLASH_LEAK)
+    # A real line break read out of JSON still ends the value.
+    broken = json.dumps({"q": "password=abc\nuser=bob"})
+    assert json.loads(redact(broken)) == {"q": "[secret removed]\nuser=bob"}
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_a_whole_json_string_literal_is_read_as_json() -> None:
+    """Today's behaviour, as on main, and disclosed in docs/limits.md: a text that is one whole
+    JSON string literal is read as JSON, so its \\n is a line break and ends the value."""
+    text = '"password=C:\\newhunt1"'
+    assert json.loads(text) == "password=C:\newhunt1"
+    assert redact(text) == '"[secret removed]\\newhunt1"'
+    assert capture.clean({"v": text})[0] == {"v": '"[secret removed]\\newhunt1"'}
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_a_quote_in_a_string_read_out_of_json_is_in_the_value() -> None:
+    """A text that is one JSON string is read out first, and its \\" becomes a raw quote."""
+    assert redact(f'"{ESCAPED_QUOTE_LEAK}"') == '"[secret removed]"'
+    assert json.loads(redact(json.dumps({"q": 'password=abc"2zz'}))) == {"q": "[secret removed]"}
+    # A name inside a quote is closed by that quote, and what follows is kept.
+    assert json.loads(redact(json.dumps('say "token=abc" now'))) == 'say "[secret removed]" now'
 
 
 def security_rule_names() -> set[str]:

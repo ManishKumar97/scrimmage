@@ -693,6 +693,16 @@ def test_an_answer_preview_has_no_secret_and_is_cut() -> None:
     assert secret not in preview and len(preview) == 200
 
 
+def test_an_answer_preview_is_redacted_as_the_python_string_it_was() -> None:
+    case = CASES["passing"]()
+    case.results[0].answer = "password=C:\\new2zz shipped"  # a backslash, then the letter n
+    _, doc, _ = render(case.config, case.results, FOLDER, case.runner)
+    detail = cast(
+        list[dict[str, object]], cast(list[dict[str, object]], doc["rows"])[0]["run_details"]
+    )[0]
+    assert detail["answer_preview"] == "[secret removed] shipped"
+
+
 def test_the_most_broken_rule_comes_first() -> None:
     case = CASES["most_broken"]()
     text, doc, _ = render(case.config, case.results, FOLDER, case.runner)

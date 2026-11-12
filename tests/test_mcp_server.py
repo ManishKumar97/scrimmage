@@ -1391,7 +1391,11 @@ def test_a_cancel_while_the_child_starts_leaves_no_untracked_child(bed: Bed) -> 
                 group.cancel_scope.cancel()
             # The server is still up, with no call running, so anything left is untracked.
             assert await none_left_but_the_server(bed)
-            assert log_lines(bed)  # the cancelled call was stopped and logged
+            # The server logs the call last, after its stop, sweep and read.
+            with anyio.fail_after(30):
+                while not log_lines(bed):
+                    await anyio.sleep(0.1)
+            (_line,) = log_lines(bed)  # the cancelled call was stopped and logged, once
 
     anyio.run(go)
     assert none_left(bed)

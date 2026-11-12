@@ -265,7 +265,8 @@ def clean(value: object) -> tuple[object, list[Removed]]:
     removed: list[Removed] = []
 
     def text(found: str, key: str | None) -> str:
-        kept, count = redacted(found)
+        # A Python string has no escapes left in it, as a string read out of JSON has none.
+        kept, count = redacted(found, decoded=True)
         removed.extend({"key": key, "rule": PATTERN} for _ in range(count))
         return kept
 
@@ -355,8 +356,10 @@ def unsaved(code: str, why: str) -> dict[str, object]:
     return {"code": code, "why": cleaned_text(why)}
 
 
-def cleaned_text(text: str) -> str:
-    return redacted(text)[0]
+def cleaned_text(text: str, *, decoded: bool = False) -> str:
+    """The text with secrets removed. decoded: it is a Python value's string, such as a key,
+    which clean redacts as decoded, so the two give the same text."""
+    return redacted(text, decoded=decoded)[0]
 
 
 SHOWN_CAP = 200  # a miss line shows this much of a call's arguments
@@ -387,7 +390,7 @@ def shown_args(value: object, differing: Sequence[str]) -> str | None:
     order = [k for k in differing if k in table] + [k for k in table if k not in differing]
     parts: list[str] = []
     for key in order:
-        name = cleaned_text(key)
+        name = cleaned_text(key, decoded=True)
         held = table[key]
         if key in differing and secret_key(key) and isinstance(held, int | float):
             # clean keeps a number, as it is never a secret pattern, but a PIN under a
