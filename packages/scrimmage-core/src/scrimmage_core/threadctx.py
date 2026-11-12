@@ -24,7 +24,7 @@ from types import ModuleType
 from typing import Any
 
 from scrimmage_core import hooks, state
-from scrimmage_core.state import OUTSIDE, PLAIN, SLOT, TAGS, Joined, ProcessState, RunState
+from scrimmage_core.state import OUTSIDE, SLOT, TAGS, Joined, ProcessState, RunState, is_plain
 
 MARK = "__scrimmage_carried__"
 SCAN_WAIT_S = 1.0  # how long a run's close waits for each loop to read its tasks
@@ -115,8 +115,8 @@ def start_patched(original: Callable[[threading.Thread], None]) -> Callable[...,
             start_outside(self)
             return original(self)
         slot = SLOT.get()
-        if slot is PLAIN and not getattr(self, MARK, False):
-            # A plain request's thread stays plain, so the outside rules never reach it.
+        if is_plain(slot) and not getattr(self, MARK, False):
+            # A plain request's thread shares its marker: plain while the request is served.
             setattr(self, MARK, True)
             carry_into(self)
             return original(self)

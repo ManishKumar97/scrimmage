@@ -16,6 +16,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -284,6 +285,26 @@ def test_a_python_child_in_a_service_run_is_refused_and_outside_a_run_is_untouch
     assert status == 200 and 'Add "process:python' in reply["reply"]
     refused = [x for x in lab.lines(name) if x.get("reason") == "service_child"]
     assert refused and refused[0]["by_config"] is True
+
+
+@pytest.mark.design("service.plain_thread_left_running")
+def test_a_plain_requests_waited_work_runs_and_work_it_left_running_meets_the_outside_rules(
+    lab: Lab,
+) -> None:
+    service = lab.start()
+    name, headers = lab.open()
+    with ThreadPoolExecutor(1) as pool:  # the run's request is in flight throughout
+        held = pool.submit(service.post, "/hold", None, headers)
+        assert service.post("/left-running") == (200, {"reply": "started"})
+        assert service.post("/release") == (200, {"reply": "released"})
+        status, reply = held.result(60)
+    assert status == 200 and reply["seen"] == [
+        "waited for: ran",
+        "background: ran",
+        "left running: ScrimmageRefused",
+    ]
+    refused = [x for x in lab.lines(name) if x.get("reason") == "orphan"]
+    assert [x["call"] for x in refused] == ["tool:check_inventory"]
 
 
 @pytest.mark.design("service.sync_endpoint")

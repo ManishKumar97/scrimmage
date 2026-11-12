@@ -37,7 +37,7 @@ from scrimmage_core.executor import Executor
 from scrimmage_core.mocks import allowed
 from scrimmage_core.plan import Plan
 from scrimmage_core.redact import redact
-from scrimmage_core.state import PLAIN, SLOT, Joined, ProcessState, RunState
+from scrimmage_core.state import SLOT, Joined, Plain, ProcessState, RunState, is_plain
 
 Scope = MutableMapping[str, Any]
 Message = MutableMapping[str, Any]
@@ -115,11 +115,7 @@ async def entry(app: App, scope: Scope, receive: Receive, send: Send) -> None:
         return None
     if kind == "websocket" or (not runs and not probe):
         # Every request sets the slot, so a value leaked between tasks is overwritten.
-        token = SLOT.set(PLAIN)
-        try:
-            return await app(scope, receive, send)
-        finally:
-            SLOT.reset(token)
+        return await served_plain(app, scope, receive, send)
     copied = dict(scope)
     copied["headers"] = [(n, v) for n, v in headers if not bytes(n).lower().startswith(PREFIX)]
     if probe:
@@ -133,6 +129,19 @@ async def entry(app: App, scope: Scope, receive: Receive, send: Send) -> None:
         return await refuse(send, unavailable.code)
     await joined(gate, app, copied, receive, send, run, sender)
     return None
+
+
+async def served_plain(app: App, scope: Scope, receive: Receive, send: Send) -> None:
+    """A request with no run, under its own plain marker. Its threads and tasks share it, so
+    work it waits for, background tasks included, stays plain; once the call returns, work it
+    left running reads as outside any request."""
+    plain = Plain()
+    token = SLOT.set(plain)
+    try:
+        return await app(scope, receive, send)
+    finally:
+        plain.done = True
+        SLOT.reset(token)
 
 
 def listening(gate: Gate) -> None:
@@ -323,11 +332,7 @@ async def answer_probe(
     method = str(scope.get("method", ""))
     error = protocol.check_request(gate.token, gate.nonces, method, path, fields, body, time.time())
     if error is not None:
-        token = SLOT.set(PLAIN)
-        try:
-            return await app(copied, replaying(body, receive), send)
-        finally:
-            SLOT.reset(token)
+        return await served_plain(app, copied, replaying(body, receive), send)
     report = json.dumps(startup_report(gate)).encode()
     signature = protocol.sign_reply(gate.token, fields.get(protocol.SIGNATURE, ""), 200, report)
     headers = [
@@ -449,7 +454,7 @@ def patch_starlette(module: ModuleType, process: ProcessState) -> None:
     @functools.wraps(call)
     async def gated_call(self: Any, scope: Scope, receive: Receive, send: Send) -> None:
         slot = SLOT.get()
-        if isinstance(slot, Joined) or slot is PLAIN:  # the uvicorn gate has been, once
+        if isinstance(slot, Joined) or is_plain(slot):  # the uvicorn gate has been, once
             return await call(self, scope, receive, send)
         return await entry(functools.partial(call, self), scope, receive, send)
 

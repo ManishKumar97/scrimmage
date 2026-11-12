@@ -73,8 +73,21 @@ class Marker:
         return self.name
 
 
-PLAIN = Marker("PLAIN")  # code that belongs to a request with no run
+class Plain(Marker):
+    """A request with no run, one per request. Once its entry call has returned, a thread or
+    task it started that is still at work is background work: done, and read as outside."""
+
+    def __init__(self) -> None:
+        super().__init__("PLAIN")
+        self.done = False
+
+
 OUTSIDE = Marker("OUTSIDE")  # outside any request: startup, lifespan, a pool between tasks
+
+
+def is_plain(slot: object) -> bool:
+    """Code of a plain request still being served."""
+    return isinstance(slot, Plain) and not slot.done
 
 
 class Joined(NamedTuple):
@@ -1207,7 +1220,7 @@ def current() -> RunState | None:
         if run.refused == CLOSED and run.entry_done:
             run.process.stale_worker = worker_name()
         return run
-    if slot is PLAIN:
+    if is_plain(slot):
         return None
     process = _process
     if process is None or not process.service:

@@ -25,6 +25,8 @@ from scrimmage_core.errors import ScrimmageRefused
 from scrimmage_core.plan import Plan
 from test_service_units import Sink, sink_of
 
+PLAIN = state.Plain()  # one plain request, still being served
+
 pytestmark = pytest.mark.slow
 ON_314 = sys.version_info >= (3, 14)
 _hooked: list[bool] = []
@@ -69,7 +71,7 @@ def under(run: state.RunState, fn: Callable[[], Any]) -> Any:
 
 def plain(fn: Callable[[], Any]) -> Any:
     context = contextvars.copy_context()
-    context.run(state.SLOT.set, state.PLAIN)
+    context.run(state.SLOT.set, PLAIN)
     return context.run(fn)
 
 

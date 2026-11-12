@@ -28,6 +28,8 @@ from scrimmage_core.plan import Plan
 from test_http_gate import Budget
 from test_service_units import Sink, sink_of
 
+PLAIN = state.Plain()  # one plain request, still being served
+
 INHERITS = threadctx.inherits()
 ON_314 = sys.version_info >= (3, 14)
 TEAM: contextvars.ContextVar[str] = contextvars.ContextVar("team_variable", default="unset")
@@ -79,7 +81,7 @@ def joined(run: state.RunState) -> contextvars.Context:
 
 def plain() -> contextvars.Context:
     context = contextvars.copy_context()
-    context.run(state.SLOT.set, state.PLAIN)
+    context.run(state.SLOT.set, PLAIN)
     return context
 
 
@@ -134,7 +136,7 @@ def test_a_pool_task_and_run_in_executor_find_their_plan(service: state.ProcessS
 async def run_then_plain(run: state.RunState, how: Callable[[], Any]) -> list[object]:
     """The run's task starts the pool's one thread; a plain task then reuses it."""
     got: list[object] = []
-    for slot in (state.Joined(run.name, run), state.PLAIN):
+    for slot in (state.Joined(run.name, run), PLAIN):
         token = state.SLOT.set(slot)
         try:
             got.append(await how())
@@ -154,19 +156,19 @@ def test_a_plain_request_in_a_pool_thread_first_started_by_a_run_is_untouched(
             loop = asyncio.get_running_loop()
             return await run_then_plain(run, lambda: loop.run_in_executor(pool, seen))
 
-        assert asyncio.run(executor()) == ["run-a", state.PLAIN]
+        assert asyncio.run(executor()) == ["run-a", PLAIN]
 
     async def to_thread() -> list[object]:
         asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
         return await run_then_plain(run, lambda: asyncio.to_thread(seen))
 
-    assert asyncio.run(to_thread()) == ["run-a", state.PLAIN]
+    assert asyncio.run(to_thread()) == ["run-a", PLAIN]
 
     async def anyio_sync() -> list[object]:  # FastAPI's sync endpoints take this path
         limiter = anyio.CapacityLimiter(1)
         return await run_then_plain(run, lambda: anyio.to_thread.run_sync(seen, limiter=limiter))
 
-    assert anyio.run(anyio_sync) == ["run-a", state.PLAIN]
+    assert anyio.run(anyio_sync) == ["run-a", PLAIN]
 
 
 @pytest.mark.design("service.thread_pool_carried")
@@ -179,8 +181,8 @@ def test_a_threadpool_task_carries_its_submitters_value_and_its_workers_start_ou
     try:
         assert joined(run).run(pool.apply, seen) == "run-a"
         assert joined(run).run(pool.map, lambda _: seen(), [1, 2]) == ["run-a", "run-a"]
-        assert plain().run(pool.apply, seen) is state.PLAIN
-        assert plain().run(lambda: list(pool.imap(lambda _: seen(), [1]))) == [state.PLAIN]
+        assert plain().run(pool.apply, seen) is PLAIN
+        assert plain().run(lambda: list(pool.imap(lambda _: seen(), [1]))) == [PLAIN]
         made = set(threading.enumerate()) - before
         assert made and not any(thread in state.TAGS for thread in made)
     finally:
@@ -217,6 +219,38 @@ def test_startup_code_submitting_to_a_pool_runs_outside(service: state.ProcessSt
 def test_a_thread_started_in_a_plain_request_finds_none(service: state.ProcessState) -> None:
     a_run(service, "run-a")
     assert plain().run(in_thread, state.current) is None
+
+
+@pytest.mark.design("service.plain_thread_left_running")
+def test_a_thread_a_plain_request_left_running_meets_the_outside_rules_once_it_returns(
+    service: state.ProcessState,
+) -> None:
+    run = a_run(service, "run-a")
+    gated = tool()
+    request = state.Plain()
+    context = contextvars.copy_context()
+    context.run(state.SLOT.set, request)
+    go, wrote = threading.Event(), threading.Event()
+    got: list[str] = []
+
+    def lingering() -> None:
+        got.append(gated("1"))  # while the request is served: plain, untouched
+        wrote.set()
+        go.wait(10)
+        try:
+            got.append(gated("2"))
+        except ScrimmageRefused as refused:
+            got.append(f"refused: {refused}")
+
+    worker = threading.Thread(target=lingering)
+    context.run(worker.start)
+    assert wrote.wait(10)
+    request.done = True  # the request's entry call has returned
+    go.set()
+    worker.join(10)
+    assert got[0] == "wrote 1"
+    assert got[1].startswith("refused: ") and "outside any request" in got[1]
+    assert [x["reason"] for x in sink_of(run).lines] == ["orphan"]
 
 
 @pytest.mark.design("service.explicit_context_kept")

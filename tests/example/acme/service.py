@@ -3,7 +3,8 @@
 POST /chat takes {message, session} and answers {reply}. The async endpoint hands the bot to
 the loop's default executor, as many services do; /chat-sync is a sync endpoint, which
 FastAPI runs on anyio's worker threads. When TEST_TOKEN is set, every request must carry
-it as a bearer token. /echo answers with what it got, for the plain-request tests.
+it as a bearer token. /echo answers with what it got, for the plain-request tests;
+/hold, /left-running and /release show what a plain request's threads and tasks meet.
 """
 
 import asyncio
@@ -150,3 +151,54 @@ async def echo(request: Request) -> dict[str, Any]:
         "pid": os.getpid(),
         "thread": threading.current_thread().name,
     }
+
+
+LEFT: dict[str, threading.Event] = {name: threading.Event() for name in ("held", "release", "done")}
+SEEN: list[str] = []
+
+
+def checked(label: str) -> None:
+    from acme import tools
+
+    try:
+        tools.check_inventory("SKU-42")
+        SEEN.append(f"{label}: ran")
+    except Exception as exc:  # a refusal
+        SEEN.append(f"{label}: {type(exc).__name__}")
+
+
+async def waited(event: threading.Event) -> None:
+    await asyncio.get_running_loop().run_in_executor(None, event.wait, 30)
+
+
+@app.post("/hold")
+async def hold() -> dict[str, Any]:
+    """Held open until the thread /left-running left has gone on; says what each part met."""
+    LEFT["held"].set()
+    await waited(LEFT["done"])
+    return {"seen": SEEN}
+
+
+@app.post("/left-running")
+async def left_running(tasks: BackgroundTasks) -> dict[str, str]:
+    """Once /hold is in: a thread it waits for, a background task, and a thread it leaves
+    running until /release."""
+    await waited(LEFT["held"])
+    joined = threading.Thread(target=checked, args=("waited for",))
+    joined.start()
+    joined.join()
+    tasks.add_task(checked, "background")
+
+    def lingering() -> None:
+        LEFT["release"].wait(30)
+        checked("left running")
+        LEFT["done"].set()
+
+    threading.Thread(target=lingering, daemon=True, name="left-running").start()
+    return {"reply": "started"}
+
+
+@app.post("/release")
+async def release() -> dict[str, str]:
+    LEFT["release"].set()
+    return {"reply": "released"}

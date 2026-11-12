@@ -40,6 +40,8 @@ from test_http_gate import Budget
 from test_langgraph import Shape, base_tool, module
 from test_mcp import library as mcp_library
 
+PLAIN = state.Plain()  # one plain request, still being served
+
 API = "https://api.test/items"
 
 
@@ -96,7 +98,7 @@ def joined(run: state.RunState) -> contextvars.Context:
 
 def plain() -> contextvars.Context:
     context = contextvars.copy_context()
-    context.run(state.SLOT.set, state.PLAIN)
+    context.run(state.SLOT.set, PLAIN)
     return context
 
 
