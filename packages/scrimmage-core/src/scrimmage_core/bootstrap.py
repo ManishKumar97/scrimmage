@@ -51,6 +51,20 @@ def stop(message: str) -> NoReturn:
     os._exit(1)
 
 
+HELPERS = (
+    "from multiprocessing.resource_tracker import main",
+    "from multiprocessing.forkserver import main",
+    "loky.backend.resource_tracker import main",
+)
+
+
+def multiprocessing_helper() -> bool:
+    """A helper process multiprocessing or loky starts, which inherits the service's
+    environment: Scrimmage stays off in it, so it never starts a helper of its own."""
+    line = " ".join(getattr(sys, "orig_argv", []))
+    return any(helper in line for helper in HELPERS)
+
+
 def service_stop(message: str) -> NoReturn:
     """A service process whose start is wrong: it stops before it serves a request."""
     print(f"scrimmage: {message}; the service stops before it serves a request", file=sys.stderr)
@@ -176,6 +190,8 @@ def start_service() -> None:
     """A service process: the uvicorn supervisor, each worker, a reloader. None has a run; each
     request brings its own. Nothing here asks the runner for anything, so a service with no
     runner serves every request without the header as it would without Scrimmage."""
+    if multiprocessing_helper():
+        return  # Python's own helper, such as the resource tracker: it runs no team code
     # Only a service needs these, and a function or a script must not pay for their import.
     from scrimmage_core import asgi_gate, executor
 

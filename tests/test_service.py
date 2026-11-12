@@ -232,6 +232,36 @@ def test_uvicorn_workers_start_in_service_mode_not_as_children(lab: Lab) -> None
     assert not any(x.get("notice") == "process" for x in lines)  # no worker joined as a child
 
 
+def trackers_in(folder: Path) -> list[int]:
+    """The resource trackers running with this folder as their working folder."""
+    found: list[int] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            line = (entry / "cmdline").read_bytes().replace(b"\0", b" ")
+            here = os.readlink(entry / "cwd")
+        except OSError:  # gone, or not ours to read
+            continue
+        if b"resource_tracker import main" in line and Path(here) == folder:
+            found.append(int(entry.name))
+    return found
+
+
+@pytest.mark.design("service.resource_tracker")
+@pytest.mark.parametrize("workers", [1, 2])
+def test_a_service_starts_one_resource_tracker_and_the_tracker_starts_none(
+    lab: Lab, workers: int
+) -> None:
+    """The service starts the shared tracker as it starts; the tracker inherits the
+    service's environment, and Scrimmage stays off in it, so it starts no tracker of its own."""
+    service = lab.start(workers=workers)
+    first = trackers_in(lab.root)
+    # Counting is what this checks: a tracker that started one would show more by now.
+    threading.Event().wait(1.0)
+    assert len(first) == 1 and trackers_in(lab.root) == first, (first, service.text[-2000:])
+
+
 @pytest.mark.design("service.active_line")
 def test_the_active_line_prints_only_where_the_entry_gate_is(lab: Lab) -> None:
     service = lab.start(workers=2)
