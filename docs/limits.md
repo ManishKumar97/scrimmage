@@ -131,6 +131,8 @@
   A kept value, such as a paging token, ends where a field name or a key shape begins in it, and the rest is read again: `next_page_token=ab,password=x` keeps `next_page_token=ab,` and removes the password.
   A field name begins there as it does anywhere else, after any character that is not a letter, a digit, `_` or a backslash, so `next_page_token=a/token=b` loses `token=b`, and `next_page_token=a_token=b` is read as the field `a_token=b`, which is removed.
   A key shape such as `sk-`, `AKIA` or `ghp_` is removed anywhere in a kept value, even glued to a letter.
+  In text that is not valid JSON, such as a log that cut a JSON body off, a raw `\uXXXX` escape is a break before a name, whatever it holds: `psql\u0020password=x` and `a=1\u0026token=x` lose the value.
+  An escape inside a name, as in `p\u0061ssword=x`, is not read as a name there, since no JSON writer escapes an ASCII letter; in a text that is JSON as a whole the escape is undone first, and the name is found.
   An edit to a string that holds a removed secret inside a JSON text is refused as a whole, even beside the secret; the other strings of that JSON text stay open.
   Redaction is a heuristic on known shapes.
 

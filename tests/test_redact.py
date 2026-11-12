@@ -1262,7 +1262,14 @@ def test_continuations_are_read_in_linear_time_when_quotes_alternate(
 
 @pytest.mark.design("security.redaction_shapes")
 @pytest.mark.parametrize(
-    "unit", ["is_secret=1,", "next_page_token=a", "g(token=a,", "is_secret=[removed]a,"]
+    "unit",
+    [
+        "is_secret=1,",
+        "next_page_token=a",
+        "g(token=a,",
+        "is_secret=[removed]a,",
+        "is_secret=1\\u002c",
+    ],
 )
 def test_a_run_of_kept_names_is_read_in_linear_time(
     monkeypatch: pytest.MonkeyPatch, unit: str
@@ -1309,6 +1316,69 @@ def test_no_kept_value_shields_a_secret_after_an_escape_and_any_glue() -> None:
                             assert prefix in out, (mode, text, out)
                     checked += 1
     assert checked > 9000, checked
+
+
+# Escapes that a text which is not valid JSON, such as a log that cut a JSON body off, still
+# holds raw: each one is a word break before a name, as a space is.
+SEPARATORS = [
+    f"\\u{code}" for code in ("0020", "002c", "002C", "0026", "003b", "000a", "0041", "00e9")
+]
+SEPARATED_PREFIXES = ["", "psql", "ab", '{"cmd": "psql', *KEPT_PREFIXES]
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_no_secret_hides_behind_an_escaped_or_encoded_separator() -> None:
+    """Every prefix, separator, glue and secret shape, in plain text, in a string read out of
+    JSON, in JSON text and in a Python value: the secret goes."""
+    modes = {
+        "plain": redact,
+        "decoded": lambda text: redacted(text, decoded=True)[0],
+        "json": lambda text: redact(json.dumps({"l": text})),
+        "python value": lambda text: json.dumps(capture.clean({"v": text})[0]),
+    }
+    checked = 0
+    for prefix in SEPARATED_PREFIXES:
+        for separator in SEPARATORS:
+            for glue in ("", ",", " ", "/", "b,"):
+                for shape, secret in SECRET_SHAPES:
+                    # The separator stands where by_design_not_a_secret has an escape.
+                    if by_design_not_a_secret(prefix, separator, glue, shape):
+                        continue
+                    text = prefix + separator + glue + shape
+                    for mode, clean in modes.items():
+                        out = clean(text)
+                        assert secret not in out, (mode, text, out)
+                    checked += 1
+    assert checked > 2000, checked
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            '{"cmd": "psql\\u0020password=hunter2 -h db',
+            '{"cmd": "psql\\u0020[secret removed] -h db',
+        ),
+        ("ab\\u002cpassword=HUNTER2", "ab\\u002c[secret removed]"),
+        ("a=1\\u0026token=HUNTER2", "a=1\\u0026[secret removed]"),
+        ("next_page_token=ab\\u002cpassword=HUNTER2", "next_page_token=ab\\u002c[secret removed]"),
+        # an escaped letter before a name is a break too, and only removes more
+        ("ab\\u0041password=HUNTER2", "ab\\u0041[secret removed]"),
+    ],
+)
+def test_a_name_begins_after_a_raw_unicode_escape(text: str, expected: str) -> None:
+    assert redact(text) == expected
+    assert redacted(text, decoded=True)[0] == expected
+    assert [rule for _, _, rule in redact_module.spans(text)] == ["form-field"]
+
+
+def test_an_escaped_letter_inside_a_name_is_read_only_once_the_json_is_read() -> None:
+    """No JSON writer escapes an ASCII letter, so plain text keeps p\\u0061ssword= as it is,
+    as docs/limits.md says. Read out of JSON it is password=, and goes."""
+    text = "p\\u0061ssword=HUNTER2"
+    assert redact(text) == text
+    assert redact('{"l": "' + text + '"}') == '{"l": "[secret removed]"}'
 
 
 ESCAPED_QUOTE_LEAK = r"password=abc\"2zz"  # a quote escaped inside a value

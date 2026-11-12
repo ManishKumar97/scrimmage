@@ -27,7 +27,11 @@ class Secret(NamedTuple):
 # the fixed list of glued env names: PGPASSWORD, PGPASS, MYSQL_PWD, authtoken, accesstoken.
 # These prefixes are harmless and are kept: the paging names (next_page_token), is_, has_,
 # top_, max_, min_, num_ and n_, and the tokenizer names (eos_token, pad_token). After a JSON
-# \n the name also starts, and a backslash before it does not.
+# \n, \r, \t or \uXXXX escape the name also starts, and a backslash before it does not. The
+# escape is a break whatever it holds: Go writes & as \u0026, and an escaped letter before a
+# name only removes more. An escape inside a name, as in p\u0061ssword=, is not read as one
+# in plain text: no JSON writer escapes an ASCII letter, and a string read out of JSON has it
+# undone already.
 # The value is a quoted string up to its closing quote, a <...>, or a run of characters that
 # is not a space, &, quote, bracket or backslash. A raw quote opens a value only when the name
 # is not itself inside that quote, so the quote that closes a string is not taken for one.
@@ -44,7 +48,7 @@ HARMLESS = "is|has|top|max|min|num|n"
 HARMLESS_TOKEN = "next|page|continuation|pagination|sync|cursor|eos|bos|pad|unk|sep|cls"
 MARKER = r"\[(?:secret )?removed\]"
 NAME = (
-    r"(?:(?<![A-Za-z0-9_\\])|(?<=\\[nrt]))"
+    r"(?:(?<![A-Za-z0-9_\\])|(?<=\\[nrt])|(?<=\\u[0-9a-fA-F]{4}))"
     rf"(?ai:(?:[A-Za-z0-9]+_)*{FIELD})"
 )
 # A quoted value may not hold another field name, so an unclosed quote that runs on to the
