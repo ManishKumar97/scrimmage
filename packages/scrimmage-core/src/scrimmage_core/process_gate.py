@@ -532,7 +532,8 @@ def thread_pool_init(method: Callable[..., Any], threads: type, ended: object) -
         if not in_service():
             return method(self, *args, **kwargs)
         was = getattr(_making, "queues", None)
-        made: list[object] = []  # every SimpleQueue made while this pool is made
+        # Every SimpleQueue made while this pool is made, with the ends its own init made.
+        made: list[tuple[object, object, object]] = []
         _making.queues = made
         try:
             method(self, *args, **kwargs)
@@ -546,13 +547,17 @@ def thread_pool_init(method: Callable[..., Any], threads: type, ended: object) -
         ends: list[object] = []
         for name in ("_inqueue", "_outqueue", "_change_notifier"):
             queue = getattr(self, name, None)
-            if not any(queue is new for new in made):
+            found = [(r, w) for q, r, w in made if q is queue]
+            if not found:
                 continue
-            mine = [
-                e
-                for e in (queue, getattr(queue, "_writer", None), getattr(queue, "_reader", None))
-                if e is not None
-            ]
+            reader, writer = found[0]
+            # Only the ends its init made, and only while they are still its ends: a context
+            # of the team's may have swapped in another queue's pipe.
+            if getattr(queue, "_reader", None) is not reader:
+                continue
+            if getattr(queue, "_writer", None) is not writer:
+                continue
+            mine = [e for e in (queue, writer, reader) if e is not None]
             ends += mine
             with contextlib.suppress(TypeError):
                 POOL_ENDS[queue] = tuple(mine)
@@ -588,8 +593,8 @@ def seen_made(init: Callable[..., Any]) -> Any:
     def noted(self: Any, *args: Any, **kwargs: Any) -> None:
         init(self, *args, **kwargs)
         making = getattr(_making, "queues", None)
-        if making is not None:
-            making.append(self)
+        if making is not None:  # the ends as its own init made them
+            making.append((self, getattr(self, "_reader", None), getattr(self, "_writer", None)))
 
     setattr(noted, GATED, True)
     return noted

@@ -1401,6 +1401,45 @@ def test_a_thread_pools_notifier_handed_in_by_a_context_is_never_its_own(
         stopped(pool)
 
 
+class WiredContext:
+    """A context of the team's whose SimpleQueue is new but runs on another queue's pipe."""
+
+    def __init__(self, shared: Any) -> None:
+        self.real = multiprocessing.get_context("spawn")
+        self.shared = shared
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.real, name)
+
+    def SimpleQueue(self) -> Any:  # multiprocessing's own name
+        queue: Any = self.real.SimpleQueue()  # made inside the pool's making
+        shared = self.shared
+        queue._reader, queue._writer, queue._poll = shared._reader, shared._writer, shared._poll
+        return queue
+
+
+@pytest.mark.design("service.thread_pool_in_a_run")
+def test_a_thread_pools_notifier_wired_to_a_team_pipe_never_makes_that_pipe_its_own(
+    service: state.ProcessState,
+) -> None:
+    """Only the ends the notifier's own init made are the pool's; a pipe a context put in
+    their place stays decided."""
+    shared: Any = multiprocessing.get_context("spawn").SimpleQueue()
+
+    class Threads(multiprocessing.pool.ThreadPool):
+        def __init__(self) -> None:
+            multiprocessing.pool.Pool.__init__(self, 1, context=WiredContext(shared))
+
+    pool = plain(Threads)
+    try:
+        run = a_run(service)
+        assert pool._change_notifier._writer is shared._writer  # type: ignore[attr-defined]
+        assert "inside a test run" in refused(run, lambda: shared._writer.send("run's data"))
+    finally:
+        plain(pool.terminate)
+        stopped(pool)
+
+
 @pytest.mark.design("service.no_inherited_exemption")
 def test_a_subclass_of_a_pools_thread_type_is_never_the_pools_own(
     service: state.ProcessState,
