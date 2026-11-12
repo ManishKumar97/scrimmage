@@ -29,6 +29,7 @@ from scrimmage_core.config import Mock, ModelHost
 from scrimmage_core.control import ControlServer
 from scrimmage_core.plan import Plan
 from scrimmage_core.records import RecordStore
+from service_harness import eventually
 
 pytestmark = pytest.mark.slow
 BIN = Path(sys.executable).parent
@@ -608,7 +609,9 @@ def test_a_service_test_answers_its_runs_and_keeps_the_setup_record(bench: Bench
     assert all(summaries[r]["outcome"] == "answered" for r in runs)
 
 
-def a_service_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+def a_service_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, address: str = "127.0.0.1:9"
+) -> Any:
     """A runner for a service test, with a long grace and wait, and no service."""
     from scrimmage_core import config as settings
     from scrimmage_core import runner
@@ -620,11 +623,61 @@ def a_service_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setenv("SCRIMMAGE_CONTROL_URL", f"http://127.0.0.1:{free_port()}")
     path = tmp_path / "service.toml"
     path.write_text(
-        '[agent]\nservice = "http://127.0.0.1:9/chat"\nbody = {message = "{question}"}\n'
+        f'[agent]\nservice = "http://{address}/chat"\nbody = {{message = "{{question}}"}}\n'
         'answer = "reply"\nrecord_grace_s = 30\nrecord_wait_s = 30\n\n'
         '[[test]]\nname = "t"\nquestion = "q"\nexpect = ["x"]\n'
     )
     return runner.Runner(settings.load(path))
+
+
+@pytest.mark.design("service.waits_to_listen")
+def test_ctrl_c_ends_the_wait_for_a_service_to_listen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from scrimmage_core import runner
+
+    made = a_service_runner(tmp_path, monkeypatch)  # nothing listens at 127.0.0.1:9
+    stopped: list[BaseException] = []
+    said: list[str] = []
+
+    def check() -> None:
+        try:
+            made.check_service()
+        except BaseException as exc:  # what ended the wait
+            stopped.append(exc)
+
+    def waiting_line() -> bool:
+        said.append(capsys.readouterr().err)
+        return "waiting for 127.0.0.1:9 to listen" in "".join(said)
+
+    waiting = threading.Thread(target=check)
+    began = time.monotonic()
+    try:
+        waiting.start()
+        eventually(waiting_line)
+        made.stop_flag.append("SIGINT")
+        made.cancel()  # as the runner's watcher does on Ctrl-C
+        waiting.join(5)
+        assert not waiting.is_alive() and time.monotonic() - began < 10
+        assert isinstance(stopped[0], runner.Interrupted) and str(stopped[0]) == "SIGINT"
+    finally:
+        made.server.server.server_close()
+
+
+@pytest.mark.design("service.waits_to_listen")
+def test_an_address_that_cannot_be_reached_is_named_as_that(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from scrimmage_core import service_client
+
+    made = a_service_runner(tmp_path, monkeypatch, "no-such-host.invalid:8765")
+    try:
+        with pytest.raises(service_client.Setup) as setup:
+            made.check_service()
+        assert setup.value.code == 3 and "cannot reach the service's address" in str(setup.value)
+        assert "took the probe's connection" not in str(setup.value)
+    finally:
+        made.server.server.server_close()
 
 
 @pytest.mark.design("service.record_wait_bounds")

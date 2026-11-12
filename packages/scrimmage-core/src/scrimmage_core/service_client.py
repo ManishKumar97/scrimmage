@@ -45,6 +45,7 @@ class Reply:
     body: bytes = b""
     failed: str | None = None  # the connection was refused, reset, or broke
     timed_out: bool = False
+    connected: bool = True  # False: no connection was made at all
 
     @property
     def gate_refused(self) -> str | None:
@@ -108,6 +109,11 @@ def target(agent: Agent) -> tuple[str, int, str]:
 def post(agent: Agent, headers: dict[str, str], body: bytes, timeout: float) -> Reply:
     host, port, path = target(agent)
     conn = http.client.HTTPConnection(host, port, timeout=timeout)
+    try:
+        conn.connect()
+    except OSError as exc:  # refused, no such host, unreachable, or the connect timed out
+        conn.close()
+        return Reply(failed=f"{type(exc).__name__}: {exc}", connected=False)
     try:
         conn.request("POST", path, body=body, headers=headers)
         response = conn.getresponse()

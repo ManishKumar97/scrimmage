@@ -627,8 +627,13 @@ class Runner:
         _, _, path = service_client.target(agent)
         report, reply = service_client.probe(agent, self.token)
         deadline = time.monotonic() + READY_S
+        if service_client.not_listening(reply):
+            host, port, _ = service_client.target(agent)
+            print(f"scrimmage: waiting for {host}:{port} to listen", file=sys.stderr, flush=True)
         # A service started just before the test may not listen yet: ask again until it does.
         while service_client.not_listening(reply) and time.monotonic() < deadline:
+            if self.cancelled or self.stop_flag:  # Ctrl-C or SIGTERM ends the wait
+                raise Interrupted(self.stop_flag[0] if self.stop_flag else "SIGINT")
             time.sleep(READY_STEP_S)  # nothing tells a closed port it has opened
             report, reply = service_client.probe(agent, self.token)
         if service_client.not_listening(reply):
@@ -637,6 +642,12 @@ class Runner:
                 f"nothing listens at the service's address for POST {path}, after {READY_S:g} s "
                 f"of asking ({reply.failed}): the service is not started, is still starting, "
                 "or listens at another address",
+            )
+        if not reply.connected:
+            raise service_client.Setup(
+                3,
+                f"cannot reach the service's address for POST {path} ({reply.failed}): no such "
+                "host, or no route to it",
             )
         if reply.failed is not None or reply.timed_out:
             raise service_client.Setup(
