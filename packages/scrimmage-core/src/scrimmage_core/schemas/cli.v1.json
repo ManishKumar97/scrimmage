@@ -511,6 +511,22 @@
           "type": "integer",
           "minimum": 1,
           "description": "The format of test_sha256. A comparison across two formats cannot tell whether the test changed."
+        },
+        "control_busy": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "The sum over the row's runs of each run's control_busy; null when no run reported one."
+        },
+        "control_p99_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "The largest control_p99_ms of the row's runs; null when no run reported one."
         }
       }
     },
@@ -572,6 +588,22 @@
         "mock_miss_count": {
           "type": "integer",
           "minimum": 0
+        },
+        "control_busy": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Control requests the process that served the run refused itself, for no free slot of its 8, from the run's claim to its close. It describes the process: two runs in one worker count the same requests."
+        },
+        "control_p99_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "The 99th percentile round trip of that process's control requests in the same window, in milliseconds; null when there were none."
         }
       }
     },

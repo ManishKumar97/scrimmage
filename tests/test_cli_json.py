@@ -462,7 +462,7 @@ def test_each_enum_lists_every_value_the_code_gives() -> None:
     assert found["found_by"] == [*init_module.FOUND_BY] * 3  # a tool's, an adapter tool's, a host's
     assert found["problem"] == list(init_module.PROBLEMS)
     source = Path(runner.__file__)
-    assigned = constants_assigned(source, "one", "outcome")
+    assigned = constants_assigned(source, "concluded", "outcome")  # where one() and served() end
     assert assigned and assigned <= set(outcomes.OUTCOMES)  # an empty lookup proves nothing
     reasons = stopped_by_values(source)
     assert runner.UNKNOWN_LABEL in reasons and reasons <= set(runner.STOPPED_BY), reasons
@@ -681,6 +681,8 @@ def test_a_row_carries_its_runs_and_the_rules_they_broke() -> None:
         "cost_usd": 0.00012,
         "answer_preview": "It shipped, and arrives on Oct 30.",
         "mock_miss_count": 0,
+        "control_busy": None,  # this hand-built run has no last batch
+        "control_p99_ms": None,
     }
     assert doc["records"] == str(FOLDER) and doc["stopped_by"] is None
     assert doc["budget_usd"] == 5.0 and doc["tests"] == 1

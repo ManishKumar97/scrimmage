@@ -168,3 +168,4 @@ _.answer_in_threads  # tests/example/acme/guarded.py: a test's scrimmage.toml na
 _.__call__  # scrimmage_core/asgi_gate.py: the server calls it, as an ASGI app
 _.chat_sync  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
 _.chat_blocking  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
+_.dies  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls

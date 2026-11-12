@@ -55,6 +55,7 @@ class Run:
     # The claiming process's control load from the run's claim to its close: its last batch.
     control_busy: int | None = None
     control_p99_ms: float | None = None
+    ended: threading.Event = field(default_factory=threading.Event)  # the claimer's last batch
 
 
 class ControlServer:
@@ -65,7 +66,9 @@ class ControlServer:
         on_refused: Callable[[str, str], None] = lambda run, reason: None,
         clock: Callable[[], float] = time.time,
         ledger: Ledger | None = None,
+        address: tuple[str, int] = ("127.0.0.1", 0),
     ) -> None:
+        """address: where to listen; a service test binds the one its service was told."""
         self.token = token
         self.store = store
         self.on_refused = on_refused
@@ -74,7 +77,7 @@ class ControlServer:
         self.nonces = protocol.NonceStore()
         self.runs: dict[str, Run] = {}
         self.lock = threading.Lock()
-        self.server = _Server(("127.0.0.1", 0), _handler(self))
+        self.server = _Server(address, _handler(self))
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
     @property
@@ -267,6 +270,8 @@ class ControlServer:
             if made is not None:
                 state.made[proc_key(batch.get("proc"))] = made
                 state.control_busy, state.control_p99_ms = busy, p99
+                if claimer is not None:
+                    state.ended.set()
             accepted = self.store.add(run, mine)
             reasons = [
                 str(x.get("reason", "unlisted")) for x in mine if x.get("action") == "refused"

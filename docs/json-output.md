@@ -146,6 +146,8 @@ Each row's keys are the table's column names, with `cost_usd` for `cost`:
 | `run_details` | One object per run, below. |
 | `test_sha256` | A hash of what the row was tested by: the question, the rules that judge the row, the mocks, `run_timeout`, `real` and `tools`. Not the agent's code. A comparison uses it to tell a changed test from a changed agent. |
 | `test_sha256_v` | The format of `test_sha256`, 1. A comparison across two formats cannot tell whether the test changed. |
+| `control_busy` | The sum of the row's runs' `control_busy`, or `null` when no run reported one. |
+| `control_p99_ms` | The largest of the row's runs' `control_p99_ms`, or `null`. |
 
 Each run in `run_details`:
 
@@ -159,6 +161,8 @@ Each run in `run_details`:
 | `cost_usd` | What this run's model calls cost. |
 | `answer_preview` | The answer with secrets removed, cut at 200 characters, as a record's preview is. The full answer is in the record. `null` with no answer. |
 | `mock_miss_count` | This run's calls that had a mock on their label and matched none. |
+| `control_busy` | Control requests the process that served this run refused itself, for no free slot of its 8, from the run's start to its close. It describes the process: two runs that overlap in one worker count the same requests. |
+| `control_p99_ms` | The 99th percentile of that process's control round trips in the same window, in milliseconds, or `null`. A value rising toward 80 ms is the warning before runs end as infrastructure errors with `plan-unavailable`. |
 
 A file that does not load gives the envelope with `rows: []`, `records: null` and each problem in `mistakes`, with exit 2.
 With `--json`, once Scrimmage has started, Ctrl-C or SIGTERM while Scrimmage loads, while the file is read or while runs go stops the command with `status` `infra`, exit 3, `rows: []` and the reason in `infra`, such as `stopped by SIGTERM`.

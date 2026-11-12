@@ -7,12 +7,14 @@ it as a bearer token. /echo answers with what it got, for the plain-request test
 """
 
 import asyncio
+import contextlib
 import os
 import threading
 import time
+from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from acme.agent import answer
@@ -91,6 +93,52 @@ async def child() -> dict[str, str]:
     except Exception as exc:  # a refusal, as the agent would see it
         return {"reply": f"{type(exc).__name__}: {exc}"}
     return {"reply": done.stdout.decode().strip()}
+
+
+@app.post("/lost")
+async def lost(ask: Ask) -> dict[str, str]:
+    """The bot runs in a fresh, empty context: its model call is outside any run."""
+    import contextvars
+
+    def bot() -> str:
+        return contextvars.Context().run(answer, ask.message)
+
+    return {"reply": await asyncio.get_running_loop().run_in_executor(None, bot)}
+
+
+@app.post("/stream")
+async def stream(ask: Ask) -> Any:
+    from fastapi.responses import StreamingResponse
+
+    async def events() -> AsyncIterator[str]:
+        yield f"data: {ask.message}\n\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream")
+
+
+@app.post("/background")
+async def background(ask: Ask, tasks: BackgroundTasks) -> dict[str, str]:
+    """Answers at once; checks the stock half a second after the reply, as an audit job."""
+    from acme import tools
+
+    def later() -> None:
+        time.sleep(0.5)
+        with contextlib.suppress(Exception):  # a refusal: the reply has gone already
+            tools.check_inventory("SKU-42")
+
+    tasks.add_task(later)
+    reply = await asyncio.get_running_loop().run_in_executor(None, answer, ask.message)
+    return {"reply": reply}
+
+
+@app.post("/dies")
+async def dies(ask: Ask, tasks: BackgroundTasks) -> dict[str, str]:
+    """Answers; for a question that asks it to, the worker then ends before the run's record
+    closes, so its last batch never comes."""
+    reply = await asyncio.get_running_loop().run_in_executor(None, answer, ask.message)
+    if "die" in ask.message:
+        tasks.add_task(lambda: os._exit(1))
+    return {"reply": reply}
 
 
 @app.api_route("/echo", methods=["GET", "POST"])

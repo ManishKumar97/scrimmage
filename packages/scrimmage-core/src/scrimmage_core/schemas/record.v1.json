@@ -671,6 +671,19 @@
                 "string",
                 "null"
               ]
+            },
+            "control_busy": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "From the run's last batch: control requests the process refused itself, for no free slot, from the run's start or claim to its close."
+            },
+            "control_p99_ms": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "description": "From the run's last batch: the 99th percentile control round trip in that window, in milliseconds."
             }
           }
         }

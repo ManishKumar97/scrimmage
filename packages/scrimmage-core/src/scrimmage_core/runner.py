@@ -24,9 +24,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TextIO, cast
+from typing import Any, TextIO, cast
 
-from scrimmage_core import judge, labels
+from scrimmage_core import judge, labels, protocol, service_client
 from scrimmage_core import plan as planner
 from scrimmage_core.budget import Ledger
 from scrimmage_core.config import (
@@ -177,6 +177,9 @@ class RunResult:
     writes: dict[str, int] = field(default_factory=dict[str, int])
     # A fault changed a result and no model request after it carried the text: a heuristic.
     undelivered: bool = False
+    # The control load of the process that served the run, from its last batch.
+    control_busy: int | None = None
+    control_p99_ms: float | None = None
 
     @property
     def miss_count(self) -> int:
@@ -185,6 +188,19 @@ class RunResult:
     @property
     def exercised(self) -> bool:
         return is_exercised(self.fault_fired, self.outcome)
+
+
+@dataclass
+class Ended:
+    """How a run ended, before its record is read: a program's exit or a service's reply."""
+
+    answer: str | None
+    timed_out: bool
+    ok: bool  # the program exited 0, or the service answered 2xx with an answer
+    kept_out: list[dict[str, object]]
+    left: list[tuple[int, str]]
+    infra: bool = False  # the gate's own 503, or the connection failed
+    mistakes: list[str] = field(default_factory=list[str])
 
 
 class Runner:
@@ -213,12 +229,27 @@ class Runner:
         if not ignore.exists():
             ignore.write_text("*\n")
         self.token = secrets.token_hex(32)
+        address = ("127.0.0.1", 0)
+        if config.agent.service:
+            # A service was started before this runner, with its token and control address:
+            # the runner reads the same two from its own environment, and binds that address.
+            self.token = service_client.runner_token()
+            address = service_client.control_address()
         # The values ${NAME} filled in: this test's own, removed from what the runner writes.
         self.scrub = config.scrub
         self.ledger = Ledger(config.agent.max_cost_usd)
-        self.server = ControlServer(
-            self.token, self.store, on_refused=self._refused, ledger=self.ledger
-        )
+        try:
+            self.server = ControlServer(
+                self.token,
+                self.store,
+                on_refused=self._refused,
+                ledger=self.ledger,
+                address=address,
+            )
+        except OSError as exc:  # the service's control port is held by another process
+            raise service_client.Setup(
+                3, f"SCRIMMAGE_CONTROL_URL's port {address[1]} cannot be bound: {exc.strerror}"
+            ) from None
         self.answers = Path(tempfile.mkdtemp(prefix="scrimmage-answers-"))
         self.lock = threading.Lock()
         self.ended = False  # run_all has read and cleared stop_flag; the watcher adds nothing
@@ -297,10 +328,13 @@ class Runner:
             plan = dataclasses.replace(plan, record=True)
         if self.probe:
             plan = dataclasses.replace(plan, probe=True)
-        self.server.open_run(run, row.name, plan.to_json())
+        service = bool(self.config.agent.service)
+        self.server.open_run(run, row.name, plan.to_json(), service=service)
         if self.cancelled:
             self.server.close_run(run)
             return None
+        if service:
+            return self.served(run, row)
         command = [
             sys.executable,
             "-m",
@@ -343,15 +377,27 @@ class Runner:
         if state.broken or state.refusals or kept_out:
             reason = "other_python" if kept_out else (state.refusals or ["structure"])[0]
             self._refused(run, "structure" if state.broken else reason)
-        lines = self.store.lines(run)
         answer = self.answer_of(run, proc.returncode)
         for written in ("log", "out"):  # read the answer first: it is judged as it was
             self.store.scrub_file(self.folder / f"{run}.{written}")
+        ended = Ended(answer, timed_out, proc.returncode == 0, kept_out, left)
+        return self.concluded(run, row, state, ended)
+
+    def concluded(self, run: str, row: planner.Row, state: Any, ended: "Ended") -> RunResult:
+        """A run's outcome, result and summary, from its record and how it ended: a program
+        that exited, or a service's reply."""
+        lines = self.store.lines(run)
+        answer, timed_out, kept_out, left = (
+            ended.answer,
+            ended.timed_out,
+            ended.kept_out,
+            ended.left,
+        )
         # Another run stopped the test and this run was stopped with it. That says
         # nothing about this run, and it never got to send its last batch.
         stopped = (
             self.cancelled and not timed_out and not state.refused and not state.broken
-        ) and proc.returncode != 0
+        ) and not ended.ok
         ended_itself = not timed_out and not state.refused and not stopped
         # Every process that ended by itself sent a last batch saying how many lines it
         # made. A missing batch, or fewer lines received from a process, is a gap.
@@ -375,7 +421,7 @@ class Runner:
         numbers = None if refusal is None else cast(dict[str, object], refusal["budget"])
         if stopped:
             outcome = "stopped"
-        elif not state.fetched or incomplete or real_errors or broken or no_plan:
+        elif not state.fetched or incomplete or real_errors or broken or no_plan or ended.infra:
             outcome = "infrastructure error"
         elif first in BUDGET_REASONS:
             outcome = "budget reached" if numbers and reached(numbers) else "not reserved"
@@ -383,7 +429,7 @@ class Runner:
             outcome = "refused call"
         elif timed_out:
             outcome = "timed out"
-        elif proc.returncode == 0 and answer is not None:
+        elif ended.ok and answer is not None:
             outcome = "answered"
         else:
             outcome = "crashed"
@@ -394,7 +440,7 @@ class Runner:
         # How many calls had their real code or request run beneath a carried fault.
         calls["under_real"] = sum(1 for line in lines if line.get("under") == "real")
         fired = fault_fired(row.fault is not None, calls["fault"])
-        mistakes = [str(line["mistake"]) for line in lines if "mistake" in line]
+        mistakes = [str(line["mistake"]) for line in lines if "mistake" in line] + ended.mistakes
         misses = [
             {
                 "call": str(x["call"]),
@@ -457,9 +503,154 @@ class Runner:
             "broken_rules": [{"kind": b.kind, "text": b.text} for b in result.judgement.broken],
             "left_out": result.judgement.left_out,
         }
+        # The claiming process's control load in this run's window, from its last batch.
+        result.control_busy, result.control_p99_ms = state.control_busy, state.control_p99_ms
+        if state.control_busy is not None:
+            summary.update(control_busy=state.control_busy, control_p99_ms=state.control_p99_ms)
         self.store.close_run(run, row.test.name, row.name, summary)
         self.check_labels(result)
         return result
+
+    def served(self, run: str, row: planner.Row) -> RunResult:
+        """A service run: one POST, then the record's wait. The parallel slot is this thread,
+        so the wait for the record runs while the next run's request goes."""
+        agent = self.config.agent
+        header = f"{run}.{protocol.run_mac(self.token, run)}"
+        reply = service_client.run_request(agent, header, row.test.question, agent.run_timeout)
+        state = self.wait_record(run)
+        ok = reply.status is not None and 200 <= reply.status < 300
+        answer, infra = None, reply.failed is not None
+        mistakes: list[str] = []
+        gate = reply.gate_refused
+        streamed = ok and service_client.streamed(reply, agent)
+        if gate is not None:
+            infra = True
+            mistakes.append(f"the service's gate answered 503 {gate}")
+        elif ok and not streamed:
+            answer, wrong = service_client.answer_of(reply, agent)
+            if wrong is not None:
+                mistakes.append(wrong)
+        if state.broken or state.refusals:
+            self._refused(run, "structure" if state.broken else state.refusals[0])
+        ended = Ended(answer, reply.timed_out, ok and answer is not None, [], [], infra, mistakes)
+        result = self.concluded(run, row, state, ended)
+        unclaimed = not state.fetched and reply.status is not None and gate is None
+        if unclaimed or streamed:
+            with self.lock:
+                self.cancelled = True  # under this lock, so no run starts from here on
+        if unclaimed:
+            # A process answered without Scrimmage, such as a worker started another way:
+            # every later run could be the same, so none is sent.
+            raise service_client.Setup(
+                3,
+                f"{run} was answered with {reply.status} but its plan was never claimed, so a "
+                "process without Scrimmage served it; no further run was sent",
+            )
+        if streamed:
+            raise service_client.Setup(
+                2,
+                f"{run}: the service streamed its reply ({reply.headers.get('content-type')}), "
+                "which this version does not judge; one run is one JSON or text reply",
+            )
+        return result
+
+    def check_service(self) -> None:
+        """The probe, then the setup request, before any run. Either can stop the test:
+        exit 3 when no gated service answers, exit 2 for a mistake in the setup."""
+        agent = self.config.agent
+        _, _, path = service_client.target(agent)
+        report = service_client.probe(agent, self.token)
+        if report is None or not {"asgi", "starlette"} & set(
+            cast(list[str], report.get("gates") or [])
+        ):
+            raise service_client.Setup(
+                3,
+                f"x-scrimmage-run does not reach Scrimmage in the service at POST {path}: a proxy "
+                "dropped the header, the service was not started with scrimmage-run and "
+                "SCRIMMAGE_SERVICE=1, or its token differs",
+            )
+        theirs = sorted(str(t) for t in cast(list[object], report.get("tools") or []))
+        ours = sorted(agent.tool_names())
+        if theirs != ours:
+            names = planner.tools_text(agent.tools, agent.renames)
+            imports = ",".join(agent.allowed_imports())
+            raise service_client.Setup(
+                2,
+                f"the service gates the tools {theirs or 'none'}, and this file lists "
+                f"{ours or 'none'}; "
+                f"start it with SCRIMMAGE_TOOLS={names} and SCRIMMAGE_ALLOW_IMPORTS={imports}",
+            )
+        self.setup_request()
+
+    def setup_request(self) -> None:
+        """The first test's baseline, sent once as setup-<hex>: its record is kept, its cost
+        counts, and no row counts it. It must be claimed, answer 2xx, refuse nothing, call
+        the model inside the run, and see no call outside one."""
+        agent = self.config.agent
+        test = self.config.tests[0]
+        row = planner.Row(test, "baseline", None)
+        name = f"setup-{secrets.token_hex(6)}"
+        with self.lock:
+            self.row_of[name] = row
+        plan = planner.plan_for(self.config, row, name)
+        self.server.open_run(name, "setup", plan.to_json(), service=True)
+        header = f"{name}.{protocol.run_mac(self.token, name)}"
+        reply = service_client.run_request(agent, header, test.question, agent.run_timeout)
+        state = self.wait_record(name)
+        lines = self.store.lines(name)
+        summary: dict[str, object] = {"outcome": "setup", "status": reply.status}
+        self.store.close_run(name, test.name, "setup", summary)
+        gate = reply.gate_refused
+        if not state.fetched or gate is not None or reply.failed or reply.timed_out:
+            why = gate or reply.failed or ("timed out" if reply.timed_out else "never claimed")
+            raise service_client.Setup(
+                3, f"the setup request {name} was not served by Scrimmage: {why}"
+            )
+        refused = [x for x in lines if x.get("action") == "refused" and x.get("reason") != "orphan"]
+        if refused:
+            first = refused[0]
+            raise service_client.Setup(
+                2,
+                f"the setup request refused {first.get('call')}: "
+                f"{first.get('mistake') or first.get('error')}",
+            )
+        # The reply first: a service that rejected the request never reached its agent.
+        ok = reply.status is not None and 200 <= reply.status < 300
+        if (
+            not ok
+            or service_client.streamed(reply, agent)
+            or service_client.answer_of(reply, agent)[1]
+        ):
+            shown = redact(reply.body.decode("utf-8", "replace")[:200], self.scrub)
+            kind = reply.headers.get("content-type")
+            why = service_client.answer_of(reply, agent)[1] if ok else None
+            raise service_client.Setup(
+                2,
+                f"the setup request got {reply.status} ({kind}): {shown}"
+                + (f"; {why}" if why else ""),
+            )
+        outside = outside_entries(lines)
+        if not any(x.get("kind") == "model" for x in lines):
+            seen = "; a lost_context notice was seen" if outside else ""
+            raise service_client.Setup(
+                3,
+                "the setup request made no model call inside its run: the context is lost on the "
+                f"agent's main path, so every run would be an infrastructure error{seen}",
+            )
+        if outside:  # reads too: each would end every run open beside it
+            adds = "; ".join(f'add "{e}" to [agent] background_real if it is safe' for e in outside)
+            raise service_client.Setup(
+                2, f"while the setup request was open, calls were made outside any request: {adds}"
+            )
+
+    def wait_record(self, run: str) -> Any:
+        """Close the run once its claimer's last batch came, or record_grace_s plus
+        record_wait_s after the reply: a missing last batch is an incomplete record."""
+        agent = self.config.agent
+        known = self.server.runs[run]
+        if known.claimed_by is not None:
+            known.ended.wait(agent.record_grace_s + agent.record_wait_s)
+        return self.server.close_run(run)
 
     def real_writes_in(self, row: planner.Row, lines: list[dict[str, object]]) -> dict[str, int]:
         """The calls of an append or replace row that ran for real and could be writes: the
@@ -555,6 +746,8 @@ class Runner:
         release = nothing
         try:
             release = self._catch_signals()
+            if self.config.agent.service:
+                self.check_service()
             with ThreadPoolExecutor(max_workers=self.config.agent.parallel) as pool:
                 base = [row for row in rows if row.fault is None for _ in range(runs)]
                 results: list[RunResult | None] = []
@@ -1410,6 +1603,11 @@ def print_report(found: Report, out: TextIO) -> int:
     print("range: a 95% Wilson interval, from these runs alone", file=out)
     for line in found.failures:
         print(line, file=out)
+    for entry in found.rows:  # the cap of 8 filling, before runs fail on it
+        busy, p99 = control_load(entry.runs)
+        if busy:
+            shown = "unknown" if p99 is None else f"{p99:g}"
+            print(f"{entry.where}: control: {busy} busy, p99 {shown} ms", file=out)
     budget = config.agent.max_cost_usd
     limit = "no budget" if budget is None else f"a budget of ${budget:g}"
     print(f"model calls cost ${found.spent:.4f} of {limit}", file=out)
@@ -1494,6 +1692,8 @@ def row_json(entry: RowReport, agent: Agent) -> dict[str, object]:
         "run_details": [run_json(r) for r in mine],
         "test_sha256": row_hash(row.test, fault, agent),
         "test_sha256_v": HASH_VERSION,
+        "control_busy": control_load(mine)[0],
+        "control_p99_ms": control_load(mine)[1],
     }
 
 
@@ -1508,7 +1708,17 @@ def run_json(result: RunResult) -> dict[str, object]:
         "cost_usd": round(result.cost_usd, 8),
         "answer_preview": answer,
         "mock_miss_count": result.miss_count,
+        "control_busy": result.control_busy,
+        "control_p99_ms": result.control_p99_ms,
     }
+
+
+def control_load(runs: list[RunResult]) -> tuple[int | None, float | None]:
+    """A row's control load: the busy counts summed and the largest p99, of the runs that
+    reported one. Each describes the process that served it, not the run alone."""
+    busy = [r.control_busy for r in runs if r.control_busy is not None]
+    p99 = [r.control_p99_ms for r in runs if r.control_p99_ms is not None]
+    return (sum(busy) if busy else None), (max(p99) if p99 else None)
 
 
 def budget_line(reason: str, numbers: dict[str, object], agent: Agent) -> str:

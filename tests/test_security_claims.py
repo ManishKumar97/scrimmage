@@ -41,6 +41,8 @@ def test_the_only_connections_are_to_and_from_the_control_server() -> None:
     assert found == {
         ("client.py", "HTTPConnection"),
         ("control.py", "ThreadingHTTPServer"),
+        # The runner's own request to a team's service, at the address its file names.
+        ("service_client.py", "HTTPConnection"),
     }
     uses = {
         name

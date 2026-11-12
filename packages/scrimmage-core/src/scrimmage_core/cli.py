@@ -402,6 +402,7 @@ def run_test(
     path: Path, found: Found | None, compare: Path | None = None, cap: str | None = None
 ) -> int:
     from scrimmage_core import runner as running  # the heavy import waits until a test runs
+    from scrimmage_core import service_client
 
     try:
         config, problems = read(path)
@@ -430,6 +431,16 @@ def run_test(
         results = runner.run_all()
     except running.Interrupted as exc:
         stopped = f"stopped by {exc}; every run was stopped"
+    except service_client.Setup as setup:
+        # A service that is not ready: exit 2 for a mistake to fix, 3 when it is not gated.
+        if runner is not None:
+            runner.server.server.server_close()
+        told = redact.remove_values(str(setup), config.scrub)[0]
+        if found is None:
+            print(f"scrimmage: {told}", file=sys.stderr)
+            return setup.code
+        found.messages.append((MISTAKES if setup.code == MISTAKE else INFRA_ERRORS, told))
+        return setup.code
     except Exception as exc:  # the runner's own failure is never a result
         # A failure to start a run can quote its arguments, which can hold a value.
         failed = redact.remove_values(repr(exc), config.scrub)[0]

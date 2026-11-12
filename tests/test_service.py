@@ -308,3 +308,439 @@ def test_a_sync_endpoint_finds_its_plan_through_anyio(lab: Lab) -> None:
     assert status == 200, (reply, service.text[-3000:])
     calls = [x for x in lab.lines(name) if x.get("call") == "tool:get_order"]
     assert calls and calls[0]["action"] == "mock" and calls[0]["run"] == name
+
+
+# scrimmage test against a service: the probe, the setup request, each run's POST.
+
+FILE = """[agent]
+service = "http://127.0.0.1:PORTPATH"
+body    = {message = "{question}", session = "{session}"}
+answer  = "ANSWER"
+tools   = TOOL_LIST
+real    = ["tool:check_inventory", "process:uname"]
+model_hosts = [{host = "127.0.0.1", provider = "openai"}]
+runs = RUNS
+run_timeout = 30
+record_grace_s = GRACE
+record_wait_s = 2
+EXTRA
+[[test]]
+name     = "order-status"
+question = "Where is order 1234?"
+expect   = ["shipped"]
+
+[[test.mock]]
+call    = "tool:get_order"
+returns = "shipped, Oct 30"
+
+[[test.mock]]
+call    = "tool:get_stock"
+returns = {sku = "SKU-42", count = 12}
+"""
+
+
+class Forwarder:
+    """A standard-library proxy in front of the service. drop: it removes every x-scrimmage-*
+    header. runs_to: where it sends each run's request, apart from the probe and setup."""
+
+    def __init__(
+        self, service_port: int, *, drop: bool = False, runs_to: int | None = None
+    ) -> None:
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        forwarder = self
+        self.seen: list[str] = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                body = self.rfile.read(int(self.headers.get("content-length") or 0))
+                headers = {
+                    k: v for k, v in self.headers.items() if k.lower() not in ("host", "connection")
+                }
+                run = self.headers.get("x-scrimmage-run", "")
+                forwarder.seen.append(run)
+                if drop:
+                    headers = {
+                        k: v for k, v in headers.items() if not k.lower().startswith("x-scrimmage-")
+                    }
+                port = service_port
+                if runs_to is not None and run.startswith("run-"):
+                    port = runs_to
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
+                try:
+                    conn.request("POST", self.path, body=body, headers=headers)
+                    reply = conn.getresponse()
+                    data = reply.read()
+                    self.send_response(reply.status)
+                    for name, value in reply.getheaders():
+                        if name.lower() not in (
+                            "connection",
+                            "transfer-encoding",
+                            "date",
+                            "server",
+                        ):
+                            self.send_header(name, value)
+                    self.end_headers()
+                    self.wfile.write(data)
+                finally:
+                    conn.close()
+
+            def log_message(self, format: str, *args: object) -> None:
+                del format, args
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = int(self.server.server_address[1])
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join()
+
+
+class Ungated:
+    """A service that answers without Scrimmage: a worker started another way."""
+
+    def __init__(self, status: int, headers: dict[str, str], body: bytes) -> None:
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                self.rfile.read(int(self.headers.get("content-length") or 0))
+                self.send_response(status)
+                for name, value in {**headers, "content-length": str(len(body))}.items():
+                    self.send_header(name, value)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format: str, *args: object) -> None:
+                del format, args
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = int(self.server.server_address[1])
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join()
+
+
+class Bench:
+    """A service started for scrimmage test, the runner in this process, the fake model."""
+
+    def __init__(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any) -> None:
+        from conftest import ACME
+        from fakes.openai_server import FakeOpenAI
+
+        self.root = tmp_path / "acme-bot"
+        shutil.copytree(EXAMPLE, self.root, ignore=shutil.ignore_patterns("__pycache__"))
+        self.token_file = tmp_path / "token"
+        self.token_file.write_text(secrets.token_hex(32))
+        self.token_file.chmod(0o600)
+        self.control = f"http://127.0.0.1:{free_port()}"
+        self.fake = FakeOpenAI(ACME)
+        self.fake.start()
+        self.monkeypatch, self.capsys = monkeypatch, capsys
+        monkeypatch.setenv("SCRIMMAGE_TOKEN_FILE", str(self.token_file))
+        monkeypatch.setenv("SCRIMMAGE_CONTROL_URL", self.control)
+        self.services: list[Running] = []
+        self.closers: list[Any] = []
+
+    def start(self, **env: str) -> Running:
+        base = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
+        base.update(
+            PATH=f"{BIN}{os.pathsep}{base.get('PATH', '')}",
+            SCRIMMAGE_SERVICE="1",
+            SCRIMMAGE_TOKEN_FILE=str(self.token_file),
+            SCRIMMAGE_CONTROL_URL=self.control,
+            SCRIMMAGE_TOOLS=TOOLS,
+            SCRIMMAGE_ALLOW_IMPORTS="acme.",
+            OPENAI_BASE_URL=self.fake.base_url,
+            OPENAI_API_KEY="test",
+        )
+        base.update(env)
+        service = Running(self.root, {k: v for k, v in base.items() if v != ""}, [])
+        self.services.append(service)
+        assert service.ready.wait(60), service.text
+        return service
+
+    def test(
+        self,
+        port: int,
+        path: str = "/chat",
+        *,
+        runs: int = 1,
+        answer: str = "reply",
+        grace: float = 0.2,
+        tests: str = "",
+        json_out: bool = False,
+        parallel: int = 1,
+    ) -> tuple[int, str]:
+        from scrimmage_core.cli import main
+
+        text = FILE.replace("PORT", str(port)).replace("PATH", path)
+        text = text.replace("EXTRA", f"parallel = {parallel}")
+        text = text.replace("TOOL_LIST", json.dumps(TOOLS.split(",")))
+        text = text.replace("RUNS", str(runs)).replace("ANSWER", answer)
+        (self.root / "service.toml").write_text(text.replace("GRACE", str(grace)) + tests)
+        self.capsys.readouterr()
+        args = ["test", str(self.root / "service.toml"), *(["--json"] if json_out else [])]
+        code = main(args)
+        out = self.capsys.readouterr()
+        return code, out.out + out.err
+
+    def summaries(self) -> dict[str, dict[str, Any]]:
+        found: dict[str, dict[str, Any]] = {}
+        for path in (self.root / "scrimmage-runs").glob("*/*.jsonl"):
+            lines = [json.loads(x) for x in path.read_text().splitlines()]
+            found[path.stem] = lines[-1].get("summary") or {}
+        return found
+
+    def lines(self, name: str) -> list[dict[str, Any]]:
+        path = next((self.root / "scrimmage-runs").glob(f"*/{name}.jsonl"))
+        return [json.loads(x) for x in path.read_text().splitlines()]
+
+    def close(self) -> None:
+        for closer in self.closers:
+            closer.close()
+        for service in self.services:
+            service.stop()
+        self.fake.stop()
+
+
+@pytest.fixture
+def bench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any) -> Iterator[Bench]:
+    made = Bench(tmp_path, monkeypatch, capsys)
+    try:
+        yield made
+    finally:
+        made.close()
+
+
+@pytest.mark.design("service.runs_answered")
+def test_a_service_test_answers_its_runs_and_keeps_the_setup_record(bench: Bench) -> None:
+    service = bench.start()
+    code, out = bench.test(service.port, runs=2)
+    assert code == 0, out
+    summaries = bench.summaries()
+    setup = [name for name in summaries if name.startswith("setup-")]
+    runs = [name for name in summaries if name.startswith("run-")]
+    assert len(setup) == 1 and len(runs) == 2
+    assert all(summaries[r]["outcome"] == "answered" for r in runs)
+
+
+@pytest.mark.design("service.probe_proves_the_gate")
+def test_a_proxy_that_drops_the_header_stops_the_runner_before_any_test_request(
+    bench: Bench,
+) -> None:
+    service = bench.start()
+    proxy = Forwarder(service.port, drop=True)
+    bench.closers.append(proxy)
+    code, out = bench.test(proxy.port)
+    assert code == 3 and "x-scrimmage-run does not reach Scrimmage" in out
+    assert len(proxy.seen) == 1 and proxy.seen[0].startswith("probe-")  # nothing after it
+
+
+@pytest.mark.design("service.probe_plain_to_strangers")
+def test_an_unsigned_probe_reaches_the_app_as_a_plain_request(bench: Bench) -> None:
+    service = bench.start()
+    status, reply = service.post(
+        "/echo", headers={"x-scrimmage-probe": "1", "x-scrimmage-run": "probe-0123456789ab"}
+    )
+    assert status == 200 and not any(k.startswith("x-scrimmage") for k, _ in reply["headers"])
+
+
+@pytest.mark.design("service.probe_signed")
+def test_a_probe_signed_with_another_token_reaches_the_app_and_the_runner_stops(
+    bench: Bench,
+) -> None:
+    service = bench.start()
+    bench.token_file.write_text(secrets.token_hex(32))  # the runner's token is another
+    code, out = bench.test(service.port)
+    assert code == 3 and "its token differs" in out
+
+
+def ungated_runs(
+    bench: Bench, status: int, headers: dict[str, str], body: bytes
+) -> tuple[int, str, Forwarder]:
+    service = bench.start()
+    other = Ungated(status, headers, body)
+    proxy = Forwarder(service.port, runs_to=other.port)
+    bench.closers += [proxy, other]
+    code, out = bench.test(proxy.port, runs=3)
+    return code, out, proxy
+
+
+@pytest.mark.design("service.unclaimed_stops")
+def test_a_reply_whose_plan_was_never_fetched_is_an_infrastructure_error_and_stops_the_test_with_exit_3(  # noqa: E501  # the design's name
+    bench: Bench,
+) -> None:
+    reply = json.dumps({"reply": "shipped"}).encode()
+    code, out, proxy = ungated_runs(bench, 200, {"content-type": "application/json"}, reply)
+    assert code == 3 and "its plan was never claimed" in out
+    assert sum(1 for run in proxy.seen if run.startswith("run-")) == 1  # no run after the first
+    runs = [s for name, s in bench.summaries().items() if name.startswith("run-")]
+    assert [s["outcome"] for s in runs if "outcome" in s] == ["infrastructure error"]
+
+
+@pytest.mark.design("service.gate_shape_exact")
+def test_a_reply_that_looks_like_the_gate_503_but_differs_stops_the_test(bench: Bench) -> None:
+    headers = {"content-type": "application/json", "x-scrimmage-error": "claimed", "x-other": "1"}
+    code, out, _ = ungated_runs(bench, 503, headers, b'{"error": "claimed"}')
+    assert code == 3 and "its plan was never claimed" in out
+
+
+@pytest.mark.design("service.claimed_or_not")
+def test_an_app_that_sends_x_scrimmage_error_itself_cannot_make_a_result(bench: Bench) -> None:
+    """Even the gate's exact 503 shape, sent by an app without Scrimmage, never makes a
+    result: the run was never claimed, so it is an infrastructure error."""
+    headers = {"content-type": "application/json", "x-scrimmage-error": "plan-unavailable"}
+    code, _, proxy = ungated_runs(bench, 503, headers, b'{"error": "plan-unavailable"}')
+    runs = [s for name, s in bench.summaries().items() if name.startswith("run-")]
+    assert code == 3 and runs and all(s["outcome"] == "infrastructure error" for s in runs)
+    assert sum(1 for run in proxy.seen if run.startswith("run-")) == 3  # the test went on
+
+
+@pytest.mark.design("service.setup_main_path")
+def test_a_setup_request_with_no_model_line_in_its_record_exits_3(bench: Bench) -> None:
+    service = bench.start()
+    code, out = bench.test(service.port, path="/lost")
+    assert code == 3 and "context is lost on the agent's main path" in out
+    assert "lost_context notice was seen" in out
+
+
+@pytest.mark.design("service.setup_rejected")
+def test_a_setup_request_the_service_rejects_stops_with_exit_2(bench: Bench) -> None:
+    service = bench.start(TEST_TOKEN="tt-0123456789abcdef")  # the file sends no bearer token
+    code, out = bench.test(service.port)
+    assert code == 2 and "got 401" in out
+
+
+@pytest.mark.design("service.setup_answer")
+def test_a_setup_reply_without_the_answer_field_stops_with_exit_2(bench: Bench) -> None:
+    service = bench.start()
+    code, out = bench.test(service.port, answer="missing")
+    assert code == 2 and "'missing'" in out and "got 200" in out
+
+
+@pytest.mark.design("service.streamed")
+def test_a_streamed_reply_is_a_setup_error(bench: Bench) -> None:
+    service = bench.start()
+    code, out = bench.test(service.port, path="/stream")
+    assert code == 2 and "text/event-stream" in out
+
+
+@pytest.mark.design("service.tools_compared")
+def test_a_tools_list_that_differs_from_the_file_stops_with_exit_2(bench: Bench) -> None:
+    service = bench.start(SCRIMMAGE_TOOLS="acme.tools:get_order")
+    code, out = bench.test(service.port)
+    assert code == 2 and "the service gates the tools ['get_order']" in out
+    assert f"SCRIMMAGE_TOOLS={TOOLS}" in out and "SCRIMMAGE_ALLOW_IMPORTS=acme." in out
+
+
+@pytest.mark.design("service.runner_environment")
+def test_the_token_and_control_url_come_from_the_runners_environment(bench: Bench) -> None:
+    bench.token_file.write_text("short")
+    assert bench.test(9)[0] == 2
+    bench.token_file.write_text(secrets.token_hex(32))
+    bench.token_file.chmod(0o644)
+    code, out = bench.test(9)
+    assert code == 2 and "must be 600" in out
+    bench.token_file.chmod(0o600)
+    bench.monkeypatch.setenv("SCRIMMAGE_CONTROL_URL", "http://0.0.0.0:7711")
+    assert bench.test(9)[0] == 2
+    holder = socket.socket()
+    holder.bind(("127.0.0.1", 0))
+    holder.listen()
+    try:
+        bench.monkeypatch.setenv(
+            "SCRIMMAGE_CONTROL_URL", f"http://127.0.0.1:{holder.getsockname()[1]}"
+        )
+        code, out = bench.test(9)
+        assert code == 3 and "cannot be bound" in out
+    finally:
+        holder.close()
+
+
+@pytest.mark.design("service.grace_keeps_late_calls")
+def test_a_slow_background_task_lands_in_the_record_within_the_grace(bench: Bench) -> None:
+    service = bench.start()
+    code, out = bench.test(service.port, path="/background", grace=2.0)
+    assert code == 0, out
+    # The audit check runs half a second after the reply, inside the two-second grace.
+    runs = [name for name in bench.summaries() if name.startswith("run-")]
+    late = [x for x in bench.lines(runs[0]) if x.get("call") == "tool:check_inventory"]
+    assert [x["action"] for x in late] == ["real"]
+
+
+@pytest.mark.design("service.missing_last_batch")
+def test_a_missing_last_batch_is_an_infrastructure_error_after_the_wait(bench: Bench) -> None:
+    service = bench.start()
+    dying = (
+        '\n[[test]]\nname = "dies"\nquestion = "please die, order 1234?"\nexpect = ["shipped"]\n'
+        '\n[[test.mock]]\ncall = "tool:get_order"\nreturns = "shipped, Oct 30"\n'
+        '\n[[test.mock]]\ncall = "tool:get_stock"\nreturns = {sku = "SKU-42", count = 12}\n'
+    )
+    code, out = bench.test(service.port, path="/dies", tests=dying)
+    assert code == 3, out
+    summaries = bench.summaries()
+    died = [
+        s for name, s in summaries.items() if name.startswith("run-") and s["outcome"] != "answered"
+    ]
+    assert [(s["outcome"], s["incomplete"]) for s in died] == [("infrastructure error", True)]
+    service.proc.wait(30)  # the worker ended itself; the stop below finds it gone
+
+
+@pytest.mark.design("service.full_cap_goes_on")
+def test_a_full_cap_gives_infrastructure_errors_and_the_test_does_not_stop(bench: Bench) -> None:
+    """A control server so slow that the service's eight control slots stay full past 250 ms:
+    a ninth claim gets the gate's 503, its run is an infrastructure error, every row still
+    has all its runs, and the test is not stopped for it."""
+    service = bench.start()
+    real = ControlServer.handle
+
+    def slow(self: ControlServer, method: str, path: str, headers: Any, body: bytes) -> Any:
+        if path == "/v1/claims" and b'"run-' in body:
+            threading.Event().wait(1.0)  # a control server under load holds each claim
+        return real(self, method, path, headers, body)
+
+    bench.monkeypatch.setattr(ControlServer, "handle", slow)
+    code, out = bench.test(service.port, runs=9, parallel=9)
+    runs = [s for name, s in bench.summaries().items() if name.startswith("run-")]
+    assert code == 3 and len(runs) == 9, out
+    assert any(s["outcome"] == "infrastructure error" for s in runs)
+    assert "its plan was never claimed" not in out
+
+
+@pytest.mark.design("service.refused_row")
+def test_a_refused_call_stops_its_row_and_the_service_keeps_serving(bench: Bench) -> None:
+    service = bench.start()
+    unmocked = (
+        '\n[[test]]\nname = "no-stock-mock"\nquestion = "Where is order 1234?"\n'
+        'expect = ["shipped"]\n'
+    )
+    unmocked += '\n[[test.mock]]\ncall = "tool:get_order"\nreturns = "shipped, Oct 30"\n'
+    code, out = bench.test(service.port, runs=2, tests=unmocked)
+    assert code == 2, out
+    refused = [s for s in bench.summaries().values() if s.get("outcome") == "refused call"]
+    assert len(refused) == 1  # the row's second run was never sent
+    assert service.post("/echo")[0] == 200  # a plain request is served as before
+
+
+@pytest.mark.design("service.control_load_reported")
+def test_control_load_reaches_the_summary_the_report_and_json(bench: Bench) -> None:
+    from test_schemas import validator
+
+    service = bench.start()
+    code, out = bench.test(service.port, json_out=True)
+    doc = json.loads(out[: out.rindex("}") + 1])
+    assert code == 0 and not list(validator("cli").iter_errors(doc))
+    row = doc["rows"][0]
+    run = row["run_details"][0]
+    assert run["control_busy"] == 0 and isinstance(run["control_p99_ms"], int | float)
+    assert row["control_busy"] == 0 and row["control_p99_ms"] == run["control_p99_ms"]
+    summary = bench.summaries()[run["run"]]
+    assert summary["control_busy"] == 0 and summary["control_p99_ms"] == run["control_p99_ms"]
