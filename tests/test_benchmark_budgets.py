@@ -65,6 +65,20 @@ def test_each_gated_call_stays_under_its_budget(tmp_path: Path) -> None:
         still_over(measure, benchmark.CALL_BUDGETS_US, "µs")
 
 
+def test_each_gated_call_stays_under_its_budget_with_values_to_scrub(tmp_path: Path) -> None:
+    """The same calls when the file reads values from the environment: every line the run
+    records is scrubbed of each of them, in all their forms."""
+    attempt = iter(range(ATTEMPTS))
+    with benchmark.running_servers(tmp_path) as servers:
+
+        def measure() -> dict[str, float]:
+            name = f"scrub-{next(attempt)}"
+            batched = benchmark.batched_added_us(servers, tmp_path, name, scrub=True)
+            return {case: gated - plain for case, (gated, plain) in batched.items()}
+
+        still_over(measure, benchmark.CALL_BUDGETS_US, "µs")
+
+
 def test_startup_and_the_cli_stay_under_their_budgets(tmp_path: Path) -> None:
     def measure() -> dict[str, float]:
         return benchmark.process_added_ms(tmp_path)

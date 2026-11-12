@@ -568,12 +568,12 @@ def percent_encoded(data: bytes, safe: bytes = b"", *, plus: bool = False) -> st
     return "".join(out)
 
 
-@functools.lru_cache(maxsize=256)
 def lower_hex(encoded: str) -> str:
     """A URL encoding with its hex digits in lower case, as some encoders write it."""
     return re.sub(r"%[0-9A-F]{2}", lambda found: found.group(0).lower(), encoded)
 
 
+@functools.lru_cache(maxsize=256)
 def scrub_forms(value: str) -> tuple[str, ...]:
     """Every form a value can take in recorded text, longest first: as written, JSON-escaped
     once and twice (a JSON string inside a JSON body, as tool arguments in a model request),
