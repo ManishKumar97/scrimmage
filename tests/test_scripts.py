@@ -1425,6 +1425,28 @@ def test_a_daemon_that_left_the_group_is_found_and_killed(project: Project) -> N
     jsonschema.Draft202012Validator(RECORD).validate(line)
 
 
+@pytest.mark.design("redact.store_scrubs_runner_lines")
+def test_a_left_group_line_of_a_test_named_with_an_env_value_holds_no_value(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    value = "qv-0123456789abcdef"
+    monkeypatch.setenv("QV", value)
+    code = (
+        "import subprocess\n"
+        "subprocess.Popen(['sleep', '30'], start_new_session=True)\n"
+        "print('the answer')\n"
+    )
+    (project.root / "bot.py").write_text(code)
+    write_config(project, f"{sys.executable} bot.py {{question}}")
+    project.toml.write_text(project.toml.read_text().replace('name = "t"', 'name = "n-${QV}"'))
+    result = project.test()
+    line = next(x for x in lines_of(result) if x.get("notice") == "left_group")
+    assert "sleep 30" in str(line["message"])
+    assert value not in json.dumps(line) and value not in result.out + result.err
+    records = [p for p in (project.root / "scrimmage-runs").rglob("*") if p.is_file()]
+    assert records and not any(value in path.read_text() for path in records)
+
+
 @pytest.mark.design("stop.daemon_no_proc")
 def test_with_no_sweep_a_daemon_lives_on_and_its_write_stays_refused(
     project: Project, monkeypatch: pytest.MonkeyPatch
