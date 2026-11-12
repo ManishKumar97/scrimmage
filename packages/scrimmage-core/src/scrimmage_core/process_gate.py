@@ -393,15 +393,16 @@ def install_service() -> None:
     )
     for loky in ("loky.backend.queues", "joblib.externals.loky.backend.queues"):
         hooks.on_import(loky, patch_queues)  # loky's own queues, with a feeder of their own
-    start_tracker()
 
 
 def start_tracker() -> None:
     """Python's resource tracker, which multiprocessing starts the first time a lock, a queue
-    or shared memory is made, started now, at the service's startup, before any request. No
-    run then needs to start it. A start of it later, a relaunch included, is decided as any
-    other start is: refused under a run, and under the outside rules unless background_real
-    lists it. A worker multiprocessing started gets its parent's tracker instead."""
+    or shared memory is made, started where the app is served, as it is loaded, or where
+    uvicorn supervises workers, before it starts one; both come before any request. No run
+    then needs to start it, and a process that never serves starts none. A start of it later,
+    a relaunch included, is decided as any other start is: refused under a run, and under the
+    outside rules unless background_real lists it. A worker multiprocessing started gets its
+    parent's tracker instead."""
     if "spawn_main" in " ".join(getattr(sys, "orig_argv", [])):
         return
     from multiprocessing import resource_tracker
@@ -441,6 +442,24 @@ def patch_uvicorn_worker(module: ModuleType) -> None:
             )
         return
     mark_internal(module, "Process", ("always_pong",))
+    supervisor: Any = getattr(module, "Multiprocess", None)
+    run = supervisor.__dict__.get("run") if isinstance(supervisor, type) else None
+    if callable(run) and not getattr(run, GATED, False):
+        supervisor.run = tracked(run)
+
+
+def tracked(run: Callable[..., Any]) -> Any:
+    """uvicorn's Multiprocess.run: the supervisor starts the tracker before its workers,
+    which then share it."""
+
+    @functools.wraps(run)
+    def supervise(self: Any, *args: Any, **kwargs: Any) -> Any:
+        if in_service():
+            start_tracker()
+        return run(self, *args, **kwargs)
+
+    setattr(supervise, GATED, True)
+    return supervise
 
 
 def patch_executor(module: ModuleType) -> None:

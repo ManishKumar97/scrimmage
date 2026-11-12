@@ -116,7 +116,8 @@ These are refused under a run too, with no entry that lists them:
 
 Any other way to reach another process is not gated, such as shared memory, a signal or a socket of your own. See [Limits](limits.md).
 
-Python's resource tracker, which `multiprocessing` needs for its locks, queues and shared memory, is started once as the service starts, before any request, so a run that makes a lock starts nothing.
+Python's resource tracker, which `multiprocessing` needs for its locks, queues and shared memory, is started once, before any request, in the process that serves the app as it loads it, or in uvicorn's supervisor before it starts its workers, so a run that makes a lock starts nothing.
+A Python that only inherits the service's settings and never serves starts no tracker.
 A start of a tracker after that, such as a relaunch after it was killed, is a start of this Python like any other: refused under a run, and under the outside rules unless `background_real` lists it.
 
 Listing a program makes every call to it real.

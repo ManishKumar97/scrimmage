@@ -43,6 +43,7 @@ def service() -> Iterator[state.ProcessState]:
     state.install_process(process)
     threadctx.install(process)
     process_gate.install_service()  # as start_service does: the pool patches sit together
+    process_gate.start_tracker()  # as a process that serves does, before any request
     yield process
     state.install_process(None)
 

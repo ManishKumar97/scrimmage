@@ -262,6 +262,25 @@ def test_a_service_starts_one_resource_tracker_and_the_tracker_starts_none(
     assert len(first) == 1 and trackers_in(lab.root) == first, (first, service.text[-2000:])
 
 
+@pytest.mark.design("service.resource_tracker")
+def test_a_service_mode_python_that_never_serves_starts_no_tracker(lab: Lab) -> None:
+    """Only a process that serves the app, or supervises its workers, starts the tracker."""
+    code = (
+        "from multiprocessing import resource_tracker\n"
+        "from scrimmage_core import state\n"
+        "print(state.process() is not None, resource_tracker._resource_tracker._pid)\n"
+    )
+    done = subprocess.run(
+        [str(BIN / "scrimmage-run"), sys.executable, "-c", code],
+        cwd=lab.root,
+        env=lab.env(),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert done.stdout.split() == ["True", "None"], done.stdout + done.stderr
+
+
 TRACKER = "from multiprocessing.resource_tracker import main;main(5)"
 HELPER_LINES = {
     "tracker": ["-c", TRACKER],

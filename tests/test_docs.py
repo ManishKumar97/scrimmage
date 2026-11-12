@@ -612,7 +612,7 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
     ):
         assert point in safety, point
     assert "every multiprocessing send" not in safety + limits
-    assert "resource tracker" in safety and "started once as the service starts" in safety
+    assert "resource tracker" in safety and "never serves starts no tracker" in safety
     security = page("security.md")
     assert "## A web service's token and run header" in security and "`0600`" in security
     assert "replayed once to each other worker within 60 seconds" in security

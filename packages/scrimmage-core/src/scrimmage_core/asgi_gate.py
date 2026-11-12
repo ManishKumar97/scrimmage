@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from types import ModuleType
 from typing import Any
 
-from scrimmage_core import hooks, labels, protocol, state, threadctx
+from scrimmage_core import hooks, labels, process_gate, protocol, state, threadctx
 from scrimmage_core.client import (
     Busy,
     ClaimRefused,
@@ -115,6 +115,7 @@ def serving() -> None:
         )
         return
     os.environ.pop("SCRIMMAGE_TOKEN_FILE", None)
+    process_gate.start_tracker()  # only a process that serves starts it
     print(f"scrimmage: {ACTIVE.format(pid=os.getpid())}", file=sys.stderr, flush=True)
 
 

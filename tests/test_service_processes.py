@@ -54,6 +54,7 @@ def service() -> Iterator[state.ProcessState]:
         sys.addaudithook(process_gate.service_hook)
         _hooked.append(True)
     process_gate.install_service()
+    process_gate.start_tracker()  # as a process that serves does, before any request
     threadctx.install(process)
     yield process
     state.install_process(None)
@@ -798,6 +799,24 @@ def test_a_uvicorn_without_always_pong_stops_the_service_naming_why(
     module.Process = type("Process", (), {})  # type: ignore[attr-defined]
     process_gate.patch_uvicorn_worker(module)
     assert stops and "always_pong" in stops[0]
+
+
+@pytest.mark.design("service.resource_tracker")
+def test_uvicorns_supervisor_starts_the_tracker_before_it_runs_its_workers(
+    service: state.ProcessState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import types
+
+    order: list[str] = []
+    monkeypatch.setattr(process_gate, "start_tracker", lambda: order.append("tracker"))
+    module = types.ModuleType("uvicorn.supervisors.multiprocess")
+    pong = {"always_pong": lambda self: None}
+    module.Process = type("Process", (), pong)  # type: ignore[attr-defined]
+    run = {"run": lambda self: order.append("workers")}
+    module.Multiprocess = type("Multiprocess", (), run)  # type: ignore[attr-defined]
+    process_gate.patch_uvicorn_worker(module)
+    module.Multiprocess().run()  # type: ignore[attr-defined]
+    assert order == ["tracker", "workers"]
 
 
 @pytest.mark.design("service.pool_stops")
