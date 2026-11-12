@@ -152,7 +152,10 @@ SECRETS = (
     Secret(r"xapp-[A-Za-z0-9-]{10,}", ("xapp-",), name="slack-token"),
     # bearer tokens
     Secret(
-        r"(?i:bearer)\s+[A-Za-z0-9._~+/=-]{16,}", ("bearer",), lowercase=True, name="bearer-token"
+        r"(?P<bearer>(?i:bearer)\s+[A-Za-z0-9._~+/=-]{16,})",
+        ("bearer",),
+        lowercase=True,
+        name="bearer-token",
     ),
     Secret(BASIC, ("authorization",), lowercase=True, name="basic-credential"),
     Secret(
@@ -271,6 +274,14 @@ def key_removals(text: str, decoded: bool = False) -> list[tuple[int, int, str]]
         elif found.start("marked") >= 0:
             resume = end = reads.end(MARKED_RUN, resume)
         at = resume
+        if found.start("bearer") >= 0:
+            # A Bearer token's characters can start a key shape or a field name, as the
+            # Authorization in Bearer QQQAuthorization: Basic ...: the whole token is removed,
+            # and the text from the first one that starts in it is read again, so what starts
+            # there and goes on past the token joins it.
+            shape = SHAPE_OR_NAME_RE.search(text, found.start() + 1)
+            if shape is not None and shape.start() < found.end():
+                at = shape.start()
         field = found.group("field")
         if field is not None:
             # The text from the first field name or key shape inside a form field is read

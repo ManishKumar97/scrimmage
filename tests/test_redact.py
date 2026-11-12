@@ -504,6 +504,27 @@ def test_redacted_json_text_is_still_json() -> None:
         }
 
 
+# A Bearer token whose last characters are the word bearer, then a space and another token:
+# the old module removed the first token alone, as one match cannot start inside another,
+# and the new one reads the token again from that word, so it removes the second one too.
+BEARER_IN_BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]*bearer\s")
+
+
+def removes_more(new: str, old: str) -> bool:
+    """new is old with more removed: what new keeps between its markers is in old, in order,
+    with something in each gap, and new is shorter."""
+    kept = new.split(redact_module.REMOVED)
+    pattern = "(?:.+?)".join(re.escape(piece) for piece in kept)
+    return len(new) < len(old) and re.fullmatch(pattern, old, re.DOTALL) is not None
+
+
+def as_before_or_more_removed(text: str, new: str, old: str) -> None:
+    if BEARER_IN_BEARER.search(text) is not None and new != old:
+        assert removes_more(new, old), (text, new, old)
+    else:
+        assert new == old, text
+
+
 @pytest.mark.design("security.redaction_shapes")
 def test_the_new_secrets_leave_what_the_other_passes_remove_as_it_was() -> None:
     """The benign texts hold none of the new literals, so they are redacted exactly as before.
@@ -514,7 +535,7 @@ def test_the_new_secrets_leave_what_the_other_passes_remove_as_it_was() -> None:
     benign = [t for t in corpus() if not any(lit in t.lower() for lit in NEW_LITERALS)][:400]
     assert len(benign) == 400
     for text in benign:
-        assert redact(text) == without_new_passes(text), text
+        as_before_or_more_removed(text, redact(text), without_new_passes(text))
     for _ in range(3000):
         parts: list[str] = []
         expected: list[str] = []
@@ -530,7 +551,8 @@ def test_the_new_secrets_leave_what_the_other_passes_remove_as_it_was() -> None:
         # A newline ends an "Illegal header" line, and a # ends a bearer token, so a part
         # is judged alone: the old module already removed a field that a bearer ran into.
         text = "log:\n# " + "\n# ".join(parts)
-        assert redact(text) == without_new_passes("log:\n# " + "\n# ".join(expected)), text
+        old = without_new_passes("log:\n# " + "\n# ".join(expected))
+        as_before_or_more_removed(text, redact(text), old)
 
 
 @pytest.mark.design("security.redaction_shapes")
@@ -1287,6 +1309,31 @@ def test_a_run_of_kept_names_is_read_in_linear_time(
 
 
 @pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize(
+    "unit",
+    [
+        "bearer " + "Q" * 16 + "/",
+        "Bearer " + "Q" * 16 + "xox",
+        "Bearer " + "Q" * 16 + ".is_secret=1,",
+        "Bearer " + "Q" * 16 + "Authorization",
+    ],
+)
+def test_a_run_of_bearer_tokens_is_read_in_linear_time(
+    monkeypatch: pytest.MonkeyPatch, unit: str
+) -> None:
+    """Each Bearer token is read again from the first key shape or field name in it, so the
+    search for that one must stop at it, or each token reads on to the end of the text."""
+
+    def reads(n: int) -> int:
+        text = unit * n
+        return continuation_reads(monkeypatch, lambda: redact(text), (*RUNS, *SEARCHES))
+
+    small, large = reads(500), reads(1000)
+    assert 0 < small <= 4 * len(unit) * 500, small
+    assert large <= 2.2 * small, (small, large)
+
+
+@pytest.mark.design("security.redaction_shapes")
 def test_no_kept_value_shields_a_secret_after_an_escape_and_any_glue() -> None:
     """Every kept prefix, escape, quote or none, glue and secret shape, in plain text, in a
     string read out of JSON, and in JSON text: the secret goes, and a kept name stays. With
@@ -1323,7 +1370,15 @@ def test_no_kept_value_shields_a_secret_after_an_escape_and_any_glue() -> None:
 SEPARATORS = [
     f"\\u{code}" for code in ("0020", "002c", "002C", "0026", "003b", "000a", "0041", "00e9")
 ]
-SEPARATED_PREFIXES = ["", "psql", "ab", '{"cmd": "psql', *KEPT_PREFIXES]
+# Bearer tokens whose characters run on into what follows them.
+BEARER_TOKENS = [
+    "Bearer " + "R" * 20,
+    "bearer\t" + "R" * 16,
+    "Authorization: Bearer " + "R" * 24,
+    "Bearer " + "R" * 16 + "." + "R" * 8,
+    "Bearer " + "R" * 20 + "==",
+]
+SEPARATED_PREFIXES = ["", "psql", "ab", '{"cmd": "psql', *KEPT_PREFIXES, *BEARER_TOKENS]
 
 
 @pytest.mark.design("security.redaction_shapes")
@@ -1350,6 +1405,48 @@ def test_no_secret_hides_behind_an_escaped_or_encoded_separator() -> None:
                         assert secret not in out, (mode, text, out)
                     checked += 1
     assert checked > 2000, checked
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_a_bearer_token_shields_no_secret_glued_after_it() -> None:
+    """Every Bearer token, glue and secret shape, in all four modes: the token goes, and so
+    does the secret after it, even where the token's characters run on into its name."""
+    modes = {
+        "plain": redact,
+        "decoded": lambda text: redacted(text, decoded=True)[0],
+        "json": lambda text: redact(json.dumps({"l": text})),
+        "python value": lambda text: json.dumps(capture.clean({"v": text})[0]),
+    }
+    checked = 0
+    for token in BEARER_TOKENS:
+        for glue in GLUES:
+            for shape, secret in SECRET_SHAPES:
+                if by_design_not_a_secret(token, "", glue, shape):
+                    continue
+                text = token + glue + shape
+                for mode, clean in modes.items():
+                    out = clean(text)
+                    assert secret not in out and "R" * 16 not in out, (mode, text, out)
+                checked += 1
+    assert checked > 900, checked
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Bearer " + "Q" * 20 + "Authorization: Basic UVFRUVFRUVFRUQ==", "[secret removed]"),
+        ("Bearer " + "Q" * 20 + "sk-" + "Q" * 20, "[secret removed]"),
+        ("Bearer " + "Q" * 16 + ".token=<QQQQ x> ok", "[secret removed] ok"),
+        ("Bearer " + "Q" * 16 + "/bearer " + "R" * 16 + " ok", "[secret removed] ok"),
+        ("Bearer " + "Q" * 20 + "-Illegal header value x", "[secret removed]"),
+        ("Bearer " + "Q" * 20 + " ok", "[secret removed] ok"),
+    ],
+)
+def test_what_starts_inside_a_bearer_token_is_read_again(text: str, expected: str) -> None:
+    assert redact(text) == expected
+    assert redacted(text, decoded=True)[0] == expected
+    assert [rule for _, _, rule in redact_module.spans(text)] == ["bearer-token"]
 
 
 @pytest.mark.design("security.redaction_shapes")

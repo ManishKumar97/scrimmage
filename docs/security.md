@@ -97,12 +97,12 @@ Every gated call is written to a record in `scrimmage-runs/`, next to your `scri
     - Google API keys: `AIza`;
     - GitHub tokens: `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` and `github_pat_`;
     - Slack tokens: `xoxa-`, `xoxb-`, `xoxe-`, `xoxp-`, `xoxr-`, `xoxs-`, `xoxe.xoxp-` and `xapp-`;
-    - bearer tokens: `Bearer` and the value after it;
+    - bearer tokens: `Bearer` and the value after it, all of it; a key shape or a field name that starts inside the value is read again, so in `Bearer abc...Authorization: Basic ...` the Basic credential goes too;
     - a Basic credential: `Authorization` and `Basic` and a value of 8 or more characters after them (a shorter word, as in `Authorization: Basic realm`, is kept), in a header line, in JSON (as a header map, a list of pairs, or a name and a value) or in a command line;
     - form-encoded and keyword fields: `password=`, `passwd=`, `token=`, `secret=` and `api_key=` and the value after them, with any `NAME_` before it, as in `DB_PASSWORD=`, `GITHUB_TOKEN=`, `AWS_SECRET_ACCESS_KEY=` and `client_secret=`, in any letter case, with `=` written as `%3D` and `_` in `api_key` as `%5F`; the value may be quoted with `'` or `"`, or in `<...>`; the env names `PGPASSWORD`, `PGPASS`, `MYSQL_PWD`, `authtoken` and `accesstoken` are removed too;
     - JSON Web Tokens, which start with `eyJ`.
 
-  *Checked by: `tests/test_security_claims.py::test_each_listed_secret_shape_is_removed`, `tests/test_redact.py::test_a_jwt_is_removed_after_any_separator`, `tests/test_redact.py::test_the_old_module_kept_each_new_secret_and_the_new_one_removes_it`, `tests/test_redact.py::test_a_marker_is_removed_with_what_sticks_to_it`, `tests/test_record.py::test_a_json_reply_holding_a_form_field_in_a_string_is_written_as_valid_json`*
+  *Checked by: `tests/test_security_claims.py::test_each_listed_secret_shape_is_removed`, `tests/test_redact.py::test_a_jwt_is_removed_after_any_separator`, `tests/test_redact.py::test_the_old_module_kept_each_new_secret_and_the_new_one_removes_it`, `tests/test_redact.py::test_a_marker_is_removed_with_what_sticks_to_it`, `tests/test_record.py::test_a_json_reply_holding_a_form_field_in_a_string_is_written_as_valid_json`, `tests/test_redact.py::test_what_starts_inside_a_bearer_token_is_read_again`, `tests/test_redact.py::test_a_bearer_token_shields_no_secret_glued_after_it`*
 
   A form field with an empty value, prose such as "reset your password at", a URL path that holds the word `token`, and these names are left as written: the paging names (`next_page_token`, `page_token`), anything after `is_`, `has_`, `top_`, `max_`, `min_`, `num_` or `n_`, the tokenizer names (`eos_token`, `bos_token`, `pad_token`, `unk_token`, `sep_token`, `cls_token`) and a name glued to a word, such as `mytoken`.
   `None`, `True` and `False` alone as a value, and a bare name as an argument of a call that has a name, such as `f(token=tok)`, are code and are left as written.
