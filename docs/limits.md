@@ -113,7 +113,8 @@
 - **A value that changes between runs is frozen by its mock.** That is what a mock is for. A value that changes within one run is listed `nondeterministic`.
 - **A form field is cut at the first space, quote or `&`.** `password=hunter2` and a quoted `password='two words'` are removed, but an unquoted `password=two words` leaves ` words`, and `password: hunter2` with a colon is not matched.
   Any `NAME_` prefix is matched, as in `DB_PASSWORD=`, so a harmless field that ends in one of these words and is not on the exempt list, such as `my_token=5`, is removed too; a call that holds one cannot be written as a mock. The exempt names are on the security page.
-  `None`, `True` and `False` alone as a value are taken for code and kept, and so is a bare name as an argument of a call that has a name, as in `f(password=changeme)`, right after the parenthesis or after a comma, with or without a space: `f(token=tok,secret=sec)` is kept whole.
+  `None`, `True` and `False` alone as a value are taken for code and kept, and so is a bare name as an argument of a call that has a name, as in `f(password=changeme)`, right after the parenthesis or after `, `.
+  After a bare comma it is not read as code, so `f(token=tok,secret=sec)` loses `secret=sec)`: a removal is the safe side.
   A parenthesis with no name before it, as in `set it (PASSWORD=hunter2) then`, is not a call.
   `user=admin, password=changeme, host=db` outside a call, and `password=Summer.Time`, are removed.
   Other names glued to an ASCII letter or digit are kept: `PGPASSWORD`, `PGPASS`, `MYSQL_PWD`, `authtoken` and `accesstoken` are removed by name, but `mytoken=5`, `dbpassword=x` and similar are not.

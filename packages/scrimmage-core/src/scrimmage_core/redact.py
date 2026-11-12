@@ -37,8 +37,7 @@ class Secret(NamedTuple):
 # is not a space, &, quote, bracket or backslash. A raw quote opens a value only when the name
 # is not itself inside that quote, so the quote that closes a string is not taken for one.
 # A marker left by an earlier removal is kept alone, and removed with what follows it.
-# None, True, False, and a bare name in a call, such as f(token=tok) or f(a=1,token=tok),
-# are code and are kept.
+# None, True, False, and a bare name in a call, such as f(token=tok), are code and are kept.
 NAMES = (
     r"(?:passw(?:or)?d|token|secret(?:_access_key)?|api(?:_|%5f)key"
     r"|pgpass(?:word)?|mysql_pwd|authtoken|accesstoken)"
@@ -235,9 +234,10 @@ class Parentheses:
 def code_value(found: re.Match[str], end: int, parentheses: Parentheses) -> bool:
     """A value that is code: None, True or False alone, or a bare name as an argument of a
     call whose name is right before its parenthesis, the argument right after the parenthesis
-    or a comma, with or without a space: f(token=tok), f(a=1, token=tok), f(a=1,token=tok).
-    end: where the value ends, with the first character it goes on with, when that is more
-    than the match holds. parentheses: where the last ( and ) before the match are."""
+    or after ", ": f(token=tok) and f(a=1, token=tok). After a bare comma, as in
+    f(a=1,token=tok), the value is removed: a removal is the safe side. end: where the value
+    ends, with the first character it goes on with, when that is more than the match holds.
+    parentheses: where the last ( and ) before the match are."""
     if found.start("value") < 0:
         return False
     text = found.string
@@ -250,7 +250,7 @@ def code_value(found: re.Match[str], end: int, parentheses: Parentheses) -> bool
     if name in CODE_VALUES:
         return True
     start = found.start()
-    if not (text[start - 1 : start] in ("(", ",") or text[start - 2 : start] == ", "):
+    if not (text[start - 1 : start] == "(" or text[start - 2 : start] == ", "):
         return False
     opening, closing = parentheses.before(start)
     named_call = opening > closing and (

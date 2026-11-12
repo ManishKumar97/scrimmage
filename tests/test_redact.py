@@ -608,8 +608,6 @@ def test_the_new_secrets_leave_what_the_other_passes_remove_as_it_was() -> None:
         "password=[secret removed]",
         "token=[removed]",
         "pa\u017f\u017fword=hunter2",  # long s is not an s
-        "f(token=tok,secret=sec)",
-        "f(token=tok,password=hunter2)",
         "%70assword=hunter2",  # an encoded letter is not a letter of a name
     ],
 )
@@ -1130,7 +1128,7 @@ def test_a_kept_value_shields_no_secret_one_glue_character_on(text: str, secret:
 NO_ESCAPE_AFTER_KEPT = [
     ("next_page_token=ab,password=X", "next_page_token=ab,[secret removed]", "form-field"),
     ("is_secret=True,token=hunter2", "is_secret=True,[secret removed]", "form-field"),
-    ("f(token=tok,password=hunter2!)", "f(token=tok,[secret removed]", "form-field"),
+    ("f(token=tok,password=hunter2)", "f(token=tok,[secret removed]", "form-field"),
     ("next_page_token=ab%2Cpassword=X", "next_page_token=ab%2C[secret removed]", "form-field"),
     ("eos_token=x|sk-" + "Q" * 24, "eos_token=x|[secret removed]", "openai-key"),
     ("cursor_token=Q2F/AKIA" + "Q" * 16, "cursor_token=Q2F/[secret removed]", "aws-access-key"),
@@ -1222,10 +1220,10 @@ BREAK_AT_END = re.compile(r"(?:\\u[0-9a-fA-F]{4}|%(?:2[06cC]|3[bB]|7[cC]))$")
 
 def by_design_not_a_secret(prefix: str, escape: str, glue: str, shape: str) -> bool:
     """A field name glued to an ASCII letter or digit is not a name, and one right after a
-    named call's parenthesis, or after a comma inside one, is code, as in b(password=x): both
+    named call's parenthesis, or after ", " inside one, is code, as in b(password=x): both
     are kept on purpose. With no escape and no glue the name is glued to the prefix."""
     before = glue or ("" if escape else prefix)
-    in_call = "(" in prefix and before.endswith((",", ", "))
+    in_call = "(" in prefix and before.endswith(", ")
     glued = before[-1:].isascii() and before[-1:].isalnum()
     glued = glued and BREAK_AT_END.search(before) is None
     return "=" in shape and (glued or before.endswith("(") or in_call)
@@ -1367,7 +1365,7 @@ class CountedFinds:
 
 
 @pytest.mark.design("security.redaction_shapes")
-@pytest.mark.parametrize("unit", ["a,token=t,", "a, token=t,", "f(a=1,token=t,", "g(token=tok,"])
+@pytest.mark.parametrize("unit", ["a, token=t,", "f(a=1, token=t,", "(token=t, ", "g(token=tok, "])
 def test_the_call_around_each_name_is_found_in_linear_time(
     monkeypatch: pytest.MonkeyPatch, unit: str
 ) -> None:
@@ -1545,9 +1543,10 @@ def test_a_name_begins_after_a_url_encoded_separator(text: str, expected: str) -
     assert [rule for _, _, rule in redact_module.spans(text)] == ["form-field"]
 
 
-def test_a_bare_comma_in_a_named_call_is_read_as_a_comma_and_a_space_are() -> None:
-    """f(token=tok,secret=sec) was f(token=tok,[secret removed], with the call's ) gone."""
-    assert redact("f(token=tok,secret=sec)") == "f(token=tok,secret=sec)"
+def test_a_name_after_a_bare_comma_in_a_named_call_is_not_code() -> None:
+    """After ", " in a named call a bare name is code; after a bare comma it is removed, the
+    safe side, as docs/limits.md says."""
+    assert redact("f(token=tok,secret=sec)") == "f(token=tok,[secret removed]"
     assert redact("f(token=tok, secret=sec)") == "f(token=tok, secret=sec)"
     assert redact("f(token=tok,secret=sec!)") == "f(token=tok,[secret removed]"
     assert redact("x(1),secret=sec") == "x(1),[secret removed]"
