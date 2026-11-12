@@ -25,6 +25,7 @@ import pytest
 from scrimmage_core import process_gate, state, threadctx
 from scrimmage_core.errors import ScrimmageRefused
 from scrimmage_core.plan import Plan
+from service_harness import eventually
 from test_service_units import Sink, sink_of
 
 PLAIN = state.Plain()  # one plain request, still being served
@@ -366,14 +367,16 @@ def consumer(kind: str, end: Any, path: str) -> None:
     """A process made before the run: it writes whatever it is sent to the file."""
     got = (
         end.get()
-        if kind in ("queue", "simple")
+        if kind in ("queue", "simple", "joinable", "put_nowait")
         else (end.recv() if kind == "send" else end.recv_bytes())
     )
     Path(path).write_text(str(got))
 
 
 @pytest.mark.design("service.send_points")
-@pytest.mark.parametrize("kind", ["queue", "simple", "send", "send_bytes"])
+@pytest.mark.parametrize(
+    "kind", ["queue", "simple", "joinable", "put_nowait", "send", "send_bytes"]
+)
 def test_multiprocessing_send_points_refuse_under_a_run(
     service: state.ProcessState, tmp_path: Path, kind: str
 ) -> None:
@@ -382,6 +385,8 @@ def test_multiprocessing_send_points_refuse_under_a_run(
     end: Any
     if kind == "queue":
         end = mine = context.Queue()
+    elif kind in ("joinable", "put_nowait"):  # its own put, which does not call Queue.put
+        end = mine = context.JoinableQueue()
     elif kind == "simple":
         end = mine = context.SimpleQueue()
     else:
@@ -392,6 +397,8 @@ def test_multiprocessing_send_points_refuse_under_a_run(
     put = {
         "queue": lambda: mine.put("run's data"),
         "simple": lambda: mine.put("run's data"),
+        "joinable": lambda: mine.put("run's data"),
+        "put_nowait": lambda: mine.put_nowait("run's data"),
         "send": lambda: mine.send("run's data"),
         "send_bytes": lambda: mine.send_bytes(b"run's data"),
     }[kind]
@@ -473,6 +480,18 @@ def test_a_joblib_loky_executor_made_before_the_run_is_refused(
     executor.shutdown()
 
 
+def in_ended_request(fn: Callable[[], Any]) -> Any:
+    """fn in a plain request that has ended once it returns, so any thread it started, such
+    as a pool's manager or a queue's feeder, runs outside any request after it."""
+    request = state.Plain()
+    context = contextvars.copy_context()
+    context.run(state.SLOT.set, request)
+    try:
+        return context.run(fn)
+    finally:
+        request.done = True
+
+
 def outside(fn: Callable[[], Any]) -> Any:
     """fn in code outside any request, such as a background job a request left running."""
     return contextvars.Context().run(fn)
@@ -525,18 +544,18 @@ def test_process_pools_used_outside_any_request_meet_the_outside_rules(
         assert len(lines(run)) == len(calls)
         # The pools' own threads still carry a plain request's work while the run is open.
         assert plain(lambda: executor.submit(write, str(written)).result()) == str(written)
-        assert plain(lambda: pool.apply(write, (str(written),))) == str(written)
+        assert plain(lambda: pool.apply_async(write, (str(written),)).get(30)) == str(written)
         service.unregister(run)
         listed = a_run(service, background=("process:multiprocessing",))
         written.unlink()
-        assert outside(lambda: pool.apply(write, (str(written),))) == str(written)
+        assert outside(lambda: pool.apply_async(write, (str(written),)).get(30)) == str(written)
         assert outside(lambda: executor.submit(write, str(written)).result()) == str(written)
         # A listed pool made outside any request starts, and its initializer runs.
         listed_pool = outside(
             lambda: context.Pool(1, initializer=write, initargs=(str(initialized),))
         )
         made.append(listed_pool)
-        assert listed_pool.apply(os.getpid) > 0 and initialized.exists()
+        assert listed_pool.apply_async(os.getpid).get(30) > 0 and initialized.exists()
         # A listed submit that starts the pool's processes: the starts are the pool's own.
         fresh = ProcessPoolExecutor(max_workers=1, mp_context=context)
         assert outside(lambda: fresh.submit(write, str(written)).result()) == str(written)
@@ -800,7 +819,7 @@ def test_a_process_pools_stop_under_a_run_is_refused_and_leaves_the_pool_as_it_w
         for stop in (pool.close, pool.terminate, executor.shutdown):
             assert "inside a test run" in refused(run, stop)
         # Nothing was half done: the pool and the executor still work.
-        assert plain(lambda: pool.apply(os.getpid)) > 0
+        assert plain(lambda: pool.apply_async(os.getpid).get(30)) > 0
         assert plain(lambda: executor.submit(os.getpid).result()) > 0
     finally:
         plain(executor.shutdown)
@@ -850,11 +869,12 @@ def test_a_thread_pools_replacement_worker_is_never_the_pools_own(
     pool = outside(lambda: multiprocessing.pool.ThreadPool(2, initializer=init_fails_once))
     try:
         for _ in range(3):  # make sure the replacement worker has taken tasks
-            assert outside(lambda: pool.apply(len, ("ab",))) == 2
+            assert outside(lambda: pool.apply_async(len, ("ab",)).get(30)) == 2
         assert FAILED_ONCE
         run = a_run(service)
         tried = [
-            outside(lambda: attempt(lambda: pool.apply(sh_write, (str(target),)))) for _ in range(6)
+            outside(lambda: attempt(lambda: pool.apply_async(sh_write, (str(target),)).get(30)))
+            for _ in range(6)
         ]
         assert tried == ["refused"] * 6 and not target.exists(), tried
         assert {x["reason"] for x in lines(run)} == {"orphan"}
@@ -868,14 +888,42 @@ def test_a_thread_pools_replacement_worker_is_never_the_pools_own(
 def test_a_pools_own_threads_are_its_handlers_and_nothing_else(
     service: state.ProcessState,
 ) -> None:
-    pool = plain(lambda: multiprocessing.pool.ThreadPool(1))
+    """A process pool's handlers, started inside its decided making, are its own; a thread
+    pool's are not, as its making decides nothing, and no worker or team thread ever is."""
+    pool = plain(lambda: multiprocessing.get_context("fork").Pool(1))
+    threads = plain(lambda: multiprocessing.pool.ThreadPool(1))
+    handle_tasks = multiprocessing.pool.Pool._handle_tasks  # type: ignore[attr-defined]
+    team = threading.Thread(target=handle_tasks, args=(None,) * 5)
     try:
         handlers = {pool._worker_handler, pool._task_handler, pool._result_handler}  # type: ignore[attr-defined]
         assert handlers <= set(state.INTERNAL)
-        assert not any(worker in state.INTERNAL for worker in pool._pool)  # type: ignore[attr-defined]
+        others = {threads._worker_handler, threads._task_handler, *threads._pool}  # type: ignore[attr-defined]
+        assert not others & set(state.INTERNAL)
+        assert not state.internal_thread(team)  # the team's thread with a pool's target
     finally:
-        plain(pool.terminate)
-        stopped(pool)
+        for each in (pool, threads):
+            plain(each.terminate)
+            stopped(each)
+
+
+@pytest.mark.design("service.no_inherited_exemption")
+def test_a_process_pools_manager_thread_carries_a_plain_task_while_a_run_is_open(
+    service: state.ProcessState,
+) -> None:
+    """The executor's manager thread puts each task on its call queue: its own put, which
+    a plain request's decided submit carries."""
+    executor = ProcessPoolExecutor(1, mp_context=multiprocessing.get_context("fork"))
+    try:
+        # Warmed in a request that then ends: its threads now run outside any request.
+        assert in_ended_request(lambda: executor.submit(os.getpid).result(10)) > 0
+        assert executor._executor_manager_thread in state.INTERNAL  # type: ignore[attr-defined]
+        run = a_run(service)
+        assert plain(lambda: executor.submit(len, "abc").result(10)) == 3
+        assert lines(run) == []
+    finally:
+        plain(
+            lambda: executor.shutdown(wait=False, cancel_futures=True)
+        )  # never waits on a stuck task
 
 
 @pytest.mark.design("service.mcp_stdio_decided")
@@ -1048,20 +1096,39 @@ def test_a_manager_started_or_sent_to_in_a_run_is_refused(
 def test_the_tracker_exemption_names_this_python_and_the_trackers_own_code() -> None:
     """Each part of the check alone: while the tracker starts, only this Python running the
     tracker's main is its own start."""
-    import multiprocessing.resource_tracker  # noqa: F401  # it imports spawn, as when it starts
+    import multiprocessing.resource_tracker  # it imports spawn, as when it starts
+    from multiprocessing import spawn, util
 
     here = sys.executable
-    main = f"{process_gate.TRACKER_MAIN}(5)"
-    starts = {
-        "the tracker's start": ((here, [here, "-c", main], {}), True),
-        "other code on this Python": ((here, [here, "-c", "import os"], {}), False),
+    flags = util._args_from_interpreter_flags()  # type: ignore[attr-defined]
+    main = f"{process_gate.TRACKER_MAIN};main(5)"
+    line = [here, *flags, "-c", main]
+    starts: dict[str, tuple[tuple[str, list[str], dict[str, str]], bool]] = {
+        "the tracker's start": ((here, line, {}), True),
+        "other code on this Python": ((here, [here, *flags, "-c", "import os"], {}), False),
+        "the tracker's code with more after it": (
+            (here, [here, *flags, "-c", main + ";import os"], {}),
+            False,
+        ),
         "another program with the tracker's code": (("/bin/sh", ["sh", "-c", main], {}), False),
     }
     process_gate._tracker.on = True  # type: ignore[attr-defined]  # as while it starts
+    chosen = spawn.get_executable()
     try:
         for name, (args, own) in starts.items():
             assert process_gate.tracker("os.posix_spawn", args) is own, name
+        # The executable multiprocessing would run is another: not the tracker's own start.
+        multiprocessing.set_executable("/bin/sh")
+        assert process_gate.tracker("os.posix_spawn", starts["the tracker's start"][0]) is False
+        multiprocessing.set_executable(chosen)
+        # A PYTHON* variable set since startup, which the child inherits: not its own either.
+        os.environ["PYTHONPATH_FOR_TEST_ONLY"] = "/tmp"
+        try:
+            assert process_gate.tracker("os.posix_spawn", (here, line, {})) is False
+        finally:
+            del os.environ["PYTHONPATH_FOR_TEST_ONLY"]
     finally:
+        multiprocessing.set_executable(chosen)
         process_gate._tracker.on = False  # type: ignore[attr-defined]
     assert process_gate.tracker("os.posix_spawn", starts["the tracker's start"][0]) is False
 
@@ -1082,19 +1149,128 @@ def test_a_reduce_that_starts_a_program_while_a_decided_send_pickles_is_not_deci
     service: state.ProcessState, tmp_path: Path
 ) -> None:
     """A known gap, in docs/limits.md: outside any request, a send background_real lists is
-    decided once; the team's __reduce__ that its pickling runs is not decided again. Under a
-    run the send is refused before anything is pickled."""
-    queue: Any = multiprocessing.get_context("spawn").Queue()
+    decided once; the team's __reduce__ that the call itself pickles runs inside it and is
+    not decided again. Under a run the send is refused before anything is pickled. A queue's
+    feeder, which pickles later on its own thread, decides what the __reduce__ starts."""
+    simple: Any = multiprocessing.get_context("spawn").SimpleQueue()
+    fed: Any = multiprocessing.get_context("spawn").Queue()
     target = tmp_path / "written"
     try:
         run = a_run(service)
-        assert "inside a test run" in refused(run, lambda: queue.put(StartsWhenPickled(target)))
+        assert "inside a test run" in refused(run, lambda: simple.put(StartsWhenPickled(target)))
         assert not target.exists()
         service.unregister(run)
-        a_run(service, background=("process:multiprocessing",))
-        outside(lambda: queue.put(StartsWhenPickled(target)))
-        assert queue.get(timeout=10) == "pickled"
-        assert target.exists()  # the gap: sh ran, and no line says so
+        listed = a_run(service, background=("process:multiprocessing",))
+        outside(lambda: simple.put(StartsWhenPickled(target)))
+        assert simple.get() == "pickled"
+        assert target.exists()  # the gap: sh ran inside the decided put, and no line says so
+        target.unlink()
+        outside(lambda: fed.put(StartsWhenPickled(target)))  # pickled by its feeder, later
+        eventually(lambda: any(x.get("reason") == "orphan" for x in sink_of(listed).lines))
+        assert not target.exists()  # the feeder's pickling is decided: sh was refused
     finally:
-        queue.close()
-        queue.join_thread()
+        simple.close()
+        fed.close()
+        fed.join_thread()
+
+
+@pytest.mark.design("service.loky_own_queues")
+def test_a_plain_and_a_listed_outside_loky_task_run_while_a_run_is_open(
+    service: state.ProcessState,
+) -> None:
+    """loky's queues have a feeder of their own: it sends what a decided put queued."""
+    from joblib.externals.loky import get_reusable_executor
+
+    executor = outside(lambda: get_reusable_executor(max_workers=1))
+    try:
+        # Made and warmed in a request that then ends: its threads now run outside any request.
+        assert in_ended_request(lambda: executor.submit(os.getpid).result(30)) > 0
+        run = a_run(service)
+        assert plain(lambda: executor.submit(len, "abc").result(30)) == 3
+        assert lines(run) == []
+        service.unregister(run)
+        listed = a_run(service, background=("process:multiprocessing",))
+        assert outside(lambda: executor.submit(len, "abcd").result(30)) == 4
+        assert not any(x.get("reason") == "orphan" for x in sink_of(listed).lines)
+    finally:  # never waits on a stuck task, and ends its workers
+        plain(lambda: executor.shutdown(wait=False, kill_workers=True))
+
+
+@pytest.mark.design("service.pool_teardown")
+@pytest.mark.filterwarnings("ignore:unclosed running multiprocessing pool:ResourceWarning")
+def test_a_send_a_team_hook_makes_inside_a_pools_teardown_is_still_decided(
+    service: state.ProcessState, tmp_path: Path
+) -> None:
+    """The teardown sends on the pool's own queues only; a team's warnings hook that sends
+    from inside it is a send like any other."""
+    import gc
+    import warnings
+
+    context = multiprocessing.get_context("spawn")
+    mine, end = context.Pipe()
+    target = tmp_path / "written"
+    child = context.Process(target=consumer, args=("send", end, str(target)))
+    plain(child.start)
+    pool = plain(lambda: multiprocessing.get_context("fork").Pool(1))
+    workers = list(pool._pool)  # type: ignore[attr-defined]
+    sent: list[str] = []
+    shown = warnings.showwarning
+
+    def hook(*args: Any, **kwargs: Any) -> None:
+        try:
+            mine.send("from the hook")
+            sent.append("ran")
+        except ScrimmageRefused:
+            sent.append("refused")
+
+    run = a_run(service)
+    held = [pool]
+    del pool
+    warnings.showwarning = hook
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("always", ResourceWarning)
+            warnings.showwarning = hook
+            under(run, lambda: (held.clear(), gc.collect()))
+        assert sent == ["refused"], sent
+        for worker in workers:
+            worker.join(10)
+            assert not worker.is_alive()  # the pool's own teardown still ran
+        child.join(1)
+        assert not target.exists()
+    finally:
+        warnings.showwarning = shown
+        child.kill()
+        child.join()
+
+
+@pytest.mark.design("service.interpreters_refused")
+@pytest.mark.skipif(not ON_314, reason="subinterpreters are new in Python 3.14")
+def test_a_put_on_a_subinterpreters_queue_in_a_run_is_refused(
+    service: state.ProcessState,
+) -> None:
+    from concurrent import interpreters  # type: ignore[attr-defined]
+
+    queue = interpreters.create_queue()  # type: ignore[attr-defined]
+    run = a_run(service)
+    assert "inside a test run" in refused(run, lambda: queue.put("run's job"))
+    assert "inside a test run" in refused(run, lambda: queue.put_nowait("run's job"))
+    assert queue.empty()
+
+
+@pytest.mark.design("service.interpreters_refused")
+@pytest.mark.skipif(not ON_314, reason="subinterpreters are new in Python 3.14")
+def test_a_thread_pool_submit_on_an_interpreter_pool_in_a_run_is_refused(
+    service: state.ProcessState,
+) -> None:
+    """ThreadPoolExecutor.submit called on an InterpreterPoolExecutor skips its own submit:
+    it is decided all the same."""
+    from concurrent.futures import InterpreterPoolExecutor  # type: ignore[attr-defined]
+
+    with InterpreterPoolExecutor(max_workers=1) as pool:
+        run = a_run(service)
+        assert "inside a test run" in refused(
+            run, lambda: ThreadPoolExecutor.submit(pool, len, "x")
+        )
+        service.unregister(run)
+        assert plain(lambda: pool.submit(len, "xy").result(10)) == 2  # decided once, not twice

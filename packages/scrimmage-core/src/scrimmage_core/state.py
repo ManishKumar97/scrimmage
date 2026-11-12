@@ -1072,9 +1072,18 @@ INTERNAL_KINDS: list[type] = []  # thread classes, such as a process pool's mana
 
 
 def internal_thread(thread: threading.Thread) -> bool:
+    """A pool's own thread: started inside a call the process gate decided, such as
+    Pool.__init__ or a submit, with a target or an exact class named as a pool's own."""
+    if getattr(_internal, "depth", 0) <= 0 or getattr(_internal, "team", False):
+        return False
     target: object = getattr(thread, "_target", None)
     target = getattr(target, "__func__", target)  # a classmethod's target is a bound method
-    return target in INTERNAL_TARGETS or isinstance(thread, tuple(INTERNAL_KINDS))
+    return target in INTERNAL_TARGETS or type(thread) in INTERNAL_KINDS
+
+
+def in_decided_call() -> bool:
+    """Inside a call the process gate decided, such as InterpreterPoolExecutor.submit."""
+    return getattr(_internal, "depth", 0) > 0 and not getattr(_internal, "team", False)
 
 
 def pool_internal() -> bool:

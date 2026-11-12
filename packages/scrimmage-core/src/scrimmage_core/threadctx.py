@@ -196,8 +196,14 @@ def patch_executor(module: ModuleType, process: ProcessState) -> None:
     def carried_submit(self: Any, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
         if not state.in_service():
             return submit(self, fn, *args, **kwargs)
-        if in_subinterpreters(self):  # its tasks cross into another interpreter, unwrapped;
-            return spawn(self, fn, *args, **kwargs)  # a run's are refused before this
+        if in_subinterpreters(self):  # its tasks cross into another interpreter, unwrapped
+            if not state.in_decided_call():  # reached past its own submit, which decides
+                from scrimmage_core import process_gate
+
+                process_gate.decide_send(
+                    "InterpreterPoolExecutor.submit", process_gate.SUBINTERPRETER
+                )
+            return spawn(self, fn, *args, **kwargs)
         return spawn(self, carrying(fn), *args, **kwargs)
 
     setattr(carried_submit, MARK, True)

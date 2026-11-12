@@ -14,8 +14,10 @@ background_real lists it, except a pool's own threads and stops, which carry wor
 decided at the team's call.
 """
 
+import contextlib
 import functools
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -247,23 +249,77 @@ def guarded(what: str, why: str, method: Callable[..., Any], skip: type | None =
     if getattr(method, GATED, False):
         return method
 
+    credits = what.endswith("Queue.put")  # a queue's feeder sends each item later
+
     @functools.wraps(method)
     def gate(*args: Any, **kwargs: Any) -> Any:
-        mine = bool(args) and (
-            (skip is not None and isinstance(args[0], skip)) or args[0] in IN_PROCESS_QUEUES
-        )
-        if not in_service() or mine or getattr(_teardown, "on", False):
+        if not in_service() or (skip is not None and args and isinstance(args[0], skip)):
             return method(*args, **kwargs)
-        run = current()
-        # A run's own code or an orphan of one is refused. Work outside any request meets the
-        # outside rules, except a pool's own, which carries what this gate decided already.
-        if run is not None and not (isinstance(run, Outside) and pool_internal()):
-            refuse_other(run, "process:multiprocessing", what, why)
-        with internal_call():
+        if args and own_object(args[0]):
             return method(*args, **kwargs)
+        decide_send(what, why)
+        if not credits:
+            with internal_call():
+                return method(*args, **kwargs)
+        writer = getattr(args[0], "_writer", None) if args else None
+        credit(writer)  # before the item is queued, so its feeder never sends it first
+        try:
+            with internal_call():
+                return method(*args, **kwargs)
+        except BaseException:
+            spend(writer)
+            raise
 
     setattr(gate, GATED, True)
     return gate
+
+
+def decide_send(what: str, why: str) -> None:
+    """A send or a start to another process, decided where the code is: refused under a run
+    or an orphan of one; outside any request, the outside rules, unless a pool's own call
+    or thread already carries a decision."""
+    run = current()
+    if run is not None and not (isinstance(run, Outside) and pool_internal()):
+        refuse_other(run, "process:multiprocessing", what, why)
+
+
+def own_object(target: object) -> bool:
+    """An object Scrimmage registered, by identity: a ThreadPool's change notifier and its
+    pipe at any time; a pool's own queues and pipes while that pool tears itself down; a
+    queue's pipe for an item a guarded put decided, once per item."""
+    try:
+        if target in IN_PROCESS_QUEUES:
+            return True
+        if getattr(_teardown, "on", False) and target in POOL_ENDS:
+            return True
+    except TypeError:  # an object that cannot be weakly held is no registered one
+        return False
+    return spend(target)
+
+
+_credit_lock = threading.Lock()
+# A queue's pipe, and how many items a guarded put decided that its feeder has not sent yet.
+_credits: "weakref.WeakKeyDictionary[Any, int]" = weakref.WeakKeyDictionary()
+
+
+def credit(writer: object) -> None:
+    if writer is None:
+        return
+    with _credit_lock:
+        _credits[writer] = _credits.get(writer, 0) + 1
+
+
+def spend(writer: object) -> bool:
+    """One decided item's send on this pipe: True, and counted, if one is owed."""
+    try:
+        with _credit_lock:
+            owed = _credits.get(writer, 0)
+            if owed <= 0:
+                return False
+            _credits[writer] = owed - 1
+            return True
+    except TypeError:
+        return False
 
 
 def internal(method: Callable[..., Any]) -> Any:
@@ -352,6 +408,12 @@ def install_service() -> None:
         "concurrent.interpreters",
         lambda m: patch_names(m, "Interpreter", ("exec", "call", "call_in_thread"), SUBINTERPRETER),
     )
+    hooks.on_import(  # a queue a subinterpreter reads: its put hands work to code with no gate
+        "concurrent.interpreters._queues",
+        lambda m: patch_names(m, "Queue", ("put", "put_nowait"), SUBINTERPRETER),
+    )
+    for loky in ("loky.backend.queues", "joblib.externals.loky.backend.queues"):
+        hooks.on_import(loky, patch_queues)  # loky's own queues, with a feeder of their own
 
 
 def patch_tracker(module: ModuleType) -> None:
@@ -402,7 +464,28 @@ def tracker(event: str, args: tuple[Any, ...]) -> bool:
         program = os.fsdecode(command(event, args)[0])
     if os.path.realpath(program) != here:
         return False
-    return any(arg.startswith(TRACKER_MAIN) for arg in argv_of(event, args))
+    # Its exact command line: this Python, its own startup flags, and the tracker's main.
+    util = sys.modules.get("multiprocessing.util")
+    flags = getattr(util, "_args_from_interpreter_flags", lambda: None)()
+    argv = argv_of(event, args)
+    if flags is None or argv[1:-1] != [*flags, "-c"] or not argv:
+        return False
+    if TRACKER_LINE.fullmatch(argv[-1]) is None:
+        return False
+    # And the environment it inherits as it was at startup: no PYTHON* variable or warning
+    # option a run set can make that Python load code of its own.
+    return python_settings() == STARTUP_SETTINGS
+
+
+TRACKER_LINE = re.compile(re.escape(TRACKER_MAIN) + r";main\(\d+\)")
+
+
+def python_settings() -> tuple[tuple[tuple[str, str], ...], tuple[str, ...]]:
+    found = tuple(sorted((k, v) for k, v in os.environ.items() if k.startswith("PYTHON")))
+    return found, tuple(sys.warnoptions)
+
+
+STARTUP_SETTINGS = python_settings()  # taken when the SDK loads, before any request
 
 
 def patch_spawnv(module: ModuleType) -> None:
@@ -446,6 +529,25 @@ def patch_executor(module: ModuleType) -> None:
     manager = getattr(module, "_ExecutorManagerThread", None)  # it sends what submit decided
     if isinstance(manager, type) and manager not in state.INTERNAL_KINDS:
         state.INTERNAL_KINDS.append(manager)
+    wakeup: Any = getattr(module, "_ThreadWakeup", None)
+    init = wakeup.__dict__.get("__init__") if isinstance(wakeup, type) else None
+    if callable(init) and not getattr(init, GATED, False):
+        wakeup.__init__ = in_process_pipe(init)
+
+
+def in_process_pipe(init: Callable[..., Any]) -> Any:
+    """An executor's wakeup pipe, made by it: both its ends stay in this process, one with the
+    caller and one with the manager thread, so a send on it reaches no other process."""
+
+    @functools.wraps(init)
+    def made(self: Any, *args: Any, **kwargs: Any) -> None:
+        init(self, *args, **kwargs)
+        for end in (getattr(self, "_writer", None), getattr(self, "_reader", None)):
+            if end is not None:
+                IN_PROCESS_QUEUES.add(end)
+
+    setattr(made, GATED, True)
+    return made
 
 
 def own_threads(module: ModuleType, owner: str, names: tuple[str, ...]) -> None:
@@ -470,9 +572,11 @@ def patch_interpreter_pool(module: ModuleType) -> None:
 
 
 def patch_queues(module: ModuleType) -> None:
-    patch_names(module, "Queue", ("put",), SENT)  # put_nowait calls put
-    patch_names(module, "SimpleQueue", ("put",), SENT)
-    own_threads(module, "Queue", ("_feed",))  # its feeder, which sends what put decided
+    """Every queue class of the module whose own put sends, now or through its feeder; a
+    subclass that defines put of its own, such as JoinableQueue, is decided too."""
+    for name, cls in sorted(vars(module).items()):
+        if isinstance(cls, type) and "put" in cls.__dict__ and name.endswith("Queue"):
+            patch_names(module, name, ("put",), SENT)  # put_nowait calls put
 
 
 def patch_pool(module: ModuleType) -> None:
@@ -499,21 +603,23 @@ def thread_pool_init(method: Callable[..., Any], threads: type, ended: object) -
 
     @functools.wraps(method)
     def init(self: Any, *args: Any, **kwargs: Any) -> Any:
-        if not in_service() or not isinstance(self, threads):
-            try:
-                return method(self, *args, **kwargs)
-            except ScrimmageRefused:
-                self._state = ended  # refused before it was made: its finalizer has nothing
-                raise
-        method(self, *args, **kwargs)
-        notifier = getattr(self, "_change_notifier", None)
-        for end in (
-            notifier,
-            getattr(notifier, "_writer", None),
-            getattr(notifier, "_reader", None),
+        if not in_service():
+            return method(self, *args, **kwargs)
+        try:
+            method(self, *args, **kwargs)
+        except ScrimmageRefused:
+            self._state = ended  # refused before it was made: its finalizer has nothing
+            raise
+        # Its own queues and pipes, by identity: its teardown may send on these only.
+        for queue in (
+            getattr(self, n, None) for n in ("_inqueue", "_outqueue", "_change_notifier")
         ):
-            if end is not None:  # the queue, and the pipe it sends through
-                IN_PROCESS_QUEUES.add(end)
+            for end in (queue, getattr(queue, "_writer", None), getattr(queue, "_reader", None)):
+                if end is not None:
+                    with contextlib.suppress(TypeError):
+                        POOL_ENDS.add(end)
+                        if isinstance(self, threads) and queue is self._change_notifier:
+                            IN_PROCESS_QUEUES.add(end)  # a pipe within this process
         return None
 
     setattr(init, GATED, True)
@@ -527,6 +633,8 @@ POOL_TEARDOWN = ("__del__", "_terminate_pool")
 POOL_STOPS = ("close", "terminate")
 # The multiprocessing queues a ThreadPool uses within this process, such as its change notifier.
 IN_PROCESS_QUEUES: "weakref.WeakSet[Any]" = weakref.WeakSet()
+# Each pool's own queues and their pipes, registered as it is made: its teardown sends on these.
+POOL_ENDS: "weakref.WeakSet[Any]" = weakref.WeakSet()
 EXECUTOR_STOPS = ("shutdown",)
 
 
