@@ -54,16 +54,42 @@ QUOTED = (
     rf"(?!(?:(?!(?P=quote))[^\n])*?(?ai:{FIELD}))"
     r"""(?:\\.|(?!(?P=quote))[^\\\n])+(?P=quote)"""
 )
+# Where a key shape other than a form field can begin: each of them starts with its literal.
+SHAPE_START = (
+    r"sk-|AKIA|ASIA|AIza|gh[pousr]_|github_pat_|xox|xapp-|Illegal header"
+    r"|(?ai:bearer|authorization)"
+)
+# Where any key shape can begin, a field name included. Every match of the patterns starts at
+# one, so a search for the next one never reads past the next match.
+SHAPE_OR_NAME = rf"{SHAPE_START}|{NAME}"
+# One step of an unquoted value, and of the value after a marker.
+STEP = r"""\\u[0-9a-fA-F]{4}|\\(?!["'nr])|[^&\s"'<>\\]"""
+MARKED_STEP = r"""[^&\s"'<>\\]"""
+
+
+def bounded(step: str) -> str:
+    """A run of steps that stops before a field name or a key shape, or one step if one
+    begins at once. key_removals reads on from there with the plain run to where the value
+    ends, so a removed value is the whole run, and each pattern match reads only up to the
+    next name: a run of kept names, as in is_secret=1,is_secret=1, stays linear."""
+    return rf"(?:(?:(?!{SHAPE_OR_NAME})(?:{step}))+|(?:{step}))"
+
+
 # `inside` is set when the name follows a quote, so a quote after it closes that string.
 FORM = (
     r"""(?:(?P<inside>(?<=["']))|(?<!["']))"""
-    + NAME
-    + rf"(?:{MARKER}[^&\s\"'<>\\]+"
+    + rf"(?P<field>{NAME})"
+    + rf"(?:(?P<marked>{MARKER}{bounded(MARKED_STEP)})"
     + rf"|(?(inside)(?!)|{QUOTED})"
     + rf"|(?!{MARKER})(?:<[^<>\"'\\]+>|(?P<value>(?(inside)|(?:\\?[\"']|<)?)"
-    + r"(?:\\u[0-9a-fA-F]{4}|\\(?![\"'nr])|[^&\s\"'<>\\])+))"
+    + rf"{bounded(STEP)}))"
     + ")"
 )
+# The rest of a value from where the pattern stopped. A run stops at the same place from any
+# step inside it, so one read serves every name inside one run.
+VALUE_RUN = re.compile(rf"(?:{STEP})*")
+MARKED_RUN = re.compile(rf"(?:{MARKED_STEP})*")
+SHAPE_OR_NAME_RE = re.compile(SHAPE_OR_NAME)
 # Where FORM's value ends, a removed value may go on past an escape, as in abc\"2zz. It goes
 # on only when more of the value follows the escape: one before a space, a bracket, a comma,
 # a colon or the end closes an escaped string instead, as the second \" in {\"a\":\"b\"}.
@@ -167,22 +193,22 @@ def no_jwt(found: re.Match[str]) -> str:
     return found.group(1).removesuffix("eyJ") + REMOVED
 
 
-def code_value(found: re.Match[str], value: str | None = None) -> bool:
+def code_value(found: re.Match[str], end: int) -> bool:
     """A value that is code: None, True or False alone, or a bare name as an argument of a
-    call whose name is right before its parenthesis, as in f(token=tok). value: the value
-    with what it goes on with, when that is more than the match holds."""
-    value = found.group("value") if value is None else value
-    if value is None:
+    call whose name is right before its parenthesis, as in f(token=tok). end: where the value
+    ends, with the first character it goes on with, when that is more than the match holds."""
+    if found.start("value") < 0:
         return False
-    head = IDENTIFIER.match(value)
+    text = found.string
+    head = IDENTIFIER.match(text, found.start("value"), end)
     if head is None:
         return False
-    name, rest = head.group(), value[head.end() :]
-    if rest[:1] not in ("", ")", ","):
+    name = head.group()
+    if text[head.end() : min(head.end() + 1, end)] not in ("", ")", ","):
         return False
     if name in CODE_VALUES:
         return True
-    text, start = found.string, found.start()
+    start = found.start()
     if not (text[start - 1 : start] == "(" or text[start - 2 : start] == ", "):
         return False
     opening = text.rfind("(", 0, start)
@@ -192,40 +218,67 @@ def code_value(found: re.Match[str], value: str | None = None) -> bool:
     return named_call and "." not in name
 
 
+class Reads:
+    """The last read of each run pattern: from where, and to where. A run stops at the same
+    place from any step inside it, so one read is enough for every name inside one run, and
+    the whole pass stays linear. One per pattern, as names inside and outside a quote can
+    alternate, each reading with its own continuation."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.last: dict[re.Pattern[str], tuple[int, int]] = {}
+
+    def end(self, pattern: re.Pattern[str], at: int) -> int:
+        since, to = self.last.get(pattern, (0, 0))
+        if not since <= at < to:
+            to = cast(re.Match[str], pattern.match(self.text, at)).end()
+            self.last[pattern] = (at, to)
+        return to
+
+
 def key_removals(text: str, decoded: bool = False) -> list[tuple[int, int, str]]:
     """Each place the key shapes remove, as (start, end, its first match's text), in order.
 
-    The matches are the patterns' own, each value ending where FORM's does. A match that is
-    kept, such as next_page_token=x, keeps only that, so the text after it is read by every
-    rule as any other text is, and it never shields a secret after it. A removed value also
-    takes what it goes on with past an escape, as in abc\"2zz, and a secret found in that is
-    joined into the same place.
+    A removed value is the whole of it, as the pattern without its bound reads it, and also
+    takes what it goes on with past an escape, as in abc\"2zz; a secret found in that is
+    joined into the same place. A match that is kept, such as next_page_token=x or code, keeps
+    only what comes before the first field name or key shape in it, so in
+    next_page_token=ab,password=x the password is read again, as any other text is, and a kept
+    value never shields a secret in it or after it.
     """
     places: list[tuple[int, int, str]] = []
-    # The last read of each continuation: from where, and to where. One per pattern, as names
-    # inside and outside a quote can alternate, each reading with its own pattern.
-    went_on: dict[re.Pattern[str], tuple[int, int]] = {}
-    for found in PATTERNS.finditer(text):
-        end = found.end()
-        value = found.group("value")
-        if value is not None and found.end("value") == end:
+    reads = Reads(text)
+    at = 0
+    while (found := PATTERNS.search(text, at)) is not None:
+        # The pattern stops a value before a field name or a key shape; its run goes on.
+        # resume: where the whole match ends. end: where a removed place ends, past an escape
+        # with more of the value after it. code_end: what code_value reads.
+        resume = end = code_end = found.end()
+        if found.start("value") >= 0:
+            resume = reads.end(VALUE_RUN, resume)
             goes_on = GOES_ON_RAW
             if decoded:
                 inside = found.group("inside") is not None
                 goes_on = GOES_ON_DECODED_INSIDE if inside else GOES_ON_DECODED
-            since, to = went_on.get(goes_on, (0, 0))
-            # A continuation stops at the same place from any step inside it, so one read is
-            # enough for a run of names inside one value: that keeps the whole pass linear.
-            if not since <= end < to:
-                to = cast(re.Match[str], goes_on.match(text, end)).end()
-                went_on[goes_on] = (end, to)
+            end = reads.end(goes_on, resume)
             # Its first character is all code_value reads past the value: an escape is never
-            # part of a name. Copying the rest would make a run of names quadratic.
-            value += text[end : min(to, end + 1)]
-            end = to
-        # Kept: a harmless name such as next_page_token, or code.
-        if HARMLESS_NAME.match(found.group()) is not None or code_value(found, value):
-            continue
+            # part of a name.
+            code_end = min(end, resume + 1)
+        elif found.start("marked") >= 0:
+            resume = end = reads.end(MARKED_RUN, resume)
+        at = resume
+        field = found.group("field")
+        if field is not None:
+            # The text from the first field name or key shape inside a form field is read
+            # again. A kept field, a harmless name such as next_page_token or code, ends
+            # there. A removed one does not, and what is found there joins it, as a Bearer
+            # token that starts inside the value and goes on past its end.
+            shape = SHAPE_OR_NAME_RE.search(text, found.start() + 1)
+            bound = len(text) if shape is None else shape.start()
+            if HARMLESS_NAME.match(field) is not None or code_value(found, code_end):
+                at = min(found.end(), bound)
+                continue
+            at = min(resume, bound)
         if places and found.start() < places[-1][1]:  # it starts in a place already removed
             start, last, first = places[-1]
             places[-1] = (start, max(last, end), first)
