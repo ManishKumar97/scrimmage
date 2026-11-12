@@ -10,10 +10,13 @@ import importlib.util
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
-from collections.abc import AsyncIterator, Callable
+import time
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -78,7 +81,7 @@ class Bed:
 
 
 @pytest.fixture
-def bed(tmp_path: Path) -> Bed:
+def bed(tmp_path: Path) -> Iterator[Bed]:
     # Python runs only the first sitecustomize it finds, so the shim works only if the
     # environment has none of its own.
     assert importlib.util.find_spec("sitecustomize") is None
@@ -89,7 +92,11 @@ def bed(tmp_path: Path) -> Bed:
     env = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
     env["PYTHONPATH"] = os.pathsep.join(p for p in (str(SHIM), env.get("PYTHONPATH")) if p)
     env["STARTS"] = str(scratch / "starts")
-    return Bed(root, env, scratch / "server.err", scratch)
+    made = Bed(root, env, scratch / "server.err", scratch)
+    yield made
+    for pid in ours(made):  # a stop test that fails must not leave its runs going for 600 s
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
 
 
 @contextlib.asynccontextmanager
@@ -638,7 +645,7 @@ def test_record_with_several_runs_gives_its_run_count_as_a_note(
     line = "2 runs of each of 1 test; each calls these for real: tool:get_invoice"
     assert doc["notes"][0] == {"message": line}, doc["notes"]
     record_line = next(x for x in bed.log.read_text().splitlines() if ": record: " in x)
-    assert record_line.endswith(", 0 bytes on standard error"), record_line
+    assert ", 0 bytes on standard error," in record_line, record_line
 
 
 def test_a_child_that_fills_its_stderr_does_not_block(bed: Bed, modes: Modes) -> None:
@@ -927,3 +934,382 @@ def test_probe_runs_only_with_the_server_flag(bed: Bed) -> None:
     assert doc["exit"] == 0 and doc["probe"]["ran"] is True, texts(probed)
     assert "probe ran your code up to its first model request" in texts(probed)[0]
     assert bed.starts() == 1
+
+
+# Agents for the stop tests. Each writes a marker once it is where a stop should find it.
+STOPPABLE = '''
+import os, signal, sys, time
+from pathlib import Path
+
+
+def mark(name, text=None):
+    Path(name + ".tmp").write_text(str(os.getpid()) if text is None else text)
+    os.replace(name + ".tmp", name)
+
+
+def answer(question):
+    """Says it got SIGTERM, then goes."""
+    def stopped(signum, frame):
+        mark("got-sigterm")
+        os._exit(0)
+    signal.signal(signal.SIGTERM, stopped)
+    mark("hanging")
+    time.sleep(600)
+    return "never"
+
+
+def stubborn(question):
+    """Ignores SIGTERM, so only SIGKILL stops it."""
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    mark(f"ignoring-{os.getpid()}")
+    time.sleep(600)
+    return "never"
+
+
+def spawner(question):
+    """Leaves a process in a session of its own, which unsets the call's variable."""
+    pid = os.fork()
+    if pid == 0:
+        os.setsid()
+        if os.environ.get("UNSET_NONCE"):
+            os.unsetenv("SCRIMMAGE_MCP_CALL")
+            os.environ.pop("SCRIMMAGE_MCP_CALL", None)
+            mark("unset")
+        time.sleep(600)
+        os._exit(0)
+    mark("grandchild", str(pid))
+    mark("hanging")
+    time.sleep(600)
+    return "never"
+'''
+
+
+def stoppable(bed: Bed, function: str, *, runs: int = 1) -> None:
+    (bed.root / "acme" / "stoppable.py").write_text(STOPPABLE)
+    hang(bed, f"acme.stoppable:{function}")
+    if runs > 1:
+        bed.edit("runs = 1\n", f"runs = {runs}\nparallel = {runs}\n")
+
+
+def ours(bed: Bed) -> list[int]:
+    """Every process that holds this test's environment: the server and all it started."""
+    mark = f"STARTS={bed.env['STARTS']}".encode()
+    found = []
+    for entry in Path("/proc").iterdir():
+        if entry.name.isdigit() and int(entry.name) != os.getpid():
+            with contextlib.suppress(OSError):
+                if mark in (entry / "environ").read_bytes().split(b"\0") and alive(int(entry.name)):
+                    found.append(int(entry.name))
+    return found
+
+
+def none_left(bed: Bed) -> bool:
+    """Waits up to 30 s for every process the test started to be gone."""
+    ceiling = time.monotonic() + 30
+    while ours(bed):
+        if time.monotonic() > ceiling:
+            return False
+        time.sleep(0.1)
+    return True
+
+
+async def cancel_when(bed: Bed, session: ClientSession, marker: str, **arguments: Any) -> None:
+    """Call test, and cancel it from the client once the run writes its marker."""
+    async with anyio.create_task_group() as group:
+        group.start_soon(session.call_tool, "test", {"max_cost_usd": 5, **arguments})
+        await appear(bed.root / marker)
+        group.cancel_scope.cancel()
+
+
+def log_lines(bed: Bed, command: str = "test") -> list[str]:
+    return [line for line in bed.log.read_text().splitlines() if f": {command}: " in line]
+
+
+def test_progress_arrives_while_a_test_runs(bed: Bed) -> None:
+    stoppable(bed, "answer")
+    seen: list[tuple[float, str | None]] = []
+    got = anyio.Event()
+
+    async def on_progress(progress: float, total: float | None, message: str | None) -> None:
+        seen.append((progress, message))
+        got.set()
+
+    async def go() -> None:
+        async with connect(bed) as session, anyio.create_task_group() as group:
+            group.start_soon(
+                partial(session.call_tool, progress_callback=on_progress),
+                "test",
+                {"max_cost_usd": 5},
+            )
+            with anyio.fail_after(60):
+                await got.wait()
+            group.cancel_scope.cancel()
+
+    anyio.run(go)
+    progress, message = seen[0]
+    assert progress >= mcp_server.PROGRESS_EVERY_S - 1
+    assert message is not None and message.startswith("test running for ")
+    assert message.endswith("; cost cap $5")
+
+
+def test_a_cancelled_test_stops_its_child_by_sigterm_and_leaves_no_process(bed: Bed) -> None:
+    stoppable(bed, "answer")
+
+    async def go() -> None:
+        async with connect(bed) as session:
+            await cancel_when(bed, session, "hanging")
+
+    anyio.run(go)
+    assert (bed.root / "got-sigterm").exists()  # the run was stopped by SIGTERM, not SIGKILL
+    assert none_left(bed)
+    (line,) = log_lines(bed)
+    # The child printed its document: it got SIGTERM, Scrimmage's own stop, first.
+    assert "the call was cancelled" in line and line.endswith(", status infra"), line
+
+
+def test_a_client_time_limit_stops_the_child_the_same_way(bed: Bed) -> None:
+    stoppable(bed, "answer")
+
+    async def go() -> None:
+        async with connect(bed) as session:
+            with pytest.raises(Exception, match=r"(?i)timed out|timeout"):
+                await session.call_tool("test", {"max_cost_usd": 5}, read_timeout_seconds=8)
+            await appear(bed.root / "got-sigterm")
+
+    anyio.run(go)
+    assert none_left(bed)
+    (line,) = log_lines(bed)
+    assert "the call was cancelled" in line and line.endswith(", status infra"), line
+
+
+def test_the_servers_time_limit_returns_the_stopped_document(bed: Bed) -> None:
+    stoppable(bed, "answer")
+    (result,) = call(bed, ("test", {"max_cost_usd": 5}), server=("--call-timeout", "8"))
+    doc = doc_of(result)
+    assert result.is_error and doc["status"] == "infra"
+    assert "stopped after the server's 8 s limit" in texts(result)[0]
+    assert (bed.root / "got-sigterm").exists() and none_left(bed)
+
+
+CHILD_IGNORES_SIGTERM = IN_CHILD + (
+    "if child:\n"
+    "    import signal\n"
+    "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+    "    real = signal.signal\n"
+    "    signal.signal = lambda s, h: None if s == signal.SIGTERM else real(s, h)\n"
+)
+
+
+def test_a_child_that_ignores_sigterm_is_killed_after_the_grace(bed: Bed) -> None:
+    stoppable(bed, "answer")
+    bed.shim(CHILD_IGNORES_SIGTERM)
+    cancelled: list[float] = []
+
+    async def go() -> None:
+        async with connect(bed) as session:
+            await cancel_when(bed, session, "hanging")
+            cancelled.append(time.monotonic())
+            while not log_lines(bed):  # the stop's line, once the child is gone
+                await anyio.sleep(0.1)
+
+    anyio.run(go)
+    waited = time.monotonic() - cancelled[0]
+    assert waited >= mcp_server.STOP_GRACE_S - 1, waited  # it had its grace
+    (line,) = log_lines(bed)
+    assert "no document" in line and "exit -9" in line, line  # then SIGKILL
+    assert none_left(bed)
+
+
+def leftover_after_a_killed_child(bed: Bed, *, unset: bool) -> tuple[int, str]:
+    """A run leaves a process in a session of its own, then the child is stopped so that its
+    own stop never runs: it ignores SIGTERM, and gets SIGKILL after the grace. Linux then
+    kills the run, whose runner died, but not the process it left."""
+    stoppable(bed, "spawner")
+    bed.shim(CHILD_IGNORES_SIGTERM)
+    if unset:
+        bed.env["UNSET_NONCE"] = "1"
+
+    async def go() -> None:
+        async with connect(bed) as session:
+            await cancel_when(bed, session, "hanging")
+            while not log_lines(bed):
+                await anyio.sleep(0.1)
+
+    anyio.run(go)
+    (line,) = log_lines(bed)
+    return int((bed.root / "grandchild").read_text()), line
+
+
+def test_the_sweep_kills_runs_in_their_own_sessions_by_the_calls_nonce(bed: Bed) -> None:
+    grandchild, line = leftover_after_a_killed_child(bed, unset=False)
+    assert "exit -9" in line and ", 1 left over and killed by the sweep" in line, line
+    assert not alive(grandchild) and none_left(bed)
+
+
+def test_a_run_that_unsets_the_nonce_is_still_swept(bed: Bed) -> None:
+    grandchild, line = leftover_after_a_killed_child(bed, unset=True)
+    assert (bed.root / "unset").exists()  # it had unset the variable before the sweep
+    assert ", 1 left over and killed by the sweep" in line, line
+    assert not alive(grandchild) and none_left(bed)
+
+
+def test_closing_stdin_with_four_runs_that_ignore_sigterm_leaves_no_process(bed: Bed) -> None:
+    stoppable(bed, "stubborn", runs=4)
+
+    async def go() -> None:
+        async with connect(bed) as session, anyio.create_task_group() as group:
+            group.start_soon(session.call_tool, "test", {"max_cost_usd": 5})
+            with anyio.fail_after(120):
+                while len(list(bed.root.glob("ignoring-*"))) < 4:
+                    await anyio.sleep(0.05)
+            group.cancel_scope.cancel()
+        # Leaving the client closes the server's stdin, and the SDK kills it on its own
+        # schedule: 2 s to exit, then SIGTERM, 2 s more, then SIGKILL.
+
+    anyio.run(go)
+    runs = [int(path.name.split("-")[1]) for path in bed.root.glob("ignoring-*")]
+    assert len(runs) == 4
+    assert none_left(bed), [pid for pid in runs if alive(pid)]
+
+
+SERVER_PID = IN_SERVER + (
+    "if server:\n"
+    "    import os, pathlib\n"
+    "    pathlib.Path(os.environ['SERVER_PID']).write_text(str(os.getpid()))\n"
+)
+
+
+def signal_stops(bed: Bed, signum: int) -> None:
+    stoppable(bed, "answer")
+    bed.shim(SERVER_PID)
+    bed.env["SERVER_PID"] = str(bed.scratch / "server.pid")
+
+    async def go() -> None:
+        with contextlib.suppress(Exception):
+            async with connect(bed) as session, anyio.create_task_group() as group:
+                group.start_soon(session.call_tool, "test", {"max_cost_usd": 5})
+                await appear(bed.root / "hanging")
+                os.kill(int((bed.scratch / "server.pid").read_text()), signum)
+                await appear(bed.root / "got-sigterm")
+                group.cancel_scope.cancel()
+
+    anyio.run(go)
+    assert (bed.root / "got-sigterm").exists() and none_left(bed)
+
+
+def test_sigterm_to_the_server_stops_a_running_child(bed: Bed) -> None:
+    signal_stops(bed, signal.SIGTERM)
+
+
+def test_sighup_to_the_server_stops_a_running_child(bed: Bed) -> None:
+    signal_stops(bed, signal.SIGHUP)
+
+
+LOOP_RAISES = IN_SERVER + (
+    "if server:\n"
+    "    import os, pathlib\n"
+    "    import anyio\n"
+    "    from scrimmage_core import mcp_server\n"
+    "    real = mcp_server.Scrimmage.supervise\n"
+    "    async def supervise(self, child):\n"
+    "        async def boom():\n"
+    "            while not pathlib.Path('hanging').exists():\n"
+    "                await anyio.sleep(0.05)\n"
+    "            raise RuntimeError('an error that escapes the loop')\n"
+    "        if child.command == 'test':\n"
+    "            self.group.start_soon(boom)\n"
+    "        await real(self, child)\n"
+    "    mcp_server.Scrimmage.supervise = supervise\n"
+)
+
+
+def test_an_error_that_escapes_the_loop_still_signals_every_child(bed: Bed) -> None:
+    stoppable(bed, "answer")
+    bed.shim(LOOP_RAISES)
+
+    async def go() -> None:
+        # The server goes away once the child is stopped; the ceiling ends a server that hangs.
+        with anyio.fail_after(120), contextlib.suppress(Exception):
+            async with connect(bed) as session:
+                await session.call_tool("test", {"max_cost_usd": 5})
+
+    anyio.run(go)
+    assert "scrimmage-mcp: stopped on an error" in bed.log.read_text()
+    assert (bed.root / "got-sigterm").exists() and none_left(bed)
+
+
+# In the server: the child exists, and the start has not returned yet, for 3 s.
+SLOW_START = IN_SERVER + (
+    "if server:\n"
+    "    import os, pathlib\n"
+    "    import anyio\n"
+    "    real = anyio.open_process\n"
+    "    async def open_process(*args, **kwargs):\n"
+    "        proc = await real(*args, **kwargs)\n"
+    "        if args[0][4] == 'test':  # the test, not the check before it\n"
+    "            pathlib.Path(os.environ['STARTING']).touch()\n"
+    "            await anyio.sleep(3)\n"
+    "        return proc\n"
+    "    anyio.open_process = open_process\n"
+)
+
+
+def test_a_cancel_while_the_child_starts_leaves_no_untracked_child(bed: Bed) -> None:
+    stoppable(bed, "answer")  # a run that never ends by itself, so a leak shows
+    bed.shim(SLOW_START)
+    bed.env["STARTING"] = str(bed.scratch / "starting")
+
+    async def go() -> None:
+        async with connect(bed) as session:
+            async with anyio.create_task_group() as group:
+                group.start_soon(session.call_tool, "test", {"max_cost_usd": 5})
+                await appear(bed.scratch / "starting")
+                group.cancel_scope.cancel()
+            # The server is still up, with no call running, so anything left is untracked.
+            assert await none_left_but_the_server(bed)
+            assert log_lines(bed)  # the cancelled call was stopped and logged
+
+    anyio.run(go)
+    assert none_left(bed)
+
+
+async def none_left_but_the_server(bed: Bed) -> bool:
+    ceiling = time.monotonic() + 30
+    while len(ours(bed)) > 1:
+        if time.monotonic() > ceiling:
+            return False
+        await anyio.sleep(0.1)  # the client must go on: it still sends the cancel
+    return True
+
+
+def test_end_of_input_sends_sigterm_before_any_await(bed: Bed) -> None:
+    """End of input reaches the server only as the cancel of every call, so the stop must
+    signal the child before its first await: a cancelled scope ends at that await."""
+    stoppable(bed, "answer")
+
+    async def go() -> None:
+        async with connect(bed) as session, anyio.create_task_group() as group:
+            group.start_soon(session.call_tool, "test", {"max_cost_usd": 5})
+            await appear(bed.root / "hanging")
+            group.cancel_scope.cancel()  # and the client closes the server's stdin
+
+    anyio.run(go)
+    ceiling = time.monotonic() + 30
+    while not (bed.root / "got-sigterm").exists():
+        assert time.monotonic() < ceiling, "the child never got SIGTERM"
+        time.sleep(0.05)
+    lines = log_lines(bed)
+    assert not lines or (bed.root / "got-sigterm").stat().st_mtime <= bed.log.stat().st_mtime
+    assert none_left(bed)
+
+
+def test_the_server_answers_the_next_call_after_a_cancel(bed: Bed) -> None:
+    stoppable(bed, "answer")
+
+    async def go() -> types.CallToolResult:
+        async with connect(bed) as session:
+            await cancel_when(bed, session, "hanging")
+            return await session.call_tool("check", {})
+
+    after = anyio.run(go)
+    assert doc_of(after)["status"] == "valid"

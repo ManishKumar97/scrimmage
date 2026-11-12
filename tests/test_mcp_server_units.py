@@ -331,3 +331,11 @@ def test_the_summary_comes_from_fields_and_never_says_wrong(
     cli.main(["show", str(folder), "--json"])
     shown = mcp_server.summary_lines(json.loads(project.capsys.readouterr().out), {})
     assert any(line.endswith("(a heuristic)") for line in shown), shown
+
+
+def test_stop_grace_is_the_runners_grace_plus_ten() -> None:
+    """The server may not import the runner, so its grace is written out: the runner's own
+    stop, then 10 s for the report and its printing."""
+    from scrimmage_core import runner
+
+    assert mcp_server.STOP_GRACE_S == runner.KILL_GRACE_S + 10

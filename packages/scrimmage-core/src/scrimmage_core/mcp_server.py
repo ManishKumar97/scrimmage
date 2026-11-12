@@ -9,6 +9,8 @@ The server speaks MCP over stdio only: the client starts it, and nothing listens
 from __future__ import annotations
 
 import argparse
+import asyncio
+import atexit
 import contextlib
 import json
 import os
@@ -17,8 +19,9 @@ import secrets
 import signal
 import subprocess
 import sys
+import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from importlib import metadata, resources
 from pathlib import Path
@@ -51,6 +54,9 @@ TAIL_CHARS = 200  # of a child's last line on standard error, as show cuts a log
 # runs, KILL_GRACE_S, plus 10 s for the report on a loaded machine. Written out, as this
 # module never imports the runner.
 STOP_GRACE_S = 15.0
+CHECK_LIMIT_S = 60.0  # the check before a spend reads one file
+PROGRESS_EVERY_S = 5.0
+EXIT_SLACK_S = 5.0  # after the longest stop, before a shutting-down server exits anyway
 CALL_VARIABLE = "SCRIMMAGE_MCP_CALL"  # set on each child, so every process it starts holds it
 COMMANDS = ("check", "test", "record", "init", "show")
 INSTRUCTIONS = (
@@ -483,6 +489,9 @@ class Child:
     proc: anyio.abc.Process
     nonce: str
     started: float
+    command: str = ""
+    stopped: str | None = None  # why the server stopped it, if it did
+    swept: int = 0  # processes the sweep killed after it
     out: bytearray = field(default_factory=bytearray)
     err: bytearray = field(default_factory=bytearray)
     err_bytes: int = 0  # all it wrote to standard error, of which err keeps the tail
@@ -506,8 +515,12 @@ class Ran:
     tail: str  # the last line of its standard error
     seconds: float
     err_bytes: int = 0
+    stopped: str | None = None
+    swept: int = 0
 
 
+# What a tool call reports progress with: progress, total, message.
+Report = Callable[[float, float | None, str | None], Awaitable[None]]
 GUARD = "scrimmage/guard"  # the _meta key of what the spending guards checked
 BUSY = (
     "a test, record or probe is already running in this server, and it runs one at a time; "
@@ -580,10 +593,10 @@ class Scrimmage:
     async def call_tool(
         self, ctx: ServerRequestContext[Any, Any], params: types.CallToolRequestParams
     ) -> types.CallToolResult:
-        del ctx
         try:
             arguments = self.checked(params.name, params.arguments or {})
-            return await self.command(params.name, arguments)
+            # A no-op when the call carries no progress token.
+            return await self.command(params.name, arguments, ctx.session.report_progress)
         except Refused as exc:
             return types.CallToolResult(content=[text(str(exc))], is_error=True)
 
@@ -640,10 +653,12 @@ class Scrimmage:
             args.append(f"--compare={self.path(arguments['compare'])}")
         return args
 
-    async def command(self, name: str, arguments: dict[str, Any]) -> types.CallToolResult:
+    async def command(
+        self, name: str, arguments: dict[str, Any], report: Report | None = None
+    ) -> types.CallToolResult:
         args = self.argv(name, arguments)
         if name not in ("test", "record") and not (name == "init" and "probe" in arguments):
-            ran = await self.run(name, args)
+            ran = await self.run(name, args, report=report)
             return self.result(ran, checked_guard(ran.doc) if name == "check" else {})
         # One spend at a time, held from the check to the end of the stop and the count, so a
         # cancelled call's runs are gone before the next spend can start.
@@ -652,14 +667,14 @@ class Scrimmage:
         self.spending = True
         try:
             if name == "init":
-                ran = await self.run(name, args)
+                ran = await self.run(name, args, report=report)
                 return self.result(ran, {})
-            return await self.spend(name, args, arguments)
+            return await self.spend(name, args, arguments, report)
         finally:
             self.spending = False
 
     async def spend(
-        self, name: str, args: list[str], arguments: Mapping[str, Any]
+        self, name: str, args: list[str], arguments: Mapping[str, Any], report: Report | None
     ) -> types.CallToolResult:
         """test or record, after the checks a spend needs. The cap the person approved, the
         max_cost_usd argument, goes to the child, whose ledger then holds it whatever the
@@ -674,7 +689,7 @@ class Scrimmage:
                 "--max-session-usd"
             )
         runs = [f"--runs={arguments['runs']}"] if "runs" in arguments else []
-        check = await self.run("check", [str(self.settings.config), *runs])
+        check = await self.run("check", [str(self.settings.config), *runs], limit=CHECK_LIMIT_S)
         if check.doc is None or is_error(int(check.doc["exit"])):
             return self.result(check, {}, first=f"{name}: check found problems; nothing was run")
         guard = checked_guard(check.doc)
@@ -692,7 +707,7 @@ class Scrimmage:
                 f"${file_cap:g}, which the person approves"
             )
         guard["max_cost_usd"] = usd
-        ran = await self.run(name, args, spend=usd)
+        ran = await self.run(name, args, spend=usd, report=report, cap=usd)
         # The file may have changed since the check: the child's cap is still at most usd.
         expected = usd if file_cap is None else min(file_cap, usd)
         used = None if ran.doc is None else ran.doc.get("budget_usd")
@@ -736,16 +751,20 @@ class Scrimmage:
             }
         }
         heading = [first] if first is not None else []
+        if ran.stopped is not None:
+            extra = [*extra, ran.stopped]
         if ran.doc is None:
             line = f"{ran.command}: the command printed no document (exit {ran.code}): "
-            said = "\n".join([*heading, f"{line}{ran.problem}{self.tail_text(ran)}", session])
+            said = "\n".join(
+                [*heading, f"{line}{ran.problem}{self.tail_text(ran)}", *extra, session]
+            )
             return types.CallToolResult(content=[text(said)], is_error=True, _meta=meta)
         doc = forwarded(ran.doc, self.paths)
         lines = [*heading, *summary_lines(doc, guard), *extra, session]
         return types.CallToolResult(
             content=[text("\n".join(lines)), text(json.dumps(doc, ensure_ascii=False))],
             structured_content=doc,
-            is_error=first is not None or is_error(int(doc["exit"])),
+            is_error=first is not None or ran.stopped is not None or is_error(int(doc["exit"])),
             _meta=meta,
         )
 
@@ -764,37 +783,86 @@ class Scrimmage:
             f"scrimmage-mcp: {ran.command}: exit {ran.code} in {ran.seconds:.1f} s, "
             f"cost_usd {doc.get('cost_usd', 0.0)}, {ran.err_bytes} bytes on standard error"
         )
+        if ran.stopped is not None:
+            line += f", {ran.stopped}, records {doc.get('records')}"
+        line += f", {ran.swept} left over and killed by the sweep"
         if ran.doc is None:
             line += f", no document: {ran.problem}{self.tail_text(ran)}"
+        else:  # a cancelled call's document reaches only here, so its status and result do
+            line += f", status {doc.get('status')}"
         print(line, file=sys.stderr, flush=True)
 
-    async def run(self, command: str, args: list[str], spend: float | None = None) -> Ran:
-        """Run one scrimmage command as a child and read its one document. spend: the most a
-        spending call may cost, added to the session when it ends, however it ends."""
+    async def run(
+        self,
+        command: str,
+        args: list[str],
+        *,
+        spend: float | None = None,
+        report: Report | None = None,
+        cap: float | None = None,
+        limit: float | None = None,
+    ) -> Ran:
+        """Run one scrimmage command as a child and read its one document.
+
+        spend: the most a spending call may cost, added to the session when it ends, however
+        it ends. report: sends progress while it runs. limit: the server's own time limit.
+        """
+        limit = self.settings.call_timeout if limit is None else limit
         async with self.slots:
-            child = await self.start(command, args)
+            started: list[Child] = []  # filled in the same shielded step that starts it
             try:
-                await child.wake.wait()
-                if not child.done.is_set():  # its output is too large: it is stopped
+                await self.start(command, args, started)
+                (child,) = started
+                reason = await self.wait(child, limit, report, cap)
+                if reason is not None:  # too large, or past the time limit: it is stopped
+                    child.stopped = reason
                     await self.stop(child)
             except BaseException:  # a cancelled call: the child is stopped before it goes on
-                await self.stop(child)
-                self.ended(self.read(command, child), spend)
+                for child in started:
+                    child.stopped = "the call was cancelled"
+                    await self.stop(child)
+                    self.ended(self.read(command, child), spend)
                 raise
             finally:
-                self.children.pop(child.pid, None)
+                for child in started:
+                    self.children.pop(child.pid, None)
+            (child,) = started
+            if child.stopped is None:
+                child.swept = self.sweep(child)  # finds nothing when the child's stop worked
             ran = self.read(command, child)
             self.ended(ran, spend)
             return ran
+
+    async def wait(
+        self, child: Child, limit: float, report: Report | None, cap: float | None
+    ) -> str | None:
+        """Wait for the child, sending progress every few seconds. The child prints nothing
+        until it ends, so the time it has run is all progress can say. Returns why it must be
+        stopped, if it must."""
+        deadline = child.started + limit
+        while not child.wake.is_set():
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return f"stopped after the server's {limit:g} s limit"
+            with anyio.move_on_after(min(PROGRESS_EVERY_S, left)):
+                await child.wake.wait()
+            if not child.wake.is_set() and report is not None:
+                ran_for = time.monotonic() - child.started
+                said = f"{child.command} running for {ran_for:.0f} s"
+                await report(ran_for, None, said if cap is None else f"{said}; cost cap ${cap:g}")
+        if not child.done.is_set():
+            return f"its document was over {DOC_CAP // 2**20} MB"
+        return None
 
     def ended(self, ran: Ran, spend: float | None) -> None:
         if spend is not None:
             self.count(ran, spend)
         self.log(ran)
 
-    async def start(self, command: str, args: list[str]) -> Child:
+    async def start(self, command: str, args: list[str], started: list[Child]) -> None:
         """Start the child and track it in one shielded step, so a cancel that lands while it
-        starts cannot leave a child no one stops."""
+        starts cannot leave a child no one stops: the caller's list holds it before anything
+        can raise, even the shielded scope's own exit, where anyio delivers a pending cancel."""
         assert self.group is not None
         nonce = secrets.token_hex(16)
         with anyio.CancelScope(shield=True):
@@ -807,23 +875,25 @@ class Scrimmage:
                 env={**os.environ, CALL_VARIABLE: nonce},
                 start_new_session=True,  # only the server signals it
             )
-            child = Child(proc, nonce, time.monotonic())
+            child = Child(proc, nonce, time.monotonic(), command)
             self.children[proc.pid] = child
+            started.append(child)
             self.group.start_soon(self.supervise, child)
-            return child
-        raise AssertionError("a shielded scope no one cancels was cancelled")  # pragma: no cover
 
     async def supervise(self, child: Child) -> None:
         """Read both pipes at once, so a child that fills one never blocks on it, then wait for
         its exit. Runs in the server's own task group, which a cancelled call does not reach."""
-        try:
-            async with anyio.create_task_group() as group:
-                group.start_soon(self.read_out, child)
-                group.start_soon(self.read_err, child)
-            await child.proc.wait()
-        finally:
-            child.done.set()
-            child.wake.set()
+        # Shielded: an error that tears down the server's task group must not mark a child
+        # done while it still runs. It ends when the child does, which a stop ensures.
+        with anyio.CancelScope(shield=True):
+            try:
+                async with anyio.create_task_group() as group:
+                    group.start_soon(self.read_out, child)
+                    group.start_soon(self.read_err, child)
+                await child.proc.wait()
+            finally:
+                child.done.set()
+                child.wake.set()
 
     async def read_out(self, child: Child) -> None:
         stream = child.proc.stdout
@@ -846,8 +916,14 @@ class Scrimmage:
             del child.err[:-STDERR_KEPT]
 
     async def stop(self, child: Child) -> None:
-        """Stop a child as Scrimmage's own stop does: SIGTERM, which stops its runs and prints
-        its document, then SIGKILL to its group if it is still alive after the grace."""
+        """Stop a child as Scrimmage's own stop does, for a cancel, a time limit or shutdown.
+
+        SIGTERM first: the child stops every run's group at once, SIGKILLs what is left after
+        its own grace, and prints its document. Then SIGKILL to the child's group if it is still
+        alive, then a sweep for every process that holds the call's nonce. A run's own program
+        gets SIGKILL from Linux when its runner dies, but the processes it starts do not inherit
+        that, and may be in sessions of their own, which no group signal reaches.
+        """
         self.signal(child, signal.SIGTERM)  # before any await, so no cancel can come between
         with anyio.CancelScope(shield=True):
             with anyio.move_on_after(STOP_GRACE_S):
@@ -856,6 +932,54 @@ class Scrimmage:
                 self.signal_group(child, signal.SIGKILL)
                 with anyio.move_on_after(KILL_REAP_S):
                     await child.done.wait()
+            child.swept = self.sweep(child)
+
+    def sweep(self, child: Child) -> int:
+        """SIGKILL every process that started with this call's nonce in its environment.
+
+        /proc/PID/environ is the environment a process started with, so one that unset the
+        variable later is still found; only one started with a fresh environment is not. A
+        system with no /proc has no sweep, and relies on Scrimmage's own stop alone.
+        """
+        mark = f"{CALL_VARIABLE}={child.nonce}".encode()
+        killed = 0
+        with contextlib.suppress(OSError):
+            for entry in os.scandir("/proc"):
+                if not entry.name.isdigit() or int(entry.name) == os.getpid():
+                    continue
+                try:
+                    with open(f"/proc/{entry.name}/environ", "rb") as file:
+                        holds = mark in file.read().split(b"\0")
+                    if holds:
+                        os.kill(int(entry.name), signal.SIGKILL)
+                        killed += 1
+                except OSError:  # gone, or not ours to read
+                    continue
+        return killed
+
+    def terminate_all(self) -> None:
+        """SIGTERM to every running child, awaiting nothing: for a signal to the server, an
+        error that escapes its loop, and its exit."""
+        for child in list(self.children.values()):
+            self.signal(child, signal.SIGTERM)
+
+    def exit_once_stopped(self, code: int) -> None:
+        """End the process once every call's stop has finished, from a thread of its own.
+
+        The SDK reads the protocol stream in a worker thread, which no cancel can interrupt,
+        so after a shutdown signal or an error the server would stay up until the client
+        closed its standard input. Each child is untracked only once its stop is done and
+        its line is written, so waiting for none to be left loses no stop and no line.
+        """
+
+        def wait_then_exit() -> None:
+            deadline = time.monotonic() + STOP_GRACE_S + KILL_REAP_S + EXIT_SLACK_S
+            while self.children and time.monotonic() < deadline:
+                time.sleep(0.05)
+            sys.stderr.flush()
+            os._exit(code)
+
+        threading.Thread(target=wait_then_exit, name="scrimmage-mcp-exit", daemon=True).start()
 
     def signal(self, child: Child, signum: int) -> None:
         if child.proc.returncode is None:
@@ -885,7 +1009,17 @@ class Scrimmage:
         ):
             problem = "its standard output is not a document whose exit is the child's"
         found = cast(dict[str, Any], doc) if problem is None else None
-        return Ran(command, code, found, problem, tail, seconds, child.err_bytes)
+        return Ran(
+            command,
+            code,
+            found,
+            problem,
+            tail,
+            seconds,
+            child.err_bytes,
+            child.stopped,
+            child.swept,
+        )
 
 
 def without_telemetry(server: Server[Any]) -> None:
@@ -909,14 +1043,63 @@ def build(state: Scrimmage) -> Server[Any]:
     return server
 
 
+SHUTDOWN_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)  # SIGHUP: a closed terminal
+
+
 async def serve(state: Scrimmage) -> None:
     server = build(state)
+    loop = asyncio.get_running_loop()
+    finished = False
+
+    def failed(said: str) -> None:
+        """An error that escapes the loop: every child gets SIGTERM, awaiting nothing, and the
+        process ends once their stops are done, whatever the protocol stream's reader does."""
+        state.terminate_all()
+        print(f"scrimmage-mcp: stopped on an error: {said}", file=sys.stderr, flush=True)
+        state.exit_once_stopped(1)
+
+    async def watch() -> None:
+        """Runs until the server's task group is torn down; if that is not a normal end or a
+        shutdown signal, a task of the server failed."""
+        try:
+            await anyio.sleep_forever()
+        finally:
+            if not finished and not serving.cancel_called:
+                failed("a task of the server failed")
+
+    serving = anyio.CancelScope()
     async with anyio.create_task_group() as group:
         state.group = group
-        async with stdio_server() as (read_stream, write_stream):
-            await server.run(read_stream, write_stream, server.create_initialization_options())
+        group.start_soon(watch)
+        with serving:
+
+            def shut_down(signum: int, frame: object) -> None:
+                """Every child gets SIGTERM here, in the handler, with no turn of the event
+                loop first. Then serving ends, and each call's stop finishes the job."""
+                del frame
+                state.terminate_all()
+                loop.call_soon_threadsafe(serving.cancel)
+                state.exit_once_stopped(128 + signum)
+
+            for signum in SHUTDOWN_SIGNALS:
+                signal.signal(signum, shut_down)
+            async with stdio_server() as (read_stream, write_stream):
+                options = server.create_initialization_options()
+                try:
+                    await server.run(read_stream, write_stream, options)
+                except Exception as exc:  # before stdio_server waits on its reader thread
+                    failed(repr(exc))
+                    raise
+        finished = True
+        group.cancel_scope.cancel()  # ends watch; each child's reader is shielded
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     state = Scrimmage(settings_from(argv))
-    anyio.run(serve, state)
+    # The last nets: an error that escapes the loop, and a plain exit, still signal every
+    # child, awaiting nothing.
+    atexit.register(state.terminate_all)
+    try:
+        anyio.run(serve, state)
+    finally:
+        state.terminate_all()
