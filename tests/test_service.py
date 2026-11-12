@@ -597,6 +597,50 @@ def test_a_service_test_answers_its_runs_and_keeps_the_setup_record(bench: Bench
     assert all(summaries[r]["outcome"] == "answered" for r in runs)
 
 
+def a_service_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """A runner for a service test, with a long grace and wait, and no service."""
+    from scrimmage_core import config as settings
+    from scrimmage_core import runner
+
+    token = tmp_path / "token"
+    token.write_text(secrets.token_hex(32))
+    token.chmod(0o600)
+    monkeypatch.setenv("SCRIMMAGE_TOKEN_FILE", str(token))
+    monkeypatch.setenv("SCRIMMAGE_CONTROL_URL", f"http://127.0.0.1:{free_port()}")
+    path = tmp_path / "service.toml"
+    path.write_text(
+        '[agent]\nservice = "http://127.0.0.1:9/chat"\nbody = {message = "{question}"}\n'
+        'answer = "reply"\nrecord_grace_s = 30\nrecord_wait_s = 30\n\n'
+        '[[test]]\nname = "t"\nquestion = "q"\nexpect = ["x"]\n'
+    )
+    return runner.Runner(settings.load(path))
+
+
+@pytest.mark.design("service.record_wait_bounds")
+def test_a_record_wait_counts_from_the_reply_and_a_cancel_ends_every_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    made = a_service_runner(tmp_path, monkeypatch)
+    try:
+        for name in ("run-00000000000a", "run-00000000000b"):
+            made.server.open_run(name, "baseline", {"run": name}, service=True)
+            made.server.runs[name].claimed_by = "a worker"  # its last batch never comes
+        # A reply long ago: its grace and wait are over, so the waiter waits no more.
+        began = time.monotonic()
+        made.wait_record("run-00000000000a", time.monotonic() - 100)
+        assert time.monotonic() - began < 1.0
+        # A wait of a minute, which a cancel, as Ctrl-C makes, ends at once.
+        waiting = threading.Thread(
+            target=made.wait_record, args=("run-00000000000b", time.monotonic())
+        )
+        waiting.start()
+        made.cancel()
+        waiting.join(5)
+        assert not waiting.is_alive()
+    finally:
+        made.server.server.server_close()
+
+
 @pytest.mark.design("service.waits_to_listen")
 def test_a_test_started_with_its_service_waits_for_the_service_to_listen(bench: Bench) -> None:
     """The service and the test start together, as a script that backgrounds the service
@@ -807,14 +851,27 @@ def test_the_parallel_slot_frees_at_the_reply_and_the_record_wait_runs_beside_th
     service = bench.start()
     proxy = Forwarder(service.port)
     bench.closers.append(proxy)
-    code, out = bench.test(proxy.port, runs=2, grace=2.0)  # parallel = 1
+    other = (  # a second test, so a second row: its run goes beside the first row's wait
+        '\n[[test]]\nname = "again"\nquestion = "Where is order 1234?"\nexpect = ["shipped"]\n'
+        '\n[[test.mock]]\ncall = "tool:get_order"\nreturns = "shipped, Oct 30"\n'
+        '\n[[test.mock]]\ncall = "tool:get_stock"\nreturns = {sku = "SKU-42", count = 12}\n'
+    )
+    code, out = bench.test(proxy.port, runs=2, grace=2.0, tests=other)  # parallel = 1
     assert code == 0, out
-    runs = [at for name, at in zip(proxy.seen, proxy.times, strict=True) if name.startswith("run-")]
-    # The second run went at the first one's reply, not after its 2 s grace. A time is what
-    # this checks: a run answers in well under a second here.
-    assert len(runs) == 2 and runs[1] - runs[0] < 1.5, runs
+    sent = [
+        (bench.lines(header.partition(".")[0])[0]["test"], at)
+        for header, at in zip(proxy.seen, proxy.times, strict=True)
+        if header.startswith("run-")
+    ]
+    # The other row's run went at the first one's reply, not after its 2 s grace; a row's
+    # own next run went only once its run before had settled, after that grace. A time is
+    # what this checks: a run answers in well under a second here.
+    assert len(sent) == 4 and sent[0][0] != sent[1][0], sent
+    assert sent[1][1] - sent[0][1] < 1.5, sent
+    first_again = next(at for test, at in sent[1:] if test == sent[0][0])
+    assert first_again - sent[0][1] >= 2.0, sent
     summaries = [s for name, s in bench.summaries().items() if name.startswith("run-")]
-    assert [s["outcome"] for s in summaries] == ["answered", "answered"]
+    assert [s["outcome"] for s in summaries] == ["answered"] * 4
 
 
 @pytest.mark.design("service.grace_keeps_late_calls")
@@ -862,7 +919,15 @@ def test_a_full_cap_gives_infrastructure_errors_and_the_test_does_not_stop(bench
         return real(self, method, path, headers, body)
 
     bench.monkeypatch.setattr(ControlServer, "handle", slow)
-    code, out = bench.test(service.port, runs=9, parallel=9)
+    # Nine rows, one run each, as a row's own runs go one after another.
+    more = "".join(
+        f'\n[[test]]\nname = "order-status-{n}"\nquestion = "Where is order 1234?"\n'
+        'expect = ["shipped"]\n'
+        '\n[[test.mock]]\ncall = "tool:get_order"\nreturns = "shipped, Oct 30"\n'
+        '\n[[test.mock]]\ncall = "tool:get_stock"\nreturns = {sku = "SKU-42", count = 12}\n'
+        for n in range(8)
+    )
+    code, out = bench.test(service.port, tests=more, parallel=9)
     runs = [s for name, s in bench.summaries().items() if name.startswith("run-")]
     assert code == 3 and len(runs) == 9, out
     assert any(s["outcome"] == "infrastructure error" for s in runs)
@@ -877,12 +942,12 @@ def test_a_refused_call_stops_its_row_and_the_service_keeps_serving(bench: Bench
         'expect = ["shipped"]\n'
     )
     unmocked += '\n[[test.mock]]\ncall = "tool:get_order"\nreturns = "shipped, Oct 30"\n'
-    code, out = bench.test(service.port, runs=2, tests=unmocked)
+    code, out = bench.test(service.port, runs=4, tests=unmocked, parallel=2)
     assert code == 2, out
     refused = [s for s in bench.summaries().values() if s.get("outcome") == "refused call"]
-    # The slot frees at the reply, so the row's second run can be on its way before the
-    # first run's record shows the refusal; no run after that is sent.
-    assert 1 <= len(refused) <= 2, refused
+    # A row's runs go one after another, each once the one before is settled, so the
+    # refusal stops its row before the next run is sent.
+    assert len(refused) == 1, refused
     assert service.post("/echo")[0] == 200  # a plain request is served as before
 
 

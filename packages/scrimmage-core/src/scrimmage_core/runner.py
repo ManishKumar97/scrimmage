@@ -270,6 +270,8 @@ class Runner:
         # A service run's record wait, which runs beside the next runs: each waits on an event,
         # so a thread each costs nothing while it waits. Made by run_all, for a service only.
         self.waiters: ThreadPoolExecutor | None = None
+        # One turn per row of a service test: its runs go one after another.
+        self.turns: dict[tuple[str, str], threading.Semaphore] = {}
         self.tools_seen: list[str] | None = None  # as the agent's process reported them
         self.label_problems: list[str] = []
         self.stopped_by: str | None = None  # the reason a refusal stopped the whole test
@@ -331,6 +333,35 @@ class Runner:
         return [sys.executable, "-m", "scrimmage_core.start", agent.function, question, *answer]
 
     def one(self, row: planner.Row) -> "RunResult | Future[RunResult] | None":
+        if self.config.agent.service:
+            # A row's runs go one after another, each once the one before it is settled, so a
+            # refusal stops its row before the next run is sent. Other rows go beside it.
+            turn = self.row_turn(row)
+            turn.acquire()
+            try:
+                found = self.one_now(row)
+            except BaseException:
+                turn.release()
+                raise
+            if isinstance(found, Future):
+                found.add_done_callback(lambda _: turn.release())
+            else:
+                turn.release()
+            return found
+        return self.one_now(row)
+
+    def in_turns(self, rows: list[planner.Row], runs: int) -> list[planner.Row]:
+        """Each row's runs, in order. A service's rows take turns, one run of each in each
+        round, so the parallel slots go to other rows while a row's run settles."""
+        if self.config.agent.service:
+            return [row for _ in range(runs) for row in rows]
+        return [row for row in rows for _ in range(runs)]
+
+    def row_turn(self, row: planner.Row) -> threading.Semaphore:
+        with self.lock:
+            return self.turns.setdefault((row.test.name, row.name), threading.Semaphore(1))
+
+    def one_now(self, row: planner.Row) -> "RunResult | Future[RunResult] | None":
         with self.lock:
             if self.cancelled or (row.test.name, row.name) in self.stopped_rows:
                 return None
@@ -533,6 +564,7 @@ class Runner:
         agent = self.config.agent
         header = f"{run}.{protocol.run_mac(self.token, run)}"
         reply = service_client.run_request(agent, header, row.test.question, agent.run_timeout)
+        replied = time.monotonic()  # the record's wait counts from here, not from its waiter
         ok = reply.status is not None and 200 <= reply.status < 300
         gate = reply.gate_refused
         streamed = ok and service_client.streamed(reply, agent)
@@ -541,7 +573,8 @@ class Runner:
             with self.lock:
                 self.cancelled = True  # under this lock, so no run starts from here on
         assert self.waiters is not None  # run_all made it, as this is a service
-        later = self.waiters.submit(self.served_result, run, row, reply, streamed)
+        # A row's next run waits for this one, so the queue holds at most one wait per row.
+        later = self.waiters.submit(self.served_result, run, row, reply, streamed, replied)
         if unclaimed:
             later.result()
             # A process answered without Scrimmage, such as a worker started another way:
@@ -561,11 +594,16 @@ class Runner:
         return later
 
     def served_result(
-        self, run: str, row: planner.Row, reply: service_client.Reply, streamed: bool
+        self,
+        run: str,
+        row: planner.Row,
+        reply: service_client.Reply,
+        streamed: bool,
+        replied: float,
     ) -> RunResult:
         """A service run's record, once its last batch came or the wait ended, and its result."""
         agent = self.config.agent
-        state = self.wait_record(run)
+        state = self.wait_record(run, replied)
         ok = reply.status is not None and 200 <= reply.status < 300
         answer, infra = None, reply.failed is not None
         mistakes: list[str] = []
@@ -642,7 +680,7 @@ class Runner:
         self.server.open_run(name, "setup", plan.to_json(), service=True)
         header = f"{name}.{protocol.run_mac(self.token, name)}"
         reply = service_client.run_request(agent, header, test.question, agent.run_timeout)
-        state = self.wait_record(name)
+        state = self.wait_record(name, time.monotonic())
         lines = self.store.lines(name)
         summary: dict[str, object] = {"outcome": "setup", "status": reply.status}
         self.store.close_run(name, test.name, "setup", summary)
@@ -689,13 +727,15 @@ class Runner:
                 2, f"while the setup request was open, calls were made outside any request: {adds}"
             )
 
-    def wait_record(self, run: str) -> Any:
+    def wait_record(self, run: str, replied: float) -> Any:
         """Close the run once its claimer's last batch came, or record_grace_s plus
-        record_wait_s after the reply: a missing last batch is an incomplete record."""
+        record_wait_s after the reply: a missing last batch is an incomplete record. A
+        cancelled test ends the wait at once."""
         agent = self.config.agent
         known = self.server.runs[run]
-        if known.claimed_by is not None:
-            known.ended.wait(agent.record_grace_s + agent.record_wait_s)
+        if known.claimed_by is not None and not self.cancelled:
+            left = replied + agent.record_grace_s + agent.record_wait_s - time.monotonic()
+            known.ended.wait(max(0.0, left))
         return self.server.close_run(run)
 
     def real_writes_in(self, row: planner.Row, lines: list[dict[str, object]]) -> dict[str, int]:
@@ -796,7 +836,7 @@ class Runner:
                 self.waiters = ThreadPoolExecutor(WAITERS, thread_name_prefix="scrimmage-record")
                 self.check_service()
             with ThreadPoolExecutor(max_workers=self.config.agent.parallel) as pool:
-                base = [row for row in rows if row.fault is None for _ in range(runs)]
+                base = self.in_turns([row for row in rows if row.fault is None], runs)
                 results: list[RunResult | None] = []
                 if not self.config.agent.tools and base:
                     # One run alone first, so a misspelled label costs one run, not all.
@@ -806,13 +846,10 @@ class Runner:
                     mine = [r for r in results if r is not None and r.row.test == test]
                     if test.faults and mine and all(r.outcome in FAILED for r in mine):
                         self.skipped.append(test.name)
-                rest = [
-                    row
-                    for row in rows
-                    if row.fault is not None and row.test.name not in self.skipped
-                    for _ in range(runs)
+                faulted = [
+                    r for r in rows if r.fault is not None and r.test.name not in self.skipped
                 ]
-                results += settled(pool.map(self.one, rest))
+                results += settled(pool.map(self.one, self.in_turns(faulted, runs)))
             with self.lock:
                 self.ended = True  # from here the watcher notes nothing, so nothing is noted twice
                 name = self.stop_flag[0] if self.stop_flag else ""
@@ -883,6 +920,9 @@ class Runner:
             self.cancelled = True
             running = list(self.procs.values())
         stop_groups(running)
+        for known in list(self.server.runs.values()):  # a service run's record wait ends
+            if known.service:
+                known.ended.set()
 
     def _interrupted(self, signum: int, frame: object) -> None:
         """The runner itself was told to stop, such as a cancelled CI job. Only notes it."""
