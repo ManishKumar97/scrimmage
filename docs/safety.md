@@ -119,6 +119,8 @@ Any other way to reach another process is not gated, such as shared memory, a si
 Python's resource tracker, which `multiprocessing` needs for its locks, queues and shared memory, is started once, before any request, in the process that serves the app as it loads it, or in uvicorn's supervisor before it starts its workers, so a run that makes a lock starts nothing.
 A Python that only inherits the service's settings and never serves starts no tracker.
 A start of a tracker after that, such as a relaunch after it was killed, is a start of this Python like any other: refused under a run, and under the outside rules unless `background_real` lists it.
+The helpers `multiprocessing` and loky start for themselves, the resource tracker and the forkserver, run with Scrimmage off, and so does a worker the forkserver forks for your code.
+Under a run each such start is refused before it is made, so a process with Scrimmage off never holds a run.
 
 Listing a program makes every call to it real.
 There is no matching on arguments: `process:kubectl` lets `kubectl delete` through as much as `kubectl get`.
