@@ -1,10 +1,11 @@
 exit 2
 scrimmage test: 1 test, 2 rows, 5 runs; records in /records/scrimmage-runs/20261107T101500Z-a1b2c3
-test          row       fault                   runs  fired  done  passed  rate  range    tools  cost     result
-order-status  baseline  -                       2     -      1     1/1     100%  21-100%  2.0    0.00024  no result
-order-status  fault 1   tool:get_order timeout  3     3      1     1/3     33%   6-79%    2.0    0.00036  fail
+test          row       fault                  runs  fired  done  passed  rate  range    tools  cost     result
+order-status  baseline  -                      2     -      1     1/1     100%  21-100%  2.0    0.00024  no result
+order-status  fault 1   tool:get_...r timeout  3     3      1     1/3     -     -        2.0    0.00036  baseline failed
+full name: order-status fault 1: tool:get_order timeout
 range: a 95% Wilson interval, from these runs alone
-fail: order-status fault 1: under this fault the agent called tool:refund_order, which the test does not allow. Mocking it would hide this
+note: order-status fault 1: under this fault the agent called tool:refund_order, which the test does not allow; its baseline did not pass. Mocking it would hide this
   1 run: refused tool:refund_order: run-fault1-0
   1 run: refused process:python: run-fault1-1
 model calls cost $0.0006 of a budget of $5

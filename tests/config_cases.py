@@ -134,6 +134,18 @@ when = "first 3"
 call = "model:openai/input_tokens"
 do   = "timeout"
 when = "first 1"
+
+[[test.fault]]
+call  = "model"
+model = "gpt-4o-mini"
+do    = "replace"
+text  = "safe"
+find  = "unsafe"
+
+[[test.fault]]
+call = "model:openai"
+do   = "slow 2s"
+when = "requests 1"
 """
 
 SCRIPT = """[agent]
@@ -272,7 +284,16 @@ BAD = [
     Bad("slow_always", fault('call = "tool:t"\ndo = "slow 2s"\n'), True),
     Bad("slow_no_unit", fault('call = "tool:t"\ndo = "slow 2"\nwhen = "first 1"\n'), True),
     Bad("slow_zero", fault('call = "tool:t"\ndo = "slow 0s"\nwhen = "first 1"\n'), False),
-    Bad("slow_on_model", fault('call = "model"\ndo = "slow 2s"\nwhen = "first 1"\n'), True),
+    Bad(
+        "slow_on_moderations",
+        fault('call = "model:openai/moderations"\ndo = "slow 2s"\nwhen = "first 1"\n'),
+        True,
+    ),
+    Bad(
+        "replace_on_model_unnamed",
+        fault('call = "model"\ndo = "replace"\ntext = "x"\nexpect = ["a"]\n'),
+        True,
+    ),
     Bad(
         "append_on_model",
         fault('call = "model"\ndo = "append"\ntext = "x"\nforbid = ["a"]\n'),

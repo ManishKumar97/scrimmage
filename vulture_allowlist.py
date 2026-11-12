@@ -156,4 +156,11 @@ _.tz  # tests/test_results.py: the argument datetime.now is called with, which a
 _.answer_with_a_deadline  # tests/example/acme/docs_bot.py: a test's scrimmage.toml names it
 _.close_connection  # tests/test_web_requests.py: http.server reads it to end a connection
 _.answer_cutting  # tests/example/acme/agent.py: a test's scrimmage.toml names it
-_.check_answer  # tests/example/acme/guarded.py: the agent looks tools up by name
+_.check_answer  # tests/example/acme/late.py: the agent looks tools up by name
+_.answer_question_only  # tests/example/acme/guarded.py: a test's scrimmage.toml names it
+_.answer_stripping  # tests/example/acme/guarded.py: a test's scrimmage.toml names it
+_.answer_raising  # tests/example/acme/guarded.py: a test's scrimmage.toml names it
+_.answer_raising_uncaught  # tests/example/acme/guarded.py: a test's scrimmage.toml names it
+_.answer_registry  # tests/example/acme/guarded.py: a test's scrimmage.toml names it
+_.answer_moderated  # tests/example/acme/guarded.py: a test's scrimmage.toml names it
+_.answer_in_threads  # tests/example/acme/guarded.py: a test's scrimmage.toml names it

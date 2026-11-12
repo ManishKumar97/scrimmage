@@ -161,7 +161,7 @@ def test_a_row_where_no_call_could_take_the_change_is_exit_2_and_names_the_fix(
 @pytest.mark.slow
 def test_slow_past_the_agents_own_deadline_takes_its_fallback_branch(project: Project) -> None:
     project.toml.write_text(
-        '[agent]\nfunction = "acme.guarded:answer"\ntools = ["acme.guarded:check_answer"]\n'
+        '[agent]\nfunction = "acme.late:answer"\ntools = ["acme.late:check_answer"]\n'
         'real = ["tool:check_answer"]\nruns = 2\nmax_cost_usd = "none"\n\n'
         '[[test]]\nname = "guard"\nquestion = "May this answer go out?"\nexpect = ["allowed"]\n\n'
         '[[test.fault]]\ncall = "tool:check_answer"\ndo = "slow 20s"\nexpect = ["fallback"]\n'

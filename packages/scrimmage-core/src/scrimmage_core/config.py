@@ -44,10 +44,10 @@ TEST_KEYS = {"name", "question", "mock", "fault", *RULE_KEYS}
 # it answers, exactly.
 MOCK_KEYS = {"call", "returns", "type", "recorded", "args"}
 WEB_MOCK_KEYS = {"call", "method", "path", "status", "headers", "json", "text", "recorded"}
-# text and find belong to append and replace, which do not work on a model call.
+# text and find belong to append and replace. On a model call only replace takes them.
 CHANGE_KEYS = {"text", "find"}
 FAULT_KEYS = {"call", "do", "when", "raises", *CHANGE_KEYS, *RULE_KEYS}
-MODEL_FAULT_KEYS = {*(FAULT_KEYS - CHANGE_KEYS), "model"}
+MODEL_FAULT_KEYS = {*FAULT_KEYS, "model"}
 MCP_MOCK_KEYS = {"call", "returns", "recorded", "args"}
 MCP_FAULT_KEYS = {"call", "do", "when", *CHANGE_KEYS, *RULE_KEYS}
 WEB_FAULT_KEYS = {"call", "do", "when", "method", "path", *CHANGE_KEYS, *RULE_KEYS}
@@ -224,6 +224,24 @@ def load(path: Path) -> Config:
     return config
 
 
+def model_paths_in_real(agent: Agent) -> list[str]:
+    """A real entry that names a model's path as a web request: it would run unbudgeted."""
+    found: list[str] = []
+    for entry in agent.real:
+        if labels.kind_of(entry) != "http":
+            continue
+        label, _, rest = entry.partition(" ")
+        method, _, path = rest.partition(" ")
+        if path and provider_openai.op_for(path, method) is not None:
+            host = label.removeprefix("http:")
+            found.append(
+                f"[agent] real: {entry!r} lists a model call as a web request, which is never "
+                f'budgeted or faulted; name the host under model_hosts as {{host = "{host}", '
+                'provider = "openai"} and take it out of real'
+            )
+    return found
+
+
 def check_references(config: Config) -> list[str]:
     """Compare values across the file, before the first run, so a typo costs no model calls."""
     names = config.agent.tool_names()
@@ -239,6 +257,7 @@ def check_references(config: Config) -> list[str]:
             "program would run with no gates; remove it"
         )
     problems += [p for test in config.tests if (p := bad_question(test, config.agent))]
+    problems += model_paths_in_real(config.agent)
     for test in config.tests:
         for fault in (None, *test.faults):
             if why := impossible(test.rules_for(fault)):
@@ -820,10 +839,7 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
     kind = labels.kind_of(call)
     # First, so text on a model fault is told why, not that the key is unknown.
     if kind == "model" and isinstance(table.get("do"), str) and carried(str(table["do"])):
-        raise ConfigError(
-            f"{where} do: append, replace and slow do not work on a model call in this "
-            "version; see docs/model-faults.md"
-        )
+        carried_on_a_model(call, str(table["do"]), "model" in table, where)
     known = {"http": WEB_FAULT_KEYS, "mcp": MCP_FAULT_KEYS, "model": MODEL_FAULT_KEYS}
     keys = known.get(kind, FAULT_KEYS)
     check_keys(table, keys, where)
@@ -866,6 +882,42 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
     rate = read_pass_rate(table, where)
     model = labels.model_name(table["model"], where) if "model" in table else None
     return Fault(call, do, when, raises, method, path, expect, forbid, rate, model, injected, find)
+
+
+def carried_on_a_model(call: str, do: str, named: bool, where: str) -> None:
+    """replace changes a chat reply's text, and slow delays the call. Both need a chat call,
+    and replace needs one model named, or it would change every model's answer."""
+    word = do.partition(" ")[0]
+    if word == "append":
+        raise ConfigError(
+            f"{where} do: append does not work on a model call; use replace on its reply, "
+            "or append to a tool result the model reads; see docs/model-faults.md"
+        )
+    if "/" in call:  # model:openai/moderations and the other calls that only read or compute
+        raise ConfigError(
+            f"{where} do: {word} works on a chat call, not on {call}, whose reply is not text; "
+            "use timeout or status on it; see docs/model-faults.md"
+        )
+    if word == "replace" and not named:
+        raise ConfigError(
+            f"{where} model: replace on a model call needs the model's name, or it would "
+            "rewrite every model's answer, the main model's too; add model = \"...\""
+        )
+
+
+def carried_model_warnings(config: Config) -> list[str]:
+    """A replace or slow on a model call still makes the real call, billed. With the budget
+    off nothing stops those calls but the run time."""
+    if config.agent.max_cost_usd is not None:
+        return []
+    return [
+        f"fault {i} of {test.name!r} makes the real model call, billed, and max_cost_usd is "
+        '"none", so nothing stops the cost; give a self-hosted model a price of 0 under '
+        "[agent.prices] and keep the budget on"
+        for test in config.tests
+        for i, fault in enumerate(test.faults, 1)
+        if labels.kind_of(fault.call) == "model" and carried(fault.do)
+    ]
 
 
 def read_slow(do: str, where: str) -> None:

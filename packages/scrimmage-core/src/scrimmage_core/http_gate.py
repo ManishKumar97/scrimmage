@@ -36,13 +36,22 @@ from scrimmage_core.budget import ASK_MAX_S, Held, Shortfall
 from scrimmage_core.changes import Changed, Unchangeable
 from scrimmage_core.client import ControlError
 from scrimmage_core.config import Fault, slow_seconds
-from scrimmage_core.decide import READ_METHODS, Call, Decision
+from scrimmage_core.decide import READ_METHODS, Call, Decision, names, schedule
 from scrimmage_core.errors import ScrimmageRefused
 from scrimmage_core.judge import normal
 from scrimmage_core.labels import shown_name
 from scrimmage_core.plan import Plan
 from scrimmage_core.redact import redact, redacted
-from scrimmage_core.state import BLOB_CAP, BlobSink, RunState, Step, blob, current, error_text
+from scrimmage_core.state import (
+    BLOB_CAP,
+    BlobSink,
+    RunState,
+    Step,
+    blob,
+    current,
+    error_text,
+    model_path_hint,
+)
 
 if TYPE_CHECKING:
     import asyncio
@@ -57,6 +66,12 @@ WAIT_STEP_S = 0.25  # how soon a waiting call asks again when the runner sends n
 JITTER = random.Random()  # its own, so the team's program keeps its random sequence
 if hasattr(os, "register_at_fork"):  # forked children do not ask in step
     os.register_at_fork(after_in_child=JITTER.seed)
+# The openai library numbers each attempt of a request; 0 is the first.
+RETRY_HEADER = "x-stainless-retry-count"
+UNMARKED = (
+    "this model call's library does not mark its retries, so requests N counted each attempt "
+    "as a request; use first N or always"
+)
 RUN_MARGIN_S = 10.0  # a wait on other runs ends this long before the run's time limit
 SHOWN_HOLDS = 5  # holds a refusal names
 WEB_CAP = changes.WEB_CAP  # a reply body over this is not read to be changed
@@ -116,6 +131,7 @@ class Context:
         self.faults = True  # false when the library has lost what faults are built from
         self.open: set[Callable[[bool], None]] = set()  # replies not read to their end
         self.root = probing.here()  # the folder the probe's paths are looked for under
+        self.model_paths: set[str] = set()  # model paths run as web requests, noted once each
 
     def close_open(self) -> None:
         """At exit: a reply the agent never finished reading is still a call that was made."""
@@ -313,13 +329,14 @@ def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call:
     op = openai_table.op_for(str(request.url.path), method) if provider is not None else None
     if provider is None or op is None:
         return Call("http", f"http:{host}", path_of(request.url), provider, method)
+    marked = RETRY_HEADER in request.headers
     try:
-        retry = max(0, int(request.headers.get("x-stainless-retry-count", "0")))
+        retry = max(0, int(request.headers.get(RETRY_HEADER, "0")))
     except ValueError:
         retry = 0
     label = f"model:{provider}" if op == "chat" else f"model:{provider}/{op}"
     key = f"{who}:{hashlib.sha256(body).hexdigest()}"
-    return Call("model", label, op, provider, method, retry, key)
+    return Call("model", label, op, provider, method, retry, key, marked=marked)
 
 
 def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, object]] | None:
@@ -347,11 +364,15 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
         extra["stream"] = (fields or {}).get("stream") is True
     step = run.decide(call, {})
     step.extra = extra
+    if call.kind == "model" and not call.marked and counts_requests(run.plan, call):
+        extra["mistake"] = UNMARKED
     if not ctx.faults and step.decision.action in ("fault", "mock"):
         without_faults(run, step)
     where = f"{call.method} {path_of(request.url)}"
     if step.decision.action == "refused":
         refuse(run, step, where)
+    if step.decision.action == "real" and call.kind == "http":
+        model_path_notice(ctx, call, where)
     if call.kind == "model" and run.plan.probe:
         stop_probe(ctx, run, step, fields, request.url)
     if call.kind == "model" and call.name == "chat":
@@ -366,6 +387,30 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
             )
         check_tools(ctx, run, step, fields, str(request.url.path))
     return step, extra
+
+
+def model_path_notice(ctx: Context, call: Call, where: str) -> None:
+    """A POST to a model's path ran for real as a web request: real lists its host. It is then
+    never budgeted, nor faulted by model name. Said once per path, as a run notice."""
+    hint = model_path_hint(call.label, where)
+    if hint is None or where in ctx.model_paths:
+        return
+    ctx.model_paths.add(where)
+    host = call.label.removeprefix("http:")
+    ctx.run.notice(
+        "model_path",
+        "scrimmage",
+        redact(
+            f"{call.label} {where} ran for real as a web request, so it was never budgeted or "
+            f'faulted by model name; if it is a model call, add {{host = "{host}", provider = '
+            '"openai"} to [agent] model_hosts'
+        ),
+    )
+
+
+def counts_requests(plan: Plan, call: Call) -> bool:
+    """Whether a requests N fault names this call."""
+    return any(names(f, call) and schedule(f.when)[0] == "requests" for f in plan.faults)
 
 
 def carries(injected: list[str], fields: dict[str, object]) -> bool:
@@ -508,6 +553,8 @@ def fault(
     """Build the failure the library would see from a real outage. Nothing is sent."""
     run = ctx.run
     plan_fault = run.plan.faults[step.decision.fault or 0]
+    # A carried fault lets the call happen, so it never comes here to be parsed as a status.
+    assert plan_fault.do == "timeout" or plan_fault.do.startswith("status "), plan_fault.do
     if plan_fault.do == "timeout":
         error = module.ReadTimeout("The read operation timed out", request=request)
         run.finish(step, error=error)
@@ -1045,13 +1092,24 @@ def left_as_it_is(ctx: Context, step: Step, extra: dict[str, object], said: Unch
         extra["mistake"] = message
 
 
+def model_op(step: Step, request: Any) -> str:
+    """What a model call is, for a change to its reply: a Responses call is a chat to the
+    engine, yet its reply has no choices to change."""
+    if path_of(request.url).rstrip("/").endswith("/responses"):
+        return "responses"
+    return str(step.call.name)
+
+
 def decided_by_headers(
     ctx: Context, step: Step, extra: dict[str, object], request: Any, response: Any
 ) -> bool:
     """Whether the headers alone rule the change out: a status, a type, an encoding, a size.
     Then the reply goes on untouched, and a stream is never read early."""
-    verdict = changes.web_kind(
-        response.status_code, str(request.method), response.headers.multi_items()
+    headers = response.headers.multi_items()
+    verdict = (
+        changes.chat_kind(response.status_code, model_op(step, request), headers)
+        if step.call.kind == "model"
+        else changes.web_kind(response.status_code, str(request.method), headers)
     )
     if isinstance(verdict, Unchangeable):
         left_as_it_is(ctx, step, extra, verdict)
@@ -1103,13 +1161,12 @@ def changed_reply(
     """The reply the agent gets once the whole body is read: changed if it can be, else as it
     was sent. The line records the original."""
     body = b"".join(chunks)
-    done = changes.change_web(
-        response.status_code,
-        str(request.method),
-        response.headers.multi_items(),
-        body,
-        fault,
-        decoded=loaded,
+    headers = response.headers.multi_items()
+    status = response.status_code
+    done = (
+        changes.change_chat(status, model_op(step, request), headers, body, fault, decoded=loaded)
+        if step.call.kind == "model"
+        else changes.change_web(status, str(request.method), headers, body, fault, decoded=loaded)
     )
     if isinstance(done, Unchangeable):
         left_as_it_is(ctx, step, extra, done)

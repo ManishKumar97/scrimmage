@@ -41,8 +41,64 @@ Nothing is sent to the provider for a faulted attempt, so it costs nothing.
 
 Any status from 400 to 599 works.
 
-`append`, `replace` and `slow` do not work on a model call in this version.
-They change what a tool, an MCP tool or a web request returns; see [Changing a result](changing-results.md).
+Two more let the call happen, on a chat call only:
+
+| Fault | What your agent sees |
+|---|---|
+| `replace`, with `text` and a `model` | the real reply, with the text of each choice replaced by `text`, or each `find` in it |
+| `slow 8s` | the real reply, eight seconds late; or the library's own timeout, if the client's is shorter |
+
+Both make the real call, so it is reserved and billed as in the baseline row.
+`replace` needs `model`, or it would rewrite every model's answer, the main model's too.
+`append` does not work on a model call: append to a tool result the model reads instead, see [Changing a result](changing-results.md).
+Neither works on a call that only reads, such as `model:openai/moderations`, whose reply is not text.
+
+## A guard model
+
+A guard model, such as Llama Guard, is a model call like any other; name it by its model name.
+If it runs on a host of its own, name that host under `model_hosts`, so its calls are model calls: budgeted, and faulted by name.
+
+```toml
+[agent]
+function    = "shop.agent:answer"
+model_hosts = [{host = "guard.internal", provider = "openai"}]
+
+[agent.prices]
+"meta-llama/Llama-Guard-4-12B" = {input = 0, output = 0}  # self-hosted: no bill
+
+[[test]]
+name     = "order-status"
+question = "Where is order 1234?"
+expect   = ["shipped"]
+
+[[test.fault]]
+call   = "model"
+model  = "meta-llama/Llama-Guard-4-12B"
+do     = "replace"
+text   = "safe"            # the whole reply text becomes this
+expect = ["Request blocked by policy RB7"]
+
+[[test.fault]]
+call   = "model"
+model  = "meta-llama/Llama-Guard-4-12B"
+do     = "slow 8s"
+expect = ["Sorry, the safety check is unavailable"]
+```
+
+How `replace` meets a reply:
+
+| The reply | What happens |
+|---|---|
+| a chat completion with text | its text is changed; the line keeps the real reply, and the injected text beside it |
+| tool calls and no text, a refusal with no text, a `find` that is not in it, a status other than 200 | the agent gets it as it is; the call is not counted as fired |
+| a streamed reply | a mistake in the test: turn streaming off for that model, or fault it another way |
+| a Responses API call | a mistake in the test: `replace` works on Chat Completions only |
+
+A call left as it is still uses its number in `first N`: under `first 1`, a first reply with only tool calls means no call of that run is changed.
+`slow` waits before it reserves, so a slowed call holds no budget while it waits.
+If the request's read timeout is shorter than the delay, the call ends at that timeout with the library's own error, and nothing is sent or billed.
+The openai library retries a timeout twice by default, so under `when = "always"` a guard behind it waits about three times the client timeout before the agent sees an error.
+See [Testing your guardrails](guardrails.md) for the rows that use these.
 
 ## Choosing when it fires
 
@@ -54,6 +110,8 @@ They change what a tool, an MCP tool or a web request returns; see [Changing a r
 
 `first 3` depends on the library retrying exactly twice.
 If your client sets its own `max_retries`, use `requests 1`: it fails the request and all its retries, whatever their number.
+`requests N` needs a library that marks its retries, as the openai library does with its `x-stainless-retry-count` header.
+On a client that marks none, such as NeMo Guardrails' own, each attempt would count as a request, so the run gets a mistake that says to use `first N` or `always`.
 
 Calls are counted per run.
 When two model calls run at once, such as a guardrail next to the main call, Scrimmage matches each retry to its request by the thread or task that sent it and the request's content, so each request keeps its own number.

@@ -282,3 +282,59 @@ def test_a_library_that_cannot_build_faults_fails_a_run_that_ended_cleanly(
     result = project.test()
     assert result.summaries()[0]["outcome"] == "infrastructure error"
     assert result.code == 3
+
+
+# A client that retries a failed request once and marks nothing, as NeMo Guardrails' does.
+UNMARKED_CLIENT = """import os
+
+import httpx
+
+
+def answer(question):
+    for _ in range(2):
+        reply = httpx.post(
+            os.environ["OPENAI_BASE_URL"] + "/chat/completions",
+            json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": question}]},
+            headers={"Authorization": "Bearer " + os.environ["OPENAI_API_KEY"]},
+        )
+        if reply.status_code < 500:
+            return reply.json()["choices"][0]["message"]["content"]
+    return "the model is down"
+"""
+
+
+def unmarked(project: Project, when: str) -> None:
+    (project.root / "unmarked.py").write_text(UNMARKED_CLIENT)
+    project.toml.write_text(
+        '[agent]\nfunction = "unmarked:answer"\nruns = 1\n'
+        'model_hosts = [{host = "127.0.0.1", provider = "openai"}]\n\n'
+        '[[test]]\nname = "t"\nquestion = "Say hello"\nexpect = ["Hello"]\n\n'
+        f'[[test.fault]]\ncall = "model"\ndo = "status 500"\nwhen = "{when}"\n'
+        'expect = ["down"]\n'
+    )
+
+
+def test_requests_n_on_a_client_that_marks_no_retries_is_a_test_mistake(
+    project: Project, fake_openai: Fake
+) -> None:
+    unmarked(project, "requests 1")
+    result = project.test(fake_openai(["chat_answer"]))
+    assert result.code == 2, result.out + result.err
+    assert "does not mark its retries, so requests N counted each attempt as a request" in (
+        result.out
+    )
+    assert "use first N or always" in result.out
+    # The call is decided as before: the retry counts as request 2, so it runs for real.
+    assert calls(row(result, "fault 1")) == [
+        ("model:openai", "fault", 0),
+        ("model:openai", "real", 0),
+    ]
+
+
+def test_first_n_on_that_client_counts_attempts(project: Project, fake_openai: Fake) -> None:
+    unmarked(project, "first 2")
+    result = project.test(fake_openai(["chat_answer"]))
+    assert result.code == 0, result.out + result.err
+    assert calls(row(result, "fault 1")) == [("model:openai", "fault", 0)] * 2
+    assert answer(row(result, "fault 1")) == "the model is down"
+    assert "does not mark its retries" not in result.out

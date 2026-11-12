@@ -183,6 +183,18 @@ def test_a_side_with_no_result_gives_no_result() -> None:
     assert judge.floor_runs(3) == 2
 
 
+def test_a_row_beside_a_failed_baseline_gives_no_result() -> None:
+    """Its counts are there, yet its rate means little, so it is never given a rate change."""
+    beside = {**row(9, 10, fault=fault()), "result": "baseline failed", "rate": None, "range": None}
+    earlier = row(1, 10, fault=fault())
+    for before, after in ((earlier, beside), (beside, earlier)):
+        (compared,) = compare.rows(result(before), result(after))
+        assert compared["change"] == "no result" and compared["difference"] is None
+        assert "a baseline that failed" in compare.change_text(compared)
+        shown = compared["after"] if after is beside else compared["before"]
+        assert compare.span(cast(Doc, shown)) == "9/10 -"  # no range beside it either
+
+
 def test_an_unclear_change_says_the_runs_cannot_tell_the_rates_apart() -> None:
     (compared,) = compare.rows(result(row(2, 5)), result(row(4, 5)))
     assert compared["change"] == "unclear"

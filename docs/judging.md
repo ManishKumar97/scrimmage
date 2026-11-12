@@ -85,6 +85,8 @@ If a row's rules cannot both be met, such as a fault that forbids a word the tes
 
 A crash or a time-out is a real result about your agent, so it fails.
 A refusal under a fault is the worst result there is: the tool failed, and the agent reached for a call the test does not allow, such as a refund. So its row reads `fail`, and the test still exits with code 2. Do not mock that call to make it pass: that hides what the agent did. Fix the agent.
+Such a refusal ends its own run only. The row's other runs still run, and each call they make that the test does not allow is refused too, so the row's passed count says how often the agent did it, such as `2/10` for an injected instruction it obeyed in 8 of 10 runs.
+Any other refusal, and any refusal on a baseline, ends its row: the runs left in it do not start.
 A child started with no gate cannot be mocked, so its line says how to let it join.
 On a baseline a refusal usually means the test forgot a mock, so it is left out.
 The rest say nothing about your agent, so they are left out of every rate.
@@ -121,6 +123,16 @@ With `runs = 3`, 0.8 means all judged runs, as 2 of 3 is below it.
 `no result` means the test did not test, so it exits with code 2, or 3 if an infrastructure error caused it.
 
 Runs of a row whose baseline answered badly still happen. Only a baseline that crashed, timed out, was refused or reached the budget in every run skips its fault rows.
+
+## A fault row beside a failing baseline
+
+When a test's baseline row does not pass, each of its fault rows shows `baseline failed` in place of its result, and no rate or range.
+Its runs still run and are recorded, and its passed and judged counts still show.
+A rate beside a failing baseline says little: the agent already fails without the fault.
+For example, a guardrail that blocks every question fails the baseline, and would pass every attack row at 100%.
+The exit code does not change: the baseline row already gives it.
+The lines under the table still name each broken rule of such a row, a refused call too, but they start with `note:`, and a refusal's line ends "its baseline did not pass".
+`scrimmage show --compare` reads such a row as `no result`.
 
 ## The table
 

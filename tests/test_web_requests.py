@@ -1498,3 +1498,35 @@ def test_replace_on_a_mocked_json_reply_reaches_the_tools_own_code(project: Proj
     result = run(project, "acme.web:answer", body)
     assert row(result, "fault 1")[-1]["summary"]["answer"] == "13 in stock"
     fits_the_schema(result)
+
+
+CHAT = {"model": "llama-guard-test", "messages": [{"role": "user", "content": "x"}]}
+
+
+def test_a_post_to_a_model_path_on_an_unnamed_host_names_model_hosts(lib: Any, web: Web) -> None:
+    sink = gate(lib)
+    with lib.Client() as client, pytest.raises(ScrimmageRefused) as caught:
+        client.post(web.url("/v1/chat/completions"), json=CHAT)
+    told = str(caught.value)
+    assert "is a model request to a host not under [agent] model_hosts" in told
+    assert 'Add {host = "127.0.0.1", provider = "openai"} to [agent] model_hosts' in told
+    assert "to real if it is safe" not in told
+    assert web.hits == [] and sink.lines[0]["reason"] == "web_write"
+    # Any other write keeps the old advice. A refusal ends the run, so this is a new one.
+    gate(lib)
+    with lib.Client() as client, pytest.raises(ScrimmageRefused, match="to real if it is safe"):
+        client.post(web.url("/v1/refunds"))
+
+
+@pytest.mark.parametrize("real", ["http:127.0.0.1", "http:127.0.0.1 POST"])
+def test_a_real_post_to_a_model_path_gets_a_notice(lib: Any, web: Web, real: str) -> None:
+    sink = gate(lib, real=(real,))
+    with lib.Client() as client:
+        for _ in range(2):
+            assert client.post(web.url("/v1/chat/completions"), json=CHAT).status_code == 200
+        client.post(web.url("/v1/refunds"))
+    notices = [x for x in sink.lines if x.get("notice") == "model_path"]
+    assert len(notices) == 1  # once per path in a process; the table, once per test
+    assert "POST /v1/chat/completions ran for real as a web request" in notices[0]["message"]
+    assert 'add {host = "127.0.0.1", provider = "openai"}' in notices[0]["message"]
+    assert [x["action"] for x in sink.lines if x.get("kind") == "http"] == ["real"] * 3

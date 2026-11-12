@@ -25,6 +25,11 @@ Only the tool name, its arguments, the call id and the answer text are changed; 
 | `acme_three_orders.json` | Functions | three `get_order` calls in one reply |
 | `acme_check_inventory.json` | Functions | calls `check_inventory` with `{"sku": "SKU-42"}` |
 | `acme_obeys.json` | Default | the answer text, for a conversation where a tool result held a note to the assistant that the model obeyed |
+| `acme_declines.json` | Default | the answer text, for a conversation where a tool result asked for a refund and the model declined by itself |
+| `guard_safe.json` | Default | the model name `llama-guard-test`, and the answer `safe`, Llama Guard's reply to allowed content |
+| `guard_unsafe.json` | Default | the model name `llama-guard-test`, and the answer `unsafe` then `S14`, Llama Guard's reply to blocked content |
+| `rail_allows.json` | Default | the model name `gpt-4.1-nano`, and the answer `No`, a NeMo self check rail's reply to allowed content |
+| `rail_blocks.json` | Default | the model name `gpt-4.1-nano`, and the answer `Yes`, a NeMo self check rail's reply to blocked content |
 | `docs_search.json` | Functions | calls the MCP tool `search` with `{"q": "refunds"}` |
 | `docs_answer.json` | Default | the answer text, for the docs example on MCP tools |
 | `docs_admits.json` | Default | the answer text, for a conversation where the MCP tool failed |
@@ -61,3 +66,6 @@ Only the token counts change; the fields that hold them are the spec's `prompt_t
 | `chat_answer_cached.json` | `chat_answer.json` | 2048 prompt tokens, 1536 of them cached, and the total to match |
 | `chat_stream_usage_cached.sse` | `chat_stream_usage.sse` | 2048 prompt tokens, all cached, in the last chunk's `usage` |
 | `response_stream_cached.sse` | `response_stream.sse` | 2048 input tokens, 1024 cached, and an `input_tokens_details` block, in the last event's `usage` |
+
+`moderation.json` is not from the spec's examples.
+Its shape follows the `ModerationCreateResponse` type of the openai Python library this repository locks, with every category false.

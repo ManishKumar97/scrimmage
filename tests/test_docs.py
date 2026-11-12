@@ -475,9 +475,35 @@ def test_the_limits_page_names_each_gap_of_the_carried_faults() -> None:
     ):
         assert limit in limits, limit
     assert "runs a listed real write twice" in limits
-    assert "`append`, `replace` and `slow` do not work on a model call" in page("model-faults.md")
+    faults = page("model-faults.md")
+    assert "`append` does not work on a model call" in faults
+    assert "`replace` needs `model`" in faults
     later = page("configuration.md").split("## Coming in later versions")[1]
     assert "`slow`," not in later and "`append`, `replace`," not in later.split("Fault options")[0]
+    assert "`append` on a model call" in later
+
+
+def test_the_guardrails_page_covers_the_two_questions_and_what_is_not_covered() -> None:
+    text = page("guardrails.md")
+    for words in (
+        "leave that tool unmocked and off `real`",
+        "ZXCANARY41",
+        "Request blocked by policy RB7",
+        "`baseline failed`",
+        "passes the lenient row and fails the strict one",
+        "Fail open or fail closed",
+        '"llama-guard-4" = {input = 0, output = 0}',
+        "I'm sorry, I can't respond to that.",
+        "NEMO_GUARDRAILS_NO_USAGE_STATS=1",
+        "promptfoo, garak and PyRIT",
+        "## What is not covered",
+    ):
+        assert words in text, words
+    assert "invented" not in text.lower()
+    nav = (DOCS.parent / "mkdocs.yml").read_text()
+    assert "Testing your guardrails: guardrails.md" in nav
+    assert "## A guard model" in page("model-faults.md")
+    assert "**`requests N` needs a library that marks its retries.**" in page("limits.md")
 
 
 @pytest.mark.design("docs.suggestions")

@@ -513,9 +513,11 @@ def rule_head(row: dict[str, object]) -> str:
         advice = (
             "See the line below" if call == runner.PROCESS_LABEL else "Mocking it would hide this"
         )
+        word = "fail" if row["result"] == judge.FAIL else "note"
+        beside = "; its baseline did not pass" if row["result"] == judge.BASELINE_FAILED else ""
         return (
-            f"fail: {where}: under this fault the agent called {call}, which the test does not "
-            f"allow. {advice}"
+            f"{word}: {where}: under this fault the agent called {call}, which the test does not "
+            f"allow{beside}. {advice}"
         )
     word = "fail" if row["result"] == judge.FAIL else "note"
     rate = cast(float, row["pass_rate"])
@@ -1444,7 +1446,7 @@ def main_cells(entry: runner.RowReport) -> list[str]:
         when = "" if row.fault.when == "always" else f" {row.fault.when}"
         fault = f"{row.fault.target} {row.fault.do}{when}"
     rate, span = "-", "-"
-    if result.judged:
+    if result.judged and not entry.baseline_failed:  # beside a failed baseline, no rate
         low, high = judge.wilson(result.passed, result.judged)
         rate, span = f"{result.passed / result.judged:.0%}", f"{low * 100:.0f}-{high:.0%}"
     return [
@@ -1459,7 +1461,7 @@ def main_cells(entry: runner.RowReport) -> list[str]:
         span,
         f"{sum(r.tool_calls for r in mine) / max(len(mine), 1):.1f}",
         f"{sum(r.cost_usd for r in mine):.5f}",
-        result.verdict,
+        judge.BASELINE_FAILED if entry.baseline_failed else result.verdict,
     ]
 
 
@@ -1763,3 +1765,45 @@ def test_python_dash_m_is_the_scrimmage_command(
     assert done.code == 3, out + err
     doc = one_document(done, "test")
     assert messages(doc, "infra") == ["stopped by SIGTERM; every run was stopped"]
+
+
+TWO_TURNS = """import pathlib
+
+from acme import tools
+
+HERE = pathlib.Path(__file__).parent
+
+
+def answer(question):
+    turn = HERE / "turn"
+    n = int(turn.read_text()) if turn.exists() else 0
+    turn.write_text(str(n + 1))
+    if n:
+        try:
+            tools.get_order("1234")
+        except TimeoutError:
+            pass
+    return ["It shipped.", "It shipped on Oct 30."][n]
+"""
+
+
+@pytest.mark.slow
+def test_baseline_failed_is_a_row_verdict_in_json(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (project.root / "two_turns.py").write_text(TWO_TURNS)
+    project.toml.write_text(
+        '[agent]\nfunction = "two_turns:answer"\ntools = ["acme.tools:get_order"]\n'
+        'runs = 1\nparallel = 1\nmax_cost_usd = "none"\n\n'
+        '[[test]]\nname = "order"\nquestion = "Where is order 1234?"\nexpect = ["Oct 30"]\n\n'
+        '[[test.fault]]\ncall = "tool:get_order"\ndo = "timeout"\nwhen = "first 1"\n'
+    )
+    capsys.readouterr()
+    assert cli.main(["test", "--json", str(project.toml)]) == 1
+    doc = json.loads(capsys.readouterr().out)
+    validate(doc)
+    rows = {str(r["row"]): r for r in cast(list[dict[str, object]], doc["rows"])}
+    assert rows["baseline"]["result"] == "fail"
+    fault = rows["fault 1"]
+    assert (fault["result"], fault["passed"], fault["judged"]) == ("baseline failed", 1, 1)
+    assert (fault["rate"], fault["range"]) == (None, None)

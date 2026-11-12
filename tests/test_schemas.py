@@ -236,7 +236,7 @@ def test_every_file_the_parser_accepts_fits_the_schema(
         accepted.append(name)
     assert {"example/scrimmage.toml", *GOOD} <= set(accepted)
     checked = {name.partition(":")[0] for name in accepted if ".md " in name}
-    # Only model-faults.md 3 is left: two keys of a fault, shown on their own.
+    # Only model-faults.md 4 is left: two keys of a fault, shown on their own.
     assert len(checked) == len(toml_blocks()) - 1, sorted(checked)
 
 

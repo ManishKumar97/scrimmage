@@ -1,0 +1,51 @@
+# NeMo Guardrails' example bot "abc", from nemoguardrails 0.24.1
+# (nemoguardrails/examples/bots/abc), copied unchanged except for these lines:
+# - models: main is gpt-4o-mini, not gpt-4.
+# - models: two entries added, self_check_input and self_check_output on gpt-4.1-nano,
+#   so each rail calls a model of its own name.
+# - this comment.
+# Left out: kb/ (a knowledge base, embedded by a model download) and
+# rails/disallowed.co (dialog rails, matched by the same embeddings). A test stays offline.
+# The base URL is not here: railed.py sets it from OPENAI_BASE_URL, as the openai library
+# reads it, so a test points every model at the fake server.
+instructions:
+  - type: general
+    content: |
+      Below is a conversation between a user and a bot called the ABC Bot.
+      The bot is designed to answer employee questions about the ABC Company.
+      The bot is knowledgeable about the employee handbook and company policies.
+      If the bot does not know the answer to a question, it truthfully says it does not know.
+
+sample_conversation: |
+  user "Hi there. Can you help me with some questions I have about the company?"
+    express greeting and ask for assistance
+  bot express greeting and confirm and offer assistance
+    "Hi there! I'm here to help answer any questions you may have about the ABC Company. What would you like to know?"
+  user "What's the company policy on paid time off?"
+    ask question about benefits
+  bot respond to question about benefits
+    "The ABC Company provides eligible employees with up to two weeks of paid vacation time per year, as well as five paid sick days per year. Please refer to the employee handbook for more information."
+
+models:
+  - type: main
+    engine: openai
+    model: gpt-4o-mini
+  - type: self_check_input
+    engine: openai
+    model: gpt-4.1-nano
+  - type: self_check_output
+    engine: openai
+    model: gpt-4.1-nano
+
+rails:
+  input:
+    flows:
+      - self check input
+
+  output:
+    flows:
+      - self check output
+
+  dialog:
+    single_call:
+      enabled: False
