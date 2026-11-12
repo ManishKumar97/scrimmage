@@ -283,7 +283,8 @@ class ProcessState:
             return
         with self.lock:
             self.report.append({"notice": kind, "library": library, "message": message})
-        print(f"scrimmage: {library}: {message}", file=sys.stderr)
+        about = "" if library == "scrimmage" else f"{library}: "  # never "scrimmage: scrimmage:"
+        print(f"scrimmage: {about}{message}", file=sys.stderr)
 
     def newer_version(
         self,

@@ -51,6 +51,13 @@ def stop(message: str) -> NoReturn:
     os._exit(1)
 
 
+def service_stop(message: str) -> NoReturn:
+    """A service process that cannot gate its requests: it stops before it serves one."""
+    print(f"scrimmage: {message}; the service stops before it serves a request", file=sys.stderr)
+    sys.stderr.flush()
+    os._exit(1)
+
+
 def report_tools(run_state: state.RunState) -> None:
     # A child made only some of the agent's tools, so it does not speak for them.
     if run_state.child:
@@ -129,18 +136,18 @@ def read_token_file(path: str) -> str:
     try:
         fd = records.open_owned(Path(path))
     except (OSError, records.Refused) as exc:
-        stop(f"SCRIMMAGE_TOKEN_FILE {path} cannot be read: {exc}")
+        service_stop(f"SCRIMMAGE_TOKEN_FILE {path} cannot be read: {exc}")
     with os.fdopen(fd, "rb") as handle:
         mode = stat.S_IMODE(os.fstat(handle.fileno()).st_mode)
         data = handle.read(4096)
     if mode != 0o600:
-        stop(
+        service_stop(
             f"SCRIMMAGE_TOKEN_FILE {path} has mode {mode:o}; it must be 600, readable by its "
             "owner only"
         )
     token = data.decode("utf-8", "replace").strip()
     if len(token) < TOKEN_MIN:
-        stop(f"SCRIMMAGE_TOKEN_FILE {path} holds a token under {TOKEN_MIN} characters")
+        service_stop(f"SCRIMMAGE_TOKEN_FILE {path} holds a token under {TOKEN_MIN} characters")
     return token
 
 
@@ -165,7 +172,7 @@ def start_service() -> None:
     from scrimmage_core import asgi_gate, executor
 
     if "SCRIMMAGE_TOKEN" in os.environ:
-        stop(
+        service_stop(
             "SCRIMMAGE_TOKEN is set, and a service reads its token from SCRIMMAGE_TOKEN_FILE only, "
             "so no environment holds it; unset SCRIMMAGE_TOKEN and set SCRIMMAGE_TOKEN_FILE"
         )
@@ -176,7 +183,7 @@ def start_service() -> None:
         os.environ.pop("SCRIMMAGE_TOKEN_FILE", None)
     url = os.environ.get("SCRIMMAGE_CONTROL_URL", "")
     if not loopback(url):
-        stop(
+        service_stop(
             f"SCRIMMAGE_CONTROL_URL {url!r} must be http:// on this machine in this version; "
             "a control server elsewhere needs TLS, which comes later"
         )
@@ -184,7 +191,7 @@ def start_service() -> None:
     tools, renames = tools_from(os.environ.get("SCRIMMAGE_TOOLS", ""))
     names = tuple(labels.tool_name(path, dict(renames)) for path in tools)
     process = state.ProcessState(names, service=True)
-    process.stop = stop
+    process.stop = service_stop
     state.install_process(process)
     client = ControlClient(url, token)
     senders = Senders()
@@ -194,12 +201,12 @@ def start_service() -> None:
     folders = [os.getcwd(), *script_folder()]
     for module, tool_names in tool_gate.targets(tools).items():
         if tool_gate.module_spec(module, folders) is None:
-            stop(f"{module} is listed in SCRIMMAGE_TOOLS but cannot be found")
+            service_stop(f"{module} is listed in SCRIMMAGE_TOOLS but cannot be found")
         del tool_names
     tool_gate.install(tools, dict(renames))
-    http_gate.install(process, client, None, stop)
-    langchain_gate.install(process, stop)
-    mcp_gate.install(process, None, stop)
+    http_gate.install(process, client, None, service_stop)
+    langchain_gate.install(process, service_stop)
+    mcp_gate.install(process, None, service_stop)
     process_gate.install(lambda: None)
     process_gate.install_service()
     threadctx.install(process)

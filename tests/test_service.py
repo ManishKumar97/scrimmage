@@ -255,7 +255,18 @@ def test_a_teams_spawn_pool_worker_started_from_a_worker_stays_off_and_runs(lab:
 def test_the_token_file_must_be_0600_and_owned(lab: Lab) -> None:
     lab.token_file.chmod(0o644)
     service = lab.start(wait=False)
-    assert "has mode 644; it must be 600" in lab.ended(service)
+    text = lab.ended(service)
+    assert "has mode 644; it must be 600" in text
+    assert "the service stops before it serves a request" in text and "agent runs" not in text
+
+
+@pytest.mark.design("service.loop_check_message")
+@pytest.mark.skipif(sys.version_info >= (3, 12), reason="uvloop is stopped on Python 3.11 only")
+def test_uvloop_on_3_11_stops_the_service_with_one_prefix(lab: Lab) -> None:
+    pytest.importorskip("uvloop")
+    service = lab.start("--loop", "uvloop", wait=False)
+    text = lab.ended(service)
+    assert "--loop asyncio" in text and "scrimmage: scrimmage:" not in text
 
 
 @pytest.mark.design("service.token_in_env_stops")
