@@ -17,7 +17,6 @@ decided at the team's call.
 import contextlib
 import functools
 import os
-import re
 import shlex
 import shutil
 import sys
@@ -158,7 +157,7 @@ def service_start(event: str, args: tuple[Any, ...]) -> None:
     if event in ("_posixsubprocess.fork_exec", "os.posix_spawn") and popen_started(event, args):
         return  # the start its Popen event decided already
     run = current()
-    if run is None or (isinstance(run, Outside) and pool_internal()) or tracker(event, args):
+    if run is None or (isinstance(run, Outside) and pool_internal()):
         return
     program, line = program_of(event, args)
     if program is None:
@@ -249,8 +248,6 @@ def guarded(what: str, why: str, method: Callable[..., Any], skip: type | None =
     if getattr(method, GATED, False):
         return method
 
-    credits = what.endswith("Queue.put")  # a queue's feeder sends each item later
-
     @functools.wraps(method)
     def gate(*args: Any, **kwargs: Any) -> Any:
         if not in_service() or (skip is not None and args and isinstance(args[0], skip)):
@@ -258,17 +255,8 @@ def guarded(what: str, why: str, method: Callable[..., Any], skip: type | None =
         if args and own_object(args[0]):
             return method(*args, **kwargs)
         decide_send(what, why)
-        if not credits:
-            with internal_call():
-                return method(*args, **kwargs)
-        writer = getattr(args[0], "_writer", None) if args else None
-        credit(writer)  # before the item is queued, so its feeder never sends it first
-        try:
-            with internal_call():
-                return method(*args, **kwargs)
-        except BaseException:
-            spend(writer)
-            raise
+        with internal_call():
+            return method(*args, **kwargs)
 
     setattr(gate, GATED, True)
     return gate
@@ -284,42 +272,45 @@ def decide_send(what: str, why: str) -> None:
 
 
 def own_object(target: object) -> bool:
-    """An object Scrimmage registered, by identity: a ThreadPool's change notifier and its
-    pipe at any time; a pool's own queues and pipes while that pool tears itself down; a
-    queue's pipe for an item a guarded put decided, once per item."""
+    """An object Scrimmage registered, by identity: a pipe within this process, such as a
+    ThreadPool's change notifier, at any time; while a pool tears itself down, that pool's
+    own queues and pipes, and no other pool's."""
     try:
         if target in IN_PROCESS_QUEUES:
             return True
-        if getattr(_teardown, "on", False) and target in POOL_ENDS:
-            return True
     except TypeError:  # an object that cannot be weakly held is no registered one
         return False
-    return spend(target)
+    torn: object = getattr(_teardown, "ends", ())
+    return any(target is end for end in cast(tuple[object, ...], torn))
 
 
-_credit_lock = threading.Lock()
-# A queue's pipe, and how many items a guarded put decided that its feeder has not sent yet.
-_credits: "weakref.WeakKeyDictionary[Any, int]" = weakref.WeakKeyDictionary()
+def feeder_send(writer: Any) -> Callable[[bytes], Any]:
+    """A queue's feeder's own send, made here for that one queue: the item it sends was
+    decided by a guarded put. Every other send on the queue's pipe stays decided."""
+    kind = cast(type[object], type(writer))
+    method: Callable[..., Any] = getattr(kind, "send_bytes")  # noqa: B009
+    original: Callable[..., Any] = getattr(method, "__wrapped__", method)
+    return functools.partial(original, writer)
 
 
-def credit(writer: object) -> None:
-    if writer is None:
+def patch_feeder(module: ModuleType) -> None:
+    """multiprocessing's Queue, and loky's, which inherits it: its _reset gives the feeder
+    feeder_send in place of the guarded send_bytes of its pipe."""
+    queue: Any = getattr(module, "Queue", None)
+    reset = queue.__dict__.get("_reset") if isinstance(queue, type) else None
+    if not callable(reset) or getattr(reset, GATED, False):
         return
-    with _credit_lock:
-        _credits[writer] = _credits.get(writer, 0) + 1
 
+    @functools.wraps(reset)
+    def given(self: Any, *args: Any, **kwargs: Any) -> Any:
+        found = reset(self, *args, **kwargs)
+        writer = getattr(self, "_writer", None)
+        if in_service() and writer is not None and hasattr(self, "_send_bytes"):
+            self._send_bytes = feeder_send(writer)
+        return found
 
-def spend(writer: object) -> bool:
-    """One decided item's send on this pipe: True, and counted, if one is owed."""
-    try:
-        with _credit_lock:
-            owed = _credits.get(writer, 0)
-            if owed <= 0:
-                return False
-            _credits[writer] = owed - 1
-            return True
-    except TypeError:
-        return False
+    setattr(given, GATED, True)
+    queue._reset = given
 
 
 def internal(method: Callable[..., Any]) -> Any:
@@ -350,12 +341,17 @@ def teardown(method: Callable[..., Any]) -> Any:
 
     @functools.wraps(method)
     def torn(*args: Any, **kwargs: Any) -> Any:
-        was = getattr(_teardown, "on", False)
-        _teardown.on = True
+        # The ends of the pool or the queues this teardown was given, and nothing else.
+        mine: list[object] = []
+        for given in [*args, *kwargs.values()]:
+            with contextlib.suppress(TypeError):
+                mine += POOL_ENDS.get(given, ())
+        was = getattr(_teardown, "ends", ())
+        _teardown.ends = tuple(mine)
         try:
             return method(*args, **kwargs)
         finally:
-            _teardown.on = was
+            _teardown.ends = was
 
     setattr(torn, GATED, True)
     return torn
@@ -382,7 +378,6 @@ def install_service() -> None:
         lambda m: patch_names(m, "BaseProcess", ("start",), "a new process would run ungated"),
     )
     hooks.on_import("subprocess", patch_popen)
-    hooks.on_import("multiprocessing.resource_tracker", patch_tracker)
     if sys.version_info < (3, 14):  # from 3.14 its start raises an audit event of its own
         hooks.on_import("multiprocessing.util", patch_spawnv)
     hooks.on_import("multiprocessing.queues", patch_queues)
@@ -414,78 +409,20 @@ def install_service() -> None:
     )
     for loky in ("loky.backend.queues", "joblib.externals.loky.backend.queues"):
         hooks.on_import(loky, patch_queues)  # loky's own queues, with a feeder of their own
+    start_tracker()
 
 
-def patch_tracker(module: ModuleType) -> None:
-    """multiprocessing's resource tracker, which Python starts the first time a lock or a
-    queue is made: a helper of its own that runs Python's code, never the team's, so its
-    start is not a start of the run's. Python 3.14 starts it from _launch."""
-    tracker: Any = getattr(module, "ResourceTracker", None)
-    for name in ("ensure_running", "_launch"):
-        method = getattr(tracker, name, None)
-        if callable(method) and not getattr(method, GATED, False):
-            setattr(tracker, name, tracker_start(method))
-    shared: Any = getattr(module, "_resource_tracker", None)
-    if isinstance(tracker, type) and isinstance(shared, tracker):
-        setattr(module, "ensure_running", shared.ensure_running)  # noqa: B010  # bound at import
+def start_tracker() -> None:
+    """Python's resource tracker, which multiprocessing starts the first time a lock, a queue
+    or shared memory is made, started now, at the service's startup, before any request. No
+    run then needs to start it. A start of it later, a relaunch included, is decided as any
+    other start is: refused under a run, and under the outside rules unless background_real
+    lists it. A worker multiprocessing started gets its parent's tracker instead."""
+    if "spawn_main" in " ".join(getattr(sys, "orig_argv", [])):
+        return
+    from multiprocessing import resource_tracker
 
-
-_tracker = threading.local()  # set while the resource tracker starts its helper
-TRACKER_MAIN = "from multiprocessing.resource_tracker import main"
-
-
-def tracker_start(method: Callable[..., Any]) -> Any:
-    @functools.wraps(method)
-    def start(*args: Any, **kwargs: Any) -> Any:
-        was = getattr(_tracker, "on", False)
-        _tracker.on = True
-        try:
-            return method(*args, **kwargs)
-        finally:
-            _tracker.on = was
-
-    setattr(start, GATED, True)
-    return start
-
-
-def tracker(event: str, args: tuple[Any, ...]) -> bool:
-    """This start is the resource tracker's own: made while it starts, running this Python,
-    which multiprocessing's executable must be too, with the tracker's own code."""
-    if not getattr(_tracker, "on", False) or event in ("os.fork", "os.forkpty", "os.system"):
-        return False
-    spawn = sys.modules.get("multiprocessing.spawn")
-    chosen = getattr(spawn, "get_executable", lambda: None)()
-    here = os.path.realpath(sys.executable)
-    if chosen is None or os.path.realpath(os.fsdecode(chosen)) != here:
-        return False
-    if event == "_posixsubprocess.fork_exec":
-        program = os.fsdecode(args[0][0]) if args and args[0] else ""
-    else:
-        program = os.fsdecode(command(event, args)[0])
-    if os.path.realpath(program) != here:
-        return False
-    # Its exact command line: this Python, its own startup flags, and the tracker's main.
-    util = sys.modules.get("multiprocessing.util")
-    flags = getattr(util, "_args_from_interpreter_flags", lambda: None)()
-    argv = argv_of(event, args)
-    if flags is None or argv[1:-1] != [*flags, "-c"] or not argv:
-        return False
-    if TRACKER_LINE.fullmatch(argv[-1]) is None:
-        return False
-    # And the environment it inherits as it was at startup: no PYTHON* variable or warning
-    # option a run set can make that Python load code of its own.
-    return python_settings() == STARTUP_SETTINGS
-
-
-TRACKER_LINE = re.compile(re.escape(TRACKER_MAIN) + r";main\(\d+\)")
-
-
-def python_settings() -> tuple[tuple[tuple[str, str], ...], tuple[str, ...]]:
-    found = tuple(sorted((k, v) for k, v in os.environ.items() if k.startswith("PYTHON")))
-    return found, tuple(sys.warnoptions)
-
-
-STARTUP_SETTINGS = python_settings()  # taken when the SDK loads, before any request
+    resource_tracker.ensure_running()
 
 
 def patch_spawnv(module: ModuleType) -> None:
@@ -577,6 +514,11 @@ def patch_queues(module: ModuleType) -> None:
     for name, cls in sorted(vars(module).items()):
         if isinstance(cls, type) and "put" in cls.__dict__ and name.endswith("Queue"):
             patch_names(module, name, ("put",), SENT)  # put_nowait calls put
+    patch_feeder(module)
+    simple: Any = getattr(module, "SimpleQueue", None)
+    init = simple.__dict__.get("__init__") if isinstance(simple, type) else None
+    if callable(init) and not getattr(init, GATED, False):
+        simple.__init__ = seen_made(init)
 
 
 def patch_pool(module: ModuleType) -> None:
@@ -605,21 +547,36 @@ def thread_pool_init(method: Callable[..., Any], threads: type, ended: object) -
     def init(self: Any, *args: Any, **kwargs: Any) -> Any:
         if not in_service():
             return method(self, *args, **kwargs)
+        was = getattr(_making, "queues", None)
+        made: list[object] = []  # every SimpleQueue made while this pool is made
+        _making.queues = made
         try:
             method(self, *args, **kwargs)
         except ScrimmageRefused:
             self._state = ended  # refused before it was made: its finalizer has nothing
             raise
-        # Its own queues and pipes, by identity: its teardown may send on these only.
-        for queue in (
-            getattr(self, n, None) for n in ("_inqueue", "_outqueue", "_change_notifier")
-        ):
-            for end in (queue, getattr(queue, "_writer", None), getattr(queue, "_reader", None)):
-                if end is not None:
-                    with contextlib.suppress(TypeError):
-                        POOL_ENDS.add(end)
-                        if isinstance(self, threads) and queue is self._change_notifier:
-                            IN_PROCESS_QUEUES.add(end)  # a pipe within this process
+        finally:
+            _making.queues = was
+        # Its own queues and pipes, by identity, only if they were made here, not handed in by
+        # a context of the team's: its teardown may send on these, and no other pool's.
+        ends: list[object] = []
+        for name in ("_inqueue", "_outqueue", "_change_notifier"):
+            queue = getattr(self, name, None)
+            if not any(queue is new for new in made):
+                continue
+            mine = [
+                e
+                for e in (queue, getattr(queue, "_writer", None), getattr(queue, "_reader", None))
+                if e is not None
+            ]
+            ends += mine
+            with contextlib.suppress(TypeError):
+                POOL_ENDS[queue] = tuple(mine)
+                if isinstance(self, threads) and name == "_change_notifier":
+                    for end in mine:
+                        IN_PROCESS_QUEUES.add(end)  # a pipe within this process
+        with contextlib.suppress(TypeError):
+            POOL_ENDS[self] = tuple(ends)
         return None
 
     setattr(init, GATED, True)
@@ -633,8 +590,27 @@ POOL_TEARDOWN = ("__del__", "_terminate_pool")
 POOL_STOPS = ("close", "terminate")
 # The multiprocessing queues a ThreadPool uses within this process, such as its change notifier.
 IN_PROCESS_QUEUES: "weakref.WeakSet[Any]" = weakref.WeakSet()
-# Each pool's own queues and their pipes, registered as it is made: its teardown sends on these.
-POOL_ENDS: "weakref.WeakSet[Any]" = weakref.WeakSet()
+# A pool, and each queue it made as it was made, with the queues and pipes that pool may send
+# on as it tears itself down.
+POOL_ENDS: "weakref.WeakKeyDictionary[Any, tuple[object, ...]]" = weakref.WeakKeyDictionary()
+_making = threading.local()  # the SimpleQueues made while a pool is being made
+
+
+def seen_made(init: Callable[..., Any]) -> Any:
+    """multiprocessing's SimpleQueue.__init__: one made while a pool is made is noted, so only
+    a queue the pool itself made is ever its own."""
+
+    @functools.wraps(init)
+    def noted(self: Any, *args: Any, **kwargs: Any) -> None:
+        init(self, *args, **kwargs)
+        making = getattr(_making, "queues", None)
+        if making is not None:
+            making.append(self)
+
+    setattr(noted, GATED, True)
+    return noted
+
+
 EXECUTOR_STOPS = ("shutdown",)
 
 

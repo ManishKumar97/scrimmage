@@ -56,7 +56,7 @@ def test_the_only_connections_are_to_and_from_the_control_server() -> None:
 STARTS = re.compile(
     r"\b(?:subprocess\.\w+\s*\(|Popen\s*\(|os\.(?:exec\w*|spawn\w*|system|popen|posix_spawnp?|"
     r"fork\w*)\s*\(|pty\.spawn\s*\(|ProcessPoolExecutor|multiprocessing\.\w+|"
-    r"create_subprocess_\w+|open_process\s*\(|run_process\s*\()"
+    r"create_subprocess_\w+|open_process\s*\(|run_process\s*\(|resource_tracker\.ensure_running\s*\()"
 )
 STARTERS = {"subprocess", "pty", "multiprocessing", "concurrent", "asyncio"}
 
@@ -66,7 +66,8 @@ def test_the_only_processes_scrimmage_starts_are_its_runs() -> None:
     """Scrimmage's start-up inside the agent runs before an audit hook could watch it, so this
     scan is what checks it: no product module but the runner and scrimmage-run starts anything,
     and the Scrimmage MCP server, a command of its own that never loads into the agent, which
-    starts each scrimmage command it runs."""
+    starts each scrimmage command it runs. A service starts Python's resource tracker, once, at
+    its startup, before any request."""
     found = {
         (path.name, " ".join(call.split()))
         for path in PACKAGES.rglob("*.py")
@@ -85,11 +86,9 @@ def test_the_only_processes_scrimmage_starts_are_its_runs() -> None:
         ("process_gate.py", "multiprocessing.pool"),
         ("process_gate.py", "multiprocessing.process"),
         ("process_gate.py", "multiprocessing.queues"),
-        # It names this to mark Python's own helper's start, which Python makes, not it.
-        ("process_gate.py", "multiprocessing.resource_tracker"),
-        # It names these to decide spawnv_passfds's starts, and to read the executable the
-        # tracker's start runs; it starts nothing through them.
-        ("process_gate.py", "multiprocessing.spawn"),
+        # A service's one start of its own: Python's resource tracker, before any request.
+        ("process_gate.py", "resource_tracker.ensure_running("),
+        # It names this to decide spawnv_passfds's starts; it starts nothing through it.
         ("process_gate.py", "multiprocessing.util"),
     }
     # The same AST scan as the standard-library test, so __import__("subprocess") counts.
@@ -112,6 +111,7 @@ def test_the_only_processes_scrimmage_starts_are_its_runs() -> None:
         ("threadctx.py", "asyncio"),  # to read a loop's tasks at a run's close
         ("asgi_gate.py", "asyncio"),  # the entry gate runs on the server's loop
         ("executor.py", "concurrent"),  # for its Future: its workers are threads
+        ("process_gate.py", "multiprocessing"),  # a service starts the resource tracker
     }
 
 
