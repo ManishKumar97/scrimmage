@@ -58,6 +58,10 @@ These are real replies, saved from the real-model check on 6 November 2026 with 
 | `real_chat_answer.json` | The chat request after the tool result |
 | `real_embedding.json` | The bot's embedding request |
 
+`rail_real_shape.json` is shaped like a NeMo rail's reply from `gpt-4.1-mini`, seen in the real-model check on 12 November 2026.
+It keeps the real reply's layout: pretty-printed, with `logprobs` and `refusal` null, `usage`, `service_tier` and `system_fingerprint`, and longer than a record line's preview.
+The id, the time and the fingerprint are made up.
+
 These are derived from the files above for cached input tokens.
 Only the token counts change; the fields that hold them are the spec's `prompt_tokens_details` and `input_tokens_details`.
 

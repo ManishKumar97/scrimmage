@@ -19,7 +19,7 @@ import pytest
 from conftest import Project
 from fakes.openai_server import FakeOpenAI
 from model_gate import GUARD, PRICE, SENDS, URL, Gate, Provider, ask, completion, guard
-from scrimmage_core import config, provider_openai, show, state
+from scrimmage_core import config, outcomes, provider_openai, show, state
 from scrimmage_core.cli import main
 from scrimmage_core.config import Fault
 from scrimmage_core.errors import ConfigError
@@ -273,7 +273,17 @@ def test_a_carried_model_fault_with_the_budget_off_warns_at_load(tmp_path: Path)
     assert config.carried_model_warnings(load(tmp_path, timeout, 'max_cost_usd = "none"')) == []
 
 
-def test_a_model_replace_line_keeps_the_real_reply_redacted_and_the_injected_text_whole() -> None:
+def saved(gate: Gate, folder: Path) -> Path:
+    """The gate's side-folder items written out as a records folder holds them, for show."""
+    (folder / "blobs").mkdir()
+    for sha, data in gate.sink.blobs.items():
+        (folder / "blobs" / sha).write_bytes(data)
+    return folder
+
+
+def test_a_model_replace_line_keeps_the_real_reply_redacted_and_the_injected_text_whole(
+    tmp_path: Path,
+) -> None:
     injected = f"safe {SECRET}"
     gate = Gate(replace(injected))
     provider = Provider(
@@ -285,8 +295,8 @@ def test_a_model_replace_line_keeps_the_real_reply_redacted_and_the_injected_tex
     real = json.loads(gate.result())["choices"][0]["message"]["content"]
     assert real.startswith("no ") and "safe" not in real  # the line holds the real reply
     assert line["changed"]["text"]["preview"] == injected  # the fault's own text is whole
-    # show puts the two side by side, from the line alone.
-    shown = show.came_back(line)
+    # show puts the two side by side, from the line and the reply it points to.
+    shown = show.came_back(line, saved(gate, tmp_path))
     assert "replace gave the agent" in shown and SECRET not in shown.partition("gave")[0]
 
 
@@ -301,10 +311,45 @@ def test_a_replaced_model_reply_is_not_looked_for_in_later_requests() -> None:
     assert not [x for x in gate.sink.lines if x.get("carries_injected")]
 
 
-def test_show_puts_what_the_model_said_beside_what_replace_gave_the_agent() -> None:
+def test_show_puts_what_the_model_said_beside_what_replace_gave_the_agent(tmp_path: Path) -> None:
     gate = Gate(replace())
     ask(guard(Provider(gate.events)))
-    assert show.came_back(gate.line) == ("the model said unsafe S14; replace gave the agent: safe")
+    shown = show.came_back(gate.line, saved(gate, tmp_path))
+    assert shown == "the model said unsafe S14; replace gave the agent: safe"
+
+
+@pytest.mark.slow
+def test_show_reads_what_the_model_said_from_a_real_shaped_reply(
+    project: Project, fake_openai: Any
+) -> None:
+    """A real completion is pretty-printed, so a line's preview ends before its text: show
+    reads the text from the reply the line points to."""
+    fake: FakeOpenAI = fake_openai(["rail_real_shape"])
+    raw = (Path(__file__).parent / "fixtures" / "openai" / "rail_real_shape.json").read_text()
+    assert len(raw) > outcomes.PREVIEW and '"content"' not in raw[: outcomes.PREVIEW]
+    (project.root / "bot.py").write_text(
+        "import openai\n\n\ndef answer(question):\n"
+        "    reply = openai.OpenAI(max_retries=0).chat.completions.create(\n"
+        '        model="gpt-4.1-mini", messages=[{"role": "user", "content": question}]\n'
+        "    )\n    return reply.choices[0].message.content\n"
+    )
+    project.toml.write_text(
+        '[agent]\nfunction = "bot:answer"\nmax_cost_usd = "none"\n'
+        'model_hosts = [{host = "127.0.0.1", provider = "openai"}]\n\n'
+        '[[test]]\nname = "t"\nquestion = "q"\nexpect = ["No"]\n\n'
+        '[[test.fault]]\ncall = "model"\nmodel = "gpt-4.1-mini"\ndo = "replace"\n'
+        'text = "maybe"\nexpect = ["maybe"]\n'
+    )
+    result = project.test(fake)
+    assert result.code == 0, result.out + result.err
+    run = str(next(r for r in result.records() if r[-1]["row"] == "fault 1")[-1]["run"])
+    (record,) = (project.root / "scrimmage-runs").glob(f"*/{run}.jsonl")
+    folder = record.parent
+    project.capsys.readouterr()
+    assert main(["show", str(folder), "--run", run]) == 0
+    out = project.capsys.readouterr().out
+    assert "the model said No; replace gave the agent: maybe" in out, out
+    assert "chatcmpl-" not in out
 
 
 @pytest.mark.slow
