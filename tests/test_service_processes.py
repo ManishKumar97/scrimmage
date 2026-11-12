@@ -1242,12 +1242,12 @@ def test_a_tracker_start_or_relaunch_under_a_run_or_outside_is_decided(
     assert tracker._pid is None  # type: ignore[attr-defined]  # nothing was started
 
 
-@pytest.mark.design("service.feeder_own_send")
+@pytest.mark.design("service.feeder_thread")
 def test_a_runs_send_on_a_queues_pipe_is_refused_whatever_its_feeder_dropped(
     service: state.ProcessState,
 ) -> None:
-    """The feeder sends with its own send, made for that queue; the pipe's send stays
-    decided, so an item the feeder could not pickle leaves nothing a run can use."""
+    """Only the queue's own feeder thread sends on its pipe undecided; every other send
+    stays decided, so an item the feeder could not pickle leaves nothing a run can use."""
     from multiprocessing.reduction import ForkingPickler
 
     queue: Any = multiprocessing.get_context("spawn").Queue()
@@ -1278,6 +1278,29 @@ def test_a_runs_send_on_a_queues_pipe_is_refused_whatever_its_feeder_dropped(
         queue.join_thread()
 
 
+@pytest.mark.design("service.feeder_thread")
+@pytest.mark.parametrize("kind", ["Queue", "JoinableQueue"])
+def test_a_runs_call_of_a_queues_own_send_is_refused(
+    service: state.ProcessState, kind: str
+) -> None:
+    """The send the queue hands its feeder is the pipe's guarded send: a run that calls it
+    is refused, while the feeder thread still sends what a put decided."""
+    from multiprocessing.reduction import ForkingPickler
+
+    queue: Any = getattr(multiprocessing.get_context("spawn"), kind)()
+    try:
+        plain(lambda: queue.put("plain"))  # starts the feeder thread
+        assert queue.get(timeout=10) == "plain"
+        run = a_run(service)
+        data = bytes(ForkingPickler.dumps("run's data"))
+        assert "inside a test run" in refused(run, lambda: queue._send_bytes(data))
+        plain(lambda: queue.put("plain again"))
+        assert queue.get(timeout=10) == "plain again"
+    finally:
+        queue.close()
+        queue.join_thread()
+
+
 class SlowWhenPickled:
     """An item whose pickling waits, so a run can try a send meanwhile."""
 
@@ -1290,7 +1313,7 @@ class SlowWhenPickled:
         return (str, ("slow",))
 
 
-@pytest.mark.design("service.feeder_own_send")
+@pytest.mark.design("service.feeder_thread")
 def test_a_runs_send_while_a_decided_item_is_pickled_is_refused(
     service: state.ProcessState,
 ) -> None:

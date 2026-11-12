@@ -278,39 +278,23 @@ def own_object(target: object) -> bool:
     try:
         if target in IN_PROCESS_QUEUES:
             return True
+        if state.FEEDERS.get(threading.current_thread()) is target:
+            return True  # a queue's own feeder thread, on its own queue's pipe
     except TypeError:  # an object that cannot be weakly held is no registered one
         return False
     torn: object = getattr(_teardown, "ends", ())
     return any(target is end for end in cast(tuple[object, ...], torn))
 
 
-def feeder_send(writer: Any) -> Callable[[bytes], Any]:
-    """A queue's feeder's own send, made here for that one queue: the item it sends was
-    decided by a guarded put. Every other send on the queue's pipe stays decided."""
-    kind = cast(type[object], type(writer))
-    method: Callable[..., Any] = getattr(kind, "send_bytes")  # noqa: B009
-    original: Callable[..., Any] = getattr(method, "__wrapped__", method)
-    return functools.partial(original, writer)
-
-
 def patch_feeder(module: ModuleType) -> None:
-    """multiprocessing's Queue, and loky's, which inherits it: its _reset gives the feeder
-    feeder_send in place of the guarded send_bytes of its pipe."""
+    """multiprocessing's Queue, or loky's: its own _feed is a feeder target. A thread started
+    inside a decided put with that exact target is that queue's feeder, and its sends on
+    that queue's pipe, and only those, carry what the put decided."""
     queue: Any = getattr(module, "Queue", None)
-    reset = queue.__dict__.get("_reset") if isinstance(queue, type) else None
-    if not callable(reset) or getattr(reset, GATED, False):
-        return
-
-    @functools.wraps(reset)
-    def given(self: Any, *args: Any, **kwargs: Any) -> Any:
-        found = reset(self, *args, **kwargs)
-        writer = getattr(self, "_writer", None)
-        if in_service() and writer is not None and hasattr(self, "_send_bytes"):
-            self._send_bytes = feeder_send(writer)
-        return found
-
-    setattr(given, GATED, True)
-    queue._reset = given
+    found: object = queue.__dict__.get("_feed") if isinstance(queue, type) else None
+    feed: object = getattr(found, "__func__", found)  # a staticmethod's function
+    if callable(feed):
+        state.FEEDER_TARGETS.add(feed)
 
 
 def internal(method: Callable[..., Any]) -> Any:

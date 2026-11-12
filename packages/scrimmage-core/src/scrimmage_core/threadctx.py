@@ -114,6 +114,7 @@ def start_patched(original: Callable[[threading.Thread], None]) -> Callable[...,
             return original(self)
         if state.internal_thread(self):
             state.INTERNAL.add(self)
+        state.note_feeder(self)
         if spawning() or isinstance(self, tuple(POOL_THREADS)):
             start_outside(self)
             return original(self)

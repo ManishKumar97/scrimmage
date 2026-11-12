@@ -1069,6 +1069,24 @@ _internal = threading.local()
 INTERNAL: "weakref.WeakSet[threading.Thread]" = weakref.WeakSet()
 INTERNAL_TARGETS: set[object] = set()  # thread targets, set by the process gate on import
 INTERNAL_KINDS: list[type] = []  # thread classes, such as a process pool's manager thread
+# A queue's _feed, mp's and loky's; and each feeder thread started inside a decided put with
+# that exact target, with the one pipe it sends on, read from its own send at its start.
+FEEDER_TARGETS: set[object] = set()
+FEEDERS: "weakref.WeakKeyDictionary[threading.Thread, object]" = weakref.WeakKeyDictionary()
+
+
+def note_feeder(thread: threading.Thread) -> None:
+    if not in_decided_call():
+        return
+    target: object = getattr(thread, "_target", None)
+    target = getattr(target, "__func__", target)
+    args: tuple[object, ...] = tuple(getattr(thread, "_args", ()) or ())
+    if target not in FEEDER_TARGETS or len(args) < 3:
+        return
+    send = args[2]  # Queue._feed(buffer, notempty, send_bytes, ...): the pipe's bound send
+    pipe = getattr(send, "__self__", None)
+    if pipe is not None and getattr(send, "__name__", "") == "send_bytes":
+        FEEDERS[thread] = pipe
 
 
 def internal_thread(thread: threading.Thread) -> bool:
