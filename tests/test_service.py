@@ -506,7 +506,7 @@ class Bench:
         self.services: list[Running] = []
         self.closers: list[Any] = []
 
-    def start(self, **env: str) -> Running:
+    def start(self, *args: str, workers: int = 1, **env: str) -> Running:
         base = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
         base.update(
             PATH=f"{BIN}{os.pathsep}{base.get('PATH', '')}",
@@ -519,7 +519,9 @@ class Bench:
             OPENAI_API_KEY="test",
         )
         base.update(env)
-        service = Running(self.root, {k: v for k, v in base.items() if v != ""}, [])
+        flags = ["--workers", str(workers)] if workers > 1 else []
+        service = Running(self.root, {k: v for k, v in base.items() if v != ""}, [*flags, *args])
+        service.wanted = workers
         self.services.append(service)
         assert service.ready.wait(60), service.text
         return service
