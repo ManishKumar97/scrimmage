@@ -6,7 +6,7 @@ import random
 import re
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import cast
 
@@ -481,6 +481,9 @@ def test_numbers_spacing_and_unicode_are_written_back_as_they_were() -> None:
         "password=False/xyz",
         "x = f(a) + (password=changeme)",
         "user=admin, password=changeme, host=db",
+        "user=admin,password=changeme,host=db",
+        "x = (a,password=changeme)",
+        "f(token=tok,password=hunter2!)",
     ],
     ids=lambda text: text[:30],
 )
@@ -504,6 +507,27 @@ def test_redacted_json_text_is_still_json() -> None:
         }
 
 
+# A Bearer token whose last characters are the word bearer, then a space and another token:
+# the old module removed the first token alone, as one match cannot start inside another,
+# and the new one reads the token again from that word, so it removes the second one too.
+BEARER_IN_BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]*bearer\s")
+
+
+def removes_more(new: str, old: str) -> bool:
+    """new is old with more removed: what new keeps between its markers is in old, in order,
+    with something in each gap, and new is shorter."""
+    kept = new.split(redact_module.REMOVED)
+    pattern = "(?:.+?)".join(re.escape(piece) for piece in kept)
+    return len(new) < len(old) and re.fullmatch(pattern, old, re.DOTALL) is not None
+
+
+def as_before_or_more_removed(text: str, new: str, old: str) -> None:
+    if BEARER_IN_BEARER.search(text) is not None and new != old:
+        assert removes_more(new, old), (text, new, old)
+    else:
+        assert new == old, text
+
+
 @pytest.mark.design("security.redaction_shapes")
 def test_the_new_secrets_leave_what_the_other_passes_remove_as_it_was() -> None:
     """The benign texts hold none of the new literals, so they are redacted exactly as before.
@@ -514,7 +538,7 @@ def test_the_new_secrets_leave_what_the_other_passes_remove_as_it_was() -> None:
     benign = [t for t in corpus() if not any(lit in t.lower() for lit in NEW_LITERALS)][:400]
     assert len(benign) == 400
     for text in benign:
-        assert redact(text) == without_new_passes(text), text
+        as_before_or_more_removed(text, redact(text), without_new_passes(text))
     for _ in range(3000):
         parts: list[str] = []
         expected: list[str] = []
@@ -530,7 +554,8 @@ def test_the_new_secrets_leave_what_the_other_passes_remove_as_it_was() -> None:
         # A newline ends an "Illegal header" line, and a # ends a bearer token, so a part
         # is judged alone: the old module already removed a field that a bearer ran into.
         text = "log:\n# " + "\n# ".join(parts)
-        assert redact(text) == without_new_passes("log:\n# " + "\n# ".join(expected)), text
+        old = without_new_passes("log:\n# " + "\n# ".join(expected))
+        as_before_or_more_removed(text, redact(text), old)
 
 
 @pytest.mark.design("security.redaction_shapes")
@@ -583,6 +608,7 @@ def test_the_new_secrets_leave_what_the_other_passes_remove_as_it_was() -> None:
         "password=[secret removed]",
         "token=[removed]",
         "pa\u017f\u017fword=hunter2",  # long s is not an s
+        "%70assword=hunter2",  # an encoded letter is not a letter of a name
     ],
 )
 def test_prose_empty_values_and_paths_are_kept(text: str) -> None:
@@ -1103,6 +1129,7 @@ NO_ESCAPE_AFTER_KEPT = [
     ("next_page_token=ab,password=X", "next_page_token=ab,[secret removed]", "form-field"),
     ("is_secret=True,token=hunter2", "is_secret=True,[secret removed]", "form-field"),
     ("f(token=tok,password=hunter2)", "f(token=tok,[secret removed]", "form-field"),
+    ("next_page_token=ab%2Cpassword=X", "next_page_token=ab%2C[secret removed]", "form-field"),
     ("eos_token=x|sk-" + "Q" * 24, "eos_token=x|[secret removed]", "openai-key"),
     ("cursor_token=Q2F/AKIA" + "Q" * 16, "cursor_token=Q2F/[secret removed]", "aws-access-key"),
     ("next_page_token=a.Bearer " + "Q" * 20, "next_page_token=a.[secret removed]", "bearer-token"),
@@ -1126,7 +1153,13 @@ def test_a_kept_value_ends_where_a_field_or_a_key_shape_begins_in_it(
 
 
 def test_a_kept_value_alone_is_kept_word_for_word() -> None:
-    for text in ("next_page_token=ab", "next_page_token=Q2F/zX+9w==,status=ok", "f(token=tok)"):
+    for text in (
+        "next_page_token=ab",
+        "next_page_token=Q2F/zX+9w==,status=ok",
+        "f(token=tok)",
+        "is_secret=1%2Cis_secret=1",  # a name starts after the encoded comma, not on its 2C
+        "is_secret=1,%20next_page_token=a",
+    ):
         assert redact(text) == text
         assert redact_module.spans(text) == []
 
@@ -1181,13 +1214,19 @@ SECRET_SHAPES = [
 ]
 
 
+# A \uXXXX escape or a URL-encoded separator ends in a letter or digit, but is a break.
+BREAK_AT_END = re.compile(r"(?:\\u[0-9a-fA-F]{4}|%(?:2[06cC]|3[bB]|7[cC]))$")
+
+
 def by_design_not_a_secret(prefix: str, escape: str, glue: str, shape: str) -> bool:
-    """A field name glued to a letter or digit is not a name, and one right after a named
-    call's parenthesis, or after ", " inside one, is code, as in b(password=x): both are kept
-    on purpose, on main too. With no escape and no glue the name is glued to the prefix."""
+    """A field name glued to an ASCII letter or digit is not a name, and one right after a
+    named call's parenthesis, or after ", " inside one, is code, as in b(password=x): both
+    are kept on purpose. With no escape and no glue the name is glued to the prefix."""
     before = glue or ("" if escape else prefix)
     in_call = "(" in prefix and before.endswith(", ")
-    return "=" in shape and (before[-1:].isalnum() or before.endswith("(") or in_call)
+    glued = before[-1:].isascii() and before[-1:].isalnum()
+    glued = glued and BREAK_AT_END.search(before) is None
+    return "=" in shape and (glued or before.endswith("(") or in_call)
 
 
 class CountedScan:
@@ -1262,7 +1301,16 @@ def test_continuations_are_read_in_linear_time_when_quotes_alternate(
 
 @pytest.mark.design("security.redaction_shapes")
 @pytest.mark.parametrize(
-    "unit", ["is_secret=1,", "next_page_token=a", "g(token=a,", "is_secret=[removed]a,"]
+    "unit",
+    [
+        "is_secret=1,",
+        "next_page_token=a",
+        "g(token=a,",
+        "is_secret=[removed]a,",
+        "is_secret=1\\u002c",
+        "is_secret=1%2C",
+        "next_page_token=a%7cnext_page_token=b%20",
+    ],
 )
 def test_a_run_of_kept_names_is_read_in_linear_time(
     monkeypatch: pytest.MonkeyPatch, unit: str
@@ -1277,6 +1325,65 @@ def test_a_run_of_kept_names_is_read_in_linear_time(
     small, large = reads(500), reads(1000)
     assert 0 < small <= 4 * len(unit) * 500, small
     assert large <= 2.2 * small, (small, large)
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize(
+    "unit",
+    [
+        "bearer " + "Q" * 16 + "/",
+        "Bearer " + "Q" * 16 + "xox",
+        "Bearer " + "Q" * 16 + ".is_secret=1,",
+        "Bearer " + "Q" * 16 + "Authorization",
+    ],
+)
+def test_a_run_of_bearer_tokens_is_read_in_linear_time(
+    monkeypatch: pytest.MonkeyPatch, unit: str
+) -> None:
+    """Each Bearer token is read again from the first key shape or field name in it, so the
+    search for that one must stop at it, or each token reads on to the end of the text."""
+
+    def reads(n: int) -> int:
+        text = unit * n
+        return continuation_reads(monkeypatch, lambda: redact(text), (*RUNS, *SEARCHES))
+
+    small, large = reads(500), reads(1000)
+    assert 0 < small <= 4 * len(unit) * 500, small
+    assert large <= 2.2 * small, (small, large)
+
+
+class CountedFinds:
+    """A pattern that counts the characters its finditer calls are given to read."""
+
+    def __init__(self, pattern: re.Pattern[str]) -> None:
+        self.pattern = pattern
+        self.read = 0
+
+    def finditer(self, text: str, pos: int, endpos: int) -> Iterator[re.Match[str]]:
+        self.read += endpos - pos
+        return self.pattern.finditer(text, pos, endpos)
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize("unit", ["a, token=t,", "f(a=1, token=t,", "(token=t, ", "g(token=tok, "])
+def test_the_call_around_each_name_is_found_in_linear_time(
+    monkeypatch: pytest.MonkeyPatch, unit: str
+) -> None:
+    """Whether a name is an argument of a named call is told from the last ( and ) before it.
+    Each part of the text is read for them once, not again back from each name."""
+    text = unit * 2000
+    counted = CountedFinds(redact_module.PARENTHESIS)
+    monkeypatch.setattr(redact_module, "PARENTHESIS", counted)
+    redact(text)
+    assert 0 < counted.read <= len(text), counted.read
+
+
+def test_the_parentheses_before_a_place_are_right_in_any_order() -> None:
+    text = "f(a, g(b), c"
+    found = redact_module.Parentheses(text)
+    assert found.before(len(text)) == (6, 8)
+    assert found.before(5) == (1, -1)  # asked out of order, still right
+    assert redact_module.Parentheses(text).before(7) == (6, -1)
 
 
 @pytest.mark.design("security.redaction_shapes")
@@ -1309,6 +1416,148 @@ def test_no_kept_value_shields_a_secret_after_an_escape_and_any_glue() -> None:
                             assert prefix in out, (mode, text, out)
                     checked += 1
     assert checked > 9000, checked
+
+
+# Escapes that a text which is not valid JSON, such as a log that cut a JSON body off, still
+# holds raw, and URL-encoded separators: each one is a word break before a name, as a space is.
+SEPARATORS = [
+    *(f"%{code}" for code in ("2C", "2c", "26", "3B", "3b", "20", "7C", "7c")),
+    *(f"\\u{code}" for code in ("0020", "002c", "002C", "0026", "003b", "000a", "0041", "00e9")),
+]
+# Bearer tokens whose characters run on into what follows them.
+BEARER_TOKENS = [
+    "Bearer " + "R" * 20,
+    "bearer\t" + "R" * 16,
+    "Authorization: Bearer " + "R" * 24,
+    "Bearer " + "R" * 16 + "." + "R" * 8,
+    "Bearer " + "R" * 20 + "==",
+]
+SEPARATED_PREFIXES = ["", "psql", "ab", '{"cmd": "psql', *KEPT_PREFIXES, *BEARER_TOKENS]
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_no_secret_hides_behind_an_escaped_or_encoded_separator() -> None:
+    """Every prefix, separator, glue and secret shape, in plain text, in a string read out of
+    JSON, in JSON text and in a Python value: the secret goes."""
+    modes = {
+        "plain": redact,
+        "decoded": lambda text: redacted(text, decoded=True)[0],
+        "json": lambda text: redact(json.dumps({"l": text})),
+        "python value": lambda text: json.dumps(capture.clean({"v": text})[0]),
+    }
+    checked = 0
+    for prefix in SEPARATED_PREFIXES:
+        for separator in SEPARATORS:
+            for glue in ("", ",", " ", "/", "b,"):
+                for shape, secret in SECRET_SHAPES:
+                    # The separator stands where by_design_not_a_secret has an escape.
+                    if by_design_not_a_secret(prefix, separator, glue, shape):
+                        continue
+                    text = prefix + separator + glue + shape
+                    for mode, clean in modes.items():
+                        out = clean(text)
+                        assert secret not in out, (mode, text, out)
+                    checked += 1
+    assert checked > 2000, checked
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_a_bearer_token_shields_no_secret_glued_after_it() -> None:
+    """Every Bearer token, glue and secret shape, in all four modes: the token goes, and so
+    does the secret after it, even where the token's characters run on into its name."""
+    modes = {
+        "plain": redact,
+        "decoded": lambda text: redacted(text, decoded=True)[0],
+        "json": lambda text: redact(json.dumps({"l": text})),
+        "python value": lambda text: json.dumps(capture.clean({"v": text})[0]),
+    }
+    checked = 0
+    for token in BEARER_TOKENS:
+        for glue in GLUES:
+            for shape, secret in SECRET_SHAPES:
+                if by_design_not_a_secret(token, "", glue, shape):
+                    continue
+                text = token + glue + shape
+                for mode, clean in modes.items():
+                    out = clean(text)
+                    assert secret not in out and "R" * 16 not in out, (mode, text, out)
+                checked += 1
+    assert checked > 900, checked
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Bearer " + "Q" * 20 + "Authorization: Basic UVFRUVFRUVFRUQ==", "[secret removed]"),
+        ("Bearer " + "Q" * 20 + "sk-" + "Q" * 20, "[secret removed]"),
+        ("Bearer " + "Q" * 16 + ".token=<QQQQ x> ok", "[secret removed] ok"),
+        ("Bearer " + "Q" * 16 + "/bearer " + "R" * 16 + " ok", "[secret removed] ok"),
+        ("Bearer " + "Q" * 20 + "-Illegal header value x", "[secret removed]"),
+        ("Bearer " + "Q" * 20 + " ok", "[secret removed] ok"),
+    ],
+)
+def test_what_starts_inside_a_bearer_token_is_read_again(text: str, expected: str) -> None:
+    assert redact(text) == expected
+    assert redacted(text, decoded=True)[0] == expected
+    assert [rule for _, _, rule in redact_module.spans(text)] == ["bearer-token"]
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            '{"cmd": "psql\\u0020password=hunter2 -h db',
+            '{"cmd": "psql\\u0020[secret removed] -h db',
+        ),
+        ("ab\\u002cpassword=HUNTER2", "ab\\u002c[secret removed]"),
+        ("a=1\\u0026token=HUNTER2", "a=1\\u0026[secret removed]"),
+        ("next_page_token=ab\\u002cpassword=HUNTER2", "next_page_token=ab\\u002c[secret removed]"),
+        # an escaped letter before a name is a break too, and only removes more
+        ("ab\\u0041password=HUNTER2", "ab\\u0041[secret removed]"),
+    ],
+)
+def test_a_name_begins_after_a_raw_unicode_escape(text: str, expected: str) -> None:
+    assert redact(text) == expected
+    assert redacted(text, decoded=True)[0] == expected
+    assert [rule for _, _, rule in redact_module.spans(text)] == ["form-field"]
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("next_page_token=ab%2Cpassword=HUNTER2", "next_page_token=ab%2C[secret removed]"),
+        ("q=a%26token=HUNTER2", "q=a%26[secret removed]"),
+        ("q=a%3bsecret=HUNTER2", "q=a%3b[secret removed]"),
+        ("SELECT%20password=HUNTER2", "SELECT%20[secret removed]"),
+        ("a%7Capi_key=HUNTER2", "a%7C[secret removed]"),
+        # hex digits with a _ after them are a NAME_ prefix, so the name starts on them
+        ("next_page_token=ab%2C_password=HUNTER2", "next_page_token=ab%[secret removed]"),
+    ],
+)
+def test_a_name_begins_after_a_url_encoded_separator(text: str, expected: str) -> None:
+    assert redact(text) == expected
+    assert redacted(text, decoded=True)[0] == expected
+    assert [rule for _, _, rule in redact_module.spans(text)] == ["form-field"]
+
+
+def test_a_name_after_a_bare_comma_in_a_named_call_is_not_code() -> None:
+    """After ", " in a named call a bare name is code; after a bare comma it is removed, the
+    safe side, as docs/limits.md says."""
+    assert redact("f(token=tok,secret=sec)") == "f(token=tok,[secret removed]"
+    assert redact("f(token=tok, secret=sec)") == "f(token=tok, secret=sec)"
+    assert redact("f(token=tok,secret=sec!)") == "f(token=tok,[secret removed]"
+    assert redact("x(1),secret=sec") == "x(1),[secret removed]"
+
+
+def test_an_escaped_letter_inside_a_name_is_read_only_once_the_json_is_read() -> None:
+    """No JSON writer escapes an ASCII letter, so plain text keeps p\\u0061ssword= as it is,
+    as docs/limits.md says. Read out of JSON it is password=, and goes."""
+    text = "p\\u0061ssword=HUNTER2"
+    assert redact(text) == text
+    assert redact('{"l": "' + text + '"}') == '{"l": "[secret removed]"}'
 
 
 ESCAPED_QUOTE_LEAK = r"password=abc\"2zz"  # a quote escaped inside a value
