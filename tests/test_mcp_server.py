@@ -1313,3 +1313,27 @@ def test_the_server_answers_the_next_call_after_a_cancel(bed: Bed) -> None:
 
     after = anyio.run(go)
     assert doc_of(after)["status"] == "valid"
+
+
+def test_the_docs_mcp_json_starts_the_server_and_lists_its_tools(bed: Bed) -> None:
+    page = (Path(__file__).parents[1] / "docs" / "mcp-server.md").read_text()
+    block = page.split("```json\n")[1].split("```")[0]
+    entry = json.loads(block)["mcpServers"]["scrimmage"]
+    assert entry["type"] == "stdio"
+    venv = bed.root / ".venv" / "bin"
+    venv.mkdir(parents=True)
+    (venv / "scrimmage-mcp").symlink_to(SERVER)  # the project's own environment, as installed
+
+    async def go() -> list[types.Tool]:
+        params = StdioServerParameters(
+            command=str(bed.root / entry["command"]), args=entry["args"], env=bed.env, cwd=bed.root
+        )
+        with bed.log.open("a") as errlog:
+            async with (
+                stdio_client(params, errlog=errlog) as (read, write),
+                ClientSession(read, write) as session,
+            ):
+                await session.initialize()
+                return (await session.list_tools()).tools
+
+    assert [tool.name for tool in anyio.run(go)] == list(mcp_server.COMMANDS)

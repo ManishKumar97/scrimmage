@@ -1,5 +1,8 @@
 # MCP tools
 
+This page is about MCP tools your agent calls.
+To drive Scrimmage from a coding agent, see [Driving Scrimmage from a coding agent](mcp-server.md).
+
 MCP, the Model Context Protocol, is a standard way for an agent to call tools that live in a separate program, an MCP server.
 You can mock an MCP tool or make it fail, so the agent's own handling of it runs.
 It works the same over stdio and over streamable HTTP, with the official `mcp` client and with FastMCP's client.

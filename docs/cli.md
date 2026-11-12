@@ -167,3 +167,13 @@ If the command cannot start, `scrimmage-run` says why on standard error and exit
 | 2 | No command was given |
 | 126 | The command was found but cannot be run |
 | 127 | The command was not found |
+
+## scrimmage-mcp
+
+```bash
+scrimmage-mcp --config PATH [--root DIR] [--max-session-usd USD] [--allow-no-budget] [--allow-probe] [--call-timeout SECONDS]
+```
+
+The Scrimmage MCP server, installed with the `mcp` extra.
+It lets a coding agent run `check`, `test`, `record`, `init` and `show` as tools, over stdio, with a cost cap on every spend.
+See [Driving Scrimmage from a coding agent](mcp-server.md).

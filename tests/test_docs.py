@@ -489,3 +489,24 @@ def test_the_show_page_lists_every_suggestion_code_and_calls_it_a_heuristic() ->
     assert "reads `code` and not `text`" in text
     assert 'never "because"' in text
     assert "never edits `scrimmage.toml`" in text
+
+
+@pytest.mark.design("docs.mcp_server")
+def test_the_mcp_server_page_says_what_it_guards_and_what_it_does_not() -> None:
+    text = page("mcp-server.md")
+    for sentence in (
+        "they are not a boundary against a coding agent with a shell",
+        "Allowlist `check` and `show` in your client, and never `test` or `record`",
+        "A result handed to a coding agent goes to that agent's model provider.",
+        "Approving a call to `test` approves whatever the config's entry point does now",
+        "carries the recorded responses of real tools word for word",
+        "`redact` removes known secret shapes, such as API keys; it does not remove customer data.",
+        "On a system with no `/proc`, such as macOS",
+        "It speaks MCP over stdio only",
+        "No client has been checked against this server yet except the SDK's own scripted client.",
+    ):
+        assert sentence in text, sentence
+    assert "[Driving Scrimmage from a coding agent](mcp-server.md)" in page("mcp.md")
+    for name in ("install.md", "cli.md", "safety.md"):
+        assert "mcp-server.md" in page(name), name
+    assert "## scrimmage-mcp" in page("cli.md")
