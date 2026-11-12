@@ -753,6 +753,7 @@ def test_redacted_json_parses_with_the_same_structure_and_no_seeded_secret() -> 
     rng = random.Random(4646)
     cases = 0
     tally = [0, 0]
+    LITERAL_PATH_SECRETS.clear()  # each fuzz skips only the secrets it seeded itself
     for _ in range(12_500):
         found: list[str] = []
         tree = seeded_tree(rng, found)
@@ -814,6 +815,7 @@ def test_the_same_pair_judgement_holds_for_python_values_and_json_text() -> None
     rng = random.Random(4747)
     cases = 0
     tally = [0, 0]
+    LITERAL_PATH_SECRETS.clear()  # each fuzz skips only the secrets it seeded itself
     for _ in range(25_000):
         found: list[str] = []
         tree = seeded_tree(rng, found)
@@ -841,6 +843,7 @@ def test_objects_beside_a_basic_value_and_pascal_case_labels_on_both_paths() -> 
     rng = random.Random(5151)
     cases = 0
     tally = [0, 0]
+    LITERAL_PATH_SECRETS.clear()  # each fuzz skips only the secrets it seeded itself
     for _ in range(30_000):
         found: list[str] = []
         tree = {"wrap": [seeded_pair(rng, found), seeded_tree(rng, found)]}
@@ -1063,6 +1066,84 @@ def test_a_kept_value_never_runs_on_into_a_secret_field_after_it(text: str) -> N
     for where, out in outs.items():
         assert secret not in out, (where, out)
         assert kept in out, (where, out)  # the kept name itself stays
+
+
+# One character of glue between the escape and the next secret, so it never starts right
+# after the escape: the value of a kept match must still end where it would without it.
+GLUED_AFTER_KEPT = [
+    (r"is_secret=True\"sk-" + "Q" * 24, "Q" * 24),
+    (r"next_page_token=a\"b,password=HUNTER2", "HUNTER2"),
+    (r"next_page_token=a\'b.Bearer " + "Q" * 20, "Q" * 20),
+    ("next_page_token=a\\nAuthorization: Basic UVFRUVFRUVFRUQ==", "UVFRUVFRUVFRUQ"),
+]
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_code_with_an_escape_and_more_value_after_it_is_not_code() -> None:
+    """True alone is code; True\\"2zz is a value, judged with what it goes on with."""
+    assert redact(r"password=True\"2zz") == "[secret removed]"
+    assert redacted("password=None\\n2zz", decoded=True)[0] == "[secret removed]"
+    assert redact("x password=True ok") == "x password=True ok"
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize(("text", "secret"), GLUED_AFTER_KEPT)
+def test_a_kept_value_shields_no_secret_one_glue_character_on(text: str, secret: str) -> None:
+    for out in (redact(text), redacted(text, decoded=True)[0], redact(json.dumps({"l": text}))):
+        assert secret not in out and text.partition("=")[0] in out, out
+
+
+KEPT_PREFIXES = [
+    "next_page_token=a",
+    "is_secret=True",
+    "eos_token=x",
+    "cursor_token=Q2F",
+    "f(token=tok",
+]
+ESCAPES = ['\\"', "\\'", "\\n", "\\r", '"', "'"]
+GLUES = ["", "b", "bb_", "%20", *",.-/|=:;()%", *(f"b{c}" for c in ",.-/|=:;()")]
+SECRET_SHAPES = [
+    ("password=HUNTER2", "HUNTER2"),
+    ("token=HUNTER2", "HUNTER2"),
+    ("sk-" + "Q" * 24, "Q" * 24),
+    ("AKIA" + "Q" * 16, "Q" * 16),
+    ("ghp_" + "Q" * 36, "Q" * 36),
+    ("Bearer " + "Q" * 20, "Q" * 20),
+    ("Authorization: Basic UVFRUVFRUVFRUQ==", "UVFRUVFRUVFRUQ"),
+    ("eyJ" + "Q" * 10 + ".eyJ" + "Q" * 10 + "." + "Q" * 10, "Q" * 10),
+]
+
+
+def by_design_not_a_secret(glue: str, shape: str) -> bool:
+    """A field name glued to a letter or digit is not a name, and one right after a named
+    call's parenthesis is code, as in b(password=x): both are kept on purpose, on main too."""
+    return "=" in shape and (glue[-1:].isalnum() or glue.endswith("("))
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_no_kept_value_shields_a_secret_after_an_escape_and_any_glue() -> None:
+    """Every kept prefix, escape or quote, glue and secret shape, in plain text, in a string
+    read out of JSON, and in JSON text: the secret goes, and a kept name stays."""
+    modes = {
+        "plain": redact,
+        "decoded": lambda text: redacted(text, decoded=True)[0],
+        "json": lambda text: redact(json.dumps({"l": text})),
+    }
+    checked = 0
+    for prefix in KEPT_PREFIXES:
+        for escape in ESCAPES:
+            for glue in GLUES:
+                for shape, secret in SECRET_SHAPES:
+                    if by_design_not_a_secret(glue, shape):
+                        continue
+                    text = prefix + escape + glue + shape
+                    for mode, clean in modes.items():
+                        out = clean(text)
+                        assert secret not in out, (mode, text, out)
+                        if not prefix.startswith("f("):  # code with an escape after it goes
+                            assert prefix.partition("=")[0] in out, (mode, text, out)
+                    checked += 1
+    assert checked > 5000, checked
 
 
 ESCAPED_QUOTE_LEAK = r"password=abc\"2zz"  # a quote escaped inside a value
