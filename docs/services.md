@@ -122,6 +122,7 @@ A reply that only looks like the gate's, or a run whose plan was never claimed, 
 
 `uvicorn --workers N` works as it does without Scrimmage: each worker loads the app, prints its own active line, and serves runs and plain requests.
 The supervisor loads no app and says nothing.
+gunicorn's workers, `UvicornWorker` included, are forks of one process and have none of Scrimmage's threads, so each stops at its first request and says so.
 Which worker takes a run is up to the kernel, and a run's lines always carry the process that served it.
 
 Each process sends at most 8 control requests at once, so 8 processes fill the control server's 64 connections.

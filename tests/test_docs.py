@@ -576,7 +576,7 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
     for limit in (
         "**A service run is stricter than a script about processes.**",
         "**`process:sh` lets any shell command through.**",
-        "**A process pool's `shutdown()` inside a run is refused.**",
+        "**A process pool's `close()`, `terminate()` or `shutdown()` inside a run is refused.**",
         "**Subinterpreters are refused in a run.**",
         "**Ray and Dask are not covered.**",
         "**`--loop asyncio` on Python 3.11.**",
@@ -588,6 +588,9 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
         "**hypercorn, `--http zttp` and `--http2` are not covered.**",
         "**A value under 8 characters is not removed from the records.**",
         "**Stopping the service mid-run.**",
+        "**A long plain request keeps the threads it started plain until it ends.**",
+        "**gunicorn is not covered, with `UvicornWorker` either.**",
+        "**A row a refusal stops may have sent one more run.**",
     ):
         assert limit in limits, limit
     safety = page("safety.md")
