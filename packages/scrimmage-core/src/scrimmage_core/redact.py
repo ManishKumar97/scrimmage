@@ -54,16 +54,33 @@ QUOTED = (
     rf"(?!(?:(?!(?P=quote))[^\n])*?(?ai:{FIELD}))"
     r"""(?:\\.|(?!(?P=quote))[^\\\n])+(?P=quote)"""
 )
-# `inside` is set when the name follows a quote, so a quote after it closes that string.
-FORM = (
-    r"""(?:(?P<inside>(?<=["']))|(?<!["']))"""
-    + NAME
-    + rf"(?:{MARKER}[^&\s\"'<>\\]+"
-    + rf"|(?(inside)(?!)|{QUOTED})"
-    + rf"|(?!{MARKER})(?:<[^<>\"'\\]+>|(?P<value>(?(inside)|(?:\\?[\"']|<)?)"
-    + r"(?:\\u[0-9a-fA-F]{4}|\\(?![\"'nr])|[^&\s\"'<>\\])+))"
-    + ")"
-)
+# What may follow an escape that stays in a value: more of the value. An escaped quote before
+# a space, a bracket, a comma, a colon or the end closes an escaped string instead, as the
+# second \" in {\"a\":\"b\"} does.
+GOES_ON = r"""(?=[^&\s"'<>\\,;:()\[\]{}])"""
+
+
+def form(decoded: bool) -> str:
+    """The form-field rule. A backslash is in the value, except before a quote, n or r.
+
+    An escaped quote with more of the value after it is in the value, as in abc\\"2zz. In raw
+    text a \\n or \\r is a JSON escape, a line break, and ends the value. In a string read out
+    of JSON every escape is already undone, so there a \\n with more of the value after it is
+    a backslash and a letter, as in C:\\new, and is in the value too."""
+    escaped = r"\\[\"'nr]" if decoded else r"\\[\"']"
+    return (
+        # `inside` is set when the name follows a quote, so a quote after it closes that string.
+        r"""(?:(?P<inside>(?<=["']))|(?<!["']))"""
+        + NAME
+        + rf"(?:{MARKER}[^&\s\"'<>\\]+"
+        + rf"|(?(inside)(?!)|{QUOTED})"
+        + rf"|(?!{MARKER})(?:<[^<>\"'\\]+>|(?P<value>(?(inside)|(?:\\?[\"']|<)?)"
+        + rf"(?:\\u[0-9a-fA-F]{{4}}|{escaped}{GOES_ON}|\\(?![\"'nr])|[^&\s\"'<>\\])+))"
+        + ")"
+    )
+
+
+FORM = form(decoded=False)
 # The harmless prefixes, checked on the match: next_page_token is found and then kept.
 HARMLESS_NAME = re.compile(
     rf"(?:[A-Za-z0-9]+_)*(?:(?:{HARMLESS})_{FIELD}|(?:{HARMLESS_TOKEN})_token(?:=|%3d))",
@@ -114,6 +131,10 @@ SECRETS = (
     Secret(r"Illegal header (?:name|value) .*", ("Illegal header",), name="header-text"),
 )
 PATTERNS = re.compile("|".join(secret.pattern for secret in SECRETS))
+# The same rules for a string read out of JSON: only the form-field rule differs.
+DECODED_PATTERNS = re.compile(
+    "|".join(form(decoded=True) if s.pattern == FORM else s.pattern for s in SECRETS)
+)
 LITERALS = tuple(lit for secret in SECRETS if not secret.lowercase for lit in secret.literals)
 LOWER_LITERALS = tuple(lit for secret in SECRETS if secret.lowercase for lit in secret.literals)
 
@@ -175,8 +196,9 @@ def kept_as_is(found: re.Match[str]) -> bool:
     return HARMLESS_NAME.match(found.group()) is not None or code_value(found)
 
 
-def remove_keys(text: str) -> tuple[str, int]:
-    """The text with every key shape replaced, and how many were."""
+def remove_keys(text: str, decoded: bool = False) -> tuple[str, int]:
+    """The text with every key shape replaced, and how many were. decoded: the text is a
+    string read out of JSON."""
     count = 0
 
     def replace(found: re.Match[str]) -> str:
@@ -186,7 +208,7 @@ def remove_keys(text: str) -> tuple[str, int]:
         count += 1
         return REMOVED
 
-    return PATTERNS.sub(replace, text), count
+    return (DECODED_PATTERNS if decoded else PATTERNS).sub(replace, text), count
 
 
 ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
@@ -202,7 +224,7 @@ def holds_candidate(text: str) -> bool:
     return any(lit in lowered for lit in LOWER_LITERALS)
 
 
-def plain(text: str) -> tuple[str, int]:
+def plain(text: str, decoded: bool = False) -> tuple[str, int]:
     """The three passes on text that is not read as JSON. Each pass runs only if the text, as
     the pass before left it, holds a string every match of that pass contains."""
     count = 0
@@ -220,7 +242,7 @@ def plain(text: str) -> tuple[str, int]:
         text, jwts = JWT.subn(no_jwt, text)
     lowered = text.lower()
     if any(lit in text for lit in LITERALS) or any(lit in lowered for lit in LOWER_LITERALS):
-        text, keys = remove_keys(text)
+        text, keys = remove_keys(text, decoded)
     return text, count + jwts + keys
 
 
@@ -347,7 +369,7 @@ def structural(text: str) -> tuple[str, int] | None:
 
     def clean(value: str) -> str:
         nonlocal count
-        kept, more = redacted(value)
+        kept, more = redacted(value, decoded=True)
         count += more
         return kept
 
@@ -385,13 +407,14 @@ def structural(text: str) -> tuple[str, int] | None:
     return lead + written + text[len(text.rstrip()) :], count
 
 
-def redacted(text: str) -> tuple[str, int]:
+def redacted(text: str, *, decoded: bool = False) -> tuple[str, int]:
     """The text with secrets removed, and how many places were removed. A JSON object,
-    array or string is read and its strings are redacted, so it stays valid JSON."""
+    array or string is read and its strings are redacted, so it stays valid JSON. decoded:
+    the text is a string read out of JSON, so a backslash in it is only a character."""
     done: tuple[str, int] = (text, 0)
     if holds_candidate(text):
         found = structural(text)
-        done = found if found is not None else plain(text)
+        done = found if found is not None else plain(text, decoded)
     # A plain str, even if given a subclass, whose methods could carry the secret back.
     return str.__str__(done[0]), done[1]
 

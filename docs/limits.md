@@ -121,6 +121,9 @@
   A JSON text that is redacted is written back with the input's spacing where it can be told, but pretty-printed JSON comes back on one line, and a `\u` escape style follows whether the input held any `\u`, so a text may be written with different escapes. Numbers are kept as written.
   Two keys that redact to the same text are kept apart by a suffix, in JSON text and in recorded mocks and tool values: the second becomes `[secret removed] 2`.
   A backslash followed by `n` or `r` ends a form value, since it is a line break in escaped text; any other backslash, as in `PGPASSWORD=p\$ss` or `password=hun\ter2`, is part of the value.
+  An escaped quote with more of the value after it is part of the value, as in `password=abc\"2zz`; one before a space, a comma, a colon, a bracket or the end closes an escaped string and ends the value.
+  In a string read out of a JSON text, a `\n` or `\r` with more of the value after it is a backslash and a letter, as in the path `password=C:\new2zz`, and is part of the value.
+  The same text outside JSON, where `\n` cannot be told from an escaped line break, still ends the value at `\n`: `password=C:\new2zz` as plain text keeps `\new2zz`.
   The paging and tokenizer prefixes (`next_`, `page_`, `sync_`, `cursor_`, `eos_`, `pad_` and the rest) are kept only before `token`: `SYNC_PASSWORD=` and `next_secret=` are removed.
   An edit to a string that holds a removed secret inside a JSON text is refused as a whole, even beside the secret; the other strings of that JSON text stay open.
   Redaction is a heuristic on known shapes.

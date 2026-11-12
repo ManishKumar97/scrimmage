@@ -181,6 +181,9 @@ def corpus() -> list[str]:
         "_",
         "xoxe." + SAMPLES["xox"],
         "plain words",
+        r"password=abc\"2zz",
+        r"password=abc\'2zz",
+        r"password=C:\new2zz",
     ]
     out: list[str] = []
     for _ in range(5000):
@@ -906,7 +909,9 @@ def test_a_marker_is_removed_with_what_sticks_to_it() -> None:
 
 
 def test_spans_cover_exactly_what_redact_removes() -> None:
-    for text in [*corpus(), *SAMPLES.values()]:
+    # The corpus is plain text, as its reference needs; the JSON leak is added whole here.
+    leaks = [ESCAPED_QUOTE_LEAK, DECODED_BACKSLASH_LEAK, json.dumps(ESCAPED_QUOTE_LEAK)]
+    for text in [*corpus(), *SAMPLES.values(), *leaks]:
         places = redact_module.replacements(text)
         built: list[str] = []
         at = 0
@@ -965,8 +970,34 @@ def test_a_backslash_n_or_r_ends_a_value_and_other_backslashes_are_in_it() -> No
     assert redact(r"password=ab\ncd") == r"[secret removed]\ncd"
     assert redact(r"password=ab\rcd") == r"[secret removed]\rcd"
     assert redact(r"password=ab\tcd ok") == "[secret removed] ok"
-    assert redact(r"x password=ab\"cd") == r"x [secret removed]\"cd"
+    assert redact(r"x password=ab\"cd") == "x [secret removed]"
     assert redact("password=ab\\$cd\\") == "[secret removed]"
+
+
+ESCAPED_QUOTE_LEAK = r"password=abc\"2zz"  # a quote escaped inside a value
+DECODED_BACKSLASH_LEAK = '{"q": "password=C:\\\\new2zz"}'  # the string is password=C:\new2zz
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize("quote", ['"', "'"])
+def test_an_escaped_quote_with_more_of_the_value_after_it_is_in_the_value(quote: str) -> None:
+    text = ESCAPED_QUOTE_LEAK.replace('"', quote)
+    assert redact(text) == "[secret removed]"
+    assert redact(f"x {text} y") == "x [secret removed] y"
+    # One that closes an escaped string still ends the value, so the text around it is kept.
+    assert redact(r"{\"a\":\"password=abc\",\"b\":1}") == r"{\"a\":\"[secret removed]\",\"b\":1}"
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_a_backslash_n_in_a_string_read_out_of_json_is_in_the_value() -> None:
+    """In JSON text \\n is a line break; once the string is read out it is a backslash and a
+    letter, as in a Windows path."""
+    assert json.loads(DECODED_BACKSLASH_LEAK)["q"] == "password=C:\\new2zz"
+    assert json.loads(redact(DECODED_BACKSLASH_LEAK)) == {"q": "[secret removed]"}
+    assert "2zz" not in redact(DECODED_BACKSLASH_LEAK)
+    # A real line break read out of JSON still ends the value.
+    broken = json.dumps({"q": "password=abc\nuser=bob"})
+    assert json.loads(redact(broken)) == {"q": "[secret removed]\nuser=bob"}
 
 
 def security_rule_names() -> set[str]:
