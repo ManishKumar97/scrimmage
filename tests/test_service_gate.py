@@ -17,13 +17,19 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+import httpx2
 import pytest
 
-from scrimmage_core import asgi_gate, protocol, state, tool_gate
+from scrimmage_core import asgi_gate, http_gate, protocol, state, tool_gate
 from scrimmage_core.client import CAP
 from scrimmage_core.config import Mock
+from scrimmage_core.plan import Plan
 from service_harness import Service, drive, eventually
 from service_harness import service as make_service
+from test_http_gate import Budget
+from test_service_units import Sink, patched_httpx2, sink_of
+
+__all__ = ["patched_httpx2"]  # a fixture, used by name
 
 seen_scopes: list[dict[str, Any]] = []
 
@@ -462,7 +468,7 @@ def test_both_gates_present_handle_a_request_once(svc: Service) -> None:
 
 
 @pytest.mark.design("service.starlette_alone")
-def test_starlette_gate_alone_under_testclient(svc: Service) -> None:
+def test_starlette_gate_alone_under_testclient(svc: Service, patched_httpx2: None) -> None:
     from starlette.applications import Starlette
     from starlette.responses import JSONResponse
     from starlette.routing import Route
@@ -478,12 +484,20 @@ def test_starlette_gate_alone_under_testclient(svc: Service) -> None:
         return JSONResponse({"answer": answer, "headers": dict(request.headers)})
 
     patch_starlette(__import__("starlette.applications", fromlist=["x"]), svc.process)
+    # The web gate too, as in a service: the test client's own requests go to the app in
+    # this process, so even with a run open they are no write outside any request.
+    http_gate.patch(httpx2, http_gate.Context(svc.process, Budget(), None, svc.process.stop))
     web = Starlette(routes=[Route("/chat", chat, methods=["POST"])])
     name = svc.open(mocks=mocked("alone"))
     header, value = svc.header(name)
     with TestClient(web) as client:
         got = client.post("/chat", headers={header.decode(): value.decode()})
+        plan = Plan("run-0123456789ab", "t", "baseline", (), (), (), (), 60.0, service=True)
+        held = state.RunState(plan, Sink(), [], process=svc.process)
+        svc.process.register(held)  # a run open in this process while the next request goes
         plain = client.post("/chat")
+        svc.process.unregister(held)
+    assert sink_of(held).lines == []
     assert got.json()["answer"] == "order for alone"
     assert not any(k.startswith("x-scrimmage") for k in got.json()["headers"])
     assert "must never run" in plain.json()["answer"]  # a plain request: the real tool, untouched

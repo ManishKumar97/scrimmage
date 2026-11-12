@@ -214,11 +214,12 @@ def test_a_notice_with_no_run_goes_to_the_startup_report(
     service: state.ProcessState, capsys: pytest.CaptureFixture[str]
 ) -> None:
     library = types.ModuleType("httpx2")
+    # Subclasses, so the gate this patches never reaches the real classes other tests use.
     library.__dict__.update(
-        Client=httpx2.Client,
-        AsyncClient=httpx2.AsyncClient,
-        SyncByteStream=httpx2.SyncByteStream,
-        AsyncByteStream=httpx2.AsyncByteStream,
+        {
+            name: type(name, (getattr(httpx2, name),), {})
+            for name in ("Client", "AsyncClient", "SyncByteStream", "AsyncByteStream")
+        },
         __version__="2.99.0",
     )
     http_gate.patch(library, http_gate.Context(service, Budget(), None, service.stop))

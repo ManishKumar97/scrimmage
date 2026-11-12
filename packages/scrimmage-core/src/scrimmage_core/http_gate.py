@@ -45,6 +45,7 @@ from scrimmage_core.redact import redact, redacted
 from scrimmage_core.state import (
     BLOB_CAP,
     BlobSink,
+    Outside,
     ProcessState,
     RunState,
     Step,
@@ -229,7 +230,7 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
         return
 
     def sync_gate(self: Any, request: Any) -> Any:
-        prepared = prepare(ctx, request, f"thread-{threading.get_ident()}")
+        prepared = prepare(ctx, request, f"thread-{threading.get_ident()}", self)
         if prepared is None:
             return sync_send(self, request)
         bound, step, extra = prepared
@@ -269,7 +270,7 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
         except RuntimeError:  # no asyncio loop: trio, or something else
             task = None
         who = f"task-{id(task)}" if task is not None else f"thread-{threading.get_ident()}"
-        prepared = prepare(ctx, request, who)
+        prepared = prepare(ctx, request, who, self)
         if prepared is None:
             return await async_send(self, request)
         bound, step, extra = prepared
@@ -369,14 +370,39 @@ def describe(ctx: Bound, request: Any, who: str, body: bytes) -> Call:
     return Call("model", label, op, provider, method, retry, key, marked=marked)
 
 
+# Transports that hand a request to an app in this process, as a test client does. A mock
+# transport is not one: its answer stands in for a server elsewhere.
+IN_PROCESS = (
+    ("httpx2", "ASGITransport"),
+    ("httpx2", "WSGITransport"),
+    ("httpx", "ASGITransport"),
+    ("httpx", "WSGITransport"),
+    ("starlette.testclient", "_TestClientTransport"),
+)
+
+
+def in_process(client: Any, request: Any) -> bool:
+    """The client sends this request to an app in this process: it leaves the process for
+    nowhere, so outside any request it writes nothing, and that app's own gates decide it."""
+    pick = getattr(client, "_transport_for_url", None)
+    try:
+        transport = pick(request.url) if callable(pick) else None
+    except Exception:  # a client this version does not know: decided as any other request
+        return False
+    kinds = [getattr(sys.modules.get(module), name, None) for module, name in IN_PROCESS]
+    return isinstance(transport, tuple(k for k in kinds if isinstance(k, type)))
+
+
 def prepare(
-    process_ctx: Context, request: Any, who: str
+    process_ctx: Context, request: Any, who: str, client: Any = None
 ) -> tuple[Bound, Step, dict[str, object]] | None:
     """Decide the request; None with no run. Raises ScrimmageRefused after recording one.
 
     The run is read here, once per request, and every step after reads that one."""
     run = current()
     if run is None or MCP_TRANSPORT.get() == endpoint_of(request.url):
+        return None
+    if isinstance(run, Outside) and in_process(client, request):
         return None
     ctx = process_ctx.bound(run)
     body = body_of(request)

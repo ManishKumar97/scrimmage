@@ -410,6 +410,33 @@ def test_an_outside_read_or_model_call_while_a_run_is_open_passes_with_a_lost_co
         ]
 
 
+@pytest.mark.design("service.in_process_transport")
+@pytest.mark.usefixtures("web")
+def test_an_outside_post_to_an_app_in_this_process_is_no_write_and_one_to_a_mock_is(
+    service: state.ProcessState,
+) -> None:
+    async def asgi(scope: Any, receive: Any, send: Any) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"in process"})
+
+    def wsgi(environ: Any, start: Any) -> list[bytes]:
+        start("200 OK", [])
+        return [b"in process"]
+
+    async def through_asgi() -> str:
+        async with httpx2.AsyncClient(transport=httpx2.ASGITransport(asgi)) as web:
+            return (await web.post("http://app.test/orders")).text
+
+    run = a_run(service, "run-a")
+    outside = contextvars.Context()
+    assert outside.run(asyncio.run, through_asgi()) == "in process"
+    wsgi_client = httpx2.Client(transport=httpx2.WSGITransport(wsgi))
+    assert outside.run(wsgi_client.post, "http://app.test/orders").text == "in process"
+    assert sink_of(run).lines == []
+    with pytest.raises(ScrimmageRefused, match="outside any request"):
+        outside.run(client().post, "https://stock.test/orders")
+
+
 @pytest.mark.design("service.background_real")
 @pytest.mark.usefixtures("web")
 def test_an_outside_write_listed_under_background_real_passes_and_one_under_real_alone_does_not(
