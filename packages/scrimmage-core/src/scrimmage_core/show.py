@@ -6,6 +6,7 @@ that is not a plain file is refused by name. A line it prints was redacted when 
 recorded, and is redacted again here.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -18,7 +19,7 @@ from typing import BinaryIO, cast
 from scrimmage_core import results, suggest
 from scrimmage_core.judge import BASELINE_FAILED
 from scrimmage_core.outcomes import PREVIEW, plural
-from scrimmage_core.records import RECORD_VERSION, Refused, open_owned, read_regular
+from scrimmage_core.records import RECORD_VERSION, Refused, open_owned
 from scrimmage_core.redact import redact, redact_decoded
 from scrimmage_core.render import HEAD, fault_text, row_cells, table_lines
 
@@ -249,9 +250,31 @@ def reply_data(entry: Doc, folder: Path | None) -> str | None:
     if folder is None or entry.get("cut") or not isinstance(sha, str) or not SHA256.fullmatch(sha):
         return None
     try:
-        return read_regular(folder / "blobs" / sha, REPLY_BYTES).decode("utf-8", "replace")
+        data = blob_bytes(folder / "blobs", sha)
     except (Refused, OSError):
         return None
+    # A side-folder item is named by its content's hash, so one that does not match is not it.
+    if data is None or hashlib.sha256(data).hexdigest() != sha:
+        return None
+    return data.decode("utf-8", "replace")
+
+
+def blob_bytes(blobs: Path, name: str) -> bytes | None:
+    """A side-folder item, or None if it is over the cap. The folder is opened as one the
+    caller owns, not a link, and the item is opened inside it without following a link, so
+    no part of the path can lead out of the records folder."""
+    folder = open_owned(blobs, folder=True)
+    try:
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+        fd = os.open(name, flags, dir_fd=folder)
+    finally:
+        os.close(folder)
+    with os.fdopen(fd, "rb") as handle:
+        found = os.fstat(handle.fileno())
+        if not stat.S_ISREG(found.st_mode) or found.st_uid != os.getuid():
+            raise Refused(f"{blobs / name}: is not a plain file the caller owns, so it is not read")
+        data = handle.read(REPLY_BYTES + 1)
+    return None if len(data) > REPLY_BYTES else data
 
 
 def changed_choice(line: Doc) -> int:

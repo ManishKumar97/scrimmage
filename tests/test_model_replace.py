@@ -318,6 +318,28 @@ def test_show_puts_what_the_model_said_beside_what_replace_gave_the_agent(tmp_pa
     assert shown == "the model said unsafe S14; replace gave the agent: safe"
 
 
+def test_show_reads_a_reply_only_from_a_real_blobs_folder_and_by_its_hash(tmp_path: Path) -> None:
+    gate = Gate(replace())
+    ask(guard(Provider(gate.events)))
+    (tmp_path / "real").mkdir()
+    real = saved(gate, tmp_path / "real")
+    sha = gate.line["result"]["sha256"]
+    # A blobs folder that is a link to another folder is not read.
+    (tmp_path / "linked").mkdir()
+    (tmp_path / "linked" / "blobs").symlink_to(real / "blobs")
+    assert "the model said" not in show.came_back(gate.line, tmp_path / "linked")
+    # Nor is an item that is a link.
+    (tmp_path / "item" / "blobs").mkdir(parents=True)
+    (tmp_path / "item" / "blobs" / sha).symlink_to(real / "blobs" / sha)
+    assert "the model said" not in show.came_back(gate.line, tmp_path / "item")
+    # Nor an item whose content is not the one its name is the hash of.
+    (tmp_path / "other" / "blobs").mkdir(parents=True)
+    swapped = gate.result().replace("unsafe", "sneaky")
+    (tmp_path / "other" / "blobs" / sha).write_text(swapped)
+    assert "the model said" not in show.came_back(gate.line, tmp_path / "other")
+    assert show.came_back(gate.line, real).startswith("the model said unsafe S14")
+
+
 @pytest.mark.slow
 def test_show_reads_what_the_model_said_from_a_real_shaped_reply(
     project: Project, fake_openai: Any
