@@ -427,6 +427,12 @@ def redact(text: str) -> str:
     return redacted(text)[0]
 
 
+def redact_decoded(text: str) -> str:
+    """redact for a Python value's string, such as the agent's answer: it has no escapes left
+    in it, so a backslash in it is only a character."""
+    return redacted(text, decoded=True)[0]
+
+
 class Replacement(NamedTuple):
     """One place the rules change a text: where it was, which rule, and what the record has."""
 

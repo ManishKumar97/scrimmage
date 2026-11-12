@@ -19,7 +19,7 @@ from scrimmage_core import results, suggest
 from scrimmage_core.judge import BASELINE_FAILED
 from scrimmage_core.outcomes import PREVIEW, plural
 from scrimmage_core.records import RECORD_VERSION, Refused, open_owned, read_regular
-from scrimmage_core.redact import redact
+from scrimmage_core.redact import redact, redact_decoded
 from scrimmage_core.render import HEAD, fault_text, row_cells, table_lines
 
 RUN_ID = re.compile(r"run-[0-9a-f]{12}")
@@ -208,7 +208,7 @@ def came_back(line: Doc, folder: Path | None = None) -> str:
         added = " ".join(redact(injected(line)).split())
         if added and line.get("kind") == "model":  # the reply's text, not its JSON
             said = model_said(line, folder)
-            text = text if said is None else f"the model said {said}"
+            text = text if said is None else f"the model said {redact_decoded(said)}"
         if added:  # the real result is cut first, so what the agent got still shows
             room = max(CAME_BACK - len(added), 20)
             real = " ".join(redact(text).split())
@@ -404,7 +404,7 @@ def run_doc(folder: Path, run: str, path: Path, row: Doc | None) -> tuple[Doc, l
         "judged": None if summary is None else summary.get("judged"),
         "left_out": None if summary is None else summary.get("left_out"),
         "broken": [] if summary is None else summary.get("broken_rules", []),
-        "answer_preview": None if answer is None else redact(str(answer))[:PREVIEW],
+        "answer_preview": None if answer is None else redact_decoded(str(answer))[:PREVIEW],
         "lines": out_lines,
         "lines_left_out": left_out,
         "log_tail": log_tail(folder, run) if outcome in BAD_ENDS else None,

@@ -436,6 +436,17 @@ def test_the_raw_answer_is_compared_and_never_reaches_a_record(project: Project)
         assert SECRET not in path.read_text()
 
 
+@pytest.mark.slow
+def test_the_recorded_answer_is_redacted_as_the_python_string_it_was(project: Project) -> None:
+    """The answer is a Python string, so its backslash-n is a backslash and a letter."""
+    answer = "shipped Oct 30, password=C:\\new2zz"
+    result = scripted(project, [{"answer": answer}], "", "runs = 1")
+    summary = result.summaries()[0]
+    assert summary["answer"] == "shipped Oct 30, [secret removed]", summary
+    for path in (project.root / "scrimmage-runs").rglob("*.jsonl"):
+        assert "2zz" not in path.read_text()
+
+
 @pytest.mark.design("judge.raw_answer_expect")
 @pytest.mark.slow
 def test_an_expected_url_matches_though_the_record_cuts_its_query(project: Project) -> None:

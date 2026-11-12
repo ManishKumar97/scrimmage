@@ -295,3 +295,8 @@ def test_a_backslash_n_in_a_python_string_is_in_the_value_on_the_mock_path() -> 
     assert shown_key is not None and "2zz" not in shown_key, shown_key
     cleaned, removed = capture.clean({WINDOWS_PATH: 1, "k": [WINDOWS_PATH]})
     assert cleaned == {REMOVED: 1, "k": [REMOVED]} and len(removed) == 2
+
+
+def test_a_value_a_gate_puts_on_a_line_is_redacted_as_a_python_string() -> None:
+    assert state.scrub(WINDOWS_PATH) == REMOVED
+    assert state.scrub(["x", WINDOWS_PATH]) == ["x", REMOVED]

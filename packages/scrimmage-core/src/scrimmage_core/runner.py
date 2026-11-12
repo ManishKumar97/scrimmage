@@ -54,7 +54,7 @@ from scrimmage_core.outcomes import (  # the runner's names for them
     plural,
 )
 from scrimmage_core.records import RECORD_VERSION, RecordStore
-from scrimmage_core.redact import redact
+from scrimmage_core.redact import redact, redact_decoded
 from scrimmage_core.render import HEAD, miss_text, row_cells, table_lines
 from scrimmage_core.results import HASH_VERSION, row_hash
 from scrimmage_core.state import COMMAND_CAP, now_iso
@@ -421,7 +421,7 @@ class Runner:
             refused[0] if chose and outcome == "refused call" else None,
         )
         summary: dict[str, object] = {
-            "answer": None if answer is None else redact(answer),
+            "answer": None if answer is None else redact_decoded(answer),
             "outcome": outcome,
             "fault_fired": fired,
             "calls": calls,
@@ -1473,7 +1473,7 @@ def row_json(entry: RowReport, agent: Agent) -> dict[str, object]:
 
 
 def run_json(result: RunResult) -> dict[str, object]:
-    answer = None if result.answer is None else redact(result.answer)[:PREVIEW]
+    answer = None if result.answer is None else redact_decoded(result.answer)[:PREVIEW]
     return {
         "run": result.run,
         "outcome": result.outcome,

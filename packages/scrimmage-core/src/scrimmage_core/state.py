@@ -30,7 +30,7 @@ from scrimmage_core.errors import ScrimmageRefused, ScrimmageStopped, ScrimmageT
 from scrimmage_core.outcomes import PREVIEW
 from scrimmage_core.plan import Plan
 from scrimmage_core.records import RECORD_VERSION
-from scrimmage_core.redact import redact, redacted
+from scrimmage_core.redact import redact, redact_decoded, redacted
 
 BLOB_CAP = 10 * 1024 * 1024  # a side-folder item keeps its first 10 MB and is marked cut
 BLOB_WAIT_S = 10.0  # the longest a recording call waits for room for its saved value
@@ -719,8 +719,8 @@ def error_text(call: engine.Call, error: BaseException) -> str:
 
 def scrub(value: object) -> object:
     """Remove secrets from the text a gate puts on a line, such as a model name or a path."""
-    if isinstance(value, str):
-        return redact(value)
+    if isinstance(value, str):  # a value the gate read, such as a model name out of the body
+        return redact_decoded(value)
     if isinstance(value, list):
         return [scrub(item) for item in cast(list[object], value)]
     return value
