@@ -303,6 +303,9 @@ A `replace` or `slow` row on a model with the budget off gets a warning above th
 Scrimmage's tests run the real NeMo Guardrails library, version 0.24.1, against a fake model server.
 They hold what follows.
 
+A fake server answers for any model name, so a model the provider has retired shows up only on a real call.
+That is what the real-model check is for: it runs the rails against OpenAI itself, and it is how the example's rails moved from the retired `gpt-4.1-nano` to `gpt-4.1-mini`.
+
 - **Its own client.** With `engine: openai`, NeMo sends each rail's call through its own httpx client, to `/chat/completions` under the model's `base_url`.
   Name that host under `model_hosts`, and each rail call is a model call with the rail's model name.
 - **A model per rail.** `self check input` and `self check output` take a model of their own, with `type: self_check_input` and `type: self_check_output` in the `models` list.
@@ -322,7 +325,7 @@ They hold what follows.
 
 - **Building or enforcing a guard.** Scrimmage tests your guard.
   It does not ship one.
-- **Two rails on one model.** A fault on `model = "gpt-4.1-nano"` hits every rail that uses that model, and `first N` counts them together.
+- **Two rails on one model.** A fault on `model = "gpt-4.1-mini"` hits every rail that uses that model, and `first N` counts them together.
   Give each rail its own model name.
 - **One model name on two hosts.** A guard and its fallback serving the same model cannot be faulted apart: a model fault does not take a host.
 - **A fallback guard under an attack.** "Guard A is down; does guard B still catch it" needs two faults in one run.

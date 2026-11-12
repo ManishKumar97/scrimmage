@@ -28,8 +28,8 @@ Only the tool name, its arguments, the call id and the answer text are changed; 
 | `acme_declines.json` | Default | the answer text, for a conversation where a tool result asked for a refund and the model declined by itself |
 | `guard_safe.json` | Default | the model name `llama-guard-test`, and the answer `safe`, Llama Guard's reply to allowed content |
 | `guard_unsafe.json` | Default | the model name `llama-guard-test`, and the answer `unsafe` then `S14`, Llama Guard's reply to blocked content |
-| `rail_allows.json` | Default | the model name `gpt-4.1-nano`, and the answer `No`, a NeMo self check rail's reply to allowed content |
-| `rail_blocks.json` | Default | the model name `gpt-4.1-nano`, and the answer `Yes`, a NeMo self check rail's reply to blocked content |
+| `rail_allows.json` | Default | the model name `gpt-4.1-mini`, and the answer `No`, a NeMo self check rail's reply to allowed content |
+| `rail_blocks.json` | Default | the model name `gpt-4.1-mini`, and the answer `Yes`, a NeMo self check rail's reply to blocked content |
 | `docs_search.json` | Functions | calls the MCP tool `search` with `{"q": "refunds"}` |
 | `docs_answer.json` | Default | the answer text, for the docs example on MCP tools |
 | `docs_admits.json` | Default | the answer text, for a conversation where the MCP tool failed |

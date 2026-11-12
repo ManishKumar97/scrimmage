@@ -25,7 +25,7 @@ pytestmark = [
 ]
 
 Fake = Callable[..., FakeOpenAI]
-RAIL, MAIN = "gpt-4.1-nano", "gpt-4o-mini"
+RAIL, MAIN = "gpt-4.1-mini", "gpt-4o-mini"
 CHAT_LABEL = "model:openai"  # a chat call to a host under model_hosts with provider openai
 MARKER = "BLOCKME"  # a question holding it is what the fake rail model blocks
 BLOCKED = "I'm sorry, I can't respond to that."  # NeMo's own refusal, from its flows
