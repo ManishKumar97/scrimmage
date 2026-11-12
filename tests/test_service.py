@@ -262,6 +262,65 @@ def test_a_service_starts_one_resource_tracker_and_the_tracker_starts_none(
     assert len(first) == 1 and trackers_in(lab.root) == first, (first, service.text[-2000:])
 
 
+TRACKER = "from multiprocessing.resource_tracker import main;main(5)"
+HELPER_LINES = {
+    "tracker": ["-c", TRACKER],
+    "tracker with options": ["-X", "faulthandler", "-Wdefault", "-c", TRACKER],
+    "forkserver": [
+        "-c",
+        "from multiprocessing.forkserver import main; main(3, 4, ['__main__'], **{'a': [1]})",
+    ],
+    "forkserver reading argv": [
+        "-c",
+        "import sys; from multiprocessing.forkserver import main; "
+        "main(3, 4, ['__main__'], sys_argv=sys.argv[1:], **{'authkey_r': 7})",
+        "app.py",
+        "--port",
+    ],
+    "loky's tracker": [
+        "-c",
+        "from joblib.externals.loky.backend.resource_tracker import main; main(5, False)",
+    ],
+}
+LOOKALIKE_LINES = {
+    "more code after": ["-c", TRACKER + "; import os"],
+    "a comment": ["-c", "import os  # from multiprocessing.resource_tracker import main"],
+    "a script first": ["app.py", "-c", TRACKER],
+    "a module first": ["-m", "app", "-c", TRACKER],
+    "a call in the arguments": [
+        "-c",
+        "from multiprocessing.resource_tracker import main; main(__import__('os').getpid())",
+    ],
+    "arguments after": ["-c", TRACKER, "more"],
+    "a computed keyword": [
+        "-c",
+        "from multiprocessing.forkserver import main; main(3, 4, [], **dict(a=print()))",
+    ],
+}
+
+
+@pytest.mark.design("service.helper_exact")
+@pytest.mark.parametrize("name", sorted(HELPER_LINES))
+def test_a_helpers_exact_command_line_keeps_scrimmage_off(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    from scrimmage_core import bootstrap
+
+    monkeypatch.setattr(sys, "orig_argv", [sys.executable, *HELPER_LINES[name]])
+    assert bootstrap.multiprocessing_helper()
+
+
+@pytest.mark.design("service.helper_exact")
+@pytest.mark.parametrize("name", sorted(LOOKALIKE_LINES))
+def test_a_command_line_that_only_looks_like_a_helpers_keeps_scrimmage_on(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    from scrimmage_core import bootstrap
+
+    monkeypatch.setattr(sys, "orig_argv", [sys.executable, *LOOKALIKE_LINES[name]])
+    assert not bootstrap.multiprocessing_helper()
+
+
 @pytest.mark.design("service.active_line")
 def test_the_active_line_prints_only_where_the_entry_gate_is(lab: Lab) -> None:
     service = lab.start(workers=2)

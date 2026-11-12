@@ -6,6 +6,7 @@ nothing and fetches its plan at its first gated call, so a short command costs n
 A child whose plan cannot be fetched refuses each call, and tries again for the next one.
 """
 
+import ast
 import atexit
 import contextlib
 import ipaddress
@@ -51,18 +52,68 @@ def stop(message: str) -> NoReturn:
     os._exit(1)
 
 
+# The modules whose main a helper process of multiprocessing or loky runs, started as
+# `python [options] -c "from <module> import main; main(...)"`.
 HELPERS = (
-    "from multiprocessing.resource_tracker import main",
-    "from multiprocessing.forkserver import main",
-    "loky.backend.resource_tracker import main",
+    "multiprocessing.resource_tracker",
+    "multiprocessing.forkserver",
+    "joblib.externals.loky.backend.resource_tracker",
+    "loky.backend.resource_tracker",
 )
+VALUED = ("-X", "-W")  # options whose value may be the next argument
 
 
 def multiprocessing_helper() -> bool:
     """A helper process multiprocessing or loky starts, which inherits the service's
-    environment: Scrimmage stays off in it, so it never starts a helper of its own."""
-    line = " ".join(getattr(sys, "orig_argv", []))
-    return any(helper in line for helper in HELPERS)
+    environment: Scrimmage stays off in it, so it never starts a helper of its own.
+    Only the exact command line such a helper is started with counts."""
+    argv: list[str] = list(getattr(sys, "orig_argv", []))
+    for at in range(1, len(argv) - 1):
+        if argv[at] == "-c":
+            return helper_command(argv[at + 1], extra=argv[at + 2 :])
+        if not argv[at].startswith("-") and argv[at - 1] not in VALUED:
+            return False  # a script or a module runs: no helper
+    return False
+
+
+def helper_command(command: str, extra: list[str]) -> bool:
+    """`[import sys;] from <helper> import main; main(<literals>)`, and nothing else. Only
+    the forkserver's `sys_argv=sys.argv[1:]` reads anything: the arguments after it."""
+    try:
+        body = ast.parse(command).body
+    except (SyntaxError, ValueError):
+        return False
+    if body and isinstance(body[0], ast.Import) and ast.unparse(body[0]) == "import sys":
+        body = body[1:]
+    if len(body) != 2:
+        return False
+    imported, called = body
+    if not isinstance(imported, ast.ImportFrom):
+        return False
+    if imported.module not in HELPERS or imported.level:
+        return False
+    if [(name.name, name.asname) for name in imported.names] != [("main", None)]:
+        return False
+    call = called.value if isinstance(called, ast.Expr) else None
+    if not isinstance(call, ast.Call) or ast.unparse(call.func) != "main":
+        return False
+    reads_argv = False
+    for keyword in call.keywords:
+        if keyword.arg == "sys_argv" and ast.unparse(keyword.value) == "sys.argv[1:]":
+            reads_argv = True
+        elif not literal(keyword.value):
+            return False
+    if extra and not reads_argv:
+        return False
+    return all(literal(arg) for arg in call.args)
+
+
+def literal(node: ast.expr) -> bool:
+    try:
+        ast.literal_eval(node)
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        return False
+    return True
 
 
 def service_stop(message: str) -> NoReturn:
