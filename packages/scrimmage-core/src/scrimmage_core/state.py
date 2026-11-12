@@ -14,12 +14,14 @@ ProcessState, which every run reads.
 import dataclasses
 import hashlib
 import json
+import math
 import os
 import shlex
 import socket
 import sys
 import threading
 import time
+import weakref
 from collections.abc import Callable, Generator, Iterable, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -27,7 +29,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, NamedTuple, Protocol, TypeVar, cast
 
-from scrimmage_core import capture
+from scrimmage_core import capture, labels
 from scrimmage_core import decide as engine
 from scrimmage_core import provider_openai as openai_table
 from scrimmage_core.changes import Changed
@@ -188,6 +190,10 @@ def newer_version_message(
     )
 
 
+def outlived_message(name: str) -> str:
+    return f"{name} started in this run and outlived it; start it in lifespan"
+
+
 def stop_process(message: str) -> None:
     """End this process at once: a gate cannot work, so nothing may run without it."""
     print(f"scrimmage: {message}; the program stops", file=sys.stderr)
@@ -219,6 +225,33 @@ class ProcessState:
         # A function's or a script's one run. A service has none: its runs come and go.
         self.own: RunState | None = None
         self.lock = threading.Lock()
+        # A service's runs whose record is open, by name.
+        self.runs: dict[str, RunState] = {}
+        # A thread or task that held a run past its end and still made a gated call: its
+        # name. The next run this process claims is told, as it cannot be a result.
+        self.stale_worker: str | None = None
+        self.orphans_told: set[str] = set()  # runs an orphan's refusal was printed for
+
+    def register(self, run: "RunState") -> None:
+        with self.lock:
+            self.runs[run.name] = run
+
+    def unregister(self, run: "RunState") -> None:
+        with self.lock:
+            if self.runs.get(run.name) is run:
+                del self.runs[run.name]
+
+    def open_runs(self) -> "list[RunState]":
+        with self.lock:
+            return list(self.runs.values())
+
+    def claimed(self, run: "RunState") -> None:
+        """A run was just claimed. A worker that outlived an earlier run means the context of
+        this process cannot be trusted, so this run is an infrastructure error, named."""
+        with self.lock:
+            stale = self.stale_worker
+        if stale is not None:
+            run.notice("structure", "scrimmage", outlived_message(stale))
 
     def current(self) -> "RunState | None":
         """The run this code belongs to; in a function or a script, always its one run."""
@@ -310,6 +343,13 @@ class RunState:
         # requests, each noted once: both belong to this run, never to the process.
         self.open: set[Callable[[bool], None]] = set()
         self.model_paths: set[str] = set()
+        self.name = "" if plan is None else plan.run
+        # In a service: the request's own call into the app has returned, so a later call
+        # in this run comes from a thread or task that outlived it.
+        self.entry_done = False
+        # On Python 3.11, the asyncio tasks made while code belonged to this run; 3.12 and
+        # later read each task's context instead.
+        self.tasks: weakref.WeakSet[Any] = weakref.WeakSet()
         if plan is not None:
             self._arrived(plan)
 
@@ -528,6 +568,7 @@ class RunState:
             "unsupported_loop": detail,
             "ambiguous_label": detail,
             "blind_child": detail,
+            "orphan": detail,
             "probe": (
                 f"{label} {detail}: scrimmage init --probe stops at the first model request, "
                 "which is refused before it is sent"
@@ -626,6 +667,22 @@ class RunState:
             self.refused = self.refused or step.call.label
             self._going(step)
         self.finish(step, error=ScrimmageRefused(message), mistake=message)
+
+    def outside_refused(self, call: engine.Call, message: str, entry: str) -> None:
+        """A write made outside any request while this run was open was refused. The line is
+        this run's, so the run is an infrastructure error: it cannot tell the call was not
+        its own. The run is not poisoned: its own calls still follow its plan."""
+        step = Step(
+            call,
+            engine.Decision("refused", reason="orphan"),
+            {},
+            now_iso(),
+            time.monotonic(),
+            extra={"outside": True, "background_entry": entry},
+        )
+        with self._lock:
+            self._going(step)
+        self.finish(step, error=ScrimmageRefused(message))
 
     def newer_version(
         self,
@@ -984,15 +1041,181 @@ def in_service() -> bool:
     return _process is not None and _process.service
 
 
+# Threads the team started while its code belonged to a run, and that run's name. A map, not
+# the thread's name, so the team's logs are unchanged. A pool's own threads are never here.
+TAGS: "weakref.WeakKeyDictionary[threading.Thread, str]" = weakref.WeakKeyDictionary()
+
+
+class NoSink:
+    """Where a stand-in's own line goes: nowhere, as the runs it concerns have theirs."""
+
+    def put(self, line: dict[str, object], *, keep: bool = False) -> None:
+        del line, keep
+
+
+def worker_name() -> str:
+    """The thread or asyncio task this code runs in, as a message names it."""
+    task = None
+    current_task = getattr(sys.modules.get("asyncio"), "current_task", None)
+    if current_task is not None:
+        try:
+            task = current_task()
+        except RuntimeError:  # no loop in this thread
+            task = None
+    if task is not None:
+        return f"asyncio task {task.get_name()!r}"
+    return f"thread {threading.current_thread().name!r}"
+
+
+def stand_in_plan(run: str, like: Plan | None, real: tuple[str, ...] = ()) -> Plan:
+    """A plan that mocks, faults and budgets nothing: what a stand-in decides by. It keeps
+    the model hosts, so a model call is still told from a web request."""
+    hosts = () if like is None else like.model_hosts
+    return Plan(run, "outside", "outside", (), (), (), real, math.inf, model_hosts=hosts)
+
+
+class Orphan(RunState):
+    """Code in a thread a run started, whose context was lost: every call is refused, and
+    its line goes to that run while its record is open, which makes the run an
+    infrastructure error. Its plan is not recovered from the tag: that would hide the loss.
+    """
+
+    def __init__(self, process: ProcessState, name: str, run: RunState | None) -> None:
+        plan = None if run is None else run._plan
+        super().__init__(stand_in_plan(name, plan), NoSink(), [], process=process)
+        self.target = run
+        self.name = name
+
+    def decide(self, call: engine.Call, args: dict[str, object]) -> Step:
+        step = Step(call, engine.Decision("refused", reason="orphan"), args, now_iso(), 0.0)
+        step.started = time.monotonic()
+        with self._lock:
+            self.refused = self.refused or call.label
+            return self._going(step)
+
+    def refusal(self, step: Step, detail: str = "") -> ScrimmageRefused:
+        del detail
+        return ScrimmageRefused(
+            f"{step.call.label}: this call was made in a thread run {self.name} started, but "
+            "outside that run's context, so it is refused; the run is an infrastructure error"
+        )
+
+    def put(self, line: dict[str, object], *, keep: bool) -> None:
+        target = self.target
+        if target is not None and target.refused != CLOSED:
+            line.update(seq=target.next_seq(), proc=target.proc)
+            target.put(line, keep=keep)
+            return
+        with self.process.lock:
+            told = self.name in self.process.orphans_told
+            self.process.orphans_told.add(self.name)
+        if not told:
+            print(
+                f"scrimmage: a call in a thread run {self.name} started came after its record "
+                "closed, and is refused",
+                file=sys.stderr,
+            )
+
+    def _first_line(self) -> None:
+        """A stand-in says nothing about the process: the run's own first line did."""
+
+
+def is_write(call: engine.Call) -> bool:
+    """A call that can change something: a tool, an MCP tool, a web write, a process."""
+    if call.kind == "http":
+        return call.method not in engine.READ_METHODS
+    return call.kind in ("tool", "mcp", "process")
+
+
+def outside_entry(call: engine.Call) -> str:
+    """The background_real entry that lets this call through."""
+    if call.kind == "http":
+        return f"{call.label} {call.method} {call.name}"
+    return call.label
+
+
+class Outside(RunState):
+    """Code outside any request, in a thread no run started, while runs are open. A write is
+    refused unless background_real lists it; a read or a model call runs, and each open run
+    is told, as the call could have been one of theirs. One rule, with no switch."""
+
+    def __init__(self, process: ProcessState, runs: list[RunState]) -> None:
+        like = runs[0]._plan
+        background = () if like is None else like.background_real
+        super().__init__(stand_in_plan("outside", like, ("tool:*",)), NoSink(), [], process=process)
+        self.runs = runs
+        self.background = background
+
+    def decide(self, call: engine.Call, args: dict[str, object]) -> Step:
+        label = outside_entry(call)
+        listed = labels.matches_real(list(self.background), call.label, call.method, call.name)
+        if listed:
+            self.tell("background", call, f"{label} ran outside any request, under background_real")
+            return super().passed(call)
+        if is_write(call):
+            message = (
+                f"{label} was made outside any request while this run was open, so it is "
+                f'refused; add "{label}" to [agent] background_real if it is safe'
+            )
+            for run in self.runs:
+                run.outside_refused(call, message, label)
+            step = Step(call, engine.Decision("refused", reason="orphan"), args, now_iso(), 0.0)
+            step.started = time.monotonic()
+            with self._lock:
+                return self._going(step)
+        self.tell(
+            "lost_context",
+            call,
+            f"{label} was made outside any request while this run was open, so this run's "
+            f'record may not be whole; add "{label}" to [agent] background_real if it is safe',
+        )
+        return super().passed(call)
+
+    def passed(self, call: engine.Call) -> Step:
+        """A read the gate lets through undecided, such as an MCP resource: still told."""
+        label = outside_entry(call)
+        self.tell(
+            "lost_context", call, f"{label} was made outside any request while this run was open"
+        )
+        return super().passed(call)
+
+    def tell(self, kind: str, call: engine.Call, message: str) -> None:
+        extra: dict[str, object] = {"call": call.label, "background_entry": outside_entry(call)}
+        for run in self.runs:
+            run.notice(kind, "scrimmage", message, extra=extra)
+
+    def refusal(self, step: Step, detail: str = "") -> ScrimmageRefused:
+        del detail
+        label = outside_entry(step.call)
+        return ScrimmageRefused(
+            f"{label} was made outside any request while a test run was open, so it is "
+            f'refused; add "{label}" to [agent] background_real if it is safe'
+        )
+
+
 def current() -> RunState | None:
     """The run this code belongs to, read at every gated call.
 
-    In a service, the slot: a run's state, or None for a plain request and for code outside
-    any request. A function or a script keeps its one run in the process slot.
+    In a service, the slot: a run's state, or None for a plain request. Code outside any
+    request gets the tagged run's orphan stand-in in a thread a run started, else the
+    outside rules while any run is open, else None. A function or a script keeps its one run
+    in the process slot.
     """
     slot = SLOT.get()
     if isinstance(slot, Joined):
-        return slot.state
-    if slot is PLAIN or in_service():
+        run = slot.state
+        if run.refused == CLOSED and run.entry_done:
+            run.process.stale_worker = worker_name()
+        return run
+    if slot is PLAIN:
         return None
-    return _current
+    process = _process
+    if process is None or not process.service:
+        return _current
+    tag = TAGS.get(threading.current_thread())
+    if tag is not None:
+        with process.lock:
+            target = process.runs.get(tag)
+        return Orphan(process, tag, target)
+    runs = process.open_runs()
+    return Outside(process, runs) if runs else None

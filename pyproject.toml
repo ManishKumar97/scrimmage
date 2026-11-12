@@ -36,6 +36,8 @@ dev = [
     "pytest-xdist>=3.8.0",
     # tests/test_mcp_server.py proves the Scrimmage MCP server makes no span.
     "opentelemetry-sdk>=1.45",
+    # tests/test_threadctx.py checks a service on uvloop, which uvicorn picks when installed.
+    "uvloop==0.23.0",
     # tests/test_docs_site.py builds the site, so a plain pytest needs mkdocs.
     {include-group = "docs"},
 ]

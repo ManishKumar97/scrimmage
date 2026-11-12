@@ -107,6 +107,25 @@ INFRA_LINE = (
 NOT_JUDGED = judge.RunJudgement(left_out="not judged")
 
 
+def context_lost(lines: list[dict[str, object]]) -> bool:
+    """A service run whose record cannot be known whole: an orphan's refusal, or a call the
+    gate saw outside any request while the run was open, which could have been its own."""
+    return any(
+        line.get("reason") == "orphan" or line.get("notice") == "lost_context" for line in lines
+    )
+
+
+def outside_entries(lines: list[dict[str, object]]) -> list[str]:
+    """Each call the gate saw outside any request while the run was open, as the entry to
+    add to [agent] background_real, in the order they came, each once."""
+    found = [
+        str(line["background_entry"])
+        for line in lines
+        if "background_entry" in line and line.get("notice") != "background"
+    ]
+    return list(dict.fromkeys(found))
+
+
 def is_exercised(fired: bool | None, outcome: str) -> bool:
     """A run tested its fault: it fired (or the row has none), or the test was stopped."""
     return fired is not False or outcome == "stopped"
@@ -346,7 +365,8 @@ class Runner:
         # The provider failing by itself says nothing about the agent.
         real_errors = [e for e in map(real_error, model) if e is not None]
         broken = any(n.get("notice") == "structure" for n in notices)
-        no_plan = "no_plan" in state.refusals  # says nothing about the agent
+        # No plan, or a call made outside the run's context: says nothing about the agent.
+        no_plan = "no_plan" in state.refusals or context_lost(lines)
         first = (state.refusals or [""])[0]
         refusal = budget_refusal(lines)
         numbers = None if refusal is None else cast(dict[str, object], refusal["budget"])
