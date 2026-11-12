@@ -117,7 +117,8 @@ async def entry(app: App, scope: Scope, receive: Receive, send: Send) -> None:
         return await app(scope, receive, send)  # lifespan: untouched, the slot as it is
     headers = list(scope.get("headers") or [])
     runs = [value for name, value in headers if bytes(name).lower() == RUN]
-    probe = any(bytes(name).lower() == PROBE for name, _ in headers)
+    # A probe is a run request too: the header alone, as any client may send, is plain.
+    probe = bool(runs) and any(bytes(name).lower() == PROBE for name, _ in headers)
     if kind == "websocket" and runs:
         await close_websocket(receive, send)
         return None
@@ -301,37 +302,13 @@ async def close_websocket(receive: Receive, send: Send) -> None:
         await send({"type": "websocket.close", "code": 1008})
 
 
-async def read_body(receive: Receive) -> bytes:
-    chunks: list[bytes] = []
-    while True:
-        message = await receive()
-        if message.get("type") != "http.request":
-            break
-        chunks.append(bytes(message.get("body", b"")))
-        if not message.get("more_body", False):
-            break
-    return b"".join(chunks)
-
-
-def replaying(body: bytes, receive: Receive) -> Receive:
-    """A receive that gives the body already read, then whatever comes after."""
-    given: list[bool] = []
-
-    async def again() -> Message:
-        if not given:
-            given.append(True)
-            return {"type": "http.request", "body": body, "more_body": False}
-        return await receive()
-
-    return again
-
-
 async def answer_probe(
     gate: Gate, app: App, scope: Scope, copied: Scope, receive: Receive, send: Send
 ) -> None:
     """The runner's signed probe gets the startup report, signed. Anything else, a stranger's
-    or a replay, goes to the app as a plain request with Scrimmage's headers removed."""
-    body = await read_body(receive)
+    or a replay, goes to the app as a plain request with Scrimmage's headers removed. The
+    probe's body is empty, and is signed as empty: the gate never reads a body, so one that
+    says it has one cannot hold the gate while it is sent."""
     fields = {
         bytes(k).decode("latin-1").title(): bytes(v).decode("latin-1") for k, v in scope["headers"]
     }
@@ -339,9 +316,12 @@ async def answer_probe(
     query = bytes(scope.get("query_string") or b"")
     path = target.decode("latin-1") + (f"?{query.decode('latin-1')}" if query else "")
     method = str(scope.get("method", ""))
-    error = protocol.check_request(gate.token, gate.nonces, method, path, fields, body, time.time())
-    if error is not None:
-        return await served_plain(app, copied, replaying(body, receive), send)
+    declared = fields.get("Content-Length", "0") != "0" or "Transfer-Encoding" in fields
+    error = declared or protocol.check_request(
+        gate.token, gate.nonces, method, path, fields, b"", time.time()
+    )
+    if error:
+        return await served_plain(app, copied, receive, send)
     report = json.dumps(startup_report(gate)).encode()
     signature = protocol.sign_reply(gate.token, fields.get(protocol.SIGNATURE, ""), 200, report)
     headers = [

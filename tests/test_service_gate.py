@@ -254,6 +254,42 @@ def test_a_bad_or_doubled_run_header_gets_503_with_no_fetch(svc: Service) -> Non
     assert counting.every == 0 and seen_scopes == []
 
 
+def signed_probe(svc: Service, body: bytes, more: list[tuple[bytes, bytes]]) -> Any:
+    """A probe signed as the runner signs it, over an empty body, whatever body follows."""
+    signed = protocol.request_headers(svc.token, "POST", "/chat", b"", time.time())
+    headers = [
+        (b"x-scrimmage-run", b"probe-0123456789ab"),
+        (b"x-scrimmage-probe", b"1"),
+        *[(k.lower().encode(), v.encode()) for k, v in signed.items()],
+        *more,
+    ]
+    return run(drive(gated_app(), headers=headers, body=body))
+
+
+@pytest.mark.design("service.probe_needs_run_header")
+def test_a_probe_header_alone_is_a_plain_request_and_a_signed_probe_gets_the_report(
+    svc: Service,
+) -> None:
+    alone = run(drive(gated_app(), headers=[(b"x-scrimmage-probe", b"1")]))
+    assert alone.status == 200 and alone.headers.get("x-app") == "1"
+    assert ["x-scrimmage-probe", "1"] in json.loads(alone.body)["headers"]  # untouched
+    report = signed_probe(svc, b"", [])
+    assert report.status == 200 and report.headers.get("x-scrimmage-probe") == "report"
+
+
+@pytest.mark.design("service.probe_body_empty")
+@pytest.mark.parametrize(
+    "declared", [[(b"content-length", b"5")], [(b"transfer-encoding", b"chunked")]]
+)
+def test_a_probe_that_declares_a_body_goes_to_the_app_unread(
+    svc: Service, declared: list[tuple[bytes, bytes]]
+) -> None:
+    reply = signed_probe(svc, b"hello", declared)
+    assert reply.status == 200 and reply.headers.get("x-app") == "1"
+    assert json.loads(reply.body)["body"] == "hello"  # the app read it, the gate did not
+    assert len(seen_scopes) == 1
+
+
 @pytest.mark.design("service.header_mac")
 def test_a_header_with_a_wrong_mac_gets_503_with_no_control_request(svc: Service) -> None:
     name = svc.open(mocks=mocked("x"))
