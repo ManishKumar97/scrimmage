@@ -1447,6 +1447,47 @@ def test_a_left_group_line_of_a_test_named_with_an_env_value_holds_no_value(
     assert records and not any(value in path.read_text() for path in records)
 
 
+@pytest.mark.design("redact.files_scrubbed_on_failure")
+def test_a_runs_log_is_scrubbed_even_when_the_runs_end_fails(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    value = "qv-0123456789abcdef"
+    monkeypatch.setenv("QV", value)
+    code = (
+        "import sys\nprint('the value is ' + sys.argv[1], file=sys.stderr)\nprint('the answer')\n"
+    )
+    (project.root / "bot.py").write_text(code)
+    write_config(project, f"{sys.executable} bot.py ${{QV}} {{question}}")
+
+    def broken(self: runner.Runner, run: str, row: object) -> list[dict[str, object]]:
+        raise RuntimeError("the run's end failed")
+
+    monkeypatch.setattr(runner.Runner, "other_python_lines", broken)
+    result = project.test()
+    assert result.code != 0 and "the run's end failed" in result.out + result.err, result.out
+    logs = list((project.root / "scrimmage-runs").rglob("*.log"))
+    assert logs and all(value not in log.read_text() for log in logs)
+    assert any("the value is" in log.read_text() for log in logs)
+
+
+@pytest.mark.design("redact.files_scrubbed_on_failure")
+def test_a_scrubbed_file_is_replaced_whole_and_stays_this_users_only(tmp_path: Path) -> None:
+    from scrimmage_core.records import RecordStore
+
+    store = RecordStore(tmp_path / "records")
+    store.scrub = ("qv-0123456789abcdef",)
+    log = tmp_path / "records" / "run.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("before qv-0123456789abcdef after\n")
+    log.chmod(0o600)
+    before = log.stat().st_ino
+    store.scrub_file(log)
+    assert log.stat().st_ino != before  # a new file renamed over it, not a rewrite in place
+    assert "qv-0123456789abcdef" not in log.read_text() and "before" in log.read_text()
+    assert stat.S_IMODE(log.stat().st_mode) == 0o600
+    assert sorted(p.name for p in log.parent.iterdir()) == ["run.log"]  # no temporary left
+
+
 @pytest.mark.design("stop.daemon_no_proc")
 def test_with_no_sweep_a_daemon_lives_on_and_its_write_stays_refused(
     project: Project, monkeypatch: pytest.MonkeyPatch

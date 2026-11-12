@@ -360,26 +360,28 @@ class Runner:
             os.close(log)
             if out != log:
                 os.close(out)
-        with self.lock:
-            self.procs[run] = proc
-        # Refused, or the test was stopped, before this program was registered.
-        if self.server.runs[run].refused or self.cancelled:
-            stop_group(proc)
-        timed_out = wait_run(proc, self.config.agent.run_timeout)
-        stop_group(proc)  # at the time limit, or a child that outlived the program
-        left = kill_those_who_left(run, proc.pid)
-        with self.lock:
-            del self.procs[run]
-        state = self.server.close_run(run)
-        kept_out = self.other_python_lines(run, row)
-        # The server stops a test on a thread of its own, which this run's end can overtake.
-        # Settle it here, so the next run sees it.
-        if state.broken or state.refusals or kept_out:
-            reason = "other_python" if kept_out else (state.refusals or ["structure"])[0]
-            self._refused(run, "structure" if state.broken else reason)
-        answer = self.answer_of(run, proc.returncode)
-        for written in ("log", "out"):  # read the answer first: it is judged as it was
-            self.store.scrub_file(self.folder / f"{run}.{written}")
+        try:
+            with self.lock:
+                self.procs[run] = proc
+            # Refused, or the test was stopped, before this program was registered.
+            if self.server.runs[run].refused or self.cancelled:
+                stop_group(proc)
+            timed_out = wait_run(proc, self.config.agent.run_timeout)
+            stop_group(proc)  # at the time limit, or a child that outlived the program
+            left = kill_those_who_left(run, proc.pid)
+            with self.lock:
+                del self.procs[run]
+            state = self.server.close_run(run)
+            kept_out = self.other_python_lines(run, row)
+            # The server stops a test on a thread of its own, which this run's end can
+            # overtake. Settle it here, so the next run sees it.
+            if state.broken or state.refusals or kept_out:
+                reason = "other_python" if kept_out else (state.refusals or ["structure"])[0]
+                self._refused(run, "structure" if state.broken else reason)
+            answer = self.answer_of(run, proc.returncode)  # read first: judged as it was
+        finally:
+            for written in ("log", "out"):  # even when the run's end failed
+                self.store.scrub_file(self.folder / f"{run}.{written}")
         ended = Ended(answer, timed_out, proc.returncode == 0, kept_out, left)
         return self.concluded(run, row, state, ended)
 

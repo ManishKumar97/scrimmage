@@ -4,6 +4,7 @@ A line sent twice, such as a batch the SDK retried, is written once.
 The last line of every record is the run's summary.
 """
 
+import contextlib
 import json
 import os
 import stat
@@ -88,8 +89,21 @@ class RecordStore:
             return
         text = path.read_bytes().decode("utf-8", "surrogateescape")
         cleaned, count = remove_values(text, self.scrub)
-        if count:
-            path.write_bytes(cleaned.encode("utf-8", "surrogateescape"))
+        if not count:
+            return
+        import tempfile  # the runner's only: the SDK, which imports this module, never needs it
+
+        # A new file renamed over it, so a stop mid-write leaves the old one or the new one,
+        # never half of each. mkstemp makes it this user's only, as the old one was.
+        fd, temp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+        try:
+            with os.fdopen(fd, "wb") as out:
+                out.write(cleaned.encode("utf-8", "surrogateescape"))
+            os.replace(temp, path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(temp)
+            raise
 
     def path(self, run: str) -> Path:
         return self.folder / f"{run}.jsonl"
