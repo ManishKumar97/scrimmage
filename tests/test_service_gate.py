@@ -266,6 +266,28 @@ def signed_probe(svc: Service, body: bytes, more: list[tuple[bytes, bytes]]) -> 
     return run(drive(gated_app(), headers=headers, body=body))
 
 
+@pytest.mark.design("service.startup_report_schema")
+def test_the_probes_report_with_a_notice_matches_its_schema(svc: Service) -> None:
+    import jsonschema
+
+    import scrimmage_core
+
+    schema = json.loads(
+        (Path(scrimmage_core.__file__).parent / "schemas" / "startup-report.v1.json").read_text()
+    )
+    svc.process.notice("newer_version", "httpx2", "httpx2 2.99.0 is newer than the versions")
+    reply = signed_probe(svc, b"", [])
+    report = json.loads(reply.body)
+    jsonschema.Draft202012Validator(schema).validate(report)
+    assert report["notices"] == [
+        {
+            "notice": "newer_version",
+            "library": "httpx2",
+            "message": "httpx2 2.99.0 is newer than the versions",
+        }
+    ]
+
+
 @pytest.mark.design("service.probe_needs_run_header")
 def test_a_probe_header_alone_is_a_plain_request_and_a_signed_probe_gets_the_report(
     svc: Service,
