@@ -16,10 +16,11 @@ are kept as it makes them, which needs the loop's create_task to be asyncio's ow
 
 import contextvars
 import functools
+import inspect
 import sys
 import threading
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from types import ModuleType
 from typing import Any
 
@@ -169,6 +170,7 @@ def install(process: ProcessState) -> None:
     hooks.on_import("concurrent.futures.thread", lambda m: patch_executor(m, process))
     hooks.on_import("anyio._backends._asyncio", lambda m: patch_anyio(m, process))
     hooks.on_import("multiprocessing.pool", lambda m: patch_thread_pool(m, process))
+    hooks.on_import("concurrent.futures._base", patch_future)
     if not GETS_CONTEXT:
         import asyncio.base_events  # asyncio is imported by every ASGI server already
 
@@ -252,14 +254,74 @@ def patch_thread_pool(module: ModuleType, process: ProcessState) -> None:
 
 
 def thread_pool_task(method: Callable[..., Any], threads: type) -> Callable[..., Any]:
+    """A pool's task: a ThreadPool's function carries its submitter's values, and on any pool
+    the callbacks and an imap's items, which the pool's handler threads run, do too."""
+    signature = inspect.signature(method)
+    items = method.__name__ in ("imap", "imap_unordered")
+
     @functools.wraps(method)
-    def task(self: Any, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-        if state.in_service() and isinstance(self, threads):
-            func = carrying(func)
-        return method(self, func, *args, **kwargs)
+    def task(self: Any, *args: Any, **kwargs: Any) -> Any:
+        if not state.in_service():
+            return method(self, *args, **kwargs)
+        bound = signature.bind(self, *args, **kwargs)
+        given = bound.arguments
+        if isinstance(self, threads) and "func" in given:
+            given["func"] = carrying(given["func"])
+        for name in ("callback", "error_callback"):
+            if given.get(name) is not None:
+                given[name] = team_code(given[name])
+        if items and "iterable" in given:
+            given["iterable"] = team_items(given["iterable"])
+        return method(*bound.args, **bound.kwargs)
 
     setattr(task, MARK, True)
     return task
+
+
+def team_code(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """fn, the team's code that a pool's own thread runs, such as a callback: under the
+    values of the code that handed it over, and never as the pool's own work."""
+    carried = carrying(fn)
+
+    @functools.wraps(fn)
+    def run(*args: Any, **kwargs: Any) -> Any:
+        with state.internal_call(team=True):
+            return carried(*args, **kwargs)
+
+    return run
+
+
+def team_items(iterable: Any) -> Iterator[Any]:
+    """An iterable a pool's task handler pulls on its own thread, each item pulled as
+    team_code, so a generator's own calls follow its submitter."""
+    found = iter(iterable)
+    step = team_code(lambda: next(found))  # here, so it takes the submitter's values
+
+    def pulled() -> Iterator[Any]:
+        while True:
+            try:
+                item = step()
+            except StopIteration:
+                return
+            yield item
+
+    return pulled()
+
+
+def patch_future(module: ModuleType) -> None:
+    """A Future's done callbacks: a process pool's manager thread runs them, as its own
+    work, so each runs as team_code, under the values of the code that added it."""
+    future: Any = getattr(module, "Future", None)
+    add = getattr(future, "add_done_callback", None)
+    if add is None or getattr(add, MARK, False):
+        return
+
+    @functools.wraps(add)
+    def add_done_callback(self: Any, fn: Callable[..., Any]) -> Any:
+        return add(self, team_code(fn) if state.in_service() else fn)
+
+    setattr(add_done_callback, MARK, True)
+    future.add_done_callback = add_done_callback
 
 
 def patch_create_task(module: ModuleType) -> None:

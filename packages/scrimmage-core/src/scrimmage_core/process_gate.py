@@ -20,12 +20,13 @@ import shlex
 import shutil
 import sys
 import threading
+import weakref
 from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from types import ModuleType
 from typing import Any, cast
 
-from scrimmage_core import hooks, python_args
+from scrimmage_core import hooks, python_args, state
 from scrimmage_core.decide import Call, Decision
 from scrimmage_core.errors import ScrimmageRefused
 from scrimmage_core.labels import PROCESS as LABEL
@@ -165,7 +166,7 @@ def service_start(event: str, args: tuple[Any, ...]) -> None:
     step = run.decide(Call("process", label, program), {"command": line})
     if step.decision.action == "real":
         run.finish(step)
-        _popen.argv = argv_of(event, args) if event == "subprocess.Popen" else None
+        _popen.argv = (program, argv_of(event, args)) if event == "subprocess.Popen" else None
         return
     refused(run, step, program_fix(program))
 
@@ -177,12 +178,31 @@ def argv_of(event: str, args: tuple[Any, ...]) -> list[str]:
 
 
 def popen_started(event: str, args: tuple[Any, ...]) -> bool:
-    """This start is the one the Popen this thread just let through makes, by its arguments.
-    Either way the Popen is spent: a start that failed before it got here, or that went
-    another way, leaves nothing for a later start to pass on."""
+    """This start is the one the Popen this thread just let through makes, by its program
+    and its arguments. Either way the Popen is spent, and a Popen that returns spends it
+    too, so a start that went another way leaves nothing for a later start to pass on."""
     allowed = getattr(_popen, "argv", None)
     _popen.argv = None
-    return allowed is not None and allowed == argv_of(event, args)
+    return allowed == (program_of(event, args)[0], argv_of(event, args))
+
+
+def patch_popen(module: ModuleType) -> None:
+    """subprocess.Popen: once it returns, the start it let through is spent, as on Python
+    3.11 to 3.13 its own fork raises no audit event that would spend it."""
+    popen: Any = getattr(module, "Popen", None)
+    init = getattr(popen, "__init__", None)
+    if init is None or getattr(init, GATED, False):
+        return
+
+    @functools.wraps(init)
+    def spent(self: Any, *args: Any, **kwargs: Any) -> None:
+        try:
+            init(self, *args, **kwargs)
+        finally:
+            _popen.argv = None
+
+    setattr(spent, GATED, True)
+    popen.__init__ = spent
 
 
 def program_fix(program: str) -> str:
@@ -229,7 +249,10 @@ def guarded(what: str, why: str, method: Callable[..., Any], skip: type | None =
 
     @functools.wraps(method)
     def gate(*args: Any, **kwargs: Any) -> Any:
-        if not in_service() or (skip is not None and args and isinstance(args[0], skip)):
+        mine = bool(args) and (
+            (skip is not None and isinstance(args[0], skip)) or args[0] in IN_PROCESS_QUEUES
+        )
+        if not in_service() or mine:
             return method(*args, **kwargs)
         run = current()
         # A run's own code or an orphan of one is refused. Work outside any request meets the
@@ -281,6 +304,8 @@ def install_service() -> None:
         "multiprocessing.process",
         lambda m: patch_names(m, "BaseProcess", ("start",), "a new process would run ungated"),
     )
+    hooks.on_import("subprocess", patch_popen)
+    hooks.on_import("multiprocessing.resource_tracker", patch_tracker)
     hooks.on_import("multiprocessing.queues", patch_queues)
     hooks.on_import(
         "multiprocessing.connection",
@@ -293,10 +318,7 @@ def install_service() -> None:
     hooks.on_import("multiprocessing.pool", patch_pool)
     # A uvicorn worker answers its supervisor's health pings over a pipe, on a thread of its
     # own: the server's traffic, never a request's.
-    hooks.on_import(
-        "uvicorn.supervisors.multiprocess",
-        lambda m: mark_internal(m, "Process", ("always_pong",)),
-    )
+    hooks.on_import("uvicorn.supervisors.multiprocess", patch_uvicorn_worker)
     for loky in ("loky.process_executor", "joblib.externals.loky.process_executor"):
         hooks.on_import(loky, patch_executor)
     hooks.on_import(
@@ -307,6 +329,49 @@ def install_service() -> None:
         "concurrent.interpreters",
         lambda m: patch_names(m, "Interpreter", ("exec", "call", "call_in_thread"), SUBINTERPRETER),
     )
+
+
+def patch_tracker(module: ModuleType) -> None:
+    """multiprocessing's resource tracker, which Python starts the first time a lock or a
+    queue is made: a helper of its own that runs Python's code, never the team's, so its
+    start is not a start of the run's. Python 3.14 starts it from _launch."""
+    tracker: Any = getattr(module, "ResourceTracker", None)
+    for name in ("ensure_running", "_launch"):
+        method = getattr(tracker, name, None)
+        if callable(method) and not getattr(method, GATED, False):
+            setattr(tracker, name, tracker_start(method))
+    shared: Any = getattr(module, "_resource_tracker", None)
+    if isinstance(tracker, type) and isinstance(shared, tracker):
+        setattr(module, "ensure_running", shared.ensure_running)  # noqa: B010  # bound at import
+
+
+def tracker_start(method: Callable[..., Any]) -> Any:
+    @functools.wraps(method)
+    def start(*args: Any, **kwargs: Any) -> Any:
+        token = EXEMPT.set(True)
+        try:
+            return method(*args, **kwargs)
+        finally:
+            EXEMPT.reset(token)
+
+    setattr(start, GATED, True)
+    return start
+
+
+def patch_uvicorn_worker(module: ModuleType) -> None:
+    worker = getattr(module, "Process", None)
+    if not callable(getattr(worker, "always_pong", None)):
+        process = state.process()
+        if process is not None:
+            process.structure(
+                "uvicorn",
+                "uvicorn's worker Process has no always_pong, so a worker's answers to its "
+                "supervisor's health pings would be refused as sends outside any request, and "
+                "every run would be an infrastructure error; the service is stopped",
+                process.stop,
+            )
+        return
+    mark_internal(module, "Process", ("always_pong",))
 
 
 def patch_executor(module: ModuleType) -> None:
@@ -329,10 +394,47 @@ def patch_pool(module: ModuleType) -> None:
     patch_names(module, "Pool", names, SENT, skip=threads)
     mark_internal(module, "Pool", POOL_OWN)
     mark_internal(module, "Pool", ("_repopulate_pool",), team=threads)  # starts the workers
+    pool: Any = getattr(module, "Pool", None)
+    init = pool.__dict__.get("__init__") if isinstance(pool, type) else None
+    if callable(init) and not getattr(init, GATED, False) and isinstance(threads, type):
+        # A process pool's making is a decided start, as a Process.start is; then its own
+        # starts and handler threads are the pool's. A ThreadPool's making starts no process.
+        made = guarded("Pool", "a new process would run ungated", init, skip=threads)
+        pool.__init__ = thread_pool_init(made, threads, getattr(module, "TERMINATE", "TERMINATE"))
 
 
-# A pool's own starts and stops: what they send is the pool's, decided at the team's call.
-POOL_OWN = ("__init__", "close", "terminate", "join", "_terminate_pool")
+def thread_pool_init(method: Callable[..., Any], threads: type, ended: object) -> Any:
+    """Pool.__init__, which for a ThreadPool marks its handler threads as the pool's own, and
+    its change notifier, a pipe within this process, as no send to another one."""
+
+    @functools.wraps(method)
+    def init(self: Any, *args: Any, **kwargs: Any) -> Any:
+        if not in_service() or not isinstance(self, threads):
+            try:
+                return method(self, *args, **kwargs)
+            except ScrimmageRefused:
+                self._state = ended  # refused before it was made: its finalizer has nothing
+                raise
+        with internal_call():
+            method(self, *args, **kwargs)
+        notifier = getattr(self, "_change_notifier", None)
+        for end in (
+            notifier,
+            getattr(notifier, "_writer", None),
+            getattr(notifier, "_reader", None),
+        ):
+            if end is not None:  # the queue, and the pipe it sends through
+                IN_PROCESS_QUEUES.add(end)
+        return None
+
+    setattr(init, GATED, True)
+    return init
+
+
+# A pool's own stops: what they send is the pool's, decided at the team's call.
+POOL_OWN = ("close", "terminate", "join", "_terminate_pool")
+# The multiprocessing queues a ThreadPool uses within this process, such as its change notifier.
+IN_PROCESS_QUEUES: "weakref.WeakSet[Any]" = weakref.WeakSet()
 EXECUTOR_OWN = ("shutdown",)
 
 

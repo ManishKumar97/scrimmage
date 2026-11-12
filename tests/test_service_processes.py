@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
@@ -492,8 +493,18 @@ def test_process_pools_used_outside_any_request_meet_the_outside_rules(
     executor = ProcessPoolExecutor(max_workers=1, mp_context=context)
     pool = context.Pool(1)
     written = tmp_path / "written"
+    made: list[Any] = []  # every pool made below, stopped at the end whatever happens
     try:
         run = a_run(service)
+        # Making a process pool outside any request is a decided start: refused, and its
+        # initializer never runs.
+        initialized = tmp_path / "initialized"
+        refused_outside(
+            lambda: made.append(context.Pool(1, initializer=write, initargs=(str(initialized),)))
+        )
+        assert made == [] and not initialized.exists()
+        assert [x["reason"] for x in lines(run)] == ["orphan"]
+        sink_of(run).lines.clear()
         calls = pool_calls(written)
         for name, call in calls.items():
             target = executor if name in ("submit", "map") else pool
@@ -503,7 +514,8 @@ def test_process_pools_used_outside_any_request_meet_the_outside_rules(
         assert [x["reason"] for x in lines(run)] == ["orphan"] * len(calls)
         # Stopping a pool, as a lifespan's shutdown does, sends none of the team's work.
         spare_executor = ProcessPoolExecutor(max_workers=1, mp_context=context)
-        spare_pool, other_pool = context.Pool(1), context.Pool(1)
+        spare_pool, other_pool = plain(lambda: (context.Pool(1), context.Pool(1)))
+        made += [spare_pool, other_pool]
         assert plain(lambda: spare_executor.submit(os.getpid).result()) > 0
         outside(spare_executor.shutdown)
         outside(spare_pool.close)
@@ -519,6 +531,12 @@ def test_process_pools_used_outside_any_request_meet_the_outside_rules(
         written.unlink()
         assert outside(lambda: pool.apply(write, (str(written),))) == str(written)
         assert outside(lambda: executor.submit(write, str(written)).result()) == str(written)
+        # A listed pool made outside any request starts, and its initializer runs.
+        listed_pool = outside(
+            lambda: context.Pool(1, initializer=write, initargs=(str(initialized),))
+        )
+        made.append(listed_pool)
+        assert listed_pool.apply(os.getpid) > 0 and initialized.exists()
         # A listed submit that starts the pool's processes: the starts are the pool's own.
         fresh = ProcessPoolExecutor(max_workers=1, mp_context=context)
         assert outside(lambda: fresh.submit(write, str(written)).result()) == str(written)
@@ -527,8 +545,9 @@ def test_process_pools_used_outside_any_request_meet_the_outside_rules(
         assert notices == {"background"}
     finally:
         executor.shutdown()
-        pool.terminate()
-        pool.join()
+        for each in [pool, *made]:
+            each.terminate()
+            each.join()
 
 
 @pytest.mark.design("service.outside_process_entries")
@@ -603,3 +622,167 @@ def test_a_thread_pools_task_outside_any_request_is_never_a_process_pools_own_wo
         workers.shutdown()
         threads.terminate()
         threads.join()
+
+
+class Team:
+    """Team code a pool's own thread runs: it starts sh to write a file, and says whether it
+    ran or was refused."""
+
+    def __init__(self, target: Path) -> None:
+        self.target = target
+        self.seen: list[str] = []
+        self.done = threading.Event()
+
+    def __call__(self, *_: object) -> None:
+        try:
+            subprocess.run(["sh", "-c", f"echo x > {self.target}"], check=True)
+            self.seen.append("ran")
+        except ScrimmageRefused as refusal:
+            self.seen.append(f"refused: {refusal}")
+        finally:
+            self.done.set()
+
+    def items(self) -> Iterator[str]:
+        self()
+        yield "a"
+
+    def refused(self) -> bool:
+        assert self.done.wait(10)
+        return self.seen[0].startswith("refused: ") and not self.target.exists()
+
+
+@pytest.mark.design("service.pool_callbacks_follow_their_run")
+@pytest.mark.parametrize("hook", ["callback", "error_callback", "imap items"])
+def test_a_thread_pools_callbacks_and_imap_items_follow_the_run_that_handed_them_over(
+    service: state.ProcessState, tmp_path: Path, hook: str
+) -> None:
+    """A pool's handler threads are the pool's own; the team's code they run is not."""
+    pool = plain(lambda: multiprocessing.pool.ThreadPool(1))
+    team = Team(tmp_path / "written")
+    run = a_run(service)
+    try:
+        if hook == "callback":
+            under(run, lambda: pool.apply_async(len, ("x",), callback=team))
+        elif hook == "error_callback":
+            under(run, lambda: pool.apply_async(len, (1,), error_callback=team))
+        else:
+            under(run, lambda: list(pool.imap(len, team.items())))
+        assert team.refused(), team.seen
+        assert any(x.get("reason") == "service_child" for x in lines(run)), [
+            (x["call"], x.get("action"), x.get("reason")) for x in lines(run)
+        ]
+    finally:
+        pool.terminate()
+        pool.join()
+
+
+@pytest.mark.design("service.pool_callbacks_follow_their_run")
+def test_a_process_pools_callback_outside_any_request_meets_the_outside_rules(
+    service: state.ProcessState, tmp_path: Path
+) -> None:
+    """The submit is listed under background_real; the callback's own start is not."""
+    pool = plain(lambda: multiprocessing.get_context("fork").Pool(1))
+    team = Team(tmp_path / "written")
+    a_run(service, background=("process:multiprocessing",))
+    try:
+        outside(lambda: pool.apply_async(os.getpid, callback=team))
+        assert team.refused(), team.seen
+    finally:
+        pool.terminate()
+        pool.join()
+
+
+def read_one(fd: int) -> int:
+    return len(os.read(fd, 1))
+
+
+@pytest.mark.design("service.pool_callbacks_follow_their_run")
+def test_a_done_callback_a_run_adds_follows_that_run_on_the_pools_manager_thread(
+    service: state.ProcessState, tmp_path: Path
+) -> None:
+    held, release = os.pipe()  # the task waits on it, so the callback is added first
+    executor = ProcessPoolExecutor(1, mp_context=multiprocessing.get_context("fork"))
+    team = Team(tmp_path / "written")
+    try:
+        future = plain(lambda: executor.submit(read_one, held))
+        run = a_run(service)
+        under(run, lambda: future.add_done_callback(team))
+        os.write(release, b"x")
+        assert future.result(10) == 1
+        assert team.refused(), team.seen
+    finally:
+        os.close(held)
+        os.close(release)
+        executor.shutdown()
+
+
+@pytest.mark.design("service.thread_pool_in_a_run")
+def test_a_thread_pool_used_and_closed_in_a_run_runs_and_stops(
+    service: state.ProcessState,
+) -> None:
+    run = a_run(service)
+
+    def go() -> list[int]:
+        with multiprocessing.pool.ThreadPool(1) as pool:
+            return pool.map(len, ["ab"])
+
+    assert under(run, go) == [2]
+    pool = under(run, lambda: multiprocessing.pool.ThreadPool(1))
+    assert under(run, lambda: pool.map(len, ["abc"])) == [3]
+    under(run, pool.close)
+    under(run, pool.join)
+    assert lines(run) == []
+
+
+@pytest.mark.design("service.fork_exec_once")
+def test_a_listed_popen_that_returned_lets_no_later_spawn_pass(
+    service: state.ProcessState,
+) -> None:
+    """On 3.11 to 3.13 a Popen's own fork raises no event that would spend its decision."""
+    run = a_run(service, real=("process:true",))
+    true, echo = shutil.which("true"), shutil.which("echo")
+    assert true is not None and echo is not None
+    under(run, lambda: subprocess.run([true]))
+
+    def spawn() -> int:
+        return os.waitpid(os.posix_spawn(echo, [true], dict(os.environ)), 0)[1]
+
+    assert "echo was started inside a test run" in refused(run, spawn)
+    # The same program with the same arguments, after the Popen returned, is its own start:
+    # decided, so it has its own line.
+    other = a_run(service, real=("process:true",))
+    under(other, lambda: subprocess.run([true]))
+    under(other, lambda: os.waitpid(os.posix_spawn(true, [true], dict(os.environ)), 0))
+    assert [x["call"] for x in lines(other)] == ["process:true", "process:true"]
+
+
+@pytest.mark.design("service.worker_pong")
+def test_a_uvicorn_without_always_pong_stops_the_service_naming_why(
+    service: state.ProcessState,
+) -> None:
+    import types
+
+    stops: list[str] = []
+    service.stop = stops.append
+    module = types.ModuleType("uvicorn.supervisors.multiprocess")
+    module.Process = type("Process", (), {})  # type: ignore[attr-defined]
+    process_gate.patch_uvicorn_worker(module)
+    assert stops and "always_pong" in stops[0]
+
+
+@pytest.mark.design("service.resource_tracker")
+def test_pythons_resource_tracker_starts_under_a_run_as_python_s_own_helper(
+    service: state.ProcessState,
+) -> None:
+    """The first lock or queue a process makes starts Python's resource tracker, a helper
+    that runs Python's code only, so it is no start of the run's."""
+    from multiprocessing import resource_tracker
+
+    run = a_run(service)
+    tracker = resource_tracker.ResourceTracker()  # its own, so it is sure to start here
+    try:
+        under(run, tracker.ensure_running)
+        assert tracker._pid is not None  # type: ignore[attr-defined]
+        assert lines(run) == []
+    finally:
+        tracker._stop()  # type: ignore[attr-defined]  # closes its pipe and waits for it
