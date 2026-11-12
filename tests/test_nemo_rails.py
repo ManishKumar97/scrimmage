@@ -168,3 +168,17 @@ def test_what_nemo_does_when_the_rail_call_fails(project: Project, fake_openai: 
     for name in ("fault 1", "fault 2"):
         assert row(result, name)[-1]["summary"]["answer"] == UNAVAILABLE
         assert not [c for c in calls(row(result, name)) if c[1] == MAIN]  # nothing went past it
+
+
+def test_a_rail_that_answers_nonsense_blocks(project: Project, fake_openai: Fake) -> None:
+    """NeMo reads a rail reply that is neither yes nor no as a block, not as an error: the bot
+    answers with NeMo's block message, so a nonsense row expects that or the bot's own text."""
+    fake = fake_for(fake_openai)
+    nonsense = (
+        f'\n[[test.fault]]\ncall = "model"\nmodel = "{RAIL}"\ndo = "replace"\ntext = "maybe"\n'
+        f'expect = [["{BLOCKED}", "{UNAVAILABLE}"]]\n'
+    )
+    result = run(project, fake, nonsense)
+    assert result.code == 0, result.out + result.err
+    assert row(result, "fault 1")[-1]["summary"]["answer"] == BLOCKED
+    assert calls(row(result, "fault 1")) == [(CHAT_LABEL, RAIL, "fault")]  # the bot never ran

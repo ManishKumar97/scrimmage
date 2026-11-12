@@ -318,6 +318,19 @@ That is what the real-model check is for: it runs the rails against OpenAI itsel
   It marks none of them as a retry, so use `first N` or `always` on a rail; `requests N` is a mistake there and says so.
 - **A failed rail.** When a rail's call fails, NeMo raises, from `generate` and from `check`.
   It has no fail-open or fail-closed setting of its own, so what your user sees is your code's choice: catch it, and return your own text.
+- **A rail that answers nonsense.** A rail reply that is neither yes nor no is not an error to NeMo: it blocks, with its own block message.
+  So a `replace` row on a rail meets NeMo's block, not your code's text for a failed rail.
+  Expect either, as below: both mean the bot failed closed.
+
+```toml
+# The rail answers nonsense. NeMo blocks; a bot that caught an error would say its own text.
+[[test.fault]]
+call   = "model"
+model  = "gpt-4.1-mini"
+do     = "replace"
+text   = "maybe"
+expect = [["I'm sorry, I can't respond to that.", "Sorry, the safety check is unavailable"]]
+```
 - **Its usage statistics.** NeMo sends usage statistics to NVIDIA unless `NEMO_GUARDRAILS_NO_USAGE_STATS=1` is set.
   That request goes through `urllib`, which Scrimmage does not gate, so set the variable for your tests.
 
