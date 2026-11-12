@@ -1057,6 +1057,29 @@ def in_service() -> bool:
 # Threads the team started while its code belonged to a run, and that run's name. A map, not
 # the thread's name, so the team's logs are unchanged. A pool's own threads are never here.
 TAGS: "weakref.WeakKeyDictionary[threading.Thread, str]" = weakref.WeakKeyDictionary()
+# A process pool's or queue's own work: a call the process gate let through, while it runs,
+# and the threads it started, such as a pool's handlers and a queue's feeder. Their sends and
+# starts carry work the gate decided at the team's call, so the outside rules skip them.
+_internal = threading.local()
+INTERNAL: "weakref.WeakSet[threading.Thread]" = weakref.WeakSet()
+
+
+def pool_internal() -> bool:
+    if getattr(_internal, "team", False):
+        return False
+    return getattr(_internal, "depth", 0) > 0 or threading.current_thread() in INTERNAL
+
+
+@contextmanager
+def internal_call(team: bool = False) -> Generator[None]:
+    """A pool's own call; team: one that starts threads for the team's tasks, such as a
+    ThreadPool's workers, which are never the pool's own."""
+    was = getattr(_internal, "team", False), getattr(_internal, "depth", 0)
+    _internal.team, _internal.depth = team, was[1] + 1
+    try:
+        yield
+    finally:
+        _internal.team, _internal.depth = was
 
 
 class NoSink:

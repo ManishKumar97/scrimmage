@@ -14,7 +14,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -55,9 +55,22 @@ def service() -> Iterator[state.ProcessState]:
     state.install_process(None)
 
 
-def a_run(process: state.ProcessState, real: tuple[str, ...] = ()) -> state.RunState:
+def a_run(
+    process: state.ProcessState, real: tuple[str, ...] = (), background: tuple[str, ...] = ()
+) -> state.RunState:
     sink = Sink()
-    plan = Plan("run-0123456789ab", "t", "baseline", (), (), (), real, 60.0, service=True)
+    plan = Plan(
+        "run-0123456789ab",
+        "t",
+        "baseline",
+        (),
+        (),
+        (),
+        real,
+        60.0,
+        service=True,
+        background_real=background,
+    )
     run = state.RunState(plan, sink, [], blobs=sink, process=process)
     process.register(run)
     return run
@@ -409,3 +422,136 @@ def test_a_joblib_loky_executor_made_before_the_run_is_refused(
     )
     assert not (tmp_path / "jl").exists()
     executor.shutdown()
+
+
+def outside(fn: Callable[[], Any]) -> Any:
+    """fn in code outside any request, such as a background job a request left running."""
+    return contextvars.Context().run(fn)
+
+
+def refused_outside(fn: Callable[[], Any]) -> str:
+    with pytest.raises(ScrimmageRefused) as caught:
+        outside(fn)
+    return str(caught.value)
+
+
+@pytest.mark.design("service.outside_process_entries")
+@pytest.mark.parametrize("method", ["fork", "spawn"])
+def test_process_pools_used_outside_any_request_meet_the_outside_rules(
+    service: state.ProcessState, tmp_path: Path, method: str
+) -> None:
+    context = multiprocessing.get_context(method)
+    executor = ProcessPoolExecutor(max_workers=1, mp_context=context)
+    pool = context.Pool(1)
+    written = tmp_path / "written"
+    try:
+        run = a_run(service)
+        calls = pool_calls(written)
+        for name, call in calls.items():
+            target = executor if name in ("submit", "map") else pool
+            message = refused_outside(lambda c=call, t=target: c(t))
+            assert "outside any request" in message and "background_real" in message, name
+            assert not written.exists(), name
+        assert [x["reason"] for x in lines(run)] == ["orphan"] * len(calls)
+        # Stopping a pool, as a lifespan's shutdown does, sends none of the team's work.
+        spare_executor = ProcessPoolExecutor(max_workers=1, mp_context=context)
+        spare_pool, other_pool = context.Pool(1), context.Pool(1)
+        assert plain(lambda: spare_executor.submit(os.getpid).result()) > 0
+        outside(spare_executor.shutdown)
+        outside(spare_pool.close)
+        outside(spare_pool.join)
+        outside(other_pool.terminate)
+        outside(other_pool.join)
+        assert len(lines(run)) == len(calls)
+        # The pools' own threads still carry a plain request's work while the run is open.
+        assert plain(lambda: executor.submit(write, str(written)).result()) == str(written)
+        assert plain(lambda: pool.apply(write, (str(written),))) == str(written)
+        service.unregister(run)
+        listed = a_run(service, background=("process:multiprocessing",))
+        written.unlink()
+        assert outside(lambda: pool.apply(write, (str(written),))) == str(written)
+        assert outside(lambda: executor.submit(write, str(written)).result()) == str(written)
+        # A listed submit that starts the pool's processes: the starts are the pool's own.
+        fresh = ProcessPoolExecutor(max_workers=1, mp_context=context)
+        assert outside(lambda: fresh.submit(write, str(written)).result()) == str(written)
+        outside(fresh.shutdown)
+        notices = {x.get("notice") for x in sink_of(listed).lines if x.get("notice")}
+        assert notices == {"background"}
+    finally:
+        executor.shutdown()
+        pool.terminate()
+        pool.join()
+
+
+@pytest.mark.design("service.outside_process_entries")
+@pytest.mark.parametrize("kind", ["start", "queue", "simple", "send", "send_bytes", "fork"])
+def test_a_process_start_or_send_outside_any_request_meets_the_outside_rules(
+    service: state.ProcessState, tmp_path: Path, kind: str
+) -> None:
+    context = multiprocessing.get_context("spawn")
+    target = tmp_path / "written"
+    queue, simple = context.Queue(), context.SimpleQueue()
+    mine, end = context.Pipe()
+    child = context.Process(target=write, args=(str(target),))
+    act = {
+        "start": child.start,
+        "queue": lambda: queue.put("outside data"),
+        "simple": lambda: simple.put("outside data"),
+        "send": lambda: mine.send("outside data"),
+        "send_bytes": lambda: mine.send_bytes(b"outside data"),
+        "fork": os.fork,
+    }[kind]
+    run = a_run(service)
+    message = refused_outside(act)
+    assert "outside any request" in message, message
+    assert [x["reason"] for x in lines(run)] == ["orphan"]
+    assert not end.poll() and queue.empty() and simple.empty()
+    assert not target.exists()
+
+
+@pytest.mark.design("service.outside_process_entries")
+def test_a_queues_feeder_a_plain_request_started_still_sends_after_the_request_returned(
+    service: state.ProcessState,
+) -> None:
+    queue: Any = multiprocessing.get_context("spawn").Queue()
+    request = state.Plain()
+    context = contextvars.copy_context()
+    context.run(state.SLOT.set, request)
+    context.run(queue.put, "first")  # starts the queue's feeder thread, in the request
+    assert queue.get(timeout=10) == "first"
+    request.done = True
+    run = a_run(service)
+    plain(lambda: queue.put("second"))  # the feeder sends it, outside any request
+    assert queue.get(timeout=10) == "second"
+    assert lines(run) == []
+    queue.close()
+    queue.join_thread()
+
+
+@pytest.mark.design("service.outside_process_entries")
+def test_a_thread_pools_task_outside_any_request_is_never_a_process_pools_own_work(
+    service: state.ProcessState, tmp_path: Path
+) -> None:
+    executor = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("fork"))
+    threads = multiprocessing.pool.ThreadPool(1)
+    workers = ThreadPoolExecutor(max_workers=1)
+    target = tmp_path / "written"
+
+    def send() -> str:
+        return executor.submit(write, str(target)).result()
+
+    try:
+        assert plain(send) == str(target)  # every pool is started before the run
+        assert plain(lambda: threads.apply(send)) == str(target)
+        assert plain(lambda: workers.submit(send).result()) == str(target)
+        target.unlink()
+        run = a_run(service)
+        refused_outside(lambda: threads.apply(send))
+        refused_outside(lambda: workers.submit(send).result())
+        assert [x["reason"] for x in lines(run)] == ["orphan", "orphan"]
+        assert not target.exists()
+    finally:
+        executor.shutdown()
+        workers.shutdown()
+        threads.terminate()
+        threads.join()

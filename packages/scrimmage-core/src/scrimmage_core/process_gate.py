@@ -8,7 +8,10 @@ seen: sh -c 'python x', env -i python and an exec from another program are not.
 In a service, a run is one request in a process that serves others, so nothing it does may
 reach another process: every start under a run is refused unless real lists its program, and
 so are a fork, a multiprocessing process, every multiprocessing send, and the process pools
-whose sends run on threads of their own. Outside any run, all of it is untouched.
+whose sends run on threads of their own. A plain request's are untouched. Code outside any
+request meets the outside rules while a run is open: each is a write, refused unless
+background_real lists it, except a pool's own threads and stops, which carry work this gate
+decided at the team's call.
 """
 
 import functools
@@ -26,7 +29,15 @@ from scrimmage_core import hooks, python_args
 from scrimmage_core.decide import Call, Decision
 from scrimmage_core.errors import ScrimmageRefused
 from scrimmage_core.labels import PROCESS as LABEL
-from scrimmage_core.state import Outside, RunState, carried, current, in_service
+from scrimmage_core.state import (
+    Outside,
+    RunState,
+    carried,
+    current,
+    in_service,
+    internal_call,
+    pool_internal,
+)
 
 BOOT = os.path.join("scrimmage_core", "_boot")  # the runner's, which may be in another venv
 EVENTS = ("subprocess.Popen", "os.exec", "os.posix_spawn")  # os.spawnv is exec here
@@ -145,7 +156,7 @@ def service_start(event: str, args: tuple[Any, ...]) -> None:
         _popen.on = False  # the start its Popen event decided already
         return
     run = current()
-    if run is None or EXEMPT.get():
+    if run is None or EXEMPT.get() or (isinstance(run, Outside) and pool_internal()):
         return
     program, line = program_of(event, args)
     if program is None:
@@ -188,6 +199,9 @@ def refuse_other(run: RunState, label: str, what: str, why: str) -> None:
         f"{what} was used inside a test run, and {why}, so it is refused; no run of a service "
         "may reach another process. Do this work in the request's own process"
     )
+    if step.decision.action == "real" and isinstance(run, Outside):
+        run.finish(step)  # background_real lists it: work outside any request may
+        return
     if step.decision.action == "real":  # listing it is not enough: it is never the run's
         step.decision = Decision("refused", reason="service_child")
     refused(run, step, message)
@@ -201,16 +215,36 @@ def guarded(what: str, why: str, method: Callable[..., Any], skip: type | None =
 
     @functools.wraps(method)
     def gate(*args: Any, **kwargs: Any) -> Any:
-        if in_service() and not (skip is not None and args and isinstance(args[0], skip)):
-            run = current()
-            # A run's own code, or an orphan of one. A pool's own threads run outside any
-            # request, and their sends are a plain request's, never a run's.
-            if run is not None and not isinstance(run, Outside):
-                refuse_other(run, "process:multiprocessing", what, why)
-        return method(*args, **kwargs)
+        if not in_service() or (skip is not None and args and isinstance(args[0], skip)):
+            return method(*args, **kwargs)
+        run = current()
+        # A run's own code or an orphan of one is refused. Work outside any request meets the
+        # outside rules, except a pool's own, which carries what this gate decided already.
+        if run is not None and not (isinstance(run, Outside) and pool_internal()):
+            refuse_other(run, "process:multiprocessing", what, why)
+        with internal_call():
+            return method(*args, **kwargs)
 
     setattr(gate, GATED, True)
     return gate
+
+
+def internal(method: Callable[..., Any], team: type | None = None) -> Any:
+    """A pool's own method, such as Pool.__init__, which starts its processes and handler
+    threads: their sends and starts are the pool's. team: a class, such as ThreadPool, whose
+    threads this method starts run the team's tasks, so they are never the pool's own."""
+    if getattr(method, GATED, False):
+        return method
+
+    @functools.wraps(method)
+    def marked(*args: Any, **kwargs: Any) -> Any:
+        if not in_service():
+            return method(*args, **kwargs)
+        with internal_call(team=team is not None and bool(args) and isinstance(args[0], team)):
+            return method(*args, **kwargs)
+
+    setattr(marked, GATED, True)
+    return marked
 
 
 def patch_names(
@@ -240,11 +274,11 @@ def install_service() -> None:
     )
     hooks.on_import(
         "concurrent.futures.process",
-        lambda m: patch_names(m, "ProcessPoolExecutor", ("submit",), SENT),
+        patch_executor,
     )
     hooks.on_import("multiprocessing.pool", patch_pool)
     for loky in ("loky.process_executor", "joblib.externals.loky.process_executor"):
-        hooks.on_import(loky, lambda m: patch_names(m, "ProcessPoolExecutor", ("submit",), SENT))
+        hooks.on_import(loky, patch_executor)
     hooks.on_import(
         "concurrent.futures.interpreter",
         lambda m: patch_names(m, "InterpreterPoolExecutor", ("submit",), SUBINTERPRETER),
@@ -253,6 +287,12 @@ def install_service() -> None:
         "concurrent.interpreters",
         lambda m: patch_names(m, "Interpreter", ("exec", "call", "call_in_thread"), SUBINTERPRETER),
     )
+
+
+def patch_executor(module: ModuleType) -> None:
+    """concurrent.futures' or loky's ProcessPoolExecutor."""
+    patch_names(module, "ProcessPoolExecutor", ("submit",), SENT)
+    mark_internal(module, "ProcessPoolExecutor", EXECUTOR_OWN)
 
 
 SUBINTERPRETER = "a subinterpreter has no Scrimmage in it, so its writes would run for real"
@@ -267,6 +307,26 @@ def patch_pool(module: ModuleType) -> None:
     threads = getattr(module, "ThreadPool", None)
     names = ("apply_async", "_map_async", "imap", "imap_unordered")
     patch_names(module, "Pool", names, SENT, skip=threads)
+    mark_internal(module, "Pool", POOL_OWN)
+    mark_internal(module, "Pool", ("_repopulate_pool",), team=threads)  # starts the workers
+
+
+# A pool's own starts and stops: what they send is the pool's, decided at the team's call.
+POOL_OWN = ("__init__", "close", "terminate", "join", "_terminate_pool")
+EXECUTOR_OWN = ("shutdown",)
+
+
+def mark_internal(
+    module: ModuleType, owner: str, names: tuple[str, ...], team: type | None = None
+) -> None:
+    cls = getattr(module, owner, None)
+    for name in names:
+        found: object = cls.__dict__.get(name) if isinstance(cls, type) else None
+        if isinstance(found, classmethod):  # Pool._terminate_pool, which a finalizer calls
+            function = cast(Callable[..., Any], found.__func__)  # pyright: ignore[reportUnknownMemberType]
+            setattr(cls, name, classmethod(internal(function)))
+        elif callable(found):
+            setattr(cls, name, internal(found, team))
 
 
 def refuse(run: RunState, python: str, argv: list[str], why: str) -> None:

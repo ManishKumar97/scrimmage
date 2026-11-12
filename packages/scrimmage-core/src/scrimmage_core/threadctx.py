@@ -111,6 +111,8 @@ def start_patched(original: Callable[[threading.Thread], None]) -> Callable[...,
     def start(self: threading.Thread) -> None:
         if not state.in_service():
             return original(self)
+        if state.pool_internal():
+            state.INTERNAL.add(self)
         if spawning() or isinstance(self, tuple(POOL_THREADS)):
             start_outside(self)
             return original(self)
