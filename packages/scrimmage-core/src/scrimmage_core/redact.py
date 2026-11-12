@@ -57,7 +57,9 @@ QUOTED = (
 # What may follow an escape that stays in a value: more of the value. An escaped quote before
 # a space, a bracket, a comma, a colon or the end closes an escaped string instead, as the
 # second \" in {\"a\":\"b\"} does.
-GOES_ON = r"""(?=[^&\s"'<>\\,;:()\[\]{}])"""
+# Nor before a field name: there a new field starts, as it would after a value that ended, so a
+# value kept on purpose, such as next_page_token=x, never runs on into a secret after it.
+GOES_ON = r"""(?=[^&\s"'<>\\,;:()\[\]{}])""" + rf"(?!(?ai:(?:[A-Za-z0-9]+_)*{FIELD}))"
 
 
 def form(decoded: bool) -> str:

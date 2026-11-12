@@ -11,7 +11,7 @@ from typing import cast
 
 import pytest
 
-from scrimmage_core import capture
+from scrimmage_core import capture, state
 from scrimmage_core import redact as redact_module
 from scrimmage_core.redact import redact, redacted
 
@@ -184,6 +184,13 @@ def corpus() -> list[str]:
         r"password=abc\"2zz",
         r"password=abc\'2zz",
         r"password=C:\new2zz",
+        # a value kept on purpose, then an escape, then a secret field
+        r"next_page_token=x\"",
+        "next_page_token=x\\n",
+        'next_page_token=x"',
+        "f(token=tok)\\n",
+        r"next_page_token=x\"password=hunter2",
+        "f(token=tok)\\npassword=hunter2",
     ]
     out: list[str] = []
     for _ in range(5000):
@@ -917,6 +924,8 @@ def test_spans_cover_exactly_what_redact_removes() -> None:
         DECODED_BACKSLASH_LEAK,
         json.dumps(ESCAPED_QUOTE_LEAK),
         f'"{ESCAPED_QUOTE_LEAK}"',
+        *KEPT_BEFORE_SECRET,
+        *(json.dumps({"log": text}) for text in KEPT_BEFORE_SECRET),
     ]
     for text in [*corpus(), *SAMPLES.values(), *leaks]:
         places = redact_module.replacements(text)
@@ -979,6 +988,35 @@ def test_a_backslash_n_or_r_ends_a_value_and_other_backslashes_are_in_it() -> No
     assert redact(r"password=ab\tcd ok") == "[secret removed] ok"
     assert redact(r"x password=ab\"cd") == "x [secret removed]"
     assert redact("password=ab\\$cd\\") == "[secret removed]"
+
+
+# A value kept on purpose, an escape or a quote, then a secret field: the kept value must
+# not take the secret in with it.
+KEPT_BEFORE_SECRET = [
+    r"next_page_token=abc\"password=hunter2",
+    r"is_secret=True\"api_key=sk_live_zz",
+    "next_page_token=Q2F\\npassword=hunter2",
+    'next_page_token=abc"password=hunter2',
+    "f(token=tok)\\npassword=hunter2",
+]
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize("text", KEPT_BEFORE_SECRET)
+def test_a_kept_value_never_runs_on_into_a_secret_field_after_it(text: str) -> None:
+    secret = text.rpartition("=")[2]
+    kept = text.partition("=")[0]
+    outs = {
+        "plain": redact(text),
+        "decoded": redacted(text, decoded=True)[0],
+        "json": redact(json.dumps({"log": text})),
+        "python value": json.dumps(capture.clean({"v": text})[0]),
+        "preview": str(state.content(text)["preview"]),
+        "miss": str(capture.shown_args({"v": text}, ["v"])),
+    }
+    for where, out in outs.items():
+        assert secret not in out, (where, out)
+        assert kept in out, (where, out)  # the kept name itself stays
 
 
 ESCAPED_QUOTE_LEAK = r"password=abc\"2zz"  # a quote escaped inside a value
