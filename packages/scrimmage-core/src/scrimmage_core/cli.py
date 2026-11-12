@@ -110,6 +110,11 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
             metavar="USD",
             help="lower the file's max_cost_usd to this for this command; it never raises it",
         )
+    check.add_argument(
+        "--max-cost-usd",
+        metavar="USD",
+        help="check --runs N under this cap, as record would run; budget_usd stays the file's",
+    )
     commands.add_parser("schema", help="print the JSON Schema of scrimmage.toml")
     init = commands.add_parser(
         "init", help="draft a scrimmage.toml by reading the code", allow_abbrev=False
@@ -158,10 +163,10 @@ def chosen_command(args: argparse.Namespace) -> Callable[[Path, Found | None], i
 
         return test
     if args.command == "check":
-        record_runs = args.runs
+        record_runs, check_cap = args.runs, args.max_cost_usd
 
         def check(path: Path, found: Found | None) -> int:
-            return run_check(path, found, record_runs)
+            return run_check(path, found, record_runs, check_cap)
 
         return check
     names, refresh, runs = list(args.test), list(args.refresh), str(args.runs)
@@ -270,6 +275,7 @@ def empty_record() -> dict[str, object]:
         "records": None,
         "cost_usd": 0.0,
         "budget_usd": None,
+        "stopped_by": None,
         "numbers": {"calls_seen": 0, "calls_written": 0},
         "tests": [],
     }
@@ -619,10 +625,14 @@ def record_mistakes(problems: list[str], found: Found | None) -> int:
     return MISTAKE
 
 
-def run_check(path: Path, found: Found | None, record_runs: str | None = None) -> int:
+def run_check(
+    path: Path, found: Found | None, record_runs: str | None = None, cap: str | None = None
+) -> int:
     """The checks scrimmage test makes before its first run. It starts nothing.
 
     record_runs: --runs, so the runs counted are those scrimmage record --runs N would start.
+    cap: --max-cost-usd, so --runs is checked under the cap that record would run with. The
+    summary's budget_usd stays the file's own, which is what a caller compares a cap with.
     """
     try:
         config, problems = read(path)
@@ -642,7 +652,10 @@ def run_check(path: Path, found: Found | None, record_runs: str | None = None) -
     if record_runs is not None:
         from scrimmage_core import record as recording  # only for --runs: it brings the runner
 
-        count, problems = recording.runs_problems(config, record_runs)
+        under, problems = capped(config, cap)
+        count = 1
+        if under is not None:
+            count, problems = recording.runs_problems(under, record_runs)
         if problems:
             if found is not None:
                 found.messages += [(MISTAKES, problem) for problem in problems]
@@ -662,6 +675,11 @@ def run_check(path: Path, found: Found | None, record_runs: str | None = None) -
         "budget_usd": agent.max_cost_usd,
         "real": list(agent.real),
         "entry": {"kind": entry_kind, "value": entry_value},
+        # The prices [agent.prices] sets; any other model takes the built-in table's.
+        "prices": {
+            model: {"input": r.input, "output": r.output, "cached_input": r.cached_input}
+            for model, r in agent.prices
+        },
     }
     if found is not None:
         found.fields["summary"] = summary

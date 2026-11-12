@@ -70,6 +70,8 @@ scrimmage-mcp --config PATH [--root DIR] [--max-session-usd USD] [--allow-no-bud
 
 `test` and `record` need a `max_cost_usd` argument, which you see in your client's approval prompt before the call spends anything.
 The cap the command runs under is the lower of that argument and the file's `max_cost_usd`.
+The cap is measured at the file's prices: each model under `[agent.prices]` at the price written there, and any other at Scrimmage's built-in table.
+A price of 0 means calls to that model cost nothing against the cap, so the `check` result and every result's `_meta` name the models the file prices.
 Approving a call to `test` approves whatever the config's entry point does now, with the code as it is at that moment; the `check` result names that entry point and the labels under `real`.
 
 A result whose exit is 2 or 3 is an error, and carries its document.

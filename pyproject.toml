@@ -123,10 +123,15 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "The scrimmage command never loads the MCP library"
+name = "Only the Scrimmage MCP server loads the MCP library"
 type = "forbidden"
-source_modules = ["scrimmage_core.cli", "scrimmage_core.entry"]
-forbidden_modules = ["mcp", "scrimmage_core.mcp_server"]
+# Every module of the package; the server is its own command, and the only one that may.
+source_modules = ["scrimmage_core"]
+forbidden_modules = ["mcp", "mcp_types", "scrimmage_core.mcp_server"]
+ignore_imports = [
+    "scrimmage_core.mcp_server -> mcp",
+    "scrimmage_core.mcp_server -> mcp_types",
+]
 
 [[tool.importlinter.contracts]]
 name = "Reading a finished test starts nothing and opens no socket"

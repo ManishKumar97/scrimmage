@@ -54,7 +54,7 @@ def test_the_only_connections_are_to_and_from_the_control_server() -> None:
 STARTS = re.compile(
     r"\b(?:subprocess\.\w+\s*\(|Popen\s*\(|os\.(?:exec\w*|spawn\w*|system|popen|posix_spawnp?|"
     r"fork\w*)\s*\(|pty\.spawn\s*\(|ProcessPoolExecutor|multiprocessing\.\w+|"
-    r"create_subprocess_\w+|open_process\s*\()"
+    r"create_subprocess_\w+|open_process\s*\(|run_process\s*\()"
 )
 STARTERS = {"subprocess", "pty", "multiprocessing", "concurrent", "asyncio"}
 

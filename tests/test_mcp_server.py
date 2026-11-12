@@ -196,6 +196,7 @@ def test_probe_is_not_an_input_without_the_server_flag(bed: Bed) -> None:
 # Every flag of each command the server runs: the input it comes from, or why it is not one.
 FLAGS = {
     "check": {"--json": "always passed", "--runs": "passed by the check before a record",
+              "--max-cost-usd": "passed by the check before a spend",
               "path": "the server's --config"},
     "test": {"--json": "always passed", "--compare": "compare",
              "--max-cost-usd": "max_cost_usd", "path": "the server's --config"},
@@ -325,6 +326,26 @@ def test_a_forwarded_records_path_round_trips_with_a_config_in_a_subfolder(
             assert doc_of(later)["compare"]["earlier"] == records
 
     anyio.run(go)
+
+
+def test_a_link_inside_the_root_is_refused_by_show_as_on_the_cli(
+    bed: Bed, fake_openai: Fake
+) -> None:
+    """The server lets a link that stays inside through, and passes it on as a link, so show
+    refuses it, as scrimmage show does from a shell."""
+    bed.edit("[agent]\n", "[agent]\nruns = 1\n")
+    bed.model(fake_openai(ACME * 2))
+    (done,) = call(bed, ("test", {"max_cost_usd": 5}))
+    records = doc_of(done)["records"]
+    (bed.root / "latest").symlink_to(bed.root / records)
+    (direct, linked) = call(bed, ("show", {"target": records}), ("show", {"target": "latest"}))
+    assert doc_of(direct)["exit"] == 0
+    assert doc_of(linked)["exit"] == 2 and linked.is_error, texts(linked)
+    by_hand = subprocess.run(
+        [str(Path(sys.executable).parent / "scrimmage"), "show", "latest", "--json"],
+        env=bed.env, cwd=bed.root, capture_output=True, text=True, timeout=60, check=False,
+    )  # fmt: skip
+    assert by_hand.returncode == 2  # the same refusal the CLI gives
 
 
 def test_a_path_outside_the_root_starts_no_child(bed: Bed, tmp_path: Path) -> None:
@@ -472,20 +493,42 @@ def record_bot(bed: Bed, invoice: str, order: str = "'1'") -> None:
     bed.toml.write_text(RECORD_TOML)
 
 
+REPLY_KEY = "sk-proj-" + "Z9y8X7w6V5u4T3s2R1q0"
+ARGUMENT_KEY = "sk-proj-" + "Q1w2E3r4T5y6U7i8O9p0"
+
+
+def recorded_as_text(bed: Bed, fake_openai: Fake) -> tuple[types.CallToolResult, dict[str, Any]]:
+    """record, with a scrimmage.recorded.toml the team wrote already there: record never
+    replaces it, so its result carries the mocks word for word in mocks_text."""
+    (bed.root / "scrimmage.recorded.toml").write_text("# the team's own notes\n")
+    bed.model(fake_openai(["chat_answer"]))
+    (recorded,) = call(bed, ("record", {"max_cost_usd": 5}))
+    return recorded, doc_of(recorded)
+
+
 def test_a_secret_in_a_recorded_reply_or_argument_never_reaches_the_client(
     bed: Bed, fake_openai: Fake
 ) -> None:
-    reply_key, argument_key = (
-        "sk-proj-" + "Z9y8X7w6V5u4T3s2R1q0",
-        "sk-proj-" + "Q1w2E3r4T5y6U7i8O9p0",
-    )
-    record_bot(bed, f"{{'status': 'paid', 'token': '{reply_key}'}}", repr(argument_key))
-    bed.model(fake_openai(["chat_answer"]))
-    (recorded,) = call(bed, ("record", {"max_cost_usd": 5}))
-    assert doc_of(recorded)["numbers"]["calls_seen"] == 1, texts(recorded)
-    assert (bed.root / "scrimmage.recorded.toml").exists()  # the replies were recorded
-    sent = received(recorded)
-    assert reply_key not in sent and argument_key not in sent
+    """A real tool's reply reaches the coding agent in mocks_text; the key in it does not."""
+    record_bot(bed, f"{{'status': 'paid on Oct 30', 'note': 'ref {REPLY_KEY}'}}")
+    recorded, doc = recorded_as_text(bed, fake_openai)
+    assert doc["numbers"]["calls_seen"] == 1, texts(recorded)
+    assert "mocks_text" in doc, doc  # the replies reach the client, word for word
+    assert "paid on Oct 30" in doc["mocks_text"] and "[secret removed]" in doc["mocks_text"]
+    assert REPLY_KEY not in received(recorded)
+    assert (bed.root / "scrimmage.recorded.toml").read_text() == "# the team's own notes\n"
+
+
+def test_a_secret_in_a_recorded_argument_never_reaches_the_client(
+    bed: Bed, fake_openai: Fake
+) -> None:
+    record_bot(bed, "'paid on Oct 30'", repr(ARGUMENT_KEY))
+    recorded, doc = recorded_as_text(bed, fake_openai)
+    assert doc["numbers"]["calls_seen"] == 1, texts(recorded)
+    (manual,) = doc["tests"][0]["manual"]  # a mock of a secret argument could never match
+    assert manual["code"] == "secret_changed_shape" and manual["call"] == "tool:get_invoice"
+    assert "mocks_text" in doc and "[secret removed]" in doc["mocks_text"]
+    assert ARGUMENT_KEY not in received(recorded)
 
 
 def test_each_tool_gives_one_result_per_exit_code(
@@ -593,7 +636,7 @@ def test_a_secret_in_an_infra_message_never_reaches_the_client(bed: Bed, modes: 
     assert result.is_error and doc["status"] == "infra"
     assert "the reader broke on [secret removed]" in doc["infra"][0]["message"]
     assert SK not in received(result)
-    assert SK in bed.log.read_text() or SK not in bed.log.read_text()  # the log is the client's
+    assert SK not in bed.log.read_text()  # the server's own log line holds no message text
 
 
 def test_a_child_that_prints_no_document_gives_its_redacted_last_line(
@@ -630,8 +673,18 @@ def test_the_child_reads_nothing_from_the_protocol_stream(bed: Bed, modes: Modes
     seen = bed.scratch / "stdin.txt"
     bed.env["STDIN_SEEN"] = str(seen)
     modes("read-stdin")
-    first, second = call(bed, ("check", {}), ("check", {}))
-    assert seen.read_text() == "/dev/null\n"  # its standard input is empty, not the protocol
+
+    async def go() -> list[types.CallToolResult]:
+        # A ceiling: a child that read the protocol stream would wait on it, and so would we.
+        with anyio.fail_after(30):
+            async with connect(bed) as session:
+                return [await session.call_tool("check", {}) for _ in range(2)]
+
+    first, second = anyio.run(go)
+    # Its standard input is empty, not the protocol. The server passes /dev/null itself; with
+    # mcp 2.3 a child that inherited it would see /dev/null too, as stdio_server puts it on fd 0
+    # while it serves, so this guards the server's own choice against a later SDK.
+    assert seen.read_text() == "/dev/null\n"
     assert doc_of(first)["status"] == doc_of(second)["status"] == "valid"
 
 
@@ -701,6 +754,20 @@ def test_no_budget_runs_with_the_server_flag_capped_by_the_argument(
     assert doc["budget_usd"] == 0.004 and doc["stopped_by"] == "budget", doc
     assert guard_of(result)["file_max_cost_usd"] is None
     assert guard_of(result)["max_cost_usd"] == 0.004
+
+
+def test_record_runs_on_a_file_with_no_budget_is_checked_under_the_argument(
+    bed: Bed, fake_openai: Fake
+) -> None:
+    """record --runs 2 refuses a file with no budget and a real tool, unless a cap is given;
+    the check before the record passes the argument, so it is not refused when record runs."""
+    record_bot(bed, "'paid'")
+    bed.edit("[agent]\n", '[agent]\nmax_cost_usd = "none"\n')
+    bed.model(fake_openai(["chat_answer"]))
+    (result,) = call(bed, ("record", {"max_cost_usd": 5, "runs": 2}), server=("--allow-no-budget",))
+    doc = doc_of(result)
+    assert (doc["command"], doc["exit"], doc["budget_usd"]) == ("record", 0, 5.0), texts(result)
+    assert doc["numbers"]["runs"] == 2
 
 
 def test_max_cost_usd_is_required_on_test_and_record(bed: Bed) -> None:
@@ -789,10 +856,12 @@ def test_the_cap_entry_and_real_are_in_every_check_test_and_record_result(
         assert guard["max_cost_usd"] == usd and guard["file_max_cost_usd"] == 5.0
         assert guard["entry"] == point and guard["real"] == [real]
         assert guard["checked_by"]["status"] == "valid"
+        assert guard["prices"] == {}  # the example names no price of its own
         assert guard["session_cap_usd"] == 10.0
         said = texts(result)[0]
         assert f"entry: function {point['value']}" in said and f"real: {real}" in said
         assert "cost cap: $5" in said or "of a $5 cap" in said, said
+        assert usd is not None or "prices: the built-in table" in said, said
 
 
 def test_the_session_ceiling_refuses_the_call_that_could_pass_it(
@@ -821,6 +890,21 @@ def test_a_stopped_spend_counts_at_least_its_argument(bed: Bed, fake_openai: Fak
     assert doc["stopped_by"] == "budget" and doc["cost_usd"] == 0.0
     assert guard_of(result)["session_spent_usd"] == 0.004
     assert "session: spent $0.0040 of $10" in texts(result)[0]
+
+
+def test_a_stopped_record_counts_at_least_its_argument(bed: Bed, fake_openai: Fake) -> None:
+    """A record the budget stops is exit 2, a mistake: its stopped_by is what says it stopped,
+    with holds that may still be in flight, so it counts at least its argument too."""
+    record_bot(bed, "'paid'")
+    bed.edit("[agent]\n", "[agent]\nmax_cost_usd = 0.004\n")
+    bed.edit("[[test]]\n", PRICED)
+    bed.model(fake_openai([]))
+    (result,) = call(bed, ("record", {"max_cost_usd": 0.004}))
+    doc = doc_of(result)
+    assert (doc["exit"], doc["status"], doc["stopped_by"]) == (2, "mistake", "budget"), doc
+    assert doc["cost_usd"] == 0.0 and doc["out"] is None
+    assert guard_of(result)["session_spent_usd"] == 0.004
+    assert "stopped by: budget" in texts(result)[0]
 
 
 TEST_DIES = IN_CHILD + "if child and sys.orig_argv[4] == 'test':\n    import os\n    os._exit(5)\n"
@@ -1223,7 +1307,9 @@ LOOP_RAISES = IN_SERVER + (
 )
 
 
-def test_an_error_that_escapes_the_loop_still_signals_every_child(bed: Bed) -> None:
+def test_an_error_in_a_server_task_is_caught_by_the_watch_task_and_signals_every_child(
+    bed: Bed,
+) -> None:
     stoppable(bed, "answer")
     bed.shim(LOOP_RAISES)
 
@@ -1280,6 +1366,38 @@ async def none_left_but_the_server(bed: Bed) -> bool:
             return False
         await anyio.sleep(0.1)  # the client must go on: it still sends the cancel
     return True
+
+
+# In the server: SIGTERM to itself after the test's child exists and before its start has
+# returned, so the shutdown's own SIGTERM to every tracked child misses it.
+SIGTERM_WHILE_STARTING = IN_SERVER + (
+    "if server:\n"
+    "    import os, signal\n"
+    "    import anyio\n"
+    "    real = anyio.open_process\n"
+    "    async def open_process(*args, **kwargs):\n"
+    "        proc = await real(*args, **kwargs)\n"
+    "        if args[0][4] == 'test':\n"
+    "            os.kill(os.getpid(), signal.SIGTERM)\n"
+    "            await anyio.sleep(1)\n"
+    "        return proc\n"
+    "    anyio.open_process = open_process\n"
+)
+
+
+def test_a_shutdown_while_a_child_starts_still_stops_that_child(bed: Bed) -> None:
+    stoppable(bed, "answer")  # a run that never ends by itself, so a missed child shows
+    bed.shim(SIGTERM_WHILE_STARTING)
+
+    async def go() -> None:
+        with anyio.fail_after(120), contextlib.suppress(Exception):  # the server goes away
+            async with connect(bed) as session:
+                await session.call_tool("test", {"max_cost_usd": 5})
+
+    anyio.run(go)
+    assert none_left(bed), ours(bed)  # by the call's nonce, and every other mark of the test
+    (line,) = log_lines(bed)
+    assert "the call was cancelled" in line, line
 
 
 def test_end_of_input_sends_sigterm_before_any_await(bed: Bed) -> None:

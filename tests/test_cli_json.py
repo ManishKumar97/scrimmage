@@ -204,6 +204,7 @@ def test_each_command_prints_one_document_for_each_exit_code(
         "budget_usd": 5.0,
         "real": ["tool:check_inventory"],
         "entry": {"kind": "function", "value": "acme.agent:answer"},
+        "prices": {},
     }
     assert checks[2].doc["summary"] is None
 
@@ -443,7 +444,7 @@ def test_each_enum_lists_every_value_the_code_gives() -> None:
     assert found["judged"] == list(judge.RUN_VERDICTS)
     assert found["outcome"] == list(outcomes.OUTCOMES)
     assert found["kind"] == list(judge.KINDS)
-    assert found["stopped_by"] == list(runner.STOPPED_BY)
+    assert found["stopped_by"] == list(runner.STOPPED_BY) * 2  # a test's, then a record's
     assert found["change"] == list(compare.CHANGES)
     assert found["action"] == ["real", "refused", *show.ACTIONS]  # a miss's, then a line's
     # A record's code, then a suggestion's.
@@ -1601,6 +1602,13 @@ def test_check_summary_lists_the_labels_under_real_and_the_entry_point(project: 
     assert summary["entry"] == {"kind": "command", "value": value}
     project.edit('real = ["tool:check_inventory", "tool:*"]', "real = []")
     assert summary_of(check_doc(project))["real"] == []
+    assert summary_of(check_doc(project))["prices"] == {}  # every model at the built-in table
+    project.edit(
+        "[[test]]\n", "[agent.prices]\ngpt-4o-mini = {input = 0, output = 0.6}\n\n[[test]]\n"
+    )
+    assert summary_of(check_doc(project))["prices"] == {
+        "gpt-4o-mini": {"input": 0, "output": 0.6, "cached_input": None}
+    }
 
 
 @pytest.mark.design("json.check_runs")
@@ -1620,6 +1628,11 @@ def test_check_runs_counts_what_record_runs_would_start(project: Project) -> Non
     project.edit("[agent]\n", '[agent]\nmax_cost_usd = "none"\n')
     doc = check_doc(project, "--runs", "2")  # what record --runs 2 refuses, check refuses
     assert doc["exit"] == 2 and "max_cost_usd" in messages(doc, "mistakes")[0]
+    # Under a cap, as record --runs 2 --max-cost-usd 0.5 runs: passed, the file's cap kept.
+    capped_doc = check_doc(project, "--runs", "2", "--max-cost-usd", "0.5")
+    assert capped_doc["exit"] == 0 and summary_of(capped_doc)["budget_usd"] is None
+    bad = check_doc(project, "--runs", "2", "--max-cost-usd", "nan")
+    assert bad["exit"] == 2 and messages(bad, "mistakes")[0].startswith("--max-cost-usd")
     assert summary_of(check_doc(project, "--runs", "1"))["runs"] == 2
     project.capsys.readouterr()
     assert cli.main(["check", str(project.toml), "--runs", "1"]) == 0

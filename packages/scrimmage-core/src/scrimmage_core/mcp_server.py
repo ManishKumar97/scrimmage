@@ -328,6 +328,7 @@ def summary_lines(doc: Mapping[str, Any], guard: Mapping[str, Any]) -> list[str]
             lines += [line for line in (entry_line(summary.get("entry")),) if line]
             lines.append(f"cost cap: {cap_text(summary.get('budget_usd'))}")
             lines.append(real_line or "real: nothing")
+            lines.append(prices_line(summary.get("prices")))
     elif command == "test":
         rows = cast(list[Mapping[str, Any]], doc.get("rows") or [])
         lines.append(f"rows: {counted(rows, 'result', RESULTS) or 'none ran'}")
@@ -350,6 +351,8 @@ def summary_lines(doc: Mapping[str, Any], guard: Mapping[str, Any]) -> list[str]
             f"spent {spent_text(doc.get('cost_usd'))} of a {cap_text(doc.get('budget_usd'))} cap"
         )
         lines += [line for line in (entry_line(guard.get("entry")), real_line) if line]
+        if doc.get("stopped_by") is not None:
+            lines.append(f"stopped by: {doc['stopped_by']}")
     elif command == "init":
         lines.append(f"out: {doc.get('out') or 'nothing was written'}")
         entry = doc.get("entry")
@@ -370,6 +373,19 @@ def summary_lines(doc: Mapping[str, Any], guard: Mapping[str, Any]) -> list[str]
     counts = [f"{name} {len(doc.get(name) or [])}" for name in LISTS]
     lines.append("messages: " + ", ".join(counts))
     return lines
+
+
+def prices_line(prices: object) -> str:
+    """The prices the cap is measured at: the file's own, by model, and the built-in table's
+    for any other. A price of 0 makes that model's calls free against the cap."""
+    if not isinstance(prices, dict) or not prices:
+        return "prices: the built-in table"
+    table = cast(dict[str, dict[str, float]], prices)
+    named = ", ".join(
+        f"{model} ${rate['input']:g}/${rate['output']:g} per million tokens in/out"
+        for model, rate in sorted(table.items())
+    )
+    return f"prices: {named}; any other model the built-in table"
 
 
 def entry_line(entry: object) -> str:
@@ -406,11 +422,12 @@ PART_BYTES = 255  # the longest name one folder holds, on the file systems Linux
 
 
 def inside(value: str, root: Path) -> Path:
-    """A path argument as the child gets it: absolute and resolved, inside the root.
+    """A path argument as the child gets it: absolute, and inside the root once resolved.
 
     A relative value is read against the root, the coding agent's own working folder, never
-    against the config's folder. The child gets the resolved path, so its own working folder
-    cannot change what the value names, and a link swapped in later cannot move it.
+    against the config's folder. The child gets the root-joined path, absolute, so its own
+    working folder cannot change what the value names; it is not the resolved one, so a link
+    in it stays a link, which show refuses to open as the CLI does.
     """
     if CONTROL.search(value) is not None:
         raise Refused(f"{value!r}: a path may not hold a control character")
@@ -420,10 +437,11 @@ def inside(value: str, root: Path) -> Path:
         len(part.encode("utf-8", "surrogateescape")) > PART_BYTES for part in Path(value).parts
     ):
         raise Refused(f"{value[:80]!r}...: the path is too long")
-    real = Path(os.path.realpath(root / value))  # an absolute value is read as it is
+    joined = root / value  # an absolute value is read as it is
+    real = Path(os.path.realpath(joined))
     if not real.is_relative_to(root):  # by parts, so /root-other is not inside /root
         raise Refused(f"{value!r}: the path is outside the project folder")
-    return real
+    return joined
 
 
 def settings_from(argv: Sequence[str] | None) -> Settings:
@@ -540,6 +558,7 @@ def checked_guard(doc: Mapping[str, Any] | None) -> dict[str, Any]:
         "file_max_cost_usd": summary.get("budget_usd"),
         "entry": summary.get("entry"),
         "real": summary.get("real"),
+        "prices": summary.get("prices"),
         "checked_by": {"command": "check", "exit": doc.get("exit"), "status": doc.get("status")},
     }
 
@@ -570,6 +589,8 @@ class Scrimmage:
         )
         self.spent = 0.0  # what this server's calls have spent, as they are counted
         self.spending = False  # a test, record or probe holds it from its check to its count
+        self.calls = 0  # tool calls in flight
+        self.shutting_down = False  # a shutdown signal or an escaped error: start nothing more
 
     def tools(self) -> list[types.Tool]:
         probe = self.settings.allow_probe
@@ -593,12 +614,15 @@ class Scrimmage:
     async def call_tool(
         self, ctx: ServerRequestContext[Any, Any], params: types.CallToolRequestParams
     ) -> types.CallToolResult:
+        self.calls += 1  # the exit after a shutdown waits for every call to have ended
         try:
             arguments = self.checked(params.name, params.arguments or {})
             # A no-op when the call carries no progress token.
             return await self.command(params.name, arguments, ctx.session.report_progress)
         except Refused as exc:
             return types.CallToolResult(content=[text(str(exc))], is_error=True)
+        finally:
+            self.calls -= 1
 
     def checked(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """The arguments, if they fit the tool's input schema; else a refusal naming one."""
@@ -688,8 +712,11 @@ class Scrimmage:
                 "with a lower max_cost_usd, or restart the server with a higher "
                 "--max-session-usd"
             )
+        # --runs under the argument's cap, as the record would run: a file with no budget is not
+        # refused for N above 1 when the argument caps it.
         runs = [f"--runs={arguments['runs']}"] if "runs" in arguments else []
-        check = await self.run("check", [str(self.settings.config), *runs], limit=CHECK_LIMIT_S)
+        check_args = [str(self.settings.config), *runs, f"--max-cost-usd={usd!r}"]
+        check = await self.run("check", check_args, limit=CHECK_LIMIT_S)
         if check.doc is None or is_error(int(check.doc["exit"])):
             return self.result(check, {}, first=f"{name}: check found problems; nothing was run")
         guard = checked_guard(check.doc)
@@ -745,6 +772,7 @@ class Scrimmage:
                 "file_max_cost_usd": guard.get("file_max_cost_usd"),
                 "entry": guard.get("entry"),
                 "real": guard.get("real"),
+                "prices": guard.get("prices"),
                 "session_spent_usd": round(self.spent, 8),
                 "session_cap_usd": ceiling,
                 **({"checked_by": guard["checked_by"]} if "checked_by" in guard else {}),
@@ -864,6 +892,8 @@ class Scrimmage:
         starts cannot leave a child no one stops: the caller's list holds it before anything
         can raise, even the shielded scope's own exit, where anyio delivers a pending cancel."""
         assert self.group is not None
+        if self.shutting_down:
+            raise Refused("the server is shutting down; nothing more is started")
         nonce = secrets.token_hex(16)
         with anyio.CancelScope(shield=True):
             proc = await anyio.open_process(
@@ -879,6 +909,8 @@ class Scrimmage:
             self.children[proc.pid] = child
             started.append(child)
             self.group.start_soon(self.supervise, child)
+            if self.shutting_down:  # a shutdown came while it started: it missed that SIGTERM
+                self.signal(child, signal.SIGTERM)
 
     async def supervise(self, child: Child) -> None:
         """Read both pipes at once, so a child that fills one never blocks on it, then wait for
@@ -970,11 +1002,13 @@ class Scrimmage:
         so after a shutdown signal or an error the server would stay up until the client
         closed its standard input. Each child is untracked only once its stop is done and
         its line is written, so waiting for none to be left loses no stop and no line.
+        os._exit skips main's finally and the atexit function; both stay, as a net for an exit
+        that does not come this way.
         """
 
         def wait_then_exit() -> None:
             deadline = time.monotonic() + STOP_GRACE_S + KILL_REAP_S + EXIT_SLACK_S
-            while self.children and time.monotonic() < deadline:
+            while (self.children or self.calls) and time.monotonic() < deadline:
                 time.sleep(0.05)
             sys.stderr.flush()
             os._exit(code)
@@ -1054,6 +1088,7 @@ async def serve(state: Scrimmage) -> None:
     def failed(said: str) -> None:
         """An error that escapes the loop: every child gets SIGTERM, awaiting nothing, and the
         process ends once their stops are done, whatever the protocol stream's reader does."""
+        state.shutting_down = True  # first: a child that starts now is signalled
         state.terminate_all()
         print(f"scrimmage-mcp: stopped on an error: {said}", file=sys.stderr, flush=True)
         state.exit_once_stopped(1)
@@ -1077,6 +1112,7 @@ async def serve(state: Scrimmage) -> None:
                 """Every child gets SIGTERM here, in the handler, with no turn of the event
                 loop first. Then serving ends, and each call's stop finishes the job."""
                 del frame
+                state.shutting_down = True  # first: a child that starts now is signalled
                 state.terminate_all()
                 loop.call_soon_threadsafe(serving.cancel)
                 state.exit_once_stopped(128 + signum)

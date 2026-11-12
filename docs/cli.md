@@ -40,11 +40,12 @@ Stopping `scrimmage test` (Ctrl-C, or a cancelled CI job) stops every run and ev
 ## scrimmage check
 
 ```bash
-scrimmage check [path/to/scrimmage.toml] [--json] [--runs N]
+scrimmage check [path/to/scrimmage.toml] [--json] [--runs N] [--max-cost-usd USD]
 ```
 
 Checks the file the way `scrimmage test` does before its first run, and runs nothing.
 `--runs N` counts the runs `scrimmage record --runs N` would start, one baseline per test, N times, and checks `N` as `record` does.
+With `--max-cost-usd USD` too, it checks `N` under that cap, as `record --runs N --max-cost-usd USD` would run; `budget_usd` in its summary stays the file's own cap.
 `scrimmage check` reads the file only: it starts no program, no control server and no model call, and makes no `scrimmage-runs/` folder, so it costs nothing.
 It catches every bad key, value and label, a tool name that is not in `tools`, a mock's `type` outside your packages, a `command` it cannot find, a flag that would skip Scrimmage's startup file, and a row no answer can pass.
 A file `scrimmage check` passes is one `scrimmage test` starts.

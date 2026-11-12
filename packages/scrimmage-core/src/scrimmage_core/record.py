@@ -1127,6 +1127,7 @@ class Result:
     mocks_text: str | None = None
     diff: list[str] = field(default_factory=list[str])
     runs: int = 1  # the runs asked for, of each test
+    stopped_by: str | None = None  # the reason a refusal stopped the record, as in a test
 
     @property
     def seen(self) -> int:
@@ -1197,6 +1198,7 @@ def budget_stopped(
         report.spent,
         plan.full.agent.max_cost_usd,
         runs=asked,
+        stopped_by=report.stopped_by or "budget",
     )
 
 
@@ -1241,6 +1243,7 @@ def finish(
         report.spent,
         plan.full.agent.max_cost_usd,
         runs=plan.config.agent.runs,
+        stopped_by=report.stopped_by,
     )
     if not records or all(r.trouble is not None for r in records):
         return result
@@ -1808,6 +1811,7 @@ def json_fields(result: Result) -> dict[str, object]:
         "records": str(result.folder),
         "cost_usd": round(result.spent, 8),
         "budget_usd": result.budget,
+        "stopped_by": result.stopped_by,
         "numbers": {
             "calls_seen": result.seen,
             "calls_written": result.done,

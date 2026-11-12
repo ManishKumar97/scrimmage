@@ -180,8 +180,9 @@ SIGKILL cannot be caught, so it leaves no document.
 
 | Field | Meaning |
 |---|---|
-| `summary` | What the file holds: `tests`, `rows`, the `runs` a test would start, the `tools` listed, `budget_usd`, `real` and `entry`. With `--runs N`, `runs` counts what `scrimmage record --runs N` would start: one baseline per test, N times. `null` when the file does not load. |
+| `summary` | What the file holds: `tests`, `rows`, the `runs` a test would start, the `tools` listed, `budget_usd`, `real`, `entry` and `prices`. With `--runs N`, `runs` counts what `scrimmage record --runs N` would start: one baseline per test, N times. `null` when the file does not load. |
 | `real` | In `summary`: the labels under `[agent] real`, as the file writes them. |
+| `prices` | In `summary`: each model `[agent.prices]` prices, with its `input`, `output` and `cached_input` dollars per million tokens. Any other model is priced from the built-in table. A price of 0 makes that model's calls free against the budget. |
 | `entry` | In `summary`: the entry point a test would start, its `kind`, `function` or `command`, and its `value`, the function or the command line. |
 
 ## scrimmage record --json
@@ -223,6 +224,7 @@ SIGKILL cannot be caught, so it leaves no document.
 | `records` | The folder that holds this record's run, or `null` when no run started. |
 | `cost_usd` | What the model calls cost, in dollars. |
 | `budget_usd` | The cost cap the record ran under: `max_cost_usd`, or the lower `--max-cost-usd`. `null` when the budget is off or no run started. |
+| `stopped_by` | In a record: the reason a refusal stopped it, such as `budget`, as in `scrimmage test`, or `null`. A stop on the budget writes nothing. |
 | `numbers` | `calls_seen`, the real tool, MCP and web calls that no other call made, less the credential requests. `calls_written`, those whose level was written whole. |
 | `calls_seen`, `calls_written` | See `numbers`. Over every run of every test. |
 | `runs` | In `numbers`: the runs of each test that `--runs` asked for. In a test: one object per run, in the order the runs were submitted, with `run`, `outcome`, `calls_seen`, `calls_written` and `cost_usd`. In a written mock: how many runs saw its key. |

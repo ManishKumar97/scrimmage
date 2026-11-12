@@ -171,7 +171,7 @@ def test_a_sibling_folder_with_the_roots_name_as_prefix_is_outside(tmp_path: Pat
             mcp_server.inside(value, root)
     assert mcp_server.inside(str(root / "x"), root) == root / "x"
     assert mcp_server.inside(str(root), root) == root
-    assert mcp_server.inside("sub/../x", root) == root / "x"
+    assert mcp_server.inside("sub/../x", root) == root / "sub" / ".." / "x"  # as given, absolute
 
 
 def test_a_link_that_points_out_is_refused(tmp_path: Path) -> None:
@@ -185,8 +185,8 @@ def test_a_link_that_points_out_is_refused(tmp_path: Path) -> None:
     for value in ("out", "out/x", "hop", "hop/x", str(root / "out")):
         with pytest.raises(mcp_server.Refused, match="outside the project folder"):
             mcp_server.inside(value, root)
-    assert mcp_server.inside("in", root) == root / "runs"  # the child gets the target
-    assert mcp_server.inside("in/x", root) == root / "runs" / "x"
+    assert mcp_server.inside("in", root) == root / "in"  # the link, which show then refuses
+    assert mcp_server.inside("in/x", root) == root / "in" / "x"
 
 
 def every_argv(state: mcp_server.Scrimmage, value: str) -> list[list[str]]:
