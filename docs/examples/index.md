@@ -12,6 +12,7 @@ Several start from the [function agent](function-agent.md) and change one thing.
 | [A web request inside a tool](web-request.md) | The tool runs for real, and the request inside it is mocked or gets a 503 |
 | [Judging an answer](judging.md) | `expect`, `forbid` and `pass_rate`, a rule that is too narrow, and the fix |
 | [A fault on one model](one-model.md) | A busy large model, a fallback to a small one, and `model` in a fault |
+| [An agent inside a web service](service-agent.md) | The function agent behind a FastAPI endpoint under uvicorn, tested with the same mock and fault |
 
 ## How these pages are checked
 

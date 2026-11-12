@@ -96,6 +96,25 @@ A program on another Python is not gated, and it may be something unrelated, suc
 But it cannot import a module that holds a tool under `tools`, or run that file: the import fails or the program stops, and the run ends as "refused call".
 A web request or an MCP call from a program on another Python is not stopped. See [Limits](limits.md).
 
+## An agent inside a web service
+
+In a service, a run is one request in a process that serves many others, so nothing a run does may reach another process.
+Every program a service run starts is refused until `real` lists it, with the exact line to add in the error, the setup request's message and the report, such as:
+
+```text
+kubectl was started inside a test run, and service runs refuse every process start. Add "process:kubectl" to [agent] real if it is safe.
+```
+
+The setup request finds such a start before any run and stops the test with exit 2, naming the entry.
+A fork, a `multiprocessing` process or send, and a process pool's task are refused under a run too, with no entry that lists them.
+
+Listing a program makes every call to it real.
+There is no matching on arguments: `process:kubectl` lets `kubectl delete` through as much as `kubectl get`.
+List a program only if every way the agent can call it is safe against the systems the test can reach.
+
+A request with no run header reaches the app untouched, and so do its calls.
+Work outside any request, while a run is open, follows the outside rules on [An agent inside a web service](services.md#work-outside-any-request).
+
 ## The budget
 
 A test has a budget, $5 unless you change it. When the runner cannot be reached to check it, the call is refused rather than sent.

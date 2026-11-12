@@ -7,9 +7,16 @@ one runs that command and compares, line by line.
 The model is the fake OpenAI server, scripted per page below, so no key is needed.
 """
 
+import contextlib
+import os
 import re
+import secrets
 import shutil
-from collections.abc import Callable
+import socket
+import subprocess
+import sys
+import threading
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,6 +41,7 @@ class Example:
     start: Path | None = None  # a folder the page starts from, or none
     base: str | None = None  # a page whose files this page starts from
     by_model: dict[str, Rule] | None = None  # models answered by what they are sent
+    service: str | None = None  # an app the page starts under uvicorn before its test
 
 
 # The bot asks for the order, then answers, or says it could not if the tool failed.
@@ -47,7 +55,78 @@ EXAMPLES = {
     "examples/web-request.md": Example(ONE_TOOL, [OK], base="examples/function-agent.md"),
     "examples/judging.md": Example(ONE_TOOL, [ROW_FAILED, OK], base="examples/function-agent.md"),
     "examples/one-model.md": Example(ONE_TOOL, [ROW_FAILED, OK], base="examples/function-agent.md"),
+    "examples/service-agent.md": Example(
+        ONE_TOOL, [OK, OK], base="examples/function-agent.md", service="shop.service:app"
+    ),
 }
+PAGE_PORT = "127.0.0.1:8765"  # the service address the page shows, moved to a free port
+
+
+def free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+@contextlib.contextmanager
+def served(root: Path, app: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """The page's service, as its start line runs it, on a free port, until the page ends.
+    The process and every worker it started are gone, by pid, before this returns."""
+    token = root / ".scrimmage-token"
+    token.write_text(secrets.token_hex(32))
+    token.chmod(0o600)
+    control = f"http://127.0.0.1:{free_port()}"
+    port = free_port()
+    toml = root / "scrimmage.toml"
+    toml.write_text(toml.read_text().replace(PAGE_PORT, f"127.0.0.1:{port}"))
+    monkeypatch.setenv("SCRIMMAGE_TOKEN_FILE", str(token))
+    monkeypatch.setenv("SCRIMMAGE_CONTROL_URL", control)
+    bin_dir = Path(sys.executable).parent
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
+    env.update(
+        PATH=f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+        SCRIMMAGE_SERVICE="1",
+        SCRIMMAGE_TOKEN_FILE=str(token),
+        SCRIMMAGE_CONTROL_URL=control,
+        SCRIMMAGE_TOOLS="shop.tools:get_order,shop.tools:refund_order",
+        SCRIMMAGE_ALLOW_IMPORTS="shop.",
+    )
+    command = [str(bin_dir / "scrimmage-run"), str(bin_dir / "uvicorn"), app]
+    proc = subprocess.Popen(
+        [*command, "--port", str(port), "--loop", "asyncio"],
+        cwd=root,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    ready, said = threading.Event(), []
+
+    def read() -> None:
+        assert proc.stderr is not None
+        for line in proc.stderr:
+            said.append(line)
+            if "Application startup complete" in line:
+                ready.set()
+        ready.set()
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    try:
+        assert ready.wait(60) and proc.poll() is None, "".join(said)
+        yield
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(20)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        reader.join(10)
+        if proc.stderr is not None:
+            proc.stderr.close()
+        with pytest.raises(ProcessLookupError):  # the service is gone
+            os.kill(proc.pid, 0)
 
 
 @dataclass(frozen=True)
@@ -112,10 +191,27 @@ def check_page(
     monkeypatch.chdir(root)
     codes: list[int] = []
     command: list[str] = []
+    with contextlib.ExitStack() as stack:
+        run_blocks(name, example, root, codes, command, stack, monkeypatch, capsys)
+    assert codes == example.codes
+
+
+def run_blocks(
+    name: str,
+    example: Example,
+    root: Path,
+    codes: list[int],
+    command: list[str],
+    stack: contextlib.ExitStack,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Each block of the page in order: a file is written, an Output is the command run."""
+    started = False
     for lang, title, body in FENCE.findall((DOCS / name).read_text()):
         if lang == "bash":
             shown = [line for line in body.splitlines() if line.startswith("scrimmage ")]
-            command = shown[-1].split()[1:] if shown else command
+            command[:] = shown[-1].split()[1:] if shown else command
             continue
         if not title:
             continue
@@ -124,11 +220,13 @@ def check_page(
             apply(root, block)
             continue
         with_fake_host(root / "scrimmage.toml")
+        if example.service and command[:1] == ["test"] and not started:
+            stack.enter_context(served(root, example.service, monkeypatch))
+            started = True
         capsys.readouterr()
         codes.append(main(command))
         out = capsys.readouterr().out
         assert normal(out) == normal(block.body), f"{name}, Output {len(codes)}:\n{out}"
-    assert codes == example.codes
 
 
 @pytest.mark.design("docs.examples_run")

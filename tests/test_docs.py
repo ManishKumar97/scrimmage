@@ -538,3 +538,63 @@ def test_the_mcp_server_page_says_what_it_guards_and_what_it_does_not() -> None:
     for name in ("install.md", "cli.md", "safety.md"):
         assert "mcp-server.md" in page(name), name
     assert "## scrimmage-mcp" in page("cli.md")
+
+
+@pytest.mark.design("docs.services")
+def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> None:
+    from scrimmage_core import asgi_gate
+
+    guide = page("services.md")
+    assert "An agent inside a web service: services.md" in (DOCS.parent / "mkdocs.yml").read_text()
+    for word in ("SCRIMMAGE_SERVICE", "SCRIMMAGE_TOKEN_FILE", "SCRIMMAGE_CONTROL_URL"):
+        assert f"| `{word}` |" in guide, word
+    for word in ("SCRIMMAGE_TOOLS", "SCRIMMAGE_ALLOW_IMPORTS", "scrimmage-run uvicorn"):
+        assert word in guide, word
+    for key in ("service", *config.SERVICE_KEYS, "answer", "parallel"):
+        assert f"| `{key}` |" in guide, key
+    for form in ("`{question}`", "`{session}`", "`${TEST_TOKEN}`", "exit 2"):
+        assert form in guide or form.strip("`") in guide, form
+    # Every code the gate can answer 503 with has its row, and nothing else has one.
+    codes = set(re.findall(r'Unavailable\("([a-z-]+)"\)', Path(asgi_gate.__file__).read_text()))
+    codes |= {"no-such-run", "claimed"}
+    rows = set(
+        re.findall(r"^\| `([a-z-]+)` \| ", guide.split("## When the gate answers 503")[1], re.M)
+    )
+    assert rows == codes, rows ^ codes
+    for words in (
+        "## Before the first run",
+        "**The probe.**",
+        "**The setup request.**",
+        "## Workers",
+        "## What is not covered",
+        "rising toward 80 ms",
+        "record_wait_s",
+    ):
+        assert words in guide, words
+    limits = page("limits.md")
+    assert "**Three agent shapes.**" in limits and "Web services come later" not in limits
+    for limit in (
+        "**A service run is stricter than a script about processes.**",
+        "**`process:sh` lets any shell command through.**",
+        "**A process pool's `shutdown()` inside a run is refused.**",
+        "**Subinterpreters are refused in a run.**",
+        "**Ray and Dask are not covered.**",
+        "**`--loop asyncio` on Python 3.11.**",
+        "**One runner per service at a time.**",
+        "**Work outside any request has a cost while a test runs.**",
+        "**The setup request lists only what it saw.**",
+        "**A lazy worker started inside a run.**",
+        "**The Starlette gate alone lets an outer middleware see the run header.**",
+        "**hypercorn, `--http zttp` and `--http2` are not covered.**",
+        "**A value under 8 characters is not removed from the records.**",
+        "**Stopping the service mid-run.**",
+    ):
+        assert limit in limits, limit
+    safety = page("safety.md")
+    assert '"process:kubectl"' in safety and "`kubectl delete`" in safety
+    assert "There is no matching on arguments" in safety
+    security = page("security.md")
+    assert "## A web service's token and run header" in security and "`0600`" in security
+    assert "replayed once to each other worker within 60 seconds" in security
+    assert "[An agent inside a web service](services.md)" in page("configuration.md")
+    assert "service-agent.md" in page("examples/index.md")

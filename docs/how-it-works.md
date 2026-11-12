@@ -107,3 +107,17 @@ The handler runs on your program's main thread, so a thread does the sending, an
 Scrimmage's own threads block SIGTERM and SIGINT, so the kernel never gives the signal to one of them while your main thread waits on a call. See [Limits](limits.md) for threads your code starts.
 
 Then the runner sweeps `/proc` for any process that left the group but still holds the exact `SCRIMMAGE_RUN` of this run in its own environment. It kills those and records each one. A process it misses gets a 409 on its next record line, which refuses all its later calls.
+
+## An agent inside a web service
+
+A service is started once, by you, and serves many runs and many other requests at the same time, so a run cannot be a process.
+A run is one request instead:
+
+1. The service starts under `scrimmage-run` with `SCRIMMAGE_SERVICE=1`. Its startup file reads the token file, and puts an **entry gate** where uvicorn loads the app, and another at Starlette's own entry.
+2. `scrimmage test` probes the service with a signed request, checks the signed report, and sends the first test's baseline once as a setup request.
+3. Each run is one `POST` with a header that names the run and carries an HMAC of its name. The entry gate checks the HMAC, claims the run's plan from the control server, removes Scrimmage's headers, and calls your app.
+4. The run is held in a Python context variable, so the request's own code, the threads and executor tasks it hands work to, and the tasks it starts follow that run's plan, while the request beside it follows its own, or none.
+5. The record closes `record_grace_s` after the reply's last byte. A thread or task still holding the run then makes it an infrastructure error.
+
+A request with no run header gets nothing from Scrimmage but a check of its headers.
+See [An agent inside a web service](services.md).

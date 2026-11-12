@@ -266,6 +266,7 @@ Anywhere else braces are kept as written, so a mock's text such as `{"a": {"b": 
 ## An agent inside a web service
 
 `service` names the address of an agent that runs inside a web service, such as a FastAPI app under uvicorn.
+How to start the service, and what happens before and during each run, is on [An agent inside a web service](services.md).
 Each run is one `POST` to that address, with `body` as JSON and `headers` added.
 `scrimmage check` prints the two lines the service's environment needs, `SCRIMMAGE_TOOLS` and `SCRIMMAGE_ALLOW_IMPORTS`, built from the file.
 `scrimmage record` and `scrimmage init --probe` do not work with a service in this version: record or probe the same agent as a function.
