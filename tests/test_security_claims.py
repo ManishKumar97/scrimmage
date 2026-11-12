@@ -87,6 +87,10 @@ def test_the_only_processes_scrimmage_starts_are_its_runs() -> None:
         ("process_gate.py", "multiprocessing.queues"),
         # It names this to mark Python's own helper's start, which Python makes, not it.
         ("process_gate.py", "multiprocessing.resource_tracker"),
+        # It names these to decide spawnv_passfds's starts, and to read the executable the
+        # tracker's start runs; it starts nothing through them.
+        ("process_gate.py", "multiprocessing.spawn"),
+        ("process_gate.py", "multiprocessing.util"),
     }
     # The same AST scan as the standard-library test, so __import__("subprocess") counts.
     imports = {

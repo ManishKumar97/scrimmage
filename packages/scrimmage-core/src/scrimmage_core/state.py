@@ -1061,10 +1061,19 @@ def in_service() -> bool:
 # the thread's name, so the team's logs are unchanged. A pool's own threads are never here.
 TAGS: "weakref.WeakKeyDictionary[threading.Thread, str]" = weakref.WeakKeyDictionary()
 # A process pool's or queue's own work: a call the process gate let through, while it runs,
-# and the threads it started, such as a pool's handlers and a queue's feeder. Their sends and
-# starts carry work the gate decided at the team's call, so the outside rules skip them.
+# and the threads whose target is named exactly as a pool's or a queue's own, such as a pool's
+# handlers and a queue's feeder. Their sends and starts carry work the gate decided at the
+# team's call, so the outside rules skip them. No thread is one by inheritance or by default.
 _internal = threading.local()
 INTERNAL: "weakref.WeakSet[threading.Thread]" = weakref.WeakSet()
+INTERNAL_TARGETS: set[object] = set()  # thread targets, set by the process gate on import
+INTERNAL_KINDS: list[type] = []  # thread classes, such as a process pool's manager thread
+
+
+def internal_thread(thread: threading.Thread) -> bool:
+    target: object = getattr(thread, "_target", None)
+    target = getattr(target, "__func__", target)  # a classmethod's target is a bound method
+    return target in INTERNAL_TARGETS or isinstance(thread, tuple(INTERNAL_KINDS))
 
 
 def pool_internal() -> bool:
@@ -1075,8 +1084,8 @@ def pool_internal() -> bool:
 
 @contextmanager
 def internal_call(team: bool = False) -> Generator[None]:
-    """A pool's own call; team: one that starts threads for the team's tasks, such as a
-    ThreadPool's workers, which are never the pool's own."""
+    """A pool's own call; team: the team's code that a pool's own thread runs, such as a
+    callback, which is never the pool's own."""
     was = getattr(_internal, "team", False), getattr(_internal, "depth", 0)
     _internal.team, _internal.depth = team, was[1] + 1
     try:

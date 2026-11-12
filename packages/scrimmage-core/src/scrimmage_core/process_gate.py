@@ -156,7 +156,7 @@ def service_start(event: str, args: tuple[Any, ...]) -> None:
     if event in ("_posixsubprocess.fork_exec", "os.posix_spawn") and popen_started(event, args):
         return  # the start its Popen event decided already
     run = current()
-    if run is None or EXEMPT.get() or (isinstance(run, Outside) and pool_internal()):
+    if run is None or (isinstance(run, Outside) and pool_internal()) or tracker(event, args):
         return
     program, line = program_of(event, args)
     if program is None:
@@ -252,7 +252,7 @@ def guarded(what: str, why: str, method: Callable[..., Any], skip: type | None =
         mine = bool(args) and (
             (skip is not None and isinstance(args[0], skip)) or args[0] in IN_PROCESS_QUEUES
         )
-        if not in_service() or mine:
+        if not in_service() or mine or getattr(_teardown, "on", False):
             return method(*args, **kwargs)
         run = current()
         # A run's own code or an orphan of one is refused. Work outside any request meets the
@@ -266,10 +266,9 @@ def guarded(what: str, why: str, method: Callable[..., Any], skip: type | None =
     return gate
 
 
-def internal(method: Callable[..., Any], team: type | None = None) -> Any:
-    """A pool's own method, such as Pool.__init__, which starts its processes and handler
-    threads: their sends and starts are the pool's. team: a class, such as ThreadPool, whose
-    threads this method starts run the team's tasks, so they are never the pool's own."""
+def internal(method: Callable[..., Any]) -> Any:
+    """A server's own method, named exactly, such as uvicorn's always_pong: while it runs, its
+    sends are its own, outside any request."""
     if getattr(method, GATED, False):
         return method
 
@@ -277,11 +276,33 @@ def internal(method: Callable[..., Any], team: type | None = None) -> Any:
     def marked(*args: Any, **kwargs: Any) -> Any:
         if not in_service():
             return method(*args, **kwargs)
-        with internal_call(team=team is not None and bool(args) and isinstance(args[0], team)):
+        with internal_call():
             return method(*args, **kwargs)
 
     setattr(marked, GATED, True)
     return marked
+
+
+_teardown = threading.local()  # set while a pool tears itself down: Pool.__del__, its finalizer
+
+
+def teardown(method: Callable[..., Any]) -> Any:
+    """A pool's teardown when it is dropped, Pool.__del__ and the finalizer's _terminate_pool:
+    it sends its workers their stop and starts nothing, under any slot."""
+    if getattr(method, GATED, False):
+        return method
+
+    @functools.wraps(method)
+    def torn(*args: Any, **kwargs: Any) -> Any:
+        was = getattr(_teardown, "on", False)
+        _teardown.on = True
+        try:
+            return method(*args, **kwargs)
+        finally:
+            _teardown.on = was
+
+    setattr(torn, GATED, True)
+    return torn
 
 
 def patch_names(
@@ -306,6 +327,8 @@ def install_service() -> None:
     )
     hooks.on_import("subprocess", patch_popen)
     hooks.on_import("multiprocessing.resource_tracker", patch_tracker)
+    if sys.version_info < (3, 14):  # from 3.14 its start raises an audit event of its own
+        hooks.on_import("multiprocessing.util", patch_spawnv)
     hooks.on_import("multiprocessing.queues", patch_queues)
     hooks.on_import(
         "multiprocessing.connection",
@@ -323,7 +346,7 @@ def install_service() -> None:
         hooks.on_import(loky, patch_executor)
     hooks.on_import(
         "concurrent.futures.interpreter",
-        lambda m: patch_names(m, "InterpreterPoolExecutor", ("submit",), SUBINTERPRETER),
+        patch_interpreter_pool,
     )
     hooks.on_import(
         "concurrent.interpreters",
@@ -345,17 +368,59 @@ def patch_tracker(module: ModuleType) -> None:
         setattr(module, "ensure_running", shared.ensure_running)  # noqa: B010  # bound at import
 
 
+_tracker = threading.local()  # set while the resource tracker starts its helper
+TRACKER_MAIN = "from multiprocessing.resource_tracker import main"
+
+
 def tracker_start(method: Callable[..., Any]) -> Any:
     @functools.wraps(method)
     def start(*args: Any, **kwargs: Any) -> Any:
-        token = EXEMPT.set(True)
+        was = getattr(_tracker, "on", False)
+        _tracker.on = True
         try:
             return method(*args, **kwargs)
         finally:
-            EXEMPT.reset(token)
+            _tracker.on = was
 
     setattr(start, GATED, True)
     return start
+
+
+def tracker(event: str, args: tuple[Any, ...]) -> bool:
+    """This start is the resource tracker's own: made while it starts, running this Python,
+    which multiprocessing's executable must be too, with the tracker's own code."""
+    if not getattr(_tracker, "on", False) or event in ("os.fork", "os.forkpty", "os.system"):
+        return False
+    spawn = sys.modules.get("multiprocessing.spawn")
+    chosen = getattr(spawn, "get_executable", lambda: None)()
+    here = os.path.realpath(sys.executable)
+    if chosen is None or os.path.realpath(os.fsdecode(chosen)) != here:
+        return False
+    if event == "_posixsubprocess.fork_exec":
+        program = os.fsdecode(args[0][0]) if args and args[0] else ""
+    else:
+        program = os.fsdecode(command(event, args)[0])
+    if os.path.realpath(program) != here:
+        return False
+    return any(arg.startswith(TRACKER_MAIN) for arg in argv_of(event, args))
+
+
+def patch_spawnv(module: ModuleType) -> None:
+    """multiprocessing.util.spawnv_passfds, which below Python 3.14 starts a program with no
+    audit event: each start through it is decided as any other start is."""
+    spawnv = getattr(module, "spawnv_passfds", None)
+    if spawnv is None or getattr(spawnv, GATED, False):
+        return
+
+    @functools.wraps(spawnv)
+    def decided(path: Any, args: Any, passfds: Any) -> Any:
+        if in_service():
+            argv = [os.fsdecode(a) for a in args]
+            service_start("os.posix_spawn", (os.fsdecode(path), argv, {}))
+        return spawnv(path, args, passfds)
+
+    setattr(decided, GATED, True)
+    setattr(module, "spawnv_passfds", decided)  # noqa: B010  # a module the SDK never imports
 
 
 def patch_uvicorn_worker(module: ModuleType) -> None:
@@ -378,23 +443,47 @@ def patch_executor(module: ModuleType) -> None:
     """concurrent.futures' or loky's ProcessPoolExecutor."""
     patch_names(module, "ProcessPoolExecutor", ("submit",), SENT)
     mark_stops(module, "ProcessPoolExecutor", EXECUTOR_STOPS)
+    manager = getattr(module, "_ExecutorManagerThread", None)  # it sends what submit decided
+    if isinstance(manager, type) and manager not in state.INTERNAL_KINDS:
+        state.INTERNAL_KINDS.append(manager)
+
+
+def own_threads(module: ModuleType, owner: str, names: tuple[str, ...]) -> None:
+    """A pool's or a queue's own thread targets, named exactly: a thread started with one of
+    them as its target is the pool's own. No other thread is, whoever starts it."""
+    cls = getattr(module, owner, None)
+    for name in names:
+        found: object = cls.__dict__.get(name) if isinstance(cls, type) else None
+        function: object = getattr(found, "__func__", found)  # a staticmethod's function
+        if callable(function):
+            state.INTERNAL_TARGETS.add(function)
 
 
 SUBINTERPRETER = "a subinterpreter has no Scrimmage in it, so its writes would run for real"
 
 
+def patch_interpreter_pool(module: ModuleType) -> None:
+    """InterpreterPoolExecutor: its submit is decided; its worker's run of a task, which a
+    submit decided, is the pool's own call into its subinterpreter."""
+    patch_names(module, "InterpreterPoolExecutor", ("submit",), SUBINTERPRETER)
+    mark_internal(module, "WorkerContext", ("run",))
+
+
 def patch_queues(module: ModuleType) -> None:
     patch_names(module, "Queue", ("put",), SENT)  # put_nowait calls put
     patch_names(module, "SimpleQueue", ("put",), SENT)
+    own_threads(module, "Queue", ("_feed",))  # its feeder, which sends what put decided
 
 
 def patch_pool(module: ModuleType) -> None:
     threads = getattr(module, "ThreadPool", None)
     names = ("apply_async", "_map_async", "imap", "imap_unordered")
     patch_names(module, "Pool", names, SENT, skip=threads)
-    mark_internal(module, "Pool", POOL_OWN)
     mark_stops(module, "Pool", POOL_STOPS, skip=threads)
-    mark_internal(module, "Pool", ("_repopulate_pool",), team=threads)  # starts the workers
+    mark_teardown(module, "Pool", POOL_TEARDOWN)
+    # Its handlers, which send what apply and map decided; the team's callbacks and items
+    # they run are carried as the team's, in threadctx.
+    own_threads(module, "Pool", ("_handle_workers", "_handle_tasks", "_handle_results"))
     pool: Any = getattr(module, "Pool", None)
     init = pool.__dict__.get("__init__") if isinstance(pool, type) else None
     if callable(init) and not getattr(init, GATED, False) and isinstance(threads, type):
@@ -405,8 +494,8 @@ def patch_pool(module: ModuleType) -> None:
 
 
 def thread_pool_init(method: Callable[..., Any], threads: type, ended: object) -> Any:
-    """Pool.__init__, which for a ThreadPool marks its handler threads as the pool's own, and
-    its change notifier, a pipe within this process, as no send to another one."""
+    """Pool.__init__, which for a ThreadPool marks its change notifier, a pipe within this
+    process, as no send to another one."""
 
     @functools.wraps(method)
     def init(self: Any, *args: Any, **kwargs: Any) -> Any:
@@ -416,8 +505,7 @@ def thread_pool_init(method: Callable[..., Any], threads: type, ended: object) -
             except ScrimmageRefused:
                 self._state = ended  # refused before it was made: its finalizer has nothing
                 raise
-        with internal_call():
-            method(self, *args, **kwargs)
+        method(self, *args, **kwargs)
         notifier = getattr(self, "_change_notifier", None)
         for end in (
             notifier,
@@ -432,8 +520,8 @@ def thread_pool_init(method: Callable[..., Any], threads: type, ended: object) -
     return init
 
 
-# A pool's own stops: what they send is the pool's, decided at the team's call.
-POOL_OWN = ("join", "_terminate_pool")
+# A pool's teardown when it is dropped: it stops its workers and starts nothing.
+POOL_TEARDOWN = ("__del__", "_terminate_pool")
 # A pool's stops that send to its processes: decided at their start, so a run's refused stop
 # leaves the pool as it was, never half closed.
 POOL_STOPS = ("close", "terminate")
@@ -470,17 +558,23 @@ def pool_stop(what: str, method: Callable[..., Any], skip: type | None) -> Any:
     return stop
 
 
-def mark_internal(
-    module: ModuleType, owner: str, names: tuple[str, ...], team: type | None = None
-) -> None:
+def mark_internal(module: ModuleType, owner: str, names: tuple[str, ...]) -> None:
+    cls = getattr(module, owner, None)
+    for name in names:
+        found: object = cls.__dict__.get(name) if isinstance(cls, type) else None
+        if callable(found):
+            setattr(cls, name, internal(found))
+
+
+def mark_teardown(module: ModuleType, owner: str, names: tuple[str, ...]) -> None:
     cls = getattr(module, owner, None)
     for name in names:
         found: object = cls.__dict__.get(name) if isinstance(cls, type) else None
         if isinstance(found, classmethod):  # Pool._terminate_pool, which a finalizer calls
             function = cast(Callable[..., Any], found.__func__)  # pyright: ignore[reportUnknownMemberType]
-            setattr(cls, name, classmethod(internal(function)))
+            setattr(cls, name, classmethod(teardown(function)))
         elif callable(found):
-            setattr(cls, name, internal(found, team))
+            setattr(cls, name, teardown(found))
 
 
 def refuse(run: RunState, python: str, argv: list[str], why: str) -> None:

@@ -162,7 +162,7 @@ def test_a_process_pool_made_before_the_run_is_refused_under_a_run(
     finally:
         executor.shutdown()
         pool.terminate()
-        pool.join()
+        stopped(pool)
 
 
 @pytest.mark.design("service.processes_refused")
@@ -428,7 +428,7 @@ def test_threadpool_and_scrimmage_traffic_never_meet_a_send_point(
         pool = under(run, lambda: multiprocessing.pool.ThreadPool(1))
         assert under(run, lambda: pool.apply(os.getpid)) == os.getpid()
         pool.terminate()
-        pool.join()
+        stopped(pool)
         svc = Service(tmp_path / "records")
         try:
             name = svc.open()
@@ -547,7 +547,7 @@ def test_process_pools_used_outside_any_request_meet_the_outside_rules(
         executor.shutdown()
         for each in [pool, *made]:
             each.terminate()
-            each.join()
+            stopped(each)
 
 
 @pytest.mark.design("service.outside_process_entries")
@@ -673,7 +673,7 @@ def test_a_thread_pools_callbacks_and_imap_items_follow_the_run_that_handed_them
         ]
     finally:
         pool.terminate()
-        pool.join()
+        stopped(pool)
 
 
 @pytest.mark.design("service.pool_callbacks_follow_their_run")
@@ -689,7 +689,7 @@ def test_a_process_pools_callback_outside_any_request_meets_the_outside_rules(
         assert team.refused(), team.seen
     finally:
         pool.terminate()
-        pool.join()
+        stopped(pool)
 
 
 def read_one(fd: int) -> int:
@@ -805,4 +805,262 @@ def test_a_process_pools_stop_under_a_run_is_refused_and_leaves_the_pool_as_it_w
     finally:
         plain(executor.shutdown)
         plain(pool.terminate)
-        plain(pool.join)
+        stopped(pool)
+
+
+def stopped(pool: Any, within: float = 20.0) -> None:
+    """pool.join, bounded: a pool left half closed fails here instead of hanging the test."""
+    done = threading.Thread(target=pool.join, daemon=True)
+    plain(done.start)
+    done.join(within)
+    assert not done.is_alive(), "the pool's join hung: it was left half closed"
+
+
+def sh_write(target: str) -> str:
+    subprocess.run(["sh", "-c", f"echo x > {target}"], check=True)
+    return "started"
+
+
+def attempt(fn: Callable[[], object]) -> str:
+    try:
+        fn()
+        return "ran"
+    except ScrimmageRefused:
+        return "refused"
+
+
+FAILED_ONCE: list[bool] = []
+
+
+def init_fails_once() -> None:
+    if not FAILED_ONCE:
+        FAILED_ONCE.append(True)
+        raise SystemExit  # the worker thread ends, and the pool's handler starts another
+
+
+@pytest.mark.design("service.no_inherited_exemption")
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")  # the death
+def test_a_thread_pools_replacement_worker_is_never_the_pools_own(
+    service: state.ProcessState, tmp_path: Path
+) -> None:
+    """A worker the pool's own handler starts, after one died, runs the team's tasks: it is
+    decided like any other thread, and outside work on it meets the outside rules."""
+    target = tmp_path / "written"
+    FAILED_ONCE.clear()
+    pool = outside(lambda: multiprocessing.pool.ThreadPool(2, initializer=init_fails_once))
+    try:
+        for _ in range(3):  # make sure the replacement worker has taken tasks
+            assert outside(lambda: pool.apply(len, ("ab",))) == 2
+        assert FAILED_ONCE
+        run = a_run(service)
+        tried = [
+            outside(lambda: attempt(lambda: pool.apply(sh_write, (str(target),)))) for _ in range(6)
+        ]
+        assert tried == ["refused"] * 6 and not target.exists(), tried
+        assert {x["reason"] for x in lines(run)} == {"orphan"}
+        assert not any(t in state.INTERNAL for t in pool._pool)  # type: ignore[attr-defined]
+    finally:
+        plain(pool.terminate)
+        stopped(pool)
+
+
+@pytest.mark.design("service.no_inherited_exemption")
+def test_a_pools_own_threads_are_its_handlers_and_nothing_else(
+    service: state.ProcessState,
+) -> None:
+    pool = plain(lambda: multiprocessing.pool.ThreadPool(1))
+    try:
+        handlers = {pool._worker_handler, pool._task_handler, pool._result_handler}  # type: ignore[attr-defined]
+        assert handlers <= set(state.INTERNAL)
+        assert not any(worker in state.INTERNAL for worker in pool._pool)  # type: ignore[attr-defined]
+    finally:
+        plain(pool.terminate)
+        stopped(pool)
+
+
+@pytest.mark.design("service.mcp_stdio_decided")
+def test_an_mcp_stdio_server_started_in_a_run_is_decided_as_its_program(
+    service: state.ProcessState, tmp_path: Path
+) -> None:
+    import asyncio
+
+    import mcp.client.stdio as stdio
+
+    from scrimmage_core import mcp_gate
+
+    if not getattr(stdio, "_patched_for_tests", False):
+        mcp_gate.patch_stdio(stdio)
+        stdio._patched_for_tests = True  # type: ignore[attr-defined]
+    target = tmp_path / "written"
+
+    async def start() -> int:
+        line = ["-c", f"echo x > {target}"]
+        proc = await stdio._create_platform_compatible_process("sh", line, dict(os.environ))  # type: ignore[attr-defined]
+        return await proc.wait()
+
+    run = a_run(service)
+    assert 'Add "process:sh"' in refused(run, lambda: asyncio.run(start()))
+    assert not target.exists()
+    listed = a_run(service, real=("process:sh",))
+    assert under(listed, lambda: asyncio.run(start())) == 0 and target.exists()
+
+
+@pytest.mark.design("service.resource_tracker")
+def test_the_tracker_exemption_holds_only_for_this_python_running_the_trackers_code(
+    service: state.ProcessState, tmp_path: Path
+) -> None:
+    from multiprocessing import resource_tracker, spawn
+
+    target = tmp_path / "written"
+    script = tmp_path / "other.sh"
+    script.write_text(f"#!/bin/sh\necho x > {target}\n")
+    script.chmod(0o755)
+    run = a_run(service)
+    chosen = spawn.get_executable()
+    tracker = resource_tracker.ResourceTracker()
+
+    def start_as_tracker() -> None:
+        multiprocessing.set_executable(str(script))
+        try:
+            tracker.ensure_running()
+        finally:
+            multiprocessing.set_executable(chosen)
+
+    try:
+        assert "other.sh was started inside a test run" in refused(run, start_as_tracker)
+        assert not target.exists()
+    finally:
+        multiprocessing.set_executable(chosen)
+        tracker._stop()  # type: ignore[attr-defined]
+
+
+@pytest.mark.design("service.spawnv_decided")
+def test_a_direct_spawnv_passfds_in_a_run_is_decided(
+    service: state.ProcessState, tmp_path: Path
+) -> None:
+    from multiprocessing import util
+
+    target = tmp_path / "written"
+    run = a_run(service)
+
+    def spawn() -> int:
+        pid = util.spawnv_passfds(b"/bin/sh", [b"sh", b"-c", f"echo x > {target}".encode()], ())
+        return os.waitpid(pid, 0)[1]
+
+    assert 'Add "process:sh"' in refused(run, spawn)
+    assert not target.exists()
+
+
+@pytest.mark.design("service.pool_teardown")
+@pytest.mark.filterwarnings("ignore:unclosed running multiprocessing pool:ResourceWarning")
+def test_a_pool_dropped_under_a_run_tears_itself_down_with_no_line(
+    service: state.ProcessState,
+) -> None:
+    import gc
+
+    pool = plain(lambda: multiprocessing.get_context("fork").Pool(1))
+    workers = list(pool._pool)  # type: ignore[attr-defined]
+    run = a_run(service)
+    held = [pool]
+    del pool
+
+    def drop() -> None:
+        held.clear()
+        gc.collect()
+
+    under(run, drop)
+    for worker in workers:
+        worker.join(10)
+        assert not worker.is_alive()
+    assert lines(run) == []
+
+
+@pytest.mark.design("service.every_start_refused")
+def test_asyncio_os_pty_and_exec_starts_in_a_run_are_refused(
+    service: state.ProcessState, tmp_path: Path
+) -> None:
+    import asyncio
+    import pty
+
+    target = tmp_path / "written"
+    line = f"echo x > {target}"
+    run = a_run(service)
+
+    async def exec_() -> int:
+        return await (await asyncio.create_subprocess_exec("sh", "-c", line)).wait()
+
+    async def shell() -> int:
+        return await (await asyncio.create_subprocess_shell(line)).wait()
+
+    async def loop_exec() -> object:
+        loop = asyncio.get_running_loop()
+        return await loop.subprocess_exec(asyncio.SubprocessProtocol, "sh", "-c", line)
+
+    starts: dict[str, Callable[[], object]] = {
+        "create_subprocess_exec": lambda: asyncio.run(exec_()),
+        "create_subprocess_shell": lambda: asyncio.run(shell()),
+        "loop.subprocess_exec": lambda: asyncio.run(loop_exec()),
+        "posix_spawnp": lambda: os.posix_spawnp("sh", ["sh", "-c", line], dict(os.environ)),
+        "spawnv": lambda: os.spawnv(os.P_WAIT, "/bin/sh", ["sh", "-c", line]),
+        "pty.spawn": lambda: pty.spawn(["sh", "-c", line]),
+    }
+    for name, start in starts.items():
+        assert attempt(lambda s=start: under(run, s)) == "refused", name
+    assert not target.exists()
+
+    def exec_in_a_child() -> int:
+        pid = os.fork()
+        if pid == 0:
+            try:
+                under(run, lambda: os.execv("/bin/sh", ["sh", "-c", line]))
+            except ScrimmageRefused:
+                os._exit(3)
+            os._exit(4)
+        return os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])
+
+    assert plain(exec_in_a_child) == 3 and not target.exists()
+
+
+@pytest.mark.design("service.processes_refused")
+def test_a_manager_started_or_sent_to_in_a_run_is_refused(
+    service: state.ProcessState, tmp_path: Path
+) -> None:
+    from multiprocessing.managers import BaseManager, SyncManager
+
+    class Writer(BaseManager):
+        pass
+
+    Writer.register("write", callable=write)
+    target = tmp_path / "written"
+    manager = Writer(ctx=multiprocessing.get_context("fork"))
+    plain(manager.start)
+    try:
+        run = a_run(service)
+        assert attempt(lambda: under(run, lambda: manager.write(str(target)))) == "refused"  # type: ignore[attr-defined]
+        fresh = SyncManager(ctx=multiprocessing.get_context("fork"))
+        assert attempt(lambda: under(run, fresh.start)) == "refused"
+        assert not target.exists()
+    finally:
+        plain(manager.shutdown)
+
+
+@pytest.mark.design("service.resource_tracker")
+def test_the_tracker_exemption_names_this_python_and_the_trackers_own_code() -> None:
+    """Each part of the check alone: while the tracker starts, only this Python running the
+    tracker's main is its own start."""
+    import multiprocessing.resource_tracker  # noqa: F401  # it imports spawn, as when it starts
+
+    here = sys.executable
+    main = f"{process_gate.TRACKER_MAIN}(5)"
+    starts = {
+        "the tracker's start": ((here, [here, "-c", main], {}), True),
+        "other code on this Python": ((here, [here, "-c", "import os"], {}), False),
+        "another program with the tracker's code": (("/bin/sh", ["sh", "-c", main], {}), False),
+    }
+    process_gate._tracker.on = True  # type: ignore[attr-defined]  # as while it starts
+    try:
+        for name, (args, own) in starts.items():
+            assert process_gate.tracker("os.posix_spawn", args) is own, name
+    finally:
+        process_gate._tracker.on = False  # type: ignore[attr-defined]
+    assert process_gate.tracker("os.posix_spawn", starts["the tracker's start"][0]) is False
