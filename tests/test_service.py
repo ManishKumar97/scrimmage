@@ -880,3 +880,17 @@ def test_control_load_reaches_the_summary_the_report_and_json(bench: Bench) -> N
     assert row["control_busy"] == 0 and row["control_p99_ms"] == run["control_p99_ms"]
     summary = bench.summaries()[run["run"]]
     assert summary["control_busy"] == 0 and summary["control_p99_ms"] == run["control_p99_ms"]
+    # A row whose runs had a busy count gets a line under the table. The load is set on the
+    # result, as a busy process would report it, so the line's text is what is checked.
+    from scrimmage_core import runner
+
+    served = runner.Runner.served_result
+
+    def busy(self: Any, *args: Any) -> Any:
+        result = served(self, *args)
+        result.control_busy, result.control_p99_ms = 3, 42.5
+        return result
+
+    bench.monkeypatch.setattr(runner.Runner, "served_result", busy)
+    code, out = bench.test(service.port)
+    assert code == 0 and "order-status baseline: control: 3 busy, p99 42.5 ms" in out, out
