@@ -204,6 +204,10 @@ def check_page(
     fake = fake_openai(example.replies, by_model=example.by_model)
     monkeypatch.setenv("OPENAI_BASE_URL", fake.base_url)
     monkeypatch.setenv("OPENAI_API_KEY", "test")
+    # A page runs `python`: the venv's, whatever else PATH holds.
+    monkeypatch.setenv(
+        "PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ.get('PATH', '')}"
+    )
     monkeypatch.chdir(root)
     codes: list[int] = []
     command: list[str] = []
