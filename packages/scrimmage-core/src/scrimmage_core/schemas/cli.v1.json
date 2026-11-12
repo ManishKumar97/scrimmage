@@ -663,6 +663,60 @@
                       "$ref": "#/$defs/dollars"
                     }
                   ]
+                },
+                "real": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The labels under [agent] real, as the file writes them."
+                },
+                "entry": {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "value"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "description": "function or command."
+                    },
+                    "value": {
+                      "type": "string",
+                      "description": "The function, or the command line, the file names."
+                    }
+                  },
+                  "description": "The entry point a test would start."
+                },
+                "prices": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "required": [
+                      "input",
+                      "output",
+                      "cached_input"
+                    ],
+                    "properties": {
+                      "input": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "output": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "cached_input": {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "minimum": 0
+                      }
+                    }
+                  },
+                  "description": "Each model [agent.prices] prices, in dollars per million tokens. Any other model is priced from Scrimmage's built-in table."
                 }
               }
             }
@@ -771,6 +825,41 @@
         },
         "cost_usd": {
           "$ref": "#/$defs/dollars"
+        },
+        "budget_usd": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/dollars"
+            }
+          ],
+          "description": "The cost cap used, or null when the budget is off or no run started."
+        },
+        "stopped_by": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "enum": [
+                "budget",
+                "budget_held",
+                "no_price",
+                "unknown_tool_type",
+                "unseen_tool",
+                "structure",
+                "ambiguous_label",
+                "unknown_label"
+              ]
+            },
+            {
+              "type": "string",
+              "$comment": "open: a value this release does not know; read as other"
+            }
+          ],
+          "description": "The reason a refusal stopped the record, as in scrimmage test, or null."
         },
         "numbers": {
           "type": "object",

@@ -202,6 +202,9 @@ def test_each_command_prints_one_document_for_each_exit_code(
         "runs": 2,  # the exit 3 fixture left runs = 1
         "tools": 4,
         "budget_usd": 5.0,
+        "real": ["tool:check_inventory"],
+        "entry": {"kind": "function", "value": "acme.agent:answer"},
+        "prices": {},
     }
     assert checks[2].doc["summary"] is None
 
@@ -441,7 +444,7 @@ def test_each_enum_lists_every_value_the_code_gives() -> None:
     assert found["judged"] == list(judge.RUN_VERDICTS)
     assert found["outcome"] == list(outcomes.OUTCOMES)
     assert found["kind"] == list(judge.KINDS)
-    assert found["stopped_by"] == list(runner.STOPPED_BY)
+    assert found["stopped_by"] == list(runner.STOPPED_BY) * 2  # a test's, then a record's
     assert found["change"] == list(compare.CHANGES)
     assert found["action"] == ["real", "refused", *show.ACTIONS]  # a miss's, then a line's
     # A record's code, then a suggestion's.
@@ -1565,6 +1568,218 @@ def test_the_files_and_the_comparison_fit_the_schema(
     shown = json.loads(capsys.readouterr().out)
     validate(shown)
     assert shown["compare"]["rows_compared"] == len(second["rows"])
+
+
+def check_doc(project: Project, *flags: str) -> dict[str, object]:
+    """`scrimmage check --json` in this process, its document checked against the schema."""
+    project.capsys.readouterr()
+    code = cli.main(["check", "--json", str(project.toml), *flags])
+    captured = project.capsys.readouterr()
+    assert captured.err == "", captured.err
+    doc = cast(dict[str, object], json.loads(captured.out))
+    validate(doc)
+    assert doc["exit"] == code
+    return doc
+
+
+def summary_of(doc: dict[str, object]) -> dict[str, object]:
+    return cast(dict[str, object], doc["summary"])
+
+
+@pytest.mark.design("json.check_entry_and_real")
+def test_check_summary_lists_the_labels_under_real_and_the_entry_point(project: Project) -> None:
+    project.edit('real     = ["tool:check_inventory"]', 'real = ["tool:check_inventory", "tool:*"]')
+    summary = summary_of(check_doc(project))
+    assert summary["real"] == ["tool:check_inventory", "tool:*"]  # as the file writes them
+    assert summary["entry"] == {"kind": "function", "value": "acme.agent:answer"}
+    project.edit(
+        'function = "acme.agent:answer"',
+        f"command = '{sys.executable} \"my bot.py\" {{question}}'",
+    )
+    (project.root / "my bot.py").write_text("")
+    summary = summary_of(check_doc(project))
+    value = f"{sys.executable} 'my bot.py' '{{question}}'"  # each argument quoted as a shell would
+    assert summary["entry"] == {"kind": "command", "value": value}
+    project.edit('real = ["tool:check_inventory", "tool:*"]', "real = []")
+    assert summary_of(check_doc(project))["real"] == []
+    assert summary_of(check_doc(project))["prices"] == {}  # every model at the built-in table
+    project.edit(
+        "[[test]]\n", "[agent.prices]\ngpt-4o-mini = {input = 0, output = 0.6}\n\n[[test]]\n"
+    )
+    assert summary_of(check_doc(project))["prices"] == {
+        "gpt-4o-mini": {"input": 0, "output": 0.6, "cached_input": None}
+    }
+
+
+@pytest.mark.design("json.check_runs")
+def test_check_runs_counts_what_record_runs_would_start(project: Project) -> None:
+    project.edit("[agent]\n", "[agent]\nruns = 3\n")
+    project.edit(
+        "[[test]]\n", '[[test]]\nname = "second"\nquestion = "q"\nexpect = ["x"]\n\n[[test]]\n'
+    )
+    as_test = summary_of(check_doc(project))
+    assert (as_test["tests"], as_test["rows"], as_test["runs"]) == (2, 3, 9)  # rows times runs
+    summary = summary_of(check_doc(project, "--runs", "4"))
+    assert (summary["tests"], summary["rows"], summary["runs"]) == (2, 3, 8)  # tests times N
+    for bad in ("0", "1_0", " 5", "1001"):
+        doc = check_doc(project, "--runs", bad)
+        assert doc["exit"] == 2 and doc["summary"] is None, bad
+        assert messages(doc, "mistakes")[0].startswith("--runs"), bad
+    project.edit("[agent]\n", '[agent]\nmax_cost_usd = "none"\n')
+    doc = check_doc(project, "--runs", "2")  # what record --runs 2 refuses, check refuses
+    assert doc["exit"] == 2 and "max_cost_usd" in messages(doc, "mistakes")[0]
+    # Under a cap, as record --runs 2 --max-cost-usd 0.5 runs: passed, the file's cap kept.
+    capped_doc = check_doc(project, "--runs", "2", "--max-cost-usd", "0.5")
+    assert capped_doc["exit"] == 0 and summary_of(capped_doc)["budget_usd"] is None
+    for flags in (("--runs", "2", "--max-cost-usd", "nan"), ("--max-cost-usd", "nan")):
+        bad = check_doc(project, *flags)  # with --runs or without it
+        assert bad["exit"] == 2 and messages(bad, "mistakes")[0].startswith("--max-cost-usd")
+    assert check_doc(project, "--max-cost-usd", "0.5")["exit"] == 0
+    assert summary_of(check_doc(project, "--runs", "1"))["runs"] == 2
+    project.capsys.readouterr()
+    assert cli.main(["check", str(project.toml), "--runs", "1"]) == 0
+    assert "2 runs" in project.capsys.readouterr().out
+
+
+# A model price at which one call's reservation, its 4096 output tokens, is about $0.04:
+# above a $0.004 cap, far below $5.
+PRICED = "[agent.prices]\ngpt-4o-mini = {input = 10, output = 10}\n\n[[test]]\n"
+
+
+def priced_test(
+    project: Project, fake_openai: Fake, cap: str, *flags: str
+) -> tuple[dict[str, object], FakeOpenAI]:
+    """`scrimmage test --json` in this process with a priced fake model."""
+    fake = fake_openai([])
+    project.monkeypatch.setenv("OPENAI_BASE_URL", fake.base_url)
+    project.monkeypatch.setenv("OPENAI_API_KEY", "test")
+    project.edit("[agent]\n", f"[agent]\nmax_cost_usd = {cap}\nruns = 1\n")
+    project.edit("[[test]]\n", PRICED)
+    project.capsys.readouterr()
+    code = cli.main(["test", "--json", str(project.toml), *flags])
+    captured = project.capsys.readouterr()
+    assert captured.err == "", captured.err
+    doc = cast(dict[str, object], json.loads(captured.out))
+    validate(doc)
+    assert doc["exit"] == code
+    return doc, fake
+
+
+def chat_requests(fake: FakeOpenAI) -> list[str]:
+    return [path for path in fake.paths if path.endswith("/chat/completions")]
+
+
+@pytest.mark.design("json.max_cost_usd_flag")
+@pytest.mark.parametrize(("file_cap", "flag"), [("5", "0.004"), ("0.004", "5")])
+@pytest.mark.slow
+def test_max_cost_usd_flag_lowers_the_cap_and_never_raises_it(
+    project: Project, fake_openai: Fake, file_cap: str, flag: str
+) -> None:
+    doc, fake = priced_test(project, fake_openai, file_cap, "--max-cost-usd", flag)
+    assert doc["exit"] == 2 and doc["stopped_by"] == "budget", doc
+    assert doc["budget_usd"] == 0.004
+    assert chat_requests(fake) == []  # no call could be held under $0.004
+
+
+@pytest.mark.design("json.max_cost_usd_flag")
+@pytest.mark.parametrize("bad", ["0", "-1", "nan", "inf", "1e400", " 5", "\uff15", "0x10", ""])
+def test_a_max_cost_usd_flag_that_is_not_a_positive_number_is_a_mistake(
+    project: Project, monkeypatch: pytest.MonkeyPatch, bad: str
+) -> None:
+    def no_runner(*args: object, **kwargs: object) -> None:
+        pytest.fail("a runner was made")
+
+    monkeypatch.setattr(Runner, "__init__", no_runner)
+    for command in ("test", "record"):
+        project.capsys.readouterr()
+        assert cli.main([command, "--json", str(project.toml), f"--max-cost-usd={bad}"]) == 2
+        doc = json.loads(project.capsys.readouterr().out)
+        validate(doc)
+        assert messages(doc, "mistakes") == [
+            f"--max-cost-usd: expected a number of dollars above 0, got {bad!r}"
+        ], command
+
+
+@pytest.mark.design("json.max_cost_usd_flag")
+@pytest.mark.slow
+def test_max_cost_usd_flag_caps_a_file_with_no_budget(project: Project, fake_openai: Fake) -> None:
+    doc, _ = priced_test(project, fake_openai, '"none"', "--max-cost-usd", "0.004")
+    assert doc["exit"] == 2 and doc["stopped_by"] == "budget", doc
+    assert doc["budget_usd"] == 0.004
+
+
+@pytest.mark.design("json.max_cost_usd_flag")
+@pytest.mark.slow
+def test_max_cost_usd_flag_makes_a_no_budget_file_reserve_before_each_call(
+    project: Project, fake_openai: Fake
+) -> None:
+    """The flag sets the config's cap, not only the ledger's limit: with only the limit, a
+    file with no budget would reserve nothing, and its first call would go out."""
+    doc, fake = priced_test(project, fake_openai, '"none"', "--max-cost-usd", "0.004")
+    assert chat_requests(fake) == [] and doc["cost_usd"] == 0.0
+    records = list((project.root / "scrimmage-runs").glob("*/*.jsonl"))
+    summaries = [json.loads(f.read_text().splitlines()[-1])["summary"] for f in records]
+    assert summaries and {s["outcome"] for s in summaries} == {"not reserved"}
+
+
+@pytest.mark.design("json.max_cost_usd_flag")
+@pytest.mark.slow
+def test_max_cost_usd_flag_is_the_cap_the_report_and_record_name(
+    project: Project, fake_openai: Fake
+) -> None:
+    project.edit("[agent]\n", "[agent]\nruns = 1\n")
+    fake = fake_openai(ACME)
+    project.monkeypatch.setenv("OPENAI_BASE_URL", fake.base_url)
+    project.monkeypatch.setenv("OPENAI_API_KEY", "test")
+    project.capsys.readouterr()
+    assert cli.main(["test", str(project.toml), "--max-cost-usd", "0.5"]) == 0
+    text = project.capsys.readouterr().out
+    assert "of a budget of $0.5" in text and "$5" not in text
+    assert cli.main(["record", "--json", str(project.toml), "--max-cost-usd=0.5"]) in (0, 1)
+    doc = json.loads(project.capsys.readouterr().out)
+    validate(doc)
+    assert doc["budget_usd"] == 0.5
+    assert cli.main(["record", "--json", str(project.toml)]) in (0, 1)  # the file's cap
+    assert json.loads(project.capsys.readouterr().out)["budget_usd"] == 5.0
+
+
+@pytest.mark.design("json.record_runs_note")
+@pytest.mark.slow
+def test_record_runs_line_is_a_note_under_json_and_stderr_is_empty(
+    project: Project, fake_openai: Fake
+) -> None:
+    fake = fake_openai(ACME)
+    done = scrimmage("record", "--json", str(project.toml), "--runs", "2", env=model_env(fake))
+    doc = one_document(done, "record")  # and standard error is empty
+    line = "2 runs of each of 1 test; each calls these for real: tool:check_inventory"
+    assert messages(doc, "notes")[0] == line, doc
+
+
+@pytest.mark.design("cli.python_dash_m")
+@pytest.mark.slow
+def test_python_dash_m_is_the_scrimmage_command(
+    project: Project, leftovers: list[subprocess.Popen[str]]
+) -> None:
+    toml = str(project.toml)
+    module = ("-P", "-m", "scrimmage_core")
+    by_module = scrimmage(*module, "check", "--json", toml, command=sys.executable)
+    by_name = scrimmage("check", "--json", toml)
+    assert by_module.code == by_name.code == 0
+    assert one_document(by_module, "check") == one_document(by_name, "check")
+    hang(project)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
+    proc = subprocess.Popen(
+        [sys.executable, *module, "test", "--json", toml],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=project.root,
+    )  # fmt: skip
+    leftovers.append(proc)
+    wait_for(project.root / "hanging")  # a run is going, under the entry point's handlers
+    proc.send_signal(signal.SIGTERM)
+    out, err = proc.communicate(timeout=60)
+    done = Done(proc.returncode, out, err)
+    assert done.code == 3, out + err
+    doc = one_document(done, "test")
+    assert messages(doc, "infra") == ["stopped by SIGTERM; every run was stopped"]
 
 
 TWO_TURNS = """import pathlib

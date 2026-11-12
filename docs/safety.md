@@ -101,6 +101,9 @@ A web request or an MCP call from a program on another Python is not stopped. Se
 A test has a budget, $5 unless you change it. When the runner cannot be reached to check it, the call is refused rather than sent.
 See [Failing the model, and keeping a budget](model-faults.md).
 
+The Scrimmage MCP server adds guards for a coding agent that runs tests: every `test` and `record` call names a `max_cost_usd` the person approves, the server checks the file before any spend, refuses a file with no budget, keeps a ceiling for the session, and runs one spend at a time.
+They stop accidents, not a coding agent with a shell; see [Driving Scrimmage from a coding agent](mcp-server.md#the-guards).
+
 ## A misspelled tool never runs ungated
 
 The rule covers every tool a gate reaches: the ones listed under `tools`, and LangChain tools, which need no list.

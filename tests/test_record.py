@@ -182,8 +182,8 @@ class Team:
         code = main(["record", str(self.toml), "--json", *flags])
         captured = self.project.capsys.readouterr()
         doc = json.loads(captured.out)  # standard output is one document
-        # a record of several runs says what is real on standard error, before the first run
-        assert captured.err == "" or captured.err.startswith("scrimmage record: "), captured.err
+        # standard error stays empty: a record of several runs says what is real in a note
+        assert captured.err == "", captured.err
         assert doc["command"] == "record" and doc["exit"] == code
         validate(doc)  # the shipped schema and the tests' closed copy of it
         if doc["out"] is not None:
@@ -2195,13 +2195,14 @@ def test_tools_under_real_are_named_before_the_runs_start(
         ["bot:get_stock"],
         ("tool:get_stock",),
     )
-    named = "scrimmage record: 2 runs of each of 1 test; each calls these for real: tool:get_stock"
+    named = "2 runs of each of 1 test; each calls these for real: tool:get_stock"
     done = team.record("--runs", "2")  # standard output is one document
-    assert done.err.splitlines() == [named]
+    assert done.err == "" and done.doc["notes"][0] == {"message": named}
     code, out = team.record_text("--runs", "2")
     assert code == 0, out
     first, second = out.splitlines()[:2]
-    assert first == named and second.startswith("scrimmage record: 1 test, 2 runs each, 2 runs;")
+    assert first == f"scrimmage record: {named}"
+    assert second.startswith("scrimmage record: 1 test, 2 runs each, 2 runs;")
 
 
 @pytest.mark.design("record.runs_flag")

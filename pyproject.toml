@@ -34,6 +34,8 @@ dev = [
     "mcp>=2.3.0",
     "fastmcp>=4.1.6",
     "pytest-xdist>=3.8.0",
+    # tests/test_mcp_server.py proves the Scrimmage MCP server makes no span.
+    "opentelemetry-sdk>=1.45",
     # tests/test_docs_site.py builds the site, so a plain pytest needs mkdocs.
     {include-group = "docs"},
 ]
@@ -99,6 +101,39 @@ name = "The marker works without the SDK installed"
 type = "forbidden"
 source_modules = ["scrimmage"]
 forbidden_modules = ["scrimmage_core"]
+
+[[tool.importlinter.contracts]]
+name = "The MCP server runs Scrimmage only as a child"
+type = "forbidden"
+source_modules = ["scrimmage_core.mcp_server"]
+forbidden_modules = [
+    "scrimmage_core.cli",
+    "scrimmage_core.entry",
+    "scrimmage_core.runner",
+    "scrimmage_core.state",
+    "scrimmage_core.init",
+    "scrimmage_core.record",
+    "scrimmage_core.show",
+    "scrimmage_core.budget",
+    "scrimmage_core.bootstrap",
+    "scrimmage_core.mcp_gate",
+    "scrimmage_core.http_gate",
+    "scrimmage_core.control",
+    "scrimmage_core.client",
+]
+
+[[tool.importlinter.contracts]]
+name = "Only the Scrimmage MCP server loads the MCP library"
+type = "forbidden"
+# Every module of the package; the server is its own command, and the only one that may.
+source_modules = ["scrimmage_core"]
+# Importing the server itself is caught by tests/test_stdlib_only.py: the source package
+# holds it, so a contract here cannot.
+forbidden_modules = ["mcp", "mcp_types"]
+ignore_imports = [
+    "scrimmage_core.mcp_server -> mcp",
+    "scrimmage_core.mcp_server -> mcp_types",
+]
 
 [[tool.importlinter.contracts]]
 name = "Reading a finished test starts nothing and opens no socket"

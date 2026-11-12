@@ -16,6 +16,7 @@ It patches functions inside your agent's process while a test runs, so it belong
 
 `scrimmage-core` depends on `scrimmage` and on nothing else outside Python's standard library.
 So installing it never changes the versions of the libraries your agent uses.
+Its one extra, `scrimmage-core[mcp]`, adds the Scrimmage MCP server, `scrimmage-mcp`, and the `mcp` library it needs; see [Driving Scrimmage from a coding agent](mcp-server.md).
 
 The marker package is installed now, though it holds no markers yet, because it reserves the import name `scrimmage`.
 Later versions put markers there, and code that imports it keeps working, with or without `scrimmage` installed.

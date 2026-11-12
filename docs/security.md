@@ -11,6 +11,7 @@ The line "Checked by" under it names the test in the repository that fails if th
 Scrimmage has no telemetry and no hosted service.
 It sends nothing to its authors or to any third party.
 The only connections Scrimmage itself makes are to its own control server, and the only processes it starts are the runs of your agent.
+The Scrimmage MCP server, a command of its own, also starts the `scrimmage` command each of its tool calls runs; see [Driving Scrimmage from a coding agent](mcp-server.md).
 
 *Checked by: `tests/test_security_audit.py::test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_sends_the_token`, `tests/test_security_claims.py::test_the_only_connections_are_to_and_from_the_control_server`*
 
