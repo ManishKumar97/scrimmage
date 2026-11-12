@@ -86,6 +86,9 @@ def test_the_only_processes_scrimmage_starts_are_its_runs() -> None:
         ("process_gate.py", "multiprocessing.pool"),
         ("process_gate.py", "multiprocessing.process"),
         ("process_gate.py", "multiprocessing.queues"),
+        # It names these to know multiprocessing's own helpers, where Scrimmage stays off.
+        ("bootstrap.py", "multiprocessing.resource_tracker"),
+        ("bootstrap.py", "multiprocessing.forkserver"),
         # A service's one start of its own: Python's resource tracker, before any request.
         ("process_gate.py", "resource_tracker.ensure_running("),
         # It names this to decide spawnv_passfds's starts; it starts nothing through it.
