@@ -31,12 +31,14 @@ class Secret(NamedTuple):
 # escape is a break whatever it holds: Go writes & as \u0026, and an escaped letter before a
 # name only removes more. An escape inside a name, as in p\u0061ssword=, is not read as one
 # in plain text: no JSON writer escapes an ASCII letter, and a string read out of JSON has it
-# undone already.
+# undone already. A URL-encoded comma, &, ;, space or | (%2C, %26, %3B, %20, %7C) is a break
+# too. An encoded letter, as in %70assword=, is not: RFC 3986 says no encoder writes one.
 # The value is a quoted string up to its closing quote, a <...>, or a run of characters that
 # is not a space, &, quote, bracket or backslash. A raw quote opens a value only when the name
 # is not itself inside that quote, so the quote that closes a string is not taken for one.
 # A marker left by an earlier removal is kept alone, and removed with what follows it.
-# None, True, False, and a bare name in a call, such as f(token=tok), are code and are kept.
+# None, True, False, and a bare name in a call, such as f(token=tok) or f(a=1,token=tok),
+# are code and are kept.
 NAMES = (
     r"(?:passw(?:or)?d|token|secret(?:_access_key)?|api(?:_|%5f)key"
     r"|pgpass(?:word)?|mysql_pwd|authtoken|accesstoken)"
@@ -47,8 +49,13 @@ FIELD = NAMES + r"(?:=|%3d)"
 HARMLESS = "is|has|top|max|min|num|n"
 HARMLESS_TOKEN = "next|page|continuation|pagination|sync|cursor|eos|bos|pad|unk|sep|cls"
 MARKER = r"\[(?:secret )?removed\]"
+# The hex digits of a URL-encoded comma, &, ;, space or |, after its %.
+ENCODED_BREAK = "(?:2[06cC]|3[bB]|7[cC])"
+# A name starts after the hex digits of an encoded break, not on them, unless a _ follows
+# them, as in %2C_password=, where the digits are read as a NAME_ prefix.
 NAME = (
-    r"(?:(?<![A-Za-z0-9_\\])|(?<=\\[nrt])|(?<=\\u[0-9a-fA-F]{4}))"
+    rf"(?:(?<![A-Za-z0-9_\\])(?!(?<=%){ENCODED_BREAK}(?!_))|(?<=\\[nrt])|(?<=\\u[0-9a-fA-F]{{4}})"
+    rf"|(?<=%{ENCODED_BREAK}))"
     rf"(?ai:(?:[A-Za-z0-9]+_)*{FIELD})"
 )
 # A quoted value may not hold another field name, so an unclosed quote that runs on to the
@@ -200,10 +207,37 @@ def no_jwt(found: re.Match[str]) -> str:
     return found.group(1).removesuffix("eyJ") + REMOVED
 
 
-def code_value(found: re.Match[str], end: int) -> bool:
+PARENTHESIS = re.compile(r"[()]")
+
+
+class Parentheses:
+    """The last ( and the last ) before a place in the text. The key pass asks at places in
+    order, so each part of the text is read once: a run of names in a call, as in
+    a,token=t,a,token=t, stays linear, where a search back from each name would not."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.read_to = 0
+        self.opening = self.closing = -1
+
+    def before(self, at: int) -> tuple[int, int]:
+        if at < self.read_to:  # never asked out of order by the key pass; kept correct anyway
+            return self.text.rfind("(", 0, at), self.text.rfind(")", 0, at)
+        for found in PARENTHESIS.finditer(self.text, self.read_to, at):
+            if found.group() == "(":
+                self.opening = found.start()
+            else:
+                self.closing = found.start()
+        self.read_to = at
+        return self.opening, self.closing
+
+
+def code_value(found: re.Match[str], end: int, parentheses: Parentheses) -> bool:
     """A value that is code: None, True or False alone, or a bare name as an argument of a
-    call whose name is right before its parenthesis, as in f(token=tok). end: where the value
-    ends, with the first character it goes on with, when that is more than the match holds."""
+    call whose name is right before its parenthesis, the argument right after the parenthesis
+    or a comma, with or without a space: f(token=tok), f(a=1, token=tok), f(a=1,token=tok).
+    end: where the value ends, with the first character it goes on with, when that is more
+    than the match holds. parentheses: where the last ( and ) before the match are."""
     if found.start("value") < 0:
         return False
     text = found.string
@@ -216,10 +250,10 @@ def code_value(found: re.Match[str], end: int) -> bool:
     if name in CODE_VALUES:
         return True
     start = found.start()
-    if not (text[start - 1 : start] == "(" or text[start - 2 : start] == ", "):
+    if not (text[start - 1 : start] in ("(", ",") or text[start - 2 : start] == ", "):
         return False
-    opening = text.rfind("(", 0, start)
-    named_call = opening > text.rfind(")", 0, start) and (
+    opening, closing = parentheses.before(start)
+    named_call = opening > closing and (
         text[opening - 1 : opening].isalnum() or text[opening - 1 : opening] == "_"
     )
     return named_call and "." not in name
@@ -255,6 +289,7 @@ def key_removals(text: str, decoded: bool = False) -> list[tuple[int, int, str]]
     """
     places: list[tuple[int, int, str]] = []
     reads = Reads(text)
+    parentheses = Parentheses(text)
     at = 0
     while (found := PATTERNS.search(text, at)) is not None:
         # The pattern stops a value before a field name or a key shape; its run goes on.
@@ -290,7 +325,7 @@ def key_removals(text: str, decoded: bool = False) -> list[tuple[int, int, str]]
             # token that starts inside the value and goes on past its end.
             shape = SHAPE_OR_NAME_RE.search(text, found.start() + 1)
             bound = len(text) if shape is None else shape.start()
-            if HARMLESS_NAME.match(field) is not None or code_value(found, code_end):
+            if HARMLESS_NAME.match(field) is not None or code_value(found, code_end, parentheses):
                 at = min(found.end(), bound)
                 continue
             at = min(resume, bound)

@@ -6,7 +6,7 @@ import random
 import re
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import cast
 
@@ -481,6 +481,9 @@ def test_numbers_spacing_and_unicode_are_written_back_as_they_were() -> None:
         "password=False/xyz",
         "x = f(a) + (password=changeme)",
         "user=admin, password=changeme, host=db",
+        "user=admin,password=changeme,host=db",
+        "x = (a,password=changeme)",
+        "f(token=tok,password=hunter2!)",
     ],
     ids=lambda text: text[:30],
 )
@@ -605,6 +608,9 @@ def test_the_new_secrets_leave_what_the_other_passes_remove_as_it_was() -> None:
         "password=[secret removed]",
         "token=[removed]",
         "pa\u017f\u017fword=hunter2",  # long s is not an s
+        "f(token=tok,secret=sec)",
+        "f(token=tok,password=hunter2)",
+        "%70assword=hunter2",  # an encoded letter is not a letter of a name
     ],
 )
 def test_prose_empty_values_and_paths_are_kept(text: str) -> None:
@@ -1124,7 +1130,8 @@ def test_a_kept_value_shields_no_secret_one_glue_character_on(text: str, secret:
 NO_ESCAPE_AFTER_KEPT = [
     ("next_page_token=ab,password=X", "next_page_token=ab,[secret removed]", "form-field"),
     ("is_secret=True,token=hunter2", "is_secret=True,[secret removed]", "form-field"),
-    ("f(token=tok,password=hunter2)", "f(token=tok,[secret removed]", "form-field"),
+    ("f(token=tok,password=hunter2!)", "f(token=tok,[secret removed]", "form-field"),
+    ("next_page_token=ab%2Cpassword=X", "next_page_token=ab%2C[secret removed]", "form-field"),
     ("eos_token=x|sk-" + "Q" * 24, "eos_token=x|[secret removed]", "openai-key"),
     ("cursor_token=Q2F/AKIA" + "Q" * 16, "cursor_token=Q2F/[secret removed]", "aws-access-key"),
     ("next_page_token=a.Bearer " + "Q" * 20, "next_page_token=a.[secret removed]", "bearer-token"),
@@ -1148,7 +1155,13 @@ def test_a_kept_value_ends_where_a_field_or_a_key_shape_begins_in_it(
 
 
 def test_a_kept_value_alone_is_kept_word_for_word() -> None:
-    for text in ("next_page_token=ab", "next_page_token=Q2F/zX+9w==,status=ok", "f(token=tok)"):
+    for text in (
+        "next_page_token=ab",
+        "next_page_token=Q2F/zX+9w==,status=ok",
+        "f(token=tok)",
+        "is_secret=1%2Cis_secret=1",  # a name starts after the encoded comma, not on its 2C
+        "is_secret=1,%20next_page_token=a",
+    ):
         assert redact(text) == text
         assert redact_module.spans(text) == []
 
@@ -1203,13 +1216,19 @@ SECRET_SHAPES = [
 ]
 
 
+# A \uXXXX escape or a URL-encoded separator ends in a letter or digit, but is a break.
+BREAK_AT_END = re.compile(r"(?:\\u[0-9a-fA-F]{4}|%(?:2[06cC]|3[bB]|7[cC]))$")
+
+
 def by_design_not_a_secret(prefix: str, escape: str, glue: str, shape: str) -> bool:
-    """A field name glued to a letter or digit is not a name, and one right after a named
-    call's parenthesis, or after ", " inside one, is code, as in b(password=x): both are kept
-    on purpose, on main too. With no escape and no glue the name is glued to the prefix."""
+    """A field name glued to an ASCII letter or digit is not a name, and one right after a
+    named call's parenthesis, or after a comma inside one, is code, as in b(password=x): both
+    are kept on purpose. With no escape and no glue the name is glued to the prefix."""
     before = glue or ("" if escape else prefix)
-    in_call = "(" in prefix and before.endswith(", ")
-    return "=" in shape and (before[-1:].isalnum() or before.endswith("(") or in_call)
+    in_call = "(" in prefix and before.endswith((",", ", "))
+    glued = before[-1:].isascii() and before[-1:].isalnum()
+    glued = glued and BREAK_AT_END.search(before) is None
+    return "=" in shape and (glued or before.endswith("(") or in_call)
 
 
 class CountedScan:
@@ -1291,6 +1310,8 @@ def test_continuations_are_read_in_linear_time_when_quotes_alternate(
         "g(token=a,",
         "is_secret=[removed]a,",
         "is_secret=1\\u002c",
+        "is_secret=1%2C",
+        "next_page_token=a%7cnext_page_token=b%20",
     ],
 )
 def test_a_run_of_kept_names_is_read_in_linear_time(
@@ -1333,6 +1354,40 @@ def test_a_run_of_bearer_tokens_is_read_in_linear_time(
     assert large <= 2.2 * small, (small, large)
 
 
+class CountedFinds:
+    """A pattern that counts the characters its finditer calls are given to read."""
+
+    def __init__(self, pattern: re.Pattern[str]) -> None:
+        self.pattern = pattern
+        self.read = 0
+
+    def finditer(self, text: str, pos: int, endpos: int) -> Iterator[re.Match[str]]:
+        self.read += endpos - pos
+        return self.pattern.finditer(text, pos, endpos)
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize("unit", ["a,token=t,", "a, token=t,", "f(a=1,token=t,", "g(token=tok,"])
+def test_the_call_around_each_name_is_found_in_linear_time(
+    monkeypatch: pytest.MonkeyPatch, unit: str
+) -> None:
+    """Whether a name is an argument of a named call is told from the last ( and ) before it.
+    Each part of the text is read for them once, not again back from each name."""
+    text = unit * 2000
+    counted = CountedFinds(redact_module.PARENTHESIS)
+    monkeypatch.setattr(redact_module, "PARENTHESIS", counted)
+    redact(text)
+    assert 0 < counted.read <= len(text), counted.read
+
+
+def test_the_parentheses_before_a_place_are_right_in_any_order() -> None:
+    text = "f(a, g(b), c"
+    found = redact_module.Parentheses(text)
+    assert found.before(len(text)) == (6, 8)
+    assert found.before(5) == (1, -1)  # asked out of order, still right
+    assert redact_module.Parentheses(text).before(7) == (6, -1)
+
+
 @pytest.mark.design("security.redaction_shapes")
 def test_no_kept_value_shields_a_secret_after_an_escape_and_any_glue() -> None:
     """Every kept prefix, escape, quote or none, glue and secret shape, in plain text, in a
@@ -1366,9 +1421,10 @@ def test_no_kept_value_shields_a_secret_after_an_escape_and_any_glue() -> None:
 
 
 # Escapes that a text which is not valid JSON, such as a log that cut a JSON body off, still
-# holds raw: each one is a word break before a name, as a space is.
+# holds raw, and URL-encoded separators: each one is a word break before a name, as a space is.
 SEPARATORS = [
-    f"\\u{code}" for code in ("0020", "002c", "002C", "0026", "003b", "000a", "0041", "00e9")
+    *(f"%{code}" for code in ("2C", "2c", "26", "3B", "3b", "20", "7C", "7c")),
+    *(f"\\u{code}" for code in ("0020", "002c", "002C", "0026", "003b", "000a", "0041", "00e9")),
 ]
 # Bearer tokens whose characters run on into what follows them.
 BEARER_TOKENS = [
@@ -1468,6 +1524,33 @@ def test_a_name_begins_after_a_raw_unicode_escape(text: str, expected: str) -> N
     assert redact(text) == expected
     assert redacted(text, decoded=True)[0] == expected
     assert [rule for _, _, rule in redact_module.spans(text)] == ["form-field"]
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("next_page_token=ab%2Cpassword=HUNTER2", "next_page_token=ab%2C[secret removed]"),
+        ("q=a%26token=HUNTER2", "q=a%26[secret removed]"),
+        ("q=a%3bsecret=HUNTER2", "q=a%3b[secret removed]"),
+        ("SELECT%20password=HUNTER2", "SELECT%20[secret removed]"),
+        ("a%7Capi_key=HUNTER2", "a%7C[secret removed]"),
+        # hex digits with a _ after them are a NAME_ prefix, so the name starts on them
+        ("next_page_token=ab%2C_password=HUNTER2", "next_page_token=ab%[secret removed]"),
+    ],
+)
+def test_a_name_begins_after_a_url_encoded_separator(text: str, expected: str) -> None:
+    assert redact(text) == expected
+    assert redacted(text, decoded=True)[0] == expected
+    assert [rule for _, _, rule in redact_module.spans(text)] == ["form-field"]
+
+
+def test_a_bare_comma_in_a_named_call_is_read_as_a_comma_and_a_space_are() -> None:
+    """f(token=tok,secret=sec) was f(token=tok,[secret removed], with the call's ) gone."""
+    assert redact("f(token=tok,secret=sec)") == "f(token=tok,secret=sec)"
+    assert redact("f(token=tok, secret=sec)") == "f(token=tok, secret=sec)"
+    assert redact("f(token=tok,secret=sec!)") == "f(token=tok,[secret removed]"
+    assert redact("x(1),secret=sec") == "x(1),[secret removed]"
 
 
 def test_an_escaped_letter_inside_a_name_is_read_only_once_the_json_is_read() -> None:
