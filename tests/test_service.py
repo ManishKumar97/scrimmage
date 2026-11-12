@@ -47,9 +47,11 @@ def free_port() -> int:
 class Running:
     """One service: scrimmage-run uvicorn acme.service:app, its stderr read as it comes."""
 
-    def __init__(self, root: Path, env: dict[str, str], args: list[str]) -> None:
+    def __init__(
+        self, root: Path, env: dict[str, str], args: list[str], app: str = "acme.service:app"
+    ) -> None:
         self.port = free_port()
-        command = [str(BIN / "scrimmage-run"), str(BIN / "uvicorn"), "acme.service:app"]
+        command = [str(BIN / "scrimmage-run"), str(BIN / "uvicorn"), app]
         command += ["--port", str(self.port), "--loop", "asyncio", *args]
         self.proc = subprocess.Popen(
             command, cwd=root, env=env, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True
@@ -161,9 +163,16 @@ class Lab:
         env.update(more)
         return {k: v for k, v in env.items() if v != ""}
 
-    def start(self, *args: str, workers: int = 1, wait: bool = True, **env: str) -> Running:
+    def start(
+        self,
+        *args: str,
+        workers: int = 1,
+        wait: bool = True,
+        app: str = "acme.service:app",
+        **env: str,
+    ) -> Running:
         flags = ["--workers", str(workers)] if workers > 1 else []
-        service = Running(self.root, self.env(**env), [*flags, *args])
+        service = Running(self.root, self.env(**env), [*flags, *args], app)
         service.wanted = workers
         self.services.append(service)
         if wait:
@@ -291,12 +300,11 @@ def test_a_python_child_in_a_service_run_is_refused_and_outside_a_run_is_untouch
 def test_a_plain_requests_waited_work_runs_and_work_it_left_running_meets_the_outside_rules(
     lab: Lab,
 ) -> None:
-    service = lab.start()
+    service = lab.start(app="acme.service:served")
     name, headers = lab.open()
     with ThreadPoolExecutor(1) as pool:  # the run's request is in flight throughout
         held = pool.submit(service.post, "/hold", None, headers)
         assert service.post("/left-running") == (200, {"reply": "started"})
-        assert service.post("/release") == (200, {"reply": "released"})
         status, reply = held.result(60)
     assert status == 200 and reply["seen"] == [
         "waited for: ran",

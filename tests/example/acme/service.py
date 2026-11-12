@@ -4,7 +4,8 @@ POST /chat takes {message, session} and answers {reply}. The async endpoint hand
 the loop's default executor, as many services do; /chat-sync is a sync endpoint, which
 FastAPI runs on anyio's worker threads. When TEST_TOKEN is set, every request must carry
 it as a bearer token. /echo answers with what it got, for the plain-request tests;
-/hold, /left-running and /release show what a plain request's threads and tasks meet.
+/hold and /left-running, served through served, show what a plain request's threads and
+tasks meet.
 """
 
 import asyncio
@@ -153,7 +154,7 @@ async def echo(request: Request) -> dict[str, Any]:
     }
 
 
-LEFT = {name: threading.Event() for name in ("held", "background", "release", "done")}
+LEFT = {name: threading.Event() for name in ("held", "returned", "done")}
 SEEN: list[str] = []
 
 
@@ -182,21 +183,15 @@ async def hold() -> dict[str, Any]:
 @app.post("/left-running")
 async def left_running(tasks: BackgroundTasks) -> dict[str, str]:
     """Once /hold is in: a thread it waits for, a background task, and a thread it leaves
-    running until /release."""
+    running until the request's call has returned."""
     await waited(LEFT["held"])
     joined = threading.Thread(target=checked, args=("waited for",))
     joined.start()
     joined.join()
-
-    def background() -> None:
-        checked("background")
-        LEFT["background"].set()
-
-    tasks.add_task(background)
+    tasks.add_task(checked, "background")
 
     def lingering() -> None:
-        LEFT["release"].wait(30)
-        LEFT["background"].wait(30)  # the reply can reach /release before this task runs
+        LEFT["returned"].wait(30)
         checked("left running")
         LEFT["done"].set()
 
@@ -204,7 +199,9 @@ async def left_running(tasks: BackgroundTasks) -> dict[str, str]:
     return {"reply": "started"}
 
 
-@app.post("/release")
-async def release() -> dict[str, str]:
-    LEFT["release"].set()
-    return {"reply": "released"}
+async def served(scope: Any, receive: Any, send: Any) -> None:
+    """The app, and a mark once /left-running's call has returned, background task and all.
+    The mark is set on the loop's next turn, after the servers around this have returned."""
+    await app(scope, receive, send)
+    if scope.get("path") == "/left-running":
+        asyncio.get_running_loop().call_soon(LEFT["returned"].set)
