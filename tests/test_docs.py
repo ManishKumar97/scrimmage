@@ -595,13 +595,22 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
         "**A long plain request keeps the threads it started plain until it ends.**",
         "**gunicorn is not covered, with `UvicornWorker` either.**",
         "**A service row's runs go one after another.**",
-        "**A send listed under `background_real` is decided once, with what its pickling runs.**",
+        "**A call `background_real` lets through is decided once, with what it runs inside.**",
+        "**Other ways to another process are not gated.**",
         "**A start made below multiprocessing's own calls is not seen before Python 3.14.**",
     ):
         assert limit in limits, limit
     safety = page("safety.md")
     assert '"process:kubectl"' in safety and "`kubectl delete`" in safety
     assert "There is no matching on arguments" in safety
+    for point in (
+        "`JoinableQueue`",
+        "`put_nowait`",
+        "`send_bytes`",
+        "`InterpreterPoolExecutor.submit`",
+    ):
+        assert point in safety, point
+    assert "every multiprocessing send" not in safety + limits
     security = page("security.md")
     assert "## A web service's token and run header" in security and "`0600`" in security
     assert "replayed once to each other worker within 60 seconds" in security

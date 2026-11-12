@@ -106,7 +106,15 @@ kubectl was started inside a test run, and service runs refuse every process sta
 ```
 
 The setup request finds such a start before any run and stops the test with exit 2, naming the entry.
-A fork, a `multiprocessing` process or send, and a process pool's task are refused under a run too, with no entry that lists them.
+These are refused under a run too, with no entry that lists them:
+
+- a fork: `os.fork`, `os.forkpty`, and so `pty.spawn` and `os.spawnv`;
+- `multiprocessing`'s `Process.start`, and a manager's start;
+- the sends of `multiprocessing`'s `Queue`, `JoinableQueue` and `SimpleQueue`, and of loky's `Queue` and `SimpleQueue` (`put` and `put_nowait`), and of a `Pipe`'s connection (`send` and `send_bytes`), a manager's proxy calls included;
+- a process pool's task, on `Pool` and on `ProcessPoolExecutor` and loky's, a `Pool`'s making, and their `close`, `terminate` and `shutdown`;
+- a subinterpreter: `InterpreterPoolExecutor.submit`, `Interpreter.exec`, `call` and `call_in_thread`, and a subinterpreter queue's `put`.
+
+Any other way to reach another process is not gated, such as shared memory or a socket of your own. See [Limits](limits.md).
 
 Listing a program makes every call to it real.
 There is no matching on arguments: `process:kubectl` lets `kubectl delete` through as much as `kubectl get`.
