@@ -183,6 +183,41 @@ async def waited(event: threading.Event) -> None:
     await asyncio.get_running_loop().run_in_executor(None, event.wait, 30)
 
 
+LATE = {name: threading.Event() for name in ("go", "done")}
+LATE_SEEN: list[str] = []
+
+
+def late_check() -> None:
+    from acme import tools
+
+    try:
+        tools.check_inventory("SKU-42")
+        LATE_SEEN.append("ran")
+    except Exception as exc:  # what the agent's late call met
+        LATE_SEEN.append(type(exc).__name__)
+    LATE["done"].set()
+
+
+@app.post("/slow")
+async def slow(ask: Ask) -> dict[str, str]:
+    """A question that says slow waits for /go-on, past its run's time, then checks the stock;
+    any other is answered at once."""
+    if "slow" not in ask.message:
+        return {
+            "reply": await asyncio.get_running_loop().run_in_executor(None, answer, ask.message)
+        }
+    await waited(LATE["go"])
+    await asyncio.get_running_loop().run_in_executor(None, late_check)
+    return {"reply": "shipped, Oct 30"}
+
+
+@app.post("/go-on")
+async def go_on() -> dict[str, Any]:
+    LATE["go"].set()
+    await waited(LATE["done"])
+    return {"seen": LATE_SEEN}
+
+
 @app.post("/hold")
 async def hold() -> dict[str, Any]:
     """Held open until the thread /left-running left has gone on; says what each part met."""

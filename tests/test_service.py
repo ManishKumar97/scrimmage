@@ -378,7 +378,7 @@ tools   = TOOL_LIST
 real    = ["tool:check_inventory", "process:uname"]
 model_hosts = [{host = "127.0.0.1", provider = "openai"}]
 runs = RUNS
-run_timeout = 30
+run_timeout = TIMEOUT
 record_grace_s = GRACE
 record_wait_s = 2
 EXTRA
@@ -540,6 +540,7 @@ class Bench:
         tests: str = "",
         json_out: bool = False,
         parallel: int = 1,
+        timeout: int = 30,
     ) -> tuple[int, str]:
         from scrimmage_core.cli import main
 
@@ -547,6 +548,7 @@ class Bench:
         text = text.replace("EXTRA", f"parallel = {parallel}")
         text = text.replace("TOOL_LIST", json.dumps(TOOLS.split(",")))
         text = text.replace("RUNS", str(runs)).replace("ANSWER", answer)
+        text = text.replace("TIMEOUT", str(timeout))
         (self.root / "service.toml").write_text(text.replace("GRACE", str(grace)) + tests)
         self.capsys.readouterr()
         args = ["test", str(self.root / "service.toml"), *(["--json"] if json_out else [])]
@@ -754,6 +756,28 @@ def test_the_token_and_control_url_come_from_the_runners_environment(bench: Benc
         assert code == 3 and "cannot be bound" in out
     finally:
         holder.close()
+
+
+@pytest.mark.design("service.run_timeout")
+def test_run_timeout_ends_the_run_and_the_next_gated_call_in_the_service_fails(
+    bench: Bench,
+) -> None:
+    service = bench.start()
+    slow = (
+        '\n[[test]]\nname = "slow"\nquestion = "slow: where is order 1234?"\nexpect = ["shipped"]\n'
+    )
+    code, out = bench.test(service.port, path="/slow", timeout=2, tests=slow)
+    # A baseline whose only run timed out before any model call shows nothing: exit 2.
+    assert code == 2 and "slow baseline: 1 timed out" in out, out
+    ended = [
+        s
+        for name, s in bench.summaries().items()
+        if name.startswith("run-") and bench.lines(name)[0]["test"] == "slow"
+    ]
+    assert [s["outcome"] for s in ended] == ["timed out"], ended
+    # The service still holds that request: its next gated call, after the run's time, fails.
+    status, reply = service.post("/go-on")
+    assert status == 200 and reply["seen"] == ["ScrimmageTimeLimit"], reply
 
 
 @pytest.mark.design("service.slot_frees_at_reply")

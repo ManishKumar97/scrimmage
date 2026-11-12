@@ -170,4 +170,6 @@ _.chat_sync  # tests/example/acme/service.py: a FastAPI route, which FastAPI cal
 _.chat_blocking  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
 _.left_running  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
 _.stream_json  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
+_.go_on  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
+_._state  # scrimmage_core/process_gate.py: multiprocessing's Pool.__del__ reads it
 _.dies  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
