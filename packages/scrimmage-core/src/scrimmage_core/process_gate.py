@@ -377,7 +377,7 @@ def patch_uvicorn_worker(module: ModuleType) -> None:
 def patch_executor(module: ModuleType) -> None:
     """concurrent.futures' or loky's ProcessPoolExecutor."""
     patch_names(module, "ProcessPoolExecutor", ("submit",), SENT)
-    mark_internal(module, "ProcessPoolExecutor", EXECUTOR_OWN)
+    mark_stops(module, "ProcessPoolExecutor", EXECUTOR_STOPS)
 
 
 SUBINTERPRETER = "a subinterpreter has no Scrimmage in it, so its writes would run for real"
@@ -393,6 +393,7 @@ def patch_pool(module: ModuleType) -> None:
     names = ("apply_async", "_map_async", "imap", "imap_unordered")
     patch_names(module, "Pool", names, SENT, skip=threads)
     mark_internal(module, "Pool", POOL_OWN)
+    mark_stops(module, "Pool", POOL_STOPS, skip=threads)
     mark_internal(module, "Pool", ("_repopulate_pool",), team=threads)  # starts the workers
     pool: Any = getattr(module, "Pool", None)
     init = pool.__dict__.get("__init__") if isinstance(pool, type) else None
@@ -432,10 +433,41 @@ def thread_pool_init(method: Callable[..., Any], threads: type, ended: object) -
 
 
 # A pool's own stops: what they send is the pool's, decided at the team's call.
-POOL_OWN = ("close", "terminate", "join", "_terminate_pool")
+POOL_OWN = ("join", "_terminate_pool")
+# A pool's stops that send to its processes: decided at their start, so a run's refused stop
+# leaves the pool as it was, never half closed.
+POOL_STOPS = ("close", "terminate")
 # The multiprocessing queues a ThreadPool uses within this process, such as its change notifier.
 IN_PROCESS_QUEUES: "weakref.WeakSet[Any]" = weakref.WeakSet()
-EXECUTOR_OWN = ("shutdown",)
+EXECUTOR_STOPS = ("shutdown",)
+
+
+def mark_stops(
+    module: ModuleType, owner: str, names: tuple[str, ...], skip: type | None = None
+) -> None:
+    cls = getattr(module, owner, None)
+    for name in names:
+        method = cls.__dict__.get(name) if isinstance(cls, type) else None
+        if callable(method) and not getattr(method, GATED, False):
+            setattr(cls, name, pool_stop(f"{owner}.{name}", method, skip))
+
+
+def pool_stop(what: str, method: Callable[..., Any], skip: type | None) -> Any:
+    """A pool's stop: refused under a run before it changes anything; outside any request,
+    the pool's own work, as a lifespan's shutdown is."""
+
+    @functools.wraps(method)
+    def stop(*args: Any, **kwargs: Any) -> Any:
+        if not in_service() or (skip is not None and args and isinstance(args[0], skip)):
+            return method(*args, **kwargs)
+        run = current()
+        if run is not None and not isinstance(run, Outside):
+            refuse_other(run, "process:multiprocessing", what, SENT)
+        with internal_call():
+            return method(*args, **kwargs)
+
+    setattr(stop, GATED, True)
+    return stop
 
 
 def mark_internal(

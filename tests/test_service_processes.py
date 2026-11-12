@@ -786,3 +786,23 @@ def test_pythons_resource_tracker_starts_under_a_run_as_python_s_own_helper(
         assert lines(run) == []
     finally:
         tracker._stop()  # type: ignore[attr-defined]  # closes its pipe and waits for it
+
+
+@pytest.mark.design("service.pool_stops")
+def test_a_process_pools_stop_under_a_run_is_refused_and_leaves_the_pool_as_it_was(
+    service: state.ProcessState,
+) -> None:
+    pool = plain(lambda: multiprocessing.get_context("fork").Pool(1))
+    executor = ProcessPoolExecutor(1, mp_context=multiprocessing.get_context("fork"))
+    try:
+        assert plain(lambda: executor.submit(os.getpid).result()) > 0
+        run = a_run(service)
+        for stop in (pool.close, pool.terminate, executor.shutdown):
+            assert "inside a test run" in refused(run, stop)
+        # Nothing was half done: the pool and the executor still work.
+        assert plain(lambda: pool.apply(os.getpid)) > 0
+        assert plain(lambda: executor.submit(os.getpid).result()) > 0
+    finally:
+        plain(executor.shutdown)
+        plain(pool.terminate)
+        plain(pool.join)
