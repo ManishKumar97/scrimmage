@@ -233,10 +233,11 @@ def problem(gate: Gate, plan: Plan) -> str | None:
 
 
 async def abandon(gate: Gate, name: str) -> None:
-    """The claimed plan cannot be used: the runner ends the run at once, not at its wait."""
+    """The claimed plan cannot be used: the runner ends the run at once, not at its wait. It
+    takes a slot when one is free, so it waits on a thread that may."""
     work = functools.partial(gate.client.abandoned, name)
     with contextlib.suppress(Exception):
-        await asyncio.wrap_future(gate.executor.submit(work))
+        await asyncio.wrap_future(gate.executor.waiting.submit(work))
 
 
 async def joined(

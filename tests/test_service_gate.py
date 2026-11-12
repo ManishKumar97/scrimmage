@@ -537,6 +537,68 @@ def test_uvicorn_loading_the_app_pops_the_token_path_and_says_it_is_active(
     assert capsys.readouterr().err.count("active in service mode") == 1
 
 
+@pytest.mark.design("service.closes_own_threads")
+def test_closes_waiting_for_every_slot_never_hold_up_the_claims_that_hold_them(
+    svc: Service,
+) -> None:
+    from scrimmage_core.client import RunSender
+
+    closing, claiming = [svc.open() for _ in range(CAP)], [svc.open() for _ in range(CAP)]
+    for name in closing:
+        svc.client.claim(name, {"pid": 1})
+    go, entered, closed = threading.Event(), threading.Semaphore(0), []
+
+    def close(name: str) -> None:
+        entered.release()
+        go.wait(10)
+        RunSender(svc.client, name, {"pid": 1}).close()  # waits for a slot on its thread
+        closed.append(name)
+
+    for name in closing:
+        svc.pool.timers.later(0, lambda n=name: close(n))
+    for _ in closing:
+        assert entered.acquire(timeout=10)  # every close is on a thread of its own, waiting
+    # Claims arrive on the loop: each takes a slot, then hands its work to the claim threads.
+    assert all(svc.client.try_slot(count=False) for _ in claiming)
+    claims = [
+        svc.pool.submit(lambda n=name: svc.client.run_held(lambda: svc.client.claim(n, {})))
+        for name in claiming
+    ]
+    go.set()
+    for claim in claims:
+        claim.result(10)
+    eventually(lambda: len(closed) == CAP, within=10)
+    assert all(svc.server.runs[name].made for name in closing)  # each last batch arrived
+
+
+@pytest.mark.design("service.closes_own_threads")
+def test_a_claim_thread_that_asks_for_a_slot_it_does_not_hold_fails_at_once(
+    svc: Service,
+) -> None:
+    from scrimmage_core.client import ControlError
+
+    name = svc.open()
+    with pytest.raises(ControlError, match="did not hold"):
+        svc.pool.submit(lambda: svc.client.claim(name, {})).result(10)
+
+
+@pytest.mark.design("service.closes_own_threads")
+def test_a_budget_release_on_a_claim_thread_is_sent_from_a_thread_that_may_wait(
+    svc: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: list[tuple[str, object]] = []
+    request = svc.client.request
+
+    def watched(method: str, path: str, payload: object = None, **kw: Any) -> Any:
+        sent.append((threading.current_thread().name, payload))
+        return request(method, path, payload, **kw)
+
+    monkeypatch.setattr(svc.client, "request", watched)
+    svc.pool.submit(lambda: svc.client.release(7)).result(10)
+    eventually(lambda: sent)
+    assert sent[0][1] == {"ticket": 7} and not sent[0][0].startswith("scrimmage-control")
+
+
 @pytest.mark.design("service.websocket")
 def test_a_websocket_with_the_run_header_is_closed(svc: Service) -> None:
     name = svc.open()

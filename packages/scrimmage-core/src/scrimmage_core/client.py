@@ -61,6 +61,14 @@ class ClaimRefused(ControlError):
 
 
 CAP = 8  # control requests one process sends at once; 8 processes fill the server's 64
+_waits = threading.local()
+
+
+def never_wait() -> None:
+    """This thread runs only work that holds its slot already: it never waits for one."""
+    _waits.never = True
+
+
 ROUND_TRIPS = 1024  # the last round trips kept, for a run's control_p99_ms
 
 
@@ -124,6 +132,11 @@ class ControlClient:
         if getattr(self._held, "on", False):
             self._held.on, held = False, True
         if not held:
+            if getattr(_waits, "never", False):
+                raise ControlError(
+                    "a Scrimmage claim thread asked for a control slot it did not hold; it "
+                    "would wait on the claims queued behind it"
+                )
             self.slots.acquire()
         try:
             status, reply = self._timed(method, path, payload)
@@ -225,7 +238,11 @@ class ControlClient:
 
     def release(self, ticket: int) -> None:
         """Stop waiting, so the calls behind this one are served. Best effort: a ticket
-        that is not asked for again is dropped after budget.LOST_S, or when its run ends."""
+        that is not asked for again is dropped after budget.LOST_S, or when its run ends. A
+        claim thread, which has used its slot, hands it to a thread that may wait for one."""
+        if getattr(_waits, "never", False):
+            threads.start(threading.Thread(target=self.release, args=(ticket,), daemon=True))
+            return
         with contextlib.suppress(ControlError):
             self.request("POST", "/v1/budget/release", {"ticket": ticket})
 
