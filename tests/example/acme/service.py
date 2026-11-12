@@ -10,6 +10,7 @@ tasks meet.
 
 import asyncio
 import contextlib
+import json
 import os
 import threading
 import time
@@ -116,6 +117,16 @@ async def stream(ask: Ask) -> Any:
         yield f"data: {ask.message}\n\n"
 
     return StreamingResponse(events(), media_type="text/event-stream")
+
+
+@app.post("/stream-json")
+async def stream_json(ask: Ask) -> Any:
+    """A stream whose one event is a whole JSON document: only its content type says it is
+    a stream."""
+    from fastapi.responses import Response
+
+    body = json.dumps({"reply": ask.message})
+    return Response(body, media_type="text/event-stream")
 
 
 @app.post("/background")

@@ -590,15 +590,31 @@ def test_a_service_test_answers_its_runs_and_keeps_the_setup_record(bench: Bench
 
 
 @pytest.mark.design("service.probe_proves_the_gate")
+@pytest.mark.parametrize("path", ["/chat", "/echo"])  # /echo answers 200 to anything
 def test_a_proxy_that_drops_the_header_stops_the_runner_before_any_test_request(
-    bench: Bench,
+    bench: Bench, path: str
 ) -> None:
     service = bench.start()
     proxy = Forwarder(service.port, drop=True)
     bench.closers.append(proxy)
-    code, out = bench.test(proxy.port)
+    code, out = bench.test(proxy.port, path=path)
     assert code == 3 and "x-scrimmage-run does not reach Scrimmage" in out
     assert len(proxy.seen) == 1 and proxy.seen[0].startswith("probe-")  # nothing after it
+
+
+@pytest.mark.design("service.probe_signed")
+def test_a_probe_reply_with_a_forged_signature_stops_the_runner(bench: Bench) -> None:
+    """A server without the token that answers as a probe would: its report is not taken."""
+    report = {"gates": ["asgi"], "tools": sorted(t.rpartition(":")[2] for t in TOOLS.split(","))}
+    headers = {
+        "content-type": "application/json",
+        "x-scrimmage-probe": "report",
+        "x-scrimmage-signature": "0" * 64,
+    }
+    forger = Ungated(200, headers, json.dumps(report).encode())
+    bench.closers.append(forger)
+    code, out = bench.test(forger.port)
+    assert code == 3 and "x-scrimmage-run does not reach Scrimmage" in out
 
 
 @pytest.mark.design("service.probe_plain_to_strangers")
@@ -651,6 +667,18 @@ def test_a_reply_that_looks_like_the_gate_503_but_differs_stops_the_test(bench: 
 
 
 @pytest.mark.design("service.claimed_or_not")
+def test_an_answer_that_carries_x_scrimmage_error_but_was_never_claimed_stops_the_test(
+    bench: Bench,
+) -> None:
+    """A good answer with the gate's header on it: whether the plan was claimed decides, not
+    the header."""
+    headers = {"content-type": "application/json", "x-scrimmage-error": "claimed"}
+    reply = json.dumps({"reply": "shipped"}).encode()
+    code, out, _ = ungated_runs(bench, 200, headers, reply)
+    assert code == 3 and "its plan was never claimed" in out
+
+
+@pytest.mark.design("service.claimed_or_not")
 def test_an_app_that_sends_x_scrimmage_error_itself_cannot_make_a_result(bench: Bench) -> None:
     """Even the gate's exact 503 shape, sent by an app without Scrimmage, never makes a
     result: the run was never claimed, so it is an infrastructure error."""
@@ -684,9 +712,10 @@ def test_a_setup_reply_without_the_answer_field_stops_with_exit_2(bench: Bench) 
 
 
 @pytest.mark.design("service.streamed")
-def test_a_streamed_reply_is_a_setup_error(bench: Bench) -> None:
+@pytest.mark.parametrize("path", ["/stream", "/stream-json"])  # one event, a whole JSON doc
+def test_a_streamed_reply_is_a_setup_error(bench: Bench, path: str) -> None:
     service = bench.start()
-    code, out = bench.test(service.port, path="/stream")
+    code, out = bench.test(service.port, path=path)
     assert code == 2 and "text/event-stream" in out
 
 
