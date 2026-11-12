@@ -45,7 +45,7 @@ EVENTS = ("subprocess.Popen", "os.exec", "os.posix_spawn")  # os.spawnv is exec 
 # _posixsubprocess.fork_exec as well, the same start, decided once.
 SERVICE_EVENTS = (*EVENTS, "os.fork", "os.forkpty", "os.system", "_posixsubprocess.fork_exec")
 GATED = "__scrimmage_gate__"
-_popen = threading.local()  # a Popen this thread just let through: its fork_exec is the same
+_popen = threading.local()  # the argv of a Popen this thread just let through: its start
 # The MCP gate decides a stdio server's calls, so its own start of the server is not blind.
 EXEMPT: ContextVar[bool] = carried(ContextVar("scrimmage_process_exempt", default=False))
 
@@ -152,9 +152,8 @@ def service_hook(event: str, args: tuple[Any, ...]) -> None:
 
 def service_start(event: str, args: tuple[Any, ...]) -> None:
     """A start in a service: refused under a run unless real lists its program."""
-    if event == "_posixsubprocess.fork_exec" and getattr(_popen, "on", False):
-        _popen.on = False  # the start its Popen event decided already
-        return
+    if event in ("_posixsubprocess.fork_exec", "os.posix_spawn") and popen_started(event, args):
+        return  # the start its Popen event decided already
     run = current()
     if run is None or EXEMPT.get() or (isinstance(run, Outside) and pool_internal()):
         return
@@ -166,9 +165,24 @@ def service_start(event: str, args: tuple[Any, ...]) -> None:
     step = run.decide(Call("process", label, program), {"command": line})
     if step.decision.action == "real":
         run.finish(step)
-        _popen.on = event == "subprocess.Popen"
+        _popen.argv = argv_of(event, args) if event == "subprocess.Popen" else None
         return
     refused(run, step, program_fix(program))
+
+
+def argv_of(event: str, args: tuple[Any, ...]) -> list[str]:
+    given: Any = args[1] if event == "_posixsubprocess.fork_exec" else command(event, args)[1]
+    items = cast(list[Any], [given] if isinstance(given, (str, bytes)) else list(given or []))
+    return [os.fsdecode(a) for a in items]
+
+
+def popen_started(event: str, args: tuple[Any, ...]) -> bool:
+    """This start is the one the Popen this thread just let through makes, by its arguments.
+    Either way the Popen is spent: a start that failed before it got here, or that went
+    another way, leaves nothing for a later start to pass on."""
+    allowed = getattr(_popen, "argv", None)
+    _popen.argv = None
+    return allowed is not None and allowed == argv_of(event, args)
 
 
 def program_fix(program: str) -> str:

@@ -11,6 +11,7 @@ import multiprocessing
 import multiprocessing.connection
 import multiprocessing.pool
 import os
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
@@ -311,6 +312,53 @@ def test_a_fork_exec_after_an_allowed_popen_passes(service: state.ProcessState) 
     for _ in range(3):  # on 3.14 each Popen raises fork_exec too: the same start, once
         assert under(run, lambda: subprocess.run(["true"], check=True)).returncode == 0
     assert [x["call"] for x in lines(run)] == ["process:true"] * 3
+
+
+@pytest.mark.design("service.fork_exec_once")
+def test_a_popen_that_starts_through_posix_spawn_is_one_start(
+    service: state.ProcessState,
+) -> None:
+    run = a_run(service, real=("process:true",))
+    true = shutil.which("true")
+    assert true is not None
+    # A full path and close_fds=False: subprocess starts it with os.posix_spawn.
+    assert under(run, lambda: subprocess.run([true], close_fds=False)).returncode == 0
+    assert [x["call"] for x in lines(run)] == ["process:true"]
+
+
+def leftover_start(service: state.ProcessState, popen: Callable[[], object]) -> str:
+    """A listed Popen, then a start of a program not listed, which no Popen made."""
+    run = a_run(service, real=("process:true",))
+    echo = shutil.which("echo")
+    assert echo is not None
+    under(run, popen)
+    import multiprocessing.util
+
+    path = os.fsencode(echo)
+    return refused(run, lambda: multiprocessing.util.spawnv_passfds(path, [path, b"x"], ()))
+
+
+@pytest.mark.design("service.fork_exec_once")
+@pytest.mark.skipif(not ON_314, reason="_posixsubprocess.fork_exec is audited from 3.14")
+def test_a_popen_that_went_through_posix_spawn_lets_no_later_start_pass(
+    service: state.ProcessState,
+) -> None:
+    true = shutil.which("true")
+    assert true is not None
+    started = leftover_start(service, lambda: subprocess.run([true], close_fds=False))
+    assert "echo was started inside a test run" in started
+
+
+@pytest.mark.design("service.fork_exec_once")
+@pytest.mark.skipif(not ON_314, reason="_posixsubprocess.fork_exec is audited from 3.14")
+def test_a_popen_that_failed_before_its_start_lets_no_later_start_pass(
+    service: state.ProcessState,
+) -> None:
+    def failing() -> None:
+        with pytest.raises(ValueError, match="illegal environment variable name"):
+            subprocess.run(["true"], env={"A=B": "x"})
+
+    assert "echo was started inside a test run" in leftover_start(service, failing)
 
 
 def consumer(kind: str, end: Any, path: str) -> None:
