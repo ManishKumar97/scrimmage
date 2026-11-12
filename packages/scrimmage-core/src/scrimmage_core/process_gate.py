@@ -291,6 +291,12 @@ def install_service() -> None:
         patch_executor,
     )
     hooks.on_import("multiprocessing.pool", patch_pool)
+    # A uvicorn worker answers its supervisor's health pings over a pipe, on a thread of its
+    # own: the server's traffic, never a request's.
+    hooks.on_import(
+        "uvicorn.supervisors.multiprocess",
+        lambda m: mark_internal(m, "Process", ("always_pong",)),
+    )
     for loky in ("loky.process_executor", "joblib.externals.loky.process_executor"):
         hooks.on_import(loky, patch_executor)
     hooks.on_import(
