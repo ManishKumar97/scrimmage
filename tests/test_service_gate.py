@@ -719,6 +719,13 @@ def test_a_websocket_with_the_run_header_is_closed(svc: Service) -> None:
     assert seen_scopes == []
 
 
+@pytest.mark.design("service.forked_worker_stops")
+def test_a_forked_worker_such_as_gunicorns_stops_at_its_first_serve(svc: Service) -> None:
+    svc.gate.proc = {**svc.gate.proc, "pid": os.getpid() + 1}  # as a fork sees its parent's
+    asgi_gate.serving()
+    assert svc.stopped and "a fork of the one Scrimmage started in" in svc.stopped[0]
+
+
 @pytest.mark.design("service.in_process_runs_as_caller")
 def test_an_app_in_this_process_runs_as_its_caller_and_only_exact_transports_are_in_process(
     svc: Service, patched_httpx2: None

@@ -103,6 +103,17 @@ def serving() -> None:
     if gate is None or gate.serving:
         return
     gate.serving = True
+    if gate.proc.get("pid") != os.getpid():
+        # Scrimmage started in another process and this one is its fork, such as a gunicorn
+        # worker: the threads that claim plans and send lines did not come with it.
+        gate.process.structure(
+            "scrimmage",
+            "this process is a fork of the one Scrimmage started in, such as a gunicorn "
+            "worker, so it has none of Scrimmage's threads, and the service is stopped; run "
+            "the app with uvicorn, whose workers each start Scrimmage themselves",
+            gate.process.stop,
+        )
+        return
     os.environ.pop("SCRIMMAGE_TOKEN_FILE", None)
     print(f"scrimmage: {ACTIVE.format(pid=os.getpid())}", file=sys.stderr, flush=True)
 

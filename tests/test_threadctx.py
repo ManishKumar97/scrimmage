@@ -221,6 +221,43 @@ def test_a_thread_started_in_a_plain_request_finds_none(service: state.ProcessSt
     assert plain().run(in_thread, state.current) is None
 
 
+@pytest.mark.design("service.long_plain_request")
+def test_a_worker_a_long_plain_request_started_is_plain_until_that_request_ends(
+    service: state.ProcessState,
+) -> None:
+    """A known gap, in docs/limits.md: work a run hands to a thread that a plain request,
+    still open, started runs as that plain request, for real. Once the request ends, the
+    same work meets the outside rules."""
+    import queue
+
+    gated = tool()
+    request = state.Plain()
+    context = contextvars.copy_context()
+    context.run(state.SLOT.set, request)
+    jobs: queue.Queue[str] = queue.Queue()
+    got: queue.Queue[str] = queue.Queue()
+
+    def worker() -> None:
+        while (order := jobs.get()) != "stop":
+            try:
+                got.put(gated(order))
+            except ScrimmageRefused as refused:
+                got.put(f"refused: {refused}")
+
+    thread = threading.Thread(target=worker)
+    context.run(thread.start)
+    a_run(service, "run-a")
+    try:
+        jobs.put("1")  # a run hands work over while the plain request is still open
+        assert got.get(timeout=10) == "wrote 1"
+        request.done = True  # the long request, such as a stream, ends
+        jobs.put("2")
+        assert got.get(timeout=10).startswith("refused: ")
+    finally:
+        jobs.put("stop")
+        thread.join(10)
+
+
 @pytest.mark.design("service.plain_thread_left_running")
 def test_a_thread_a_plain_request_left_running_meets_the_outside_rules_once_it_returns(
     service: state.ProcessState,
