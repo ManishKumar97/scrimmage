@@ -595,6 +595,7 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
         "**A long plain request keeps the threads it started plain until it ends.**",
         "**gunicorn is not covered, with `UvicornWorker` either.**",
         "**A service row's runs go one after another.**",
+        "**A send listed under `background_real` is decided once, with what its pickling runs.**",
         "**A start made below multiprocessing's own calls is not seen before Python 3.14.**",
     ):
         assert limit in limits, limit

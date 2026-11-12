@@ -1064,3 +1064,37 @@ def test_the_tracker_exemption_names_this_python_and_the_trackers_own_code() -> 
     finally:
         process_gate._tracker.on = False  # type: ignore[attr-defined]
     assert process_gate.tracker("os.posix_spawn", starts["the tracker's start"][0]) is False
+
+
+class StartsWhenPickled:
+    """The team's own object whose __reduce__ starts a program, as pickling runs it."""
+
+    def __init__(self, target: Path) -> None:
+        self.target = target
+
+    def __reduce__(self) -> tuple[type, tuple[str]]:
+        subprocess.run(["sh", "-c", f"echo x > {self.target}"], check=True)
+        return (str, ("pickled",))
+
+
+@pytest.mark.design("service.pickling_gap")
+def test_a_reduce_that_starts_a_program_while_a_decided_send_pickles_is_not_decided_again(
+    service: state.ProcessState, tmp_path: Path
+) -> None:
+    """A known gap, in docs/limits.md: outside any request, a send background_real lists is
+    decided once; the team's __reduce__ that its pickling runs is not decided again. Under a
+    run the send is refused before anything is pickled."""
+    queue: Any = multiprocessing.get_context("spawn").Queue()
+    target = tmp_path / "written"
+    try:
+        run = a_run(service)
+        assert "inside a test run" in refused(run, lambda: queue.put(StartsWhenPickled(target)))
+        assert not target.exists()
+        service.unregister(run)
+        a_run(service, background=("process:multiprocessing",))
+        outside(lambda: queue.put(StartsWhenPickled(target)))
+        assert queue.get(timeout=10) == "pickled"
+        assert target.exists()  # the gap: sh ran, and no line says so
+    finally:
+        queue.close()
+        queue.join_thread()
