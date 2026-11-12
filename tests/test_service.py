@@ -503,7 +503,7 @@ model_hosts = [{host = "127.0.0.1", provider = "openai"}]
 runs = RUNS
 run_timeout = TIMEOUT
 record_grace_s = GRACE
-record_wait_s = 2
+record_wait_s = WAIT
 EXTRA
 [[test]]
 name     = "order-status"
@@ -661,6 +661,7 @@ class Bench:
         runs: int = 1,
         answer: str = "reply",
         grace: float = 0.2,
+        wait: float = 10.0,  # ends early once the last batch comes: a slow box needs no more
         tests: str = "",
         json_out: bool = False,
         parallel: int = 1,
@@ -672,7 +673,7 @@ class Bench:
         text = text.replace("EXTRA", f"parallel = {parallel}")
         text = text.replace("TOOL_LIST", json.dumps(TOOLS.split(",")))
         text = text.replace("RUNS", str(runs)).replace("ANSWER", answer)
-        text = text.replace("TIMEOUT", str(timeout))
+        text = text.replace("TIMEOUT", str(timeout)).replace("WAIT", str(wait))
         (self.root / "service.toml").write_text(text.replace("GRACE", str(grace)) + tests)
         self.capsys.readouterr()
         args = ["test", str(self.root / "service.toml"), *(["--json"] if json_out else [])]
@@ -1088,7 +1089,7 @@ def test_a_missing_last_batch_is_an_infrastructure_error_after_the_wait(bench: B
         '\n[[test.mock]]\ncall = "tool:get_order"\nreturns = "shipped, Oct 30"\n'
         '\n[[test.mock]]\ncall = "tool:get_stock"\nreturns = {sku = "SKU-42", count = 12}\n'
     )
-    code, out = bench.test(service.port, path="/dies", tests=dying)
+    code, out = bench.test(service.port, path="/dies", tests=dying, wait=2.0)
     assert code == 3, out
     summaries = bench.summaries()
     died = [
