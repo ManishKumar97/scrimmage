@@ -153,7 +153,7 @@ async def echo(request: Request) -> dict[str, Any]:
     }
 
 
-LEFT: dict[str, threading.Event] = {name: threading.Event() for name in ("held", "release", "done")}
+LEFT = {name: threading.Event() for name in ("held", "background", "release", "done")}
 SEEN: list[str] = []
 
 
@@ -187,10 +187,16 @@ async def left_running(tasks: BackgroundTasks) -> dict[str, str]:
     joined = threading.Thread(target=checked, args=("waited for",))
     joined.start()
     joined.join()
-    tasks.add_task(checked, "background")
+
+    def background() -> None:
+        checked("background")
+        LEFT["background"].set()
+
+    tasks.add_task(background)
 
     def lingering() -> None:
         LEFT["release"].wait(30)
+        LEFT["background"].wait(30)  # the reply can reach /release before this task runs
         checked("left running")
         LEFT["done"].set()
 
