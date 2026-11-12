@@ -52,8 +52,16 @@ def stop(message: str) -> NoReturn:
 
 
 def service_stop(message: str) -> NoReturn:
-    """A service process that cannot gate its requests: it stops before it serves one."""
+    """A service process whose start is wrong: it stops before it serves a request."""
     print(f"scrimmage: {message}; the service stops before it serves a request", file=sys.stderr)
+    sys.stderr.flush()
+    os._exit(1)
+
+
+def structure_stop(message: str) -> NoReturn:
+    """A library a gate cannot work with, found before the service listens, or as it is first
+    imported: the service stops. One found while it serves marks it broken instead."""
+    print(f"scrimmage: {message}; the service stops", file=sys.stderr)
     sys.stderr.flush()
     os._exit(1)
 
@@ -191,7 +199,7 @@ def start_service() -> None:
     tools, renames = tools_from(os.environ.get("SCRIMMAGE_TOOLS", ""))
     names = tuple(labels.tool_name(path, dict(renames)) for path in tools)
     process = state.ProcessState(names, service=True)
-    process.stop = service_stop
+    process.stop = structure_stop
     state.install_process(process)
     client = ControlClient(url, token)
     senders = Senders()
@@ -204,9 +212,9 @@ def start_service() -> None:
             service_stop(f"{module} is listed in SCRIMMAGE_TOOLS but cannot be found")
         del tool_names
     tool_gate.install(tools, dict(renames))
-    http_gate.install(process, client, None, service_stop)
-    langchain_gate.install(process, service_stop)
-    mcp_gate.install(process, None, service_stop)
+    http_gate.install(process, client, None, structure_stop)
+    langchain_gate.install(process, structure_stop)
+    mcp_gate.install(process, None, structure_stop)
     process_gate.install(lambda: None)
     process_gate.install_service()
     threadctx.install(process)

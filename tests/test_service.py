@@ -268,6 +268,9 @@ def test_uvloop_on_3_11_stops_the_service_with_one_prefix(lab: Lab) -> None:
     service = lab.start("--loop", "uvloop", wait=False)
     text = lab.ended(service)
     assert "--loop asyncio" in text and "scrimmage: scrimmage:" not in text
+    # A structure stop says the service stops, not that it never served: one found inside a
+    # request is worded the same.
+    assert "; the service stops\n" in text and "before it serves a request" not in text
 
 
 @pytest.mark.design("service.token_in_env_stops")
