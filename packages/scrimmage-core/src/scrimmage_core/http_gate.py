@@ -52,6 +52,7 @@ from scrimmage_core.state import (
     carried,
     current,
     error_text,
+    in_service,
     model_path_hint,
 )
 
@@ -938,7 +939,16 @@ async def ask_off_the_loop(
         return got
 
     try:
-        return await asyncio.to_thread(work)
+        # Loaded by a service's start only, so a function or a script never imports it.
+        pool = getattr(sys.modules.get("scrimmage_core.executor"), "EXECUTOR", None)
+        if pool is None or not in_service():
+            return await asyncio.to_thread(work)
+        # A service's own executor, never the app's, and only with a control slot free:
+        # with none, the call waits on the loop and asks again, holding no thread.
+        client = cast(Any, ctx.client)
+        if not client.try_slot():
+            return Pause(next_ask_s(None), ticket)
+        return await asyncio.wrap_future(pool.submit(lambda: client.run_held(work)))
     except asyncio.CancelledError:
         with lock:
             cancelled.append(True)

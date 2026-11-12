@@ -752,8 +752,9 @@ def test_a_sigterm_inside_the_exit_drain_loses_no_line(monkeypatch: pytest.Monke
             self.first = True
 
         def request(
-            self, method: str, path: str, payload: object = None
+            self, method: str, path: str, payload: object = None, *, held: bool = False
         ) -> tuple[int, dict[str, object]]:
+            del held
             if self.first:
                 self.first = False
                 handler = signal.getsignal(signal.SIGTERM)

@@ -18,6 +18,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
+from typing import TypeVar
 from urllib.parse import urlsplit
 
 from scrimmage_core import protocol, threads
@@ -31,6 +32,7 @@ TIMEOUT_S = 10.0
 BLOB_QUEUE = 64  # side-folder items waiting to be sent; each is at most 10 MB
 # Put on the queue at exit to end the sender's wait. Compared by identity, never sent.
 WAKE: dict[str, object] = {}
+T = TypeVar("T")
 
 
 class ControlError(Exception):
@@ -46,6 +48,22 @@ def hint(reply: dict[str, object]) -> float | None:
         return None
 
 
+class Busy(ControlError):
+    """No control slot was free: the process already has CAP requests in flight."""
+
+
+class ClaimRefused(ControlError):
+    """The runner would not give the run's plan: no_such_run, run_closed or claimed."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(f"the runner refused the claim: {code}")
+        self.code = code
+
+
+CAP = 8  # control requests one process sends at once; 8 processes fill the server's 64
+ROUND_TRIPS = 1024  # the last round trips kept, for a run's control_p99_ms
+
+
 class ControlClient:
     def __init__(self, url: str, token: str) -> None:
         parts = urlsplit(url)
@@ -55,15 +73,87 @@ class ControlClient:
         self.port = parts.port or 80
         self.token = token
         self.offset = 0.0  # the server's clock minus ours, learned from its replies
+        # Each request holds a slot while it is in flight. A sync caller waits for one on its
+        # own thread; a claim or an async budget ask takes one only if free, on the loop.
+        self.slots = threading.BoundedSemaphore(CAP)
+        self.trips: deque[tuple[float, float]] = deque(maxlen=ROUND_TRIPS)  # (end, ms)
+        self.busy: deque[float] = deque(maxlen=ROUND_TRIPS)  # when a request found no slot
+        self._load = threading.Lock()
+        self._held = threading.local()  # this thread runs work for a slot taken on a loop
+
+    def try_slot(self, *, count: bool = True) -> bool:
+        """Take a slot if one is free; if not, count the request as turned away, unless the
+        caller will try again and counts it once itself."""
+        if self.slots.acquire(blocking=False):
+            return True
+        if count:
+            self.turned_away()
+        return False
+
+    def turned_away(self) -> None:
+        """A control request this process refused itself, for no free slot."""
+        with self._load:
+            self.busy.append(time.monotonic())
+
+    def run_held(self, work: Callable[[], T]) -> T:
+        """Run work with the slot this thread's caller took: its first request uses it, and a
+        work that sends none gives it back."""
+        self._held.on = True
+        try:
+            return work()
+        finally:
+            if self._held.on:
+                self._held.on = False
+                self.slots.release()
+
+    def load_since(self, since: float) -> tuple[int, float | None]:
+        """Requests turned away for no free slot, and the 99th percentile round trip in ms,
+        from a moment on: what a run's last batch says about the process's control load."""
+        with self._load:
+            busy = sum(1 for at in self.busy if at >= since)
+            times = sorted(ms for end, ms in self.trips if end >= since)
+        if not times:
+            return busy, None
+        return busy, round(times[min(len(times) - 1, int(0.99 * len(times)))], 1)
 
     def request(
-        self, method: str, path: str, payload: object = None
+        self, method: str, path: str, payload: object = None, *, held: bool = False
     ) -> tuple[int, dict[str, object]]:
-        """Send one signed request; retry once if the server says our clock is off."""
-        status, reply = self._send(method, path, payload)
-        if status == 401 and reply.get("error") == "clock":
-            status, reply = self._send(method, path, payload)
-        return status, reply
+        """Send one signed request; retry once if the server says our clock is off. held:
+        the caller took a slot already, and this releases it."""
+        if getattr(self._held, "on", False):
+            self._held.on, held = False, True
+        if not held:
+            self.slots.acquire()
+        try:
+            status, reply = self._timed(method, path, payload)
+            if status == 401 and reply.get("error") == "clock":
+                status, reply = self._timed(method, path, payload)
+            return status, reply
+        finally:
+            self.slots.release()
+
+    def _timed(self, method: str, path: str, payload: object) -> tuple[int, dict[str, object]]:
+        began = time.monotonic()
+        try:
+            return self._send(method, path, payload)
+        finally:
+            ended = time.monotonic()
+            with self._load:
+                self.trips.append((ended, (ended - began) * 1000))
+
+    def claim(self, run: str, proc: object, *, held: bool = False) -> object:
+        """A service run's plan, claimed for this process. Raises ClaimRefused or
+        ControlError."""
+        status, reply = self.request("POST", "/v1/claims", {"run": run, "proc": proc}, held=held)
+        if status != 200:
+            raise ClaimRefused(str(reply.get("error")))
+        return reply.get("plan")
+
+    def abandoned(self, run: str) -> None:
+        """The claimed plan cannot be used: the runner ends the run at once."""
+        with contextlib.suppress(ControlError):
+            self.request("POST", "/v1/abandoned", {"run": run})
 
     def _send(self, method: str, path: str, payload: object) -> tuple[int, dict[str, object]]:
         body = b"" if payload is None else json.dumps(payload).encode()
@@ -157,6 +247,7 @@ class Sender:
         self.proc = proc  # this process, as its record lines name it
         self.eager = eager  # send each line as it is made, with no thread
         self.on_closed: Callable[[], None] = lambda: None  # the run has ended
+        self.since = time.monotonic()  # the control load in the last batch counts from here
         self._fresh()
 
     def _fresh(self) -> None:
@@ -321,6 +412,10 @@ class Sender:
         if final:
             batch["made"] = made
             batch["proc"] = self.proc
+            # The process's control load from this run's start or claim on. It describes the
+            # process: two runs that overlap in one worker count the same requests.
+            busy, p99 = self.client.load_since(self.since)
+            batch.update(control_busy=busy, control_p99_ms=p99)
         try:
             status, _ = self.client.request("POST", "/v1/records", batch)
         except ControlError:
@@ -357,3 +452,55 @@ class Sender:
                 status = 0
             if status != 200:
                 self.unsent_posts.append((path, payload))
+
+
+class RunSender(Sender):
+    """One service run's lines: its own queue, counts and close, with no thread of its own.
+    The process's one Senders thread sends a batch for each run that has lines."""
+
+    def start(self) -> None:
+        """The process's Senders thread sends this run's batches."""
+
+    def send_some(self) -> None:
+        """One batch, if there are lines: called by the Senders thread every BATCH_S."""
+        self._send_batch(block=False)
+
+    def close(self) -> None:
+        """The run's record closes: send what is queued, then the last batch, with made."""
+        while self._send_batch(block=False):
+            pass
+        self._send_batch(block=False, final=True)
+
+
+class Senders:
+    """The one sender thread of a service process, over every open run's RunSender. A
+    thread per run would be 64 threads polling every 100 ms at 64 runs."""
+
+    def __init__(self) -> None:
+        self.runs: dict[int, RunSender] = {}
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._loop, name="scrimmage-sender", daemon=True)
+        self._wake = threading.Event()
+
+    def start(self) -> None:
+        threads.start(self._thread)
+
+    def stop(self) -> None:
+        self._wake.set()
+        if self._thread.is_alive():
+            self._thread.join(2 * TIMEOUT_S)
+
+    def add(self, sender: RunSender) -> None:
+        with self._lock:
+            self.runs[id(sender)] = sender
+
+    def remove(self, sender: RunSender) -> None:
+        with self._lock:
+            self.runs.pop(id(sender), None)
+
+    def _loop(self) -> None:
+        while not self._wake.wait(BATCH_S):
+            with self._lock:
+                senders = list(self.runs.values())
+            for sender in senders:
+                sender.send_some()

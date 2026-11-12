@@ -8,13 +8,17 @@ A child whose plan cannot be fetched refuses each call, and tries again for the 
 
 import atexit
 import contextlib
+import ipaddress
 import os
 import signal
+import stat
 import sys
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from types import FrameType
 from typing import Literal, NoReturn
+from urllib.parse import urlsplit
 
 from scrimmage_core import (
     http_gate,
@@ -22,11 +26,13 @@ from scrimmage_core import (
     langchain_gate,
     mcp_gate,
     process_gate,
+    records,
     state,
+    threadctx,
     threads,
     tool_gate,
 )
-from scrimmage_core.client import ControlClient, ControlError, Sender
+from scrimmage_core.client import ControlClient, ControlError, Sender, Senders
 from scrimmage_core.mocks import allowed
 from scrimmage_core.plan import Plan, no_plan, tools_from
 from scrimmage_core.redact import remove_values
@@ -114,13 +120,105 @@ def handle_sigterm(last_lines: Callable[[], None], sender: Sender) -> None:
     signal.signal(signal.SIGTERM, on_term)
 
 
+TOKEN_MIN = 32  # characters a service's token needs: the MAC of a run header rests on it
+
+
+def read_token_file(path: str) -> str:
+    """The token, from a plain file this user owns, mode 0600 exactly. Else the process stops:
+    a token another user could read is not the boundary the design rests on."""
+    try:
+        fd = records.open_owned(Path(path))
+    except (OSError, records.Refused) as exc:
+        stop(f"SCRIMMAGE_TOKEN_FILE {path} cannot be read: {exc}")
+    with os.fdopen(fd, "rb") as handle:
+        mode = stat.S_IMODE(os.fstat(handle.fileno()).st_mode)
+        data = handle.read(4096)
+    if mode != 0o600:
+        stop(
+            f"SCRIMMAGE_TOKEN_FILE {path} has mode {mode:o}; it must be 600, readable by its "
+            "owner only"
+        )
+    token = data.decode("utf-8", "replace").strip()
+    if len(token) < TOKEN_MIN:
+        stop(f"SCRIMMAGE_TOKEN_FILE {path} holds a token under {TOKEN_MIN} characters")
+    return token
+
+
+def loopback(url: str) -> bool:
+    """http:// on this machine: TLS to a control server elsewhere comes in a later version."""
+    parts = urlsplit(url)
+    if parts.scheme != "http" or not parts.hostname:
+        return False
+    if parts.hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(parts.hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def start_service() -> None:
+    """A service process: the uvicorn supervisor, each worker, a reloader. None has a run; each
+    request brings its own. Nothing here asks the runner for anything, so a service with no
+    runner serves every request without the header as it would without Scrimmage."""
+    # Only a service needs these, and a function or a script must not pay for their import.
+    from scrimmage_core import asgi_gate, executor
+
+    if "SCRIMMAGE_TOKEN" in os.environ:
+        stop(
+            "SCRIMMAGE_TOKEN is set, and a service reads its token from SCRIMMAGE_TOKEN_FILE only, "
+            "so no environment holds it; unset SCRIMMAGE_TOKEN and set SCRIMMAGE_TOKEN_FILE"
+        )
+    path = os.environ.get("SCRIMMAGE_TOKEN_FILE", "")
+    token = read_token_file(path)
+    if "spawn_main" in " ".join(getattr(sys, "orig_argv", [])):
+        # A worker uvicorn spawned: the team's own children never learn the file's path.
+        os.environ.pop("SCRIMMAGE_TOKEN_FILE", None)
+    url = os.environ.get("SCRIMMAGE_CONTROL_URL", "")
+    if not loopback(url):
+        stop(
+            f"SCRIMMAGE_CONTROL_URL {url!r} must be http:// on this machine in this version; "
+            "a control server elsewhere needs TLS, which comes later"
+        )
+    prefixes = [p for p in os.environ.get("SCRIMMAGE_ALLOW_IMPORTS", "").split(",") if p]
+    tools, renames = tools_from(os.environ.get("SCRIMMAGE_TOOLS", ""))
+    names = tuple(labels.tool_name(path, dict(renames)) for path in tools)
+    process = state.ProcessState(names, service=True)
+    process.stop = stop
+    state.install_process(process)
+    client = ControlClient(url, token)
+    senders = Senders()
+    pool = executor.Executor()
+    executor.EXECUTOR = pool
+    asgi_gate.GATE = asgi_gate.Gate(process, client, token, prefixes, tools, renames, senders, pool)
+    folders = [os.getcwd(), *script_folder()]
+    for module, tool_names in tool_gate.targets(tools).items():
+        if tool_gate.module_spec(module, folders) is None:
+            stop(f"{module} is listed in SCRIMMAGE_TOOLS but cannot be found")
+        del tool_names
+    tool_gate.install(tools, dict(renames))
+    http_gate.install(process, client, None, stop)
+    langchain_gate.install(process, stop)
+    mcp_gate.install(process, None, stop)
+    process_gate.install(lambda: None)
+    process_gate.install_service()
+    threadctx.install(process)
+    asgi_gate.install(process)
+    senders.start()
+
+
 def start(*, mode: Mode = "program", target: str | None = None) -> None:
     child = mode == "child"
-    token = os.environ["SCRIMMAGE_TOKEN"]
+    token = os.environ.get("SCRIMMAGE_TOKEN", "")
     url = os.environ.get("SCRIMMAGE_CONTROL_URL", "")
     run = os.environ.get("SCRIMMAGE_RUN", "")
-    if not url or not run:
-        stop("SCRIMMAGE_CONTROL_URL and SCRIMMAGE_RUN must be set")
+    if not token or not url or not run:
+        # A script's child that lost its run still fails closed. A service has no run at
+        # startup, and says so with SCRIMMAGE_SERVICE=1.
+        stop(
+            "SCRIMMAGE_TOKEN, SCRIMMAGE_CONTROL_URL and SCRIMMAGE_RUN must be set; to start a "
+            "web service under scrimmage-run, set SCRIMMAGE_SERVICE=1 and SCRIMMAGE_TOKEN_FILE"
+        )
     prefixes = [p for p in os.environ.get("SCRIMMAGE_ALLOW_IMPORTS", "").split(",") if p]
     plan: Plan | None = None
     try:

@@ -11,12 +11,14 @@ import math
 import secrets
 import threading
 import time
+from collections import deque
 
 TIME = "X-Scrimmage-Time"
 NONCE = "X-Scrimmage-Nonce"
 SIGNATURE = "X-Scrimmage-Signature"
 WINDOW_S = 60.0  # how far a request's time may be from the server's clock
 NONCE_KEEP_S = 2 * WINDOW_S
+RUN_MAC_HEX = 16  # 64 bits of HMAC-SHA256 in a run header
 
 
 def digest(body: bytes) -> str:
@@ -49,21 +51,32 @@ def same(a: str, b: str) -> bool:
     return hmac.compare_digest(a.encode(), b.encode())
 
 
+def run_mac(token: str, name: str) -> str:
+    """The MAC a run header carries for its run's name: only a token holder can make one."""
+    return _mac(token, "scrimmage-run-name-v1", name)[:RUN_MAC_HEX]
+
+
 class NonceStore:
-    """Nonces seen in the last two minutes. A nonce seen before is a replay."""
+    """Nonces seen in the last two minutes. A nonce seen before is a replay.
+
+    An expiry queue ordered by time: each call drops only the entries that expired, then
+    looks once, so its cost does not grow with the number stored. A service's probe exposes
+    one of these to anyone who can reach its port."""
 
     def __init__(self) -> None:
-        self._seen: dict[str, float] = {}
+        self._order: deque[tuple[float, str]] = deque()
+        self._seen: set[str] = set()
         self._lock = threading.Lock()
 
     def first_use(self, nonce: str, now: float | None = None) -> bool:
         now = time.time() if now is None else now
         with self._lock:
-            for old in [n for n, t in self._seen.items() if now - t > NONCE_KEEP_S]:
-                del self._seen[old]
+            while self._order and now - self._order[0][0] > NONCE_KEEP_S:
+                self._seen.discard(self._order.popleft()[1])
             if nonce in self._seen:
                 return False
-            self._seen[nonce] = now
+            self._seen.add(nonce)
+            self._order.append((now, nonce))
             return True
 
 

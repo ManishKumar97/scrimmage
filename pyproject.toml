@@ -38,6 +38,10 @@ dev = [
     "opentelemetry-sdk>=1.45",
     # tests/test_threadctx.py checks a service on uvloop, which uvicorn picks when installed.
     "uvloop==0.23.0",
+    # The service tests run a FastAPI app under uvicorn, and loky's process pool via joblib.
+    "fastapi==0.162.5",
+    "uvicorn==0.54.0",
+    "joblib==1.6.0",
     # tests/test_docs_site.py builds the site, so a plain pytest needs mkdocs.
     {include-group = "docs"},
 ]

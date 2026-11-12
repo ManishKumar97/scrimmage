@@ -77,6 +77,12 @@ def test_the_only_processes_scrimmage_starts_are_its_runs() -> None:
         # It names the module to patch its thread pool when the agent imports it; it never
         # makes a pool or starts a process itself.
         ("threadctx.py", "multiprocessing.pool"),
+        # It names these to refuse them under a service run, when the agent imports them.
+        ("process_gate.py", "ProcessPoolExecutor"),
+        ("process_gate.py", "multiprocessing.connection"),
+        ("process_gate.py", "multiprocessing.pool"),
+        ("process_gate.py", "multiprocessing.process"),
+        ("process_gate.py", "multiprocessing.queues"),
     }
     # The same AST scan as the standard-library test, so __import__("subprocess") counts.
     imports = {
@@ -96,6 +102,8 @@ def test_the_only_processes_scrimmage_starts_are_its_runs() -> None:
         ("mcp_server.py", "subprocess"),  # for DEVNULL and PIPE; anyio starts the child
         ("mcp_server.py", "asyncio"),  # for the loop its signal handler wakes
         ("threadctx.py", "asyncio"),  # to read a loop's tasks at a run's close
+        ("asgi_gate.py", "asyncio"),  # the entry gate runs on the server's loop
+        ("executor.py", "concurrent"),  # for its Future: its workers are threads
     }
 
 

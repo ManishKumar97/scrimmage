@@ -192,10 +192,20 @@ def patch_executor(module: ModuleType, process: ProcessState) -> None:
     def carried_submit(self: Any, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
         if not state.in_service():
             return submit(self, fn, *args, **kwargs)
+        if in_subinterpreters(self):  # its tasks cross into another interpreter, unwrapped;
+            return spawn(self, fn, *args, **kwargs)  # a run's are refused before this
         return spawn(self, carrying(fn), *args, **kwargs)
 
     setattr(carried_submit, MARK, True)
     pool.submit = carried_submit
+
+
+def in_subinterpreters(pool: object) -> bool:
+    """A 3.14 InterpreterPoolExecutor: a ThreadPoolExecutor whose tasks run in subinterpreters,
+    which share none of this interpreter's context variables."""
+    module = sys.modules.get("concurrent.futures.interpreter")
+    kind = getattr(module, "InterpreterPoolExecutor", None)
+    return kind is not None and isinstance(pool, kind)
 
 
 def patch_anyio(module: ModuleType, process: ProcessState) -> None:

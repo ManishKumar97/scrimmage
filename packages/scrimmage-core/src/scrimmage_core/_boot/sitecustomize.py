@@ -1,6 +1,8 @@
 """Scrimmage's startup file. scrimmage-run puts this folder first on PYTHONPATH.
 
-It does nothing unless SCRIMMAGE_TOKEN is set; then it switches the SDK on. Either
+It does nothing unless SCRIMMAGE_TOKEN, or a service's SCRIMMAGE_TOKEN_FILE, is set; then
+it switches the SDK on. With SCRIMMAGE_SERVICE=1 every Python with the SDK is a service
+process, which takes its runs from requests. Either
 way it then runs the next sitecustomize.py on the path, which this one hid, so the
 program starts exactly as it would without Scrimmage.
 
@@ -176,6 +178,13 @@ def _start() -> None:
     if not has_sdk:
         _keep_out_tools()  # a tool, a build step or a cloud command: leave it alone
         return
+    if os.environ.get("SCRIMMAGE_SERVICE") == "1":
+        # Every Python of a service is a service process: the supervisor, each worker, a
+        # reloader. None is a child, and none has a run of its own.
+        from scrimmage_core import bootstrap
+
+        bootstrap.start_service()
+        return
     root = program and theirs is not None  # it execs itself and stays the root
     if theirs is None:
         theirs = _claim()
@@ -192,7 +201,7 @@ def _start() -> None:
     bootstrap.start(mode="program" if root else "child", target=_target())
 
 
-if os.environ.get("SCRIMMAGE_TOKEN"):
+if os.environ.get("SCRIMMAGE_TOKEN") or os.environ.get("SCRIMMAGE_TOKEN_FILE"):
     try:
         _start()
     except BaseException as exc:  # fail closed: never run the agent without its gates

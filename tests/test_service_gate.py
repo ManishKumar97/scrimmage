@@ -1,0 +1,495 @@
+"""The entry gate in the test process, before a real ASGI app, with a real control server.
+
+A request without the run header reaches the app exactly as the server sent it. One with it
+reaches the app only once its MAC is checked and its plan claimed, once, with every
+x-scrimmage-* header removed. Its record closes record_grace_s after the reply.
+"""
+
+import asyncio
+import contextvars
+import json
+import threading
+import time
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from scrimmage_core import asgi_gate, protocol, state, tool_gate
+from scrimmage_core.client import CAP
+from scrimmage_core.config import Mock
+from service_harness import Service, drive, eventually
+from service_harness import service as make_service
+
+seen_scopes: list[dict[str, Any]] = []
+
+
+def get_order(order_id: str) -> str:
+    raise AssertionError("a real order lookup must never run in a test")
+
+
+GATED = tool_gate.gate(get_order, "get_order")
+
+
+async def app(scope: Any, receive: Any, send: Any) -> None:
+    """Calls the gated tool, then answers with it and with the headers it was sent."""
+    seen_scopes.append(scope)
+    message = await receive()
+    try:
+        answer = GATED("1")
+    except Exception as exc:  # a refusal, as the agent would see it
+        answer = f"{type(exc).__name__}: {exc}"
+    body = json.dumps(
+        {
+            "answer": answer,
+            "headers": [[bytes(k).decode(), bytes(v).decode()] for k, v in scope["headers"]],
+            "body": bytes(message.get("body", b"")).decode(),
+        }
+    ).encode()
+    await send({"type": "http.response.start", "status": 200, "headers": [(b"x-app", b"1")]})
+    await send({"type": "http.response.body", "body": body})
+
+
+def gated_app() -> Any:
+    return asgi_gate.Entry(app)
+
+
+@pytest.fixture
+def svc(tmp_path: Path) -> Iterator[Service]:
+    seen_scopes.clear()
+    yield from make_service(tmp_path / "records")
+
+
+def mocked(name: str) -> tuple[Mock, ...]:
+    return (Mock("tool:get_order", f"order for {name}", None),)
+
+
+def run(coroutine: Any) -> Any:
+    return asyncio.run(coroutine)
+
+
+@pytest.mark.design("service.runs_apart")
+def test_four_parallel_runs_each_see_only_their_plan(svc: Service) -> None:
+    names = [svc.open(f"run-{i:012x}", mocks=mocked(f"run-{i:012x}")) for i in range(4)]
+
+    async def four() -> list[Any]:
+        return await asyncio.gather(
+            *(drive(gated_app(), headers=[svc.header(name)]) for name in names)
+        )
+
+    replies = run(four())
+    for name, reply in zip(names, replies, strict=True):
+        assert reply.status == 200 and json.loads(reply.body)["answer"] == f"order for {name}"
+        lines = svc.closed(name)
+        calls = [x for x in lines if x.get("call") == "tool:get_order"]
+        assert len(calls) == 1 and {x["run"] for x in lines} == {name}
+
+
+@pytest.mark.design("service.plain_untouched")
+def test_plain_requests_reach_the_app_byte_for_byte(svc: Service) -> None:
+    """A thousand plain requests, some with x-scrimmage-* names but no run header, between
+    four runs, under a slot leaked into the server's own context: each reaches the app with
+    the server's own scope object, and the same reply the app gives without Scrimmage."""
+    extra = [(b"x-scrimmage-time", b"1"), (b"x-scrimmage-nonce", b"n"), (b"accept", b"*/*")]
+
+    def scope_for(i: int) -> dict[str, Any]:
+        return {
+            "type": "http",
+            "method": "POST",
+            "path": "/chat",
+            "raw_path": b"/chat",
+            "query_string": b"",
+            "headers": list(extra),
+            "n": i,
+        }
+
+    # The same app with no gate, before any run is open: what it gives without Scrimmage.
+    async def alone() -> list[Any]:
+        return await asyncio.gather(*(drive(app, scope=scope_for(i)) for i in range(1000)))
+
+    bare = run(alone())
+    names = [svc.open(mocks=mocked("x")) for _ in range(4)]
+    leaked = contextvars.copy_context()
+    stale = state.RunState(None, None, [])  # type: ignore[arg-type]
+    leaked.run(state.SLOT.set, state.Joined("run-leaked", stale))  # leaked into the server
+    scopes = [scope_for(i) for i in range(1000)]
+    seen_scopes.clear()
+
+    async def mixed() -> list[Any]:
+        plain = [drive(gated_app(), scope=scope) for scope in scopes]
+        runs = [drive(gated_app(), headers=[svc.header(n)]) for n in names]
+        return await asyncio.gather(*plain[:500], *runs, *plain[500:])
+
+    through = leaked.run(run, mixed())
+    gated = [*through[:500], *through[504:]]
+    for without, mine in zip(bare, gated, strict=True):
+        assert (mine.status, mine.headers, mine.body) == (
+            without.status,
+            without.headers,
+            without.body,
+        )
+    # Each plain request reached the app with the server's own scope object, not a copy.
+    plain_seen = {id(s) for s in seen_scopes if "n" in s}
+    assert plain_seen == {id(s) for s in scopes}
+    assert all(json.loads(r.body)["answer"] == "order for x" for r in through[500:504])
+
+
+@pytest.mark.design("service.plain_untouched")
+def test_a_plain_request_gets_the_servers_own_scope(svc: Service) -> None:
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/echo",
+        "raw_path": b"/echo",
+        "query_string": b"",
+        "headers": [(b"x-scrimmage-time", b"1")],
+    }
+    run(drive(gated_app(), scope=scope))
+    assert seen_scopes == [scope] and seen_scopes[0] is scope
+
+
+@pytest.mark.design("service.header_removed")
+def test_the_run_header_never_reaches_the_app(svc: Service) -> None:
+    name = svc.open(mocks=mocked("x"))
+    _, value = svc.header(name)
+    headers = [(b"X-Scrimmage-Run", value), (b"x-scrimmage-other", b"1"), (b"accept", b"a")]
+    reply = run(drive(gated_app(), headers=headers))
+    assert reply.status == 200
+    sent = json.loads(reply.body)["headers"]
+    assert sent == [["accept", "a"]]
+    assert "x-scrimmage" not in reply.body.decode().lower()
+
+
+def refused_code(reply: Any) -> str:
+    assert reply.status == 503, reply
+    assert reply.headers["content-type"] == "application/json"
+    assert json.loads(reply.body) == {"error": reply.headers["x-scrimmage-error"]}
+    assert set(reply.headers) == {"content-type", "content-length", "x-scrimmage-error"}
+    return reply.headers["x-scrimmage-error"]
+
+
+@pytest.mark.design("service.no_plan_no_app")
+def test_a_run_request_whose_plan_cannot_be_claimed_gets_503_and_never_reaches_the_app(
+    svc: Service,
+) -> None:
+    # A run that closed: its genuine header, sent late.
+    late = svc.open()
+    svc.server.close_run(late)
+    assert refused_code(run(drive(gated_app(), headers=[svc.header(late)]))) == "no-such-run"
+    # A plan outside SCRIMMAGE_ALLOW_IMPORTS.
+    outside = svc.open(mocks=(Mock("tool:get_order", 1, "other.models:Order"),))
+    assert (
+        refused_code(run(drive(gated_app(), headers=[svc.header(outside)]))) == "plan-unavailable"
+    )
+    # The runner stopped.
+    gone = svc.open()
+    svc.server.stop()
+    assert refused_code(run(drive(gated_app(), headers=[svc.header(gone)]))) == "plan-unavailable"
+    assert seen_scopes == []
+
+
+@pytest.mark.design("service.claimed_once")
+def test_a_second_claim_of_a_run_gets_503_claimed(svc: Service) -> None:
+    name = svc.open(mocks=mocked("x"), grace=30.0)
+    assert run(drive(gated_app(), headers=[svc.header(name)])).status == 200
+    assert refused_code(run(drive(gated_app(), headers=[svc.header(name)]))) == "claimed"
+    assert len(seen_scopes) == 1
+
+
+@pytest.mark.design("service.claimer_only")
+def test_lines_from_a_process_that_did_not_claim_are_refused(svc: Service) -> None:
+    name = svc.open()
+    mine = {"host": "h", "pid": 1, "started": "a"}
+    other = {"host": "h", "pid": 2, "started": "b"}
+    assert svc.client.claim(name, mine)
+    line = {"v": 1, "run": name, "test": "t", "row": "baseline", "seq": 1, "proc": other}
+    status, reply = svc.client.request("POST", "/v1/records", {"run": name, "lines": [line]})
+    assert (status, reply["error"]) == (409, "not_the_claimer")
+    line["proc"] = mine
+    status, _ = svc.client.request("POST", "/v1/records", {"run": name, "lines": [line]})
+    assert status == 200
+    # A service run's plan is claimed, never fetched.
+    assert svc.client.request("GET", f"/v1/plans/{name}")[0] == 409
+
+
+class Counting:
+    """Counts the claims the gate makes, and every control request, made from then on."""
+
+    def __init__(self, svc: Service) -> None:
+        self.count = 0
+        self.every = 0
+        real = svc.client.request
+
+        def counted(method: str, path: str, *args: Any, **kwargs: Any) -> Any:
+            self.every += 1
+            self.count += path == "/v1/claims"
+            return real(method, path, *args, **kwargs)
+
+        svc.client.request = counted  # type: ignore[method-assign]
+
+
+@pytest.mark.design("service.bad_header")
+def test_a_bad_or_doubled_run_header_gets_503_with_no_fetch(svc: Service) -> None:
+    name = svc.open(mocks=mocked("x"))
+    good = svc.header(name)
+    counting = Counting(svc)
+    for headers in (
+        [good, good],
+        [(b"x-scrimmage-run", name.encode())],
+        [(b"x-scrimmage-run", b"run-NOTHEX0000.0123456789abcdef")],
+        [(b"x-scrimmage-run", good[1] + b"0")],
+        [(b"x-scrimmage-run", b"probe-0123456789ab.0123456789abcdef")],
+    ):
+        assert refused_code(run(drive(gated_app(), headers=headers))) == "bad-run-header"
+    assert counting.every == 0 and seen_scopes == []
+
+
+@pytest.mark.design("service.header_mac")
+def test_a_header_with_a_wrong_mac_gets_503_with_no_control_request(svc: Service) -> None:
+    name = svc.open(mocks=mocked("x"))
+    counting = Counting(svc)
+    mac = protocol.run_mac(svc.token, name)
+    wrong = "0" * 16 if mac != "0" * 16 else "1" * 16
+    for bad in (wrong, mac[:15] + ("0" if mac[15] != "0" else "1")):
+        headers = [(b"x-scrimmage-run", f"{name}.{bad}".encode())]
+        assert refused_code(run(drive(gated_app(), headers=headers))) == "bad-run-header"
+    assert counting.every == 0 and seen_scopes == []
+
+
+@pytest.mark.design("service.header_mac")
+def test_a_header_made_with_another_token_gets_503(svc: Service) -> None:
+    name = svc.open(mocks=mocked("x"))
+    header = svc.header(name, token="another-token-" + "0" * 40)
+    assert refused_code(run(drive(gated_app(), headers=[header]))) == "bad-run-header"
+
+
+@pytest.mark.design("service.abandoned")
+def test_a_claim_failure_after_the_claim_sends_abandoned_and_the_run_ends_at_once(
+    svc: Service,
+) -> None:
+    name = svc.open(tools=("acme.tools:get_order", "acme.tools:refund_order"))
+    assert refused_code(run(drive(gated_app(), headers=[svc.header(name)]))) == "plan-unavailable"
+    eventually(lambda: (name, "structure") in svc.refused)
+    assert svc.server.runs[name].broken and seen_scopes == []
+
+
+@pytest.mark.design("service.setup_header")
+def test_the_setup_header_passes_the_gate(svc: Service) -> None:
+    name = svc.open("setup-0123456789ab", mocks=mocked("setup"))
+    assert run(drive(gated_app(), headers=[svc.header(name)])).status == 200
+    # A setup- name with a MAC made for the run- name is refused.
+    other = svc.open("setup-ba9876543210")
+    mac = protocol.run_mac(svc.token, "run-ba9876543210")
+    headers = [(b"x-scrimmage-run", f"{other}.{mac}".encode())]
+    assert refused_code(run(drive(gated_app(), headers=headers))) == "bad-run-header"
+
+
+@pytest.mark.design("service.own_executor")
+def test_claims_and_budget_asks_never_use_the_default_executor(svc: Service) -> None:
+    name = svc.open(mocks=mocked("x"))
+    used: list[object] = []
+
+    class Watched(ThreadPoolExecutor):
+        def submit(self, fn: Any, /, *args: Any, **kwargs: Any) -> Any:
+            used.append(fn)
+            return super().submit(fn, *args, **kwargs)
+
+    async def with_default() -> Any:
+        asyncio.get_running_loop().set_default_executor(Watched(max_workers=2))
+        return await drive(gated_app(), headers=[svc.header(name)])
+
+    assert run(with_default()).status == 200
+    assert used == []
+    own = [t for t in threading.enumerate() if t.name.startswith("scrimmage-control-")]
+    assert len(own) >= CAP and not any(t in state.TAGS for t in own)
+
+
+@pytest.mark.design("service.claim_waits_on_loop")
+def test_a_claim_with_no_free_slot_waits_about_250_ms_then_gets_503(svc: Service) -> None:
+    name = svc.open(mocks=mocked("x"))
+    for _ in range(CAP):
+        assert svc.client.slots.acquire(blocking=False)
+    try:
+
+        async def timed() -> tuple[Any, float, int]:
+            ticks = [0]
+
+            async def tick() -> None:  # the loop keeps running while the claim waits
+                while True:
+                    ticks[0] += 1
+                    await asyncio.sleep(0.01)
+
+            ticker = asyncio.create_task(tick())
+            began = time.monotonic()
+            reply = await drive(gated_app(), headers=[svc.header(name)])
+            ticker.cancel()
+            return reply, time.monotonic() - began, ticks[0]
+
+        reply, waited, ticks = run(timed())
+    finally:
+        for _ in range(CAP):
+            svc.client.slots.release()
+    assert refused_code(reply) == "plan-unavailable"
+    assert 0.2 <= waited < 1.0 and ticks >= 10
+    assert svc.client.load_since(0)[0] == 1  # turned away once, counted once
+
+
+@pytest.mark.design("service.nonce_queue")
+def test_the_nonce_store_drops_expired_entries_without_a_full_sweep() -> None:
+    store = protocol.NonceStore()
+    for i in range(10_000):
+        assert store.first_use(f"n{i}", now=float(i) / 100)
+    assert not store.first_use("n9999", now=100.0)
+    # Each call drops only the expired entries at the front, then looks once.
+    late = 100.0 + protocol.NONCE_KEEP_S
+    assert store.first_use("fresh", now=late)
+    assert len(store._order) < 10_000 and "n0" not in store._seen
+    began = time.perf_counter()
+    for i in range(10_000):
+        store.first_use(f"m{i}", now=late)
+    assert time.perf_counter() - began < 1.0
+
+
+@pytest.mark.design("service.control_load")
+def test_the_last_batch_counts_control_busy_and_control_p99_ms(svc: Service) -> None:
+    real_handle = svc.server.handle
+
+    def slow(*args: Any) -> Any:
+        time.sleep(0.3)  # a control server under load: each request is held 300 ms
+        return real_handle(*args)
+
+    svc.server.handle = slow  # type: ignore[method-assign]
+    names = [svc.open(mocks=mocked("x")) for _ in range(CAP + 1)]
+
+    async def nine() -> list[Any]:  # a ninth claim beside eight: no slot frees in 250 ms
+        return await asyncio.gather(*(drive(gated_app(), headers=[svc.header(n)]) for n in names))
+
+    replies = run(nine())
+    assert sorted(r.status for r in replies) == [200] * CAP + [503]
+    claimed = [n for n, r in zip(names, replies, strict=True) if r.status == 200]
+    for name in claimed:
+        svc.closed(name)
+    loaded = [svc.server.runs[n] for n in claimed]
+    assert all((r.control_busy or 0) >= 1 for r in loaded)
+    assert all((r.control_p99_ms or 0) >= 100 for r in loaded)
+    svc.server.handle = real_handle  # type: ignore[method-assign]
+    quiet = svc.open(mocks=mocked("x"))
+    assert run(drive(gated_app(), headers=[svc.header(quiet)])).status == 200
+    svc.closed(quiet)
+    calm = svc.server.runs[quiet]
+    assert calm.control_busy == 0 and calm.control_p99_ms is not None
+    assert calm.control_p99_ms < min(r.control_p99_ms or 0 for r in loaded)
+
+
+@pytest.mark.design("service.grace")
+def test_a_call_in_the_grace_window_is_in_the_record_and_one_after_is_refused(
+    svc: Service,
+) -> None:
+    name = svc.open(mocks=mocked("x"), grace=1.0)
+    holder: list[state.RunState] = []
+
+    async def remember(scope: Any, receive: Any, send: Any) -> None:
+        current = state.current()
+        assert current is not None
+        holder.append(current)
+        await app(scope, receive, send)
+
+    assert run(drive(asgi_gate.Entry(remember), headers=[svc.header(name)])).status == 200
+    context = contextvars.copy_context()
+    context.run(state.SLOT.set, state.Joined(name, holder[0]))
+    # Well after the reply, still inside the 1 s grace: a record closed at the reply would
+    # have closed by now. A time is what this checks, so the wait is a time.
+    threading.Event().wait(0.3)
+    assert context.run(GATED, "2") == "order for x"  # in the grace window: the run's own
+    lines = svc.closed(name)
+    assert sum(1 for x in lines if x.get("call") == "tool:get_order") == 2
+    with pytest.raises(Exception, match="has ended"):
+        context.run(GATED, "3")
+
+
+@pytest.mark.design("service.orphan_reported")
+def test_a_forced_lost_plan_is_an_orphan_its_write_is_refused_and_the_run_is_an_infrastructure_error(  # noqa: E501  # the design's name
+    svc: Service,
+) -> None:
+    import threading
+
+    from scrimmage_core import runner
+
+    name = svc.open(mocks=mocked("x"), grace=0.3)
+    told: list[str] = []
+
+    async def loses_it(scope: Any, receive: Any, send: Any) -> None:
+        def worker() -> None:
+            try:
+                contextvars.Context().run(GATED, "1")  # the plan's context is lost here
+            except Exception as exc:
+                told.append(str(exc))
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        thread.join()
+        await app(scope, receive, send)
+
+    assert run(drive(asgi_gate.Entry(loses_it), headers=[svc.header(name)])).status == 200
+    lines = svc.closed(name)
+    assert "outside that run's context" in told[0]
+    assert any(x.get("reason") == "orphan" for x in lines)
+    assert runner.context_lost(lines)
+
+
+@pytest.mark.design("service.gates_once")
+def test_both_gates_present_handle_a_request_once(svc: Service) -> None:
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    from scrimmage_core.asgi_gate import patch_starlette
+
+    async def chat(request: Any) -> Any:
+        return JSONResponse({"answer": GATED("1")})
+
+    patch_starlette(__import__("starlette.applications", fromlist=["x"]), svc.process)
+    inner = Starlette(routes=[Route("/chat", chat, methods=["POST"])])
+    name = svc.open(mocks=mocked("both"))
+    counting = Counting(svc)
+    reply = run(drive(asgi_gate.Entry(inner), headers=[svc.header(name)]))
+    assert reply.status == 200 and json.loads(reply.body)["answer"] == "order for both"
+    assert counting.count == 1  # one claim: the inner gate passed the call on as it was
+
+
+@pytest.mark.design("service.starlette_alone")
+def test_starlette_gate_alone_under_testclient(svc: Service) -> None:
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    from scrimmage_core.asgi_gate import patch_starlette
+
+    async def chat(request: Any) -> Any:
+        try:
+            answer = GATED("1")
+        except AssertionError as real:  # the real tool ran: untouched, as for a plain request
+            answer = str(real)
+        return JSONResponse({"answer": answer, "headers": dict(request.headers)})
+
+    patch_starlette(__import__("starlette.applications", fromlist=["x"]), svc.process)
+    web = Starlette(routes=[Route("/chat", chat, methods=["POST"])])
+    name = svc.open(mocks=mocked("alone"))
+    header, value = svc.header(name)
+    with TestClient(web) as client:
+        got = client.post("/chat", headers={header.decode(): value.decode()})
+        plain = client.post("/chat")
+    assert got.json()["answer"] == "order for alone"
+    assert not any(k.startswith("x-scrimmage") for k in got.json()["headers"])
+    assert "must never run" in plain.json()["answer"]  # a plain request: the real tool, untouched
+
+
+@pytest.mark.design("service.websocket")
+def test_a_websocket_with_the_run_header_is_closed(svc: Service) -> None:
+    name = svc.open()
+    reply = run(drive(gated_app(), headers=[svc.header(name)], scope_type="websocket"))
+    assert reply.messages == [{"type": "websocket.close", "code": 1008}]
+    assert seen_scopes == []

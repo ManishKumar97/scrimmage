@@ -48,6 +48,13 @@ class Run:
     # When the run opened, just before its program started: the runner's run_timeout counts
     # from about here. Monotonic, so it is read only as a difference on this process's clock.
     opened: float = field(default_factory=time.monotonic)
+    # A service run is one request: its plan is claimed once, by the process that answers
+    # it, and only that process's lines are taken from then on.
+    service: bool = False
+    claimed_by: str | None = None
+    # The claiming process's control load from the run's claim to its close: its last batch.
+    control_busy: int | None = None
+    control_p99_ms: float | None = None
 
 
 class ControlServer:
@@ -83,11 +90,13 @@ class ControlServer:
         self.server.server_close()
         self.thread.join()
 
-    def open_run(self, run: str, row: str, plan: dict[str, object]) -> None:
+    def open_run(
+        self, run: str, row: str, plan: dict[str, object], *, service: bool = False
+    ) -> None:
         json.dumps(plan)  # a plan that cannot be sent fails here, not in a handler
         self.store.open_run(run)
         with self.lock:
-            self.runs[run] = Run(plan, row)
+            self.runs[run] = Run(plan, row, service=service)
 
     def close_run(self, run: str) -> Run:
         """No line or plan request is accepted for the run after this."""
@@ -118,7 +127,45 @@ class ControlServer:
             return self._release(body)
         if method == "POST" and path == BLOB_PATH:
             return self._blob(body)
+        if method == "POST" and path == "/v1/claims":
+            return self._claim(body)
+        if method == "POST" and path == "/v1/abandoned":
+            return self._abandoned(body)
         return 404, {"error": "not_found"}
+
+    def _claim(self, body: bytes) -> tuple[int, dict[str, object]]:
+        """A service run's plan, to the first process that asks. A second claim, as from a
+        replayed header, is refused: a run is joined once."""
+        try:
+            request = obj(json.loads(body))
+            run, proc = str(request["run"]), proc_key(request["proc"])
+        except (ValueError, KeyError):
+            return 400, {"error": "bad_request"}
+        with self.lock:
+            state = self.runs.get(run)
+            if state is None or not state.open:
+                return 404, {"error": "no_such_run"}
+            if state.claimed_by is not None:
+                return 409, {"error": "claimed"}
+            state.claimed_by, state.fetched = proc, True
+            elapsed = round(max(0.0, time.monotonic() - state.opened), 3)
+            return 200, {"plan": {**state.plan, "elapsed_s": elapsed}}
+
+    def _abandoned(self, body: bytes) -> tuple[int, dict[str, object]]:
+        """The claimer could not use the plan: the run is broken, and ends at once."""
+        try:
+            run = str(obj(json.loads(body))["run"])
+        except (ValueError, KeyError):
+            return 400, {"error": "bad_request"}
+        with self.lock:
+            state = self.runs.get(run)
+            if state is None or not state.open:
+                return 409, {"error": "run_closed"}
+            first = not state.broken
+            state.broken = True
+        if first:
+            threading.Thread(target=self.on_refused, args=(run, "structure"), daemon=True).start()
+        return 200, {"ok": True}
 
     def _open(self, run: str) -> Run | None:
         with self.lock:
@@ -186,6 +233,8 @@ class ControlServer:
             state = self.runs.get(run)
             if state is None or not state.open:
                 return 404, {"error": "no_such_run"}
+            if state.service:  # a service run's plan is claimed, once, never fetched
+                return 409, {"error": "service_run"}
             state.fetched = True
             # The run's age, not a time on this clock, which means nothing in the agent's.
             elapsed = round(max(0.0, time.monotonic() - state.opened), 3)
@@ -200,6 +249,7 @@ class ControlServer:
             made = None if batch.get("made") is None else int(str(batch["made"]))
             if made is not None and made < 0:
                 raise ValueError("made is negative")
+            busy, p99 = control_load(batch)
         except (ValueError, KeyError, TypeError):
             return 400, {"error": "bad_batch"}
         mine = [line for line in lines if line.get("run") == run]
@@ -207,9 +257,16 @@ class ControlServer:
             state = self.runs.get(run)
             if state is None or not state.open:
                 return 409, {"error": "run_closed"}
+            claimer = state.claimed_by
+            senders = {proc_key(line.get("proc")) for line in mine}
+            if made is not None:
+                senders.add(proc_key(batch.get("proc")))
+            if claimer is not None and senders - {claimer}:
+                return 409, {"error": "not_the_claimer"}  # no run spans processes in a service
             state.dropped += dropped
             if made is not None:
                 state.made[proc_key(batch.get("proc"))] = made
+                state.control_busy, state.control_p99_ms = busy, p99
             accepted = self.store.add(run, mine)
             reasons = [
                 str(x.get("reason", "unlisted")) for x in mine if x.get("action") == "refused"
@@ -228,6 +285,17 @@ class ControlServer:
         if broken:
             threading.Thread(target=self.on_refused, args=(run, "structure"), daemon=True).start()
         return 200, {"accepted": accepted}
+
+
+def control_load(batch: dict[str, object]) -> tuple[int | None, float | None]:
+    """A last batch's control_busy and control_p99_ms, which only a newer SDK sends."""
+    busy = batch.get("control_busy")
+    p99 = batch.get("control_p99_ms")
+    if busy is not None and (isinstance(busy, bool) or not isinstance(busy, int) or busy < 0):
+        raise ValueError("control_busy is not a count")
+    if p99 is not None and (isinstance(p99, bool) or not isinstance(p99, int | float) or p99 < 0):
+        raise ValueError("control_p99_ms is not a time")
+    return busy, None if p99 is None else float(p99)
 
 
 def proc_key(proc: object) -> str:

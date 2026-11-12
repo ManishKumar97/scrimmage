@@ -20,10 +20,22 @@ import httpx2
 import pytest
 
 import scrimmage_core
-from scrimmage_core import http_gate, langchain_gate, mcp_gate, process_gate, state, tool_gate
+from scrimmage_core import (
+    asgi_gate,
+    http_gate,
+    langchain_gate,
+    mcp_gate,
+    process_gate,
+    protocol,
+    state,
+    tool_gate,
+)
+from scrimmage_core.client import ControlClient, Senders
 from scrimmage_core.config import Mock
 from scrimmage_core.errors import ScrimmageRefused
+from scrimmage_core.executor import Executor
 from scrimmage_core.plan import Plan
+from service_harness import drive
 from test_http_gate import Budget
 from test_langgraph import Shape, base_tool, module
 from test_mcp import library as mcp_library
@@ -319,8 +331,30 @@ def test_langchain_checked_entry_calls_the_original_with_no_run(
 
 
 def assert_structure_and_untouched(service: state.ProcessState, stops: list[str]) -> None:
+    """The process is broken, not stopped: a run request then gets 503 structure, before any
+    control request, and a plain request reaches the app untouched."""
     assert stops == [] and service.broken is not None
     assert [entry["notice"] for entry in service.report] == ["structure"]
+    token = "t" * 64
+    unreachable = ControlClient("http://127.0.0.1:9", token)  # a claim would fail: none is made
+    pool = Executor()
+    asgi_gate.GATE = asgi_gate.Gate(service, unreachable, token, [], (), (), Senders(), pool)
+    reached: list[object] = []
+
+    async def app(scope: Any, receive: Any, send: Any) -> None:
+        reached.append(scope)
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"plain"})
+
+    name = "run-0123456789ab"
+    header = (b"x-scrimmage-run", f"{name}.{protocol.run_mac(token, name)}".encode())
+    try:
+        refused = asyncio.run(drive(asgi_gate.Entry(app), headers=[header]))
+        plain = asyncio.run(drive(asgi_gate.Entry(app)))
+    finally:
+        asgi_gate.GATE = None
+    assert refused.status == 503 and refused.headers["x-scrimmage-error"] == "structure"
+    assert (plain.status, plain.body) == (200, b"plain") and len(reached) == 1
 
 
 @pytest.mark.design("service.broken_after_listening")

@@ -22,7 +22,7 @@ import anyio.to_thread
 import httpx2
 import pytest
 
-from scrimmage_core import http_gate, runner, state, threadctx, tool_gate
+from scrimmage_core import http_gate, process_gate, runner, state, threadctx, tool_gate
 from scrimmage_core.errors import ScrimmageRefused
 from scrimmage_core.plan import Plan
 from test_http_gate import Budget
@@ -40,6 +40,7 @@ def service() -> Iterator[state.ProcessState]:
     process.listening = True
     state.install_process(process)
     threadctx.install(process)
+    process_gate.install_service()  # as start_service does: the pool patches sit together
     yield process
     state.install_process(None)
 
