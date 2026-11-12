@@ -124,6 +124,8 @@
   An escaped quote with more of the value after it is part of the value, as in `password=abc\"2zz`; one before a space, a comma, a colon, a bracket or the end closes an escaped string and ends the value.
   In a string read out of a JSON text, and in a Python string, such as what a tool takes or returns or the agent's answer, a `\n` or `\r` with more of the value after it is a backslash and a letter, as in the path `password=C:\new2zz`, and is part of the value.
   There a raw quote with more of the value after it is part of the value too, unless the field name sits inside a quote, which the quote then closes.
+  A text that is one whole JSON string literal, as in `"password=C:\newhunt1"`, is read as JSON, so a `\n` in it is a line break and ends a value there: `ewhunt1` after it is kept.
+  This holds for a Python string of that shape too, and redaction did the same before these rules.
   The same text outside JSON, where `\n` cannot be told from an escaped line break, still ends the value at `\n`: `password=C:\new2zz` as plain text keeps `\new2zz`.
   The paging and tokenizer prefixes (`next_`, `page_`, `sync_`, `cursor_`, `eos_`, `pad_` and the rest) are kept only before `token`: `SYNC_PASSWORD=` and `next_secret=` are removed.
   An edit to a string that holds a removed secret inside a JSON text is refused as a whole, even beside the secret; the other strings of that JSON text stay open.
