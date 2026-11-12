@@ -7,6 +7,7 @@ line keeps the real reply, redacted, and the injected text, whole.
 
 import asyncio
 import gzip
+import hashlib
 import json
 from collections.abc import Iterator
 from pathlib import Path
@@ -316,6 +317,21 @@ def test_show_puts_what_the_model_said_beside_what_replace_gave_the_agent(tmp_pa
     ask(guard(Provider(gate.events)))
     shown = show.came_back(gate.line, saved(gate, tmp_path))
     assert shown == "the model said unsafe S14; replace gave the agent: safe"
+
+
+def test_show_redacts_what_the_model_said_as_the_python_string_it_was(tmp_path: Path) -> None:
+    """A record written before its reply was redacted still shows no secret: the text read out
+    of the reply is a string, so its backslash-n is a backslash and a letter."""
+    gate = Gate(replace())
+    ask(guard(Provider(gate.events)))
+    data = json.dumps(completion("password=C:\\new2zz")).encode()  # as an old record kept it
+    sha = hashlib.sha256(data).hexdigest()
+    (tmp_path / "blobs").mkdir()
+    (tmp_path / "blobs" / sha).write_bytes(data)
+    line = {**gate.line, "result": {**gate.line["result"], "sha256": sha}}
+    assert show.came_back(line, tmp_path) == (
+        "the model said [secret removed]; replace gave the agent: safe"
+    )
 
 
 def test_show_reads_a_reply_only_from_a_real_blobs_folder_and_by_its_hash(tmp_path: Path) -> None:
