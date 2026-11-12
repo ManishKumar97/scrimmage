@@ -15,7 +15,7 @@ import types
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx2
 import pytest
@@ -451,6 +451,38 @@ def test_a_call_in_the_grace_window_is_in_the_record_and_one_after_is_refused(
     assert sum(1 for x in lines if x.get("call") == "tool:get_order") == 2
     with pytest.raises(Exception, match="has ended"):
         context.run(GATED, "3")
+
+
+@pytest.mark.design("service.closed_before_last_batch")
+def test_a_call_made_while_the_last_batch_is_sent_is_refused(
+    svc: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from scrimmage_core.client import RunSender
+
+    name = svc.open(mocks=mocked("x"))
+    holder: list[state.RunState] = []
+    during: list[str] = []
+    close = RunSender.close
+
+    async def remember(scope: Any, receive: Any, send: Any) -> None:
+        holder.append(cast(state.RunState, state.current()))
+        await app(scope, receive, send)
+
+    def sending(self: RunSender) -> None:
+        context = contextvars.copy_context()
+        context.run(state.SLOT.set, state.Joined(name, holder[0]))
+        try:
+            during.append(context.run(GATED, "late"))
+        except Exception as exc:  # the refusal the agent would see
+            during.append(str(exc))
+        close(self)
+
+    monkeypatch.setattr(RunSender, "close", sending)
+    assert run(drive(asgi_gate.Entry(remember), headers=[svc.header(name)])).status == 200
+    lines = svc.closed(name)
+    assert len(during) == 1 and "has ended" in during[0]
+    calls = [x["action"] for x in lines if x.get("call") == "tool:get_order"]
+    assert calls == ["mock", "refused"]  # the late call is refused, and still recorded
 
 
 @pytest.mark.design("service.orphan_reported")

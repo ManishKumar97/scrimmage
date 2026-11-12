@@ -263,6 +263,9 @@ async def joined(
     def close() -> None:
         try:
             threadctx.close_run(run)
+            # Closed before the last batch, so a call that starts now is refused, not a line
+            # sent after the record was made.
+            run.run_closed()
             sender.close()
         finally:
             run.run_closed()
