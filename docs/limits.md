@@ -128,10 +128,13 @@
   This holds for a Python string of that shape too, and redaction did the same before these rules.
   The same text outside JSON, where `\n` cannot be told from an escaped line break, still ends the value at `\n`: `password=C:\new2zz` as plain text keeps `\new2zz`.
   The paging and tokenizer prefixes (`next_`, `page_`, `sync_`, `cursor_`, `eos_`, `pad_` and the rest) are kept only before `token`: `SYNC_PASSWORD=` and `next_secret=` are removed.
+  A kept value, such as a paging token, ends where a field name or a key shape begins in it, and the rest is read again: `next_page_token=ab,password=x` keeps `next_page_token=ab,` and removes the password.
+  A field name begins there as it does anywhere else, after any character that is not a letter, a digit, `_` or a backslash, so `next_page_token=a/token=b` loses `token=b`, and `next_page_token=a_token=b` is read as the field `a_token=b`, which is removed.
+  A key shape such as `sk-`, `AKIA` or `ghp_` is removed anywhere in a kept value, even glued to a letter.
   An edit to a string that holds a removed secret inside a JSON text is refused as a whole, even beside the secret; the other strings of that JSON text stay open.
   Redaction is a heuristic on known shapes.
 
-  *Checked by: `tests/test_redact.py::test_the_old_module_kept_each_new_secret_and_the_new_one_removes_it`, `tests/test_redact.py::test_prose_empty_values_and_paths_are_kept`*
+  *Checked by: `tests/test_redact.py::test_the_old_module_kept_each_new_secret_and_the_new_one_removes_it`, `tests/test_redact.py::test_prose_empty_values_and_paths_are_kept`, `tests/test_redact.py::test_a_kept_value_ends_where_a_field_or_a_key_shape_begins_in_it`*
 
 - **A secret with no pattern under an innocent key is written.** `{"note": "pw is hunter2"}` has neither a known pattern nor a secret-like key, so it goes in; the customer-data warning says to check the mocks.
 - **`${` in a value cannot be written.** `scrimmage.toml` rejects `${` as a placeholder, so such a value is listed `placeholder`.

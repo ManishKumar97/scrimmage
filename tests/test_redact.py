@@ -976,6 +976,9 @@ def test_spans_cover_exactly_what_redact_removes() -> None:
         f'"{ESCAPED_QUOTE_LEAK}"',
         *KEPT_BEFORE_SECRET,
         *(json.dumps({"log": text}) for text in KEPT_BEFORE_SECRET),
+        *(text for text, _, _ in NO_ESCAPE_AFTER_KEPT),
+        # every kept prefix with each glue and shape right after it, as the grid has them
+        *(p + g + s for p in KEPT_PREFIXES for g in GLUES for s, _ in SECRET_SHAPES),
     ]
     for text in [*corpus(), *SAMPLES.values(), *leaks]:
         places = redact_module.replacements(text)
@@ -1094,6 +1097,61 @@ def test_a_kept_value_shields_no_secret_one_glue_character_on(text: str, secret:
         assert secret not in out and text.partition("=")[0] in out, out
 
 
+# A kept value with a field or a key shape right after it, with no escape between: the kept
+# value stays, and what follows it is removed by its own rule.
+NO_ESCAPE_AFTER_KEPT = [
+    ("next_page_token=ab,password=X", "next_page_token=ab,[secret removed]", "form-field"),
+    ("is_secret=True,token=hunter2", "is_secret=True,[secret removed]", "form-field"),
+    ("f(token=tok,password=hunter2)", "f(token=tok,[secret removed]", "form-field"),
+    ("eos_token=x|sk-" + "Q" * 24, "eos_token=x|[secret removed]", "openai-key"),
+    ("cursor_token=Q2F/AKIA" + "Q" * 16, "cursor_token=Q2F/[secret removed]", "aws-access-key"),
+    ("next_page_token=a.Bearer " + "Q" * 20, "next_page_token=a.[secret removed]", "bearer-token"),
+    ("f(token=ghp_" + "Q" * 36 + ")", "f(token=[secret removed])", "github-token"),
+]
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize(("text", "expected", "rule"), NO_ESCAPE_AFTER_KEPT)
+def test_a_kept_value_ends_where_a_field_or_a_key_shape_begins_in_it(
+    text: str, expected: str, rule: str
+) -> None:
+    assert redact(text) == expected
+    assert redacted(text, decoded=True)[0] == expected
+    assert json.loads(redact(json.dumps({"l": text}))) == {"l": expected}
+    assert capture.clean({"v": text})[0] == {"v": expected}
+    assert [found for _, _, found in redact_module.spans(text)] == [rule]
+    # The paging token, the flag or the bare name before it is kept as it was.
+    kept = expected.partition("[secret removed]")[0]
+    assert text.startswith(kept) and "=" in kept
+
+
+def test_a_kept_value_alone_is_kept_word_for_word() -> None:
+    for text in ("next_page_token=ab", "next_page_token=Q2F/zX+9w==,status=ok", "f(token=tok)"):
+        assert redact(text) == text
+        assert redact_module.spans(text) == []
+
+
+def test_a_field_name_begins_in_a_kept_value_as_it_does_anywhere_else() -> None:
+    """As in docs/limits.md: after any character that is not a letter, a digit, _ or a
+    backslash, and right after the =, where a NAME_ prefix takes the kept value in."""
+    assert redact("next_page_token=a/token=b") == "next_page_token=a/[secret removed]"
+    assert redact("next_page_token=a_token=b") == "next_page_token=[secret removed]"
+    assert redact("next_page_token=ab" + "sk-" + "Q" * 20) == "next_page_token=ab[secret removed]"
+    assert redact("next_page_token=atoken=b") == "next_page_token=atoken=b"  # glued: no name
+
+
+def test_every_key_shape_starts_where_a_kept_value_is_cut() -> None:
+    """A kept value is cut where a field name or a key shape begins, so every match of the
+    patterns must begin at one, or a shape could hide inside a kept value."""
+    for secret in redact_module.SECRETS:
+        for literal in secret.literals:
+            if secret.name != "form-field":
+                assert redact_module.SHAPE_OR_NAME_RE.match(literal), literal
+    for text in [*SAMPLES.values(), *(shape for shape, _ in SECRET_SHAPES), *corpus()]:
+        for found in redact_module.PATTERNS.finditer(text):
+            assert redact_module.SHAPE_OR_NAME_RE.match(text, found.start()), text
+
+
 KEPT_PREFIXES = [
     "next_page_token=a",
     "is_secret=True",
@@ -1101,8 +1159,16 @@ KEPT_PREFIXES = [
     "cursor_token=Q2F",
     "f(token=tok",
 ]
-ESCAPES = ['\\"', "\\'", "\\n", "\\r", '"', "'"]
-GLUES = ["", "b", "bb_", "%20", *",.-/|=:;()%", *(f"b{c}" for c in ",.-/|=:;()")]
+ESCAPES = ['\\"', "\\'", "\\n", "\\r", '"', "'", ""]
+GLUES = [
+    "",
+    "b",
+    "bb_",
+    "%20",
+    *",.-/|=:;()%&+~@[{ \t",
+    *(f"b{c}" for c in ",.-/|=:;()&"),
+    ", ",
+]
 SECRET_SHAPES = [
     ("password=HUNTER2", "HUNTER2"),
     ("token=HUNTER2", "HUNTER2"),
@@ -1115,14 +1181,18 @@ SECRET_SHAPES = [
 ]
 
 
-def by_design_not_a_secret(glue: str, shape: str) -> bool:
+def by_design_not_a_secret(prefix: str, escape: str, glue: str, shape: str) -> bool:
     """A field name glued to a letter or digit is not a name, and one right after a named
-    call's parenthesis is code, as in b(password=x): both are kept on purpose, on main too."""
-    return "=" in shape and (glue[-1:].isalnum() or glue.endswith("("))
+    call's parenthesis, or after ", " inside one, is code, as in b(password=x): both are kept
+    on purpose, on main too. With no escape and no glue the name is glued to the prefix."""
+    before = glue or ("" if escape else prefix)
+    in_call = "(" in prefix and before.endswith(", ")
+    return "=" in shape and (before[-1:].isalnum() or before.endswith("(") or in_call)
 
 
 class CountedScan:
-    """A continuation pattern that counts the characters its matches read."""
+    """A pattern that counts the characters its matches and searches read: from where it
+    starts to where its match ends, or to the end of the text if it finds none."""
 
     def __init__(self, pattern: re.Pattern[str]) -> None:
         self.pattern = pattern
@@ -1133,47 +1203,88 @@ class CountedScan:
         self.read += 0 if found is None else found.end() - at
         return found
 
+    def search(self, text: str, at: int) -> re.Match[str] | None:
+        found = self.pattern.search(text, at)
+        self.read += (len(text) if found is None else found.end()) - at
+        return found
 
-def continuation_reads(monkeypatch: pytest.MonkeyPatch, clean: Callable[[], object]) -> int:
-    counted = [
-        CountedScan(getattr(redact_module, name))
-        for name in ("GOES_ON_RAW", "GOES_ON_DECODED", "GOES_ON_DECODED_INSIDE")
-    ]
+
+# What the key pass reads on with past where a pattern stops, and what it searches with.
+RUNS = ("GOES_ON_RAW", "GOES_ON_DECODED", "GOES_ON_DECODED_INSIDE", "VALUE_RUN", "MARKED_RUN")
+SEARCHES = ("PATTERNS", "SHAPE_OR_NAME_RE")
+
+
+def continuation_reads(
+    monkeypatch: pytest.MonkeyPatch, clean: Callable[[], object], names: tuple[str, ...] = RUNS
+) -> int:
+    counted = [CountedScan(getattr(redact_module, name)) for name in names]
     with monkeypatch.context() as patched:
-        for name, scan in zip(
-            ("GOES_ON_RAW", "GOES_ON_DECODED", "GOES_ON_DECODED_INSIDE"), counted, strict=True
-        ):
+        for name, scan in zip(names, counted, strict=True):
             patched.setattr(redact_module, name, scan)
         clean()
     return sum(scan.read for scan in counted)
 
 
+# Names outside and inside a quote that alternate, with an escape after each value, and with
+# none: a kept value, a removed one and a field glued right after each.
+ALTERNATING = [
+    ',token=a\\nb"token=a\\nb',
+    ',next_page_token=a"token=b,is_secret=c"password=d',
+]
+
+
 @pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize("unit", ALTERNATING)
 @pytest.mark.parametrize("path", ["python value", "json text"])
 def test_continuations_are_read_in_linear_time_when_quotes_alternate(
-    monkeypatch: pytest.MonkeyPatch, path: str
+    monkeypatch: pytest.MonkeyPatch, path: str, unit: str
 ) -> None:
     """Names outside and inside a quote alternate, so each reads with its own continuation.
-    Each must reuse its own last read, or every name reads on to the end of the text."""
+    Each must reuse its own last read, or every name reads on to the end of the text. The
+    searches that find each name, and where a kept value is cut, stay linear too."""
 
-    def reads(n: int) -> tuple[int, int]:
-        text = ',token=a\\nb"token=a\\nb' * n
+    def reads(n: int, names: tuple[str, ...]) -> tuple[int, int]:
+        text = unit * n
         if path == "python value":
-            return continuation_reads(monkeypatch, lambda: capture.clean({"v": text})), len(text)
+            return continuation_reads(monkeypatch, lambda: capture.clean({"v": text}), names), len(
+                text
+            )
         whole = json.dumps({"v": text})
-        return continuation_reads(monkeypatch, lambda: redact(whole)), len(whole)
+        return continuation_reads(monkeypatch, lambda: redact(whole), names), len(whole)
 
-    small, small_len = reads(500)
-    large, large_len = reads(1000)
-    assert small > 0
-    assert small <= 2 * small_len and large <= 2 * large_len, (small, large)
+    for names, per_char in ((RUNS, 2), (SEARCHES, 3)):
+        small, small_len = reads(500, names)
+        large, large_len = reads(1000, names)
+        assert small > 0, names
+        assert small <= per_char * small_len and large <= per_char * large_len, (small, large)
+        assert large <= 2.2 * small, (names, small, large)
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize(
+    "unit", ["is_secret=1,", "next_page_token=a", "g(token=a,", "is_secret=[removed]a,"]
+)
+def test_a_run_of_kept_names_is_read_in_linear_time(
+    monkeypatch: pytest.MonkeyPatch, unit: str
+) -> None:
+    """Each kept name is cut at the next one, so the pattern that finds it must stop there
+    too, or each name in the run reads on to the end of the text."""
+
+    def reads(n: int) -> int:
+        text = unit * n
+        return continuation_reads(monkeypatch, lambda: redact(text), (*RUNS, *SEARCHES))
+
+    small, large = reads(500), reads(1000)
+    assert 0 < small <= 4 * len(unit) * 500, small
     assert large <= 2.2 * small, (small, large)
 
 
 @pytest.mark.design("security.redaction_shapes")
 def test_no_kept_value_shields_a_secret_after_an_escape_and_any_glue() -> None:
-    """Every kept prefix, escape or quote, glue and secret shape, in plain text, in a string
-    read out of JSON, and in JSON text: the secret goes, and a kept name stays."""
+    """Every kept prefix, escape, quote or none, glue and secret shape, in plain text, in a
+    string read out of JSON, and in JSON text: the secret goes, and a kept name stays. With
+    no escape the glue comes right after the kept value, as in next_page_token=a,password=x,
+    and the kept value stays word for word."""
     modes = {
         "plain": redact,
         "decoded": lambda text: redacted(text, decoded=True)[0],
@@ -1184,7 +1295,7 @@ def test_no_kept_value_shields_a_secret_after_an_escape_and_any_glue() -> None:
         for escape in ESCAPES:
             for glue in GLUES:
                 for shape, secret in SECRET_SHAPES:
-                    if by_design_not_a_secret(glue, shape):
+                    if by_design_not_a_secret(prefix, escape, glue, shape):
                         continue
                     text = prefix + escape + glue + shape
                     for mode, clean in modes.items():
@@ -1192,8 +1303,12 @@ def test_no_kept_value_shields_a_secret_after_an_escape_and_any_glue() -> None:
                         assert secret not in out, (mode, text, out)
                         if not prefix.startswith("f("):  # code with an escape after it goes
                             assert prefix.partition("=")[0] in out, (mode, text, out)
+                        # Kept word for word, unless the glue makes it the start of the
+                        # next name, as the a in next_page_token=abb_password=x.
+                        if not (escape or prefix.startswith("f(") or glue.endswith("_")):
+                            assert prefix in out, (mode, text, out)
                     checked += 1
-    assert checked > 5000, checked
+    assert checked > 9000, checked
 
 
 ESCAPED_QUOTE_LEAK = r"password=abc\"2zz"  # a quote escaped inside a value
