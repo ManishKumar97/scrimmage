@@ -574,6 +574,7 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
     from scrimmage_core import runner as running
 
     assert f"it asks again for up to {running.READY_S:g} seconds" in guide
+    assert "--loop asyncio" in guide and "process:<command>" in guide
     limits = page("limits.md")
     assert "**Three agent shapes.**" in limits and "Web services come later" not in limits
     for limit in (
@@ -593,7 +594,8 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
         "**Stopping the service mid-run.**",
         "**A long plain request keeps the threads it started plain until it ends.**",
         "**gunicorn is not covered, with `UvicornWorker` either.**",
-        "**A row a refusal stops may have sent one more run.**",
+        "**A service row's runs go one after another.**",
+        "**A start made below multiprocessing's own calls is not seen before Python 3.14.**",
     ):
         assert limit in limits, limit
     safety = page("safety.md")

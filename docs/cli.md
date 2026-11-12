@@ -161,7 +161,7 @@ Runs a command with Scrimmage's startup file first on Python's path, then become
 `scrimmage test` starts every run through it, and you can put it in front of a command yourself, in a script or a container's start line.
 On its own, without a test running, it changes nothing: the startup file does nothing unless a test switched Scrimmage on.
 
-A web service is started through it once, with `SCRIMMAGE_SERVICE=1` and the token file in its environment, such as `scrimmage-run uvicorn shop.service:app --port 8765`.
+A web service is started through it once, with `SCRIMMAGE_SERVICE=1` and the token file in its environment, such as `scrimmage-run uvicorn shop.service:app --port 8765 --loop asyncio`.
 Each process that loads the app prints `scrimmage: active in service mode (pid N)`; a service with a mistake in that environment stops before it listens and says why.
 See [An agent inside a web service](services.md).
 

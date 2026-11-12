@@ -14,8 +14,11 @@ python -c "import secrets; print(secrets.token_hex(32))" > .scrimmage-token
 chmod 600 .scrimmage-token
 export SCRIMMAGE_TOKEN_FILE=$PWD/.scrimmage-token SCRIMMAGE_CONTROL_URL=http://127.0.0.1:8766
 SCRIMMAGE_SERVICE=1 SCRIMMAGE_TOOLS=shop.tools:get_order SCRIMMAGE_ALLOW_IMPORTS=shop. \
-  scrimmage-run uvicorn shop.service:app --port 8765
+  scrimmage-run uvicorn shop.service:app --port 8765 --loop asyncio
 ```
+
+`--loop asyncio` is needed on Python 3.11 when uvloop is installed, as `uvicorn[standard]` installs it: on 3.11 Scrimmage cannot watch uvloop's tasks, so the service stops at its start and says so.
+From Python 3.12 it can be left out.
 
 Three variables switch Scrimmage on in the service:
 
@@ -148,5 +151,6 @@ See [Limits](limits.md) for the cost of this rule.
 - WSGI services, Flask, Django and gunicorn, queue workers, and hypercorn.
 - `scrimmage record` and `scrimmage init --probe`, which stop with exit 2: record or probe the same agent as a function.
 - A Python child joining a service run: every process start in a run is refused unless `real` lists its program. See [Safety](safety.md#an-agent-inside-a-web-service).
+- An MCP server over stdio started inside a request: its start is a process start, so it needs `process:<command>` under `real`, such as `process:npx`. A server started at the service's startup needs nothing; its tool calls are gated either way.
 
 [Limits](limits.md) lists the rest.

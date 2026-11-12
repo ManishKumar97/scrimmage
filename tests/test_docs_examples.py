@@ -11,6 +11,7 @@ import contextlib
 import os
 import re
 import secrets
+import shlex
 import shutil
 import socket
 import subprocess
@@ -41,7 +42,7 @@ class Example:
     start: Path | None = None  # a folder the page starts from, or none
     base: str | None = None  # a page whose files this page starts from
     by_model: dict[str, Rule] | None = None  # models answered by what they are sent
-    service: str | None = None  # an app the page starts under uvicorn before its test
+    service: bool = False  # the page starts a service with its own line before its test
 
 
 # The bot asks for the order, then answers, or says it could not if the tool failed.
@@ -56,7 +57,7 @@ EXAMPLES = {
     "examples/judging.md": Example(ONE_TOOL, [ROW_FAILED, OK], base="examples/function-agent.md"),
     "examples/one-model.md": Example(ONE_TOOL, [ROW_FAILED, OK], base="examples/function-agent.md"),
     "examples/service-agent.md": Example(
-        ONE_TOOL, [OK, OK], base="examples/function-agent.md", service="shop.service:app"
+        ONE_TOOL, [OK, OK], base="examples/function-agent.md", service=True
     ),
 }
 PAGE_PORT = "127.0.0.1:8765"  # the service address the page shows, moved to a free port
@@ -68,10 +69,25 @@ def free_port() -> int:
         return int(probe.getsockname()[1])
 
 
+def start_line(name: str) -> tuple[dict[str, str], list[str]]:
+    """The page's own start line, as written: the variables set before scrimmage-run, and
+    the command from scrimmage-run on, without a trailing &."""
+    for lang, _, body in FENCE.findall((DOCS / name).read_text()):
+        if lang != "bash" or "scrimmage-run " not in body:
+            continue
+        joined = body.replace("\\\n", " ")
+        line = next(x for x in joined.splitlines() if "scrimmage-run " in x)
+        words = [w for w in shlex.split(line) if w != "&"]
+        at = words.index("scrimmage-run")
+        env = dict(w.split("=", 1) for w in words[:at])
+        return env, words[at:]
+    raise AssertionError(f"{name} shows no scrimmage-run line")
+
+
 @contextlib.contextmanager
-def served(root: Path, app: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """The page's service, as its start line runs it, on a free port, until the page ends.
-    The process and every worker it started are gone, by pid, before this returns."""
+def served(root: Path, page: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """The page's service, started with the page's own line, on a free port, until the page
+    ends. The process and every worker it started are gone, by pid, before this returns."""
     token = root / ".scrimmage-token"
     token.write_text(secrets.token_hex(32))
     token.chmod(0o600)
@@ -82,18 +98,18 @@ def served(root: Path, app: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[No
     monkeypatch.setenv("SCRIMMAGE_TOKEN_FILE", str(token))
     monkeypatch.setenv("SCRIMMAGE_CONTROL_URL", control)
     bin_dir = Path(sys.executable).parent
+    shown, words = start_line(page)
     env = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
+    env.update(shown)
     env.update(
         PATH=f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
-        SCRIMMAGE_SERVICE="1",
-        SCRIMMAGE_TOKEN_FILE=str(token),
+        SCRIMMAGE_TOKEN_FILE=str(token),  # the page's file and address, here on free ports
         SCRIMMAGE_CONTROL_URL=control,
-        SCRIMMAGE_TOOLS="shop.tools:get_order,shop.tools:refund_order",
-        SCRIMMAGE_ALLOW_IMPORTS="shop.",
     )
-    command = [str(bin_dir / "scrimmage-run"), str(bin_dir / "uvicorn"), app]
+    command = [str(bin_dir / words[0]), str(bin_dir / words[1]), *words[2:]]
+    command[command.index(PAGE_PORT.rpartition(":")[2])] = str(port)
     proc = subprocess.Popen(
-        [*command, "--port", str(port), "--loop", "asyncio"],
+        command,
         cwd=root,
         env=env,
         stdout=subprocess.DEVNULL,
@@ -221,7 +237,7 @@ def run_blocks(
             continue
         with_fake_host(root / "scrimmage.toml")
         if example.service and command[:1] == ["test"] and not started:
-            stack.enter_context(served(root, example.service, monkeypatch))
+            stack.enter_context(served(root, name, monkeypatch))
             started = True
         capsys.readouterr()
         codes.append(main(command))

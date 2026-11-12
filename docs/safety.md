@@ -112,6 +112,9 @@ Listing a program makes every call to it real.
 There is no matching on arguments: `process:kubectl` lets `kubectl delete` through as much as `kubectl get`.
 List a program only if every way the agent can call it is safe against the systems the test can reach.
 
+An MCP server over stdio that the agent starts inside a request is such a start too: list it as `process:<command>`, such as `process:npx`, under `real`.
+A server started once, at the service's startup, is started outside any run and needs no entry; its tool calls are gated either way.
+
 A request with no run header reaches the app untouched, and so do its calls.
 Work outside any request, while a run is open, follows the outside rules on [An agent inside a web service](services.md#work-outside-any-request).
 

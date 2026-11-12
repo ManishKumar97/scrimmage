@@ -90,7 +90,7 @@ python -c "import secrets; print(secrets.token_hex(32))" > .scrimmage-token
 chmod 600 .scrimmage-token
 export SCRIMMAGE_TOKEN_FILE=$PWD/.scrimmage-token SCRIMMAGE_CONTROL_URL=http://127.0.0.1:8766
 SCRIMMAGE_SERVICE=1 SCRIMMAGE_TOOLS=shop.tools:get_order,shop.tools:refund_order SCRIMMAGE_ALLOW_IMPORTS=shop. \
-  scrimmage-run uvicorn shop.service:app --port 8765 &
+  scrimmage-run uvicorn shop.service:app --port 8765 --loop asyncio &
 ```
 
 The service prints one line per process, `scrimmage: active in service mode`, and then serves as it always does.
