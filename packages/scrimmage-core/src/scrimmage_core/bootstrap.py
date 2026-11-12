@@ -29,6 +29,7 @@ from scrimmage_core import (
 from scrimmage_core.client import ControlClient, ControlError, Sender
 from scrimmage_core.mocks import allowed
 from scrimmage_core.plan import Plan, no_plan, tools_from
+from scrimmage_core.redact import remove_values
 
 TERM_WAIT_S = 4.0  # under the runner's five seconds before SIGKILL
 # What a process is: the program the runner started, a child of it, or a service process.
@@ -220,8 +221,6 @@ def start(*, mode: Mode = "program", target: str | None = None) -> None:
     process_gate.install(before_exec)
     handle_sigterm(last_lines, sender)
     if plan is not None:
-        print(
-            f"scrimmage: active for run {run} ({plan.test}, {plan.row}); "
-            "calls follow this test's plan",
-            file=sys.stderr,
-        )
+        # The test's name can hold a value from the environment, and this line is in the log.
+        line = f"active for run {run} ({plan.test}, {plan.row}); calls follow this test's plan"
+        print(f"scrimmage: {remove_values(line, plan.scrub)[0]}", file=sys.stderr)

@@ -448,7 +448,12 @@ def test_each_enum_lists_every_value_the_code_gives() -> None:
     assert found["change"] == list(compare.CHANGES)
     assert found["action"] == ["real", "refused", *show.ACTIONS]  # a miss's, then a line's
     # A record's code, then a suggestion's.
-    assert set(found["code"]) == {*record.MANUAL_CODES, *record.SKIPPED_CODES, *suggest.CODES}
+    assert set(found["code"]) == {
+        *record.MANUAL_CODES,
+        *record.SKIPPED_CODES,
+        *record.RETIRED_CODES,
+        *suggest.CODES,
+    }
     assert len(suggest.CODES) == len(set(suggest.CODES))
     assert set(found["rule"]) == {capture.PATTERN, capture.KEY_NAME}
     source_record = Path(record.__file__).read_text()

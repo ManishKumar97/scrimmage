@@ -7,7 +7,9 @@ more is removed from what is recorded, in its encoded forms too.
 """
 
 import base64
+import copy
 import json
+import pickle
 import re
 from pathlib import Path
 from urllib.parse import quote, quote_plus
@@ -219,10 +221,105 @@ def test_the_row_hash_is_the_same_before_and_after_a_variable_changes(
         assert test.question == f"Order {order}?"  # the run gets the value
         hashes.append(results.row_hash(test, None, cfg.agent))
     assert hashes[0] == hashes[1]
-    # A file with no ${ hashes as it always did.
+    # A file with no ${ hashes as it always did: the value the release before this one gave.
     plain = load_text(tmp_path, (EXAMPLE / "scrimmage.toml").read_text())
-    unwritten = results.row_hash(plain.tests[0], None, plain.agent)
-    assert unwritten == results.row_hash(plain.tests[0], None, plain.agent)
+    assert results.row_hash(plain.tests[0], None, plain.agent) == EXAMPLE_HASH
+    # A check that changes the text, such as a host in lower case, still hashes it as written.
+    web = text.replace(
+        'returns = {key = "${SECRET_KEY}"}',
+        'returns = 1\n\n[[test.mock]]\ncall = "http:${API_HOST}"\nmethod = "GET"\njson = 1',
+    )
+    seen = set()
+    for host in ("API.Acme.Internal", "Other.Acme.Internal"):
+        monkeypatch.setenv("API_HOST", host)
+        cfg = load_text(tmp_path, web)
+        assert cfg.tests[0].mocks[1].call == f"http:{host.lower()}"
+        seen.add(results.row_hash(cfg.tests[0], None, cfg.agent))
+    assert len(seen) == 1
+
+
+# The example's baseline row hash, from the commit before ${NAME} was read.
+EXAMPLE_HASH = "fc9801270c80a387c0dbd36f3b8e9354c93ff87eea85cf93a157644e79445905"
+
+
+@pytest.mark.design("service.expanded_copies")
+def test_an_expanded_value_copies_and_pickles_with_its_written_form() -> None:
+    value = config.Expanded("tt-0123456789abcdef", "${TEST_TOKEN}")
+    for made in (copy.copy(value), copy.deepcopy(value), pickle.loads(pickle.dumps(value))):
+        assert isinstance(made, config.Expanded)
+        assert (str(made), made.written) == ("tt-0123456789abcdef", "${TEST_TOKEN}")
+
+
+VALUE = "v4lue-from-the-environment"
+# Each key, given a bad value that came from the environment.
+BAD_KEYS = {
+    "answer": '[agent]\nfunction = "acme.agent:answer"\nanswer = "${V}"\n',
+    "service": '[agent]\nservice = "${V}"\nbody = "{question}"\n',
+    "function": '[agent]\nfunction = "${V}"\n',
+    "real": '[agent]\nfunction = "acme.agent:answer"\nreal = ["${V}"]\n',
+    "background_real": (
+        '[agent]\nservice = "http://127.0.0.1:8765/chat"\nbody = "{question}"\n'
+        'background_real = ["${V}"]\n'
+    ),
+    "tools": '[agent]\nfunction = "acme.agent:answer"\ntools = ["${V}"]\n',
+    "model_hosts": (
+        '[agent]\nfunction = "acme.agent:answer"\n'
+        'model_hosts = [{host = "${V}/x", provider = "openai"}]\n'
+    ),
+    "command": '[agent]\ncommand = "${V} {question}"\n',
+}
+BAD_TEST_KEYS = {
+    "mock call": '\n[[test.mock]]\ncall = "${V}"\nreturns = 1\n',
+    "mock method": '\n[[test.mock]]\ncall = "http:a.test"\nmethod = "${V}"\njson = 1\n',
+    "mock type": '\n[[test.mock]]\ncall = "tool:t"\nreturns = 1\ntype = "${V}"\n',
+    "fault do": '\n[[test.fault]]\ncall = "tool:t"\ndo = "${V}"\nwhen = "first 1"\n',
+    "fault raises": (
+        '\n[[test.fault]]\ncall = "tool:t"\ndo = "error"\nraises = "${V}"\nwhen = "first 1"\n'
+    ),
+}
+
+
+@pytest.mark.design("service.errors_scrubbed")
+def test_a_mistake_never_quotes_a_value_from_the_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("V", VALUE)
+    files = {key: text + TEST for key, text in BAD_KEYS.items()}
+    files |= {
+        key: '[agent]\nfunction = "acme.agent:answer"\n' + TEST + t
+        for key, t in BAD_TEST_KEYS.items()
+    }
+    path = tmp_path / "scrimmage.toml"
+    for key, text in files.items():
+        path.write_text(text)
+        with pytest.raises(ConfigError) as caught:
+            config.load(path)
+        assert VALUE not in str(caught.value), key
+        for args in (["check", str(path)], ["check", str(path), "--json"]):
+            capsys.readouterr()
+            assert main(args) == 2, key
+            told = capsys.readouterr()
+            assert VALUE not in told.out + told.err, (key, args)
+
+
+@pytest.mark.design("service.check_as_written")
+def test_check_json_shows_the_entry_as_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("SEC", VALUE)
+    monkeypatch.setenv("PORT", "8765")
+    path = tmp_path / "scrimmage.toml"
+    for text, written in (
+        ('[agent]\ncommand = "python3 bot.py --key ${SEC} {question}"\n', "--key ${SEC}"),
+        ('[agent]\nservice = "http://127.0.0.1:${PORT}/chat"\nbody = "{question}"\n', "${PORT}"),
+    ):
+        path.write_text(text + TEST)
+        (tmp_path / "bot.py").write_text("print('x')\n")
+        capsys.readouterr()
+        main(["check", str(path), "--json"])
+        doc = json.loads(capsys.readouterr().out)
+        assert written in doc["summary"]["entry"]["value"]
+        assert VALUE not in json.dumps(doc)
 
 
 SECRET = "s3cr3t-value-0123456789"
@@ -233,10 +330,20 @@ SECRET = "s3cr3t-value-0123456789"
 def test_an_expanded_value_never_reaches_a_record_a_blob_the_summary_or_result_json(
     project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The value is in a mock's returns, so the SDK writes it first, into the tool's line and
-    the model request that carries it, before the runner sees anything."""
-    monkeypatch.setenv("ORDER_SECRET", SECRET)
+    """One value is in a mock's returns, so the SDK writes it first, into the tool's line and
+    the model request that carries it, before the runner sees anything. Others are in the
+    test's name, expect and forbid, which the runner writes into its own lines, the summary
+    and the program's log, and which show reads back."""
+    values = {"ORDER_SECRET": SECRET, "SN": "name-0123456789abcd", "SE": "expect-0123456789ab"}
+    values["SF"] = "forbid-0123456789ab"
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
     project.edit('returns = "shipped, Oct 30"', 'returns = "shipped, Oct 30, ref ${ORDER_SECRET}"')
+    project.edit('name     = "order-status"', 'name     = "order-${SN}"')
+    project.edit(
+        'expect   = ["shipped", ["Oct 30", "October 30"]]',
+        'expect   = ["shipped", ["Oct 30", "${SE}"]]\nforbid = ["${SF}"]',
+    )
     fake = FakeOpenAI(ACME)
     fake.start()
     try:
@@ -245,14 +352,24 @@ def test_an_expanded_value_never_reaches_a_record_a_blob_the_summary_or_result_j
         fake.stop()
     assert result.finished, result.out
     assert any(SECRET in json.dumps(r) for r in fake.requests), "the agent never got the value"
-    written = [p for p in (project.root / "scrimmage-runs").rglob("*") if p.is_file()]
+    folder = next((project.root / "scrimmage-runs").glob("*/result.json")).parent
+    written = [p for p in folder.rglob("*") if p.is_file()]
     assert any(p.parent.name == "blobs" for p in written)
-    assert any(p.name == "result.json" for p in written)
-    for path in written:
-        data = path.read_bytes()
-        assert SECRET.encode() not in data, path
-        assert base64.b64encode(SECRET.encode())[2:-2] not in data, path
-    assert SECRET not in result.out
+    assert any(p.suffix == ".log" for p in written) and any(p.suffix == ".jsonl" for p in written)
+    shown = []
+    for args in ([str(folder)], [str(folder), "--json"]):
+        project.capsys.readouterr()
+        main(["show", *args])
+        captured = project.capsys.readouterr()
+        shown.append(captured.out + captured.err)
+    assert "order-" in shown[0]  # show did name the test, without its value
+    for value in values.values():
+        for path in written:
+            data = path.read_bytes()
+            assert value.encode() not in data, (value, path)
+            assert base64.b64encode(value.encode())[2:-2] not in data, (value, path)
+        assert value not in result.out + result.err
+        assert all(value not in text for text in shown), value
     assert REMOVED in "".join(p.read_text(errors="replace") for p in written)
 
 
@@ -266,6 +383,10 @@ def test_a_scrub_value_is_removed_json_escaped_url_encoded_and_in_base64_at_each
         quote(value, safe=""),
         quote(value),
         quote_plus(value),
+        # Lower-case hex, as some encoders write it.
+        re.sub(r"%[0-9A-F]{2}", lambda m: m.group(0).lower(), quote(value, safe="")),
+        # A JSON string inside a JSON body: tool arguments inside a model request.
+        json.dumps(json.dumps(value)[1:-1])[1:-1],
     ]
     for form in forms:
         assert redact.redact(f"before {form} after", scrub=scrub) == f"before {REMOVED} after"

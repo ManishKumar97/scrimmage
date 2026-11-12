@@ -569,17 +569,31 @@ def percent_encoded(data: bytes, safe: bytes = b"", *, plus: bool = False) -> st
 
 
 @functools.lru_cache(maxsize=256)
+def lower_hex(encoded: str) -> str:
+    """A URL encoding with its hex digits in lower case, as some encoders write it."""
+    return re.sub(r"%[0-9A-F]{2}", lambda found: found.group(0).lower(), encoded)
+
+
 def scrub_forms(value: str) -> tuple[str, ...]:
-    """Every form a value can take in recorded text, longest first: as written, JSON-escaped,
-    URL-encoded, and in base64 at each of the three offsets a byte string can put it at.
-    A base64 form leaves off its edge characters, which the neighbouring bytes decide."""
+    """Every form a value can take in recorded text, longest first: as written, JSON-escaped
+    once and twice (a JSON string inside a JSON body, as tool arguments in a model request),
+    URL-encoded in upper and lower case hex, and in base64 at each of the three offsets a byte
+    string can put it at. A base64 form leaves off its edge characters, which the neighbouring
+    bytes decide."""
     data = value.encode("utf-8", "surrogatepass")
-    forms = {
-        value,
-        json.dumps(value)[1:-1],
+    once = json.dumps(value)[1:-1]
+    encoded_forms = [
         percent_encoded(data),
         percent_encoded(data, b"/"),
         percent_encoded(data, plus=True),
+    ]
+    forms = {
+        value,
+        once,
+        json.dumps(once)[1:-1],
+        json.dumps(value, ensure_ascii=False)[1:-1],
+        *encoded_forms,
+        *(lower_hex(form) for form in encoded_forms),
     }
     for offset in range(3):
         encoded = base64.b64encode(b"\0" * offset + data + b"\0\0").decode()

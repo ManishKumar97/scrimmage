@@ -431,7 +431,9 @@ def run_test(
     except running.Interrupted as exc:
         stopped = f"stopped by {exc}; every run was stopped"
     except Exception as exc:  # the runner's own failure is never a result
-        stopped = f"infrastructure error in the runner: {exc!r}"
+        # A failure to start a run can quote its arguments, which can hold a value.
+        failed = redact.remove_values(repr(exc), config.scrub)[0]
+        stopped = f"infrastructure error in the runner: {failed}"
     finally:
         if runner is not None:
             runner.server.server.server_close()
@@ -592,7 +594,8 @@ def run_record(
     except running.Interrupted as exc:
         stopped = f"stopped by {exc}; every run was stopped, and nothing was written"
     except Exception as exc:  # the runner's own failure is never a result
-        stopped = f"infrastructure error in the runner: {exc!r}"
+        failed = redact.remove_values(repr(exc), plan.config.scrub)[0]
+        stopped = f"infrastructure error in the runner: {failed}"
     finally:
         if runner is not None:
             runner.server.server.server_close()
@@ -612,7 +615,8 @@ def run_record(
         print("scrimmage: stopped by SIGINT while the file was written", file=sys.stderr)
         return INFRA
     except Exception as exc:  # WriterBug or any other failure while writing: Scrimmage's own
-        message = f"infrastructure error while writing the file, nothing was written: {exc!r}"
+        failed = redact.remove_values(repr(exc), plan.config.scrub)[0]  # it can quote a value
+        message = f"infrastructure error while writing the file, nothing was written: {failed}"
         if found is None:
             print(f"scrimmage: {message}", file=sys.stderr)
             return INFRA
@@ -673,10 +677,14 @@ def run_check(
             print(f"scrimmage check: {plural(len(problems), 'problem')}; nothing was run")
             return MISTAKE
         runs = len(config.tests) * count  # one baseline per test, N times
+    # As the file writes them: a value from the environment is never printed.
     entry_kind, entry_value = (
-        ("command", shlex.join(agent.command))
+        (
+            "command",
+            agent.command_written if "${" in agent.command_written else shlex.join(agent.command),
+        )
         if agent.command
-        else ("service", agent.service)
+        else ("service", str(settings.as_written(agent.service)))
         if agent.service
         else ("function", agent.function)
     )

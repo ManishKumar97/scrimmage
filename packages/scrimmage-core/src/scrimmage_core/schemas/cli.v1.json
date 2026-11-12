@@ -1548,6 +1548,7 @@
                 "nondeterministic",
                 "unsavable",
                 "null",
+                "placeholder",
                 "too_large",
                 "binary",
                 "incomplete_reply",

@@ -206,6 +206,7 @@ class Runner:
         runs.mkdir(mode=0o700, exist_ok=True)
         os.chmod(runs, 0o700)  # records hold customer data: only their owner may list them
         self.store = new_store(runs, stamp)
+        self.store.scrub = config.scrub
         self.folder = self.store.folder
         # Records can hold customer data, so they stay out of the team's git repo.
         ignore = runs / ".gitignore"
@@ -344,6 +345,8 @@ class Runner:
             self._refused(run, "structure" if state.broken else reason)
         lines = self.store.lines(run)
         answer = self.answer_of(run, proc.returncode)
+        for written in ("log", "out"):  # read the answer first: it is judged as it was
+            self.store.scrub_file(self.folder / f"{run}.{written}")
         # Another run stopped the test and this run was stopped with it. That says
         # nothing about this run, and it never got to send its last batch.
         stopped = (

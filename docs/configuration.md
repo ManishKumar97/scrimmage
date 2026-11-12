@@ -235,7 +235,9 @@ An editor that finds nothing wrong is a good sign. `scrimmage check` decides; se
 `NAME` is a letter or `_`, then letters, digits or `_`.
 A name that is not set stops the test with exit 2, naming the table, the key and the name, such as `[agent] headers Authorization: ${TEST_TOKEN} is not set in the environment`.
 A name set to an empty value is read as empty.
-`$${` is a literal `${`, as Docker Compose writes it; only `$${` is an escape, so `$$` alone stays two dollar signs.
+`$${` is a literal `${`, the escape Docker Compose uses too.
+Unlike Compose, `$$` alone is not an escape: it stays two dollar signs, so `$$${HOME}` is a `$` and then a literal `${HOME}`.
+This is the form `scrimmage record` writes for a recorded `$${`, so it reads back as it was.
 Keys are never read.
 
 A filled-in value is text as it is: a value that holds `{question}` or `${OTHER}` is never read again.

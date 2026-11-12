@@ -55,6 +55,9 @@ INCOMPLETE_REPLY, SECRET_CHANGED_SHAPE, MODEL_INSIDE, NOT_FINISHED = (
     "model_inside",
     "not_finished",
 )
+# Codes an earlier version gave and this one never does. The v1 schema keeps them: a value
+# is removed only with a new version. A recorded ${ is now written as the literal $${.
+RETIRED_CODES = ("placeholder",)
 MANUAL_CODES = (
     REFUSED,
     RAISED,

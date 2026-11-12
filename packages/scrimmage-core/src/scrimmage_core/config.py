@@ -26,7 +26,7 @@ from scrimmage_core.errors import ConfigError
 from scrimmage_core.judge import Rules, impossible, normal
 from scrimmage_core.mocks import allowed
 from scrimmage_core.provider_openai import Rates
-from scrimmage_core.redact import SCRUB_MIN, redact
+from scrimmage_core.redact import SCRUB_MIN, redact, remove_values
 
 READ_METHODS = ("GET", "HEAD")  # the web requests that run for real without being listed
 AGENT_KEYS = {
@@ -118,6 +118,10 @@ class Expanded(str):
         made.written = written
         return made
 
+    def __reduce__(self) -> tuple[type["Expanded"], tuple[str, str]]:
+        """Copied and pickled with its written form, as dataclasses.replace and copy do."""
+        return Expanded, (str.__str__(self), self.written)
+
 
 def as_written(value: object) -> object:
     """A value as the file wrote it: every expanded text back to its placeholders."""
@@ -131,8 +135,11 @@ def as_written(value: object) -> object:
 
 
 def kept(original: str, checked: str) -> str:
-    """A checked value keeps its written form when the check did not change it."""
-    return original if isinstance(original, Expanded) and checked == original else checked
+    """A checked value keeps its written form, even where the check changed its text, such as
+    a host in lower case: the row hash must never read the value from the environment."""
+    if not isinstance(original, Expanded) or isinstance(checked, Expanded):
+        return checked
+    return original if checked == original else Expanded(checked, original.written)
 
 
 @dataclass(frozen=True)
@@ -405,6 +412,7 @@ class Agent:
     # A command's arguments as read: each a run of pieces, (filled in from ${NAME}, text).
     # {question} is filled in the text only, so a value that holds it is sent as written.
     command_pieces: tuple[tuple[tuple[bool, str], ...], ...] = ()
+    command_written: str = ""  # the command line as the file writes it, ${NAME} and all
     # An agent inside a web service: its address, body and headers, function and command empty.
     service: str = ""
     body: object = None  # JSON, with a Template in place of every text
@@ -479,6 +487,15 @@ def load(path: Path, env: Mapping[str, str] | None = None) -> Config:
         raise ConfigError(f"{path.name}: [agent] is required")
     reader = Reader(os.environ if env is None else env)
     data = reader.file(data)
+    try:
+        return read_file(path, data, reader)
+    except ConfigError as exc:
+        # A message may quote a value it rejects, which may have come from the environment.
+        values = tuple(reader.scrub)
+        raise ConfigError(*(remove_values(p, values)[0] for p in exc.problems)) from None
+
+
+def read_file(path: Path, data: dict[str, object], reader: Reader) -> Config:
     tests = as_list(data.get("test", []), f"{path.name} [[test]]")
     if not tests:
         raise ConfigError(f"{path.name}: at least one [[test]] is required")
@@ -884,6 +901,7 @@ def read_agent(table: dict[str, object], reader: Reader | None = None) -> Agent:
         command=command,
         children=children,
         command_pieces=pieces,
+        command_written=str(table["command"]) if "command" in table else "",
         service=read_service(table, where) if service else "",
         body=read_body(table, where, reader) if service else None,
         headers=read_headers(table.get("headers", {}), f"{where} headers", reader),
