@@ -15,7 +15,6 @@ import shutil
 import subprocess
 import sys
 import threading
-import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
@@ -841,17 +840,19 @@ def test_a_process_pools_stop_under_a_run_is_refused_and_leaves_the_pool_as_it_w
 
 def shut(executor: Any, within: float = 20.0) -> None:
     """executor.shutdown, bounded: it never waits on a stuck task, and a worker a broken
-    pool never stops is killed, so the test fails here instead of the suite hanging at exit."""
+    pool never stops is killed, so the test fails here instead of the suite hanging at exit.
+    The executor's manager thread joins its workers as it ends, so its end is the check."""
     workers: list[Any] = list((executor._processes or {}).values())
+    manager: Any = executor._executor_manager_thread
     plain(lambda: executor.shutdown(wait=False, cancel_futures=True))
-    deadline = time.monotonic() + within
-    for worker in workers:
-        worker.join(max(0.0, deadline - time.monotonic()))
-    left = [worker for worker in workers if worker.is_alive()]
-    for worker in left:
-        worker.kill()
-        worker.join(5)
-    assert not left, "the executor's workers outlived its shutdown"
+    if manager is not None:
+        manager.join(within)
+    stuck = manager is not None and manager.is_alive()
+    if stuck:
+        for worker in workers:
+            worker.kill()
+            worker.join(5)
+    assert not stuck, "the executor's workers outlived its shutdown"
 
 
 def stopped(pool: Any, within: float = 20.0) -> None:
