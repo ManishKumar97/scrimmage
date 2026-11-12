@@ -266,8 +266,8 @@ class Runner:
         self.row_of: dict[str, planner.Row] = {}
         self.cancelled = False
         # A service run's record wait, which runs beside the next runs: each waits on an event,
-        # so a thread each costs nothing while it waits.
-        self.waiters = ThreadPoolExecutor(WAITERS, thread_name_prefix="scrimmage-record-wait")
+        # so a thread each costs nothing while it waits. Made by run_all, for a service only.
+        self.waiters: ThreadPoolExecutor | None = None
         self.tools_seen: list[str] | None = None  # as the agent's process reported them
         self.label_problems: list[str] = []
         self.stopped_by: str | None = None  # the reason a refusal stopped the whole test
@@ -538,6 +538,7 @@ class Runner:
         if unclaimed or streamed:
             with self.lock:
                 self.cancelled = True  # under this lock, so no run starts from here on
+        assert self.waiters is not None  # run_all made it, as this is a service
         later = self.waiters.submit(self.served_result, run, row, reply, streamed)
         if unclaimed:
             later.result()
@@ -772,6 +773,7 @@ class Runner:
         try:
             release = self._catch_signals()
             if self.config.agent.service:
+                self.waiters = ThreadPoolExecutor(WAITERS, thread_name_prefix="scrimmage-record")
                 self.check_service()
             with ThreadPoolExecutor(max_workers=self.config.agent.parallel) as pool:
                 base = [row for row in rows if row.fault is None for _ in range(runs)]
@@ -800,7 +802,8 @@ class Runner:
         finally:
             release()
             self.cancel()
-            self.waiters.shutdown()
+            if self.waiters is not None:
+                self.waiters.shutdown()
             self.server.stop()
             shutil.rmtree(self.answers, ignore_errors=True)
         return [r for r in results if r is not None]
