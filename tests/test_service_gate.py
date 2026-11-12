@@ -775,3 +775,44 @@ def test_an_app_in_this_process_runs_as_its_caller_and_only_exact_transports_are
         assert wrote == []
     finally:
         svc.process.unregister(held)
+
+
+@pytest.mark.design("service.starlette_runs_as_caller")
+def test_a_hand_made_call_to_the_app_runs_as_its_caller_where_uvicorns_gate_is(
+    svc: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With uvicorn's gate installed, every request it serves has its slot set, so a call
+    that reaches Starlette's gate without one was made by code in this process: outside any
+    request, the app's write meets the outside rules, never a fresh plain request."""
+    from starlette.applications import Starlette
+    from starlette.responses import PlainTextResponse
+    from starlette.routing import Route
+
+    from scrimmage_core.asgi_gate import patch_starlette
+
+    wrote: list[str] = []
+
+    def write_order(order: str) -> str:
+        wrote.append(order)
+        return f"wrote {order}"
+
+    write = tool_gate.gate(write_order, "write_order")
+
+    async def direct(request: Any) -> Any:
+        try:
+            return PlainTextResponse(write("1"))
+        except Exception as exc:  # the refusal, as the app would see it
+            return PlainTextResponse(str(exc))
+
+    patch_starlette(__import__("starlette.applications", fromlist=["x"]), svc.process)
+    web = Starlette(routes=[Route("/direct", direct, methods=["POST"])])
+    monkeypatch.setattr(svc.gate, "gates", [*svc.gate.gates, "asgi"])  # as uvicorn's load does
+    plan = Plan("run-0123456789ab", "t", "baseline", (), (), (), (), 60.0, service=True)
+    held = state.RunState(plan, Sink(), [], process=svc.process)
+    svc.process.register(held)
+    try:
+        reply = contextvars.Context().run(run, drive(web, path="/direct"))
+        assert "outside any request" in reply.body.decode() and wrote == []
+        assert [x["call"] for x in sink_of(held).lines] == ["tool:write_order"]
+    finally:
+        svc.process.unregister(held)

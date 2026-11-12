@@ -463,6 +463,11 @@ def patch_starlette(module: ModuleType, process: ProcessState) -> None:
         slot = SLOT.get()
         if isinstance(slot, Joined) or is_plain(slot):  # the uvicorn gate has been, once
             return await call(self, scope, receive, send)
+        gate = GATE
+        if gate is not None and "asgi" in gate.gates:
+            # uvicorn's gate sets the slot of every request it serves, so a call that comes
+            # here without one was made by code in this process: it runs as that code.
+            return await call(self, scope, receive, send)
         serving()
         return await entry(functools.partial(call, self), scope, receive, send)
 
