@@ -636,6 +636,13 @@ class Runner:
                 raise Interrupted(self.stop_flag[0] if self.stop_flag else "SIGINT")
             time.sleep(READY_STEP_S)  # nothing tells a closed port it has opened
             report, reply = service_client.probe(agent, self.token)
+        if service_client.not_listening(reply) and str(reply.failed).startswith("TimeoutError"):
+            raise service_client.Setup(
+                3,
+                f"the connection to the service's address for POST {path} timed out, after "
+                f"{READY_S:g} s of asking (a firewall may drop it): the service is not reachable "
+                "from here",
+            )
         if service_client.not_listening(reply):
             raise service_client.Setup(
                 3,

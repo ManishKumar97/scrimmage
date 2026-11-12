@@ -21,6 +21,7 @@ from scrimmage_core.config import SERVICE_URL, Agent, request_body, request_head
 from scrimmage_core.start import BadAnswerPath, pick
 
 TOKEN_MIN = 32
+CONNECT_S = 2.0  # how long the probe's connection may take before it is asked again
 STREAMED = ("text/event-stream", "application/x-ndjson", "application/jsonl")
 # The gate's own 503, exactly: what says Scrimmage answered and could not claim the plan.
 GATE_HEADERS = {"content-type", "content-length", "x-scrimmage-error"}
@@ -106,14 +107,23 @@ def target(agent: Agent) -> tuple[str, int, str]:
     return found["host"].strip("[]"), int(found["port"] or 80), found["path"] or "/"
 
 
-def post(agent: Agent, headers: dict[str, str], body: bytes, timeout: float) -> Reply:
+def post(
+    agent: Agent,
+    headers: dict[str, str],
+    body: bytes,
+    timeout: float,
+    connect_timeout: float | None = None,
+) -> Reply:
+    """One POST. connect_timeout: how long the connection may take, if shorter than timeout."""
     host, port, path = target(agent)
-    conn = http.client.HTTPConnection(host, port, timeout=timeout)
+    conn = http.client.HTTPConnection(host, port, timeout=connect_timeout or timeout)
     try:
         conn.connect()
     except OSError as exc:  # refused, no such host, unreachable, or the connect timed out
         conn.close()
         return Reply(failed=f"{type(exc).__name__}: {exc}", connected=False)
+    if conn.sock is not None:
+        conn.sock.settimeout(timeout)
     try:
         conn.request("POST", path, body=body, headers=headers)
         response = conn.getresponse()
@@ -139,7 +149,7 @@ def probe(agent: Agent, token: str) -> tuple[dict[str, object] | None, Reply]:
         "x-scrimmage-probe": "1",
         **signed,
     }
-    reply = post(agent, headers, b"", 30.0)
+    reply = post(agent, headers, b"", 30.0, connect_timeout=CONNECT_S)
     if reply.status != 200 or reply.headers.get("x-scrimmage-probe") != "report":
         return None, reply
     expected = protocol.sign_reply(token, signed[protocol.SIGNATURE], 200, reply.body)
@@ -153,8 +163,13 @@ def probe(agent: Agent, token: str) -> tuple[dict[str, object] | None, Reply]:
 
 
 def not_listening(reply: Reply) -> bool:
-    """Nothing listens at the address yet: a service still starting, or not started."""
-    return reply.failed is not None and reply.failed.startswith("ConnectionRefusedError")
+    """Nothing listens at the address yet, or its connection timed out: a service still
+    starting, or not started, so the probe asks again."""
+    return (
+        reply.failed is not None
+        and not reply.connected
+        and (reply.failed.startswith(("ConnectionRefusedError", "TimeoutError")))
+    )
 
 
 def run_request(agent: Agent, header: str, question: str, timeout: float) -> Reply:

@@ -683,6 +683,26 @@ def test_an_address_that_cannot_be_reached_is_named_as_that(
         made.server.server.server_close()
 
 
+@pytest.mark.design("service.waits_to_listen")
+def test_an_address_whose_connection_times_out_is_asked_again_and_named_as_that(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """10.255.255.1 drops the connection, as a firewall would: each try waits 2 s."""
+    from scrimmage_core import runner, service_client
+
+    monkeypatch.setattr(runner, "READY_S", 3.0)
+    made = a_service_runner(tmp_path, monkeypatch, "10.255.255.1:8765")
+    began = time.monotonic()
+    try:
+        with pytest.raises(service_client.Setup) as setup:
+            made.check_service()
+    finally:
+        made.server.server.server_close()
+    assert setup.value.code == 3 and "timed out" in str(setup.value)
+    assert "a firewall may drop it" in str(setup.value) and "no such host" not in str(setup.value)
+    assert time.monotonic() - began < 10  # tries of 2 s, not one of 30
+
+
 @pytest.mark.design("service.record_wait_bounds")
 def test_a_record_wait_counts_from_the_reply_and_a_cancel_ends_every_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
