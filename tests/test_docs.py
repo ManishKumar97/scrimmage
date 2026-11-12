@@ -604,3 +604,22 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
     assert "replayed once to each other worker within 60 seconds" in security
     assert "[An agent inside a web service](services.md)" in page("configuration.md")
     assert "service-agent.md" in page("examples/index.md")
+
+
+@pytest.mark.design("docs.faults_judged")
+def test_no_documented_fault_fires_on_every_call_with_nothing_to_judge_it() -> None:
+    """A fault that always fires needs its own expect or forbid, or a when; as the reader of
+    the file refuses one without, no page may show one, run or not."""
+    found = 0
+    for name in (str(p.relative_to(DOCS)) for p in doc_pages(DOCS)):
+        for block in re.findall(r"```(?:toml|diff)[^\n]*\n(.*?)```", page(name), re.S):
+            parts = re.split(r"(?m)^[+ ]?(\[\[?[^\]\n]+\]\]?)\s*$", block)
+            for header, body in zip(parts[1::2], parts[2::2], strict=True):
+                if header.strip("+ ") != "[[test.fault]]":
+                    continue
+                found += 1
+                keys = set(re.findall(r"(?m)^[+ ]?(\w+)\s*=", body))
+                do = re.search(r'(?m)^[+ ]?do\s*=\s*"(\w+)', body)
+                changes = do is not None and do.group(1) in ("append", "replace")
+                assert changes or keys & {"expect", "forbid", "when"}, (name, body)
+    assert found >= 10
