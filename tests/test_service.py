@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -407,6 +408,7 @@ class Forwarder:
 
         forwarder = self
         self.seen: list[str] = []
+        self.times: list[float] = []  # when each request came, as seen is
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:
@@ -416,6 +418,7 @@ class Forwarder:
                 }
                 run = self.headers.get("x-scrimmage-run", "")
                 forwarder.seen.append(run)
+                forwarder.times.append(time.monotonic())
                 if drop:
                     headers = {
                         k: v for k, v in headers.items() if not k.lower().startswith("x-scrimmage-")
@@ -753,6 +756,23 @@ def test_the_token_and_control_url_come_from_the_runners_environment(bench: Benc
         holder.close()
 
 
+@pytest.mark.design("service.slot_frees_at_reply")
+def test_the_parallel_slot_frees_at_the_reply_and_the_record_wait_runs_beside_the_next_run(
+    bench: Bench,
+) -> None:
+    service = bench.start()
+    proxy = Forwarder(service.port)
+    bench.closers.append(proxy)
+    code, out = bench.test(proxy.port, runs=2, grace=2.0)  # parallel = 1
+    assert code == 0, out
+    runs = [at for name, at in zip(proxy.seen, proxy.times, strict=True) if name.startswith("run-")]
+    # The second run went at the first one's reply, not after its 2 s grace. A time is what
+    # this checks: a run answers in well under a second here.
+    assert len(runs) == 2 and runs[1] - runs[0] < 1.5, runs
+    summaries = [s for name, s in bench.summaries().items() if name.startswith("run-")]
+    assert [s["outcome"] for s in summaries] == ["answered", "answered"]
+
+
 @pytest.mark.design("service.grace_keeps_late_calls")
 def test_a_slow_background_task_lands_in_the_record_within_the_grace(bench: Bench) -> None:
     service = bench.start()
@@ -776,7 +796,9 @@ def test_a_missing_last_batch_is_an_infrastructure_error_after_the_wait(bench: B
     assert code == 3, out
     summaries = bench.summaries()
     died = [
-        s for name, s in summaries.items() if name.startswith("run-") and s["outcome"] != "answered"
+        s
+        for name, s in summaries.items()
+        if name.startswith("run-") and bench.lines(name)[0]["test"] == "dies"
     ]
     assert [(s["outcome"], s["incomplete"]) for s in died] == [("infrastructure error", True)]
     service.proc.wait(30)  # the worker ended itself; the stop below finds it gone
@@ -814,7 +836,9 @@ def test_a_refused_call_stops_its_row_and_the_service_keeps_serving(bench: Bench
     code, out = bench.test(service.port, runs=2, tests=unmocked)
     assert code == 2, out
     refused = [s for s in bench.summaries().values() if s.get("outcome") == "refused call"]
-    assert len(refused) == 1  # the row's second run was never sent
+    # The slot frees at the reply, so the row's second run can be on its way before the
+    # first run's record shows the refusal; no run after that is sent.
+    assert 1 <= len(refused) <= 2, refused
     assert service.post("/echo")[0] == 200  # a plain request is served as before
 
 

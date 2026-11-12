@@ -19,8 +19,8 @@ import tempfile
 import threading
 import time
 from collections import Counter
-from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Iterable, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -203,6 +203,14 @@ class Ended:
     mistakes: list[str] = field(default_factory=list[str])
 
 
+WAITERS = 64  # service runs whose record waits at once: the control server's connections
+
+
+def settled(found: "Iterable[RunResult | Future[RunResult] | None]") -> list[RunResult | None]:
+    """The results of runs, each service run's once its record wait has ended."""
+    return [r.result() if isinstance(r, Future) else r for r in list(found)]
+
+
 class Runner:
     def __init__(
         self,
@@ -257,6 +265,9 @@ class Runner:
         self.stopped_rows: set[tuple[str, str]] = set()
         self.row_of: dict[str, planner.Row] = {}
         self.cancelled = False
+        # A service run's record wait, which runs beside the next runs: each waits on an event,
+        # so a thread each costs nothing while it waits.
+        self.waiters = ThreadPoolExecutor(WAITERS, thread_name_prefix="scrimmage-record-wait")
         self.tools_seen: list[str] | None = None  # as the agent's process reported them
         self.label_problems: list[str] = []
         self.stopped_by: str | None = None  # the reason a refusal stopped the whole test
@@ -317,7 +328,7 @@ class Runner:
         answer = [agent.answer] if agent.answer else []
         return [sys.executable, "-m", "scrimmage_core.start", agent.function, question, *answer]
 
-    def one(self, row: planner.Row) -> RunResult | None:
+    def one(self, row: planner.Row) -> "RunResult | Future[RunResult] | None":
         with self.lock:
             if self.cancelled or (row.test.name, row.name) in self.stopped_rows:
                 return None
@@ -513,18 +524,49 @@ class Runner:
         self.check_labels(result)
         return result
 
-    def served(self, run: str, row: planner.Row) -> RunResult:
-        """A service run: one POST, then the record's wait. The parallel slot is this thread,
-        so the wait for the record runs while the next run's request goes."""
+    def served(self, run: str, row: planner.Row) -> "RunResult | Future[RunResult]":
+        """A service run: one POST. The parallel slot is this thread, and it frees at the
+        reply: the wait for the record, and the result, run on a waiter beside the next
+        runs. A reply that stops the test is settled here, before the next run."""
         agent = self.config.agent
         header = f"{run}.{protocol.run_mac(self.token, run)}"
         reply = service_client.run_request(agent, header, row.test.question, agent.run_timeout)
+        ok = reply.status is not None and 200 <= reply.status < 300
+        gate = reply.gate_refused
+        streamed = ok and service_client.streamed(reply, agent)
+        unclaimed = not self.server.runs[run].fetched and reply.status is not None and gate is None
+        if unclaimed or streamed:
+            with self.lock:
+                self.cancelled = True  # under this lock, so no run starts from here on
+        later = self.waiters.submit(self.served_result, run, row, reply, streamed)
+        if unclaimed:
+            later.result()
+            # A process answered without Scrimmage, such as a worker started another way:
+            # every later run could be the same, so none is sent.
+            raise service_client.Setup(
+                3,
+                f"{run} was answered with {reply.status} but its plan was never claimed, so a "
+                "process without Scrimmage served it; no further run was sent",
+            )
+        if streamed:
+            later.result()
+            raise service_client.Setup(
+                2,
+                f"{run}: the service streamed its reply ({reply.headers.get('content-type')}), "
+                "which this version does not judge; one run is one JSON or text reply",
+            )
+        return later
+
+    def served_result(
+        self, run: str, row: planner.Row, reply: service_client.Reply, streamed: bool
+    ) -> RunResult:
+        """A service run's record, once its last batch came or the wait ended, and its result."""
+        agent = self.config.agent
         state = self.wait_record(run)
         ok = reply.status is not None and 200 <= reply.status < 300
         answer, infra = None, reply.failed is not None
         mistakes: list[str] = []
         gate = reply.gate_refused
-        streamed = ok and service_client.streamed(reply, agent)
         if gate is not None:
             infra = True
             mistakes.append(f"the service's gate answered 503 {gate}")
@@ -535,26 +577,7 @@ class Runner:
         if state.broken or state.refusals:
             self._refused(run, "structure" if state.broken else state.refusals[0])
         ended = Ended(answer, reply.timed_out, ok and answer is not None, [], [], infra, mistakes)
-        result = self.concluded(run, row, state, ended)
-        unclaimed = not state.fetched and reply.status is not None and gate is None
-        if unclaimed or streamed:
-            with self.lock:
-                self.cancelled = True  # under this lock, so no run starts from here on
-        if unclaimed:
-            # A process answered without Scrimmage, such as a worker started another way:
-            # every later run could be the same, so none is sent.
-            raise service_client.Setup(
-                3,
-                f"{run} was answered with {reply.status} but its plan was never claimed, so a "
-                "process without Scrimmage served it; no further run was sent",
-            )
-        if streamed:
-            raise service_client.Setup(
-                2,
-                f"{run}: the service streamed its reply ({reply.headers.get('content-type')}), "
-                "which this version does not judge; one run is one JSON or text reply",
-            )
-        return result
+        return self.concluded(run, row, state, ended)
 
     def check_service(self) -> None:
         """The probe, then the setup request, before any run. Either can stop the test:
@@ -755,8 +778,8 @@ class Runner:
                 results: list[RunResult | None] = []
                 if not self.config.agent.tools and base:
                     # One run alone first, so a misspelled label costs one run, not all.
-                    results.append(self.one(base.pop(0)))
-                results += list(pool.map(self.one, base))
+                    results += settled([self.one(base.pop(0))])
+                results += settled(pool.map(self.one, base))
                 for test in self.config.tests:
                     mine = [r for r in results if r is not None and r.row.test == test]
                     if test.faults and mine and all(r.outcome in FAILED for r in mine):
@@ -767,7 +790,7 @@ class Runner:
                     if row.fault is not None and row.test.name not in self.skipped
                     for _ in range(runs)
                 ]
-                results += list(pool.map(self.one, rest))
+                results += settled(pool.map(self.one, rest))
             with self.lock:
                 self.ended = True  # from here the watcher notes nothing, so nothing is noted twice
                 name = self.stop_flag[0] if self.stop_flag else ""
@@ -777,6 +800,7 @@ class Runner:
         finally:
             release()
             self.cancel()
+            self.waiters.shutdown()
             self.server.stop()
             shutil.rmtree(self.answers, ignore_errors=True)
         return [r for r in results if r is not None]
