@@ -54,7 +54,7 @@ def test_the_only_connections_are_to_and_from_the_control_server() -> None:
 STARTS = re.compile(
     r"\b(?:subprocess\.\w+\s*\(|Popen\s*\(|os\.(?:exec\w*|spawn\w*|system|popen|posix_spawnp?|"
     r"fork\w*)\s*\(|pty\.spawn\s*\(|ProcessPoolExecutor|multiprocessing\.\w+|"
-    r"create_subprocess_\w+)"
+    r"create_subprocess_\w+|open_process\s*\()"
 )
 STARTERS = {"subprocess", "pty", "multiprocessing", "concurrent", "asyncio"}
 
@@ -62,13 +62,19 @@ STARTERS = {"subprocess", "pty", "multiprocessing", "concurrent", "asyncio"}
 @pytest.mark.design("security.process_starts_scanned")
 def test_the_only_processes_scrimmage_starts_are_its_runs() -> None:
     """Scrimmage's start-up inside the agent runs before an audit hook could watch it, so this
-    scan is what checks it: no product module but the runner and scrimmage-run starts anything."""
+    scan is what checks it: no product module but the runner and scrimmage-run starts anything,
+    and the Scrimmage MCP server, a command of its own that never loads into the agent, which
+    starts each scrimmage command it runs."""
     found = {
         (path.name, " ".join(call.split()))
         for path in PACKAGES.rglob("*.py")
         for call in STARTS.findall(path.read_text())
     }
-    assert found == {("runner.py", "subprocess.Popen("), ("run_command.py", "os.execvpe(")}
+    assert found == {
+        ("runner.py", "subprocess.Popen("),
+        ("run_command.py", "os.execvpe("),
+        ("mcp_server.py", "open_process("),
+    }
     # The same AST scan as the standard-library test, so __import__("subprocess") counts.
     imports = {
         (path.name, name)
@@ -84,6 +90,8 @@ def test_the_only_processes_scrimmage_starts_are_its_runs() -> None:
         ("http_gate.py", "asyncio"),
         ("mcp_gate.py", "asyncio"),
         ("start.py", "asyncio"),
+        ("mcp_server.py", "subprocess"),  # for DEVNULL and PIPE; anyio starts the child
+        ("mcp_server.py", "asyncio"),  # for the loop its signal handler wakes
     }
 
 
