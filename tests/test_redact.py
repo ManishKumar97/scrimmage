@@ -594,6 +594,8 @@ SEEDED = [
     "PGPASSWORD={v}",
     "password=<{v}>",
     "password=[secret removed]{v}",
+    "password=C:\\new{v}",  # a backslash and a letter in a string, as in a Windows path
+    'password=abc\\"{v}',
     "Authorization: Basic {b}",
     "Bearer {b}{b}",
     "sk-proj-{b}{b}",
@@ -910,7 +912,12 @@ def test_a_marker_is_removed_with_what_sticks_to_it() -> None:
 
 def test_spans_cover_exactly_what_redact_removes() -> None:
     # The corpus is plain text, as its reference needs; the JSON leak is added whole here.
-    leaks = [ESCAPED_QUOTE_LEAK, DECODED_BACKSLASH_LEAK, json.dumps(ESCAPED_QUOTE_LEAK)]
+    leaks = [
+        ESCAPED_QUOTE_LEAK,
+        DECODED_BACKSLASH_LEAK,
+        json.dumps(ESCAPED_QUOTE_LEAK),
+        f'"{ESCAPED_QUOTE_LEAK}"',
+    ]
     for text in [*corpus(), *SAMPLES.values(), *leaks]:
         places = redact_module.replacements(text)
         built: list[str] = []
@@ -998,6 +1005,15 @@ def test_a_backslash_n_in_a_string_read_out_of_json_is_in_the_value() -> None:
     # A real line break read out of JSON still ends the value.
     broken = json.dumps({"q": "password=abc\nuser=bob"})
     assert json.loads(redact(broken)) == {"q": "[secret removed]\nuser=bob"}
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_a_quote_in_a_string_read_out_of_json_is_in_the_value() -> None:
+    """A text that is one JSON string is read out first, and its \\" becomes a raw quote."""
+    assert redact(f'"{ESCAPED_QUOTE_LEAK}"') == '"[secret removed]"'
+    assert json.loads(redact(json.dumps({"q": 'password=abc"2zz'}))) == {"q": "[secret removed]"}
+    # A name inside a quote is closed by that quote, and what follows is kept.
+    assert json.loads(redact(json.dumps('say "token=abc" now'))) == 'say "[secret removed]" now'
 
 
 def security_rule_names() -> set[str]:

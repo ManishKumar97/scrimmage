@@ -66,8 +66,10 @@ def form(decoded: bool) -> str:
     An escaped quote with more of the value after it is in the value, as in abc\\"2zz. In raw
     text a \\n or \\r is a JSON escape, a line break, and ends the value. In a string read out
     of JSON every escape is already undone, so there a \\n with more of the value after it is
-    a backslash and a letter, as in C:\\new, and is in the value too."""
-    escaped = r"\\[\"'nr]" if decoded else r"\\[\"']"
+    a backslash and a letter, as in C:\\new, and is in the value too. A raw quote there is a
+    character as well, as \\" became one when the string was read, unless the name sits inside
+    a quote, which it then closes."""
+    escaped = r"(?:\\[\"'nr]|(?(inside)(?!)|[\"']))" if decoded else r"\\[\"']"
     return (
         # `inside` is set when the name follows a quote, so a quote after it closes that string.
         r"""(?:(?P<inside>(?<=["']))|(?<!["']))"""

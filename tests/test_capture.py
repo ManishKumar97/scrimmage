@@ -7,7 +7,7 @@ from typing import NamedTuple, cast
 import pydantic
 import pytest
 
-from scrimmage_core import capture
+from scrimmage_core import capture, state
 from scrimmage_core.redact import REMOVED
 
 
@@ -267,3 +267,31 @@ def test_a_number_under_a_secret_key_shows_only_its_type(pin: float) -> None:
     assert shown == f'{{"password": <{type(pin).__name__}>, "order": <str>}}'
     assert str(pin) not in (shown or "")
     assert capture.shown_args({"amount": 24680}, ["amount"]) == '{"amount": 24680}'
+
+
+WINDOWS_PATH = "password=C:\\new2zz"  # a Python string: a backslash, then the letter n
+
+
+def get_path() -> str:
+    return WINDOWS_PATH
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_a_backslash_n_in_a_python_string_is_in_the_value_on_the_tool_value_path() -> None:
+    """A Python string has no escapes left, so its \\n is a backslash and a letter."""
+    doc = capture.tool_value(WINDOWS_PATH, {}, get_path, same, [])
+    assert doc["value"] == REMOVED, doc  # what a recorded mock of the call returns
+    nested = capture.tool_value({"path": [WINDOWS_PATH]}, {}, get_path, same, [])
+    assert nested["value"] == {"path": [REMOVED]}, nested
+    assert "2zz" not in str(state.content(WINDOWS_PATH)["preview"])  # the call line's preview
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_a_backslash_n_in_a_python_string_is_in_the_value_on_the_mock_path() -> None:
+    """A mock's arguments as a miss shows them, and the names and values of a mock's table."""
+    shown = capture.shown_args({"q": WINDOWS_PATH, "n": 1}, ["q"])
+    assert shown is not None and "2zz" not in shown, shown
+    shown_key = capture.shown_args({WINDOWS_PATH: "x"}, [WINDOWS_PATH])
+    assert shown_key is not None and "2zz" not in shown_key, shown_key
+    cleaned, removed = capture.clean({WINDOWS_PATH: 1, "k": [WINDOWS_PATH]})
+    assert cleaned == {REMOVED: 1, "k": [REMOVED]} and len(removed) == 2
