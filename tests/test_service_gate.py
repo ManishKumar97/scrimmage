@@ -571,26 +571,34 @@ def test_starlette_gate_alone_under_testclient(svc: Service, patched_httpx2: Non
             answer = GATED("1")
         except AssertionError as real:  # the real tool ran: untouched, as for a plain request
             answer = str(real)
+        except Exception as refused:  # the outside rules refused it
+            answer = str(refused)
         return JSONResponse({"answer": answer, "headers": dict(request.headers)})
 
     patch_starlette(__import__("starlette.applications", fromlist=["x"]), svc.process)
     # The web gate too, as in a service: the test client's own requests go to the app in
-    # this process, so even with a run open they are no write outside any request.
+    # this process, so they are no web write; the app then runs as its caller, here code
+    # outside any request.
     http_gate.patch(httpx2, http_gate.Context(svc.process, Budget(), None, svc.process.stop))
     web = Starlette(routes=[Route("/chat", chat, methods=["POST"])])
     name = svc.open(mocks=mocked("alone"))
     header, value = svc.header(name)
     with TestClient(web) as client:
         got = client.post("/chat", headers={header.decode(): value.decode()})
+        eventually(lambda: not svc.process.open_runs())  # the run's record has closed
+        alone = client.post("/chat")  # no run open: untouched, the real tool runs
         plan = Plan("run-0123456789ab", "t", "baseline", (), (), (), (), 60.0, service=True)
         held = state.RunState(plan, Sink(), [], process=svc.process)
         svc.process.register(held)  # a run open in this process while the next request goes
-        plain = client.post("/chat")
+        outside = client.post("/chat")
         svc.process.unregister(held)
-    assert sink_of(held).lines == []
     assert got.json()["answer"] == "order for alone"
     assert not any(k.startswith("x-scrimmage") for k in got.json()["headers"])
-    assert "must never run" in plain.json()["answer"]  # a plain request: the real tool, untouched
+    assert "must never run" in alone.json()["answer"]
+    # With a run open, the app runs as its caller: the outside rules refuse its write, and
+    # the open run is told. The test client's own request is no web write.
+    assert "outside any request" in outside.json()["answer"]
+    assert [(x["call"], x["reason"]) for x in sink_of(held).lines] == [("tool:get_order", "orphan")]
 
 
 @pytest.mark.design("service.token_file_popped")
@@ -709,3 +717,54 @@ def test_a_websocket_with_the_run_header_is_closed(svc: Service) -> None:
     reply = run(drive(gated_app(), headers=[svc.header(name)], scope_type="websocket"))
     assert reply.messages == [{"type": "websocket.close", "code": 1008}]
     assert seen_scopes == []
+
+
+@pytest.mark.design("service.in_process_runs_as_caller")
+def test_an_app_in_this_process_runs_as_its_caller_and_only_exact_transports_are_in_process(
+    svc: Service, patched_httpx2: None
+) -> None:
+    http_gate.patch(httpx2, http_gate.Context(svc.process, Budget(), None, svc.process.stop))
+    wrote: list[str] = []
+
+    def write_order(order: str) -> str:
+        wrote.append(order)
+        return f"wrote {order}"
+
+    write = tool_gate.gate(write_order, "write_order")
+
+    async def inner(scope: Any, receive: Any, send: Any) -> None:
+        try:
+            body = write("1").encode()
+        except Exception as exc:  # the refusal, as the app would see it
+            body = str(exc).encode()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": body})
+
+    class Forwarding(httpx2.ASGITransport):
+        """A subclass, which could send anywhere: not taken as in process."""
+
+    async def post(transport: Any) -> str:
+        async with httpx2.AsyncClient(transport=transport) as web:
+            return (await web.post("http://app.test/orders")).text
+
+    gated = asgi_gate.Entry(inner)
+    plan = Plan("run-0123456789ab", "t", "baseline", (), (), (), (), 60.0, service=True)
+    held = state.RunState(plan, Sink(), [], process=svc.process)
+    svc.process.register(held)
+    try:
+        outside = contextvars.Context()
+        # Code outside any request: its in-process request is no web write, and the app
+        # runs as that code, so the app's write meets the outside rules.
+        replied = outside.run(asyncio.run, post(httpx2.ASGITransport(gated)))
+        assert "outside any request" in replied and wrote == []
+        with pytest.raises(Exception, match="outside any request"):
+            outside.run(asyncio.run, post(Forwarding(gated)))
+        assert [x["call"] for x in sink_of(held).lines] == ["tool:write_order", "http:app.test"]
+        # A run's own in-process request is decided by its plan, as any web write is.
+        inside = contextvars.copy_context()
+        inside.run(state.SLOT.set, state.Joined(held.name, held))
+        with pytest.raises(Exception, match=r"http:app\.test"):
+            inside.run(asyncio.run, post(httpx2.ASGITransport(gated)))
+        assert wrote == []
+    finally:
+        svc.process.unregister(held)

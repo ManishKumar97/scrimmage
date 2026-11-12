@@ -123,6 +123,9 @@ async def entry(app: App, scope: Scope, receive: Receive, send: Send) -> None:
         await close_websocket(receive, send)
         return None
     if kind == "websocket" or (not runs and not probe):
+        if state.IN_PROCESS_CALL.get():
+            # Sent by code in this process, such as a test client: the app runs as its caller.
+            return await app(scope, receive, send)
         # Every request sets the slot, so a value leaked between tasks is overwritten.
         return await served_plain(app, scope, receive, send)
     copied = dict(scope)

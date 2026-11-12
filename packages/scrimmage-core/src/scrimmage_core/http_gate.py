@@ -44,6 +44,7 @@ from scrimmage_core.plan import Plan
 from scrimmage_core.redact import redact, redacted
 from scrimmage_core.state import (
     BLOB_CAP,
+    IN_PROCESS_CALL,
     BlobSink,
     Outside,
     ProcessState,
@@ -232,7 +233,8 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
     def sync_gate(self: Any, request: Any) -> Any:
         prepared = prepare(ctx, request, f"thread-{threading.get_ident()}", self)
         if prepared is None:
-            return sync_send(self, request)
+            with to_this_process(self, request):
+                return sync_send(self, request)
         bound, step, extra = prepared
         change = None
         mode = step.decision.action
@@ -272,7 +274,8 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
         who = f"task-{id(task)}" if task is not None else f"thread-{threading.get_ident()}"
         prepared = prepare(ctx, request, who, self)
         if prepared is None:
-            return await async_send(self, request)
+            with to_this_process(self, request):
+                return await async_send(self, request)
         bound, step, extra = prepared
         if task is None and step.call.kind == "model":
             bound.run.refuse(step, "unsupported_loop")
@@ -383,14 +386,29 @@ IN_PROCESS = (
 
 def in_process(client: Any, request: Any) -> bool:
     """The client sends this request to an app in this process: it leaves the process for
-    nowhere, so outside any request it writes nothing, and that app's own gates decide it."""
+    nowhere, so outside any request it writes nothing, and that app's own gates decide it.
+    Only these exact classes: a subclass could send anywhere."""
     pick = getattr(client, "_transport_for_url", None)
     try:
         transport = pick(request.url) if callable(pick) else None
     except Exception:  # a client this version does not know: decided as any other request
         return False
     kinds = [getattr(sys.modules.get(module), name, None) for module, name in IN_PROCESS]
-    return isinstance(transport, tuple(k for k in kinds if isinstance(k, type)))
+    return type(transport) in kinds
+
+
+@contextlib.contextmanager
+def to_this_process(client: Any, request: Any) -> Iterator[None]:
+    """A request to an app in this process: the app runs under its caller's slot, so code
+    outside any request stays outside, never a fresh plain request."""
+    if not in_service() or not in_process(client, request):
+        yield
+        return
+    token = IN_PROCESS_CALL.set(True)
+    try:
+        yield
+    finally:
+        IN_PROCESS_CALL.reset(token)
 
 
 def prepare(

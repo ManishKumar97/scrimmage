@@ -100,6 +100,9 @@ class Joined(NamedTuple):
 # The run this code belongs to, in a service. Unset for a function or a script, which keep
 # their one run in the process slot below.
 SLOT: ContextVar["Joined | Marker | None"] = carried(ContextVar("scrimmage_slot", default=None))
+# A request a client in this process sends to an app in this process, such as a test
+# client's: the app's entry gate keeps the caller's slot.
+IN_PROCESS_CALL: ContextVar[bool] = carried(ContextVar("scrimmage_in_process", default=False))
 
 
 class LineSink(Protocol):
