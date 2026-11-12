@@ -37,6 +37,13 @@ dev = [
     # tests/test_docs_site.py builds the site, so a plain pytest needs mkdocs.
     {include-group = "docs"},
 ]
+# tests/test_nemo_rails.py runs the real library, and skips without it. Not installed by
+# default: it brings onnxruntime, numpy, tokenizers and fastembed. Pinned, as the tests hold
+# what this version does; it does not install on 3.14 yet. Install it with
+# `uv sync --group nemo`.
+nemo = [
+    "nemoguardrails==0.24.1 ; python_full_version < '3.14'",
+]
 docs = [
     "mkdocs>=1.6.1,<2",
     "mkdocs-material>=9.8.1,<10",

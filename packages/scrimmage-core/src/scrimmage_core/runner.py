@@ -36,6 +36,7 @@ from scrimmage_core.config import (
     Fault,
     Mock,
     Test,
+    carried_model_warnings,
     real_writes,
     write_warnings,
 )
@@ -119,6 +120,13 @@ def fault_fired(has_fault: bool, fault_lines: int) -> bool | None:
 def chose_refused(has_fault: bool, first_refusal: str) -> bool:
     """The agent chose a call the test does not allow, under a fault."""
     return has_fault and first_refusal in CHOSEN_CALLS
+
+
+def ends_its_row(has_fault: bool, first_refusal: str, by_config: bool) -> bool:
+    """Whether a run's first refusal stops the rest of its row. A call the agent chose under
+    a fault does not, so the row counts every run; a refusal the test's setup caused does,
+    whatever its reason, as every run would meet it again."""
+    return by_config or not chose_refused(has_fault, first_refusal)
 
 
 @dataclass
@@ -208,10 +216,15 @@ class Runner:
         self.stop_flag: list[str] = [] if stop_flag is None else stop_flag
 
     def _refused(self, run: str, reason: str) -> None:
-        """The first refusal ends its run and its row; some reasons end the whole test."""
+        """The first refusal ends its run and its row; some reasons end the whole test. A call
+        the agent chose under a fault ends its run only: the row's other runs still run, so
+        its rate counts every run, such as an attack the agent obeyed in 8 of 10."""
         with self.lock:
             row = self.row_of[run]
-            self.stopped_rows.add((row.test.name, row.name))
+            known = self.server.runs.get(run)
+            setup = known is not None and known.setup_refused
+            if ends_its_row(row.fault is not None, reason, setup):
+                self.stopped_rows.add((row.test.name, row.name))
             proc = self.procs.get(run)
             stop_test = reason in STOP_TEST and self.stopped_by is None
             if stop_test:
@@ -386,7 +399,8 @@ class Runner:
                 if "unchanged" in line
             ],
             writes=self.real_writes_in(row, lines),
-            undelivered=any("changed" in line for line in lines)
+            # A changed model reply is read by the agent, not sent on to a model.
+            undelivered=any("changed" in line and line.get("kind") != "model" for line in lines)
             and not any(line.get("carries_injected") for line in model),
             tools_seen=reported_tools(notices),
             misses=misses,
@@ -888,15 +902,26 @@ def signal_group(proc: subprocess.Popen[bytes], sig: int) -> bool:
 
 @dataclass(frozen=True)
 class RowReport:
-    """One row's runs and its result, which the table, the notes and the exit code all read."""
+    """One row's runs and its result, which the table, the notes and the exit code all read.
+
+    baseline_failed marks a fault row whose test's baseline did not pass. The table and the
+    JSON then show `baseline failed` and no rate; the exit code still reads result, so it is
+    the same as without the mark.
+    """
 
     row: planner.Row
     runs: list[RunResult]
     result: judge.RowResult
+    baseline_failed: bool = False
 
     @property
     def where(self) -> str:
         return f"{self.row.test.name} {self.row.name}"
+
+    @property
+    def shown(self) -> str:
+        """The verdict the table and the JSON give."""
+        return judge.BASELINE_FAILED if self.baseline_failed else self.result.verdict
 
     @property
     def refused(self) -> bool:
@@ -911,7 +936,10 @@ def row_reports(config: Config, results: list[RunResult]) -> list[RowReport]:
         result = judge.judge_row(
             [r.judgement for r in mine], config.agent.runs, row.rules.pass_rate, refused
         )
-        reports.append(RowReport(row, mine, result))
+        # The baseline is its test's first row, so it is judged before its fault rows.
+        baseline = next(r for r in reports if r.row.test == row.test) if row.fault else None
+        failed = baseline is not None and baseline.result.verdict != judge.PASS
+        reports.append(RowReport(row, mine, result, failed))
     return reports
 
 
@@ -994,15 +1022,17 @@ def rule_lines(report: RowReport, folder: Path) -> list[str]:
     if not most:
         return []
     row, rate = report.result, report.row.rules.pass_rate
-    word = "fail" if row.verdict == judge.FAIL else "note"
+    word = "fail" if report.shown == judge.FAIL else "note"
     head = f"{word}: {report.where}: {row.passed}/{row.judged} passed, pass_rate is {rate:g}"
     calls = [b.text for r in report.runs for b in r.judgement.broken if b.kind == judge.REFUSED]
     if calls:
         call = calls[0].removeprefix(f"{judge.REFUSED} ")
         advice = "See the line below" if call == PROCESS_LABEL else "Mocking it would hide this"
+        # Beside a failed baseline the row is not read as a fail, though the call was refused.
+        beside = "; its baseline did not pass" if report.baseline_failed else ""
         head = (
-            f"fail: {report.where}: under this fault the agent called {call}, which the test "
-            f"does not allow. {advice}"
+            f"{word}: {report.where}: under this fault the agent called {call}, which the test "
+            f"does not allow{beside}. {advice}"
         )
     return [
         head,
@@ -1228,6 +1258,15 @@ def build_report(
         )
     if silent:
         notes.append(f"{plural(len(silent), 'run')} answered with no model call")
+    # A model's path run as a web request: once per test, however many runs said it.
+    notes += sorted(
+        {
+            f"{r.row.test.name}: {line.get('message')}"
+            for r in results
+            for line in r.notices
+            if line.get("notice") == "model_path"
+        }
+    )
     newer = sorted(
         {
             str(line.get("message"))
@@ -1252,6 +1291,7 @@ def build_report(
     above = [(WARNINGS, TOOL_STAR_LINE)] if "tool:*" in config.agent.real else []
     # An injected text may ask for a write, and a write that real allows would then run.
     above += [(WARNINGS, text) for text in write_warnings(config)]
+    above += [(WARNINGS, text) for text in carried_model_warnings(config)]
     return Report(
         config,
         results,
@@ -1403,7 +1443,7 @@ def row_json(entry: RowReport, agent: Agent) -> dict[str, object]:
     fault = row.fault
     rate: float | None = None
     span: list[float] | None = None
-    if result.judged:
+    if result.judged and not entry.baseline_failed:
         low, high = judge.wilson(result.passed, result.judged)
         rate, span = round(result.passed / result.judged, 4), [round(low, 4), round(high, 4)]
     return {
@@ -1420,7 +1460,7 @@ def row_json(entry: RowReport, agent: Agent) -> dict[str, object]:
         "pass_rate": row.rules.pass_rate,
         "tools": round(sum(r.tool_calls for r in mine) / max(len(mine), 1), 4),
         "cost_usd": round(sum(r.cost_usd for r in mine), 8),
-        "result": result.verdict,
+        "result": entry.shown,
         "broken": [
             {"kind": rule.kind, "text": rule.text, "runs": [r.run for r in runs]}
             for rule, runs in broken_runs(entry)

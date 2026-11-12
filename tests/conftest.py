@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -186,7 +187,7 @@ def fake_openai() -> Iterator[Callable[..., FakeOpenAI]]:
     """
     started: list[FakeOpenAI] = []
 
-    def start(replies: list[str], **fixtures: str) -> FakeOpenAI:
+    def start(replies: list[str], **fixtures: Any) -> FakeOpenAI:
         fake = FakeOpenAI(replies, **fixtures)
         fake.start()
         started.append(fake)

@@ -14,7 +14,9 @@ from scrimmage_core.redact import redact
 
 PASS, FAIL, NO_RESULT = "pass", "fail", "no result"
 LEFT_OUT = "left out"
-VERDICTS = (PASS, FAIL, NO_RESULT)  # a row's result
+# A fault row beside a baseline that did not pass: its rate says little, so none is shown.
+BASELINE_FAILED = "baseline failed"
+VERDICTS = (PASS, FAIL, NO_RESULT, BASELINE_FAILED)  # a row's result
 RUN_VERDICTS = (PASS, FAIL, LEFT_OUT)  # how one run counts
 EMPTY = "empty answer"
 NOT_FIRED = "the fault did not fire"

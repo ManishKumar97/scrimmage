@@ -173,7 +173,7 @@ The difference of the two rates, after minus before, gets a 95% interval built f
 
 | `change` | When |
 |---|---|
-| `no result` | Either side has no result: too few judged runs. This is checked first, so a thin side never gets a rate change. |
+| `no result` | Either side has no result: too few judged runs, or `baseline failed`. This is checked first, so a thin side never gets a rate change. |
 | `better` | The whole interval is above 0. |
 | `worse` | The whole interval is below 0. |
 | `unclear` | The interval holds 0: these runs cannot tell the two rates apart. |

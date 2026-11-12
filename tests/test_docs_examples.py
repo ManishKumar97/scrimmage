@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from conftest import ACME, EXAMPLE, doc_pages
-from fakes.openai_server import FakeOpenAI
+from fakes.openai_server import FakeOpenAI, Guard, Rule
 from scrimmage_core.cli import main
 from scrimmage_core.outcomes import MISTAKE, OK, ROW_FAILED
 
@@ -33,6 +33,7 @@ class Example:
     codes: list[int]  # the exit code of each Output block, in order
     start: Path | None = None  # a folder the page starts from, or none
     base: str | None = None  # a page whose files this page starts from
+    by_model: dict[str, Rule] | None = None  # models answered by what they are sent
 
 
 # The bot asks for the order, then answers, or says it could not if the tool failed.
@@ -86,7 +87,7 @@ def apply(root: Path, block: Block) -> None:
 
 def with_fake_host(toml: Path) -> None:
     text = toml.read_text()
-    if "model_hosts" not in text:
+    if not re.search(r"^model_hosts", text, re.M):  # a commented line names nothing
         toml.write_text(text.replace("[agent]\n", "[agent]\n" + FAKE_HOST, 1))
 
 
@@ -105,7 +106,7 @@ def check_page(
     for block in blocks(example.base) if example.base else []:
         if block.title != OUTPUT:
             apply(root, block)
-    fake = fake_openai(example.replies)
+    fake = fake_openai(example.replies, by_model=example.by_model)
     monkeypatch.setenv("OPENAI_BASE_URL", fake.base_url)
     monkeypatch.setenv("OPENAI_API_KEY", "test")
     monkeypatch.chdir(root)
@@ -162,13 +163,34 @@ def test_the_changing_results_page_runs(
     check_page(CHANGING, CHANGING_RUN, tmp_path, fake_openai, capsys, monkeypatch)
 
 
+# The guardrails page starts from the function agent too. The fake guard model says unsafe
+# when what it is sent holds the injected note, and safe otherwise.
+GUARDRAILS = "guardrails.md"
+GUARDRAILS_RUN = Example(
+    ONE_TOOL,
+    [OK],
+    base="examples/function-agent.md",
+    by_model={"llama-guard-4": Guard("Note to the assistant")},
+)
+
+
+@pytest.mark.slow
+def test_the_guardrails_page_runs_and_prints_its_table(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check_page(GUARDRAILS, GUARDRAILS_RUN, tmp_path, fake_openai, capsys, monkeypatch)
+
+
 def test_every_page_with_an_output_is_run() -> None:
     pages = {
         str(p.relative_to(DOCS))
         for p in doc_pages(DOCS)
         if any(b.title == OUTPUT for b in blocks(str(p.relative_to(DOCS))))
     }
-    assert pages == {*EXAMPLES, CHANGING}
+    assert pages == {*EXAMPLES, CHANGING, GUARDRAILS}
 
 
 def test_the_landing_page_shows_the_function_agent_as_it_runs() -> None:

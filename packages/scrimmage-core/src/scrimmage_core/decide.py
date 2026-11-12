@@ -29,7 +29,8 @@ class Call:
     For an MCP tool, the label names the server too and short is the label without it.
     For a tool or MCP call, args is its arguments as a mock with args holds them, set only
     when the plan has such a mock or is recording; None when they are not known or cannot
-    be held.
+    be held. marked is False for a model call whose library does not number its attempts,
+    so its retries cannot be told from new requests.
     """
 
     kind: Kind
@@ -42,6 +43,7 @@ class Call:
     short: str | None = None
     model: str | None = None
     args: object = None
+    marked: bool = True
 
 
 @dataclass(frozen=True)

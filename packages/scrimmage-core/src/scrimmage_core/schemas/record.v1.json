@@ -730,7 +730,8 @@
             "process",
             "other_python",
             "left_group",
-            "probe"
+            "probe",
+            "model_path"
           ]
         },
         "process": {

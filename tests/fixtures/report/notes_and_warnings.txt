@@ -1,9 +1,9 @@
 exit 2
 scrimmage test: 1 test, 2 rows, 6 runs; records in /records/scrimmage-runs/20261107T101500Z-a1b2c3
 warning: every tool that is not mocked runs for real (real = ["tool:*"])
-test                  row       fault                 runs  fired  done  passed  rate  range   tools  cost     result
-a-test-w...he-table-  baseline  -                     3     -      2     2/3     67%   21-94%  2.0    0.00036  fail
-a-test-w...he-table-  fault 1   model gp...9 first 2  3     0      3     0/0     -     -       2.0    0.00036  no result
+test               row       fault              runs  fired  done  passed  rate  range   tools  cost     result
+a-test-...-table-  baseline  -                  3     -      2     2/3     67%   21-94%  2.0    0.00036  fail
+a-test-...-table-  fault 1   model g...first 2  3     0      3     0/0     -     -       2.0    0.00036  baseline failed
 full name: a-test-whose-name-is-far-too-long-for-the-table-a-test-whose-name-is-far-too-long-for-the-table- baseline: -
 full name: a-test-whose-name-is-far-too-long-for-the-table-a-test-whose-name-is-far-too-long-for-the-table- fault 1: model gpt-4.1 status 429 first 2
 range: a 95% Wilson interval, from these runs alone

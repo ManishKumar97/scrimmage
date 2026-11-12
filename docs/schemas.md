@@ -13,5 +13,6 @@ An editor can then check the file as you type; see [Checking the file in your ed
 
 A schema checks shape only: keys, types and the form of a text.
 Scrimmage itself checks more when it reads a file, so a value can fit a schema and still be refused.
+For example, the schema of `scrimmage.toml` takes `replace` and `slow` on a model fault, and `replace` only with a `model`, but it cannot tell a streamed model call from one that is not: that is found when the call runs.
 
 <!-- shipped schemas -->
