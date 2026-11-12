@@ -142,6 +142,17 @@ ignore_imports = [
 ]
 
 [[tool.importlinter.contracts]]
+name = "The SDK never imports a service's web libraries"
+type = "forbidden"
+# The gates patch them through import hooks, when the service imports them, so a function
+# or a script never loads them, and a service gets the version it installed.
+source_modules = ["scrimmage_core"]
+forbidden_modules = ["uvicorn", "starlette", "fastapi", "anyio"]
+ignore_imports = [
+    "scrimmage_core.mcp_server -> anyio",  # the Scrimmage MCP server's own, a command apart
+]
+
+[[tool.importlinter.contracts]]
 name = "Reading a finished test starts nothing and opens no socket"
 type = "forbidden"
 source_modules = [
