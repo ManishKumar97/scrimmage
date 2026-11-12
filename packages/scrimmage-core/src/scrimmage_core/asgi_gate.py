@@ -81,22 +81,30 @@ class Gate:
     proc: dict[str, object] = field(default_factory=state.this_process)
     nonces: protocol.NonceStore = field(default_factory=protocol.NonceStore)
     gates: list[str] = field(default_factory=list[str])  # the entry gates installed, by name
+    serving: bool = False  # this process loaded or served the app
 
 
 GATE: Gate | None = None  # set by bootstrap.start_service
 
 
 def active(name: str) -> None:
-    """An entry gate is in this process: say so once, so the supervisor says nothing."""
+    """An entry gate is installed in this process. A supervisor installs them too, as it
+    imports the same libraries, so this alone says nothing."""
     gate = GATE
-    if gate is None or name in gate.gates:
+    if gate is not None and name not in gate.gates:
+        gate.gates.append(name)
+
+
+def serving() -> None:
+    """This process loaded the app or serves it: say so once. The team's own children,
+    started from here, never learn where the token is; a supervisor that loads no app keeps
+    it for its workers."""
+    gate = GATE
+    if gate is None or gate.serving:
         return
-    gate.gates.append(name)
-    if len(gate.gates) == 1:
-        # This process serves the app, so the team's own children, started from here, never
-        # learn where the token is. A supervisor that loads no app keeps it for its workers.
-        os.environ.pop("SCRIMMAGE_TOKEN_FILE", None)
-        print(f"scrimmage: {ACTIVE.format(pid=os.getpid())}", file=sys.stderr, flush=True)
+    gate.serving = True
+    os.environ.pop("SCRIMMAGE_TOKEN_FILE", None)
+    print(f"scrimmage: {ACTIVE.format(pid=os.getpid())}", file=sys.stderr, flush=True)
 
 
 async def entry(app: App, scope: Scope, receive: Receive, send: Send) -> None:
@@ -432,6 +440,7 @@ def patch_uvicorn(module: ModuleType, process: ProcessState) -> None:
             return
         self.loaded_app = Entry(self.loaded_app)
         active("asgi")
+        serving()
 
     setattr(gated_load, GATED, True)
     config.load = gated_load
@@ -456,6 +465,7 @@ def patch_starlette(module: ModuleType, process: ProcessState) -> None:
         slot = SLOT.get()
         if isinstance(slot, Joined) or is_plain(slot):  # the uvicorn gate has been, once
             return await call(self, scope, receive, send)
+        serving()
         return await entry(functools.partial(call, self), scope, receive, send)
 
     setattr(gated_call, GATED, True)

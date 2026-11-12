@@ -8,8 +8,10 @@ x-scrimmage-* header removed. Its record closes record_grace_s after the reply.
 import asyncio
 import contextvars
 import json
+import os
 import threading
 import time
+import types
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -485,6 +487,54 @@ def test_starlette_gate_alone_under_testclient(svc: Service) -> None:
     assert got.json()["answer"] == "order for alone"
     assert not any(k.startswith("x-scrimmage") for k in got.json()["headers"])
     assert "must never run" in plain.json()["answer"]  # a plain request: the real tool, untouched
+
+
+@pytest.mark.design("service.token_file_popped")
+def test_only_a_process_that_serves_the_app_pops_the_token_path_and_says_it_is_active(
+    svc: Service, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from starlette.applications import Starlette
+    from starlette.responses import PlainTextResponse
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    monkeypatch.setenv("SCRIMMAGE_TOKEN_FILE", "/run/token")
+    asgi_gate.active("starlette")  # a supervisor imports starlette and loads no app
+    asgi_gate.patch_starlette(__import__("starlette.applications", fromlist=["x"]), svc.process)
+
+    async def ok(request: Any) -> Any:
+        return PlainTextResponse("ok")
+
+    web = Starlette(routes=[Route("/ok", ok)])
+    assert os.environ["SCRIMMAGE_TOKEN_FILE"] == "/run/token"
+    assert "active in service mode" not in capsys.readouterr().err
+    with TestClient(web) as client:  # its first call serves the app
+        assert client.get("/ok").text == "ok"
+        assert client.get("/ok").text == "ok"
+    assert "SCRIMMAGE_TOKEN_FILE" not in os.environ
+    assert capsys.readouterr().err.count("active in service mode") == 1
+
+
+@pytest.mark.design("service.token_file_popped")
+def test_uvicorn_loading_the_app_pops_the_token_path_and_says_it_is_active(
+    svc: Service, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class Config:  # uvicorn's, as far as the gate reads it
+        http = "auto"
+        http2 = False
+
+        def load(self) -> None:
+            self.loaded_app = app
+
+    module = types.ModuleType("uvicorn.config")
+    module.Config = Config  # type: ignore[attr-defined]
+    asgi_gate.patch_uvicorn(module, svc.process)
+    monkeypatch.setenv("SCRIMMAGE_TOKEN_FILE", "/run/token")
+    config = Config()
+    config.load()
+    assert isinstance(config.loaded_app, asgi_gate.Entry)
+    assert "SCRIMMAGE_TOKEN_FILE" not in os.environ
+    assert capsys.readouterr().err.count("active in service mode") == 1
 
 
 @pytest.mark.design("service.websocket")
