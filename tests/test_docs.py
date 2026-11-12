@@ -571,6 +571,9 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
         "record_wait_s",
     ):
         assert words in guide, words
+    from scrimmage_core import runner as running
+
+    assert f"it asks again for up to {running.READY_S:g} seconds" in guide
     limits = page("limits.md")
     assert "**Three agent shapes.**" in limits and "Web services come later" not in limits
     for limit in (

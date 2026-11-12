@@ -78,6 +78,8 @@ The runner checks the service twice before it sends a run.
 
 **The probe.**
 It sends one signed request, marked as a probe, to the service's address.
+While nothing listens at that address, it asks again for up to 30 seconds, so a script can start the service in the background and run the test at once.
+If nothing listens by then, the test stops with exit 3 and says so.
 Scrimmage in the service answers with a report signed with the same token: its versions, its gates and the tools its gates swap.
 The report's shape is the [startup report schema](schemas.md).
 If no gated service answers, because a proxy dropped Scrimmage's header, the service was started without `scrimmage-run` and `SCRIMMAGE_SERVICE=1`, or its token is another, the test stops with exit 3 and sends nothing more.

@@ -509,7 +509,7 @@ class Bench:
         self.services: list[Running] = []
         self.closers: list[Any] = []
 
-    def start(self, *args: str, workers: int = 1, **env: str) -> Running:
+    def start(self, *args: str, workers: int = 1, wait: bool = True, **env: str) -> Running:
         base = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
         base.update(
             PATH=f"{BIN}{os.pathsep}{base.get('PATH', '')}",
@@ -526,7 +526,8 @@ class Bench:
         service = Running(self.root, {k: v for k, v in base.items() if v != ""}, [*flags, *args])
         service.wanted = workers
         self.services.append(service)
-        assert service.ready.wait(60), service.text
+        if wait:
+            assert service.ready.wait(60), service.text
         return service
 
     def test(
@@ -594,6 +595,25 @@ def test_a_service_test_answers_its_runs_and_keeps_the_setup_record(bench: Bench
     runs = [name for name in summaries if name.startswith("run-")]
     assert len(setup) == 1 and len(runs) == 2
     assert all(summaries[r]["outcome"] == "answered" for r in runs)
+
+
+@pytest.mark.design("service.waits_to_listen")
+def test_a_test_started_with_its_service_waits_for_the_service_to_listen(bench: Bench) -> None:
+    """The service and the test start together, as a script that backgrounds the service
+    does: the probe meets a refused connection first, and asks again."""
+    service = bench.start("--loop", "asyncio", workers=2, wait=False)
+    code, out = bench.test(service.port)
+    assert code == 0, out + service.text
+
+
+@pytest.mark.design("service.waits_to_listen")
+def test_a_service_that_never_listens_stops_the_test_naming_that(bench: Bench) -> None:
+    from scrimmage_core import runner
+
+    bench.monkeypatch.setattr(runner, "READY_S", 0.5)
+    code, out = bench.test(free_port())
+    assert code == 3 and "nothing listens at the service's address" in out, out
+    assert "is still starting" in out and "a proxy dropped the header" not in out
 
 
 @pytest.mark.design("service.probe_proves_the_gate")

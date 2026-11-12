@@ -203,6 +203,8 @@ class Ended:
     mistakes: list[str] = field(default_factory=list[str])
 
 
+READY_S = 30.0  # how long the probe asks a service that does not listen yet
+READY_STEP_S = 0.2
 WAITERS = 64  # service runs whose record waits at once: the control server's connections
 
 
@@ -585,7 +587,25 @@ class Runner:
         exit 3 when no gated service answers, exit 2 for a mistake in the setup."""
         agent = self.config.agent
         _, _, path = service_client.target(agent)
-        report = service_client.probe(agent, self.token)
+        report, reply = service_client.probe(agent, self.token)
+        deadline = time.monotonic() + READY_S
+        # A service started just before the test may not listen yet: ask again until it does.
+        while service_client.not_listening(reply) and time.monotonic() < deadline:
+            time.sleep(READY_STEP_S)  # nothing tells a closed port it has opened
+            report, reply = service_client.probe(agent, self.token)
+        if service_client.not_listening(reply):
+            raise service_client.Setup(
+                3,
+                f"nothing listens at the service's address for POST {path}, after {READY_S:g} s "
+                f"of asking ({reply.failed}): the service is not started, is still starting, "
+                "or listens at another address",
+            )
+        if reply.failed is not None or reply.timed_out:
+            raise service_client.Setup(
+                3,
+                f"the service at POST {path} took the probe's connection but gave no reply: "
+                f"{reply.failed or 'timed out'}",
+            )
         if report is None or not {"asgi", "starlette"} & set(
             cast(list[str], report.get("gates") or [])
         ):

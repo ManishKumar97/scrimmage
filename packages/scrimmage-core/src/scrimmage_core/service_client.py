@@ -122,10 +122,10 @@ def post(agent: Agent, headers: dict[str, str], body: bytes, timeout: float) -> 
         conn.close()
 
 
-def probe(agent: Agent, token: str) -> dict[str, object] | None:
+def probe(agent: Agent, token: str) -> tuple[dict[str, object] | None, Reply]:
     """The signed probe: the service's startup report, signed for this request, or None when
-    no Scrimmage with this token answered. Its body is empty, so an app reached by mistake
-    rejects it as a bad request."""
+    no Scrimmage with this token answered, and the reply itself. Its body is empty, so an
+    app reached by mistake rejects it as a bad request."""
     _, _, path = target(agent)
     signed = protocol.request_headers(token, "POST", path, b"", time.time())
     headers = {
@@ -135,15 +135,20 @@ def probe(agent: Agent, token: str) -> dict[str, object] | None:
     }
     reply = post(agent, headers, b"", 30.0)
     if reply.status != 200 or reply.headers.get("x-scrimmage-probe") != "report":
-        return None
+        return None, reply
     expected = protocol.sign_reply(token, signed[protocol.SIGNATURE], 200, reply.body)
     if not protocol.same(reply.headers.get(protocol.SIGNATURE.lower(), ""), expected):
-        return None
+        return None, reply
     with contextlib.suppress(ValueError):
         found = json.loads(reply.body)
         if isinstance(found, dict):
-            return dict(found)  # type: ignore[arg-type]
-    return None
+            return dict(found), reply  # type: ignore[arg-type]
+    return None, reply
+
+
+def not_listening(reply: Reply) -> bool:
+    """Nothing listens at the address yet: a service still starting, or not started."""
+    return reply.failed is not None and reply.failed.startswith("ConnectionRefusedError")
 
 
 def run_request(agent: Agent, header: str, question: str, timeout: float) -> Reply:
