@@ -6,6 +6,7 @@ import random
 import re
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
@@ -1118,6 +1119,55 @@ def by_design_not_a_secret(glue: str, shape: str) -> bool:
     """A field name glued to a letter or digit is not a name, and one right after a named
     call's parenthesis is code, as in b(password=x): both are kept on purpose, on main too."""
     return "=" in shape and (glue[-1:].isalnum() or glue.endswith("("))
+
+
+class CountedScan:
+    """A continuation pattern that counts the characters its matches read."""
+
+    def __init__(self, pattern: re.Pattern[str]) -> None:
+        self.pattern = pattern
+        self.read = 0
+
+    def match(self, text: str, at: int) -> re.Match[str] | None:
+        found = self.pattern.match(text, at)
+        self.read += 0 if found is None else found.end() - at
+        return found
+
+
+def continuation_reads(monkeypatch: pytest.MonkeyPatch, clean: Callable[[], object]) -> int:
+    counted = [
+        CountedScan(getattr(redact_module, name))
+        for name in ("GOES_ON_RAW", "GOES_ON_DECODED", "GOES_ON_DECODED_INSIDE")
+    ]
+    with monkeypatch.context() as patched:
+        for name, scan in zip(
+            ("GOES_ON_RAW", "GOES_ON_DECODED", "GOES_ON_DECODED_INSIDE"), counted, strict=True
+        ):
+            patched.setattr(redact_module, name, scan)
+        clean()
+    return sum(scan.read for scan in counted)
+
+
+@pytest.mark.design("security.redaction_shapes")
+@pytest.mark.parametrize("path", ["python value", "json text"])
+def test_continuations_are_read_in_linear_time_when_quotes_alternate(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """Names outside and inside a quote alternate, so each reads with its own continuation.
+    Each must reuse its own last read, or every name reads on to the end of the text."""
+
+    def reads(n: int) -> tuple[int, int]:
+        text = ',token=a\\nb"token=a\\nb' * n
+        if path == "python value":
+            return continuation_reads(monkeypatch, lambda: capture.clean({"v": text})), len(text)
+        whole = json.dumps({"v": text})
+        return continuation_reads(monkeypatch, lambda: redact(whole)), len(whole)
+
+    small, small_len = reads(500)
+    large, large_len = reads(1000)
+    assert small > 0
+    assert small <= 2 * small_len and large <= 2 * large_len, (small, large)
+    assert large <= 2.2 * small, (small, large)
 
 
 @pytest.mark.design("security.redaction_shapes")

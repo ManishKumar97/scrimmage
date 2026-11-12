@@ -202,7 +202,9 @@ def key_removals(text: str, decoded: bool = False) -> list[tuple[int, int, str]]
     joined into the same place.
     """
     places: list[tuple[int, int, str]] = []
-    went_on = (GOES_ON_RAW, 0, 0)  # the last continuation read: from where, and to where
+    # The last read of each continuation: from where, and to where. One per pattern, as names
+    # inside and outside a quote can alternate, each reading with its own pattern.
+    went_on: dict[re.Pattern[str], tuple[int, int]] = {}
     for found in PATTERNS.finditer(text):
         end = found.end()
         value = found.group("value")
@@ -211,12 +213,12 @@ def key_removals(text: str, decoded: bool = False) -> list[tuple[int, int, str]]
             if decoded:
                 inside = found.group("inside") is not None
                 goes_on = GOES_ON_DECODED_INSIDE if inside else GOES_ON_DECODED
-            seen, since, to = went_on
+            since, to = went_on.get(goes_on, (0, 0))
             # A continuation stops at the same place from any step inside it, so one read is
             # enough for a run of names inside one value: that keeps the whole pass linear.
-            if seen is not goes_on or not since <= end < to:
+            if not since <= end < to:
                 to = cast(re.Match[str], goes_on.match(text, end)).end()
-                went_on = (goes_on, end, to)
+                went_on[goes_on] = (end, to)
             # Its first character is all code_value reads past the value: an escape is never
             # part of a name. Copying the rest would make a run of names quadratic.
             value += text[end : min(to, end + 1)]
