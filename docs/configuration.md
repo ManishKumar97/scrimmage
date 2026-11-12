@@ -8,19 +8,25 @@ Anything this version does not support is rejected as unknown, with exit code 2.
 
 | Setting | What it does | Default |
 |---|---|---|
-| `function` | The agent, as `module:function`. Scrimmage calls it with the question and waits for it if it is async. Give this or `command`. | none |
-| `command` | The agent as a script, such as `"python bot.py {question}"`. It is split into arguments like a shell's words, and the question fills `{question}` as part of one argument, with no shell. Must hold `{question}`. Give this or `function`. See [An agent run as a script](scripts.md). | none |
-| `children` | `true` fires faults in child processes too, and lets a child on another Python join if it has Scrimmage installed. See [Faults in children](scripts.md#faults-in-children). | `false` |
+| `function` | The agent, as `module:function`. Scrimmage calls it with the question and waits for it if it is async. Give exactly one of `function`, `command` and `service`. | none |
+| `command` | The agent as a script, such as `"python bot.py {question}"`. It is split into arguments like a shell's words, and the question fills `{question}` as part of one argument, with no shell. Must hold `{question}`. See [An agent run as a script](scripts.md). | none |
+| `service` | An agent inside a web service, as `http://host:port/path`. Each run is one `POST` there. `https` is not read in this version. See [An agent inside a web service](#an-agent-inside-a-web-service). | none |
+| `body` | With `service`: the run's body, sent as JSON. A table, an array or a text that holds `{question}` in a text value. Required with `service`. | none |
+| `headers` | With `service`: the run's headers, as a table of text. A value may hold `${NAME}` and `{session}`, never `{question}`. | empty |
+| `record_grace_s` | With `service`: how long a run's record stays open after its reply, for calls the service makes after it answers. 0 to 60. | 5 |
+| `record_wait_s` | With `service`: how much longer the runner waits for a run's last lines after the grace. Above 0, up to 120. | 10 |
+| `background_real` | With `service`: calls work outside any request, such as a telemetry exporter, may make for real while a test runs. It is never read for a call inside a run, which `real` decides. | empty |
+| `children` | `true` fires faults in child processes too, and lets a child on another Python join if it has Scrimmage installed. Not with `service`. See [Faults in children](scripts.md#faults-in-children). | `false` |
 | `tools` | The agent's own tools, as `module:function` import paths, or `module:Class.method` for a tool that is a method. Scrimmage swaps each one for a gate when your code imports its module. When the model sees a different name, write `{path = "package.tools:lookup_order", name = "lookup-order"}`; labels use the name the model sees, which for a method is its own name. See [Tools that are methods](#tools-that-are-methods). | empty |
 | `real` | Calls that are safe to run for real when a test does not mock them, such as `"tool:check_inventory"`, `"tool:*"` for every tool, `"mcp:docs/search"` for a tool on an MCP server, `"hosted:mcp/orders"` for a hosted MCP server, `"process:python"` for a Python child that does not join, or a web write such as `"http:orders.acme.internal POST /refunds"`. Model calls are not listed: they are real unless a fault names them. | empty |
 | `runs` | How many times each row runs. | 3 |
-| `parallel` | How many runs go at the same time. | 4 |
+| `parallel` | How many runs go at the same time. | 4; 1 with `service` |
 | `run_timeout` | Seconds one run may take before it is stopped and marked "timed out". It counts from when Scrimmage starts the program, so start-up time counts too. | 120 |
 | `max_cost_usd` | The most the whole test may spend on model calls, in dollars. `"none"` turns the budget off, on purpose. | 5 |
 | `model_hosts` | Extra hosts whose requests are model calls, such as a gateway, each with the format it speaks: `[{host = "llm-gateway.internal", provider = "openai"}]`. A host name only, with no port. | empty |
 | `reserve_output_tokens` | The output tokens a budget reservation assumes when a request does not set `max_tokens`. A call that does not fit while others hold the budget waits for them; see [When calls in flight hold the budget](model-faults.md#when-calls-in-flight-hold-the-budget). | 4096 |
 | `prices` | Prices for other models, as the table below. The key `""` prices a call that sends no model name. | empty |
-| `answer` | Where the answer is in what the function returns, such as `"messages[-1].content"`. Only with `function`. Required when the function returns anything but text, as the whole value would hold tool results too. See [Agents on a framework](frameworks.md). | the returned text |
+| `answer` | Where the answer is in what the function returns, such as `"messages[-1].content"`, or in a service's JSON reply, such as `"reply"`. With `function` or `service`. Required when the function returns anything but text, as the whole value would hold tool results too. See [Agents on a framework](frameworks.md). | the returned text, or a service's whole reply |
 
 ## [agent.prices]
 
@@ -219,20 +225,65 @@ Scrimmage reads the line as a comment, so it changes nothing.
 
 The schema checks the shape of the file only.
 It cannot check what needs the whole file, your folder or your machine: a tool name against `tools`, a mock on a model call, a `type` outside your packages, a program on your `PATH`, or a test name used twice.
-The schema also rejects `${` in any text, as Scrimmage does not read placeholders.
+The schema cannot see your environment, so it cannot tell a `${NAME}` that is not set; Scrimmage stops on it.
 It cannot tell a whole number written as `2.0` from `2`, as JSON Schema counts both as an integer, so Taplo and other editors accept `runs = 2.0`; Scrimmage rejects it.
 An editor that finds nothing wrong is a good sign. `scrimmage check` decides; see [Commands](cli.md#scrimmage-check).
+
+## Placeholders
+
+`${NAME}` in any text value of the file is filled in from the environment when the file is read.
+`NAME` is a letter or `_`, then letters, digits or `_`.
+A name that is not set stops the test with exit 2, naming the table, the key and the name, such as `[agent] headers Authorization: ${TEST_TOKEN} is not set in the environment`.
+A name set to an empty value is read as empty.
+`$${` is a literal `${`, as Docker Compose writes it; only `$${` is an escape, so `$$` alone stays two dollar signs.
+Keys are never read.
+
+A filled-in value is text as it is: a value that holds `{question}` or `${OTHER}` is never read again.
+In `command` the line is split into arguments first, and each argument is filled in after, so a value with a space stays one argument.
+
+Each filled-in value of 8 characters or more is removed from every record, side-folder item, summary, report and `result.json`, as written, JSON-escaped, URL-encoded and in base64.
+A value under 8 characters is not removed, as it would match too much other text: keep secrets longer than that.
+A row's hash in `result.json` is taken over the file as written, `${NAME}` and all, so it never covers a value from the environment, and a rotated token is not a changed test.
+
+`{question}` and `{session}` are read in `body` and `headers` only.
+`{question}` is the test's question; a header cannot hold it.
+`{session}` is `scrimmage-` and 16 random hex digits, new for every run, and never the run's name.
+In those two fields `{{` is `{` and `}}` is `}`, and any other `{...}` is a test mistake.
+Each text is read once, so a question that holds `{session}` reaches the service as written.
+Anywhere else braces are kept as written, so a mock's text such as `{"a": {"b": 1}}` is sent as it is.
+`command` reads `{question}` as before, with no `{{` and no `{session}`, so `awk '{print $1}'` still works.
+
+| Written in `body` | Sent |
+|---|---|
+| `"{question}"` | the question |
+| `"id {{x}} {session}"` | `id {x} scrimmage-0f3a...` |
+| `"Bearer ${TEST_TOKEN}"` | `Bearer` and the variable's value |
+| `"$${HOME}"` | `${HOME}` |
+| `"{other}"` | exit 2: not a placeholder |
+
+## An agent inside a web service
+
+`service` names the address of an agent that runs inside a web service, such as a FastAPI app under uvicorn.
+Each run is one `POST` to that address, with `body` as JSON and `headers` added.
+`scrimmage check` prints the two lines the service's environment needs, `SCRIMMAGE_TOOLS` and `SCRIMMAGE_ALLOW_IMPORTS`, built from the file.
+`scrimmage record` and `scrimmage init --probe` do not work with a service in this version: record or probe the same agent as a function.
+
+```toml
+[agent]
+service = "http://127.0.0.1:8765/chat"
+body    = {message = "{question}", session = "{session}"}
+answer  = "reply"
+headers = {Authorization = "Bearer ${TEST_TOKEN}"}
+```
 
 ## Coming in later versions
 
 These are part of Scrimmage's design but not of this version.
 Using one now stops the test: it is rejected as unknown.
 
-- Agent shapes: `service` (a web service).
-- Settings: `body`, `headers`, `control`, `control_tls`, `records`, `record_grace_s`, `record_wait_s`.
+- Settings: `control`, `control_tls`, `records`.
 - Labels: `auth:`, and model providers other than OpenAI.
 - Faults: `empty` on a tool or a web request, `refused`, `reset`, `dns`, `bad body`, `auth error`, `context too long`, `append` on a model call, the other model reply faults, and `status` on a tool.
 - Schedules: `once` (write `first 1`) and `call N`.
 - Fault options: `retry_after`.
 - Mocks: `returns_from`.
-- Placeholders: `${VAR}`.

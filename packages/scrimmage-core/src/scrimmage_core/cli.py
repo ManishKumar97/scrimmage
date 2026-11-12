@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import io
 import json
 import math
 import re
@@ -17,11 +18,11 @@ import sys
 import threading
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, TextIO
+from typing import TYPE_CHECKING, TextIO, cast
 
 from scrimmage_core import compare as comparing
 from scrimmage_core import config as settings
-from scrimmage_core import entry
+from scrimmage_core import entry, redact
 from scrimmage_core import plan as planner
 from scrimmage_core import results as results_file
 from scrimmage_core.errors import ConfigError
@@ -446,7 +447,13 @@ def run_test(
     assert runner is not None
     report = running.build_report(config, results, runner.folder, runner)
     stop_point()  # a signal that came while the report was built: no file is written
-    fields = {**running.report_json(report), "compare": None}
+    # The values ${NAME} filled in never reach the result file, the document or the report.
+    for said in (report.above, report.messages):
+        said[:] = [(kind, redact.remove_values(text, config.scrub)[0]) for kind, text in said]
+    fields = cast(
+        dict[str, object],
+        redact.scrubbed({**running.report_json(report), "compare": None}, config.scrub),
+    )
     version = scrimmage_version()
     doc = document("test", report.code, str(path), report.every_message, version, **fields)
     # A test the budget or a bad label stopped has rows with fewer runs than planned: it is not
@@ -456,7 +463,9 @@ def run_test(
     if found is None:
         if warning is not None:
             print(f"scrimmage: warning: {warning}", file=sys.stderr)
-        code = running.print_report(report, sys.stdout)
+        printed = io.StringIO()
+        code = running.print_report(report, printed)
+        sys.stdout.write(redact.remove_values(printed.getvalue(), config.scrub)[0])
         if compare is not None:
             say_comparison(earlier, doc, compare, finished, None)
         return code
@@ -665,7 +674,11 @@ def run_check(
             return MISTAKE
         runs = len(config.tests) * count  # one baseline per test, N times
     entry_kind, entry_value = (
-        ("command", shlex.join(agent.command)) if agent.command else ("function", agent.function)
+        ("command", shlex.join(agent.command))
+        if agent.command
+        else ("service", agent.service)
+        if agent.service
+        else ("function", agent.function)
     )
     summary: dict[str, object] = {
         "tests": len(config.tests),
@@ -690,7 +703,20 @@ def run_check(
         f"scrimmage check: {path} is valid: {plural(len(config.tests), 'test')}, "
         f"{plural(rows, 'row')}, {plural(runs, 'run')}, {tools}, {budget}"
     )
+    if agent.service:
+        print("start the service with these two set, with scrimmage-run and SCRIMMAGE_SERVICE=1:")
+        for line in service_lines(agent):
+            print(f"  {line}")
     return OK
+
+
+def service_lines(agent: settings.Agent) -> list[str]:
+    """The two lines a service's environment needs, built from the file: the tools its gates
+    swap, and the packages a plan may import from. The probe stops a test without them."""
+    return [
+        f"SCRIMMAGE_TOOLS={shlex.quote(planner.tools_text(agent.tools, agent.renames))}",
+        f"SCRIMMAGE_ALLOW_IMPORTS={shlex.quote(','.join(agent.allowed_imports()))}",
+    ]
 
 
 def init_command(args: argparse.Namespace, process: bool) -> int:

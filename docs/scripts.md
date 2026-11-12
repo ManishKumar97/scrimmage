@@ -25,7 +25,8 @@ Scrimmage splits the command into arguments when it reads the file, the way a sh
 Then it puts the question into its argument.
 No shell is ever involved, so the question above reaches `bot.py` as one argument, `sys.argv[1]`, and `rm` never runs.
 
-`{question}` is the only placeholder, and the command must hold it. It can sit inside an argument, as in `--ask={question}`.
+`{question}` is the question, and the command must hold it. It can sit inside an argument, as in `--ask={question}`.
+`${NAME}` is filled in from the environment, after the command is split, so a value with a space stays one argument; see [Placeholders](configuration.md#placeholders).
 
 The program runs in the folder that holds `scrimmage.toml`.
 `python` is found on your `PATH`, so run `scrimmage test` in the environment your agent runs in.

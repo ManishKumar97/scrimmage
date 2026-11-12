@@ -253,7 +253,9 @@ def test_every_command_flag_exit_code_and_json_field_is_documented() -> None:
         assert "a signal before that" in text and "always equals the document's `exit`" in text
     assert "once scrimmage has started" in output.lower()
     assert "Once Scrimmage has started" in cli_page
-    assert "`2.0`" in page("configuration.md") and "rejects `${`" in page("configuration.md")
+    assert "`2.0`" in page("configuration.md") and "`$${` is a literal `${`" in page(
+        "configuration.md"
+    )
     assert "[JSON output](json-output.md)" in page("index.md")
     assert "#:schema ./scrimmage.schema.json" in page("configuration.md")
     assert "## Checking the file in your editor" in page("configuration.md")

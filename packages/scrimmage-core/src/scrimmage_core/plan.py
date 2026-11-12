@@ -7,6 +7,7 @@ from typing import cast
 from scrimmage_core import labels
 from scrimmage_core.config import (
     DEFAULT_RESERVE_OUTPUT_TOKENS,
+    MAX_GRACE_S,
     Config,
     Fault,
     Mock,
@@ -43,6 +44,13 @@ class Plan:
     # The runner adds it to each copy it serves, so the SDK's time limit counts from the
     # runner's start, however long the program took to load.
     elapsed_s: float = 0.0
+    # The values ${NAME} filled in, which the SDK removes from every line and side-folder item
+    # before either is hashed. Sent with the plan only; never written to a file.
+    scrub: tuple[str, ...] = ()
+    service: bool = False  # a run of an agent inside a web service, one request long
+    record_grace_s: float = 0.0  # in a service: the record stays open this long after the reply
+    # In a service: calls work outside any request may make for real while this run is open.
+    background_real: tuple[str, ...] = ()
 
     def tool_names(self) -> list[str]:
         """Every tool's final name: the one the model sees."""
@@ -76,6 +84,12 @@ class Plan:
             doc["probe"] = True
         if self.elapsed_s:
             doc["elapsed_s"] = self.elapsed_s
+        if self.scrub:
+            doc["scrub"] = list(self.scrub)
+        if self.service:
+            doc["service"] = True
+            doc["record_grace_s"] = self.record_grace_s
+            doc["background_real"] = list(self.background_real)
         return doc
 
     @staticmethod
@@ -113,6 +127,10 @@ class Plan:
         elapsed = number(doc, "elapsed_s") if "elapsed_s" in doc else 0.0
         if not elapsed >= 0:  # NaN too: a negative age would stretch the time limit
             raise ValueError("plan elapsed_s is negative")
+        scrub = tuple(str(value) for value in items(doc, "scrub")) if "scrub" in doc else ()
+        grace = number(doc, "record_grace_s") if "record_grace_s" in doc else 0.0
+        if not 0 <= grace <= MAX_GRACE_S:
+            raise ValueError("plan record_grace_s is out of range")
         return Plan(
             run=string(doc, "run"),
             test=string(doc, "test"),
@@ -131,6 +149,12 @@ class Plan:
             record=doc.get("record") is True,
             probe=doc.get("probe") is True,
             elapsed_s=elapsed,
+            scrub=scrub,
+            service=doc.get("service") is True,
+            record_grace_s=grace,
+            background_real=tuple(str(r) for r in items(doc, "background_real"))
+            if "background_real" in doc
+            else (),
         )
 
 
@@ -267,6 +291,10 @@ def plan_for(config: Config, row: Row, run: str) -> Plan:
         reserve_output_tokens=config.agent.reserve_output_tokens,
         prices=config.agent.prices,
         children=config.agent.children,
+        scrub=config.scrub,
+        service=bool(config.agent.service),
+        record_grace_s=config.agent.record_grace_s if config.agent.service else 0.0,
+        background_real=config.agent.background_real,
     )
 
 

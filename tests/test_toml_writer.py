@@ -2,10 +2,11 @@
 
 import random
 import tomllib
+from typing import Any, cast
 
 import pytest
 
-from scrimmage_core import capture, toml_write
+from scrimmage_core import capture, config, toml_write
 
 ALPHABET = [chr(c) for c in range(0x00, 0x30)] + list('"\\#[]{}=., \'é漢🙂') + [
     "\u007f", "\u0085", "\u009f", "\u2028", "﻿", '"""', "[[test.fault]]", "${", "a", "Z", "9",
@@ -50,7 +51,8 @@ def test_two_thousand_generated_values_read_back_type_strict_equal() -> None:
         returns, args = value(rng), {key(rng): value(rng) for _ in range(rng.randint(0, 3))}
         fields = mock_of(returns, args=args)
         block = toml_write.mock(fields, [text(rng)])
-        found = tomllib.loads(block)["test"]["mock"][0]
+        # Read as scrimmage record reads back what it wrote: $${ is a literal ${.
+        found = cast(Any, config.literal(tomllib.loads(block)))["test"]["mock"][0]
         assert capture.differ(fields, found, "mock") is None, block
 
 

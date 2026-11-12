@@ -20,7 +20,7 @@ import socket
 import sys
 import threading
 import time
-from collections.abc import Callable, Generator, Iterable
+from collections.abc import Callable, Generator, Iterable, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -36,7 +36,7 @@ from scrimmage_core.errors import ScrimmageRefused, ScrimmageStopped, ScrimmageT
 from scrimmage_core.outcomes import PREVIEW
 from scrimmage_core.plan import Plan
 from scrimmage_core.records import RECORD_VERSION
-from scrimmage_core.redact import redact, redact_decoded, redacted
+from scrimmage_core.redact import redact, redact_decoded, redacted, remove_values, scrubbed
 
 BLOB_CAP = 10 * 1024 * 1024  # a side-folder item keeps its first 10 MB and is marked cut
 BLOB_WAIT_S = 10.0  # the longest a recording call waits for room for its saved value
@@ -103,7 +103,7 @@ def now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def content(value: object, *, clean: bool = True) -> dict[str, object]:
+def content(value: object, *, clean: bool = True, scrub: Sequence[str] = ()) -> dict[str, object]:
     """Hash, size and preview of a recorded value, with secrets removed first.
 
     The call is only observed, so no value may fail it: one that holds itself, is nested
@@ -116,7 +116,7 @@ def content(value: object, *, clean: bool = True) -> dict[str, object]:
     except Exception as exc:  # a value that holds itself, nests too deep, or will not sort
         text = f"<a {type(value).__name__} Scrimmage could not write as JSON: {type(exc).__name__}>"
     if clean:  # a Python string has no escapes left in it; JSON text is read as JSON
-        text = redacted(text, decoded=isinstance(value, str))[0]
+        text = redacted(text, decoded=isinstance(value, str), scrub=scrub)[0]
     # A lone surrogate, such as an undecodable byte in a file name, has no UTF-8 form.
     text = text.encode("utf-8", "backslashreplace").decode()
     data = text.encode()
@@ -460,6 +460,7 @@ class RunState:
         for key in ("value", "args"):
             if key in out:
                 text = json.dumps(out[key], ensure_ascii=False)  # plain refused surrogates
+                text = remove_values(text, self.secrets)[0]  # the patterns ran already
                 out[key] = kept_blob(text.encode(), self.blobs, wait=True)
         return out
 
@@ -569,7 +570,7 @@ class RunState:
     def announce(self) -> None:
         """Say once what this process is: its Python, its command and its parent."""
         self._unannounced = False
-        command = redact(shlex.join(sys.orig_argv))[:COMMAND_CAP]
+        command = redact(shlex.join(sys.orig_argv), self.secrets)[:COMMAND_CAP]
         line = self._head()
         line.update(
             notice="process",
@@ -577,7 +578,7 @@ class RunState:
             message="a process joined the run",
             process={"python": redact(sys.executable), "command": command, "parent": os.getppid()},
         )
-        self.sink.put(line, keep=True)
+        self.put(line, keep=True)
 
     def stop_open(self) -> None:
         """A call going on when the run is stopped would leave no line, so it gets one here."""
@@ -657,12 +658,12 @@ class RunState:
         line = self._head()
         line.update(notice=kind, library=library, message=message)
         if mistake is not None:
-            line["mistake"] = redact(mistake)
+            line["mistake"] = redact(mistake, self.secrets)
         if tools is not None:
             line["tools"] = tools
         if extra is not None:
             line.update(extra)
-        self.sink.put(line, keep=True)
+        self.put(line, keep=True)
 
     def unchanged(self, step: Step, why: str) -> None:
         """A carried fault could not change this call: it gets what the baseline gives it, and
@@ -681,14 +682,14 @@ class RunState:
         assert step.decision.fault is not None
         fault = self.plan.faults[step.decision.fault]
         shown: dict[str, object] = {
-            "text": content(fault.text or "", clean=False),
+            "text": content(remove_values(fault.text or "", self.secrets)[0], clean=False),
             "count": done.count,
             "parts": list(done.parts),
         }
         if fault.find is not None:
             raw = fault.find.encode("utf-8", "backslashreplace")
             shown["find"] = {
-                **content(fault.find),
+                **content(fault.find, scrub=self.secrets),
                 "sha256": hashlib.sha256(raw).hexdigest(),
                 "bytes": len(raw),
             }
@@ -724,15 +725,17 @@ class RunState:
         mistake: str | None = None,
     ) -> None:
         decision = step.decision
+        secrets = self.secrets
         self._first_line()
         line = self._head()
+        refused = error is not None or decision.action == "refused"
         line.update(
-            call=redact(step.call.label),  # a server names its own tools
+            call=redact(step.call.label, secrets),  # a server names its own tools
             kind=step.call.kind,
             action=decision.action,
-            args=content(step.args),
-            result=None if error is not None or decision.action == "refused" else content(result),
-            error=None if error is None else error_text(step.call, error),
+            args=content(step.args, scrub=secrets),
+            result=None if refused else content(result, scrub=secrets),
+            error=None if error is None else error_text(step.call, error, secrets),
             start=step.start,
             ms=int((time.monotonic() - step.started) * 1000),
         )
@@ -754,12 +757,12 @@ class RunState:
         if decision.action == "refused":
             line["reason"] = decision.reason or "unlisted"
         if mistake is not None:
-            line["mistake"] = redact(mistake)
+            line["mistake"] = redact(mistake, secrets)
         if step.call_id is not None:
             line["call_id"] = step.call_id
         if step.parent is not None:
             line["parent"] = step.parent
-        line.update({key: scrub(value) for key, value in step.extra.items()})
+        line.update({key: scrub(value, secrets) for key, value in step.extra.items()})
         if step.miss is not None:
             line["mock_miss"] = self.miss_line(step)
         # On every recorded tool or MCP line, refused ones too: a refused call is the one a
@@ -774,7 +777,18 @@ class RunState:
         write = write or step.call.kind == "process"
         keep = decision.action == "refused" or step.call.kind == "model" or write
         keep = keep or "mock_miss" in line
-        self.sink.put(line, keep=keep)
+        self.put(line, keep=keep)
+
+    @property
+    def secrets(self) -> tuple[str, ...]:
+        """The values this run's plan says to remove from every line, as the runner read them
+        from the environment. This run's own: another run's are never used here."""
+        plan = self._plan
+        return () if plan is None else plan.scrub
+
+    def put(self, line: dict[str, object], *, keep: bool) -> None:
+        """Every text a line holds goes without this run's values, whatever field holds it."""
+        self.sink.put(cast("dict[str, object]", scrubbed(line, self.secrets)), keep=keep)
 
 
 MISS_CAP = 2048  # a miss on a line, as JSON text; a batch over 4 MB is refused with a 413
@@ -858,7 +872,7 @@ def fit_miss(miss: dict[str, object]) -> dict[str, object]:
     return miss
 
 
-def error_text(call: engine.Call, error: BaseException) -> str:
+def error_text(call: engine.Call, error: BaseException, secrets: Sequence[str] = ()) -> str:
     """A web client's message can quote the URL or a header, so a web line keeps its type."""
     if call.kind == "http" and not isinstance(error, ScrimmageRefused):
         return type(error).__name__
@@ -866,15 +880,16 @@ def error_text(call: engine.Call, error: BaseException) -> str:
         message = str(error)
     except Exception:  # an error whose own __str__ fails must not fail the call it observed
         message = "its message could not be read"
-    return redact(f"{type(error).__name__}: {message}").encode("utf-8", "backslashreplace").decode()
+    text = redact(f"{type(error).__name__}: {message}", secrets)
+    return text.encode("utf-8", "backslashreplace").decode()
 
 
-def scrub(value: object) -> object:
+def scrub(value: object, secrets: Sequence[str] = ()) -> object:
     """Remove secrets from the text a gate puts on a line, such as a model name or a path."""
     if isinstance(value, str):  # a value the gate read, such as a model name out of the body
-        return redact_decoded(value)
+        return redact_decoded(value, secrets)
     if isinstance(value, list):
-        return [scrub(item) for item in cast(list[object], value)]
+        return [scrub(item, secrets) for item in cast(list[object], value)]
     return value
 
 
@@ -892,13 +907,18 @@ def handed_over(sink: BlobSink, sha: str, data: bytes, *, wait: bool) -> bool:
 
 
 def blob(
-    data: bytes, sink: BlobSink | None, total: int | None = None, *, wait: bool = False
+    data: bytes,
+    sink: BlobSink | None,
+    total: int | None = None,
+    *,
+    wait: bool = False,
+    scrub: Sequence[str] = (),
 ) -> dict[str, object]:
     """Record a model request or reply: its full content goes to the side folder by hash.
 
     total is the true size when only part of the content was kept while it went by.
     """
-    text = redact(data.decode("utf-8", "replace"))
+    text = redact(data.decode("utf-8", "replace"), scrub)
     raw = text.encode()
     size = max(len(raw), total or 0)
     kept = raw[:BLOB_CAP]

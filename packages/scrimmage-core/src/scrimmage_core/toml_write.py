@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from typing import cast
 
 from scrimmage_core import capture
+from scrimmage_core.config import literal
 
 LINE = 100  # an inline list or table this long or longer is written over several lines
 INDENT = "    "
@@ -30,8 +31,11 @@ class WriterBug(RuntimeError):
     """What was written does not read back as what was meant: a bug in Scrimmage, exit 3."""
 
 
-def string(text: str) -> str:
-    """A basic string. Every control character is escaped, and no string spans lines."""
+def string(text: str, *, value: bool = True) -> str:
+    """A basic string. Every control character is escaped, and no string spans lines.
+
+    value: a value, which the file reads ${NAME} in, so a recorded ${ is written as the
+    literal $${ and is never a placeholder by accident. A key is read as it is written."""
     out = ['"']
     for char in text:
         code = ord(char)
@@ -44,11 +48,12 @@ def string(text: str) -> str:
         else:
             out.append(char)
     out.append('"')
-    return "".join(out)
+    written = "".join(out)
+    return written.replace("${", "$${") if value else written
 
 
 def key(name: str) -> str:
-    return name if BARE.fullmatch(name) else string(name)
+    return name if BARE.fullmatch(name) else string(name, value=False)
 
 
 def inline(value: object) -> str:
@@ -124,7 +129,7 @@ def mock(fields: dict[str, object], comments: Sequence[str] = ()) -> str:
 def read_back(block: str, fields: dict[str, object]) -> None:
     """The block, read by tomllib, must be exactly the mock meant, or it is Scrimmage's bug."""
     try:
-        found = tomllib.loads(block)
+        found = literal(tomllib.loads(block))  # $${ is ${ once read; nothing is filled in
     except tomllib.TOMLDecodeError as exc:
         raise WriterBug(f"scrimmage wrote a mock tomllib cannot read: {exc}") from exc
     where = capture.differ({"test": {"mock": [fields]}}, found, "mock")

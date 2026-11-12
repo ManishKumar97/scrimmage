@@ -2,15 +2,21 @@
 
 Only what this version supports is accepted. Anything else is rejected, never read
 and ignored; docs/configuration.md lists what later versions add.
+
+${NAME} is read in every text value, from the environment, when the file is read; $${ is a
+literal ${. A service's body and headers also read {question} and {session}, where {{ and }}
+are a brace. Each string is read once, so an expanded value is never read again.
 """
 
 import builtins
 import math
 import os
 import re
+import secrets
 import shlex
 import shutil
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -20,7 +26,7 @@ from scrimmage_core.errors import ConfigError
 from scrimmage_core.judge import Rules, impossible, normal
 from scrimmage_core.mocks import allowed
 from scrimmage_core.provider_openai import Rates
-from scrimmage_core.redact import redact
+from scrimmage_core.redact import SCRUB_MIN, redact
 
 READ_METHODS = ("GET", "HEAD")  # the web requests that run for real without being listed
 AGENT_KEYS = {
@@ -37,7 +43,15 @@ AGENT_KEYS = {
     "reserve_output_tokens",
     "prices",
     "answer",
+    "service",
+    "body",
+    "headers",
+    "record_grace_s",
+    "record_wait_s",
+    "background_real",
 }
+# An agent inside a web service: these go with service only.
+SERVICE_KEYS = ("body", "headers", "record_grace_s", "record_wait_s", "background_real")
 RULE_KEYS = {"expect", "forbid", "pass_rate"}
 TEST_KEYS = {"name", "question", "mock", "fault", *RULE_KEYS}
 # recorded marks a mock scrimmage record wrote; args, on a tool or MCP mock, the arguments
@@ -73,8 +87,224 @@ DEFAULT_RESERVE_OUTPUT_TOKENS = 4096
 ANSWER_PATH = re.compile(r"[A-Za-z_]\w*(\[-?\d+\]|\.[A-Za-z_]\w*)*")
 IMPORT_PATH = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*:[A-Za-z_]\w*")
 TOOL_NAMES = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*")  # a function, or Class.method
-QUESTION = "{question}"  # in a command; the only placeholder filled in
+QUESTION = "{question}"  # in a command, and in a service's body
+SESSION = "{session}"  # in a service's body and headers: new for every run
+SESSION_PREFIX = "scrimmage-"
 MAX_ARGUMENT = 128 * 1024  # Linux's limit on one argument, with its closing NUL
+VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# http://host:port/path, with a host name, an IPv4 address or a bracketed IPv6 one.
+SERVICE_URL = re.compile(
+    r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*)://(?P<host>[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])"
+    r"(?::(?P<port>[0-9]{1,5}))?(?P<path>/[^\s#]*)?"
+)
+HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")  # an HTTP token, RFC 9110
+# Headers the runner writes itself, or that would change how the request is read.
+SET_BY_SCRIMMAGE = ("host", "content-length", "content-type", "transfer-encoding", "connection")
+MAX_GRACE_S = 60.0
+MAX_WAIT_S = 120.0
+DEFAULT_GRACE_S = 5.0
+DEFAULT_WAIT_S = 10.0
+
+
+class Expanded(str):
+    """A text value whose ${NAME} placeholders were filled in. It is what the agent gets;
+    written is the text as the file has it, which is what a row's hash reads, so a hash
+    never covers a secret and a rotated token is not a changed test."""
+
+    written: str
+
+    def __new__(cls, value: str, written: str) -> "Expanded":
+        made = super().__new__(cls, value)
+        made.written = written
+        return made
+
+
+def as_written(value: object) -> object:
+    """A value as the file wrote it: every expanded text back to its placeholders."""
+    if isinstance(value, Expanded):
+        return value.written
+    if isinstance(value, dict):
+        return {k: as_written(v) for k, v in cast(dict[object, object], value).items()}
+    if isinstance(value, list):
+        return [as_written(v) for v in cast(list[object], value)]
+    return value
+
+
+def kept(original: str, checked: str) -> str:
+    """A checked value keeps its written form when the check did not change it."""
+    return original if isinstance(original, Expanded) and checked == original else checked
+
+
+@dataclass(frozen=True)
+class Piece:
+    """One part of a text: text as it is, an expanded value, the question or the session."""
+
+    kind: str  # "text", "value", "question" or "session"
+    text: str = ""
+
+
+@dataclass(frozen=True)
+class Template:
+    """A body or header text, read once into its pieces, filled in for each run."""
+
+    pieces: tuple[Piece, ...]
+
+    def render(self, question: str, session: str) -> str:
+        filled = {"question": question, "session": session}
+        return "".join(filled.get(piece.kind, piece.text) for piece in self.pieces)
+
+    @property
+    def asks(self) -> bool:
+        return any(piece.kind == "question" for piece in self.pieces)
+
+    @property
+    def fixed(self) -> str:
+        """The text that is the same in every run: all but the question and the session."""
+        return "".join(p.text for p in self.pieces if p.kind in ("text", "value"))
+
+
+class Reader:
+    """Reads placeholders from one environment. Every value it fills in of SCRUB_MIN
+    characters or more is kept, so the runner and the SDK remove it from every record.
+
+    literal: fill in nothing, so a file reads the same in any environment; $${ is still ${.
+    """
+
+    def __init__(self, env: Mapping[str, str], *, literal: bool = False) -> None:
+        self.env = env
+        self.literal = literal
+        self.scrub: set[str] = set()
+
+    def scan(self, text: str, where: str, *, braces: bool = False) -> list[Piece]:
+        """One pass over the text. braces: also read {question}, {session}, {{ and }}."""
+        pieces: list[Piece] = []
+        held: list[str] = []
+
+        def flush() -> None:
+            if held:
+                pieces.append(Piece("text", "".join(held)))
+                held.clear()
+
+        i = 0
+        while i < len(text):
+            if text.startswith("$${", i):
+                # A literal ${, with the name and the brace that close it, which a body would
+                # otherwise read as a lone }.
+                end = text.find("}", i + 3)
+                escaped = end != -1 and VARIABLE.fullmatch(text[i + 3 : end]) is not None
+                held.append(text[i + 1 : end + 1] if escaped else "${")
+                i = end + 1 if escaped else i + 3
+                continue
+            if text.startswith("${", i):
+                end = text.find("}", i + 2)
+                name = text[i + 2 : end] if end != -1 else ""
+                if not VARIABLE.fullmatch(name):
+                    shown = text[i : end + 1] if end != -1 else text[i:]
+                    raise ConfigError(
+                        f"{where}: {redact(shown)!r} is not a placeholder; a placeholder is "
+                        "${NAME}, and $${ is a literal ${"
+                    )
+                i = end + 1
+                if self.literal:
+                    held.append(f"${{{name}}}")
+                    continue
+                value = self.env.get(name)
+                if value is None:
+                    raise ConfigError(f"{where}: ${{{name}}} is not set in the environment")
+                if len(value) >= SCRUB_MIN:
+                    self.scrub.add(value)
+                flush()
+                pieces.append(Piece("value", value))
+                continue
+            if braces:
+                found = braced(text, i, where)
+                if found is not None:
+                    piece, i = found
+                    if piece.kind == "text":
+                        held.append(piece.text)
+                    else:
+                        flush()
+                        pieces.append(piece)
+                    continue
+            held.append(text[i])
+            i += 1
+        flush()
+        return pieces
+
+    def expand(self, text: str, where: str) -> str:
+        """A text value with its placeholders filled in, keeping the written text beside."""
+        if "${" not in text:
+            return text
+        filled = "".join(p.text for p in self.scan(text, where))
+        return filled if self.literal else Expanded(filled, text)
+
+    def template(self, text: str, where: str) -> Template:
+        return Template(tuple(self.scan(text, where, braces=True)))
+
+    def walk(self, value: object, where: str, skip: tuple[str, ...] = ()) -> object:
+        """Every text in a value, keys left as they are. skip: keys read by their own rules."""
+        if isinstance(value, str):
+            return self.expand(value, where)
+        if isinstance(value, dict):
+            table = cast(dict[str, object], value)
+            return {
+                key: item if key in skip else self.walk(item, f"{where} {key}")
+                for key, item in table.items()
+            }
+        if isinstance(value, list):
+            items = cast(list[object], value)
+            return [self.walk(item, f"{where} {i}") for i, item in enumerate(items, 1)]
+        return value
+
+    def file(self, data: dict[str, object]) -> dict[str, object]:
+        """The whole file. A service's body and headers, and a command, are read later, by
+        their own rules: a command is split first, so a value cannot change the split."""
+        out: dict[str, object] = {}
+        for key, value in data.items():
+            if key == "agent" and isinstance(value, dict):
+                out[key] = self.walk(cast(object, value), "[agent]", ("body", "headers", "command"))
+            elif key == "test" and isinstance(value, list):
+                tests = cast(list[object], value)
+                out[key] = [self.walk(t, test_where(t, i)) for i, t in enumerate(tests, 1)]
+            else:
+                out[key] = self.walk(value, key)
+        return out
+
+
+def test_where(test: object, index: int) -> str:
+    name = cast(dict[str, object], test).get("name") if isinstance(test, dict) else None
+    return f"[[test]] {name!r}" if isinstance(name, str) else f"[[test]] {index}"
+
+
+def braced(text: str, i: int, where: str) -> tuple[Piece, int] | None:
+    """A brace at i in a body or header text: {{, }}, {question}, {session}, or a mistake."""
+    if text.startswith("{{", i):
+        return Piece("text", "{"), i + 2
+    if text.startswith("}}", i):
+        return Piece("text", "}"), i + 2
+    if text.startswith(QUESTION, i):
+        return Piece("question"), i + len(QUESTION)
+    if text.startswith(SESSION, i):
+        return Piece("session"), i + len(SESSION)
+    if text[i] not in "{}":
+        return None
+    end = text.find("}", i)
+    shown = text[i : end + 1] if text[i] == "{" and end != -1 else text[i]
+    raise ConfigError(
+        f"{where}: {redact(shown)} is not a placeholder; only {QUESTION} and {SESSION} are "
+        "read here, and {{ and }} are a brace"
+    )
+
+
+def new_session() -> str:
+    """A run's {session}: new for every run, and never the run's name."""
+    return SESSION_PREFIX + secrets.token_hex(8)
+
+
+def literal(data: object) -> object:
+    """A file's values as text, with nothing filled in: $${ reads as ${ and ${NAME} stays.
+    What scrimmage record reads back, so its check never needs the team's environment."""
+    return Reader({}, literal=True).walk(data, "the file")
 
 
 @dataclass(frozen=True)
@@ -172,6 +402,17 @@ class Agent:
     answer: str | None = None  # where the answer is in what the agent returns
     command: tuple[str, ...] = ()  # a script's arguments; function is then empty
     children: bool = False  # child processes fire faults, and join on any Python
+    # A command's arguments as read: each a run of pieces, (filled in from ${NAME}, text).
+    # {question} is filled in the text only, so a value that holds it is sent as written.
+    command_pieces: tuple[tuple[tuple[bool, str], ...], ...] = ()
+    # An agent inside a web service: its address, body and headers, function and command empty.
+    service: str = ""
+    body: object = None  # JSON, with a Template in place of every text
+    headers: tuple[tuple[str, Template], ...] = ()
+    record_grace_s: float = DEFAULT_GRACE_S  # a run's record stays open this long after its reply
+    record_wait_s: float = DEFAULT_WAIT_S  # and the runner waits this much longer for its end
+    # Calls work outside any request may make for real while a run is open.
+    background_real: tuple[str, ...] = ()
 
     def tool_names(self) -> list[str]:
         """Every tool's final name: the one the model sees."""
@@ -189,9 +430,41 @@ class Config:
     agent: Agent
     tests: tuple[Test, ...]
     root: Path
+    # Every value ${NAME} filled in, of SCRUB_MIN characters or more: removed from records.
+    scrub: tuple[str, ...] = ()
 
 
-def load(path: Path) -> Config:
+def command_args(agent: Agent, question: str) -> list[str]:
+    """What one run of a script starts. {question} is filled in the file's own text only."""
+    if not agent.command_pieces:
+        return [part.replace(QUESTION, question) for part in agent.command]
+    return [
+        "".join(text if value else text.replace(QUESTION, question) for value, text in pieces)
+        for pieces in agent.command_pieces
+    ]
+
+
+def request_body(agent: Agent, question: str, session: str) -> object:
+    """A service run's body: the file's body with this run's question and session."""
+
+    def filled(value: object) -> object:
+        if isinstance(value, Template):
+            return value.render(question, session)
+        if isinstance(value, dict):
+            return {k: filled(v) for k, v in cast(dict[str, object], value).items()}
+        if isinstance(value, list):
+            return [filled(v) for v in cast(list[object], value)]
+        return value
+
+    return filled(agent.body)
+
+
+def request_headers(agent: Agent, session: str) -> list[tuple[str, str]]:
+    """A service run's headers. A header never holds the question."""
+    return [(name, value.render("", session)) for name, value in agent.headers]
+
+
+def load(path: Path, env: Mapping[str, str] | None = None) -> Config:
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
@@ -200,14 +473,16 @@ def load(path: Path) -> Config:
         raise ConfigError(f"{path.name}: the file is not UTF-8 text") from None
     except OSError as exc:
         raise ConfigError(f"{path.name}: cannot read it: {exc.strerror}") from None
-    reject_placeholders(data, path.name)
+    reject_unsendable(data, path.name)
     check_keys(data, {"agent", "test"}, path.name)
     if "agent" not in data:
         raise ConfigError(f"{path.name}: [agent] is required")
+    reader = Reader(os.environ if env is None else env)
+    data = reader.file(data)
     tests = as_list(data.get("test", []), f"{path.name} [[test]]")
     if not tests:
         raise ConfigError(f"{path.name}: at least one [[test]] is required")
-    agent = read_agent(as_table(data["agent"], "[agent]"))
+    agent = read_agent(as_table(data["agent"], "[agent]"), reader)
     seen: set[str] = set()
     parsed: list[Test] = []
     for i, raw in enumerate(tests, 1):
@@ -217,7 +492,7 @@ def load(path: Path) -> Config:
             raise ConfigError(f"[[test]] {test.name!r}: name is used twice")
         seen.add(test.name)
         parsed.append(test)
-    config = Config(agent, tuple(parsed), path.parent)
+    config = Config(agent, tuple(parsed), path.parent, tuple(sorted(reader.scrub)))
     problems = check_references(config)
     if problems:
         raise ConfigError(*problems)
@@ -449,7 +724,7 @@ def bad_question(test: Test, agent: Agent) -> str | None:
     where = f"[[test]] {test.name!r} question"
     if "\0" in test.question:
         return f"{where}: holds a NUL, which cannot go in an argument"
-    parts = [part.replace(QUESTION, test.question) for part in agent.command] or [test.question]
+    parts = command_args(agent, test.question) or [test.question]
     if max(len(part.encode()) + 1 for part in parts) > MAX_ARGUMENT:
         return f"{where}: is over the {MAX_ARGUMENT // 1024} KiB one argument can hold"
     return None
@@ -474,22 +749,18 @@ def can_start(program: str, root: Path) -> bool:
     return path.is_file() and os.access(path, os.X_OK)
 
 
-def reject_placeholders(value: object, where: str) -> None:
-    """Reject ${...} placeholders, and values a plan cannot carry, such as TOML dates."""
+def reject_unsendable(value: object, where: str) -> None:
+    """Reject values a plan cannot carry, such as TOML dates."""
     if not isinstance(value, str | int | float | bool | list | dict):
         raise ConfigError(
             f"{where}: a {type(value).__name__} cannot be sent to the agent; write it as text"
         )
-    if isinstance(value, str) and "${" in value:
-        raise ConfigError(
-            f"{where}: ${{...}} placeholders are not read, so the text would reach the agent as is"
-        )
     if isinstance(value, dict):
         for key, item in as_table(cast(object, value), where).items():
-            reject_placeholders(item, f"{where}.{key}")
+            reject_unsendable(item, f"{where}.{key}")
     if isinstance(value, list):
         for item in as_list(cast(object, value), where):
-            reject_placeholders(item, where)
+            reject_unsendable(item, where)
 
 
 def as_table(value: object, where: str) -> dict[str, object]:
@@ -548,11 +819,21 @@ def whole(table: dict[str, object], key: str, default: int, where: str) -> int:
     return value
 
 
-def read_agent(table: dict[str, object]) -> Agent:
+def read_agent(table: dict[str, object], reader: Reader | None = None) -> Agent:
     where = "[agent]"
+    reader = reader or Reader(os.environ)
     check_keys(table, AGENT_KEYS, where)
-    if ("function" in table) == ("command" in table):
-        raise ConfigError(f"{where}: give function or command, exactly one of them")
+    if sum(key in table for key in ("function", "command", "service")) != 1:
+        raise ConfigError(f"{where}: give function, command or service, exactly one of them")
+    service = "service" in table
+    for key in SERVICE_KEYS:
+        if key in table and not service:
+            raise ConfigError(f"{where} {key}: works only with service; see {DOCS}")
+    if service and "children" in table:
+        raise ConfigError(
+            f"{where} children: works only with function or command; a service run refuses "
+            f"every process it starts unless real lists it; see {DOCS}"
+        )
     timeout = table.get("run_timeout", 120)
     if isinstance(timeout, bool) or not isinstance(timeout, int | float) or timeout <= 0:
         raise ConfigError(f"{where} run_timeout: expected a number of seconds, got {timeout!r}")
@@ -567,7 +848,12 @@ def read_agent(table: dict[str, object]) -> Agent:
     for entry in as_list(table.get("real", []), f"{where} real"):
         if not isinstance(entry, str):
             raise ConfigError(f"{where} real: expected labels, got {entry!r}")
-        real.append(labels.check(entry, f"{where} real", pattern=True))
+        real.append(kept(entry, labels.check(entry, f"{where} real", pattern=True)))
+    background: list[str] = []
+    for entry in as_list(table.get("background_real", []), f"{where} background_real"):
+        if not isinstance(entry, str):
+            raise ConfigError(f"{where} background_real: expected labels, got {entry!r}")
+        background.append(labels.check(entry, f"{where} background_real", pattern=True))
     answer = table.get("answer")
     if answer is not None and not (isinstance(answer, str) and ANSWER_PATH.fullmatch(answer)):
         raise ConfigError(f"{where} answer: {answer!r} is not a path of the form 'field[-1].name'")
@@ -579,10 +865,11 @@ def read_agent(table: dict[str, object]) -> Agent:
     function = ""
     if "function" in table:
         function = import_path(text(table, "function", where), f"{where} function")
+    command, pieces = read_command(table, where, reader) if "command" in table else ((), ())
     agent = Agent(
         function=function,
         runs=whole(table, "runs", 3, where),
-        parallel=whole(table, "parallel", 4, where),
+        parallel=whole(table, "parallel", 1 if service else 4, where),
         run_timeout=float(timeout),
         tools=tuple(tools),
         real=tuple(real),
@@ -594,8 +881,15 @@ def read_agent(table: dict[str, object]) -> Agent:
         ),
         prices=read_prices(table.get("prices", {}), f"{where}.prices"),
         answer=answer,
-        command=read_command(table, where) if "command" in table else (),
+        command=command,
         children=children,
+        command_pieces=pieces,
+        service=read_service(table, where) if service else "",
+        body=read_body(table, where, reader) if service else None,
+        headers=read_headers(table.get("headers", {}), f"{where} headers", reader),
+        record_grace_s=seconds(table, "record_grace_s", DEFAULT_GRACE_S, MAX_GRACE_S, where),
+        record_wait_s=seconds(table, "record_wait_s", DEFAULT_WAIT_S, MAX_WAIT_S, where),
+        background_real=tuple(background),
     )
     names = agent.tool_names()
     for name in names:
@@ -604,15 +898,104 @@ def read_agent(table: dict[str, object]) -> Agent:
     return agent
 
 
-def read_command(table: dict[str, object], where: str) -> tuple[str, ...]:
-    """A command's arguments. It is split here, so a question can never change the split."""
+def read_command(
+    table: dict[str, object], where: str, reader: Reader
+) -> tuple[tuple[str, ...], tuple[tuple[tuple[bool, str], ...], ...]]:
+    """A command's arguments, and their pieces. It is split here, then each argument's
+    ${NAME} is filled in, so neither a question nor a value can change the split."""
     try:
-        parts = tuple(shlex.split(text(table, "command", where)))
+        parts = shlex.split(text(table, "command", where))
     except ValueError as exc:
         raise ConfigError(f"{where} command: {exc}") from None
-    if not any(QUESTION in part for part in parts):
+    pieces = tuple(
+        tuple((p.kind == "value", p.text) for p in reader.scan(part, f"{where} command"))
+        for part in parts
+    )
+    if not any(QUESTION in text for arg in pieces for value, text in arg if not value):
         raise ConfigError(f"{where} command: must hold {QUESTION}, or the agent gets no question")
-    return parts
+    return tuple("".join(text for _, text in arg) for arg in pieces), pieces
+
+
+def read_service(table: dict[str, object], where: str) -> str:
+    """The service's address: http://host:port/path, on any machine the runner reaches."""
+    value = text(table, "service", where)
+    parts = SERVICE_URL.fullmatch(value)
+    if parts is not None and parts["scheme"].lower() == "https":
+        raise ConfigError(
+            f"{where} service: https is not supported in this version, which reaches a service "
+            "on this machine over http; use http://host:port/path"
+        )
+    port = parts["port"] if parts is not None else None
+    if parts is None or parts["scheme"] != "http" or (port is not None and int(port) > 65535):
+        raise ConfigError(f"{where} service: {value!r} is not of the form http://host:port/path")
+    return value
+
+
+def read_body(table: dict[str, object], where: str, reader: Reader) -> object:
+    """A service run's body: a table, an array or a text, read once into its pieces."""
+    if "body" not in table:
+        raise ConfigError(f"{where} body: required with service, and must hold {QUESTION}")
+    asks: list[bool] = []
+
+    def read(value: object, at: str) -> object:
+        if isinstance(value, str):
+            template = reader.template(value, at)
+            asks.append(template.asks)
+            return template
+        if isinstance(value, dict):
+            return {k: read(v, f"{at} {k}") for k, v in cast(dict[str, object], value).items()}
+        if isinstance(value, list):
+            return [read(v, f"{at} {i}") for i, v in enumerate(cast(list[object], value), 1)]
+        return value
+
+    raw: object = table["body"]
+    if not isinstance(raw, str | dict | list):
+        raise ConfigError(f"{where} body: expected a table, an array or text, got {raw!r}")
+    body = read(cast(object, raw), f"{where} body")
+    if not any(asks):
+        raise ConfigError(
+            f"{where} body: must hold {QUESTION} in a text value, or the agent gets no question"
+        )
+    return body
+
+
+def read_headers(value: object, where: str, reader: Reader) -> tuple[tuple[str, Template], ...]:
+    """A service run's headers: names as HTTP writes them, values that never hold the
+    question, and printable ASCII once their values are filled in."""
+    headers: list[tuple[str, Template]] = []
+    for name, raw in as_table(value, where).items():
+        at = f"{where} {name}"
+        if not HEADER_NAME.fullmatch(name):
+            raise ConfigError(f"{at}: {name!r} is not a valid header name")
+        if name.lower().startswith("x-scrimmage-") or name.lower() in SET_BY_SCRIMMAGE:
+            raise ConfigError(f"{at}: {name} is set by Scrimmage, so it cannot be given here")
+        if not isinstance(raw, str):
+            raise ConfigError(f"{at}: expected text, got {redact(repr(raw))}")
+        template = reader.template(raw, at)
+        if template.asks:
+            raise ConfigError(f"{at}: {QUESTION} cannot go in a header; put it in body")
+        fixed = template.fixed
+        if not fixed.isascii() or not fixed.isprintable():
+            raise ConfigError(f"{at}: must be printable ASCII once its values are filled in")
+        headers.append((name, template))
+    return tuple(headers)
+
+
+def seconds(table: dict[str, object], key: str, default: float, top: float, where: str) -> float:
+    """record_grace_s from 0, and record_wait_s above 0, each up to its top."""
+    value = table.get(key, default)
+    zero = key == "record_grace_s"  # a grace of 0 closes the record at the reply
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not math.isfinite(value)
+        or value < 0
+        or (value == 0 and not zero)
+        or value > top
+    ):
+        low = "0" if zero else "above 0"
+        raise ConfigError(f"{where} {key}: expected seconds, {low} to {top:g}, got {value!r}")
+    return float(value)
 
 
 def read_model_hosts(value: object, where: str) -> tuple[ModelHost, ...]:
@@ -771,8 +1154,14 @@ def reject_model_mocks(test: Test, agent: Agent) -> None:
 
 def narrowing(table: dict[str, object], where: str) -> tuple[str | None, str | None]:
     """The method and path a web mock or fault is narrowed to, if any."""
-    method = labels.method_of(text(table, "method", where), where) if "method" in table else None
-    path = labels.path_of(text(table, "path", where), where) if "path" in table else None
+    method = None
+    if "method" in table:
+        written = text(table, "method", where)
+        method = kept(written, labels.method_of(written, where))
+    path = None
+    if "path" in table:
+        written = text(table, "path", where)
+        path = kept(written, labels.path_of(written, where))
     return method, path
 
 
@@ -820,7 +1209,8 @@ def read_args(table: dict[str, object], where: str) -> dict[str, object] | None:
 
 
 def read_mock(table: dict[str, object], where: str) -> Mock:
-    call = labels.check(text(table, "call", where), f"{where} call")
+    written = text(table, "call", where)
+    call = kept(written, labels.check(written, f"{where} call"))
     if labels.kind_of(call) == "http":
         return read_web_mock(table, call, where)
     check_keys(table, MCP_MOCK_KEYS if labels.kind_of(call) == "mcp" else MOCK_KEYS, where)

@@ -208,7 +208,7 @@ def test_no_entry_point_writes_the_commented_draft_and_exits_2(
     toml.write_text(text + '\n[[test]]\nname = "t"\nquestion = "q"\nexpect = ["x"]\n')
     capsys.readouterr()
     assert cli.main(["check", str(toml)]) == MISTAKE
-    assert "function or command" in capsys.readouterr().err
+    assert "function, command or service" in capsys.readouterr().err
 
 
 @pytest.mark.design("init.ranks")

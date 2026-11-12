@@ -24,6 +24,7 @@ import scrimmage_core
 from conftest import Project, TimeLimit
 from fakes.openai_server import FakeOpenAI
 from scrimmage_core import capture, toml_write
+from scrimmage_core import config as settings
 from scrimmage_core import record as recording
 from scrimmage_core import runner as running
 from scrimmage_core.cli import main
@@ -866,7 +867,7 @@ def answer(question):
 
 @pytest.mark.design("record.answer_note")
 @pytest.mark.design("record.fake_marker")
-@pytest.mark.design("record.placeholder")
+@pytest.mark.design("record.dollar_brace")
 @pytest.mark.design("record.null_value")
 @pytest.mark.design("record.skeleton")
 def test_what_a_mock_cannot_hold_is_listed_with_a_commented_skeleton(team: Team) -> None:
@@ -902,18 +903,20 @@ def answer(question):
     done = team.record()
     assert done.code == 1, done.out
     manual = {m["call"]: m["code"] for m in done.manual()}
-    assert manual == {
-        "tool:dollars": "placeholder",
-        "tool:nothing": "null",
-        "tool:pic": "unsavable",
-    }
+    assert manual == {"tool:nothing": "null", "tool:pic": "unsavable"}
     mocks = {m["call"]: m for m in done.mocks()}
     assert mocks["tool:marker"]["returns"] == fake
     assert "fault" not in done.output["test"][0]
     assert any("broke a rule" in n["message"] for n in done.doc["notes"])
-    assert done.counts == {"calls_seen": 5, "calls_written": 2}
+    assert done.counts == {"calls_seen": 5, "calls_written": 3}
     text = team.out_path.read_text()
-    for call in ("tool:dollars", "tool:nothing", "tool:pic"):
+    # A recorded ${ is written as the literal $${, so the file never reads it from the
+    # environment: the mock gives back the value as it was.
+    assert 'returns  = "cost $${HOME}"' in text
+    loaded = settings.load(team.out_path)
+    dollars = next(m for m in loaded.tests[0].mocks if m.call == "tool:dollars")
+    assert dollars.returns == "cost ${HOME}"
+    for call in ("tool:nothing", "tool:pic"):
         assert f'# call    = "{call}"' in text
     assert "# [[test.mock]]" in text
     code, out = team.test_output()
@@ -1964,9 +1967,10 @@ def answer(question):
 
 # The arguments of a call a mock cannot be written for, and the labels a miss now covers.
 
+# Its value holds None, which TOML has no form for, so its mock is always a skeleton.
 DOLLARS = """
 def dollars(key):
-    return "cost ${HOME}"
+    return {"cost": None}
 """
 RECORDED_ORDER = (
     '[[test]]\nname     = "t"\nquestion = "q"\nexpect   = ["ok"]\n'

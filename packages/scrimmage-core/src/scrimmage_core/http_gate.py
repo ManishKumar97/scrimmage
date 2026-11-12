@@ -387,7 +387,7 @@ def prepare(
     extra: dict[str, object] = {
         "method": call.method,
         "path": path_of(request.url),
-        "args": blob(body or b"", ctx.sender),
+        "args": blob(body or b"", ctx.sender, scrub=run.secrets),
     }
     if call.provider is not None:
         extra["provider"] = call.provider
@@ -626,7 +626,7 @@ def reply(
     status, headers, body = answer
     sent = b"" if request.method == "HEAD" else body
     recorded = sent if original is None or request.method == "HEAD" else original
-    extra.update(status=status, result=blob(recorded, ctx.sender))
+    extra.update(status=status, result=blob(recorded, ctx.sender, scrub=ctx.run.secrets))
     ctx.run.finish(step)
     if status >= 200 and status not in (204, 304):
         headers = {**headers, "content-length": str(len(body))}
@@ -1406,7 +1406,7 @@ def capture(
         for chunk in raw:
             keep(chunk)
         if error is not None:
-            extra["error"] = error_text(step.call, error)
+            extra["error"] = error_text(step.call, error, ctx.run.secrets)
         finish(error is None)
         return
     loaded = getattr(response, "_content", None)  # a reply already in memory has no stream
@@ -1416,7 +1416,7 @@ def capture(
         return
 
     def broke(error: Exception) -> None:
-        extra["error"] = error_text(step.call, error)
+        extra["error"] = error_text(step.call, error, ctx.run.secrets)
         finish(False)
 
     ctx.open.add(finish)
@@ -1436,7 +1436,7 @@ def record(
     encoding = str(response.headers.get("content-encoding", ""))
     body = decoded(raw, encoding)
     if step.call.kind != "model":
-        saved = blob(body, ctx.sender, total=size, wait=ctx.run.recording)
+        saved = blob(body, ctx.sender, total=size, wait=ctx.run.recording, scrub=ctx.run.secrets)
         extra.update(status=response.status_code, result=saved)
         if ctx.run.recording and step.call.provider is None:  # a model host is never recorded
             extra["recorded"] = ctx.run.recorded(
@@ -1453,7 +1453,7 @@ def record(
     usd = openai_table.cost(tokens_in, tokens_out, rates, cached) if rates else None
     extra.update(
         status=response.status_code,
-        result=blob(body, ctx.sender, total=size),
+        result=blob(body, ctx.sender, total=size, scrub=ctx.run.secrets),
         tokens={"input": tokens_in, "output": tokens_out, "cached": cached},
         cost_usd=None if usd is None else round(usd, 8),
         cost_estimated=usd is not None and not used.known and not free,

@@ -144,8 +144,8 @@ A change that would land on text the record removes, such as a key, is not made,
 The record then could not show what the agent saw.
 Choose a `find` away from the secret.
 
-`${` in `text` or `find` is refused, as everywhere in the file: Scrimmage does not read placeholders.
-An injection that needs `${` cannot be written in this version.
+`${NAME}` in `text` or `find` is filled in from the environment, as everywhere in the file.
+An injection that needs a literal `${`, such as a Log4Shell-shaped text, writes it as `$${`; see [Placeholders](configuration.md#placeholders).
 
 ## Making a call late: slow
 

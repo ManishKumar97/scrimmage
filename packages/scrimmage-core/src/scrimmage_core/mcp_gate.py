@@ -351,7 +351,7 @@ def read_only_note(gate: Gate, call: Call) -> str:
 def record(gate: Gate, run: RunState, value: object) -> dict[str, object]:
     """Arguments and results go through blob, which removes secrets."""
     sink = run.blobs if run.blobs is not None else gate.sender  # the run's own side folder
-    return blob(json.dumps(value, default=repr, sort_keys=True).encode(), sink)
+    return blob(json.dumps(value, default=repr, sort_keys=True).encode(), sink, scrub=run.secrets)
 
 
 @dataclass(frozen=True)

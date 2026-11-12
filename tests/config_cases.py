@@ -233,10 +233,28 @@ forbid = ["x"]
 """
 )
 
+SERVICE = '[agent]\nservice = "http://127.0.0.1:8765/chat"\nbody = "{question}"\n' + TEST
+# Every key an agent inside a web service takes, and both placeholder kinds.
+EVERY_SERVICE_KEY = (
+    """[agent]
+service         = "http://127.0.0.1:8765/chat"
+body            = {message = "{question}", session = "{session}", tags = ["a {{b}}", 1]}
+headers         = {X-Session = "{session}", X-Literal = "$${NOT_READ}"}
+answer          = "reply"
+record_grace_s  = 0
+record_wait_s   = 2.5
+background_real = ["http:telemetry.acme.internal POST /v1/traces"]
+parallel        = 2
+"""
+    + TEST
+)
+
 GOOD = {
     "carried": CARRIED,
     "minimal": MINIMAL,
     "every_key": EVERY_KEY,
+    "service": SERVICE,
+    "every_service_key": EVERY_SERVICE_KEY,
     "script": SCRIPT,
     "recorded": RECORDED,
     "args_hand_written": HAND_ARGS,
@@ -279,7 +297,7 @@ BAD = [
     ),
     Bad("find_blank", fault('call = "tool:t"\ndo = "replace"\ntext = "x"\nfind = " "\n'), True),
     Bad("text_not_text", fault('call = "tool:t"\ndo = "append"\ntext = 5\n'), True),
-    Bad("text_placeholder", fault('call = "tool:t"\ndo = "append"\ntext = "${X}"\n'), True),
+    Bad("text_unset", fault('call = "tool:t"\ndo = "append"\ntext = "${NOT_SET_X}"\n'), False),
     Bad("whole_replace_always", fault('call = "tool:t"\ndo = "replace"\ntext = "x"\n'), True),
     Bad("slow_always", fault('call = "tool:t"\ndo = "slow 2s"\n'), True),
     Bad("slow_no_unit", fault('call = "tool:t"\ndo = "slow 2"\nwhen = "first 1"\n'), True),
@@ -445,15 +463,56 @@ BAD = [
         fault('call = "tool:t"\ndo = "timeout"\nwhen = "first 1"\npass_rate = 2\n'),
         True,
     ),
-    # ${...} is not read anywhere in the file, and a TOML date is not a value a plan carries.
-    Bad("placeholder", MINIMAL.replace("Where is order 1234?", "${HOME}"), True),
-    Bad("placeholder_in_returns", mock('call = "tool:t"\nreturns = {a = [{b = "${X}"}]}\n'), True),
-    Bad("placeholder_in_command", SCRIPT.replace("{question}", "{question} ${HOME}"), True),
-    Bad("placeholder_in_label", mock('call = "mcp:${S}/search"\nreturns = 1\n'), True),
-    Bad("placeholder_in_header", mock('call = "http:a.acme"\nheaders = {x = "${T}"}\n'), True),
+    # A TOML date is not a value a plan carries.
     Bad("toml_date", test("forbid = [2026-11-07]\n"), True),
     Bad("toml_date_in_returns", mock('call = "tool:t"\nreturns = {at = 2026-11-07}\n'), True),
+    # An agent inside a web service: its own keys, and those it cannot take.
+    Bad(
+        "service_and_function",
+        agent('service = "http://127.0.0.1:8765/chat"\nbody = "{question}"\n'),
+        True,
+    ),
+    Bad("service_https", SERVICE.replace("http://", "https://"), True),
+    Bad("service_no_body", SERVICE.replace('body = "{question}"\n', ""), True),
+    Bad("body_without_service", agent('body = "{question}"\n'), True),
+    Bad("service_children", SERVICE.replace("[agent]\n", "[agent]\nchildren = true\n"), True),
+    Bad(
+        "header_scrimmage",
+        SERVICE.replace("[agent]\n", '[agent]\nheaders = {x-scrimmage-run = "a"}\n'),
+        True,
+    ),
+    Bad("header_host", SERVICE.replace("[agent]\n", '[agent]\nheaders = {Host = "a"}\n'), True),
+    Bad("grace_too_long", SERVICE.replace("[agent]\n", "[agent]\nrecord_grace_s = 61\n"), True),
+    Bad("wait_zero", SERVICE.replace("[agent]\n", "[agent]\nrecord_wait_s = 0\n"), True),
     # Below, only the parser can tell: these need the whole file, the folder or the machine.
+    # ${NAME} is read from the environment, which the schema cannot see.
+    Bad("placeholder_unset", MINIMAL.replace("Where is order 1234?", "${NOT_SET_HOME}"), False),
+    Bad(
+        "placeholder_in_returns",
+        mock('call = "tool:t"\nreturns = {a = [{b = "${NOT_SET_X}"}]}\n'),
+        False,
+    ),
+    Bad(
+        "placeholder_in_command", SCRIPT.replace("{question}", "{question} ${NOT_SET_HOME}"), False
+    ),
+    Bad("placeholder_in_label", mock('call = "mcp:${NOT_SET_S}/search"\nreturns = 1\n'), False),
+    Bad(
+        "placeholder_in_header",
+        mock('call = "http:a.acme"\nheaders = {x = "${NOT_SET_T}"}\n'),
+        False,
+    ),
+    Bad("placeholder_not_a_name", MINIMAL.replace("Where is order 1234?", "${1x}"), False),
+    Bad("body_without_question", SERVICE.replace('body = "{question}"', 'body = "hi"'), False),
+    Bad(
+        "body_unknown_brace",
+        SERVICE.replace('body = "{question}"', 'body = "{question} {x}"'),
+        False,
+    ),
+    Bad(
+        "header_question",
+        SERVICE.replace("[agent]\n", '[agent]\nheaders = {X-Q = "{question}"}\n'),
+        False,
+    ),
     Bad("not_toml", "[agent\nfunction = 1\n", False),
     Bad("duplicate_test", MINIMAL + TEST, False),
     Bad(

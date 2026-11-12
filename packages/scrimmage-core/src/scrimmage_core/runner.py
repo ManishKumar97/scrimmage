@@ -30,13 +30,13 @@ from scrimmage_core import judge, labels
 from scrimmage_core import plan as planner
 from scrimmage_core.budget import Ledger
 from scrimmage_core.config import (
-    QUESTION,
     Agent,
     Config,
     Fault,
     Mock,
     Test,
     carried_model_warnings,
+    command_args,
     real_writes,
     write_warnings,
 )
@@ -193,6 +193,8 @@ class Runner:
         if not ignore.exists():
             ignore.write_text("*\n")
         self.token = secrets.token_hex(32)
+        # The values ${NAME} filled in: this test's own, removed from what the runner writes.
+        self.scrub = config.scrub
         self.ledger = Ledger(config.agent.max_cost_usd)
         self.server = ControlServer(
             self.token, self.store, on_refused=self._refused, ledger=self.ledger
@@ -260,7 +262,7 @@ class Runner:
         question stays one argument, and no shell ever sees it."""
         agent = self.config.agent
         if agent.command:
-            return [part.replace(QUESTION, question) for part in agent.command]
+            return command_args(agent, question)
         answer = [agent.answer] if agent.answer else []
         return [sys.executable, "-m", "scrimmage_core.start", agent.function, question, *answer]
 
@@ -421,7 +423,7 @@ class Runner:
             refused[0] if chose and outcome == "refused call" else None,
         )
         summary: dict[str, object] = {
-            "answer": None if answer is None else redact_decoded(answer),
+            "answer": None if answer is None else redact_decoded(answer, self.scrub),
             "outcome": outcome,
             "fault_fired": fired,
             "calls": calls,
@@ -479,7 +481,7 @@ class Runner:
         }
 
     def left_line(self, run: str, row: planner.Row, pid: int, command: str) -> dict[str, object]:
-        text = redact(command)[:COMMAND_CAP]
+        text = redact(command, self.scrub)[:COMMAND_CAP]
         message = f"process {pid} left the run's process group and was killed: {text}"
         return {**self.line(run, row, 1, pid), "notice": "left_group", "message": message}
 
@@ -498,11 +500,11 @@ class Runner:
                 {
                     **self.line(run, row, number, report["pid"]),
                     "notice": "other_python",
-                    "message": redact(str(report["message"])),
-                    "mistake": redact(str(report["message"])),
+                    "message": redact(str(report["message"]), self.scrub),
+                    "mistake": redact(str(report["message"]), self.scrub),
                     "process": {
-                        "python": redact(str(process["python"])),
-                        "command": redact(str(process["command"]))[:COMMAND_CAP],
+                        "python": redact(str(process["python"]), self.scrub),
+                        "command": redact(str(process["command"]), self.scrub)[:COMMAND_CAP],
                         "parent": process["parent"],
                     },
                 }

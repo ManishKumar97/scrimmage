@@ -205,6 +205,8 @@ def test_every_file_the_parser_accepts_fits_the_schema(
 ) -> None:
     # A docs block's command names python or python3; find them as a venv user would.
     monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}")
+    # A docs block for a service reads its bearer token from the environment, as a team's does.
+    monkeypatch.setenv("TEST_TOKEN", "tt-0123456789abcdef")
     files = [
         (str(path.relative_to(TESTS)), path.read_text())
         for path in sorted(TESTS.rglob("*.toml"))

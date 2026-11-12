@@ -292,6 +292,31 @@
     },
     "probe": {
       "type": "boolean"
+    },
+    "scrub": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 8
+      },
+      "description": "The values ${NAME} filled in, of 8 characters or more. The SDK removes each from every line and side-folder item, in its encoded forms too, before either is hashed. Sent with the plan only: never written to a file."
+    },
+    "service": {
+      "type": "boolean",
+      "description": "A run of an agent inside a web service: one request long."
+    },
+    "record_grace_s": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 60,
+      "description": "In a service run: how long the record stays open after the reply."
+    },
+    "background_real": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "In a service run: labels that calls made outside any request may run for real while the run is open. Never read for a call inside the run, which real decides."
     }
   },
   "$defs": {

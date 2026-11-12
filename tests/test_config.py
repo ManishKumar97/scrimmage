@@ -68,7 +68,7 @@ def test_a_bad_value_names_its_table_and_key(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("old", "new", "message"),
     [
-        ('returns = "shipped, Oct 30"', 'returns = "${X}"', "placeholders are not read"),
+        ('returns = "shipped, Oct 30"', 'returns = "${NOT_SET_X}"', r"\$\{NOT_SET_X\} is not set"),
         ('do   = "timeout"', 'do   = "timeout"\nwhen = "once"', "'once' is not a schedule"),
         ('do   = "timeout"', 'do   = "slow 8"', "'slow 8' is not a delay"),
         ('do   = "timeout"', 'do   = "status 429"', "works on a model call or a web request"),
@@ -76,8 +76,8 @@ def test_a_bad_value_names_its_table_and_key(tmp_path: Path) -> None:
         ('call = "tool:get_order"\ndo', 'call = "model:x"\ndo', "not a known provider"),
         ('call = "tool:get_order"\ndo', 'call = "model:anthropic"\ndo', "not a known provider"),
         ('call = "tool:get_order"\ndo', 'call = "model:openai/images"\ndo', "not a model call"),
-        ("[agent]\n", '[agent]\nservice = "x"\n', "service: unknown setting; see docs"),
-        ("[agent]\n", '[agent]\nservice = "http://agent/chat"\n', "service: unknown setting"),
+        ("[agent]\n", '[agent]\ncontrol = "x"\n', "control: unknown setting; see docs"),
+        ("[agent]\n", '[agent]\nrecords = "x"\n', "records: unknown setting"),
         ("[agent]\n", "[agent]\nrnus = 50\n", "rnus: unknown setting"),
         ('returns = "shipped, Oct 30"', 'returns_from = "acme.m:f"', "returns_from: unknown"),
     ],
@@ -98,11 +98,11 @@ def test_anything_this_version_does_not_support_is_rejected(
             'function = "acme.agent"',
             "not an import path",
         ),
-        ('function = "acme.agent:answer"', "", r"\[agent\]: give function or command"),
+        ('function = "acme.agent:answer"', "", r"\[agent\]: give function, command or service"),
         (
             'function = "acme.agent:answer"',
             'function = "acme.agent:answer"\ncommand = "python bot.py {question}"',
-            r"\[agent\]: give function or command",
+            r"\[agent\]: give function, command or service",
         ),
         (
             'function = "acme.agent:answer"',

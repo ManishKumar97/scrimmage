@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import cast
 
 from scrimmage_core import plan as planner
-from scrimmage_core.config import Agent, Fault, Test
+from scrimmage_core.config import Agent, Fault, Test, as_written
 from scrimmage_core.records import Refused, read_regular
 
 RESULT_FILE = "result.json"
@@ -72,6 +72,8 @@ def row_hash(test: Test, fault: Fault | None, agent: Agent) -> str:
 
     The agent's own code, prompts and model are left out: changing those is what a comparison
     measures. `tools` is hashed as the file lists it, so another order is another hash.
+    Every text is hashed as the file writes it, ${NAME} and all, so the hash never covers a
+    value from the environment, and a rotated token is not a changed test.
     """
     rules = test.rules_for(fault)
     doc = {
@@ -87,7 +89,7 @@ def row_hash(test: Test, fault: Fault | None, agent: Agent) -> str:
         "tools": list(agent.tools),
     }
     canonical = json.dumps(
-        doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
+        as_written(doc), sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

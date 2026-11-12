@@ -1,8 +1,10 @@
 """Remove known secret patterns from anything that is recorded."""
 
+import base64
+import functools
 import json
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from typing import NamedTuple, cast
 
 REMOVED = "[secret removed]"
@@ -546,26 +548,97 @@ def structural(text: str) -> tuple[str, int] | None:
     return lead + written + text[len(text.rstrip()) :], count
 
 
-def redacted(text: str, *, decoded: bool = False) -> tuple[str, int]:
-    """The text with secrets removed, and how many places were removed. A JSON object,
-    array or string is read and its strings are redacted, so it stays valid JSON. decoded:
-    the text is a string read out of JSON, so a backslash in it is only a character."""
+SCRUB_MIN = 8  # a shorter value would match too much text that is not it
+# What URL encoding keeps as it is, as RFC 3986 and urllib.parse.quote have it. Written here, as
+# this module is read by code that must not import a network library.
+UNRESERVED = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-~")
+
+
+def percent_encoded(data: bytes, safe: bytes = b"", *, plus: bool = False) -> str:
+    """data URL-encoded, as quote(data, safe) does, or quote_plus with plus."""
+    kept = UNRESERVED | frozenset(safe)
+    out: list[str] = []
+    for byte in data:
+        if plus and byte == 0x20:
+            out.append("+")
+        elif byte in kept:
+            out.append(chr(byte))
+        else:
+            out.append(f"%{byte:02X}")
+    return "".join(out)
+
+
+@functools.lru_cache(maxsize=256)
+def scrub_forms(value: str) -> tuple[str, ...]:
+    """Every form a value can take in recorded text, longest first: as written, JSON-escaped,
+    URL-encoded, and in base64 at each of the three offsets a byte string can put it at.
+    A base64 form leaves off its edge characters, which the neighbouring bytes decide."""
+    data = value.encode("utf-8", "surrogatepass")
+    forms = {
+        value,
+        json.dumps(value)[1:-1],
+        percent_encoded(data),
+        percent_encoded(data, b"/"),
+        percent_encoded(data, plus=True),
+    }
+    for offset in range(3):
+        encoded = base64.b64encode(b"\0" * offset + data + b"\0\0").decode()
+        first = -(-8 * offset // 6)  # the first character made of the value's bits alone
+        last = (8 * (offset + len(data)) - 6) // 6  # and the last
+        core = encoded[first : last + 1]
+        forms |= {core, core.replace("+", "-").replace("/", "_")}  # standard and URL-safe
+    return tuple(sorted((f for f in forms if len(f) >= SCRUB_MIN), key=len, reverse=True))
+
+
+def remove_values(text: str, scrub: Sequence[str]) -> tuple[str, int]:
+    """The text with each of the caller's own values removed, in every form, and how many
+    places were removed. A value under SCRUB_MIN characters is not removed."""
+    count = 0
+    for value in scrub:
+        if len(value) < SCRUB_MIN:
+            continue
+        for form in scrub_forms(value):
+            if form in text:
+                count += text.count(form)
+                text = text.replace(form, REMOVED)
+    return text, count
+
+
+def scrubbed(value: object, scrub: Sequence[str]) -> object:
+    """Every text in a value, at any depth, without the caller's own values."""
+    if not scrub:
+        return value
+    if isinstance(value, str):
+        return remove_values(value, scrub)[0]
+    if isinstance(value, dict):
+        return {k: scrubbed(v, scrub) for k, v in cast(dict[object, object], value).items()}
+    if isinstance(value, list | tuple):
+        return [scrubbed(item, scrub) for item in cast(list[object], value)]
+    return value
+
+
+def redacted(text: str, *, decoded: bool = False, scrub: Sequence[str] = ()) -> tuple[str, int]:
+    """The text with secrets removed, and how many places were removed. The caller's own
+    values go first, then the patterns. A JSON object, array or string is read and its
+    strings are redacted, so it stays valid JSON. decoded: the text is a string read out of
+    JSON, so a backslash in it is only a character."""
+    text, removed = remove_values(text, scrub) if scrub else (text, 0)
     done: tuple[str, int] = (text, 0)
     if holds_candidate(text):
         found = structural(text)
         done = found if found is not None else plain(text, decoded)
     # A plain str, even if given a subclass, whose methods could carry the secret back.
-    return str.__str__(done[0]), done[1]
+    return str.__str__(done[0]), done[1] + removed
 
 
-def redact(text: str) -> str:
-    return redacted(text)[0]
+def redact(text: str, scrub: Sequence[str] = ()) -> str:
+    return redacted(text, scrub=scrub)[0]
 
 
-def redact_decoded(text: str) -> str:
+def redact_decoded(text: str, scrub: Sequence[str] = ()) -> str:
     """redact for a Python value's string, such as the agent's answer: it has no escapes left
     in it, so a backslash in it is only a character."""
-    return redacted(text, decoded=True)[0]
+    return redacted(text, decoded=True, scrub=scrub)[0]
 
 
 class Replacement(NamedTuple):

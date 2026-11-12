@@ -680,11 +680,11 @@
                   "properties": {
                     "kind": {
                       "type": "string",
-                      "description": "function or command."
+                      "description": "function, command or service."
                     },
                     "value": {
                       "type": "string",
-                      "description": "The function, or the command line, the file names."
+                      "description": "The function, the command line, or the service's address, as the file names it."
                     }
                   },
                   "description": "The entry point a test would start."
@@ -1000,7 +1000,7 @@
               "properties": {
                 "kind": {
                   "type": "string",
-                  "description": "function or command."
+                  "description": "function, command or service."
                 },
                 "value": {
                   "type": "string"
@@ -1548,7 +1548,6 @@
                 "nondeterministic",
                 "unsavable",
                 "null",
-                "placeholder",
                 "too_large",
                 "binary",
                 "incomplete_reply",

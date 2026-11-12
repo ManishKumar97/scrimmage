@@ -46,7 +46,7 @@
 - **A sync caller that gives up leaves its thread behind.** Under `slow`, a caller that stops waiting with `future.result(timeout=...)` does not stop the thread that waits. That thread runs the real call after the delay, so a caller that retries runs a listed real write twice. Python cannot stop another thread safely.
 - **`slow` is not a late reply after the work.** The delay comes before the call. A call that does its work and replies late, which tests duplicate writes on retry, is a later fault. Nor is the delay drawn from a range.
 - **The plan holds `find` as written.** The plan is how the program applies a fault, so a `find` cannot be redacted there or it would no longer match. It is held in memory by the runner and served to the program over the loopback control server, and is not written to the records folder; the results and the record line show `find` redacted. It comes from your own `scrimmage.toml`.
-- **`${` in an injected text.** Scrimmage rejects `${` anywhere in the file, `text` and `find` included, so an injection that needs it, such as a Log4Shell-shaped text, cannot be written.
+- **`${` in an injected text.** `${NAME}` is filled in from the environment anywhere in the file, `text` and `find` included, so an injection that needs a literal `${`, such as a Log4Shell-shaped text, writes it as `$${`.
 - **A change over text the record removes is not made.** A `find` that touches a key, or an `append` that joins a key to the text before it, leaves the call unchanged and the line names the rule.
 - **`replace` on a model reply is for Chat Completions text.** A streamed reply and a Responses API call are a mistake in the test, a reply with no text is left as it is, and a moderation or embedding result cannot take it.
   The reply is written back as compact JSON, so its bytes differ from the provider's even where its fields do not.
@@ -144,7 +144,7 @@
   *Checked by: `tests/test_redact.py::test_the_old_module_kept_each_new_secret_and_the_new_one_removes_it`, `tests/test_redact.py::test_prose_empty_values_and_paths_are_kept`, `tests/test_redact.py::test_a_kept_value_ends_where_a_field_or_a_key_shape_begins_in_it`*
 
 - **A secret with no pattern under an innocent key is written.** `{"note": "pw is hunter2"}` has neither a known pattern nor a secret-like key, so it goes in; the customer-data warning says to check the mocks.
-- **`${` in a value cannot be written.** `scrimmage.toml` rejects `${` as a placeholder, so such a value is listed `placeholder`.
+- **A recorded `${` is written as `$${`.** `scrimmage.toml` reads `${NAME}` from the environment, so a recorded value that holds `${` is written as the literal `$${`, and reads back as the value it was.
 - **A request to a credential or secret-store endpoint runs for real in a test.** It is never written as a mock, so the test still reaches it, as the recording did.
 - **A mock's value is capped at 64 KiB of TOML.** A larger value, a body, or arguments are listed `too_large` and written by hand.
 - **A burst of tool calls with no pause while recording.** While recording, each call saves two values through a queue of 64 items, about 30 calls at once. A call waits up to 10 seconds for room. If the queue stays full, `scrimmage record` says a burst lost a saved value, exits 3, and writes nothing for that test. Make fewer calls at once in that test.
