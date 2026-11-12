@@ -30,6 +30,7 @@ The table gives the time added at the median and at the 99th percentile, in micr
 |---|---|---|---|---|---|---|
 | Tool call, sync | 0.2 | 43.3 | 43.1 (42.6 to 43.5) | 0.2 | 102.1 | 101.9 (91.3 to 109.6) |
 | Tool call, async | 0.3 | 43.3 | 43.0 (42.8 to 43.6) | 0.3 | 96.7 | 96.4 (86.7 to 105.6) |
+| Tool call, args miss, on a tool under `real` | 0.2 | 132.3 | 132.1 (130.8 to 136.0) | 0.3 | 335.1 | 334.9 (310.5 to 354.9) |
 | Web request through httpx, sync | 357.9 | 673.6 | 306.8 (280.5 to 320.5) | 514.9 | 1095.6 | 585.4 (523.0 to 1017.2) |
 | Web request through httpx, async | 697.8 | 1074.6 | 372.8 (348.5 to 397.1) | 941.0 | 1508.6 | 600.0 (488.9 to 1131.8) |
 | Model call, sync, budget on | 1231.0 | 2890.4 | 1645.5 (1610.1 to 1696.6) | 1383.4 | 3867.7 | 2484.3 (2081.9 to 3363.0) |
@@ -38,9 +39,11 @@ The table gives the time added at the median and at the 99th percentile, in micr
 | Model call, async, budget off | 1543.7 | 2155.2 | 614.2 (531.1 to 621.6) | 1761.0 | 2762.6 | 1047.4 (881.6 to 2331.6) |
 | MCP tool call, stdio, async | 1305.5 | 1564.3 | 257.3 (220.9 to 270.3) | 1444.6 | 2198.2 | 725.0 (628.4 to 1004.7) |
 
+The args miss row comes from a separate run on 2026-11-11, made while other work shared the machine, so it is noisier than the other rows, which come from an earlier run.
+
 A mocked call makes no real call, so it has no ungated row to compare with.
 A mocked tool call takes 48.0 µs at the median, and a mocked web request 185.5 µs.
-A call that misses a mock with `args`, on a tool under `real` by name, runs for real and adds about 126 µs, as it looks for the nearest mock and keeps the evidence.
+A call that misses a mock with `args`, on a tool under `real` by name, runs for real and adds about 132 µs, as it looks for the nearest mock and keeps the evidence.
 
 A gated model call with a budget on makes one extra signed request to the runner, to reserve the call's money.
 That is the largest part of the time it adds.

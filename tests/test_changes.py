@@ -265,3 +265,26 @@ def test_a_body_with_more_after_its_first_gzip_member_is_never_changed(tail: byt
     headers = [("content-type", "text/plain"), ("content-encoding", "gzip")]
     result = changes.change_web(200, "GET", headers, body, fault("append", "!"))
     assert isinstance(result, Unchangeable) and result.why == "the body will not unpack"
+
+
+def test_a_replace_in_a_json_text_inside_data_is_judged_per_string() -> None:
+    """The URL's query is removed by redaction, but an edit to the msg string touches none of
+    it. The whole JSON text is not one removed span."""
+    body = json.dumps({"msg": "hello", "next": "https://api.example.com/items?page=2"})
+    done = changed(changes.change_data({"body": body}, fault("replace", "HI", "hello")))
+    assert isinstance(done.value, dict)
+    assert json.loads(done.value["body"]) == {
+        "msg": "HI",
+        "next": "https://api.example.com/items?page=2",
+    }
+
+
+def test_a_replace_that_touches_a_secret_in_a_json_text_inside_data_is_refused() -> None:
+    body = json.dumps({"msg": "hello", "key": KEY})
+    clash = left(changes.change_data({"body": body}, fault("replace", "y", KEY[4:9])))
+    assert (clash.kind, clash.rule) == ("span", "json")
+    # a string that holds a removed span is one place, so an edit beside the secret in it is
+    # refused too
+    body = json.dumps({"msg": f"hello {KEY}"})
+    clash = left(changes.change_data({"body": body}, fault("replace", "y", "hello")))
+    assert clash.kind == "span"
