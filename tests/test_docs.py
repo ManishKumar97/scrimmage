@@ -597,6 +597,7 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
         "**A service row's runs go one after another.**",
         "**A call `background_real` lets through is decided once, with what it runs inside.**",
         "**Other ways to another process are not gated.**",
+        "**Signals are not gated.**",
         "**A start made below multiprocessing's own calls is not seen before Python 3.14.**",
     ):
         assert limit in limits, limit
@@ -611,6 +612,7 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
     ):
         assert point in safety, point
     assert "every multiprocessing send" not in safety + limits
+    assert "resource tracker" in safety and "started once as the service starts" in safety
     security = page("security.md")
     assert "## A web service's token and run header" in security and "`0600`" in security
     assert "replayed once to each other worker within 60 seconds" in security

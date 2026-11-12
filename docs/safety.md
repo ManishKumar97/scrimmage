@@ -114,7 +114,10 @@ These are refused under a run too, with no entry that lists them:
 - a process pool's task, on `Pool` and on `ProcessPoolExecutor` and loky's, a `Pool`'s making, and their `close`, `terminate` and `shutdown`;
 - a subinterpreter: `InterpreterPoolExecutor.submit`, `Interpreter.exec`, `call` and `call_in_thread`, and a subinterpreter queue's `put`.
 
-Any other way to reach another process is not gated, such as shared memory or a socket of your own. See [Limits](limits.md).
+Any other way to reach another process is not gated, such as shared memory, a signal or a socket of your own. See [Limits](limits.md).
+
+Python's resource tracker, which `multiprocessing` needs for its locks, queues and shared memory, is started once as the service starts, before any request, so a run that makes a lock starts nothing.
+A start of a tracker after that, such as a relaunch after it was killed, is a start of this Python like any other: refused under a run, and under the outside rules unless `background_real` lists it.
 
 Listing a program makes every call to it real.
 There is no matching on arguments: `process:kubectl` lets `kubectl delete` through as much as `kubectl get`.
