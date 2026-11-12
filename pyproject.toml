@@ -127,7 +127,9 @@ name = "Only the Scrimmage MCP server loads the MCP library"
 type = "forbidden"
 # Every module of the package; the server is its own command, and the only one that may.
 source_modules = ["scrimmage_core"]
-forbidden_modules = ["mcp", "mcp_types", "scrimmage_core.mcp_server"]
+# Importing the server itself is caught by tests/test_stdlib_only.py: the source package
+# holds it, so a contract here cannot.
+forbidden_modules = ["mcp", "mcp_types"]
 ignore_imports = [
     "scrimmage_core.mcp_server -> mcp",
     "scrimmage_core.mcp_server -> mcp_types",

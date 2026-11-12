@@ -1631,8 +1631,10 @@ def test_check_runs_counts_what_record_runs_would_start(project: Project) -> Non
     # Under a cap, as record --runs 2 --max-cost-usd 0.5 runs: passed, the file's cap kept.
     capped_doc = check_doc(project, "--runs", "2", "--max-cost-usd", "0.5")
     assert capped_doc["exit"] == 0 and summary_of(capped_doc)["budget_usd"] is None
-    bad = check_doc(project, "--runs", "2", "--max-cost-usd", "nan")
-    assert bad["exit"] == 2 and messages(bad, "mistakes")[0].startswith("--max-cost-usd")
+    for flags in (("--runs", "2", "--max-cost-usd", "nan"), ("--max-cost-usd", "nan")):
+        bad = check_doc(project, *flags)  # with --runs or without it
+        assert bad["exit"] == 2 and messages(bad, "mistakes")[0].startswith("--max-cost-usd")
+    assert check_doc(project, "--max-cost-usd", "0.5")["exit"] == 0
     assert summary_of(check_doc(project, "--runs", "1"))["runs"] == 2
     project.capsys.readouterr()
     assert cli.main(["check", str(project.toml), "--runs", "1"]) == 0

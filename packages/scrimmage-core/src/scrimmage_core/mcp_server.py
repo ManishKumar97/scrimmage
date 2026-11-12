@@ -425,9 +425,10 @@ def inside(value: str, root: Path) -> Path:
     """A path argument as the child gets it: absolute, and inside the root once resolved.
 
     A relative value is read against the root, the coding agent's own working folder, never
-    against the config's folder. The child gets the root-joined path, absolute, so its own
-    working folder cannot change what the value names; it is not the resolved one, so a link
-    in it stays a link, which show refuses to open as the CLI does.
+    against the config's folder. The child gets it absolute, with every folder above its last
+    part resolved, so neither its own working folder nor a link swapped higher up can change
+    what it names; the last part stays as given, so a linked target stays a link, which show
+    refuses to open as the CLI does.
     """
     if CONTROL.search(value) is not None:
         raise Refused(f"{value!r}: a path may not hold a control character")
@@ -441,7 +442,9 @@ def inside(value: str, root: Path) -> Path:
     real = Path(os.path.realpath(joined))
     if not real.is_relative_to(root):  # by parts, so /root-other is not inside /root
         raise Refused(f"{value!r}: the path is outside the project folder")
-    return joined
+    # Every folder above the last part resolved now, so a link higher up swapped later cannot
+    # move it; the last part as given, so a linked target stays a link, which show refuses.
+    return Path(os.path.realpath(joined.parent)) / joined.name
 
 
 def settings_from(argv: Sequence[str] | None) -> Settings:

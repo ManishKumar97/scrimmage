@@ -649,12 +649,12 @@ def run_check(
     agent = config.agent
     rows = len(planner.rows(config))
     runs = rows * agent.runs
-    if record_runs is not None:
-        from scrimmage_core import record as recording  # only for --runs: it brings the runner
-
-        under, problems = capped(config, cap)
+    under, problems = capped(config, cap)  # a bad --max-cost-usd is a mistake, with --runs or not
+    if under is None or record_runs is not None:
         count = 1
-        if under is not None:
+        if under is not None and record_runs is not None:
+            from scrimmage_core import record as recording  # only for --runs: it brings the runner
+
             count, problems = recording.runs_problems(under, record_runs)
         if problems:
             if found is not None:

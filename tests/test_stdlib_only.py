@@ -60,3 +60,62 @@ def test_imports_only_the_standard_library(path: Path, ours: set[str]) -> None:
     ours = ours | OWN_PROCESS.get(path.name, set())
     outside = imported_roots(path) - set(sys.stdlib_module_names) - ours
     assert not outside, f"{path} imports {sorted(outside)}"
+
+
+SERVER = "scrimmage_core.mcp_server"
+
+
+def imports_the_server(path: Path) -> bool:
+    """Whether a module imports the MCP server, by any of the ways Python allows."""
+    tree = ast.parse(path.read_text(), str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import) and any(
+            alias.name == SERVER or alias.name.startswith(SERVER + ".") for alias in node.names
+        ):
+            return True
+        if isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if node.level == 0 and (module == SERVER or module.startswith(SERVER + ".")):
+                return True
+            names = {alias.name for alias in node.names}
+            package = module == "scrimmage_core" and node.level == 0
+            if (package or (node.level == 1 and not module)) and "mcp_server" in names:
+                return True
+            if node.level == 1 and module == "mcp_server":
+                return True
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute | ast.Name):
+            name = node.func.attr if isinstance(node.func, ast.Attribute) else node.func.id
+            argument = node.args[0] if node.args else None
+            if (
+                name in DYNAMIC
+                and isinstance(argument, ast.Constant)
+                and str(argument.value).startswith(SERVER)
+            ):
+                return True
+    return False
+
+
+def test_only_the_mcp_server_command_loads_the_mcp_server(tmp_path: Path) -> None:
+    """The server is a command of its own: no other module imports it, so the scrimmage
+    command and the code that loads into the agent never bring in the MCP library. The
+    import-linter contract cannot see this one, as the server is inside its source package."""
+    core = PACKAGES / "scrimmage-core" / "src" / "scrimmage_core"
+    found = [
+        p.name
+        for p in sorted(core.rglob("*.py"))
+        if p.name != "mcp_server.py" and imports_the_server(p)
+    ]
+    assert not found, found
+    for line in (  # every way of importing it is seen, so a pass above means something
+        "from scrimmage_core import mcp_server",
+        "from scrimmage_core import cli, mcp_server as server",
+        "import scrimmage_core.mcp_server",
+        "from scrimmage_core.mcp_server import main",
+        "from . import mcp_server",
+        "from .mcp_server import main",
+        "importlib.import_module('scrimmage_core.mcp_server')",
+    ):
+        (tmp_path / "probe.py").write_text(line + "\n")
+        assert imports_the_server(tmp_path / "probe.py"), line
+    (tmp_path / "probe.py").write_text("from scrimmage_core import mcp_gate\n")
+    assert not imports_the_server(tmp_path / "probe.py")

@@ -348,6 +348,44 @@ def test_a_link_inside_the_root_is_refused_by_show_as_on_the_cli(
     assert by_hand.returncode == 2  # the same refusal the CLI gives
 
 
+# In the server: a link the path goes through is pointed elsewhere after the check and before
+# the show child starts, as another process of the same user could.
+SWAP_A_LINK = IN_SERVER + (
+    "if server:\n"
+    "    import os\n"
+    "    import anyio\n"
+    "    real = anyio.open_process\n"
+    "    async def open_process(*args, **kwargs):\n"
+    "        if args[0][4] == 'show':\n"
+    "            os.unlink(os.environ['SWAP_LINK'])\n"
+    "            os.symlink(os.environ['SWAP_TO'], os.environ['SWAP_LINK'])\n"
+    "        return await real(*args, **kwargs)\n"
+    "    anyio.open_process = open_process\n"
+)
+
+
+def test_a_link_higher_up_swapped_after_the_check_cannot_lead_outside(
+    bed: Bed, fake_openai: Fake, tmp_path: Path
+) -> None:
+    bed.edit("[agent]\n", "[agent]\nruns = 1\n")
+    bed.model(fake_openai(ACME * 2))
+    (done,) = call(bed, ("test", {"max_cost_usd": 5}))
+    records = (bed.root / doc_of(done)["records"]).resolve()
+    outside = tmp_path / "outside-runs"  # a copy outside the root, with a marker in it
+    shutil.copytree(records.parent, outside)
+    result_file = outside / records.name / "result.json"
+    saved = json.loads(result_file.read_text())
+    saved["rows"][0]["test"] = "OUTSIDE-MARKER"
+    result_file.write_text(json.dumps(saved))
+    (bed.root / "deep").symlink_to(records.parent)  # two levels above the file named
+    bed.shim(SWAP_A_LINK)
+    bed.env.update(SWAP_LINK=str(bed.root / "deep"), SWAP_TO=str(outside))
+    (shown,) = call(bed, ("show", {"target": f"deep/{records.name}/result.json"}))
+    assert (bed.root / "deep").resolve() == outside  # the swap did happen
+    assert doc_of(shown)["exit"] == 0, texts(shown)  # the folder checked, read as it was
+    assert "OUTSIDE-MARKER" not in received(shown)
+
+
 def test_a_path_outside_the_root_starts_no_child(bed: Bed, tmp_path: Path) -> None:
     bed.shim(COUNT_STARTS)
     (bed.root / "out").symlink_to(tmp_path)
