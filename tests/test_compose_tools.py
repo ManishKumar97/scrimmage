@@ -4,7 +4,6 @@ import gzip
 import hashlib
 import io
 import json
-import os
 import shutil
 import socket
 import subprocess
@@ -158,7 +157,7 @@ def _tar(files: dict[str, bytes]) -> bytes:
 
 def _layer(files: dict[str, bytes], gz: bool = False) -> bytes:
     data = _tar(files)
-    return gzip.compress(data) if gz else data
+    return gzip.compress(data, mtime=0) if gz else data
 
 
 def _digest(blob: bytes) -> str:
@@ -246,8 +245,9 @@ def test_scanner_fails_when_a_listed_layer_is_missing(tmp_path: Path) -> None:
         scan_image(_archive(tmp_path, {"manifest.json": manifest}), [CANARY])
 
 
-GZIP_OF_NON_TAR = gzip.compress(b"this is not a tar archive " + CANARY.encode() * 40)
-CORRUPT_DEFLATE = gzip.compress(_tar({"a": os.urandom(20000)}))[:200] + b"\xff" * 64
+GZIP_OF_NON_TAR = gzip.compress(b"this is not a tar archive " + CANARY.encode() * 40, mtime=0)
+_NOISE = b"".join(hashlib.sha256(bytes([i])).digest() for i in range(250))
+CORRUPT_DEFLATE = gzip.compress(_tar({"a": _NOISE}), mtime=0)[:200] + b"\xff" * 64
 
 
 @pytest.mark.parametrize(
@@ -255,7 +255,7 @@ CORRUPT_DEFLATE = gzip.compress(_tar({"a": os.urandom(20000)}))[:200] + b"\xff" 
     [
         b"\x28\xb5\x2f\xfd" + b"\x00" * 32,
         SKIPPABLE_ZSTD,
-        gzip.compress(_tar({"a": b"x" * 5000}))[:60],
+        gzip.compress(_tar({"a": b"x" * 5000}), mtime=0)[:60],
         CORRUPT_DEFLATE,
         GZIP_OF_NON_TAR,
         b"BZh9" + b"\x00" * 32,
@@ -276,7 +276,11 @@ def test_scanner_fails_on_a_listed_layer_it_cannot_read(tmp_path: Path, blob: by
         scan_image(_image(tmp_path, [blob]), [CANARY])
 
 
-@pytest.mark.parametrize("blob", [SKIPPABLE_ZSTD, GZIP_OF_NON_TAR, CORRUPT_DEFLATE])
+@pytest.mark.parametrize(
+    "blob",
+    [SKIPPABLE_ZSTD, GZIP_OF_NON_TAR, CORRUPT_DEFLATE],
+    ids=["zstd-skippable", "gzip-of-non-tar", "corrupt-deflate"],
+)
 def test_scanner_fails_on_compressed_data_that_is_not_a_listed_layer(
     tmp_path: Path, blob: bytes
 ) -> None:
