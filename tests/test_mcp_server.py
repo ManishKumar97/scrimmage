@@ -237,7 +237,6 @@ def test_every_cli_flag_is_an_input_or_left_out_with_a_reason(
 
 SPANS = """
 import os
-import re
 if server:
     from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider
@@ -1268,7 +1267,8 @@ def swept_count(line: str) -> int:
     """How many processes the sweep killed. At least the one the run left; the run itself
     also counts when Linux has not yet killed it for its dead runner, which load decides."""
     found = re.search(r", (\d+) left over and killed by the sweep", line)
-    return int(found.group(1)) if found else 0
+    assert found, line
+    return int(found.group(1))
 
 
 def test_the_sweep_kills_runs_in_their_own_sessions_by_the_calls_nonce(bed: Bed) -> None:
