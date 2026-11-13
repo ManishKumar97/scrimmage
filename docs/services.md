@@ -26,7 +26,13 @@ Three variables switch Scrimmage on in the service:
 |---|---|
 | `SCRIMMAGE_SERVICE` | `1`: Scrimmage runs in service mode. Without it, a token file alone stops the service with a message naming `SCRIMMAGE_SERVICE=1`. |
 | `SCRIMMAGE_TOKEN_FILE` | The path of the token file: a plain file you own, mode `600`, with a token of 32 characters or more. Any other mode stops the service. |
-| `SCRIMMAGE_CONTROL_URL` | The runner's control server, as `http://127.0.0.1:port`. Only a loopback address is read in this version. |
+| `SCRIMMAGE_CONTROL_URL` | The runner's control server: `http://127.0.0.1:port` when the runner is on this machine, or `https://host:port` for a runner the service reaches over a network. `http://` on any other host stops the service. |
+
+An `https://` control address also needs one more variable:
+
+| Variable | What it holds |
+|---|---|
+| `SCRIMMAGE_CONTROL_CA` | The authority to trust: a PEM file with exactly one certificate, the `ca.pem` that `scrimmage cert` writes. A file of several certificates, such as a system bundle, stops the service. |
 
 Two more name what the gates swap, and `scrimmage check` prints both, built from your file:
 
@@ -41,6 +47,7 @@ Each process that loads the app prints `scrimmage: active in service mode (pid N
 That process then removes `SCRIMMAGE_TOKEN_FILE` from its own environment, so a program it starts never learns where the token is.
 
 The runner reads the same two variables, `SCRIMMAGE_TOKEN_FILE` and `SCRIMMAGE_CONTROL_URL`, from its own environment, and listens on that address for the length of the test.
+With `control` in the file, it listens on that address instead and needs no `SCRIMMAGE_CONTROL_URL`.
 If the address cannot be bound, the test stops with exit 3.
 
 ## The settings
@@ -57,6 +64,8 @@ In `scrimmage.toml`, `service` replaces `function` or `command`:
 | `record_wait_s` | How much longer the runner waits for a run's last lines after the grace. Above 0, up to 120. | 10 |
 | `background_real` | Calls that work outside any request may make for real while a test runs, such as a telemetry exporter. | empty |
 | `parallel` | Runs at the same time, each its own request. | 1 |
+| `control` | The `ip:port` the runner listens on, for a service in a container. | the address of `SCRIMMAGE_CONTROL_URL` |
+| `control_tls` | `{cert = "path", key = "path"}`: the certificate and key the runner speaks TLS with. | none |
 
 [Configuration](configuration.md#agent) has every key, and `real` and `tools` work as they do for a function.
 
@@ -123,6 +132,60 @@ When the gate cannot run a request under its plan, it answers `503` itself, with
 The runner reads each of these as an infrastructure error for that run, exit 3, and the test goes on.
 A reply that only looks like the gate's, or a run whose plan was never claimed, stops the test with exit 3: a process without Scrimmage answered it.
 
+## A service in a container
+
+A container has its own loopback, so a service in one cannot reach a runner on `127.0.0.1`.
+For that case the runner listens on an address of its host that the container can reach, and the control channel runs over TLS.
+
+1. Make the certificates: `scrimmage cert --ip 172.17.0.1 --name host.docker.internal --out .scrimmage-cert`. See [`scrimmage cert`](cli.md#scrimmage-cert).
+2. In `scrimmage.toml`, name where the runner listens and what it speaks:
+
+    ```toml
+    [agent]
+    service     = "http://127.0.0.1:8765/chat"
+    body        = {message = "{question}"}
+    control     = "172.17.0.1:8766"
+    control_tls = {cert = ".scrimmage-cert/server.pem", key = ".scrimmage-cert/server.key"}
+    ```
+
+3. Start the service with `SCRIMMAGE_CONTROL_URL=https://host.docker.internal:8766` and `SCRIMMAGE_CONTROL_CA` set to the path of `ca.pem` inside the container.
+   The token file is a plain file, mode `600`, owned by the process that reads it.
+   Run the container as the file's owner, such as with `user: "1000:1000"` in Docker Compose, or the service stops and names both user ids.
+
+The SDK trusts the one authority in `SCRIMMAGE_CONTROL_CA` and nothing else; it never loads the system's certificate store.
+It speaks TLS 1.3 only, checks the host name or address in `SCRIMMAGE_CONTROL_URL` against the certificate, and applies strict chain rules.
+The authority's key is discarded once the server certificate is signed, and the authority is limited to the names and addresses you gave and their subdomains.
+The HMAC signing stays on every request and reply, under TLS.
+
+What crosses the network, exactly:
+
+| From | To | What | Protected by |
+|---|---|---|---|
+| The service | The runner, at `SCRIMMAGE_CONTROL_URL` | Claims, plans, record lines, side-folder items and budget asks | TLS 1.3 with your authority, and the HMAC on every request and reply |
+| The runner | The service, at `service` | The runs: request bodies, the `headers` from the file, an `Authorization` header included, and the whole answer | The run header's MAC proves who sent it. Nothing protects the content: it crosses the container network in clear |
+| The service | Anywhere else | The agent's own calls | The gates, as without a container |
+
+The runner's requests to the service stay `http://` in this version.
+A container with Docker's default `CAP_NET_RAW` on the same bridge can read them.
+Keep a real credential out of `headers` when the service runs in a container.
+
+Who can reach the runner's address: every container on every Docker network on the host, every Kubernetes node and pod, and a peer on the host's network that routes the address to it.
+The runner keeps no list of who may connect, so a client without the token can still open connections.
+It can read nothing and send nothing the signature accepts, and it can hold the control server's 64 connections.
+Each connection is cut after 10 seconds without a read and 15 seconds in all, handshake included, and a request that declares a body over 4 MB is read only if its signature is good.
+While every connection is held, runs end as `plan-unavailable` infrastructure errors, never as results.
+The report's `control server:` lines count what the runner saw, so this shows even when no run was claimed:
+
+```text
+control server: runs sent 5, claims received 0
+control server: 64 connections cut by the timeouts, a client that stalled or dripped
+control server: 3 connections failed TLS (unknown ca 2, wrong version number 1)
+```
+
+`claims received` far below `runs sent` means no service reached the control server: a wrong address, a wrong authority, or a held port.
+Each control request opens a new connection and a TLS handshake, so TLS adds about 1.7 ms to a request's median, and `control_p99_ms` rises sooner than without it.
+Keeping connections alive is a later step.
+
 ## Workers
 
 `uvicorn --workers N` works as it does without Scrimmage: each worker loads the app, prints its own active line, and serves runs and plain requests.
@@ -146,7 +209,7 @@ See [Limits](limits.md) for the cost of this rule.
 
 ## What is not covered
 
-- `https` service addresses, a control server off this machine, and a second runner against the same service at once.
+- `https` service addresses, a certificate rotated while a test runs, a proxy that ends TLS between the service and the runner, and a second runner against the same service at once.
 - A streamed reply, a WebSocket, several turns per run, and a service that answers 202 and finishes elsewhere.
 - WSGI services, Flask, Django and gunicorn, queue workers, and hypercorn.
 - `scrimmage record` and `scrimmage init --probe`, which stop with exit 2: record or probe the same agent as a function.

@@ -14,6 +14,7 @@ import contextlib
 import http.client
 import json
 import queue
+import ssl
 import threading
 import time
 from collections import deque
@@ -73,12 +74,18 @@ ROUND_TRIPS = 1024  # the last round trips kept, for a run's control_p99_ms
 
 
 class ControlClient:
-    def __init__(self, url: str, token: str) -> None:
+    def __init__(self, url: str, token: str, context: ssl.SSLContext | None = None) -> None:
+        """context: the TLS settings of an https:// control URL, which cannot be used without."""
         parts = urlsplit(url)
-        if parts.scheme != "http" or not parts.hostname:
+        if parts.scheme not in ("http", "https") or not parts.hostname:
             raise ControlError(f"SCRIMMAGE_CONTROL_URL {url!r} is not http://host:port")
+        if (parts.scheme == "https") != (context is not None):
+            raise ControlError(
+                f"SCRIMMAGE_CONTROL_URL {url!r} needs a TLS context if and only if it is https://"
+            )
+        self.context = context
         self.host = parts.hostname
-        self.port = parts.port or 80
+        self.port = parts.port or (443 if context is not None else 80)
         self.token = token
         self.offset = 0.0  # the server's clock minus ours, learned from its replies
         # Each request holds a slot while it is in flight. A sync caller waits for one on its
@@ -175,7 +182,7 @@ class ControlClient:
         )
         if body:
             headers["Content-Type"] = "application/json"
-        conn = http.client.HTTPConnection(self.host, self.port, timeout=TIMEOUT_S)
+        conn = self._connection()
         try:
             conn.request(method, path, body=body, headers=headers)
             response = conn.getresponse()
@@ -197,6 +204,14 @@ class ControlClient:
             raise ControlError("the control server's reply is not valid") from exc
         self.offset = server_time - time.time()
         return response.status, reply
+
+    def _connection(self) -> http.client.HTTPConnection:
+        """The one place a control connection is made: TLS when the URL is https://."""
+        if self.context is None:
+            return http.client.HTTPConnection(self.host, self.port, timeout=TIMEOUT_S)
+        return http.client.HTTPSConnection(
+            self.host, self.port, timeout=TIMEOUT_S, context=self.context
+        )
 
     def fetch_plan(self, run: str) -> object:
         status, reply = self.request("GET", f"/v1/plans/{run}")

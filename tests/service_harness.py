@@ -3,6 +3,7 @@ ASGI driver written by hand, so no HTTP library stands between the test and the 
 
 import asyncio
 import secrets
+import ssl
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -87,18 +88,27 @@ async def drive(
 class Service:
     """The runner's control server, and one service process's gate, here."""
 
-    def __init__(self, folder: Path, *, tools: tuple[str, ...] = TOOLS) -> None:
+    def __init__(
+        self,
+        folder: Path,
+        *,
+        tools: tuple[str, ...] = TOOLS,
+        server_tls: ssl.SSLContext | None = None,
+        client_tls: ssl.SSLContext | None = None,
+    ) -> None:
+        """server_tls, client_tls: TLS on the control channel, on the runner's side and the
+        service's."""
         self.token = secrets.token_hex(32)
         self.store = RecordStore(folder)
         self.refused: list[tuple[str, str]] = []
         self.server = ControlServer(
-            self.token, self.store, lambda r, why: self.refused.append((r, why))
+            self.token, self.store, lambda r, why: self.refused.append((r, why)), tls=server_tls
         )
         self.server.start()
         self.stopped: list[str] = []
         self.process = state.ProcessState(("get_order",), service=True)
         self.process.stop = self.stopped.append
-        self.client = ControlClient(self.server.url, self.token)
+        self.client = ControlClient(self.server.url, self.token, client_tls)
         self.senders = Senders()
         self.senders.start()
         self.pool = executor.Executor()

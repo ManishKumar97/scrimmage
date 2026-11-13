@@ -231,6 +231,29 @@
           "type": "integer",
           "minimum": 0
         },
+        "runs_sent": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "A service test only: the requests the runner sent to the service, the setup request and every run."
+        },
+        "claims_received": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "A service test only: the claims the control server answered. Far below runs_sent means no service reached the control server."
+        },
+        "control_cut": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "A service test only: the control server's connections the read or whole-request timeouts cut. Near zero in a healthy test."
+        },
+        "control_tls_failed": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": "A service test with control_tls only: connections that failed TLS, counted by OpenSSL's reason, such as unknown ca."
+        },
         "result_file": {
           "type": [
             "string",

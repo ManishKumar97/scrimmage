@@ -9,6 +9,8 @@ _.log_message  # tests/fakes/openai_server.py: http.server calls it per request
 _.do_GET  # control.py and test_protocol.py: http.server calls do_<METHOD> by name
 _.daemon_threads  # control.py: socketserver.ThreadingMixIn reads it
 _.request_queue_size  # control.py: socketserver.TCPServer reads it
+_.address_family  # control.py: socketserver.TCPServer reads it to make its socket
+_.readable  # control.py: io.BufferedReader asks its raw stream by name
 _.maxsize  # test_protocol.py: queue.Queue reads it to decide when it is full
 _.get_order  # tests/example/acme/tools.py: the agent looks tools up by name
 _.check_inventory  # tests/example/acme/tools.py: the agent looks tools up by name

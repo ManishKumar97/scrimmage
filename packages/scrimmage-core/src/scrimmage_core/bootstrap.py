@@ -12,6 +12,7 @@ import contextlib
 import ipaddress
 import os
 import signal
+import ssl
 import stat
 import sys
 import threading
@@ -32,6 +33,7 @@ from scrimmage_core import (
     state,
     threadctx,
     threads,
+    tls,
     tool_gate,
 )
 from scrimmage_core.client import ControlClient, ControlError, Sender, Senders
@@ -201,13 +203,26 @@ def handle_sigterm(last_lines: Callable[[], None], sender: Sender) -> None:
 TOKEN_MIN = 32  # characters a service's token needs: the MAC of a run header rests on it
 
 
+def other_owner(path: str, error: Exception) -> str:
+    """The reason a token file was not opened. A file owned by another uid is the usual
+    mistake in a container, so it names both uids and the setting that fixes it."""
+    if isinstance(error, records.Refused) and "owned by another user" in str(error):
+        with contextlib.suppress(OSError):
+            owner = os.stat(path).st_uid
+            return (
+                f"the token file is owned by uid {owner} and this process runs as uid "
+                f"{os.getuid()}; in Docker, set user: to the file owner's uid and gid"
+            )
+    return str(error)
+
+
 def read_token_file(path: str) -> str:
     """The token, from a plain file this user owns, mode 0600 exactly. Else the process stops:
     a token another user could read is not the boundary the design rests on."""
     try:
         fd = records.open_owned(Path(path))
     except (OSError, records.Refused) as exc:
-        service_stop(f"SCRIMMAGE_TOKEN_FILE {path} cannot be read: {exc}")
+        service_stop(f"SCRIMMAGE_TOKEN_FILE {path} cannot be read: {other_owner(path, exc)}")
     with os.fdopen(fd, "rb") as handle:
         mode = stat.S_IMODE(os.fstat(handle.fileno()).st_mode)
         data = handle.read(4096)
@@ -223,7 +238,7 @@ def read_token_file(path: str) -> str:
 
 
 def loopback(url: str) -> bool:
-    """http:// on this machine: TLS to a control server elsewhere comes in a later version."""
+    """http:// on this machine: the one form that needs no TLS."""
     parts = urlsplit(url)
     if parts.scheme != "http" or not parts.hostname:
         return False
@@ -233,6 +248,36 @@ def loopback(url: str) -> bool:
         return ipaddress.ip_address(parts.hostname).is_loopback
     except ValueError:
         return False
+
+
+def control_context(url: str) -> ssl.SSLContext | None:
+    """The TLS settings for SCRIMMAGE_CONTROL_URL, or None for http:// on this machine. The
+    service stops at its start on a form it cannot use: http:// elsewhere, or https:// with no
+    SCRIMMAGE_CONTROL_CA that holds exactly one certificate."""
+    scheme = urlsplit(url).scheme
+    if scheme == "http":
+        if not loopback(url):
+            service_stop(
+                f"SCRIMMAGE_CONTROL_URL {url!r} is http:// beyond this machine, which would send "
+                "the plans in clear; use https://host:port and set SCRIMMAGE_CONTROL_CA to the "
+                "authority's certificate, which scrimmage cert makes"
+            )
+        return None
+    if scheme != "https" or not urlsplit(url).hostname:
+        service_stop(
+            f"SCRIMMAGE_CONTROL_URL {url!r} must be http://127.0.0.1:port on this machine, or "
+            "https://host:port with SCRIMMAGE_CONTROL_CA set"
+        )
+    ca = os.environ.get("SCRIMMAGE_CONTROL_CA", "")
+    if not ca:
+        service_stop(
+            f"SCRIMMAGE_CONTROL_URL {url!r} is https://, so SCRIMMAGE_CONTROL_CA must name the "
+            "authority's certificate (ca.pem from scrimmage cert), and it is not set"
+        )
+    try:
+        return tls.client_context(Path(ca))
+    except tls.TlsError as exc:
+        service_stop(f"SCRIMMAGE_CONTROL_CA: {exc}")
 
 
 def start_service() -> None:
@@ -255,18 +300,14 @@ def start_service() -> None:
         # A worker uvicorn spawned: the team's own children never learn the file's path.
         os.environ.pop("SCRIMMAGE_TOKEN_FILE", None)
     url = os.environ.get("SCRIMMAGE_CONTROL_URL", "")
-    if not loopback(url):
-        service_stop(
-            f"SCRIMMAGE_CONTROL_URL {url!r} must be http:// on this machine in this version; "
-            "a control server elsewhere needs TLS, which comes later"
-        )
+    context = control_context(url)
     prefixes = [p for p in os.environ.get("SCRIMMAGE_ALLOW_IMPORTS", "").split(",") if p]
     tools, renames = tools_from(os.environ.get("SCRIMMAGE_TOOLS", ""))
     names = tuple(labels.tool_name(path, dict(renames)) for path in tools)
     process = state.ProcessState(names, service=True)
     process.stop = structure_stop
     state.install_process(process)
-    client = ControlClient(url, token)
+    client = ControlClient(url, token, context)
     senders = Senders()
     pool = executor.Executor()
     executor.EXECUTOR = pool

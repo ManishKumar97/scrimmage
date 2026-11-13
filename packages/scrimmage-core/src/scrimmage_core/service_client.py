@@ -11,13 +11,20 @@ import ipaddress
 import json
 import os
 import secrets
+import ssl
 import stat
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from scrimmage_core import protocol, records
-from scrimmage_core.config import SERVICE_URL, Agent, request_body, request_headers
+from scrimmage_core import protocol, records, tls
+from scrimmage_core.config import (
+    SERVICE_URL,
+    Agent,
+    control_address_of,
+    request_body,
+    request_headers,
+)
 from scrimmage_core.start import BadAnswerPath, pick
 
 TOKEN_MIN = 32
@@ -83,8 +90,13 @@ def runner_token() -> str:
     return token
 
 
-def control_address() -> tuple[str, int]:
-    """SCRIMMAGE_CONTROL_URL, which the service was started with: http:// on this machine."""
+def control_address(agent: Agent) -> tuple[str, int]:
+    """Where the runner listens: the file's control setting, or else SCRIMMAGE_CONTROL_URL, which
+    the service was started with: http:// on this machine."""
+    if agent.control:
+        found_control = control_address_of(agent.control)
+        assert found_control is not None  # the file reader checked it
+        return found_control
     url = os.environ.get("SCRIMMAGE_CONTROL_URL", "")
     found = SERVICE_URL.fullmatch(url)
     host = found["host"].strip("[]") if found else ""
@@ -96,9 +108,32 @@ def control_address() -> tuple[str, int]:
         raise Setup(
             2,
             f"SCRIMMAGE_CONTROL_URL {url!r} must be http://127.0.0.1:port, the address the "
-            "service was started with; a control server elsewhere needs TLS, a later version",
+            "service was started with; for a service in a container, set control and "
+            "control_tls in the file",
         )
     return host, int(found["port"])
+
+
+def server_tls(agent: Agent, root: Path) -> ssl.SSLContext | None:
+    """The runner's TLS context, or None without control_tls. Exit 2 for a key that others can
+    read, a certificate that does not match its key, or one outside its dates."""
+    if agent.control_tls is None:
+        return None
+    cert, key = (root / value for value in agent.control_tls)
+    try:
+        fd = records.open_owned(key)
+    except (OSError, records.Refused) as exc:
+        raise Setup(2, f"control_tls key {key} cannot be read: {exc}") from None
+    with os.fdopen(fd, "rb") as handle:
+        mode = stat.S_IMODE(os.fstat(handle.fileno()).st_mode)
+    if mode != 0o600:
+        raise Setup(2, f"control_tls key {key} has mode {mode:o}; it must be 600")
+    try:
+        context = tls.server_context(cert, key)
+        tls.check_valid(context, cert)
+    except tls.TlsError as exc:
+        raise Setup(2, f"control_tls: {exc}") from None
+    return context
 
 
 def target(agent: Agent) -> tuple[str, int, str]:

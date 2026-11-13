@@ -76,7 +76,6 @@ def test_a_bad_value_names_its_table_and_key(tmp_path: Path) -> None:
         ('call = "tool:get_order"\ndo', 'call = "model:x"\ndo', "not a known provider"),
         ('call = "tool:get_order"\ndo', 'call = "model:anthropic"\ndo', "not a known provider"),
         ('call = "tool:get_order"\ndo', 'call = "model:openai/images"\ndo', "not a model call"),
-        ("[agent]\n", '[agent]\ncontrol = "x"\n', "control: unknown setting; see docs"),
         ("[agent]\n", '[agent]\nrecords = "x"\n', "records: unknown setting"),
         ("[agent]\n", "[agent]\nrnus = 50\n", "rnus: unknown setting"),
         ('returns = "shipped, Oct 30"', 'returns_from = "acme.m:f"', "returns_from: unknown"),

@@ -9,6 +9,7 @@ are a brace. Each string is read once, so an expanded value is never read again.
 """
 
 import builtins
+import ipaddress
 import math
 import os
 import re
@@ -49,9 +50,20 @@ AGENT_KEYS = {
     "record_grace_s",
     "record_wait_s",
     "background_real",
+    "control",
+    "control_tls",
 }
 # An agent inside a web service: these go with service only.
-SERVICE_KEYS = ("body", "headers", "record_grace_s", "record_wait_s", "background_real")
+SERVICE_KEYS = (
+    "body",
+    "headers",
+    "record_grace_s",
+    "record_wait_s",
+    "background_real",
+    "control",
+    "control_tls",
+)
+CONTROL_TLS_KEYS = {"cert", "key"}
 RULE_KEYS = {"expect", "forbid", "pass_rate"}
 TEST_KEYS = {"name", "question", "mock", "fault", *RULE_KEYS}
 # recorded marks a mock scrimmage record wrote; args, on a tool or MCP mock, the arguments
@@ -97,6 +109,8 @@ SERVICE_URL = re.compile(
     r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*)://(?P<host>[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])"
     r"(?::(?P<port>[0-9]{1,5}))?(?P<path>/[^\s#]*)?"
 )
+# ip:port, an IPv6 address in brackets. A name is never read: localhost can land on ::1.
+CONTROL = re.compile(r"(?:\[(?P<v6>[0-9A-Fa-f:.]+)\]|(?P<v4>[0-9.]+)):(?P<port>[0-9]{1,5})")
 HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")  # an HTTP token, RFC 9110
 # Headers the runner writes itself, or that would change how the request is read.
 SET_BY_SCRIMMAGE = ("host", "content-length", "content-type", "transfer-encoding", "connection")
@@ -421,6 +435,10 @@ class Agent:
     record_wait_s: float = DEFAULT_WAIT_S  # and the runner waits this much longer for its end
     # Calls work outside any request may make for real while a run is open.
     background_real: tuple[str, ...] = ()
+    # Where the runner listens for a service in a container: "ip:port", and the paths, read
+    # against the file's folder, of the certificate chain and key it speaks TLS with.
+    control: str = ""
+    control_tls: tuple[str, str] | None = None
 
     def tool_names(self) -> list[str]:
         """Every tool's final name: the one the model sees."""
@@ -908,12 +926,77 @@ def read_agent(table: dict[str, object], reader: Reader | None = None) -> Agent:
         record_grace_s=seconds(table, "record_grace_s", DEFAULT_GRACE_S, MAX_GRACE_S, where),
         record_wait_s=seconds(table, "record_wait_s", DEFAULT_WAIT_S, MAX_WAIT_S, where),
         background_real=tuple(background),
+        control=read_control(table, where) if "control" in table else "",
+        control_tls=read_control_tls(table, where) if "control_tls" in table else None,
     )
+    check_control(agent, where)
     names = agent.tool_names()
     for name in names:
         if names.count(name) > 1:
             raise ConfigError(f"{where} tools: two tools are named {name!r}")
     return agent
+
+
+def control_address_of(value: str) -> tuple[str, int] | None:
+    """The host and port of a control setting, or None when it is not an IP address and a
+    port from 1 to 65535, or is an address that listens on every interface."""
+    found = CONTROL.fullmatch(value)
+    if found is None:
+        return None
+    host, port = found["v6"] or found["v4"], int(found["port"])
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    if (found["v6"] and address.version != 6) or not 1 <= port <= 65535:
+        return None
+    mapped = getattr(address, "ipv4_mapped", None)
+    if address.is_unspecified or (mapped is not None and mapped.is_unspecified):
+        return None
+    return host, port
+
+
+def read_control(table: dict[str, object], where: str) -> str:
+    """The address the runner listens on, for a service in a container to reach."""
+    value = text(table, "control", where)
+    if control_address_of(value) is None:
+        raise ConfigError(
+            f"{where} control: {value!r} is not an IP address and a port, such as "
+            "'172.17.0.1:8766' or '[fd00::1]:8766', that is one address of this machine and "
+            "not every address; a host name is refused because localhost can mean ::1"
+        )
+    return value
+
+
+def read_control_tls(table: dict[str, object], where: str) -> tuple[str, str]:
+    """The certificate chain and the key, as paths against the file's folder."""
+    at = f"{where} control_tls"
+    tls = as_table(table["control_tls"], at)
+    check_keys(tls, CONTROL_TLS_KEYS, at)
+    for key in sorted(CONTROL_TLS_KEYS):
+        if key not in tls:
+            raise ConfigError(
+                f"{at}: {key} is required; write control_tls = {{cert = ..., key = ...}}"
+            )
+    return text(tls, "cert", at), text(tls, "key", at)
+
+
+def check_control(agent: Agent, where: str) -> None:
+    """Plain HTTP carries the plans and the record, so it stays on this machine."""
+    if agent.control_tls is not None and not agent.control:
+        raise ConfigError(
+            f"{where} control_tls: needs control, the address to listen on; a runner on "
+            "loopback needs no certificate"
+        )
+    address = control_address_of(agent.control) if agent.control else None
+    if address is not None and agent.control_tls is None:
+        host = ipaddress.ip_address(address[0])
+        if not host.is_loopback:
+            raise ConfigError(
+                f"{where} control: {agent.control!r} is not a loopback address, so records "
+                "that can hold customer data would cross the network in clear; add control_tls "
+                "with a certificate from scrimmage cert"
+            )
 
 
 def read_command(
