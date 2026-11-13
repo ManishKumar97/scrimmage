@@ -13,8 +13,7 @@ from scrimmage_core import config, runner
 from scrimmage_core.runner import Runner
 
 GRACE_S = 1.0
-BOUND_S = 20  # a ceiling for an event that should come at once; it only ends a failing test
-LOADED_BOUND_S = 120  # the same, for a wait on another process while the machine is busy
+LOADED_BOUND_S = 120  # a ceiling for a wait on another process; it only ends a failing test
 
 IGNORES_TERM = (
     "import signal, sys\n"
