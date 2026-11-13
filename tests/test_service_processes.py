@@ -6,6 +6,7 @@ The same calls outside any run are untouched. Each target here would write a fil
 must not exist after a refused call.
 """
 
+import collections
 import contextvars
 import gc
 import multiprocessing
@@ -1347,8 +1348,6 @@ def a_queue(kind: str) -> Any:
 
 def added_to_buffer(queue: Any, item: object, notify: bool) -> None:
     """What put does, without put: a deque's own append, so no subclass of it could see it."""
-    import collections
-
     queue._sem.acquire()  # as put does, so the feeder's release on a refusal balances it
     with queue._notempty:
         collections.deque.append(queue._buffer, item)
@@ -1421,6 +1420,111 @@ def test_an_item_whose_put_failed_is_no_decided_item(service: state.ProcessState
     finally:
         full.close()
         full.join_thread()
+
+
+class SendsWhenPickled:
+    """An item whose reducer, registered with ForkingPickler, sends while it is pickled."""
+
+
+def try_send(queue: Any, got: list[str]) -> None:
+    from multiprocessing.reduction import ForkingPickler
+
+    try:
+        queue._writer.send_bytes(bytes(ForkingPickler.dumps("run's data")))
+        got.append("sent")
+    except ScrimmageRefused:
+        got.append("refused")
+
+
+@pytest.mark.design("service.feeder_items")
+def test_a_send_made_while_a_decided_item_is_pickled_is_refused(
+    service: state.ProcessState,
+) -> None:
+    """The feeder's own send carries only the exact bytes its pickling returned: a send a
+    reducer makes during the pickling is decided as any other, and the item still arrives."""
+    from multiprocessing.reduction import ForkingPickler
+
+    queue = a_queue("Queue")
+    got: list[str] = []
+
+    def reduce(item: SendsWhenPickled) -> tuple[type, tuple[str]]:
+        try_send(queue, got)
+        return (str, ("pickled",))
+
+    ForkingPickler.register(SendsWhenPickled, reduce)
+    try:
+        in_ended_request(lambda: queue.put("plain"))  # its feeder runs outside any request
+        assert queue.get(timeout=10) == "plain"
+        run = a_run(service)
+        plain(lambda: queue.put(SendsWhenPickled()))
+        assert queue.get(timeout=10) == "pickled"  # the item, and nothing before it
+        assert got == ["refused"]
+        assert [x["action"] for x in lines(run)] == ["refused"]
+    finally:
+        ForkingPickler._extra_reducers.pop(SendsWhenPickled, None)  # type: ignore[attr-defined]
+        queue.close()
+        queue.join_thread()
+
+
+@pytest.mark.design("service.feeder_items")
+def test_a_send_a_queues_error_hook_makes_after_a_failed_pickle_is_refused(
+    service: state.ProcessState,
+) -> None:
+    import multiprocessing.queues
+
+    got: list[str] = []
+
+    class Hooked(multiprocessing.queues.Queue):  # type: ignore[type-arg]
+        def _on_queue_feeder_error(self, e: Exception, obj: object) -> None:
+            try_send(self, got)
+
+    queue: Any = Hooked(ctx=multiprocessing.get_context("spawn"))
+    try:
+        in_ended_request(lambda: queue.put("plain"))
+        assert queue.get(timeout=10) == "plain"
+        run = a_run(service)
+        plain(lambda: queue.put(lambda: None))  # decided, and its pickling fails
+        plain(lambda: queue.put("plain again"))
+        assert queue.get(timeout=10) == "plain again"
+        assert got == ["refused"]
+        assert [x["action"] for x in lines(run)] == ["refused"]
+    finally:
+        queue.close()
+        queue.join_thread()
+
+
+@pytest.mark.design("service.feeder_thread")
+def test_a_feeders_pickled_bytes_pass_only_on_its_own_pipe(service: state.ProcessState) -> None:
+    """A registered feeder thread, holding the bytes its check let through, may send them on
+    its own queue's pipe only: on another queue's pipe the send is decided, and refused."""
+    from multiprocessing.reduction import ForkingPickler
+
+    mine, other = a_queue("Queue"), a_queue("Queue")
+    got: list[str] = []
+
+    def feeder() -> None:
+        data = ForkingPickler.dumps("decided")
+        state.FEEDERS[threading.current_thread()] = mine._writer
+        for queue in (other, mine):
+            process_gate._fed.sent = (mine._writer, data)  # as its check left it
+            try:
+                queue._writer.send_bytes(data)
+                got.append("sent")
+            except ScrimmageRefused:
+                got.append("refused")
+
+    run = a_run(service)
+    thread = threading.Thread(target=lambda: under(run, feeder))
+    thread.start()
+    thread.join(10)
+    try:
+        assert got == ["refused", "sent"]
+        assert mine._reader.poll(10)  # read from the pipe: no put took the queue's count
+        assert ForkingPickler.loads(mine._reader.recv_bytes()) == "decided"
+        assert not other._reader.poll(0)
+    finally:
+        for each in (mine, other):
+            each.close()
 
 
 def refused_unchecked(service: state.ProcessState, queue: Any) -> None:

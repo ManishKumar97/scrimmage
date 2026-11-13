@@ -252,7 +252,7 @@ def guarded(what: str, why: str, method: Callable[..., Any], skip: type | None =
     def gate(*args: Any, **kwargs: Any) -> Any:
         if not in_service() or (skip is not None and args and isinstance(args[0], skip)):
             return method(*args, **kwargs)
-        if args and own_object(args[0]):
+        if args and (own_object(args[0]) or fed_send(args)):
             return method(*args, **kwargs)
         decide_send(what, why)
         with internal_call():
@@ -278,21 +278,49 @@ def own_object(target: object) -> bool:
     try:
         if target in IN_PROCESS_QUEUES:
             return True
-        if state.FEEDERS.get(threading.current_thread()) is target and fed_now(target):
-            return True  # a queue's own feeder thread, on its own pipe, with a decided item
     except TypeError:  # an object that cannot be weakly held is no registered one
         return False
     torn: object = getattr(_teardown, "ends", ())
     return any(target is end for end in cast(tuple[object, ...], torn))
 
 
-_fed = threading.local()  # the pipe this feeder thread may send its next item on, once
+# On a feeder thread: the pipe and the exact pickled bytes of the decided item it just
+# pickled, which its next send may carry, once.
+_fed = threading.local()
 
 
-def fed_now(pipe: object) -> bool:
-    allowed = getattr(_fed, "pipe", None) is pipe
-    _fed.pipe = None
-    return allowed
+def fed_send(args: tuple[Any, ...]) -> bool:
+    """A queue's own feeder thread, sending on its own pipe the very bytes its check let
+    through. Any gated call on the thread spends the record, so nothing made while the item
+    was pickled, nor after a failed pickle, can use it."""
+    sent: tuple[object, object] | None = getattr(_fed, "sent", None)
+    _fed.sent = None
+    if sent is None or len(args) < 2:
+        return False
+    pipe, pickled = sent
+    try:
+        own = state.FEEDERS.get(threading.current_thread()) is pipe
+    except TypeError:
+        return False
+    return own and args[0] is pipe and args[1] is pickled
+
+
+def fed_pickle(item: object, pickle: Callable[[], Any]) -> Any:
+    """A feeder's pickling of item: checked first, and its bytes recorded for the send only
+    once the pickling returned. A pickling inside it, such as a reducer's, is checked as
+    part of that item, and records nothing."""
+    _fed.sent = None
+    if getattr(_fed, "depth", 0):
+        return pickle()
+    pipe = feeder_item(item)
+    _fed.depth = 1
+    try:
+        pickled = pickle()
+    finally:
+        _fed.depth = 0
+    if pipe is not None:
+        _fed.sent = (pipe, pickled)
+    return pickled
 
 
 UNFED = (
@@ -301,18 +329,16 @@ UNFED = (
 )
 
 
-def feeder_item(item: object) -> None:
+def feeder_item(item: object) -> object:
     """A feeder thread is about to pickle and send item: it may, once, only if a decided put
     added it to the buffer this feeder reads. Any other item is refused, and every open run
     is told, as any of them could have put it there."""
-    _fed.pipe = None
     thread = threading.current_thread()
     buffer = state.FEED_BUFFERS.get(thread)
     if buffer is None or not in_service():
-        return  # not a feeder: its sends are decided as any other send
+        return None  # not a feeder: its sends are decided as any other send
     if state.take_decided(buffer, item):
-        _fed.pipe = state.FEEDERS.get(thread)
-        return
+        return state.FEEDERS.get(thread)  # the pipe a registered feeder may send it on
     process = state.process()
     runs = process.open_runs() if process is not None else []
     call = Call("process", "process:multiprocessing", "Queue._feed")
@@ -329,9 +355,8 @@ def checked_pickler(base: type) -> type:
     class ForkingPickler(base):  # type: ignore[misc, valid-type]
         @classmethod
         def dumps(cls, obj: Any, protocol: Any = None) -> Any:
-            feeder_item(obj)
             pickled: Callable[..., Any] = getattr(base, "dumps")  # noqa: B009  # base pickles it
-            return pickled(obj, protocol)
+            return fed_pickle(obj, lambda: pickled(obj, protocol))
 
     ForkingPickler.__qualname__ = base.__qualname__
     ForkingPickler.__module__ = base.__module__
@@ -344,8 +369,7 @@ def checked_dumps(dumps: Callable[..., Any]) -> Any:
 
     @functools.wraps(dumps)
     def checked(obj: Any, *args: Any, **kwargs: Any) -> Any:
-        feeder_item(obj)
-        return dumps(obj, *args, **kwargs)
+        return fed_pickle(obj, lambda: dumps(obj, *args, **kwargs))
 
     setattr(checked, GATED, True)
     return checked
