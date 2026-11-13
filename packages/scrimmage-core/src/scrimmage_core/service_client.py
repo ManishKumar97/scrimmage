@@ -392,6 +392,13 @@ HINTS = {
 }
 
 
+NOT_YET = {
+    "TimeoutError": "nothing answers yet",
+    "ConnectionRefusedError": "nothing listens yet",
+    "gaierror": "the name does not resolve yet",
+}
+
+
 def still_routing(report: dict[str, object] | None) -> bool:
     """The ping failed in a way a cluster still setting up its routes explains: a timeout, a
     refusal or a name that does not resolve yet. A certificate error, another runner's reply
@@ -400,7 +407,9 @@ def still_routing(report: dict[str, object] | None) -> bool:
     return control.get("reached") is not True and control.get("error") in ROUTING_ERRORS
 
 
-def check_control(report: dict[str, object], runner_id: str, *, asked_s: float) -> None:
+def check_control(
+    report: dict[str, object], runner_id: str, *, asked_s: float, silent: bool = False
+) -> None:
     """The service's ping: exit 3 when it could not reach this runner's control server, or
     reached another runner that holds the same token. asked_s: how long the runner asked
     again, said in the message for the errors it asks again about."""
@@ -412,7 +421,10 @@ def check_control(report: dict[str, object], runner_id: str, *, asked_s: float) 
         if error in ROUTING_ERRORS:
             parts = urlsplit(url)
             hint = HINTS[str(error)].format(host=parts.hostname or url, port=parts.port or "")
-            asked = f" after {asked_s:g} s of asking"
+            spent = f"{asked_s:.0f}" if asked_s >= 10 else f"{asked_s:.1f}"
+            asked = f" after {spent} s of asking"
+            if silent:
+                asked += " (then the service stopped answering the probe)"
         else:
             asked = ""
             hint = (

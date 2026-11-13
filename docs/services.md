@@ -145,7 +145,7 @@ The report's `control` object holds `reached`, `tls`, `error`, `detail`, `rtt_ms
 A runner reads `error`, never `tls`, and an older service that sends no `error` is read as having none.
 
 A new pod is not reachable at once: kube-proxy and the network plugin take a moment to route to it.
-When the ping fails with a timeout, a refused connection or a name that does not resolve, the runner probes again every second for up to 30 seconds from its first probe, and prints once `scrimmage: waiting for the service to reach the control server at` and the address.
+When the ping fails with a timeout, a refused connection or a name that does not resolve, the runner probes again every second for up to 30 seconds from its first probe, and prints once `scrimmage: waiting for the service to reach the control server at`, the address and what is missing, such as `(the name does not resolve yet)`.
 Only the probe is sent again.
 No setup request and no run is sent until a ping succeeds, and a run is never sent twice.
 A certificate that does not verify, a reply from another runner and an error answered by the control server stop the test at once, as does a ping that was never made because every control slot was busy.

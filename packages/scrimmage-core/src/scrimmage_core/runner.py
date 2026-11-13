@@ -352,6 +352,8 @@ class Runner:
         self.tools_seen: list[str] | None = None  # as the agent's process reported them
         self.service_warnings: list[str] = []  # what the probe found that does not stop the test
         self.service_notes: list[str] = []  # what the template check could not check
+        self.asked_s = 0.0  # how long the probe asked again while the ping failed
+        self.went_silent = False  # the service stopped answering the probe in that wait
         self.control_ping: dict[str, object] | None = None  # the service's ping, as it reported
         self.label_problems: list[str] = []
         self.stopped_by: str | None = None  # the reason a refusal stopped the whole test
@@ -839,18 +841,27 @@ class Runner:
         if not service_client.still_routing(probed.report):
             return probed
         control = cast(dict[str, object], (probed.report or {}).get("control") or {})
+        began = deadline - READY_S  # the first probe
+        yet = service_client.NOT_YET[str(control.get("error"))]
         print(
             f"scrimmage: waiting for the service to reach the control server at "
-            f"{control.get('url')}",
+            f"{control.get('url')} ({yet})",
             file=sys.stderr,
             flush=True,
         )
+        try:
+            return self.ask_again(probed, deadline)
+        finally:
+            self.asked_s = time.monotonic() - began
+
+    def ask_again(self, probed: service_client.Probed, deadline: float) -> service_client.Probed:
         while time.monotonic() < deadline:
             if self.cancelled or self.stop_flag:  # Ctrl-C or SIGTERM ends the wait
                 raise Interrupted(self.stop_flag[0] if self.stop_flag else "SIGINT")
             time.sleep(min(CONTROL_STEP_S, max(deadline - time.monotonic(), 0.0)))
             again = service_client.probe(self.config.agent, self.token)
             if again.report is None:  # the service stopped answering: keep what the ping found
+                self.went_silent = True
                 break
             probed = again
             if not service_client.still_routing(probed.report):
@@ -883,7 +894,9 @@ class Runner:
         problem = self.tools_problem(report)
         if problem is not None:
             raise service_client.Setup(2, problem)
-        service_client.check_control(report, self.server.runner_id, asked_s=READY_S)
+        service_client.check_control(
+            report, self.server.runner_id, asked_s=self.asked_s, silent=self.went_silent
+        )
         gap = probed.gap
         if gap is not None and abs(gap) >= service_client.CLOCK_STOP_S:
             raise service_client.Setup(3, service_client.clock_stop(gap))

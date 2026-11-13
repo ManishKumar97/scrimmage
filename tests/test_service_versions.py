@@ -12,6 +12,7 @@ import contextlib
 import http.client
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -506,7 +507,11 @@ def test_a_ping_that_fails_stops_the_test_with_exit_3_before_setup_naming_the_er
     nobody = f"http://{HOST}:{free_port()}"  # no control server listens there
     code, out = against(bench, control_url=nobody)
     assert code == 3, out
-    assert f"the service cannot reach the control server at {nobody} after 0.5 s of asking: " in out
+    assert re.search(
+        rf"the service cannot reach the control server at {re.escape(nobody)} "
+        r"after [0-9.]+ s of asking: ",
+        out,
+    )
     assert "Connection refused" in out
     sent_nothing(bench)
 

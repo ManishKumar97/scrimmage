@@ -257,7 +257,6 @@
         "control_ping": {
           "type": ["object", "null"],
           "description": "A service test only: what the service's signed ping to the control server found before the first run, as its startup report gave it. Present in every finished service test; a test that stops at the probe or the ping has none, and gives the reason in infra.",
-          "additionalProperties": false,
           "required": ["reached", "tls", "detail", "rtt_ms", "runner_id", "url"],
           "properties": {
             "reached": {"type": "boolean"},

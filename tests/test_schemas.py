@@ -279,3 +279,25 @@ def test_the_startup_reports_control_error_is_an_optional_addition() -> None:
     for error in ("TimeoutError", None):
         assert not list(check.iter_errors({**old, "error": error}))
     assert list(check.iter_errors({**old, "error": 7}))
+
+
+@pytest.mark.design("schema.startup_report_additive")
+def test_a_later_field_in_the_control_objects_fits_both_schemas() -> None:
+    """Neither schema closes the object, so a field added later does not fail this copy."""
+    startup = json.loads((SCHEMAS / "startup-report.v2.json").read_text())["$defs"]["control"]
+    cli_doc = json.loads((SCHEMAS / "cli.v1.json").read_text())
+    ping = cli_doc["$defs"]["test"]["properties"]["control_ping"]
+    found = {
+        "reached": True,
+        "tls": "none",
+        "error": None,
+        "detail": None,
+        "rtt_ms": 1.0,
+        "runner_id": None,
+        "url": "http://127.0.0.1:1",
+        "from_a_later_release": 1,
+    }
+    assert startup.get("additionalProperties") is not False
+    assert ping.get("additionalProperties") is not False
+    for control in (startup, ping):
+        assert not list(jsonschema.Draft202012Validator(control).iter_errors(found))

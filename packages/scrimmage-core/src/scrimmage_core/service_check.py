@@ -34,9 +34,14 @@ class Outcome:
     document: dict[str, object]
 
 
-def control_line(control: dict[str, object], runner_id: str) -> Line:
+def control_line(control: dict[str, object], runner: running.Runner) -> Line:
     try:
-        client.check_control({"control": control}, runner_id, asked_s=running.READY_S)
+        client.check_control(
+            {"control": control},
+            runner.server.runner_id,
+            asked_s=runner.asked_s,
+            silent=runner.went_silent,
+        )
     except client.Setup as setup:
         return Line("control", str(setup), INFRA_LEVEL)
     tls = control.get("tls")
@@ -100,7 +105,7 @@ def inspect(runner: running.Runner, probed: client.Probed, strict: bool) -> Outc
     else:
         lines.append(Line("tools", problem, MISTAKE_LEVEL))
     control = cast(dict[str, object], report.get("control") or {})
-    lines.append(control_line(control, runner.server.runner_id))
+    lines.append(control_line(control, runner))
     gap = probed.gap
     gap_line = Line("clock", "the service sent no time", WARN)
     if gap is not None:

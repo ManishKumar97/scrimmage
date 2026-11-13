@@ -7,6 +7,7 @@ https.
 """
 
 import contextlib
+import re
 import socket
 import threading
 import time
@@ -112,6 +113,12 @@ class Relay:
 
 def upstream_port(bench: Bench) -> int:
     return int(bench.control.rsplit(":", 1)[1])
+
+
+def asked_for(out: str, url: str) -> bool:
+    """The failure's own line, with the seconds the runner really asked for."""
+    pattern = rf"the service cannot reach the control server at {re.escape(url)} after [0-9.]+ s "
+    return re.search(pattern + "of asking: ", out) is not None
 
 
 def probes(forwarder: Forwarder) -> int:
@@ -228,6 +235,8 @@ def test_a_ping_refused_at_first_is_asked_again_until_it_is_reached(
     assert probes(watcher) > 2  # the probe was sent again while the port refused
     # A run is sent once: only the probe is asked again.
     assert sum(s.startswith("run-") for s in watcher.seen) == 1, watcher.seen
+    assert sum(s.startswith("setup-") for s in watcher.seen) == 1, watcher.seen
+    assert f"{relay.url} (nothing listens yet)" in out, out
 
 
 @pytest.mark.design("service.ping_retry")
@@ -240,9 +249,7 @@ def test_a_ping_that_times_out_for_the_whole_wait_names_a_dropping_policy(
     relay.open_in(0.0)
     code, out = against(bench, control_url=relay.url)
     assert code == 3, out
-    assert (
-        f"the service cannot reach the control server at {relay.url} after 6 s of asking: "
-    ) in out
+    assert asked_for(out, relay.url), out
     assert f"timed out{DROPS}{relay.port}" in out, out
     assert relay.accepted >= 2  # it was asked again
     assert line_count(out, WAITING + relay.url) == 1, out
@@ -260,8 +267,7 @@ def test_a_ping_refused_for_the_whole_wait_names_the_services_selector(
     bench.closers.append(watcher)
     code, out = bench.test(watcher.port)
     assert code == 3, out
-    prefix = f"the service cannot reach the control server at {nobody} after 1.5 s of asking: "
-    assert prefix in out and f"Connection refused{REFUSES}" in out, out
+    assert asked_for(out, nobody) and f"Connection refused{REFUSES}" in out, out
     assert probes(watcher) >= 3  # about every 0.2 s for 1.5 s
     sent_nothing(bench)
 
@@ -277,7 +283,7 @@ def test_a_control_name_that_does_not_resolve_names_the_service(
     service = bench.start(SCRIMMAGE_CONTROL_URL=url, SCRIMMAGE_CONTROL_CA=str(files.ca))
     code, out = bench.test(service.port)
     assert code == 3, out
-    assert f"the service cannot reach the control server at {url} after 1 s of asking: " in out
+    assert asked_for(out, url), out
     assert (
         "; the name no-such-name.invalid does not resolve where the service runs; check the "
         "host in SCRIMMAGE_CONTROL_URL and that the Service is in the service's namespace"
@@ -328,3 +334,44 @@ def test_no_run_is_sent_when_the_ping_never_succeeds(
         (bench.root / "scrimmage-runs").glob("*/*.jsonl")
     )
     sent_nothing(bench)
+
+
+@pytest.mark.design("service.ping_retry")
+def test_the_probes_wait_and_the_pings_wait_share_one_deadline(
+    bench: Bench, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The service's address listens 2 s late, and then its ping is refused: the two waits
+    are one READY_S counted from the first probe, not 2 s plus a fresh READY_S."""
+    monkeypatch.setattr(running, "READY_S", 4.0)
+    monkeypatch.setattr(running, "CONTROL_STEP_S", 0.2)
+    service = bench.start(SCRIMMAGE_CONTROL_URL=f"http://{HOST}:{free_port()}")
+    late = Relay(service.port)  # the runner's address: refused until it opens
+    bench.closers.append(late)
+    late.open_in(2.0)
+    began = time.monotonic()
+    code, out = bench.test(late.port)
+    spent = time.monotonic() - began
+    assert code == 3 and "Connection refused" in out, out
+    assert spent < running.READY_S + 1.0, spent  # a fresh wait for the ping would take 6 s
+    assert re.search(r"after (3\.[5-9]|4\.[0-9]) s of asking", out), out
+
+
+def test_a_service_that_stops_answering_during_the_wait_is_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(running, "CONTROL_STEP_S", 0.01)
+    failed = {"reached": False, "error": "ConnectionRefusedError", "detail": "x", "url": "u"}
+    first = service_client.Probed({"control": failed}, service_client.Reply())
+    silent = service_client.Probed(None, service_client.Reply(failed="reset"))
+    monkeypatch.setattr(service_client, "probe", lambda *_: silent)
+    made = a_service_runner(tmp_path, monkeypatch)
+    try:
+        found = made.control_reached(first, time.monotonic() + 30)
+    finally:
+        made.server.server.server_close()
+    assert found is first and made.went_silent
+    with pytest.raises(service_client.Setup) as stopped:
+        service_client.check_control(
+            {"control": failed}, "r" * 16, asked_s=made.asked_s, silent=made.went_silent
+        )
+    assert "(then the service stopped answering the probe)" in str(stopped.value)
