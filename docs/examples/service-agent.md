@@ -119,4 +119,10 @@ Before the first run, the runner checked that the service is gated with the same
 The `control server:` line counts what the runner sent, the setup request and the 6 runs, and the claims the service made for them; the two numbers match when every request reached a gated service.
 Each run then went to the service as its own request, under its own plan, while the service kept serving everything else.
 
+## In a container
+
+The same service runs in a container, with the runner still on the host.
+The control channel then runs over TLS, and the container runs as the token file's owner.
+[A service in a container](../services.md#a-service-in-a-container) has the Compose file, the commands and what crosses the network.
+
 More: [An agent inside a web service](../services.md), [Configuration](../configuration.md), [Safety](../safety.md).

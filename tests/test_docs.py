@@ -624,6 +624,33 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
     assert "service-agent.md" in page("examples/index.md")
 
 
+@pytest.mark.design("docs.container_shape")
+def test_the_container_shape_tls_and_check_service_are_documented() -> None:
+    guide = page("services.md")
+    compose = (Path(__file__).parent / "compose" / "service" / "compose.yaml").read_text()
+    assert compose.strip() in guide  # the page shows the file the Docker tests run
+    for words in (
+        "### With Docker Compose",
+        "SCRIMMAGE_UID",
+        "`user:`",
+        "create_host_path: false",
+        "host.docker.internal:host-gateway",
+        "docker build --network none",
+        "docker compose port agent 8765",
+        "scrimmage check scrimmage.toml --service",
+        "docker compose down -v",
+        'control = "0.0.0.0:8766"',
+        "CAP_NET_RAW",
+        "SCRIMMAGE_CONTROL_CA",
+    ):
+        assert words in guide, words
+    assert "## A service in a container" in guide
+    assert "[A service in a container](../services.md#a-service-in-a-container)" in page(
+        "examples/service-agent.md"
+    )
+    assert "`control_tls`" in page("configuration.md") and "scrimmage cert" in page("cli.md")
+
+
 @pytest.mark.design("docs.faults_judged")
 def test_no_documented_fault_fires_on_every_call_with_nothing_to_judge_it() -> None:
     """A fault that always fires needs its own expect or forbid, or a when; as the reader of

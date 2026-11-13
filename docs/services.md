@@ -197,6 +197,85 @@ For that case the runner listens on an address of its host that the container ca
    The token file is a plain file, mode `600`, owned by the process that reads it.
    Run the container as the file's owner, such as with `user: "1000:1000"` in Docker Compose, or the service stops and names both user ids.
 
+### With Docker Compose
+
+This repository tests the example service this way, and a service of yours can follow it.
+Compose is used for test environments here.
+The file below runs the service in one container, with two workers, and the runner on the host.
+
+```yaml title="compose.yaml"
+# The acme order bot as a service, with the runner on the host. See the services page of the docs.
+# Set before `docker compose up`:
+#   SCRIMMAGE_UID, SCRIMMAGE_GID   the token file owner's ids, from `id -u` and `id -g`
+#   SCRIMMAGE_TOKEN_FILE           the token file, mode 600
+#   SCRIMMAGE_CA_FILE              ca.pem from `scrimmage cert`
+#   SCRIMMAGE_CONTROL_PORT         the port of `control` in scrimmage.toml
+services:
+  agent:
+    image: ${SCRIMMAGE_IMAGE:-scrimmage-acme-service}
+    # The token file must be read by its owner, so the container runs as that user.
+    user: "${SCRIMMAGE_UID:?set SCRIMMAGE_UID to the token file owner's uid, $(id -u)}:${SCRIMMAGE_GID:?set SCRIMMAGE_GID to $(id -g)}"
+    ports:
+      - "127.0.0.1::8765"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      SCRIMMAGE_SERVICE: "1"
+      SCRIMMAGE_TOKEN_FILE: /run/scrimmage/token
+      SCRIMMAGE_CONTROL_URL: https://host.docker.internal:${SCRIMMAGE_CONTROL_PORT:?set SCRIMMAGE_CONTROL_PORT to the port of control in scrimmage.toml}
+      SCRIMMAGE_CONTROL_CA: /run/scrimmage/ca.pem
+      SCRIMMAGE_TOOLS: acme.tools:get_order,acme.tools:check_inventory,acme.tools:refund_order,acme.tools:get_stock
+      SCRIMMAGE_ALLOW_IMPORTS: acme.
+    volumes:
+      - scratch:/tmp  # the one place the app may write
+      - type: bind
+        source: ${SCRIMMAGE_TOKEN_FILE:?set SCRIMMAGE_TOKEN_FILE}
+        target: /run/scrimmage/token
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SCRIMMAGE_CA_FILE:?set SCRIMMAGE_CA_FILE}
+        target: /run/scrimmage/ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
+    command: ["scrimmage-run", "uvicorn", "acme.service:app", "--host", "0.0.0.0", "--port", "8765", "--workers", "2"]
+
+volumes:
+  scratch: {}
+```
+
+Four things in it matter:
+
+- `user:` runs the container as the token file's owner.
+  Compose refuses to start when `SCRIMMAGE_UID` or `SCRIMMAGE_GID` is unset, because bash does not export `UID`, so Scrimmage's own two variables carry the ids.
+- The token file and `ca.pem` are read-only bind mounts, and `create_host_path: false` makes a missing file an error, not a folder Docker made.
+  Neither file is in the image.
+- `SCRIMMAGE_TOKEN_FILE` and `SCRIMMAGE_CONTROL_CA` name the paths inside the container, never the host's.
+- `host.docker.internal:host-gateway` is Docker's own name for the host's bridge address, `172.17.0.1` on a default install.
+  `docker network inspect bridge` shows yours; give that address to `scrimmage cert --ip` and to `control`.
+
+The image holds the app and the Scrimmage SDK and nothing else of yours.
+Build it from a folder that holds only a Dockerfile, the wheels and the app, with `docker build --network none`, so that nothing is fetched at build time and no `.env`, key or token file can enter the image.
+
+Then, from the folder of your `scrimmage.toml`:
+
+```bash
+scrimmage cert --ip 172.17.0.1 --name host.docker.internal --out .scrimmage-cert
+export SCRIMMAGE_UID=$(id -u) SCRIMMAGE_GID=$(id -g) SCRIMMAGE_CONTROL_PORT=8766
+export SCRIMMAGE_TOKEN_FILE=$PWD/.scrimmage-token SCRIMMAGE_CA_FILE=$PWD/.scrimmage-cert/ca.pem
+docker compose up -d
+docker compose port agent 8765        # the host port Docker chose, such as 127.0.0.1:49153
+scrimmage check scrimmage.toml --service
+scrimmage test scrimmage.toml
+docker compose down -v
+```
+
+Put the host port from `docker compose port` in `service`, and the same `SCRIMMAGE_CONTROL_PORT` in `control`.
+`scrimmage check --service` asks the service to ping the runner over TLS, so a wrong authority, a wrong address or a wrong user shows there, before any run.
+The runner refuses `control = "0.0.0.0:8766"`, an address that listens on every interface: it must be one address of the host.
+
 The SDK trusts the one authority in `SCRIMMAGE_CONTROL_CA` and nothing else; it never loads the system's certificate store.
 It speaks TLS 1.3 only, checks the host name or address in `SCRIMMAGE_CONTROL_URL` against the certificate, and applies strict chain rules.
 The authority's key is discarded once the server certificate is signed, and the authority is limited to the names and addresses you gave and their subdomains.
