@@ -670,8 +670,8 @@ class Runner:
         deadline = time.monotonic() + READY_S
 
         def starting(found: service_client.Reply) -> bool:
-            """No reply yet: refused, timed out, or taken and cut by a published port. Any
-            HTTP reply, even half of one, ends the wait, so a reset after it is final."""
+            """No reply yet: refused, timed out, or taken and cut by a published port. A reply
+            whose headers were read ends the wait, so a reset after it is final."""
             return service_client.not_listening(found) or service_client.accepted_then_cut(found)
 
         if starting(reply):
@@ -707,7 +707,7 @@ class Runner:
         if reply.failed is not None or reply.timed_out:
             hint = (
                 "; a container's published port can accept a connection before the app "
-                f"inside listens, and this one was still reset after {READY_S:g} s"
+                f"inside listens, and this one was still reset or closed with no reply after {READY_S:g} s"
                 if starting(reply)
                 else ""
             )

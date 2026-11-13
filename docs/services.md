@@ -90,7 +90,7 @@ The runner checks the service twice before it sends a run.
 
 **The probe.**
 It sends one signed request, marked as a probe, to the service's address.
-While nothing listens at that address, or a connection is taken and reset with no reply, it asks again for up to 30 seconds, so a script can start the service in the background and run the test at once.
+While nothing listens at that address, or a connection is taken and then reset or closed with no reply, it asks again for up to 30 seconds, so a script can start the service in the background and run the test at once.
 If nothing listens by then, the test stops with exit 3 and says so.
 Scrimmage in the service answers with a report signed with the same token: its versions, its gates and the tools its gates swap.
 The report's shape is the [startup report schema](schemas.md).
@@ -276,7 +276,8 @@ docker compose down -v
 ```
 
 Run `scrimmage check --service` or `scrimmage test` right after `up -d`; no wait is needed.
-Docker's published port takes a connection before the app inside listens and resets it, and the runner asks again for up to 30 seconds.
+Docker's published port takes a connection before the app inside listens and resets or closes it, and the runner asks again for up to 30 seconds.
+A wrong address that accepts a connection and then closes it costs the full 30 second wait before the test stops with exit 3.
 Put the host port from `docker compose port` in `service`, and the same `SCRIMMAGE_CONTROL_PORT` in `control`.
 `scrimmage check --service` asks the service to ping the runner over TLS, so a wrong authority, a wrong address or a wrong user shows there, before any run.
 The runner refuses `control = "0.0.0.0:8766"`, an address that listens on every interface: it must be one address of the host.

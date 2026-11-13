@@ -632,8 +632,11 @@ class EagerPort:
     `reset_for` seconds it takes each connection and resets it (SO_LINGER 0), then it pipes
     connections to `behind`. half: it replies with the start of an HTTP reply and resets."""
 
-    def __init__(self, behind: int | None, reset_for: float, *, half: bool = False) -> None:
-        self.behind, self.half = behind, half
+    def __init__(
+        self, behind: int | None, reset_for: float, *, half: bool = False, cut_runs: bool = False
+    ) -> None:
+        self.behind, self.half, self.cut_runs = behind, half, cut_runs
+        self.cut = 0  # run requests it reset (cut_runs: it pipes the probe and setup only)
         self.opens = time.monotonic() + reset_for
         self.accepted = 0
         self.stopped = False
@@ -651,6 +654,11 @@ class EagerPort:
             except OSError:
                 return
             self.accepted += 1
+            if self.cut_runs and self.behind is not None and self.is_run(client):
+                self.cut += 1
+                client.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                client.close()
+                continue
             if self.behind is None or time.monotonic() < self.opens:
                 if self.half:
                     client.recv(65536)
@@ -659,6 +667,18 @@ class EagerPort:
                 client.close()
                 continue
             threading.Thread(target=self.pipe, args=(client,), daemon=True).start()
+
+    @staticmethod
+    def is_run(client: socket.socket) -> bool:
+        """Whether the request on this connection is a run's own, read without consuming it."""
+        client.settimeout(5)
+        try:
+            head = client.recv(65536, socket.MSG_PEEK)
+        except OSError:
+            return False
+        finally:
+            client.settimeout(None)
+        return b"x-scrimmage-run: run-" in head.lower()
 
     def pipe(self, client: socket.socket) -> None:
         with client, socket.create_connection(("127.0.0.1", self.behind or 0)) as server:
@@ -969,6 +989,21 @@ def test_a_reset_after_part_of_a_reply_is_final_at_once(bench: Bench) -> None:
     code, out = bench.test(eager.port)
     assert code == 3 and "took the probe's connection but gave no reply" in out, out
     assert "published port" not in out and eager.accepted == 1
+
+
+@pytest.mark.design("service.waits_to_listen")
+def test_a_run_request_that_is_reset_is_not_sent_again(bench: Bench) -> None:
+    """Only the probe is asked again. A run's POST may reach a live write tool, so a reset
+    on it is one infrastructure failure, never a second request."""
+    service = bench.start()
+    eager = EagerPort(service.port, reset_for=0, cut_runs=True)
+    bench.closers.append(eager)
+    code, out = bench.test(eager.port, json_out=True)
+    report = json.loads(out)
+    assert eager.cut == 1, out  # one run connection, reset, and no retry of it
+    assert code == 3 and report["status"] == "infra", out
+    details = report["rows"][0]["run_details"]
+    assert [d["outcome"] for d in details] == ["infrastructure error"], out
 
 
 @pytest.mark.design("service.probe_proves_the_gate")
