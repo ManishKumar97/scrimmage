@@ -253,7 +253,9 @@ def test_every_command_flag_exit_code_and_json_field_is_documented() -> None:
         assert "a signal before that" in text and "always equals the document's `exit`" in text
     assert "once scrimmage has started" in output.lower()
     assert "Once Scrimmage has started" in cli_page
-    assert "`2.0`" in page("configuration.md") and "rejects `${`" in page("configuration.md")
+    assert "`2.0`" in page("configuration.md") and "`$${` is a literal `${`" in page(
+        "configuration.md"
+    )
     assert "[JSON output](json-output.md)" in page("index.md")
     assert "#:schema ./scrimmage.schema.json" in page("configuration.md")
     assert "## Checking the file in your editor" in page("configuration.md")
@@ -536,3 +538,106 @@ def test_the_mcp_server_page_says_what_it_guards_and_what_it_does_not() -> None:
     for name in ("install.md", "cli.md", "safety.md"):
         assert "mcp-server.md" in page(name), name
     assert "## scrimmage-mcp" in page("cli.md")
+
+
+@pytest.mark.design("docs.services")
+def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> None:
+    from scrimmage_core import asgi_gate
+
+    guide = page("services.md")
+    assert "An agent inside a web service: services.md" in (DOCS.parent / "mkdocs.yml").read_text()
+    for word in ("SCRIMMAGE_SERVICE", "SCRIMMAGE_TOKEN_FILE", "SCRIMMAGE_CONTROL_URL"):
+        assert f"| `{word}` |" in guide, word
+    for word in ("SCRIMMAGE_TOOLS", "SCRIMMAGE_ALLOW_IMPORTS", "scrimmage-run uvicorn"):
+        assert word in guide, word
+    for key in ("service", *config.SERVICE_KEYS, "answer", "parallel"):
+        assert f"| `{key}` |" in guide, key
+    for form in ("`{question}`", "`{session}`", "`${TEST_TOKEN}`", "exit 2"):
+        assert form in guide or form.strip("`") in guide, form
+    # Every code the gate can answer 503 with has its row, and nothing else has one.
+    codes = set(re.findall(r'Unavailable\("([a-z-]+)"\)', Path(asgi_gate.__file__).read_text()))
+    codes |= {"no-such-run", "claimed"}
+    rows = set(
+        re.findall(r"^\| `([a-z-]+)` \| ", guide.split("## When the gate answers 503")[1], re.M)
+    )
+    assert rows == codes, rows ^ codes
+    for words in (
+        "## Before the first run",
+        "**The probe.**",
+        "**The setup request.**",
+        "## Workers",
+        "## What is not covered",
+        "rising toward 80 ms",
+        "record_wait_s",
+    ):
+        assert words in guide, words
+    from scrimmage_core import runner as running
+
+    assert f"it asks again for up to {running.READY_S:g} seconds" in guide
+    assert "--loop asyncio" in guide and "process:<command>" in guide
+    limits = page("limits.md")
+    assert "**Three agent shapes.**" in limits and "Web services come later" not in limits
+    for limit in (
+        "**A service run is stricter than a script about processes.**",
+        "**`process:sh` lets any shell command through.**",
+        "**A process pool's `close()`, `terminate()` or `shutdown()` inside a run is refused.**",
+        "**Subinterpreters are refused in a run.**",
+        "**Ray and Dask are not covered.**",
+        "**`--loop asyncio` on Python 3.11.**",
+        "**One runner per service at a time.**",
+        "**Work outside any request has a cost while a test runs.**",
+        "**The setup request lists only what it saw.**",
+        "**A lazy worker started inside a run.**",
+        "**The Starlette gate alone lets an outer middleware see the run header.**",
+        "**hypercorn, `--http zttp` and `--http2` are not covered.**",
+        "**A value under 8 characters is not removed from the records.**",
+        "**Stopping the service mid-run.**",
+        "**A long plain request keeps the threads it started plain until it ends.**",
+        "**gunicorn is not covered, with `UvicornWorker` either.**",
+        "**A service row's runs go one after another.**",
+        "**A call `background_real` lets through is decided once, with what it runs inside.**",
+        "**Other ways to another process are not gated.**",
+        "**Signals are not gated.**",
+        "**A start made below multiprocessing's own calls is not seen before Python 3.14.**",
+    ):
+        assert limit in limits, limit
+    safety = page("safety.md")
+    assert '"process:kubectl"' in safety and "`kubectl delete`" in safety
+    assert "There is no matching on arguments" in safety
+    for point in (
+        "`JoinableQueue`",
+        "`put_nowait`",
+        "`send_bytes`",
+        "`InterpreterPoolExecutor.submit`",
+    ):
+        assert point in safety, point
+    assert "every multiprocessing send" not in safety + limits
+    assert "resource tracker" in safety and "never serves starts no tracker" in safety
+    security = page("security.md")
+    assert "## A web service's token and run header" in security and "`0600`" in security
+    # The threat model's scope: public APIs in, rewrites of private internals out.
+    assert "## Who Scrimmage defends against" in security
+    assert "rewrites the private parts of Python's objects or of Scrimmage's own" in security
+    assert "out of scope" in page("limits.md")
+    assert "replayed once to each other worker within 60 seconds" in security
+    assert "[An agent inside a web service](services.md)" in page("configuration.md")
+    assert "service-agent.md" in page("examples/index.md")
+
+
+@pytest.mark.design("docs.faults_judged")
+def test_no_documented_fault_fires_on_every_call_with_nothing_to_judge_it() -> None:
+    """A fault that always fires needs its own expect or forbid, or a when; as the reader of
+    the file refuses one without, no page may show one, run or not."""
+    found = 0
+    for name in (str(p.relative_to(DOCS)) for p in doc_pages(DOCS)):
+        for block in re.findall(r"```(?:toml|diff)[^\n]*\n(.*?)```", page(name), re.S):
+            parts = re.split(r"(?m)^[+ ]?(\[\[?[^\]\n]+\]\]?)\s*$", block)
+            for header, body in zip(parts[1::2], parts[2::2], strict=True):
+                if header.strip("+ ") != "[[test.fault]]":
+                    continue
+                found += 1
+                keys = set(re.findall(r"(?m)^[+ ]?(\w+)\s*=", body))
+                do = re.search(r'(?m)^[+ ]?do\s*=\s*"(\w+)', body)
+                changes = do is not None and do.group(1) in ("append", "replace")
+                assert changes or keys & {"expect", "forbid", "when"}, (name, body)
+    assert found >= 10

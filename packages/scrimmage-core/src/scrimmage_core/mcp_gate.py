@@ -25,7 +25,8 @@ from scrimmage_core.decide import Call
 from scrimmage_core.http_gate import MCP_TRANSPORT, endpoint_of, params, refuse
 from scrimmage_core.process_gate import EXEMPT
 from scrimmage_core.redact import redact
-from scrimmage_core.state import BlobSink, RunState, Step, blob, current
+from scrimmage_core.state import BlobSink, ProcessState, RunState, Step, blob, current
+from scrimmage_core.state import carried as carried_var
 
 SESSION = "mcp.client.session"
 TRANSPORT = "mcp.client.streamable_http"
@@ -64,16 +65,22 @@ PASSES = (
 TRACED = ("resources/read", "prompts/get", "completion/complete", "resources/subscribe")
 # The real call in flight here. A client that proxies, such as FastMCP's for several servers,
 # makes a second MCP call inside the first, which the gate decides by itself.
-FORWARDING: ContextVar[Step | None] = ContextVar("scrimmage_mcp_forwarding", default=None)
+FORWARDING: ContextVar[Step | None] = carried_var(
+    ContextVar("scrimmage_mcp_forwarding", default=None)
+)
 # The functions the transport opens a web request with, and where each takes the address.
 OPENERS = {"stream_within_origin": 2, "sse_within_origin": 1}
 
 
 class Gate:
-    """What this process has learned about its MCP servers."""
+    """What this process has learned about its MCP servers. It holds no run: a tools/list
+    made at startup, before any run, is learned for every later run."""
 
-    def __init__(self, run: RunState, sender: BlobSink | None, stop: Callable[[str], None]) -> None:
-        self.run = run
+    def __init__(
+        self, owner: ProcessState | RunState, sender: BlobSink | None, stop: Callable[[str], None]
+    ) -> None:
+        # A run's own process, when a run is given: a function or a script has one of each.
+        self.process = owner.process if isinstance(owner, RunState) else owner
         self.sender = sender
         self.stop = stop  # ends the program: a library that cannot be gated
         self.servers: dict[str, set[str]] = {}  # tool -> the labels that have it
@@ -83,13 +90,15 @@ class Gate:
         self.schemas: dict[str, dict[str, Any]] = {}  # label -> that output schema
         self.read_only: set[str] = set()  # labels the server marks as read-only
 
-    def learn(self, server: str | None, reply: Any) -> None:
-        """Read one tools/list reply. A tool it names is one this gate sees."""
+    def learn(self, server: str | None, reply: Any, run: RunState | None = None) -> None:
+        """Read one tools/list reply, with or without a run. A tool it names is one this
+        gate sees, in the process, so every run sees it."""
+        process = self.process if run is None else run.process
         for tool in reply.model_dump(by_alias=True, mode="json", exclude_none=True)["tools"]:
             name = tool["name"]
             label = call_for(server, name).label
             self.note(name, label)
-            self.run.adapted.add(name)
+            process.adapted.add(name)
             self.listed.add(label)
             if "outputSchema" in tool:
                 self.shaped.add(label)
@@ -104,9 +113,9 @@ class Gate:
         self.servers.setdefault(tool, set()).add(label)
         self.tools.setdefault(label, set()).add(tool)
 
-    def ambiguous(self, call: Call) -> str | None:
+    def ambiguous(self, call: Call, run: RunState) -> str | None:
         """Why a label the plan uses could mean two things, if it could."""
-        plan = self.run.plan
+        plan = run.plan
         named = [*plan.real, *(entry.call for entry in (*plan.mocks, *plan.faults))]
         labels = self.servers.get(call.name, set())
         if call.short in named and len(labels) > 1:
@@ -187,12 +196,11 @@ def broken(gate: Gate) -> None:
         f"with {tested}, so the program is stopped, even if it never calls an MCP tool. "
         "Install mcp 2.x in the test environment, or remove mcp from it"
     )
-    gate.run.notice("structure", "mcp", message)
-    gate.stop(message)
+    gate.process.structure("mcp", message, gate.stop)
 
 
-def install(run: RunState, sender: BlobSink | None, stop: Callable[[str], None]) -> None:
-    gate = Gate(run, sender, stop)
+def install(process: ProcessState, sender: BlobSink | None, stop: Callable[[str], None]) -> None:
+    gate = Gate(process, sender, stop)
     hooks.on_import(SESSION, lambda module: patch(module, gate))
     hooks.on_import(TRANSPORT, lambda module: patch_transport(module, gate))
     hooks.on_import(STDIO, patch_stdio)
@@ -217,7 +225,7 @@ def patch(module: ModuleType, gate: Gate) -> None:
     if not gatable(module):
         broken(gate)
         return
-    gate.run.newer_version("mcp", version(), TESTED)
+    gate.process.newer_version("mcp", version(), TESTED)
     send = module.ClientSession.send_request
     if getattr(send, GATED, False):
         return
@@ -225,18 +233,22 @@ def patch(module: ModuleType, gate: Gate) -> None:
     async def send_gate(self: Any, request: Any, result_type: Any, *args: Any, **kw: Any) -> Any:
         run = current()
         if run is None:
-            return await send(self, request, result_type, *args, **kw)
+            reply = await send(self, request, result_type, *args, **kw)
+            # A service lists its tools at startup, with no run; every run must see them.
+            if getattr(request, "method", None) == "tools/list":
+                gate.learn(server_of(self), reply)
+            return reply
         data = request.model_dump(by_alias=True, mode="json", exclude_none=True)
         method = data["method"]
         server = server_of(self)
         if method in TRACED:
             step = run.passed(call_for(server, method))
-            step.extra["args"] = record(gate, data.get("params", {}))
+            step.extra["args"] = record(gate, run, data.get("params", {}))
             return await carried(gate, run, step, send(self, request, result_type, *args, **kw))
         if method in PASSES:
             reply = await send(self, request, result_type, *args, **kw)
             if method == "tools/list":
-                gate.learn(server, reply)
+                gate.learn(server, reply, run)
             return reply
         fields = data.get("params", {})
         tool_call = method == "tools/call"
@@ -318,10 +330,10 @@ def decided(gate: Gate, run: RunState, call: Call, arguments: object) -> Step:
     forwarding = FORWARDING.get()
     if forwarding is not None:  # its real says only that it was passed on, so the line says so
         forwarding.extra["forwarded_to"] = call.label
-    step.extra["args"] = record(gate, arguments)
+    step.extra["args"] = record(gate, run, arguments)
     if step.decision.action == "refused":
         refuse(run, step, read_only_note(gate, call))
-    why = gate.ambiguous(call)
+    why = gate.ambiguous(call, run)
     if why is not None:
         run.refuse(step, "ambiguous_label")
         refuse(run, step, why)
@@ -336,9 +348,10 @@ def read_only_note(gate: Gate, call: Call) -> str:
     )
 
 
-def record(gate: Gate, value: object) -> dict[str, object]:
+def record(gate: Gate, run: RunState, value: object) -> dict[str, object]:
     """Arguments and results go through blob, which removes secrets."""
-    return blob(json.dumps(value, default=repr, sort_keys=True).encode(), gate.sender)
+    sink = run.blobs if run.blobs is not None else gate.sender  # the run's own side folder
+    return blob(json.dumps(value, default=repr, sort_keys=True).encode(), sink, scrub=run.secrets)
 
 
 @dataclass(frozen=True)
@@ -367,7 +380,7 @@ async def carried(
 
     try:
         reply = await sent
-        step.extra["result"] = record(gate, wire_form(reply))
+        step.extra["result"] = record(gate, run, wire_form(reply))
     except BaseException as exc:
         run.finish(step, error=exc)
         raise
@@ -536,7 +549,7 @@ async def carry(
     if step.decision.under == "mock":
         raw = await mock_reply(gate, run, step, session)
         shown, done = change(raw)
-        step.extra["result"] = record(gate, parsed_form(result_type, raw))
+        step.extra["result"] = record(gate, run, parsed_form(result_type, raw))
         try:
             reply = await send(stand_in(session, shown), request, result_type, *args, **kw)
         except BaseException as exc:
@@ -553,7 +566,7 @@ async def carry(
         finally:
             FORWARDING.reset(token)
         done = changing.result
-        step.extra["result"] = record(gate, parsed_form(result_type, changing.original))
+        step.extra["result"] = record(gate, run, parsed_form(result_type, changing.original))
     if isinstance(done, changes.Changed):
         run.changed(step, done)
         run.finish(step)

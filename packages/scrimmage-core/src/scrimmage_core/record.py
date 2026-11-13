@@ -43,10 +43,9 @@ REFUSED, RAISED, STATUS, DIFFERS, NONDETERMINISTIC = (
     "differs",
     "nondeterministic",
 )
-UNSAVABLE, NULL, PLACEHOLDER, TOO_LARGE, BINARY = (
+UNSAVABLE, NULL, TOO_LARGE, BINARY = (
     "unsavable",
     "null",
-    "placeholder",
     "too_large",
     "binary",
 )
@@ -56,6 +55,9 @@ INCOMPLETE_REPLY, SECRET_CHANGED_SHAPE, MODEL_INSIDE, NOT_FINISHED = (
     "model_inside",
     "not_finished",
 )
+# Codes an earlier version gave and this one never does. The v1 schema keeps them: a value
+# is removed only with a new version. A recorded ${ is now written as the literal $${.
+RETIRED_CODES = ("placeholder",)
 MANUAL_CODES = (
     REFUSED,
     RAISED,
@@ -64,7 +66,6 @@ MANUAL_CODES = (
     NONDETERMINISTIC,
     UNSAVABLE,
     NULL,
-    PLACEHOLDER,
     TOO_LARGE,
     BINARY,
     INCOMPLETE_REPLY,
@@ -86,12 +87,15 @@ SIBLING_CODES = (
     RAISED,
     STATUS,
     NULL,
-    PLACEHOLDER,
     TOO_LARGE,
     UNSAVABLE,
     SECRET_CHANGED_SHAPE,
 )
 HEADER_START = "# Written by scrimmage record from "
+SERVICE_NOT_RECORDED = (
+    "scrimmage record does not work with an agent inside a web service in this version; "
+    "record the same agent as a function or a command, then copy its mocks; nothing was run"
+)
 CUSTOMER_DATA = (
     "the mocks hold replies from real systems, which can hold customer data; "
     "check them before you commit them"
@@ -254,15 +258,13 @@ def data_status(status: int) -> bool:
     return 200 <= status < 300 or (400 <= status < 500 and status not in NOT_DATA)
 
 
-def holds(value: object, wanted: object) -> bool:
-    """Whether a value holds None (wanted None) or, in any text, ${ (wanted "${")."""
+def holds_none(value: object) -> bool:
+    """Whether a value holds None anywhere, which TOML has no form for."""
     if isinstance(value, dict):
-        return any(holds(item, wanted) for item in cast(dict[str, object], value).values())
+        return any(holds_none(item) for item in cast(dict[str, object], value).values())
     if isinstance(value, list):
-        return any(holds(item, wanted) for item in cast(list[object], value))
-    if wanted is None:
-        return value is None
-    return isinstance(value, str) and "${" in value
+        return any(holds_none(item) for item in cast(list[object], value))
+    return value is None
 
 
 def toml_size(value: object) -> int:
@@ -270,13 +272,12 @@ def toml_size(value: object) -> int:
 
 
 def value_problem(name: str, value: object) -> Listed | None:
-    """Why a value cannot sit in a mock: what TOML has no form for, or what the file rejects."""
-    if name == "args" and holds(value, None):
+    """Why a value cannot sit in a mock: what TOML has no form for, or what is too big. A ${
+    is written as the literal $${, so it reads back as the value it was."""
+    if name == "args" and holds_none(value):
         return Listed(UNSAVABLE, "its arguments hold None, which TOML cannot write")
-    if holds(value, None):
+    if holds_none(value):
         return Listed(NULL, f"{name} holds None, which TOML cannot write")
-    if holds(value, "${"):
-        return Listed(PLACEHOLDER, f"{name} holds ${{, which the file rejects")
     size = toml_size(value)
     if size > CAP:
         return Listed(TOO_LARGE, f"{name} is {size} bytes as TOML, over the {CAP} cap")
@@ -489,8 +490,6 @@ def toml_can_hold(value: object) -> bool:
 
 def mock_outcome(saved: Saved) -> Outcome:
     """The mock, if the file reader takes it: a bad path or a key it rejects is listed."""
-    if holds(saved.fields, "${"):
-        return Listed(PLACEHOLDER, "the mock holds ${, which the file rejects")
     try:
         settings.read_mock(saved.fields, "the mock")
     except ConfigError as exc:
@@ -1054,6 +1053,8 @@ def prepare(
     config: settings.Config, names: list[str], refresh: list[str], runs: str = "1"
 ) -> tuple[Plan | None, list[str]]:
     """The baselines to run, or the problems with the flags, before any run."""
+    if config.agent.service:
+        return None, [SERVICE_NOT_RECORDED]
     known = [test.name for test in config.tests]
     problems = [
         f"--test {name!r} names no test in this file; the tests are {', '.join(known)}"
@@ -1579,10 +1580,13 @@ def with_header(lines: list[str], name: str, when: str) -> list[str]:
 
 
 def read_back(team_text: str, new_text: str, plan: Plan, records: list[TestRecord]) -> str | None:
-    """The new file, read by tomllib, must be the team's file plus exactly these mocks."""
-    team = tomllib.loads(team_text)
+    """The new file, read by tomllib, must be the team's file plus exactly these mocks.
+
+    Both are read literally: $${ is ${, and no ${NAME} is filled in, so the check never
+    needs the team's environment, and a written mock reads back as the value recorded."""
+    team = cast(dict[str, object], settings.literal(tomllib.loads(team_text)))
     try:
-        found = tomllib.loads(new_text)
+        found = settings.literal(tomllib.loads(new_text))
     except tomllib.TOMLDecodeError:
         return "the file's layout cannot take the mocks, such as mocks written as an inline array"
     index_of = {test.name: i for i, test in enumerate(plan.full.tests)}

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import io
 import json
 import math
 import re
@@ -17,11 +18,11 @@ import sys
 import threading
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, TextIO
+from typing import TYPE_CHECKING, TextIO, cast
 
 from scrimmage_core import compare as comparing
 from scrimmage_core import config as settings
-from scrimmage_core import entry
+from scrimmage_core import entry, redact
 from scrimmage_core import plan as planner
 from scrimmage_core import results as results_file
 from scrimmage_core.errors import ConfigError
@@ -401,6 +402,7 @@ def run_test(
     path: Path, found: Found | None, compare: Path | None = None, cap: str | None = None
 ) -> int:
     from scrimmage_core import runner as running  # the heavy import waits until a test runs
+    from scrimmage_core import service_client
 
     try:
         config, problems = read(path)
@@ -429,8 +431,20 @@ def run_test(
         results = runner.run_all()
     except running.Interrupted as exc:
         stopped = f"stopped by {exc}; every run was stopped"
+    except service_client.Setup as setup:
+        # A service that is not ready: exit 2 for a mistake to fix, 3 when it is not gated.
+        if runner is not None:
+            runner.server.server.server_close()
+        told = redact.remove_values(str(setup), config.scrub)[0]
+        if found is None:
+            print(f"scrimmage: {told}", file=sys.stderr)
+            return setup.code
+        found.messages.append((MISTAKES if setup.code == MISTAKE else INFRA_ERRORS, told))
+        return setup.code
     except Exception as exc:  # the runner's own failure is never a result
-        stopped = f"infrastructure error in the runner: {exc!r}"
+        # A failure to start a run can quote its arguments, which can hold a value.
+        failed = redact.remove_values(repr(exc), config.scrub)[0]
+        stopped = f"infrastructure error in the runner: {failed}"
     finally:
         if runner is not None:
             runner.server.server.server_close()
@@ -446,7 +460,13 @@ def run_test(
     assert runner is not None
     report = running.build_report(config, results, runner.folder, runner)
     stop_point()  # a signal that came while the report was built: no file is written
-    fields = {**running.report_json(report), "compare": None}
+    # The values ${NAME} filled in never reach the result file, the document or the report.
+    for said in (report.above, report.messages):
+        said[:] = [(kind, redact.remove_values(text, config.scrub)[0]) for kind, text in said]
+    fields = cast(
+        dict[str, object],
+        redact.scrubbed({**running.report_json(report), "compare": None}, config.scrub),
+    )
     version = scrimmage_version()
     doc = document("test", report.code, str(path), report.every_message, version, **fields)
     # A test the budget or a bad label stopped has rows with fewer runs than planned: it is not
@@ -456,7 +476,9 @@ def run_test(
     if found is None:
         if warning is not None:
             print(f"scrimmage: warning: {warning}", file=sys.stderr)
-        code = running.print_report(report, sys.stdout)
+        printed = io.StringIO()
+        code = running.print_report(report, printed)
+        sys.stdout.write(redact.remove_values(printed.getvalue(), config.scrub)[0])
         if compare is not None:
             say_comparison(earlier, doc, compare, finished, None)
         return code
@@ -583,7 +605,8 @@ def run_record(
     except running.Interrupted as exc:
         stopped = f"stopped by {exc}; every run was stopped, and nothing was written"
     except Exception as exc:  # the runner's own failure is never a result
-        stopped = f"infrastructure error in the runner: {exc!r}"
+        failed = redact.remove_values(repr(exc), plan.config.scrub)[0]
+        stopped = f"infrastructure error in the runner: {failed}"
     finally:
         if runner is not None:
             runner.server.server.server_close()
@@ -603,7 +626,8 @@ def run_record(
         print("scrimmage: stopped by SIGINT while the file was written", file=sys.stderr)
         return INFRA
     except Exception as exc:  # WriterBug or any other failure while writing: Scrimmage's own
-        message = f"infrastructure error while writing the file, nothing was written: {exc!r}"
+        failed = redact.remove_values(repr(exc), plan.config.scrub)[0]  # it can quote a value
+        message = f"infrastructure error while writing the file, nothing was written: {failed}"
         if found is None:
             print(f"scrimmage: {message}", file=sys.stderr)
             return INFRA
@@ -664,8 +688,16 @@ def run_check(
             print(f"scrimmage check: {plural(len(problems), 'problem')}; nothing was run")
             return MISTAKE
         runs = len(config.tests) * count  # one baseline per test, N times
+    # As the file writes them: a value from the environment is never printed.
     entry_kind, entry_value = (
-        ("command", shlex.join(agent.command)) if agent.command else ("function", agent.function)
+        (
+            "command",
+            agent.command_written if "${" in agent.command_written else shlex.join(agent.command),
+        )
+        if agent.command
+        else ("service", str(settings.as_written(agent.service)))
+        if agent.service
+        else ("function", agent.function)
     )
     summary: dict[str, object] = {
         "tests": len(config.tests),
@@ -690,7 +722,20 @@ def run_check(
         f"scrimmage check: {path} is valid: {plural(len(config.tests), 'test')}, "
         f"{plural(rows, 'row')}, {plural(runs, 'run')}, {tools}, {budget}"
     )
+    if agent.service:
+        print("start the service with these two set, with scrimmage-run and SCRIMMAGE_SERVICE=1:")
+        for line in service_lines(agent):
+            print(f"  {line}")
     return OK
+
+
+def service_lines(agent: settings.Agent) -> list[str]:
+    """The two lines a service's environment needs, built from the file: the tools its gates
+    swap, and the packages a plan may import from. The probe stops a test without them."""
+    return [
+        f"SCRIMMAGE_TOOLS={shlex.quote(planner.tools_text(agent.tools, agent.renames))}",
+        f"SCRIMMAGE_ALLOW_IMPORTS={shlex.quote(','.join(agent.allowed_imports()))}",
+    ]
 
 
 def init_command(args: argparse.Namespace, process: bool) -> int:

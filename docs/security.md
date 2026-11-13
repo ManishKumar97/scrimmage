@@ -10,7 +10,7 @@ The line "Checked by" under it names the test in the repository that fails if th
 
 Scrimmage has no telemetry and no hosted service.
 It sends nothing to its authors or to any third party.
-The only connections Scrimmage itself makes are to its own control server, and the only processes it starts are the runs of your agent.
+The only connections Scrimmage itself makes are to its own control server, and the only processes it starts are the runs of your agent, and, in a service, Python's own resource tracker, once, in the process that serves the app or supervises its workers, before any request.
 The Scrimmage MCP server, a command of its own, also starts the `scrimmage` command each of its tool calls runs; see [Driving Scrimmage from a coding agent](mcp-server.md).
 
 *Checked by: `tests/test_security_audit.py::test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_sends_the_token`, `tests/test_security_claims.py::test_the_only_connections_are_to_and_from_the_control_server`*
@@ -60,6 +60,55 @@ So can any code inside the agent under test, which needs it so that its child pr
 The signing keeps out programs of other users on the machine only.
 It follows that records are not tamper-proof against the agent under test: code in the agent could send lines of its own.
 Do not use records as audit evidence.
+
+## A web service's token and run header
+
+When the agent is [inside a web service](services.md), the service runs before and after the test, so the token is yours, not one the runner makes.
+Keep it as you keep a production secret.
+The service and the runner read it from the file `SCRIMMAGE_TOKEN_FILE` names, which must be a plain file you own, with mode `0600`, and hold 32 characters or more.
+A service with `SCRIMMAGE_TOKEN` in its environment stops, so no process environment holds the token.
+
+*Checked by: `tests/test_service.py::test_the_token_file_must_be_0600_and_owned`, `tests/test_service.py::test_scrimmage_token_in_a_service_environment_stops_naming_the_file`, `tests/test_service.py::test_the_token_and_control_url_come_from_the_runners_environment`*
+
+Each process that serves the app removes the file's path from its own environment, so a program it starts never learns where the token is.
+The token stays in that process's memory for the service's life, where any code in the process can read it.
+
+*Checked by: `tests/test_service.py::test_a_token_file_path_is_popped_in_each_worker`, `tests/test_service.py::test_a_teams_spawn_pool_worker_started_from_a_worker_stays_off_and_runs`, `tests/test_service_gate.py::test_only_a_process_that_serves_the_app_pops_the_token_path_and_says_it_is_active`*
+
+Each run's request carries one header, `x-scrimmage-run: run-<12 hex>.<16 hex>`, whose second part is an HMAC-SHA256 of the run's name with the token.
+The service checks it locally, so a header made without the token gets `503 bad-run-header` before any request to the runner, and a flood of forged headers costs one HMAC each and never reaches the control server.
+
+*Checked by: `tests/test_service_gate.py::test_a_header_with_a_wrong_mac_gets_503_with_no_control_request`, `tests/test_service_workers.py::test_a_header_flood_turns_runs_into_nothing_worse_than_infrastructure_errors`, `tests/test_service_workers.py::test_the_mac_check_costs_microseconds`*
+
+A run is claimed once, by one process, and the runner takes that run's lines from that process only.
+So a genuine header replayed, or forwarded by a proxy to another service, gets `503 claimed`, never a result.
+
+*Checked by: `tests/test_service_gate.py::test_a_second_claim_of_a_run_gets_503_claimed`, `tests/test_service_gate.py::test_lines_from_a_process_that_did_not_claim_are_refused`*
+
+Every `x-scrimmage-` header is removed before your app sees the request, so the app cannot pass the header on.
+The MAC covers the run's name, not the body, so the gate never holds a request's body.
+
+*Checked by: `tests/test_service_gate.py::test_the_run_header_never_reaches_the_app`, `tests/test_service_gate.py::test_a_probe_that_declares_a_body_goes_to_the_app_unread`*
+
+The probe's reply is signed with the token over the probe's own signature, so a server without the token cannot pass for a gated service.
+The report it holds has versions, gate names and tool names: no token, no plan and nothing of a run.
+
+*Checked by: `tests/test_service.py::test_a_probe_reply_with_a_forged_signature_stops_the_runner`, `tests/test_service.py::test_a_probe_signed_with_another_token_reaches_the_app_and_the_runner_stops`, `tests/test_service_gate.py::test_the_probes_report_with_a_notice_matches_its_schema`*
+
+Each value the file reads with `${NAME}`, of 8 characters or more, is removed from every record line, side-folder item, summary, report, `result.json` and the run's `.log` and `.out` files, as written, JSON-escaped, URL-encoded and in base64.
+
+*Checked by: `tests/test_service_config.py::test_an_expanded_value_never_reaches_a_record_a_blob_the_summary_or_result_json`, `tests/test_service_config.py::test_a_scrub_value_is_removed_json_escaped_url_encoded_and_in_base64_at_each_offset`, `tests/test_scripts.py::test_a_runs_log_is_scrubbed_even_when_the_runs_end_fails`*
+
+| Who | What they can do | What follows |
+|---|---|---|
+| A client without the token that sends a run header | nothing: the MAC fails in the gate | `503 bad-run-header`, no control request |
+| Someone on the loopback path who reads a genuine test request | resend its header | `503 claimed`: the run is claimed already. Never a result |
+| The app, or a proxy, that forwards incoming headers downstream | nothing: the header is gone before the app sees it | a downstream gated service would get `503 claimed` |
+| Code inside the service's process | read the token from memory | the same as any code in the agent, as for a script |
+| Someone on the path who replays a genuine probe to another worker within 60 seconds | that worker's startup report | disclosed below |
+
+Each worker keeps its own record of the nonces it has seen, so a probe captured on the loopback path can be replayed once to each other worker within 60 seconds, and gets that worker's startup report.
+The report holds nothing secret, so this version does not share nonces across workers.
 
 ## The plan is data
 
@@ -198,12 +247,20 @@ See [Failing the model, and keeping a budget](model-faults.md).
 
   *Checked by: `tests/test_security_claims.py::test_a_secret_with_no_known_shape_passes_through_redaction`*
 
-- **Your agent's own output.** The per-run `.log` and `.out` files hold whatever your agent printed, and they are not cleaned.
+- **Your agent's own output.** The per-run `.log` and `.out` files hold whatever your agent printed, and they are not cleaned, except of the values the file reads with `${NAME}`.
   They are readable only by you; keep them like any test log.
 - **A hostile `scrimmage.toml`.** `function` and `command` name code that runs, so treat the file like code.
   A CI job that holds model API keys must not run `scrimmage test` on a pull request from an outside contributor.
 
 [Limits](limits.md) lists every known gap of this version, and [Safety](safety.md) the rules each gate applies.
+
+## Who Scrimmage defends against
+
+Scrimmage guards honest team code that uses public APIs, and the internals these docs name.
+Code that rewrites the private parts of Python's objects or of Scrimmage's own is out of scope.
+That includes a `multiprocessing` queue's `_buffer`, `_writer` or `_send_bytes`, a pool's private queues, and Scrimmage's own state.
+Such code can get around a gate, and no fix is promised for it.
+Public APIs stay in scope, such as `ForkingPickler.register` and `copyreg`.
 
 ## Reporting a vulnerability
 

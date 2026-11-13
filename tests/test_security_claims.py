@@ -41,6 +41,8 @@ def test_the_only_connections_are_to_and_from_the_control_server() -> None:
     assert found == {
         ("client.py", "HTTPConnection"),
         ("control.py", "ThreadingHTTPServer"),
+        # The runner's own request to a team's service, at the address its file names.
+        ("service_client.py", "HTTPConnection"),
     }
     uses = {
         name
@@ -54,7 +56,7 @@ def test_the_only_connections_are_to_and_from_the_control_server() -> None:
 STARTS = re.compile(
     r"\b(?:subprocess\.\w+\s*\(|Popen\s*\(|os\.(?:exec\w*|spawn\w*|system|popen|posix_spawnp?|"
     r"fork\w*)\s*\(|pty\.spawn\s*\(|ProcessPoolExecutor|multiprocessing\.\w+|"
-    r"create_subprocess_\w+|open_process\s*\(|run_process\s*\()"
+    r"create_subprocess_\w+|open_process\s*\(|run_process\s*\(|resource_tracker\.ensure_running\s*\()"
 )
 STARTERS = {"subprocess", "pty", "multiprocessing", "concurrent", "asyncio"}
 
@@ -64,7 +66,8 @@ def test_the_only_processes_scrimmage_starts_are_its_runs() -> None:
     """Scrimmage's start-up inside the agent runs before an audit hook could watch it, so this
     scan is what checks it: no product module but the runner and scrimmage-run starts anything,
     and the Scrimmage MCP server, a command of its own that never loads into the agent, which
-    starts each scrimmage command it runs."""
+    starts each scrimmage command it runs. A service starts Python's resource tracker, once, at
+    its startup, before any request."""
     found = {
         (path.name, " ".join(call.split()))
         for path in PACKAGES.rglob("*.py")
@@ -74,6 +77,22 @@ def test_the_only_processes_scrimmage_starts_are_its_runs() -> None:
         ("runner.py", "subprocess.Popen("),
         ("run_command.py", "os.execvpe("),
         ("mcp_server.py", "open_process("),
+        # It names the module to patch its thread pool when the agent imports it; it never
+        # makes a pool or starts a process itself.
+        ("threadctx.py", "multiprocessing.pool"),
+        # It names these to refuse them under a service run, when the agent imports them.
+        ("process_gate.py", "ProcessPoolExecutor"),
+        ("process_gate.py", "multiprocessing.connection"),
+        ("process_gate.py", "multiprocessing.pool"),
+        ("process_gate.py", "multiprocessing.process"),
+        ("process_gate.py", "multiprocessing.queues"),
+        # It names these to know multiprocessing's own helpers, where Scrimmage stays off.
+        ("bootstrap.py", "multiprocessing.resource_tracker"),
+        ("bootstrap.py", "multiprocessing.forkserver"),
+        # A service's one start of its own: Python's resource tracker, before any request.
+        ("process_gate.py", "resource_tracker.ensure_running("),
+        # It names this to decide spawnv_passfds's starts; it starts nothing through it.
+        ("process_gate.py", "multiprocessing.util"),
     }
     # The same AST scan as the standard-library test, so __import__("subprocess") counts.
     imports = {
@@ -92,6 +111,10 @@ def test_the_only_processes_scrimmage_starts_are_its_runs() -> None:
         ("start.py", "asyncio"),
         ("mcp_server.py", "subprocess"),  # for DEVNULL and PIPE; anyio starts the child
         ("mcp_server.py", "asyncio"),  # for the loop its signal handler wakes
+        ("threadctx.py", "asyncio"),  # to read a loop's tasks at a run's close
+        ("asgi_gate.py", "asyncio"),  # the entry gate runs on the server's loop
+        ("executor.py", "concurrent"),  # for its Future: its workers are threads
+        ("process_gate.py", "multiprocessing"),  # a service starts the resource tracker
     }
 
 

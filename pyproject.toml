@@ -37,6 +37,12 @@ dev = [
     "pytest-xdist>=3.8.0",
     # tests/test_mcp_server.py proves the Scrimmage MCP server makes no span.
     "opentelemetry-sdk>=1.45",
+    # tests/test_threadctx.py checks a service on uvloop, which uvicorn picks when installed.
+    "uvloop==0.23.0",
+    # The service tests run a FastAPI app under uvicorn, and loky's process pool via joblib.
+    "fastapi==0.162.5",
+    "uvicorn==0.54.0",
+    "joblib==1.6.0",
     # tests/test_docs_site.py builds the site, so a plain pytest needs mkdocs.
     {include-group = "docs"},
 ]
@@ -134,6 +140,17 @@ forbidden_modules = ["mcp", "mcp_types"]
 ignore_imports = [
     "scrimmage_core.mcp_server -> mcp",
     "scrimmage_core.mcp_server -> mcp_types",
+]
+
+[[tool.importlinter.contracts]]
+name = "The SDK never imports a service's web libraries"
+type = "forbidden"
+# The gates patch them through import hooks, when the service imports them, so a function
+# or a script never loads them, and a service gets the version it installed.
+source_modules = ["scrimmage_core"]
+forbidden_modules = ["uvicorn", "starlette", "fastapi", "anyio"]
+ignore_imports = [
+    "scrimmage_core.mcp_server -> anyio",  # the Scrimmage MCP server's own, a command apart
 ]
 
 [[tool.importlinter.contracts]]

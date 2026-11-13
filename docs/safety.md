@@ -96,6 +96,47 @@ A program on another Python is not gated, and it may be something unrelated, suc
 But it cannot import a module that holds a tool under `tools`, or run that file: the import fails or the program stops, and the run ends as "refused call".
 A web request or an MCP call from a program on another Python is not stopped. See [Limits](limits.md).
 
+## An agent inside a web service
+
+In a service, a run is one request in a process that serves many others, so nothing a run does may reach another process.
+Every program a service run starts is refused until `real` lists it, with the exact line to add in the error, the setup request's message and the report, such as:
+
+```text
+kubectl was started inside a test run, and service runs refuse every process start. Add "process:kubectl" to [agent] real if it is safe.
+```
+
+The setup request finds such a start before any run and stops the test with exit 2, naming the entry.
+These are refused under a run too, with no entry that lists them:
+
+- a fork: `os.fork`, `os.forkpty`, and so `pty.spawn` and `os.spawnv`;
+- `multiprocessing`'s `Process.start`, and a manager's start;
+- the sends of `multiprocessing`'s `Queue`, `JoinableQueue` and `SimpleQueue`, and of loky's `Queue` and `SimpleQueue` (`put` and `put_nowait`), and of a `Pipe`'s connection (`send` and `send_bytes`), a manager's proxy calls included;
+- a process pool's task, on `Pool` and on `ProcessPoolExecutor` and loky's, a `Pool`'s making, and their `close`, `terminate` and `shutdown`;
+- a subinterpreter: `InterpreterPoolExecutor.submit`, `Interpreter.exec`, `call` and `call_in_thread`, and a subinterpreter queue's `put`.
+
+A queue's feeder thread sends only the items a decided `put` added, by identity.
+Their contents at pickling time are not checked: an item a run changes while it waits in the buffer is sent as changed.
+A send made while an item is pickled, such as one a reducer makes, is decided as any other send.
+An item put in a queue's buffer some other way is refused when the feeder reaches it, even after the run closed, and every run open at that moment is told.
+
+Any other way to reach another process is not gated, such as shared memory, a signal or a socket of your own. See [Limits](limits.md).
+
+Python's resource tracker, which `multiprocessing` needs for its locks, queues and shared memory, is started once, before any request, in the process that serves the app as it loads it, or in uvicorn's supervisor before it starts its workers, so a run that makes a lock starts nothing.
+A Python that only inherits the service's settings and never serves starts no tracker.
+A start of a tracker after that, such as a relaunch after it was killed, is a start of this Python like any other: refused under a run, and under the outside rules unless `background_real` lists it.
+The helpers `multiprocessing` and loky start for themselves, the resource tracker and the forkserver, run with Scrimmage off, and so does a worker the forkserver forks for your code.
+Under a run each such start is refused before it is made, so a process with Scrimmage off never holds a run.
+
+Listing a program makes every call to it real.
+There is no matching on arguments: `process:kubectl` lets `kubectl delete` through as much as `kubectl get`.
+List a program only if every way the agent can call it is safe against the systems the test can reach.
+
+An MCP server over stdio that the agent starts inside a request is such a start too: list it as `process:<command>`, such as `process:npx`, under `real`.
+A server started once, at the service's startup, is started outside any run and needs no entry; its tool calls are gated either way.
+
+A request with no run header reaches the app untouched, and so do its calls.
+Work outside any request, while a run is open, follows the outside rules on [An agent inside a web service](services.md#work-outside-any-request).
+
 ## The budget
 
 A test has a budget, $5 unless you change it. When the runner cannot be reached to check it, the call is refused rather than sent.

@@ -50,3 +50,27 @@ def skipping(args: list[str]) -> str | None:
     """The first flag that keeps Python from running Scrimmage's startup file."""
     skipped = sorted(flags(args) & SKIPS)
     return f"-{skipped[0]}" if skipped else None
+
+
+def separate_command(args: list[str]) -> int | None:
+    """Where the code is when Python runs it with `-c` as a word of its own, after options
+    only; None if Python runs anything else first: a script, a module, or code joined to
+    its `-c` (`-cCODE`) or to another flag."""
+    at = 0
+    while at < len(args):
+        word = args[at]
+        if word == LONG_WITH_VALUE:
+            at += 2
+            continue
+        if not word.startswith("-") or word in ("-", "--"):
+            return None
+        if not word.startswith("--"):
+            for place, letter in enumerate(word[1:], 2):
+                if letter in "cm":
+                    return at + 1 if word == "-c" and at + 1 < len(args) else None
+                if letter in "WX":
+                    if place == len(word):
+                        at += 1  # its value is the next word
+                    break
+        at += 1
+    return None

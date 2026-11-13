@@ -44,12 +44,17 @@ from scrimmage_core.plan import Plan
 from scrimmage_core.redact import redact, redacted
 from scrimmage_core.state import (
     BLOB_CAP,
+    IN_PROCESS_CALL,
     BlobSink,
+    Outside,
+    ProcessState,
     RunState,
     Step,
     blob,
+    carried,
     current,
     error_text,
+    in_service,
     model_path_hint,
 )
 
@@ -101,8 +106,8 @@ SETUP_REASONS = (
 # decided at the MCP gate or are the connection's own, so the web gate does not decide them
 # again. It is the whole endpoint, not a flag: an event hook or an auth flow runs inside the
 # same send, and its requests are still web requests.
-MCP_TRANSPORT: ContextVar[tuple[object, ...] | None] = ContextVar(
-    "scrimmage_mcp_transport", default=None
+MCP_TRANSPORT: ContextVar[tuple[object, ...] | None] = carried(
+    ContextVar("scrimmage_mcp_transport", default=None)
 )
 
 
@@ -115,28 +120,56 @@ class Reserver(Protocol):
 
 
 class Context:
-    """What every gated request needs: the run, the way to the runner, the sender."""
+    """What the gate keeps for the process: what it knows, the way to the runner, the sender.
+
+    It holds no run. Each request reads its run when it is made, so in a service, where one
+    process serves many runs at once, each call is decided by its own run's plan.
+    """
 
     def __init__(
         self,
-        run: RunState,
+        owner: ProcessState | RunState,
         client: Reserver,
         sender: BlobSink | None,
         stop: Callable[[str], None],
     ) -> None:
-        self.run = run
+        # A run's own process, when a run is given: a function or a script has one of each.
+        self.process = owner.process if isinstance(owner, RunState) else owner
         self.client = client
         self.sender = sender
         self.stop = stop  # ends the program: a library that cannot be gated
         self.faults = True  # false when the library has lost what faults are built from
-        self.open: set[Callable[[bool], None]] = set()  # replies not read to their end
         self.root = probing.here()  # the folder the probe's paths are looked for under
-        self.model_paths: set[str] = set()  # model paths run as web requests, noted once each
+
+    def bound(self, run: RunState) -> "Bound":
+        # A run's side-folder items go with its own lines; a run made with none uses ours.
+        sender = run.blobs if run.blobs is not None else self.sender
+        return Bound(run, self.client, sender, self.faults, self.root)
 
     def close_open(self) -> None:
         """At exit: a reply the agent never finished reading is still a call that was made."""
-        for finish in list(self.open):
-            finish(False)
+        run = self.process.current()
+        if run is not None:
+            run.close_open()
+
+
+@dataclasses.dataclass(frozen=True)
+class Bound:
+    """One gated request's view: its own run, read once when the request was made."""
+
+    run: RunState
+    client: Reserver
+    sender: BlobSink | None
+    faults: bool
+    root: str
+
+    @property
+    def open(self) -> set[Callable[[bool], None]]:
+        return self.run.open  # replies not read to their end
+
+    @property
+    def model_paths(self) -> set[str]:
+        return self.run.model_paths  # model paths run as web requests, noted once each
 
 
 def params(function: object) -> list[str] | None:
@@ -165,9 +198,9 @@ def version(module: ModuleType) -> tuple[int, int] | None:
 
 
 def install(
-    run: RunState, client: Reserver, sender: BlobSink | None, stop: Callable[[str], None]
+    process: ProcessState, client: Reserver, sender: BlobSink | None, stop: Callable[[str], None]
 ) -> Context:
-    ctx = Context(run, client, sender, stop)
+    ctx = Context(process, client, sender, stop)
     atexit.register(ctx.close_open)  # registered after the sender's flush, so it runs first
     for library in TESTED:
         hooks.on_import(library, lambda module, name=library: patch(module, ctx, name))
@@ -181,53 +214,53 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
             f"{named} does not have the functions Scrimmage gates, so its calls cannot be "
             "checked or budgeted, and the program is stopped"
         )
-        ctx.run.notice("structure", library, message)
-        ctx.stop(message)
+        ctx.process.structure(library, message, ctx.stop)
         return
     if not all(hasattr(module, n) for n in ("Response", "ByteStream", "ReadTimeout")):
-        ctx.run.notice(
+        ctx.process.notice(
             "structure",
             library,
             f"{named} lacks what Scrimmage builds faults and mocks from; refusals and the "
             "budget still apply, those do not",
         )
         ctx.faults = False
-    ctx.run.newer_version(library, version(module), TESTED[library])
+    ctx.process.newer_version(library, version(module), TESTED[library])
     sync_send = module.Client._send_single_request
     async_send = module.AsyncClient._send_single_request
     if getattr(sync_send, GATED, False):
         return
 
     def sync_gate(self: Any, request: Any) -> Any:
-        prepared = prepare(ctx, request, f"thread-{threading.get_ident()}")
+        prepared = prepare(ctx, request, f"thread-{threading.get_ident()}", self)
         if prepared is None:
-            return sync_send(self, request)
-        step, extra = prepared
+            with to_this_process(self, request):
+                return sync_send(self, request)
+        bound, step, extra = prepared
         change = None
         mode = step.decision.action
         if step.decision.under is not None:  # a carried fault: the call goes as the baseline's
             mode = step.decision.under
-            change = slowed_sync(ctx, module, step, request)
+            change = slowed_sync(bound, module, step, request)
         if mode == "fault":
-            return fault(ctx, module, self, step, request, extra)
+            return fault(bound, module, self, step, request, extra)
         if mode == "mock":
-            return mocked(ctx, module, self, step, request, extra, change)
-        reservation = reserve(ctx, step, request, extra)
+            return mocked(bound, module, self, step, request, extra, change)
+        reservation = reserve(bound, step, request, extra)
         try:
             response = sync_send(self, request)
         except BaseException as exc:
-            failed(ctx, module, step, request, extra, reservation, exc)
+            failed(bound, module, step, request, extra, reservation, exc)
             raise
-        target = off_host(ctx, step, request, response)
+        target = off_host(bound, step, request, response)
         if target is not None:
             with contextlib.suppress(Exception):  # the refusal says why it was dropped
                 response.close()
-            redirected_away(ctx, step, request, extra, reservation, target)
+            redirected_away(bound, step, request, extra, reservation, target)
         if change is not None:
             return changed_sync(
-                ctx, module, self, step, request, response, extra, reservation, change
+                bound, module, self, step, request, response, extra, reservation, change
             )
-        capture(ctx, module, step, request, response, extra, reservation, sync=True)
+        capture(bound, module, step, request, response, extra, reservation, sync=True)
         return response
 
     async def async_gate(self: Any, request: Any) -> Any:
@@ -239,14 +272,15 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
         except RuntimeError:  # no asyncio loop: trio, or something else
             task = None
         who = f"task-{id(task)}" if task is not None else f"thread-{threading.get_ident()}"
-        prepared = prepare(ctx, request, who)
+        prepared = prepare(ctx, request, who, self)
         if prepared is None:
-            return await async_send(self, request)
-        step, extra = prepared
+            with to_this_process(self, request):
+                return await async_send(self, request)
+        bound, step, extra = prepared
         if task is None and step.call.kind == "model":
-            ctx.run.refuse(step, "unsupported_loop")
+            bound.run.refuse(step, "unsupported_loop")
             refuse(
-                ctx.run,
+                bound.run,
                 step,
                 "this model call runs outside asyncio, such as under trio, which Scrimmage "
                 "does not support yet, so it could not be budgeted; run the agent on asyncio",
@@ -255,31 +289,31 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
         mode = step.decision.action
         if step.decision.under is not None:  # a carried fault: the call goes as the baseline's
             mode = step.decision.under
-            change = await slowed_async(ctx, module, step, request, extra)
+            change = await slowed_async(bound, module, step, request, extra)
         if mode == "fault":
-            return fault(ctx, module, self, step, request, extra)
+            return fault(bound, module, self, step, request, extra)
         if mode == "mock":
-            return mocked(ctx, module, self, step, request, extra, change)
+            return mocked(bound, module, self, step, request, extra, change)
         reservation = None
         if step.call.kind == "model":
-            reservation = await reserve_off_the_loop(ctx, step, request, extra)
+            reservation = await reserve_off_the_loop(bound, step, request, extra)
         try:
             response = await async_send(self, request)
         except BaseException as exc:
-            failed(ctx, module, step, request, extra, reservation, exc)
+            failed(bound, module, step, request, extra, reservation, exc)
             raise
-        target = off_host(ctx, step, request, response)
+        target = off_host(bound, step, request, response)
         if target is not None:
             cancel = await close_keeping_cancel(response)
             try:
-                redirected_away(ctx, step, request, extra, reservation, target)
+                redirected_away(bound, step, request, extra, reservation, target)
             except ScrimmageRefused as refusal:
                 raise (cancel or refusal) from None
         if change is not None:
             return await changed_async(
-                ctx, module, self, step, request, response, extra, reservation, change
+                bound, module, self, step, request, response, extra, reservation, change
             )
-        capture(ctx, module, step, request, response, extra, reservation, sync=False)
+        capture(bound, module, step, request, response, extra, reservation, sync=False)
         return response
 
     setattr(sync_gate, GATED, True)
@@ -299,7 +333,7 @@ def body_of(request: Any) -> bytes | None:
     return held if isinstance(held, bytes) else None
 
 
-def provider_of(ctx: Context, host: str) -> str | None:
+def provider_of(ctx: Bound, host: str) -> str | None:
     named = next((h.provider for h in ctx.run.plan.model_hosts if h.host == host), None)
     return named or ("openai" if host in openai_table.HOSTS else None)
 
@@ -319,7 +353,7 @@ def endpoint_of(url: Any) -> tuple[object, ...]:
     return url.scheme, host_of(url), url.port, path_of(url)
 
 
-def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call:
+def describe(ctx: Bound, request: Any, who: str, body: bytes) -> Call:
     """The call this request is: a model call, or a web request to its own host."""
     host = host_of(request.url)
     provider = provider_of(ctx, host)
@@ -339,11 +373,56 @@ def describe(ctx: Context, request: Any, who: str, body: bytes) -> Call:
     return Call("model", label, op, provider, method, retry, key, marked=marked)
 
 
-def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, object]] | None:
-    """Decide the request; None with no run. Raises ScrimmageRefused after recording one."""
+# Transports that hand a request to an app in this process, as a test client does. A mock
+# transport is not one: its answer stands in for a server elsewhere.
+IN_PROCESS = (
+    ("httpx2", "ASGITransport"),
+    ("httpx2", "WSGITransport"),
+    ("httpx", "ASGITransport"),
+    ("httpx", "WSGITransport"),
+    ("starlette.testclient", "_TestClientTransport"),
+)
+
+
+def in_process(client: Any, request: Any) -> bool:
+    """The client sends this request to an app in this process: it leaves the process for
+    nowhere, so outside any request it writes nothing, and that app's own gates decide it.
+    Only these exact classes: a subclass could send anywhere."""
+    pick = getattr(client, "_transport_for_url", None)
+    try:
+        transport = pick(request.url) if callable(pick) else None
+    except Exception:  # a client this version does not know: decided as any other request
+        return False
+    kinds = [getattr(sys.modules.get(module), name, None) for module, name in IN_PROCESS]
+    return type(transport) in kinds
+
+
+@contextlib.contextmanager
+def to_this_process(client: Any, request: Any) -> Iterator[None]:
+    """A request to an app in this process: the app runs under its caller's slot, so code
+    outside any request stays outside, never a fresh plain request."""
+    if not in_service() or not in_process(client, request):
+        yield
+        return
+    token = IN_PROCESS_CALL.set(True)
+    try:
+        yield
+    finally:
+        IN_PROCESS_CALL.reset(token)
+
+
+def prepare(
+    process_ctx: Context, request: Any, who: str, client: Any = None
+) -> tuple[Bound, Step, dict[str, object]] | None:
+    """Decide the request; None with no run. Raises ScrimmageRefused after recording one.
+
+    The run is read here, once per request, and every step after reads that one."""
     run = current()
     if run is None or MCP_TRANSPORT.get() == endpoint_of(request.url):
         return None
+    if isinstance(run, Outside) and in_process(client, request):
+        return None
+    ctx = process_ctx.bound(run)
     body = body_of(request)
     call = describe(ctx, request, who, body or b"")
     fields = openai_table.request_fields(body) if body and call.kind == "model" else None
@@ -353,7 +432,7 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
     extra: dict[str, object] = {
         "method": call.method,
         "path": path_of(request.url),
-        "args": blob(body or b"", ctx.sender),
+        "args": blob(body or b"", ctx.sender, scrub=run.secrets),
     }
     if call.provider is not None:
         extra["provider"] = call.provider
@@ -386,10 +465,10 @@ def prepare(ctx: Context, request: Any, who: str) -> tuple[Step, dict[str, objec
                 "JSON",
             )
         check_tools(ctx, run, step, fields, str(request.url.path))
-    return step, extra
+    return ctx, step, extra
 
 
-def model_path_notice(ctx: Context, call: Call, where: str) -> None:
+def model_path_notice(ctx: Bound, call: Call, where: str) -> None:
     """A POST to a model's path ran for real as a web request: real lists its host. It is then
     never budgeted, nor faulted by model name. Said once per path, as a run notice."""
     hint = model_path_hint(call.label, where)
@@ -440,7 +519,7 @@ def carries(injected: list[str], fields: dict[str, object]) -> bool:
 
 
 def stop_probe(
-    ctx: Context, run: RunState, step: Step, fields: dict[str, object] | None, url: Any
+    ctx: Bound, run: RunState, step: Step, fields: dict[str, object] | None, url: Any
 ) -> NoReturn:
     """Note the tools this first model request offers, refuse it unsent, and end the program.
 
@@ -497,7 +576,7 @@ def refuse(run: RunState, step: Step, detail: str) -> NoReturn:
 
 
 def check_tools(
-    ctx: Context, run: RunState, step: Step, fields: dict[str, object], path: str
+    ctx: Bound, run: RunState, step: Step, fields: dict[str, object], path: str
 ) -> None:
     """Hosted writes, unknown tool types and tools no gate sees: all stop before sending."""
     tools = openai_table.offered(path, fields)
@@ -543,7 +622,7 @@ def check_tools(
 
 
 def fault(
-    ctx: Context,
+    ctx: Bound,
     module: ModuleType,
     client: Any,
     step: Step,
@@ -577,7 +656,7 @@ def reason_phrase(status: int) -> str:
 
 
 def reply(
-    ctx: Context,
+    ctx: Bound,
     module: ModuleType,
     client: Any,
     step: Step,
@@ -592,7 +671,7 @@ def reply(
     status, headers, body = answer
     sent = b"" if request.method == "HEAD" else body
     recorded = sent if original is None or request.method == "HEAD" else original
-    extra.update(status=status, result=blob(recorded, ctx.sender))
+    extra.update(status=status, result=blob(recorded, ctx.sender, scrub=ctx.run.secrets))
     ctx.run.finish(step)
     if status >= 200 and status not in (204, 304):
         headers = {**headers, "content-length": str(len(body))}
@@ -608,7 +687,7 @@ def reply(
 
 
 def mocked(
-    ctx: Context,
+    ctx: Bound,
     module: ModuleType,
     client: Any,
     step: Step,
@@ -646,7 +725,7 @@ def mocked(
     return response
 
 
-def prices_of(ctx: Context, model: str) -> openai_table.Rates | None:
+def prices_of(ctx: Bound, model: str) -> openai_table.Rates | None:
     return openai_table.price(model, dict(ctx.run.plan.prices))
 
 
@@ -693,7 +772,7 @@ class Pause:
     ticket: int | None
 
 
-def hold_for(ctx: Context, step: Step, request: Any, extra: dict[str, object]) -> float | None:
+def hold_for(ctx: Bound, step: Step, request: Any, extra: dict[str, object]) -> float | None:
     """What this model call could cost, at worst; None when nothing is reserved for it."""
     plan = ctx.run.plan
     if step.call.kind != "model" or plan.budget_usd is None:
@@ -711,7 +790,7 @@ def hold_for(ctx: Context, step: Step, request: Any, extra: dict[str, object]) -
     return openai_table.cost(len(body) // CHAR_PER_TOKEN, output, rates)
 
 
-def reserve(ctx: Context, step: Step, request: Any, extra: dict[str, object]) -> int | None:
+def reserve(ctx: Bound, step: Step, request: Any, extra: dict[str, object]) -> int | None:
     """Reserve what this model call could cost, before it is sent.
 
     A sync call waits on its own thread, the one that made the call and is blocked on it
@@ -739,7 +818,7 @@ def reserve(ctx: Context, step: Step, request: Any, extra: dict[str, object]) ->
 
 
 def ask(
-    ctx: Context,
+    ctx: Bound,
     step: Step,
     extra: dict[str, object],
     usd: float,
@@ -838,7 +917,7 @@ def hold_text(hold: Held, run: str) -> str:
 
 
 async def reserve_off_the_loop(
-    ctx: Context, step: Step, request: Any, extra: dict[str, object]
+    ctx: Bound, step: Step, request: Any, extra: dict[str, object]
 ) -> int | None:
     """Reserve for an async call. Each ask is one short request on a thread; the waits
     between asks are on the loop, so a waiting call holds no thread. asyncio's default
@@ -864,7 +943,7 @@ async def reserve_off_the_loop(
 
 
 async def ask_off_the_loop(
-    ctx: Context,
+    ctx: Bound,
     step: Step,
     extra: dict[str, object],
     usd: float,
@@ -904,7 +983,16 @@ async def ask_off_the_loop(
         return got
 
     try:
-        return await asyncio.to_thread(work)
+        # Loaded by a service's start only, so a function or a script never imports it.
+        pool = getattr(sys.modules.get("scrimmage_core.executor"), "EXECUTOR", None)
+        if pool is None or not in_service():
+            return await asyncio.to_thread(work)
+        # A service's own executor, never the app's, and only with a control slot free:
+        # with none, the call waits on the loop and asks again, holding no thread.
+        client = cast(Any, ctx.client)
+        if not client.try_slot():
+            return Pause(next_ask_s(None), ticket)
+        return await asyncio.wrap_future(pool.submit(lambda: client.run_held(work)))
     except asyncio.CancelledError:
         with lock:
             cancelled.append(True)
@@ -915,7 +1003,7 @@ async def ask_off_the_loop(
         raise
 
 
-def give_up(ctx: Context, ticket: int | None) -> None:
+def give_up(ctx: Bound, ticket: int | None) -> None:
     """Hand back a ticket off the caller's thread or loop. If the release is lost, the
     ledger drops the ticket once it has not been asked for in budget.LOST_S."""
     if ticket is not None:
@@ -923,7 +1011,7 @@ def give_up(ctx: Context, ticket: int | None) -> None:
 
 
 def abandoned(
-    ctx: Context,
+    ctx: Bound,
     step: Step,
     extra: dict[str, object],
     reservation: int | None,
@@ -939,7 +1027,7 @@ def abandoned(
     settle(ctx, reservation, 0.0)
 
 
-def off_host(ctx: Context, step: Step, request: Any, response: Any) -> str | None:
+def off_host(ctx: Bound, step: Step, request: Any, response: Any) -> str | None:
     """The host a redirect would take this model call to, if that is not a model host.
 
     This refuses even a client that would not follow the redirect. The gate cannot tell,
@@ -969,7 +1057,7 @@ async def close_keeping_cancel(response: Any) -> "asyncio.CancelledError | None"
 
 
 def redirected_away(
-    ctx: Context,
+    ctx: Bound,
     step: Step,
     request: Any,
     extra: dict[str, object],
@@ -993,7 +1081,7 @@ def redirected_away(
 
 
 def failed(
-    ctx: Context,
+    ctx: Bound,
     module: ModuleType,
     step: Step,
     request: Any,
@@ -1017,7 +1105,7 @@ def failed(
     settle(ctx, reservation, usd or 0.0)
 
 
-def settle(ctx: Context, reservation: int | None, usd: float) -> None:
+def settle(ctx: Bound, reservation: int | None, usd: float) -> None:
     """Replace the reservation, off the agent's thread or loop: the sender delivers it."""
     if reservation is not None and ctx.sender is not None:
         ctx.sender.put_settle(reservation, usd)
@@ -1030,12 +1118,12 @@ def timeout_of(request: Any) -> float | None:
     return None if value is None else float(value)
 
 
-def slow_fault(ctx: Context, step: Step) -> tuple[Fault, float | None]:
+def slow_fault(ctx: Bound, step: Step) -> tuple[Fault, float | None]:
     fault = ctx.run.plan.faults[step.decision.fault or 0]
     return fault, slow_seconds(fault.do)
 
 
-def slowed_sync(ctx: Context, module: ModuleType, step: Step, request: Any) -> Fault | None:
+def slowed_sync(ctx: Bound, module: ModuleType, step: Step, request: Any) -> Fault | None:
     """Under a carried fault, before the request is sent: wait if the fault is slow. Returns
     the fault if it changes the reply. A wait cut short ends the call, with its line."""
     fault, seconds = slow_fault(ctx, step)
@@ -1056,7 +1144,7 @@ def slowed_sync(ctx: Context, module: ModuleType, step: Step, request: Any) -> F
 
 
 async def slowed_async(
-    ctx: Context, module: ModuleType, step: Step, request: Any, extra: dict[str, object]
+    ctx: Bound, module: ModuleType, step: Step, request: Any, extra: dict[str, object]
 ) -> Fault | None:
     """slowed_sync on the event loop, in steps, so the caller's own deadline cancels the wait."""
     fault, seconds = slow_fault(ctx, step)
@@ -1083,7 +1171,7 @@ async def slowed_async(
     return None
 
 
-def left_as_it_is(ctx: Context, step: Step, extra: dict[str, object], said: Unchangeable) -> None:
+def left_as_it_is(ctx: Bound, step: Step, extra: dict[str, object], said: Unchangeable) -> None:
     """The reply cannot take the change: the agent gets it as it is, and the line says why."""
     fault = ctx.run.plan.faults[step.decision.fault or 0]
     ctx.run.unchanged(step, said.why)
@@ -1101,7 +1189,7 @@ def model_op(step: Step, request: Any) -> str:
 
 
 def decided_by_headers(
-    ctx: Context, step: Step, extra: dict[str, object], request: Any, response: Any
+    ctx: Bound, step: Step, extra: dict[str, object], request: Any, response: Any
 ) -> bool:
     """Whether the headers alone rule the change out: a status, a type, an encoding, a size.
     Then the reply goes on untouched, and a stream is never read early."""
@@ -1146,7 +1234,7 @@ def rebuilt(
 
 
 def changed_reply(
-    ctx: Context,
+    ctx: Bound,
     module: ModuleType,
     client: Any,
     step: Step,
@@ -1207,7 +1295,7 @@ def replaying(
 
 
 def changed_sync(
-    ctx: Context,
+    ctx: Bound,
     module: ModuleType,
     client: Any,
     step: Step,
@@ -1263,7 +1351,7 @@ def changed_sync(
 
 
 async def changed_async(
-    ctx: Context,
+    ctx: Bound,
     module: ModuleType,
     client: Any,
     step: Step,
@@ -1326,7 +1414,7 @@ async def changed_async(
 
 
 def capture(
-    ctx: Context,
+    ctx: Bound,
     module: ModuleType,
     step: Step,
     request: Any,
@@ -1372,7 +1460,7 @@ def capture(
         for chunk in raw:
             keep(chunk)
         if error is not None:
-            extra["error"] = error_text(step.call, error)
+            extra["error"] = error_text(step.call, error, ctx.run.secrets)
         finish(error is None)
         return
     loaded = getattr(response, "_content", None)  # a reply already in memory has no stream
@@ -1382,7 +1470,7 @@ def capture(
         return
 
     def broke(error: Exception) -> None:
-        extra["error"] = error_text(step.call, error)
+        extra["error"] = error_text(step.call, error, ctx.run.secrets)
         finish(False)
 
     ctx.open.add(finish)
@@ -1390,7 +1478,7 @@ def capture(
 
 
 def record(
-    ctx: Context,
+    ctx: Bound,
     step: Step,
     request: Any,
     response: Any,
@@ -1402,7 +1490,7 @@ def record(
     encoding = str(response.headers.get("content-encoding", ""))
     body = decoded(raw, encoding)
     if step.call.kind != "model":
-        saved = blob(body, ctx.sender, total=size, wait=ctx.run.recording)
+        saved = blob(body, ctx.sender, total=size, wait=ctx.run.recording, scrub=ctx.run.secrets)
         extra.update(status=response.status_code, result=saved)
         if ctx.run.recording and step.call.provider is None:  # a model host is never recorded
             extra["recorded"] = ctx.run.recorded(
@@ -1419,7 +1507,7 @@ def record(
     usd = openai_table.cost(tokens_in, tokens_out, rates, cached) if rates else None
     extra.update(
         status=response.status_code,
-        result=blob(body, ctx.sender, total=size),
+        result=blob(body, ctx.sender, total=size, scrub=ctx.run.secrets),
         tokens={"input": tokens_in, "output": tokens_out, "cached": cached},
         cost_usd=None if usd is None else round(usd, 8),
         cost_estimated=usd is not None and not used.known and not free,

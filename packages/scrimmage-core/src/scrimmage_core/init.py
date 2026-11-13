@@ -58,6 +58,10 @@ BAD_PROBE = (
     "--probe takes the function to run, as module:function, such as acme.agent:answer; "
     "got {value!r}. A script is never probed; nothing was run"
 )
+SERVICE_PROBE = (
+    "init --probe does not work with an agent inside a web service in this version; probe "
+    "the function its endpoint calls, as module:function; nothing was run"
+)
 NO_MODEL_REQUEST = "saw no model request through a gated client"
 NAMED = "the function named with --probe"
 GUESS_COMMENT = "# A guess from reading the code. Check it before you run anything."
@@ -204,6 +208,8 @@ def prepare(
     """Read the code and, if asked, probe the named function. Nothing is written yet."""
     draft = Draft(out, str(out))
     # All are checked first, so the team's code never runs for a draft that cannot be written.
+    if probe is not None and probe.lower().startswith(("http://", "https://")):
+        return refused(draft, SERVICE_PROBE)
     if probe is not None and not IMPORT_PATH.fullmatch(probe):
         return refused(draft, BAD_PROBE.format(value=probe))
     if not folder.is_dir():

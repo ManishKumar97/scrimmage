@@ -27,7 +27,7 @@ def gone(pid: int) -> bool:
     try:
         with open(f"/proc/{pid}/stat") as stat:
             return stat.read().rsplit(")", 1)[1].split()[0] == "Z"  # a zombie is ended
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):  # reaped before the open, or the read
         return True
 
 

@@ -19,6 +19,8 @@ WEB_HOST = re.compile(r"[a-z0-9][a-z0-9._-]*")
 WEB_METHOD = re.compile(r"[A-Za-z][A-Za-z-]*")  # letters, and the hyphen of M-SEARCH
 WEB_PATH = re.compile(r"/(?:(?![?#])[\x21-\x7e])*")  # as sent: percent-encoded, no query
 PROCESS = "process:python"  # a Python child that would run with no gates
+# A program a service run may start for real, by its base name: process:git, process:sh.
+PROGRAM = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._+-]*")
 DOCS = "see docs/configuration.md"
 NAME_CAP = 200  # a model name comes from a request, so a line shows this much of it
 
@@ -43,9 +45,14 @@ def check(text: str, where: str, *, pattern: bool = False) -> str:
         if not HOSTED.fullmatch(text):
             raise ConfigError(f"{where}: {text!r} is not of the form 'hosted:mcp/<label>'")
         return text
-    if text == PROCESS:
+    if kind == "process" and sep:
         if not pattern:
             raise ConfigError(f"{where}: {text!r} is allowed only under [agent] real")
+        if not PROGRAM.fullmatch(name):
+            raise ConfigError(
+                f"{where}: {text!r} is not of the form 'process:<program>', the base name of "
+                "the program a start runs, such as process:git"
+            )
         return text
     if kind == "http" and sep:
         return check_web(text, where, pattern=pattern)

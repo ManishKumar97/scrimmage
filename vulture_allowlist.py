@@ -147,6 +147,7 @@ _.delete_doc  # tests/fakes/docs_server.py: the MCP server calls its tools by na
 _.output_model  # tests/fakes/docs_server.py: read by the MCP server's result check
 _._handle_resumption_request  # tests/test_mcp.py: a stand-in the MCP gate wraps by name
 _.handle_get_stream  # tests/test_mcp.py: a stand-in the MCP gate wraps by name
+_.patched_httpx2  # tests/test_service_units.py: a fixture, which pytest.mark.usefixtures names
 _.signals_kept  # tests/conftest.py: a fixture, which pytest.mark.usefixtures names as text
 _.fast_tests_start_no_process  # tests/conftest.py: an autouse fixture, which pytest runs by itself
 _.no_sender_thread_outlives_its_test  # tests/conftest.py: an autouse fixture, run by pytest
@@ -164,3 +165,12 @@ _.answer_raising_uncaught  # tests/example/acme/guarded.py: a test's scrimmage.t
 _.answer_registry  # tests/example/acme/guarded.py: a test's scrimmage.toml names it
 _.answer_moderated  # tests/example/acme/guarded.py: a test's scrimmage.toml names it
 _.answer_in_threads  # tests/example/acme/guarded.py: a test's scrimmage.toml names it
+_.__call__  # scrimmage_core/asgi_gate.py: the server calls it, as an ASGI app
+_.chat_sync  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
+_.chat_held  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
+_.left_running  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
+_.stream_json  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
+_.go_on  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
+_._state  # scrimmage_core/process_gate.py: multiprocessing's Pool.__del__ reads it
+_.dies  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
+_._on_queue_feeder_error  # tests/test_service_processes.py: a queue's hook its feeder calls

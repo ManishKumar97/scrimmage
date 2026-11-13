@@ -4,11 +4,15 @@ A line sent twice, such as a batch the SDK retried, is written once.
 The last line of every record is the run's summary.
 """
 
+import contextlib
 import json
 import os
 import stat
 import threading
 from pathlib import Path
+from typing import cast
+
+from scrimmage_core.redact import remove_values, scrubbed
 
 RECORD_VERSION = 1
 
@@ -59,6 +63,9 @@ class RecordStore:
         folder.mkdir(mode=0o700, parents=True, exist_ok=False)
         os.chmod(folder, 0o700)
         self.folder = folder
+        # The values ${NAME} filled in. Every line is written without them, whichever side
+        # made it: this is the one place every line passes before it reaches a file.
+        self.scrub: tuple[str, ...] = ()
         self._lock = threading.Lock()
         self._seen: dict[str, set[tuple[object, ...]]] = {}
         self._lines: dict[str, list[dict[str, object]]] = {}
@@ -74,6 +81,29 @@ class RecordStore:
             fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as out:
                 out.write(data)
+
+    def scrub_file(self, path: Path) -> None:
+        """A file a run's program wrote, such as its .log, without the values ${NAME} filled
+        in: its output can print them, as the SDK's own start line names the test."""
+        if not self.scrub or not path.exists():
+            return
+        text = path.read_bytes().decode("utf-8", "surrogateescape")
+        cleaned, count = remove_values(text, self.scrub)
+        if not count:
+            return
+        import tempfile  # the runner's only: the SDK, which imports this module, never needs it
+
+        # A new file renamed over it, so a stop mid-write leaves the old one or the new one,
+        # never half of each. mkstemp makes it this user's only, as the old one was.
+        fd, temp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+        try:
+            with os.fdopen(fd, "wb") as out:
+                out.write(cleaned.encode("utf-8", "surrogateescape"))
+            os.replace(temp, path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(temp)
+            raise
 
     def path(self, run: str) -> Path:
         return self.folder / f"{run}.jsonl"
@@ -97,6 +127,7 @@ class RecordStore:
                     if key in seen:
                         continue
                     seen.add(key)
+                    line = cast(dict[str, object], scrubbed(line, self.scrub))
                     self._lines[run].append(line)
                     out.write(json.dumps(line, sort_keys=True) + "\n")
                     added += 1
@@ -108,5 +139,6 @@ class RecordStore:
 
     def close_run(self, run: str, test: str, row: str, summary: dict[str, object]) -> None:
         line = {"v": RECORD_VERSION, "run": run, "test": test, "row": row, "summary": summary}
+        line = cast(dict[str, object], scrubbed(line, self.scrub))
         with self._lock, self.path(run).open("a") as out:
             out.write(json.dumps(line, sort_keys=True) + "\n")

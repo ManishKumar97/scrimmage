@@ -22,7 +22,7 @@ from typing import Any, cast
 from scrimmage_core import hooks, tool_gate
 from scrimmage_core.errors import ScrimmageMockError, ScrimmageRefused
 from scrimmage_core.http_gate import params
-from scrimmage_core.state import RunState
+from scrimmage_core.state import ProcessState, RunState, carried, in_service
 
 LIBRARY = "langchain-core"
 MODULE = "langchain_core.tools.base"
@@ -40,11 +40,11 @@ PLUMBING = ("RunnableConfig", "CallbackManagerForToolRun", "AsyncCallbackManager
 
 # The tool whose real call is in progress. _arun often delegates to _run on the same tool,
 # and that is one call, not two.
-_inside: contextvars.ContextVar[object] = contextvars.ContextVar("scrimmage_inside")
+_inside: contextvars.ContextVar[object] = carried(contextvars.ContextVar("scrimmage_inside"))
 
 
-def install(run: RunState, stop: Callable[[str], None]) -> None:
-    hooks.on_import(MODULE, lambda module: patch(module, run, stop))
+def install(process: ProcessState, stop: Callable[[str], None]) -> None:
+    hooks.on_import(MODULE, lambda module: patch(module, process, stop))
 
 
 def gatable(module: ModuleType) -> bool:
@@ -73,20 +73,21 @@ def version() -> tuple[int, int] | None:
         return None
 
 
-def patch(module: ModuleType, run: RunState, stop: Callable[[str], None]) -> None:
+def patch(module: ModuleType, owner: ProcessState | RunState, stop: Callable[[str], None]) -> None:
+    """owner: the process, or a run's own process; the adapter keeps no run."""
+    process = owner.process if isinstance(owner, RunState) else owner
     if not gatable(module):
         message = (
             f"{LIBRARY} does not have the functions Scrimmage gates, so its tools cannot be "
             "checked, and the program is stopped"
         )
-        run.notice("structure", LIBRARY, message)
-        stop(message)
+        process.structure(LIBRARY, message, stop)
         return
-    run.newer_version(LIBRARY, version(), TESTED)
+    process.newer_version(LIBRARY, version(), TESTED)
     base = module.BaseTool
     failure = module.ToolException
     create = base.__init__
-    library = Library(base, entry_points(base), failure, run)
+    library = Library(base, entry_points(base), failure, process)
     made = vars(base)["__init_subclass__"].__func__
     # By id: a pydantic model has no hash, so a WeakSet cannot hold one.
     tools: weakref.WeakValueDictionary[int, Any] = weakref.WeakValueDictionary()
@@ -110,9 +111,9 @@ def patch(module: ModuleType, run: RunState, stop: Callable[[str], None]) -> Non
         """Record whether a call to this tool reaches a gate. Says why not, if it does not."""
         reason = skips_gate(tool, library)
         if reason is None:
-            run.adapted.add(tool.name)  # offered to the model, it will reach a gate
+            process.adapted.add(tool.name)  # offered to the model, it will reach a gate
         else:
-            run.blocked[tool.name] = reason
+            process.blocked[tool.name] = reason
         return reason
 
     def recheck() -> None:
@@ -121,7 +122,7 @@ def patch(module: ModuleType, run: RunState, stop: Callable[[str], None]) -> Non
         for tool in live:
             vet(tool)
 
-    run.rechecks.append(recheck)
+    process.rechecks.append(recheck)
     base.__init__ = tracked_init
     if "model_copy" in vars(base):  # a copy has no __init__; older versions lack this method
         copied = vars(base)["model_copy"]
@@ -135,7 +136,7 @@ def patch(module: ModuleType, run: RunState, stop: Callable[[str], None]) -> Non
         base.model_copy = tracked_copy
     base.__init_subclass__ = classmethod(tracked_subclass)
     for name in ENTRIES:
-        setattr(base, name, checked(vars(base)[name], run, vet))
+        setattr(base, name, checked(vars(base)[name], process, vet))
 
 
 def owner_of(cls: type, name: str) -> type:
@@ -180,12 +181,12 @@ def entry_points(base: type) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class Library:
-    """What the checks need to know about the library and this run."""
+    """What the checks need to know about the library and this process."""
 
     base: type
     entries: tuple[str, ...]
     failure: type[Exception]
-    run: RunState
+    process: ProcessState
 
 
 def overrides(cls: type, library: Library) -> list[str]:
@@ -208,12 +209,21 @@ def override_problem(tool: Any, name: str) -> str:
     )
 
 
-def refusal(run: RunState, name: str) -> Callable[..., Any]:
-    """Stands in for an override that may never reach a gate, so its code never runs."""
+def refusal(process: ProcessState, name: str, original: object) -> Callable[..., Any]:
+    """Stands in for an override that may never reach a gate, so its code never runs in a run.
 
-    def refuse(tool: Any, *args: Any, **kwargs: Any) -> None:
+    In a service a plain request, or code outside any request, gets the override itself:
+    Scrimmage changes nothing outside a test's runs."""
+
+    def refuse(tool: Any, *args: Any, **kwargs: Any) -> Any:
+        run = process.current()
+        if run is None and in_service():
+            getter = getattr(original, "__get__", None)
+            own = getter(tool, type(tool)) if getter is not None else original
+            return cast("Callable[..., Any]", own)(*args, **kwargs)
         message = override_problem(tool, name)
-        run.cannot_gate(tool.name, message)
+        if run is not None:
+            run.cannot_gate(tool.name, message)
         raise ScrimmageRefused(message)
 
     return tool_gate.mark(refuse)
@@ -229,7 +239,8 @@ def guard_class(cls: type, library: Library) -> tuple[bool, list[str]]:
     for name in replaced:
         # On this class, not the owner: the owner can be a mixin other classes use too.
         if not tool_gate.is_gate(getattr(cls, name)):
-            setattr(cls, name, refusal(library.run, name))
+            original = inspect.getattr_static(cls, name)
+            setattr(cls, name, refusal(library.process, name, original))
     return gated, replaced
 
 
@@ -247,18 +258,24 @@ def skips_gate(tool: Any, library: Library) -> str | None:
 
 
 def checked(
-    entry: Callable[..., Any], run: RunState, vet: Callable[[Any], str | None]
+    entry: Callable[..., Any], process: ProcessState, vet: Callable[[Any], str | None]
 ) -> Callable[..., Any]:
     """Gate a tool again as it is called, for _run assigned after the tool was made.
 
     This only checks: an injected failure is raised at the gate, inside the error handling.
+    In a service, a call with no run is only noted: nothing outside a test's runs is refused.
     """
 
     def check(tool: Any) -> None:
         reason = vet(tool)
-        if reason is not None:
+        if reason is None:
+            return
+        run = process.current()
+        if run is None and in_service():
+            return
+        if run is not None:
             run.cannot_gate(tool.name, reason)
-            raise ScrimmageRefused(reason)
+        raise ScrimmageRefused(reason)
 
     if inspect.iscoroutinefunction(entry):
 

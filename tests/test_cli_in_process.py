@@ -249,7 +249,7 @@ def test_a_signal_noted_before_the_handlers_still_stops_the_runs(
     original = Runner.one
 
     def watching(self: Runner, row: object) -> RunResult | None:
-        result = original(self, row)  # type: ignore[arg-type]
+        result = runner.settled([original(self, row)])[0]  # type: ignore[arg-type]
         if result is not None:
             started.append(result.run)
         return result
@@ -279,7 +279,7 @@ def test_the_noted_signal_stops_the_runs_without_waiting_for_the_watcher(
         gate.wait(WAIT_S)
 
     def watching(self: Runner, row: object) -> RunResult | None:
-        result = original(self, row)  # type: ignore[arg-type]
+        result = runner.settled([original(self, row)])[0]  # type: ignore[arg-type]
         gate.set()
         if result is not None:
             started.append(result.run)

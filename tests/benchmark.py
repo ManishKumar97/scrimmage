@@ -132,8 +132,15 @@ class Servers:
     mcp: str  # the MCP server's arguments, split on |, as the agent passes them on
 
 
-def toml(*, budget: str, mocks: bool, miss: bool = False) -> str:
-    """The scrimmage.toml of the bench agent. A mock that goes unused is a test mistake."""
+# Values the file reads from the environment, which every record line is scrubbed of.
+SCRUB_ENV = {f"BENCH_SCRUB_{n}": f"bench-scrub-value-{n}-0123456789" for n in range(4)}
+
+
+def toml(*, budget: str, mocks: bool, miss: bool = False, scrub: bool = False) -> str:
+    """The scrimmage.toml of the bench agent. A mock that goes unused is a test mistake.
+    scrub: the test's name and forbid rules read SCRUB_ENV, so each line is scrubbed."""
+    name = "bench " + " ".join(f"${{{key}}}" for key in SCRUB_ENV) if scrub else "bench"
+    forbid = "forbid = [" + ", ".join(f'"${{{key}}}"' for key in SCRUB_ENV) + "]" if scrub else ""
     tools = ", ".join(
         f'"benchmark_agent:{name}"'
         for name in ("tool_sync", "tool_async", "tool_mock", "tool_miss")
@@ -161,9 +168,10 @@ def toml(*, budget: str, mocks: bool, miss: bool = False) -> str:
         max_cost_usd = {budget}
 
         [[test]]
-        name = "bench"
+        name = "{name}"
         question = "go"
         expect = ["ok"]
+        {forbid}
 
         """)
         + (
@@ -253,15 +261,18 @@ def run_gated(
     *,
     mode: str = "samples",
     profile: Path | None = None,
+    scrub: bool = False,
 ) -> dict[str, dict[str, list[int]]]:
     """The agent under a real scrimmage test."""
     project = out.parent / f"project-{out.stem}"
     project.mkdir()
     mocks = "tool_mock" in cases
     (project / "scrimmage.toml").write_text(
-        toml(budget=budget, mocks=mocks, miss="tool_miss" in cases)
+        toml(budget=budget, mocks=mocks, miss="tool_miss" in cases, scrub=scrub)
     )
     env = call_env(servers, cases, out, mode=mode, profile=profile)
+    if scrub:
+        env.update(SCRUB_ENV)
     result = subprocess.run(
         [SCRIMMAGE, "test", str(project / "scrimmage.toml")],
         env=env,
@@ -356,7 +367,9 @@ def measure_calls(rounds: int, tmp: Path, servers: Servers) -> list[CallRow]:
     return [*rows.values(), *free.values()]
 
 
-def batched_added_us(servers: Servers, tmp: Path, name: str) -> dict[str, tuple[float, float]]:
+def batched_added_us(
+    servers: Servers, tmp: Path, name: str, *, scrub: bool = False
+) -> dict[str, tuple[float, float]]:
     """Per case, the time in µs in a gated process and in a plain one, which has no gates.
 
     Each is the smallest of its batch medians, so a stretch of load only makes a batch
@@ -364,7 +377,9 @@ def batched_added_us(servers: Servers, tmp: Path, name: str) -> dict[str, tuple[
     regression signal for the budget test, not a number to publish.
     """
     plain = run_plain(servers, tmp / f"{name}-plain.json", PLAIN_CASES, mode="batches")
-    gated = run_gated(servers, tmp / f"{name}-gated.json", PLAIN_CASES, "1000", mode="batches")
+    gated = run_gated(
+        servers, tmp / f"{name}-gated.json", PLAIN_CASES, "1000", mode="batches", scrub=scrub
+    )
     return {
         case: (us(min(data["batches"])), us(min(plain[case]["batches"])))
         for case, data in gated.items()

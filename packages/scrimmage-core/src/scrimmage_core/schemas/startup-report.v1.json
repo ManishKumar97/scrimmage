@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:scrimmage:schema:startup-report:v1",
+  "title": "Scrimmage startup report, version 1",
+  "description": "What a service process answers the runner's signed probe with: how it was started and what its gates found before any run. It holds no token, no plan and nothing of a run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "v",
+    "sdk",
+    "python",
+    "executable",
+    "pid",
+    "mode",
+    "gates",
+    "libraries",
+    "chained_sitecustomize",
+    "tools",
+    "notices",
+    "server_time"
+  ],
+  "properties": {
+    "v": {
+      "description": "The report's version.",
+      "const": 1
+    },
+    "sdk": {
+      "description": "The version of scrimmage-core in the service.",
+      "type": "string"
+    },
+    "python": {
+      "description": "The service's Python, as `sys.version` gives it.",
+      "type": "string"
+    },
+    "executable": {
+      "description": "The path of the service's Python, with any secret in it removed.",
+      "type": "string"
+    },
+    "pid": {
+      "description": "The process that answered.",
+      "type": "integer"
+    },
+    "mode": {
+      "description": "How the SDK runs in this process.",
+      "const": "service"
+    },
+    "gates": {
+      "description": "The entry gates installed in this process, such as `asgi` for uvicorn and `starlette`.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "libraries": {
+      "description": "Each gated library the service has imported, and its version.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "chained_sitecustomize": {
+      "description": "True when the sitecustomize Python loaded is not Scrimmage's, as when the service has one of its own earlier on its path.",
+      "type": "boolean"
+    },
+    "tools": {
+      "description": "The names the model sees for the tools SCRIMMAGE_TOOLS names, sorted.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "notices": {
+      "description": "Notices a gate gave with no run open, such as a library too new or missing what a gate needs.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/notice"
+      }
+    },
+    "server_time": {
+      "description": "The service's clock when it answered, in seconds since the epoch.",
+      "type": "number"
+    }
+  },
+  "$defs": {
+    "notice": {
+      "description": "One notice given with no run.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "notice",
+        "library",
+        "message"
+      ],
+      "properties": {
+        "notice": {
+          "description": "Its kind, such as `structure` or `newer_version`.",
+          "type": "string"
+        },
+        "library": {
+          "description": "The library it is about, or `scrimmage`.",
+          "type": "string"
+        },
+        "message": {
+          "description": "What it says, as stderr printed it.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

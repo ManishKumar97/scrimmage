@@ -72,7 +72,7 @@
     },
     "real_label": {
       "type": "string",
-      "pattern": "^(tool:([A-Za-z0-9_-]+|\\*)|mcp:[^\\s/*]([^*]*[^\\s/*])?|hosted:mcp/[A-Za-z0-9_.-]+|process:python|http:([A-Za-z0-9][A-Za-z0-9._-]*|\\[?[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*\\]?)( [A-Za-z][A-Za-z-]*( /[!\"$->@-~]*)?)?)$"
+      "pattern": "^(tool:([A-Za-z0-9_-]+|\\*)|mcp:[^\\s/*]([^*]*[^\\s/*])?|hosted:mcp/[A-Za-z0-9_.-]+|process:[A-Za-z0-9_][A-Za-z0-9._+-]*|http:([A-Za-z0-9][A-Za-z0-9._-]*|\\[?[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*\\]?)( [A-Za-z][A-Za-z-]*( /[!\"$->@-~]*)?)?)$"
     },
     "method": {
       "type": "string",
@@ -146,13 +146,62 @@
           "required": [
             "command"
           ]
+        },
+        {
+          "required": [
+            "service"
+          ]
         }
       ],
       "dependentSchemas": {
         "answer": {
-          "required": [
-            "function"
+          "anyOf": [
+            {
+              "required": [
+                "function"
+              ]
+            },
+            {
+              "required": [
+                "service"
+              ]
+            }
           ]
+        },
+        "body": {
+          "required": [
+            "service"
+          ]
+        },
+        "headers": {
+          "required": [
+            "service"
+          ]
+        },
+        "record_grace_s": {
+          "required": [
+            "service"
+          ]
+        },
+        "record_wait_s": {
+          "required": [
+            "service"
+          ]
+        },
+        "background_real": {
+          "required": [
+            "service"
+          ]
+        },
+        "service": {
+          "required": [
+            "body"
+          ],
+          "not": {
+            "required": [
+              "children"
+            ]
+          }
         }
       },
       "properties": {
@@ -254,6 +303,51 @@
         "answer": {
           "type": "string",
           "pattern": "^[A-Za-z_]\\w*(\\[-?\\d+\\]|\\.[A-Za-z_]\\w*)*$"
+        },
+        "service": {
+          "type": "string",
+          "pattern": "^http://[^/?#\\s]+(/[^#\\s]*)?$",
+          "description": "An agent inside a web service: http://host:port/path, sent one POST per run. https is not read in this version."
+        },
+        "body": {
+          "type": [
+            "string",
+            "object",
+            "array"
+          ],
+          "description": "A service run's body, sent as JSON. It must hold {question} in a text value; {session} is new for every run, and {{ and }} are a brace."
+        },
+        "headers": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+            "not": {
+              "pattern": "^([Xx]-[Ss][Cc][Rr][Ii][Mm][Mm][Aa][Gg][Ee]-.*|[Hh][Oo][Ss][Tt]|[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Ll][Ee][Nn][Gg][Tt][Hh]|[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Tt][Yy][Pp][Ee]|[Tt][Rr][Aa][Nn][Ss][Ff][Ee][Rr]-[Ee][Nn][Cc][Oo][Dd][Ii][Nn][Gg]|[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn])$"
+            }
+          },
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "A service run's headers. A value may hold ${NAME} and {session}, never {question}. Scrimmage sets x-scrimmage-*, Host, Content-Length, Content-Type, Transfer-Encoding and Connection itself."
+        },
+        "record_grace_s": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 60,
+          "description": "How long a service run's record stays open after its reply. Default 5."
+        },
+        "record_wait_s": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 120,
+          "description": "How much longer the runner waits for a service run's last lines. Default 10."
+        },
+        "background_real": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/real_label"
+          },
+          "description": "Calls that work outside any request, such as a telemetry exporter, may make for real while a test runs. Never read for a call inside a run."
         }
       }
     },
@@ -767,13 +861,10 @@
     },
     "plain_text": {
       "type": "string",
-      "not": {
-        "pattern": "\\$\\{"
-      },
-      "description": "Text with no ${, as ${...} placeholders are not read in this version."
+      "description": "Text. ${NAME} is read from the environment when the file is read, and $${ is a literal ${."
     },
     "value": {
-      "description": "Any value the file holds, at any depth, with no ${ in its text.",
+      "description": "Any value the file holds, at any depth.",
       "anyOf": [
         {
           "$ref": "#/$defs/plain_text"
@@ -805,10 +896,7 @@
     "change_text": {
       "type": "string",
       "maxLength": 65536,
-      "not": {
-        "pattern": "\\$\\{"
-      },
-      "description": "Text with no ${. At most 64 KiB."
+      "description": "Text. At most 64 KiB."
     },
     "change_find": {
       "$ref": "#/$defs/change_text",
