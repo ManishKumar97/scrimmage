@@ -1595,9 +1595,6 @@ def refused_unchecked(service: state.ProcessState, queue: Any) -> None:
 
 
 @pytest.mark.design("service.feeder_items")
-# The refused send's error holds the feeder's frame, and so the pickled item, a view into a
-# BytesIO: collected together, the BytesIO reports the view as an unraisable BufferError.
-@pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning")
 def test_a_feeder_whose_check_was_taken_away_has_no_send_of_its_own(
     service: state.ProcessState, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1617,7 +1614,40 @@ def test_a_feeder_whose_check_was_taken_away_has_no_send_of_its_own(
         monkeypatch.undo()
         queue.close()
         queue.join_thread()
-        gc.collect()  # here, where the warning above is ignored, not in a later test
+
+
+@pytest.mark.design("service.feeder_items")
+def test_a_refused_send_keeps_nothing_of_the_buffer_it_was_given(
+    service: state.ProcessState,
+) -> None:
+    """The refusal's error must not sit in a reference cycle with the frames it crossed: a
+    feeder's pickled item is a view into a BytesIO, and the view lives as long as those
+    frames. Where a cycle holds it, the BytesIO cannot close until the collector runs, and
+    then it reports an unraisable BufferError in whichever test is running."""
+    import io
+
+    mine, other = multiprocessing.get_context("spawn").Pipe()
+    run = a_run(service)
+    gc.collect()
+    gc.disable()
+    try:
+        buffer = io.BytesIO(b"run's data")
+
+        def send() -> None:
+            view = buffer.getbuffer()
+            mine.send_bytes(view)
+
+        try:  # not pytest.raises, whose own record of the error may be a cycle
+            under(run, send)
+        except ScrimmageRefused as error:
+            assert "inside a test run" in str(error)
+        else:
+            pytest.fail("the send was not refused")
+        buffer.close()  # raises BufferError while a view of it is still held
+    finally:
+        gc.enable()
+        for each in (mine, other):
+            each.close()
 
 
 class SlowWhenPickled:

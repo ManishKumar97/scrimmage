@@ -395,7 +395,10 @@ async def carried(
         step.extra["recorded"] = run.recorded(lambda: found)
     run.finish(step, mistake=mistake)
     if cancel is not None:
-        raise cancel
+        try:
+            raise cancel
+        finally:
+            del cancel  # else it names a traceback that names this frame, and so itself
     return reply
 
 
@@ -689,9 +692,7 @@ def fault_reply(module: ModuleType, run: RunState, step: Step, method: str) -> d
     fault = run.plan.faults[step.decision.fault or 0]
     if fault.do == "timeout":
         code = module.types.REQUEST_TIMEOUT
-        error = module.MCPError(code=code, message=f"Request {method!r} timed out")
-        run.finish(step, error=error)
-        raise error
+        run.fail(step, module.MCPError(code=code, message=f"Request {method!r} timed out"))
     if fault.do == "empty":
         return tool_result([])
     text = f"Error executing tool {step.call.name}"
