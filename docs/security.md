@@ -142,6 +142,14 @@ In a container the service must run as the file's owner, or it stops and names t
 
 *Checked by: `tests/test_control_tls.py::test_a_token_file_owned_by_another_uid_names_the_user_setting`*
 
+In a Kubernetes pod the token and the control key are files of a Secret volume, which the kubelet writes as root with the pod's `fsGroup` as group, mode `440`, on a read-only mount.
+Scrimmage reads such a file only through the kubelet's own links, and only when root owns it, its group is the process's, no bit is set for others and the mount is read-only; it checks all of that on the open file.
+Any one of the process's groups counts, so a group from the pod's `supplementalGroups` passes too.
+Every container in the pod shares the group, so every container in the pod can read the token; the pod is the boundary, as it is for any Secret.
+No other pod sees the volume.
+
+*Checked by: `tests/test_secret_file.py::test_a_kubernetes_secret_file_is_accepted`, `tests/test_secret_file.py::test_a_link_out_of_the_folder_is_refused`, `tests/test_secret_file.py::test_a_secret_file_others_can_read_is_refused`, `tests/test_secret_file.py::test_all_three_readers_use_the_rule`*
+
 Each process that serves the app removes the file's path from its own environment, so a program it starts never learns where the token is.
 The token stays in that process's memory for the service's life, where any code in the process can read it.
 
