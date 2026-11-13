@@ -14,5 +14,6 @@ tests/compose/service/app/
 tests/compose/service/token
 tests/compose/service/*.key
 images/runner/wheels/
+tests/k8s/fake_model/app/
 images/runner/token
 images/runner/*.key

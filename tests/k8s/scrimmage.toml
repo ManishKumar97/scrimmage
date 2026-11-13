@@ -1,0 +1,35 @@
+# The Job's file, the ConfigMap scrimmage-config. The tests below it are the example's.
+# POD_IP is the runner pod's own address from the downward API, so the agent's pods reach the
+# control server there. The Service `scrimmage` and the certificate's names point at it.
+[agent]
+service     = "http://acme-agent:8000/chat"
+body        = {message = "{question}", session = "{session}"}
+answer      = "reply"
+tools       = ["acme.tools:get_order", "acme.tools:check_inventory", "acme.tools:refund_order", "acme.tools:get_stock"]
+real        = ["tool:check_inventory", "process:uname"]
+model_hosts = [{host = "fake-model", provider = "openai"}]
+control     = "${POD_IP}:7700"
+control_tls = {cert = "/run/scrimmage/tls/tls.crt", key = "/run/scrimmage/tls/tls.key"}
+runs = 30
+record_grace_s = 0.2
+record_wait_s = 10
+run_timeout = 30
+
+[[test]]
+name     = "order-status"
+question = "Where is order 1234?"
+expect   = ["shipped", ["Oct 30", "October 30"]]
+
+[[test.mock]]
+call    = "tool:get_order"
+returns = "shipped, Oct 30"
+
+[[test.mock]]
+call    = "tool:get_stock"             # returns an acme.models.Stock object
+returns = {sku = "SKU-42", count = 12}
+
+[[test.fault]]
+call = "tool:get_order"
+do   = "timeout"
+expect = [["unable", "sorry", "try again"]]
+forbid = ["Oct 30", "October 30"]

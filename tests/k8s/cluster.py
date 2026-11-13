@@ -19,6 +19,7 @@ import tempfile
 import time
 import tomllib
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,15 @@ from k8s import images
 HERE = Path(__file__).parent
 PINS: dict[str, Any] = tomllib.loads((HERE / "versions.toml").read_text())
 KIND_CONFIG = HERE / "kind.yaml"
+MANIFESTS = HERE / "manifests"
+CONFIG_FILE = HERE / "scrimmage.toml"
+TOKEN_SECRET = "scrimmage-token"
+CONFIG_MAP = "scrimmage-config"
+# What every test namespace holds before its workloads start: the accounts, the volume claim,
+# the Services and the policies. A workload applied first would fail on a missing account.
+FOUNDATION = ("service-accounts.yaml", "records-pvc.yaml", "services.yaml", "network-policies.yaml")
+WORKLOADS = ("fake-model.yaml", "agent.yaml")
+PSA_MODES = ("enforce", "warn", "audit")
 POD_CIDR = "192.168.0.0/16"
 MEMORY_NEEDED_KB = 6 * 1024 * 1024
 ROOM_WAIT_S = 1200.0
@@ -41,6 +51,24 @@ NETWORK = "scrimmage-kind"
 
 class ClusterError(AssertionError):
     """The cluster cannot be made or used. An AssertionError, so a test shows it as a failure."""
+
+
+@dataclass(frozen=True)
+class Tags:
+    """The image tags the manifests name as <image>:TAG, each one built and loaded first."""
+
+    runner: str
+    agent: str
+    fake_model: str
+
+    def render(self, text: str) -> str:
+        for placeholder, tag in (
+            ("scrimmage-runner:TAG", self.runner),
+            ("scrimmage-compose-service:TAG", self.agent),
+            ("scrimmage-fake-model:TAG", self.fake_model),
+        ):
+            text = text.replace(placeholder, tag)
+        return text
 
 
 def lane() -> str:
@@ -433,16 +461,131 @@ class Cluster:
         remove_network_if_unused()
 
     @contextlib.contextmanager
-    def namespace(self) -> Iterator[str]:
-        """A namespace of its own, deleted after the test."""
+    def namespace(
+        self, *, restricted: bool = False, modes: tuple[str, ...] = PSA_MODES
+    ) -> Iterator[str]:
+        """A namespace of its own, deleted after the test. `restricted` makes it from the
+        committed template, which enforces, warns and audits the Pod Security restricted
+        standard; without it the namespace is bare, for a test of the cluster itself. `modes`
+        keeps only those of the three, so a test can see what one label does alone."""
         name = f"s8-{secrets.token_hex(4)}"
-        self.kubectl("create", "namespace", name)
+        if restricted:
+            template = (MANIFESTS / "namespace.yaml").read_text().replace("NAMESPACE", name)
+            left_out = tuple(f"pod-security.kubernetes.io/{m}" for m in PSA_MODES if m not in modes)
+            template = "".join(
+                line
+                for line in template.splitlines(keepends=True)
+                if not line.strip().startswith(left_out)
+            )
+            self.kubectl("apply", "-f", "-", input=template)
+        else:
+            self.kubectl("create", "namespace", name)
         try:
             yield name
         finally:
             self.kubectl(
                 "delete", "namespace", name, "--wait=false", "--ignore-not-found", check=False
             )
+
+    def apply(
+        self,
+        namespace: str,
+        files: tuple[str, ...],
+        tags: Tags,
+        *,
+        dry_run: bool = False,
+    ) -> str:
+        """Server-side apply of committed manifests, with the image tags filled in. Returns what
+        kubectl printed on stderr, where the Pod Security warnings are. `dry_run` runs admission
+        and creates nothing."""
+        text = "\n---\n".join(tags.render((MANIFESTS / name).read_text()) for name in files)
+        command = ["apply", "--server-side", "-n", namespace, "-f", "-"]
+        if dry_run:
+            command.append("--dry-run=server")
+        return self.kubectl(*command, input=text).stderr
+
+    def create_token_secret(self, namespace: str) -> str:
+        """The token Secret, made from stdin. The token is on no command line and in no file."""
+        token = secrets.token_hex(32)
+        secret = {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {"name": TOKEN_SECRET, "namespace": namespace},
+            "stringData": {"token": token},
+        }
+        self.kubectl("apply", "-f", "-", input=json.dumps(secret))
+        return token
+
+    def create_config_map(self, namespace: str) -> None:
+        """The Job's file, scrimmage.toml, as the ConfigMap the Job mounts."""
+        config = {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": CONFIG_MAP, "namespace": namespace},
+            "data": {"scrimmage.toml": CONFIG_FILE.read_text()},
+        }
+        self.kubectl("apply", "-f", "-", input=json.dumps(config))
+
+    def deploy(self, namespace: str, tags: Tags) -> str:
+        """Everything except the Job and the reader: the certificate and its two Secrets, the
+        token, the file, the accounts, the volume claim, the Services, the policies, the fake
+        model and the agent. Returns every warning kubectl printed, which is empty when the
+        namespace's standard accepts it all. Returns before any pod is Ready; see wait_ready."""
+        self.issue_control_certificate(namespace)
+        self.create_token_secret(namespace)
+        self.create_config_map(namespace)
+        warnings = self.apply(namespace, FOUNDATION, tags)
+        return warnings + self.apply(namespace, WORKLOADS, tags)
+
+    def deployment_ready(self, namespace: str, name: str) -> bool:
+        found = self.json("get", "deployment", name, "-n", namespace, check=False) or {}
+        wanted = found.get("spec", {}).get("replicas", 1)
+        status = found.get("status", {})
+        return (
+            status.get("readyReplicas", 0) == wanted
+            and status.get("updatedReplicas", 0) == wanted
+            and status.get("replicas", 0) == wanted
+        )
+
+    def wait_ready(self, namespace: str, *names: str, timeout: float = 180) -> None:
+        """Every named Deployment has all its replicas Ready. An event that says a pod will
+        never start fails the wait at once."""
+        self.wait_until(
+            f"Deployments {', '.join(names)}",
+            lambda: all(self.deployment_ready(namespace, name) for name in names),
+            timeout=timeout,
+            namespace=namespace,
+        )
+
+    def pod_ready(self, namespace: str, name: str) -> bool:
+        pod = self.json("get", "pod", name, "-n", namespace, check=False)
+        conditions = (pod or {}).get("status", {}).get("conditions", [])
+        return any(c["type"] == "Ready" and c["status"] == "True" for c in conditions)
+
+    def start_reader(self, namespace: str, tags: Tags) -> None:
+        """The reader pod, which holds the records volume read-only and runs nothing else."""
+        self.apply(namespace, ("reader.yaml",), tags)
+        self.wait_until(
+            "the reader pod",
+            lambda: self.pod_ready(namespace, "reader"),
+            timeout=120,
+            namespace=namespace,
+        )
+
+    def reader_exec(
+        self, namespace: str, *command: str, check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
+        """A command in the reader pod. kubectl exec keeps stdout and stderr apart."""
+        return self.kubectl("exec", "reader", "-n", namespace, "--", *command, check=check)
+
+    def exit_code(self, namespace: str, pod: str) -> int | None:
+        """The exit code of the pod's first container, from the pod's status; None while it
+        has not ended. It is never read from the pod's log."""
+        found = self.json("get", "pod", pod, "-n", namespace, check=False) or {}
+        for status in found.get("status", {}).get("containerStatuses", []):
+            ended = status.get("state", {}).get("terminated")
+            return int(ended["exitCode"]) if ended else None
+        return None
 
     def issue_control_certificate(self, namespace: str) -> None:
         """A server certificate for scrimmage.<namespace>, from the authority, then the two

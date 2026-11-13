@@ -1,0 +1,9 @@
+# The fake OpenAI API for the kind tests: the standard library only, plus the fixture files.
+# Nothing is fetched while it builds; the harness stages app/ first and builds with
+# `docker build --network none`. No ARG or ENV here holds a secret.
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+COPY app/ /app/
+WORKDIR /app
+USER 10001:10001
+ENTRYPOINT ["python", "/app/serve.py"]
