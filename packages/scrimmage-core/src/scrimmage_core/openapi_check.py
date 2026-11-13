@@ -4,32 +4,20 @@ A pure module: the parsed document, the route and the rendered body go in, and
 warnings and notes come out. It checks a small subset of JSON Schema and nothing else.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import cast
 
 REF_PREFIX = "#/components/schemas/"
 REF_DEPTH = 8  # a $ref chain longer than this is a cycle, and is left unchecked
-# Keywords the subset does not check. A schema that uses one earns the "not checked" note.
-UNCHECKED = frozenset(
-    {
-        "oneOf",
-        "allOf",
-        "not",
-        "pattern",
-        "format",
-        "enum",
-        "const",
-        "minimum",
-        "maximum",
-        "minLength",
-        "maxLength",
-        "minItems",
-        "maxItems",
-    }
+# Keywords the code reads, and annotations that change no check. Any other keyword in a
+# schema that is checked earns the "not checked" note.
+READ = frozenset({"type", "required", "properties", "additionalProperties", "$ref", "anyOf"})
+ANNOTATIONS = frozenset(
+    {"title", "description", "default", "examples", "deprecated", "readOnly", "writeOnly"}
 )
 NOT_CHECKED_NOTE = (
-    "/openapi.json: keywords outside the checked subset, such as oneOf, pattern and "
-    "format, are not checked"
+    "/openapi.json: some of the schema is not checked, such as items, oneOf, pattern and "
+    "format, a $ref outside components/schemas, and fields more than one level down"
 )
 
 Schema = dict[str, object]
@@ -39,6 +27,15 @@ Schema = dict[str, object]
 class Result:
     warnings: tuple[str, ...]
     notes: tuple[str, ...]
+
+
+@dataclass
+class _Out:
+    says: str
+    where: str
+    warnings: list[str] = field(default_factory=lambda: [])
+    notes: list[str] = field(default_factory=lambda: [])
+    skipped: bool = False
 
 
 def check_template(
@@ -52,22 +49,24 @@ def check_template(
 ) -> Result:
     """Check body against what document says POST route takes.
 
-    prefix is the path prefix the document was found under; it is taken off route
-    before the lookup, as an app mounted under a root_path lists its paths without it.
+    prefix is the path prefix the document was found under. The route with it taken
+    off is looked up first, as an app mounted under a root_path lists its paths without
+    it; then the route as given, as an APIRouter(prefix=...) lists it.
     """
     verb = method.upper()
     where = f"[{label}] body:"
     path = _strip_prefix(route, prefix)
     request = _request_schema(document, path, method.lower())
+    if request is None and path != route:
+        path = route
+        request = _request_schema(document, path, method.lower())
     if request is None:
-        note = f"{where} /openapi.json has no JSON request body for {verb} {path}; not checked"
+        note = f"{where} /openapi.json has no JSON request body for {verb} {route}; not checked"
         return Result((), (note,))
-    schemas = _components(document)
-    warnings: list[str] = []
-    skipped: list[bool] = []
-    says = f"{where} /openapi.json says {verb} {path}"
-    _check_object(request, body, "", schemas, says, warnings, skipped, deep=True)
-    return Result(tuple(warnings), (NOT_CHECKED_NOTE,) if skipped else ())
+    out = _Out(says=f"{where} /openapi.json says {verb} {path}", where=where)
+    _check_object(request, body, "", _components(document), out, deep=True)
+    notes = list(out.notes) + ([NOT_CHECKED_NOTE] if out.skipped else [])
+    return Result(tuple(out.warnings), tuple(notes))
 
 
 def _strip_prefix(route: str, prefix: str) -> str:
@@ -160,12 +159,38 @@ def _json_type(value: object) -> str:
     return "object"
 
 
-def _type_fits(want: object, value: object) -> bool:
-    names = [want] if isinstance(want, str) else _list(want)
+def _names(want: object) -> list[str]:
+    return [n for n in [want] if isinstance(n, str)] or [
+        n for n in _list(want) if isinstance(n, str)
+    ]
+
+
+def _type_fits(names: list[str], value: object) -> bool:
     if not names:
         return True  # a type this check cannot read is left alone
     have = _json_type(value)
-    return any(n == have or (n == "number" and have == "integer") for n in names)
+    integral = isinstance(value, float) and value.is_integer()
+    for n in names:
+        if n == have or (n == "number" and have == "integer") or (n == "integer" and integral):
+            return True
+    return False
+
+
+def _coerced(names: list[str], value: object) -> bool:
+    """A string that pydantic's lax mode turns into the wanted type."""
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if "integer" in names and text.lstrip("+-").isdigit():
+        return True
+    if "number" in names:
+        try:
+            float(text)
+        except ValueError:
+            pass
+        else:
+            return True
+    return "boolean" in names and text.lower() in ("true", "false")
 
 
 def _check_object(
@@ -173,48 +198,54 @@ def _check_object(
     value: object,
     name: str,
     schemas: Schema,
-    says: str,
-    warnings: list[str],
-    skipped: list[bool],
+    out: _Out,
     *,
     deep: bool,
 ) -> None:
     settled, nullable = _settle(schema, schemas)
-    if settled is None or (value is None and nullable):
+    if settled is None:
+        out.skipped = True  # a $ref not followed, or a chain cut at REF_DEPTH
         return
-    if UNCHECKED & settled.keys() or "anyOf" in settled:
-        skipped.append(True)
-    want = settled.get("type")
-    if want is not None and not _type_fits(want, value):
+    if value is None and nullable:
+        return
+    others = settled.keys() - READ - ANNOTATIONS
+    extra = settled.get("additionalProperties")
+    if others or "anyOf" in settled or not isinstance(extra, bool | None):
+        out.skipped = True
+    names = _names(settled.get("type"))
+    if not _type_fits(names, value):
         what = f'field "{name}"' if name else "the body"
-        warnings.append(f"{says} wants {what} as {want}; the template has {_json_type(value)}")
+        if name and _coerced(names, value):
+            out.notes.append(
+                f"{out.where} {what} is a string where /openapi.json wants "
+                f"{' or '.join(names)}; FastAPI usually coerces this (heuristic)"
+            )
+            return
+        out.warnings.append(
+            f"{out.says} wants {what} as {' or '.join(names)}; the template has {_json_type(value)}"
+        )
         return
     members = _obj(value)
-    if members is None or not deep:
+    if members is None:
+        return
+    if not deep:
+        if settled.keys() & {"properties", "required"} or extra is False:
+            out.skipped = True  # fields two levels down are not checked
         return
     given = set(members)
-    for field in _list(settled.get("required")):
-        if isinstance(field, str) and field not in given:
-            at = f"{name}.{field}" if name else field
-            warnings.append(f'{says} requires "{at}"; the template has no such field')
+    for req in _list(settled.get("required")):
+        if isinstance(req, str) and req not in given:
+            at = f"{name}.{req}" if name else req
+            out.warnings.append(f'{out.says} requires "{at}"; the template has no such field')
     props = _obj(settled.get("properties")) or {}
-    if settled.get("additionalProperties") is False:
-        for field in sorted(given - props.keys()):
-            at = f"{name}.{field}" if name else field
-            warnings.append(f'{says} allows no field "{at}"; the template has it')
-    for field, sub in props.items():
+    if extra is False:
+        for key in sorted(given - props.keys()):
+            at = f"{name}.{key}" if name else key
+            out.warnings.append(f'{out.says} allows no field "{at}"; the template has it')
+    for key, sub in props.items():
         sub_schema = _obj(sub)
-        if field not in given or sub_schema is None:
+        if key not in given or sub_schema is None:
             continue
-        at = f"{name}.{field}" if name else field
+        at = f"{name}.{key}" if name else key
         # One level down: a property's own fields are checked, theirs are not.
-        _check_object(
-            sub_schema,
-            members[field],
-            at,
-            schemas,
-            says,
-            warnings,
-            skipped,
-            deep=name == "",
-        )
+        _check_object(sub_schema, members[key], at, schemas, out, deep=name == "")

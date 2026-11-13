@@ -114,6 +114,7 @@ def test_nothing_is_checked_two_levels_down() -> None:
     schema: dict[str, object] = {"type": "object", "properties": {"a": middle}}
     result = check_template(inlined(schema), "/chat", "POST", {"a": {"b": {}}})
     assert result.warnings == ()
+    assert result.notes == (NOT_CHECKED_NOTE,)
 
 
 def test_a_ref_outside_components_is_not_followed() -> None:
@@ -123,17 +124,129 @@ def test_a_ref_outside_components_is_not_followed() -> None:
         doc = inlined({"$ref": target})
         doc["x"] = {"Strict": strict}
         doc["components"] = {"other": {"Strict": strict}}
-        assert check_template(doc, "/chat", "POST", {"message": "x"}).warnings == ()
+        top = check_template(doc, "/chat", "POST", {"message": "x"})
+        assert (top.warnings, top.notes) == ((), (NOT_CHECKED_NOTE,))
         prop = {"type": "object", "properties": {"m": {"$ref": target}}}
         doc2 = inlined(prop)
         doc2["x"] = {"Strict": strict}
-        assert check_template(doc2, "/chat", "POST", {"m": {}}).warnings == ()
+        nested = check_template(doc2, "/chat", "POST", {"m": {}})
+        assert (nested.warnings, nested.notes) == ((), (NOT_CHECKED_NOTE,))
 
 
 def test_a_ref_cycle_ends() -> None:
     doc = inlined({"$ref": "#/components/schemas/A"})
     doc["components"] = {"schemas": {"A": {"$ref": "#/components/schemas/A"}}}
-    assert check_template(doc, "/chat", "POST", {}).warnings == ()
+    result = check_template(doc, "/chat", "POST", {})
+    assert (result.warnings, result.notes) == ((), (NOT_CHECKED_NOTE,))
+
+
+def test_a_nullable_chain_cut_at_the_depth_limit_sets_the_note() -> None:
+    schemas: dict[str, object] = {
+        f"A{i}": {"anyOf": [{"$ref": f"#/components/schemas/A{i + 1}"}, {"type": "null"}]}
+        for i in range(12)
+    }
+    doc = inlined({"$ref": "#/components/schemas/A0"})
+    doc["components"] = {"schemas": schemas}
+    result = check_template(doc, "/chat", "POST", {})
+    assert (result.warnings, result.notes) == ((), (NOT_CHECKED_NOTE,))
+
+
+def test_a_list_body_with_items_sets_the_note() -> None:
+    tool: dict[str, object] = {"type": "object", "required": ["name"]}
+    schema: dict[str, object] = {"type": "array", "items": {"$ref": "#/components/schemas/Tool"}}
+    doc = inlined(schema)
+    doc["components"] = {"schemas": {"Tool": tool}}
+    result = check_template(doc, "/chat", "POST", [{}])
+    assert (result.warnings, result.notes) == ((), (NOT_CHECKED_NOTE,))
+
+
+def test_array_items_in_a_property_set_the_note() -> None:
+    schema: dict[str, object] = {
+        "type": "object",
+        "properties": {"a": {"type": "array", "items": {"type": "string"}}},
+    }
+    result = check_template(inlined(schema), "/chat", "POST", {"a": [1]})
+    assert (result.warnings, result.notes) == ((), (NOT_CHECKED_NOTE,))
+
+
+def test_keys_the_code_does_not_read_set_the_note_and_annotations_do_not() -> None:
+    for key, val in (
+        ("prefixItems", []),
+        ("patternProperties", {}),
+        ("discriminator", {}),
+        ("multipleOf", 2),
+        ("exclusiveMinimum", 0),
+        ("uniqueItems", True),
+        ("additionalProperties", {"type": "string"}),
+    ):
+        schema: dict[str, object] = {"type": "object", key: val}
+        result = check_template(inlined(schema), "/chat", "POST", {})
+        assert result.notes == (NOT_CHECKED_NOTE,), key
+    notes: dict[str, object] = {
+        "type": "object",
+        "title": "T",
+        "description": "d",
+        "default": {},
+        "examples": [{}],
+        "deprecated": False,
+        "readOnly": False,
+        "writeOnly": False,
+        "additionalProperties": True,
+    }
+    assert check_template(inlined(notes), "/chat", "POST", {}).notes == ()
+
+
+def test_a_float_with_an_integral_value_counts_as_an_integer() -> None:
+    schema: dict[str, object] = {"type": "object", "properties": {"n": {"type": "integer"}}}
+    assert check_template(inlined(schema), "/chat", "POST", {"n": 3.0}).warnings == ()
+    odd = check_template(inlined(schema), "/chat", "POST", {"n": 3.5})
+    assert odd.warnings == (
+        '[agent] body: /openapi.json says POST /chat wants field "n" as integer; '
+        "the template has number",
+    )
+
+
+def test_a_value_fastapi_would_coerce_is_a_heuristic_note_not_a_warning() -> None:
+    schema: dict[str, object] = {
+        "type": "object",
+        "properties": {
+            "max_tokens": {"type": "integer"},
+            "temp": {"type": "number"},
+            "stream": {"type": "boolean"},
+        },
+    }
+    body = {"max_tokens": "10", "temp": "0.5", "stream": "true"}
+    result = check_template(inlined(schema), "/chat", "POST", body)
+    assert result.warnings == ()
+    assert result.notes[0] == (
+        '[agent] body: field "max_tokens" is a string where /openapi.json wants integer; '
+        "FastAPI usually coerces this (heuristic)"
+    )
+    assert len(result.notes) == 3
+    for bad in ({"max_tokens": "ten"}, {"max_tokens": "1.5"}, {"stream": "maybe"}):
+        assert len(check_template(inlined(schema), "/chat", "POST", bad).warnings) == 1
+
+
+def test_a_router_prefix_route_is_found_in_full_and_the_note_names_the_route() -> None:
+    doc = inlined(CHAT, "/api/chat")
+    found = check_template(doc, "/api/chat", "POST", {"x": 1}, prefix="/api")
+    assert found.warnings[0].startswith("[agent] body: /openapi.json says POST /api/chat requires")
+    lost = check_template(doc, "/api/other", "POST", {}, prefix="/api")
+    assert lost.notes == (
+        "[agent] body: /openapi.json has no JSON request body for POST /api/other; not checked",
+    )
+
+
+def test_a_list_valued_type_prints_as_plain_words() -> None:
+    schema: dict[str, object] = {
+        "type": "object",
+        "properties": {"s": {"type": ["string", "null"]}},
+    }
+    result = check_template(inlined(schema), "/chat", "POST", {"s": 5})
+    assert result.warnings == (
+        '[agent] body: /openapi.json says POST /chat wants field "s" as string or null; '
+        "the template has integer",
+    )
 
 
 def test_a_service_under_a_prefix_is_found_at_the_prefix() -> None:
@@ -145,6 +258,7 @@ def test_a_service_under_a_prefix_is_found_at_the_prefix() -> None:
     lost = check_template(doc, "/api/chat", "POST", {"x": 1})
     assert lost.warnings == ()
     assert len(lost.notes) == 1
+    assert "POST /api/chat" in lost.notes[0]
 
 
 def test_no_openapi_document_is_one_note() -> None:
