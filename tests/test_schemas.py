@@ -257,3 +257,25 @@ def test_a_bad_file_is_rejected_by_the_parser_and_a_bad_shape_by_the_schema(
 
 def test_there_are_at_least_thirty_bad_shapes() -> None:
     assert sum(bad.shape for bad in BAD) >= 30
+
+
+@pytest.mark.design("schema.startup_report_additive")
+def test_the_startup_reports_control_error_is_an_optional_addition() -> None:
+    """A report from a service that has no `error` yet still fits, so a runner reads both."""
+    document = json.loads((SCHEMAS / "startup-report.v2.json").read_text())
+    control = document["$defs"]["control"]
+    assert control["required"] == ["reached", "tls", "detail", "rtt_ms", "runner_id", "url"]
+    assert control["properties"]["error"]["type"] == ["string", "null"]
+    check = jsonschema.Draft202012Validator(control)
+    old = {
+        "reached": False,
+        "tls": "none",
+        "detail": "timed out",
+        "rtt_ms": 5000.0,
+        "runner_id": None,
+        "url": "http://127.0.0.1:7700",
+    }
+    assert not list(check.iter_errors(old))
+    for error in ("TimeoutError", None):
+        assert not list(check.iter_errors({**old, "error": error}))
+    assert list(check.iter_errors({**old, "error": 7}))

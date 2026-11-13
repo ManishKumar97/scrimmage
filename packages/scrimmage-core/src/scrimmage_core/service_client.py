@@ -20,6 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 from scrimmage_core import openapi_check, protocol, records, tls, versions
 from scrimmage_core.config import (
@@ -374,21 +375,54 @@ def check_versions(report: dict[str, object]) -> list[str]:
     )
 
 
-def check_control(report: dict[str, object], runner_id: str) -> None:
+ROUTING_ERRORS = ("TimeoutError", "ConnectionRefusedError", "gaierror")  # asking again may help
+HINTS = {
+    "TimeoutError": (
+        "nothing answered, as when a NetworkPolicy or a firewall drops the traffic; allow the "
+        "service's pods to reach this runner on port {port}"
+    ),
+    "ConnectionRefusedError": (
+        "nothing listens there, as when a Kubernetes Service has no ready endpoints; check "
+        "that the Service's selector matches this runner's pod"
+    ),
+    "gaierror": (
+        "the name {host} does not resolve where the service runs; check the host in "
+        "SCRIMMAGE_CONTROL_URL and that the Service is in the service's namespace"
+    ),
+}
+
+
+def still_routing(report: dict[str, object] | None) -> bool:
+    """The ping failed in a way a cluster still setting up its routes explains: a timeout, a
+    refusal or a name that does not resolve yet. A certificate error, another runner's reply
+    and a control server's own error are final, and so is a ping that was never made."""
+    control = cast(dict[str, object], (report or {}).get("control") or {})
+    return control.get("reached") is not True and control.get("error") in ROUTING_ERRORS
+
+
+def check_control(report: dict[str, object], runner_id: str, *, asked_s: float) -> None:
     """The service's ping: exit 3 when it could not reach this runner's control server, or
-    reached another runner that holds the same token."""
+    reached another runner that holds the same token. asked_s: how long the runner asked
+    again, said in the message for the errors it asks again about."""
     control = cast(dict[str, object], report.get("control") or {})
-    url = control.get("url") or "the control address"
+    url = str(control.get("url") or "the control address")
     if control.get("reached") is not True:
-        hint = (
-            "check SCRIMMAGE_CONTROL_CA"
-            if str(control.get("tls")).startswith("SSL")
-            else "check that SCRIMMAGE_CONTROL_URL is an address the service can reach"
-        )
+        error = control.get("error")
+        detail = control.get("detail")
+        if error in ROUTING_ERRORS:
+            parts = urlsplit(url)
+            hint = HINTS[str(error)].format(host=parts.hostname or url, port=parts.port or "")
+            asked = f" after {asked_s:g} s of asking"
+        else:
+            asked = ""
+            hint = (
+                "check SCRIMMAGE_CONTROL_CA"
+                if str(error).startswith("SSL")
+                else "check that SCRIMMAGE_CONTROL_URL is an address the service can reach"
+            )
         raise Setup(
             3,
-            f"the service cannot reach the control server at {url}: {control.get('detail')}; "
-            f"{hint}",
+            f"the service cannot reach the control server at {url}{asked}: {detail}; {hint}",
         )
     if control.get("runner_id") != runner_id:
         raise Setup(

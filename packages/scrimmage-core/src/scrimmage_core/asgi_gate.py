@@ -400,6 +400,7 @@ def unreached(client: ControlClient, detail: str) -> dict[str, object]:
     return {
         "reached": False,
         "tls": "none" if client.context is None else "not connected",
+        "error": None,  # no ping was made, so nothing the runner could ask again about
         "detail": detail,
         "rtt_ms": 0.0,
         "runner_id": None,

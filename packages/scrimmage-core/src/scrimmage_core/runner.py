@@ -216,6 +216,7 @@ PLAN_FORM_UNKNOWN = (
 )
 READY_S = 30.0  # how long the probe asks a service that does not listen yet
 READY_STEP_S = 0.2
+CONTROL_STEP_S = 1.0  # how often the probe asks again while the service cannot reach the runner
 WAITERS = 64  # service runs whose record waits at once: the control server's connections
 
 
@@ -761,9 +762,9 @@ class Runner:
         answers, or the service's clock is too far from this machine's to go on."""
         agent = self.config.agent
         _, _, path = service_client.target(agent)
+        deadline = time.monotonic() + READY_S
         probed = service_client.probe(agent, self.token)
         reply = probed.reply
-        deadline = time.monotonic() + READY_S
 
         def starting(found: service_client.Reply) -> bool:
             """No reply yet: refused, timed out, or taken and cut by a published port. A reply
@@ -828,6 +829,32 @@ class Runner:
                 "SCRIMMAGE_SERVICE=1, its token differs, or its SDK speaks another protocol "
                 "version",
             )
+        return self.control_reached(probed, deadline)
+
+    def control_reached(
+        self, probed: service_client.Probed, deadline: float
+    ) -> service_client.Probed:
+        """Ask again while the service's ping fails the way a cluster still setting up its
+        routes explains. Only the probe is sent again: no run and no setup request."""
+        if not service_client.still_routing(probed.report):
+            return probed
+        control = cast(dict[str, object], (probed.report or {}).get("control") or {})
+        print(
+            f"scrimmage: waiting for the service to reach the control server at "
+            f"{control.get('url')}",
+            file=sys.stderr,
+            flush=True,
+        )
+        while time.monotonic() < deadline:
+            if self.cancelled or self.stop_flag:  # Ctrl-C or SIGTERM ends the wait
+                raise Interrupted(self.stop_flag[0] if self.stop_flag else "SIGINT")
+            time.sleep(min(CONTROL_STEP_S, max(deadline - time.monotonic(), 0.0)))
+            again = service_client.probe(self.config.agent, self.token)
+            if again.report is None:  # the service stopped answering: keep what the ping found
+                break
+            probed = again
+            if not service_client.still_routing(probed.report):
+                break
         return probed
 
     def tools_problem(self, report: dict[str, object]) -> str | None:
@@ -856,7 +883,7 @@ class Runner:
         problem = self.tools_problem(report)
         if problem is not None:
             raise service_client.Setup(2, problem)
-        service_client.check_control(report, self.server.runner_id)
+        service_client.check_control(report, self.server.runner_id, asked_s=READY_S)
         gap = probed.gap
         if gap is not None and abs(gap) >= service_client.CLOCK_STOP_S:
             raise service_client.Setup(3, service_client.clock_stop(gap))

@@ -27,6 +27,7 @@ import pytest
 
 from ports import free_port
 from scrimmage_core import asgi_gate, control, protocol, service_client, tls, versions
+from scrimmage_core import runner as running
 from scrimmage_core.cert import make_certificates
 from scrimmage_core.client import PING_TIMEOUT_S, ControlClient
 from scrimmage_core.control import ControlServer
@@ -430,6 +431,7 @@ def test_the_ping_reports_reached_tls_rtt_and_this_runners_id(
     assert control_object == {
         "reached": True,
         "tls": "none",
+        "error": None,
         "detail": None,
         "rtt_ms": control_object["rtt_ms"],
         "runner_id": plain.server.runner_id,
@@ -469,7 +471,7 @@ def test_a_ping_that_cannot_verify_the_certificate_names_the_error_and_the_fix(
     assert found["reached"] is False and found["tls"] == "SSLCertVerificationError", found
     assert "certificate verify failed" in found["detail"] and found["runner_id"] is None
     with pytest.raises(service_client.Setup) as stopped:
-        service_client.check_control(report, service.server.runner_id)
+        service_client.check_control(report, service.server.runner_id, asked_s=30.0)
     assert stopped.value.code == 3
     message = str(stopped.value)
     assert f"the service cannot reach the control server at {found['url']}: " in message
@@ -500,12 +502,12 @@ def test_a_ping_answered_by_another_runner_stops_the_test(bench: Bench, tmp_path
 def test_a_ping_that_fails_stops_the_test_with_exit_3_before_setup_naming_the_error(
     bench: Bench,
 ) -> None:
+    bench.monkeypatch.setattr(running, "READY_S", 0.5)  # the ping is asked again for this long
     nobody = f"http://{HOST}:{free_port()}"  # no control server listens there
     code, out = against(bench, control_url=nobody)
     assert code == 3, out
-    assert f"the service cannot reach the control server at {nobody}: " in out
+    assert f"the service cannot reach the control server at {nobody} after 0.5 s of asking: " in out
     assert "Connection refused" in out
-    assert "check that SCRIMMAGE_CONTROL_URL is an address the service can reach" in out
     sent_nothing(bench)
 
 
@@ -693,6 +695,7 @@ def test_json_of_a_run_that_reaches_setup_carries_the_ping(bench: Bench) -> None
 
 @pytest.mark.design("service.ping_stops")
 def test_json_of_a_run_that_fails_the_ping_says_why_and_has_no_ping_fields(bench: Bench) -> None:
+    bench.monkeypatch.setattr(running, "READY_S", 0.5)
     nobody = f"http://{HOST}:{free_port()}"
     service = bench.start(SCRIMMAGE_CONTROL_URL=nobody)
     code, out = bench.test(service.port, json_out=True)

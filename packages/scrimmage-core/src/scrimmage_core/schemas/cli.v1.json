@@ -262,6 +262,7 @@
           "properties": {
             "reached": {"type": "boolean"},
             "tls": {"type": "string"},
+            "error": {"type": ["string", "null"]},
             "detail": {"type": ["string", "null"]},
             "rtt_ms": {"type": "number", "minimum": 0},
             "runner_id": {"type": ["string", "null"]},

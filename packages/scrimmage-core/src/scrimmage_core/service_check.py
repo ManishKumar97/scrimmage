@@ -36,7 +36,7 @@ class Outcome:
 
 def control_line(control: dict[str, object], runner_id: str) -> Line:
     try:
-        client.check_control({"control": control}, runner_id)
+        client.check_control({"control": control}, runner_id, asked_s=running.READY_S)
     except client.Setup as setup:
         return Line("control", str(setup), INFRA_LEVEL)
     tls = control.get("tls")
