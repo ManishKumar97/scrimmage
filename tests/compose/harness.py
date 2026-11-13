@@ -141,6 +141,15 @@ def runtime_pins() -> list[str]:
     return sorted(f"{name}=={version}" for name, version in wanted.items())
 
 
+def stage_workspace_wheels(wheels: Path) -> None:
+    """Build the two workspace wheels into `wheels`, replacing any earlier ones there."""
+    for old in wheels.glob("scrimmage*.whl"):
+        old.unlink()
+    for package in ("scrimmage", "scrimmage-core"):
+        build = ["uv", "build", "--wheel", "--package", package, "--out-dir", str(wheels), "-q"]
+        sh(build, timeout=BUILD_TIMEOUT_S, cwd=REPO)
+
+
 def stage() -> None:
     """Fill wheels/ and app/ in the build context: the pinned wheels, the two workspace
     wheels built here, and the example app."""
@@ -158,11 +167,7 @@ def stage() -> None:
             command += ["--platform", platform]
         command += ["-r", str(marker), "-d", str(wheels)]
         sh(command, timeout=BUILD_TIMEOUT_S)
-    for old in wheels.glob("scrimmage*.whl"):
-        old.unlink()
-    for package in ("scrimmage", "scrimmage-core"):
-        build = ["uv", "build", "--wheel", "--package", package, "--out-dir", str(wheels), "-q"]
-        sh(build, timeout=BUILD_TIMEOUT_S, cwd=REPO)
+    stage_workspace_wheels(wheels)
     app = SERVICE / "app"
     shutil.rmtree(app, ignore_errors=True)
     shutil.copytree(EXAMPLE / "acme", app / "acme", ignore=shutil.ignore_patterns("__pycache__"))

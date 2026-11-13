@@ -13,3 +13,6 @@ tests/compose/service/wheels/
 tests/compose/service/app/
 tests/compose/service/token
 tests/compose/service/*.key
+images/runner/wheels/
+images/runner/token
+images/runner/*.key
