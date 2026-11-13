@@ -147,7 +147,6 @@ class Cluster:
         self.keep = os.environ.get("SCRIMMAGE_KIND_KEEP") == "1"
         self.folder = Path(tempfile.mkdtemp(prefix="scrimmage-kind-"))
         self.kubeconfig = self.folder / "kubeconfig"
-        self.created = False
 
     def env(self) -> dict[str, str]:
         env = dict(os.environ)
@@ -156,6 +155,14 @@ class Cluster:
         env["HELM_CACHE_HOME"] = str(self.folder / "helm-cache")
         env["HELM_CONFIG_HOME"] = str(self.folder / "helm-config")
         env["HELM_DATA_HOME"] = str(self.folder / "helm-data")
+        return env
+
+    def kind_env(self) -> dict[str, str]:
+        """kind's environment: no KUBECONFIG, because kind honours it. Then only the
+        --kubeconfig flag keeps kind away from the user's file, and a call that drops the flag
+        is seen by the test that watches that file."""
+        env = self.env()
+        del env["KUBECONFIG"]
         return env
 
     def kubectl(
@@ -184,9 +191,8 @@ class Cluster:
                 str(self.kubeconfig),
             ],
             timeout=600,
-            env=self.env(),
+            env=self.kind_env(),
         )  # no --wait: the node is not Ready until Calico runs
-        self.created = True
 
     def delete(self) -> None:
         """Delete the cluster of this session's name. Its --kubeconfig keeps kind away from
@@ -202,7 +208,7 @@ class Cluster:
                 str(self.kubeconfig),
             ],
             timeout=300,
-            env=self.env(),
+            env=self.kind_env(),
             check=False,
         )
 
