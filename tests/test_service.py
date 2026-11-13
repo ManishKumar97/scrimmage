@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 
 from conftest import EXAMPLE
+from ports import free_port
 from scrimmage_core import protocol
 from scrimmage_core.config import Mock, ModelHost
 from scrimmage_core.control import ControlServer
@@ -38,12 +39,6 @@ TOOLS = (
 )
 ACTIVE = re.compile(r"scrimmage: active in service mode \(pid (\d+)\)")
 READY = "Application startup complete"
-
-
-def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
 
 
 class Running:
