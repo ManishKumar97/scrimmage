@@ -20,6 +20,7 @@ import time
 import tomllib
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,24 @@ TOOLS = ("kind", "kubectl", "helm", "docker")
 # clusters on the machine, such as an AIOpsLab test bed, are addressed by, so it is never
 # shared, and never removed.
 NETWORK = "scrimmage-kind"
+
+
+def parse_time(text: str) -> datetime:
+    """An API timestamp, with or without fractions, as a time. Compared as text, an eventTime
+    with microseconds sorts wrong against one without."""
+    return datetime.fromisoformat(text)
+
+
+def when(metadata: dict[str, Any]) -> datetime:
+    return parse_time(metadata["creationTimestamp"])
+
+
+def event_time(item: dict[str, Any]) -> datetime:
+    """When an event last happened: lastTimestamp, else eventTime, else the time it was made."""
+    for key in ("lastTimestamp", "eventTime"):
+        if item.get(key):
+            return parse_time(item[key])
+    return when(item["metadata"])
 
 
 class ClusterError(AssertionError):
@@ -278,43 +297,73 @@ class Cluster:
         *,
         timeout: float,
         namespace: str | None = None,
-        names: tuple[str, ...] = (),
+        watch: tuple[tuple[str, str], ...] = (),
     ) -> None:
-        """Ask `check` every 2 s. When a namespace is given, an event that says a workload will
-        never start stops the wait at once, naming its message. With `names`, only an event
-        about an object named for one of them, made since the first of them was, counts."""
+        """Ask `check` every 2 s. `watch` lists the workloads being waited for, as
+        ("deployment" | "pod", name) in `namespace`. An event that says one of them will never
+        start stops the wait at once, naming its message; no other event counts, and with
+        nothing watched no event does."""
         deadline = time.monotonic() + timeout
-        since = self.created_since(namespace, names) if namespace else ""
         while True:
             if check():
                 return
-            if namespace and (event := self.bad_event(namespace, names, since)):
+            if namespace and watch and (event := self.bad_event(namespace, watch)):
                 raise ClusterError(f"waiting for {what} in {namespace}: {event}")
             if time.monotonic() > deadline:
                 raise ClusterError(f"{what} was not ready after {timeout:.0f} s")
             time.sleep(2)
 
-    def created_since(self, namespace: str, names: tuple[str, ...]) -> str:
-        """The earliest creation time of the named Deployments, as the API writes it; empty
-        when none is named or found. An older event is not about what is being waited for."""
-        times = [
-            found["metadata"]["creationTimestamp"]
-            for name in names
-            if (found := self.json("get", "deployment", name, "-n", namespace, check=False))
-        ]
-        return min(times, default="")
+    def scopes(
+        self, namespace: str, watch: tuple[tuple[str, str], ...]
+    ) -> list[tuple[set[str], datetime]]:
+        """For each watched workload, the uids an event may be about and the time before which
+        an event is old news. A Deployment's scope is its newest ReplicaSet, by revision, and
+        that ReplicaSet's pods, since an earlier rollout's failure is over. A pod's is its own."""
+        found: list[tuple[set[str], datetime]] = []
+        for kind, name in watch:
+            if kind == "pod":
+                pod = self.json("get", "pod", name, "-n", namespace, check=False)
+                if pod:
+                    found.append(({pod["metadata"]["uid"]}, when(pod["metadata"])))
+                continue
+            deployment = self.json("get", "deployment", name, "-n", namespace, check=False)
+            if not deployment:
+                continue
+            uid = deployment["metadata"]["uid"]
+            sets = [
+                r
+                for r in (self.json("get", "replicasets", "-n", namespace, check=False) or {}).get(
+                    "items", []
+                )
+                if any(o["uid"] == uid for o in r["metadata"].get("ownerReferences", []))
+            ]
+            if not sets:
+                continue
+            newest = max(
+                sets,
+                key=lambda r: int(
+                    r["metadata"].get("annotations", {}).get("deployment.kubernetes.io/revision", 0)
+                ),
+            )
+            uids = {newest["metadata"]["uid"]}
+            for pod in (self.json("get", "pods", "-n", namespace, check=False) or {}).get(
+                "items", []
+            ):
+                if any(o["uid"] in uids for o in pod["metadata"].get("ownerReferences", [])):
+                    uids.add(pod["metadata"]["uid"])
+            found.append((uids, when(newest["metadata"])))
+        return found
 
-    def bad_event(self, namespace: str, names: tuple[str, ...] = (), since: str = "") -> str | None:
+    def bad_event(self, namespace: str, watch: tuple[tuple[str, str], ...]) -> str | None:
+        scopes = self.scopes(namespace, watch)
         events = self.json("get", "events", "-n", namespace, check=False)
         for item in (events or {}).get("items", []):
             if item.get("reason") not in FAIL_FAST_EVENTS:
                 continue
-            if names and not item.get("involvedObject", {}).get("name", "").startswith(names):
-                continue
-            happened = item.get("lastTimestamp") or item.get("eventTime") or ""
-            if since and happened and happened < since:
-                continue
-            return f"{item['reason']}: {item.get('message', '')}"
+            uid = item.get("involvedObject", {}).get("uid")
+            happened = event_time(item)
+            if any(uid in uids and happened >= since for uids, since in scopes):
+                return f"{item['reason']}: {item.get('message', '')}"
         return None
 
     def nodes_ready(self) -> bool:
@@ -576,7 +625,7 @@ class Cluster:
             lambda: all(self.deployment_ready(namespace, name) for name in names),
             timeout=timeout,
             namespace=namespace,
-            names=names,
+            watch=tuple(("deployment", name) for name in names),
         )
 
     def pod_ready(self, namespace: str, name: str) -> bool:
@@ -592,6 +641,7 @@ class Cluster:
             lambda: self.pod_ready(namespace, "reader"),
             timeout=120,
             namespace=namespace,
+            watch=(("pod", "reader"),),
         )
 
     def reader_exec(

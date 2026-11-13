@@ -13,6 +13,7 @@ import json
 import subprocess
 import time
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -211,20 +212,17 @@ def test_the_token_secret_comes_from_stdin(
     assert on_stdin == [["kubectl", "apply", "--server-side"]]
 
 
-def event(namespace: str, name: str, owner: str, when: str) -> dict[str, Any]:
+def event(namespace: str, name: str, owner: dict[str, str], when: str) -> dict[str, Any]:
+    """A FailedCreate event about `owner`, a ReplicaSet named and, if it has one, with its uid."""
     return {
         "apiVersion": "v1",
         "kind": "Event",
         "metadata": {"name": name, "namespace": namespace},
         "type": "Warning",
         "reason": "FailedCreate",
-        "message": "Error creating: a refusal from long ago",
-        "involvedObject": {
-            "kind": "ReplicaSet",
-            "name": owner,
-            "namespace": namespace,
-            "apiVersion": "apps/v1",
-        },
+        "message": f"Error creating: planted {name}",
+        "involvedObject": {"kind": "ReplicaSet", "namespace": namespace, "apiVersion": "apps/v1"}
+        | owner,
         "firstTimestamp": when,
         "lastTimestamp": when,
         "count": 1,
@@ -234,19 +232,48 @@ def event(namespace: str, name: str, owner: str, when: str) -> dict[str, Any]:
 def test_a_stale_failure_event_does_not_fail_a_healthy_wait(cluster: Cluster, tags: Tags) -> None:
     healthy = pod("healthy", shipped=True)
     healthy["spec"]["containers"][0]["image"] = tags.runner
+    watched = (("deployment", "healthy"),)
     with cluster.namespace(restricted=True) as namespace:
         wait_default_account(cluster, namespace)
-        # One event is about some other object; the other names the Deployment waited for but
-        # is older than it.
-        for planted in (
-            event(namespace, "g1-other", "gone-long-ago", "2999-01-01T00:00:00Z"),
-            event(namespace, "g1-old", "healthy-0123456789", "2001-01-01T00:00:00Z"),
-        ):
-            assert apply_json(cluster, namespace, planted).returncode == 0
-        assert cluster.bad_event(namespace), "the planted events must be there to be ignored"
         made = apply_json(cluster, namespace, deployment("healthy", healthy))
         assert made.returncode == 0, made.stderr
         cluster.wait_ready(namespace, "healthy", timeout=120)
+        # A rollout: the first ReplicaSet is now an earlier one, its failure long over.
+        healthy["spec"]["containers"][0]["env"] = [{"name": "ROLLOUT", "value": "2"}]
+        assert apply_json(cluster, namespace, deployment("healthy", healthy)).returncode == 0
+        cluster.wait_ready(namespace, "healthy", timeout=120)
+        revision = "deployment.kubernetes.io/revision"
+        sets = sorted(
+            cluster.json("get", "replicasets", "-n", namespace)["items"],
+            key=lambda r: int(r["metadata"]["annotations"][revision]),
+        )
+        old, current = sets[0]["metadata"], sets[-1]["metadata"]
+        assert old["name"] != current["name"], "the rollout made no second ReplicaSet"
+        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")  # after the rollout, so recent
+        # Recent events, none about the Deployment's current ReplicaSet or its pods.
+        for planted in (
+            event(namespace, "g1-unrelated", {"name": "gone-long-ago"}, now),
+            event(namespace, "g1-lookalike", {"name": "healthy-old-7d9f", "uid": "x-1"}, now),
+            event(namespace, "g1-rollout", {"name": old["name"], "uid": old["uid"]}, now),
+        ):
+            assert apply_json(cluster, namespace, planted).returncode == 0
+        assert cluster.bad_event(namespace, watched) is None
+        cluster.kubectl("scale", "deployment", "healthy", "-n", namespace, "--replicas=2")
+        cluster.wait_ready(namespace, "healthy", timeout=120)
+        # An unscoped wait: the reader's, with the stale events still there.
+        cluster.apply(namespace, ("service-accounts.yaml", "records-pvc.yaml"), tags)
+        cluster.start_reader(namespace, tags)
+        # Positive control: an event about the current ReplicaSet does fail the wait.
+        about = {"name": current["name"], "uid": current["uid"]}
+        assert (
+            apply_json(
+                cluster,
+                namespace,
+                event(namespace, "g1-now", about, datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")),
+            ).returncode
+            == 0
+        )
+        assert "planted g1-now" in str(cluster.bad_event(namespace, watched))
 
 
 def test_the_reader_pod_reads_the_records_volume(cluster: Cluster, tags: Tags) -> None:
@@ -277,6 +304,7 @@ def test_the_reader_pod_reads_the_records_volume(cluster: Cluster, tags: Tags) -
             lambda: cluster.exit_code(namespace, "writer") is not None,
             timeout=120,
             namespace=namespace,
+            watch=(("pod", "writer"),),
         )
         assert cluster.exit_code(namespace, "writer") == 0
         cluster.kubectl("delete", "pod", "writer", "-n", namespace, "--wait=true")

@@ -158,6 +158,7 @@ def test_a_network_policy_is_enforced(cluster: Cluster, runner_image: str) -> No
             lambda: all(pod_ready(cluster, namespace, n) for n in ("server", "client")),
             timeout=120,
             namespace=namespace,
+            watch=(("pod", "server"), ("pod", "client")),
         )
         server = cluster.json("get", "pod", "server", "-n", namespace)["status"]["podIP"]
         assert dial(cluster, namespace, server) == "connected", "no policy: the first try must pass"
