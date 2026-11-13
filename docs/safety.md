@@ -115,6 +115,8 @@ These are refused under a run too, with no entry that lists them:
 - a subinterpreter: `InterpreterPoolExecutor.submit`, `Interpreter.exec`, `call` and `call_in_thread`, and a subinterpreter queue's `put`.
 
 A queue's feeder thread sends only the items a decided `put` added, by identity.
+Their contents at pickling time are not checked: an item a run changes while it waits in the buffer is sent as changed.
+A send made while an item is pickled, such as one a reducer makes, is decided as any other send.
 An item put in a queue's buffer some other way is refused when the feeder reaches it, even after the run closed, and every run open at that moment is told.
 
 Any other way to reach another process is not gated, such as shared memory, a signal or a socket of your own. See [Limits](limits.md).
