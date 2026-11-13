@@ -3991,16 +3991,20 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+cert = [
+    { name = "cryptography" },
+]
 mcp = [
     { name = "mcp" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", marker = "extra == 'cert'", specifier = ">=46" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.3,<2.4" },
     { name = "scrimmage", editable = "packages/scrimmage" },
 ]
-provides-extras = ["mcp"]
+provides-extras = ["mcp", "cert"]
 
 [[package]]
 name = "scrimmage-workspace"
@@ -4015,6 +4019,7 @@ dependencies = [
 dev = [
     { name = "coverage" },
     { name = "coverage-threads" },
+    { name = "cryptography" },
     { name = "fastmcp" },
     { name = "httpx" },
     { name = "import-linter" },
@@ -4052,6 +4057,7 @@ requires-dist = [
 dev = [
     { name = "coverage", specifier = ">=7.17" },
     { name = "coverage-threads", editable = "tools/coverage-threads" },
+    { name = "cryptography", specifier = ">=46" },
     { name = "fastmcp", specifier = ">=4.1.6" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "import-linter", specifier = ">=2.15" },

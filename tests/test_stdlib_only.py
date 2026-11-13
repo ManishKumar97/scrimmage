@@ -52,7 +52,11 @@ def imported_roots(path: Path) -> set[str]:
 CASES = [(p, ours) for src, ours in ALLOWED.items() for p in sorted(src.rglob("*.py"))]
 # The Scrimmage MCP server is a command of its own, installed with the mcp extra. It never
 # loads into the team's process: it starts each Scrimmage command as a child.
-OWN_PROCESS = {"mcp_server.py": {"anyio", "jsonschema", "mcp", "mcp_types"}}
+OWN_PROCESS = {
+    "mcp_server.py": {"anyio", "jsonschema", "mcp", "mcp_types"},
+    # scrimmage cert, installed with the cert extra, run by hand and never imported by the rest.
+    "cert.py": {"cryptography"},
+}
 
 
 @pytest.mark.parametrize(("path", "ours"), CASES, ids=[str(p.name) for p, _ in CASES])
