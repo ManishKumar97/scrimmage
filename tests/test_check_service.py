@@ -701,6 +701,32 @@ def test_a_service_that_drips_its_reply_is_cut_at_the_whole_request_deadline(
     )
 
 
+def test_the_connect_runs_inside_the_whole_request_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 10.255.255.1 is not routable: a connect to it hangs until its timeout.
+    monkeypatch.setattr(service_client, "target", lambda agent: ("10.255.255.1", 80, "/chat"))
+    agent = agent_for(tmp_path, 1, monkeypatch)
+    began = time.monotonic()
+    reply = service_client.send("GET", agent, "/x", {}, None, 6.0, None, None, began + 0.5)
+    elapsed = time.monotonic() - began
+    if not reply.timed_out:
+        pytest.skip(f"this network answers the address at once: {reply.failed}")
+    assert elapsed < 2.0, elapsed
+    assert not reply.connected
+
+
+def test_a_deadline_already_passed_makes_no_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent = agent_for(tmp_path, free_port(), monkeypatch)  # nothing listens: a connect is refused
+    reply = service_client.send(
+        "GET", agent, "/body", {}, None, 6.0, None, None, time.monotonic() - 1
+    )
+    assert reply.timed_out
+    assert not reply.connected
+
+
 def test_a_stop_ends_the_openapi_read_between_chunks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
