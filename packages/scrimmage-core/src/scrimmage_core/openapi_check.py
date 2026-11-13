@@ -176,6 +176,10 @@ def _type_fits(names: list[str], value: object) -> bool:
     return False
 
 
+# The strings pydantic v2's lax mode turns into a bool, in any case.
+BOOL_WORDS = frozenset(("true", "false", "1", "0", "yes", "no", "on", "off", "t", "f", "y", "n"))
+
+
 def _coerced(names: list[str], value: object) -> bool:
     """A string that pydantic's lax mode turns into the wanted type."""
     if not isinstance(value, str):
@@ -190,7 +194,7 @@ def _coerced(names: list[str], value: object) -> bool:
             pass
         else:
             return True
-    return "boolean" in names and text.lower() in ("true", "false")
+    return "boolean" in names and text.lower() in BOOL_WORDS
 
 
 def _check_object(

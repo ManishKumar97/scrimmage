@@ -1,5 +1,7 @@
 """The /openapi.json template check, as a pure function."""
 
+import pytest
+
 from scrimmage_core.openapi_check import NOT_CHECKED_NOTE, check_template
 
 CHAT: dict[str, object] = {
@@ -225,6 +227,24 @@ def test_a_value_fastapi_would_coerce_is_a_heuristic_note_not_a_warning() -> Non
     assert len(result.notes) == 3
     for bad in ({"max_tokens": "ten"}, {"max_tokens": "1.5"}, {"stream": "maybe"}):
         assert len(check_template(inlined(schema), "/chat", "POST", bad).warnings) == 1
+
+
+@pytest.mark.parametrize(
+    "word", ["1", "0", "yes", "no", "on", "off", "t", "f", "y", "n", "True", "YES", "Off", "T"]
+)
+def test_every_string_pydantic_reads_as_a_bool_is_a_note(word: str) -> None:
+    schema: dict[str, object] = {"type": "object", "properties": {"stream": {"type": "boolean"}}}
+    result = check_template(inlined(schema), "/chat", "POST", {"stream": word})
+    assert result.warnings == ()
+    assert len(result.notes) == 1
+    assert result.notes[0].endswith("FastAPI usually coerces this (heuristic)")
+
+
+@pytest.mark.parametrize("word", ["maybe", "2", "", "none", "truee"])
+def test_a_string_pydantic_rejects_as_a_bool_still_warns(word: str) -> None:
+    schema: dict[str, object] = {"type": "object", "properties": {"stream": {"type": "boolean"}}}
+    result = check_template(inlined(schema), "/chat", "POST", {"stream": word})
+    assert len(result.warnings) == 1
 
 
 def test_a_router_prefix_route_is_found_in_full_and_the_note_names_the_route() -> None:
