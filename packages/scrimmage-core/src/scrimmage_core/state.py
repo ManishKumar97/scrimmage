@@ -28,7 +28,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, NamedTuple, Protocol, TypeVar, cast
+from typing import Any, NamedTuple, NoReturn, Protocol, TypeVar, cast
 
 from scrimmage_core import capture, labels
 from scrimmage_core import decide as engine
@@ -794,6 +794,28 @@ class RunState:
         # run. In a probe nothing is needed past this point, so no more of its code runs.
         if step.decision.action == "refused" and self._plan is not None and self._plan.probe:
             self.end_program()
+
+    def fail(
+        self,
+        step: Step,
+        error: BaseException,
+        *,
+        mistake: bool = False,
+        cause: BaseException | None = None,
+    ) -> NoReturn:
+        """Write the call's line with error (and, as a mistake, its text), then raise it.
+
+        The one place a gate raises an error it has recorded. A caller that held the error
+        in a local would make a cycle with its own traceback, which holds the caller's
+        frame, and what the frame holds (such as a pickled send's buffer) would live until
+        the garbage collector ran. Pass the error as an expression, and not through a local."""
+        try:
+            self.finish(step, error=error, mistake=str(error) if mistake else None)
+            if cause is not None:
+                raise error from cause
+            raise error
+        finally:
+            del error
 
     def _write(
         self,

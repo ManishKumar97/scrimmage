@@ -1641,6 +1641,8 @@ def test_a_refused_send_keeps_nothing_of_the_buffer_it_was_given(
             under(run, send)
         except ScrimmageRefused as error:
             assert "inside a test run" in str(error)
+        else:
+            pytest.fail("the send was not refused")
         buffer.close()  # raises BufferError while a view of it is still held
     finally:
         gc.enable()

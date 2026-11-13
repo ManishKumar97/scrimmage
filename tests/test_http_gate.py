@@ -128,6 +128,32 @@ def test_a_write_to_a_host_that_is_not_a_model_host_is_refused(gated: None) -> N
     assert sink.lines[0]["reason"] == "web_write"
 
 
+def test_a_refused_request_keeps_nothing_of_the_body_it_was_given(gated: None) -> None:
+    """The refusal's error must not sit in a reference cycle with the frames it crossed: a
+    body that is a view into a BytesIO lives as long as those frames, and where a cycle holds
+    them the BytesIO cannot close until the collector runs, then reports an unraisable
+    BufferError in whichever test is running."""
+    import gc
+    import io
+
+    install(make_plan())
+    gc.collect()
+    gc.disable()
+    try:
+        buffer = io.BytesIO(b"{}")
+        try:  # not pytest.raises, whose own record of the error may be a cycle
+            client().post(
+                "https://orders.acme.internal/refunds", content=cast(Any, buffer.getbuffer())
+            )
+        except ScrimmageRefused:
+            pass
+        else:
+            pytest.fail("the request was not refused")
+        buffer.close()  # raises BufferError while a view of it is still held
+    finally:
+        gc.enable()
+
+
 @pytest.mark.design("gate.model_hosts_setting")
 def test_a_team_gateway_under_model_hosts_is_a_model_call(gated: None) -> None:
     sink, _ = install(make_plan())

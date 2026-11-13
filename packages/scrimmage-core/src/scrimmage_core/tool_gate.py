@@ -107,22 +107,24 @@ def apply(state: RunState, step: Step, gated: Gated) -> object:
     """Carry out a decision that does not run the real tool."""
     decision = step.decision
     if decision.action == "refused":
-        error = state.refusal(step)
         # The message names the two fixes, so it belongs in the run table.
-        mistake = str(error) if decision.reason == "unlisted" else None
-        state.finish(step, error=error, mistake=mistake)
-        raise error
+        state.fail(step, state.refusal(step), mistake=decision.reason == "unlisted")
     if decision.action == "fault":
         assert decision.fault is not None
         fault = state.plan.faults[decision.fault]
         try:
             error = injected(state, fault, step.call.name, gated.failure)
         except Exception as exc:  # a bad raises is a mistake in the test, not the agent's failure
-            problem = ScrimmageMockError(f"the fault cannot raise {fault.raises}: {exc}")
-            state.finish(step, error=problem, mistake=str(problem))
-            raise problem from exc
-        state.finish(step, error=error)
-        raise error
+            state.fail(
+                step,
+                ScrimmageMockError(f"the fault cannot raise {fault.raises}: {exc}"),
+                mistake=True,
+                cause=exc,
+            )
+        try:
+            state.fail(step, error)
+        finally:
+            del error  # else it names a traceback that names this frame, and so itself
     value = build_mock(state, step, gated)
     state.finish(step, result=value)
     return value

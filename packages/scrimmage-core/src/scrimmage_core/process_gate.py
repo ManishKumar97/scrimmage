@@ -216,22 +216,11 @@ def program_fix(program: str) -> str:
 def refused(run: RunState, step: Any, message: str) -> None:
     """A start or a send refused under a service run. The setup caused it, not the agent: a
     library's own shell-out reads as a test mistake to fix, by listing it."""
-    # The error's traceback holds this frame, so a local still naming it would be a cycle
-    # that keeps the caller's frame, and the send's pickled buffer in it, alive until the
-    # garbage collector runs. The local is deleted as the error leaves.
-    error: ScrimmageRefused | None = None
-    try:
-        if step.decision.reason == "orphan":  # code outside the run's context: its own rule
-            error = run.refusal(step)
-            run.finish(step, error=error)
-        else:
-            run.refuse(step, "service_child")
-            step.extra["by_config"] = True
-            error = ScrimmageRefused(message)
-            run.finish(step, error=error, mistake=message)
-        raise error
-    finally:
-        del error
+    if step.decision.reason == "orphan":  # code outside the run's context: its own rule
+        run.fail(step, run.refusal(step))
+    run.refuse(step, "service_child")
+    step.extra["by_config"] = True
+    run.fail(step, ScrimmageRefused(message), mistake=True)
 
 
 def refuse_other(run: RunState, label: str, what: str, why: str) -> None:
@@ -825,7 +814,6 @@ def refuse(run: RunState, python: str, argv: list[str], why: str) -> None:
         f'PYTHONPATH rather than replace it, so it joins the run, or add "{LABEL}" to [agent] '
         "real if it is safe."
     )
-    error = run.refusal(run.refuse(step, "blind_child"), detail)
+    refused_step = run.refuse(step, "blind_child")
     step.extra["by_config"] = True  # the test's setup caused this refusal, not the agent
-    run.finish(step, error=error, mistake=str(error))
-    raise error
+    run.fail(step, run.refusal(refused_step, detail), mistake=True)

@@ -552,9 +552,8 @@ def stop_probe(
         extra["unreadable"] = True
     run.notice("probe", "scrimmage", f"the probe stopped at {method} {path}", extra=extra)
     run.refuse(step, "probe")
-    error = run.refusal(step, redact(f"{method} {path}"))
-    run.finish(step, error=error)  # in a probe, this ends the program
-    raise error
+    # In a probe, finishing the step ends the program.
+    run.fail(step, run.refusal(step, redact(f"{method} {path}")))
 
 
 def without_faults(run: RunState, step: Step) -> None:
@@ -567,12 +566,13 @@ def without_faults(run: RunState, step: Step) -> None:
 
 
 def refuse(run: RunState, step: Step, detail: str) -> NoReturn:
-    error = run.refusal(step, redact(detail))
-    mistake = str(error) if step.decision.reason in MISTAKE_REASONS else None
     if step.decision.reason in SETUP_REASONS:
         step.extra["by_config"] = True  # the test's setup caused this refusal, not the agent
-    run.finish(step, error=error, mistake=mistake)
-    raise error
+    run.fail(
+        step,
+        run.refusal(step, redact(detail)),
+        mistake=step.decision.reason in MISTAKE_REASONS,
+    )
 
 
 def check_tools(
@@ -635,9 +635,7 @@ def fault(
     # A carried fault lets the call happen, so it never comes here to be parsed as a status.
     assert plan_fault.do == "timeout" or plan_fault.do.startswith("status "), plan_fault.do
     if plan_fault.do == "timeout":
-        error = module.ReadTimeout("The read operation timed out", request=request)
-        run.finish(step, error=error)
-        raise error
+        run.fail(step, module.ReadTimeout("The read operation timed out", request=request))
     status = int(plan_fault.do.split()[1])
     if step.call.kind == "model":
         body = openai_table.error_body(status)
