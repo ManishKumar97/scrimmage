@@ -1101,7 +1101,9 @@ def test_a_missing_last_batch_is_an_infrastructure_error_after_the_wait(bench: B
         '\n[[test.mock]]\ncall = "tool:get_order"\nreturns = "shipped, Oct 30"\n'
         '\n[[test.mock]]\ncall = "tool:get_stock"\nreturns = {sku = "SKU-42", count = 12}\n'
     )
-    code, out = bench.test(service.port, path="/dies", tests=dying, wait=2.0)
+    # The default wait: the healthy row's last batch must come within it even on a loaded
+    # box, and the dying row's wait is the bound this test pays for.
+    code, out = bench.test(service.port, path="/dies", tests=dying)
     assert code == 3, out
     summaries = bench.summaries()
     died = [
