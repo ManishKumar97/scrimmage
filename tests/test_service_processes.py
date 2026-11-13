@@ -7,6 +7,7 @@ must not exist after a refused call.
 """
 
 import collections
+import contextlib
 import contextvars
 import gc
 import multiprocessing
@@ -1491,6 +1492,62 @@ def test_a_send_a_queues_error_hook_makes_after_a_failed_pickle_is_refused(
     finally:
         queue.close()
         queue.join_thread()
+
+
+@pytest.mark.design("service.feeder_thread")
+def test_a_server_method_a_runs_code_calls_is_the_runs_own_call(
+    service: state.ProcessState,
+) -> None:
+    """uvicorn's always_pong, called by a run's code, grants it no decided call."""
+    from uvicorn.supervisors.multiprocess import Process as Supervised
+
+    seen: list[bool] = []
+
+    class Fake:
+        def pong(self) -> None:
+            seen.append(state.in_decided_call())
+            raise StopIteration  # always_pong answers forever: once is enough here
+
+    def ping() -> None:
+        with contextlib.suppress(StopIteration):
+            Supervised.always_pong(Fake())  # type: ignore[arg-type]
+
+    run = a_run(service)
+    under(run, ping)
+    outside(ping)
+    assert seen == [False, True]
+
+
+@pytest.mark.design("service.feeder_thread")
+def test_a_feeder_is_registered_only_as_its_queues_own_put_starts_it(
+    service: state.ProcessState,
+) -> None:
+    """A run that starts a queue's feeder itself, or a thread with the feeder's target
+    inside a decided call, gets no feeder of the queue's: its sends stay decided."""
+    import multiprocessing.queues
+
+    started = a_queue("Queue")
+    other = a_queue("Queue")
+    try:
+        run = a_run(service)
+        under(run, started._start_thread)  # not inside a decided put
+        assert started._thread not in state.FEEDERS
+        feed = multiprocessing.queues.Queue._feed  # type: ignore[attr-defined]
+        ends = collections.deque([multiprocessing.queues._sentinel])  # type: ignore[attr-defined]
+        args = (ends, threading.Condition(), other._send_bytes, other._wlock)  # the queue's send
+        args += (lambda: None, lambda: None, False, lambda e, obj: None, other._sem)
+        made = threading.Thread(target=feed, args=args, daemon=True)
+        with state.internal_call():  # as a server method a run called once did
+            made.start()
+        made.join(10)
+        assert made not in state.FEEDERS
+        plain(lambda: other.put("plain"))  # its own feeder, registered as its put starts it
+        assert state.FEEDERS.get(other._thread) is other._writer
+        assert other.get(timeout=10) == "plain"
+    finally:
+        for each in (started, other):
+            each.close()
+            each.join_thread()
 
 
 @pytest.mark.design("service.feeder_thread")

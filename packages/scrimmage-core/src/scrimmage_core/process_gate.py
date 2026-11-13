@@ -404,6 +404,22 @@ def patch_feeder(module: ModuleType) -> None:
     feed: object = getattr(found, "__func__", found)  # a staticmethod's function
     if callable(feed):
         state.FEEDER_TARGETS.add(feed)
+    start = queue.__dict__.get("_start_thread") if isinstance(queue, type) else None
+    if callable(start) and not getattr(start, GATED, False):
+        queue._start_thread = starting(start)
+
+
+def starting(method: Callable[..., Any]) -> Any:
+    """Queue._start_thread: the one place a queue's own feeder is started, so the only
+    place a feeder is registered, and only as this queue's."""
+
+    @functools.wraps(method)
+    def start(self: Any, *args: Any, **kwargs: Any) -> Any:
+        with state.starting_feeder(self):
+            return method(self, *args, **kwargs)
+
+    setattr(start, GATED, True)
+    return start
 
 
 def internal(method: Callable[..., Any]) -> Any:
@@ -416,6 +432,9 @@ def internal(method: Callable[..., Any]) -> Any:
     def marked(*args: Any, **kwargs: Any) -> Any:
         if not in_service():
             return method(*args, **kwargs)
+        run = current()
+        if run is not None and not isinstance(run, Outside):
+            return method(*args, **kwargs)  # called by a run's code: the run's own, decided
         with internal_call():
             return method(*args, **kwargs)
 

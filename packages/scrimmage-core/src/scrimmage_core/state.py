@@ -1112,12 +1112,30 @@ def note_feeder(thread: threading.Thread) -> None:
         return
     with contextlib.suppress(TypeError):  # a buffer that cannot be weakly held has no items
         FEED_BUFFERS[thread] = args[0]  # Queue._feed(buffer, notempty, send_bytes, ...)
-    if not in_decided_call():
+    # Its feeder, only as its own queue's _start_thread starts it inside a decided put: the
+    # queue's thread, reading the queue's buffer, sending with the queue's writer.
+    queue: object = getattr(_starting, "queue", None)
+    if not in_decided_call() or queue is None or getattr(queue, "_thread", None) is not thread:
         return
+    writer: object = getattr(queue, "_writer", None)
     send = args[2]  # the pipe's bound send
-    pipe = getattr(send, "__self__", None)
-    if pipe is not None and getattr(send, "__name__", "") == "send_bytes":
-        FEEDERS[thread] = pipe
+    if args[0] is not getattr(queue, "_buffer", None) or writer is None:
+        return
+    if getattr(send, "__self__", None) is writer and getattr(send, "__name__", "") == "send_bytes":
+        FEEDERS[thread] = writer
+
+
+_starting = threading.local()  # the queue whose _start_thread is running on this thread
+
+
+@contextmanager
+def starting_feeder(queue: object) -> Generator[None]:
+    was = getattr(_starting, "queue", None)
+    _starting.queue = queue
+    try:
+        yield
+    finally:
+        _starting.queue = was
 
 
 def note_decided(buffer: object, item: object) -> None:
