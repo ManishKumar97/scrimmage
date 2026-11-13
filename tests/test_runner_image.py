@@ -113,7 +113,7 @@ def test_the_runner_image_holds_no_agent_code(image: str) -> None:
 
     # pip list cannot see code that has no .dist-info, so read site-packages itself, and look
     # for startup files that would run code in every Python: a .pth, sitecustomize, usercustomize.
-    found = json.loads(run(image, "-I", "-c", INSPECT, entrypoint="python").stdout)
+    found = json.loads(run(image, "-c", INSPECT, entrypoint="python").stdout)
     allowed = (
         r"README\.txt|pip|pip-[^/]+\.dist-info|scrimmage|scrimmage-[^/]+\.dist-info"
         r"|scrimmage_core|scrimmage_core-[^/]+\.dist-info"
@@ -121,6 +121,15 @@ def test_the_runner_image_holds_no_agent_code(image: str) -> None:
     stray = [x for x in found["site_packages"] if not re.fullmatch(allowed, x)]
     assert stray == [], f"in site-packages: {stray}"
     assert found["startup_files"] == []
+
+    # Not -I above: the walk covers the real sys.path, which PYTHONPATH would extend. So the
+    # image must not set the variables that change where Python looks or what it runs first.
+    inspected = harness.sh(
+        ["docker", "image", "inspect", image, "-f", "{{json .Config.Env}}"], timeout=60
+    )
+    env = json.loads(inspected.stdout) or []
+    names = {item.split("=", 1)[0] for item in env}
+    assert not names & {"PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME"}, env
 
 
 def test_the_runner_image_builds_with_no_network(image: str) -> None:
