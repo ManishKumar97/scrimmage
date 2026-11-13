@@ -240,7 +240,7 @@ def test_every_string_pydantic_reads_as_a_bool_is_a_note(word: str) -> None:
     assert result.notes[0].endswith("FastAPI usually coerces this (heuristic)")
 
 
-@pytest.mark.parametrize("word", ["maybe", "2", "", "none", "truee"])
+@pytest.mark.parametrize("word", ["maybe", "2", "", "none", "truee", " true ", "yes\n"])
 def test_a_string_pydantic_rejects_as_a_bool_still_warns(word: str) -> None:
     schema: dict[str, object] = {"type": "object", "properties": {"stream": {"type": "boolean"}}}
     result = check_template(inlined(schema), "/chat", "POST", {"stream": word})

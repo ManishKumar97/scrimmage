@@ -194,7 +194,7 @@ def _coerced(names: list[str], value: object) -> bool:
             pass
         else:
             return True
-    return "boolean" in names and text.lower() in BOOL_WORDS
+    return "boolean" in names and value.lower() in BOOL_WORDS
 
 
 def _check_object(
