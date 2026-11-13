@@ -92,7 +92,7 @@ The text of a message can change in any release.
 
 | Field | Meaning |
 |---|---|
-| `records` | The folder that holds this test's records, as the text's first line names it. `null` when the file did not load, so no folder was made. |
+| `records` | The folder that holds this test's records, as the text's first line names it: under `scrimmage-runs/` beside the file, or under `--records DIR`. `null` when the file did not load, so no folder was made. |
 | `tests` | How many `[[test]]` tables the file has. |
 | `rows` | One object per table row, in the table's order. Empty when the file did not load, when a signal stopped the test, or when Scrimmage itself failed. A test a refusal stopped, such as for the budget, still has every row, and the rows that did not run have `runs` 0. |
 | `cost_usd` | What the model calls cost, in dollars. |

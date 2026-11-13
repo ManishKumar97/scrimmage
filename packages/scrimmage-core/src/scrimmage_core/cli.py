@@ -87,6 +87,12 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
     record = commands.add_parser(
         "record", help="run each test's baseline and write its calls as mocks", allow_abbrev=False
     )
+    test.add_argument(
+        "--records",
+        type=Path,
+        metavar="DIR",
+        help="write the records folder inside DIR, not scrimmage-runs beside the file",
+    )
     for command in (test, check, record):
         command.add_argument("path", nargs="?", default="scrimmage.toml", type=Path)
         command.add_argument("--json", action="store_true", help="print one JSON document")
@@ -188,10 +194,10 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
 def chosen_command(args: argparse.Namespace) -> Callable[[Path, Found | None], int]:
     """The function that runs this command, with a command's own flags already bound."""
     if args.command == "test":
-        compare, cap = args.compare, args.max_cost_usd
+        compare, cap, records = args.compare, args.max_cost_usd, args.records
 
         def test(path: Path, found: Found | None) -> int:
-            return run_test(path, found, compare, cap)
+            return run_test(path, found, compare, cap, records)
 
         return test
     if args.command == "check":
@@ -433,7 +439,11 @@ def unreadable(command: str, exc: Exception, found: Found | None) -> int:
 
 
 def run_test(
-    path: Path, found: Found | None, compare: Path | None = None, cap: str | None = None
+    path: Path,
+    found: Found | None,
+    compare: Path | None = None,
+    cap: str | None = None,
+    records: Path | None = None,
 ) -> int:
     from scrimmage_core import runner as running  # the heavy import waits until a test runs
     from scrimmage_core import service_client
@@ -458,7 +468,9 @@ def run_test(
     try:
         # With --json the runner shares the noted signal, so one that came just before its
         # runs start still stops them, and one during them is said once.
-        runner = running.Runner(config, stop_flag=None if found is None else entry.pending)
+        runner = running.Runner(
+            config, stop_flag=None if found is None else entry.pending, records=records
+        )
         if found is not None:
             found.started(config, runner)
         stop_point()

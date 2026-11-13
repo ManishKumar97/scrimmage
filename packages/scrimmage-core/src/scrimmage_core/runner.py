@@ -7,12 +7,14 @@ higher code wins, as a mistake or an error makes the rates not worth trusting.
 
 import contextlib
 import dataclasses
+import errno
 import json
 import os
 import secrets
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -208,6 +210,49 @@ READY_STEP_S = 0.2
 WAITERS = 64  # service runs whose record waits at once: the control server's connections
 
 
+REFUSED_ERRNOS = (errno.EACCES, errno.EPERM, errno.EROFS, errno.ENOTDIR, errno.ENOENT)
+
+
+def records_folder(path: Path) -> bool:
+    """Make --records DIR, or check the one that is there. True when this call made it.
+
+    A folder that exists is used as it is: it is the user's own and no wider than 0700, or the
+    test stops. A mistake in the path is exit 2, so a CI job does not retry it; a full disk or a
+    failing one stays an infrastructure error.
+    """
+    try:
+        found = path.stat()
+    except FileNotFoundError:
+        found = None
+    except OSError as exc:
+        raise service_client.Setup(2, f"--records {path}: {exc.strerror}") from None
+    if found is None:
+        try:
+            path.mkdir(mode=0o700, parents=True, exist_ok=True)
+            os.chmod(path, 0o700)  # records hold customer data: only their owner may list them
+        except OSError as exc:
+            if exc.errno not in REFUSED_ERRNOS:
+                raise
+            raise service_client.Setup(2, f"--records {path}: {exc.strerror}") from None
+        return True
+    if not stat.S_ISDIR(found.st_mode):
+        raise service_client.Setup(2, f"--records {path} is not a folder")
+    inside = path / "scrimmage-runs"
+    if found.st_uid != os.getuid():
+        raise service_client.Setup(
+            2,
+            f"--records {path} is owned by uid {found.st_uid}; point it at a folder inside it, "
+            f"such as {inside}",
+        )
+    if found.st_mode & 0o077:
+        raise service_client.Setup(
+            2,
+            f"--records {path} has mode {stat.S_IMODE(found.st_mode):o}, which lets others in; "
+            f"run chmod 700 on it, or point it at a new folder inside it, such as {inside}",
+        )
+    return False
+
+
 def settled(found: "Iterable[RunResult | Future[RunResult] | None]") -> list[RunResult | None]:
     """The results of runs, each service run's once its record wait has ended."""
     return [r.result() if isinstance(r, Future) else r for r in list(found)]
@@ -223,9 +268,12 @@ class Runner:
         record: bool = False,
         probe: bool = False,
         scratch: bool = False,
+        records: Path | None = None,
     ) -> None:
         """scratch: the records go to a folder of their own to remove, as scrimmage check
-        --service writes none beside the file."""
+        --service writes none beside the file.
+        records: scrimmage test --records, the folder to hold the test's folder, in place of
+        scrimmage-runs beside the file."""
         self.config = config
         self.record = record  # scrimmage record: real calls' lines carry what a mock needs
         self.probe = probe  # scrimmage init --probe: the first model request ends the run
@@ -243,15 +291,22 @@ class Runner:
             tls_context = service_client.server_tls(config.agent, config.root)
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         runs = Path(tempfile.mkdtemp(prefix="scrimmage-check-")) if scratch else None
-        runs = runs or config.root / "scrimmage-runs"
-        runs.mkdir(mode=0o700, exist_ok=True)
-        os.chmod(runs, 0o700)  # records hold customer data: only their owner may list them
+        # Only a folder this run makes is changed: an existing --records folder, such as the
+        # config folder, is left as it is, with no mode change and no .gitignore.
+        made = True
+        if records is not None:
+            runs = records.absolute()
+            made = records_folder(runs)
+        else:
+            runs = runs or config.root / "scrimmage-runs"
+            runs.mkdir(mode=0o700, exist_ok=True)
+            os.chmod(runs, 0o700)  # records hold customer data: only their owner may list them
         self.store = new_store(runs, stamp)
         self.store.scrub = config.scrub
         self.folder = self.store.folder
         # Records can hold customer data, so they stay out of the team's git repo.
         ignore = runs / ".gitignore"
-        if not ignore.exists():
+        if made and not ignore.exists():
             ignore.write_text("*\n")
         # The values ${NAME} filled in: this test's own, removed from what the runner writes.
         self.scrub = config.scrub
