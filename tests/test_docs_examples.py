@@ -13,7 +13,6 @@ import re
 import secrets
 import shlex
 import shutil
-import socket
 import subprocess
 import sys
 import threading
@@ -25,6 +24,7 @@ import pytest
 
 from conftest import ACME, EXAMPLE, doc_pages
 from fakes.openai_server import FakeOpenAI, Guard, Rule
+from ports import free_port
 from scrimmage_core.cli import main
 from scrimmage_core.outcomes import MISTAKE, OK, ROW_FAILED
 
@@ -61,12 +61,6 @@ EXAMPLES = {
     ),
 }
 PAGE_PORT = "127.0.0.1:8765"  # the service address the page shows, moved to a free port
-
-
-def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
 
 
 def start_line(name: str) -> tuple[dict[str, str], list[str]]:
