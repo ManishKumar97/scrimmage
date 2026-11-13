@@ -74,7 +74,7 @@ def runner_image() -> str:
 
 
 @pytest.fixture(scope="module")
-def cluster(runner_image: str, users_files_before: dict[str, tuple[str, int]]) -> Iterator[Cluster]:
+def cluster(runner_image: str) -> Iterator[Cluster]:
     with kubernetes.session((runner_image,)) as made:
         yield made
 
