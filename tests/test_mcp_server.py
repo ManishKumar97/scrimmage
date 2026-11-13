@@ -9,6 +9,7 @@ import contextlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -1264,16 +1265,24 @@ def leftover_after_a_killed_child(bed: Bed, *, unset: bool) -> tuple[int, str]:
     return int((bed.root / "grandchild").read_text()), line
 
 
+def swept_count(line: str) -> int:
+    """How many processes the sweep killed. At least the one the run left; the run itself
+    also counts when Linux has not yet killed it for its dead runner, which load decides."""
+    found = re.search(r", (\d+) left over and killed by the sweep", line)
+    assert found, line
+    return int(found.group(1))
+
+
 def test_the_sweep_kills_runs_in_their_own_sessions_by_the_calls_nonce(bed: Bed) -> None:
     grandchild, line = leftover_after_a_killed_child(bed, unset=False)
-    assert "exit -9" in line and ", 1 left over and killed by the sweep" in line, line
+    assert "exit -9" in line and swept_count(line) >= 1, line
     assert not alive(grandchild) and none_left(bed)
 
 
 def test_a_run_that_unsets_the_nonce_is_still_swept(bed: Bed) -> None:
     grandchild, line = leftover_after_a_killed_child(bed, unset=True)
     assert (bed.root / "unset").exists()  # it had unset the variable before the sweep
-    assert ", 1 left over and killed by the sweep" in line, line
+    assert swept_count(line) >= 1, line
     assert not alive(grandchild) and none_left(bed)
 
 
