@@ -21,6 +21,7 @@ It runs before any watcher in that process could be installed, so the scan check
 *Checked by: `tests/test_security_claims.py::test_the_only_processes_scrimmage_starts_are_its_runs`, `tests/test_security_claims.py::test_the_only_connections_are_to_and_from_the_control_server`*
 
 The runner and the code inside your agent talk over one local connection, to a control server that listens on `127.0.0.1` only, on a port chosen for each test.
+A [service in a container](services.md#a-service-in-a-container) is the one exception: there `control` names the address the runner listens on, and the channel runs over TLS.
 
 *Checked by: `tests/test_security_claims.py::test_the_control_server_listens_on_loopback_only`*
 
@@ -61,6 +62,55 @@ The signing keeps out programs of other users on the machine only.
 It follows that records are not tamper-proof against the agent under test: code in the agent could send lines of its own.
 Do not use records as audit evidence.
 
+## TLS on the control channel
+
+A control server that listens beyond loopback carries plans and record lines, which can hold customer data, so it never does so in clear.
+
+- A `control` address that is not loopback with no `control_tls` is refused when the file is read, exit 2.
+  `control_tls` without `control` is refused too, and so is an address that listens on every interface or is a name.
+
+  *Checked by: `tests/test_control_tls.py::test_control_beyond_loopback_without_control_tls_is_exit_2`, `tests/test_control_tls.py::test_control_tls_without_control_is_exit_2`, `tests/test_control_tls.py::test_control_on_an_unspecified_address_is_refused`, `tests/test_control_tls.py::test_control_must_be_an_ip_literal`*
+
+- A service whose `SCRIMMAGE_CONTROL_URL` is `http://` beyond loopback stops at its start, and so does one with an `https://` address and no `SCRIMMAGE_CONTROL_CA`, or a file of several certificates.
+
+  *Checked by: `tests/test_control_tls.py::test_http_beyond_loopback_stops_the_service_naming_https`, `tests/test_control_tls.py::test_https_without_scrimmage_control_ca_stops_the_service_naming_it`, `tests/test_control_tls.py::test_a_ca_file_with_two_certificates_stops_the_service`*
+
+- The SDK trusts the one authority it is given.
+  It refuses a certificate from another authority, one that an authority in the system's store signed, and one for another name.
+
+  *Checked by: `tests/test_control_tls.py::test_the_sdk_refuses_a_certificate_not_from_the_given_authority`, `tests/test_control_tls.py::test_the_sdk_refuses_a_public_authority_and_never_loads_the_system_store`, `tests/test_control_tls.py::test_the_sdk_refuses_a_certificate_for_another_name`*
+
+- The SDK speaks TLS 1.3 only and applies OpenSSL's strict chain rules, so Python 3.11 to 3.14 judge a chain alike.
+
+  *Checked by: `tests/test_control_tls.py::test_the_sdk_refuses_tls_1_2`, `tests/test_control_tls.py::test_the_sdk_refuses_an_authority_that_only_strict_mode_rejects`*
+
+- Every control request, whatever its kind, goes through the one TLS connection.
+
+  *Checked by: `tests/test_control_tls.py::test_every_control_request_kind_goes_through_the_tls_connection`*
+
+- The runner starts only with a private key in a plain file you own with mode `0600`, and a certificate that matches the key and is inside its dates.
+
+  *Checked by: `tests/test_control_tls.py::test_a_control_key_not_0600_is_exit_2`, `tests/test_control_tls.py::test_an_expired_or_mismatched_certificate_is_exit_2_at_start`*
+
+- The control server runs each connection's TLS handshake in a thread of its own, and cuts a connection after 10 seconds without a read or 15 seconds in all.
+  A client that stalls its handshake or sends a byte at a time holds one connection until then and blocks no one else.
+  A request that declares a body over 4 MB is read only after its signature is checked.
+
+  *Checked by: `tests/test_control_tls.py::test_a_stalled_handshake_does_not_block_a_second_client_and_is_cut_at_the_deadline`, `tests/test_control_tls.py::test_a_slow_drip_is_cut_at_the_whole_request_deadline`, `tests/test_control_tls.py::test_an_unsigned_large_body_is_refused_before_it_is_read`*
+
+- A connection that fails TLS prints no traceback; the report counts it by OpenSSL's reason.
+  The report also counts the runs it sent and the claims it received, so a control server that no service can reach shows on the runner.
+
+  *Checked by: `tests/test_control_tls.py::test_tls_failures_are_counted_by_reason_and_print_no_traceback`, `tests/test_control_tls.py::test_the_report_counts_runs_sent_and_claims_received`*
+
+- A four-worker service test over TLS on loopback completes, and each run's record holds only that run's lines.
+
+  *Checked by: `tests/test_control_tls.py::test_a_full_s7a_run_works_over_tls_on_loopback`*
+
+TLS protects what crosses the control channel against a reader on the network.
+It adds nothing against someone who holds the token, and the HMAC stays on every request and reply.
+The runner's requests to the service stay `http://`, and what that exposes is on [An agent inside a web service](services.md#a-service-in-a-container).
+
 ## A web service's token and run header
 
 When the agent is [inside a web service](services.md), the service runs before and after the test, so the token is yours, not one the runner makes.
@@ -69,6 +119,10 @@ The service and the runner read it from the file `SCRIMMAGE_TOKEN_FILE` names, w
 A service with `SCRIMMAGE_TOKEN` in its environment stops, so no process environment holds the token.
 
 *Checked by: `tests/test_service.py::test_the_token_file_must_be_0600_and_owned`, `tests/test_service.py::test_scrimmage_token_in_a_service_environment_stops_naming_the_file`, `tests/test_service.py::test_the_token_and_control_url_come_from_the_runners_environment`*
+
+In a container the service must run as the file's owner, or it stops and names the file's user id and its own.
+
+*Checked by: `tests/test_control_tls.py::test_a_token_file_owned_by_another_uid_names_the_user_setting`*
 
 Each process that serves the app removes the file's path from its own environment, so a program it starts never learns where the token is.
 The token stays in that process's memory for the service's life, where any code in the process can read it.

@@ -1,17 +1,22 @@
 """The control server: the runner's side of the SDK's requests.
 
-It serves each run's plan while the run is open and stores its record lines. It
-listens on the local machine only. Every request must be signed, and every reply is.
+It serves each run's plan while the run is open and stores its record lines. It listens on
+the loopback address unless a service test gives it another, which then needs TLS. Every
+request must be signed, and every reply is.
 """
 
 import base64
 import dataclasses
 import hashlib
+import io
 import json
 import re
+import socket as socket_module
+import ssl
 import sys
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -29,7 +34,9 @@ MAX_BLOB_BODY = 14 * 1024 * 1024  # one 10 MB side-folder item, base64 encoded
 BLOB_PATH = "/v1/blobs"
 SHA256 = re.compile(r"[0-9a-f]{64}")
 READ_TIMEOUT_S = 10.0  # a connection that sends nothing frees its slot
+REQUEST_DEADLINE_S = 15.0  # from the connection being served to the last byte of its reply
 PLAN_PATH = re.compile(r"/v1/plans/([A-Za-z0-9_-]{1,64})")
+TLS_ALERT = re.compile(r"^(tlsv1|sslv3) alert ")
 
 
 @dataclass
@@ -58,6 +65,47 @@ class Run:
     ended: threading.Event = field(default_factory=threading.Event)  # the claimer's last batch
 
 
+class Stats:
+    """What the server counts for the report: connections that failed TLS, by OpenSSL's reason,
+    connections the timeouts cut, and the claims it answered. A control server that no SDK can
+    reach shows here when the runs' own load figures, which arrive in a claimed run's last
+    batch, do not."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._tls_failed: Counter[str] = Counter()
+        self._cut = 0
+        self._claims = 0
+
+    def failed_tls(self, error: ssl.SSLError) -> None:
+        reason = TLS_ALERT.sub("", str(error.reason or "unknown").lower().replace("_", " "))
+        with self._lock:
+            self._tls_failed[reason] += 1
+
+    def cut(self) -> None:
+        with self._lock:
+            self._cut += 1
+
+    def claimed(self) -> None:
+        with self._lock:
+            self._claims += 1
+
+    @property
+    def tls_failed(self) -> dict[str, int]:
+        with self._lock:
+            return dict(sorted(self._tls_failed.items()))
+
+    @property
+    def connections_cut(self) -> int:
+        with self._lock:
+            return self._cut
+
+    @property
+    def claims_received(self) -> int:
+        with self._lock:
+            return self._claims
+
+
 class ControlServer:
     def __init__(
         self,
@@ -67,8 +115,10 @@ class ControlServer:
         clock: Callable[[], float] = time.time,
         ledger: Ledger | None = None,
         address: tuple[str, int] = ("127.0.0.1", 0),
+        tls: ssl.SSLContext | None = None,
     ) -> None:
-        """address: where to listen; a service test binds the one its service was told."""
+        """address: where to listen; a service test binds the one its service was told.
+        tls: each accepted connection is wrapped in it, and the url says https."""
         self.token = token
         self.store = store
         self.on_refused = on_refused
@@ -77,13 +127,16 @@ class ControlServer:
         self.nonces = protocol.NonceStore()
         self.runs: dict[str, Run] = {}
         self.lock = threading.Lock()
-        self.server = _Server(address, _handler(self))
+        self.tls = tls is not None
+        self.stats = Stats()
+        self.server = _Server(address, _handler(self), tls, self.stats)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
     @property
     def url(self) -> str:
         host, port = self.server.server_address[:2]
-        return f"http://{host!s}:{port}"
+        shown = f"[{host}]" if ":" in str(host) else str(host)
+        return f"{'https' if self.tls else 'http'}://{shown}:{port}"
 
     def start(self) -> None:
         self.thread.start()
@@ -151,6 +204,7 @@ class ControlServer:
             if state.claimed_by is not None:
                 return 409, {"error": "claimed"}
             state.claimed_by, state.fetched = proc, True
+            self.stats.claimed()
             elapsed = round(max(0.0, time.monotonic() - state.opened), 3)
             return 200, {"plan": {**state.plan, "elapsed_s": elapsed}}
 
@@ -315,9 +369,33 @@ class _Server(ThreadingHTTPServer):
     # Connections wait here while the 64 threads are busy; the default of 5 resets the rest.
     request_queue_size = 1024
 
-    def __init__(self, address: tuple[str, int], handler: type[BaseHTTPRequestHandler]) -> None:
+    def __init__(
+        self,
+        address: tuple[str, int],
+        handler: type[BaseHTTPRequestHandler],
+        tls: ssl.SSLContext | None,
+        stats: Stats,
+    ) -> None:
+        self.tls = tls
+        self.stats = stats
+        if ":" in address[0]:
+            self.address_family = socket_module.AF_INET6
         super().__init__(address, handler)
         self.slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+
+    def get_request(self) -> tuple[socket, Any]:
+        """Accept a connection. With TLS it is wrapped here and not handshaken: the accept loop
+        never waits on a client, and the handshake runs in the connection's own thread, on its
+        first read, under that connection's deadline."""
+        sock, address = super().get_request()
+        if self.tls is None:
+            return sock, address
+        try:
+            wrapped = self.tls.wrap_socket(sock, server_side=True, do_handshake_on_connect=False)
+        except BaseException:
+            sock.close()
+            raise
+        return wrapped, address
 
     def process_request(self, request: socket | tuple[bytes, socket], client_address: Any) -> None:
         self.slots.acquire()
@@ -328,8 +406,12 @@ class _Server(ThreadingHTTPServer):
             raise
 
     def handle_error(self, request: Any, client_address: Any) -> None:
-        """A program killed mid-request is routine: no traceback on the runner's output."""
-        if not isinstance(sys.exc_info()[1], ConnectionError):
+        """A program killed mid-request is routine, and so is a client that fails TLS: neither
+        prints a traceback on the runner's output. A TLS failure is counted by its reason."""
+        error = sys.exc_info()[1]
+        if isinstance(error, ssl.SSLError):
+            self.stats.failed_tls(error)
+        elif not isinstance(error, ConnectionError):
             super().handle_error(request, client_address)
 
     def process_request_thread(
@@ -341,9 +423,41 @@ class _Server(ThreadingHTTPServer):
             self.slots.release()
 
 
+class _Reader(io.RawIOBase):
+    """The connection's reads, each under the lower of the read timeout and what is left of
+    the whole request's deadline: a client that sends a byte at a time is cut at the deadline,
+    and so is one that never finishes a handshake. A cut is counted."""
+
+    def __init__(self, connection: socket, deadline: float, stats: Stats) -> None:
+        self.connection = connection
+        self.deadline = deadline
+        self.stats = stats
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Any) -> int:
+        left = self.deadline - time.monotonic()
+        try:
+            if left <= 0:
+                raise TimeoutError("the request passed its deadline")
+            self.connection.settimeout(min(READ_TIMEOUT_S, left))
+            return self.connection.recv_into(buffer)
+        except TimeoutError:
+            self.stats.cut()
+            raise
+
+
 def _handler(control: ControlServer) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         timeout = READ_TIMEOUT_S
+        deadline = 0.0
+
+        def setup(self) -> None:
+            super().setup()
+            self.deadline = time.monotonic() + REQUEST_DEADLINE_S
+            self.rfile.close()
+            self.rfile = io.BufferedReader(_Reader(self.connection, self.deadline, control.stats))
 
         def _serve(self, method: str) -> None:
             text = self.headers.get("Content-Length") or "0"
@@ -354,14 +468,25 @@ def _handler(control: ControlServer) -> type[BaseHTTPRequestHandler]:
             if length > (MAX_BLOB_BODY if self.path == BLOB_PATH else MAX_BODY):
                 self.send_error(413)
                 return
-            body = self.rfile.read(length) if length else b""
             headers = {k.title(): v for k, v in self.headers.items()}
-            status, payload = control.handle(method, self.path, headers, body)
+            status: int
+            payload: dict[str, object]
+            if length > MAX_BODY and not protocol.signed_head(
+                control.token, method, self.path, headers
+            ):
+                # A large body is read only for a request that is signed already: an unsigned
+                # client can make the server read no more than the small bodies below.
+                status, payload = 401, {"error": "bad_signature"}
+            else:
+                body = self.rfile.read(length) if length else b""
+                status, payload = control.handle(method, self.path, headers, body)
             payload["server_time"] = control.clock()
             reply = json.dumps(payload).encode()
             signature = protocol.sign_reply(
                 control.token, headers.get(protocol.SIGNATURE, ""), status, reply
             )
+            # The reply is written within what is left of the deadline, as the reads were.
+            self.connection.settimeout(max(0.001, self.deadline - time.monotonic()))
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(reply)))

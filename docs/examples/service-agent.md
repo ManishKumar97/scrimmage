@@ -110,11 +110,13 @@ test          row       fault                 runs  fired  done  passed  rate  r
 order-status  baseline  -                     3     -      3     3/3     100%  44-100%  1.0    0.00009  pass
 order-status  fault 1   tool:get_order error  3     3      3     3/3     100%  44-100%  1.0    0.00009  pass
 range: a 95% Wilson interval, from these runs alone
+control server: runs sent 7, claims received 7
 model calls cost $0.0002 of a budget of $5
 ```
 
 Each run's record stays open 5 seconds after its reply, `record_grace_s`, for work the service does after it answers, so this test takes about half a minute.
 Before the first run, the runner checked that the service is gated with the same tools, and sent the first test's baseline once as a setup request.
+The `control server:` line counts what the runner sent, the setup request and the 6 runs, and the claims the service made for them; the two numbers match when every request reached a gated service.
 Each run then went to the service as its own request, under its own plan, while the service kept serving everything else.
 
 More: [An agent inside a web service](../services.md), [Configuration](../configuration.md), [Safety](../safety.md).

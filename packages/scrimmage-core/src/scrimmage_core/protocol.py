@@ -16,6 +16,9 @@ from collections import deque
 TIME = "X-Scrimmage-Time"
 NONCE = "X-Scrimmage-Nonce"
 SIGNATURE = "X-Scrimmage-Signature"
+# The digest of the body the signature covers, sent so a server can check the signature
+# before it reads a large body.
+BODY_SHA256 = "X-Scrimmage-Body-Sha256"
 WINDOW_S = 60.0  # how far a request's time may be from the server's clock
 NONCE_KEEP_S = 2 * WINDOW_S
 RUN_MAC_HEX = 16  # 64 bits of HMAC-SHA256 in a run header
@@ -29,8 +32,14 @@ def _mac(token: str, *parts: str) -> str:
     return hmac.new(token.encode(), "\n".join(parts).encode(), hashlib.sha256).hexdigest()
 
 
+def sign_digest(
+    token: str, method: str, path: str, stamp: str, nonce: str, body_digest: str
+) -> str:
+    return _mac(token, "scrimmage-request-v1", method, path, stamp, nonce, body_digest)
+
+
 def sign_request(token: str, method: str, path: str, stamp: str, nonce: str, body: bytes) -> str:
-    return _mac(token, "scrimmage-request-v1", method, path, stamp, nonce, digest(body))
+    return sign_digest(token, method, path, stamp, nonce, digest(body))
 
 
 def sign_reply(token: str, request_signature: str, status: int, body: bytes) -> str:
@@ -44,6 +53,7 @@ def request_headers(token: str, method: str, path: str, body: bytes, now: float)
         TIME: stamp,
         NONCE: nonce,
         SIGNATURE: sign_request(token, method, path, stamp, nonce, body),
+        BODY_SHA256: digest(body),
     }
 
 
@@ -78,6 +88,21 @@ class NonceStore:
             self._seen.add(nonce)
             self._order.append((now, nonce))
             return True
+
+
+def signed_head(token: str, method: str, path: str, headers: dict[str, str]) -> bool:
+    """Whether the headers carry a signature made with the token over the body digest they
+    declare. It reads no body and uses no nonce: the full check follows once the body is in,
+    and finds a body that is not the declared one."""
+    stamp, nonce, signature, declared = (
+        headers.get(TIME),
+        headers.get(NONCE),
+        headers.get(SIGNATURE),
+        headers.get(BODY_SHA256),
+    )
+    if not stamp or not nonce or not signature or not declared or len(nonce) != 32:
+        return False
+    return same(signature, sign_digest(token, method, path, stamp, nonce, declared))
 
 
 def check_request(

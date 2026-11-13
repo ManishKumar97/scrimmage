@@ -101,6 +101,37 @@ Prints the JSON Schema of `scrimmage.toml` that ships with your installed Scrimm
 An editor uses it to check the file as you type; see [Checking the file in your editor](configuration.md#checking-the-file-in-your-editor).
 The schema checks the shape of the file. `scrimmage check` decides.
 
+## scrimmage cert
+
+```bash
+scrimmage cert --ip 172.17.0.1 --name host.docker.internal --out .scrimmage-cert [--days 30]
+```
+
+Makes the certificates for a control server that a service in a container reaches over TLS; see [Services](services.md).
+It writes three files into a new folder, mode 0700, and refuses a folder that exists:
+
+| File | What | Mode |
+|---|---|---|
+| `ca.pem` | The authority's certificate. The service names it in `SCRIMMAGE_CONTROL_CA`. | 0644 |
+| `server.pem` | The control server's certificate, with each `--name` as a DNS name and each `--ip` as an IP address. | 0644 |
+| `server.key` | Its private key. | 0600 |
+
+The authority's key exists only while the command runs and is discarded once the server certificate is signed, so no file can sign another name.
+The authority is limited to the names and addresses you give and their subdomains.
+Give at least one `--ip` or `--name`; both can be repeated.
+`--days` is the validity, 1 to 397, and 30 by default.
+Making new certificates means running the command again, then restarting the runner and the service.
+
+It prints the two lines the service's environment needs, and the `control_tls` line for the file, with absolute paths so the line works from any folder.
+In a container, `SCRIMMAGE_CONTROL_CA` is the path where `ca.pem` is mounted there, not the printed path.
+The port is left as `<port>` for you to fill in.
+The command needs the `cert` extra, `pip install "scrimmage-core[cert]"`; without it the command says so and exits 2.
+
+| Code | Meaning |
+|---|---|
+| 0 | The three files were written |
+| 2 | No name or address, a name or address a certificate cannot carry, a folder that exists, a folder that cannot be written, or the extra is not installed |
+
 ## scrimmage show
 
 ```bash

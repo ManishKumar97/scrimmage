@@ -240,11 +240,14 @@ class Runner:
             ignore.write_text("*\n")
         self.token = secrets.token_hex(32)
         address = ("127.0.0.1", 0)
+        tls_context = None
         if config.agent.service:
             # A service was started before this runner, with its token and control address:
-            # the runner reads the same two from its own environment, and binds that address.
+            # the runner reads the token from its own environment, and the address from the
+            # file's control setting or, for a service on this machine, the same environment.
             self.token = service_client.runner_token()
-            address = service_client.control_address()
+            address = service_client.control_address(config.agent)
+            tls_context = service_client.server_tls(config.agent, config.root)
         # The values ${NAME} filled in: this test's own, removed from what the runner writes.
         self.scrub = config.scrub
         self.ledger = Ledger(config.agent.max_cost_usd)
@@ -255,13 +258,15 @@ class Runner:
                 on_refused=self._refused,
                 ledger=self.ledger,
                 address=address,
+                tls=tls_context,
             )
         except OSError as exc:  # the service's control port is held by another process
             raise service_client.Setup(
-                3, f"SCRIMMAGE_CONTROL_URL's port {address[1]} cannot be bound: {exc.strerror}"
+                3, f"the control address {address[0]}:{address[1]} cannot be bound: {exc.strerror}"
             ) from None
         self.answers = Path(tempfile.mkdtemp(prefix="scrimmage-answers-"))
         self.lock = threading.Lock()
+        self.sent = 0  # service requests sent: the setup request and every run
         self.ended = False  # run_all has read and cleared stop_flag; the watcher adds nothing
         self.procs: dict[str, subprocess.Popen[bytes]] = {}
         self.stopped_rows: set[tuple[str, str]] = set()
@@ -557,13 +562,21 @@ class Runner:
         self.check_labels(result)
         return result
 
+    def send(self, header: str, question: str) -> service_client.Reply:
+        """One request to the service, counted: a control server that no SDK reaches shows as
+        requests sent and no claims received."""
+        with self.lock:
+            self.sent += 1
+        agent = self.config.agent
+        return service_client.run_request(agent, header, question, agent.run_timeout)
+
     def served(self, run: str, row: planner.Row) -> "RunResult | Future[RunResult]":
         """A service run: one POST. The parallel slot is this thread, and it frees at the
         reply: the wait for the record, and the result, run on a waiter beside the next
         runs. A reply that stops the test is settled here, before the next run."""
         agent = self.config.agent
         header = f"{run}.{protocol.run_mac(self.token, run)}"
-        reply = service_client.run_request(agent, header, row.test.question, agent.run_timeout)
+        reply = self.send(header, row.test.question)
         replied = time.monotonic()  # the record's wait counts from here, not from its waiter
         ok = reply.status is not None and 200 <= reply.status < 300
         gate = reply.gate_refused
@@ -697,7 +710,7 @@ class Runner:
         plan = planner.plan_for(self.config, row, name)
         self.server.open_run(name, "setup", plan.to_json(), service=True)
         header = f"{name}.{protocol.run_mac(self.token, name)}"
-        reply = service_client.run_request(agent, header, test.question, agent.run_timeout)
+        reply = self.send(header, test.question)
         state = self.wait_record(name, time.monotonic())
         lines = self.store.lines(name)
         summary: dict[str, object] = {"outcome": "setup", "status": reply.status}
@@ -1381,6 +1394,16 @@ def counts(ended: Counter[str]) -> str:
 
 
 @dataclass(frozen=True)
+class ControlFacts:
+    """What the runner itself counted of a service test's control channel."""
+
+    runs_sent: int
+    claims_received: int
+    cut: int
+    tls_failed: dict[str, int]
+
+
+@dataclass(frozen=True)
 class Report:
     """What scrimmage test found, once. The text and the JSON are two renderings of it."""
 
@@ -1399,6 +1422,7 @@ class Report:
     code: int
     misses: list[dict[str, object]] = field(default_factory=list[dict[str, object]])
     misses_left_out: int = 0
+    control: ControlFacts | None = None  # a service test only
 
     @property
     def every_message(self) -> list[tuple[str, str]]:
@@ -1631,7 +1655,15 @@ def build_report(
         code,
         [doc for doc, _ in grouped[:MISS_JSON]],
         max(len(grouped) - MISS_JSON, 0),
+        control_facts(runner) if config.agent.service else None,
     )
+
+
+def control_facts(runner: "Runner | None") -> ControlFacts | None:
+    if runner is None:
+        return None
+    stats = runner.server.stats
+    return ControlFacts(runner.sent, stats.claims_received, stats.connections_cut, stats.tls_failed)
 
 
 MISS_JSON, MISS_LINES = 200, 20
@@ -1715,12 +1747,37 @@ def print_report(found: Report, out: TextIO) -> int:
         if busy:
             shown = "unknown" if p99 is None else f"{p99:g}"
             print(f"{entry.where}: control: {busy} busy, p99 {shown} ms", file=out)
+    for line in control_lines(found.control):
+        print(line, file=out)
     budget = config.agent.max_cost_usd
     limit = "no budget" if budget is None else f"a budget of ${budget:g}"
     print(f"model calls cost ${found.spent:.4f} of {limit}", file=out)
     for kind, text in found.messages:
         print(f"{PREFIXES[kind]}: {text}", file=out)
     return found.code
+
+
+def control_lines(facts: ControlFacts | None) -> list[str]:
+    """The runner's own view of a service test's control channel. Runs sent beside claims
+    received is what shows a control server that no service can reach, when the figures that
+    ride in a claimed run's last batch are missing."""
+    if facts is None:
+        return []
+    lines = [
+        f"control server: runs sent {facts.runs_sent}, claims received {facts.claims_received}"
+    ]
+    if facts.tls_failed:
+        reasons = ", ".join(f"{reason} {n}" for reason, n in facts.tls_failed.items())
+        lines.append(
+            f"control server: {plural(sum(facts.tls_failed.values()), 'connection')} "
+            f"failed TLS ({reasons})"
+        )
+    if facts.cut:
+        lines.append(
+            f"control server: {plural(facts.cut, 'connection')} cut by the timeouts, "
+            "a client that stalled or dripped"
+        )
+    return lines
 
 
 def report(
@@ -1744,6 +1801,18 @@ def report_json(found: Report) -> dict[str, object]:
         "stopped_by": found.stopped_by,
         "mock_misses": found.misses,
         "mock_misses_left_out": found.misses_left_out,
+        **control_json(found.control),
+    }
+
+
+def control_json(facts: ControlFacts | None) -> dict[str, object]:
+    if facts is None:
+        return {}
+    return {
+        "runs_sent": facts.runs_sent,
+        "claims_received": facts.claims_received,
+        "control_cut": facts.cut,
+        "control_tls_failed": facts.tls_failed,
     }
 
 

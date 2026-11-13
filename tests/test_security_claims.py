@@ -40,7 +40,9 @@ def test_the_only_connections_are_to_and_from_the_control_server() -> None:
     }
     assert found == {
         ("client.py", "HTTPConnection"),
+        ("client.py", "HTTPSConnection"),  # the same control server, over TLS
         ("control.py", "ThreadingHTTPServer"),
+        ("control.py", "wrap_socket"),  # each accepted connection, in TLS
         # The runner's own request to a team's service, at the address its file names.
         ("service_client.py", "HTTPConnection"),
     }

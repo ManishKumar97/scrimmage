@@ -193,6 +193,17 @@
             "service"
           ]
         },
+        "control": {
+          "required": [
+            "service"
+          ]
+        },
+        "control_tls": {
+          "required": [
+            "service",
+            "control"
+          ]
+        },
         "service": {
           "required": [
             "body"
@@ -348,6 +359,31 @@
             "$ref": "#/$defs/real_label"
           },
           "description": "Calls that work outside any request, such as a telemetry exporter, may make for real while a test runs. Never read for a call inside a run."
+        },
+        "control": {
+          "type": "string",
+          "description": "The ip:port the runner listens on for a service in a container, such as 172.17.0.1:8766. An IP address, never a name, and never every address. Any address but loopback needs control_tls."
+        },
+        "control_tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cert",
+            "key"
+          ],
+          "properties": {
+            "cert": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The certificate chain, a PEM file, as a path from the folder of this file."
+            },
+            "key": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Its private key, a PEM file you own, mode 600."
+            }
+          },
+          "description": "The certificate and key the control server speaks TLS with. Needs control. scrimmage cert makes them."
         }
       }
     },
