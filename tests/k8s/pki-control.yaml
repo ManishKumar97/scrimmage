@@ -1,0 +1,23 @@
+# The control server's certificate for one test namespace. The harness fills in NAMESPACE.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: scrimmage-control-NAMESPACE
+  namespace: scrimmage-pki
+spec:
+  secretName: scrimmage-control-NAMESPACE
+  duration: 24h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  usages:
+    - server auth
+    - digital signature
+  dnsNames:
+    - scrimmage
+    - scrimmage.NAMESPACE
+    - scrimmage.NAMESPACE.svc
+    - scrimmage.NAMESPACE.svc.cluster.local
+  issuerRef:
+    name: scrimmage-ca
+    kind: Issuer

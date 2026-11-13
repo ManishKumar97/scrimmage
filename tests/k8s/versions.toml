@@ -1,0 +1,20 @@
+# What the kind test cluster is built from. The harness refuses a kind older than [kind].
+# [node] is the same image kind.yaml names; a test keeps the two equal.
+
+[kind]
+version = "v0.33.0"
+
+[node]
+# kind v0.33.0 defaults to v1.37.0, but cert-manager 1.21 lists Kubernetes 1.33 to 1.36 as
+# supported and not 1.37, so the node is the v1.36.4 image from the same release.
+image = "kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed"
+
+[calico]
+repo = "https://docs.tigera.io/calico/charts"
+chart = "tigera-operator"
+version = "v3.33.0"
+
+[cert-manager]
+repo = "https://charts.jetstack.io"
+chart = "cert-manager"
+version = "v1.21.3"

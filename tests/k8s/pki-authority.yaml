@@ -1,0 +1,44 @@
+# The certificate authority for the control channel, made once per cluster in scrimmage-pki.
+# No test namespace holds an Issuer.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scrimmage-pki
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: scrimmage-selfsigned
+  namespace: scrimmage-pki
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: scrimmage-ca
+  namespace: scrimmage-pki
+spec:
+  isCA: true
+  commonName: scrimmage-ca
+  secretName: scrimmage-ca
+  duration: 43800h
+  # No nameConstraints: cert-manager 1.21 accepts them, but a DNS constraint is a suffix rule.
+  # It can permit scrimmage and x.scrimmage, never scrimmage.<namespace>.svc, which the control
+  # certificate must name, unless every test namespace is listed in advance.
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Never
+  issuerRef:
+    name: scrimmage-selfsigned
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: scrimmage-ca
+  namespace: scrimmage-pki
+spec:
+  ca:
+    secretName: scrimmage-ca
