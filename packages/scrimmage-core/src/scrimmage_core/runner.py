@@ -714,7 +714,8 @@ class Runner:
             raise service_client.Setup(
                 3,
                 f"x-scrimmage-run does not reach Scrimmage in the service at POST {path}: a proxy "
-                "dropped the header, the service was not started with scrimmage-run and "
+                "dropped the header, the service was not started with scrimmage-run, or with "
+                "PYTHONPATH beginning with the folder scrimmage path prints, and "
                 "SCRIMMAGE_SERVICE=1, its token differs, or its SDK speaks another protocol "
                 "version",
             )

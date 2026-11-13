@@ -51,11 +51,15 @@ class Running:
         args: list[str],
         app: str = "acme.service:app",
         bin_dir: Path = BIN,
+        bare: bool = False,
     ) -> None:
         """bin_dir: the bin folder of the venv the service runs in, this one unless a test
-        wants another SDK."""
+        wants another SDK. bare: start uvicorn itself, with no scrimmage-run, so the
+        environment's PYTHONPATH is all that switches Scrimmage on."""
         self.port = free_port()
-        command = [str(bin_dir / "scrimmage-run"), str(bin_dir / "uvicorn"), app]
+        command = [str(bin_dir / "uvicorn"), app]
+        if not bare:
+            command.insert(0, str(bin_dir / "scrimmage-run"))
         command += ["--port", str(self.port), "--loop", "asyncio", *args]
         self.proc = subprocess.Popen(
             command, cwd=root, env=env, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True
@@ -173,6 +177,7 @@ class Lab:
         workers: int = 1,
         wait: bool = True,
         app: str = "acme.service:app",
+        bare: bool = False,
         **env: str,
     ) -> Running:
         flags = ["--workers", str(workers)] if workers > 1 else []
@@ -653,6 +658,7 @@ class Bench:
         wait: bool = True,
         bin_dir: Path = BIN,
         app: str = "acme.service:app",
+        bare: bool = False,
         **env: str,
     ) -> Running:
         base = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
@@ -669,7 +675,7 @@ class Bench:
         base.update(env)
         flags = ["--workers", str(workers)] if workers > 1 else []
         env_for = {k: v for k, v in base.items() if v != ""}
-        service = Running(self.root, env_for, [*flags, *args], app, bin_dir=bin_dir)
+        service = Running(self.root, env_for, [*flags, *args], app, bin_dir=bin_dir, bare=bare)
         service.wanted = workers
         self.services.append(service)
         if wait:
