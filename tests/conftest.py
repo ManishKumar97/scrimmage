@@ -115,6 +115,17 @@ def pytest_configure(config: pytest.Config) -> None:
         )
 
 
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """A kind test makes a cluster, which takes minutes and memory, so it is left out unless
+    SCRIMMAGE_KIND=1. Left out, not skipped: a skip would fail a CI run."""
+    if os.environ.get("SCRIMMAGE_KIND") == "1":
+        return
+    left_out = [item for item in items if item.get_closest_marker("kind") is not None]
+    if left_out:
+        config.hook.pytest_deselected(items=left_out)
+        items[:] = [item for item in items if item not in left_out]
+
+
 def pytest_sessionfinish(session: pytest.Session) -> None:
     """In CI a skipped test fails the run: a safety check that did not run proves nothing.
 

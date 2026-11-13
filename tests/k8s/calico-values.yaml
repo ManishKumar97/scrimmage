@@ -1,0 +1,17 @@
+# Calico's operator installs Calico with VXLAN on the pod range kind.yaml sets.
+# The API server, Goldmane and Whisker are Calico's own extras; a test needs none of them.
+installation:
+  cni:
+    type: Calico
+  controlPlaneReplicas: 1
+  calicoNetwork:
+    ipPools:
+      - cidr: 192.168.0.0/16
+        encapsulation: VXLAN
+        natOutgoing: Enabled
+apiServer:
+  enabled: false
+goldmane:
+  enabled: false
+whisker:
+  enabled: false

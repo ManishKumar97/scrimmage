@@ -1,0 +1,11 @@
+# The test cluster: one node, Calico as the network plugin. kind is a test cluster.
+# The node image is pinned by digest. It is v1.36 because cert-manager 1.21 lists Kubernetes
+# 1.33 to 1.36 as supported and does not list 1.37; see versions.toml.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  disableDefaultCNI: true # Calico is the network plugin
+  podSubnet: 192.168.0.0/16 # Calico's default pool
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
