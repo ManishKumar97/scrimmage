@@ -20,7 +20,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from scrimmage_core import openapi_check, protocol, records, tls, versions
 from scrimmage_core.config import (
@@ -174,7 +174,7 @@ def post(
     return send("POST", agent, target(agent)[2], headers, body, timeout, connect_timeout)
 
 
-def cut(sock: socket.socket) -> None:
+def cut(sock: Any) -> None:
     """End the connection under a read that is still waiting."""
     with contextlib.suppress(OSError):
         sock.shutdown(socket.SHUT_RDWR)
