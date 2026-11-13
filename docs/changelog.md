@@ -13,5 +13,8 @@ Scrimmage has no published release yet.
 - The service pings the control server before it answers the probe, and the test stops with exit 3 if the ping fails or another runner answers.
   The startup report is version 2, and `scrimmage test --json` gains `control_ping`.
 - The control server refuses a large body whose signed header is more than 60 seconds old, before it reads the body.
+- A service run's summary names the process that claimed it, `claimed_by`, and carries `plan_digest` and `claimed_plan_digest`, keyed digests of the plan the runner made and the plan the claiming process used.
+  A run served under another plan is an infrastructure error.
+  The record schema gains these fields and the notices `plan_changed` and `plan_unreported`.
 
 Releases will be listed on this page, newest first, each with its version, its date and what changed.

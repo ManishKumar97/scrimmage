@@ -684,6 +684,42 @@
               ],
               "minimum": 0,
               "description": "From the run's last batch: the 99th percentile control round trip in that window, in milliseconds."
+            },
+            "plan_digest": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "description": "In a service run: HMAC-SHA256, keyed by the run token, of the runner's own plan without elapsed_s and scrub. Without the token it tells a reader nothing about the plan."
+            },
+            "claimed_plan_digest": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[0-9a-f]{64}$",
+              "description": "In a service run: the same digest, taken by the claiming process over the plan its run state held when it sent its last batch. null when that batch carried none, from an older SDK of the same major, or never came."
+            },
+            "claimed_by": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "host",
+                "pid"
+              ],
+              "description": "In a service run: the process that claimed the run. In a pod, host is the pod's name.",
+              "properties": {
+                "host": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pid": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              }
             }
           }
         }
@@ -744,7 +780,9 @@
             "other_python",
             "left_group",
             "probe",
-            "model_path"
+            "model_path",
+            "plan_changed",
+            "plan_unreported"
           ]
         },
         "process": {

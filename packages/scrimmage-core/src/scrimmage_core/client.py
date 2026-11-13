@@ -332,6 +332,8 @@ class Sender:
         self.proc = proc  # this process, as its record lines name it
         self.eager = eager  # send each line as it is made, with no thread
         self.on_closed: Callable[[], None] = lambda: None  # the run has ended
+        # A claimed run's plan as its state holds it now, read when the last batch is built.
+        self.plan_of: Callable[[], dict[str, object]] | None = None
         self.since = time.monotonic()  # the control load in the last batch counts from here
         self._fresh()
 
@@ -497,6 +499,8 @@ class Sender:
         if final:
             batch["made"] = made
             batch["proc"] = self.proc
+            if self.plan_of is not None:
+                batch["plan_digest"] = protocol.plan_digest(self.client.token, self.plan_of())
             # The process's control load from this run's start or claim on. It describes the
             # process: two runs that overlap in one worker count the same requests.
             busy, p99 = self.client.load_since(self.since)

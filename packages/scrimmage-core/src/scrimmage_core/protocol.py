@@ -7,6 +7,7 @@ status and its body's hash, so a reply can answer only the request it was made f
 
 import hashlib
 import hmac
+import json
 import math
 import secrets
 import threading
@@ -65,6 +66,21 @@ def same(a: str, b: str) -> bool:
 def run_mac(token: str, name: str) -> str:
     """The MAC a run header carries for its run's name: only a token holder can make one."""
     return _mac(token, "scrimmage-run-name-v1", name)[:RUN_MAC_HEX]
+
+
+# What Plan.to_json() adds beside the plan: the run's age, which changes with time, and the
+# values ${NAME} filled in, which a digest on a volume must not let a reader test guesses at.
+UNDIGESTED = ("elapsed_s", "scrub")
+
+
+def plan_digest(token: str, plan: dict[str, object]) -> str:
+    """HMAC-SHA256, keyed by the token, of a plan's to_json() without elapsed_s and scrub.
+
+    Keyed, because the plan holds mock values and other text from the test file: a plain
+    hash stored in a record would let anyone who reads it test a guess offline."""
+    kept = {key: value for key, value in plan.items() if key not in UNDIGESTED}
+    text = json.dumps(kept, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hmac.new(token.encode(), text.encode(), hashlib.sha256).hexdigest()
 
 
 class NonceStore:

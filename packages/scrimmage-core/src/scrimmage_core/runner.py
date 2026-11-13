@@ -205,6 +205,11 @@ class Ended:
     mistakes: list[str] = field(default_factory=list[str])
 
 
+PLAN_CHANGED = "the process that served this run used another plan"
+PLAN_UNREPORTED = (
+    "the service's Scrimmage does not report which plan it used; "
+    "upgrade scrimmage-core in the service to compare"
+)
 READY_S = 30.0  # how long the probe asks a service that does not listen yet
 READY_STEP_S = 0.2
 WAITERS = 64  # service runs whose record waits at once: the control server's connections
@@ -521,7 +526,16 @@ class Runner:
         gap = any(per_proc[proc] < made for proc, made in state.made.items())
         unfinished = not state.made or any(proc not in state.made for proc in per_proc)
         incomplete = bool(state.dropped) or (ended_itself and (gap or unfinished))
+        own_digest = protocol.plan_digest(self.server.token, state.plan) if state.service else None
+        # Equal digests say nothing more. Another says the claiming process used another plan.
+        # None, from a last batch that came without one, is an older SDK: no comparison.
+        changed = state.claimed_plan_digest not in (None, own_digest)
+        unreported = state.service and state.ended.is_set() and state.claimed_plan_digest is None
         made = kept_out + [self.left_line(run, row, *entry) for entry in left]
+        if changed:
+            made.append(self.runner_notice(run, row, "plan_changed", PLAN_CHANGED))
+        elif unreported:
+            made.append(self.runner_notice(run, row, "plan_unreported", PLAN_UNREPORTED))
         self.store.add(run, made)
         lines += made
         model = [line for line in lines if line.get("kind") == "model"]
@@ -537,7 +551,15 @@ class Runner:
         numbers = None if refusal is None else cast(dict[str, object], refusal["budget"])
         if stopped:
             outcome = "stopped"
-        elif not state.fetched or incomplete or real_errors or broken or no_plan or ended.infra:
+        elif (
+            not state.fetched
+            or incomplete
+            or real_errors
+            or broken
+            or no_plan
+            or ended.infra
+            or changed
+        ):
             outcome = "infrastructure error"
         elif first in BUDGET_REASONS:
             outcome = "budget reached" if numbers and reached(numbers) else "not reserved"
@@ -619,6 +641,12 @@ class Runner:
             "broken_rules": [{"kind": b.kind, "text": b.text} for b in result.judgement.broken],
             "left_out": result.judgement.left_out,
         }
+        if state.service:
+            summary.update(
+                plan_digest=own_digest,
+                claimed_plan_digest=state.claimed_plan_digest,
+                claimed_by=state.claimer,
+            )
         # The claiming process's control load in this run's window, from its last batch.
         result.control_busy, result.control_p99_ms = state.control_busy, state.control_p99_ms
         if state.control_busy is not None:
@@ -947,6 +975,12 @@ class Runner:
             "proc": proc,
             "library": "scrimmage",
         }
+
+    def runner_notice(
+        self, run: str, row: planner.Row, kind: str, message: str
+    ) -> dict[str, object]:
+        """A notice the runner writes itself, as from its own process."""
+        return {**self.line(run, row, 1, os.getpid()), "notice": kind, "message": message}
 
     def left_line(self, run: str, row: planner.Row, pid: int, command: str) -> dict[str, object]:
         text = redact(command, self.scrub)[:COMMAND_CAP]
@@ -1628,7 +1662,7 @@ def build_report(
             f"{where}: {r.run}: {line['message']}"
             for r in mine
             for line in r.notices
-            if line.get("notice") == "left_group"
+            if line.get("notice") in ("left_group", "plan_changed")
         ]
         ended = Counter(r.outcome for r in mine if not r.exercised)
         if ended:
@@ -1754,6 +1788,15 @@ def build_report(
             for r in results
             for line in r.notices
             if line.get("notice") == "model_path"
+        }
+    )
+    # An older SDK in the service says nothing of its plan: once per test, not once per run.
+    notes += sorted(
+        {
+            f"{r.row.test.name}: {line.get('message')}"
+            for r in results
+            for line in r.notices
+            if line.get("notice") == "plan_unreported"
         }
     )
     newer = sorted(
