@@ -1,0 +1,33 @@
+# Reads the records after the test's Job and its pod are gone. It mounts the volume read-only.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: reader
+  labels: {app.kubernetes.io/name: scrimmage-reader}
+spec:
+  serviceAccountName: scrimmage-runner
+  automountServiceAccountToken: false
+  terminationGracePeriodSeconds: 0
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: reader
+      image: scrimmage-runner:TAG
+      imagePullPolicy: Never
+      command: ["sleep", "infinity"]
+      resources:
+        requests: {cpu: 125m, memory: 128Mi}
+        limits: {memory: 256Mi}
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: {drop: [ALL]}
+      volumeMounts:
+        - {name: records, mountPath: /records, readOnly: true}
+  volumes:
+    - name: records
+      persistentVolumeClaim: {claimName: scrimmage-records, readOnly: true}

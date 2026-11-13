@@ -1,0 +1,11 @@
+# The class "standard" is kind's local-path provisioner. A production cluster names a CSI class.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: scrimmage-records
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 1Gi

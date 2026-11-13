@@ -1,0 +1,56 @@
+# One test, one pod. backoffLimit 0: a retry would start a second test and spend twice.
+# The pod's exit code is scrimmage test's: 0, 2 or 3. The result is result.json on the volume.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: scrimmage-test
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: scrimmage-runner}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: scrimmage-runner
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: runner
+          image: scrimmage-runner:TAG
+          imagePullPolicy: Never
+          args: ["test", "/etc/scrimmage/scrimmage.toml", "--records", "/records/scrimmage-runs"]
+          env:
+            - name: POD_IP
+              valueFrom: {fieldRef: {fieldPath: status.podIP}}
+            - {name: SCRIMMAGE_TOKEN_FILE, value: /run/scrimmage/token/token}
+          ports: [{containerPort: 7700, name: control}]
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: config, mountPath: /etc/scrimmage, readOnly: true}
+            - {name: token, mountPath: /run/scrimmage/token, readOnly: true}
+            - {name: tls, mountPath: /run/scrimmage/tls, readOnly: true}
+            - {name: records, mountPath: /records}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: config, configMap: {name: scrimmage-config}}
+        - {name: token, secret: {secretName: scrimmage-token, defaultMode: 0400}}
+        - name: tls
+          secret:
+            secretName: scrimmage-control-tls
+            defaultMode: 0400
+            items: [{key: tls.crt, path: tls.crt}, {key: tls.key, path: tls.key}]
+        - {name: records, persistentVolumeClaim: {claimName: scrimmage-records}}
+        - {name: tmp, emptyDir: {medium: Memory, sizeLimit: 64Mi}}

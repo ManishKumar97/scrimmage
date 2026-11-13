@@ -1,0 +1,4 @@
+# The build context is this folder and nothing wider; only these two paths enter it.
+*
+!Dockerfile
+!app/

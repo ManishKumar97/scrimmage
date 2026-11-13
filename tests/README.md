@@ -62,6 +62,15 @@ A second session waits while another lane's cluster runs and less than 6 GB of m
 `SCRIMMAGE_KIND_KEEP=1` keeps the cluster for debugging and prints the command that deletes it.
 `tests/k8s/versions.toml` pins the kind, node image, Calico and cert-manager versions, and `tests/k8s/probe.py` checks the assumptions the tests make about them on a real cluster.
 
+`tests/test_k8s_manifests.py` applies the manifests in `tests/k8s/manifests/` to a namespace named `s8-<random>`, made from `namespace.yaml` with the Pod Security `restricted` standard enforced, warned and audited.
+The agent Deployment has two replicas.
+The runner Job, the reader pod and the records volume claim are there too, and the fake model is a small image built from `tests/k8s/fake_model/`.
+Images are built with no network, loaded into the cluster with `kind load`, and never pulled.
+The harness copies the control certificate's Secrets into the namespace, makes the token Secret from standard input so the token is on no command line, and fails a wait at once on a `FailedCreate` event, naming its message.
+Every container has resource requests and a memory limit.
+`tests/test_k8s_harness.py` checks that, and the manifests' other fixed shape, without a cluster.
+Run it the same way, and check the count with `tests/compose/check_junit.py`.
+
 ## While you work
 
 Run the fast tier, then the slow tests of the area you changed:

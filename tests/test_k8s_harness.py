@@ -3,11 +3,15 @@
 import tempfile
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
 
+from compose import harness
 from k8s import cluster as kubernetes
 from k8s.cluster import Cluster, ClusterError
+from scrimmage_core.config import load as load_config
 
 HERE = Path(kubernetes.__file__).parent
 
@@ -140,3 +144,104 @@ def test_a_session_does_not_wait_for_its_own_scratch_cluster(
     monkeypatch.setattr(kubernetes, "memory_available_kb", lambda: 1024 * 1024)
     monkeypatch.setattr(kubernetes, "running_clusters", lambda: ["scrimmage-2-kp", "scrimmage-2"])
     Cluster("2-mn").reserve_room()  # returns at once; waiting would hang the test
+
+
+# The committed manifests, read without a cluster.
+
+MANIFEST_FILES = sorted((HERE / "manifests").glob("*.yaml"))
+WORKLOAD_KINDS = {"Deployment", "Job", "Pod"}
+
+
+def documents(path: Path) -> list[dict[str, Any]]:
+    return [d for d in yaml.safe_load_all(path.read_text()) if d]
+
+
+def pod_spec(document: dict[str, Any]) -> dict[str, Any]:
+    if document["kind"] == "Pod":
+        return document["spec"]
+    return document["spec"]["template"]["spec"]
+
+
+def containers() -> list[tuple[str, dict[str, Any]]]:
+    found: list[tuple[str, dict[str, Any]]] = []
+    for path in MANIFEST_FILES:
+        for document in documents(path):
+            if document["kind"] in WORKLOAD_KINDS:
+                name = f"{path.name}/{document['metadata']['name']}"
+                found += [(name, c) for c in pod_spec(document)["containers"]]
+    return found
+
+
+def test_the_manifests_are_the_files_the_harness_applies() -> None:
+    found = {(d["kind"], d["metadata"]["name"]) for p in MANIFEST_FILES for d in documents(p)}
+    assert {
+        ("Deployment", "acme-agent"),
+        ("Deployment", "fake-model"),
+        ("Job", "scrimmage-test"),
+        ("Pod", "reader"),
+    } <= found
+    applied = {*kubernetes.FOUNDATION, *kubernetes.WORKLOADS, "runner-job.yaml", "reader.yaml"}
+    assert applied | {"namespace.yaml"} == {p.name for p in MANIFEST_FILES}
+
+
+def test_every_container_has_resource_requests_and_a_memory_limit() -> None:
+    found = containers()
+    assert len(found) == 4, "agent, runner, fake model and reader"
+    for name, container in found:
+        resources = container.get("resources", {})
+        assert {"cpu", "memory"} <= set(resources.get("requests", {})), f"{name}: no requests"
+        assert "memory" in resources.get("limits", {}), f"{name}: no memory limit"
+
+
+def test_every_image_is_a_tag_the_harness_fills_and_is_never_pulled() -> None:
+    tags = kubernetes.Tags(
+        "scrimmage-runner:a1", "scrimmage-compose-service:b2", "scrimmage-fake-model:c3"
+    )
+    for name, container in containers():
+        assert container["image"].endswith(":TAG"), f"{name}: {container['image']}"
+        assert container["imagePullPolicy"] == "Never", f"{name} may pull a same-named image"
+        assert tags.render(container["image"]).split(":")[1] in ("a1", "b2", "c3"), name
+
+
+def test_the_manifests_hold_what_pod_security_does_not_check() -> None:
+    """The restricted standard asks none of these, so a manifest could drop one unnoticed."""
+    specs: list[tuple[str, dict[str, Any]]] = []
+    for path in MANIFEST_FILES:
+        for document in documents(path):
+            name = f"{path.name}/{document['metadata']['name']}"
+            if document["kind"] == "ServiceAccount":
+                assert document["automountServiceAccountToken"] is False, name
+            elif document["kind"] in WORKLOAD_KINDS:
+                specs.append((name, pod_spec(document)))
+    assert len(specs) == 4
+    for name, spec in specs:
+        assert spec["automountServiceAccountToken"] is False, f"{name}: mounts an API token"
+        for container in spec["containers"]:
+            assert container["securityContext"]["readOnlyRootFilesystem"] is True, name
+        secrets = [v for v in spec.get("volumes", []) if "secret" in v]
+        if secrets:
+            assert spec["securityContext"].get("fsGroup"), f"{name}: no fsGroup for its Secrets"
+    (agent,) = (s for n, s in specs if n.startswith("agent.yaml"))
+    ca = next(v["secret"] for v in agent["volumes"] if v["name"] == "ca")
+    assert ca["secretName"] == "scrimmage-ca-cert"
+    assert ca["items"] == [{"key": "ca.crt", "path": "ca.pem"}], "only the authority, never a key"
+
+
+def test_the_namespace_enforces_warns_and_audits_the_restricted_standard() -> None:
+    (namespace,) = documents(HERE / "manifests" / "namespace.yaml")
+    labels = namespace["metadata"]["labels"]
+    image = tomllib.loads((HERE / "versions.toml").read_text())["node"]["image"]
+    minor = "v" + ".".join(image.split(":")[1].split("@")[0].lstrip("v").split(".")[:2])
+    for mode in ("enforce", "warn", "audit"):
+        assert labels[f"pod-security.kubernetes.io/{mode}"] == "restricted"
+        assert labels[f"pod-security.kubernetes.io/{mode}-version"] == minor, "the cluster's minor"
+
+
+def test_the_jobs_file_is_valid_and_its_tests_are_the_examples() -> None:
+    config = load_config(HERE / "scrimmage.toml", {"POD_IP": "10.0.0.5"})
+    assert config.agent.service == "http://acme-agent:8000/chat"
+    assert config.agent.control == "10.0.0.5:7700"
+    assert [m.host for m in config.agent.model_hosts] == ["fake-model"]
+    example = (harness.EXAMPLE / "scrimmage.toml").read_text()
+    committed = (HERE / "scrimmage.toml").read_text()
+    assert committed.endswith(example[example.index("[[test]]") :])

@@ -151,8 +151,10 @@ class FakeOpenAI:
         moderation: str | None = None,
         by_model: dict[str, Rule] | None = None,
         host: str = "127.0.0.1",
+        port: int = 0,
     ) -> None:
-        """host: the address to listen on; a container reaches it at the bridge address."""
+        """host: the address to listen on; a container reaches it at the bridge address.
+        port: 0 picks a free one; a server in a cluster names its port."""
         self._by_model = dict(by_model or {})
         self._replies = [Reply(name) for name in replies]
         self._embedding = Reply(embedding) if embedding else None
@@ -166,7 +168,7 @@ class FakeOpenAI:
         # program sent to the model host.
         self.received: list[tuple[dict[str, str], bytes]] = []
         self.errors: list[str] = []
-        self._server = ThreadingHTTPServer((host, 0), self._handler())
+        self._server = ThreadingHTTPServer((host, port), self._handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
     @property

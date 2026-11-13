@@ -1,0 +1,122 @@
+# Deny everything, then allow four paths: the agent to the runner on 7700, the runner to the
+# agent on 8000, the agent to the fake model on 8080, and every pod to cluster DNS.
+# A policy selects one set of pods, so each path is two policies: egress on the sender, ingress
+# on the receiver. Calico checks a policy after a Service's address is translated, so the rules
+# name pods and ports, never Service addresses.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dns
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-to-runner-ingress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: scrimmage-runner}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: acme-agent}
+      ports:
+        - {protocol: TCP, port: 7700}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-to-runner-egress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: acme-agent}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: scrimmage-runner}
+      ports:
+        - {protocol: TCP, port: 7700}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: runner-to-agent-ingress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: acme-agent}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: scrimmage-runner}
+      ports:
+        - {protocol: TCP, port: 8000}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: runner-to-agent-egress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: scrimmage-runner}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: acme-agent}
+      ports:
+        - {protocol: TCP, port: 8000}
+---
+# The real-model check replaces the two agent-to-model policies with TCP 443 to 0.0.0.0/0,
+# except the pod and service ranges, 172.16.0.0/12 and 169.254.0.0/16, since a NetworkPolicy
+# cannot name a host.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-to-model-ingress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: fake-model}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: acme-agent}
+      ports:
+        - {protocol: TCP, port: 8080}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-to-model-egress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: acme-agent}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: fake-model}
+      ports:
+        - {protocol: TCP, port: 8080}
