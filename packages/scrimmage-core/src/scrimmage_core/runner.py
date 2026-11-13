@@ -707,7 +707,8 @@ class Runner:
         if reply.failed is not None or reply.timed_out:
             hint = (
                 "; a container's published port can accept a connection before the app "
-                f"inside listens, and this one was still reset or closed with no reply after {READY_S:g} s"
+                "inside listens, and this one was still reset or closed with no reply after "
+                f"{READY_S:g} s"
                 if starting(reply)
                 else ""
             )
