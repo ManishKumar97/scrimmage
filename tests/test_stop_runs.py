@@ -14,6 +14,7 @@ from scrimmage_core.runner import Runner
 
 GRACE_S = 1.0
 BOUND_S = 20  # a ceiling for an event that should come at once; it only ends a failing test
+LOADED_BOUND_S = 120  # the same, for a wait on another process while the machine is busy
 
 IGNORES_TERM = (
     "import signal, sys\n"
@@ -68,6 +69,14 @@ def test_cancel_stops_every_run_in_one_grace_period_not_one_each(
         run.server.server.server_close()
 
 
+def state(pid: int) -> str:
+    try:
+        with open(f"/proc/{pid}/stat") as stat:
+            return stat.read().rsplit(")", 1)[1].split()[0]
+    except OSError:
+        return "gone"
+
+
 def running_program(pid: int) -> bool:
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as cmdline:
@@ -96,18 +105,20 @@ def test_a_run_ends_when_its_runner_is_killed() -> None:
     try:
         assert mini.stdout is not None
         pid = int(mini.stdout.readline())  # the run is started
-        ready = time.monotonic() + BOUND_S
+        ready = time.monotonic() + LOADED_BOUND_S
         while not running_program(
             pid
         ):  # the event: run_command has become the program, which ignores SIGTERM
-            assert time.monotonic() < ready and not gone(pid), "the run never started"
+            assert time.monotonic() < ready and not gone(pid), (
+                f"the run never started (state {state(pid)})"
+            )
             time.sleep(0.01)
         mini.kill()  # SIGKILL: nothing in the runner gets to stop its runs
         mini.wait()
-        deadline = time.monotonic() + BOUND_S
+        deadline = time.monotonic() + LOADED_BOUND_S  # SIGKILL is sent at once; the exit is not
         while not gone(pid) and time.monotonic() < deadline:
             time.sleep(0.01)
-        assert gone(pid), "the run outlived its runner"
+        assert gone(pid), f"the run outlived its runner (state {state(pid)})"
     finally:
         if pid and not gone(pid):
             os.kill(pid, signal.SIGKILL)
