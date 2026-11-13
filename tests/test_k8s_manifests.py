@@ -191,16 +191,62 @@ def test_the_token_secret_comes_from_stdin(
     monkeypatch.setattr(kubernetes, "run", watching)
     with cluster.namespace(restricted=True) as namespace:
         token = cluster.create_token_secret(namespace)
+        cluster.issue_control_certificate(namespace)
         stored = cluster.kubectl(
             "get", "secret", "scrimmage-token", "-n", namespace,
             "-o", "jsonpath={.data.token}",
         ).stdout  # fmt: skip
         assert len(token) == 64
         assert base64.b64decode(stored).decode() == token, "the Secret holds the token"
-    # Positive control: the watcher does see the token, on the one command's standard input.
-    assert [c[:2] for c, i in commands if i and token in i] == [["kubectl", "apply"]]
+        for name in ("scrimmage-token", "scrimmage-control-tls", "scrimmage-ca-cert"):
+            found = cluster.json("get", "secret", name, "-n", namespace)
+            notes = found["metadata"].get("annotations", {})
+            assert "kubectl.kubernetes.io/last-applied-configuration" not in notes, (
+                f"{name} carries its own content in an annotation"
+            )
     for command, _ in commands:
         assert token not in " ".join(command), f"the token is on a command line: {command[:6]}"
+    # Positive control: the watcher does see the token, on one command's standard input.
+    on_stdin = [c[:3] for c, i in commands if i and token in i]
+    assert on_stdin == [["kubectl", "apply", "--server-side"]]
+
+
+def event(namespace: str, name: str, owner: str, when: str) -> dict[str, Any]:
+    return {
+        "apiVersion": "v1",
+        "kind": "Event",
+        "metadata": {"name": name, "namespace": namespace},
+        "type": "Warning",
+        "reason": "FailedCreate",
+        "message": "Error creating: a refusal from long ago",
+        "involvedObject": {
+            "kind": "ReplicaSet",
+            "name": owner,
+            "namespace": namespace,
+            "apiVersion": "apps/v1",
+        },
+        "firstTimestamp": when,
+        "lastTimestamp": when,
+        "count": 1,
+    }
+
+
+def test_a_stale_failure_event_does_not_fail_a_healthy_wait(cluster: Cluster, tags: Tags) -> None:
+    healthy = pod("healthy", shipped=True)
+    healthy["spec"]["containers"][0]["image"] = tags.runner
+    with cluster.namespace(restricted=True) as namespace:
+        wait_default_account(cluster, namespace)
+        # One event is about some other object; the other names the Deployment waited for but
+        # is older than it.
+        for planted in (
+            event(namespace, "g1-other", "gone-long-ago", "2999-01-01T00:00:00Z"),
+            event(namespace, "g1-old", "healthy-0123456789", "2001-01-01T00:00:00Z"),
+        ):
+            assert apply_json(cluster, namespace, planted).returncode == 0
+        assert cluster.bad_event(namespace), "the planted events must be there to be ignored"
+        made = apply_json(cluster, namespace, deployment("healthy", healthy))
+        assert made.returncode == 0, made.stderr
+        cluster.wait_ready(namespace, "healthy", timeout=120)
 
 
 def test_the_reader_pod_reads_the_records_volume(cluster: Cluster, tags: Tags) -> None:

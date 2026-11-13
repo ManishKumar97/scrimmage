@@ -278,24 +278,43 @@ class Cluster:
         *,
         timeout: float,
         namespace: str | None = None,
+        names: tuple[str, ...] = (),
     ) -> None:
         """Ask `check` every 2 s. When a namespace is given, an event that says a workload will
-        never start stops the wait at once, naming its message."""
+        never start stops the wait at once, naming its message. With `names`, only an event
+        about an object named for one of them, made since the first of them was, counts."""
         deadline = time.monotonic() + timeout
+        since = self.created_since(namespace, names) if namespace else ""
         while True:
             if check():
                 return
-            if namespace and (event := self.bad_event(namespace)):
+            if namespace and (event := self.bad_event(namespace, names, since)):
                 raise ClusterError(f"waiting for {what} in {namespace}: {event}")
             if time.monotonic() > deadline:
                 raise ClusterError(f"{what} was not ready after {timeout:.0f} s")
             time.sleep(2)
 
-    def bad_event(self, namespace: str) -> str | None:
+    def created_since(self, namespace: str, names: tuple[str, ...]) -> str:
+        """The earliest creation time of the named Deployments, as the API writes it; empty
+        when none is named or found. An older event is not about what is being waited for."""
+        times = [
+            found["metadata"]["creationTimestamp"]
+            for name in names
+            if (found := self.json("get", "deployment", name, "-n", namespace, check=False))
+        ]
+        return min(times, default="")
+
+    def bad_event(self, namespace: str, names: tuple[str, ...] = (), since: str = "") -> str | None:
         events = self.json("get", "events", "-n", namespace, check=False)
         for item in (events or {}).get("items", []):
-            if item.get("reason") in FAIL_FAST_EVENTS:
-                return f"{item['reason']}: {item.get('message', '')}"
+            if item.get("reason") not in FAIL_FAST_EVENTS:
+                continue
+            if names and not item.get("involvedObject", {}).get("name", "").startswith(names):
+                continue
+            happened = item.get("lastTimestamp") or item.get("eventTime") or ""
+            if since and happened and happened < since:
+                continue
+            return f"{item['reason']}: {item.get('message', '')}"
         return None
 
     def nodes_ready(self) -> bool:
@@ -513,7 +532,9 @@ class Cluster:
             "metadata": {"name": TOKEN_SECRET, "namespace": namespace},
             "stringData": {"token": token},
         }
-        self.kubectl("apply", "-f", "-", input=json.dumps(secret))
+        # Server-side: a client-side apply writes the whole object, token included, into an
+        # annotation.
+        self.kubectl("apply", "--server-side", "-f", "-", input=json.dumps(secret))
         return token
 
     def create_config_map(self, namespace: str) -> None:
@@ -555,6 +576,7 @@ class Cluster:
             lambda: all(self.deployment_ready(namespace, name) for name in names),
             timeout=timeout,
             namespace=namespace,
+            names=names,
         )
 
     def pod_ready(self, namespace: str, name: str) -> bool:
@@ -614,7 +636,7 @@ class Cluster:
                 "metadata": {"name": name, "namespace": namespace},
                 "data": {key: data[key] for key in keys},
             }
-            self.kubectl("apply", "-f", "-", input=json.dumps(secret))
+            self.kubectl("apply", "--server-side", "-f", "-", input=json.dumps(secret))
 
 
 @contextlib.contextmanager

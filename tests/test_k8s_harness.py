@@ -203,6 +203,30 @@ def test_every_image_is_a_tag_the_harness_fills_and_is_never_pulled() -> None:
         assert tags.render(container["image"]).split(":")[1] in ("a1", "b2", "c3"), name
 
 
+def test_the_manifests_hold_what_pod_security_does_not_check() -> None:
+    """The restricted standard asks none of these, so a manifest could drop one unnoticed."""
+    specs: list[tuple[str, dict[str, Any]]] = []
+    for path in MANIFEST_FILES:
+        for document in documents(path):
+            name = f"{path.name}/{document['metadata']['name']}"
+            if document["kind"] == "ServiceAccount":
+                assert document["automountServiceAccountToken"] is False, name
+            elif document["kind"] in WORKLOAD_KINDS:
+                specs.append((name, pod_spec(document)))
+    assert len(specs) == 4
+    for name, spec in specs:
+        assert spec["automountServiceAccountToken"] is False, f"{name}: mounts an API token"
+        for container in spec["containers"]:
+            assert container["securityContext"]["readOnlyRootFilesystem"] is True, name
+        secrets = [v for v in spec.get("volumes", []) if "secret" in v]
+        if secrets:
+            assert spec["securityContext"].get("fsGroup"), f"{name}: no fsGroup for its Secrets"
+    (agent,) = (s for n, s in specs if n.startswith("agent.yaml"))
+    ca = next(v["secret"] for v in agent["volumes"] if v["name"] == "ca")
+    assert ca["secretName"] == "scrimmage-ca-cert"
+    assert ca["items"] == [{"key": "ca.crt", "path": "ca.pem"}], "only the authority, never a key"
+
+
 def test_the_namespace_enforces_warns_and_audits_the_restricted_standard() -> None:
     (namespace,) = documents(HERE / "manifests" / "namespace.yaml")
     labels = namespace["metadata"]["labels"]
