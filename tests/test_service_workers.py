@@ -26,42 +26,70 @@ from scrimmage_core.config import Mock
 from scrimmage_core.control import MAX_CONNECTIONS, ControlServer
 from scrimmage_core.records import RecordStore
 from service_harness import eventually
-from test_service import Bench, Lab, bench, lab
+from test_service import Lab, lab
 
 pytestmark = pytest.mark.slow
-__all__ = ["bench", "lab"]  # the fixtures, used by name
-MAX_RUNS = 100
+__all__ = ["lab"]  # the fixture, used by name
 PER_PROCESS = 8  # the design's number, not the code's, so a change to it fails here
 
 
 @pytest.mark.design("service.workers_spread")
-def test_runs_reach_four_worker_pids_and_every_record_matches_its_plan(bench: Bench) -> None:
-    service = bench.start(workers=4)
-    workers = set(service.workers())
-    assert len(workers) == 4, service.text
-    seen: set[int] = set()
-    sent = 0
-    while len(seen) < 4 and sent < MAX_RUNS:
-        # /chat-blocking holds its worker's loop 300 ms, so the next connection goes elsewhere.
-        code, out = bench.test(service.port, path="/chat-blocking", runs=4, parallel=4)
-        assert code == 0, out
-        sent += 4
-        for name, path in records(bench).items():
-            lines = [json.loads(x) for x in path.read_text().splitlines()]
-            assert lines, name
-            # Every line is the run's own: the plan opened for it named this run and test,
-            # and each line a worker wrote carries the plan's row, the first test's baseline.
-            assert {(x["run"], x["test"]) for x in lines} == {(name, "order-status")}, name
-            served = [x for x in lines if x.get("proc", {}).get("pid") in workers]
-            assert served and {x["row"] for x in served} == {"baseline"}, name
-            if name.startswith("run-"):
-                seen |= {int(x["proc"]["pid"]) for x in served}
-    assert seen == workers, f"{len(seen)} of 4 workers served in {sent} runs"
-    print(f"four workers served within {sent} runs")
+def test_runs_reach_four_worker_pids_and_every_record_matches_its_plan(
+    lab: Lab, tmp_path: Path
+) -> None:
+    """Four runs, each sent once the run before it holds its worker: a held worker accepts no
+    connection, so each run reaches a worker no run holds yet, whatever order the workers
+    accept in. Then all four go on, at once, and each record holds only that run's lines."""
+    from conftest import ACME
+    from fakes.openai_server import FakeOpenAI
 
-
-def records(bench: Bench) -> dict[str, Path]:
-    return {p.stem: p for p in (bench.root / "scrimmage-runs").glob("*/*.jsonl")}
+    hold = tmp_path / "hold.sock"
+    fake = FakeOpenAI(ACME)
+    fake.start()
+    waiting = socket.socket(socket.AF_UNIX)
+    waiting.bind(str(hold))
+    waiting.listen(4)
+    waiting.settimeout(60)
+    held: list[socket.socket] = []
+    try:
+        service = lab.start(
+            workers=4, OPENAI_BASE_URL=fake.base_url, OPENAI_API_KEY="test", HOLD_SOCKET=str(hold)
+        )
+        workers = set(service.workers())
+        assert len(workers) == 4, service.text
+        mocks = (
+            Mock("tool:get_order", "shipped, Oct 30", None),
+            Mock("tool:get_stock", {"sku": "SKU-42", "count": 12}, "acme.models:Stock"),
+        )
+        # The openai client runs `uname -p` through platform to name its machine: listed.
+        real = ("tool:check_inventory", "process:uname")
+        runs = [lab.open(mocks=mocks, real=real) for _ in range(4)]
+        reach: dict[str, int] = {}
+        with ThreadPoolExecutor(4) as sending:
+            replies = []
+            for name, headers in runs:
+                body = {"message": "Where is order 1234?"}
+                replies.append(sending.submit(service.post, "/chat-held", body, headers))
+                conn, _ = waiting.accept()  # this run's worker holds it, and its loop
+                held.append(conn)
+                reach[name] = int(conn.makefile().readline())
+            for conn in held:
+                conn.sendall(b"g")
+            answered = [reply.result(60) for reply in replies]
+        assert all(status == 200 for status, _ in answered), (answered, service.text[-3000:])
+        assert set(reach.values()) == workers, reach
+        for name, _ in runs:
+            lines = lab.lines(name)
+            # Every line is the run's own, from the worker its request reached, with the
+            # row of the plan opened for it.
+            assert lines and {x["run"] for x in lines} == {name}, name
+            assert {x.get("proc", {}).get("pid") for x in lines} == {reach[name]}, name
+            assert {x["row"] for x in lines} == {"baseline"}, name
+    finally:
+        for conn in held:
+            conn.close()
+        waiting.close()
+        fake.stop()
 
 
 @pytest.mark.design("service.sixty_fifth_connection")

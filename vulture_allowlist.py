@@ -167,7 +167,7 @@ _.answer_moderated  # tests/example/acme/guarded.py: a test's scrimmage.toml nam
 _.answer_in_threads  # tests/example/acme/guarded.py: a test's scrimmage.toml names it
 _.__call__  # scrimmage_core/asgi_gate.py: the server calls it, as an ASGI app
 _.chat_sync  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
-_.chat_blocking  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
+_.chat_held  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
 _.left_running  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
 _.stream_json  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
 _.go_on  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls

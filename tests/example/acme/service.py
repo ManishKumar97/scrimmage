@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import json
 import os
+import socket
 import threading
 import time
 from collections.abc import AsyncIterator
@@ -49,12 +50,16 @@ def chat_sync(ask: Ask, request: Request) -> dict[str, str]:
     return {"reply": answer(ask.message)}
 
 
-@app.post("/chat-blocking")
-async def chat_blocking(ask: Ask, request: Request) -> dict[str, str]:
-    """Holds its event loop for 300 ms, so a busy worker is less likely to take the next
-    connection."""
+@app.post("/chat-held")
+async def chat_held(ask: Ask, request: Request) -> dict[str, str]:
+    """Tells the test which worker it reached, then holds that worker's event loop until the
+    test lets it go. A held worker accepts no connection, so the test's next one reaches
+    another worker, whatever order the workers accept in."""
     authorized(request)
-    time.sleep(0.3)
+    with socket.socket(socket.AF_UNIX) as held:
+        held.connect(os.environ["HOLD_SOCKET"])
+        held.sendall(f"{os.getpid()}\n".encode())
+        held.recv(1)  # the test's go, once every worker is held
     return {"reply": await asyncio.get_running_loop().run_in_executor(None, answer, ask.message)}
 
 
