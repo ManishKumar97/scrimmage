@@ -2,18 +2,23 @@
 batch, and the runner compares it with its own plan. A different plan is an infrastructure
 error, and a last batch from an older SDK with no digest is not compared."""
 
+import asyncio
 import contextlib
+import dataclasses
 import hashlib
 import hmac
+import importlib.util
 import json
 import socket
 import threading
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from conftest import EXAMPLE
 from scrimmage_core import protocol, runner
 from scrimmage_core.config import Mock
 from scrimmage_core.control import ControlServer
@@ -28,7 +33,9 @@ TOKEN = "f00d" * 16
 
 def a_plan(**more: Any) -> Plan:
     mocks = (Mock("tool:get_order", "shipped, Oct 30", None),)
-    return Plan("run-0000000000aa", "t", "baseline", mocks, (), (), (), 30.0, **more)
+    fields: dict[str, Any] = {"mocks": mocks, "faults": (), "tools": (), "real": ()}
+    fields.update(more)
+    return Plan("run-0000000000aa", "t", "baseline", time_limit_s=30.0, **fields)
 
 
 def text_of(plan: Plan) -> str:
@@ -121,7 +128,7 @@ def test_the_digest_is_an_hmac_over_to_json_without_elapsed_or_scrub() -> None:
     expected = hmac.new(TOKEN.encode(), text_of(plain).encode(), hashlib.sha256).hexdigest()
     assert digest == expected
     assert protocol.plan_digest("0ddba11" * 9, plain.to_json()) != digest
-    changed = Plan(**{**plain.__dict__, "mocks": (Mock("tool:get_order", "lost", None),)})
+    changed = a_plan(mocks=(Mock("tool:get_order", "lost", None),))
     assert protocol.plan_digest(TOKEN, changed.to_json()) != digest
     # The argument is not changed: the same dict is digested again with its keys in place.
     doc = both.to_json()
@@ -129,22 +136,39 @@ def test_the_digest_is_an_hmac_over_to_json_without_elapsed_or_scrub() -> None:
     assert "elapsed_s" in doc and "scrub" in doc
 
 
+SECRET_MOCK = """
+[[test]]
+name     = "scrubbed"
+question = "Where is order 1234?"
+expect   = ["shipped"]
+
+[[test.mock]]
+call    = "tool:get_order"
+returns = "${E2_ORDER_STATUS}, shipped"
+"""
+SECRET = "e2-a-value-only-the-environment-holds"
+
+
 @pytest.mark.design("service.plan_digest")
 def test_the_stored_digest_does_not_reveal_a_scrubbed_value(bench: Bench) -> None:
-    """The record holds the digest. Someone who reads it and guesses a mock's value right
-    still cannot confirm the guess with a hash they make themselves."""
+    """A mock holds a ${NAME} value, which the plan lists in scrub. Someone who reads the
+    record and guesses the value right still cannot confirm it with a hash they make."""
+    bench.monkeypatch.setenv("E2_ORDER_STATUS", SECRET)
     sent = the_plans_sent(bench)
     service = bench.start()
-    code, out = bench.test(service.port, runs=1)
-    assert code == 0, out
-    (summary,) = runs_of(bench).values()
-    (plan,) = [p for p in sent.values() if p["run"] in runs_of(bench)]
-    guess = dict(plan)
-    assert "shipped, Oct 30" in json.dumps(guess)  # the right guess is in the text hashed
-    shown = json.dumps(guess, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    bench.test(service.port, runs=1, tests=SECRET_MOCK)
+    mine = {n: s for n, s in runs_of(bench).items() if sent[n]["test"] == "scrubbed"}
+    assert len(mine) == 1
+    ((name, summary),) = mine.items()
+    plan = sent[name]
+    assert plan["scrub"] == [SECRET]  # the value is listed to be scrubbed ...
+    assert SECRET in json.dumps(plan["mocks"])  # ... and is in the text a digest covers
+    kept = {k: v for k, v in plan.items() if k not in ("elapsed_s", "scrub")}
+    shown = json.dumps(kept, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     stored = summary["plan_digest"]
-    assert stored != hashlib.sha256(shown.encode()).hexdigest()
-    assert stored == protocol.plan_digest(token_of(bench), plan)  # and the token confirms it
+    assert SECRET in shown
+    assert stored != hashlib.sha256(shown.encode()).hexdigest()  # the right guess, plain hash
+    assert stored == protocol.plan_digest(token_of(bench), plan)  # the token confirms it
 
 
 @pytest.mark.design("service.plan_digest")
@@ -223,3 +247,84 @@ def test_the_runner_digests_its_own_plan_not_the_claimers(bench: Bench) -> None:
         own = protocol.plan_digest(token_of(bench), sent[name])
         assert summary["plan_digest"] == own, name
         assert summary["claimed_plan_digest"] != own, name
+
+
+@pytest.mark.design("service.plan_digest")
+def test_a_digest_of_another_form_is_not_compared_and_names_the_form(bench: Bench) -> None:
+    served = ControlServer._records  # pyright: ignore[reportPrivateUsage]
+
+    def newer(self: ControlServer, body: bytes) -> Any:
+        batch = json.loads(body)
+        if "plan_digest" in batch:
+            assert batch["plan_digest_form"] == protocol.PLAN_DIGEST_FORM
+            batch["plan_digest_form"] = 99
+        return served(self, json.dumps(batch).encode())
+
+    bench.monkeypatch.setattr(ControlServer, "_records", newer)
+    service = bench.start(SCRIMMAGE_TEST_CHANGE_PLAN="1")  # it would differ, if it were compared
+    code, out = bench.test(service.port, runs=2)
+    runs = runs_of(bench)
+    assert len(runs) == 2
+    for name, summary in runs.items():
+        assert summary["claimed_plan_digest"] is None, name
+        assert summary["outcome"] == "answered", name
+        assert [x["notice"] for x in bench.lines(name) if "notice" in x] == ["plan_unreported"]
+    assert code == 0, out
+    said = runner.PLAN_FORM_UNKNOWN.format(form=99, ours=protocol.PLAN_DIGEST_FORM)
+    assert out.count(said) == 1, out
+
+
+# Every key Plan.to_json() can write, and every Plan field, as they are now.
+DIGESTED_KEYS = {
+    "v", "run", "test", "row", "mocks", "faults", "tools", "real", "children", "time_limit_s",
+    "model_hosts", "budget", "renames", "record", "probe", "service", "record_grace_s",
+    "background_real",
+}  # fmt: skip
+PLAN_FIELDS = {
+    "run", "test", "row", "mocks", "faults", "tools", "real", "time_limit_s", "renames",
+    "model_hosts", "budget_usd", "reserve_output_tokens", "prices", "children", "unavailable",
+    "record", "probe", "elapsed_s", "scrub", "service", "record_grace_s", "background_real",
+}  # fmt: skip
+
+
+@pytest.mark.design("service.plan_digest")
+def test_a_new_plan_key_or_field_must_choose_between_the_digest_and_a_new_form() -> None:
+    full = a_plan(
+        renames=(("acme.tools:get_order", "order"),),
+        record=True,
+        probe=True,
+        elapsed_s=1.0,
+        scrub=("x",),
+        service=True,
+        background_real=("tool:x",),
+    )
+    kept = set(full.to_json()) - set(protocol.UNDIGESTED)
+    fields = {f.name for f in dataclasses.fields(Plan)}
+    advice = (
+        "Plan changed. A key the digest covers changes every digest, so either add it to "
+        "protocol.UNDIGESTED, if it is like elapsed_s and scrub, or bump "
+        "protocol.PLAN_DIGEST_FORM; then update this test's sets."
+    )
+    assert kept == DIGESTED_KEYS, (advice, sorted(kept ^ DIGESTED_KEYS))
+    assert fields == PLAN_FIELDS, (advice, sorted(fields ^ PLAN_FIELDS))
+    assert protocol.PLAN_DIGEST_FORM == 1, advice  # a new form is a decision, made here
+
+
+@pytest.mark.design("service.plan_digest")
+def test_the_seam_fails_loudly_for_a_plan_with_no_mock(monkeypatch: pytest.MonkeyPatch) -> None:
+    from scrimmage_core import asgi_gate
+
+    spec = importlib.util.spec_from_file_location("plan_seam", EXAMPLE / "acme" / "plan_seam.py")
+    assert spec is not None and spec.loader is not None
+    plan_seam = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(plan_seam)
+    nothing: Any = None
+
+    async def claim(gate: Any, name: str) -> Any:
+        return SimpleNamespace(plan=a_plan(mocks=()), _plan=None), None
+
+    monkeypatch.setenv(plan_seam.ENV, "1")
+    monkeypatch.setattr(asgi_gate, "claimed", claim)
+    plan_seam.install()
+    with pytest.raises(RuntimeError, match="needs a plan with a mock"):
+        asyncio.run(asgi_gate.claimed(nothing, "run-0000000000aa"))

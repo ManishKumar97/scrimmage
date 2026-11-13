@@ -210,6 +210,10 @@ PLAN_UNREPORTED = (
     "the service's Scrimmage does not report which plan it used; "
     "upgrade scrimmage-core in the service to compare"
 )
+PLAN_FORM_UNKNOWN = (
+    "the service's Scrimmage digests its plan in form {form}, and this runner compares form "
+    "{ours}; use the same scrimmage-core version in the service to compare"
+)
 READY_S = 30.0  # how long the probe asks a service that does not listen yet
 READY_STEP_S = 0.2
 WAITERS = 64  # service runs whose record waits at once: the control server's connections
@@ -528,14 +532,23 @@ class Runner:
         incomplete = bool(state.dropped) or (ended_itself and (gap or unfinished))
         own_digest = protocol.plan_digest(self.server.token, state.plan) if state.service else None
         # Equal digests say nothing more. Another says the claiming process used another plan.
-        # None, from a last batch that came without one, is an older SDK: no comparison.
-        changed = state.claimed_plan_digest not in (None, own_digest)
-        unreported = state.service and state.ended.is_set() and state.claimed_plan_digest is None
+        # A last batch with no digest, or one of a form this runner does not compute, is from
+        # another SDK of the same major: no comparison, and a notice says so.
+        form, digest = state.claimed_plan_form, state.claimed_plan_digest
+        comparable = digest is not None and form == protocol.PLAN_DIGEST_FORM
+        claimed = digest if comparable else None
+        changed = comparable and digest != own_digest
+        unreported = state.service and state.ended.is_set() and not comparable
         made = kept_out + [self.left_line(run, row, *entry) for entry in left]
         if changed:
             made.append(self.runner_notice(run, row, "plan_changed", PLAN_CHANGED))
         elif unreported:
-            made.append(self.runner_notice(run, row, "plan_unreported", PLAN_UNREPORTED))
+            said = (
+                PLAN_UNREPORTED
+                if digest is None
+                else PLAN_FORM_UNKNOWN.format(form=form, ours=protocol.PLAN_DIGEST_FORM)
+            )
+            made.append(self.runner_notice(run, row, "plan_unreported", said))
         self.store.add(run, made)
         lines += made
         model = [line for line in lines if line.get("kind") == "model"]
@@ -644,7 +657,7 @@ class Runner:
         if state.service:
             summary.update(
                 plan_digest=own_digest,
-                claimed_plan_digest=state.claimed_plan_digest,
+                claimed_plan_digest=claimed,
                 claimed_by=state.claimer,
             )
         # The claiming process's control load in this run's window, from its last batch.

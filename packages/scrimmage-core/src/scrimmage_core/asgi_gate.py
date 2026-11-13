@@ -12,7 +12,6 @@ The SDK never imports uvicorn or Starlette: the hook patches each when the app i
 
 import asyncio
 import contextlib
-import dataclasses
 import functools
 import importlib.metadata
 import json
@@ -233,27 +232,10 @@ async def claimed(gate: Gate, name: str) -> tuple[RunState, RunSender]:
     # The digest is of the plan this run's state holds when its last batch is built, not of
     # the reply that carried it, so a plan changed in this process after the claim shows.
     sender.plan_of = lambda: run.plan.to_json()
-    if os.environ.get(CHANGE_PLAN_ENV):
-        change_plan(run)
     gate.senders.add(sender)
     gate.process.register(run)
     gate.process.claimed(run)
     return run, sender
-
-
-CHANGE_PLAN_ENV = "SCRIMMAGE_TEST_CHANGE_PLAN"
-
-
-def change_plan(run: RunState) -> None:
-    """A test's seam, on only where its environment variable is set: one mock of the run's
-    own plan changes after the claim, never in the claim's reply, so the digest of the run's
-    state differs from the runner's."""
-    plan = run.plan
-    first = tuple(
-        dataclasses.replace(m, returns="changed by the test", status=m.status + 1)
-        for m in plan.mocks[:1]
-    )
-    run._plan = dataclasses.replace(plan, mocks=first + plan.mocks[1:])  # pyright: ignore[reportPrivateUsage]
 
 
 def problem(gate: Gate, plan: Plan) -> str | None:

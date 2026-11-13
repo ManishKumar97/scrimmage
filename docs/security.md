@@ -166,10 +166,11 @@ So a genuine header replayed, or forwarded by a proxy to another service, gets `
 *Checked by: `tests/test_service_gate.py::test_a_second_claim_of_a_run_gets_503_claimed`, `tests/test_service_gate.py::test_lines_from_a_process_that_did_not_claim_are_refused`*
 
 The claiming process's last batch names the plan its run state used, as a digest.
-The digest is HMAC-SHA256 keyed by the run token, over the plan without its `elapsed_s` and `scrub`, so a record on a volume does not let a reader test a guess at a mock's value.
-A run whose digest differs from the runner's own is an infrastructure error, and a last batch with no digest is not compared and says so.
+The digest is HMAC-SHA256 keyed by the service token, over the plan without its `elapsed_s` and `scrub`, so a record on a volume does not let a reader test a guess at a mock's value.
+A run whose digest differs from the runner's own is an infrastructure error, and a last batch with no digest, or a digest of another form, is not compared and says so.
+The service token is the one in the service's token file, which lasts across tests, so the token file must never sit on the records volume: whoever reads both can test guesses at the plan.
 
-*Checked by: `tests/test_plan_digest.py::test_the_stored_digest_does_not_reveal_a_scrubbed_value`, `tests/test_plan_digest.py::test_a_run_whose_state_changed_its_plan_is_an_infrastructure_error`, `tests/test_plan_digest.py::test_a_last_batch_with_no_digest_is_not_compared_and_says_so`*
+*Checked by: `tests/test_plan_digest.py::test_the_stored_digest_does_not_reveal_a_scrubbed_value`, `tests/test_plan_digest.py::test_a_run_whose_state_changed_its_plan_is_an_infrastructure_error`, `tests/test_plan_digest.py::test_a_last_batch_with_no_digest_is_not_compared_and_says_so`, `tests/test_plan_digest.py::test_a_digest_of_another_form_is_not_compared_and_names_the_form`*
 
 Every `x-scrimmage-` header is removed before your app sees the request, so the app cannot pass the header on.
 The MAC covers the run's name, not the body, so the gate never holds a request's body.

@@ -64,6 +64,7 @@ class Run:
     claimer: dict[str, object] | None = None  # {host, pid} of the claiming process
     # What the claimer's last batch said of the plan its state used; None when it said none.
     claimed_plan_digest: str | None = None
+    claimed_plan_form: int | None = None  # the form that digest is of
     # The claiming process's control load from the run's claim to its close: its last batch.
     control_busy: int | None = None
     control_p99_ms: float | None = None
@@ -329,7 +330,7 @@ class ControlServer:
             if made is not None and made < 0:
                 raise ValueError("made is negative")
             busy, p99 = control_load(batch)
-            digest = plan_digest_of(batch)
+            digest, form = plan_digest_of(batch)
         except (ValueError, KeyError, TypeError):
             return 400, {"error": "bad_batch"}
         mine = [line for line in lines if line.get("run") == run]
@@ -349,6 +350,7 @@ class ControlServer:
                 state.control_busy, state.control_p99_ms = busy, p99
                 if claimer is not None:
                     state.claimed_plan_digest = digest
+                    state.claimed_plan_form = form
                     state.ended.set()
             accepted = self.store.add(run, mine)
             reasons = [
@@ -381,14 +383,15 @@ def control_load(batch: dict[str, object]) -> tuple[int | None, float | None]:
     return busy, None if p99 is None else float(p99)
 
 
-def plan_digest_of(batch: dict[str, object]) -> str | None:
-    """A last batch's plan_digest, which only a newer SDK sends: 64 hex, or absent."""
-    digest = batch.get("plan_digest")
-    if digest is None:
-        return None
-    if not isinstance(digest, str) or not SHA256.fullmatch(digest):
+def plan_digest_of(batch: dict[str, object]) -> tuple[str | None, int | None]:
+    """A last batch's plan_digest and the form it is of, which only a newer SDK sends: 64 hex
+    and a whole number, or absent."""
+    digest, form = batch.get("plan_digest"), batch.get("plan_digest_form")
+    if digest is not None and not (isinstance(digest, str) and SHA256.fullmatch(digest)):
         raise ValueError("plan_digest is not a digest")
-    return digest
+    if form is not None and (isinstance(form, bool) or not isinstance(form, int)):
+        raise ValueError("plan_digest_form is not a number")
+    return digest, form
 
 
 def claimer_of(proc: object) -> dict[str, object]:
