@@ -7,6 +7,7 @@ must not exist after a refused call.
 """
 
 import contextvars
+import gc
 import multiprocessing
 import multiprocessing.connection
 import multiprocessing.pool
@@ -1333,6 +1334,124 @@ def test_a_runs_call_of_a_queues_own_send_is_refused(
     finally:
         queue.close()
         queue.join_thread()
+
+
+def a_queue(kind: str) -> Any:
+    context = multiprocessing.get_context("spawn")
+    if kind == "loky":
+        from joblib.externals.loky.backend import queues
+
+        return queues.Queue(ctx=context)
+    return getattr(context, kind)()
+
+
+def added_to_buffer(queue: Any, item: object, notify: bool) -> None:
+    """What put does, without put: a deque's own append, so no subclass of it could see it."""
+    import collections
+
+    queue._sem.acquire()  # as put does, so the feeder's release on a refusal balances it
+    with queue._notempty:
+        collections.deque.append(queue._buffer, item)
+        if notify:
+            queue._notempty.notify()
+
+
+@pytest.mark.design("service.feeder_items")
+@pytest.mark.parametrize("kind", ["Queue", "JoinableQueue", "loky"])
+def test_an_item_a_run_adds_to_a_queues_buffer_is_never_sent(
+    service: state.ProcessState, kind: str
+) -> None:
+    """The feeder sends only an item a decided put added, by identity: one a run put in the
+    buffer itself is refused, and the run's record says so."""
+    queue = a_queue(kind)
+    try:
+        plain(lambda: queue.put("plain"))  # starts the feeder thread
+        assert queue.get(timeout=10) == "plain"
+        run = a_run(service)
+        under(run, lambda: added_to_buffer(queue, "run's data", notify=True))
+        plain(lambda: queue.put("plain again"))
+        assert queue.get(timeout=10) == "plain again"  # the run's item, first in, never came
+        refusals = [x for x in lines(run) if x.get("action") == "refused"]
+        assert [x["call"] for x in refusals] == ["process:multiprocessing"], refusals
+        assert "background_entry" not in refusals[0]  # no entry would let it through
+    finally:
+        queue.close()
+        queue.join_thread()
+
+
+@pytest.mark.design("service.feeder_items")
+def test_an_item_a_run_left_in_a_queues_buffer_is_refused_after_the_run_closed(
+    service: state.ProcessState,
+) -> None:
+    """With no notify the item waits for the next put, which may come once no run is open:
+    it is still refused, and the service's startup report says so."""
+    queue = a_queue("Queue")
+    try:
+        plain(lambda: queue.put("plain"))
+        assert queue.get(timeout=10) == "plain"
+        run = a_run(service)
+        under(run, lambda: added_to_buffer(queue, "run's data", notify=False))
+        service.unregister(run)
+        plain(lambda: queue.put("plain again"))
+        assert queue.get(timeout=10) == "plain again"
+        assert [x["notice"] for x in service.report] == ["queue_feeder"]
+    finally:
+        queue.close()
+        queue.join_thread()
+
+
+@pytest.mark.design("service.feeder_items")
+def test_an_item_whose_put_failed_is_no_decided_item(service: state.ProcessState) -> None:
+    """A put refused for a full queue added nothing: a run that adds that same object to the
+    buffer later is refused too."""
+    import queue as stdlib_queue
+
+    full: Any = multiprocessing.get_context("spawn").Queue(maxsize=1)
+    later = ["the item a full queue turned away"]
+    try:
+        plain(lambda: full.put("plain"))
+        with pytest.raises(stdlib_queue.Full):
+            plain(lambda: full.put(later, block=False))
+        assert full.get(timeout=10) == "plain"
+        run = a_run(service)
+        under(run, lambda: added_to_buffer(full, later, notify=True))
+        eventually(lambda: any(x.get("action") == "refused" for x in lines(run)))
+        plain(lambda: full.put("plain again"))
+        assert full.get(timeout=10) == "plain again"
+    finally:
+        full.close()
+        full.join_thread()
+
+
+@pytest.mark.design("service.feeder_items")
+# The refused send's error holds the feeder's frame, and so the pickled item, a view into a
+# BytesIO: collected together, the BytesIO reports the view as an unraisable BufferError.
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning")
+def test_a_feeder_whose_check_was_taken_away_has_no_send_of_its_own(
+    service: state.ProcessState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The feeder's send passes undecided only right after its check let that one item
+    through. Code that puts the plain pickler back gets no check, and so no such send: its
+    sends meet the outside rules."""
+    import multiprocessing.queues
+    from multiprocessing.reduction import ForkingPickler
+
+    queue = a_queue("Queue")
+    try:
+        in_ended_request(lambda: queue.put("plain"))  # its feeder runs outside any request
+        assert queue.get(timeout=10) == "plain"
+        monkeypatch.setattr(multiprocessing.queues, "_ForkingPickler", ForkingPickler)
+        run = a_run(service)
+        under(run, lambda: added_to_buffer(queue, "run's data", notify=True))
+        eventually(lambda: any(x.get("action") == "refused" for x in lines(run)))
+        assert not queue._reader.poll(0)  # refused before it was sent
+        service.unregister(run)
+        del run
+    finally:
+        monkeypatch.undo()
+        queue.close()
+        queue.join_thread()
+        gc.collect()  # here, where the warning above is ignored, not in a later test
 
 
 class SlowWhenPickled:

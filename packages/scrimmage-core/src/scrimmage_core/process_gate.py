@@ -278,12 +278,97 @@ def own_object(target: object) -> bool:
     try:
         if target in IN_PROCESS_QUEUES:
             return True
-        if state.FEEDERS.get(threading.current_thread()) is target:
-            return True  # a queue's own feeder thread, on its own queue's pipe
+        if state.FEEDERS.get(threading.current_thread()) is target and fed_now(target):
+            return True  # a queue's own feeder thread, on its own pipe, with a decided item
     except TypeError:  # an object that cannot be weakly held is no registered one
         return False
     torn: object = getattr(_teardown, "ends", ())
     return any(target is end for end in cast(tuple[object, ...], torn))
+
+
+_fed = threading.local()  # the pipe this feeder thread may send its next item on, once
+
+
+def fed_now(pipe: object) -> bool:
+    allowed = getattr(_fed, "pipe", None) is pipe
+    _fed.pipe = None
+    return allowed
+
+
+UNFED = (
+    "an item was added to a multiprocessing queue's buffer without the queue's put, so its "
+    "feeder refused to send it to another process; only an item a put decided is sent"
+)
+
+
+def feeder_item(item: object) -> None:
+    """A feeder thread is about to pickle and send item: it may, once, only if a decided put
+    added it to the buffer this feeder reads. Any other item is refused, and every open run
+    is told, as any of them could have put it there."""
+    _fed.pipe = None
+    thread = threading.current_thread()
+    buffer = state.FEED_BUFFERS.get(thread)
+    if buffer is None or not in_service():
+        return  # not a feeder: its sends are decided as any other send
+    if state.take_decided(buffer, item):
+        _fed.pipe = state.FEEDERS.get(thread)
+        return
+    process = state.process()
+    runs = process.open_runs() if process is not None else []
+    call = Call("process", "process:multiprocessing", "Queue._feed")
+    for run in runs:
+        run.outside_refused(call, UNFED, None)
+    if not runs and process is not None:
+        process.notice("queue_feeder", "scrimmage", UNFED)
+    raise ScrimmageRefused(UNFED)
+
+
+def checked_pickler(base: type) -> type:
+    """multiprocessing.queues' ForkingPickler, whose dumps first checks a feeder's item."""
+
+    class ForkingPickler(base):  # type: ignore[misc, valid-type]
+        @classmethod
+        def dumps(cls, obj: Any, protocol: Any = None) -> Any:
+            feeder_item(obj)
+            pickled: Callable[..., Any] = getattr(base, "dumps")  # noqa: B009  # base pickles it
+            return pickled(obj, protocol)
+
+    ForkingPickler.__qualname__ = base.__qualname__
+    ForkingPickler.__module__ = base.__module__
+    setattr(ForkingPickler, GATED, True)
+    return ForkingPickler
+
+
+def checked_dumps(dumps: Callable[..., Any]) -> Any:
+    """loky's queue dumps, which first checks a feeder's item."""
+
+    @functools.wraps(dumps)
+    def checked(obj: Any, *args: Any, **kwargs: Any) -> Any:
+        feeder_item(obj)
+        return dumps(obj, *args, **kwargs)
+
+    setattr(checked, GATED, True)
+    return checked
+
+
+def recorded(put: Callable[..., Any]) -> Any:
+    """A queue's own put, run once the gate decided it: the item it adds to the buffer its
+    feeder reads is noted by identity, so the feeder sends that item, and no other."""
+
+    @functools.wraps(put)
+    def noted(self: Any, *args: Any, **kwargs: Any) -> Any:
+        buffer = getattr(self, "_buffer", None) if in_service() else None
+        if buffer is None or not (args or "obj" in kwargs):
+            return put(self, *args, **kwargs)
+        item = args[0] if args else kwargs["obj"]
+        state.note_decided(buffer, item)
+        try:
+            return put(self, *args, **kwargs)
+        except BaseException:
+            state.drop_decided(buffer, item)
+            raise
+
+    return noted
 
 
 def patch_feeder(module: ModuleType) -> None:
@@ -516,8 +601,19 @@ def patch_queues(module: ModuleType) -> None:
     subclass that defines put of its own, such as JoinableQueue, is decided too."""
     for name, cls in sorted(vars(module).items()):
         if isinstance(cls, type) and "put" in cls.__dict__ and name.endswith("Queue"):
+            put = cls.__dict__["put"]
+            if not getattr(put, GATED, False):
+                setattr(cls, "put", recorded(put))  # noqa: B010  # inside the gate below
             patch_names(module, name, ("put",), SENT)  # put_nowait calls put
     patch_feeder(module)
+    # What a feeder pickles is checked first: mp's queues pickle with _ForkingPickler,
+    # loky's with dumps.
+    pickler: object = getattr(module, "_ForkingPickler", None)
+    if isinstance(pickler, type) and not getattr(pickler, GATED, False):
+        setattr(module, "_ForkingPickler", checked_pickler(pickler))  # noqa: B010
+    dumps: object = module.__dict__.get("dumps")
+    if callable(dumps) and not getattr(dumps, GATED, False):
+        setattr(module, "dumps", checked_dumps(dumps))  # noqa: B010
     simple: Any = getattr(module, "SimpleQueue", None)
     init = simple.__dict__.get("__init__") if isinstance(simple, type) else None
     if callable(init) and not getattr(init, GATED, False):

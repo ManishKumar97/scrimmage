@@ -11,6 +11,7 @@ what the process learns, such as the tools a framework made at startup, is in it
 ProcessState, which every run reads.
 """
 
+import contextlib
 import dataclasses
 import hashlib
 import json
@@ -685,17 +686,21 @@ class RunState:
             self._going(step)
         self.finish(step, error=ScrimmageRefused(message), mistake=message)
 
-    def outside_refused(self, call: engine.Call, message: str, entry: str) -> None:
+    def outside_refused(self, call: engine.Call, message: str, entry: str | None) -> None:
         """A write made outside any request while this run was open was refused. The line is
         this run's, so the run is an infrastructure error: it cannot tell the call was not
-        its own. The run is not poisoned: its own calls still follow its plan."""
+        its own. The run is not poisoned: its own calls still follow its plan. entry: the
+        background_real entry that would let it through, or None if none would."""
+        extra: dict[str, object] = {"outside": True}
+        if entry is not None:
+            extra["background_entry"] = entry
         step = Step(
             call,
             engine.Decision("refused", reason="orphan"),
             {},
             now_iso(),
             time.monotonic(),
-            extra={"outside": True, "background_entry": entry},
+            extra=extra,
         )
         with self._lock:
             self._going(step)
@@ -1073,20 +1078,73 @@ INTERNAL_KINDS: list[type] = []  # thread classes, such as a process pool's mana
 # that exact target, with the one pipe it sends on, read from its own send at its start.
 FEEDER_TARGETS: set[object] = set()
 FEEDERS: "weakref.WeakKeyDictionary[threading.Thread, object]" = weakref.WeakKeyDictionary()
+# Every thread started with a feeder target, and the buffer it reads, read at its start.
+FEED_BUFFERS: "weakref.WeakKeyDictionary[threading.Thread, object]" = weakref.WeakKeyDictionary()
+# For each buffer, the items a decided put added to it and its feeder has not yet sent, by
+# identity. An item in a buffer that is not here was put there some other way.
+# A deque cannot be a dictionary key, so each is held by id, with a weak reference that drops
+# its entry once the buffer is gone and confirms the id is still that buffer.
+_DECIDED: "dict[int, tuple[weakref.ref[Any], list[object]]]" = {}
+_DECIDED_LOCK = threading.Lock()
+
+
+def _decided(buffer: object, make: bool = False) -> list[object]:
+    key = id(buffer)
+    found = _DECIDED.get(key)
+    if found is not None and found[0]() is buffer:
+        return found[1]
+    if not make:
+        return []
+    try:
+        ref = weakref.ref(buffer, lambda _, key=key: _DECIDED.pop(key, None))
+    except TypeError:  # a buffer that cannot be weakly held has no items
+        return []
+    items: list[object] = []
+    _DECIDED[key] = (ref, items)
+    return items
 
 
 def note_feeder(thread: threading.Thread) -> None:
-    if not in_decided_call():
-        return
     target: object = getattr(thread, "_target", None)
     target = getattr(target, "__func__", target)
     args: tuple[object, ...] = tuple(getattr(thread, "_args", ()) or ())
     if target not in FEEDER_TARGETS or len(args) < 3:
         return
-    send = args[2]  # Queue._feed(buffer, notempty, send_bytes, ...): the pipe's bound send
+    with contextlib.suppress(TypeError):  # a buffer that cannot be weakly held has no items
+        FEED_BUFFERS[thread] = args[0]  # Queue._feed(buffer, notempty, send_bytes, ...)
+    if not in_decided_call():
+        return
+    send = args[2]  # the pipe's bound send
     pipe = getattr(send, "__self__", None)
     if pipe is not None and getattr(send, "__name__", "") == "send_bytes":
         FEEDERS[thread] = pipe
+
+
+def note_decided(buffer: object, item: object) -> None:
+    """A decided put is about to add item to buffer."""
+    with _DECIDED_LOCK:
+        _decided(buffer, make=True).append(item)
+
+
+def drop_decided(buffer: object, item: object) -> None:
+    """The put failed: item was never added."""
+    with _DECIDED_LOCK:
+        items = _decided(buffer)
+        for at in range(len(items) - 1, -1, -1):
+            if items[at] is item:
+                del items[at]
+                return
+
+
+def take_decided(buffer: object, item: object) -> bool:
+    """The feeder is about to send item: True, once, if a decided put added it."""
+    with _DECIDED_LOCK:
+        items = _decided(buffer)
+        for at, found in enumerate(items):
+            if found is item:
+                del items[at]
+                return True
+    return False
 
 
 def internal_thread(thread: threading.Thread) -> bool:

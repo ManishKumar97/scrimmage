@@ -114,6 +114,9 @@ These are refused under a run too, with no entry that lists them:
 - a process pool's task, on `Pool` and on `ProcessPoolExecutor` and loky's, a `Pool`'s making, and their `close`, `terminate` and `shutdown`;
 - a subinterpreter: `InterpreterPoolExecutor.submit`, `Interpreter.exec`, `call` and `call_in_thread`, and a subinterpreter queue's `put`.
 
+A queue's feeder thread sends only the items a decided `put` added, by identity.
+An item put in a queue's buffer some other way is refused when the feeder reaches it, even after the run closed, and every run open at that moment is told.
+
 Any other way to reach another process is not gated, such as shared memory, a signal or a socket of your own. See [Limits](limits.md).
 
 Python's resource tracker, which `multiprocessing` needs for its locks, queues and shared memory, is started once, before any request, in the process that serves the app as it loads it, or in uvicorn's supervisor before it starts its workers, so a run that makes a lock starts nothing.
