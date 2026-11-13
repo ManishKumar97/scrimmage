@@ -9,6 +9,8 @@ dependencies = ["scrimmage"]
 [project.optional-dependencies]
 # The Scrimmage MCP server. Pinned to one minor: its middleware list may change within 2.x.
 mcp = ["mcp>=2.3,<2.4"]
+# scrimmage cert: the throwaway authority and server certificate.
+cert = ["cryptography>=46"]
 
 [project.scripts]
 scrimmage = "scrimmage_core.entry:main"

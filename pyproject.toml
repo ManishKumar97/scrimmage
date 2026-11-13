@@ -32,6 +32,7 @@ dev = [
     "langchain-core>=1.7",
     "langchain-openai>=1.7",
     "mcp>=2.3.0",
+    "cryptography>=46",
     "fastmcp>=4.1.6",
     "pytest-xdist>=3.8.0",
     # tests/test_mcp_server.py proves the Scrimmage MCP server makes no span.
@@ -151,6 +152,13 @@ forbidden_modules = ["uvicorn", "starlette", "fastapi", "anyio"]
 ignore_imports = [
     "scrimmage_core.mcp_server -> anyio",  # the Scrimmage MCP server's own, a command apart
 ]
+
+[[tool.importlinter.contracts]]
+name = "Only the certificate maker loads cryptography"
+type = "forbidden"
+source_modules = ["scrimmage_core", "scrimmage"]
+forbidden_modules = ["cryptography"]
+ignore_imports = ["scrimmage_core.cert -> cryptography"]
 
 [[tool.importlinter.contracts]]
 name = "Reading a finished test starts nothing and opens no socket"
