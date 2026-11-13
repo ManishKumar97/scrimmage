@@ -61,7 +61,10 @@ def free_port(also: str | None = None) -> int:
     ports = list(port_range())
     random.shuffle(ports)  # each port is tried once, so the walk ends only when none is free
     for port in ports:
-        fd = os.open(claims / str(port), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:  # O_NOFOLLOW: a symlink planted at a claim file makes the open fail, so skip it
+            fd = os.open(claims / str(port), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        except OSError:
+            continue
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             with socket.socket() as probe:  # something outside the tests may hold it

@@ -2,6 +2,7 @@
 
 import multiprocessing
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -75,13 +76,22 @@ def test_claims_dir_refuses_a_symlink(tmp_path: Path, monkeypatch: pytest.Monkey
         ports.claims_dir()
 
 
+@pytest.fixture
+def own_held(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[int]]:
+    """A separate `held` list for one test; the fds the test opened are closed at its end."""
+    mine: list[int] = []
+    monkeypatch.setattr(ports, "held", mine)
+    yield mine
+    for fd in mine:
+        os.close(fd)
+
+
 def test_walk_tries_each_port_once_and_leaves_one_claim_each(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, own_held: list[int]
 ):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     monkeypatch.setattr(ports, "HIGH", ports.LOW + 5)
     monkeypatch.setattr(ports, "RANGE_FILE", tmp_path / "missing")
-    monkeypatch.setattr(ports, "held", [])
     # An address this host does not own makes every probe fail, so the walk covers the range.
     with pytest.raises(RuntimeError, match="no free port"):
         ports.free_port(also="203.0.113.1")
@@ -90,15 +100,30 @@ def test_walk_tries_each_port_once_and_leaves_one_claim_each(
     ]
 
 
-def test_walk_finds_the_last_free_port(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_walk_finds_the_last_free_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, own_held: list[int]
+):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     monkeypatch.setattr(ports, "HIGH", ports.LOW + 3)
     monkeypatch.setattr(ports, "RANGE_FILE", tmp_path / "missing")
-    monkeypatch.setattr(ports, "held", [])
     first = ports.free_port()
     second = ports.free_port()
     third = ports.free_port()
     assert {first, second, third} == set(range(ports.LOW, ports.LOW + 3))
+
+
+def test_walk_skips_a_port_whose_claim_file_is_a_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, own_held: list[int]
+):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(ports, "HIGH", ports.LOW + 1)
+    monkeypatch.setattr(ports, "RANGE_FILE", tmp_path / "missing")
+    target = tmp_path / "elsewhere"
+    target.write_text("")
+    (ports.claims_dir() / str(ports.LOW)).symlink_to(target)
+    with pytest.raises(RuntimeError, match="no free port"):
+        ports.free_port()
+    assert own_held == []
 
 
 def _claim(count: int) -> list[int]:
