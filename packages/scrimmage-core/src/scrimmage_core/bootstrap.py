@@ -206,9 +206,13 @@ TOKEN_MIN = 32  # characters a service's token needs: the MAC of a run header re
 def other_owner(path: str, error: Exception) -> str:
     """The reason a token file was not opened. A file owned by another uid is the usual
     mistake in a container, so it names both uids and the setting that fixes it."""
-    if isinstance(error, records.Refused) and "owned by another user" in str(error):
+    other = isinstance(error, records.Refused) and "owned by another user" in str(error)
+    if other or isinstance(error, PermissionError):
+        # A mode 0600 file of another user is refused at open, before the owner check.
         with contextlib.suppress(OSError):
             owner = os.stat(path).st_uid
+            if owner == os.getuid():
+                return str(error)
             return (
                 f"the token file is owned by uid {owner} and this process runs as uid "
                 f"{os.getuid()}; in Docker, set user: to the file owner's uid and gid"

@@ -1,0 +1,42 @@
+# The acme order bot as a service, with the runner on the host. See the services page of the docs.
+# Set before `docker compose up`:
+#   SCRIMMAGE_UID, SCRIMMAGE_GID   the token file owner's ids, from `id -u` and `id -g`
+#   SCRIMMAGE_TOKEN_FILE           the token file, mode 600
+#   SCRIMMAGE_CA_FILE              ca.pem from `scrimmage cert`
+#   SCRIMMAGE_CONTROL_PORT         the port of `control` in scrimmage.toml
+services:
+  agent:
+    image: ${SCRIMMAGE_IMAGE:-scrimmage-acme-service}
+    # The token file must be read by its owner, so the container runs as that user.
+    # The image's files are read-only to the app; /tmp is the one place it may write.
+    read_only: true
+    user: "${SCRIMMAGE_UID:?set SCRIMMAGE_UID to the token file owner's uid, $(id -u)}:${SCRIMMAGE_GID:?set SCRIMMAGE_GID to $(id -g)}"
+    ports:
+      - "127.0.0.1::8765"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      SCRIMMAGE_SERVICE: "1"
+      SCRIMMAGE_TOKEN_FILE: /run/scrimmage/token
+      SCRIMMAGE_CONTROL_URL: https://host.docker.internal:${SCRIMMAGE_CONTROL_PORT:?set SCRIMMAGE_CONTROL_PORT to the port of control in scrimmage.toml}
+      SCRIMMAGE_CONTROL_CA: /run/scrimmage/ca.pem
+      SCRIMMAGE_TOOLS: acme.tools:get_order,acme.tools:check_inventory,acme.tools:refund_order,acme.tools:get_stock
+      SCRIMMAGE_ALLOW_IMPORTS: acme.
+    volumes:
+      - scratch:/tmp
+      - type: bind
+        source: ${SCRIMMAGE_TOKEN_FILE:?set SCRIMMAGE_TOKEN_FILE}
+        target: /run/scrimmage/token
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SCRIMMAGE_CA_FILE:?set SCRIMMAGE_CA_FILE}
+        target: /run/scrimmage/ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
+    command: ["scrimmage-run", "uvicorn", "acme.service:app", "--host", "0.0.0.0", "--port", "8765", "--workers", "2"]
+
+volumes:
+  scratch: {}

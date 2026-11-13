@@ -528,3 +528,30 @@ def test_service_with_children_record_or_probe_is_refused(
     probe = ["--probe", "http://127.0.0.1:8765/chat", "--out", str(tmp_path / "draft.toml")]
     assert main(["init", str(tmp_path / "bot"), *probe]) == 2
     assert "init --probe does not work with" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("error", ["permission", "refused"])
+def test_a_token_file_of_another_user_names_both_uids_and_the_user_setting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: str
+) -> None:
+    """In a container as a non-root uid the 0600 file cannot even be opened, so the reason is
+    a PermissionError, not the owner check; both name the file's uid, this uid and user:."""
+    import os
+
+    from scrimmage_core import bootstrap, records
+
+    token = tmp_path / "token"
+    token.write_text("x" * 40)
+    owner = token.stat().st_uid
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    cause: Exception = (
+        PermissionError(13, "Permission denied")
+        if error == "permission"
+        else records.Refused(f"{token}: is owned by another user, so it is not read")
+    )
+    said = bootstrap.other_owner(str(token), cause)
+    assert f"owned by uid {owner} and this process runs as uid 1234" in said
+    assert "set user: to the file owner's uid and gid" in said
+    # The file's own user meets a permission error for another reason: it is not rewritten.
+    monkeypatch.setattr(os, "getuid", lambda: owner)
+    assert "owned by uid" not in bootstrap.other_owner(str(token), PermissionError(13, "no"))

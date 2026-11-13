@@ -19,7 +19,8 @@ CLAIMS = Path(tempfile.gettempdir()) / f"scrimmage-test-ports-{os.getuid()}"
 held: list[int] = []  # lock files kept open, so the kernel frees the claims at exit
 
 
-def free_port() -> int:
+def free_port(also: str | None = None) -> int:
+    """also: a second address that must be free at the port too, such as a bridge address."""
     CLAIMS.mkdir(mode=0o700, exist_ok=True)
     for _ in range(HIGH - LOW):
         port = random.randrange(LOW, HIGH)
@@ -28,6 +29,9 @@ def free_port() -> int:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             with socket.socket() as probe:  # something outside the tests may hold it
                 probe.bind(("127.0.0.1", port))
+            if also is not None:
+                with socket.socket() as probe:
+                    probe.bind((also, port))
         except OSError:
             os.close(fd)
             continue

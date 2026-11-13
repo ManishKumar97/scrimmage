@@ -1,0 +1,4 @@
+# Only the hook enters the test image.
+*
+!00_egress_audit.pth
+!egress_audit.py

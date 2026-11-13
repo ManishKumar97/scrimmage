@@ -1,0 +1,13 @@
+# Added by the test harness: the fake model on the host, and the egress audit log.
+services:
+  agent:
+    environment:
+      OPENAI_BASE_URL: ${TEST_MODEL_URL:?}
+      OPENAI_API_KEY: test
+      EGRESS_AUDIT_LOG: /run/egress/log
+    volumes:
+      - type: bind
+        source: ${TEST_EGRESS_DIR:?}
+        target: /run/egress
+        bind:
+          create_host_path: false

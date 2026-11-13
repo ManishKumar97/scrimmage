@@ -9,3 +9,7 @@ __pycache__/
 .coverage.*
 scrimmage-runs/
 site/
+tests/compose/service/wheels/
+tests/compose/service/app/
+tests/compose/service/token
+tests/compose/service/*.key

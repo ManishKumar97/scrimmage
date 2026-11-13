@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import io
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -11,10 +12,12 @@ import sys
 import tarfile
 import uuid
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from compose import check_junit
+from compose.harness import egress_problems
 from compose.image_scan import PEM_PRIVATE_KEY, UnreadableLayer, scan_image
 
 SKIPPABLE_ZSTD = b"\x50\x2a\x4d\x18\x04\x00\x00\x00abcd\x28\xb5\x2f\xfd" + b"\x00" * 8
@@ -443,6 +446,128 @@ def test_hook_is_silent_without_a_log_path(tmp_path: Path) -> None:
     code = f"import site; site.addsitedir({str(site_dir)!r})"
     subprocess.run([sys.executable, "-c", code], check=True, env={"PATH": ""}, timeout=30)
     assert list(tmp_path.iterdir()) == [site_dir]
+
+
+@pytest.mark.slow
+def test_hook_start_line_names_the_parent_so_a_child_can_be_matched(tmp_path: Path) -> None:
+    records = _run_with_hook(tmp_path, "pass\n")
+    assert records[0]["event"] == "start"
+    assert records[0]["ppid"] == os.getpid()
+
+
+@pytest.mark.slow
+def test_hook_logs_os_system_and_forks_and_the_start_line_holds_the_argv(tmp_path: Path) -> None:
+    code = (
+        "import os\n"
+        "os.system('true')\n"
+        "pid = os.fork()\n"
+        "if pid == 0:\n"
+        "    os._exit(0)\n"
+        "os.waitpid(pid, 0)\n"
+    )
+    records = _run_with_hook(tmp_path, code)
+    kinds = [r["event"] for r in records if r["event"] != "start"]
+    assert kinds == ["system", "fork"]
+    assert records[1]["command"] == "true"
+    assert cast(list[str], records[0]["argv"])[:2] == [sys.executable, "-c"]
+    assert records[0]["executable"] == sys.executable
+
+
+# egress log analysis
+
+GW, CONTROL, MODEL = "172.17.0.1", 28000, 29000
+ALLOWED = {(GW, CONTROL), (GW, MODEL)}
+NAMES = {"host.docker.internal", GW}
+PY = "/usr/local/bin/python"
+MP = [PY, "-c", "from multiprocessing.spawn import spawn_main; spawn_main()"]
+HIDDEN = [PY, "-S", "-c", "import socket"]
+
+
+def _start(
+    pid: int, ppid: int, argv: list[str] | None = None, *, late: bool = False
+) -> dict[str, object]:
+    return {
+        "event": "start",
+        "pid": pid,
+        "ppid": ppid,
+        "argv": argv or [PY, "-m", "x"],
+        "executable": PY,
+        "scrimmage_core": late,
+        "sitecustomize": False,
+    }
+
+
+def _popen(pid: int, argv: list[str], executable: str | None = None) -> dict[str, object]:
+    return {"pid": pid, "event": "popen", "executable": executable or argv[0], "argv": argv}
+
+
+def _clean_log() -> list[dict[str, object]]:
+    return [
+        _start(1, 0),
+        {"pid": 1, "event": "exec", "executable": PY, "argv": ["uvicorn"]},
+        _start(1, 0),
+        _start(8, 1, MP),  # multiprocessing's tracker and workers: a start line, no popen
+        _start(9, 1, MP),
+        {"pid": 8, "event": "getaddrinfo", "host": "host.docker.internal", "port": CONTROL},
+        {"pid": 8, "event": "connect", "address": [GW, CONTROL]},
+        {"pid": 8, "event": "sendto", "address": ["::ffff:" + GW, MODEL, 0, 0]},
+        _popen(8, ["uname", "-p"]),
+    ]
+
+
+KNOWN = (("uname", ["uname", "-p"]),)
+
+
+def _problems(records: list[dict[str, object]]) -> list[str]:
+    return egress_problems(records, ALLOWED, NAMES, KNOWN)
+
+
+def test_a_clean_egress_log_has_no_problem() -> None:
+    assert _problems(_clean_log()) == []
+
+
+@pytest.mark.parametrize(
+    ("extra", "needle"),
+    [
+        ({"pid": 8, "event": "connect", "address": ["1.1.1.1", 53]}, "connect to ['1.1.1.1', 53]"),
+        ({"pid": 8, "event": "connect", "address": [GW, 22]}, f"connect to ['{GW}', 22]"),
+        ({"pid": 8, "event": "sendmsg", "address": ["8.8.8.8", 53]}, "sendmsg to"),
+        ({"pid": 8, "event": "connect", "address": "/var/run/docker.sock"}, "docker.sock"),
+        ({"pid": 8, "event": "getaddrinfo", "host": "example.com", "port": 443}, "resolved"),
+        (_popen(8, ["curl", "example.com"]), "wrote no start line"),
+        (_popen(1, HIDDEN), "wrote no start line"),
+        (_popen(8, ["uname", "-a"]), "wrote no start line"),
+        (_popen(8, ["uname", "-p"], "/tmp/uname"), "wrote no start line"),
+        ({"pid": 1, "event": "spawn", "executable": PY, "argv": HIDDEN}, "wrote no start line"),
+        ({"pid": 1, "event": "system", "command": "python3 -S -c x"}, "system 'python3 -S"),
+        ({"pid": 1, "event": "fork"}, "fork"),
+        ({"pid": 1, "event": "exec", "executable": PY, "argv": HIDDEN}, "2 exec lines but 2 start"),
+    ],
+)
+def test_the_egress_check_names_each_kind_of_problem(extra: dict[str, object], needle: str) -> None:
+    problems = _problems([*_clean_log(), extra])
+    assert any(needle in p for p in problems), problems
+
+
+def test_a_multiprocessing_child_does_not_pay_for_a_hidden_popen() -> None:
+    # Pid 1 has two multiprocessing children with start lines; a third, hidden child of pid 1
+    # started by subprocess must still be named.
+    problems = _problems([*_clean_log(), _popen(1, HIDDEN)])
+    assert problems == [f"pid 1: popen {HIDDEN} wrote no start line"]
+
+
+def test_the_egress_check_names_a_hook_that_came_after_scrimmage() -> None:
+    log = _clean_log()
+    log[3] = _start(8, 1, MP, late=True)
+    assert any("came after Scrimmage" in p for p in _problems(log))
+
+
+def test_a_child_with_a_start_line_pairs_with_its_parents_popen() -> None:
+    argv = [PY, "-c", "pass"]
+    log = [*_clean_log(), _popen(8, argv), _start(20, 8, argv)]
+    assert _problems(log) == []
+    # One start line pays for one popen only.
+    assert len(_problems([*log, _popen(8, argv)])) == 1
 
 
 # Docker positive control

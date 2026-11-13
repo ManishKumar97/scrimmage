@@ -23,6 +23,24 @@ uv sync --group nemo && uv run pytest tests/test_nemo_rails.py
 A later plain `uv sync` removes the group again.
 The group does not install on Python 3.14 yet.
 
+## The Docker tests
+
+`tests/test_service_compose.py` runs the example service in a container under Docker Compose, with the runner on the host.
+They are marked `docker` and `slow`.
+They need a working Docker daemon, and a daemon that fails makes them fail, not skip.
+Run them in one process and check that all six passed and none skipped:
+
+```sh
+J=$(mktemp -d)/docker.xml
+uv run pytest -n 0 -m docker tests/test_service_compose.py --junitxml="$J" && uv run python tests/compose/check_junit.py "$J" 6
+```
+
+The first run downloads `python:3.12-slim` and the wheels the service needs, then builds two images, `scrimmage-compose-service` and `scrimmage-compose-egress`, each tagged by a hash of what it holds.
+Later runs reuse them.
+Everything stays on this machine.
+Each test brings up a project of its own and takes it down, volumes included, in a `finally`.
+To remove what the tests leave, run `docker rmi $(docker images -q 'scrimmage-compose-*')`.
+
 ## While you work
 
 Run the fast tier, then the slow tests of the area you changed:
