@@ -221,9 +221,7 @@ def test_cert_manager_issues_a_certificate_the_sdk_accepts(
         assert handshake(ca, certificate, key) == "TLSv1.3"
 
 
-def test_the_harness_never_touches_the_users_kubeconfig(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_the_harness_never_touches_the_users_kubeconfig(tmp_path: Path) -> None:
     before = snapshot(user_files())
     assert before, "no file of the user's to watch: the check would prove nothing"
     cert_manager = kubernetes.PINS["cert-manager"]
@@ -244,14 +242,8 @@ def test_the_harness_never_touches_the_users_kubeconfig(
             ["kind", "export", "kubeconfig", "--name", scratch.name], timeout=60, env=env
         )
         assert (home / ".kube" / "config").is_file(), "the control did not see a write"
-        # The delete, in that home, where the cluster is named in the user's kubeconfig. Without
-        # --kubeconfig, and with no KUBECONFIG, kind would take it out of that file.
-        seeded = snapshot([home / ".kube"])
-        with monkeypatch.context() as patched:
-            patched.setenv("HOME", str(home))
-            patched.delenv("KUBECONFIG", raising=False)
-            scratch.delete()
-        assert snapshot([home / ".kube"]) == seeded, "kind delete edited the user's kubeconfig"
+        # A dropped --kubeconfig on create or delete is caught by the fast test
+        # test_create_and_delete_name_the_session_kubeconfig in test_k8s_harness.py.
     assert snapshot(user_files()) == before
 
 

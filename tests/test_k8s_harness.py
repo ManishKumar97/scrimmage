@@ -110,7 +110,10 @@ def test_create_and_delete_name_the_session_kubeconfig(
         assert env["KIND_EXPERIMENTAL_DOCKER_NETWORK"] == "scrimmage-kind"
 
 
-def test_cleanup_never_removes_the_network_named_kind(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cleanup_never_removes_the_network_named_kind(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     calls: list[list[str]] = []
 
     def record(command: list[str], **_: object) -> None:
