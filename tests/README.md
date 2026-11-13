@@ -41,6 +41,26 @@ Everything stays on this machine.
 Each test brings up a project of its own and takes it down, volumes included, in a `finally`.
 To remove what the tests leave, run `docker rmi $(docker images -q 'scrimmage-compose-*')`.
 
+## The Kubernetes tests
+
+`tests/test_k8s_cluster.py` makes a kind cluster from `tests/k8s/kind.yaml`: one node, Calico as the network plugin, cert-manager for certificates.
+kind is a test cluster, the one the Kubernetes project tests itself on.
+The tests are marked `kind` and `slow`, and they are left out of every run unless `SCRIMMAGE_KIND=1` is set.
+With it set, a missing `kind`, `kubectl`, `helm` or `docker` makes them fail, not skip.
+A session takes about four minutes to make its cluster.
+Run one file at a time, in one process:
+
+```sh
+J=$(mktemp -d)/k8s.xml
+SCRIMMAGE_KIND=1 SCRIMMAGE_LANE=2 uv run pytest -n 0 -m kind tests/test_k8s_cluster.py --junitxml="$J" && uv run python tests/compose/check_junit.py "$J" 6
+```
+
+The cluster is named `scrimmage-<lane>`, from `SCRIMMAGE_LANE` (default `1`), and a session deletes only the cluster of its own name.
+The harness gives kubectl, Helm and kind a kubeconfig and Helm folders of their own, so `~/.kube/config` and your Helm files are never read or written, and another cluster on the machine is never touched.
+A second session waits while another lane's cluster runs and less than 6 GB of memory is free.
+`SCRIMMAGE_KIND_KEEP=1` keeps the cluster for debugging and prints the command that deletes it.
+`tests/k8s/versions.toml` pins the kind, node image, Calico and cert-manager versions, and `tests/k8s/probe.py` checks the assumptions the tests make about them on a real cluster.
+
 ## While you work
 
 Run the fast tier, then the slow tests of the area you changed:
