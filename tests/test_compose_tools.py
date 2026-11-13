@@ -1,8 +1,10 @@
 """The Docker Compose harness's standalone pieces: JUnit check, image scanner, egress hook."""
 
 import gzip
+import hashlib
 import io
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -16,6 +18,7 @@ import pytest
 from compose import check_junit
 from compose.image_scan import PEM_PRIVATE_KEY, UnreadableLayer, scan_image
 
+SKIPPABLE_ZSTD = b"\x50\x2a\x4d\x18\x04\x00\x00\x00abcd\x28\xb5\x2f\xfd" + b"\x00" * 8
 HOOK_DIR = Path(__file__).parent / "compose" / "egress_hook"
 CANARY = "CANARY-7f3a9c1e-token"
 REAL_PEM = (
@@ -28,30 +31,73 @@ REAL_PEM = (
 # check_junit
 
 
-def _junit(tmp_path: Path, **counts: int) -> Path:
-    attrs = {"tests": 6, "skipped": 0, "failures": 0, "errors": 0} | counts
-    text = " ".join(f'{k}="{v}"' for k, v in attrs.items())
+def _case(name: str, child: str = "") -> str:
+    return f'<testcase classname="c" name="{name}">{child}</testcase>'
+
+
+def _xml(tmp_path: Path, cases: list[str], suite_attrs: str = "", wrap: bool = True) -> Path:
+    body = f'<testsuite name="p" {suite_attrs}>{"".join(cases)}</testsuite>'
     path = tmp_path / "r.xml"
-    path.write_text(f'<?xml version="1.0"?><testsuites><testsuite name="p" {text}/></testsuites>')
+    path.write_text(f"<testsuites>{body}</testsuites>" if wrap else body)
     return path
 
 
+def _run_junit(path: Path, n: int = 6) -> int:
+    return check_junit.main(["x", str(path), str(n)])
+
+
+def _six(child_on_last: str = "") -> list[str]:
+    return [_case(str(i)) for i in range(5)] + [_case("5", child_on_last)]
+
+
 def test_junit_accepts_exactly_n_passed(tmp_path: Path) -> None:
-    assert check_junit.main(["x", str(_junit(tmp_path)), "6"]) == 0
-
-
-@pytest.mark.parametrize(
-    "counts",
-    [{"skipped": 1}, {"failures": 1}, {"errors": 1}, {"tests": 5}, {"tests": 7}],
-)
-def test_junit_rejects_anything_but_n_passed(tmp_path: Path, counts: dict[str, int]) -> None:
-    assert check_junit.main(["x", str(_junit(tmp_path, **counts)), "6"]) == 1
+    assert _run_junit(_xml(tmp_path, _six(), 'tests="6" skipped="0" failures="0" errors="0"')) == 0
 
 
 def test_junit_accepts_a_bare_testsuite_root(tmp_path: Path) -> None:
-    path = tmp_path / "r.xml"
-    path.write_text('<testsuite tests="2" skipped="0" failures="0" errors="0"/>')
-    assert check_junit.main(["x", str(path), "2"]) == 0
+    assert _run_junit(_xml(tmp_path, _six(), wrap=False)) == 0
+
+
+@pytest.mark.parametrize(
+    "child",
+    [
+        "<skipped/>",
+        "<failure/>",
+        "<error/>",
+        "<rerunFailure/>",
+        "<flakyFailure/>",
+        '<properties><property name="xpass" value="1"/></properties>',
+    ],
+)
+def test_junit_rejects_a_case_with_a_bad_child_whatever_the_suite_says(
+    tmp_path: Path, child: str
+) -> None:
+    lying = 'tests="6" skipped="0" failures="0" errors="0"'
+    assert _run_junit(_xml(tmp_path, _six(child), lying)) == 1
+
+
+@pytest.mark.parametrize("attr", ['skipped="1"', 'failures="1"', 'errors="1"'])
+def test_junit_rejects_a_suite_attribute_that_counts_a_problem(tmp_path: Path, attr: str) -> None:
+    assert _run_junit(_xml(tmp_path, _six(), attr)) == 1
+
+
+def test_junit_rejects_a_wrong_case_count_whatever_tests_says(tmp_path: Path) -> None:
+    assert _run_junit(_xml(tmp_path, _six()[:5], 'tests="6"')) == 1
+    assert _run_junit(_xml(tmp_path, [*_six(), _case("6")], 'tests="6"')) == 1
+
+
+def test_junit_rejects_negative_counters(tmp_path: Path) -> None:
+    assert _run_junit(_xml(tmp_path, _six(), 'tests="7" skipped="-1"')) == 1
+    assert _run_junit(_xml(tmp_path, _six(), 'tests="-6"')) == 1
+
+
+def test_junit_does_not_double_count_nested_suites(tmp_path: Path) -> None:
+    inner = f'<testsuite name="in" tests="6">{"".join(_six())}</testsuite>'
+    path = tmp_path / "n.xml"
+    path.write_text(
+        f'<testsuites><testsuite name="out" tests="12">{inner}</testsuite></testsuites>'
+    )
+    assert _run_junit(path) == 0
 
 
 def test_junit_rejects_missing_empty_and_garbled_files(tmp_path: Path) -> None:
@@ -60,35 +106,52 @@ def test_junit_rejects_missing_empty_and_garbled_files(tmp_path: Path) -> None:
     garbled = tmp_path / "g.xml"
     garbled.write_text("not xml")
     for path in (tmp_path / "none.xml", empty, garbled):
-        assert check_junit.main(["x", str(path), "6"]) == 1
+        assert _run_junit(path) == 1
     assert check_junit.main(["x"]) == 2
 
 
 # image scanner
 
 
-def _layer(files: dict[str, bytes], gz: bool = False) -> bytes:
+def _tar(files: dict[str, bytes]) -> bytes:
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tar:
         for name, data in files.items():
             info = tarfile.TarInfo(name)
             info.size = len(data)
             tar.addfile(info, io.BytesIO(data))
-    return gzip.compress(buf.getvalue()) if gz else buf.getvalue()
+    return buf.getvalue()
 
 
-def _image(tmp_path: Path, layers: list[bytes]) -> Path:
+def _layer(files: dict[str, bytes], gz: bool = False) -> bytes:
+    data = _tar(files)
+    return gzip.compress(data) if gz else data
+
+
+def _digest(blob: bytes) -> str:
+    return hashlib.sha256(blob).hexdigest()
+
+
+def _archive(tmp_path: Path, files: dict[str, bytes]) -> Path:
     path = tmp_path / f"{uuid.uuid4().hex}.tar"
-    with tarfile.open(path, "w") as tar:
-        for i, blob in enumerate(layers):
-            info = tarfile.TarInfo(f"blobs/sha256/{i:064d}")
-            info.size = len(blob)
-            tar.addfile(info, io.BytesIO(blob))
-        manifest = b'{"layers": []}'
-        info = tarfile.TarInfo("manifest.json")
-        info.size = len(manifest)
-        tar.addfile(info, io.BytesIO(manifest))
+    path.write_bytes(_tar(files))
     return path
+
+
+def _image(tmp_path: Path, layers: list[bytes], extra: dict[str, bytes] | None = None) -> Path:
+    """An OCI layout archive: index.json, one manifest, a config and the layers."""
+    blobs = {f"blobs/sha256/{_digest(b)}": b for b in layers}
+    config = b'{"architecture": "amd64"}'
+    blobs[f"blobs/sha256/{_digest(config)}"] = config
+    manifest = json.dumps(
+        {
+            "config": {"digest": f"sha256:{_digest(config)}"},
+            "layers": [{"digest": f"sha256:{_digest(b)}"} for b in layers],
+        }
+    ).encode()
+    blobs[f"blobs/sha256/{_digest(manifest)}"] = manifest
+    index = json.dumps({"manifests": [{"digest": f"sha256:{_digest(manifest)}"}]}).encode()
+    return _archive(tmp_path, {"index.json": index, **blobs, **(extra or {})})
 
 
 def test_scanner_finds_nothing_in_a_clean_image(tmp_path: Path) -> None:
@@ -109,10 +172,24 @@ def test_scanner_reads_gzip_layers_that_a_raw_grep_misses(tmp_path: Path) -> Non
     assert [h.file for h in scan_image(image, [CANARY])] == ["etc/secret"]
 
 
+def test_scanner_reads_the_classic_manifest_json_layout(tmp_path: Path) -> None:
+    layer = _layer({"token": CANARY.encode()})
+    manifest = json.dumps([{"Layers": ["abc/layer.tar"]}]).encode()
+    image = _archive(tmp_path, {"manifest.json": manifest, "abc/layer.tar": layer})
+    assert [h.file for h in scan_image(image, [CANARY])] == ["token"]
+
+
 def test_scanner_finds_a_real_looking_pem_key(tmp_path: Path) -> None:
     image = _image(tmp_path, [_layer({"server.key": REAL_PEM.encode()})])
     hits = scan_image(image, [])
     assert [(h.file, h.what) for h in hits] == [("server.key", "pem private key")]
+
+
+def test_scanner_finds_a_crlf_pem_key(tmp_path: Path) -> None:
+    crlf = REAL_PEM.replace("\n", "\r\n").encode()
+    assert PEM_PRIVATE_KEY.search(crlf)
+    image = _image(tmp_path, [_layer({"server.key": crlf})])
+    assert [h.what for h in scan_image(image, [])] == ["pem private key"]
 
 
 def test_pem_regex_ignores_the_bare_marker_text() -> None:
@@ -120,23 +197,59 @@ def test_pem_regex_ignores_the_bare_marker_text() -> None:
     assert not PEM_PRIVATE_KEY.search(b"PRIVATE KEY")
 
 
-def test_scanner_searches_the_manifest_and_config_bytes_too(tmp_path: Path) -> None:
-    path = tmp_path / "m.tar"
-    data = CANARY.encode()
-    with tarfile.open(path, "w") as tar:
-        info = tarfile.TarInfo("config.json")
-        info.size = len(data)
-        tar.addfile(info, io.BytesIO(data))
-    assert [h.file for h in scan_image(path, [CANARY])] == ["config.json"]
+def test_scanner_searches_files_outside_the_layer_list_as_bytes(tmp_path: Path) -> None:
+    image = _image(tmp_path, [_layer({"a": b"x"})], extra={"extra.json": CANARY.encode()})
+    assert [h.file for h in scan_image(image, [CANARY])] == ["extra.json"]
 
 
-def test_scanner_fails_on_a_layer_it_cannot_read(tmp_path: Path) -> None:
-    zstd_blob = b"\x28\xb5\x2f\xfd" + b"\x00" * 32
+def test_scanner_fails_when_the_image_lists_no_layers_at_all(tmp_path: Path) -> None:
+    with pytest.raises(UnreadableLayer, match="cannot tell"):
+        scan_image(_archive(tmp_path, {"config.json": b"{}"}), [CANARY])
+
+
+def test_scanner_fails_when_a_listed_layer_is_missing(tmp_path: Path) -> None:
+    manifest = json.dumps([{"Layers": ["gone/layer.tar"]}]).encode()
+    with pytest.raises(UnreadableLayer, match="not in the archive"):
+        scan_image(_archive(tmp_path, {"manifest.json": manifest}), [CANARY])
+
+
+GZIP_OF_NON_TAR = gzip.compress(b"this is not a tar archive " + CANARY.encode() * 40)
+CORRUPT_DEFLATE = gzip.compress(_tar({"a": os.urandom(20000)}))[:200] + b"\xff" * 64
+
+
+@pytest.mark.parametrize(
+    "blob",
+    [
+        b"\x28\xb5\x2f\xfd" + b"\x00" * 32,
+        SKIPPABLE_ZSTD,
+        gzip.compress(_tar({"a": b"x" * 5000}))[:60],
+        CORRUPT_DEFLATE,
+        GZIP_OF_NON_TAR,
+        b"BZh9" + b"\x00" * 32,
+        b"\xfd7zXZ\x00" + b"\x00" * 32,
+    ],
+    ids=[
+        "zstd",
+        "zstd-skippable",
+        "truncated-gzip",
+        "corrupt-deflate",
+        "gzip-of-non-tar",
+        "bz2",
+        "xz",
+    ],
+)
+def test_scanner_fails_on_a_listed_layer_it_cannot_read(tmp_path: Path, blob: bytes) -> None:
     with pytest.raises(UnreadableLayer):
-        scan_image(_image(tmp_path, [zstd_blob]), [CANARY])
-    truncated = gzip.compress(_layer({"a": b"x" * 5000}))[:60]
-    with pytest.raises(UnreadableLayer):
-        scan_image(_image(tmp_path, [truncated]), [CANARY])
+        scan_image(_image(tmp_path, [blob]), [CANARY])
+
+
+@pytest.mark.parametrize("blob", [SKIPPABLE_ZSTD, GZIP_OF_NON_TAR, CORRUPT_DEFLATE])
+def test_scanner_fails_on_compressed_data_that_is_not_a_listed_layer(
+    tmp_path: Path, blob: bytes
+) -> None:
+    image = _image(tmp_path, [_layer({"a": b"x"})], extra={"blobs/sha256/config": blob})
+    with pytest.raises(UnreadableLayer, match="outside the layer list"):
+        scan_image(image, [CANARY])
 
 
 def test_scanner_rejects_an_empty_canary(tmp_path: Path) -> None:
@@ -159,6 +272,88 @@ def _run_with_hook(tmp_path: Path, code: str) -> list[dict[str, object]]:
         timeout=30,
     )
     return [json.loads(line) for line in log.read_text().splitlines()]
+
+
+def _udp_port() -> tuple[socket.socket, int]:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("127.0.0.1", 0))
+    return sock, sock.getsockname()[1]
+
+
+@pytest.mark.slow
+def test_hook_logs_udp_sendto_sendmsg_without_connect_and_getaddrinfo(tmp_path: Path) -> None:
+    sock, port = _udp_port()
+    with sock:
+        code = (
+            "import socket\n"
+            "s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
+            f"s.sendto(b'x', ('127.0.0.1', {port}))\n"
+            f"s.sendmsg([b'y'], [], 0, ('127.0.0.1', {port}))\n"
+            "socket.getaddrinfo('localhost', 80)\n"
+        )
+        records = _run_with_hook(tmp_path, code)
+    by_kind = {r["event"]: r for r in records if r["event"] != "start"}
+    assert by_kind["sendto"]["address"] == ["127.0.0.1", port]
+    assert by_kind["sendmsg"]["address"] == ["127.0.0.1", port]
+    assert (by_kind["getaddrinfo"]["host"], by_kind["getaddrinfo"]["port"]) == ("localhost", 80)
+    assert "connect" not in by_kind
+
+
+@pytest.mark.slow
+def test_hook_logs_the_argv_of_every_child_it_starts(tmp_path: Path) -> None:
+    code = (
+        "import os, subprocess, sys\n"
+        "subprocess.run([sys.executable, '-S', '-c', 'pass'], check=True)\n"
+        "pid = os.posix_spawn(sys.executable, [sys.executable, '-S', '-c', 'pass'], os.environ)\n"
+        "os.waitpid(pid, 0)\n"
+        "os.execv(sys.executable, [sys.executable, '-S', '-c', 'pass'])\n"
+    )
+    records = _run_with_hook(tmp_path, code)
+    children = [r for r in records if r["event"] in ("popen", "spawn", "exec")]
+    assert [r["event"] for r in children] == ["popen", "spawn", "exec"]
+    assert all("-S" in r["argv"] for r in children)  # type: ignore[operator]
+    # The -S children load no .pth, so the only start line is the parent's.
+    assert [r["event"] for r in records].count("start") == 1
+
+
+@pytest.mark.slow
+def test_hook_exits_70_when_the_log_cannot_be_written(tmp_path: Path) -> None:
+    site_dir = tmp_path / "site"
+    shutil.copytree(HOOK_DIR, site_dir, ignore=shutil.ignore_patterns("__pycache__"))
+    code = f"import site; site.addsitedir({str(site_dir)!r}); print('RAN ON')"
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        env={"EGRESS_AUDIT_LOG": str(tmp_path / "no" / "such" / "dir" / "log"), "PATH": ""},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert done.returncode == 70
+    assert "cannot install" in done.stderr
+    assert "RAN ON" not in done.stdout
+
+
+@pytest.mark.slow
+def test_hook_makes_a_relative_log_path_absolute_at_install(tmp_path: Path) -> None:
+    site_dir = tmp_path / "site"
+    shutil.copytree(HOOK_DIR, site_dir, ignore=shutil.ignore_patterns("__pycache__"))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    code = (
+        f"import site, os; site.addsitedir({str(site_dir)!r})\n"
+        f"os.chdir({str(elsewhere)!r})\n"
+        "import socket; socket.getaddrinfo('localhost', 1)\n"
+    )
+    subprocess.run(
+        [sys.executable, "-c", code],
+        check=True,
+        cwd=tmp_path,
+        env={"EGRESS_AUDIT_LOG": "rel.log", "PATH": ""},
+        timeout=30,
+    )
+    lines = (tmp_path / "rel.log").read_text().splitlines()
+    assert [json.loads(line)["event"] for line in lines] == ["start", "getaddrinfo"]
+    assert not (elsewhere / "rel.log").exists()
 
 
 @pytest.mark.slow
@@ -226,7 +421,7 @@ def _docker_usable() -> bool:
 @pytest.mark.slow
 def test_scanner_finds_a_canary_in_a_real_image_and_nothing_without_it(tmp_path: Path) -> None:
     if not _docker_usable():
-        pytest.skip("docker daemon is not available")
+        pytest.fail("docker daemon is not usable, so this docker test cannot pass")
     canary = f"CANARY-{uuid.uuid4().hex}"
     tags = {name: f"scrimmage-scan-{name}-{uuid.uuid4().hex[:8]}" for name in ("with", "without")}
     try:

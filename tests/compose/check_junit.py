@@ -1,35 +1,63 @@
 """Assert a JUnit XML file holds exactly N passed tests and nothing else.
 
 Usage: python check_junit.py FILE N
-Exit 0 when the file has N tests, none skipped, failed or errored. Exit 1 otherwise.
+Exit 0 when the file has N test cases and every one passed. Exit 1 otherwise.
+
+It counts leaf testcase elements, not the attributes of the suites, so a nested suite is
+never counted twice and an attribute that disagrees with the cases cannot hide one.
+A case passes only if it has no skipped, failure, error, rerun or flaky child and no
+xpass property. A suite attribute for skipped, failures or errors that is not 0 fails
+the file, and so does any negative counter.
 """
 
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+_BAD_CHILDREN = {
+    "skipped",
+    "failure",
+    "error",
+    "rerunFailure",
+    "rerunError",
+    "flakyFailure",
+    "flakyError",
+}
+_COUNTERS = ("tests", "skipped", "failures", "errors")
 
-def count(path: Path) -> dict[str, int]:
-    """Sum the counters over every testsuite in the file."""
-    root = ET.parse(path).getroot()
-    suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
-    if not suites:
-        raise ValueError(f"{path}: no testsuite element")
-    total = {"tests": 0, "skipped": 0, "failures": 0, "errors": 0}
-    for suite in suites:
-        for key in total:
-            total[key] += int(suite.get(key, "0"))
-    return total
+
+def _case_problem(case: ET.Element) -> str | None:
+    name = f"{case.get('classname', '')}::{case.get('name', '?')}"
+    for child in case:
+        if child.tag in _BAD_CHILDREN:
+            return f"{name}: has a {child.tag} element"
+        if child.tag == "properties" and any(
+            "xpass" in (p.get("name") or "").lower() for p in child
+        ):
+            return f"{name}: is an xpass"
+    return None
 
 
 def problems(path: Path, expected: int) -> list[str]:
-    got = count(path)
-    found = [
-        f"{key} is {got[key]}, expected 0" for key in ("skipped", "failures", "errors") if got[key]
-    ]
-    passed = got["tests"] - got["skipped"] - got["failures"] - got["errors"]
-    if passed != expected or got["tests"] != expected:
-        found.append(f"{passed} passed of {got['tests']} tests, expected exactly {expected}")
+    root = ET.parse(path).getroot()
+    suites = [e for e in root.iter() if e.tag == "testsuite"]
+    cases = [e for e in root.iter() if e.tag == "testcase"]
+    if not suites:
+        raise ValueError(f"{path}: no testsuite element")
+    found: list[str] = []
+    for suite in suites:
+        for key in _COUNTERS:
+            value = int(suite.get(key, "0"))
+            if value < 0:
+                found.append(f"suite {suite.get('name', '?')}: {key} is negative")
+            elif key != "tests" and value:
+                found.append(f"suite {suite.get('name', '?')}: {key} is {value}, expected 0")
+    bad = [p for p in map(_case_problem, cases) if p]
+    found += bad
+    if len(cases) - len(bad) != expected or len(cases) != expected:
+        found.append(
+            f"{len(cases) - len(bad)} passed of {len(cases)} cases, expected exactly {expected}"
+        )
     return found
 
 
