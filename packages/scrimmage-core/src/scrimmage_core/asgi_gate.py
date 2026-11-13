@@ -229,6 +229,9 @@ async def claimed(gate: Gate, name: str) -> tuple[RunState, RunSender]:
     run = RunState(plan, sender, gate.prefixes, process=gate.process, blobs=sender)
     run.proc = gate.proc
     sender.on_closed = run.run_closed
+    # The digest is of the plan this run's state holds when its last batch is built, not of
+    # the reply that carried it, so a plan changed in this process after the claim shows.
+    sender.plan_of = lambda: run.plan.to_json()
     gate.senders.add(sender)
     gate.process.register(run)
     gate.process.claimed(run)

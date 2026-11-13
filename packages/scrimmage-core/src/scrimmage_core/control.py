@@ -22,7 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socket import socket
-from typing import Any
+from typing import Any, cast
 
 from scrimmage_core import protocol, versions
 from scrimmage_core.budget import Ledger, Shortfall
@@ -61,6 +61,10 @@ class Run:
     # it, and only that process's lines are taken from then on.
     service: bool = False
     claimed_by: str | None = None
+    claimer: dict[str, object] | None = None  # {host, pid} of the claiming process
+    # What the claimer's last batch said of the plan its state used; None when it said none.
+    claimed_plan_digest: str | None = None
+    claimed_plan_form: int | None = None  # the form that digest is of
     # The claiming process's control load from the run's claim to its close: its last batch.
     control_busy: int | None = None
     control_p99_ms: float | None = None
@@ -222,6 +226,7 @@ class ControlServer:
             if state.claimed_by is not None:
                 return 409, {"error": "claimed"}
             state.claimed_by, state.fetched = proc, True
+            state.claimer = claimer_of(request["proc"])
             self.stats.claimed()
             elapsed = round(max(0.0, time.monotonic() - state.opened), 3)
             return 200, {"plan": {**state.plan, "elapsed_s": elapsed}}
@@ -325,6 +330,7 @@ class ControlServer:
             if made is not None and made < 0:
                 raise ValueError("made is negative")
             busy, p99 = control_load(batch)
+            digest, form = plan_digest_of(batch)
         except (ValueError, KeyError, TypeError):
             return 400, {"error": "bad_batch"}
         mine = [line for line in lines if line.get("run") == run]
@@ -343,6 +349,8 @@ class ControlServer:
                 state.made[proc_key(batch.get("proc"))] = made
                 state.control_busy, state.control_p99_ms = busy, p99
                 if claimer is not None:
+                    state.claimed_plan_digest = digest
+                    state.claimed_plan_form = form
                     state.ended.set()
             accepted = self.store.add(run, mine)
             reasons = [
@@ -373,6 +381,27 @@ def control_load(batch: dict[str, object]) -> tuple[int | None, float | None]:
     if p99 is not None and (isinstance(p99, bool) or not isinstance(p99, int | float) or p99 < 0):
         raise ValueError("control_p99_ms is not a time")
     return busy, None if p99 is None else float(p99)
+
+
+def plan_digest_of(batch: dict[str, object]) -> tuple[str | None, int | None]:
+    """A last batch's plan_digest and the form it is of, which only a newer SDK sends: 64 hex
+    and a whole number, or absent."""
+    digest, form = batch.get("plan_digest"), batch.get("plan_digest_form")
+    if digest is not None and not (isinstance(digest, str) and SHA256.fullmatch(digest)):
+        raise ValueError("plan_digest is not a digest")
+    if form is not None and (isinstance(form, bool) or not isinstance(form, int)):
+        raise ValueError("plan_digest_form is not a number")
+    return digest, form
+
+
+def claimer_of(proc: object) -> dict[str, object]:
+    """The host and pid a record names for the process that claimed a run."""
+    doc = cast(dict[str, object], proc) if isinstance(proc, dict) else {}
+    host, pid = doc.get("host"), doc.get("pid")
+    return {
+        "host": host if isinstance(host, str) else None,
+        "pid": pid if isinstance(pid, int) and not isinstance(pid, bool) else None,
+    }
 
 
 def proc_key(proc: object) -> str:

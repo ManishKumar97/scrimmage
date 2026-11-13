@@ -21,8 +21,10 @@ from typing import Any
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
+from acme import plan_seam
 from acme.agent import answer
 
+plan_seam.install()  # a test's switch, off unless its variable is set
 app = FastAPI()
 
 
