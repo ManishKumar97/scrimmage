@@ -197,11 +197,20 @@ def send(
     longer reply fails. deadline: a time.monotonic() value after which the whole request is
     cut, however slowly the service sends. stop: asked between chunks; true ends the request."""
     host, port, _ = target(agent)
-    conn = http.client.HTTPConnection(host, port, timeout=connect_timeout or timeout)
+    wait = connect_timeout or timeout
+    if deadline is not None:
+        # The connect is inside the deadline too: it may not run past what is left of it.
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return Reply(timed_out=True, connected=False)
+        wait = min(wait, left)
+    conn = http.client.HTTPConnection(host, port, timeout=wait)
     try:
         conn.connect()
     except OSError as exc:  # refused, no such host, unreachable, or the connect timed out
         conn.close()
+        if deadline is not None and time.monotonic() >= deadline:
+            return Reply(timed_out=True, connected=False)  # the connect ran into the deadline
         # A reset while connecting is a port that took the connection and cut it, which a
         # fast loopback shows at connect; it is not a missing host.
         cut_short = isinstance(exc, ConnectionResetError)
