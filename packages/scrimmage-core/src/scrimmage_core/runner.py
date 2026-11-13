@@ -230,6 +230,17 @@ class Runner:
         self.record = record  # scrimmage record: real calls' lines carry what a mock needs
         self.probe = probe  # scrimmage init --probe: the first model request ends the run
         self.control_url = control_url  # lets a test point the agent elsewhere
+        # Read first: these can stop the test, and nothing is made on disk until they pass.
+        self.token = secrets.token_hex(32)
+        address = ("127.0.0.1", 0)
+        tls_context = None
+        if config.agent.service:
+            # A service was started before this runner, with its token and control address:
+            # the runner reads the token from its own environment, and the address from the
+            # file's control setting or, for a service on this machine, the same environment.
+            self.token = service_client.runner_token()
+            address = service_client.control_address(config.agent)
+            tls_context = service_client.server_tls(config.agent, config.root)
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         runs = Path(tempfile.mkdtemp(prefix="scrimmage-check-")) if scratch else None
         runs = runs or config.root / "scrimmage-runs"
@@ -242,16 +253,6 @@ class Runner:
         ignore = runs / ".gitignore"
         if not ignore.exists():
             ignore.write_text("*\n")
-        self.token = secrets.token_hex(32)
-        address = ("127.0.0.1", 0)
-        tls_context = None
-        if config.agent.service:
-            # A service was started before this runner, with its token and control address:
-            # the runner reads the token from its own environment, and the address from the
-            # file's control setting or, for a service on this machine, the same environment.
-            self.token = service_client.runner_token()
-            address = service_client.control_address(config.agent)
-            tls_context = service_client.server_tls(config.agent, config.root)
         # The values ${NAME} filled in: this test's own, removed from what the runner writes.
         self.scrub = config.scrub
         self.ledger = Ledger(config.agent.max_cost_usd)
@@ -265,6 +266,8 @@ class Runner:
                 tls=tls_context,
             )
         except OSError as exc:  # the service's control port is held by another process
+            if scratch:
+                shutil.rmtree(runs, ignore_errors=True)
             raise service_client.Setup(
                 3, f"the control address {address[0]}:{address[1]} cannot be bound: {exc.strerror}"
             ) from None
@@ -749,7 +752,13 @@ class Runner:
             raise service_client.Setup(3, service_client.clock_stop(gap))
         if gap is not None and abs(gap) >= service_client.CLOCK_WARN_S:
             self.service_warnings.append(service_client.clock_text(gap))
-        found = service_client.template_check(self.config.agent)
+
+        def stopped() -> bool:
+            return self.cancelled or bool(self.stop_flag)
+
+        found = service_client.template_check(self.config.agent, stop=stopped)
+        if stopped():  # Ctrl-C or SIGTERM ended the read
+            raise Interrupted(self.stop_flag[0] if self.stop_flag else "SIGINT")
         self.service_warnings += found.warnings
         self.service_notes += found.notes
         self.setup_request()

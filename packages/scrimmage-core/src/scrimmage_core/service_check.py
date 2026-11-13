@@ -164,3 +164,4 @@ def check(config: Config, strict: bool, stop_flag: list[str] | None) -> Outcome 
                 runner.server.stop()
             finally:
                 shutil.rmtree(runner.folder.parent, ignore_errors=True)
+                shutil.rmtree(runner.answers, ignore_errors=True)

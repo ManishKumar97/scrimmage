@@ -3,7 +3,7 @@
 Real uvicorn processes under scrimmage-run, as test_service.py starts them. Where a test needs
 a document the framework would not write, or a service clock that is off, it starts a small
 FastAPI app of its own (LOOSE) that answers whatever document the test gives it, logs every
-request it receives, and moves the gate's clock when told to.
+request it receives, and moves the gate's wall clock when told to.
 """
 
 import asyncio
@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import pytest
 
@@ -50,9 +50,16 @@ SHIFT = float(os.environ.get("GATE_CLOCK_SHIFT", "0"))
 if SHIFT:
     from scrimmage_core import asgi_gate
 
-    gate = asgi_gate.GATE
-    assert gate is not None
-    gate.clock = lambda: time.time() + SHIFT
+    class Shifted:
+        """The gate's view of the time module, with the wall clock moved."""
+
+        def __getattr__(self, name):
+            return getattr(time, name)
+
+        def time(self):
+            return time.time() + SHIFT
+
+    asgi_gate.time = Shifted()
 
 
 async def chat(request: Request) -> dict[str, str]:
@@ -351,6 +358,19 @@ def test_a_gap_above_the_window_gets_a_signed_clock_reply_and_exit_3_naming_the_
     assert code == 3 and re.search(r"the service is (69|70)\.\d s behind this machine", out), out
 
 
+class Shifted:
+    """The gate's view of the time module, with the wall clock moved."""
+
+    def __init__(self, seconds: float) -> None:
+        self.seconds = seconds
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(time, name)
+
+    def time(self) -> float:
+        return time.time() + self.seconds
+
+
 async def plain_app(scope: Any, receive: Any, send: Any) -> None:
     await receive()
     await send({"type": "http.response.start", "status": 200, "headers": [(b"x-app", b"1")]})
@@ -367,7 +387,9 @@ def stale_probe(svc: Service, age: float = 65.0) -> tuple[list[tuple[bytes, byte
     return headers, signed[protocol.SIGNATURE]
 
 
-def test_a_replayed_stale_probe_is_answered_as_documented(tmp_path: Path) -> None:
+def test_a_replayed_stale_probe_is_answered_as_documented(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     svc = Service(tmp_path / "records")
     try:
         headers, request_signature = stale_probe(svc)
@@ -397,7 +419,7 @@ def test_a_replayed_stale_probe_is_answered_as_documented(tmp_path: Path) -> Non
         finally:
             asgi_gate.GATE = first
         # The same worker after it has forgotten the nonce (after 120 s) answers it again.
-        first.clock = lambda: time.time() + 130
+        monkeypatch.setattr(asgi_gate, "time", Shifted(130))
         is_clock_reply(send(), time.time() + 130)
     finally:
         svc.close()
@@ -578,3 +600,154 @@ def test_the_paths_the_document_is_looked_for_at() -> None:
     assert paths("/chat") == ["/openapi.json"]
     assert paths("/api/chat") == ["/openapi.json", "/api/openapi.json"]
     assert paths("/a/b/c/chat") == ["/openapi.json", "/a/b/c/openapi.json", "/a/b/openapi.json"]
+
+
+# --- what leaves the runner, and how long it may take -----------------------------------------
+
+
+class Raw(BaseHTTPRequestHandler):
+    """Records the headers and body of each GET it gets; answers 404."""
+
+    seen: ClassVar[list[tuple[dict[str, str], bytes]]] = []
+
+    def do_GET(self) -> None:
+        size = int(self.headers.get("content-length") or 0)
+        Raw.seen.append(({k.lower(): v for k, v in self.headers.items()}, self.rfile.read(size)))
+        self.send_response(404)
+        self.send_header("content-length", "0")
+        self.end_headers()
+
+    def log_message(self, format: str, *args: object) -> None:
+        del format, args
+
+
+class Drip(BaseHTTPRequestHandler):
+    """Sends its reply one byte every 0.2 s, for 60 s: no single read ever times out."""
+
+    def do_GET(self) -> None:
+        try:
+            if self.path == "/headers":  # the headers themselves are dripped
+                for byte in b"HTTP/1.1 200 OK\r\ncontent-length: 9999\r\nx-a: " + b"y" * 300:
+                    self.wfile.write(bytes([byte]))
+                    self.wfile.flush()
+                    time.sleep(0.2)
+            else:
+                self.wfile.write(b"HTTP/1.1 200 OK\r\ncontent-length: 9999\r\n\r\n")
+                for _ in range(300):
+                    self.wfile.write(b" ")
+                    self.wfile.flush()
+                    time.sleep(0.2)
+        except OSError:
+            pass  # the runner cut the connection
+
+    def log_message(self, format: str, *args: object) -> None:
+        del format, args
+
+
+def served(handler: type[BaseHTTPRequestHandler]) -> tuple[ThreadingHTTPServer, int]:
+    server = ThreadingHTTPServer(("127.0.0.1", free_port()), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, int(server.server_address[1])
+
+
+def agent_for(tmp_path: Path, port: int, monkeypatch: pytest.MonkeyPatch) -> config.Agent:
+    monkeypatch.setenv("FILE_TOKEN", TOKEN)
+    path = tmp_path / "scrimmage.toml"
+    path.write_text(
+        f'[agent]\nservice = "http://127.0.0.1:{port}/chat"\n'
+        'body = {message = "{question}"}\nanswer = "reply"\n'
+        'headers = {Authorization = "Bearer ${FILE_TOKEN}"}\n\n'
+        '[[test]]\nname = "t"\nquestion = "q"\nexpect = ["x"]\n'
+    )
+    return config.load(path).agent
+
+
+def test_the_openapi_get_leaves_the_runner_with_the_files_headers_and_nothing_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    Raw.seen.clear()
+    server, port = served(Raw)
+    try:
+        service_client.template_check(agent_for(tmp_path, port, monkeypatch))
+    finally:
+        server.shutdown()
+        server.server_close()
+    ((headers, body),) = Raw.seen
+    assert not [name for name in headers if name.startswith("x-scrimmage-")], headers
+    assert headers["authorization"] == f"Bearer {TOKEN}"
+    assert set(headers) == {"host", "accept-encoding", "authorization"}, headers
+    assert body == b""
+
+
+@pytest.mark.parametrize("kind", ["headers", "body"])
+def test_a_service_that_drips_its_reply_is_cut_at_the_whole_request_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    monkeypatch.setattr(service_client, "OPENAPI_TIMEOUT_S", 1.5)
+    server, port = served(Drip)
+    try:
+        agent = agent_for(tmp_path, port, monkeypatch)
+        monkeypatch.setattr(service_client, "openapi_paths", lambda route: [f"/{kind}"])
+        began = time.monotonic()
+        found = service_client.template_check(agent)
+        elapsed = time.monotonic() - began
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert elapsed < 4, elapsed
+    assert found.warnings == ()
+    assert found.notes == (
+        f"[agent] body: /openapi.json: GET /{kind} got no complete answer in 1.5 s; not checked",
+    )
+
+
+def test_a_stop_ends_the_openapi_read_between_chunks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server, port = served(Drip)
+    try:
+        agent = agent_for(tmp_path, port, monkeypatch)
+        monkeypatch.setattr(service_client, "openapi_paths", lambda route: ["/body"])
+        began = time.monotonic()
+        found = service_client.template_check(agent, stop=lambda: True)
+        elapsed = time.monotonic() - began
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert elapsed < 4, elapsed
+    assert "got stopped" in found.notes[0]
+
+
+@pytest.fixture
+def empty_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """TMPDIR is an empty folder, so anything a command leaves behind shows."""
+    folder = tmp_path / "scratch"
+    folder.mkdir()
+    monkeypatch.setenv("TMPDIR", str(folder))
+    monkeypatch.setattr("tempfile.tempdir", str(folder))
+    return folder
+
+
+def test_check_service_leaves_nothing_in_the_temp_folder(lab: Lab, empty_tmp: Path) -> None:
+    port = lab.start()
+    code, out = lab.check(lab.file(port))
+    assert code == 0, out
+    assert list(empty_tmp.iterdir()) == []
+
+
+@pytest.mark.parametrize("unset", ["SCRIMMAGE_TOKEN_FILE", "SCRIMMAGE_CONTROL_URL", "held"])
+def test_check_service_that_stops_before_it_probes_leaves_nothing_behind(
+    lab: Lab, empty_tmp: Path, monkeypatch: pytest.MonkeyPatch, unset: str
+) -> None:
+    holder = socket.socket()
+    holder.bind(("127.0.0.1", 0))
+    if unset == "held":  # the control address is taken by another process
+        monkeypatch.setenv("SCRIMMAGE_CONTROL_URL", f"http://127.0.0.1:{holder.getsockname()[1]}")
+    else:
+        monkeypatch.delenv(unset)
+    try:
+        code, out = lab.check(lab.file(free_port()))
+    finally:
+        holder.close()
+    assert code in (2, 3), out
+    assert list(empty_tmp.iterdir()) == []

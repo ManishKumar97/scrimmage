@@ -82,9 +82,6 @@ class Gate:
     nonces: protocol.NonceStore = field(default_factory=protocol.NonceStore)
     gates: list[str] = field(default_factory=list[str])  # the entry gates installed, by name
     serving: bool = False  # this process loaded or served the app
-    # The time the probe is checked against and the report states. A test's app replaces it
-    # to put the service's clock off the runner's.
-    clock: Callable[[], float] = time.time
 
 
 GATE: Gate | None = None  # set by bootstrap.start_service
@@ -338,7 +335,7 @@ async def answer_probe(
     path = target.decode("latin-1") + (f"?{query.decode('latin-1')}" if query else "")
     method = str(scope.get("method", ""))
     declared = fields.get("Content-Length", "0") != "0" or "Transfer-Encoding" in fields
-    now = gate.clock()
+    now = time.time()
     error = declared or protocol.check_request(
         gate.token, gate.nonces, method, path, fields, b"", now
     )
@@ -430,7 +427,7 @@ def startup_report(gate: Gate, control: dict[str, object]) -> dict[str, object]:
         "tools": sorted(labels.tool_name(path, renames) for path in gate.tools),
         "notices": [dict(entry) for entry in gate.process.report],
         "control": control,
-        "server_time": gate.clock(),
+        "server_time": time.time(),
     }
 
 

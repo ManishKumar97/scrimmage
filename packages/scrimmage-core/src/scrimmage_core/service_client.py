@@ -12,9 +12,12 @@ import json
 import math
 import os
 import secrets
+import socket
 import ssl
 import stat
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
@@ -171,6 +174,12 @@ def post(
     return send("POST", agent, target(agent)[2], headers, body, timeout, connect_timeout)
 
 
+def cut(sock: socket.socket) -> None:
+    """End the connection under a read that is still waiting."""
+    with contextlib.suppress(OSError):
+        sock.shutdown(socket.SHUT_RDWR)
+
+
 def send(
     method: str,
     agent: Agent,
@@ -180,9 +189,12 @@ def send(
     timeout: float,
     connect_timeout: float | None = None,
     limit: int | None = None,
+    deadline: float | None = None,
+    stop: Callable[[], bool] | None = None,
 ) -> Reply:
     """One request to the service's host and port. limit: the most bytes of reply to read; a
-    longer reply fails."""
+    longer reply fails. deadline: a time.monotonic() value after which the whole request is
+    cut, however slowly the service sends. stop: asked between chunks; true ends the request."""
     host, port, _ = target(agent)
     conn = http.client.HTTPConnection(host, port, timeout=connect_timeout or timeout)
     try:
@@ -192,19 +204,39 @@ def send(
         return Reply(failed=f"{type(exc).__name__}: {exc}", connected=False)
     if conn.sock is not None:
         conn.sock.settimeout(timeout)
+    cutter: threading.Timer | None = None
+    if deadline is not None and conn.sock is not None:
+        # A socket timeout is per read, so a service that sends a byte a second never reaches
+        # it; shutting the socket down at the deadline ends any read, the headers' included.
+        cutter = threading.Timer(max(deadline - time.monotonic(), 0.0), cut, [conn.sock])
+        cutter.daemon = True
+        cutter.start()
     try:
         conn.request(method, path, body=body, headers=headers)
         response = conn.getresponse()
-        data = response.read(None if limit is None else limit + 1)
-        if limit is not None and len(data) > limit:
-            return Reply(failed=f"the reply is longer than {limit} bytes")
+        if limit is None:
+            data = response.read()
+        else:
+            data = b""
+            while chunk := response.read1(65536):
+                data += chunk
+                if len(data) > limit:
+                    return Reply(failed=f"the reply is longer than {limit} bytes")
+                if stop is not None and stop():
+                    return Reply(failed="stopped")
+            if deadline is not None and time.monotonic() >= deadline:
+                return Reply(timed_out=True)  # the reply ended because it was cut
         named = {k.lower(): v for k, v in response.getheaders()}
         return Reply(response.status, named, data)
     except TimeoutError:
         return Reply(timed_out=True)
-    except (OSError, http.client.HTTPException) as exc:
+    except (OSError, http.client.HTTPException, ValueError) as exc:
+        if deadline is not None and time.monotonic() >= deadline:
+            return Reply(timed_out=True)  # the cutter closed the socket under the read
         return Reply(failed=f"{type(exc).__name__}: {exc}")
     finally:
+        if cutter is not None:
+            cutter.cancel()
         conn.close()
 
 
@@ -423,7 +455,9 @@ def openapi_paths(route: str) -> list[str]:
     return [f"{prefix}/openapi.json" for prefix in ["", *prefixes]][:OPENAPI_GETS]
 
 
-def template_check(agent: Agent, question: str = "x") -> openapi_check.Result:
+def template_check(
+    agent: Agent, question: str = "x", stop: Callable[[], bool] | None = None
+) -> openapi_check.Result:
     """Check the file's body against the service's /openapi.json. A plain GET from this
     process, with the file's headers and no body, so no gate sees it. A misfit is a warning;
     every other outcome, such as no document, is a note."""
@@ -433,13 +467,20 @@ def template_check(agent: Agent, question: str = "x") -> openapi_check.Result:
     headers = dict(request_headers(agent, session))
     route = target(agent)[2].partition("?")[0]
     asked: list[str] = []
+    end = time.monotonic() + OPENAPI_TIMEOUT_S  # for all the GETs together
     for where in openapi_paths(route):
-        reply = send("GET", agent, where, headers, None, OPENAPI_TIMEOUT_S, limit=OPENAPI_MAX)
+        reply = send(
+            "GET", agent, where, headers, None, OPENAPI_TIMEOUT_S, None, OPENAPI_MAX, end, stop
+        )
         asked.append(where)
         if reply.status == 404:
             continue
         if reply.status != 200:
-            what = reply.failed or ("timed out" if reply.timed_out else f"status {reply.status}")
+            what = reply.failed or (
+                f"no complete answer in {OPENAPI_TIMEOUT_S:g} s"
+                if reply.timed_out
+                else f"status {reply.status}"
+            )
             return openapi_note(f"GET {where} got {what}")
         try:
             document = json.loads(reply.body)
