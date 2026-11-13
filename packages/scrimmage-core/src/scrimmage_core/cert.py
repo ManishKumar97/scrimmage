@@ -10,6 +10,7 @@ the scrimmage cert command, never into the team's process.
 
 import ipaddress
 import os
+import re
 import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -22,6 +23,14 @@ MAX_DAYS = 397
 BACKDATE = timedelta(minutes=5)  # a clock a little behind the runner's still accepts it
 CA_NAME = "Scrimmage throwaway authority"
 SERVER_NAME = "Scrimmage control server"
+
+
+LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
+
+
+def valid_name(name: str) -> bool:
+    """Whether name is dot-separated LDH labels: no wildcard, no empty label, at most 253."""
+    return len(name) <= 253 and all(LABEL.fullmatch(label) for label in name.split("."))
 
 
 class CertError(ScrimmageError):
@@ -56,12 +65,20 @@ def make_certificates(
     addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
     for text in ips:
         try:
-            addresses.append(ipaddress.ip_address(text))
+            address = ipaddress.ip_address(text)
         except ValueError:
             raise CertError(f"--ip {text!r} is not an IP address") from None
+        if address.is_unspecified:
+            raise CertError(f"--ip {text!r} is the unspecified address; give the runner's own")
+        if getattr(address, "scope_id", None):
+            raise CertError(f"--ip {text!r} has a scope id; a certificate names no interface")
+        addresses.append(address)
     for name in names:
-        if not name or not name.isascii() or not name.isprintable() or " " in name:
-            raise CertError(f"--name {name!r} is not a host name")
+        if not valid_name(name):
+            raise CertError(
+                f"--name {name!r} is not a host name: use letters, digits and hyphens in "
+                "dot-separated labels, with no wildcard, no leading or trailing dot"
+            )
     if out.exists() or out.is_symlink():
         raise CertError(f"{out} already exists; give a new folder, or remove it first")
 
@@ -165,24 +182,32 @@ def make_certificates(
     )
     files = CertFiles(out / "ca.pem", out / "server.pem", out / "server.key")
     try:
+        out.mkdir(mode=0o700)
+    except FileExistsError:
+        raise CertError(f"{out} already exists; give a new folder, or remove it first") from None
+    except OSError as error:
+        raise CertError(f"cannot create {out}: {error.strerror or error}") from None
+    # From here the folder is ours, so a failed write removes it and nothing else.
+    try:
+        folder = os.open(out, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
         try:
-            out.mkdir(mode=0o700)
-        except FileExistsError:
-            raise CertError(
-                f"{out} already exists; give a new folder, or remove it first"
-            ) from None
-        out.chmod(0o700)  # the umask may have narrowed the mode, never widened it
-        for path, data, mode in (
-            (files.ca, ca_pem, 0o644),
-            (files.cert, server_pem, 0o644),
-            (files.key, key_pem, 0o600),
-        ):
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(data)
-            path.chmod(mode)
-    except CertError:
-        raise
+            os.fchmod(folder, 0o700)  # the umask may have narrowed the mode, never widened it
+            for name, data, mode in (
+                ("ca.pem", ca_pem, 0o644),
+                ("server.pem", server_pem, 0o644),
+                ("server.key", key_pem, 0o600),
+            ):
+                fd = os.open(
+                    name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    mode,
+                    dir_fd=folder,
+                )
+                with os.fdopen(fd, "wb") as handle:
+                    os.fchmod(handle.fileno(), mode)
+                    handle.write(data)
+        finally:
+            os.close(folder)
     except OSError as error:
         shutil.rmtree(out, ignore_errors=True)
         raise CertError(f"cannot write {out}: {error.strerror or error}") from None

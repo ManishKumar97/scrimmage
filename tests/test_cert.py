@@ -1,6 +1,8 @@
 """scrimmage cert: a throwaway authority, name-constrained, and one server certificate."""
 
+import errno
 import ipaddress
+import os
 import ssl
 import stat
 import sys
@@ -272,7 +274,7 @@ def test_the_authority_is_name_constrained_to_the_given_names_and_their_subdomai
         )
     )
 
-    def signed(san: x509.GeneralName) -> Path:
+    def signed(*sans: x509.GeneralName) -> Path:
         now = datetime.now(UTC)
         leaf = (
             x509.CertificateBuilder()
@@ -283,7 +285,7 @@ def test_the_authority_is_name_constrained_to_the_given_names_and_their_subdomai
             .not_valid_before(now - timedelta(minutes=5))
             .not_valid_after(now + timedelta(days=1))
             .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
-            .add_extension(x509.SubjectAlternativeName([san]), critical=False)
+            .add_extension(x509.SubjectAlternativeName(list(sans)), critical=False)
             .add_extension(
                 x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(ca_ski),
                 critical=False,
@@ -300,11 +302,18 @@ def test_the_authority_is_name_constrained_to_the_given_names_and_their_subdomai
     handshake(files.ca, inside_ip, leaf_key_file, IP)
     for outside, host in (
         (x509.DNSName("other.internal"), "other.internal"),
+        (x509.DNSName("evil" + NAME), "evil" + NAME),
         (x509.IPAddress(ipaddress.ip_address("172.17.0.2")), "172.17.0.2"),
     ):
         bad = signed(outside)
-        with pytest.raises(ssl.SSLCertVerificationError):
+        with pytest.raises(ssl.SSLCertVerificationError) as raised:
             handshake(files.ca, bad, leaf_key_file, host)
+        assert raised.value.verify_message == "permitted subtree violation"
+    # One name inside does not excuse another outside it.
+    mixed = signed(x509.DNSName("a." + NAME), x509.DNSName("other.internal"))
+    with pytest.raises(ssl.SSLCertVerificationError) as raised:
+        handshake(files.ca, mixed, leaf_key_file, "a." + NAME)
+    assert raised.value.verify_message == "permitted subtree violation"
 
 
 def test_cert_without_the_extra_says_how_to_install_it(
@@ -318,3 +327,62 @@ def test_cert_without_the_extra_says_how_to_install_it(
     assert str(raised.value) == cert.INSTALL
     assert "scrimmage-core[cert]" in str(raised.value)
     assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "text"),
+    [
+        ({"names": ("*",)}, "not a host name"),
+        ({"names": ("*.docker.internal",)}, "not a host name"),
+        ({"names": (".docker.internal",)}, "not a host name"),
+        ({"names": ("docker.internal.",)}, "not a host name"),
+        ({"names": ("a..b",)}, "not a host name"),
+        ({"names": ("a/b",)}, "not a host name"),
+        ({"names": ("-a.internal",)}, "not a host name"),
+        ({"names": ("a" * 64 + ".internal",)}, "not a host name"),
+        ({"names": ("",)}, "not a host name"),
+        ({"names": ("h\u00e9.internal",)}, "not a host name"),
+        ({"ips": ("0.0.0.0",)}, "unspecified"),
+        ({"ips": ("::",)}, "unspecified"),
+        ({"ips": ("fe80::1%eth0",)}, "scope id"),
+    ],
+)
+def test_cert_refuses_names_and_addresses_a_certificate_should_not_carry(
+    tmp_path: Path, kwargs: dict[str, Any], text: str
+) -> None:
+    with pytest.raises(CertError, match=text):
+        make_certificates(tmp_path / "out", **kwargs)
+    assert not (tmp_path / "out").exists()
+
+
+def test_a_name_of_63_character_labels_is_accepted(tmp_path: Path) -> None:
+    make_certificates(tmp_path / "out", names=("a" * 63 + ".b-c.internal",))
+
+
+def test_a_failed_write_removes_the_folder_it_made(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(fd: int, mode: int) -> None:
+        raise OSError(errno.EIO, "disk gone")
+
+    monkeypatch.setattr(os, "fchmod", fail)
+    with pytest.raises(CertError, match="cannot write"):
+        make(tmp_path)
+    assert not (tmp_path / "out").exists()
+
+
+def test_a_failed_mkdir_leaves_a_folder_that_was_already_there(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = tmp_path / "out"
+
+    def raced(self: Path, mode: int = 0o777, **kwargs: Any) -> None:
+        self.mkdir_real(mode=mode)  # type: ignore[attr-defined]
+        (self / "keep").write_text("mine")
+        raise PermissionError(errno.EACCES, "denied")
+
+    monkeypatch.setattr(Path, "mkdir_real", Path.mkdir, raising=False)
+    monkeypatch.setattr(Path, "mkdir", raced)
+    with pytest.raises(CertError, match="cannot create"):
+        make(tmp_path)
+    assert (out / "keep").read_text() == "mine"
