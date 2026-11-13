@@ -755,17 +755,20 @@ def cert_command(args: argparse.Namespace) -> int:
 
     out, ips, names = args.out, tuple(args.ip), tuple(args.name)
     try:
-        files = cert.make_certificates(out, ips=ips, names=names, days=args.days)
+        files = cert.make_certificates(out.absolute(), ips=ips, names=names, days=args.days)
     except cert.CertError as exc:
         print(f"scrimmage: {exc}", file=sys.stderr)
         return MISTAKE
     host = names[0] if names else ips[0]
     shown = f"[{host}]" if ":" in host else host
     print(f"scrimmage cert: wrote {files.ca}, {files.cert} and {files.key}, valid {args.days} days")
-    print("the service's environment:")
+    print(
+        "the service's environment (in a container, SCRIMMAGE_CONTROL_CA is the path where "
+        "ca.pem is mounted there):"
+    )
     print(f"  SCRIMMAGE_CONTROL_URL=https://{shown}:<port>")
     print(f"  SCRIMMAGE_CONTROL_CA={files.ca}")
-    print("the [agent] table of scrimmage.toml:")
+    print("the [agent] table of scrimmage.toml (absolute paths, so it works from any folder):")
     print(f'  control_tls = {{cert = "{files.cert}", key = "{files.key}"}}')
     return OK
 

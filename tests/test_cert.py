@@ -402,12 +402,23 @@ def test_the_cert_command_writes_the_files_and_prints_the_lines_to_copy(
     assert sorted(p.name for p in out.iterdir()) == ["ca.pem", "server.key", "server.pem"]
     assert shown.out.splitlines() == [
         f"scrimmage cert: wrote {out}/ca.pem, {out}/server.pem and {out}/server.key, valid 30 days",
-        "the service's environment:",
+        "the service's environment (in a container, SCRIMMAGE_CONTROL_CA is the path where "
+        "ca.pem is mounted there):",
         f"  SCRIMMAGE_CONTROL_URL=https://{NAME}:<port>",
         f"  SCRIMMAGE_CONTROL_CA={out}/ca.pem",
-        "the [agent] table of scrimmage.toml:",
+        "the [agent] table of scrimmage.toml (absolute paths, so it works from any folder):",
         f'  control_tls = {{cert = "{out}/server.pem", key = "{out}/server.key"}}',
     ]
+
+
+def test_the_cert_command_prints_absolute_paths_from_a_relative_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert run_cli("--ip", IP, "--out", "pki") == 0
+    shown = capsys.readouterr().out
+    assert f"SCRIMMAGE_CONTROL_CA={tmp_path}/pki/ca.pem" in shown
+    assert f'cert = "{tmp_path}/pki/server.pem"' in shown
 
 
 def test_the_cert_command_names_the_address_when_it_is_given_no_name(

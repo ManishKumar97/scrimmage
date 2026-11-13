@@ -103,7 +103,7 @@ The text of a message can change in any release.
 | `runs_sent` | With a service: the requests the runner sent to it, the setup request and every run. Absent for a function or a script. |
 | `claims_received` | With a service: the claims the control server answered. Far below `runs_sent` means no service reached the control server. |
 | `control_cut` | With a service: the control server's connections that the read or whole-request timeouts cut. Near zero in a healthy test. |
-| `control_tls_failed` | With a service: connections that failed TLS, counted by OpenSSL's reason, such as `unknown ca`. Empty without `control_tls`. |
+| `control_tls_failed` | With a service: connections that failed TLS, counted by OpenSSL's reason, such as `unknown ca`. Always present for a service, and empty without `control_tls`. |
 | `result_file` | The `result.json` this test wrote into `records`: the same document, but for this field, which the file leaves out, and `compare`, which is always `null` in the file. `null` when it was not written: a write failed, or the test did not finish. See [Reading a finished test](show.md). |
 | `compare` | `null`, or with `--compare` the comparison with the earlier test, below. |
 

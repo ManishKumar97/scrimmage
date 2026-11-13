@@ -122,7 +122,8 @@ Give at least one `--ip` or `--name`; both can be repeated.
 `--days` is the validity, 1 to 397, and 30 by default.
 Making new certificates means running the command again, then restarting the runner and the service.
 
-It prints the two lines the service's environment needs, and the `control_tls` line for the file.
+It prints the two lines the service's environment needs, and the `control_tls` line for the file, with absolute paths so the line works from any folder.
+In a container, `SCRIMMAGE_CONTROL_CA` is the path where `ca.pem` is mounted there, not the printed path.
 The port is left as `<port>` for you to fill in.
 The command needs the `cert` extra, `pip install "scrimmage-core[cert]"`; without it the command says so and exits 2.
 

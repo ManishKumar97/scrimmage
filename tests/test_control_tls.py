@@ -14,8 +14,11 @@ import ipaddress
 import json
 import os
 import secrets
+import shutil
 import socket
 import ssl
+import subprocess
+import threading
 import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -254,6 +257,28 @@ def test_a_control_key_not_0600_is_exit_2(
     assert "has mode 644; it must be 600" in err
 
 
+@pytest.mark.design("service.tls_key_private")
+def test_a_key_swapped_between_the_mode_check_and_the_load_is_exit_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    files = pki(tmp_path)
+    other = pki(tmp_path, "other")
+    path = runner_file(tmp_path, files.cert, files.key)
+    real = tls.server_context
+
+    def swapped(cert: Path, key: Path) -> ssl.SSLContext:
+        context = real(cert, key)  # loads the file that was checked
+        new = key.with_suffix(".new")  # made before the old file goes, so its inode differs
+        shutil.copy(other.key, new)
+        new.chmod(0o600)
+        os.replace(new, key)  # then a different 0600 file takes its place
+        return context
+
+    monkeypatch.setattr(tls, "server_context", swapped)
+    code, err = run_test(path, monkeypatch, capsys)
+    assert code == 2 and "changed while it was read" in err, err
+
+
 def self_signed(tmp_path: Path, name: str, start: datetime, end: datetime) -> CertFiles:
     key = ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "x")])
@@ -357,6 +382,28 @@ def test_the_sdk_refuses_a_public_authority_and_never_loads_the_system_store(
     # Positive control: a context that loads the default store does trust this server.
     default = ssl.create_default_context()
     handshake(default, tls.server_context(system.cert, system.key), HOST)
+    with pytest.raises(ControlError, match="SSLCertVerificationError"):
+        sdk(server, ours.ca).claim(RUN, {"pid": 1})
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    shutil.which("openssl") is None, reason="openssl is not installed, so no hashed CA folder"
+)
+@pytest.mark.design("service.tls_one_authority")
+def test_the_sdk_refuses_an_authority_in_the_system_folder(
+    tmp_path: Path, servers: list[ControlServer], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    system, ours = pki(tmp_path, "system"), pki(tmp_path, "ours")
+    folder = tmp_path / "capath"
+    folder.mkdir()
+    shutil.copy(system.ca, folder / "system.pem")
+    subprocess.run(["openssl", "rehash", str(folder)], check=True)  # the names OpenSSL looks up
+    monkeypatch.setenv("SSL_CERT_DIR", str(folder))
+    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "no-such-file"))
+    server = serve(servers, tmp_path, system)
+    # Positive control: the default store, through the folder alone, trusts this server.
+    handshake(ssl.create_default_context(), tls.server_context(system.cert, system.key), HOST)
     with pytest.raises(ControlError, match="SSLCertVerificationError"):
         sdk(server, ours.ca).claim(RUN, {"pid": 1})
 
@@ -684,10 +731,20 @@ def test_an_unsigned_large_body_is_refused_before_it_is_read(
     for name, value in forged.items():
         conn.putheader(name, value)
     conn.endheaders()
-    conn.send(b"x" * 4096)
+    conn.auto_open = 0  # a send after the close must fail, not open a second connection
+
+    def push() -> None:  # the whole declared body, until the server stops listening
+        chunk = b"x" * 65536
+        with contextlib.suppress(OSError, http.client.HTTPException):
+            for _ in range(14 * 1024 * 1024 // len(chunk)):
+                conn.send(chunk)
+
+    pusher = threading.Thread(target=push, daemon=True)
+    pusher.start()
     reply = conn.getresponse()
     assert reply.status == 401 and json.loads(reply.read())["error"] == "bad_signature"
     conn.close()
+    pusher.join(10)
     assert taken[0] < 64 * 1024
     # Positive control: a signed body of the same kind is read in full.
     data = os.urandom(5 * 1024 * 1024)

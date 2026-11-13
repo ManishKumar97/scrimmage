@@ -103,7 +103,7 @@ A control server that listens beyond loopback carries plans and record lines, wh
 
   *Checked by: `tests/test_control_tls.py::test_tls_failures_are_counted_by_reason_and_print_no_traceback`, `tests/test_control_tls.py::test_the_report_counts_runs_sent_and_claims_received`*
 
-- A service run over TLS gives the same records as one without.
+- A four-worker service test over TLS on loopback completes, and each run's record holds only that run's lines.
 
   *Checked by: `tests/test_control_tls.py::test_a_full_s7a_run_works_over_tls_on_loopback`*
 

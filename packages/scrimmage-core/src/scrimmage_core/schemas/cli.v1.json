@@ -252,7 +252,7 @@
             "type": "integer",
             "minimum": 1
           },
-          "description": "A service test with control_tls only: connections that failed TLS, counted by OpenSSL's reason, such as unknown ca."
+          "description": "A service test only; empty without control_tls: connections that failed TLS, counted by OpenSSL's reason, such as unknown ca."
         },
         "result_file": {
           "type": [

@@ -125,14 +125,25 @@ def server_tls(agent: Agent, root: Path) -> ssl.SSLContext | None:
     except (OSError, records.Refused) as exc:
         raise Setup(2, f"control_tls key {key} cannot be read: {exc}") from None
     with os.fdopen(fd, "rb") as handle:
-        mode = stat.S_IMODE(os.fstat(handle.fileno()).st_mode)
+        checked = os.fstat(handle.fileno())
+    mode = stat.S_IMODE(checked.st_mode)
     if mode != 0o600:
         raise Setup(2, f"control_tls key {key} has mode {mode:o}; it must be 600")
     try:
-        context = tls.server_context(cert, key)
+        context = tls.server_context(cert, key)  # opens the key again, by its path
         tls.check_valid(context, cert)
+        loaded = os.lstat(key)
     except tls.TlsError as exc:
         raise Setup(2, f"control_tls: {exc}") from None
+    except OSError as exc:
+        raise Setup(2, f"control_tls key {key} cannot be read: {exc.strerror or exc}") from None
+    # The file that was checked must be the file that was loaded, not one swapped in between.
+    if (loaded.st_dev, loaded.st_ino, loaded.st_mode) != (
+        checked.st_dev,
+        checked.st_ino,
+        checked.st_mode,
+    ):
+        raise Setup(2, f"control_tls key {key} changed while it was read; start the test again")
     return context
 
 
