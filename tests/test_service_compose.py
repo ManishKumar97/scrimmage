@@ -31,7 +31,9 @@ from ports import free_port
 pytestmark = [pytest.mark.slow, pytest.mark.docker]
 
 ACTIVE = re.compile(r"scrimmage: active in service mode \(pid (\d+)\)")
-NON_PYTHON = (["uname", "-p"],)  # what the example's `real = ["process:uname"]` lets openai run
+NON_PYTHON = (
+    ("uname", ["uname", "-p"]),
+)  # what the example's `real = ["process:uname"]` lets openai run
 
 
 @pytest.fixture(scope="session")
@@ -78,7 +80,7 @@ def running(
     ca = harness.make_certs(folder / "other-cert", gateway).ca if other_ca else None
     fake = FakeOpenAI(ACME, host=gateway)
     fake.start()
-    control_port = free_port()
+    control_port = free_port(also=gateway)
     project = Project(
         folder,
         image,
@@ -173,6 +175,9 @@ def test_the_container_connects_only_to_the_control_address_and_the_model_host(
         allowed = {(gateway, control), (gateway, model)}
         names = {"host.docker.internal", gateway}
         problems = harness.egress_problems(records, allowed, names, NON_PYTHON)
+        # The one excused program is the system's uname, not one earlier on the PATH.
+        which = bench.project.compose("exec", "-T", "agent", "sh", "-c", "command -v uname")
+        assert which.stdout.strip() == "/usr/bin/uname"
         assert problems == []
         # A child started below subprocess leaves no line of its own, so every process still
         # alive in the container must have written a start line.
@@ -182,9 +187,10 @@ def test_the_container_connects_only_to_the_control_address_and_the_model_host(
 
 def test_the_image_holds_no_secret(images: Images, tmp_path: Path) -> None:
     canaries = list(harness.CANARIES.values())
-    archive = tmp_path / "service.tar"
-    harness.sh(["docker", "save", "-o", str(archive), images.service], timeout=300)
-    assert scan_image(archive, canaries) == []
+    for name, tag in (("service", images.service), ("egress", images.egress)):
+        archive = tmp_path / f"{name}.tar"
+        harness.sh(["docker", "save", "-o", str(archive), tag], timeout=300)
+        assert scan_image(archive, canaries) == [], name
 
     # The positive control: the Dockerfile with `COPY token /token`, and the canary in the
     # context, must be found by the same scan, or "found nothing" above means nothing.
@@ -226,17 +232,23 @@ def test_a_container_with_the_wrong_ca_fails_the_probe_with_exit_3(
 def test_a_container_run_as_another_uid_names_the_user_setting(
     images: Images, tmp_path: Path
 ) -> None:
-    with running(images.service, uid=0, folder=tmp_path) as bench:
-        bench.project.up()
-        for _ in range(60):
-            if bench.project.state() in ("exited", "dead"):
-                break
-            time.sleep(0.5)
-        logs = bench.project.logs()
-        assert bench.project.state() == "exited", logs
-        owner = bench.project.token_file.stat().st_uid
-        assert f"the token file is owned by uid {owner} and this process runs as uid 0" in logs
-        assert "in Docker, set user: to the file owner's uid and gid" in logs
+    """Root reads the file and meets the owner check; a non-root uid cannot open the 0600 file
+    at all. Both must name the file's uid, the process's uid and the user: setting."""
+    for uid in (0, 1234):
+        folder = tmp_path / f"uid-{uid}"
+        folder.mkdir()
+        with running(images.service, uid=uid, folder=folder) as bench:
+            bench.project.up()
+            for _ in range(60):
+                if bench.project.state() in ("exited", "dead"):
+                    break
+                time.sleep(0.5)
+            logs = bench.project.logs()
+            assert bench.project.state() == "exited", logs
+            owner = bench.project.token_file.stat().st_uid
+            said = f"the token file is owned by uid {owner} and this process runs as uid {uid}"
+            assert said in logs, logs
+            assert "in Docker, set user: to the file owner's uid and gid" in logs
 
 
 def test_compose_down_leaves_no_container_network_or_volume(images: Images, tmp_path: Path) -> None:

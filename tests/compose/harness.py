@@ -410,13 +410,13 @@ def egress_problems(
     records: list[dict[str, Any]],
     allowed: set[tuple[str, int]],
     names: set[str],
-    known_children: tuple[list[str], ...] = (),
+    known_children: tuple[tuple[str, list[str]], ...] = (),
 ) -> list[str]:
     """Everything in an egress log that is not allowed.
 
     allowed: the (address, port) pairs a process may connect to or send to.
     names: the host names it may resolve.
-    known_children: the argv of programs that are not Python, so write no start line.
+    known_children: (executable, argv) of programs that are not Python, so write no start line.
     Three kinds of problem: a process whose hook came after Scrimmage's startup file, a network
     address or name outside the lists, and a child process no start line accounts for.
     """
@@ -435,24 +435,32 @@ def egress_problems(
     return problems
 
 
-def _unwatched_children(records: list[dict[str, Any]], known: tuple[list[str], ...]) -> list[str]:
-    """A popen or spawn line of pid P is matched by a start line whose ppid is P; an exec line
-    of pid P by a second start line of P. A child that wrote no start line, such as `python -S`
-    or a program that is not Python, leaves its parent's line unmatched, unless the program is
-    one of `known`. A child started below subprocess, as multiprocessing's spawn does, has no
-    line of its own: `live_pids` finds one that is still running."""
+def _unwatched_children(
+    records: list[dict[str, Any]], known: tuple[tuple[str, list[str]], ...]
+) -> list[str]:
+    """Pair each popen or spawn line of pid P with one start line whose ppid is P and whose
+    argv is that argv. A line with no partner is a child that wrote no start line, such as
+    `python -S` or a program that is not Python, unless (executable, argv) is in `known`.
+    A multiprocessing child has a start line but no popen line, so it pays for nothing.
+    An exec line of pid P needs a second start line of P. os.system and a fork never pair."""
     problems: list[str] = []
-    pids = {r["pid"] for r in records}
-    for pid in sorted(pids):
+    for pid in sorted({r["pid"] for r in records}):
         own = [r for r in records if r["pid"] == pid]
         started = sum(1 for r in own if r["event"] == "start")
         execs = sum(1 for r in own if r["event"] == "exec")
         if started != 1 + execs:
             problems.append(f"pid {pid}: {execs} exec lines but {started} start lines")
-        made = sum(1 for r in own if r["event"] in ("popen", "spawn") and r["argv"] not in known)
-        children = sum(1 for r in records if r["event"] == "start" and r.get("ppid") == pid)
-        if children < made:
-            problems.append(f"pid {pid} started {made} children, only {children} wrote a start")
+        free = [r["argv"] for r in records if r["event"] == "start" and r.get("ppid") == pid]
+        for r in own:
+            if r["event"] in ("system", "fork"):
+                problems.append(f"pid {pid}: {r['event']} {r.get('command', '')!r}")
+            elif r["event"] in ("popen", "spawn"):
+                if (r["executable"], r["argv"]) in known:
+                    continue
+                if r["argv"] in free:
+                    free.remove(r["argv"])
+                else:
+                    problems.append(f"pid {pid}: {r['event']} {r['argv']} wrote no start line")
     return problems
 
 

@@ -214,6 +214,8 @@ services:
   agent:
     image: ${SCRIMMAGE_IMAGE:-scrimmage-acme-service}
     # The token file must be read by its owner, so the container runs as that user.
+    # The image's files are read-only to the app; /tmp is the one place it may write.
+    read_only: true
     user: "${SCRIMMAGE_UID:?set SCRIMMAGE_UID to the token file owner's uid, $(id -u)}:${SCRIMMAGE_GID:?set SCRIMMAGE_GID to $(id -g)}"
     ports:
       - "127.0.0.1::8765"
@@ -227,7 +229,7 @@ services:
       SCRIMMAGE_TOOLS: acme.tools:get_order,acme.tools:check_inventory,acme.tools:refund_order,acme.tools:get_stock
       SCRIMMAGE_ALLOW_IMPORTS: acme.
     volumes:
-      - scratch:/tmp  # the one place the app may write
+      - scratch:/tmp
       - type: bind
         source: ${SCRIMMAGE_TOKEN_FILE:?set SCRIMMAGE_TOKEN_FILE}
         target: /run/scrimmage/token
@@ -246,10 +248,11 @@ volumes:
   scratch: {}
 ```
 
-Four things in it matter:
+Five things in it matter:
 
 - `user:` runs the container as the token file's owner.
   Compose refuses to start when `SCRIMMAGE_UID` or `SCRIMMAGE_GID` is unset, because bash does not export `UID`, so Scrimmage's own two variables carry the ids.
+- `read_only: true` makes the image's files read-only to the app, and `/tmp` is a volume it may write.
 - The token file and `ca.pem` are read-only bind mounts, and `create_host_path: false` makes a missing file an error, not a folder Docker made.
   Neither file is in the image.
 - `SCRIMMAGE_TOKEN_FILE` and `SCRIMMAGE_CONTROL_CA` name the paths inside the container, never the host's.

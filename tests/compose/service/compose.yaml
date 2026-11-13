@@ -8,6 +8,8 @@ services:
   agent:
     image: ${SCRIMMAGE_IMAGE:-scrimmage-acme-service}
     # The token file must be read by its owner, so the container runs as that user.
+    # The image's files are read-only to the app; /tmp is the one place it may write.
+    read_only: true
     user: "${SCRIMMAGE_UID:?set SCRIMMAGE_UID to the token file owner's uid, $(id -u)}:${SCRIMMAGE_GID:?set SCRIMMAGE_GID to $(id -g)}"
     ports:
       - "127.0.0.1::8765"
@@ -21,7 +23,7 @@ services:
       SCRIMMAGE_TOOLS: acme.tools:get_order,acme.tools:check_inventory,acme.tools:refund_order,acme.tools:get_stock
       SCRIMMAGE_ALLOW_IMPORTS: acme.
     volumes:
-      - scratch:/tmp  # the one place the app may write
+      - scratch:/tmp
       - type: bind
         source: ${SCRIMMAGE_TOKEN_FILE:?set SCRIMMAGE_TOKEN_FILE}
         target: /run/scrimmage/token
