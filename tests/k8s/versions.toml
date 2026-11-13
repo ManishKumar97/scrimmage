@@ -9,6 +9,9 @@ version = "v0.33.0"
 # supported and not 1.37, so the node is the v1.36.4 image from the same release.
 image = "kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed"
 
+# The charts install images by tag (Calico's operator, cert-manager's pods), not by digest, so
+# a chart version pins them only as far as its publisher keeps a tag fixed.
+
 [calico]
 repo = "https://docs.tigera.io/calico/charts"
 chart = "tigera-operator"

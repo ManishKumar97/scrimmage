@@ -52,10 +52,11 @@ Run one file at a time, in one process:
 
 ```sh
 J=$(mktemp -d)/k8s.xml
-SCRIMMAGE_KIND=1 SCRIMMAGE_LANE=2 uv run pytest -n 0 -m kind tests/test_k8s_cluster.py --junitxml="$J" && uv run python tests/compose/check_junit.py "$J" 6
+SCRIMMAGE_KIND=1 SCRIMMAGE_LANE=2 test-slot uv run pytest -n 0 -m kind tests/test_k8s_cluster.py --junitxml="$J" && uv run python tests/compose/check_junit.py "$J" 6
 ```
 
 The cluster is named `scrimmage-<lane>`, from `SCRIMMAGE_LANE` (default `1`), and a session deletes only the cluster of its own name.
+The clusters use a Docker network of their own, `scrimmage-kind`, never the network named `kind`.
 The harness gives kubectl, Helm and kind a kubeconfig and Helm folders of their own, so `~/.kube/config` and your Helm files are never read or written, and another cluster on the machine is never touched.
 A second session waits while another lane's cluster runs and less than 6 GB of memory is free.
 `SCRIMMAGE_KIND_KEEP=1` keeps the cluster for debugging and prints the command that deletes it.

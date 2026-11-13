@@ -51,6 +51,7 @@ def user_files() -> list[Path]:
     home = Path.home()
     return [
         home / ".kube" / "config",
+        home / ".kube" / "cache",
         home / ".cache" / "helm",
         home / ".config" / "helm",
         home / ".local" / "share" / "helm",
@@ -124,8 +125,18 @@ def test_calico_is_the_network_plugin(cluster: Cluster) -> None:
     pods = cluster.json("get", "pods", "-n", "kube-system", "-l", "k8s-app=kube-dns")["items"]
     assert pods, "no CoreDNS pod to read an address from"
     for pod in pods:
-        address = kubernetes.ipaddress.ip_address(pod["status"]["podIP"])
+        # Only Calico writes this annotation; the plugin kind ships, on the same range, does not.
+        annotation = pod["metadata"].get("annotations", {}).get("cni.projectcalico.org/podIP")
+        assert annotation, f"{pod['metadata']['name']} has no Calico address annotation"
+        address = kubernetes.ipaddress.ip_interface(annotation).ip
+        assert str(address) == pod["status"]["podIP"]
         assert address in pool, f"{pod['metadata']['name']} has {address}, outside {pool}"
+
+
+def pod_ready(cluster: Cluster, namespace: str, name: str) -> bool:
+    pod = cluster.json("get", "pod", name, "-n", namespace, check=False)
+    conditions = (pod or {}).get("status", {}).get("conditions", [])
+    return any(c["type"] == "Ready" and c["status"] == "True" for c in conditions)
 
 
 def dial(cluster: Cluster, namespace: str, host: str) -> str:
@@ -142,10 +153,12 @@ def test_a_network_policy_is_enforced(cluster: Cluster, runner_image: str) -> No
                 "apply", "-n", namespace, "-f", "-",
                 input=pod_json(name, runner_image, script, label=name),
             )  # fmt: skip
-        cluster.kubectl(
-            "wait", "--for=condition=Ready", "pod/server", "pod/client", "-n", namespace,
-            "--timeout=120s",
-        )  # fmt: skip
+        cluster.wait_until(
+            "both pods Ready",
+            lambda: all(pod_ready(cluster, namespace, n) for n in ("server", "client")),
+            timeout=120,
+            namespace=namespace,
+        )
         server = cluster.json("get", "pod", "server", "-n", namespace)["status"]["podIP"]
         assert dial(cluster, namespace, server) == "connected", "no policy: the first try must pass"
         policy = {
@@ -155,10 +168,19 @@ def test_a_network_policy_is_enforced(cluster: Cluster, runner_image: str) -> No
             "spec": {"podSelector": {"matchLabels": {"app": "server"}}, "policyTypes": ["Ingress"]},
         }
         cluster.kubectl("apply", "-n", namespace, "-f", "-", input=json.dumps(policy))
-        blocked = dial(cluster, namespace, server)
-        assert blocked == "TimeoutError", (
-            f"the deny policy did not hold a new connection: {blocked}"
-        )
+        seen: list[str] = []
+
+        def blocked() -> bool:
+            seen.append(dial(cluster, namespace, server))
+            return seen[-1] == "TimeoutError"
+
+        # A few seconds for Calico to program the rule; after that every new connection times out.
+        for _ in range(4):
+            if blocked():
+                break
+        else:
+            raise AssertionError(f"the deny policy did not hold a new connection: {seen}")
+        assert blocked(), "once blocked, a new connection must stay blocked"
         cluster.kubectl("delete", "networkpolicy", "deny", "-n", namespace)
         cluster.wait_until(
             "the policy to go",
@@ -205,10 +227,7 @@ def test_the_harness_never_touches_the_users_kubeconfig(
     before = snapshot(user_files())
     assert before, "no file of the user's to watch: the check would prove nothing"
     cert_manager = kubernetes.PINS["cert-manager"]
-    scratch = Cluster("9k")
-    try:
-        scratch.begin()
-        scratch.create()
+    with kubernetes.scratch("kc") as scratch:
         assert snapshot(user_files()) == before, "kind create wrote the user's files"
         scratch.kubectl("get", "nodes")
         scratch.helm(
@@ -226,27 +245,19 @@ def test_the_harness_never_touches_the_users_kubeconfig(
         )
         assert (home / ".kube" / "config").is_file(), "the control did not see a write"
         # The delete, in that home, where the cluster is named in the user's kubeconfig. Without
-        # --kubeconfig kind would take it out of that file.
+        # --kubeconfig, and with no KUBECONFIG, kind would take it out of that file.
         seeded = snapshot([home / ".kube"])
-        monkeypatch.setenv("HOME", str(home))
-        scratch.down()
+        with monkeypatch.context() as patched:
+            patched.setenv("HOME", str(home))
+            patched.delenv("KUBECONFIG", raising=False)
+            scratch.delete()
         assert snapshot([home / ".kube"]) == seeded, "kind delete edited the user's kubeconfig"
-    finally:
-        monkeypatch.undo()
-        scratch.down()
     assert snapshot(user_files()) == before
 
 
 def test_a_session_deletes_only_its_own_cluster() -> None:
-    kept = Cluster("9j")
-    mine = Cluster("8j")
-    try:
-        kept.create()
-        mine.begin()  # a session's start
-        mine.create()
-        mine.down()  # and its end
-        assert kept.name in kubernetes.running_clusters(), "another lane's cluster was deleted"
-    finally:
-        mine.down()
-        kept.down()
+    with kubernetes.scratch("kp") as kept:
+        with kubernetes.scratch("mn"):  # a session's start, and its end on leaving
+            pass
+        assert kept.name in kubernetes.running_clusters(), "another cluster was deleted"
     assert kept.name not in kubernetes.running_clusters()

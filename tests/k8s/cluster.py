@@ -33,6 +33,10 @@ ROOM_WAIT_S = 1200.0
 # An event with one of these reasons means a workload will never start; waiting is no use.
 FAIL_FAST_EVENTS = frozenset({"FailedCreate", "FailedScheduling", "ErrImageNeverPull"})
 TOOLS = ("kind", "kubectl", "helm", "docker")
+# S8 clusters get a Docker network of their own. The network named `kind` is what other kind
+# clusters on the machine, such as an AIOpsLab test bed, are addressed by, so it is never
+# shared, and never removed.
+NETWORK = "scrimmage-kind"
 
 
 class ClusterError(AssertionError):
@@ -48,6 +52,19 @@ def lane() -> str:
 
 def cluster_name(which: str | None = None) -> str:
     return f"scrimmage-{which or lane()}"
+
+
+def scratch_name(role: str) -> str:
+    """A name for a cluster a test makes beside the session's. It holds a hyphen, which a lane
+    cannot, so it never equals another lane's cluster, and it differs by lane."""
+    if not re.fullmatch(r"[a-z0-9]{1,4}", role):
+        raise ClusterError(f"scratch role {role!r} must be 1 to 4 letters or digits")
+    return f"{lane()}-{role}"
+
+
+def is_ours(name: str) -> bool:
+    """The session's own cluster, or one of its scratch clusters."""
+    return name == cluster_name() or name.startswith(f"{cluster_name()}-")
 
 
 def lock_file(name: str) -> Path:
@@ -139,6 +156,20 @@ def check_pod_range_is_free() -> None:
         raise ClusterError(f"the host has a route {clash} inside {POD_CIDR}, the pod range")
 
 
+def remove_network(name: str = NETWORK) -> None:
+    """Remove a Docker network S8 made. The network named `kind` is never removed."""
+    if name == "kind":
+        raise ClusterError("refusing to remove the Docker network named kind")
+    run(["docker", "network", "rm", name], timeout=60, check=False)
+
+
+def remove_network_if_unused() -> None:
+    """The last S8 cluster to go takes the network. Docker refuses while a node is on it."""
+    with locked("scrimmage-kind"):
+        if not any(c.startswith("scrimmage-") for c in running_clusters()):
+            remove_network()
+
+
 class Cluster:
     """One lane's cluster and the session folder that holds its kubeconfig and Helm files."""
 
@@ -158,16 +189,16 @@ class Cluster:
         return env
 
     def kind_env(self) -> dict[str, str]:
-        """kind's environment: no KUBECONFIG, because kind honours it. Then only the
-        --kubeconfig flag keeps kind away from the user's file, and a call that drops the flag
-        is seen by the test that watches that file."""
-        env = self.env()
-        del env["KUBECONFIG"]
-        return env
+        """kind's environment: the session's kubeconfig, which kind honours as well as the
+        --kubeconfig flag, and the network of its own."""
+        return {**self.env(), "KIND_EXPERIMENTAL_DOCKER_NETWORK": NETWORK}
 
     def kubectl(
         self, *args: str, input: str | None = None, timeout: float = 120, check: bool = True
     ) -> subprocess.CompletedProcess[str]:
+        for arg in args:  # let kubectl's own --timeout message come first
+            if found := re.fullmatch(r"--timeout=(\d+)s", arg):
+                timeout = int(found.group(1)) + 30
         return run(["kubectl", *args], timeout=timeout, env=self.env(), input=input, check=check)
 
     def helm(self, *args: str, timeout: float = 600) -> subprocess.CompletedProcess[str]:
@@ -354,6 +385,13 @@ class Cluster:
         check_pod_range_is_free()
         self.delete()
 
+    def bare(self) -> None:
+        """A cluster with nothing installed, for a test of the harness itself. It takes the
+        global lock around creating, as a session does."""
+        with locked("scrimmage-kind"):
+            self.begin()
+            self.create()
+
     def up(self, load: tuple[str, ...] = ()) -> None:
         with locked("scrimmage-kind"):  # held until the pods are scheduled
             self.begin()
@@ -368,7 +406,7 @@ class Cluster:
         never stopped or deleted: if it is not ours, this fails naming it."""
         deadline = time.monotonic() + ROOM_WAIT_S
         while memory_available_kb() < MEMORY_NEEDED_KB:
-            others = [c for c in running_clusters() if c != self.name]
+            others = [c for c in running_clusters() if c != self.name and not is_ours(c)]
             foreign = [c for c in others if not c.startswith("scrimmage-")]
             free_gb = memory_available_kb() / 1024 / 1024
             if foreign:
@@ -392,6 +430,7 @@ class Cluster:
             return
         self.delete()
         shutil.rmtree(self.folder, ignore_errors=True)
+        remove_network_if_unused()
 
     @contextlib.contextmanager
     def namespace(self) -> Iterator[str]:
@@ -433,6 +472,20 @@ class Cluster:
                 "data": {key: data[key] for key in keys},
             }
             self.kubectl("apply", "-f", "-", input=json.dumps(secret))
+
+
+@contextlib.contextmanager
+def scratch(role: str) -> Iterator[Cluster]:
+    """A bare cluster beside the session's, named by lane and role, under a lock of its own
+    name so two sessions never share it, and deleted after."""
+    name = scratch_name(role)
+    with locked(f"scrimmage-kind-{name}"):
+        cluster = Cluster(name)
+        try:
+            cluster.bare()
+            yield cluster
+        finally:
+            cluster.down()
 
 
 @contextlib.contextmanager
