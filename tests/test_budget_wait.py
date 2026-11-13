@@ -862,7 +862,12 @@ def test_a_stream_held_open_across_a_second_call_ends_in_a_clear_stop(project: P
     assert [s["outcome"] for s in result.summaries()] == ["not reserved"]
     assert "test mistake: a model call could not be reserved" in result.out
     assert "was held by calls in flight (model:openai in run-" in result.out
-    assert "after a wait of 1s for calls in flight" in result.out, result.out
+    # The wait is the 1 s bound set in DEADLOCK, plus however long the machine stalled the
+    # run past it: a loaded one can stretch it to 2 s or more. So the test reads the number:
+    # at least the bound, and far under the default a call waits on itself (BUDGET_WAIT_S, 30 s).
+    waited = re.search(r"after a wait of (\d+)s for calls in flight", result.out)
+    assert waited, result.out
+    assert 1 <= int(waited[1]) < http_gate.BUDGET_WAIT_S, result.out
     assert "was reached" not in result.out
 
 
