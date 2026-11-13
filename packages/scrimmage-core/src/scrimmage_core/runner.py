@@ -668,11 +668,17 @@ class Runner:
         probed = service_client.probe(agent, self.token)
         reply = probed.reply
         deadline = time.monotonic() + READY_S
-        if service_client.not_listening(reply):
+
+        def starting(found: service_client.Reply) -> bool:
+            """No reply yet: refused, timed out, or taken and cut by a published port. A reply
+            whose headers were read ends the wait, so a reset after it is final."""
+            return service_client.not_listening(found) or service_client.accepted_then_cut(found)
+
+        if starting(reply):
             host, port, _ = service_client.target(agent)
             print(f"scrimmage: waiting for {host}:{port} to listen", file=sys.stderr, flush=True)
         # A service started just before the test may not listen yet: ask again until it does.
-        while service_client.not_listening(reply) and time.monotonic() < deadline:
+        while starting(reply) and time.monotonic() < deadline:
             if self.cancelled or self.stop_flag:  # Ctrl-C or SIGTERM ends the wait
                 raise Interrupted(self.stop_flag[0] if self.stop_flag else "SIGINT")
             time.sleep(READY_STEP_S)  # nothing tells a closed port it has opened
@@ -692,17 +698,24 @@ class Runner:
                 f"of asking ({reply.failed}): the service is not started, is still starting, "
                 "or listens at another address",
             )
-        if not reply.connected:
+        if not reply.connected and not reply.unanswered:
             raise service_client.Setup(
                 3,
                 f"cannot reach the service's address for POST {path} ({reply.failed}): no such "
                 "host, or no route to it",
             )
         if reply.failed is not None or reply.timed_out:
+            hint = (
+                "; a container's published port can accept a connection before the app "
+                "inside listens, and this one was still reset or closed with no reply after "
+                f"{READY_S:g} s"
+                if starting(reply)
+                else ""
+            )
             raise service_client.Setup(
                 3,
                 f"the service at POST {path} took the probe's connection but gave no reply: "
-                f"{reply.failed or 'timed out'}",
+                f"{reply.failed or 'timed out'}{hint}",
             )
         gap = probed.gap
         if probed.clock_refused and gap is not None:
