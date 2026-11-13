@@ -64,6 +64,7 @@ class Reply:
     failed: str | None = None  # the connection was refused, reset, or broke
     timed_out: bool = False
     connected: bool = True  # False: no connection was made at all
+    unanswered: bool = False  # taken, then reset or closed before any HTTP reply began
 
     @property
     def gate_refused(self) -> str | None:
@@ -201,7 +202,10 @@ def send(
         conn.connect()
     except OSError as exc:  # refused, no such host, unreachable, or the connect timed out
         conn.close()
-        return Reply(failed=f"{type(exc).__name__}: {exc}", connected=False)
+        # A reset while connecting is a port that took the connection and cut it, which a
+        # fast loopback shows at connect; it is not a missing host.
+        cut_short = isinstance(exc, ConnectionResetError)
+        return Reply(failed=f"{type(exc).__name__}: {exc}", connected=False, unanswered=cut_short)
     if conn.sock is not None:
         conn.sock.settimeout(timeout)
     cutter: threading.Timer | None = None
@@ -211,9 +215,11 @@ def send(
         cutter = threading.Timer(max(deadline - time.monotonic(), 0.0), cut, [conn.sock])
         cutter.daemon = True
         cutter.start()
+    replied = False
     try:
         conn.request(method, path, body=body, headers=headers)
         response = conn.getresponse()
+        replied = True
         if limit is None:
             data = response.read()
         else:
@@ -233,7 +239,8 @@ def send(
     except (OSError, http.client.HTTPException, ValueError) as exc:
         if deadline is not None and time.monotonic() >= deadline:
             return Reply(timed_out=True)  # the cutter closed the socket under the read
-        return Reply(failed=f"{type(exc).__name__}: {exc}")
+        cut_short = isinstance(exc, ConnectionError | http.client.RemoteDisconnected)
+        return Reply(failed=f"{type(exc).__name__}: {exc}", unanswered=cut_short and not replied)
     finally:
         if cutter is not None:
             cutter.cancel()
@@ -392,6 +399,12 @@ def not_listening(reply: Reply) -> bool:
         and not reply.connected
         and (reply.failed.startswith(("ConnectionRefusedError", "TimeoutError")))
     )
+
+
+def accepted_then_cut(reply: Reply) -> bool:
+    """The connection was taken and then reset or closed with no HTTP reply: what a
+    container's published port does before the app inside listens."""
+    return reply.failed is not None and reply.unanswered
 
 
 def run_request(agent: Agent, header: str, question: str, timeout: float) -> Reply:

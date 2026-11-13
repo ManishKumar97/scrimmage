@@ -4,6 +4,7 @@ Each test starts its own service, waits for the lines it prints, and stops it; e
 started, the supervisor and its workers, is checked gone after.
 """
 
+import contextlib
 import http.client
 import json
 import os
@@ -12,6 +13,7 @@ import secrets
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -625,6 +627,59 @@ class Ungated:
         self.thread.join()
 
 
+class EagerPort:
+    """A port that accepts before the app listens, as Docker's port proxy does: for the first
+    `reset_for` seconds it takes each connection and resets it (SO_LINGER 0), then it pipes
+    connections to `behind`. half: it replies with the start of an HTTP reply and resets."""
+
+    def __init__(self, behind: int | None, reset_for: float, *, half: bool = False) -> None:
+        self.behind, self.half = behind, half
+        self.opens = time.monotonic() + reset_for
+        self.accepted = 0
+        self.stopped = False
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(16)
+        self.port = self.sock.getsockname()[1]
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+        self.thread.start()
+
+    def serve(self) -> None:
+        while not self.stopped:
+            try:
+                client, _ = self.sock.accept()
+            except OSError:
+                return
+            self.accepted += 1
+            if self.behind is None or time.monotonic() < self.opens:
+                if self.half:
+                    client.recv(65536)
+                    client.sendall(b"HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\nabc")
+                client.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                client.close()
+                continue
+            threading.Thread(target=self.pipe, args=(client,), daemon=True).start()
+
+    def pipe(self, client: socket.socket) -> None:
+        with client, socket.create_connection(("127.0.0.1", self.behind or 0)) as server:
+
+            def forward(source: socket.socket, sink: socket.socket) -> None:
+                with contextlib.suppress(OSError):
+                    while data := source.recv(65536):
+                        sink.sendall(data)
+                    sink.shutdown(socket.SHUT_WR)
+
+            back = threading.Thread(target=forward, args=(server, client), daemon=True)
+            back.start()
+            forward(client, server)
+            back.join(30)
+
+    def close(self) -> None:
+        self.stopped = True
+        self.sock.close()
+        self.thread.join(5)
+
+
 class Bench:
     """A service started for scrimmage test, the runner in this process, the fake model."""
 
@@ -877,6 +932,43 @@ def test_a_service_that_never_listens_stops_the_test_naming_that(bench: Bench) -
     code, out = bench.test(free_port())
     assert code == 3 and "nothing listens at the service's address" in out, out
     assert "is still starting" in out and "a proxy dropped the header" not in out
+
+
+@pytest.mark.design("service.waits_to_listen")
+def test_a_port_that_resets_connections_until_the_app_listens_is_asked_again(bench: Bench) -> None:
+    """Docker's published port accepts before the app inside listens, then resets."""
+    service = bench.start()
+    eager = EagerPort(service.port, reset_for=1.5)
+    bench.closers.append(eager)
+    code, out = bench.test(eager.port)
+    assert code == 0, out
+    assert eager.accepted > 2  # it was asked again, not stopped by the first reset
+
+
+@pytest.mark.design("service.waits_to_listen")
+def test_a_port_that_always_resets_stops_the_test_naming_it_after_the_wait(bench: Bench) -> None:
+    from scrimmage_core import runner
+
+    bench.monkeypatch.setattr(runner, "READY_S", 1.0)
+    eager = EagerPort(None, reset_for=0)
+    bench.closers.append(eager)
+    began = time.monotonic()
+    code, out = bench.test(eager.port)
+    assert code == 3 and "took the probe's connection but gave no reply" in out, out
+    assert "published port can accept a connection before the app inside listens" in out
+    assert eager.accepted > 2 and time.monotonic() - began < 10
+
+
+@pytest.mark.design("service.waits_to_listen")
+def test_a_reset_after_part_of_a_reply_is_final_at_once(bench: Bench) -> None:
+    from scrimmage_core import runner
+
+    bench.monkeypatch.setattr(runner, "READY_S", 30.0)
+    eager = EagerPort(None, reset_for=0, half=True)
+    bench.closers.append(eager)
+    code, out = bench.test(eager.port)
+    assert code == 3 and "took the probe's connection but gave no reply" in out, out
+    assert "published port" not in out and eager.accepted == 1
 
 
 @pytest.mark.design("service.probe_proves_the_gate")
