@@ -360,7 +360,6 @@ class Cluster:
             self.create()
             self.install_calico()
             self.install_cert_manager()
-        self.make_authority()
         for tag in load:
             images.kind_load(tag, self.name)
 
@@ -410,6 +409,7 @@ class Cluster:
         """A server certificate for scrimmage.<namespace>, from the authority, then the two
         Secrets a test namespace holds: the runner's with the key, the agent's with only the
         authority. The key passes through this process's memory, never a file."""
+        self.make_authority()  # applying it again changes nothing
         text = (HERE / "pki-control.yaml").read_text().replace("NAMESPACE", namespace)
         self.kubectl("apply", "-f", "-", input=text)
         source = f"scrimmage-control-{namespace}"

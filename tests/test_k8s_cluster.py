@@ -69,11 +69,6 @@ def snapshot(paths: list[Path]) -> dict[str, tuple[str, int]]:
 
 
 @pytest.fixture(scope="module")
-def users_files_before() -> dict[str, tuple[str, int]]:
-    return snapshot(user_files())
-
-
-@pytest.fixture(scope="module")
 def runner_image() -> str:
     return images.ensure_runner_image()
 
@@ -205,17 +200,23 @@ def test_cert_manager_issues_a_certificate_the_sdk_accepts(
 
 
 def test_the_harness_never_touches_the_users_kubeconfig(
-    cluster: Cluster, users_files_before: dict[str, tuple[str, int]], tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    assert users_files_before, "no file of the user's to watch: the check would prove nothing"
-    # After the session's own kind, kubectl and Helm calls.
-    assert snapshot(user_files()) == users_files_before
-    # After a cluster of another name is made and deleted the way the harness does it.
+    before = snapshot(user_files())
+    assert before, "no file of the user's to watch: the check would prove nothing"
+    cert_manager = kubernetes.PINS["cert-manager"]
     scratch = Cluster("9k")
     try:
         scratch.begin()
         scratch.create()
-        # Positive control: kind with no --kubeconfig, in an empty home, does write one.
+        assert snapshot(user_files()) == before, "kind create wrote the user's files"
+        scratch.kubectl("get", "nodes")
+        scratch.helm(
+            "show", "chart", "--repo", cert_manager["repo"], "--version", cert_manager["version"],
+            cert_manager["chart"],
+        )  # fmt: skip
+        assert snapshot(user_files()) == before, "kubectl or helm wrote the user's files"
+        # Positive control: kind with no --kubeconfig, in an empty home, does write a file there.
         home = tmp_path / "home"
         home.mkdir()
         env = {**os.environ, "HOME": str(home)}
@@ -224,9 +225,16 @@ def test_the_harness_never_touches_the_users_kubeconfig(
             ["kind", "export", "kubeconfig", "--name", scratch.name], timeout=60, env=env
         )
         assert (home / ".kube" / "config").is_file(), "the control did not see a write"
-    finally:
+        # The delete, in that home, where the cluster is named in the user's kubeconfig. Without
+        # --kubeconfig kind would take it out of that file.
+        seeded = snapshot([home / ".kube"])
+        monkeypatch.setenv("HOME", str(home))
         scratch.down()
-    assert snapshot(user_files()) == users_files_before
+        assert snapshot([home / ".kube"]) == seeded, "kind delete edited the user's kubeconfig"
+    finally:
+        monkeypatch.undo()
+        scratch.down()
+    assert snapshot(user_files()) == before
 
 
 def test_a_session_deletes_only_its_own_cluster() -> None:
