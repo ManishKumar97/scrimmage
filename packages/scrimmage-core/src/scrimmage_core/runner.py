@@ -13,6 +13,7 @@ import secrets
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -208,6 +209,27 @@ READY_STEP_S = 0.2
 WAITERS = 64  # service runs whose record waits at once: the control server's connections
 
 
+def owned_folder(path: Path) -> None:
+    """An existing --records folder is this user's own, as the mode set on it needs.
+
+    A volume's mount point is root's and mode 0777, so a folder made inside it is the one to name.
+    """
+    try:
+        found = path.stat()
+    except FileNotFoundError:
+        return  # made below
+    except OSError as exc:
+        raise service_client.Setup(2, f"--records {path}: {exc.strerror}") from None
+    if not stat.S_ISDIR(found.st_mode):
+        raise service_client.Setup(2, f"--records {path} is not a folder")
+    if found.st_uid != os.getuid():
+        raise service_client.Setup(
+            2,
+            f"--records {path} is owned by uid {found.st_uid}; point it at a folder inside it, "
+            f"such as {path / 'scrimmage-runs'}",
+        )
+
+
 def settled(found: "Iterable[RunResult | Future[RunResult] | None]") -> list[RunResult | None]:
     """The results of runs, each service run's once its record wait has ended."""
     return [r.result() if isinstance(r, Future) else r for r in list(found)]
@@ -223,9 +245,12 @@ class Runner:
         record: bool = False,
         probe: bool = False,
         scratch: bool = False,
+        records: Path | None = None,
     ) -> None:
         """scratch: the records go to a folder of their own to remove, as scrimmage check
-        --service writes none beside the file."""
+        --service writes none beside the file.
+        records: scrimmage test --records, the folder to hold the test's folder, in place of
+        scrimmage-runs beside the file."""
         self.config = config
         self.record = record  # scrimmage record: real calls' lines carry what a mock needs
         self.probe = probe  # scrimmage init --probe: the first model request ends the run
@@ -243,8 +268,11 @@ class Runner:
             tls_context = service_client.server_tls(config.agent, config.root)
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         runs = Path(tempfile.mkdtemp(prefix="scrimmage-check-")) if scratch else None
+        if records is not None:
+            runs = records.absolute()
+            owned_folder(runs)
         runs = runs or config.root / "scrimmage-runs"
-        runs.mkdir(mode=0o700, exist_ok=True)
+        runs.mkdir(mode=0o700, parents=records is not None, exist_ok=True)
         os.chmod(runs, 0o700)  # records hold customer data: only their owner may list them
         self.store = new_store(runs, stamp)
         self.store.scrub = config.scrub

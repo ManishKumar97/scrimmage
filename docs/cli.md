@@ -6,7 +6,7 @@
 ## scrimmage test
 
 ```bash
-scrimmage test [path/to/scrimmage.toml] [--compare EARLIER] [--max-cost-usd USD] [--json]
+scrimmage test [path/to/scrimmage.toml] [--compare EARLIER] [--max-cost-usd USD] [--records DIR] [--json]
 ```
 
 Runs every test in the file, which is `scrimmage.toml` in the current folder by default.
@@ -15,13 +15,19 @@ With `--json` it prints one JSON document in place of the table; see [JSON outpu
 It never raises it: the lower of the two is the cap, and a file with `max_cost_usd = "none"` gets `USD`.
 The report and the document's `budget_usd` name the cap used.
 A test that finished writes `result.json` into its records folder, so `scrimmage show` can read it later.
+`--records DIR` puts the records folder inside `DIR`, in place of `scrimmage-runs/` beside the file.
+Use it when the file's own folder cannot be written, such as a file mounted from a Kubernetes ConfigMap.
+A `DIR` that is missing is made, mode `0700`, with any folder above it.
+A relative `DIR` is relative to the folder you run the command in, not to the file.
+A `DIR` that exists must be yours: one owned by another user, such as a volume's mount point, is exit 2, and the message names a folder inside it to use.
+`scrimmage show DIR/<time>` reads the folder it makes.
 With `--compare EARLIER` it prints, after its own output, how each row changed from an earlier test; see [Reading a finished test](show.md).
 
 Before the first run it checks the file, and every label against `tools` when that list is set, so a typo such as `tool:get_ordr` costs nothing:
 the test stops and lists the tools it knows.
 With no `tools` list, a framework's tool names are known only when the agent runs, so one baseline run goes first, alone. If a mock or fault names a tool the agent does not have, the test stops there with exit 2 and lists the real tools.
 
-It prints one table row per test row with its pass rate and result, then which rules failed and what the model calls cost. See [Judging an answer](judging.md). It writes each run's record to `scrimmage-runs/<time>/`, and exits with:
+It prints one table row per test row with its pass rate and result, then which rules failed and what the model calls cost. See [Judging an answer](judging.md). It writes each run's record to `scrimmage-runs/<time>/` beside the file, or inside `--records DIR`, and exits with:
 
 | Code | Meaning |
 |---|---|
