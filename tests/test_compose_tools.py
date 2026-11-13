@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import io
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -15,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from compose import check_junit
+from compose.harness import egress_problems
 from compose.image_scan import PEM_PRIVATE_KEY, UnreadableLayer, scan_image
 
 SKIPPABLE_ZSTD = b"\x50\x2a\x4d\x18\x04\x00\x00\x00abcd\x28\xb5\x2f\xfd" + b"\x00" * 8
@@ -443,6 +445,83 @@ def test_hook_is_silent_without_a_log_path(tmp_path: Path) -> None:
     code = f"import site; site.addsitedir({str(site_dir)!r})"
     subprocess.run([sys.executable, "-c", code], check=True, env={"PATH": ""}, timeout=30)
     assert list(tmp_path.iterdir()) == [site_dir]
+
+
+@pytest.mark.slow
+def test_hook_start_line_names_the_parent_so_a_child_can_be_matched(tmp_path: Path) -> None:
+    records = _run_with_hook(tmp_path, "pass\n")
+    assert records[0]["event"] == "start"
+    assert records[0]["ppid"] == os.getpid()
+
+
+# egress log analysis
+
+GW, CONTROL, MODEL = "172.17.0.1", 28000, 29000
+ALLOWED = {(GW, CONTROL), (GW, MODEL)}
+NAMES = {"host.docker.internal", GW}
+
+
+def _start(pid: int, ppid: int, *, late: bool = False) -> dict[str, object]:
+    return {
+        "event": "start",
+        "pid": pid,
+        "ppid": ppid,
+        "scrimmage_core": late,
+        "sitecustomize": False,
+    }
+
+
+def _clean_log() -> list[dict[str, object]]:
+    return [
+        _start(1, 0),
+        {"pid": 1, "event": "exec", "argv": ["uvicorn"]},
+        _start(1, 0),
+        _start(8, 1),
+        {"pid": 8, "event": "getaddrinfo", "host": "host.docker.internal", "port": CONTROL},
+        {"pid": 8, "event": "connect", "address": [GW, CONTROL]},
+        {"pid": 8, "event": "sendto", "address": ["::ffff:" + GW, MODEL, 0, 0]},
+        {"pid": 8, "event": "popen", "argv": ["uname", "-p"]},
+    ]
+
+
+def _problems(records: list[dict[str, object]]) -> list[str]:
+    return egress_problems(records, ALLOWED, NAMES, (["uname", "-p"],))
+
+
+def test_a_clean_egress_log_has_no_problem() -> None:
+    assert _problems(_clean_log()) == []
+
+
+@pytest.mark.parametrize(
+    ("extra", "needle"),
+    [
+        ({"pid": 8, "event": "connect", "address": ["1.1.1.1", 53]}, "connect to ['1.1.1.1', 53]"),
+        ({"pid": 8, "event": "connect", "address": [GW, 22]}, f"connect to ['{GW}', 22]"),
+        ({"pid": 8, "event": "sendmsg", "address": ["8.8.8.8", 53]}, "sendmsg to"),
+        ({"pid": 8, "event": "connect", "address": "/var/run/docker.sock"}, "docker.sock"),
+        ({"pid": 8, "event": "getaddrinfo", "host": "example.com", "port": 443}, "resolved"),
+        ({"pid": 8, "event": "popen", "argv": ["curl", "example.com"]}, "started 1 children"),
+        (
+            {"pid": 8, "event": "spawn", "argv": ["python", "-S", "-c", "pass"]},
+            "started 1 children",
+        ),
+        ({"pid": 1, "event": "exec", "argv": ["python", "-S"]}, "2 exec lines but 2 start"),
+    ],
+)
+def test_the_egress_check_names_each_kind_of_problem(extra: dict[str, object], needle: str) -> None:
+    problems = _problems([*_clean_log(), extra])
+    assert any(needle in p for p in problems), problems
+
+
+def test_the_egress_check_names_a_hook_that_came_after_scrimmage() -> None:
+    log = _clean_log()
+    log[3] = _start(8, 1, late=True)
+    assert any("came after Scrimmage" in p for p in _problems(log))
+
+
+def test_a_child_with_a_start_line_matches_its_parents_popen() -> None:
+    log = [*_clean_log(), {"pid": 8, "event": "popen", "argv": ["python"]}, _start(20, 8)]
+    assert _problems(log) == []
 
 
 # Docker positive control

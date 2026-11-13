@@ -1,0 +1,10 @@
+# The build context is this folder and nothing wider; only these three paths enter it.
+*
+!Dockerfile
+!wheels/
+!app/
+# Named again for a reader: none of these may ever reach an image.
+.env*
+*.key
+*token*
+.scrimmage-cert
