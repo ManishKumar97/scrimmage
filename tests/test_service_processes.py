@@ -14,6 +14,7 @@ import multiprocessing
 import multiprocessing.connection
 import multiprocessing.pool
 import os
+import pickle
 import shutil
 import subprocess
 import sys
@@ -1577,7 +1578,7 @@ def test_a_feeders_pickled_bytes_pass_only_on_its_own_pipe(service: state.Proces
     try:
         assert got == ["refused", "sent"]
         assert mine._reader.poll(10)  # read from the pipe: no put took the queue's count
-        assert ForkingPickler.loads(mine._reader.recv_bytes()) == "decided"
+        assert pickle.loads(mine._reader.recv_bytes()) == "decided"
         assert not other._reader.poll(0)
     finally:
         for each in (mine, other):
