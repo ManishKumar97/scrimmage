@@ -615,6 +615,10 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
     assert "resource tracker" in safety and "never serves starts no tracker" in safety
     security = page("security.md")
     assert "## A web service's token and run header" in security and "`0600`" in security
+    # The threat model's scope: public APIs in, rewrites of private internals out.
+    assert "## Who Scrimmage defends against" in security
+    assert "rewrites the private parts of Python's objects or of Scrimmage's own" in security
+    assert "out of scope" in page("limits.md")
     assert "replayed once to each other worker within 60 seconds" in security
     assert "[An agent inside a web service](services.md)" in page("configuration.md")
     assert "service-agent.md" in page("examples/index.md")

@@ -225,6 +225,14 @@ See [Failing the model, and keeping a budget](model-faults.md).
 
   *Checked by: `tests/test_bootstrap.py::test_a_broken_control_reply_stops_the_program_instead_of_running_ungated`*
 
+## Who Scrimmage defends against
+
+Scrimmage guards honest team code that uses public APIs, and the internals these docs name.
+Code that rewrites the private parts of Python's objects or of Scrimmage's own is out of scope.
+That includes a `multiprocessing` queue's `_buffer`, `_writer` or `_send_bytes`, a pool's private queues, and Scrimmage's own state.
+Such code can get around a gate, and no fix is promised for it.
+Public APIs stay in scope, such as `ForkingPickler.register` and `copyreg`.
+
 ## What Scrimmage does not protect against
 
 - **Code written to get around it.** The gates run inside your program.
