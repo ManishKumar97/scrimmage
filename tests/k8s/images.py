@@ -4,6 +4,7 @@ The build follows the compose harness: wheels staged first, `--network none`, a 
 a hash of the context, and one build at a time under the harness's lock. Nothing is pushed.
 """
 
+import shutil
 from pathlib import Path
 
 from compose import harness
@@ -13,7 +14,8 @@ RUNNER = harness.REPO / "images" / "runner"
 
 def stage_runner() -> None:
     wheels = RUNNER / "wheels"
-    wheels.mkdir(exist_ok=True)
+    shutil.rmtree(wheels, ignore_errors=True)  # only the wheels staged now enter the build
+    wheels.mkdir()
     harness.stage_workspace_wheels(wheels)
 
 

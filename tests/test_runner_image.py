@@ -5,6 +5,7 @@ count with `tests/compose/check_junit.py`. Docker must work: a daemon that fails
 fail, not skip.
 """
 
+import json
 import re
 import shutil
 import subprocess
@@ -23,6 +24,23 @@ pytestmark = [pytest.mark.slow, pytest.mark.docker]
 def image() -> str:
     harness.require_docker()
     return images.ensure_runner_image()
+
+
+# Run inside the image: the top-level entries of site-packages, and every startup file on
+# sys.path outside scrimmage_core/_boot.
+INSPECT = """
+import json, os, sys, sysconfig
+top = sorted(os.listdir(sysconfig.get_paths()["purelib"]))
+startup = []
+for base in sys.path:
+    for root, _, files in os.walk(base) if os.path.isdir(base) else []:
+        if root.endswith("scrimmage_core/_boot") or "/scrimmage_core/_boot/" in root + "/":
+            continue
+        for f in files:
+            if f.endswith(".pth") or f.split(".")[0] in ("sitecustomize", "usercustomize"):
+                startup.append(os.path.join(root, f))
+print(json.dumps({"site_packages": top, "startup_files": sorted(set(startup))}))
+"""
 
 
 def run(image: str, *args: str, entrypoint: str | None = None) -> subprocess.CompletedProcess[str]:
@@ -44,33 +62,42 @@ def test_the_runner_image_holds_no_secret(image: str, tmp_path: Path) -> None:
     harness.sh(["docker", "save", "-o", str(archive), image], timeout=300)
     assert scan_image(archive, canaries) == []
 
-    # The Dockerfile copies the wheels and nothing else, so no canary can enter by a COPY.
-    copies = [
-        line
-        for line in (images.RUNNER / "Dockerfile").read_text().splitlines()
-        if re.match(r"\s*(COPY|ADD)\b", line, re.IGNORECASE)
+    # A lint on the Dockerfile text, not a guarantee: the image scan above is the guarantee.
+    # No COPY or ADD at all, and the only RUN that mounts or reads another stage is the install.
+    text = (images.RUNNER / "Dockerfile").read_text().replace("\\\n", " ")
+    lines = [line.strip() for line in text.splitlines()]
+    assert [x for x in lines if re.match(r"(COPY|ADD)\b", x, re.IGNORECASE)] == []
+    mounting = [
+        x for x in lines if re.match(r"RUN\b", x, re.IGNORECASE) and re.search(r"--mount|from=", x)
     ]
-    assert copies == ["COPY wheels/ /wheels/"]
+    assert len(mounting) == 1 and "pip install --no-index" in mounting[0], mounting
 
-    # The positive control: the same Dockerfile with `COPY token /token`, and the canary in
-    # the context, must be found by the same scan, or "found nothing" above means nothing.
-    control = f"{image}-control"
-    context = tmp_path / "control-context"
-    context.mkdir()
-    shutil.copy(images.RUNNER / "Dockerfile", context / "Dockerfile")
-    shutil.copytree(images.RUNNER / "wheels", context / "wheels")
-    # Not the image's .dockerignore: its `*token*` line would drop the canary on purpose.
-    (context / ".dockerignore").write_text("*\n!Dockerfile\n!wheels/\n!token\n")
-    with (context / "Dockerfile").open("a") as dockerfile:
-        dockerfile.write("COPY token /token\n")
-    (context / "token").write_text(harness.CANARIES["token"])
-    try:
-        harness.build(context, control)
-        leaking = tmp_path / "control.tar"
-        harness.sh(["docker", "save", "-o", str(leaking), control], timeout=300)
-        assert [h.file for h in scan_image(leaking, canaries)] == ["token"]
-    finally:
-        subprocess.run(["docker", "rmi", "-f", control], capture_output=True, timeout=120)
+    # The positive controls: the same Dockerfile with a COPY of the token, and with a RUN
+    # that bind-mounts the whole context and copies it, each with the canary in the context
+    # and a weakened .dockerignore, must be found by the same scan, or "found nothing" above
+    # means nothing.
+    controls = {
+        "copy": "COPY token /token\n",
+        "bind": "RUN --mount=type=bind,target=/ctx cp -r /ctx /src\n",
+    }
+    for name, extra in controls.items():
+        control = f"{image}-control-{name}"
+        context = tmp_path / f"control-{name}"
+        context.mkdir()
+        dockerfile = (images.RUNNER / "Dockerfile").read_text().replace("USER ", extra + "USER ", 1)
+        (context / "Dockerfile").write_text(dockerfile)
+        shutil.copytree(images.RUNNER / "wheels", context / "wheels")
+        # Not the image's .dockerignore: its `*token*` line would drop the canary on purpose.
+        (context / ".dockerignore").write_text("*\n!Dockerfile\n!wheels/\n!token\n")
+        (context / "token").write_text(harness.CANARIES["token"])
+        try:
+            harness.build(context, control)
+            leaking = tmp_path / f"control-{name}.tar"
+            harness.sh(["docker", "save", "-o", str(leaking), control], timeout=300)
+            hits = scan_image(leaking, canaries)
+            assert [h.file for h in hits] and all(h.file.endswith("token") for h in hits), name
+        finally:
+            subprocess.run(["docker", "rmi", "-f", control], capture_output=True, timeout=120)
 
 
 def test_the_runner_image_holds_no_agent_code(image: str) -> None:
@@ -83,6 +110,17 @@ def test_the_runner_image_holds_no_agent_code(image: str) -> None:
     listing = run(image, "-m", "pip", "list", "--format=freeze", entrypoint="python").stdout
     names = sorted(line.split("==")[0] for line in listing.splitlines())
     assert names == ["pip", "scrimmage", "scrimmage-core"]
+
+    # pip list cannot see code that has no .dist-info, so read site-packages itself, and look
+    # for startup files that would run code in every Python: a .pth, sitecustomize, usercustomize.
+    found = json.loads(run(image, "-I", "-c", INSPECT, entrypoint="python").stdout)
+    allowed = (
+        r"README\.txt|pip|pip-[^/]+\.dist-info|scrimmage|scrimmage-[^/]+\.dist-info"
+        r"|scrimmage_core|scrimmage_core-[^/]+\.dist-info"
+    )
+    stray = [x for x in found["site_packages"] if not re.fullmatch(allowed, x)]
+    assert stray == [], f"in site-packages: {stray}"
+    assert found["startup_files"] == []
 
 
 def test_the_runner_image_builds_with_no_network(image: str) -> None:
