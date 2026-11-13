@@ -50,6 +50,28 @@ The runner reads the same two variables, `SCRIMMAGE_TOKEN_FILE` and `SCRIMMAGE_C
 With `control` in the file, it listens on that address instead and needs no `SCRIMMAGE_CONTROL_URL`.
 If the address cannot be bound, the test stops with exit 3.
 
+### Start it without `scrimmage-run`
+
+A start line that cannot be changed, such as a manifest's `command`, can set the same folder on `PYTHONPATH` itself.
+`scrimmage path` prints it, and a team reads it once from its own image:
+
+```bash
+docker run --rm acme/agent:test scrimmage path
+```
+
+```yaml
+command: ["uvicorn", "acme.service:app", "--host", "0.0.0.0", "--port", "8000"]
+env:
+  - name: PYTHONPATH
+    value: /usr/local/lib/python3.12/site-packages/scrimmage_core/_boot   # first, then any of your own
+  - name: SCRIMMAGE_SERVICE
+    value: "1"
+```
+
+The path belongs to the image: it changes with the Python version and the install, so read it again after either changes.
+A wrong or stale path, or a folder of your own put first with its own `sitecustomize.py`, starts the service with no gates.
+The probe then gets no report, and the test stops with exit 3.
+
 ## The settings
 
 In `scrimmage.toml`, `service` replaces `function` or `command`:
@@ -94,7 +116,7 @@ While nothing listens at that address, it asks again for up to 30 seconds, so a 
 If nothing listens by then, the test stops with exit 3 and says so.
 Scrimmage in the service answers with a report signed with the same token: its versions, its gates and the tools its gates swap.
 The report's shape is the [startup report schema](schemas.md).
-If no gated service answers, because a proxy dropped Scrimmage's header, the service was started without `scrimmage-run` and `SCRIMMAGE_SERVICE=1`, its token is another, or its SDK speaks another protocol version, the test stops with exit 3 and sends nothing more.
+If no gated service answers, because a proxy dropped Scrimmage's header, the service was started without `scrimmage-run`, or without `PYTHONPATH` beginning with the folder `scrimmage path` prints, and `SCRIMMAGE_SERVICE=1`, its token is another, or its SDK speaks another protocol version, the test stops with exit 3 and sends nothing more.
 The probe carries no protocol marker, since a service answers a stranger as it would without Scrimmage, so a failed probe cannot tell those causes apart.
 If the service gates other tools than the file lists, the test stops with exit 2 and prints the two variables to start it with.
 

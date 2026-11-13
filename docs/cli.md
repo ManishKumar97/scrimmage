@@ -170,6 +170,21 @@ The command needs the `cert` extra, `pip install "scrimmage-core[cert]"`; withou
 | 0 | The three files were written |
 | 2 | No name or address, a name or address a certificate cannot carry, a folder that exists, a folder that cannot be written, or the extra is not installed |
 
+## scrimmage path
+
+```bash
+scrimmage path
+```
+
+Prints one line: the absolute path of the folder `scrimmage-run` puts first on `PYTHONPATH`.
+That folder holds one file, Scrimmage's startup file.
+The command reads no file and no environment variable, needs no token, and exits 0.
+It prints nothing else, so `PYTHONPATH=$(scrimmage path)` works in a shell.
+
+A start line you cannot change, such as a Kubernetes manifest, sets that path itself; see [An agent inside a web service](services.md).
+
+It exits 2 when the folder is not a real folder on disk, as in a zipped install, and says to install `scrimmage-core` from its wheel.
+
 ## scrimmage show
 
 ```bash

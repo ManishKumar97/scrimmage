@@ -1,4 +1,4 @@
-"""The scrimmage command: scrimmage test, check, record, init, show, schema and cert.
+"""The scrimmage command: scrimmage test, check, record, init, show, schema, cert and path.
 
 With --json, standard output holds one JSON document and nothing else. Every command's
 document starts with the same envelope; schemas/cli.v1.json describes it.
@@ -11,6 +11,7 @@ import dataclasses
 import io
 import json
 import math
+import os
 import re
 import shlex
 import signal
@@ -159,11 +160,18 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
     cert.add_argument("--name", action="append", default=[], metavar="HOST", help="a DNS SAN")
     cert.add_argument("--out", required=True, type=Path, help="a new folder for the three files")
     cert.add_argument("--days", type=int, default=30, help="validity in days, 1 to 397; default 30")
+    commands.add_parser(
+        "path",
+        help="print the folder scrimmage-run puts first on PYTHONPATH",
+        allow_abbrev=False,
+    )
     args = parser.parse_args(argv)
     if args.command == "check" and args.strict and not args.service:
         parser.error("--strict needs --service")
     if args.command == "cert":
         return cert_command(args)
+    if args.command == "path":
+        return path_command()
     if args.command == "init":
         return init_command(args, process)
     if args.command == "show":
@@ -824,6 +832,22 @@ def service_lines(agent: settings.Agent) -> list[str]:
         f"SCRIMMAGE_TOOLS={shlex.quote(planner.tools_text(agent.tools, agent.renames))}",
         f"SCRIMMAGE_ALLOW_IMPORTS={shlex.quote(','.join(agent.allowed_imports()))}",
     ]
+
+
+def path_command() -> int:
+    """scrimmage path: the folder scrimmage-run puts first on PYTHONPATH, on one line."""
+    from scrimmage_core import run_command  # the folder is named once, where scrimmage-run is
+
+    boot = Path(os.path.abspath(run_command.BOOT))
+    if not (boot / "sitecustomize.py").is_file():
+        print(
+            f"scrimmage path: {boot} is not a folder on disk, so PYTHONPATH cannot name it; "
+            "install scrimmage-core from its wheel",
+            file=sys.stderr,
+        )
+        return MISTAKE
+    print(boot)
+    return OK
 
 
 def cert_command(args: argparse.Namespace) -> int:
