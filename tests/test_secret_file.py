@@ -211,3 +211,49 @@ def test_server_tls_follows_the_link_when_it_compares_the_file(
     as_kubelet(monkeypatch)
     agent = settings.load(runner_file(tmp_path, files.cert, key)).agent
     assert service_client.server_tls(agent, tmp_path) is not None
+
+
+def test_a_secret_file_this_process_cannot_open_names_fsgroup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stops: None
+):
+    """The open itself fails with EACCES, as for root:root 0400 under a user, and no fact of
+    the file is patched: the refusal must still name the setting."""
+    link = kubelet_layout(tmp_path / "volume")
+    (tmp_path / "volume" / STAMP / "token").chmod(0)
+    with pytest.raises(Stopped) as raised:
+        bootstrap.read_token_file(str(link))
+    assert "securityContext.fsGroup" in str(raised.value)
+    assert "set user:" not in str(raised.value)  # the Docker hint is not for a Secret file
+    monkeypatch.setenv("SCRIMMAGE_TOKEN_FILE", str(link))
+    with pytest.raises(service_client.Setup) as setup:
+        service_client.runner_token()
+    assert "securityContext.fsGroup" in str(setup.value)
+
+
+def test_a_swap_after_the_walk_cannot_change_which_file_is_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    volume = tmp_path / "volume"
+    link = kubelet_layout(volume)
+    attacker = tmp_path / "attacker"
+    kubelet_layout(attacker, data=b"x" * 64)
+    as_kubelet(monkeypatch)
+    real = os.readlink
+    swapped: list[bool] = []
+
+    def swap_then_read(path: str | Path, *, dir_fd: int | None = None) -> str:
+        if not swapped:  # once the folder is open: put the attacker's folder in its place
+            swapped.append(True)
+            volume.rename(tmp_path / "moved")
+            attacker.rename(volume)
+        return real(path, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "readlink", swap_then_read)
+    with os.fdopen(records.open_secret(link), "rb") as handle:
+        assert handle.read().decode() == TOKEN
+    assert swapped
+
+
+def test_a_secret_file_the_owner_can_write_is_refused():
+    said = records.secret_refusal(Path("t"), SecretFacts(0o640, 0, FS_GROUP, True), 10001, GROUPS)
+    assert said is not None and "has mode 640" in said

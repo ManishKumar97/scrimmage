@@ -367,7 +367,7 @@ When the path is a Secret volume's link, it reads the file only if all of these 
 - the process is not root;
 - root owns the file;
 - the file's group is one of the process's groups, which `fsGroup` adds;
-- the mode has no bit for others and none to write or run: `400` or `440`;
+- the mode has no bit for others, none to write and none to run: `400` or `440`;
 - the volume is mounted read-only.
 
 Each refusal names the setting that fixes it: `securityContext.fsGroup`, `runAsUser` and `runAsNonRoot: true`, or the volume's `defaultMode`.

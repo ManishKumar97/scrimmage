@@ -144,6 +144,7 @@ In a container the service must run as the file's owner, or it stops and names t
 
 In a Kubernetes pod the token and the control key are files of a Secret volume, which the kubelet writes as root with the pod's `fsGroup` as group, mode `440`, on a read-only mount.
 Scrimmage reads such a file only through the kubelet's own links, and only when root owns it, its group is the process's, no bit is set for others and the mount is read-only; it checks all of that on the open file.
+Any one of the process's groups counts, so a group from the pod's `supplementalGroups` passes too.
 Every container in the pod shares the group, so every container in the pod can read the token; the pod is the boundary, as it is for any Secret.
 No other pod sees the volume.
 

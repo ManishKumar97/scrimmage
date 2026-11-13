@@ -82,7 +82,7 @@ def secret_refusal(path: Path, facts: SecretFacts, uid: int, groups: frozenset[i
     """Why a file in the kubelet's Secret layout is not read, or None when it passes.
 
     The rule: this process is not root, root owns the file, its group is one of this process's,
-    no bit for others and none to write or run, and the mount is read-only.
+    no bit for others, none to write, and none to run, and the mount is read-only.
     """
     if uid == 0:
         return (
@@ -97,28 +97,75 @@ def secret_refusal(path: Path, facts: SecretFacts, uid: int, groups: frozenset[i
             f"{path}: is a Kubernetes Secret file of group {facts.gid}, and this process runs "
             f"with groups {mine}; set the pod's securityContext.fsGroup to {os.getgid()}"
         )
-    if facts.mode & 0o137:
+    if facts.mode & 0o337:
         return f"{path}: has mode {facts.mode:o}; set the Secret volume's defaultMode to 0400"
     if not facts.readonly:
         return f"{path}: is on a writable mount; a Kubernetes Secret volume is read-only"
     return None
 
 
-def in_secret_layout(path: Path) -> bool:
-    """True when `path` is the kubelet's layout: `name -> ..data/name`, `..data -> ..<stamp>`
-    with no slash, and a plain file in the stamp folder. Each step is looked at, not followed."""
-    folder = path.parent
+OUTSIDE = "is a symbolic link outside a Kubernetes Secret volume, so it is not read"
+FOLDER = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+def open_in_layout(path: Path) -> int:
+    """The file of the kubelet's layout, opened by walking it with descriptors: `name ->
+    ..data/name`, `..data -> ..<stamp>` with no slash, and a plain file in the stamp folder.
+
+    Each step is looked up inside the folder already open, so a swap of any path after the
+    walk starts cannot change which file is opened. Raises Refused outside the layout, and
+    PermissionError when the file is there but this process may not open it.
+    """
+    name = path.name
     try:
-        if os.readlink(path) != f"..data/{path.name}":
-            return False
-        stamp = os.readlink(folder / "..data")
-        if "/" in stamp or not stamp.startswith("..") or stamp in ("..", "..data"):
-            return False
-        return stat.S_ISDIR(os.lstat(folder / stamp).st_mode) and stat.S_ISREG(
-            os.lstat(folder / stamp / path.name).st_mode
-        )
+        folder = os.open(path.parent, FOLDER)
     except OSError:
-        return False
+        raise Refused(f"{path}: {OUTSIDE}") from None
+    stamp_fd = -1
+    try:
+        try:
+            if os.readlink(name, dir_fd=folder) != f"..data/{name}":
+                raise Refused(f"{path}: {OUTSIDE}")
+            stamp = os.readlink("..data", dir_fd=folder)
+            if "/" in stamp or not stamp.startswith("..") or stamp in ("..", "..data"):
+                raise Refused(f"{path}: {OUTSIDE}")
+            stamp_fd = os.open(stamp, FOLDER, dir_fd=folder)
+            return os.open(
+                name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=stamp_fd
+            )
+        except PermissionError:
+            if stamp_fd < 0:
+                raise Refused(f"{path}: {OUTSIDE}") from None
+            raise Refused(unreadable_refusal(path, name, stamp_fd)) from None
+        except OSError:
+            raise Refused(f"{path}: {OUTSIDE}") from None
+    finally:
+        os.close(folder)
+        if stamp_fd >= 0:
+            os.close(stamp_fd)
+
+
+def unreadable_refusal(path: Path, name: str, stamp_fd: int) -> str:
+    """Why this process may not open a file of the Secret layout. The file's own owner, group
+    and mode only word the refusal; nothing here trusts the file."""
+    try:
+        found = os.stat(name, dir_fd=stamp_fd, follow_symlinks=False)
+        facts = SecretFacts(
+            stat.S_IMODE(found.st_mode),
+            found.st_uid,
+            found.st_gid,
+            bool(os.fstatvfs(stamp_fd).f_flag & os.ST_RDONLY),
+        )
+        groups = frozenset({os.getgid(), *os.getgroups()})
+        reason = secret_refusal(path, facts, os.getuid(), groups)
+    except OSError:
+        reason = None
+    if reason is not None and "fsGroup" in reason:
+        return reason
+    return (
+        f"{reason or f'{path}: is a Kubernetes Secret file'}; this process cannot open it, so set "
+        f"the pod's securityContext.fsGroup to {os.getgid()} and the volume's defaultMode to 0440"
+    )
 
 
 def open_secret(path: Path) -> int:
@@ -136,11 +183,7 @@ def open_secret(path: Path) -> int:
             os.close(fd)
             raise WrongMode(path, mode)
         return fd
-    if not in_secret_layout(path):
-        raise Refused(
-            f"{path}: is a symbolic link outside a Kubernetes Secret volume, so it is not read"
-        )
-    fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK)
+    fd = open_in_layout(path)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise Refused(f"{path}: is not a plain file, so it is not read")
