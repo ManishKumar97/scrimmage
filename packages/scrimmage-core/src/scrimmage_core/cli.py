@@ -1,4 +1,4 @@
-"""The scrimmage command: scrimmage test, check, record, init and schema.
+"""The scrimmage command: scrimmage test, check, record, init, show, schema and cert.
 
 With --json, standard output holds one JSON document and nothing else. Every command's
 document starts with the same envelope; schemas/cli.v1.json describes it.
@@ -140,7 +140,18 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
         help="compare with an earlier records folder or its result.json",
     )
     show.add_argument("--json", action="store_true", help="print one JSON document")
+    cert = commands.add_parser(
+        "cert",
+        help="make the certificates for a control server a container reaches",
+        allow_abbrev=False,
+    )
+    cert.add_argument("--ip", action="append", default=[], metavar="ADDRESS", help="an IP SAN")
+    cert.add_argument("--name", action="append", default=[], metavar="HOST", help="a DNS SAN")
+    cert.add_argument("--out", required=True, type=Path, help="a new folder for the three files")
+    cert.add_argument("--days", type=int, default=30, help="validity in days, 1 to 397; default 30")
     args = parser.parse_args(argv)
+    if args.command == "cert":
+        return cert_command(args)
     if args.command == "init":
         return init_command(args, process)
     if args.command == "show":
@@ -736,6 +747,27 @@ def service_lines(agent: settings.Agent) -> list[str]:
         f"SCRIMMAGE_TOOLS={shlex.quote(planner.tools_text(agent.tools, agent.renames))}",
         f"SCRIMMAGE_ALLOW_IMPORTS={shlex.quote(','.join(agent.allowed_imports()))}",
     ]
+
+
+def cert_command(args: argparse.Namespace) -> int:
+    """scrimmage cert: a throwaway authority and a server certificate, in a new folder."""
+    from scrimmage_core import cert  # the one module that needs the optional extra
+
+    out, ips, names = args.out, tuple(args.ip), tuple(args.name)
+    try:
+        files = cert.make_certificates(out, ips=ips, names=names, days=args.days)
+    except cert.CertError as exc:
+        print(f"scrimmage: {exc}", file=sys.stderr)
+        return MISTAKE
+    host = names[0] if names else ips[0]
+    shown = f"[{host}]" if ":" in host else host
+    print(f"scrimmage cert: wrote {files.ca}, {files.cert} and {files.key}, valid {args.days} days")
+    print("the service's environment:")
+    print(f"  SCRIMMAGE_CONTROL_URL=https://{shown}:<port>")
+    print(f"  SCRIMMAGE_CONTROL_CA={files.ca}")
+    print("the [agent] table of scrimmage.toml:")
+    print(f'  control_tls = {{cert = "{files.cert}", key = "{files.key}"}}')
+    return OK
 
 
 def init_command(args: argparse.Namespace, process: bool) -> int:

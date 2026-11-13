@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-from scrimmage_core import cert
+from scrimmage_core import cert, cli
 from scrimmage_core.cert import CertError, CertFiles, make_certificates
 
 NAME = "host.docker.internal"
@@ -386,3 +386,59 @@ def test_a_failed_mkdir_leaves_a_folder_that_was_already_there(
     with pytest.raises(CertError, match="cannot create"):
         make(tmp_path)
     assert (out / "keep").read_text() == "mine"
+
+
+def run_cli(*args: str) -> int:
+    return cli.main(["cert", *args])
+
+
+def test_the_cert_command_writes_the_files_and_prints_the_lines_to_copy(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = tmp_path / "pki"
+    assert run_cli("--ip", IP, "--name", NAME, "--out", str(out)) == 0
+    shown = capsys.readouterr()
+    assert shown.err == ""
+    assert sorted(p.name for p in out.iterdir()) == ["ca.pem", "server.key", "server.pem"]
+    assert shown.out.splitlines() == [
+        f"scrimmage cert: wrote {out}/ca.pem, {out}/server.pem and {out}/server.key, valid 30 days",
+        "the service's environment:",
+        f"  SCRIMMAGE_CONTROL_URL=https://{NAME}:<port>",
+        f"  SCRIMMAGE_CONTROL_CA={out}/ca.pem",
+        "the [agent] table of scrimmage.toml:",
+        f'  control_tls = {{cert = "{out}/server.pem", key = "{out}/server.key"}}',
+    ]
+
+
+def test_the_cert_command_names_the_address_when_it_is_given_no_name(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert run_cli("--ip", "fd00::1", "--out", str(tmp_path / "pki"), "--days", "5") == 0
+    shown = capsys.readouterr().out
+    assert "SCRIMMAGE_CONTROL_URL=https://[fd00::1]:<port>" in shown
+    assert "valid 5 days" in shown
+
+
+def test_the_cert_command_exits_2_on_a_certificate_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = tmp_path / "pki"
+    out.mkdir()
+    assert run_cli("--ip", IP, "--out", str(out)) == 2
+    shown = capsys.readouterr()
+    assert shown.out == ""
+    assert shown.err == f"scrimmage: {out} already exists; give a new folder, or remove it first\n"
+    assert run_cli("--out", str(tmp_path / "other")) == 2
+    assert "give at least one --ip or --name" in capsys.readouterr().err
+    assert not (tmp_path / "other").exists()
+
+
+def test_the_cert_command_without_the_extra_exits_2_and_says_how_to_install_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for name in [m for m in sys.modules if m == "cryptography" or m.startswith("cryptography.")]:
+        monkeypatch.delitem(sys.modules, name)
+    monkeypatch.setitem(sys.modules, "cryptography", None)
+    assert run_cli("--ip", IP, "--out", str(tmp_path / "pki")) == 2
+    assert capsys.readouterr().err == f"scrimmage: {cert.INSTALL}\n"
+    assert not (tmp_path / "pki").exists()
