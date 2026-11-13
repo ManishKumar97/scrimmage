@@ -105,6 +105,16 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
     check.add_argument(
         "--runs", metavar="N", help="count the runs scrimmage record --runs N would start"
     )
+    check.add_argument(
+        "--service",
+        action="store_true",
+        help="also probe the service in the file and read its report; sends no run",
+    )
+    check.add_argument(
+        "--strict",
+        action="store_true",
+        help="with --service, a template that does not fit /openapi.json is exit 2",
+    )
     for command in (test, record):
         command.add_argument(
             "--max-cost-usd",
@@ -150,6 +160,8 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
     cert.add_argument("--out", required=True, type=Path, help="a new folder for the three files")
     cert.add_argument("--days", type=int, default=30, help="validity in days, 1 to 397; default 30")
     args = parser.parse_args(argv)
+    if args.command == "check" and args.strict and not args.service:
+        parser.error("--strict needs --service")
     if args.command == "cert":
         return cert_command(args)
     if args.command == "init":
@@ -178,7 +190,10 @@ def chosen_command(args: argparse.Namespace) -> Callable[[Path, Found | None], i
         record_runs, check_cap = args.runs, args.max_cost_usd
 
         def check(path: Path, found: Found | None) -> int:
-            return run_check(path, found, record_runs, check_cap)
+            code = run_check(path, found, record_runs, check_cap, hint=not args.service)
+            if code != OK or not args.service:
+                return code
+            return run_check_service(path, found, args.strict)
 
         return check
     names, refresh, runs = list(args.test), list(args.refresh), str(args.runs)
@@ -661,13 +676,18 @@ def record_mistakes(problems: list[str], found: Found | None) -> int:
 
 
 def run_check(
-    path: Path, found: Found | None, record_runs: str | None = None, cap: str | None = None
+    path: Path,
+    found: Found | None,
+    record_runs: str | None = None,
+    cap: str | None = None,
+    hint: bool = True,
 ) -> int:
     """The checks scrimmage test makes before its first run. It starts nothing.
 
     record_runs: --runs, so the runs counted are those scrimmage record --runs N would start.
     cap: --max-cost-usd, so --runs is checked under the cap that record would run with. The
     summary's budget_usd stays the file's own, which is what a caller compares a cap with.
+    hint: say how to start a service, which scrimmage check --service has running already.
     """
     try:
         config, problems = read(path)
@@ -733,11 +753,68 @@ def run_check(
         f"scrimmage check: {path} is valid: {plural(len(config.tests), 'test')}, "
         f"{plural(rows, 'row')}, {plural(runs, 'run')}, {tools}, {budget}"
     )
-    if agent.service:
+    if agent.service and hint:
         print("start the service with these two set, with scrimmage-run and SCRIMMAGE_SERVICE=1:")
         for line in service_lines(agent):
             print(f"  {line}")
     return OK
+
+
+def run_check_service(path: Path, found: Found | None, strict: bool) -> int:
+    """scrimmage check --service, after the file passed: probe the service and say what it
+    reported. Sends no run and no setup request."""
+    from scrimmage_core import runner as running
+    from scrimmage_core import service_check, service_client
+
+    try:
+        config, _ = read(path)
+    except Exception as exc:  # Scrimmage's own failure, not a mistake in the file
+        return unreadable("check", exc, found)
+    assert config is not None  # run_check read the file and found it valid
+    if not config.agent.service:
+        message = "--service needs [agent] service in the file, and this file has none"
+        if found is None:
+            print(f"scrimmage: {message}", file=sys.stderr)
+            return MISTAKE
+        found.messages.append((MISTAKES, message))
+        return MISTAKE
+    stop_point()
+    flag = None if found is None else entry.pending
+    try:
+        result = service_check.check(config, strict, flag)
+    except running.Interrupted as exc:
+        stopped = f"stopped by {exc}"
+        if found is None:
+            print(f"scrimmage: {stopped}", file=sys.stderr)
+            return INFRA
+        return found.fail(stopped)
+    scrub = config.scrub
+    if isinstance(result, service_client.Setup):
+        told = redact.remove_values(str(result), scrub)[0]
+        if found is None:
+            print(f"scrimmage: {told}", file=sys.stderr)
+            return result.code
+        found.messages.append((MISTAKES if result.code == MISTAKE else INFRA_ERRORS, told))
+        return result.code
+    kinds = {
+        service_check.WARN: WARNINGS,
+        service_check.MISTAKE_LEVEL: MISTAKES,
+        service_check.INFRA_LEVEL: INFRA_ERRORS,
+    }
+    if found is None:
+        for line in result.lines:
+            line.text = redact.remove_values(line.text, scrub)[0]
+        service_check.print_lines(result.lines, sys.stdout)
+        return result.code
+    found.messages += [
+        (kinds[level], redact.remove_values(t, scrub)[0]) for level, t in result.messages
+    ]
+    document = cast(dict[str, object], redact.scrubbed(result.document, scrub))
+    found.messages += [
+        (NOTES, note) for note in cast(dict[str, list[str]], document["template"])["notes"]
+    ]
+    found.fields["service"] = document
+    return result.code
 
 
 def service_lines(agent: settings.Agent) -> list[str]:

@@ -222,22 +222,15 @@ class Runner:
         *,
         record: bool = False,
         probe: bool = False,
+        scratch: bool = False,
     ) -> None:
+        """scratch: the records go to a folder of their own to remove, as scrimmage check
+        --service writes none beside the file."""
         self.config = config
         self.record = record  # scrimmage record: real calls' lines carry what a mock needs
         self.probe = probe  # scrimmage init --probe: the first model request ends the run
         self.control_url = control_url  # lets a test point the agent elsewhere
-        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        runs = config.root / "scrimmage-runs"
-        runs.mkdir(mode=0o700, exist_ok=True)
-        os.chmod(runs, 0o700)  # records hold customer data: only their owner may list them
-        self.store = new_store(runs, stamp)
-        self.store.scrub = config.scrub
-        self.folder = self.store.folder
-        # Records can hold customer data, so they stay out of the team's git repo.
-        ignore = runs / ".gitignore"
-        if not ignore.exists():
-            ignore.write_text("*\n")
+        # Read first: these can stop the test, and nothing is made on disk until they pass.
         self.token = secrets.token_hex(32)
         address = ("127.0.0.1", 0)
         tls_context = None
@@ -248,6 +241,18 @@ class Runner:
             self.token = service_client.runner_token()
             address = service_client.control_address(config.agent)
             tls_context = service_client.server_tls(config.agent, config.root)
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        runs = Path(tempfile.mkdtemp(prefix="scrimmage-check-")) if scratch else None
+        runs = runs or config.root / "scrimmage-runs"
+        runs.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(runs, 0o700)  # records hold customer data: only their owner may list them
+        self.store = new_store(runs, stamp)
+        self.store.scrub = config.scrub
+        self.folder = self.store.folder
+        # Records can hold customer data, so they stay out of the team's git repo.
+        ignore = runs / ".gitignore"
+        if not ignore.exists():
+            ignore.write_text("*\n")
         # The values ${NAME} filled in: this test's own, removed from what the runner writes.
         self.scrub = config.scrub
         self.ledger = Ledger(config.agent.max_cost_usd)
@@ -261,6 +266,8 @@ class Runner:
                 tls=tls_context,
             )
         except OSError as exc:  # the service's control port is held by another process
+            if scratch:
+                shutil.rmtree(runs, ignore_errors=True)
             raise service_client.Setup(
                 3, f"the control address {address[0]}:{address[1]} cannot be bound: {exc.strerror}"
             ) from None
@@ -279,6 +286,7 @@ class Runner:
         self.turns: dict[tuple[str, str], threading.Semaphore] = {}
         self.tools_seen: list[str] | None = None  # as the agent's process reported them
         self.service_warnings: list[str] = []  # what the probe found that does not stop the test
+        self.service_notes: list[str] = []  # what the template check could not check
         self.control_ping: dict[str, object] | None = None  # the service's ping, as it reported
         self.label_problems: list[str] = []
         self.stopped_by: str | None = None  # the reason a refusal stopped the whole test
@@ -652,12 +660,13 @@ class Runner:
         ended = Ended(answer, reply.timed_out, ok and answer is not None, [], [], infra, mistakes)
         return self.concluded(run, row, state, ended)
 
-    def check_service(self) -> None:
-        """The probe, then the setup request, before any run. Either can stop the test:
-        exit 3 when no gated service answers, exit 2 for a mistake in the setup."""
+    def probe_service(self) -> service_client.Probed:
+        """The probe, asked again while the service starts: exit 3 when no gated service
+        answers, or the service's clock is too far from this machine's to go on."""
         agent = self.config.agent
         _, _, path = service_client.target(agent)
-        report, reply = service_client.probe(agent, self.token)
+        probed = service_client.probe(agent, self.token)
+        reply = probed.reply
         deadline = time.monotonic() + READY_S
         if service_client.not_listening(reply):
             host, port, _ = service_client.target(agent)
@@ -667,7 +676,8 @@ class Runner:
             if self.cancelled or self.stop_flag:  # Ctrl-C or SIGTERM ends the wait
                 raise Interrupted(self.stop_flag[0] if self.stop_flag else "SIGINT")
             time.sleep(READY_STEP_S)  # nothing tells a closed port it has opened
-            report, reply = service_client.probe(agent, self.token)
+            probed = service_client.probe(agent, self.token)
+            reply = probed.reply
         if service_client.not_listening(reply) and str(reply.failed).startswith("TimeoutError"):
             raise service_client.Setup(
                 3,
@@ -694,6 +704,10 @@ class Runner:
                 f"the service at POST {path} took the probe's connection but gave no reply: "
                 f"{reply.failed or 'timed out'}",
             )
+        gap = probed.gap
+        if probed.clock_refused and gap is not None:
+            raise service_client.Setup(3, service_client.clock_stop(gap))
+        report = probed.report
         if report is None or not {"asgi", "starlette"} & set(
             cast(list[str], report.get("gates") or [])
         ):
@@ -704,20 +718,49 @@ class Runner:
                 "SCRIMMAGE_SERVICE=1, its token differs, or its SDK speaks another protocol "
                 "version",
             )
-        self.control_ping = cast(dict[str, object] | None, report.get("control"))
-        self.service_warnings += service_client.check_versions(report)
+        return probed
+
+    def tools_problem(self, report: dict[str, object]) -> str | None:
+        """Why the tools the service gates are not the ones the file lists, or None."""
+        agent = self.config.agent
         theirs = sorted(str(t) for t in cast(list[object], report.get("tools") or []))
         ours = sorted(agent.tool_names())
-        if theirs != ours:
-            names = planner.tools_text(agent.tools, agent.renames)
-            imports = ",".join(agent.allowed_imports())
-            raise service_client.Setup(
-                2,
-                f"the service gates the tools {theirs or 'none'}, and this file lists "
-                f"{ours or 'none'}; "
-                f"start it with SCRIMMAGE_TOOLS={names} and SCRIMMAGE_ALLOW_IMPORTS={imports}",
-            )
+        if theirs == ours:
+            return None
+        names = planner.tools_text(agent.tools, agent.renames)
+        imports = ",".join(agent.allowed_imports())
+        return (
+            f"the service gates the tools {theirs or 'none'}, and this file lists "
+            f"{ours or 'none'}; "
+            f"start it with SCRIMMAGE_TOOLS={names} and SCRIMMAGE_ALLOW_IMPORTS={imports}"
+        )
+
+    def check_service(self) -> None:
+        """The probe, then the setup request, before any run. Either can stop the test:
+        exit 3 when no gated service answers, exit 2 for a mistake in the setup."""
+        probed = self.probe_service()
+        report = probed.report
+        assert report is not None  # probe_service raised without one
+        self.control_ping = cast(dict[str, object] | None, report.get("control"))
+        self.service_warnings += service_client.check_versions(report)
+        problem = self.tools_problem(report)
+        if problem is not None:
+            raise service_client.Setup(2, problem)
         service_client.check_control(report, self.server.runner_id)
+        gap = probed.gap
+        if gap is not None and abs(gap) >= service_client.CLOCK_STOP_S:
+            raise service_client.Setup(3, service_client.clock_stop(gap))
+        if gap is not None and abs(gap) >= service_client.CLOCK_WARN_S:
+            self.service_warnings.append(service_client.clock_text(gap))
+
+        def stopped() -> bool:
+            return self.cancelled or bool(self.stop_flag)
+
+        found = service_client.template_check(self.config.agent, stop=stopped)
+        if stopped():  # Ctrl-C or SIGTERM ended the read
+            raise Interrupted(self.stop_flag[0] if self.stop_flag else "SIGINT")
+        self.service_warnings += found.warnings
+        self.service_notes += found.notes
         self.setup_request()
 
     def setup_request(self) -> None:
@@ -1627,6 +1670,7 @@ def build_report(
             for call in web_misses
         ]
     warnings += runner.service_warnings if runner is not None else []
+    notes += runner.service_notes if runner is not None else []
     if hosted:
         warnings.append(
             f"{plural(hosted, 'model request')} offered provider tools that only read, "

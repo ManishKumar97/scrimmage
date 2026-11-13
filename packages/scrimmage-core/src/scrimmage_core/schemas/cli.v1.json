@@ -791,6 +791,119 @@
             }
           ]
         },
+        "service": {
+          "type": "object",
+          "description": "What `scrimmage check --service` read from the service. Present only with --service, and only when the service answered as a gated one.",
+          "required": [
+            "url",
+            "gates",
+            "sdk",
+            "runner_sdk",
+            "tools",
+            "tools_match",
+            "control",
+            "clock_gap_s",
+            "template",
+            "notices"
+          ],
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "The service's address, as the file writes it."
+            },
+            "gates": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The entry gates installed in the process that answered, such as asgi."
+            },
+            "pid": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "description": "The process that answered."
+            },
+            "sdk": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The version of scrimmage-core in the service."
+            },
+            "runner_sdk": {
+              "type": "string",
+              "description": "The version of scrimmage-core in the command."
+            },
+            "python": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The service's Python version string."
+            },
+            "executable": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The service's Python executable."
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The tools the service's gates swap."
+            },
+            "tools_match": {
+              "type": "boolean",
+              "description": "The service gates exactly the tools the file lists."
+            },
+            "control": {
+              "type": "object",
+              "description": "The service's ping to the control server, as the startup report holds it."
+            },
+            "clock_gap_s": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "description": "The service's clock less this machine's, in seconds; positive when the service is ahead."
+            },
+            "template": {
+              "type": "object",
+              "required": [
+                "warnings",
+                "notes"
+              ],
+              "properties": {
+                "warnings": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Where the file's body does not fit the service's /openapi.json."
+                },
+                "notes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "What the check could not do, such as no document found."
+                }
+              }
+            },
+            "notices": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              },
+              "description": "The notices the service held when it answered."
+            }
+          }
+        },
         "mistakes": {
           "$ref": "#/$defs/messages"
         },
