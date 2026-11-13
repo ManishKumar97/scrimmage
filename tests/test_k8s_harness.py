@@ -78,7 +78,9 @@ def test_two_lanes_make_scratch_clusters_of_different_names(
     three = kubernetes.scratch_name("kc")
     assert two != three
     assert "-" in two, "a lane cannot hold a hyphen, so no lane's own cluster has this name"
-    assert not kubernetes.is_ours(kubernetes.cluster_name(two))  # lane 3's session never counts lane 2's scratch as its own
+    assert not kubernetes.is_ours(
+        kubernetes.cluster_name(two)
+    )  # lane 3's session never counts lane 2's scratch as its own
     monkeypatch.setenv("SCRIMMAGE_LANE", "2")
     assert kubernetes.is_ours(kubernetes.cluster_name(two))
     assert kubernetes.is_ours("scrimmage-2")
