@@ -27,6 +27,7 @@ from scrimmage_core import (
     langchain_gate,
     mcp_gate,
     process_gate,
+    python_args,
     records,
     state,
     threadctx,
@@ -60,20 +61,17 @@ HELPERS = (
     "joblib.externals.loky.backend.resource_tracker",
     "loky.backend.resource_tracker",
 )
-VALUED = ("-X", "-W")  # options whose value may be the next argument
 
 
 def multiprocessing_helper() -> bool:
     """A helper process multiprocessing or loky starts, which inherits the service's
     environment: Scrimmage stays off in it, so it never starts a helper of its own.
     Only the exact command line such a helper is started with counts."""
-    argv: list[str] = list(getattr(sys, "orig_argv", []))
-    for at in range(1, len(argv) - 1):
-        if argv[at] == "-c":
-            return helper_command(argv[at + 1], extra=argv[at + 2 :])
-        if not argv[at].startswith("-") and argv[at - 1] not in VALUED:
-            return False  # a script or a module runs: no helper
-    return False
+    argv: list[str] = list(getattr(sys, "orig_argv", []))[1:]
+    at = python_args.separate_command(argv)  # stops at the first -c or -m, joined or not
+    if at is None:
+        return False  # a script, a module, or code given some other way: no helper
+    return helper_command(argv[at], extra=argv[at + 1 :])
 
 
 def helper_command(command: str, extra: list[str]) -> bool:

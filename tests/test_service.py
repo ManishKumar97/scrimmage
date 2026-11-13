@@ -285,6 +285,15 @@ TRACKER = "from multiprocessing.resource_tracker import main;main(5)"
 HELPER_LINES = {
     "tracker": ["-c", TRACKER],
     "tracker with options": ["-X", "faulthandler", "-Wdefault", "-c", TRACKER],
+    "tracker with joined and long options": [
+        "-Xdev",
+        "-W",
+        "default",
+        "--check-hash-based-pycs",
+        "always",
+        "-c",
+        TRACKER,
+    ],
     "forkserver": [
         "-c",
         "from multiprocessing.forkserver import main; main(3, 4, ['__main__'], **{'a': [1]})",
@@ -306,6 +315,9 @@ LOOKALIKE_LINES = {
     "a comment": ["-c", "import os  # from multiprocessing.resource_tracker import main"],
     "a script first": ["app.py", "-c", TRACKER],
     "a module first": ["-m", "app", "-c", TRACKER],
+    "code joined to a -c first": ["-cimport os", "-c", TRACKER],
+    "a module joined to -m first": ["-mapp", "-c", TRACKER],
+    "-X taking the -c as its value": ["-X", "-c", TRACKER],
     "a call in the arguments": [
         "-c",
         "from multiprocessing.resource_tracker import main; main(__import__('os').getpid())",
