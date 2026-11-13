@@ -13,7 +13,6 @@ import ipaddress
 import os
 import signal
 import ssl
-import stat
 import sys
 import threading
 from collections.abc import Callable
@@ -221,20 +220,20 @@ def other_owner(path: str, error: Exception) -> str:
 
 
 def read_token_file(path: str) -> str:
-    """The token, from a plain file this user owns, mode 0600 exactly. Else the process stops:
-    a token another user could read is not the boundary the design rests on."""
+    """The token, from a plain file this user owns, mode 0600 exactly, or from a Kubernetes
+    Secret volume file (records.open_secret). Else the process stops: a token another user
+    could read is not the boundary the design rests on."""
     try:
-        fd = records.open_owned(Path(path))
+        fd = records.open_secret(Path(path))
+    except records.WrongMode as exc:
+        service_stop(
+            f"SCRIMMAGE_TOKEN_FILE {path} has mode {exc.mode:o}; it must be 600, readable by "
+            "its owner only"
+        )
     except (OSError, records.Refused) as exc:
         service_stop(f"SCRIMMAGE_TOKEN_FILE {path} cannot be read: {other_owner(path, exc)}")
     with os.fdopen(fd, "rb") as handle:
-        mode = stat.S_IMODE(os.fstat(handle.fileno()).st_mode)
         data = handle.read(4096)
-    if mode != 0o600:
-        service_stop(
-            f"SCRIMMAGE_TOKEN_FILE {path} has mode {mode:o}; it must be 600, readable by its "
-            "owner only"
-        )
     token = data.decode("utf-8", "replace").strip()
     if len(token) < TOKEN_MIN:
         service_stop(f"SCRIMMAGE_TOKEN_FILE {path} holds a token under {TOKEN_MIN} characters")

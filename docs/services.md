@@ -25,7 +25,7 @@ Three variables switch Scrimmage on in the service:
 | Variable | What it holds |
 |---|---|
 | `SCRIMMAGE_SERVICE` | `1`: Scrimmage runs in service mode. Without it, a token file alone stops the service with a message naming `SCRIMMAGE_SERVICE=1`. |
-| `SCRIMMAGE_TOKEN_FILE` | The path of the token file: a plain file you own, mode `600`, with a token of 32 characters or more. Any other mode stops the service. |
+| `SCRIMMAGE_TOKEN_FILE` | The path of the token file: a plain file you own, mode `600`, or a Kubernetes Secret volume file (see [the token in a pod](#the-token-and-the-key-in-a-kubernetes-pod)), with a token of 32 characters or more. Any other mode stops the service. |
 | `SCRIMMAGE_CONTROL_URL` | The runner's control server: `http://127.0.0.1:port` when the runner is on this machine, or `https://host:port` for a runner the service reaches over a network. `http://` on any other host stops the service. |
 
 An `https://` control address also needs one more variable:
@@ -337,6 +337,41 @@ control server: 3 connections failed TLS (unknown ca 2, wrong version number 1)
 `claims received` far below `runs sent` means no service reached the control server: a wrong address, a wrong authority, or a held port.
 Each control request opens a new connection and a TLS handshake, so TLS adds about 1.7 ms to a request's median, and `control_p99_ms` rises sooner than without it.
 Keeping connections alive is a later step.
+
+## The token and the key in a Kubernetes pod
+
+In a pod, give the token and the control key to Scrimmage as files from a Secret volume, never as `env` with `secretKeyRef`.
+An environment variable is inherited by every program the agent starts, and `kubectl exec <pod> -- env` shows it.
+A service with `SCRIMMAGE_TOKEN` in its environment stops, and the runner reads `SCRIMMAGE_TOKEN_FILE` only.
+
+```yaml
+securityContext:
+  runAsUser: 10001
+  runAsNonRoot: true
+  fsGroup: 10001
+containers:
+  - name: agent
+    env:
+      - {name: SCRIMMAGE_TOKEN_FILE, value: /run/scrimmage/token/token}
+    volumeMounts:
+      - {name: token, mountPath: /run/scrimmage/token, readOnly: true}
+volumes:
+  - {name: token, secret: {secretName: scrimmage-token, defaultMode: 0400}}
+```
+
+The kubelet writes a Secret file as root, with the pod's `fsGroup` as its group and mode `440`, and `token` is a link to `..data/token`.
+Scrimmage still reads a plain file you own with mode `600` first.
+When the path is a Secret volume's link, it reads the file only if all of these hold:
+
+- the path is the kubelet's own link, `token -> ..data/token`, and `..data` is a link to a folder of the same directory; a link to anywhere else is refused;
+- the process is not root;
+- root owns the file;
+- the file's group is one of the process's groups, which `fsGroup` adds;
+- the mode has no bit for others and none to write or run: `400` or `440`;
+- the volume is mounted read-only.
+
+Each refusal names the setting that fixes it: `securityContext.fsGroup`, `runAsUser` and `runAsNonRoot: true`, or the volume's `defaultMode`.
+A plain file owned by another user, and a plain file of mode `640`, are still refused.
 
 ## Workers
 

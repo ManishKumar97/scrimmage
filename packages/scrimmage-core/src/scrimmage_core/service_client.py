@@ -14,7 +14,6 @@ import os
 import secrets
 import socket
 import ssl
-import stat
 import threading
 import time
 from collections.abc import Callable
@@ -88,14 +87,15 @@ def runner_token() -> str:
     if not path:
         raise Setup(2, "a service test reads its token from SCRIMMAGE_TOKEN_FILE, which is not set")
     try:
-        fd = records.open_owned(Path(path))
+        fd = records.open_secret(Path(path))
+    except records.WrongMode as exc:
+        raise Setup(
+            2, f"SCRIMMAGE_TOKEN_FILE {path} has mode {exc.mode:o}; it must be 600"
+        ) from None
     except (OSError, records.Refused) as exc:
         raise Setup(2, f"SCRIMMAGE_TOKEN_FILE {path} cannot be read: {exc}") from None
     with os.fdopen(fd, "rb") as handle:
-        mode = stat.S_IMODE(os.fstat(handle.fileno()).st_mode)
         token = handle.read(4096).decode("utf-8", "replace").strip()
-    if mode != 0o600:
-        raise Setup(2, f"SCRIMMAGE_TOKEN_FILE {path} has mode {mode:o}; it must be 600")
     if len(token) < TOKEN_MIN:
         raise Setup(2, f"SCRIMMAGE_TOKEN_FILE {path} holds a token under {TOKEN_MIN} characters")
     return token
@@ -132,18 +132,17 @@ def server_tls(agent: Agent, root: Path) -> ssl.SSLContext | None:
         return None
     cert, key = (root / value for value in agent.control_tls)
     try:
-        fd = records.open_owned(key)
+        fd = records.open_secret(key)
+    except records.WrongMode as exc:
+        raise Setup(2, f"control_tls key {key} has mode {exc.mode:o}; it must be 600") from None
     except (OSError, records.Refused) as exc:
         raise Setup(2, f"control_tls key {key} cannot be read: {exc}") from None
     with os.fdopen(fd, "rb") as handle:
         checked = os.fstat(handle.fileno())
-    mode = stat.S_IMODE(checked.st_mode)
-    if mode != 0o600:
-        raise Setup(2, f"control_tls key {key} has mode {mode:o}; it must be 600")
     try:
         context = tls.server_context(cert, key)  # opens the key again, by its path
         tls.check_valid(context, cert)
-        loaded = os.lstat(key)
+        loaded = os.stat(key)  # follows a Secret volume's link, as the open did
     except tls.TlsError as exc:
         raise Setup(2, f"control_tls: {exc}") from None
     except OSError as exc:
