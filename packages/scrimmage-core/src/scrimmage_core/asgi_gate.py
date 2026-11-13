@@ -82,6 +82,9 @@ class Gate:
     nonces: protocol.NonceStore = field(default_factory=protocol.NonceStore)
     gates: list[str] = field(default_factory=list[str])  # the entry gates installed, by name
     serving: bool = False  # this process loaded or served the app
+    # The time the probe is checked against and the report states. A test's app replaces it
+    # to put the service's clock off the runner's.
+    clock: Callable[[], float] = time.time
 
 
 GATE: Gate | None = None  # set by bootstrap.start_service
@@ -335,9 +338,15 @@ async def answer_probe(
     path = target.decode("latin-1") + (f"?{query.decode('latin-1')}" if query else "")
     method = str(scope.get("method", ""))
     declared = fields.get("Content-Length", "0") != "0" or "Transfer-Encoding" in fields
+    now = gate.clock()
     error = declared or protocol.check_request(
-        gate.token, gate.nonces, method, path, fields, b"", time.time()
+        gate.token, gate.nonces, method, path, fields, b"", now
     )
+    if error == "clock" and gate.nonces.first_use(fields.get(protocol.NONCE, ""), now):
+        # The signature, nonce and body are good and only the time is outside the window:
+        # the runner's clock and this one differ. Only a token holder can make this probe, and
+        # a nonce seen before goes to the app as plain, like any replay.
+        return await send_clock(gate, fields, now, send)
     if error:
         return await served_plain(app, copied, receive, send)
     report = json.dumps(startup_report(gate, await pinged(gate))).encode()
@@ -351,6 +360,20 @@ async def answer_probe(
     await send({"type": "http.response.start", "status": 200, "headers": headers})
     await send({"type": "http.response.body", "body": report})
     return None
+
+
+async def send_clock(gate: Gate, fields: dict[str, str], now: float, send: Send) -> None:
+    """The signed answer to a probe whose time is outside the window: 409 and this clock's time."""
+    body = json.dumps({"error": "clock", "server_time": now}).encode()
+    signature = protocol.sign_reply(gate.token, fields.get(protocol.SIGNATURE, ""), 409, body)
+    headers = [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(body)).encode()),
+        (PROBE, b"clock"),
+        (protocol.SIGNATURE.lower().encode(), signature.encode()),
+    ]
+    await send({"type": "http.response.start", "status": 409, "headers": headers})
+    await send({"type": "http.response.body", "body": body})
 
 
 async def pinged(gate: Gate) -> dict[str, object]:
@@ -407,7 +430,7 @@ def startup_report(gate: Gate, control: dict[str, object]) -> dict[str, object]:
         "tools": sorted(labels.tool_name(path, renames) for path in gate.tools),
         "notices": [dict(entry) for entry in gate.process.report],
         "control": control,
-        "server_time": time.time(),
+        "server_time": gate.clock(),
     }
 
 

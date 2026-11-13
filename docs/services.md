@@ -120,6 +120,28 @@ The control server answers with a random id it made for this test, and the runne
 The report's `control` object holds `reached`, `tls`, `detail`, `rtt_ms`, `runner_id` and `url`; `tls` is `verified`, `none` for `http://` on loopback, the class of the error when the ping failed over `https://`, or `not connected` when every control slot was busy and no ping was tried.
 If the service cannot reach the control server, or reached another runner, the test stops with exit 3 before the setup request, and names the error, such as a certificate that did not verify.
 
+**The clock.**
+The runner works out how far the service's clock is from its own, from the service's time in the report and the middle of the probe's round trip.
+`scrimmage check --service` always prints the gap.
+`scrimmage test` says it as a warning from 10 seconds, and stops with exit 3 before the setup request from 50 seconds, because a request more than 60 seconds off is refused and a clock that is still moving would soon pass that.
+Past 60 seconds the service's gate cannot take the probe as one, so it answers a signed `409` with its time, and the test stops with exit 3 naming the gap.
+The service's calls to the control server are not affected: its client corrects its own clock from the control server's signed replies.
+Set both clocks from the same time source (NTP) to avoid all of this.
+
+**The template.**
+Before the setup request, and in `scrimmage check --service`, the runner sends one plain `GET` for `/openapi.json` to the service, with the file's `headers` expanded and no body, and checks the file's `body` against the document.
+It is a request from the runner's own process, so no gate sees it and the app gets it untouched, with no `x-scrimmage-` header.
+It asks at the service's origin first, then under each prefix of the service's path, longest first, at most three requests in all, so a service at `/api/chat` mounted under `/api` is found at `/api/openapi.json`.
+It renders `body` with the question `x` and a new session, and checks a small part of JSON Schema: that every `required` name is present, that no field is outside `properties` when `additionalProperties` is `false`, and each present field's JSON type, one level down for an object.
+It follows `$ref` only inside `components/schemas`, and looks through pydantic's `anyOf` with `null` for an optional field.
+Each misfit is one warning, such as `[agent] body: /openapi.json says POST /chat requires "message"; the template has no such field`.
+A warning never stops `scrimmage test`; `scrimmage check --service --strict` exits 2 on one.
+No document, a document that is not JSON or too deeply nested to read, or no entry for the path is one note.
+Not checked: `oneOf`, `pattern`, `format`, `items`, and anything more than one level down; the note says so.
+A pydantic model with `populate_by_name` accepts a field under its Python name as well as its alias, but the document lists only the alias.
+A file that sends the Python name is warned about, for a missing alias under `required` and, with `additionalProperties` false, for a field the document does not allow.
+The warning is false in that case: it never stops a test, and `--strict` is the only place it matters, so leave `--strict` off for such a service.
+
 **The setup request.**
 Then it sends the first test's baseline once, as a run named `setup-` and 12 hex digits.
 Its record is kept beside the runs, and its model calls count toward the budget, but no row counts it.

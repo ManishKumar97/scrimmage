@@ -647,7 +647,13 @@ class Bench:
         self.closers: list[Any] = []
 
     def start(
-        self, *args: str, workers: int = 1, wait: bool = True, bin_dir: Path = BIN, **env: str
+        self,
+        *args: str,
+        workers: int = 1,
+        wait: bool = True,
+        bin_dir: Path = BIN,
+        app: str = "acme.service:app",
+        **env: str,
     ) -> Running:
         base = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
         base.update(
@@ -663,7 +669,7 @@ class Bench:
         base.update(env)
         flags = ["--workers", str(workers)] if workers > 1 else []
         env_for = {k: v for k, v in base.items() if v != ""}
-        service = Running(self.root, env_for, [*flags, *args], bin_dir=bin_dir)
+        service = Running(self.root, env_for, [*flags, *args], app, bin_dir=bin_dir)
         service.wanted = workers
         self.services.append(service)
         if wait:

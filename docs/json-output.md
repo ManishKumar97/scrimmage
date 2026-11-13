@@ -193,6 +193,20 @@ SIGKILL cannot be caught, so it leaves no document.
 | `real` | In `summary`: the labels under `[agent] real`, as the file writes them. |
 | `prices` | In `summary`: each model `[agent.prices]` prices, with its `input`, `output` and `cached_input` dollars per million tokens. Any other model is priced from the built-in table. A price of 0 makes that model's calls free against the budget. |
 | `entry` | In `summary`: the entry point a test would start, its `kind`, `function` or `command`, and its `value`, the function or the command line. |
+| `service` | Only with `scrimmage check --service`, and only when the service answered as a gated one: what it reported. Absent otherwise. |
+| `url` | In `service`: the service's address, as the file writes it. |
+| `gates` | In `service`: the entry gates installed in the process that answered, such as `asgi`. |
+| `pid` | In `service`: the process that answered. |
+| `sdk` | In `service`: the version of `scrimmage-core` in the service. |
+| `runner_sdk` | In `service`: the version of `scrimmage-core` in the command. |
+| `python` | In `service`: the service's Python version string. |
+| `executable` | In `service`: the service's Python executable. |
+| `tools` | In `service`: the tools its gates swap. |
+| `tools_match` | In `service`: whether they are exactly the tools the file lists. |
+| `control` | In `service`: the service's ping to the control server, as the [startup report](schemas.md) holds it. |
+| `clock_gap_s` | In `service`: the service's clock less this machine's, in seconds; positive when the service is ahead. `null` when the service sent no time. |
+| `template` | In `service`: an object with `warnings`, where the file's `body` does not fit the service's `/openapi.json`, and `notes`, what the check could not do. |
+| `notices` | In `service`: the notices the service held when it answered. |
 
 ## scrimmage record --json
 

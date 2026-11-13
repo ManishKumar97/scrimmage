@@ -178,9 +178,18 @@ Each value the file reads with `${NAME}`, of 8 characters or more, is removed fr
 | The app, or a proxy, that forwards incoming headers downstream | nothing: the header is gone before the app sees it | a downstream gated service would get `503 claimed` |
 | Code inside the service's process | read the token from memory | the same as any code in the agent, as for a script |
 | Someone on the path who replays a genuine probe to another worker within 60 seconds | that worker's startup report | disclosed below |
+| Someone who captured a genuine probe whose time was outside the 60 second window and replays it | a signed reply with the service's clock, once to each worker per 120 seconds | disclosed below |
 
 Each worker keeps its own record of the nonces it has seen, so a probe captured on the loopback path can be replayed once to each other worker within 60 seconds, and gets that worker's startup report.
 The report holds nothing secret, so this version does not share nonces across workers.
+
+A probe whose signature and body are good but whose time is more than 60 seconds off the service's clock gets a signed `409` with the service's time, so the runner can name the gap.
+Only a holder of the token can make such a probe, so a stranger gets nothing.
+Someone who captured one genuine probe, such as a container with `CAP_NET_RAW` on the bridge, can replay it and learn that Scrimmage is in the service and what its clock reads.
+Each worker keeps its own nonces and forgets one after 120 seconds, so a replay to another worker, or to the same worker after 120 seconds, gets the signed reply again.
+A replay to the same worker within 120 seconds finds its nonce used and reaches the app as a plain request.
+
+*Checked by: `tests/test_check_service.py::test_a_replayed_stale_probe_is_answered_as_documented`, `tests/test_check_service.py::test_a_gap_above_the_window_gets_a_signed_clock_reply_and_exit_3_naming_the_gap`*
 
 ## The plan is data
 
