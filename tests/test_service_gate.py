@@ -273,7 +273,7 @@ def test_the_probes_report_with_a_notice_matches_its_schema(svc: Service) -> Non
     import scrimmage_core
 
     schema = json.loads(
-        (Path(scrimmage_core.__file__).parent / "schemas" / "startup-report.v1.json").read_text()
+        (Path(scrimmage_core.__file__).parent / "schemas" / "startup-report.v2.json").read_text()
     )
     svc.process.notice("newer_version", "httpx2", "httpx2 2.99.0 is newer than the versions")
     reply = signed_probe(svc, b"", [])

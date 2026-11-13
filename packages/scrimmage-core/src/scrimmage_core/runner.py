@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO, cast
 
-from scrimmage_core import judge, labels, protocol, service_client
+from scrimmage_core import judge, labels, protocol, service_client, versions
 from scrimmage_core import plan as planner
 from scrimmage_core.budget import Ledger
 from scrimmage_core.config import (
@@ -278,6 +278,8 @@ class Runner:
         # One turn per row of a service test: its runs go one after another.
         self.turns: dict[tuple[str, str], threading.Semaphore] = {}
         self.tools_seen: list[str] | None = None  # as the agent's process reported them
+        self.service_warnings: list[str] = []  # what the probe found that does not stop the test
+        self.control_ping: dict[str, object] | None = None  # the service's ping, as it reported
         self.label_problems: list[str] = []
         self.stopped_by: str | None = None  # the reason a refusal stopped the whole test
         self.skipped: list[str] = []  # tests whose fault rows did not run: baseline failed
@@ -582,7 +584,8 @@ class Runner:
         gate = reply.gate_refused
         streamed = ok and service_client.streamed(reply, agent)
         unclaimed = not self.server.runs[run].fetched and reply.status is not None and gate is None
-        if unclaimed or streamed:
+        wrong_version = gate == "version"
+        if unclaimed or streamed or wrong_version:
             with self.lock:
                 self.cancelled = True  # under this lock, so no run starts from here on
         assert self.waiters is not None  # run_all made it, as this is a service
@@ -597,6 +600,9 @@ class Runner:
                 f"{run} was answered with {reply.status} but its plan was never claimed, so a "
                 "process without Scrimmage served it; no further run was sent",
             )
+        if wrong_version:
+            later.result()
+            raise self.version_refusal(run)
         if streamed:
             later.result()
             raise service_client.Setup(
@@ -605,6 +611,19 @@ class Runner:
                 "which this version does not judge; one run is one JSON or text reply",
             )
         return later
+
+    def version_refusal(self, run: str) -> "service_client.Setup":
+        """A worker of the service from another major release refused its claim: every run it
+        gets would fail the same way, so the test stops."""
+        found = self.server.refused_sdk
+        theirs = "no version" if not found or found[0] is None else versions.shown(found[0])
+        ours = versions.installed()
+        return service_client.Setup(
+            2,
+            f"{run} was refused: a process of the service runs scrimmage-core {theirs} and "
+            f"this runner is {ours}, another major release; "
+            f"{service_client.install_line(ours)}, in every process of it",
+        )
 
     def served_result(
         self,
@@ -682,8 +701,11 @@ class Runner:
                 3,
                 f"x-scrimmage-run does not reach Scrimmage in the service at POST {path}: a proxy "
                 "dropped the header, the service was not started with scrimmage-run and "
-                "SCRIMMAGE_SERVICE=1, or its token differs",
+                "SCRIMMAGE_SERVICE=1, its token differs, or its SDK speaks another protocol "
+                "version",
             )
+        self.control_ping = cast(dict[str, object] | None, report.get("control"))
+        self.service_warnings += service_client.check_versions(report)
         theirs = sorted(str(t) for t in cast(list[object], report.get("tools") or []))
         ours = sorted(agent.tool_names())
         if theirs != ours:
@@ -695,6 +717,7 @@ class Runner:
                 f"{ours or 'none'}; "
                 f"start it with SCRIMMAGE_TOOLS={names} and SCRIMMAGE_ALLOW_IMPORTS={imports}",
             )
+        service_client.check_control(report, self.server.runner_id)
         self.setup_request()
 
     def setup_request(self) -> None:
@@ -716,6 +739,8 @@ class Runner:
         summary: dict[str, object] = {"outcome": "setup", "status": reply.status}
         self.store.close_run(name, test.name, "setup", summary)
         gate = reply.gate_refused
+        if gate == "version":
+            raise self.version_refusal(name)
         if not state.fetched or gate is not None or reply.failed or reply.timed_out:
             why = gate or reply.failed or ("timed out" if reply.timed_out else "never claimed")
             raise service_client.Setup(
@@ -1401,6 +1426,7 @@ class ControlFacts:
     claims_received: int
     cut: int
     tls_failed: dict[str, int]
+    ping: dict[str, object] | None  # the service's ping to the control server, as it reported
 
 
 @dataclass(frozen=True)
@@ -1600,6 +1626,7 @@ def build_report(
             "none matched its method and path"
             for call in web_misses
         ]
+    warnings += runner.service_warnings if runner is not None else []
     if hosted:
         warnings.append(
             f"{plural(hosted, 'model request')} offered provider tools that only read, "
@@ -1663,7 +1690,13 @@ def control_facts(runner: "Runner | None") -> ControlFacts | None:
     if runner is None:
         return None
     stats = runner.server.stats
-    return ControlFacts(runner.sent, stats.claims_received, stats.connections_cut, stats.tls_failed)
+    return ControlFacts(
+        runner.sent,
+        stats.claims_received,
+        stats.connections_cut,
+        stats.tls_failed,
+        runner.control_ping,
+    )
 
 
 MISS_JSON, MISS_LINES = 200, 20
@@ -1813,6 +1846,7 @@ def control_json(facts: ControlFacts | None) -> dict[str, object]:
         "claims_received": facts.claims_received,
         "control_cut": facts.cut,
         "control_tls_failed": facts.tls_failed,
+        "control_ping": facts.ping,
     }
 
 

@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:scrimmage:schema:startup-report:v2",
+  "title": "Scrimmage startup report, version 2",
+  "description": "What a service process answers the runner's signed probe with: how it was started and what its gates found before any run, and whether it could reach the control server. It holds no token, no plan and nothing of a run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "v",
+    "sdk",
+    "python",
+    "executable",
+    "pid",
+    "mode",
+    "gates",
+    "libraries",
+    "chained_sitecustomize",
+    "tools",
+    "notices",
+    "control",
+    "server_time"
+  ],
+  "properties": {
+    "v": {
+      "description": "The report's version. Version 1 had no `control`.",
+      "const": 2
+    },
+    "sdk": {
+      "description": "The version of scrimmage-core in the service, which the runner compares with its own: another major is refused, another minor or patch is allowed with a warning.",
+      "type": "string"
+    },
+    "python": {
+      "description": "The service's Python, as `sys.version` gives it.",
+      "type": "string"
+    },
+    "executable": {
+      "description": "The path of the service's Python, with any secret in it removed.",
+      "type": "string"
+    },
+    "pid": {
+      "description": "The process that answered.",
+      "type": "integer"
+    },
+    "mode": {
+      "description": "How the SDK runs in this process.",
+      "const": "service"
+    },
+    "gates": {
+      "description": "The entry gates installed in this process, such as `asgi` for uvicorn and `starlette`.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "libraries": {
+      "description": "Each gated library the service has imported, and its version.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "chained_sitecustomize": {
+      "description": "True when the sitecustomize Python loaded is not Scrimmage's, as when the service has one of its own earlier on its path.",
+      "type": "boolean"
+    },
+    "tools": {
+      "description": "The names the model sees for the tools SCRIMMAGE_TOOLS names, sorted.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "notices": {
+      "description": "Notices a gate gave with no run open, such as a library too new or missing what a gate needs.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/notice"
+      }
+    },
+    "control": {
+      "description": "The service's signed ping to the control server, sent before it answered.",
+      "$ref": "#/$defs/control"
+    },
+    "server_time": {
+      "description": "The service's clock when it answered, in seconds since the epoch.",
+      "type": "number"
+    }
+  },
+  "$defs": {
+    "notice": {
+      "description": "One notice given with no run.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "notice",
+        "library",
+        "message"
+      ],
+      "properties": {
+        "notice": {
+          "description": "Its kind, such as `structure` or `newer_version`.",
+          "type": "string"
+        },
+        "library": {
+          "description": "The library it is about, or `scrimmage`.",
+          "type": "string"
+        },
+        "message": {
+          "description": "What it says, as stderr printed it.",
+          "type": "string"
+        }
+      }
+    },
+    "control": {
+      "description": "What the ping found.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reached",
+        "tls",
+        "detail",
+        "rtt_ms",
+        "runner_id",
+        "url"
+      ],
+      "properties": {
+        "reached": {
+          "description": "True when the control server answered the ping.",
+          "type": "boolean"
+        },
+        "tls": {
+          "description": "`verified` for an https control URL whose certificate was accepted, `none` for http on loopback, on a failure over https the class of the error, such as `SSLCertVerificationError`, or `not connected` when no ping was tried because every control slot was busy.",
+          "type": "string"
+        },
+        "detail": {
+          "description": "For a failure, the error's message with any secret removed, cut at 200 characters. `null` when the ping was answered.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rtt_ms": {
+          "description": "The ping's round trip in milliseconds.",
+          "type": "number",
+          "minimum": 0
+        },
+        "runner_id": {
+          "description": "The id the control server answered with, or `null`. The runner checks it is its own.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "description": "The control address the service was started with, as scheme, host and port.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

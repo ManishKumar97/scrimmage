@@ -94,8 +94,31 @@ While nothing listens at that address, it asks again for up to 30 seconds, so a 
 If nothing listens by then, the test stops with exit 3 and says so.
 Scrimmage in the service answers with a report signed with the same token: its versions, its gates and the tools its gates swap.
 The report's shape is the [startup report schema](schemas.md).
-If no gated service answers, because a proxy dropped Scrimmage's header, the service was started without `scrimmage-run` and `SCRIMMAGE_SERVICE=1`, or its token is another, the test stops with exit 3 and sends nothing more.
+If no gated service answers, because a proxy dropped Scrimmage's header, the service was started without `scrimmage-run` and `SCRIMMAGE_SERVICE=1`, its token is another, or its SDK speaks another protocol version, the test stops with exit 3 and sends nothing more.
+The probe carries no protocol marker, since a service answers a stranger as it would without Scrimmage, so a failed probe cannot tell those causes apart.
 If the service gates other tools than the file lists, the test stops with exit 2 and prints the two variables to start it with.
+
+**The version rule.**
+The report holds the version of `scrimmage-core` in the service, and the runner compares it with its own.
+The major is the first number of the version, or, while it is 0, the first two, since a 0.x release may change anything.
+
+| The service's SDK against the runner | What happens |
+|---|---|
+| The same release | nothing |
+| The same major, another minor, patch, pre-release or local part | one warning, in the report, naming both versions. The test goes on |
+| Another major | exit 2 before any run, naming both versions and the install line |
+| A version that is not an installed `scrimmage-core` release, such as `unknown` | exit 2 |
+| A startup report older than this runner reads (version 1) | exit 2: install the runner's version in the service |
+
+Every claim of a run's plan carries the SDK's version too, so a process added later, such as a second worker from another image, is checked at its first run.
+A claim from another major, or with no version in it, is refused with `503 version`, unlike the other gate codes it stops the test with exit 2, because every run from that process would fail the same way.
+A function or a script whose child runs on another venv's SDK is not version-checked: see [limits](limits.md).
+
+**The ping.**
+Before it answers a probe, the service sends one signed request to the control server, through the same connection and certificate check as every other control request.
+The control server answers with a random id it made for this test, and the runner checks the id is its own, so the ping proves this runner and not any runner that holds the token.
+The report's `control` object holds `reached`, `tls`, `detail`, `rtt_ms`, `runner_id` and `url`; `tls` is `verified`, `none` for `http://` on loopback, the class of the error when the ping failed over `https://`, or `not connected` when every control slot was busy and no ping was tried.
+If the service cannot reach the control server, or reached another runner, the test stops with exit 3 before the setup request, and names the error, such as a certificate that did not verify.
 
 **The setup request.**
 Then it sends the first test's baseline once, as a run named `setup-` and 12 hex digits.

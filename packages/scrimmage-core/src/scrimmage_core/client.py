@@ -22,14 +22,16 @@ from collections.abc import Callable
 from typing import TypeVar
 from urllib.parse import urlsplit
 
-from scrimmage_core import protocol, threads
+from scrimmage_core import protocol, threads, versions
 from scrimmage_core.budget import Held, Shortfall
 from scrimmage_core.plan import items, number, obj
+from scrimmage_core.redact import redact
 
 QUEUE_SIZE = 10_000
 BATCH_LINES = 500
 BATCH_S = 0.1
 TIMEOUT_S = 10.0
+PING_TIMEOUT_S = 5.0  # the probe's ping must not hold the probe for a whole TIMEOUT_S
 BLOB_QUEUE = 64  # side-folder items waiting to be sent; each is at most 10 MB
 # Put on the queue at exit to end the sender's wait. Compared by identity, never sent.
 WAKE: dict[str, object] = {}
@@ -86,8 +88,12 @@ class ControlClient:
         self.context = context
         self.host = parts.hostname
         self.port = parts.port or (443 if context is not None else 80)
+        shown = f"[{self.host}]" if ":" in self.host else self.host
+        # Host and port only: a URL's user and password are never kept or shown.
+        self.url = f"{parts.scheme}://{shown}:{self.port}"
         self.token = token
         self.offset = 0.0  # the server's clock minus ours, learned from its replies
+        self.synced = False  # a signed reply has set the offset
         # Each request holds a slot while it is in flight. A sync caller waits for one on its
         # own thread; a claim or an async budget ask takes one only if free, on the loop.
         self.slots = threading.BoundedSemaphore(CAP)
@@ -132,10 +138,17 @@ class ControlClient:
         return busy, round(times[min(len(times) - 1, int(0.99 * len(times)))], 1)
 
     def request(
-        self, method: str, path: str, payload: object = None, *, held: bool = False
+        self,
+        method: str,
+        path: str,
+        payload: object = None,
+        *,
+        held: bool = False,
+        timeout: float = TIMEOUT_S,
     ) -> tuple[int, dict[str, object]]:
         """Send one signed request; retry once if the server says our clock is off. held:
-        the caller took a slot already, and this releases it."""
+        the caller took a slot already, and this releases it. timeout: for this request's
+        connection and each wait on it."""
         if getattr(self._held, "on", False):
             self._held.on, held = False, True
         if not held:
@@ -146,17 +159,19 @@ class ControlClient:
                 )
             self.slots.acquire()
         try:
-            status, reply = self._timed(method, path, payload)
+            status, reply = self._timed(method, path, payload, timeout)
             if status == 401 and reply.get("error") == "clock":
-                status, reply = self._timed(method, path, payload)
+                status, reply = self._timed(method, path, payload, timeout)
             return status, reply
         finally:
             self.slots.release()
 
-    def _timed(self, method: str, path: str, payload: object) -> tuple[int, dict[str, object]]:
+    def _timed(
+        self, method: str, path: str, payload: object, timeout: float
+    ) -> tuple[int, dict[str, object]]:
         began = time.monotonic()
         try:
-            return self._send(method, path, payload)
+            return self._send(method, path, payload, timeout)
         finally:
             ended = time.monotonic()
             with self._load:
@@ -165,24 +180,61 @@ class ControlClient:
     def claim(self, run: str, proc: object, *, held: bool = False) -> object:
         """A service run's plan, claimed for this process. Raises ClaimRefused or
         ControlError."""
-        status, reply = self.request("POST", "/v1/claims", {"run": run, "proc": proc}, held=held)
+        body = {"run": run, "proc": proc, "sdk": versions.installed()}
+        status, reply = self.request("POST", "/v1/claims", body, held=held)
         if status != 200:
             raise ClaimRefused(str(reply.get("error")))
         return reply.get("plan")
+
+    def ping(self, *, held: bool = False) -> dict[str, object]:
+        """One signed ping, as the startup report shows it: whether the control server was
+        reached, how the connection was protected, the round trip and the runner's id. It
+        raises nothing: a failure is the answer."""
+        began = time.monotonic()
+        tls = "verified" if self.context is not None else "none"
+        runner_id: object = None
+        detail: str | None = None
+        try:
+            status, reply = self.request("POST", "/v1/ping", held=held, timeout=PING_TIMEOUT_S)
+            reached = status == 200 and reply.get("ok") is True
+            if reached:
+                runner_id = reply.get("runner_id")
+            else:
+                detail = f"the control server answered {status} {reply.get('error')}"
+        except ControlError as exc:
+            reached, cause = False, exc.__cause__ or exc
+            detail = str(cause)
+            if self.context is not None:
+                tls = type(cause).__name__
+        return {
+            "reached": reached,
+            "tls": tls,
+            "detail": None if detail is None else redact(detail)[:200],
+            "rtt_ms": round((time.monotonic() - began) * 1000, 1),
+            "runner_id": runner_id if isinstance(runner_id, str) else None,
+            "url": self.url,
+        }
 
     def abandoned(self, run: str) -> None:
         """The claimed plan cannot be used: the runner ends the run at once."""
         with contextlib.suppress(ControlError):
             self.request("POST", "/v1/abandoned", {"run": run})
 
-    def _send(self, method: str, path: str, payload: object) -> tuple[int, dict[str, object]]:
+    def _send(
+        self, method: str, path: str, payload: object, timeout: float = TIMEOUT_S
+    ) -> tuple[int, dict[str, object]]:
         body = b"" if payload is None else json.dumps(payload).encode()
+        if len(body) > protocol.MAX_BODY and not self.synced:
+            # The server checks a large body's header, time included, before it reads the body
+            # and closes the connection on a refusal, so a client whose clock is off would never
+            # see the answer. One small request first learns the offset.
+            self._send("POST", "/v1/ping", None, timeout)
         headers = protocol.request_headers(
             self.token, method, path, body, time.time() + self.offset
         )
         if body:
             headers["Content-Type"] = "application/json"
-        conn = self._connection()
+        conn = self._connection(timeout)
         try:
             conn.request(method, path, body=body, headers=headers)
             response = conn.getresponse()
@@ -203,14 +255,15 @@ class ControlClient:
         except (ValueError, KeyError) as exc:
             raise ControlError("the control server's reply is not valid") from exc
         self.offset = server_time - time.time()
+        self.synced = True
         return response.status, reply
 
-    def _connection(self) -> http.client.HTTPConnection:
+    def _connection(self, timeout: float = TIMEOUT_S) -> http.client.HTTPConnection:
         """The one place a control connection is made: TLS when the URL is https://."""
         if self.context is None:
-            return http.client.HTTPConnection(self.host, self.port, timeout=TIMEOUT_S)
+            return http.client.HTTPConnection(self.host, self.port, timeout=timeout)
         return http.client.HTTPSConnection(
-            self.host, self.port, timeout=TIMEOUT_S, context=self.context
+            self.host, self.port, timeout=timeout, context=self.context
         )
 
     def fetch_plan(self, run: str) -> object:

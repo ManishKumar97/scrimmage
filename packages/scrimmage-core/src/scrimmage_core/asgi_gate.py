@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from types import ModuleType
 from typing import Any
 
-from scrimmage_core import hooks, labels, process_gate, protocol, state, threadctx
+from scrimmage_core import hooks, labels, process_gate, protocol, state, threadctx, versions
 from scrimmage_core.client import (
     Busy,
     ClaimRefused,
@@ -212,7 +212,7 @@ async def claimed(gate: Gate, name: str) -> tuple[RunState, RunSender]:
     try:
         doc = await asyncio.wrap_future(gate.executor.submit(work))
     except ClaimRefused as refused:
-        code = {"claimed": "claimed"}.get(refused.code, "no-such-run")
+        code = {"claimed": "claimed", "version": "version"}.get(refused.code, "no-such-run")
         raise Unavailable(code) from None
     except (ControlError, Busy):
         raise Unavailable("plan-unavailable") from None
@@ -340,7 +340,7 @@ async def answer_probe(
     )
     if error:
         return await served_plain(app, copied, receive, send)
-    report = json.dumps(startup_report(gate)).encode()
+    report = json.dumps(startup_report(gate, await pinged(gate))).encode()
     signature = protocol.sign_reply(gate.token, fields.get(protocol.SIGNATURE, ""), 200, report)
     headers = [
         (b"content-type", b"application/json"),
@@ -353,8 +353,40 @@ async def answer_probe(
     return None
 
 
-def startup_report(gate: Gate) -> dict[str, object]:
-    """Versions, gate names and tools: no token, no plan, nothing of a run."""
+async def pinged(gate: Gate) -> dict[str, object]:
+    """One signed ping to the control server, on Scrimmage's own threads, with a control slot
+    taken on the loop as a claim does: with none free in about 250 ms, the answer says so
+    and no request is made."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + CLAIM_WAIT_S
+    client = gate.client
+    while not client.try_slot(count=False):
+        if loop.time() >= deadline:
+            client.turned_away()
+            return unreached(client, "all of this process's control slots were busy")
+        await asyncio.sleep(CLAIM_STEP_S)
+    work = functools.partial(client.run_held, client.ping)
+    try:
+        return dict(await asyncio.wrap_future(gate.executor.submit(work)))
+    except Exception as exc:  # the ping reports its own failures; this is a bug in the gate
+        return unreached(client, f"{type(exc).__name__}")
+
+
+def unreached(client: ControlClient, detail: str) -> dict[str, object]:
+    """No ping was made: no connection was tried, so an https setup has verified nothing."""
+    return {
+        "reached": False,
+        "tls": "none" if client.context is None else "not connected",
+        "detail": detail,
+        "rtt_ms": 0.0,
+        "runner_id": None,
+        "url": client.url,
+    }
+
+
+def startup_report(gate: Gate, control: dict[str, object]) -> dict[str, object]:
+    """Versions, gate names, tools and the control server's ping: no token, no plan, nothing
+    of a run."""
     found: dict[str, str] = {}
     for name in LIBRARIES:
         if name in sys.modules:
@@ -363,8 +395,8 @@ def startup_report(gate: Gate) -> dict[str, object]:
     chained = getattr(sys.modules.get("sitecustomize"), "__file__", "") or ""
     renames = dict(gate.renames)
     return {
-        "v": 1,
-        "sdk": sdk_version(),
+        "v": 2,
+        "sdk": versions.installed(),
         "python": sys.version,
         "executable": redact(sys.executable),
         "pid": os.getpid(),
@@ -374,15 +406,9 @@ def startup_report(gate: Gate) -> dict[str, object]:
         "chained_sitecustomize": bool(chained) and "scrimmage_core" not in chained,
         "tools": sorted(labels.tool_name(path, renames) for path in gate.tools),
         "notices": [dict(entry) for entry in gate.process.report],
+        "control": control,
         "server_time": time.time(),
     }
-
-
-def sdk_version() -> str:
-    try:
-        return importlib.metadata.version("scrimmage-core")
-    except importlib.metadata.PackageNotFoundError:
-        return "unknown"
 
 
 class Entry:

@@ -59,6 +59,7 @@ class FakeRunner:
     label_problems: list[str] = field(default_factory=list[str])
     tools_seen: list[str] | None = None
     skipped: list[str] = field(default_factory=list[str])
+    service_warnings: list[str] = field(default_factory=list[str])
     ledger: FakeLedger = field(default_factory=FakeLedger)
 
 
