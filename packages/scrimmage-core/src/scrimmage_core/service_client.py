@@ -16,8 +16,9 @@ import stat
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
-from scrimmage_core import protocol, records, tls
+from scrimmage_core import protocol, records, tls, versions
 from scrimmage_core.config import (
     SERVICE_URL,
     Agent,
@@ -206,6 +207,75 @@ def probe(agent: Agent, token: str) -> tuple[dict[str, object] | None, Reply]:
         if isinstance(found, dict):
             return dict(found), reply  # type: ignore[arg-type]
     return None, reply
+
+
+def install_line(version: str) -> str:
+    return f"install scrimmage-core {version} in the service"
+
+
+def check_versions(report: dict[str, object]) -> list[str]:
+    """The report's Scrimmage against this runner's: exit 2 for a report older than this
+    runner reads, a version that is not an installed release, or another major. The same major
+    with another release is allowed, and the warning to say so is returned."""
+    ours = versions.installed()
+    found = report.get("v")
+    if found == 1:
+        raise Setup(
+            2,
+            f"the service's Scrimmage is older than this runner (startup report v1); "
+            f"{install_line(ours)}",
+        )
+    if found != 2:
+        raise Setup(
+            2,
+            f"the service's startup report is version {found!r}, which this runner does not "
+            f"read; {install_line(ours)}, or upgrade the runner",
+        )
+    theirs = report.get("sdk")
+    verdict = versions.judge(theirs, ours)
+    if verdict is versions.Verdict.SAME:
+        return []
+    if verdict is versions.Verdict.WARN:
+        return [
+            f"the service runs scrimmage-core {theirs} and this runner is {ours}; the same "
+            "major release, so the test goes on"
+        ]
+    if verdict is versions.Verdict.UNREADABLE:
+        raise Setup(
+            2,
+            f"the service's SDK version is {theirs!r} (this runner is {ours}), which is not "
+            f"an installed scrimmage-core release; {install_line(ours)}",
+        )
+    raise Setup(
+        2,
+        f"the service runs scrimmage-core {theirs} and this runner is {ours}, another major "
+        f"release; {install_line(ours)}",
+    )
+
+
+def check_control(report: dict[str, object], runner_id: str) -> None:
+    """The service's ping: exit 3 when it could not reach this runner's control server, or
+    reached another runner that holds the same token."""
+    control = cast(dict[str, object], report.get("control") or {})
+    url = control.get("url") or "the control address"
+    if control.get("reached") is not True:
+        hint = (
+            "check SCRIMMAGE_CONTROL_CA"
+            if str(control.get("tls")).startswith("SSL")
+            else "check that SCRIMMAGE_CONTROL_URL is an address the service can reach"
+        )
+        raise Setup(
+            3,
+            f"the service cannot reach the control server at {url}: {control.get('detail')}; "
+            f"{hint}",
+        )
+    if control.get("runner_id") != runner_id:
+        raise Setup(
+            3,
+            f"the control server the service reached at {url} answered as runner "
+            f"{control.get('runner_id')}, not as this runner ({runner_id}): another runner "
+            "holds the same token, or SCRIMMAGE_CONTROL_URL points at it",
+        )
 
 
 def not_listening(reply: Reply) -> bool:

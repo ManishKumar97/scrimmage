@@ -98,6 +98,22 @@ A control server that listens beyond loopback carries plans and record lines, wh
 
   *Checked by: `tests/test_control_tls.py::test_a_stalled_handshake_does_not_block_a_second_client_and_is_cut_at_the_deadline`, `tests/test_control_tls.py::test_a_slow_drip_is_cut_at_the_whole_request_deadline`, `tests/test_control_tls.py::test_an_unsigned_large_body_is_refused_before_it_is_read`*
 
+- That check includes the time.
+  A header the token made is good for 60 seconds, so one captured earlier and sent again, with a declared 14 MB body, is refused with `401 clock` before any of the body is read.
+
+  *Checked by: `tests/test_service_versions.py::test_a_signed_header_older_than_60_s_is_refused_before_any_body_is_read`*
+
+- The service pings the control server before it answers a probe.
+  The ping is signed like every request and its reply is signed for it, and it stores nothing.
+  The control server answers with a random id made for this test, and the runner stops the test with exit 3 if the id is not its own, so a second runner that holds the same token cannot stand in for this one.
+
+  *Checked by: `tests/test_service_versions.py::test_the_ping_stores_nothing_and_is_signed`, `tests/test_service_versions.py::test_a_ping_reply_signed_for_another_request_is_not_taken`, `tests/test_service_versions.py::test_a_ping_answered_by_another_runner_stops_the_test`*
+
+- A claim for a run's plan carries the SDK's version, and the control server refuses a claim from another major, or with no version, with `409 version`.
+  The gate answers that run `503 version`, and the runner stops the test.
+
+  *Checked by: `tests/test_service_versions.py::test_a_claim_with_no_sdk_field_is_refused`, `tests/test_service_versions.py::test_a_worker_from_another_major_is_refused_at_its_first_claim_and_stops_the_test`*
+
 - A connection that fails TLS prints no traceback; the report counts it by OpenSSL's reason.
   The report also counts the runs it sent and the claims it received, so a control server that no service can reach shows on the runner.
 

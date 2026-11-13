@@ -254,6 +254,20 @@
           },
           "description": "A service test only; empty without control_tls: connections that failed TLS, counted by OpenSSL's reason, such as unknown ca."
         },
+        "control_ping": {
+          "type": ["object", "null"],
+          "description": "A service test only: what the service's signed ping to the control server found before the first run, as its startup report gave it. null when the test stopped before the probe was answered.",
+          "additionalProperties": false,
+          "required": ["reached", "tls", "detail", "rtt_ms", "runner_id", "url"],
+          "properties": {
+            "reached": {"type": "boolean"},
+            "tls": {"type": "string"},
+            "detail": {"type": ["string", "null"]},
+            "rtt_ms": {"type": "number", "minimum": 0},
+            "runner_id": {"type": ["string", "null"]},
+            "url": {"type": "string"}
+          }
+        },
         "result_file": {
           "type": [
             "string",

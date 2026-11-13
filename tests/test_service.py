@@ -45,10 +45,17 @@ class Running:
     """One service: scrimmage-run uvicorn acme.service:app, its stderr read as it comes."""
 
     def __init__(
-        self, root: Path, env: dict[str, str], args: list[str], app: str = "acme.service:app"
+        self,
+        root: Path,
+        env: dict[str, str],
+        args: list[str],
+        app: str = "acme.service:app",
+        bin_dir: Path = BIN,
     ) -> None:
+        """bin_dir: the bin folder of the venv the service runs in, this one unless a test
+        wants another SDK."""
         self.port = free_port()
-        command = [str(BIN / "scrimmage-run"), str(BIN / "uvicorn"), app]
+        command = [str(bin_dir / "scrimmage-run"), str(bin_dir / "uvicorn"), app]
         command += ["--port", str(self.port), "--loop", "asyncio", *args]
         self.proc = subprocess.Popen(
             command, cwd=root, env=env, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True
@@ -639,10 +646,12 @@ class Bench:
         self.services: list[Running] = []
         self.closers: list[Any] = []
 
-    def start(self, *args: str, workers: int = 1, wait: bool = True, **env: str) -> Running:
+    def start(
+        self, *args: str, workers: int = 1, wait: bool = True, bin_dir: Path = BIN, **env: str
+    ) -> Running:
         base = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
         base.update(
-            PATH=f"{BIN}{os.pathsep}{base.get('PATH', '')}",
+            PATH=f"{bin_dir}{os.pathsep}{base.get('PATH', '')}",
             SCRIMMAGE_SERVICE="1",
             SCRIMMAGE_TOKEN_FILE=str(self.token_file),
             SCRIMMAGE_CONTROL_URL=self.control,
@@ -653,7 +662,8 @@ class Bench:
         )
         base.update(env)
         flags = ["--workers", str(workers)] if workers > 1 else []
-        service = Running(self.root, {k: v for k, v in base.items() if v != ""}, [*flags, *args])
+        env_for = {k: v for k, v in base.items() if v != ""}
+        service = Running(self.root, env_for, [*flags, *args], bin_dir=bin_dir)
         service.wanted = workers
         self.services.append(service)
         if wait:

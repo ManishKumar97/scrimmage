@@ -11,6 +11,7 @@ import hashlib
 import io
 import json
 import re
+import secrets
 import socket as socket_module
 import ssl
 import sys
@@ -23,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socket import socket
 from typing import Any
 
-from scrimmage_core import protocol
+from scrimmage_core import protocol, versions
 from scrimmage_core.budget import Ledger, Shortfall
 from scrimmage_core.plan import items, number, obj
 from scrimmage_core.records import RecordStore
@@ -129,6 +130,10 @@ class ControlServer:
         self.lock = threading.Lock()
         self.tls = tls is not None
         self.stats = Stats()
+        # Who this server is, for a ping to prove: random for each runner, never written down.
+        self.runner_id = secrets.token_hex(8)
+        # The SDK version of the first claim refused for its version, which the runner names.
+        self.refused_sdk: list[str | None] = []
         self.server = _Server(address, _handler(self), tls, self.stats)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
@@ -185,6 +190,8 @@ class ControlServer:
             return self._blob(body)
         if method == "POST" and path == "/v1/claims":
             return self._claim(body)
+        if method == "POST" and path == "/v1/ping":
+            return 200, {"ok": True, "runner_id": self.runner_id}  # stores nothing
         if method == "POST" and path == "/v1/abandoned":
             return self._abandoned(body)
         return 404, {"error": "not_found"}
@@ -197,6 +204,15 @@ class ControlServer:
             run, proc = str(request["run"]), proc_key(request["proc"])
         except (ValueError, KeyError):
             return 400, {"error": "bad_request"}
+        sdk = request.get("sdk")  # a claim that does not say its version is refused like a major
+        if versions.judge(sdk, versions.installed()) in (
+            versions.Verdict.UNREADABLE,
+            versions.Verdict.MAJOR,
+        ):
+            with self.lock:
+                if not self.refused_sdk:  # the first is the one the runner names
+                    self.refused_sdk.append(sdk if isinstance(sdk, str) else None)
+            return 409, {"error": "version"}
         with self.lock:
             state = self.runs.get(run)
             if state is None or not state.open:
@@ -471,12 +487,16 @@ def _handler(control: ControlServer) -> type[BaseHTTPRequestHandler]:
             headers = {k.title(): v for k, v in self.headers.items()}
             status: int
             payload: dict[str, object]
-            if length > MAX_BODY and not protocol.signed_head(
-                control.token, method, self.path, headers
-            ):
-                # A large body is read only for a request that is signed already: an unsigned
-                # client can make the server read no more than the small bodies below.
-                status, payload = 401, {"error": "bad_signature"}
+            early = (
+                protocol.signed_head(control.token, method, self.path, headers, control.clock())
+                if length > MAX_BODY
+                else None
+            )
+            if early is not None:
+                # A large body is read only for a request that is signed and fresh already: an
+                # unsigned client, or one that replays an old header, can make the server read
+                # no more than the small bodies below.
+                status, payload = 401, {"error": early}
             else:
                 body = self.rfile.read(length) if length else b""
                 status, payload = control.handle(method, self.path, headers, body)
