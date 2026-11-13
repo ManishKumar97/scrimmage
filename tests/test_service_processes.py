@@ -1423,6 +1423,15 @@ def test_an_item_whose_put_failed_is_no_decided_item(service: state.ProcessState
         full.join_thread()
 
 
+def refused_unchecked(service: state.ProcessState, queue: Any) -> None:
+    """A run's item, which the unchecked feeder's send refuses; the run is gone on return."""
+    run = a_run(service)
+    under(run, lambda: added_to_buffer(queue, "run's data", notify=True))
+    eventually(lambda: any(x.get("action") == "refused" for x in lines(run)))
+    assert not queue._reader.poll(0)  # refused before it was sent
+    service.unregister(run)
+
+
 @pytest.mark.design("service.feeder_items")
 # The refused send's error holds the feeder's frame, and so the pickled item, a view into a
 # BytesIO: collected together, the BytesIO reports the view as an unraisable BufferError.
@@ -1441,12 +1450,7 @@ def test_a_feeder_whose_check_was_taken_away_has_no_send_of_its_own(
         in_ended_request(lambda: queue.put("plain"))  # its feeder runs outside any request
         assert queue.get(timeout=10) == "plain"
         monkeypatch.setattr(multiprocessing.queues, "_ForkingPickler", ForkingPickler)
-        run = a_run(service)
-        under(run, lambda: added_to_buffer(queue, "run's data", notify=True))
-        eventually(lambda: any(x.get("action") == "refused" for x in lines(run)))
-        assert not queue._reader.poll(0)  # refused before it was sent
-        service.unregister(run)
-        del run
+        refused_unchecked(service, queue)
     finally:
         monkeypatch.undo()
         queue.close()
