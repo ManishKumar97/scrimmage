@@ -26,10 +26,10 @@ from scrimmage_core.config import Mock
 from scrimmage_core.control import MAX_CONNECTIONS, ControlServer
 from scrimmage_core.records import RecordStore
 from service_harness import eventually
-from test_service import Lab, lab
+from test_service import Bench, Lab, bench, lab
 
 pytestmark = pytest.mark.slow
-__all__ = ["lab"]  # the fixture, used by name
+__all__ = ["bench", "lab"]  # the fixtures, used by name
 PER_PROCESS = 8  # the design's number, not the code's, so a change to it fails here
 
 
@@ -90,6 +90,26 @@ def test_runs_reach_four_worker_pids_and_every_record_matches_its_plan(
             conn.close()
         waiting.close()
         fake.stop()
+
+
+@pytest.mark.design("service.workers_records")
+def test_scrimmage_test_with_four_parallel_runs_on_four_workers_keeps_each_record_whole(
+    bench: Bench,
+) -> None:
+    """The CLI's path: scrimmage test, four runs at once, against four workers. Wherever each
+    run lands, every line of its record carries its run, its test and its plan's row."""
+    service = bench.start(workers=4)
+    workers = set(service.workers())
+    assert len(workers) == 4, service.text
+    code, out = bench.test(service.port, runs=4, parallel=4)
+    assert code == 0, out
+    records = {p.stem: p for p in (bench.root / "scrimmage-runs").glob("*/*.jsonl")}
+    assert sum(name.startswith("run-") for name in records) == 4, sorted(records)
+    for name, path in records.items():
+        lines = [json.loads(x) for x in path.read_text().splitlines()]
+        assert lines and {(x["run"], x["test"]) for x in lines} == {(name, "order-status")}, name
+        served = [x for x in lines if x.get("proc", {}).get("pid") in workers]
+        assert served and {x["row"] for x in served} == {"baseline"}, name
 
 
 @pytest.mark.design("service.sixty_fifth_connection")
