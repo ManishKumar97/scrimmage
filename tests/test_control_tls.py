@@ -14,6 +14,7 @@ import ipaddress
 import json
 import os
 import secrets
+import select
 import shutil
 import socket
 import ssl
@@ -732,19 +733,27 @@ def test_an_unsigned_large_body_is_refused_before_it_is_read(
     conn.endheaders()
     conn.auto_open = 0  # a send after the close must fail, not open a second connection
 
+    stop = threading.Event()
+
     def push() -> None:  # the whole declared body, until the server stops listening
         chunk = b"x" * 65536
         with contextlib.suppress(OSError, http.client.HTTPException):
             for _ in range(14 * 1024 * 1024 // len(chunk)):
+                if stop.is_set():
+                    return
                 conn.send(chunk)
 
     pusher = threading.Thread(target=push, daemon=True)
     pusher.start()
+    # Wait on the descriptor, not the TLS object: a read and a send on one TLS socket from two
+    # threads crash CPython 3.14. The pusher is stopped before the reply is read.
+    select.select([conn.sock], [], [], 10)
+    stop.set()
+    pusher.join(10)
     reply = conn.getresponse()
     assert reply.status == 401 and json.loads(reply.read())["error"] == "bad_signature"
     conn.close()
-    pusher.join(10)
-    assert taken[0] < 64 * 1024
+    assert taken[0] < 64 * 1024, f"{taken[0]} bytes of the one request were read"
     # Positive control: a signed body of the same kind is read in full.
     data = os.urandom(5 * 1024 * 1024)
     payload = {

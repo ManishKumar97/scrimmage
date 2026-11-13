@@ -129,7 +129,7 @@
           "type": "boolean"
         },
         "tls": {
-          "description": "`verified` for an https control URL whose certificate was accepted, `none` for http on loopback, or on a failure over https the class of the error, such as `SSLCertVerificationError`.",
+          "description": "`verified` for an https control URL whose certificate was accepted, `none` for http on loopback, on a failure over https the class of the error, such as `SSLCertVerificationError`, or `not connected` when no ping was tried because every control slot was busy.",
           "type": "string"
         },
         "detail": {

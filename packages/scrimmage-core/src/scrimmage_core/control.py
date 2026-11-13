@@ -30,10 +30,11 @@ from scrimmage_core.plan import items, number, obj
 from scrimmage_core.records import RecordStore
 
 MAX_CONNECTIONS = 64
-MAX_BODY = 4 * 1024 * 1024  # a batch of 500 lines is far smaller
+MAX_BODY = protocol.MAX_BODY  # a batch of 500 lines is far smaller
 MAX_BLOB_BODY = 14 * 1024 * 1024  # one 10 MB side-folder item, base64 encoded
 BLOB_PATH = "/v1/blobs"
 SHA256 = re.compile(r"[0-9a-f]{64}")
+READ_BUFFER = 8192  # bytes the handler reads ahead; the same on every Python
 READ_TIMEOUT_S = 10.0  # a connection that sends nothing frees its slot
 REQUEST_DEADLINE_S = 15.0  # from the connection being served to the last byte of its reply
 PLAN_PATH = re.compile(r"/v1/plans/([A-Za-z0-9_-]{1,64})")
@@ -130,7 +131,8 @@ class ControlServer:
         self.lock = threading.Lock()
         self.tls = tls is not None
         self.stats = Stats()
-        # Who this server is, for a ping to prove: random for each runner, never written down.
+        # Who this server is, for a ping to prove: random for each runner and kept in memory. It
+        # appears in the startup report and result.json, which is fine: it opens nothing.
         self.runner_id = secrets.token_hex(8)
         # The SDK version of the first claim refused for its version, which the runner names.
         self.refused_sdk: list[str | None] = []
@@ -473,7 +475,11 @@ def _handler(control: ControlServer) -> type[BaseHTTPRequestHandler]:
             super().setup()
             self.deadline = time.monotonic() + REQUEST_DEADLINE_S
             self.rfile.close()
-            self.rfile = io.BufferedReader(_Reader(self.connection, self.deadline, control.stats))
+            # An explicit buffer: the default grew from 8 KiB to 128 KiB in Python 3.14, and reading
+            # the headers would then pull that much of the body in before the signature is checked.
+            self.rfile = io.BufferedReader(
+                _Reader(self.connection, self.deadline, control.stats), READ_BUFFER
+            )
 
         def _serve(self, method: str) -> None:
             text = self.headers.get("Content-Length") or "0"

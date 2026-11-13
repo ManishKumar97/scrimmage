@@ -100,14 +100,16 @@ A control server that listens beyond loopback carries plans and record lines, wh
 
 - That check includes the time.
   A header the token made is good for 60 seconds, so one captured earlier and sent again, with a declared 14 MB body, is refused with `401 clock` before any of the body is read.
+  The server reads at most 8 KiB ahead of the headers on every Python version.
+  A client that has had no signed reply yet sends one small request before a body over 4 MB, so a clock that is off is corrected before the large send and not met as a closed connection.
 
-  *Checked by: `tests/test_service_versions.py::test_a_signed_header_older_than_60_s_is_refused_before_any_body_is_read`*
+  *Checked by: `tests/test_service_versions.py::test_a_signed_header_older_than_60_s_is_refused_before_any_body_is_read`, `tests/test_service_versions.py::test_a_fresh_client_with_a_skewed_clock_sends_a_large_blob_after_a_small_request`*
 
 - The service pings the control server before it answers a probe.
   The ping is signed like every request and its reply is signed for it, and it stores nothing.
   The control server answers with a random id made for this test, and the runner stops the test with exit 3 if the id is not its own, so a second runner that holds the same token cannot stand in for this one.
 
-  *Checked by: `tests/test_service_versions.py::test_the_ping_stores_nothing_and_is_signed`, `tests/test_service_versions.py::test_a_ping_reply_signed_for_another_request_is_not_taken`, `tests/test_service_versions.py::test_a_ping_answered_by_another_runner_stops_the_test`*
+  *Checked by: `tests/test_service_versions.py::test_the_ping_stores_nothing_and_is_signed`, `tests/test_service_versions.py::test_a_ping_reply_with_a_bad_signature_is_not_taken`, `tests/test_service_versions.py::test_a_ping_answered_by_another_runner_stops_the_test`*
 
 - A claim for a run's plan carries the SDK's version, and the control server refuses a claim from another major, or with no version, with `409 version`.
   The gate answers that run `503 version`, and the runner stops the test.

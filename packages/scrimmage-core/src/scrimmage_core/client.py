@@ -93,6 +93,7 @@ class ControlClient:
         self.url = f"{parts.scheme}://{shown}:{self.port}"
         self.token = token
         self.offset = 0.0  # the server's clock minus ours, learned from its replies
+        self.synced = False  # a signed reply has set the offset
         # Each request holds a slot while it is in flight. A sync caller waits for one on its
         # own thread; a claim or an async budget ask takes one only if free, on the loop.
         self.slots = threading.BoundedSemaphore(CAP)
@@ -223,6 +224,11 @@ class ControlClient:
         self, method: str, path: str, payload: object, timeout: float = TIMEOUT_S
     ) -> tuple[int, dict[str, object]]:
         body = b"" if payload is None else json.dumps(payload).encode()
+        if len(body) > protocol.MAX_BODY and not self.synced:
+            # The server checks a large body's header, time included, before it reads the body
+            # and closes the connection on a refusal, so a client whose clock is off would never
+            # see the answer. One small request first learns the offset.
+            self._send("POST", "/v1/ping", None, timeout)
         headers = protocol.request_headers(
             self.token, method, path, body, time.time() + self.offset
         )
@@ -249,6 +255,7 @@ class ControlClient:
         except (ValueError, KeyError) as exc:
             raise ControlError("the control server's reply is not valid") from exc
         self.offset = server_time - time.time()
+        self.synced = True
         return response.status, reply
 
     def _connection(self, timeout: float = TIMEOUT_S) -> http.client.HTTPConnection:

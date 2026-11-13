@@ -19,6 +19,7 @@ SIGNATURE = "X-Scrimmage-Signature"
 # The digest of the body the signature covers, sent so a server can check the signature
 # before it reads a large body.
 BODY_SHA256 = "X-Scrimmage-Body-Sha256"
+MAX_BODY = 4 * 1024 * 1024  # a body over this is read only after its header is checked
 WINDOW_S = 60.0  # how far a request's time may be from the server's clock
 NONCE_KEEP_S = 2 * WINDOW_S
 RUN_MAC_HEX = 16  # 64 bits of HMAC-SHA256 in a run header

@@ -363,23 +363,24 @@ async def pinged(gate: Gate) -> dict[str, object]:
     while not client.try_slot(count=False):
         if loop.time() >= deadline:
             client.turned_away()
-            return unreached(client.url, "all of this process's control slots were busy")
+            return unreached(client, "all of this process's control slots were busy")
         await asyncio.sleep(CLAIM_STEP_S)
     work = functools.partial(client.run_held, client.ping)
     try:
         return dict(await asyncio.wrap_future(gate.executor.submit(work)))
     except Exception as exc:  # the ping reports its own failures; this is a bug in the gate
-        return unreached(client.url, f"{type(exc).__name__}")
+        return unreached(client, f"{type(exc).__name__}")
 
 
-def unreached(url: str, detail: str) -> dict[str, object]:
+def unreached(client: ControlClient, detail: str) -> dict[str, object]:
+    """No ping was made: no connection was tried, so an https setup has verified nothing."""
     return {
         "reached": False,
-        "tls": "none",
+        "tls": "none" if client.context is None else "not connected",
         "detail": detail,
         "rtt_ms": 0.0,
         "runner_id": None,
-        "url": url,
+        "url": client.url,
     }
 
 

@@ -11,7 +11,12 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
-RELEASE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
+# A release, then only what PEP 440 adds to one: pre, post and dev parts and a local part.
+# ASCII only, so no other script's digits pass; anything else is not a version.
+RELEASE = re.compile(
+    r"(\d+)\.(\d+)(?:\.(\d+))?(?P<rest>(?:\.?(?:a|b|rc|post|dev)\d*)*(?:\+[a-z0-9.]+)?)",
+    re.ASCII,
+)
 UNKNOWN = "unknown"
 
 
@@ -33,11 +38,11 @@ def parse(text: object) -> Version | None:
     """The release at the start of text, or None when there is none."""
     if not isinstance(text, str):
         return None
-    found = RELEASE.match(text)
+    found = RELEASE.fullmatch(text)
     if found is None:
         return None
     first, second, third = int(found[1]), int(found[2]), int(found[3] or 0)
-    return Version((first,) if first else (0, second), (first, second, third), text[found.end() :])
+    return Version((first,) if first else (0, second), (first, second, third), found["rest"])
 
 
 def judge(sdk: object, runner: str) -> Verdict:
@@ -66,3 +71,8 @@ def _installed() -> str:
 def installed() -> str:
     """The version of scrimmage-core in this process, or `unknown` when it is not installed."""
     return _installed()
+
+
+def shown(text: object) -> str:
+    """A version as a message may show it: printable characters only, and short."""
+    return "".join(c for c in str(text) if c.isprintable())[:64]

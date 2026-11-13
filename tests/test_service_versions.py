@@ -7,6 +7,7 @@ the runner and its control server read the version through.
 """
 
 import asyncio
+import base64
 import contextlib
 import http.client
 import json
@@ -61,13 +62,25 @@ RULE = [
     ("1.4.2", "", versions.Verdict.UNREADABLE),
     ("1.4.2", "v1.4.2", versions.Verdict.UNREADABLE),
     ("unknown", "unknown", versions.Verdict.UNREADABLE),
+    ("1.4.2", "1.4.2junk", versions.Verdict.UNREADABLE),
+    ("1.4.2", "1.4.2\n", versions.Verdict.UNREADABLE),  # `$` would have let this through
+    (
+        "1.4.2",
+        "\N{ARABIC-INDIC DIGIT ONE}.\N{ARABIC-INDIC DIGIT FOUR}.\N{ARABIC-INDIC DIGIT TWO}",
+        versions.Verdict.UNREADABLE,
+    ),  # Arabic-Indic digits
+    ("1.4.2", "1.4.2-1", versions.Verdict.UNREADABLE),
+    ("1.4.2", "1.4.2.post1", versions.Verdict.WARN),
+    ("1.4.2", "1.4.2rc1.dev0+abc.1", versions.Verdict.WARN),
 ]
 
 
 @pytest.mark.parametrize(
     ("runner", "sdk", "verdict"),
     RULE,
-    ids=[f"{runner}-vs-{sdk or 'empty'}" for runner, sdk, _ in RULE],
+    ids=[
+        f"{runner}-vs-{sdk.encode('unicode_escape').decode() or 'empty'}" for runner, sdk, _ in RULE
+    ],
 )
 def test_the_version_rule_reads_the_release_and_keeps_the_rest_as_text(
     runner: str, sdk: str, verdict: versions.Verdict
@@ -526,7 +539,7 @@ def test_the_ping_stores_nothing_and_is_signed(
 
 
 @pytest.mark.design("service.ping_signed")
-def test_a_ping_reply_signed_for_another_request_is_not_taken(
+def test_a_ping_reply_with_a_bad_signature_is_not_taken(
     control_server: ControlServer,
 ) -> None:
     """A server without the token that answers 200 ok is not a reached control server."""
@@ -588,6 +601,7 @@ def test_a_signed_header_older_than_60_s_is_refused_before_any_body_is_read(
     host, port = control_server.server.server_address[:2]
     try:
         for age, expected in ((120, "clock"), (-120, "clock")):
+            taken[0] = 0  # each request is counted alone, not summed with the one before
             # A header the token made, captured and sent again: its signature is good.
             stale = protocol.request_headers(
                 control_server.token, "POST", "/v1/blobs", b"", time.time() - age
@@ -610,21 +624,79 @@ def test_a_signed_header_older_than_60_s_is_refused_before_any_body_is_read(
             pusher.start()
             reply = conn.getresponse()
             assert reply.status == 401 and json.loads(reply.read())["error"] == expected
+            pusher.join(10)  # before the close, as a send under a close can crash
             conn.close()
-            pusher.join(10)
-        assert taken[0] < 64 * 1024, f"{taken[0]} bytes of the body were read"
+            assert taken[0] < 64 * 1024, f"age {age}: {taken[0]} bytes of the body were read"
         # Positive control: a fresh signed body of the same kind is read in full.
-        data = os.urandom(5 * 1024 * 1024)
-        import base64
-
-        payload = {
-            "run": RUN,
-            "sha256": protocol.digest(data),
-            "data": base64.b64encode(data).decode(),
-        }
-        before = taken[0]
+        taken[0] = 0
         client = ControlClient(control_server.url, control_server.token)
-        assert client.request("POST", "/v1/blobs", payload)[0] == 200
-        assert taken[0] - before > 5 * 1024 * 1024
+        assert client.request("POST", "/v1/blobs", blob(5 * 1024 * 1024))[0] == 200
+        assert taken[0] > 5 * 1024 * 1024
     finally:
         control_server.stop()
+
+
+def blob(size: int) -> dict[str, str]:
+    data = os.urandom(size)
+    return {"run": RUN, "sha256": protocol.digest(data), "data": base64.b64encode(data).decode()}
+
+
+@pytest.mark.design("service.tls_deadlines")
+@pytest.mark.parametrize("skew", [-120, 120, 0], ids=["behind", "ahead", "true"])
+def test_a_fresh_client_with_a_skewed_clock_sends_a_large_blob_after_a_small_request(
+    control_server: ControlServer, skew: int
+) -> None:
+    """The server refuses a large body with a stale header before reading it, and closes the
+    connection; the client learns the offset from a small request first, so it never meets
+    that refusal."""
+    control_server.start()
+    try:
+        client = ControlClient(control_server.url, control_server.token)
+        client.offset = skew  # its clock is wrong by this much, and it has had no reply yet
+        assert client.request("POST", "/v1/blobs", blob(5 * 1024 * 1024))[0] == 200
+        assert abs(client.offset) < 5, client.offset
+    finally:
+        control_server.stop()
+
+
+def test_a_busy_https_setup_does_not_say_it_verified_nothing_was_needed(tmp_path: Path) -> None:
+    files = make_certificates(tmp_path / "pki", ips=(HOST,), names=("control.test",))
+    secure = ControlClient("https://127.0.0.1:9", "t" * 64, tls.client_context(files.ca))
+    plain = ControlClient("http://127.0.0.1:9", "t" * 64)
+    assert asgi_gate.unreached(secure, "busy")["tls"] == "not connected"
+    assert asgi_gate.unreached(plain, "busy")["tls"] == "none"
+
+
+def test_a_version_in_a_message_has_no_control_characters() -> None:
+    assert versions.shown("9\x1b[31m\n\x00red") == "9[31mred"
+    assert len(versions.shown("1" * 500)) == 64
+
+
+# --- the ping in scrimmage test --json -------------------------------------------------------
+
+
+def document(out: str) -> dict[str, Any]:
+    """The one JSON document a --json run printed."""
+    found, _ = json.JSONDecoder().raw_decode(out[out.index("{") :])
+    return dict(found)
+
+
+@pytest.mark.design("service.ping_report")
+def test_json_of_a_run_that_reaches_setup_carries_the_ping(bench: Bench) -> None:
+    service = bench.start()
+    code, out = bench.test(service.port, json_out=True)
+    assert code == 0, out
+    ping = document(out)["control_ping"]
+    assert ping["reached"] is True and ping["tls"] == "none" and len(ping["runner_id"]) == 16
+    assert ping["url"] == bench.control
+
+
+@pytest.mark.design("service.ping_stops")
+def test_json_of_a_run_that_fails_the_ping_says_why_and_has_no_ping_fields(bench: Bench) -> None:
+    nobody = f"http://{HOST}:{free_port()}"
+    service = bench.start(SCRIMMAGE_CONTROL_URL=nobody)
+    code, out = bench.test(service.port, json_out=True)
+    found = document(out)
+    assert code == 3 and found["status"] == "infra", out
+    assert "Connection refused" in json.dumps(found["infra"])
+    assert "control_ping" not in found

@@ -616,7 +616,7 @@ class Runner:
         """A worker of the service from another major release refused its claim: every run it
         gets would fail the same way, so the test stops."""
         found = self.server.refused_sdk
-        theirs = "no version" if not found or found[0] is None else found[0]
+        theirs = "no version" if not found or found[0] is None else versions.shown(found[0])
         ours = versions.installed()
         return service_client.Setup(
             2,
@@ -704,6 +704,7 @@ class Runner:
                 "SCRIMMAGE_SERVICE=1, its token differs, or its SDK speaks another protocol "
                 "version",
             )
+        self.control_ping = cast(dict[str, object] | None, report.get("control"))
         self.service_warnings += service_client.check_versions(report)
         theirs = sorted(str(t) for t in cast(list[object], report.get("tools") or []))
         ours = sorted(agent.tool_names())
@@ -716,7 +717,6 @@ class Runner:
                 f"{ours or 'none'}; "
                 f"start it with SCRIMMAGE_TOOLS={names} and SCRIMMAGE_ALLOW_IMPORTS={imports}",
             )
-        self.control_ping = cast(dict[str, object], report.get("control"))
         service_client.check_control(report, self.server.runner_id)
         self.setup_request()
 

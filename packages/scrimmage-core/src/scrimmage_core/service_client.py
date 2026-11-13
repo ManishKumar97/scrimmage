@@ -232,23 +232,24 @@ def check_versions(report: dict[str, object]) -> list[str]:
             f"read; {install_line(ours)}, or upgrade the runner",
         )
     theirs = report.get("sdk")
+    named = versions.shown(theirs)
     verdict = versions.judge(theirs, ours)
     if verdict is versions.Verdict.SAME:
         return []
     if verdict is versions.Verdict.WARN:
         return [
-            f"the service runs scrimmage-core {theirs} and this runner is {ours}; the same "
+            f"the service runs scrimmage-core {named} and this runner is {ours}; the same "
             "major release, so the test goes on"
         ]
     if verdict is versions.Verdict.UNREADABLE:
         raise Setup(
             2,
-            f"the service's SDK version is {theirs!r} (this runner is {ours}), which is not "
+            f"the service's SDK version is {named!r} (this runner is {ours}), which is not "
             f"an installed scrimmage-core release; {install_line(ours)}",
         )
     raise Setup(
         2,
-        f"the service runs scrimmage-core {theirs} and this runner is {ours}, another major "
+        f"the service runs scrimmage-core {named} and this runner is {ours}, another major "
         f"release; {install_line(ours)}",
     )
 

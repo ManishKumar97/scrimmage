@@ -117,7 +117,7 @@ A function or a script whose child runs on another venv's SDK is not version-che
 **The ping.**
 Before it answers a probe, the service sends one signed request to the control server, through the same connection and certificate check as every other control request.
 The control server answers with a random id it made for this test, and the runner checks the id is its own, so the ping proves this runner and not any runner that holds the token.
-The report's `control` object holds `reached`, `tls`, `detail`, `rtt_ms`, `runner_id` and `url`; `tls` is `verified`, `none` for `http://` on loopback, or the class of the error.
+The report's `control` object holds `reached`, `tls`, `detail`, `rtt_ms`, `runner_id` and `url`; `tls` is `verified`, `none` for `http://` on loopback, the class of the error when the ping failed over `https://`, or `not connected` when every control slot was busy and no ping was tried.
 If the service cannot reach the control server, or reached another runner, the test stops with exit 3 before the setup request, and names the error, such as a certificate that did not verify.
 
 **The setup request.**
