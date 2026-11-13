@@ -1381,10 +1381,10 @@ def test_an_item_a_run_adds_to_a_queues_buffer_is_never_sent(
 
 @pytest.mark.design("service.feeder_items")
 def test_an_item_a_run_left_in_a_queues_buffer_is_refused_after_the_run_closed(
-    service: state.ProcessState,
+    service: state.ProcessState, capfd: pytest.CaptureFixture[str]
 ) -> None:
     """With no notify the item waits for the next put, which may come once no run is open:
-    it is still refused, and the service's startup report says so."""
+    it is still refused, and the service's log says so."""
     queue = a_queue("Queue")
     try:
         plain(lambda: queue.put("plain"))
@@ -1394,7 +1394,7 @@ def test_an_item_a_run_left_in_a_queues_buffer_is_refused_after_the_run_closed(
         service.unregister(run)
         plain(lambda: queue.put("plain again"))
         assert queue.get(timeout=10) == "plain again"
-        assert [x["notice"] for x in service.report] == ["queue_feeder"]
+        assert f"scrimmage: {process_gate.UNFED}" in capfd.readouterr().err
     finally:
         queue.close()
         queue.join_thread()

@@ -318,8 +318,8 @@ def feeder_item(item: object) -> None:
     call = Call("process", "process:multiprocessing", "Queue._feed")
     for run in runs:
         run.outside_refused(call, UNFED, None)
-    if not runs and process is not None:
-        process.notice("queue_feeder", "scrimmage", UNFED)
+    if not runs:  # no record to write to: the service's log says so
+        print(f"scrimmage: {UNFED}", file=sys.stderr, flush=True)
     raise ScrimmageRefused(UNFED)
 
 
