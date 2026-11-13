@@ -22,6 +22,7 @@ def path_output(capsys: pytest.CaptureFixture[str]) -> tuple[int, str, str]:
 
 def test_path_prints_the_boot_folder_alone(capsys: pytest.CaptureFixture[str]) -> None:
     code, out, err = path_output(capsys)
+    assert Path(out.strip()).name == "_boot", out
     assert code == 0 and err == ""
     lines = out.splitlines()
     assert len(lines) == 1 and out.endswith("\n"), out
@@ -78,12 +79,17 @@ def test_a_service_started_with_pythonpath_by_hand_runs_a_test(
 ) -> None:
     _, boot, _ = path_output(capsys)
     service = bench.start(bare=True, PYTHONPATH=boot.strip())
-    code, out = bench.test(service.port, runs=2)
-    assert code == 0, out
-    summaries = bench.summaries()
-    runs = [name for name in summaries if name.startswith("run-")]
-    assert len(runs) == 2 and len([n for n in summaries if n.startswith("setup-")]) == 1
-    assert all(summaries[r]["outcome"] == "answered" for r in runs)
+    unmocked = (
+        '\n[[test]]\nname = "no-stock-mock"\nquestion = "Where is order 1234?"\n'
+        'expect = ["shipped"]\n'
+        '\n[[test.mock]]\ncall = "tool:get_order"\nreturns = "shipped, Oct 30"\n'
+    )
+    code, out = bench.test(service.port, runs=2, tests=unmocked)
+    assert code == 2, out  # a refused call, so the gates are on in the hand-started service
+    outcomes = [s.get("outcome") for n, s in bench.summaries().items() if n.startswith("run-")]
+    assert outcomes.count("refused call") == 1, outcomes
+    assert "answered" in outcomes, outcomes
+    assert len([n for n in bench.summaries() if n.startswith("setup-")]) == 1
 
 
 @pytest.mark.slow
