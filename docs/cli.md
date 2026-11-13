@@ -17,9 +17,14 @@ The report and the document's `budget_usd` name the cap used.
 A test that finished writes `result.json` into its records folder, so `scrimmage show` can read it later.
 `--records DIR` puts the records folder inside `DIR`, in place of `scrimmage-runs/` beside the file.
 Use it when the file's own folder cannot be written, such as a file mounted from a Kubernetes ConfigMap.
-A `DIR` that is missing is made, mode `0700`, with any folder above it.
+A `DIR` that is missing is made, mode `0700`, with a `.gitignore` inside it.
+Only `DIR` itself gets that mode: any folder made above it has the default mode.
+A `DIR` that cannot be made, such as one under a read-only folder, is exit 2 and the message names it.
 A relative `DIR` is relative to the folder you run the command in, not to the file.
-A `DIR` that exists must be yours: one owned by another user, such as a volume's mount point, is exit 2, and the message names a folder inside it to use.
+A `DIR` that already exists is used as it is: its mode is not changed and no `.gitignore` is written, so `--records .` never alters the folder it names.
+It must be yours and no wider than `0700`.
+One that others can enter is exit 2; run `chmod 700` on it, or point `--records` at a new folder inside it.
+One owned by another user is exit 2 as well, even when it is group-writable, as a volume's mount point is; point `--records` at a new folder inside it, such as `DIR/scrimmage-runs`.
 `scrimmage show DIR/<time>` reads the folder it makes.
 With `--compare EARLIER` it prints, after its own output, how each row changed from an earlier test; see [Reading a finished test](show.md).
 

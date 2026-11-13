@@ -92,3 +92,58 @@ def test_show_reads_a_folder_from_records(
     code, out, err = run(project, fake, str(folder), command="show")
     assert (code, err) == (0, "")
     assert out.startswith(f"scrimmage test: 1 test, 2 rows, 6 runs; records in {folder}")
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root can write into a read-only folder")
+def test_records_under_a_read_only_parent_is_exit_2_naming_the_folder(
+    project: Project, fake_openai: Fake, tmp_path: Path
+) -> None:
+    parent = tmp_path / "locked"
+    parent.mkdir()
+    dest = parent / "x" / "y"
+    with read_only(parent):
+        assert not os.access(parent, os.W_OK)
+        code, out, err = run(project, fake_openai([]), str(project.toml), "--records", str(dest))
+    assert code == 2 and out == ""
+    assert err == f"scrimmage: --records {dest}: Permission denied\n"
+    assert not parent.joinpath("x").exists()
+
+
+def test_an_existing_own_folder_of_mode_700_is_used_as_it_is(
+    project: Project, fake_openai: Fake, tmp_path: Path
+) -> None:
+    dest = tmp_path / "mine"
+    dest.mkdir(mode=0o700)
+    code, _, err = run(project, fake_openai(ACME), str(project.toml), "--records", str(dest))
+    assert (code, err) == (0, "")
+    assert stat.S_IMODE(dest.stat().st_mode) == 0o700
+    assert sorted(p.name for p in dest.iterdir() if p.is_file()) == []  # no .gitignore
+
+
+def test_an_existing_folder_open_to_others_is_exit_2_and_left_alone(
+    project: Project, fake_openai: Fake, tmp_path: Path
+) -> None:
+    dest = tmp_path / "shared"
+    dest.mkdir()
+    dest.chmod(0o755)
+    code, out, err = run(project, fake_openai([]), str(project.toml), "--records", str(dest))
+    assert code == 2 and out == ""
+    assert err == (
+        f"scrimmage: --records {dest} has mode 755, which lets others in; run chmod 700 on it, "
+        f"or point it at a new folder inside it, such as {dest / 'scrimmage-runs'}\n"
+    )
+    assert stat.S_IMODE(dest.stat().st_mode) == 0o755
+    assert list(dest.iterdir()) == []
+
+
+def test_the_config_folder_is_never_changed_by_records(project: Project, fake_openai: Fake) -> None:
+    project.root.chmod(0o700)
+    before = sorted(p.name for p in project.root.iterdir())
+    code, _, err = run(
+        project, fake_openai(ACME), str(project.toml), "--records", str(project.root)
+    )
+    assert (code, err) == (0, "")
+    assert stat.S_IMODE(project.root.stat().st_mode) == 0o700
+    after = sorted(p.name for p in project.root.iterdir())
+    assert len(after) == len(before) + 1 and set(before) <= set(after)  # the test's own folder
+    assert (project.root / ".gitignore").exists() == (".gitignore" in before)
