@@ -387,14 +387,13 @@ def test_the_sdk_refuses_a_public_authority_and_never_loads_the_system_store(
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(
-    shutil.which("openssl") is None, reason="openssl is not installed, so no hashed CA folder"
-)
 @pytest.mark.design("service.tls_one_authority")
 def test_the_sdk_refuses_an_authority_in_the_system_folder(
     tmp_path: Path, servers: list[ControlServer], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    system, ours = pki(tmp_path, "system"), pki(tmp_path, "ours")
+    # A different subject from the SDK's own authority: with the same subject OpenSSL finds the
+    # SDK's authority in memory and never opens the folder.
+    system, ours = forge(tmp_path, "system", critical=True, with_aki=True), pki(tmp_path, "ours")
     folder = tmp_path / "capath"
     folder.mkdir()
     shutil.copy(system.ca, folder / "system.pem")
