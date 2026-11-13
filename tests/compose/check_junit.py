@@ -5,8 +5,10 @@ Exit 0 when the file has N test cases and every one passed. Exit 1 otherwise.
 
 It counts leaf testcase elements, not the attributes of the suites, so a nested suite is
 never counted twice and an attribute that disagrees with the cases cannot hide one.
-A case passes only if it has no skipped, failure, error, rerun or flaky child and no
-xpass property. A suite attribute for skipped, failures or errors that is not 0 fails
+A case passes only if it has no skipped, failure, error, rerun or flaky child.
+An unexpected pass is not marked in the XML, so pyproject.toml sets xfail_strict, which
+makes pytest write it as a failure.
+A suite attribute for skipped, failures or errors that is not 0 fails
 the file, and so does any negative counter.
 """
 
@@ -31,10 +33,6 @@ def _case_problem(case: ET.Element) -> str | None:
     for child in case:
         if child.tag in _BAD_CHILDREN:
             return f"{name}: has a {child.tag} element"
-        if child.tag == "properties" and any(
-            "xpass" in (p.get("name") or "").lower() for p in child
-        ):
-            return f"{name}: is an xpass"
     return None
 
 

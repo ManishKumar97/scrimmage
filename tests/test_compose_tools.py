@@ -66,7 +66,6 @@ def test_junit_accepts_a_bare_testsuite_root(tmp_path: Path) -> None:
         "<error/>",
         "<rerunFailure/>",
         "<flakyFailure/>",
-        '<properties><property name="xpass" value="1"/></properties>',
     ],
 )
 def test_junit_rejects_a_case_with_a_bad_child_whatever_the_suite_says(
@@ -98,6 +97,40 @@ def test_junit_does_not_double_count_nested_suites(tmp_path: Path) -> None:
         f'<testsuites><testsuite name="out" tests="12">{inner}</testsuite></testsuites>'
     )
     assert _run_junit(path) == 0
+
+
+@pytest.mark.slow
+def test_junit_rejects_an_xfail_that_passes_under_the_repo_config(tmp_path: Path) -> None:
+    case = tmp_path / "test_x.py"
+    case.write_text("import pytest\n\n@pytest.mark.xfail\ndef test_x():\n    pass\n")
+    config = Path(__file__).parent.parent / "pyproject.toml"
+
+    def run(*extra: str) -> Path:
+        out = tmp_path / f"{len(extra)}.xml"
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "-c",
+                str(config),
+                "-n",
+                "0",
+                "-p",
+                "no:cacheprovider",
+                f"--junitxml={out}",
+                str(case),
+                *extra,
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            timeout=120,
+        )
+        return out
+
+    assert _run_junit(run(), 1) == 1
+    # Control: without xfail_strict the same file is written as a plain pass.
+    assert _run_junit(run("-o", "xfail_strict=false"), 1) == 0
 
 
 def test_junit_rejects_missing_empty_and_garbled_files(tmp_path: Path) -> None:
