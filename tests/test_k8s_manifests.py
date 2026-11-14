@@ -22,6 +22,7 @@ import pytest
 from k8s import cluster as kubernetes
 from k8s import images
 from k8s.cluster import Cluster, ClusterError, Tags
+from k8s.workloads import wait_default_account
 
 pytestmark = [pytest.mark.slow, pytest.mark.kind]
 
@@ -95,24 +96,12 @@ def apply_json(cluster: Cluster, namespace: str, document: dict[str, Any], *flag
     )
 
 
-def wait_default_account(cluster: Cluster, namespace: str) -> None:
-    """The namespace's default account is made a moment after it, and a pod made before it
-    is refused for that, which would be a different failure from the one a test provokes."""
-    cluster.wait_until(
-        "the default service account",
-        lambda: (
-            cluster.kubectl("get", "sa", "default", "-n", namespace, check=False).returncode == 0
-        ),
-        timeout=30,
-    )
-
-
 def test_every_manifest_applies_with_no_pod_security_warning(cluster: Cluster, tags: Tags) -> None:
     with cluster.namespace(restricted=True) as namespace:
         wait_default_account(cluster, namespace)
         shipped = sorted(p.name for p in (HERE / "manifests").glob("*.yaml"))
         shipped.remove("namespace.yaml")  # a cluster-scoped object, applied to make this one
-        assert len(shipped) == 8
+        assert len(shipped) == 10
         # Admission runs on a server-side dry run, so every file is judged and none is made.
         # The accounts are made for real first: a pod naming one that is missing is refused.
         cluster.apply(namespace, ("service-accounts.yaml",), tags)

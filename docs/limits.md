@@ -184,3 +184,24 @@
 - **An outage from a thread is frozen into the mock, with exit 0.** A 503 a tool's thread got is `outside_tool`, so nothing marks the tool as failing, and its mock answers with whatever the tool made of it.
 - **A model call from a thread is frozen inside a tool mock, with exit 0.** A model call a tool makes from a thread has no parent until Scrimmage links threads, so nothing marks the tool as having reached the model, and its mock holds the model's reply.
 - **`passphrase`, `pw` and other short names are not key-name secrets.** The key rule's words are `password`, `passwd`, `pwd`, `secret`, `token`, `auth`, `authorization`, `cookie`, `session`, `credential` and the `api key` family. A value under any other key is kept. `secret_id`, Vault's AppRole credential, is removed.
+
+## In a Kubernetes cluster
+
+- **One node.** The tests run one kind node.
+  A node failure, several nodes and the runner's pod moving between nodes are not tested.
+- **No encryption between nodes.** The runner's requests to the agent are `http://`, and Calico carries pod traffic between nodes unencrypted unless its WireGuard encryption is on.
+  The tests do not turn it on.
+- **The runner runs inside the cluster.** A runner outside it cannot serve the agent's pods: `kubectl port-forward` carries traffic one way only.
+- **Nothing between the runner and the agent.** A service mesh or an ingress in front of the agent is not tested; the runner calls the agent's Service directly.
+- **One Job at a time against one `scrimmage` Service.** A second Job behind the same Service fails the ping's runner id check.
+- **The probe reaches one replica.** A second replica whose control channel is broken is not named before the test; its runs end as infrastructure errors.
+- **A new authority needs the agent's pods restarted.** The SDK reads `SCRIMMAGE_CONTROL_CA` once, at its start.
+  A renewed server certificate keeps the same authority, so it needs nothing.
+- **A certificate renewed during a test is seen at the next test.** The runner reads its certificate and key at its start.
+  A runner that starts while the kubelet swaps the Secret's files for a renewal can read the new certificate with the old key; it then stops with exit 2, saying the two cannot be used together, and a restart fixes it.
+- **The control authority has no name constraints.** A DNS name constraint permits a name and every name that ends with it, so no fixed set covers `scrimmage.<namespace>` for any namespace.
+  The authority is trusted only through `SCRIMMAGE_CONTROL_CA`, and its key lives only in `scrimmage-pki`.
+- **A name lookup can carry data out.** The `dns` policy lets every pod ask cluster DNS, and CoreDNS forwards a name it does not serve to the resolvers upstream.
+  So a process in any pod can put data in a name it looks up, and no NetworkPolicy stops it.
+  A CoreDNS that answers only cluster names, or a DNS firewall, closes that path; the tests do neither.
+- **Not part of this version.** trust-manager, a Helm chart for the runner, a published and signed runner image, and a production storage class for the records.

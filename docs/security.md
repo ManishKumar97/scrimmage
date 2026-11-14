@@ -206,6 +206,58 @@ A replay to the same worker within 120 seconds finds its nonce used and reaches 
 
 *Checked by: `tests/test_check_service.py::test_a_replayed_stale_probe_is_answered_as_documented`, `tests/test_check_service.py::test_a_gap_above_the_window_gets_a_signed_clock_reply_and_exit_3_naming_the_gap`*
 
+## The control channel in a Kubernetes cluster
+
+In a cluster the runner runs as a Job and the agent as a Deployment, set up as [In Kubernetes](services.md#in-kubernetes) shows.
+The shipped network policies deny all traffic in the namespace, then allow four paths: the agent's pods to the runner on port 7700, the runner to the agent on port 8000, the agent to its model host, and every pod to cluster DNS.
+The tests run Calico, which enforces them; a network plugin that does not enforce NetworkPolicy ignores them.
+
+- Only the agent's pods reach the runner's control port.
+  A pod in the namespace with another label gets no answer, and so does a pod in another namespace, even one with the agent's label.
+  A pod in the namespace that no policy names cannot be reached from another namespace.
+
+  *Checked by: `tests/test_k8s_security.py::test_only_the_agents_pods_reach_the_control_port`*
+
+- The runner reaches only the agent and cluster DNS.
+  It cannot reach the model host or any address outside the cluster.
+
+  *Checked by: `tests/test_k8s_security.py::test_the_runner_reaches_only_the_agent_and_dns`*
+
+- The runner's account has no Role and no RoleBinding, and no API token is mounted in its pod.
+  It may do only what every account may, such as ask what it may do, so a runner that is taken over cannot call the Kubernetes API.
+
+  *Checked by: `tests/test_k8s_security.py::test_the_runners_service_account_can_do_nothing`*
+
+- The namespace enforces the Pod Security `restricted` standard, and every pod the manifests make meets it.
+  Each runs as uid 10001, never as root, with no privilege escalation, every Linux capability dropped, the default seccomp profile and a read-only root file system.
+  A pod that breaks the standard is refused when it is made, even with no Deployment around it.
+  Dropping every capability drops `CAP_NET_RAW`, so no pod can read other pods' traffic off the network.
+
+  *Checked by: `tests/test_k8s_security.py::test_every_pod_passes_the_restricted_standard`*
+
+- Each process in the agent's pods connects only to the Service `scrimmage` on port 7700 and to the model host, and looks up only those two names.
+
+  *Checked by: `tests/test_k8s_security.py::test_the_agents_pods_connect_only_to_the_control_service_and_the_model`*
+
+With the policies, the agent's pods and the processes on the node itself can reach port 7700; Calico lets a node reach its own pods, which the kubelet's probes need.
+Without them, every pod and every node in the cluster can.
+
+| Who | Can | What follows |
+|---|---|---|
+| A pod in another namespace, or one in this namespace with another label | connect to port 7700 | nothing: the policy drops the packets. A client that holds the control server's connections needs a connection first, so it is shut out |
+| Anyone who can make a pod with the agent's label in the namespace, directly or through any workload | reach port 7700 | what any client without the token gets: refused signatures, at most 4 MB read before the check, 15 seconds a connection. Such a pod can also mount the token Secret, which is the boundary row below |
+| A pod on the pod network with `CAP_NET_RAW` | read other pods' traffic | nothing: Calico gives each pod a link of its own, with no shared bridge, and `restricted` drops the capability anyway |
+| Root on a node, or a pod on the host's network | read the runner's requests to the agent, which are `http://`, and the records on the volume | everything, as on any node. This is out of scope |
+| Anyone who can make a Service named `scrimmage` in the namespace | answer the agent's control requests | its certificate fails the check, and the agent sends nothing |
+| Anyone who can read Secrets, or create or edit workloads (pods, Deployments, Jobs and the like), in the namespace | the token and the control server's key: a pod they start mounts any Secret of the namespace, with no RBAC on Secrets | everything. **This is the boundary.** Grant those rights in a test's namespace only to those you would give the token |
+| Anyone who can create a cert-manager `Certificate` or `CertificateRequest` in `scrimmage-pki`, the namespace of the authority and its Issuer | have the authority sign a certificate for `scrimmage` | a certificate the agent accepts, so they can answer as the runner, though with no token they sign no plan. cert-manager approves every request by default, so this is a real path. cert-manager's approver-policy project is the production hardening; the tests do not run it |
+| A runner pod that is taken over | call the Kubernetes API | nothing: no token is mounted, and its egress reaches only DNS and the agent |
+| A process in the agent's pods | reach any other address | the egress policy drops it. A process can still put data in the names it looks up, which cluster DNS passes on; see [Limits](limits.md#in-a-kubernetes-cluster) |
+
+The authority's key lives only in `scrimmage-pki`, and no test namespace holds an Issuer, so rights in a test's namespace are not rights to sign.
+The runner's requests to the agent stay `http://`, so request bodies, the `headers` from the file and every answer cross the pod network in clear.
+On one node that path is inside the node; between nodes Calico carries it unencrypted unless its WireGuard encryption is on.
+
 ## The plan is data
 
 For each run, the runner sends the code inside your agent a plan: which calls to mock, which to fail, and which may run for real.

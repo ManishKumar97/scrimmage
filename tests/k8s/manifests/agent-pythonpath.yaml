@@ -1,0 +1,64 @@
+# The agent of agent.yaml, started without scrimmage-run, for a Deployment that keeps its own
+# command. PYTHONPATH begins with the folder that holds Scrimmage's sitecustomize.py, and
+# SCRIMMAGE_SERVICE=1 switches the service on, which is all scrimmage-run does for a service.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: acme-agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app.kubernetes.io/name: acme-agent}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: acme-agent}
+    spec:
+      serviceAccountName: acme-agent
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: agent
+          image: scrimmage-compose-service:TAG
+          imagePullPolicy: Never
+          command: ["uvicorn", "acme.service:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+          env:
+            # First on the path: the folder `scrimmage path` prints in this image. Read it once with
+            # docker run --rm <image> scrimmage path
+            - {name: PYTHONPATH, value: /usr/local/lib/python3.12/site-packages/scrimmage_core/_boot}
+            - {name: SCRIMMAGE_SERVICE, value: "1"}
+            - {name: SCRIMMAGE_TOKEN_FILE, value: /run/scrimmage/token/token}
+            - {name: SCRIMMAGE_CONTROL_URL, value: "https://scrimmage:7700"}
+            - {name: SCRIMMAGE_CONTROL_CA, value: /run/scrimmage/ca/ca.pem}
+            - {name: SCRIMMAGE_TOOLS, value: "acme.tools:get_order,acme.tools:check_inventory,acme.tools:refund_order,acme.tools:get_stock"}
+            - {name: SCRIMMAGE_ALLOW_IMPORTS, value: "acme."}
+            - {name: OPENAI_BASE_URL, value: "http://fake-model:8080/v1"}
+            - {name: OPENAI_API_KEY, value: test}
+          ports: [{containerPort: 8000, name: http}]
+          readinessProbe:
+            httpGet: {path: /openapi.json, port: http}
+            periodSeconds: 2
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: token, mountPath: /run/scrimmage/token, readOnly: true}
+            - {name: ca, mountPath: /run/scrimmage/ca, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: token, secret: {secretName: scrimmage-token, defaultMode: 0400}}
+        - name: ca
+          secret:
+            secretName: scrimmage-ca-cert
+            defaultMode: 0444
+            items: [{key: ca.crt, path: ca.pem}]
+        - {name: tmp, emptyDir: {medium: Memory, sizeLimit: 64Mi}}

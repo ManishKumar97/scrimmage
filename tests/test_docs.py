@@ -673,9 +673,11 @@ def test_no_documented_fault_fires_on_every_call_with_nothing_to_judge_it() -> N
 
 K8S = Path(__file__).parent / "k8s"
 # The files the "In Kubernetes" section shows, each as the cluster tests apply it. The fake
-# model's Deployment is left out: it stands in for the model provider in the tests only.
+# model's Deployment is left out: it stands in for the model provider in the tests only. So is
+# the agent from the egress test image, which adds a hook only the tests use.
+K8S_TEST_ONLY = {"fake-model.yaml", "agent-egress.yaml"}
 K8S_SHOWN = {
-    **{p.name: p for p in (K8S / "manifests").glob("*.yaml") if p.name != "fake-model.yaml"},
+    **{p.name: p for p in (K8S / "manifests").glob("*.yaml") if p.name not in K8S_TEST_ONLY},
     "pki-authority.yaml": K8S / "pki-authority.yaml",
     "pki-control.yaml": K8S / "pki-control.yaml",
     "scrimmage.toml": K8S / "scrimmage.toml",

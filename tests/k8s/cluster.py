@@ -79,14 +79,17 @@ class Tags:
     runner: str
     agent: str
     fake_model: str
+    egress: str | None = None  # the agent plus the egress audit hook; only one test needs it
 
     def render(self, text: str) -> str:
         for placeholder, tag in (
             ("scrimmage-runner:TAG", self.runner),
             ("scrimmage-compose-service:TAG", self.agent),
             ("scrimmage-fake-model:TAG", self.fake_model),
+            ("scrimmage-compose-egress:TAG", self.egress),
         ):
-            text = text.replace(placeholder, tag)
+            if tag is not None:
+                text = text.replace(placeholder, tag)
         return text
 
 
@@ -596,16 +599,18 @@ class Cluster:
         }
         self.kubectl("apply", "-f", "-", input=json.dumps(config))
 
-    def deploy(self, namespace: str, tags: Tags) -> str:
+    def deploy(self, namespace: str, tags: Tags, agent: str = "agent.yaml") -> str:
         """Everything except the Job and the reader: the certificate and its two Secrets, the
         token, the file, the accounts, the volume claim, the Services, the policies, the fake
-        model and the agent. Returns every warning kubectl printed, which is empty when the
-        namespace's standard accepts it all. Returns before any pod is Ready; see wait_ready."""
+        model and the agent, from `agent`, a file of the Deployment acme-agent. Returns every
+        warning kubectl printed, which is empty when the namespace's standard accepts it all.
+        Returns before any pod is Ready; see wait_ready."""
         self.issue_control_certificate(namespace)
         self.create_token_secret(namespace)
         self.create_config_map(namespace)
         warnings = self.apply(namespace, FOUNDATION, tags)
-        return warnings + self.apply(namespace, WORKLOADS, tags)
+        workloads = tuple(agent if name == "agent.yaml" else name for name in WORKLOADS)
+        return warnings + self.apply(namespace, workloads, tags)
 
     def deployment_ready(self, namespace: str, name: str) -> bool:
         found = self.json("get", "deployment", name, "-n", namespace, check=False) or {}
