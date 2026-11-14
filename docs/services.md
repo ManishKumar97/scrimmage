@@ -395,6 +395,600 @@ When the path is a Secret volume's link, it reads the file only if all of these 
 Each refusal names the setting that fixes it: `securityContext.fsGroup`, `runAsUser` and `runAsNonRoot: true`, or the volume's `defaultMode`.
 A plain file owned by another user, and a plain file of mode `640`, are still refused.
 
+## In Kubernetes
+
+In a cluster, the runner runs as a Job, and the service runs as a Deployment of two replicas behind a Service.
+Every secret arrives as a Secret volume.
+This repository tests the example service this way on kind, with the files below.
+kind is the Kubernetes project's own test cluster; the files are the same on a production cluster.
+
+1. One namespace holds the test, and enforces the Pod Security `restricted` standard.
+2. cert-manager issues the control server's certificate.
+3. A Secret, `scrimmage-token`, holds the token.
+4. The agent runs as the Deployment `acme-agent`, two replicas of `uvicorn --workers 2`, behind the Service `acme-agent` on port 8000.
+5. The runner runs as the Job `scrimmage-test`, behind the Service `scrimmage` on port 7700.
+   It writes its records to a volume claim, `scrimmage-records`.
+6. NetworkPolicies deny everything in the namespace, then allow the agent to reach the runner on 7700, the runner to reach the agent on 8000, the agent to reach the model, and every pod to reach cluster DNS.
+7. The agent's pods reach the runner at `https://scrimmage:7700`, and the runner reaches the agent at `http://acme-agent:8000/chat`.
+
+The cluster needs three things:
+
+- a network plugin that enforces NetworkPolicy, such as Calico, which the tests use;
+- cert-manager, the CNCF project most clusters issue certificates with;
+- a storage class for the records: the tests use `standard`, kind's local-path class, which is for tests only, and a production cluster names a CSI class, such as the EBS one.
+
+`TAG` in an image name stands for your image's tag, and `NAMESPACE` for the test's namespace.
+`imagePullPolicy: Never` runs only an image already on the node; use your registry's policy instead.
+
+### The namespace and the accounts
+
+```yaml title="namespace.yaml"
+# The namespace one test runs in. The harness replaces NAMESPACE with s8-<random>.
+# enforce refuses a pod that breaks the restricted standard. A Deployment or a Job that breaks it
+# is still admitted and only its pods are refused, so warn prints the problem when the workload
+# is applied, and audit records it. The version is the cluster's own minor, pinned.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: NAMESPACE
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.36
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.36
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.36
+```
+
+None of the accounts has a Role, and no pod gets an API token: the runner never calls the Kubernetes API, and a pod needs no rights to mount a Secret.
+
+```yaml title="service-accounts.yaml"
+# No Role and no RoleBinding for any of them, and no API token mounted into a pod.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scrimmage-runner
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: acme-agent
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fake-model
+automountServiceAccountToken: false
+```
+
+### The certificate
+
+The authority and its Issuer live in a namespace of their own, `scrimmage-pki`, made once per cluster.
+cert-manager signs every request an Issuer gets, so an Issuer in the test's namespace would sign for the control name for anyone who can make a `Certificate` there.
+
+```yaml title="pki-authority.yaml"
+# The certificate authority for the control channel, made once per cluster in scrimmage-pki.
+# No test namespace holds an Issuer.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scrimmage-pki
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: scrimmage-selfsigned
+  namespace: scrimmage-pki
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: scrimmage-ca
+  namespace: scrimmage-pki
+spec:
+  isCA: true
+  commonName: scrimmage-ca
+  secretName: scrimmage-ca
+  duration: 43800h
+  # No nameConstraints: cert-manager 1.21 accepts them, but a DNS constraint is a suffix rule.
+  # It can permit scrimmage and x.scrimmage, never scrimmage.<namespace>.svc, which the control
+  # certificate must name, unless every test namespace is listed in advance.
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Never
+  issuerRef:
+    name: scrimmage-selfsigned
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: scrimmage-ca
+  namespace: scrimmage-pki
+spec:
+  ca:
+    secretName: scrimmage-ca
+```
+
+One certificate per test namespace, with `NAMESPACE` filled in:
+
+```yaml title="pki-control.yaml"
+# The control server's certificate for one test namespace. The harness fills in NAMESPACE.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: scrimmage-control-NAMESPACE
+  namespace: scrimmage-pki
+spec:
+  secretName: scrimmage-control-NAMESPACE
+  duration: 24h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  usages:
+    - server auth
+    - digital signature
+  dnsNames:
+    - scrimmage
+    - scrimmage.NAMESPACE
+    - scrimmage.NAMESPACE.svc
+    - scrimmage.NAMESPACE.svc.cluster.local
+  issuerRef:
+    name: scrimmage-ca
+    kind: Issuer
+```
+
+Copy its Secret into the test's namespace as two Secrets: `scrimmage-control-tls` with `tls.crt` and `tls.key` for the runner, and `scrimmage-ca-cert` with only `ca.crt` for the agent.
+No key is ever in the agent's pod.
+
+```bash
+NS=my-test
+SOURCE="secret/scrimmage-control-$NS -n scrimmage-pki"
+kubectl create secret generic scrimmage-control-tls -n $NS \
+  --from-file=tls.crt=<(kubectl get $SOURCE -o jsonpath='{.data.tls\.crt}' | base64 -d) \
+  --from-file=tls.key=<(kubectl get $SOURCE -o jsonpath='{.data.tls\.key}' | base64 -d)
+kubectl create secret generic scrimmage-ca-cert -n $NS \
+  --from-file=ca.crt=<(kubectl get $SOURCE -o jsonpath='{.data.ca\.crt}' | base64 -d)
+```
+
+The key passes through a pipe, never a file.
+The authority lives 5 years and keeps its key, so a renewed server certificate never changes what the agent trusts.
+
+### The token
+
+Make the token Secret from standard input, so the token is on no command line and in no file:
+
+```bash
+python3 -c "import secrets; print(secrets.token_hex(32), end='')" \
+  | kubectl create secret generic scrimmage-token -n $NS --from-file=token=/dev/stdin
+```
+
+### The records volume, the Services and the policies
+
+The records outlive the Job's pod on the claim, and are read back by the reader pod below.
+Records hold your test's data: delete the claim when you no longer need them.
+
+```yaml title="records-pvc.yaml"
+# The class "standard" is kind's local-path provisioner. A production cluster names a CSI class.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: scrimmage-records
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 1Gi
+```
+
+```yaml title="services.yaml"
+apiVersion: v1
+kind: Service
+metadata:
+  name: scrimmage
+spec:
+  selector:
+    app.kubernetes.io/name: scrimmage-runner
+  ports:
+    - {name: control, port: 7700, targetPort: control}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: acme-agent
+spec:
+  selector:
+    app.kubernetes.io/name: acme-agent
+  ports:
+    - {name: http, port: 8000, targetPort: http}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fake-model
+spec:
+  selector:
+    app.kubernetes.io/name: fake-model
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+```
+
+```yaml title="network-policies.yaml"
+# Deny everything, then allow four paths: the agent to the runner on 7700, the runner to the
+# agent on 8000, the agent to the fake model on 8080, and every pod to cluster DNS.
+# A policy selects one set of pods, so each path is two policies: egress on the sender, ingress
+# on the receiver. Calico checks a policy after a Service's address is translated, so the rules
+# name pods and ports, never Service addresses.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dns
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-to-runner-ingress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: scrimmage-runner}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: acme-agent}
+      ports:
+        - {protocol: TCP, port: 7700}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-to-runner-egress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: acme-agent}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: scrimmage-runner}
+      ports:
+        - {protocol: TCP, port: 7700}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: runner-to-agent-ingress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: acme-agent}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: scrimmage-runner}
+      ports:
+        - {protocol: TCP, port: 8000}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: runner-to-agent-egress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: scrimmage-runner}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: acme-agent}
+      ports:
+        - {protocol: TCP, port: 8000}
+---
+# The real-model check replaces the two agent-to-model policies with TCP 443 to 0.0.0.0/0,
+# except the pod and service ranges, 172.16.0.0/12 and 169.254.0.0/16, since a NetworkPolicy
+# cannot name a host.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-to-model-ingress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: fake-model}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: acme-agent}
+      ports:
+        - {protocol: TCP, port: 8080}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-to-model-egress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: acme-agent}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: fake-model}
+      ports:
+        - {protocol: TCP, port: 8080}
+```
+
+The tests run a fake model in the namespace, the `fake-model` the policies name.
+With a real provider, replace the two agent-to-model policies as their comment says.
+
+### The agent
+
+```yaml title="agent.yaml"
+# The acme order bot as a service: two replicas, each uvicorn with two workers.
+# The token and the authority arrive as Secret volumes. The service refuses a token in its
+# environment. The authority's Secret holds ca.crt alone, so no key is ever in this pod.
+# OPENAI_API_KEY is the fake model's, not a secret.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: acme-agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app.kubernetes.io/name: acme-agent}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: acme-agent}
+    spec:
+      serviceAccountName: acme-agent
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: agent
+          image: scrimmage-compose-service:TAG
+          imagePullPolicy: Never
+          command: ["scrimmage-run", "uvicorn", "acme.service:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+          env:
+            - {name: SCRIMMAGE_SERVICE, value: "1"}
+            - {name: SCRIMMAGE_TOKEN_FILE, value: /run/scrimmage/token/token}
+            - {name: SCRIMMAGE_CONTROL_URL, value: "https://scrimmage:7700"}
+            - {name: SCRIMMAGE_CONTROL_CA, value: /run/scrimmage/ca/ca.pem}
+            - {name: SCRIMMAGE_TOOLS, value: "acme.tools:get_order,acme.tools:check_inventory,acme.tools:refund_order,acme.tools:get_stock"}
+            - {name: SCRIMMAGE_ALLOW_IMPORTS, value: "acme."}
+            - {name: OPENAI_BASE_URL, value: "http://fake-model:8080/v1"}
+            - {name: OPENAI_API_KEY, value: test}
+          ports: [{containerPort: 8000, name: http}]
+          readinessProbe:
+            httpGet: {path: /openapi.json, port: http}
+            periodSeconds: 2
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: token, mountPath: /run/scrimmage/token, readOnly: true}
+            - {name: ca, mountPath: /run/scrimmage/ca, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: token, secret: {secretName: scrimmage-token, defaultMode: 0400}}
+        - name: ca
+          secret:
+            secretName: scrimmage-ca-cert
+            defaultMode: 0444
+            items: [{key: ca.crt, path: ca.pem}]
+        - {name: tmp, emptyDir: {medium: Memory, sizeLimit: 64Mi}}
+```
+
+### The Job and its file
+
+The Job's file is the ConfigMap `scrimmage-config`.
+`control` is the runner pod's own address, from the downward API, and the Service `scrimmage` points at it.
+The pod's address is removed from the records, as is any `${NAME}` value of 8 characters or more.
+
+```toml title="scrimmage.toml"
+# The Job's file, the ConfigMap scrimmage-config. The tests below it are the example's.
+# POD_IP is the runner pod's own address from the downward API, so the agent's pods reach the
+# control server there. The Service `scrimmage` and the certificate's names point at it.
+[agent]
+service     = "http://acme-agent:8000/chat"
+body        = {message = "{question}", session = "{session}"}
+answer      = "reply"
+tools       = ["acme.tools:get_order", "acme.tools:check_inventory", "acme.tools:refund_order", "acme.tools:get_stock"]
+real        = ["tool:check_inventory", "process:uname"]
+model_hosts = [{host = "fake-model", provider = "openai"}]
+control     = "${POD_IP}:7700"
+control_tls = {cert = "/run/scrimmage/tls/tls.crt", key = "/run/scrimmage/tls/tls.key"}
+runs = 30
+record_grace_s = 0.2
+record_wait_s = 10
+run_timeout = 30
+
+[[test]]
+name     = "order-status"
+question = "Where is order 1234?"
+expect   = ["shipped", ["Oct 30", "October 30"]]
+
+[[test.mock]]
+call    = "tool:get_order"
+returns = "shipped, Oct 30"
+
+[[test.mock]]
+call    = "tool:get_stock"             # returns an acme.models.Stock object
+returns = {sku = "SKU-42", count = 12}
+
+[[test.fault]]
+call = "tool:get_order"
+do   = "timeout"
+expect = [["unable", "sorry", "try again"]]
+forbid = ["Oct 30", "October 30"]
+```
+
+`--records` puts the records folder inside the volume, not beside the read-only file.
+
+```yaml title="runner-job.yaml"
+# One test, one pod. backoffLimit 0: a retry would start a second test and spend twice.
+# The pod's exit code is scrimmage test's: 0, 2 or 3. The result is result.json on the volume.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: scrimmage-test
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: scrimmage-runner}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: scrimmage-runner
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: runner
+          image: scrimmage-runner:TAG
+          imagePullPolicy: Never
+          args: ["test", "/etc/scrimmage/scrimmage.toml", "--records", "/records/scrimmage-runs"]
+          env:
+            - name: POD_IP
+              valueFrom: {fieldRef: {fieldPath: status.podIP}}
+            - {name: SCRIMMAGE_TOKEN_FILE, value: /run/scrimmage/token/token}
+          ports: [{containerPort: 7700, name: control}]
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: config, mountPath: /etc/scrimmage, readOnly: true}
+            - {name: token, mountPath: /run/scrimmage/token, readOnly: true}
+            - {name: tls, mountPath: /run/scrimmage/tls, readOnly: true}
+            - {name: records, mountPath: /records}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: config, configMap: {name: scrimmage-config}}
+        - {name: token, secret: {secretName: scrimmage-token, defaultMode: 0400}}
+        - name: tls
+          secret:
+            secretName: scrimmage-control-tls
+            defaultMode: 0400
+            items: [{key: tls.crt, path: tls.crt}, {key: tls.key, path: tls.key}]
+        - {name: records, persistentVolumeClaim: {claimName: scrimmage-records}}
+        - {name: tmp, emptyDir: {medium: Memory, sizeLimit: 64Mi}}
+```
+
+`backoffLimit: 0` means the cluster never starts the test a second time: a failed test ends the Job as `Failed`, with one pod.
+
+### Run it
+
+```bash
+kubectl apply --server-side -n $NS -f service-accounts.yaml -f records-pvc.yaml \
+  -f services.yaml -f network-policies.yaml
+kubectl create configmap scrimmage-config -n $NS --from-file=scrimmage.toml
+kubectl apply --server-side -n $NS -f agent.yaml
+kubectl rollout status deployment/acme-agent -n $NS
+kubectl apply --server-side -n $NS -f runner-job.yaml
+POD="pod -n $NS -l batch.kubernetes.io/job-name=scrimmage-test"
+EXIT='{.items[0].status.containerStatuses[0].state.terminated.exitCode}'
+until kubectl get $POD -o jsonpath="$EXIT" | grep -q .; do sleep 5; done
+kubectl get $POD -o jsonpath="$EXIT"     # 0, 2 or 3, as scrimmage test exits
+```
+
+Read the exit code from the pod's status, as above, and the result from the records.
+`kubectl logs` mixes the runner's progress lines on stderr into its stdout, so it is for a person to read, never for a program.
+
+### Read the records
+
+The reader pod mounts the records volume read-only and runs nothing else.
+It reads the records after the Job and its pod are deleted, too.
+
+```yaml title="reader.yaml"
+# Reads the records after the test's Job and its pod are gone. It mounts the volume read-only.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: reader
+  labels: {app.kubernetes.io/name: scrimmage-reader}
+spec:
+  serviceAccountName: scrimmage-runner
+  automountServiceAccountToken: false
+  terminationGracePeriodSeconds: 0
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: reader
+      image: scrimmage-runner:TAG
+      imagePullPolicy: Never
+      command: ["sleep", "infinity"]
+      resources:
+        requests: {cpu: 125m, memory: 128Mi}
+        limits: {memory: 256Mi}
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: {drop: [ALL]}
+      volumeMounts:
+        - {name: records, mountPath: /records, readOnly: true}
+  volumes:
+    - name: records
+      persistentVolumeClaim: {claimName: scrimmage-records, readOnly: true}
+```
+
+```bash
+kubectl apply --server-side -n $NS -f reader.yaml
+kubectl exec -n $NS reader -- ls /records/scrimmage-runs
+kubectl exec -n $NS reader -- scrimmage show /records/scrimmage-runs/<folder>
+kubectl exec -n $NS reader -- cat /records/scrimmage-runs/<folder>/result.json
+```
+
+Each run's summary names the pod that served it in `claimed_by`, and both digests of its plan, as [a service run's summary line](json-output.md#a-service-runs-summary-line) says.
+
 ## Workers
 
 `uvicorn --workers N` works as it does without Scrimmage: each worker loads the app, prints its own active line, and serves runs and plain requests.
