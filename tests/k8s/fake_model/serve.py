@@ -21,7 +21,7 @@ from fakes.openai_server import CHAT_PATH, FakeOpenAI, Reply, holds
 PORT = 8080
 HOLD_PORT = 8081
 HOLD_MARKER = "[scrimmage-hold]"
-HOLD_S = 20.0
+HOLD_S = 40.0
 
 
 class Hold:
