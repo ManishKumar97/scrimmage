@@ -31,9 +31,6 @@ from ports import free_port
 pytestmark = [pytest.mark.slow, pytest.mark.docker]
 
 ACTIVE = re.compile(r"scrimmage: active in service mode \(pid (\d+)\)")
-NON_PYTHON = (
-    ("uname", ["uname", "-p"]),
-)  # what the example's `real = ["process:uname"]` lets openai run
 
 
 @pytest.fixture(scope="session")
@@ -174,7 +171,7 @@ def test_the_container_connects_only_to_the_control_address_and_the_model_host(
         # Nothing else: every address, every name, every child.
         allowed = {(gateway, control), (gateway, model)}
         names = {"host.docker.internal", gateway}
-        problems = harness.egress_problems(records, allowed, names, NON_PYTHON)
+        problems = harness.egress_problems(records, allowed, names, harness.NON_PYTHON)
         # The one excused program is the system's uname, not one earlier on the PATH.
         which = bench.project.compose("exec", "-T", "agent", "sh", "-c", "command -v uname")
         assert which.stdout.strip() == "/usr/bin/uname"

@@ -411,6 +411,11 @@ def _address(raw: Any) -> tuple[str, int] | None:
     return (host, port) if isinstance(port, int) else None
 
 
+# The programs that are not Python the example's agent starts: the example's
+# `real = ["process:uname"]` lets openai run uname.
+NON_PYTHON = (("uname", ["uname", "-p"]),)
+
+
 def egress_problems(
     records: list[dict[str, Any]],
     allowed: set[tuple[str, int]],
@@ -473,11 +478,19 @@ def read_egress(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def live_pids(project: Project) -> set[int]:
-    """The process ids alive in the agent container now, read from its /proc by the shell
-    alone, so the reader starts no Python of its own. Its own pid is left out."""
-    script = 'for p in /proc/[0-9]*; do echo "${p#/proc/}"; done; echo "self $$"'
-    out = project.compose("exec", "-T", "agent", "sh", "-c", script, timeout=60).stdout
+# Lists the process ids alive where it runs, from /proc, by the shell alone, so the reader
+# starts no Python of its own. Run with `sh -c`; its output goes to parse_live_pids.
+LIVE_PIDS = 'for p in /proc/[0-9]*; do echo "${p#/proc/}"; done; echo "self $$"'
+
+
+def parse_live_pids(out: str) -> set[int]:
+    """The pids LIVE_PIDS printed, without the shell's own."""
     lines = out.split()
     own = int(lines[lines.index("self") + 1])
     return {int(x) for x in lines if x.isdigit()} - {own}
+
+
+def live_pids(project: Project) -> set[int]:
+    """The process ids alive in the agent container now."""
+    out = project.compose("exec", "-T", "agent", "sh", "-c", LIVE_PIDS, timeout=60).stdout
+    return parse_live_pids(out)

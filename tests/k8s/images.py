@@ -75,3 +75,9 @@ def ensure_agent_image() -> str:
 def kind_load(tag: str, cluster: str) -> None:
     """Copy a local image into the cluster's nodes; the manifests use imagePullPolicy Never."""
     harness.sh(["kind", "load", "docker-image", tag, "--name", cluster], timeout=300)
+
+
+def ensure_egress_image() -> str:
+    """The agent image plus the egress audit hook, for the test that reads what each process
+    connects to. The product image has no hook."""
+    return harness.ensure_images().egress

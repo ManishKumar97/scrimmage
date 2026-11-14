@@ -6,11 +6,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 
 from compose import harness
 from k8s import cluster as kubernetes
 from k8s.cluster import Cluster, ClusterError
+from k8s.workloads import MANIFEST_FILES, WORKLOAD_KINDS, documents, pod_spec
 from scrimmage_core.config import load as load_config
 
 HERE = Path(kubernetes.__file__).parent
@@ -148,19 +148,6 @@ def test_a_session_does_not_wait_for_its_own_scratch_cluster(
 
 # The committed manifests, read without a cluster.
 
-MANIFEST_FILES = sorted((HERE / "manifests").glob("*.yaml"))
-WORKLOAD_KINDS = {"Deployment", "Job", "Pod"}
-
-
-def documents(path: Path) -> list[dict[str, Any]]:
-    return [d for d in yaml.safe_load_all(path.read_text()) if d]
-
-
-def pod_spec(document: dict[str, Any]) -> dict[str, Any]:
-    if document["kind"] == "Pod":
-        return document["spec"]
-    return document["spec"]["template"]["spec"]
-
 
 def containers() -> list[tuple[str, dict[str, Any]]]:
     found: list[tuple[str, dict[str, Any]]] = []
@@ -181,12 +168,14 @@ def test_the_manifests_are_the_files_the_harness_applies() -> None:
         ("Pod", "reader"),
     } <= found
     applied = {*kubernetes.FOUNDATION, *kubernetes.WORKLOADS, "runner-job.yaml", "reader.yaml"}
-    assert applied | {"namespace.yaml"} == {p.name for p in MANIFEST_FILES}
+    # Two more Deployments of acme-agent, each applied in place of agent.yaml by one test.
+    in_place = {"agent-pythonpath.yaml", "agent-egress.yaml"}
+    assert applied | in_place | {"namespace.yaml"} == {p.name for p in MANIFEST_FILES}
 
 
 def test_every_container_has_resource_requests_and_a_memory_limit() -> None:
     found = containers()
-    assert len(found) == 4, "agent, runner, fake model and reader"
+    assert len(found) == 6, "three agents, runner, fake model and reader"
     for name, container in found:
         resources = container.get("resources", {})
         assert {"cpu", "memory"} <= set(resources.get("requests", {})), f"{name}: no requests"
@@ -195,12 +184,15 @@ def test_every_container_has_resource_requests_and_a_memory_limit() -> None:
 
 def test_every_image_is_a_tag_the_harness_fills_and_is_never_pulled() -> None:
     tags = kubernetes.Tags(
-        "scrimmage-runner:a1", "scrimmage-compose-service:b2", "scrimmage-fake-model:c3"
+        "scrimmage-runner:a1",
+        "scrimmage-compose-service:b2",
+        "scrimmage-fake-model:c3",
+        "scrimmage-compose-egress:d4",
     )
     for name, container in containers():
         assert container["image"].endswith(":TAG"), f"{name}: {container['image']}"
         assert container["imagePullPolicy"] == "Never", f"{name} may pull a same-named image"
-        assert tags.render(container["image"]).split(":")[1] in ("a1", "b2", "c3"), name
+        assert tags.render(container["image"]).split(":")[1] in ("a1", "b2", "c3", "d4"), name
 
 
 def test_the_manifests_hold_what_pod_security_does_not_check() -> None:
@@ -213,7 +205,7 @@ def test_the_manifests_hold_what_pod_security_does_not_check() -> None:
                 assert document["automountServiceAccountToken"] is False, name
             elif document["kind"] in WORKLOAD_KINDS:
                 specs.append((name, pod_spec(document)))
-    assert len(specs) == 4
+    assert len(specs) == 6
     for name, spec in specs:
         assert spec["automountServiceAccountToken"] is False, f"{name}: mounts an API token"
         for container in spec["containers"]:

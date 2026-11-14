@@ -12,28 +12,34 @@ Like the other cluster tests, these run only with SCRIMMAGE_KIND=1, one file at 
         tests/test_service_k8s.py
 """
 
-import base64
 import json
 import re
 from collections.abc import Iterator
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from k8s import cluster as kubernetes
 from k8s import images
-from k8s.cluster import Cluster, ClusterError, Tags
+from k8s.cluster import Cluster, Tags
+from k8s.workloads import (
+    EXAMPLE_OUTCOMES,
+    JOB,
+    JOB_PODS,
+    JobRun,
+    pod_names,
+    read_records,
+    row_outcomes,
+    run_details,
+    run_job,
+    start_job,
+    wait_default_account,
+    wait_ended,
+)
 from test_docs import kubernetes_docs_problems
-from test_k8s_manifests import wait_default_account
 
 pytestmark = [pytest.mark.slow, pytest.mark.kind]
 
-JOB = "scrimmage-test"
-JOB_PODS = f"batch.kubernetes.io/job-name={JOB}"
-AGENT_PODS = "app.kubernetes.io/name=acme-agent"
-RUNS = "/records/scrimmage-runs"
 TOKEN_FILE = "/run/scrimmage/token/token"
 # What the agent's own process sees of its token file: the link, the file it leads to, and
 # whether its mount is read-only. Printed as JSON, so nothing is parsed from text.
@@ -53,27 +59,6 @@ print(json.dumps({{
 """
 
 
-@dataclass(frozen=True)
-class JobRun:
-    """One test the Job ran in a namespace that stays up for this file's tests."""
-
-    namespace: str
-    token: str = field(repr=False)  # never in a failure's output
-    exit_code: int
-    runner_pod: str
-    agents: tuple[str, ...]
-    log: Path  # kubectl logs, saved for a person to read; no test reads it
-
-
-@dataclass(frozen=True)
-class Records:
-    """What the records volume holds: the test's result.json and each run's summary line."""
-
-    folder: str
-    result: dict[str, Any]
-    summaries: dict[str, dict[str, Any]]
-
-
 @pytest.fixture(scope="module")
 def tags() -> Tags:
     return Tags(
@@ -89,103 +74,12 @@ def cluster(tags: Tags) -> Iterator[Cluster]:
         yield made
 
 
-def pod_names(cluster: Cluster, namespace: str, selector: str) -> list[str]:
-    found = cluster.json("get", "pods", "-n", namespace, "-l", selector)
-    return sorted(p["metadata"]["name"] for p in found["items"])
-
-
-def agents_ready(cluster: Cluster, namespace: str) -> bool:
-    """Both replicas Ready. A container that restarted stops the wait at once with its log: a
-    service that refuses its settings exits, and would otherwise only show as a timeout."""
-    found = cluster.json("get", "pods", "-n", namespace, "-l", AGENT_PODS)
-    for item in found["items"]:
-        for status in item.get("status", {}).get("containerStatuses", []):
-            if status.get("restartCount", 0):
-                name = item["metadata"]["name"]
-                said = cluster.kubectl(
-                    "logs", name, "-n", namespace, "--previous", "--tail=20", check=False
-                )
-                raise ClusterError(f"the agent's container in {name} restarted:\n{said.stdout}")
-    return cluster.deployment_ready(namespace, "acme-agent")
-
-
-def start_job(cluster: Cluster, namespace: str, tags: Tags) -> str:
-    """Apply the Job and return its pod's name once the pod exists."""
-    cluster.apply(namespace, ("runner-job.yaml",), tags)
-    cluster.wait_until(
-        "the Job's pod",
-        lambda: bool(pod_names(cluster, namespace, JOB_PODS)),
-        timeout=60,
-    )
-    return pod_names(cluster, namespace, JOB_PODS)[0]
-
-
-def wait_ended(cluster: Cluster, namespace: str, pod: str, timeout: float) -> int:
-    """The pod's exit code, from its status, once its container has ended."""
-    cluster.wait_until(
-        f"{pod} to end",
-        lambda: cluster.exit_code(namespace, pod) is not None,
-        timeout=timeout,
-        namespace=namespace,
-        watch=(("pod", pod),),
-    )
-    code = cluster.exit_code(namespace, pod)
-    assert code is not None
-    return code
-
-
-def read_records(cluster: Cluster, namespace: str) -> Records:
-    """result.json and the summary lines, read through the reader pod from the volume."""
-    folders = cluster.reader_exec(namespace, "ls", RUNS).stdout.split()
-    assert len(folders) == 1, f"one test, one records folder: {folders}"
-    folder = f"{RUNS}/{folders[0]}"
-    result = json.loads(cluster.reader_exec(namespace, "cat", f"{folder}/result.json").stdout)
-    lines = cluster.reader_exec(namespace, "sh", "-c", f"cat {folder}/*.jsonl").stdout
-    summaries = {
-        line["run"]: line["summary"]
-        for line in map(json.loads, lines.splitlines())
-        if "summary" in line
-    }
-    return Records(folder, result, summaries)
-
-
-def run_details(result: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    return {d["run"]: d for row in result["rows"] for d in row["run_details"]}
-
-
 @pytest.fixture(scope="module")
 def tested(
     cluster: Cluster, tags: Tags, tmp_path_factory: pytest.TempPathFactory
 ) -> Iterator[JobRun]:
     with cluster.namespace(restricted=True) as namespace:
-        wait_default_account(cluster, namespace)
-        cluster.deploy(namespace, tags)
-        cluster.wait_ready(namespace, "fake-model")
-        cluster.wait_until(
-            "both agent replicas",
-            lambda: agents_ready(cluster, namespace),
-            timeout=180,
-            namespace=namespace,
-            watch=(("deployment", "acme-agent"),),
-        )
-        agents = tuple(pod_names(cluster, namespace, AGENT_PODS))
-        stored = cluster.kubectl(
-            "get", "secret", kubernetes.TOKEN_SECRET, "-n", namespace,
-            "-o", "jsonpath={.data.token}",
-        ).stdout  # fmt: skip
-        runner_pod = start_job(cluster, namespace, tags)
-        code = wait_ended(cluster, namespace, runner_pod, timeout=900)
-        log = tmp_path_factory.mktemp("k8s-job") / f"{runner_pod}.log"
-        log.write_text(cluster.kubectl("logs", runner_pod, "-n", namespace, check=False).stdout)
-        cluster.start_reader(namespace, tags)
-        yield JobRun(
-            namespace=namespace,
-            token=base64.b64decode(stored).decode(),
-            exit_code=code,
-            runner_pod=runner_pod,
-            agents=agents,
-            log=log,
-        )
+        yield run_job(cluster, namespace, tags, tmp_path_factory.mktemp("k8s-job"))
 
 
 def test_the_job_runs_a_test_against_two_replicas(cluster: Cluster, tested: JobRun) -> None:
@@ -215,13 +109,8 @@ def test_the_job_runs_a_test_against_two_replicas(cluster: Cluster, tested: JobR
     result = records.result
     assert (result["status"], result["exit"]) == ("passed", 0), result["infra"]
     assert result["runs_sent"] == result["claims_received"] == 61  # the setup request, 60 runs
+    assert row_outcomes(result) == EXAMPLE_OUTCOMES
     rows = {r["row"]: r for r in result["rows"]}
-    assert set(rows) == {"baseline", "fault 1"}
-    for name, fired in (("baseline", None), ("fault 1", True)):
-        row = rows[name]
-        assert (row["result"], row["done"], row["passed"]) == ("pass", 30, 30), row
-        assert {d["outcome"] for d in row["run_details"]} == {"answered"}
-        assert {d["fault_fired"] for d in row["run_details"]} == {fired}
     assert "Oct 30" in rows["baseline"]["run_details"][0]["answer_preview"]
 
 

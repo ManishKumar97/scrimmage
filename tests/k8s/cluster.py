@@ -79,14 +79,17 @@ class Tags:
     runner: str
     agent: str
     fake_model: str
+    egress: str | None = None  # the agent plus the egress audit hook; only one test needs it
 
     def render(self, text: str) -> str:
         for placeholder, tag in (
             ("scrimmage-runner:TAG", self.runner),
             ("scrimmage-compose-service:TAG", self.agent),
             ("scrimmage-fake-model:TAG", self.fake_model),
+            ("scrimmage-compose-egress:TAG", self.egress),
         ):
-            text = text.replace(placeholder, tag)
+            if tag is not None:
+                text = text.replace(placeholder, tag)
         return text
 
 
@@ -606,6 +609,16 @@ class Cluster:
         self.create_config_map(namespace)
         warnings = self.apply(namespace, FOUNDATION, tags)
         return warnings + self.apply(namespace, WORKLOADS, tags)
+
+    def deploy_agent(self, namespace: str, tags: Tags, agent: str) -> str:
+        """What deploy makes, with the agent's Deployment from `agent`, another file of the
+        Deployment acme-agent, in place of agent.yaml."""
+        self.issue_control_certificate(namespace)
+        self.create_token_secret(namespace)
+        self.create_config_map(namespace)
+        warnings = self.apply(namespace, FOUNDATION, tags)
+        workloads = tuple(agent if name == "agent.yaml" else name for name in WORKLOADS)
+        return warnings + self.apply(namespace, workloads, tags)
 
     def deployment_ready(self, namespace: str, name: str) -> bool:
         found = self.json("get", "deployment", name, "-n", namespace, check=False) or {}
