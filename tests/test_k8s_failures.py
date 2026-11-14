@@ -19,6 +19,7 @@ import re
 import time
 import urllib.request
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -153,11 +154,16 @@ def record_files(cluster: Cluster, namespace: str) -> list[str]:
 
 def connect_from_agents(cluster: Cluster, namespace: str) -> set[str]:
     """What one connection from each agent replica found: {"connected"} when all got through."""
-    found: set[str] = set()
-    for agent in pod_names(cluster, namespace, AGENT_PODS):
+    agents = pod_names(cluster, namespace, AGENT_PODS)
+    assert agents, "no agent pod to connect from"
+
+    def connect(agent: str) -> str:
         done = cluster.kubectl("exec", agent, "-n", namespace, "--", "python3", "-c", CONNECT)
-        found.add(done.stdout.strip())
-    return found
+        return str(done.stdout.strip())
+
+    # One kubectl exec takes about 2.5 s, so the replicas go at the same time.
+    with ThreadPoolExecutor(max_workers=len(agents)) as pool:
+        return set(pool.map(connect, agents))
 
 
 def block_agent_to_runner(cluster: Cluster, namespace: str) -> None:
@@ -271,6 +277,9 @@ def test_a_control_name_that_does_not_exist_gives_an_infrastructure_error(
     assert "does not resolve where the service runs" in found.message
 
 
+RUN_TIMEOUT_S = 60
+
+
 def held_file(tmp_path: Path) -> Path:
     """The committed [agent] table with `parallel = 1`, 2 runs per row and a 60 s run timeout,
     and two tests: the second one's question holds the fake model's hold marker. So the runs go
@@ -279,7 +288,7 @@ def held_file(tmp_path: Path) -> Path:
     agent = committed[: committed.index("[[test]]")]
     for old, new in (
         ("runs = 30\n", "runs = 2\n"),
-        ("run_timeout = 30\n", "run_timeout = 60\nparallel = 1\n"),
+        ("run_timeout = 30\n", f"run_timeout = {RUN_TIMEOUT_S}\nparallel = 1\n"),
     ):
         assert old in agent, old
         agent = agent.replace(old, new)
@@ -293,7 +302,7 @@ def held_file(tmp_path: Path) -> Path:
 
 
 def wait_for(what: str, check: Callable[[], bool], timeout: float) -> None:
-    """Ask every 0.25 s: the hold leaves the test 20 s, so the harness's 2 s step is too slow."""
+    """Ask every 0.25 s: the hold leaves the test 40 s, so the harness's 2 s step is too slow."""
     deadline = time.monotonic() + timeout
     while not check():
         assert time.monotonic() < deadline, f"{what} after {timeout:.0f} s"
@@ -316,6 +325,7 @@ def test_a_policy_applied_mid_test_turns_every_later_run_into_an_infrastructure_
     cluster: Cluster, tags: Tags, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(kubernetes, "CONFIG_FILE", held_file(tmp_path))
+    assert serve.HOLD_S < RUN_TIMEOUT_S  # the hold must end before the run's own timeout
     with cluster.namespace(restricted=True) as namespace:
         wait_default_account(cluster, namespace)
         cluster.deploy(namespace, tags)
