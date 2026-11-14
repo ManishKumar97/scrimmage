@@ -599,20 +599,12 @@ class Cluster:
         }
         self.kubectl("apply", "-f", "-", input=json.dumps(config))
 
-    def deploy(self, namespace: str, tags: Tags) -> str:
+    def deploy(self, namespace: str, tags: Tags, agent: str = "agent.yaml") -> str:
         """Everything except the Job and the reader: the certificate and its two Secrets, the
         token, the file, the accounts, the volume claim, the Services, the policies, the fake
-        model and the agent. Returns every warning kubectl printed, which is empty when the
-        namespace's standard accepts it all. Returns before any pod is Ready; see wait_ready."""
-        self.issue_control_certificate(namespace)
-        self.create_token_secret(namespace)
-        self.create_config_map(namespace)
-        warnings = self.apply(namespace, FOUNDATION, tags)
-        return warnings + self.apply(namespace, WORKLOADS, tags)
-
-    def deploy_agent(self, namespace: str, tags: Tags, agent: str) -> str:
-        """What deploy makes, with the agent's Deployment from `agent`, another file of the
-        Deployment acme-agent, in place of agent.yaml."""
+        model and the agent, from `agent`, a file of the Deployment acme-agent. Returns every
+        warning kubectl printed, which is empty when the namespace's standard accepts it all.
+        Returns before any pod is Ready; see wait_ready."""
         self.issue_control_certificate(namespace)
         self.create_token_secret(namespace)
         self.create_config_map(namespace)

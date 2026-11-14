@@ -157,7 +157,7 @@ def run_job(
     """Deploy everything in `namespace`, with the agent from `agent`, run the Job to its end,
     save its log in `logs`, and start the reader pod."""
     wait_default_account(cluster, namespace)
-    cluster.deploy_agent(namespace, tags, agent)
+    cluster.deploy(namespace, tags, agent)
     cluster.wait_ready(namespace, "fake-model")
     cluster.wait_until(
         "both agent replicas",

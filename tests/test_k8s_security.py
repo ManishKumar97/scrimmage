@@ -409,7 +409,12 @@ def test_the_agents_pods_connect_only_to_the_control_service_and_the_model(
             problems = harness.egress_problems(
                 records, {control, model}, {"scrimmage", "fake-model"}, harness.NON_PYTHON
             )
-            assert problems == [], agent
+            assert problems == [], (agent, problems)
+            # The one excused program is the system's uname, not one earlier on the PATH.
+            which = cluster.kubectl(
+                "exec", agent, "-n", namespace, "--", "sh", "-c", "command -v uname"
+            )
+            assert which.stdout.strip() == "/usr/bin/uname", (agent, which.stdout)
             # A child started below subprocess leaves no line of its own, so every process
             # alive in the pod must have written a start line.
             out = cluster.kubectl(
