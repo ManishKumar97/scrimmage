@@ -932,12 +932,15 @@ kubectl rollout status deployment/acme-agent -n $NS
 kubectl apply --server-side -n $NS -f runner-job.yaml
 POD="pod -n $NS -l batch.kubernetes.io/job-name=scrimmage-test"
 EXIT='{.items[0].status.containerStatuses[0].state.terminated.exitCode}'
-until kubectl get $POD -o jsonpath="$EXIT" | grep -q .; do sleep 5; done
-kubectl get $POD -o jsonpath="$EXIT"     # 0, 2 or 3, as scrimmage test exits
+for i in $(seq 360); do   # up to 30 minutes
+  kubectl get $POD -o jsonpath="$EXIT" | grep -q . && break; sleep 5
+done
+kubectl get $POD -o jsonpath="$EXIT"     # 0, 2 or 3, as scrimmage test exits; empty if still running
 ```
 
 Read the exit code from the pod's status, as above, and the result from the records.
-`kubectl logs` mixes the runner's progress lines on stderr into its stdout, so it is for a person to read, never for a program.
+`kubectl logs` mixes any line the runner writes on stderr, such as its waiting message, into its stdout, so it is for a person to read, never for a program.
+The loop gives up after 30 minutes, so a pod that never ends, such as one whose image is missing, does not hang it.
 
 ### Read the records
 

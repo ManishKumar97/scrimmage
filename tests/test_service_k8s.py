@@ -3,7 +3,8 @@ under its own plan by one of them, the records outlive the Job's pod on their vo
 read their secrets from Secret volumes, and a Job that fails never starts a second test.
 
 The result is read from result.json and the records on the volume, through the reader pod,
-never from `kubectl logs`: there the runner's stderr is mixed into its stdout.
+never from `kubectl logs`: there any stderr line, such as the runner's waiting message,
+is mixed into its stdout.
 
 Like the other cluster tests, these run only with SCRIMMAGE_KIND=1, one file at a time:
 
@@ -15,7 +16,7 @@ import base64
 import json
 import re
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -57,7 +58,7 @@ class JobRun:
     """One test the Job ran in a namespace that stays up for this file's tests."""
 
     namespace: str
-    token: str
+    token: str = field(repr=False)  # never in a failure's output
     exit_code: int
     runner_pod: str
     agents: tuple[str, ...]
@@ -263,7 +264,7 @@ def test_the_pods_read_their_secrets_from_secret_volumes(cluster: Cluster, teste
         env = cluster.kubectl("exec", agent, "-n", namespace, "--", "env").stdout
         own = cluster.kubectl("exec", agent, "-n", namespace, "--", "cat", "/proc/1/environ")
         for text in (env, own.stdout.replace("\0", "\n")):
-            assert tested.token not in text
+            assert (tested.token in text) is False, "the token is in the pod's environment"
             assert re.search(r"(?m)^SCRIMMAGE_TOKEN=", text) is None
             assert f"SCRIMMAGE_TOKEN_FILE={TOKEN_FILE}" in text  # positive control
 
