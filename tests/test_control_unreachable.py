@@ -34,8 +34,8 @@ HOST = "127.0.0.1"
 TOKEN = "t" * 64
 DROPS = (
     "; nothing answered, as when a NetworkPolicy or a firewall drops the traffic, or when the "
-    "control Service has no ready endpoints and an egress policy names pods; allow the "
-    "service's pods to reach this runner on port "
+    "control Service has no ready endpoints and an egress policy allows only named pods; "
+    "allow the service's pods to reach this runner on port "
 )
 DROPS_END = ", and check that the Service's selector matches this runner's pod"
 REFUSES = (

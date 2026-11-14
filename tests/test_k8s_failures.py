@@ -1,12 +1,13 @@
 """The runner as a Job when the agent cannot reach its control server: each way it fails in a
 cluster ends the test with exit 3 and a message that names the fix.
 
-Three faults stop the test at its probe, before any run: a NetworkPolicy that drops the
-agent's traffic to the runner, a Service `scrimmage` with no endpoints, and no Service of that
-name. The fourth comes mid-test: a policy applied while a run is inside its model call turns
-that run, and every later one, into an infrastructure error, never into a result.
+Four faults stop the test at its probe, before any run: a NetworkPolicy that drops the
+agent's traffic to the runner, a Service `scrimmage` with no endpoints, which those policies
+drop too, the same Service with no policy at all, which refuses, and no Service of that name.
+The fifth comes mid-test: a policy applied while a run is inside its model call turns that
+run, and every later one, into an infrastructure error, never into a result.
 
-The positive control for all four is test_service_k8s.py's passing Job: the same manifests
+The positive control for all five is test_service_k8s.py's passing Job: the same manifests
 without the fault. Like the other cluster tests, these run only with SCRIMMAGE_KIND=1:
 
     SCRIMMAGE_KIND=1 SCRIMMAGE_LANE=3 test-slot uv run pytest -n 0 -m kind \
@@ -50,9 +51,13 @@ ASKED = re.compile(
 )
 DROPS = (
     "; nothing answered, as when a NetworkPolicy or a firewall drops the traffic, or when the "
-    "control Service has no ready endpoints and an egress policy names pods; allow the "
-    "service's pods to reach this runner on port 7700, and check that the Service's selector "
-    "matches this runner's pod"
+    "control Service has no ready endpoints and an egress policy allows only named pods; "
+    "allow the service's pods to reach this runner on port 7700, and check that the Service's "
+    "selector matches this runner's pod"
+)
+REFUSES = (
+    "; nothing listens there, as when a Kubernetes Service has no ready endpoints; check that "
+    "the Service's selector matches this runner's pod"
 )
 NO_NAME = (
     "; the name scrimmage does not resolve where the service runs; check the host in "
@@ -146,10 +151,13 @@ def record_files(cluster: Cluster, namespace: str) -> list[str]:
     return sorted(found.stdout.split())
 
 
-def connect_from_agent(cluster: Cluster, namespace: str) -> str:
-    agent = pod_names(cluster, namespace, AGENT_PODS)[0]
-    done = cluster.kubectl("exec", agent, "-n", namespace, "--", "python3", "-c", CONNECT)
-    return done.stdout.strip()
+def connect_from_agents(cluster: Cluster, namespace: str) -> set[str]:
+    """What one connection from each agent replica found: {"connected"} when all got through."""
+    found: set[str] = set()
+    for agent in pod_names(cluster, namespace, AGENT_PODS):
+        done = cluster.kubectl("exec", agent, "-n", namespace, "--", "python3", "-c", CONNECT)
+        found.add(done.stdout.strip())
+    return found
 
 
 def block_agent_to_runner(cluster: Cluster, namespace: str) -> None:
@@ -202,6 +210,7 @@ def check_stopped(found: Stopped, hint: str, not_yet: str) -> None:
     assert found.message.endswith(hint), found.message
     assert found.waiting == [f"{WAITING}({not_yet})"], found.waiting
     # runs sent 0: no setup request and no run reached the agent's model, and none was recorded.
+    # The record files catch a setup request sent too early: it gets a 503 before any model call.
     assert found.model_requests == 0
     assert found.written == [], found.written
 
@@ -226,9 +235,27 @@ def test_a_control_service_with_no_endpoints_gives_an_infrastructure_error(
 
     found = stopped_at_probe(cluster, tags, tmp_path, no_endpoints)
     # With no endpoint, kube-proxy never translates the Service's address to a pod's, so the
-    # agent's egress policies, which name pods, drop the packet before kube-proxy can refuse
-    # it: a timeout, not a refusal. Without such a policy the same Service refuses.
+    # agent's egress policies, which allow only named pods, drop the packet before kube-proxy
+    # can refuse it: a timeout, not a refusal. Without them the same Service refuses: see the
+    # next test.
     check_stopped(found, DROPS, "nothing answers yet")
+
+
+def test_a_control_service_with_no_endpoints_and_no_egress_policy_is_refused(
+    cluster: Cluster, tags: Tags, tmp_path: Path
+) -> None:
+    def no_endpoints_no_policy(namespace: str) -> None:
+        cluster.kubectl("delete", "networkpolicy", "--all", "-n", namespace, "--wait=true")
+        left = cluster.json("get", "networkpolicy", "-n", namespace)["items"]
+        assert left == [], left
+        cluster.kubectl(
+            "patch", "service", "scrimmage", "-n", namespace, "--type=merge",
+            "-p", '{"spec": {"selector": {"app.kubernetes.io/name": "no-such-pod"}}}',
+        )  # fmt: skip
+
+    found = stopped_at_probe(cluster, tags, tmp_path, no_endpoints_no_policy)
+    # Nothing drops the packet, so kube-proxy refuses the Service's address itself.
+    check_stopped(found, REFUSES, "nothing listens yet")
 
 
 def test_a_control_name_that_does_not_exist_gives_an_infrastructure_error(
@@ -300,11 +327,11 @@ def test_a_policy_applied_mid_test_turns_every_later_run_into_an_infrastructure_
             wait_for("run 2's model call held", lambda: hold_state(port)["waiting"] == 1, 180)
             held_at = time.monotonic()
             wait_for("run 1's summary", lambda: len(run_summaries(cluster, namespace)) == 1, 10)
-            assert connect_from_agent(cluster, namespace) == "connected"  # the positive control
+            assert connect_from_agents(cluster, namespace) == {"connected"}  # positive control
             block_agent_to_runner(cluster, namespace)
             wait_for(
                 "the policy to drop the agent's connection",
-                lambda: connect_from_agent(cluster, namespace) == "TimeoutError",
+                lambda: connect_from_agents(cluster, namespace) == {"TimeoutError"},
                 15,
             )
             # Released by the test, not by the hold's own limit: run 2 was still waiting.
@@ -331,6 +358,8 @@ def test_a_policy_applied_mid_test_turns_every_later_run_into_an_infrastructure_
     held = summaries[second["run"]]
     assert held["incomplete"] is True, (held, log)
     assert held["outcome"] == "infrastructure error", held
+    # Its next model call could not reserve budget, so the reservation in flight stays held.
+    assert f"{second['run']} ended with model:openai still holding" in said, log
     # Every later run's claim failed, and the gate said so with its own 503.
     for later in (third, fourth):
         assert later["outcome"] == "infrastructure error", (later, log)
