@@ -171,26 +171,38 @@ def test_the_stored_digest_does_not_reveal_a_scrubbed_value(bench: Bench) -> Non
     assert stored == protocol.plan_digest(token_of(bench), plan)  # the token confirms it
 
 
+SPREAD_TRIES = 12  # a batch landed on one worker 3 times in 8, so 12 tries fail 1 in 10**5
+
+
 @pytest.mark.design("service.plan_digest")
 def test_the_claimer_reports_the_digest_of_the_plan_its_state_used(
     bench: Bench, hold: Hold
 ) -> None:
+    """Both workers must serve runs for this to test anything. With parallel runs one worker's
+    loop can accept several connections before the hold blocks it, so a batch of 20 can land
+    on one worker. The batch is sent again, at most SPREAD_TRIES times, until both have served;
+    every run of every batch must pass every check."""
     sent = the_plans_sent(bench)
     service = bench.start(workers=2, HOLD_SOCKET=str(hold.server.getsockname()))
     workers = set(service.workers())
     assert len(workers) == 2, service.text
-    code, out = bench.test(service.port, "/chat-held", runs=20, parallel=4)
-    assert code == 0, out
-    runs = runs_of(bench)
-    assert len(runs) == 20
-    for name, summary in runs.items():
-        assert summary["outcome"] == "answered", name
-        expected = protocol.plan_digest(token_of(bench), sent[name])
-        assert summary["plan_digest"] == expected, name
-        assert summary["claimed_plan_digest"] == expected, name
-    pids = {s["claimed_by"]["pid"] for s in runs.values()}
-    assert pids == workers, (pids, workers)
-    assert all(s["claimed_by"]["host"] for s in runs.values())
+    pids: set[int] = set()
+    tries = 0
+    while pids != workers and tries < SPREAD_TRIES:
+        tries += 1
+        code, out = bench.test(service.port, "/chat-held", runs=20, parallel=4)
+        assert code == 0, out
+        runs = runs_of(bench)
+        assert len(runs) == 20 * tries
+        for name, summary in runs.items():
+            assert summary["outcome"] == "answered", name
+            expected = protocol.plan_digest(token_of(bench), sent[name])
+            assert summary["plan_digest"] == expected, name
+            assert summary["claimed_plan_digest"] == expected, name
+        assert all(s["claimed_by"]["host"] for s in runs.values())
+        pids = {s["claimed_by"]["pid"] for s in runs.values()}
+        assert pids <= workers, (pids, workers)
+    assert pids == workers, (pids, workers, tries)
 
 
 @pytest.mark.design("service.plan_digest")
