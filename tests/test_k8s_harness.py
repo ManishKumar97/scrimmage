@@ -1,5 +1,7 @@
 """The kind harness's own rules, with no cluster: what it refuses, and what it never touches."""
 
+import json
+import subprocess
 import tempfile
 import tomllib
 from pathlib import Path
@@ -237,3 +239,34 @@ def test_the_jobs_file_is_valid_and_its_tests_are_the_examples() -> None:
     example = (harness.EXAMPLE / "scrimmage.toml").read_text()
     committed = (HERE / "scrimmage.toml").read_text()
     assert committed.endswith(example[example.index("[[test]]") :])
+
+
+def test_a_crd_with_no_conditions_yet_is_waited_for_not_failed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The Calico CRD flake: right after the operator makes its CRD, the object has no
+    status.conditions. That counts as not yet established, and the next look finds it."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    replies = [
+        None,  # not found yet
+        {"metadata": {"name": "x"}},  # stored, no status at all
+        {"status": {"conditions": None}},  # the reply the flake met
+        {"status": {"conditions": [{"type": "NamesAccepted", "status": "True"}]}},
+        {"status": {"conditions": [{"type": "Established", "status": "True"}]}},
+    ]
+    asked: list[list[str]] = []
+
+    def kubectl_get(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        asked.append(command)
+        reply = replies[len(asked) - 1]
+        code = 1 if reply is None else 0
+        return subprocess.CompletedProcess(command, code, json.dumps(reply or {}), "")
+
+    monkeypatch.setattr(kubernetes, "run", kubectl_get)
+    monkeypatch.setattr(kubernetes.time, "sleep", lambda _: None)
+    cluster = Cluster("2")
+    cluster.wait_until(
+        "the CRD", lambda: cluster.crd_established("installations.operator.tigera.io"), timeout=60
+    )
+    assert len(asked) == len(replies)
+    assert all(c[:3] == ["kubectl", "get", "crd"] for c in asked), asked

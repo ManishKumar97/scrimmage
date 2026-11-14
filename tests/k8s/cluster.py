@@ -402,21 +402,12 @@ class Cluster:
         self.helm(
             "install", "calico", *chart, "--create-namespace", "--set", "installation.enabled=false"
         )
+        # `kubectl wait --for=condition=Established` fails at once, not later, on a CRD that
+        # exists but has no status.conditions yet. So the harness reads the condition itself.
         self.wait_until(
             "the operator's CRDs",
-            lambda: (
-                self.kubectl(
-                    "get", "crd", "installations.operator.tigera.io", check=False
-                ).returncode
-                == 0
-            ),
-            timeout=120,
-        )
-        self.kubectl(
-            "wait",
-            "--for=condition=Established",
-            "crd/installations.operator.tigera.io",
-            "--timeout=60s",
+            lambda: self.crd_established("installations.operator.tigera.io"),
+            timeout=180,
         )
         self.helm("upgrade", "calico", *chart)
         self.wait_until(
@@ -425,6 +416,13 @@ class Cluster:
             timeout=180,
         )
         self.wait_until("every node Ready", self.nodes_ready, timeout=180)
+
+    def crd_established(self, name: str) -> bool:
+        """The CRD exists and its Established condition is True. A CRD the API server has only
+        just stored has no status.conditions, which counts as not yet."""
+        crd = self.json("get", "crd", name, check=False)
+        conditions = ((crd or {}).get("status") or {}).get("conditions") or []
+        return any(c.get("type") == "Established" and c.get("status") == "True" for c in conditions)
 
     def install_cert_manager(self) -> None:
         cm = PINS["cert-manager"]
