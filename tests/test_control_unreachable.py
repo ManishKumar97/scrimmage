@@ -344,20 +344,24 @@ def test_no_run_is_sent_when_the_ping_never_succeeds(
 def test_the_probes_wait_and_the_pings_wait_share_one_deadline(
     bench: Bench, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The service's address listens 2 s late, and then its ping is refused: the two waits
-    are one READY_S counted from the first probe, not 2 s plus a fresh READY_S."""
-    monkeypatch.setattr(running, "READY_S", 4.0)
+    """The service's address listens 6 s late, and then its ping is refused: the two waits
+    are one READY_S counted from the first probe, not 6 s plus a fresh READY_S."""
+    monkeypatch.setattr(running, "READY_S", 8.0)
     monkeypatch.setattr(running, "CONTROL_STEP_S", 0.2)
     service = bench.start(SCRIMMAGE_CONTROL_URL=f"http://{HOST}:{free_port()}")
     late = Relay(service.port)  # the runner's address: refused until it opens
     bench.closers.append(late)
-    late.open_in(2.0)
+    late.open_in(6.0)
     began = time.monotonic()
     code, out = bench.test(late.port)
     spent = time.monotonic() - began
     assert code == 3 and "Connection refused" in out, out
-    assert spent < running.READY_S + 1.0, spent  # a fresh wait for the ping would take 6 s
-    assert re.search(r"after (3\.[5-9]|4\.[0-9]) s of asking", out), out
+    # One deadline ends near 8 s; a fresh wait for the ping would end past 14 s. The 3 s margin
+    # on each side covers the runner's own start on a loaded machine.
+    assert spent < running.READY_S + 3.0, spent
+    asked = re.search(r"after ([0-9.]+) s of asking", out)
+    assert asked is not None, out
+    assert running.READY_S - 0.5 <= float(asked[1]) < running.READY_S + 3.0, out
 
 
 def test_a_service_that_stops_answering_during_the_wait_is_named(
