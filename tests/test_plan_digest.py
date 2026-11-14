@@ -58,8 +58,10 @@ def the_plans_sent(bench: Bench) -> dict[str, dict[str, object]]:
 
 class Hold:
     """The test's end of /chat-held. A request is held until two held requests come from two
-    workers, so both workers serve runs whatever order the kernel hands out connections in.
-    A request alone for a second, such as the setup request, goes on."""
+    workers. A held worker's loop accepts nothing more, so the next new connection reaches the
+    other worker; but a worker can accept several connections before its first one blocks, so
+    a whole batch can still land on one worker, and the test below sends it again. A request
+    alone for a second, such as the setup request, goes on."""
 
     def __init__(self, path: Path) -> None:
         self.server = socket.socket(socket.AF_UNIX)
