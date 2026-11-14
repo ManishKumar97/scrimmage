@@ -7,6 +7,7 @@ https.
 """
 
 import contextlib
+import json
 import re
 import socket
 import threading
@@ -16,6 +17,7 @@ from typing import Any
 
 import pytest
 
+import test_service
 from ports import free_port
 from scrimmage_core import asgi_gate, service_client, tls
 from scrimmage_core import runner as running
@@ -107,6 +109,8 @@ class Relay:
     def close(self) -> None:
         self.stopping.set()
         for sock in self.held:
+            with contextlib.suppress(OSError):
+                sock.shutdown(socket.SHUT_RDWR)  # wakes a copy thread blocked in recv
             sock.close()
         self.thread.join(5)
 
@@ -375,3 +379,63 @@ def test_a_service_that_stops_answering_during_the_wait_is_named(
             {"control": failed}, "r" * 16, asked_s=made.asked_s, silent=made.went_silent
         )
     assert "(then the service stopped answering the probe)" in str(stopped.value)
+
+
+def refused_then_silent(bench: Bench, monkeypatch: pytest.MonkeyPatch) -> Relay:
+    """A service whose ping is refused, reached through a relay that stops listening after its
+    second probe: the runner's re-probe then gets no report. READY_S is 20 s."""
+    monkeypatch.setattr(running, "READY_S", 20.0)
+    monkeypatch.setattr(running, "CONTROL_STEP_S", 0.2)
+    service = bench.start(SCRIMMAGE_CONTROL_URL=f"http://{HOST}:{free_port()}")
+    relay = Relay(service.port)
+    bench.closers.append(relay)
+    relay.open_in(0.0)
+
+    def stops_after_two() -> None:
+        eventually(lambda: relay.accepted >= 2, within=60)
+        relay.close()
+
+    threading.Thread(target=stops_after_two, daemon=True).start()
+    return relay
+
+
+SILENT = "(then the service stopped answering the probe)"
+
+
+@pytest.mark.design("service.ping_retry")
+def test_a_service_that_goes_silent_in_a_test_says_so_and_how_long_it_asked(
+    bench: Bench, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    relay = refused_then_silent(bench, monkeypatch)
+    code, out = bench.test(relay.port)
+    assert code == 3 and SILENT in out, out
+    seconds = re.search(r"after ([0-9.]+) s of asking", out)
+    assert seconds is not None and float(seconds.group(1)) < 10, out  # not READY_S
+
+
+@pytest.mark.design("service.ping_retry")
+def test_check_service_says_the_same_when_the_service_goes_silent(
+    bench: Bench, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from scrimmage_core.cli import main
+
+    relay = refused_then_silent(bench, monkeypatch)
+    text = test_service.FILE.replace("PORT", str(relay.port)).replace("PATH", "/chat")
+    for key, value in (
+        ("EXTRA", ""),
+        ("TOOL_LIST", json.dumps(test_service.TOOLS.split(","))),
+        ("RUNS", "1"),
+        ("ANSWER", "reply"),
+        ("TIMEOUT", "30"),
+        ("WAIT", "10"),
+        ("GRACE", "0.2"),
+    ):
+        text = text.replace(key, value)
+    path = tmp_path / "f-check.toml"
+    path.write_text(text)
+    bench.capsys.readouterr()
+    code = main(["check", str(path), "--service"])
+    out = bench.capsys.readouterr()
+    assert code == 3 and SILENT in out.out + out.err, out
+    seconds = re.search(r"after ([0-9.]+) s of asking", out.out + out.err)
+    assert seconds is not None and float(seconds.group(1)) < 10, out
