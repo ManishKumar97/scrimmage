@@ -2,6 +2,7 @@
 
 import json
 import re
+from collections import Counter
 from pathlib import Path
 from typing import cast
 
@@ -668,3 +669,41 @@ def test_no_documented_fault_fires_on_every_call_with_nothing_to_judge_it() -> N
                 changes = do is not None and do.group(1) in ("append", "replace")
                 assert changes or keys & {"expect", "forbid", "when"}, (name, body)
     assert found >= 10
+
+
+K8S = Path(__file__).parent / "k8s"
+# The files the "In Kubernetes" section shows, each as the cluster tests apply it. The fake
+# model's Deployment is left out: it stands in for the model provider in the tests only.
+K8S_SHOWN = {
+    **{p.name: p for p in (K8S / "manifests").glob("*.yaml") if p.name != "fake-model.yaml"},
+    "pki-authority.yaml": K8S / "pki-authority.yaml",
+    "pki-control.yaml": K8S / "pki-control.yaml",
+    "scrimmage.toml": K8S / "scrimmage.toml",
+}
+
+
+def kubernetes_docs_problems() -> list[str]:
+    """Each file the services page's "In Kubernetes" section shows, compared with the committed
+    one the cluster tests apply, and each of them shown once. An empty list is in step."""
+    parts = page("services.md").split("\n## In Kubernetes\n", 1)
+    if len(parts) != 2:
+        return ["services.md has no In Kubernetes section"]
+    section = parts[1].split("\n## ", 1)[0]
+    blocks = re.findall(r'(?ms)^```(?:yaml|toml) title="([^"]+)"\n(.*?)^```$', section)
+    counts = Counter(title for title, _ in blocks)
+    problems = [f"{title} is shown {n} times" for title, n in counts.items() if n > 1]
+    shown = dict(blocks)
+    problems += [f"{name} is not shown" for name in sorted(K8S_SHOWN.keys() - shown.keys())]
+    problems += [f"{name} is not a committed file" for name in sorted(shown.keys() - K8S_SHOWN)]
+    problems += [
+        f"{name} differs from tests/k8s/{K8S_SHOWN[name].relative_to(K8S)}"
+        for name in sorted(shown.keys() & K8S_SHOWN.keys())
+        if shown[name] != K8S_SHOWN[name].read_text()
+    ]
+    return problems
+
+
+@pytest.mark.design("docs.kubernetes_manifests")
+def test_the_docs_manifests_are_the_tested_ones() -> None:
+    assert kubernetes_docs_problems() == []
+    assert "[In Kubernetes](../services.md#in-kubernetes)" in page("examples/service-agent.md")
