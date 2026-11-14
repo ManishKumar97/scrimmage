@@ -151,13 +151,8 @@ class JobRun:
     log: Path  # kubectl logs, saved for a person to read; no test reads it
 
 
-def run_job(
-    cluster: Cluster, namespace: str, tags: Tags, logs: Path, agent: str = "agent.yaml"
-) -> JobRun:
-    """Deploy everything in `namespace`, with the agent from `agent`, run the Job to its end,
-    save its log in `logs`, and start the reader pod."""
-    wait_default_account(cluster, namespace)
-    cluster.deploy(namespace, tags, agent)
+def wait_agents(cluster: Cluster, namespace: str) -> None:
+    """The fake model and both agent replicas Ready, after `Cluster.deploy`."""
     cluster.wait_ready(namespace, "fake-model")
     cluster.wait_until(
         "both agent replicas",
@@ -166,11 +161,27 @@ def run_job(
         namespace=namespace,
         watch=(("deployment", "acme-agent"),),
     )
-    agents = tuple(pod_names(cluster, namespace, AGENT_PODS))
+
+
+def token_of(cluster: Cluster, namespace: str) -> str:
+    """The test token, read back from its Secret. Keep it out of every failure's output."""
     stored = cluster.kubectl(
         "get", "secret", kubernetes.TOKEN_SECRET, "-n", namespace,
         "-o", "jsonpath={.data.token}",
     ).stdout  # fmt: skip
+    return base64.b64decode(stored).decode()
+
+
+def run_job(
+    cluster: Cluster, namespace: str, tags: Tags, logs: Path, agent: str = "agent.yaml"
+) -> JobRun:
+    """Deploy everything in `namespace`, with the agent from `agent`, run the Job to its end,
+    save its log in `logs`, and start the reader pod."""
+    wait_default_account(cluster, namespace)
+    cluster.deploy(namespace, tags, agent)
+    wait_agents(cluster, namespace)
+    agents = tuple(pod_names(cluster, namespace, AGENT_PODS))
+    token = token_of(cluster, namespace)
     runner_pod = start_job(cluster, namespace, tags)
     code = wait_ended(cluster, namespace, runner_pod, timeout=900)
     log = logs / f"{runner_pod}.log"
@@ -178,7 +189,7 @@ def run_job(
     cluster.start_reader(namespace, tags)
     return JobRun(
         namespace=namespace,
-        token=base64.b64decode(stored).decode(),
+        token=token,
         exit_code=code,
         runner_pod=runner_pod,
         agents=agents,

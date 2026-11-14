@@ -155,7 +155,7 @@ The text after `asking:` is the error's own message, which differs between syste
 
 | The ping found | The test stops with |
 |---|---|
-| A timeout, as when a NetworkPolicy or a firewall drops the traffic | `the service cannot reach the control server at https://scrimmage:7700 after 30 s of asking: timed out; nothing answered, as when a NetworkPolicy or a firewall drops the traffic; allow the service's pods to reach this runner on port 7700` |
+| A timeout, as when a NetworkPolicy or a firewall drops the traffic, or a Service has no ready endpoints under an egress policy that names pods | `the service cannot reach the control server at https://scrimmage:7700 after 30 s of asking: timed out; nothing answered, as when a NetworkPolicy or a firewall drops the traffic, or when the control Service has no ready endpoints and an egress policy names pods; allow the service's pods to reach this runner on port 7700, and check that the Service's selector matches this runner's pod` |
 | A refused connection, as when a Kubernetes Service has no ready endpoints | `the service cannot reach the control server at https://scrimmage:7700 after 30 s of asking: [Errno 111] Connection refused; nothing listens there, as when a Kubernetes Service has no ready endpoints; check that the Service's selector matches this runner's pod` |
 | A name that does not resolve | `the service cannot reach the control server at https://scrimmage:7700 after 30 s of asking: [Errno -2] Name or service not known; the name scrimmage does not resolve where the service runs; check the host in SCRIMMAGE_CONTROL_URL and that the Service is in the service's namespace` |
 | A certificate from another authority | `the service cannot reach the control server at https://scrimmage:7700: ... certificate verify failed ...; check SCRIMMAGE_CONTROL_CA`, at the first probe |
@@ -1064,6 +1064,30 @@ kubectl exec -n $NS reader -- cat /records/scrimmage-runs/<folder>/result.json
 ```
 
 Each run's summary names the pod that served it in `claimed_by`, and both digests of its plan, as [a service run's summary line](json-output.md#a-service-runs-summary-line) says.
+
+### When the agent cannot reach the runner
+
+Each case below is tested in the kind cluster with the manifests above and one fault.
+
+| The fault | What the Job's pod ends with |
+|---|---|
+| The agent's egress policy to the runner allows nothing | exit 3 after 30 s of asking, with the timeout's hint, as in the table above |
+| The Service `scrimmage` has a selector that matches no pod | exit 3 after 30 s of asking, with the same timeout's hint |
+| No Service named `scrimmage` in the namespace | exit 3 after 30 s of asking, with the name's hint: `the name scrimmage does not resolve where the service runs; check the host in SCRIMMAGE_CONTROL_URL and that the Service is in the service's namespace` |
+
+A Service with no endpoints shows as a timeout here, not as a refusal.
+With no endpoint, kube-proxy never translates the Service's address to a pod's, so the agent's egress policies, which name pods, drop the packet before kube-proxy can refuse it.
+Without an egress policy the same Service refuses the connection, and the hint names its selector.
+
+In each case, the runner prints its waiting line once, sends no setup request and no run, and writes no record and no `result.json` to the volume.
+The message is the last line of the pod's log, since there is no result to read.
+
+A policy that cuts the agent off from the runner in the middle of a test does not stop it.
+Calico checks a policy against each new connection, and every control request is a new connection, so the cut takes effect at the next request.
+The run inside its request at that moment gets its reply, but cannot send its last batch, so it ends `infrastructure error` with `incomplete` true in its summary.
+Each later run's claim fails, its gate answers `503 plan-unavailable`, and it ends `infrastructure error` too, after up to 10 s of waiting for the claim.
+No run after the cut ends with a result.
+The test ends with exit 3, and `result.json` says how many runs were sent and how few were claimed, in `runs_sent` and `claims_received`.
 
 ## Workers
 

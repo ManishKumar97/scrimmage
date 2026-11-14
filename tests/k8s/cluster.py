@@ -695,6 +695,33 @@ class Cluster:
 
 
 @contextlib.contextmanager
+def port_forward(cluster: Cluster, namespace: str, target: str, port: int) -> Iterator[int]:
+    """`kubectl port-forward` from a free local port to `port` in `target`, such as
+    deployment/fake-model, for as long as the block runs. Yields the local port. It reaches
+    the pod's loopback through the kubelet, so no NetworkPolicy applies to it. The process is
+    this one's own child, stopped by its pid."""
+    forward = subprocess.Popen(
+        ["kubectl", "port-forward", "-n", namespace, target, f":{port}"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=cluster.env(),
+    )
+    try:
+        assert forward.stdout is not None
+        line = forward.stdout.readline()  # "Forwarding from 127.0.0.1:PORT -> port"
+        found = re.search(r"127\.0\.0\.1:(\d+) ->", line)
+        if found is None:
+            forward.kill()
+            assert forward.stderr is not None
+            raise ClusterError(f"kubectl port-forward to {target}: {line}{forward.stderr.read()}")
+        yield int(found.group(1))
+    finally:
+        forward.kill()
+        forward.communicate(timeout=30)  # waits for it, and closes its pipes
+
+
+@contextlib.contextmanager
 def scratch(role: str) -> Iterator[Cluster]:
     """A bare cluster beside the session's, named by lane and role, under a lock of its own
     name so two sessions never share it, and deleted after."""
