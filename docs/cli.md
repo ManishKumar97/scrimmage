@@ -91,6 +91,7 @@ scrimmage check scrimmage.toml --service [--strict] [--json]
 
 After the file passes, `--service` checks the [service](services.md) the file names, the way `scrimmage test` does before its first run, and stops there.
 It reads the token file and starts the control server for the length of the command, sends the probe, and makes one `GET` for `/openapi.json`.
+While the service's ping to the control server times out, is refused or cannot resolve the name, the probe is asked again for up to 30 seconds, so the command can take that long before it names the failure.
 It sends no run and no setup request, makes no model call and leaves no `scrimmage-runs/` folder, so it costs nothing.
 Without `--service`, `scrimmage check` reads the file only, as above.
 

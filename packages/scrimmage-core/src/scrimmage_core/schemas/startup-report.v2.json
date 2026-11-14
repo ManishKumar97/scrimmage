@@ -112,9 +112,8 @@
       }
     },
     "control": {
-      "description": "What the ping found.",
+      "description": "What the ping found. A field it does not list fits: a later Scrimmage may add one, and a reader ignores it.",
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "reached",
         "tls",
@@ -131,6 +130,13 @@
         "tls": {
           "description": "`verified` for an https control URL whose certificate was accepted, `none` for http on loopback, on a failure over https the class of the error, such as `SSLCertVerificationError`, or `not connected` when no ping was tried because every control slot was busy.",
           "type": "string"
+        },
+        "error": {
+          "description": "For a ping that failed to connect, the class name of the error, such as `TimeoutError`, `ConnectionRefusedError`, `gaierror` or `SSLCertVerificationError`, on `http://` and `https://` alike. `ControlError` when the control server's reply was not signed for the request or was not valid. `null` when the ping was answered, when the control server answered with an error, and when no ping was tried. Optional: a report from an older Scrimmage has none.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "detail": {
           "description": "For a failure, the error's message with any secret removed, cut at 200 characters. `null` when the ping was answered.",

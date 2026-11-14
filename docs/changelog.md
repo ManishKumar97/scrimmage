@@ -16,5 +16,8 @@ Scrimmage has no published release yet.
 - A service run's summary names the process that claimed it, `claimed_by`, and carries `plan_digest` and `claimed_plan_digest`, keyed digests of the plan the runner made and the plan the claiming process used.
   A run served under another plan is an infrastructure error.
   The record schema gains these fields and the notices `plan_changed` and `plan_unreported`.
+- The service's ping to the control server reports `error`, the class of its failure, on `http://` and `https://` alike.
+  The runner asks again for up to 30 seconds when the ping times out, is refused or cannot resolve the name, and a failure after that names its fix: a NetworkPolicy, a Service selector or the host in `SCRIMMAGE_CONTROL_URL`.
+  The startup report's `control` object gains `error`, an optional field.
 
 Releases will be listed on this page, newest first, each with its version, its date and what changed.

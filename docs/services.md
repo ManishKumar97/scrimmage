@@ -139,8 +139,26 @@ A function or a script whose child runs on another venv's SDK is not version-che
 **The ping.**
 Before it answers a probe, the service sends one signed request to the control server, through the same connection and certificate check as every other control request.
 The control server answers with a random id it made for this test, and the runner checks the id is its own, so the ping proves this runner and not any runner that holds the token.
-The report's `control` object holds `reached`, `tls`, `detail`, `rtt_ms`, `runner_id` and `url`; `tls` is `verified`, `none` for `http://` on loopback, the class of the error when the ping failed over `https://`, or `not connected` when every control slot was busy and no ping was tried.
-If the service cannot reach the control server, or reached another runner, the test stops with exit 3 before the setup request, and names the error, such as a certificate that did not verify.
+The report's `control` object holds `reached`, `tls`, `error`, `detail`, `rtt_ms`, `runner_id` and `url`.
+`tls` is `verified`, `none` for `http://` on loopback, the class of the error when the ping failed over `https://`, or `not connected` when every control slot was busy and no ping was tried.
+`error` is the class of the error that stopped the ping, such as `TimeoutError`, on `http://` and `https://` alike, and `null` when the ping was answered or was not tried.
+A runner reads `error`, never `tls`, and an older service that sends no `error` is read as having none.
+
+A new pod is not reachable at once: kube-proxy and the network plugin take a moment to route to it.
+When the ping fails with a timeout, a refused connection or a name that does not resolve, the runner probes again every second for up to 30 seconds from its first probe, and prints once `scrimmage: waiting for the service to reach the control server at`, the address and what is missing, such as `(the name does not resolve yet)`.
+Only the probe is sent again.
+No setup request and no run is sent until a ping succeeds, and a run is never sent twice.
+A certificate that does not verify, a reply from another runner and an error answered by the control server stop the test at once, as does a ping that was never made because every control slot was busy.
+
+If the ping still fails after the wait, or reached another runner, the test stops with exit 3 before the setup request, sends no run and writes none to the records folder.
+The text after `asking:` is the error's own message, which differs between systems; the rest is fixed.
+
+| The ping found | The test stops with |
+|---|---|
+| A timeout, as when a NetworkPolicy or a firewall drops the traffic | `the service cannot reach the control server at https://scrimmage:7700 after 30 s of asking: timed out; nothing answered, as when a NetworkPolicy or a firewall drops the traffic; allow the service's pods to reach this runner on port 7700` |
+| A refused connection, as when a Kubernetes Service has no ready endpoints | `the service cannot reach the control server at https://scrimmage:7700 after 30 s of asking: [Errno 111] Connection refused; nothing listens there, as when a Kubernetes Service has no ready endpoints; check that the Service's selector matches this runner's pod` |
+| A name that does not resolve | `the service cannot reach the control server at https://scrimmage:7700 after 30 s of asking: [Errno -2] Name or service not known; the name scrimmage does not resolve where the service runs; check the host in SCRIMMAGE_CONTROL_URL and that the Service is in the service's namespace` |
+| A certificate from another authority | `the service cannot reach the control server at https://scrimmage:7700: ... certificate verify failed ...; check SCRIMMAGE_CONTROL_CA`, at the first probe |
 
 **The clock.**
 The runner works out how far the service's clock is from its own, from the service's time in the report and the middle of the probe's round trip.

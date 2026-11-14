@@ -189,9 +189,11 @@ class ControlClient:
     def ping(self, *, held: bool = False) -> dict[str, object]:
         """One signed ping, as the startup report shows it: whether the control server was
         reached, how the connection was protected, the round trip and the runner's id. It
-        raises nothing: a failure is the answer."""
+        raises nothing: a failure is the answer. `error` is the failure's class name on http
+        and https alike, and None for an answer, even a refusing one."""
         began = time.monotonic()
         tls = "verified" if self.context is not None else "none"
+        error: str | None = None
         runner_id: object = None
         detail: str | None = None
         try:
@@ -204,11 +206,13 @@ class ControlClient:
         except ControlError as exc:
             reached, cause = False, exc.__cause__ or exc
             detail = str(cause)
+            error = type(cause).__name__
             if self.context is not None:
                 tls = type(cause).__name__
         return {
             "reached": reached,
             "tls": tls,
+            "error": error,
             "detail": None if detail is None else redact(detail)[:200],
             "rtt_ms": round((time.monotonic() - began) * 1000, 1),
             "runner_id": runner_id if isinstance(runner_id, str) else None,
