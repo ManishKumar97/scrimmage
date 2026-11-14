@@ -155,6 +155,7 @@ def record_files(cluster: Cluster, namespace: str) -> list[str]:
 def connect_from_agents(cluster: Cluster, namespace: str) -> set[str]:
     """What one connection from each agent replica found: {"connected"} when all got through."""
     agents = pod_names(cluster, namespace, AGENT_PODS)
+    assert agents, "no agent pod to connect from"
 
     def connect(agent: str) -> str:
         done = cluster.kubectl("exec", agent, "-n", namespace, "--", "python3", "-c", CONNECT)
