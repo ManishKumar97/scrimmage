@@ -33,9 +33,11 @@ __all__ = ["bench"]  # a fixture, used by name
 HOST = "127.0.0.1"
 TOKEN = "t" * 64
 DROPS = (
-    "; nothing answered, as when a NetworkPolicy or a firewall drops the traffic; allow the "
-    "service's pods to reach this runner on port "
+    "; nothing answered, as when a NetworkPolicy or a firewall drops the traffic, or when the "
+    "control Service has no ready endpoints and an egress policy allows only named pods; "
+    "allow the service's pods to reach this runner on port "
 )
+DROPS_END = ", and check that the Service's selector matches this runner's pod"
 REFUSES = (
     "; nothing listens there, as when a Kubernetes Service has no ready endpoints; check that "
     "the Service's selector matches this runner's pod"
@@ -254,7 +256,7 @@ def test_a_ping_that_times_out_for_the_whole_wait_names_a_dropping_policy(
     code, out = against(bench, control_url=relay.url)
     assert code == 3, out
     assert asked_for(out, relay.url), out
-    assert f"timed out{DROPS}{relay.port}" in out, out
+    assert f"timed out{DROPS}{relay.port}{DROPS_END}" in out, out
     assert relay.accepted >= 2  # it was asked again
     assert line_count(out, WAITING + relay.url) == 1, out
     sent_nothing(bench)

@@ -378,8 +378,10 @@ def check_versions(report: dict[str, object]) -> list[str]:
 ROUTING_ERRORS = ("TimeoutError", "ConnectionRefusedError", "gaierror")  # asking again may help
 HINTS = {
     "TimeoutError": (
-        "nothing answered, as when a NetworkPolicy or a firewall drops the traffic; allow the "
-        "service's pods to reach this runner on port {port}"
+        "nothing answered, as when a NetworkPolicy or a firewall drops the traffic, or when the "
+        "control Service has no ready endpoints and an egress policy allows only named pods; "
+        "allow the service's pods to reach this runner on port {port}, and check that the "
+        "Service's selector matches this runner's pod"
     ),
     "ConnectionRefusedError": (
         "nothing listens there, as when a Kubernetes Service has no ready endpoints; check "
