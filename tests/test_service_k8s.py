@@ -264,7 +264,8 @@ def test_the_pods_read_their_secrets_from_secret_volumes(cluster: Cluster, teste
         env = cluster.kubectl("exec", agent, "-n", namespace, "--", "env").stdout
         own = cluster.kubectl("exec", agent, "-n", namespace, "--", "cat", "/proc/1/environ")
         for text in (env, own.stdout.replace("\0", "\n")):
-            assert (tested.token in text) is False, "the token is in the pod's environment"
+            leaked = tested.token in text  # outside the assert, so a failure never prints it
+            assert not leaked, "the token is in the pod's environment"
             assert re.search(r"(?m)^SCRIMMAGE_TOKEN=", text) is None
             assert f"SCRIMMAGE_TOKEN_FILE={TOKEN_FILE}" in text  # positive control
 
