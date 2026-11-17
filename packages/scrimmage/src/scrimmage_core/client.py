@@ -92,8 +92,6 @@ class ControlClient:
         # Host and port only: a URL's user and password are never kept or shown.
         self.url = f"{parts.scheme}://{shown}:{self.port}"
         self.token = token
-        self.offset = 0.0  # the server's clock minus ours, learned from its replies
-        self.synced = False  # a signed reply has set the offset
         # Each request holds a slot while it is in flight. A sync caller waits for one on its
         # own thread; a claim or an async budget ask takes one only if free, on the loop.
         self.slots = threading.BoundedSemaphore(CAP)
@@ -146,9 +144,9 @@ class ControlClient:
         held: bool = False,
         timeout: float = TIMEOUT_S,
     ) -> tuple[int, dict[str, object]]:
-        """Send one signed request; retry once if the server says our clock is off. held:
-        the caller took a slot already, and this releases it. timeout: for this request's
-        connection and each wait on it."""
+        """Send one signed request, signed with this machine's clock. held: the caller took a
+        slot already, and this releases it. timeout: for this request's connection and each
+        wait on it."""
         if getattr(self._held, "on", False):
             self._held.on, held = False, True
         if not held:
@@ -159,10 +157,7 @@ class ControlClient:
                 )
             self.slots.acquire()
         try:
-            status, reply = self._timed(method, path, payload, timeout)
-            if status == 401 and reply.get("error") == "clock":
-                status, reply = self._timed(method, path, payload, timeout)
-            return status, reply
+            return self._timed(method, path, payload, timeout)
         finally:
             self.slots.release()
 
@@ -228,14 +223,7 @@ class ControlClient:
         self, method: str, path: str, payload: object, timeout: float = TIMEOUT_S
     ) -> tuple[int, dict[str, object]]:
         body = b"" if payload is None else json.dumps(payload).encode()
-        if len(body) > protocol.MAX_BODY and not self.synced:
-            # The server checks a large body's header, time included, before it reads the body
-            # and closes the connection on a refusal, so a client whose clock is off would never
-            # see the answer. One small request first learns the offset.
-            self._send("POST", "/v1/ping", None, timeout)
-        headers = protocol.request_headers(
-            self.token, method, path, body, time.time() + self.offset
-        )
+        headers = protocol.request_headers(self.token, method, path, body, time.time())
         if body:
             headers["Content-Type"] = "application/json"
         conn = self._connection(timeout)
@@ -255,11 +243,8 @@ class ControlClient:
             raise ControlError("the control server's reply is not signed for this request")
         try:
             reply = obj(json.loads(data))
-            server_time = float(str(reply["server_time"]))
-        except (ValueError, KeyError) as exc:
+        except ValueError as exc:
             raise ControlError("the control server's reply is not valid") from exc
-        self.offset = server_time - time.time()
-        self.synced = True
         return response.status, reply
 
     def _connection(self, timeout: float = TIMEOUT_S) -> http.client.HTTPConnection:

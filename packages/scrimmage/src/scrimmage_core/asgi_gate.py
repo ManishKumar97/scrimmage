@@ -196,6 +196,13 @@ def checked_name(gate: Gate, runs: list[bytes]) -> str:
     return name
 
 
+# The control server's claim refusals the gate names as its own 503 code. A clock refusal: this
+# process's clock left the runner's 60 s window after the probe. Any other refusal is a run
+# the runner does not hold open.
+CLAIM_REFUSALS = {"claimed": "claimed", "version": "version", "clock": "clock"}
+NO_SUCH_RUN = "no-such-run"
+
+
 async def claimed(gate: Gate, name: str) -> tuple[RunState, RunSender]:
     """The run's plan, claimed on Scrimmage's own threads with a control slot taken on the
     loop: with none free in about 250 ms the request gets 503, holding no thread."""
@@ -212,7 +219,7 @@ async def claimed(gate: Gate, name: str) -> tuple[RunState, RunSender]:
     try:
         doc = await asyncio.wrap_future(gate.executor.submit(work))
     except ClaimRefused as refused:
-        code = {"claimed": "claimed", "version": "version"}.get(refused.code, "no-such-run")
+        code = CLAIM_REFUSALS.get(refused.code, NO_SUCH_RUN)
         raise Unavailable(code) from None
     except (ControlError, Busy):
         raise Unavailable("plan-unavailable") from None
@@ -346,7 +353,7 @@ async def answer_probe(
         # The signature, nonce and body are good and only the time is outside the window:
         # the runner's clock and this one differ. Only a token holder can make this probe, and
         # a nonce seen before goes to the app as plain, like any replay.
-        return await send_clock(gate, fields, now, send)
+        return await send_clock(gate, fields, send)
     if error:
         return await served_plain(app, copied, receive, send)
     report = json.dumps(startup_report(gate, await pinged(gate))).encode()
@@ -362,9 +369,10 @@ async def answer_probe(
     return None
 
 
-async def send_clock(gate: Gate, fields: dict[str, str], now: float, send: Send) -> None:
-    """The signed answer to a probe whose time is outside the window: 409 and this clock's time."""
-    body = json.dumps({"error": "clock", "server_time": now}).encode()
+async def send_clock(gate: Gate, fields: dict[str, str], send: Send) -> None:
+    """The signed answer to a probe whose time is outside the window: 409 and no time, so a
+    replay of it learns only that the clocks differ."""
+    body = json.dumps({"error": "clock"}).encode()
     signature = protocol.sign_reply(gate.token, fields.get(protocol.SIGNATURE, ""), 409, body)
     headers = [
         (b"content-type", b"application/json"),
@@ -431,7 +439,6 @@ def startup_report(gate: Gate, control: dict[str, object]) -> dict[str, object]:
         "tools": sorted(labels.tool_name(path, renames) for path in gate.tools),
         "notices": [dict(entry) for entry in gate.process.report],
         "control": control,
-        "server_time": time.time(),
     }
 
 

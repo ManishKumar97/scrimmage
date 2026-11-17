@@ -161,26 +161,17 @@ The text after `asking:` is the error's own message, which differs between syste
 | A certificate from another authority | `the service cannot reach the control server at https://scrimmage:7700: ... certificate verify failed ...; check SCRIMMAGE_CONTROL_CA`, at the first probe |
 
 **The clock.**
-The runner works out how far the service's clock is from its own, from the service's time in the report and the middle of the probe's round trip.
-`scrimmage check --service` always prints the gap.
-`scrimmage test` says it as a warning from 10 seconds, and stops with exit 3 before the setup request from 50 seconds, because a request more than 60 seconds off is refused and a clock that is still moving would soon pass that.
-Past 60 seconds the service's gate cannot take the probe as one, so it answers a signed `409` with its time, and the test stops with exit 3 naming the gap.
-The service's calls to the control server are not affected: its client corrects its own clock from the control server's signed replies.
-Set both clocks from the same time source (NTP) to avoid all of this.
+Every signed request carries the sender's time, and a request more than 60 seconds from the receiver's clock is refused.
+Scrimmage does not measure or correct a gap: each side signs with its own clock.
+A gap under 60 seconds changes nothing and is not reported.
+Past 60 seconds the service's gate cannot take the probe as one, so it answers a signed `409` that holds no time, and the test stops with exit 3 before the setup request:
 
-**The template.**
-Before the setup request, and in `scrimmage check --service`, the runner sends one plain `GET` for `/openapi.json` to the service, with the file's `headers` expanded and no body, and checks the file's `body` against the document.
-It is a request from the runner's own process, so no gate sees it and the app gets it untouched, with no `x-scrimmage-` header.
-It asks at the service's origin first, then under each prefix of the service's path, longest first, at most three requests in all, so a service at `/api/chat` mounted under `/api` is found at `/api/openapi.json`.
-It renders `body` with the question `x` and a new session, and checks a small part of JSON Schema: that every `required` name is present, that no field is outside `properties` when `additionalProperties` is `false`, and each present field's JSON type, one level down for an object.
-It follows `$ref` only inside `components/schemas`, and looks through pydantic's `anyOf` with `null` for an optional field.
-Each misfit is one warning, such as `[agent] body: /openapi.json says POST /chat requires "message"; the template has no such field`.
-A warning never stops `scrimmage test`; `scrimmage check --service --strict` exits 2 on one.
-No document, a document that is not JSON or too deeply nested to read, or no entry for the path is one note.
-Not checked: `oneOf`, `pattern`, `format`, `items`, and anything more than one level down; the note says so.
-A pydantic model with `populate_by_name` accepts a field under its Python name as well as its alias, but the document lists only the alias.
-A file that sends the Python name is warned about, for a missing alias under `required` and, with `additionalProperties` false, for a field the document does not allow.
-The warning is false in that case: it never stops a test, and `--strict` is the only place it matters, so leave `--strict` off for such a service.
+```text
+the service's clock and this machine's differ by more than 60 s, so every signed request is refused; set both from the same NTP source
+```
+
+The service's ping to the control server is a signed request too, so a gap there stops the test with the same message.
+NTP, the Network Time Protocol, is what servers use to keep their clocks in step; set the runner's machine and the service's from the same source.
 
 **The setup request.**
 Then it sends the first test's baseline once, as a run named `setup-` and 12 hex digits.
@@ -215,10 +206,12 @@ When the gate cannot run a request under its plan, it answers `503` itself, with
 | `bad-run-header` | The header is malformed, appears twice, or carries a MAC made without the token. No control request is made. |
 | `no-such-run` | The runner has no such run open: it ended, or never was. |
 | `claimed` | Another request claimed this run already, such as a replayed header. |
+| `version` | The process runs another Scrimmage version than the runner. The test stops with exit 2 and names both versions. |
+| `clock` | The control server refused the claim because the service's clock and the runner's differ by more than 60 seconds, as after a clock jump during the test. The test stops with exit 3 at that run, sends no further run, and says to set both clocks from the same NTP source. |
 | `plan-unavailable` | No control slot was free in about 250 ms, the runner could not be reached, or the plan names a tool or a package the service does not gate. |
 | `structure` | The process found a library it cannot gate after it started listening. Plain requests are still served. |
 
-The runner reads each of these as an infrastructure error for that run, exit 3, and the test goes on.
+The runner reads each of the others as an infrastructure error for that run, exit 3, and the test goes on.
 A reply that only looks like the gate's, or a run whose plan was never claimed, stops the test with exit 3: a process without Scrimmage answered it.
 
 ## In Docker Compose
