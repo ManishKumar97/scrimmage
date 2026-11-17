@@ -174,7 +174,7 @@ Making new certificates means running the command again, then restarting the run
 It prints the two lines the service's environment needs, and the `control_tls` line for the file, with absolute paths so the line works from any folder.
 In a container, `SCRIMMAGE_CONTROL_CA` is the path where `ca.pem` is mounted there, not the printed path.
 The port is left as `<port>` for you to fill in.
-The command needs the `cert` extra, `pip install "scrimmage[cert]"`; without it the command says so and exits 2.
+The command needs the `cert` extra, `pip install "./packages/scrimmage[cert]"` from the clone; without it the command says so and exits 2.
 
 | Code | Meaning |
 |---|---|

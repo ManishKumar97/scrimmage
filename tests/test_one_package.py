@@ -63,3 +63,25 @@ def test_no_page_names_the_old_package_or_the_short_command() -> None:
     assert {page: names for page, names in found.items() if names} == {}
     assert GONE.search("pip install scrimmage-core") and GONE.search("`scrim test`")
     assert not GONE.search("scrimmage-run, scrimmage, scrimmage_core, scrimmage-runs")
+
+
+def test_no_docs_command_installs_scrimmage_from_the_index() -> None:
+    # PyPI holds a 0.0.0 placeholder named scrimmage, and pip prefers it to our dev release.
+    # So a command installs Scrimmage from a path, or from a wheel folder with --no-index.
+    installs = [
+        (str(page.relative_to(DOCS)), shlex.split(line))
+        for page in doc_pages(DOCS)
+        if page.name != "changelog.md"
+        for lang, _, body in FENCE.findall(page.read_text())
+        if lang == "bash"
+        for line in body.splitlines()
+        if re.match(r"(uv )?pip install ", line)
+    ]
+    assert len(installs) >= 5, installs
+    from_index = [
+        (page, words)
+        for page, words in installs
+        if "--no-index" not in words
+        and any(re.match(r"scrimmage(\[[\w,]*\])?($|[<>=!~ ])", w) for w in words[2:])
+    ]
+    assert from_index == []
