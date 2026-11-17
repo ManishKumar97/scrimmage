@@ -1,5 +1,6 @@
 """scrimmage cert: a throwaway authority, name-constrained, and one server certificate."""
 
+import contextlib
 import errno
 import ipaddress
 import os
@@ -16,7 +17,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-from scrimmage_core import cert, cli
+from scrimmage_core import cert, cli, tls
 from scrimmage_core.cert import CertError, CertFiles, make_certificates
 
 NAME = "host.docker.internal"
@@ -314,6 +315,66 @@ def test_the_authority_is_name_constrained_to_the_given_names_and_their_subdomai
     with pytest.raises(ssl.SSLCertVerificationError) as raised:
         handshake(files.ca, mixed, leaf_key_file, "a." + NAME)
     assert raised.value.verify_message == "permitted subtree violation"
+
+
+def test_an_authority_of_names_alone_refuses_every_address(
+    tmp_path: Path, captured: Captured
+) -> None:
+    """A constraint binds only the name types it lists, so with no --ip the authority must
+    exclude every address, or a leaf naming one would pass."""
+    files = make(tmp_path, ips=(), names=("scrimmage",))
+    ca_key, ca = captured.keys[0], load(files.ca)
+    leaf_key = ec.generate_private_key(ec.SECP256R1())
+    ca_ski = ca.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value
+    now = datetime.now(UTC)
+    for address in ("10.96.0.10", "fd00::1"):
+        leaf = (
+            x509.CertificateBuilder()
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "leaf")]))
+            .issuer_name(ca.subject)
+            .public_key(leaf_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(minutes=5))
+            .not_valid_after(now + timedelta(days=1))
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(
+                x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(address))]),
+                critical=False,
+            )
+            .add_extension(
+                x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(ca_ski),
+                critical=False,
+            )
+            .sign(ca_key, hashes.SHA256())
+        )
+        leaf_file, key_file = tmp_path / "leaf.pem", tmp_path / "leaf.key"
+        leaf_file.write_bytes(leaf.public_bytes(serialization.Encoding.PEM))
+        key_file.write_bytes(
+            leaf_key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+        )
+        # The SDK's own contexts, the ones the service and the runner use.
+        client = tls.client_context(files.ca)
+        server = tls.server_context(leaf_file, key_file)
+        to_server, to_client = ssl.MemoryBIO(), ssl.MemoryBIO()
+        mine = client.wrap_bio(to_server, to_client, server_hostname=address)
+        theirs = server.wrap_bio(to_client, to_server, server_side=True)
+        with pytest.raises(ssl.SSLCertVerificationError) as raised:
+            for _ in range(8):
+                for side in (mine, theirs):
+                    with contextlib.suppress(ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                        side.do_handshake()
+        assert raised.value.verify_message == "excluded subtree violation", address
+    # Positive control: the name it was made for still passes.
+    handshake(files.ca, files.cert, files.key, "scrimmage")
+    constraints = ca.extensions.get_extension_for_class(x509.NameConstraints).value
+    assert constraints.excluded_subtrees == [
+        x509.IPAddress(ipaddress.ip_network("0.0.0.0/0")),
+        x509.IPAddress(ipaddress.ip_network("::/0")),
+    ]
 
 
 def test_cert_without_the_extra_says_how_to_install_it(

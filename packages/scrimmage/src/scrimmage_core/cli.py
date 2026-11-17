@@ -854,7 +854,8 @@ def cert_command(args: argparse.Namespace) -> int:
         return MISTAKE
     host = names[0] if names else ips[0]
     shown = f"[{host}]" if ":" in host else host
-    print(f"scrimmage cert: wrote {files.ca}, {files.cert} and {files.key}, valid {args.days} days")
+    valid = plural(args.days, "day")
+    print(f"scrimmage cert: wrote {files.ca}, {files.cert} and {files.key}, valid {valid}")
     print(
         "the service's environment (in a container, SCRIMMAGE_CONTROL_CA is the path where "
         "ca.pem is mounted there):"

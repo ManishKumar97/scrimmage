@@ -148,6 +148,68 @@ def test_a_session_does_not_wait_for_its_own_scratch_cluster(
     Cluster("2-mn").reserve_room()  # returns at once; waiting would hang the test
 
 
+@pytest.mark.slow  # it runs the real scrimmage cert
+def test_control_secrets_runs_scrimmage_cert_then_two_kubectl_creates_and_removes_the_folder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """scrimmage cert really runs; each kubectl call is recorded with what the folder held."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    real = kubernetes.run
+    calls: list[tuple[list[str], list[str]]] = []
+    cluster = Cluster("2")
+    out = cluster.folder / "cert-ns1"
+
+    def recording(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        held = sorted(p.name for p in out.iterdir()) if out.exists() else []
+        calls.append((command, held))
+        if command[0] == "kubectl":
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return real(command, **kwargs)
+
+    monkeypatch.setattr(kubernetes, "run", recording)
+    cluster.control_secrets("ns1")
+    names = ["scrimmage", "scrimmage.ns1.svc", "scrimmage.ns1.svc.cluster.local"]
+    assert [c for c, _ in calls] == [
+        [
+            kubernetes.scrimmage_command(), "cert",
+            *(arg for name in names for arg in ("--name", name)),
+            "--days", "1", "--out", str(out),
+        ],
+        [
+            "kubectl", "create", "secret", "tls", "scrimmage-control-tls", "-n", "ns1",
+            "--cert", str(out / "server.pem"), "--key", str(out / "server.key"),
+        ],
+        [
+            "kubectl", "create", "secret", "generic", "scrimmage-ca-cert", "-n", "ns1",
+            f"--from-file=ca.crt={out / 'ca.pem'}",
+        ],
+    ]  # fmt: skip
+    # The two creates read the three files scrimmage cert wrote, and then the folder is gone.
+    assert [held for _, held in calls[1:]] == [["ca.pem", "server.key", "server.pem"]] * 2
+    assert not out.exists(), "the folder with the server's key was left on disk"
+    assert cluster.folder.is_dir(), "only the certificate folder goes, not the session's"
+
+
+def test_a_failed_create_still_removes_the_certificate_folder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    cluster = Cluster("2")
+
+    def refusing(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        if command[0] == "kubectl":
+            raise ClusterError("kubectl create secret exited 1")
+        out = Path(command[command.index("--out") + 1])  # scrimmage cert's folder, faked
+        out.mkdir()
+        (out / "server.key").write_text("key")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(kubernetes, "run", refusing)
+    with pytest.raises(ClusterError, match="exited 1"):
+        cluster.control_secrets("ns1")
+    assert not (cluster.folder / "cert-ns1").exists()
+
+
 # The committed manifests, read without a cluster.
 
 

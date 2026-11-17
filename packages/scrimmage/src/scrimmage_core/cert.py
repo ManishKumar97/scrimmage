@@ -2,7 +2,8 @@
 
 The authority's key lives in this function's memory only. It signs the server certificate
 and is dropped, so nothing on disk can sign another name. The authority is name-constrained
-to the names and addresses given, so a leaked ca.pem cannot vouch for any other host.
+to the names and addresses given, so a leaked ca.pem cannot vouch for any other host. With
+no address given, it excludes every address.
 
 This is the one module that imports cryptography, an optional extra. It is loaded only by
 the scrimmage cert command, never into the team's process.
@@ -127,7 +128,14 @@ def make_certificates(
                         for address in addresses
                     ),
                 ],
-                excluded_subtrees=None,
+                # A constraint binds only the name types it lists, so an authority of names
+                # alone would vouch for any address. With no --ip, every address is excluded.
+                excluded_subtrees=None
+                if addresses
+                else [
+                    x509.IPAddress(ipaddress.ip_network("0.0.0.0/0")),
+                    x509.IPAddress(ipaddress.ip_network("::/0")),
+                ],
             ),
             critical=True,
         )

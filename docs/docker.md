@@ -110,6 +110,7 @@ The runner refuses `control = "0.0.0.0:8766"`, an address that listens on every 
 The SDK trusts the one authority in `SCRIMMAGE_CONTROL_CA` and nothing else; it never loads the system's certificate store.
 It speaks TLS 1.3 only, checks the host name or address in `SCRIMMAGE_CONTROL_URL` against the certificate, and applies strict chain rules.
 The authority's key is discarded once the server certificate is signed, and the authority is limited to the names and addresses you gave and their subdomains.
+Given `--ip` with no `--name`, DNS names are not limited, so give both, as above.
 The HMAC signing stays on every request and reply, under TLS.
 
 What crosses the network, exactly:
