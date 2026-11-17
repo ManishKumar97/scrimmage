@@ -17,6 +17,8 @@ import ipaddress
 import json
 import os
 import ssl
+import subprocess
+import time
 import tomllib
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -302,6 +304,34 @@ def tls_pod(name: str, image: str, script: str, *, label: str, mount: str, secre
     )
 
 
+def runner_endpoint_ready(cluster: Cluster, namespace: str) -> bool:
+    """The Service scrimmage's EndpointSlice lists the runner pod as ready."""
+    slices = cluster.json(
+        "get", "endpointslices", "-n", namespace, "-l", "kubernetes.io/service-name=scrimmage"
+    )
+    return any(
+        endpoint.get("targetRef", {}).get("name") == "runner"
+        and endpoint.get("conditions", {}).get("ready") is True
+        for item in slices["items"]
+        for endpoint in item.get("endpoints") or []
+    )
+
+
+def connect(cluster: Cluster, namespace: str, *hosts: str) -> subprocess.CompletedProcess[str]:
+    """TLS_CLIENT in the agent's pod. A refused connection, as kube-proxy gives while its
+    rules catch up with the EndpointSlice, is tried again for up to 10 s; any other result,
+    a refused certificate included, is returned as it is."""
+    deadline = time.monotonic() + 10
+    while True:
+        done = cluster.kubectl(
+            "exec", "agent", "-n", namespace, "--", "python3", "-c", TLS_CLIENT, *hosts,
+            check=False,
+        )  # fmt: skip
+        if "ConnectionRefusedError" not in done.stderr or time.monotonic() > deadline:
+            return done
+        time.sleep(1)
+
+
 def test_a_default_session_installs_no_cert_manager(
     cluster: Cluster, request: pytest.FixtureRequest
 ) -> None:
@@ -350,18 +380,21 @@ def test_the_default_certificates_come_from_scrimmage_cert_and_pass_the_handshak
             namespace=namespace,
             watch=(("pod", "runner"), ("pod", "agent")),
         )
+        # A Ready pod is not yet behind its Service: kube-proxy routes to it only once the
+        # Service's EndpointSlice lists it as ready.
+        cluster.wait_until(
+            "the runner behind the Service scrimmage",
+            lambda: runner_endpoint_ready(cluster, namespace),
+            timeout=60,
+        )
         # Each name the agent may connect by, through the Service `scrimmage` and cluster DNS.
         hosts = kubernetes.control_names(namespace)
-        said = cluster.kubectl(
-            "exec", "agent", "-n", namespace, "--", "python3", "-c", TLS_CLIENT, *hosts
-        ).stdout.splitlines()
-        assert said == [f"{host} TLSv1.3 ok" for host in hosts]
+        said = connect(cluster, namespace, *hosts)
+        assert said.returncode == 0, said.stderr[-500:]
+        assert said.stdout.splitlines() == [f"{host} TLSv1.3 ok" for host in hosts]
         # Positive control: the same client refuses a name of the Service the certificate
         # does not carry.
-        other = cluster.kubectl(
-            "exec", "agent", "-n", namespace, "--", "python3", "-c", TLS_CLIENT,
-            f"scrimmage.{namespace}", check=False,
-        )  # fmt: skip
+        other = connect(cluster, namespace, f"scrimmage.{namespace}")
         assert other.returncode != 0
         assert "CERTIFICATE_VERIFY_FAILED" in other.stderr, other.stderr[-500:]
 

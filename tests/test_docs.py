@@ -1,6 +1,7 @@
 """The user docs keep up with the code: every setting, fault and outcome has its place."""
 
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -716,19 +717,34 @@ def test_the_docs_manifests_are_the_tested_ones() -> None:
     assert "[In Kubernetes](../kubernetes.md#in-kubernetes)" in page("examples/service-agent.md")
 
 
-def certificate_block() -> list[list[str]]:
-    """The commands of the Kubernetes page's certificate block, each split as the shell does,
-    with continued lines joined."""
+def certificate_text() -> str:
+    """The Kubernetes page's certificate block, as written."""
     section = page("kubernetes.md").split("\n### The certificate\n", 1)[1].split("\n#", 1)[0]
-    (block,) = re.findall(r"(?ms)^```bash\n(set -e\n.*?)^```$", section)
-    return [shlex.split(line) for line in block.replace("\\\n", " ").splitlines()]
+    (block,) = re.findall(r"(?ms)^```bash\n(NS=.*?)^```$", section)
+    return block
+
+
+def certificate_block() -> list[list[list[str]]]:
+    """Each line of the certificate block, continued lines joined, as the commands the shell
+    runs: one list for a plain line, several for a line chained with &&."""
+    lines: list[list[list[str]]] = []
+    for line in certificate_text().replace("\\\n", " ").splitlines():
+        chain: list[list[str]] = [[]]
+        for word in shlex.split(line):
+            if word == "&&":
+                chain.append([])
+            else:
+                chain[-1].append(word)
+        lines.append(chain)
+    return lines
 
 
 def test_the_certificate_block_runs_what_the_harness_runs(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The commands the page shows are the ones the kind tests make their Secrets with, with
-    $NS for the namespace and .scrimmage-cert for the harness's folder."""
+    $NS for the namespace and .scrimmage-cert for the harness's folder: a cleanup, the three
+    commands chained, and a cleanup on a line of its own."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     ran: list[list[str]] = []
 
@@ -745,10 +761,40 @@ def test_the_certificate_block_runs_what_the_harness_runs(
         for command in ran
     ]
     harness[0][0] = "scrimmage"  # the harness names the command by its full path
-    shown = certificate_block()
-    assert shown[:3] == [["set", "-e"], ["NS=my-test"], ["rm", "-rf", ".scrimmage-cert"]]
-    assert shown[-1] == ["rm", "-rf", ".scrimmage-cert"], "the key's folder is removed last"
-    assert shown[3:-1] == harness
+    cleanup = [["rm", "-rf", ".scrimmage-cert"]]
+    assert certificate_block() == [[["NS=my-test"]], cleanup, harness, cleanup]
+
+
+@pytest.mark.slow  # it runs the block in bash
+def test_the_certificate_block_removes_the_key_when_a_create_fails(tmp_path: Path) -> None:
+    """The block pasted into a shell, with a scrimmage that writes the three files and a
+    kubectl whose second create fails: the key is gone, and the shell goes on."""
+    bin_dir, work = tmp_path / "bin", tmp_path / "work"
+    bin_dir.mkdir()
+    work.mkdir()
+    fakes = {
+        "scrimmage": 'out="${@: -1}"; mkdir "$out" && touch "$out/ca.pem" "$out/server.pem" '
+        '"$out/server.key"',
+        "kubectl": 'echo "$*" >> ../kubectl.log; [ "$3" != generic ]',
+    }
+    for name, body in fakes.items():
+        fake = bin_dir / name
+        fake.write_text(f"#!/bin/bash\n{body}\n")
+        fake.chmod(0o755)
+    (work / ".scrimmage-cert").mkdir()  # an old folder, which the first rm -rf clears
+    script = certificate_text() + "echo STILL\n"
+    done = subprocess.run(
+        ["bash", "-c", script],
+        cwd=work,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert done.stdout.splitlines()[-1:] == ["STILL"], done.stderr
+    assert not (work / ".scrimmage-cert").exists(), "the key was left on disk"
+    creates = (tmp_path / "kubectl.log").read_text().splitlines()
+    assert [line.split()[2] for line in creates] == ["tls", "generic"], creates
 
 
 @pytest.mark.design("docs.service_pages")

@@ -109,19 +109,21 @@ automountServiceAccountToken: false
 Make the certificate with [`scrimmage cert`](cli.md#scrimmage-cert), as for Docker, once per test namespace, on the machine that applies the manifests.
 It names the three names the agent's pods may reach the runner by: `scrimmage`, which `SCRIMMAGE_CONTROL_URL` holds, and its two longer forms.
 
-Run it as a script: `set -e` stops it at the first command that fails, so a failed `scrimmage cert` never leaves an old folder to be stored.
-
 ```bash
-set -e
 NS=my-test
 rm -rf .scrimmage-cert
 scrimmage cert --name scrimmage --name scrimmage.$NS.svc --name scrimmage.$NS.svc.cluster.local \
-  --days 1 --out .scrimmage-cert
+  --days 1 --out .scrimmage-cert && \
 kubectl create secret tls scrimmage-control-tls -n $NS \
-  --cert .scrimmage-cert/server.pem --key .scrimmage-cert/server.key
+  --cert .scrimmage-cert/server.pem --key .scrimmage-cert/server.key && \
 kubectl create secret generic scrimmage-ca-cert -n $NS --from-file=ca.crt=.scrimmage-cert/ca.pem
 rm -rf .scrimmage-cert
 ```
+
+The first `rm -rf` clears an old folder, which `scrimmage cert` would refuse.
+The `&&` stops at the first command that fails, so no Secret is made from files that were not written.
+The last `rm -rf` is a line of its own, so the key is removed even when a create fails.
+The block is safe to paste into a shell; it never exits it.
 
 `scrimmage-control-tls` holds `tls.crt` and `tls.key` for the runner, and `scrimmage-ca-cert` holds only `ca.crt` for the agent.
 No key is ever in the agent's pod.
@@ -129,7 +131,7 @@ No key is ever in the agent's pod.
 - The authority's key is never written: `scrimmage cert` drops it once the server certificate is signed, so nothing in or out of the cluster can sign another control certificate.
 - The authority is limited to the three names given and the names under them, and it excludes every IP address, so it is good for this namespace only.
 - The server's key passes through the machine that runs `scrimmage cert`, in a folder only you can read, and through the API call of `kubectl create secret`.
-  The last `rm -rf` removes it from the machine.
+  The last `rm -rf` removes it from the machine, whatever the creates did.
 
 The tests make the two Secrets with these same commands.
 
@@ -140,13 +142,12 @@ The tests make the two Secrets with these same commands.
 - A runner that starts with an expired certificate exits 2 at its start, naming `control_tls`.
 - A test that outlives the 24 hours has every new handshake with the runner refused.
 
-To make a new one, delete the two Secrets, run the block above again, and restart the agent's pods, since a new certificate comes from a new authority and the SDK reads `SCRIMMAGE_CONTROL_CA` once, at its start:
+To make a new one:
 
-```bash
-kubectl delete secret scrimmage-control-tls scrimmage-ca-cert -n $NS
-# the block above
-kubectl rollout restart deployment/acme-agent -n $NS
-```
+1. Delete the two Secrets: `kubectl delete secret scrimmage-control-tls scrimmage-ca-cert -n $NS`.
+2. Run the certificate block above again, all of it.
+3. Restart the agent's pods: `kubectl rollout restart deployment/acme-agent -n $NS`.
+   A new certificate comes from a new authority, and the SDK reads `SCRIMMAGE_CONTROL_CA` once, at its start.
 
 `kubectl create` refuses a Secret that exists, so the delete comes first.
 
