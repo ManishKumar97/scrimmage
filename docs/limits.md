@@ -6,18 +6,22 @@ Six limits decide this.
 Check them first.
 Every other limit is listed below, grouped by how your agent runs.
 
-- **OpenAI only.** Model calls are understood for OpenAI's API and for gateways that speak its format; another provider's calls are plain web requests with no budget.
-  Name a gateway host under `model_hosts`; see [Use a gateway](model-faults.md#use-a-gateway).
+- **OpenAI only.** Model calls are understood for OpenAI's API and for gateways that speak its format; a call to another provider stops the test until you list it.
+  Either name a gateway that speaks OpenAI's format under `model_hosts`, or list the provider's host under `real`, where its calls run with no budget and no faults; see [Use a gateway](model-faults.md#use-a-gateway).
 - **LangChain only.** LangChain tools, which LangGraph runs, are found by themselves; a tool on another framework is not gated.
-  List each tool's function under `tools`; see [Other frameworks](frameworks.md#other-frameworks).
+  List each tool's function under `tools`; see [the `tools` setting](configuration.md#agent).
 - **httpx only.** Web requests through httpx and httpx2 are gated; `requests`, `aiohttp`, `urllib` and raw sockets run unrecorded and ungated.
+  A write through `requests` or `aiohttp` reaches the real system.
+  The openai SDK uses httpx, so model calls are covered.
   Move the call to httpx, or list the tool that makes it under `tools`; see [What is covered](web-requests.md#what-is-covered).
 - **No streaming replies.** A service that streams its answer stops the test with exit 2, and a streamed model or web reply cannot take `replace` or `append`.
   Test a route that returns one reply; see [Each run](services.md#each-run).
-- **Rules match words, not meaning.** `expect` finds text, so "shipped" passes inside "has not shipped".
+- **Rules match text, not meaning.** `expect` finds text, so "shipped" passes inside "has not shipped".
   Write a `forbid` for the wrong answer too; see [How text is compared](judging.md#how-text-is-compared).
 - **Install from git.** Scrimmage is not on PyPI yet; the name there holds an empty placeholder.
   Install it from a clone; see [From a clone](install.md#from-a-clone).
+
+If none of these applies, the rest of this page is detail for your use case.
 
 ## Writing and checking a test
 
@@ -33,30 +37,7 @@ Every other limit is listed below, grouped by how your agent runs.
 
 ## A function or a script agent
 
-- **Three agent shapes.** The agent is a Python function, a Python script, or an ASGI web service under uvicorn, such as a FastAPI app. See [An agent inside a web service](services.md).
-
-- **Signals are not gated.** `os.kill`, `os.killpg` and `signal.pthread_kill` reach another process with no decision: a run can stop a process, or make one start again. A relaunch of Python's resource tracker after a run killed it is refused like any other start; see [Safety](safety.md#an-agent-inside-a-web-service).
-
-- **A run's changes to its process carry over.** The working folder, `os.environ`, signal handlers and every other object the service process shares belong to the whole process, so a run that changes them changes them for later plain requests, for work outside any request and for any process started after it, a relaunch of Python's resource tracker included.
-  That covers an item waiting in a queue's buffer, which a run can change before the feeder pickles it, and pickler reducers a run registers with `ForkingPickler.register` or `copyreg`, which then run for every later pickling.
-
-- **Other ways to another process are not gated.** Shared memory (`multiprocessing.Value`, `Array`, `shared_memory`), a lock or a semaphore shared with another process, a socket or a file another process reads, and any send point not on that list reach another process with no decision and no line.
-
-- **Code that rewrites private internals is out of scope.** Scrimmage guards code that uses public APIs. Code that rewrites the private parts of Python's objects, such as a queue's `_buffer` or `_writer`, or Scrimmage's own state, can get around a gate; see [Security](security.md#who-scrimmage-defends-against).
-
-- **A queue's private parts are not gated.** Code that takes a `multiprocessing` queue's lock or semaphore, or empties its buffer, can stall the queue for every request, and for the processes that share it, but sends them nothing. Code that puts back the pickler a queue's feeder uses removes the feeder's check: its sends are then decided as any other send, so one made while no run is open passes.
-
 - **`process:sh` lets any shell command through.** A start is decided by the program's name alone, so listing `process:sh` makes every `shell=True` call and every `os.system` real, whatever the command.
-
-- **A process pool's `close()`, `terminate()` or `shutdown()` inside a run is refused.** Each sends to the pool's processes. The refusal comes before the stop changes anything, so the pool still works. Stop pools at the service's shutdown, outside any request.
-
-- **Subinterpreters are refused in a run.** `InterpreterPoolExecutor` and `concurrent.interpreters` run code with no Scrimmage in it, so each is refused under a run.
-
-- **Ray and Dask are not covered.** A task a run sends to a Ray or Dask cluster goes through their own network connections, which no gate sees, so it can reach a live write there. Dask's local threaded scheduler is threads, and follows the run.
-
-- **`--loop asyncio` on Python 3.11.** On 3.11 Scrimmage watches each task a run makes through the loop's `create_task`, which uvloop's loop does not let it do. A service on uvloop stops at its start with a message naming `--loop asyncio`. From 3.12, uvloop works.
-
-- **On Python 3.11, a task built outside `create_task` is not seen at a run's close.** A run whose task outlives it is an infrastructure error. On 3.11 that check sees tasks made with `asyncio.create_task` or `loop.create_task` only; from 3.12 it reads every task on every loop.
 
 - **A command that clears Scrimmage's path.** `env PYTHONPATH=. python bot.py` replaces the startup folder, so the program runs with no gates, its writes are real, and only then does the run read infrastructure error. Add to `PYTHONPATH` in the environment of `scrimmage test` instead. A flag that does the same, `python -E`, is refused when the file is read.
 
@@ -85,8 +66,6 @@ Every other limit is listed below, grouped by how your agent runs.
 
 - **Programs on another Python.** They are not gated, so a web write or an MCP call from one is not stopped or recorded. Only a tool under `tools` is kept from them, by module name and file ending. A copy of its code is not. With `children` set, one that has Scrimmage installed joins, and a stdio server on `mcp` 1.x then stops with exit code 3.
 
-- **A child on another venv's SDK is not version-checked.** The version rule of a service test covers the SDK in the service's own processes: the probe's report and each claim. A function or a script whose child runs on another venv with a different `scrimmage` is not compared, so install the same version in every venv your agent starts.
-
 - **A daemon that starts its own session.** A child that calls `os.setsid`, or is started with `start_new_session=True`, leaves the run's process group, so the group stop does not reach it. A sweep of `/proc` after the run finds it by the exact `SCRIMMAGE_RUN` in its environment, kills it and records it. Until then it can run. A process that starts with a clean environment holds no such variable and is not found. A system with no `/proc`, such as macOS, has no sweep: the daemon keeps running, a 409 on its next line refuses its later calls while the test goes on, and a `real` call after `scrimmage test` has ended runs for real. A double fork with no new session stays in the group and is stopped.
 
 - **A last line of output shared with a child.** The last printed line is read from one file, so a child that prints after your program comes last, and nothing says so. Print the answer last or use the answer file. See [An agent run as a script](scripts.md#the-answer).
@@ -112,6 +91,21 @@ Every other limit is listed below, grouped by how your agent runs.
 ## An agent inside a web service
 
 - **A service run is stricter than a script about processes.** A script's child joins its run. In a service, a run is one request in a process that serves others, so every process start under a run is refused unless `real` lists its program as `process:<program>`, and so are the forks, `multiprocessing` starts and sends, process pools and subinterpreters that [Safety](safety.md#an-agent-inside-a-web-service) lists by name. A Python child never joins a service run.
+
+- **Signals are not gated.** `os.kill`, `os.killpg` and `signal.pthread_kill` reach another process with no decision: a run can stop a process, or make one start again. A relaunch of Python's resource tracker after a run killed it is refused like any other start; see [Safety](safety.md#an-agent-inside-a-web-service).
+
+- **A run's changes to its process carry over.** The working folder, `os.environ`, signal handlers and every other object the service process shares belong to the whole process, so a run that changes them changes them for later plain requests, for work outside any request and for any process started after it, a relaunch of Python's resource tracker included.
+  That covers an item waiting in a queue's buffer, which a run can change before the feeder pickles it, and pickler reducers a run registers with `ForkingPickler.register` or `copyreg`, which then run for every later pickling.
+
+- **Other ways to another process are not gated.** Shared memory (`multiprocessing.Value`, `Array`, `shared_memory`), a lock or a semaphore shared with another process, a socket or a file another process reads, and any send point not on that list reach another process with no decision and no line.
+
+- **A queue's private parts are not gated.** Code that takes a `multiprocessing` queue's lock or semaphore, or empties its buffer, can stall the queue for every request, and for the processes that share it, but sends them nothing. Code that puts back the pickler a queue's feeder uses removes the feeder's check: its sends are then decided as any other send, so one made while no run is open passes.
+
+- **A process pool's `close()`, `terminate()` or `shutdown()` inside a run is refused.** Each sends to the pool's processes. The refusal comes before the stop changes anything, so the pool still works. Stop pools at the service's shutdown, outside any request.
+
+- **`--loop asyncio` on Python 3.11.** On 3.11 Scrimmage watches each task a run makes through the loop's `create_task`, which uvloop's loop does not let it do. A service on uvloop stops at its start with a message naming `--loop asyncio`. From 3.12, uvloop works.
+
+- **On Python 3.11, a task built outside `create_task` is not seen at a run's close.** A run whose task outlives it is an infrastructure error. On 3.11 that check sees tasks made with `asyncio.create_task` or `loop.create_task` only; from 3.12 it reads every task on every loop.
 
 - **Each control request is a new connection.** The service opens a TCP connection and, over TLS, a TLS handshake for every claim, record batch and budget ask, and a closed connection sits in the host's connection-tracking table for 120 seconds. With the usual table of 262,144 entries it fills at about 2,200 new connections a second; the kernel then drops new connections without a reply, and runs end as `plan-unavailable` infrastructure errors. Watch `control_p99_ms` and the report's `control server:` lines. Keeping connections alive is a later step.
 
@@ -141,8 +135,6 @@ Every other limit is listed below, grouped by how your agent runs.
 
 - **hypercorn, `--http zttp` and `--http2` are not covered.** zttp and HTTP/2 stop the service at its start. hypercorn is not tested.
 
-- **A value under 8 characters is not removed from the records.** It would match too much other text. Keep tokens and secrets longer than that.
-
 - **Stopping the service mid-run.** uvicorn installs its own SIGTERM handler, so runs open when it stops lose their last lines, and read as infrastructure errors.
 
 - **A service run refuses every process start, a library's own too.** The openai library runs `uname -p` through `platform` to name its machine, so a service whose agent calls OpenAI needs `"process:uname"` under `real`. The setup request finds it before any run and names the entry to add.
@@ -151,9 +143,13 @@ Every other limit is listed below, grouped by how your agent runs.
 
 ## In Docker Compose
 
+Also read the control-path limits under An agent inside a web service.
+
 - **A client without the token can hold the control server's connections.** When `control` is not loopback, any container or pod on the host can open the runner's 64 connections and send nothing. Each is cut after 15 seconds, and while all are held the runs end as `plan-unavailable` infrastructure errors, never as results. A network policy that limits who may connect is the fix.
 
 ## In a Kubernetes cluster
+
+Also read the control-path limits under An agent inside a web service.
 
 - **One node.** The tests run one kind node.
   A node failure, several nodes and the runner's pod moving between nodes are not tested.
@@ -190,6 +186,18 @@ Every other limit is listed below, grouped by how your agent runs.
 - **Not part of this version.** trust-manager, a Helm chart for the runner, a published and signed runner image, and a production storage class for the records.
 
 ## General
+
+### Programs and processes
+
+- **Three agent shapes.** The agent is a Python function, a Python script, or an ASGI web service under uvicorn, such as a FastAPI app. See [An agent inside a web service](services.md).
+
+- **Code that rewrites private internals is out of scope.** Scrimmage guards code that uses public APIs. Code that rewrites the private parts of Python's objects, such as a queue's `_buffer` or `_writer`, or Scrimmage's own state, can get around a gate; see [Security](security.md#who-scrimmage-defends-against).
+
+- **Subinterpreters are refused in a run.** `InterpreterPoolExecutor` and `concurrent.interpreters` run code with no Scrimmage in it, so each is refused under a run.
+
+- **Ray and Dask are not covered.** A task a run sends to a Ray or Dask cluster goes through their own network connections, which no gate sees, so it can reach a live write there. Dask's local threaded scheduler is threads, and follows the run.
+
+- **A child on another venv's SDK is not version-checked.** The version rule of a service test covers the SDK in the service's own processes: the probe's report and each claim. A function or a script whose child runs on another venv with a different `scrimmage` is not compared, so install the same version in every venv your agent starts.
 
 ### Tools and frameworks
 
@@ -407,3 +415,5 @@ Every other limit is listed below, grouped by how your agent runs.
 - **A model call from a thread is frozen inside a tool mock, with exit 0.** A model call a tool makes from a thread has no parent until Scrimmage links threads, so nothing marks the tool as having reached the model, and its mock holds the model's reply.
 
 - **`passphrase`, `pw` and other short names are not key-name secrets.** The key rule's words are `password`, `passwd`, `pwd`, `secret`, `token`, `auth`, `authorization`, `cookie`, `session`, `credential` and the `api key` family. A value under any other key is kept. `secret_id`, Vault's AppRole credential, is removed.
+
+- **A value under 8 characters is not removed from the records.** It would match too much other text. Keep tokens and secrets longer than that.
