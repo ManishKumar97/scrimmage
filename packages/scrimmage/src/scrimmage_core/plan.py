@@ -8,16 +8,23 @@ from scrimmage_core import labels
 from scrimmage_core.config import (
     DEFAULT_RESERVE_OUTPUT_TOKENS,
     MAX_GRACE_S,
+    SCHEDULE,
     Config,
     Fault,
     Mock,
     ModelHost,
     Test,
+    word_problem,
 )
 from scrimmage_core.judge import Rules
 from scrimmage_core.provider_openai import Rates
 
 PLAN_VERSION = 1
+# The keys a fault has in a plan. A runner of a later version may send one this SDK does not
+# know, and running the fault without it would run a fault nobody asked for.
+PLAN_FAULT_KEYS = frozenset(
+    {"call", "do", "when", "raises", "method", "path", "model", "text", "find"}
+)
 
 
 @dataclass(frozen=True)
@@ -99,20 +106,7 @@ class Plan:
         if doc.get("v") != PLAN_VERSION:
             raise ValueError(f"plan version {doc.get('v')!r} is not {PLAN_VERSION}")
         mocks = tuple(mock_from(m) for m in map(obj, items(doc, "mocks")))
-        faults = tuple(
-            Fault(
-                string(f, "call"),
-                string(f, "do"),
-                string(f, "when"),
-                optional(f, "raises"),
-                optional(f, "method"),
-                optional(f, "path"),
-                model=optional(f, "model"),
-                text=optional(f, "text"),
-                find=optional(f, "find"),
-            )
-            for f in map(obj, items(doc, "faults"))
-        )
+        faults = tuple(fault_from(f) for f in map(obj, items(doc, "faults")))
         limit = number(doc, "time_limit_s")
         budget = obj(doc.get("budget", {}))
         prices = tuple(
@@ -265,6 +259,29 @@ def fault_json(fault: Fault) -> dict[str, object]:
         if value is not None:
             doc[key] = value
     return doc
+
+
+def fault_from(doc: dict[str, object]) -> Fault:
+    """A plan's fault, refused when this SDK cannot run it as the runner meant it."""
+    unknown = sorted(set(doc) - PLAN_FAULT_KEYS)
+    if unknown:
+        raise ValueError(f"plan fault key {unknown[0]!r} is not one this scrimmage knows")
+    do, when = string(doc, "do"), string(doc, "when")
+    if word_problem(do) is not None:
+        raise ValueError(f"plan fault {do!r} is not a fault this scrimmage runs")
+    if not SCHEDULE.fullmatch(when):
+        raise ValueError(f"plan schedule {when!r} is not one this scrimmage runs")
+    return Fault(
+        string(doc, "call"),
+        do,
+        when,
+        optional(doc, "raises"),
+        optional(doc, "method"),
+        optional(doc, "path"),
+        model=optional(doc, "model"),
+        text=optional(doc, "text"),
+        find=optional(doc, "find"),
+    )
 
 
 def rows(config: Config) -> list[Row]:

@@ -32,6 +32,7 @@ from scrimmage_core import runner as running
 from scrimmage_core.cert import make_certificates
 from scrimmage_core.client import PING_TIMEOUT_S, ControlClient
 from scrimmage_core.control import ControlServer
+from scrimmage_core.plan import Plan
 from scrimmage_core.records import RecordStore
 from service_harness import Service, drive
 from test_service import BIN, Bench, bench
@@ -322,6 +323,32 @@ def test_a_worker_of_another_version_is_refused_at_its_first_claim_and_stops_the
     # The first run stopped the test: the other two were never sent.
     assert sum(1 for run in proxy.seen if run.startswith("run-")) == 1, proxy.seen
     assert "503 version" not in out  # the stop is the test's, not a run counted as an error
+
+
+@pytest.mark.design("service.plan_it_cannot_run")
+def test_a_service_given_a_plan_it_cannot_run_ends_the_run_as_an_infrastructure_error(
+    bench: Bench, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A runner of a later version sends a fault word the service's SDK does not build. The
+    service runs nothing in its place: the run is an infrastructure error, not a result."""
+    sent = Plan.to_json
+
+    def later(plan: Plan) -> dict[str, object]:
+        doc = sent(plan)
+        if plan.run.startswith("run-"):  # the setup request's plan is left as it was
+            doc["faults"] = [{"call": "tool:get_order", "do": "melt", "when": "always"}]
+        return doc
+
+    service = bench.start()
+    monkeypatch.setattr(Plan, "to_json", later)
+    code, out = bench.test(service.port, runs=1)
+    assert code == 3, out
+    runs = {name: s for name, s in bench.summaries().items() if name.startswith("run-")}
+    assert [s["outcome"] for s in runs.values()] == ["infrastructure error"], runs
+    (name,) = runs
+    assert f"{name}: the service's gate answered 503 plan-unavailable" in out, out
+    assert runs[name]["model_calls"] == 0, runs  # nothing ran in the fault's place
+    assert "claims received 2" in out, out  # the run was claimed, then refused
 
 
 # --- the ping ------------------------------------------------------------------------------

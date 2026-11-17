@@ -121,6 +121,28 @@ def test_two_requests_at_once_each_keep_their_own_number() -> None:
     assert sorted(by_thread.values()) == [["fault"] * 3, ["real"] * 3]
 
 
+@pytest.mark.design("schedule.call_n")
+def test_call_n_fires_on_the_nth_matching_call_alone() -> None:
+    p = make(faults=[Fault("tool:get_order", "timeout", "call 2")], real=["tool:*"])
+    counters = Counters(p)
+    other = Call("tool", "tool:get_stock", "get_stock")
+    actions = []
+    for call in (GET_ORDER, other, GET_ORDER, GET_ORDER, GET_ORDER):
+        decision = decide(call, p, counters.note(call))
+        actions.append((decision.action, decision.n))
+    # The call it does not name takes no number; the second get_order alone fails.
+    assert actions == [("real", 0), ("real", 0), ("fault", 2), ("real", 0), ("real", 0)]
+
+
+@pytest.mark.design("schedule.call_n_attempts")
+def test_call_n_counts_a_retry_as_the_next_call() -> None:
+    p = make(faults=[Fault("model", "status 429", "call 2")])
+    counters = Counters(p)
+    actions = [decide(chat(i), p, counters.note(chat(i))).action for i in range(3)]
+    # The library's first retry is the second call, as under first N.
+    assert actions == ["real", "fault", "real"]
+
+
 def test_a_retry_with_no_first_attempt_counts_as_a_new_request() -> None:
     p = make(faults=[Fault("model", "timeout", "requests 1")])
     counters = Counters(p)
@@ -148,6 +170,7 @@ def test_model_labels_match_as_written(label: str, call: str, expected: bool) ->
 def test_schedules() -> None:
     assert fires("always", 1) and fires("first 2", 2) and not fires("first 2", 3)
     assert fires("requests 1", 1) and not fires("requests 1", 2)
+    assert fires("call 2", 2) and not fires("call 2", 1) and not fires("call 2", 3)
     with pytest.raises(ValueError, match="is not a schedule"):
         fires("once", 1)
 

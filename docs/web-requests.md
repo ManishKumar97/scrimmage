@@ -109,7 +109,8 @@ A `Set-Cookie` header reaches the client's cookie jar, as it would from a real r
 | `status N` | a real reply with that status, from 400 to 599, and a short plain-text body |
 | `timeout` | the library's own `ReadTimeout` |
 
-`when` can be `always` or `first N`. `requests N` is for model calls only.
+`when` can be `always`, `first N` or `call N`, the Nth matching request alone.
+`requests N` is for model calls only.
 
 ## Mistakes it catches
 
