@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO, cast
 
-from scrimmage_core import judge, labels, protocol, service_client, versions
+from scrimmage_core import judge, labels, protocol, service_client
 from scrimmage_core import plan as planner
 from scrimmage_core.budget import Ledger
 from scrimmage_core.config import (
@@ -206,14 +206,6 @@ class Ended:
 
 
 PLAN_CHANGED = "the process that served this run used another plan"
-PLAN_UNREPORTED = (
-    "the service's Scrimmage does not report which plan it used; "
-    "upgrade scrimmage in the service to compare"
-)
-PLAN_FORM_UNKNOWN = (
-    "the service's Scrimmage digests its plan in form {form}, and this runner compares form "
-    "{ours}; use the same scrimmage version in the service to compare"
-)
 READY_S = 30.0  # how long the probe asks a service that does not listen yet
 READY_STEP_S = 0.2
 CONTROL_STEP_S = 1.0  # how often the probe asks again while the service cannot reach the runner
@@ -535,23 +527,12 @@ class Runner:
         incomplete = bool(state.dropped) or (ended_itself and (gap or unfinished))
         own_digest = protocol.plan_digest(self.server.token, state.plan) if state.service else None
         # Equal digests say nothing more. Another says the claiming process used another plan.
-        # A last batch with no digest, or one of a form this runner does not compute, is from
-        # another SDK of the same major: no comparison, and a notice says so.
-        form, digest = state.claimed_plan_form, state.claimed_plan_digest
-        comparable = digest is not None and form == protocol.PLAN_DIGEST_FORM
-        claimed = digest if comparable else None
-        changed = comparable and digest != own_digest
-        unreported = state.service and state.ended.is_set() and not comparable
+        # The control server refuses a claimed run's last batch with no digest.
+        claimed = state.claimed_plan_digest
+        changed = claimed is not None and claimed != own_digest
         made = kept_out + [self.left_line(run, row, *entry) for entry in left]
         if changed:
             made.append(self.runner_notice(run, row, "plan_changed", PLAN_CHANGED))
-        elif unreported:
-            said = (
-                PLAN_UNREPORTED
-                if digest is None
-                else PLAN_FORM_UNKNOWN.format(form=form, ours=protocol.PLAN_DIGEST_FORM)
-            )
-            made.append(self.runner_notice(run, row, "plan_unreported", said))
         self.store.add(run, made)
         lines += made
         model = [line for line in lines if line.get("kind") == "model"]
@@ -720,17 +701,11 @@ class Runner:
         return later
 
     def version_refusal(self, run: str) -> "service_client.Setup":
-        """A worker of the service from another major release refused its claim: every run it
-        gets would fail the same way, so the test stops."""
+        """A worker of the service of another version refused its claim: every run it gets
+        would fail the same way, so the test stops."""
         found = self.server.refused_sdk
-        theirs = "no version" if not found or found[0] is None else versions.shown(found[0])
-        ours = versions.installed()
-        return service_client.Setup(
-            2,
-            f"{run} was refused: a process of the service runs scrimmage {theirs} and "
-            f"this runner is {ours}, another major release; "
-            f"{service_client.install_line(ours)}, in every process of it",
-        )
+        said = service_client.other_version(found[0] if found else None)
+        return service_client.Setup(2, f"{run} was refused: {said}, in every process of it")
 
     def served_result(
         self,
@@ -890,7 +865,7 @@ class Runner:
         report = probed.report
         assert report is not None  # probe_service raised without one
         self.control_ping = cast(dict[str, object] | None, report.get("control"))
-        self.service_warnings += service_client.check_versions(report)
+        service_client.check_version(report)
         problem = self.tools_problem(report)
         if problem is not None:
             raise service_client.Setup(2, problem)
@@ -1841,15 +1816,6 @@ def build_report(
             for r in results
             for line in r.notices
             if line.get("notice") == "model_path"
-        }
-    )
-    # An older SDK in the service says nothing of its plan: once per test, not once per run.
-    notes += sorted(
-        {
-            f"{r.row.test.name}: {line.get('message')}"
-            for r in results
-            for line in r.notices
-            if line.get("notice") == "plan_unreported"
         }
     )
     newer = sorted(

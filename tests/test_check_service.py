@@ -127,7 +127,7 @@ class Logged:
 app = Logged(inner)
 '''
 
-LABELS = ("service", "versions", "python", "tools", "control", "clock", "template", "notices")
+LABELS = ("service", "version", "python", "tools", "control", "clock", "template", "notices")
 TOKEN = "bearer-token-for-the-openapi-get"
 
 
@@ -238,7 +238,7 @@ def test_check_service_prints_the_startup_report_and_the_clock_gap(lab: Lab) -> 
         line_of(out, "service"),
     ), out
     ours = versions.installed()
-    assert line_of(out, "versions") == f"scrimmage {ours} in the service, {ours} here"
+    assert line_of(out, "version") == f"scrimmage {ours} in the service and here"
     assert line_of(out, "python").startswith(sys.version.split()[0]) and " at /" in out
     names = "check_inventory, get_order, get_stock, refund_order"
     assert line_of(out, "tools") == f"{names}   (match the file)"
@@ -251,6 +251,25 @@ def test_check_service_prints_the_startup_report_and_the_clock_gap(lab: Lab) -> 
     ), out
     assert line_of(out, "template") == "fits POST /chat in /openapi.json"
     assert line_of(out, "notices") == "none"
+
+
+def test_check_service_prints_one_version_line(lab: Lab) -> None:
+    service = lab.bench.start()
+    theirs = versions.installed()
+    code, out = lab.check(lab.file(service.port))
+    assert code == 0, out
+    assert line_of(out, "version") == f"scrimmage {theirs} in the service and here"
+    # A runner of another version: the one line names both, and nothing else says so.
+    lab.bench.monkeypatch.setattr(versions, "installed", lambda: "9.9.9")
+    code, out = lab.check(lab.file(service.port))
+    assert code == 2, out
+    said = (
+        f"the service runs scrimmage {theirs} and this runner is 9.9.9; "
+        "install scrimmage 9.9.9 in the service"
+    )
+    assert line_of(out, "version") == said, out
+    assert out.count(f"scrimmage {theirs} and this runner") == 1, out  # said once, on its line
+    assert "versions" not in out, out
 
 
 def test_check_without_service_still_reads_the_file_only(
@@ -306,7 +325,7 @@ def test_check_service_prints_every_line_when_one_is_wrong(lab: Lab) -> None:
     code, out = lab.check(lab.file(port))
     assert code == 2, out
     assert "the service gates the tools ['get_order']" in line_of(out, "tools")
-    for label in ("service", "versions", "python", "control", "clock", "template", "notices"):
+    for label in ("service", "version", "python", "control", "clock", "template", "notices"):
         line_of(out, label)  # still printed, once
 
 

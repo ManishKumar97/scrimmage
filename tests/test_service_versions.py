@@ -44,57 +44,6 @@ RUN = "run-0123456789ab"
 HOST = "127.0.0.1"
 
 
-# --- the rule itself -----------------------------------------------------------------------
-
-RULE = [
-    ("1.4.2", "1.4.2", versions.Verdict.SAME),
-    ("1.4.2", "1.4.3", versions.Verdict.WARN),
-    ("1.4.2", "1.5.0", versions.Verdict.WARN),
-    ("1.4.2", "1.4.2.dev3", versions.Verdict.WARN),
-    ("1.4.2", "1.4.2rc1", versions.Verdict.WARN),
-    ("1.4.2", "1.4.2+gabc", versions.Verdict.WARN),
-    ("1.4", "1.4.0", versions.Verdict.SAME),  # the same release, spelled shorter
-    ("1.4.2", "2.0.0", versions.Verdict.MAJOR),
-    ("1.4.2", "10.4.2", versions.Verdict.MAJOR),
-    ("1.4.2", "0.9.0", versions.Verdict.MAJOR),
-    ("0.4.2", "0.4.9", versions.Verdict.WARN),
-    ("0.4.2", "0.5.0", versions.Verdict.MAJOR),  # while the major is 0, a minor is a major
-    ("0.4.2", "1.4.2", versions.Verdict.MAJOR),
-    ("1.4.2", "unknown", versions.Verdict.UNREADABLE),
-    ("1.4.2", "", versions.Verdict.UNREADABLE),
-    ("1.4.2", "v1.4.2", versions.Verdict.UNREADABLE),
-    ("unknown", "unknown", versions.Verdict.UNREADABLE),
-    ("1.4.2", "1.4.2junk", versions.Verdict.UNREADABLE),
-    ("1.4.2", "1.4.2\n", versions.Verdict.UNREADABLE),  # `$` would have let this through
-    (
-        "1.4.2",
-        "\N{ARABIC-INDIC DIGIT ONE}.\N{ARABIC-INDIC DIGIT FOUR}.\N{ARABIC-INDIC DIGIT TWO}",
-        versions.Verdict.UNREADABLE,
-    ),  # Arabic-Indic digits
-    ("1.4.2", "1.4.2-1", versions.Verdict.UNREADABLE),
-    ("1.4.2", "1.4.2.post1", versions.Verdict.WARN),
-    ("1.4.2", "1.4.2rc1.dev0+abc.1", versions.Verdict.WARN),
-]
-
-
-@pytest.mark.parametrize(
-    ("runner", "sdk", "verdict"),
-    RULE,
-    ids=[
-        f"{runner}-vs-{sdk.encode('unicode_escape').decode() or 'empty'}" for runner, sdk, _ in RULE
-    ],
-)
-def test_the_version_rule_reads_the_release_and_keeps_the_rest_as_text(
-    runner: str, sdk: str, verdict: versions.Verdict
-) -> None:
-    assert versions.judge(sdk, runner) is verdict
-
-
-def test_a_version_that_is_not_text_is_unreadable() -> None:
-    assert versions.judge(None, "1.4.2") is versions.Verdict.UNREADABLE
-    assert versions.judge(7, "1.4.2") is versions.Verdict.UNREADABLE
-
-
 # --- SDKs of other versions, built as the runner would meet them ---------------------------
 
 
@@ -182,64 +131,37 @@ def sent_nothing(bench: Bench) -> None:
     assert bench.fake.requests == []
 
 
-@pytest.mark.design("service.version_major")
+@pytest.mark.design("service.version_same")
 @pytest.mark.parametrize(
     ("sdk", "runner"),
-    [("1.4.2", "0.0.0"), ("1.4.2", "10.0.0"), ("0.1.0", "0.0.0")],
-    ids=["1-vs-0", "1-vs-10", "0_1-vs-0_0"],
+    [("0.4.1", "0.4.0"), ("1.4.2", "0.4.0"), ("0.1.0.dev3", "")],
+    ids=["patch", "major", "dev"],
 )
-def test_an_sdk_one_major_off_is_refused_at_the_probe(
+def test_another_sdk_version_stops_at_the_probe_naming_both(
     bench: Bench,
     sdk_venv: Callable[[str], Path],
     runner_is: Callable[[str], None],
     sdk: str,
     runner: str,
 ) -> None:
-    runner_is(runner)
+    if runner:
+        runner_is(runner)
+    ours = versions.installed()
     code, out = against(bench, sdk_venv(sdk))
     assert code == 2, out
-    assert f"scrimmage {sdk} and this runner is {runner}, another major release" in out
-    assert f"install scrimmage {runner} in the service" in out
+    said = f"the service runs scrimmage {sdk} and this runner is {ours}; install scrimmage {ours}"
+    assert said + " in the service" in out, out
     sent_nothing(bench)
 
 
-@pytest.mark.design("service.version_minor")
-def test_an_sdk_one_minor_off_warns_and_passes(
-    bench: Bench, sdk_venv: Callable[[str], Path], runner_is: Callable[[str], None]
-) -> None:
-    runner_is("1.5.0")
-    code, out = against(bench, sdk_venv("1.4.2"))
+@pytest.mark.design("service.version_same")
+def test_the_same_version_passes_with_nothing_said(bench: Bench) -> None:
+    code, out = against(bench)  # the service runs this venv's scrimmage, as the runner does
     assert code == 0, out
-    warning = "the service runs scrimmage 1.4.2 and this runner is 1.5.0"
-    assert out.count(warning) == 1, out  # said once, in the report
-    assert "warning: " + warning in out
+    assert "the service runs scrimmage" not in out, out
+    assert "warning: " not in out, out
     # The setup request and the run each claimed their plan, with the SDK's version in it.
     assert "claims received 2" in out, out
-
-
-@pytest.mark.design("service.version_zero_x")
-def test_on_0_x_a_minor_off_counts_as_a_major_and_a_patch_off_does_not(
-    bench: Bench, sdk_venv: Callable[[str], Path], runner_is: Callable[[str], None]
-) -> None:
-    runner_is("0.5.0")
-    code, out = against(bench, sdk_venv("0.1.0"))  # the SDK is 0.1.0 and the runner 0.5.0
-    assert code == 2 and "another major release" in out, out
-    runner_is("0.1.9")
-    code, out = against(bench, sdk_venv("0.1.0"))  # the same 0.1 line: a patch off
-    assert code == 0, out
-    assert "the service runs scrimmage 0.1.0 and this runner is 0.1.9" in out
-
-
-@pytest.mark.design("service.version_dev_local")
-@pytest.mark.parametrize("sdk", ["0.1.0.dev3", "0.1.0+gabc"], ids=["dev", "local"])
-def test_dev_and_local_versions_compare_by_release_and_warn(
-    bench: Bench, sdk_venv: Callable[[str], Path], sdk: str
-) -> None:
-    ours = versions.installed()
-    assert ours == "0.1.0.dev0"  # the same 0.1.0 release as the SDK, another dev or local part
-    code, out = against(bench, sdk_venv(sdk))
-    assert code == 0, out
-    assert f"the service runs scrimmage {sdk} and this runner is {ours}" in out
 
 
 # --- a report that says less than a version we can compare ---------------------------------
@@ -309,37 +231,28 @@ def rewritten(bench: Bench, edit: Callable[[dict[str, Any]], None]) -> Callable[
 
 
 @pytest.mark.design("service.version_unknown")
-@pytest.mark.parametrize("found", ["unknown", "banana", ""], ids=["unknown", "text", "empty"])
-def test_an_unknown_sdk_version_is_refused(bench: Bench, found: str) -> None:
+@pytest.mark.parametrize(
+    ("found", "named"),
+    [("unknown", "unknown"), ("banana", "banana"), ("", "no version")],
+    ids=["unknown", "text", "empty"],
+)
+@pytest.mark.parametrize("runner", ["", "unknown"], ids=["known-runner", "unknown-runner"])
+def test_an_unknown_version_never_matches_even_itself(
+    bench: Bench, runner_is: Callable[[str], None], found: str, named: str, runner: str
+) -> None:
+    """A runner with no package metadata reads `unknown`, and a service reporting `unknown`
+    still does not match it."""
+    if runner:
+        runner_is(runner)
+    ours = versions.installed()
+    assert not versions.same(found)
+
     def edit(report: dict[str, Any]) -> None:
         report["sdk"] = found
 
     code, out = against(bench, proxy=rewritten(bench, edit))
     assert code == 2, out
-    assert f"the service's SDK version is {found!r}" in out
-    assert "not an installed scrimmage release" in out
-    sent_nothing(bench)
-
-
-@pytest.mark.design("service.version_report_v1")
-def test_a_v1_startup_report_names_the_old_sdk(bench: Bench) -> None:
-    def edit(report: dict[str, Any]) -> None:
-        report["v"] = 1
-        del report["control"]
-
-    code, out = against(bench, proxy=rewritten(bench, edit))
-    assert code == 2, out
-    assert "the service's Scrimmage is older than this runner (startup report v1)" in out
-    assert f"install scrimmage {versions.installed()} in the service" in out
-    sent_nothing(bench)
-
-
-def test_a_report_of_a_version_the_runner_does_not_read_is_refused(bench: Bench) -> None:
-    def edit(report: dict[str, Any]) -> None:
-        report["v"] = 3
-
-    code, out = against(bench, proxy=rewritten(bench, edit))
-    assert code == 2 and "startup report is version 3" in out, out
+    assert f"the service runs scrimmage {named} and this runner is {ours};" in out, out
     sent_nothing(bench)
 
 
@@ -381,22 +294,22 @@ def test_a_claim_with_no_sdk_field_is_refused(control_server: ControlServer) -> 
 
 
 @pytest.mark.design("service.version_claim")
-def test_a_worker_from_another_major_is_refused_at_its_first_claim_and_stops_the_test(
+def test_a_worker_of_another_version_is_refused_at_its_first_claim_and_stops_the_test(
     bench: Bench, sdk_venv: Callable[[str], Path]
 ) -> None:
     """Two workers behind one port. The probe and the setup request reach the first, of this
-    runner's major; the runs reach the second, of another."""
+    runner's version; the runs reach the second, of another dev release of the same 0.1.0."""
     from test_service import Forwarder
 
     good = bench.start()
-    old = bench.start(bin_dir=sdk_venv("1.4.2"))
-    proxy = Forwarder(good.port, runs_to=old.port)
+    other = bench.start(bin_dir=sdk_venv("0.1.0.dev3"))
+    proxy = Forwarder(good.port, runs_to=other.port)
     bench.closers.append(proxy)
     code, out = bench.test(proxy.port, runs=3)
     assert code == 2, out
     ours = versions.installed()
-    assert f"scrimmage 1.4.2 and this runner is {ours}, another major release" in out
-    assert "in every process of it" in out
+    said = f"was refused: the service runs scrimmage 0.1.0.dev3 and this runner is {ours}; "
+    assert said + f"install scrimmage {ours} in the service, in every process of it" in out, out
     # The first run stopped the test: the other two were never sent.
     assert sum(1 for run in proxy.seen if run.startswith("run-")) == 1, proxy.seen
     assert "503 version" not in out  # the stop is the test's, not a run counted as an error

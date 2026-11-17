@@ -664,7 +664,9 @@ def test_closes_waiting_for_every_slot_never_hold_up_the_claims_that_hold_them(
     def close(name: str) -> None:
         entered.release()
         go.wait(10)
-        RunSender(svc.client, name, {"pid": 1}).close()  # waits for a slot on its thread
+        sender = RunSender(svc.client, name, {"pid": 1})
+        sender.plan_of = lambda: {"run": name}  # a claimed run's last batch names its plan
+        sender.close()  # waits for a slot on its thread
         closed.append(name)
 
     for name in closing:

@@ -71,12 +71,10 @@ def run_mac(token: str, name: str) -> str:
 # What Plan.to_json() adds beside the plan: the run's age, which changes with time, and the
 # values ${NAME} filled in, which a digest on a volume must not let a reader test guesses at.
 UNDIGESTED = ("elapsed_s", "scrub")
-# The form of the digested text: Plan.to_json() without UNDIGESTED, as sorted compact JSON.
-# A key added to Plan.to_json() changes that text, so either it joins UNDIGESTED, if it is
-# like elapsed_s and scrub, or this number goes up. The SDK sends the form beside its digest,
-# and the runner compares only a digest of its own form. tests/test_plan_digest.py pins the key
-# set, so the suite fails when a Plan field is added without one of the two.
-PLAN_DIGEST_FORM = 1
+# The digested text is Plan.to_json() without UNDIGESTED, as sorted compact JSON. A key added
+# to Plan.to_json() is digested unless it joins UNDIGESTED, as it should if it is like
+# elapsed_s and scrub. tests/test_plan_digest.py pins the key set, so the suite fails when a
+# Plan field is added without that choice.
 
 
 def plan_digest(token: str, plan: dict[str, object]) -> str:

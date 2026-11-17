@@ -114,26 +114,26 @@ The runner checks the service twice before it sends a run.
 It sends one signed request, marked as a probe, to the service's address.
 While nothing listens at that address, or a connection is taken and then reset or closed with no reply, it asks again for up to 30 seconds, so a script can start the service in the background and run the test at once.
 If nothing listens by then, the test stops with exit 3 and says so.
-Scrimmage in the service answers with a report signed with the same token: its versions, its gates and the tools its gates swap.
+Scrimmage in the service answers with a report signed with the same token: its version, its gates and the tools its gates swap.
 The report's shape is the [startup report schema](schemas.md).
 If no gated service answers, because a proxy dropped Scrimmage's header, the service was started without `scrimmage-run`, or without `PYTHONPATH` beginning with the folder `scrimmage path` prints, and `SCRIMMAGE_SERVICE=1`, its token is another, or its SDK speaks another protocol version, the test stops with exit 3 and sends nothing more.
 The probe carries no protocol marker, since a service answers a stranger as it would without Scrimmage, so a failed probe cannot tell those causes apart.
 If the service gates other tools than the file lists, the test stops with exit 2 and prints the two variables to start it with.
 
 **The version rule.**
+Before 1.0 the service and the runner run the same `scrimmage` version.
 The report holds the version of `scrimmage` in the service, and the runner compares it with its own.
-The major is the first number of the version, or, while it is 0, the first two, since a 0.x release may change anything.
+The same version passes, and nothing is said.
+Any other version, even another patch or dev release, stops the test with exit 2 before any run, with one message naming both versions and the install line:
 
-| The service's SDK against the runner | What happens |
-|---|---|
-| The same release | nothing |
-| The same major, another minor, patch, pre-release or local part | one warning, in the report, naming both versions. The test goes on |
-| Another major | exit 2 before any run, naming both versions and the install line |
-| A version that is not an installed `scrimmage` release, such as `unknown` | exit 2 |
-| A startup report older than this runner reads (version 1) | exit 2: install the runner's version in the service |
+```text
+the service runs scrimmage 0.4.1 and this runner is 0.4.0; install scrimmage 0.4.0 in the service
+```
+
+A version of `unknown`, from a `scrimmage` with no package metadata, never matches, not even another `unknown`.
 
 Every claim of a run's plan carries the SDK's version too, so a process added later, such as a second worker from another image, is checked at its first run.
-A claim from another major, or with no version in it, is refused with `503 version`, unlike the other gate codes it stops the test with exit 2, because every run from that process would fail the same way.
+A claim from another version, or with no version in it, is refused with `503 version`, unlike the other gate codes it stops the test with exit 2, because every run from that process would fail the same way.
 A function or a script whose child runs on another venv's SDK is not version-checked: see [limits](limits.md).
 
 **The ping.**
@@ -202,7 +202,7 @@ A record whose last lines never came is incomplete, and the run is an infrastruc
 
 Each run's last batch also carries a digest of the plan its process used, and the runner compares it with the digest of its own plan.
 A run served under another plan is an infrastructure error, and its summary names the process that claimed it in `claimed_by`: [`plan_digest`, `claimed_plan_digest` and `claimed_by`](json-output.md#a-service-runs-summary-line).
-A service whose `scrimmage` is older does not send the digest: nothing is compared, and the report says to upgrade it.
+A claimed run's last batch with no digest is refused as a bad batch, so its record is incomplete and the run is an infrastructure error.
 
 A streamed reply, such as `text/event-stream`, stops the test with exit 2: this version judges one JSON or text reply per run.
 
