@@ -11,11 +11,13 @@ import ipaddress
 import json
 import os
 import secrets
+import socket
 import ssl
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 from scrimmage_core import protocol, records, tls, versions
@@ -30,6 +32,8 @@ from scrimmage_core.start import BadAnswerPath, pick
 
 TOKEN_MIN = 32
 CONNECT_S = 2.0  # how long the probe's connection may take before it is asked again
+PROBE_S = 30.0  # the whole probe, from its connection to the last byte of its reply
+PROBE_MAX = 1024 * 1024  # a startup report is a few KB; a longer reply is not Scrimmage's
 STREAMED = ("text/event-stream", "application/x-ndjson", "application/jsonl")
 # The gate's own 503, exactly: what says Scrimmage answered and could not claim the plan.
 GATE_HEADERS = {"content-type", "content-length", "x-scrimmage-error"}
@@ -63,6 +67,7 @@ class Reply:
     timed_out: bool = False
     connected: bool = True  # False: no connection was made at all
     unanswered: bool = False  # taken, then reset or closed before any HTTP reply began
+    too_long: bool = False  # the reply passed the most bytes the request may read
 
     @property
     def gate_refused(self) -> str | None:
@@ -181,8 +186,13 @@ def send(
     body: bytes | None,
     timeout: float,
     connect_timeout: float | None = None,
+    *,
+    limit: int | None = None,
+    deadline_s: float | None = None,
 ) -> Reply:
-    """One request to the service's host and port."""
+    """One request to the service's host and port. limit: the most bytes of reply to read.
+    deadline_s: the most seconds the request may take once connected, however slowly the
+    service sends; timeout bounds each read only."""
     host, port, _ = target(agent)
     conn = http.client.HTTPConnection(host, port, timeout=connect_timeout or timeout)
     try:
@@ -195,21 +205,49 @@ def send(
         return Reply(failed=f"{type(exc).__name__}: {exc}", connected=False, unanswered=cut_short)
     if conn.sock is not None:
         conn.sock.settimeout(timeout)
+    expired = threading.Event()
+    cutter: threading.Timer | None = None
+    if deadline_s is not None and conn.sock is not None:
+        # A read timeout is per read, so a reply sent a byte at a time never meets it; the
+        # socket is shut at the deadline, which ends any read, the headers' included.
+        cutter = threading.Timer(deadline_s, cut, [conn.sock, expired])
+        cutter.daemon = True
+        cutter.start()
     replied = False
     try:
         conn.request(method, path, body=body, headers=headers)
         response = conn.getresponse()
         replied = True
-        data = response.read()
+        if limit is None:
+            data = response.read()
+        else:
+            data = b""
+            while chunk := response.read1(65536):
+                data += chunk
+                if len(data) > limit:
+                    return Reply(too_long=True, failed=f"the reply is longer than {limit} bytes")
+        if expired.is_set():
+            return Reply(timed_out=True)  # the reply ended because it was cut
         named = {k.lower(): v for k, v in response.getheaders()}
         return Reply(response.status, named, data)
     except TimeoutError:
         return Reply(timed_out=True)
     except (OSError, http.client.HTTPException, ValueError) as exc:
+        if expired.is_set():
+            return Reply(timed_out=True)  # the deadline shut the socket under the read
         cut_short = isinstance(exc, ConnectionError | http.client.RemoteDisconnected)
         return Reply(failed=f"{type(exc).__name__}: {exc}", unanswered=cut_short and not replied)
     finally:
+        if cutter is not None:
+            cutter.cancel()
         conn.close()
+
+
+def cut(sock: Any, expired: threading.Event) -> None:
+    """End the connection under a read that is still waiting."""
+    expired.set()
+    with contextlib.suppress(OSError):
+        sock.shutdown(socket.SHUT_RDWR)
 
 
 @dataclass
@@ -233,7 +271,9 @@ def probe(agent: Agent, token: str) -> Probed:
         "x-scrimmage-probe": "1",
         **signed,
     }
-    reply = post(agent, headers, b"", 30.0, connect_timeout=CONNECT_S)
+    reply = send(
+        "POST", agent, path, headers, b"", 30.0, CONNECT_S, limit=PROBE_MAX, deadline_s=PROBE_S
+    )
     found = Probed(None, reply)
     kind = reply.headers.get("x-scrimmage-probe")
     if (reply.status, kind) not in ((200, "report"), (409, "clock")):

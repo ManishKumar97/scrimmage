@@ -51,7 +51,8 @@ def test_the_only_connections_are_to_and_from_the_control_server() -> None:
         for path in PACKAGES.rglob("*.py")
         for name in re.findall(r"\bsocket\.(\w+)", path.read_text())
     }
-    assert uses == {"gethostname"}
+    # SHUT_RDWR: service_client cuts the runner's own probe to the service at its deadline.
+    assert uses == {"gethostname", "SHUT_RDWR"}
 
 
 # Every standard-library way to start a process, and the modules that hold them.

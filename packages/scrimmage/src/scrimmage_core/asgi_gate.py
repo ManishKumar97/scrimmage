@@ -212,7 +212,9 @@ async def claimed(gate: Gate, name: str) -> tuple[RunState, RunSender]:
     try:
         doc = await asyncio.wrap_future(gate.executor.submit(work))
     except ClaimRefused as refused:
-        code = {"claimed": "claimed", "version": "version"}.get(refused.code, "no-such-run")
+        # A clock refusal: this process's clock left the runner's 60 s window after the probe.
+        known = {"claimed": "claimed", "version": "version", "clock": "clock"}
+        code = known.get(refused.code, "no-such-run")
         raise Unavailable(code) from None
     except (ControlError, Busy):
         raise Unavailable("plan-unavailable") from None

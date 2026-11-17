@@ -6,12 +6,15 @@ request it receives and moves the gate's wall clock when told to.
 """
 
 import asyncio
+import contextlib
 import dataclasses
 import json
 import re
 import socket
 import sys
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
 
@@ -54,6 +57,32 @@ if SHIFT:
             return time.time() + SHIFT
 
     asgi_gate.time = Shifted()
+
+JUMP = float(os.environ.get("CLAIM_CLOCK_JUMP", "0"))
+
+if JUMP:
+    from scrimmage_core import client as control_client
+
+    claims = []
+
+    class Jumped:
+        """The SDK client's clock, which jumps by JUMP once the setup request's claim is done:
+        the probe, the ping and the setup request pass, and every later request is off."""
+
+        def __getattr__(self, name):
+            return getattr(time, name)
+
+        def time(self):
+            return time.time() + (JUMP if len(claims) > 1 else 0)
+
+    control_client.time = Jumped()
+    first_claim = control_client.ControlClient.claim
+
+    def claim(self, run, proc, *, held=False):
+        claims.append(run)
+        return first_claim(self, run, proc, held=held)
+
+    control_client.ControlClient.claim = claim
 
 
 async def chat(request: Request) -> dict[str, str]:
@@ -374,6 +403,99 @@ def test_a_replayed_stale_probe_is_answered_as_documented(
         is_clock_reply(send())
     finally:
         svc.close()
+
+
+def test_a_clock_jump_after_the_probe_names_the_clock_in_the_run(lab: Lab) -> None:
+    port = lab.start(CLAIM_CLOCK_JUMP="300")
+    code, out = lab.bench.test(port)
+    assert code == 3, out  # the setup request passed; the run's claim was refused
+    assert CLOCK_OFF in out, out
+    assert "503 no-such-run" not in out and "503 clock" not in out, out
+    assert [r["method"] for r in lab.requests()].count("POST") == 1  # only the setup request
+
+
+# --- a probe reply that never ends ---------------------------------------------------------
+
+
+class Flood(BaseHTTPRequestHandler):
+    """Answers the probe with 400 MB."""
+
+    def do_POST(self) -> None:
+        size = 400 * 1024 * 1024
+        self.send_response(200)
+        self.send_header("content-length", str(size))
+        self.end_headers()
+        chunk = b"\0" * 65536
+        with contextlib.suppress(OSError):
+            for _ in range(size // len(chunk)):
+                self.wfile.write(chunk)
+
+    def log_message(self, format: str, *args: object) -> None:
+        del format, args
+
+
+class Drip(BaseHTTPRequestHandler):
+    """Sends its reply one byte every 0.2 s, about 20 s in all, so no single read times out."""
+
+    def do_POST(self) -> None:
+        reply = b"HTTP/1.1 200 OK\r\ncontent-length: 60\r\n\r\n"
+        if self.path == "/headers":  # the headers themselves are dripped
+            reply += b"x" * 60
+        else:
+            self.wfile.write(reply)
+            reply = b"x" * 60
+        with contextlib.suppress(OSError):
+            for byte in reply:
+                self.wfile.write(bytes([byte]))
+                self.wfile.flush()
+                time.sleep(0.2)
+
+    def log_message(self, format: str, *args: object) -> None:
+        del format, args
+
+
+def served(handler: type[BaseHTTPRequestHandler]) -> tuple[ThreadingHTTPServer, int]:
+    server = ThreadingHTTPServer(("127.0.0.1", free_port()), handler)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, int(server.server_address[1])
+
+
+def test_a_probe_reply_over_1_mib_is_cut_with_exit_3(lab: Lab) -> None:
+    server, port = served(Flood)
+    try:
+        began = time.monotonic()
+        code, out = lab.bench.test(port)
+        elapsed = time.monotonic() - began
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert code == 3, out
+    assert (
+        "the service at POST /chat answered the probe with more than 1 MiB; Scrimmage's "
+        "startup report is a few KB, so something other than Scrimmage answered"
+    ) in out, out
+    assert elapsed < 10, elapsed
+
+
+@pytest.mark.parametrize("path", ["/headers", "/body"])
+def test_a_probe_reply_that_drips_is_cut_at_the_whole_request_deadline(
+    lab: Lab, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    monkeypatch.setattr(service_client, "PROBE_S", 1.5)  # 30 s in use; each read waits 30 s
+    server, port = served(Drip)
+    try:
+        began = time.monotonic()
+        code, out = lab.bench.test(port, path)
+        elapsed = time.monotonic() - began
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert code == 3, out
+    assert (
+        f"the service at POST {path} did not finish its reply to the probe within 1.5 s"
+    ) in out, out
+    assert elapsed < 6, elapsed
 
 
 @pytest.fixture

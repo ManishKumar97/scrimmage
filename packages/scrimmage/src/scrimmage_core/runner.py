@@ -724,7 +724,8 @@ class Runner:
         gate = reply.gate_refused
         if gate is not None:
             infra = True
-            mistakes.append(f"the service's gate answered 503 {gate}")
+            said = service_client.CLOCK_OFF if gate == "clock" else None
+            mistakes.append(said or f"the service's gate answered 503 {gate}")
         elif ok and not streamed:
             answer, wrong = service_client.answer_of(reply, agent)
             if wrong is not None:
@@ -778,7 +779,20 @@ class Runner:
                 f"cannot reach the service's address for POST {path} ({reply.failed}): no such "
                 "host, or no route to it",
             )
-        if reply.failed is not None or reply.timed_out:
+        if reply.too_long:
+            raise service_client.Setup(
+                3,
+                f"the service at POST {path} answered the probe with more than "
+                f"{service_client.PROBE_MAX // (1024 * 1024)} MiB; Scrimmage's startup report "
+                "is a few KB, so something other than Scrimmage answered",
+            )
+        if reply.timed_out:
+            raise service_client.Setup(
+                3,
+                f"the service at POST {path} did not finish its reply to the probe within "
+                f"{service_client.PROBE_S:g} s",
+            )
+        if reply.failed is not None:
             hint = (
                 "; a container's published port can accept a connection before the app "
                 "inside listens, and this one was still reset or closed with no reply after "
@@ -789,7 +803,7 @@ class Runner:
             raise service_client.Setup(
                 3,
                 f"the service at POST {path} took the probe's connection but gave no reply: "
-                f"{reply.failed or 'timed out'}{hint}",
+                f"{reply.failed}{hint}",
             )
         if probed.clock_refused:
             raise service_client.Setup(3, service_client.CLOCK_OFF)
@@ -894,6 +908,8 @@ class Runner:
         gate = reply.gate_refused
         if gate == "version":
             raise self.version_refusal(name)
+        if gate == "clock":
+            raise service_client.Setup(3, service_client.CLOCK_OFF)
         if not state.fetched or gate is not None or reply.failed or reply.timed_out:
             why = gate or reply.failed or ("timed out" if reply.timed_out else "never claimed")
             raise service_client.Setup(
