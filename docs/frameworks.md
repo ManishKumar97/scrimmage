@@ -93,6 +93,13 @@ A tool's `handle_tool_error` handles only `ToolException`, so a `ConnectionError
 
 A tool built with `response_format = "content_and_artifact"` returns a pair, so its mock is a list of two items: `returns = ["the content", {a = "b"}]`.
 
+## What the empty fault does
+
+`do = "empty"` returns the empty value of the tool function's declared return type, such as `""` for `-> str`, and the tool never runs.
+LangChain then sends the model a tool message with that content, as it does for a real empty result.
+See [Faults](concepts.md#faults) for each type's value.
+`empty` on a tool built with `response_format = "content_and_artifact"` is a mistake in the test, because the pair's empty value cannot be told; mock it with an empty pair instead, such as `returns = ["", {}]`.
+
 ## Tools that cannot be gated
 
 Scrimmage gates what a tool really runs, wherever it comes from: a decorator, a class, a mixin, or a `_run` assigned to the class later.

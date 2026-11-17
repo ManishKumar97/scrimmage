@@ -351,6 +351,12 @@ def mock_shape(tool: Any, value: object) -> object:
     )
 
 
+NO_EMPTY_PAIR = (
+    "is a LangChain tool with response_format content_and_artifact, so empty cannot tell "
+    'its empty result; mock it with an empty pair, such as returns = ["", {}]'
+)
+
+
 def artifact_content(value: object) -> tuple[object, Callable[[object], object]]:
     """A tool with an artifact returns (content, artifact). Only the content goes to the
     model, so it is all that an append or replace changes; the artifact is put back as it was."""
@@ -377,6 +383,7 @@ def gate(method: Callable[..., Any], failure: type[Exception]) -> Callable[..., 
         if _inside.get(None) is tool:  # _arun delegating to _run on the same tool
             return None
         function = function_of(tool, method)
+        paired = getattr(tool, "response_format", "content") == "content_and_artifact"
         return tool_gate.Gated(
             tool.name,
             arguments(tuple(rest), kwargs, (method, function), withheld(tool)),
@@ -384,9 +391,8 @@ def gate(method: Callable[..., Any], failure: type[Exception]) -> Callable[..., 
             failure,
             functools.partial(real_call, tool),
             functools.partial(mock_shape, tool),
-            artifact_content
-            if getattr(tool, "response_format", "content") == "content_and_artifact"
-            else tool_gate.whole,
+            artifact_content if paired else tool_gate.whole,
+            NO_EMPTY_PAIR if paired else None,
         )
 
     return tool_gate.gate_with(method, describe)

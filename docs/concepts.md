@@ -60,11 +60,23 @@ If the tool returns its own type, Scrimmage builds that type from the mock:
 |---|---|
 | `error` | a tool raises an error: `ToolException` under LangChain, `RuntimeError` in a hand-written loop, or the type named by `raises`; an MCP tool returns a failed result, as a real server does |
 | `timeout` | a tool raises `TimeoutError`; a model call, a web request or an MCP tool raises the library's own timeout error, as if the other side never answered |
-| `empty` | an MCP tool returns a result with no content |
+| `empty` | a tool returns the empty value of its declared return type, and never runs; an MCP tool returns a result with no content |
 | `append` | the call happens, and the text of the fault is added at the end of what it returns |
 | `replace` | the call happens, and what it returns is replaced by the text of the fault, or the `find` text in it is |
 | `slow` | written `slow 8s`: the call happens after that many seconds, so a caller's own deadline can fire first |
 | `status` | written `status 429`: a model call gets a real HTTP error reply, and the library raises its own error, such as `RateLimitError`; a web request gets a reply with that status |
+
+Under `empty` the tool's declared return type gives the value:
+
+| Declared | Value |
+|---|---|
+| `str` | `""` |
+| a list, such as `list[dict]` | `[]` |
+| a dict | `{}` |
+| a tuple | `()` |
+| a type that allows `None`, such as `str \| None`, or no annotation | `None` |
+
+Any other type, such as a pydantic model, has no empty value, so `empty` on it is a mistake in the test, and the message names the fix: mock it with the fields of an empty result, or fault the web request inside the tool.
 
 A fault fires on every call it names, unless `when` narrows it to the `first N` attempts or the first `requests N`. See [Failing the model](model-faults.md).
 It fires only in the program Scrimmage started, not in its child processes, unless `children` is set. See [An agent run as a script](scripts.md#faults-in-children).

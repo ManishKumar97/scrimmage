@@ -1486,8 +1486,8 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
         raise ConfigError(f"{where} do: {do!r} is not a fault; see {DOCS}")
     if do == "error" and kind not in ("tool", "mcp"):
         raise ConfigError(f"{where} do: 'error' works only on a tool; see {DOCS}")
-    if do == "empty" and kind != "mcp":
-        raise ConfigError(f"{where} do: 'empty' works only on an MCP tool; see {DOCS}")
+    if do == "empty" and kind not in ("tool", "mcp"):
+        raise ConfigError(f"{where} do: 'empty' works only on a tool or an MCP tool; see {DOCS}")
     raises = read_raises(table, do, where)
     injected, find = read_change(table, do, where)
     when = str(table.get("when", "always"))

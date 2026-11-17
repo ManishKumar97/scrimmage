@@ -299,8 +299,10 @@ Also read the control-path limits under An agent inside a web service.
 
 - **One provider.** OpenAI's Chat Completions, Responses and embeddings, and gateways that speak the same format. Other providers come later.
 
-- **A few faults.** `timeout` and `error` on tools, `timeout` and `status N` on model calls and web requests, `timeout`, `error` and `empty` on MCP tools, `append`, `replace` and `slow` on tools, MCP tools and web requests, and `replace` and `slow` on a chat model call.
+- **A few faults.** `timeout`, `error` and `empty` on tools, `timeout` and `status N` on model calls and web requests, `timeout`, `error` and `empty` on MCP tools, `append`, `replace` and `slow` on tools, MCP tools and web requests, and `replace` and `slow` on a chat model call.
   `append` on a model call, and the other faults that change the model's reply, come later.
+
+- **`empty` needs a declared type with an empty value.** On a tool declared to return a model, a dataclass, a number or `bytes`, or a LangChain tool with `response_format = "content_and_artifact"`, `empty` is a mistake in the test, and the tool never runs. Mock an empty result instead. See [Faults](concepts.md#faults).
 
 - **Only text and plain data take `append` and `replace`.** A result that is a model object, a dataclass, a number, `None`, `bytes` or a `str` subclass is not changed: the call is left as it is, the line says why, and a row with no place for the change is a mistake in the test. A dict, list or tuple takes only `replace` with `find`, on string values. See [Changing a result](changing-results.md#what-each-kind-of-call-can-take).
 

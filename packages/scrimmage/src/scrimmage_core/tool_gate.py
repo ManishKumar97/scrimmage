@@ -9,6 +9,7 @@ import functools
 import importlib.machinery
 import inspect
 import sys
+import typing
 from collections.abc import Callable, Sequence, Set
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from types import ModuleType
 from typing import Any, NoReturn
 
 from scrimmage_core import capture, changes, delay, hooks, mocks
+from scrimmage_core import decide as engine
 from scrimmage_core import state as states
 from scrimmage_core.config import Fault, slow_seconds
 from scrimmage_core.errors import ScrimmageMockError
@@ -98,6 +100,8 @@ class Gated:
     # The part of a result an append or replace acts on, and how to put the changed part
     # back. A tool that returns (content, artifact) changes the content only.
     content: Callable[[object], tuple[object, Callable[[object], object]]] = whole
+    # Why an empty fault cannot be carried out on this tool whatever its type, and the fix.
+    no_empty: str | None = None
 
 
 Describe = Callable[[tuple[Any, ...], dict[str, Any]], Gated | None]
@@ -112,6 +116,8 @@ def apply(state: RunState, step: Step, gated: Gated) -> object:
     if decision.action == "fault":
         assert decision.fault is not None
         fault = state.plan.faults[decision.fault]
+        if fault.do == "empty":
+            return emptied(state, step, gated)
         try:
             error = injected(state, fault, step.call.name, gated.failure)
         except Exception as exc:  # a bad raises is a mistake in the test, not the agent's failure
@@ -128,6 +134,47 @@ def apply(state: RunState, step: Step, gated: Gated) -> object:
     value = build_mock(state, step, gated)
     state.finish(step, result=value)
     return value
+
+
+class NoEmpty:
+    """A declared return type with no empty value."""
+
+
+NO_EMPTY = NoEmpty()
+EMPTY: dict[object, Callable[[], object]] = {str: str, list: list, dict: dict, tuple: tuple}
+
+
+def empty_of(declared: object) -> object:
+    """The empty value of a declared return type: "", [], {} or (); None when the type allows
+    None or says nothing; NO_EMPTY for any other type, such as a model or a number."""
+    found: set[object] = set()
+    for member in changes.members(declared):
+        if member in (None, changes.NONE, typing.Any, object) or isinstance(member, typing.TypeVar):
+            return None
+        found.add(typing.get_origin(member) or member)
+    if len(found) == 1 and (kind := next(iter(found))) in EMPTY:
+        return EMPTY[kind]()
+    return NO_EMPTY
+
+
+def emptied(state: RunState, step: Step, gated: Gated) -> object:
+    """empty: the tool's empty value, and the tool never runs. A tool with no empty value is a
+    mistake in the test: the call fails at once, and the fault is not counted as fired."""
+    why = gated.no_empty
+    if why is None:
+        declared = changes.declared_return(gated.tool)
+        value = empty_of(declared)
+        if not isinstance(value, NoEmpty):
+            state.finish(step, result=value)
+            return value
+        shown = getattr(declared, "__name__", None) or str(declared)
+        why = (
+            f"is declared to return {shown}, which has no empty value; mock it with the fields "
+            "of an empty result, or fault the web request inside it"
+        )
+    state.unchanged(step, why)
+    step.decision = engine.settled(step.call, state.plan)  # the line is not a fired fault
+    state.fail(step, ScrimmageMockError(f"{step.call.label} {why}"), mistake=True)
 
 
 def build_mock(state: RunState, step: Step, gated: Gated) -> object:
