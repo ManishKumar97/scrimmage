@@ -295,6 +295,13 @@ The check runs before the import, and at the start of each process, so a plan th
 
 *Checked by: `tests/test_bootstrap.py::test_a_type_outside_the_allowed_prefixes_is_refused_before_import`, `tests/test_tool_gate.py::test_a_type_outside_the_allowed_prefixes_is_refused_before_import`, `tests/test_schemas.py::test_the_sdk_rejects_a_bad_plan`*
 
+## A fault sends nothing
+
+Only `append`, `replace` and `slow` let the call they name happen.
+Every other fault is built by the gate, and nothing is sent: no request reaches a server or a provider, no tool runs, and a model call reserves and costs nothing.
+
+*Checked by: `tests/test_security_claims.py::test_no_fault_but_the_carried_ones_sends_a_request`, `tests/test_connection_faults.py::test_a_connection_fault_on_a_model_call_reserves_and_costs_nothing`*
+
 ## Records
 
 Every gated call is written to a record in `scrimmage-runs/`, next to your `scrimmage.toml`.

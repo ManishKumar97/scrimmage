@@ -65,6 +65,9 @@ If the tool returns its own type, Scrimmage builds that type from the mock:
 | `replace` | the call happens, and what it returns is replaced by the text of the fault, or the `find` text in it is |
 | `slow` | written `slow 8s`: the call happens after that many seconds, so a caller's own deadline can fire first |
 | `status` | written `status 429`: a model call gets a real HTTP error reply, and the library raises its own error, such as `RateLimitError`; a web request gets a reply with that status |
+| `refused` | a model call or a web request raises the library's `ConnectError`, as if nothing listened on the server's port |
+| `reset` | a model call or a web request raises the library's `ReadError`, as if the server dropped the connection |
+| `dns` | a model call or a web request raises the library's `ConnectError`, as if the server's name did not resolve |
 
 Under `empty` the tool's declared return type gives the value:
 

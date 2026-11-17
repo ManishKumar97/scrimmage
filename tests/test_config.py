@@ -869,3 +869,20 @@ def test_real_cannot_list_a_model_path_as_a_web_request(tmp_path: Path) -> None:
     # Another web write, or the host and method alone, is the team's to list.
     for entry in ("POST /v1/refunds", "POST"):
         assert load_text(tmp_path, text.replace("POST /v1/chat/completions", entry))
+
+
+@pytest.mark.design("config.connection_faults")
+@pytest.mark.parametrize("word", ["refused", "reset", "dns"])
+def test_connection_faults_work_on_model_and_web_only(tmp_path: Path, word: str) -> None:
+    for call in ("model", "model:openai", "model:*/embeddings", "http:inventory.acme.internal"):
+        fault = example(tmp_path, FAULT, model_fault(word, "first 1", call)).tests[0].faults[0]
+        assert (fault.call, fault.do) == (call, word)
+    raises = config.CONNECTION[word]
+    for call in ("tool:get_order", "mcp:docs/search"):
+        table: dict[str, object] = {"call": call, "do": word, "when": "first 1"}
+        with pytest.raises(ConfigError) as caught:
+            config.read_fault(table, "[[test.fault]] 1")
+        assert f'do = "error" with raises = "{raises}"' in str(caught.value)
+    # What the message names loads, as a built-in a tool raises.
+    named = model_fault("error", "first 1", "tool:get_order") + f'raises = "{raises}"\n'
+    assert example(tmp_path, FAULT, named).tests[0].faults[0].raises == raises

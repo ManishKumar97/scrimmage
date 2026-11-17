@@ -89,7 +89,15 @@ BODY_HEADERS = {"content-length", "content-encoding", "transfer-encoding"}
 DOCS = "docs/configuration.md"
 JUDGING = "docs/judging.md"
 # The faults this version builds. Each one has an entry in docs/fault-catalog.toml.
-FAULTS = ("timeout", "status", "error", "empty", "append", "replace", "slow")
+FAULTS = (
+    "timeout", "status", "error", "empty", "append", "replace", "slow", "refused", "reset", "dns",
+)  # fmt: skip
+# A connection that fails: on a model call or a web request, with what a tool raises instead.
+CONNECTION = {
+    "refused": "ConnectionRefusedError",
+    "reset": "ConnectionResetError",
+    "dns": "OSError",  # socket.gaierror is one, and a plan imports only the agent's own
+}
 STATUS = re.compile(r"status (?P<code>\d{3})")
 SLOW = re.compile(r"slow (?P<s>\d+(?:\.\d+)?)s")
 # These let the call happen: the fault changes what it returns, or when.
@@ -1481,6 +1489,12 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
         raise ConfigError(f"{where} do: 'error' works only on a tool; see {DOCS}")
     if do == "empty" and kind not in ("tool", "mcp"):
         raise ConfigError(f"{where} do: 'empty' works only on a tool or an MCP tool; see {DOCS}")
+    if do in CONNECTION and kind in ("tool", "mcp"):
+        raise ConfigError(
+            f"{where} do: {do!r} works on a model call or a web request, where the connection "
+            f'is made; on a tool, write do = "error" with raises = "{CONNECTION[do]}"; '
+            f"see {DOCS}"
+        )
     raises = read_raises(table, do, where)
     injected, find = read_change(table, do, where)
     when = str(table.get("when", "always"))

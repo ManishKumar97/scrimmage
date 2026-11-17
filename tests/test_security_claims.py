@@ -1,20 +1,37 @@
 """Claims on the security page that no other test held: where the control server listens,
 that it is the only connection Scrimmage makes, the record folder's mode, each secret shape
-redaction removes, a known gap in redaction, and the numbers the page states."""
+redaction removes, a known gap in redaction, the numbers the page states, and that no fault
+but the carried ones sends a request."""
 
+import asyncio
+import contextlib
+import http.server
+import json
 import re
 import stat
-from collections.abc import Callable
+import threading
+import urllib.request
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import ClassVar
 
+import httpx2
+import mcp
+import mcp.client.session as mcp_session
 import pytest
+from mcp.server.mcpserver import MCPServer
 
 from conftest import ACME, Project
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import config, protocol
+from scrimmage_core import config, http_gate, mcp_gate, protocol, state, tool_gate
+from scrimmage_core.config import Fault, ModelHost
 from scrimmage_core.control import ControlServer
+from scrimmage_core.errors import ConfigError
+from scrimmage_core.plan import Plan
 from scrimmage_core.records import RecordStore
 from scrimmage_core.redact import REMOVED, redact
+from test_connection_faults import never_stopped
+from test_http_gate import Budget, Sink
 from test_stdlib_only import imported_roots
 
 TOKEN = "f00d" * 16
@@ -55,7 +72,8 @@ def test_the_only_connections_are_to_and_from_the_control_server() -> None:
     }
     # SHUT_RDWR: service_client cuts the runner's own probe to the service at its deadline.
     # socket: managed.py's free port, bound and closed, never connected.
-    assert uses == {"gethostname", "SHUT_RDWR", "socket"}
+    # gaierror, EAI_NONAME: the error http_gate builds for an injected dns fault; no lookup.
+    assert uses == {"gethostname", "SHUT_RDWR", "socket", "gaierror", "EAI_NONAME"}
 
 
 # Every standard-library way to start a process, and the modules that hold them.
@@ -245,3 +263,158 @@ def test_the_numbers_on_the_security_page_are_the_codes() -> None:
     assert "self.token = secrets.token_hex(32)" in runner and "256 bits" in page
     assert config.DEFAULT_BUDGET_USD == 5 and "$5 unless" in page
     assert "hashlib.sha256" in (SDK / "protocol.py").read_text() and "HMAC-SHA256" in page
+
+
+class Counter(http.server.BaseHTTPRequestHandler):
+    """Counts every request it gets, so a send cannot go unseen."""
+
+    seen: ClassVar[list[str]] = []
+
+    def answer(self) -> None:
+        self.seen.append(f"{self.command} {self.path}")
+        self.rfile.read(int(self.headers.get("content-length") or 0))
+        body = json.dumps({"choices": [], "usage": {}}).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    do_GET = do_POST = answer
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+@pytest.fixture
+def counting_server() -> Iterator[str]:
+    Counter.seen.clear()
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Counter)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+    server.server_close()
+
+
+# One label of each kind a fault can name. The model host is the same server by another name.
+LABELS = {"model": "model", "http": "http:127.0.0.1", "tool": "tool:lookup", "mcp": "mcp:docs/x"}
+CHAT = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
+
+
+def spelled(word: str) -> str:
+    return "status 503" if word == "status" else word
+
+
+def loads(word: str, label: str) -> bool:
+    table: dict[str, object] = {"call": label, "do": spelled(word), "when": "first 1"}
+    try:
+        config.read_fault(table, "[[test.fault]] 1")
+    except ConfigError:
+        return False
+    return True
+
+
+# Read from FAULTS and read_fault, so a word a later version adds is covered here.
+NOT_CARRIED = [
+    (word, kind)
+    for word in config.FAULTS
+    if word not in config.CARRIED
+    for kind, label in LABELS.items()
+    if loads(word, label)
+]
+
+
+@pytest.fixture
+def gated_run() -> Iterator[Callable[..., tuple[state.RunState, Sink]]]:
+    """Makes a run with these faults and gates this process's httpx2 and MCP on it."""
+    sends = (httpx2.Client._send_single_request, httpx2.AsyncClient._send_single_request)
+    mcp_send = mcp_session.ClientSession.send_request
+
+    def make(*faults: Fault, real: tuple[str, ...] = ()) -> tuple[state.RunState, Sink]:
+        sink = Sink()
+        hosts = (ModelHost("localhost", "openai"),)
+        plan = Plan("run-1", "t", "row", (), faults, (), real, 60.0, model_hosts=hosts)
+        run = state.RunState(plan, sink, [])
+        http_gate.patch(httpx2, http_gate.Context(run, Budget(), sink, never_stopped))
+        mcp_gate.patch(mcp_session, mcp_gate.Gate(run, sink, never_stopped))
+        return run, sink
+
+    yield make
+    httpx2.Client._send_single_request, httpx2.AsyncClient._send_single_request = sends
+    mcp_session.ClientSession.send_request = mcp_send  # type: ignore[method-assign]
+    state.install(None)
+
+
+def fetch(url: str) -> str:
+    """A request no gate sees, as a tool's own code might send it."""
+    with urllib.request.urlopen(url, timeout=5) as reply:
+        return str(reply.read())
+
+
+def call(kind: str, server: str, run: state.RunState) -> None:
+    """One call of this kind, whose real form sends a request to the counting server."""
+    port = server.rpartition(":")[2]
+    if kind == "model":
+        httpx2.Client().post(f"http://localhost:{port}/v1/chat/completions", json=CHAT)
+    elif kind == "http":
+        httpx2.Client().get(f"http://{server}/stock/SKU-42")
+    elif kind == "tool":
+
+        def lookup(sku: str) -> str:
+            return fetch(f"http://{server}/tool/{sku}")
+
+        tool_gate.gate(lookup, "lookup")("SKU-42")
+    else:
+        docs = MCPServer("docs")
+
+        @docs.tool()
+        def x(q: str) -> str:  # pyright: ignore[reportUnusedFunction]
+            return fetch(f"http://{server}/mcp/{q}")
+
+        async def go() -> None:
+            async with mcp.Client(docs) as client:
+                state.install(run)  # after the handshake, which is not a tool call
+                await client.call_tool("x", {"q": "SKU-42"})
+
+        asyncio.run(go())
+
+
+@pytest.mark.design("security.no_fault_sends")
+@pytest.mark.parametrize(("word", "kind"), NOT_CARRIED, ids=[f"{w} {k}" for w, k in NOT_CARRIED])
+def test_no_fault_but_the_carried_ones_sends_a_request(
+    gated_run: Callable[..., tuple[state.RunState, Sink]],
+    counting_server: str,
+    word: str,
+    kind: str,
+) -> None:
+    """Every fault word that is not carried, on every kind it loads on: the gate builds the
+    failure and nothing reaches the server."""
+    run, sink = gated_run(Fault(LABELS[kind], spelled(word), "first 1"))
+    state.install(run)
+    with contextlib.suppress(Exception):  # what the agent gets is each fault's own test
+        call(kind, counting_server, run)
+    state.install(None)
+    assert Counter.seen == [], f"{word} on {kind} sent {Counter.seen}"
+    assert [x["action"] for x in sink.lines if x.get("kind") == kind] == ["fault"]
+
+
+@pytest.mark.design("security.no_fault_sends")
+def test_the_words_and_kinds_checked_come_from_what_loads() -> None:
+    assert ("refused", "http") in NOT_CARRIED and ("dns", "model") in NOT_CARRIED
+    assert ("timeout", "mcp") in NOT_CARRIED and ("error", "tool") in NOT_CARRIED
+    assert ("refused", "tool") not in NOT_CARRIED and ("append", "http") not in NOT_CARRIED
+
+
+@pytest.mark.design("security.no_fault_sends")
+def test_the_counting_server_sees_append_on_a_listed_web_read_once_per_call(
+    gated_run: Callable[..., tuple[state.RunState, Sink]], counting_server: str
+) -> None:
+    """The positive control: under a carried fault the same server sees the call."""
+    fault = Fault(LABELS["http"], "append", "always", text=" more")
+    run, _ = gated_run(fault, real=(LABELS["http"],))
+    state.install(run)
+    for _ in range(2):
+        call("http", counting_server, run)
+    state.install(None)
+    assert Counter.seen == ["GET /stock/SKU-42"] * 2
