@@ -137,6 +137,12 @@ If none of these applies, the rest of this page is detail for your use case.
 
 - **Stopping the service mid-run.** uvicorn installs its own SIGTERM handler, so runs open when it stops lose their last lines, and read as infrastructure errors.
 
+- **A killed runner leaves the copy's workers on macOS.** On Linux, each process of a copy started with `start` is killed when the process that started it dies, so a runner killed with SIGKILL takes the copy with it. macOS has no such call: there the workers keep serving the port until you stop them.
+
+- **A killed runner leaves its token folder.** A runner killed with SIGKILL cannot delete the `scrimmage-token-` folder it made in the temporary folder. The token in it opens nothing once that runner is gone, and the system clears the folder with the rest of its temporary files.
+
+- **Another process can take the port before the copy binds it.** Scrimmage picks a free port, and the copy binds it a moment later. If another process takes it in between, the copy exits, the test stops with exit 3 and the copy's last lines, which say the address is already in use, and a second run picks another port. There is no retry.
+
 - **A process that leaves the copy's group with `setsid` is not stopped.** With `start`, Scrimmage stops the copy of the service by its process group, so a process the service starts in a session of its own keeps running after the test.
 
 - **A service run refuses every process start, a library's own too.** The openai library runs `uname -p` through `platform` to name its machine, so a service whose agent calls OpenAI needs `"process:uname"` under `real`. The setup request finds it before any run and names the entry to add.

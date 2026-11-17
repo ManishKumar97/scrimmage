@@ -15,6 +15,7 @@ import socket
 import ssl
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -33,6 +34,7 @@ from scrimmage_core.start import BadAnswerPath, pick
 TOKEN_MIN = 32
 CONNECT_S = 2.0  # how long the probe's connection may take before it is asked again
 PROBE_S = 30.0  # the whole probe, from its connection to the last byte of its reply
+ALIVE_STEP_S = 0.1  # how often a probe asks whether the service the runner started runs
 PROBE_MAX = 1024 * 1024  # a startup report is a few KB; a longer reply is not Scrimmage's
 STREAMED = ("text/event-stream", "application/x-ndjson", "application/jsonl")
 # The gate's own 503, exactly: what says Scrimmage answered and could not claim the plan.
@@ -189,10 +191,12 @@ def send(
     *,
     limit: int | None = None,
     deadline_s: float | None = None,
+    alive: Callable[[], bool] | None = None,
 ) -> Reply:
     """One request to the service's host and port. limit: the most bytes of reply to read.
     deadline_s: the most seconds the request may take once connected, however slowly the
-    service sends; timeout bounds each read only."""
+    service sends; timeout bounds each read only. alive: asked while the request waits for
+    its deadline; once it says no, the request is cut, as at the deadline."""
     host, port, _ = target(agent)
     conn = http.client.HTTPConnection(host, port, timeout=connect_timeout or timeout)
     try:
@@ -205,13 +209,13 @@ def send(
         return Reply(failed=f"{type(exc).__name__}: {exc}", connected=False, unanswered=cut_short)
     if conn.sock is not None:
         conn.sock.settimeout(timeout)
-    expired = threading.Event()
-    cutter: threading.Timer | None = None
+    expired, done = threading.Event(), threading.Event()
+    cutter: threading.Thread | None = None
     if deadline_s is not None and conn.sock is not None:
         # A read timeout is per read, so a reply sent a byte at a time never meets it; the
         # socket is shut at the deadline, which ends any read, the headers' included.
-        cutter = threading.Timer(deadline_s, cut, [conn.sock, expired])
-        cutter.daemon = True
+        watched = (conn.sock, expired, done, deadline_s, alive)
+        cutter = threading.Thread(target=watch, args=watched, daemon=True)
         cutter.start()
     replied = False
     try:
@@ -239,9 +243,25 @@ def send(
         return Reply(failed=f"{type(exc).__name__}: {exc}", unanswered=cut_short and not replied)
     finally:
         if cutter is not None:
-            cutter.cancel()
+            done.set()
             cutter.join()  # a cut already running ends before the socket is closed
         conn.close()
+
+
+def watch(
+    sock: Any,
+    expired: threading.Event,
+    done: threading.Event,
+    deadline_s: float,
+    alive: Callable[[], bool] | None,
+) -> None:
+    """Cut the request at its deadline, or as soon as alive says no, unless it is done."""
+    end = time.monotonic() + deadline_s
+    step = deadline_s if alive is None else ALIVE_STEP_S
+    while not done.wait(max(0.0, min(step, end - time.monotonic()))):
+        if time.monotonic() >= end or (alive is not None and not alive()):
+            cut(sock, expired)
+            return
 
 
 def cut(sock: Any, expired: threading.Event) -> None:
@@ -260,11 +280,12 @@ class Probed:
     clock_refused: bool = False  # signed: this machine's clock is outside the service's window
 
 
-def probe(agent: Agent, token: str) -> Probed:
+def probe(agent: Agent, token: str, alive: Callable[[], bool] | None = None) -> Probed:
     """The signed probe: the service's startup report, signed for this request, or no report
     when no Scrimmage with this token answered, and the reply itself. Its body is empty, so an
     app reached by mistake rejects it as a bad request. A signed clock reply says the two
-    clocks differ by more than the window."""
+    clocks differ by more than the window. alive: whether the service the runner started is
+    still running; a probe that waits on a process that took its port ends when it exits."""
     _, _, path = target(agent)
     signed = protocol.request_headers(token, "POST", path, b"", time.time())
     headers = {
@@ -273,7 +294,16 @@ def probe(agent: Agent, token: str) -> Probed:
         **signed,
     }
     reply = send(
-        "POST", agent, path, headers, b"", 30.0, CONNECT_S, limit=PROBE_MAX, deadline_s=PROBE_S
+        "POST",
+        agent,
+        path,
+        headers,
+        b"",
+        30.0,
+        CONNECT_S,
+        limit=PROBE_MAX,
+        deadline_s=PROBE_S,
+        alive=alive,
     )
     found = Probed(None, reply)
     kind = reply.headers.get("x-scrimmage-probe")

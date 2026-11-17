@@ -4,6 +4,7 @@ import ctypes
 import os
 import signal
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 BOOT = Path(__file__).parent / "_boot"
@@ -23,7 +24,17 @@ def stop_with_the_runner() -> None:
     it. Elsewhere it does nothing.
     """
     runner = os.environ.pop("SCRIMMAGE_RUNNER_PID", "")  # the program never sees it
-    if not sys.platform.startswith("linux") or not runner.isdigit():
+    if runner.isdigit():
+        stop_with_parent(lambda parent: parent == int(runner))
+
+
+def stop_with_parent(still_mine: Callable[[int], bool]) -> None:
+    """SIGKILL to this process when its parent dies, on Linux; elsewhere nothing.
+
+    still_mine is asked, after the setting, whether the parent now is the one that started
+    this process: a parent that died before the setting sends no signal, so this process
+    ends here instead."""
+    if not sys.platform.startswith("linux"):
         return
     try:
         libc = ctypes.CDLL(None, use_errno=True)
@@ -31,7 +42,7 @@ def stop_with_the_runner() -> None:
             return
     except (OSError, AttributeError):
         return
-    if os.getppid() != int(runner):  # it died before the setting, so no signal will come
+    if not still_mine(os.getppid()):
         os.kill(os.getpid(), signal.SIGKILL)
 
 

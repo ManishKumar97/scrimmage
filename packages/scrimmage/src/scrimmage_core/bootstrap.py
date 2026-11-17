@@ -283,12 +283,37 @@ def control_context(url: str) -> ssl.SSLContext | None:
         service_stop(f"SCRIMMAGE_CONTROL_CA: {exc}")
 
 
+def stop_with_the_copy() -> None:
+    """In a copy the runner started with [agent] start, ask Linux to SIGKILL this process
+    when its parent dies, so a runner killed with SIGKILL leaves no worker serving the port.
+
+    The copy's first process is its group's leader, and scrimmage-run already asked for it to
+    go with the runner. Every other process of the copy was started inside the copy's group:
+    a parent that is no longer in that group is not the one that started it, which died
+    before the setting, so this process ends here."""
+    if os.environ.get("SCRIMMAGE_MANAGED") != "1" or os.getpid() == os.getpgrp():
+        return
+    from scrimmage_core import run_command  # only a managed copy needs it
+
+    run_command.stop_with_parent(in_my_group)
+
+
+def in_my_group(pid: int) -> bool:
+    try:
+        return os.getpgid(pid) == os.getpgrp()
+    except OSError:  # it has gone
+        return False
+
+
 def start_service() -> None:
     """A service process: the uvicorn supervisor, each worker, a reloader. None has a run; each
     request brings its own. Nothing here asks the runner for anything, so a service with no
     runner serves every request without the header as it would without Scrimmage."""
     if multiprocessing_helper():
-        return  # Python's own helper, such as the resource tracker: it runs no team code
+        # Python's own helper, such as the resource tracker: it runs no team code, and it
+        # exits by itself once every process that holds its pipe has, after its cleanup.
+        return
+    stop_with_the_copy()
     # Only a service needs these, and a function or a script must not pay for their import.
     from scrimmage_core import asgi_gate, executor
 

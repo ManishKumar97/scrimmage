@@ -2,7 +2,7 @@
 
 Many agents run inside a web service, one request per question.
 This example puts the [function agent](function-agent.md) behind a FastAPI endpoint and tests it there, under uvicorn, with the same mock and fault.
-The service is started once, and each run is one `POST` to it.
+Scrimmage starts a test copy of the service, sends each run to it as one `POST`, and stops it when the test ends.
 
 Libraries this example needs: `openai`, `fastapi` and `uvicorn`.
 This page was checked with openai 3.46, fastapi 0.162 and uvicorn 0.54.
@@ -37,11 +37,14 @@ async def chat(ask: Ask) -> dict[str, str]:
     return {"reply": reply}
 ```
 
-`service` replaces `function`, with the body the endpoint reads and the field that holds the answer:
+`start` and `service` replace `function`: the command that starts the service, and its address.
+Scrimmage picks a free port and fills it in where the file writes `{port}`.
+`body` is what the endpoint reads, and `answer` is the field that holds the answer:
 
 ```toml title="scrimmage.toml"
 [agent]
-service = "http://127.0.0.1:8765/chat"
+start   = "uvicorn shop.service:app --port {port} --loop asyncio"
+service = "http://127.0.0.1:{port}/chat"
 body    = {message = "{question}", session = "{session}"}
 answer  = "reply"
 tools   = ["shop.tools:get_order", "shop.tools:refund_order"]
@@ -64,6 +67,7 @@ expect = [["unable", "sorry", "try again"]]
 forbid = ["Oct 30", "October 30"]
 ```
 
+`--loop asyncio` is needed on Python 3.11 when uvloop is installed; from Python 3.12 it can be left out.
 The openai library runs `uname -p` to name the machine it runs on, and a service run refuses every process start that `real` does not list, so `process:uname` is listed.
 
 ## Check the file
@@ -74,31 +78,12 @@ scrimmage check
 
 ```text title="Output"
 scrimmage check: scrimmage.toml is valid: 1 test, 2 rows, 6 runs, 2 tools, a budget of $5
-start the service with these two set, with scrimmage-run and SCRIMMAGE_SERVICE=1:
-  SCRIMMAGE_TOOLS=shop.tools:get_order,shop.tools:refund_order
-  SCRIMMAGE_ALLOW_IMPORTS=shop.
+the service starts with: uvicorn shop.service:app --port {port} --loop asyncio
 ```
-
-The two last lines are what the service's environment needs.
-
-## Start the service
-
-The service and the runner share a token, kept in a file only you can read, and the address of the runner's control server:
-
-```bash
-python -c "import secrets; print(secrets.token_hex(32))" > .scrimmage-token
-chmod 600 .scrimmage-token
-export SCRIMMAGE_TOKEN_FILE=$PWD/.scrimmage-token SCRIMMAGE_CONTROL_URL=http://127.0.0.1:8766
-SCRIMMAGE_SERVICE=1 SCRIMMAGE_TOOLS=shop.tools:get_order,shop.tools:refund_order SCRIMMAGE_ALLOW_IMPORTS=shop. \
-  scrimmage-run uvicorn shop.service:app --port 8765 --loop asyncio &
-```
-
-The service prints one line per process, `scrimmage: active in service mode`, and then serves as it always does.
-A request with no Scrimmage header reaches the app untouched.
 
 ## Run it
 
-In the same shell, with the same two variables:
+One command starts the service, runs the test and stops the service:
 
 ```bash
 scrimmage test
@@ -119,9 +104,14 @@ Before the first run, the runner checked that the service is gated with the same
 The `control server:` line counts what the runner sent, the setup request and the 6 runs, and the claims the service made for them; the two numbers match when every request reached a gated service.
 Each run then went to the service as its own request, under its own plan, while the service kept serving everything else.
 
+You made no token file, set no variable and started nothing in the background.
+The service's own output is in `service.log`, in the records folder.
+When the test ends, or on Ctrl-C, Scrimmage stops every process of the service, workers included; [Let Scrimmage start the service](../services.md#let-scrimmage-start-the-service) has the details.
+
 ## In a container
 
 The same service runs in a container, with the runner still on the host.
+There you start the service yourself, and Scrimmage attaches to it, as [Attach to a service you started](../services.md#attach-to-a-service-you-started) shows.
 The control channel then runs over TLS, and the container runs as the token file's owner.
 [A service in a container](../docker.md#a-service-in-a-container) has the Compose file, the commands and what crosses the network.
 
