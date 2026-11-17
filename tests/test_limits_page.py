@@ -169,6 +169,7 @@ ALL_TITLES = [
     "`${` in an injected text.",
     "`--json` prints at the end.",
     "`--loop asyncio` on Python 3.11.",
+    "`bad body` on a streamed model request.",
     "`first N` in children.",
     "`mcp:search` before the second server is known.",
     "`os.fork` warns on Python 3.12 and later.",

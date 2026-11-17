@@ -1332,7 +1332,6 @@ def test_a_server_with_no_name_has_only_the_short_label() -> None:
         (f'[[test.fault]]\ncall = "{LABEL}"\ndo = "slow"\n', "is not a delay"),
         (f'[[test.fault]]\ncall = "{LABEL}"\ndo = "error"\nwhen = "requests 1"\n', "counts model"),
         ('[[test.fault]]\ncall = "tool:x"\ndo = "empty"\n', "works only on an MCP tool"),
-        ('[[test.fault]]\ncall = "http:a.b"\ndo = "empty"\n', "works only on an MCP tool"),
         ('[[test.fault]]\ncall = "model"\ndo = "empty"\n', "works only on an MCP tool"),
     ],
 )

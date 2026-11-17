@@ -53,6 +53,11 @@ origin = "public incident"
 source = "https://github.blog/news-insights/company-news/github-availability-report-march-2026/ (GitHub availability report, 24 March 2026: an outage at an upstream dependency caused HTTP 500 errors and connection resets for the Microsoft Teams integration, whose error rate peaked at 90.1% of requests)"
 
 [[fault]]
+name = "bad body"
+origin = "public incident"
+source = "https://blog.cloudflare.com/incident-report-on-memory-leak-caused-by-cloudflare-parser-bug/ (Cloudflare, 23 February 2017, Cloudbleed: a buffer overrun in an edge parser meant some HTTP requests through Cloudflare got corrupted pages back, holding bytes from other requests' memory)"
+
+[[fault]]
 name = "dns"
 origin = "public incident"
 source = "https://aws.amazon.com/message/101925/ (AWS us-east-1, 19-20 October 2025: a latent defect in DynamoDB's automated DNS management caused endpoint resolution failures, so customers and dependent AWS services could not establish new connections)"

@@ -60,7 +60,8 @@ If the tool returns its own type, Scrimmage builds that type from the mock:
 |---|---|
 | `error` | a tool raises an error: `ToolException` under LangChain, `RuntimeError` in a hand-written loop, or the type named by `raises`; an MCP tool returns a failed result, as a real server does |
 | `timeout` | a tool raises `TimeoutError`; a model call, a web request or an MCP tool raises the library's own timeout error, as if the other side never answered |
-| `empty` | an MCP tool returns a result with no content |
+| `empty` | an MCP tool returns a result with no content; a web request gets a 200 with no body and no `Content-Type` |
+| `bad body` | a model call or a web request gets a 200 that says it is JSON, with a body cut short so it does not parse |
 | `append` | the call happens, and the text of the fault is added at the end of what it returns |
 | `replace` | the call happens, and what it returns is replaced by the text of the fault, or the `find` text in it is |
 | `slow` | written `slow 8s`: the call happens after that many seconds, so a caller's own deadline can fire first |

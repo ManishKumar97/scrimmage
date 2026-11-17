@@ -33,6 +33,9 @@ MESSAGES = {
     500: "The server had an error while processing your request. Sorry about that!",
     503: "The engine is currently overloaded, please try again later.",
 }
+# What bad body sends a model call: the first 60 bytes of the spec's Default chat example,
+# so a reader that logs the body sees a real reply's start, cut before it can parse.
+BROKEN_BODY = b'{\n  "id": "chatcmpl-B9MBs8CjcvOU2jLn4n570S5qMJKcT",\n  "objec'
 TYPES = {429: "requests"}
 CODES = {429: "rate_limit_exceeded", 401: "invalid_api_key"}
 

@@ -91,6 +91,7 @@ JUDGING = "docs/judging.md"
 # The faults this version builds. Each one has an entry in docs/fault-catalog.toml.
 FAULTS = (
     "timeout", "status", "error", "empty", "append", "replace", "slow", "refused", "reset", "dns",
+    "bad body",
 )  # fmt: skip
 # A connection that fails: on a model call or a web request, with what a tool raises instead.
 CONNECTION = {
@@ -1487,8 +1488,15 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
         raise ConfigError(f"{where} do: {problem}")
     if do == "error" and kind not in ("tool", "mcp"):
         raise ConfigError(f"{where} do: 'error' works only on a tool; see {DOCS}")
-    if do == "empty" and kind != "mcp":
-        raise ConfigError(f"{where} do: 'empty' works only on an MCP tool; see {DOCS}")
+    if do == "empty" and kind not in ("mcp", "http"):
+        raise ConfigError(
+            f"{where} do: 'empty' works only on an MCP tool or a web request; see {DOCS}"
+        )
+    if do == "bad body" and kind in ("tool", "mcp"):
+        raise ConfigError(
+            f"{where} do: 'bad body' works on a model call or a web request, whose reply is a "
+            f"body to parse; on a tool, fault the web request inside it; see {DOCS}"
+        )
     if do in CONNECTION and kind in ("tool", "mcp"):
         raise ConfigError(
             f"{where} do: {do!r} works on a model call or a web request, where the connection "
