@@ -1179,7 +1179,8 @@ def test_empty_on_a_tool_declared_to_return_a_model_is_a_mistake_naming_the_fix(
     calls = summary["calls"]
     assert (calls["fault"], calls["mock"], calls["refused"], calls["under_real"]) == (0, 1, 1, 0)
     assert calls["real"] == sum(1 for x in fault if x.get("kind") == "model")  # model calls only
-    assert summary["outcome"] != "refused call", result.out
+    assert summary["outcome"] == "crashed", result.out  # the gate's mistake is no refused call
+    assert "made a call the test does not allow" not in result.out
     fix = (
         "tool:get_stock is declared to return Stock, which has no empty value; mock it with "
         "the fields of an empty result, or fault the web request inside it"
@@ -1187,6 +1188,30 @@ def test_empty_on_a_tool_declared_to_return_a_model_is_a_mistake_naming_the_fix(
     assert line["mistake"] == fix and fix in result.out + result.err
     # The real get_stock raises a RuntimeError of its own: it never ran.
     assert str(line["error"]).startswith("ScrimmageMockError: tool:get_stock is declared")
+
+
+@pytest.mark.design("fault.empty_tool_no_empty_value")
+@pytest.mark.slow
+def test_an_unlisted_call_after_the_empty_mistake_is_still_a_refused_call(
+    project: Project,
+) -> None:
+    project.edit(
+        'function = "acme.agent:answer"',
+        'function = "acme.agent:refund_when_stock_fails"\nruns = 1\nmax_cost_usd = "none"',
+    )
+    empty = '[[test.fault]]\ncall = "tool:get_stock"\ndo = "empty"\nforbid = ["12 in stock"]\n'
+    project.edit(EXAMPLE_FAULT, empty)
+    result = project.test()
+    assert result.code == 2, result.out + result.err
+    fault = next(lines for lines in result.records() if lines[-1]["row"] == "fault 1")
+    tools = [(x["call"], x["action"], x.get("reason")) for x in fault if x.get("kind") == "tool"]
+    assert tools == [
+        ("tool:get_stock", "refused", "mistake"),
+        ("tool:refund_order", "refused", "unlisted"),
+    ]
+    assert cast(dict[str, Any], fault[-1]["summary"])["outcome"] == "refused call"
+    assert "made a call the test does not allow" in result.out
+    assert "tool:get_stock is declared to return Stock" in result.out
 
 
 @pytest.mark.design("fault.empty_tool_never_runs")
@@ -1294,3 +1319,56 @@ def test_empty_on_a_return_type_that_cannot_be_resolved_is_a_mistake(lines: Line
     [line] = lines.lines
     assert (line["action"], line["reason"], line["mistake"]) == ("refused", "mistake", fix)
     assert "fault" not in line
+
+
+FUTURE = "from __future__ import annotations\n"
+LAZY = sys.version_info >= (3, 14)  # annotations are evaluated only when asked for
+UNRESOLVED = [
+    pytest.param("", 'def f() -> "Missing": ...', "Missing", id="quoted"),
+    pytest.param(FUTURE, 'def f() -> "Missing": ...', "Missing", id="quoted_future"),
+    pytest.param(FUTURE, "def f() -> Optional[Missing]: ...", "Optional[Missing]", id="future"),
+    pytest.param(
+        "",
+        "def f() -> Optional[Missing]: ...",
+        "Optional[Missing]",
+        id="lazy",
+        marks=pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself fails"),
+    ),
+]
+
+
+def made(head: str, source: str) -> Any:
+    space: dict[str, Any] = {}
+    exec(head + "from typing import Optional\n" + source, space)
+    return space["f"]
+
+
+@pytest.mark.design("fault.empty_tool_no_empty_value")
+@pytest.mark.parametrize(("head", "source", "written"), UNRESOLVED)
+def test_an_unresolved_return_type_is_named_as_written(
+    lines: Lines, head: str, source: str, written: str
+) -> None:
+    install(lines, faults=[empty_fault("tool:f")])
+    with pytest.raises(ScrimmageMockError) as caught:
+        tool_gate.gate(made(head, source), "f")()
+    said = str(caught.value)
+    assert said == (
+        f"tool:f declares a return type Scrimmage cannot resolve ({written!r}); mock it, "
+        "or import the type at run time"
+    )
+    assert "ForwardRef" not in said and "0x" not in said
+
+
+def test_a_parameter_annotation_that_raises_leaves_the_return_type_readable(lines: Lines) -> None:
+    install(lines, faults=[empty_fault("tool:f")])
+    assert tool_gate.gate(made(FUTURE, "def f(a: 1 / 0 = 1) -> str: ..."), "f")() == ""
+
+
+@pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself raises")
+def test_a_lazy_annotation_that_raises_is_a_mistake_not_none(lines: Lines) -> None:
+    """On 3.14 annotations are read all at once: one that raises hides the return type, in
+    every format, so empty cannot tell its value."""
+    install(lines, faults=[empty_fault("tool:f")])
+    with pytest.raises(ScrimmageMockError, match="annotations that raise ZeroDivisionError"):
+        tool_gate.gate(made("", "def f(a: 1 / 0 = 1) -> str: ..."), "f")()
+    assert lines.lines[0]["action"] == "refused"

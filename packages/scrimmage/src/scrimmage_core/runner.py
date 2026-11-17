@@ -561,7 +561,9 @@ class Runner:
         broken = any(n.get("notice") == "structure" for n in notices)
         # No plan, or a call made outside the run's context: says nothing about the agent.
         no_plan = "no_plan" in state.refusals or context_lost(lines)
-        first = (state.refusals or [""])[0]
+        # A gate's refusal for a mistake in the test is not a call the agent made or chose.
+        chosen = [r for r in state.refusals if r != MISTAKE_REFUSAL]
+        first = (chosen or [""])[0]
         refusal = budget_refusal(lines)
         numbers = None if refusal is None else cast(dict[str, object], refusal["budget"])
         if stopped:
@@ -578,7 +580,7 @@ class Runner:
             outcome = "infrastructure error"
         elif first in BUDGET_REASONS:
             outcome = "budget reached" if numbers and reached(numbers) else "not reserved"
-        elif (state.refused and first != MISTAKE_REFUSAL) or kept_out:
+        elif chosen or kept_out:
             outcome = "refused call"
         elif timed_out:
             outcome = "timed out"
@@ -634,8 +636,12 @@ class Runner:
             budget_reason="" if refusal is None else str(refusal["reason"]),
         )
         # Here the raw answer is still at hand. The record only ever gets the redacted one.
-        chose = chose_refused(row.fault is not None, (state.refusals or [""])[0])
-        refused = [str(line["call"]) for line in lines if line.get("action") == "refused"]
+        chose = chose_refused(row.fault is not None, first)
+        refused = [
+            str(line["call"])
+            for line in lines
+            if line.get("action") == "refused" and line.get("reason") != MISTAKE_REFUSAL
+        ]
         result.judgement = judge.judge_run(
             outcome,
             answer,

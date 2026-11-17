@@ -330,17 +330,41 @@ def annotated(function: object) -> object:
     return function
 
 
+def annotations_of(function: object, string: bool = False) -> dict[str, object]:
+    """The function's annotations, none evaluated. On Python 3.14 they are lazy: FORWARDREF
+    keeps a name it cannot resolve as a reference, and STRING gives each as written."""
+    if sys.version_info >= (3, 14):
+        import annotationlib
+
+        kind = annotationlib.Format.STRING if string else annotationlib.Format.FORWARDREF
+        return dict(annotationlib.get_annotations(function, format=kind))  # pyright: ignore
+    return dict(inspect.get_annotations(function))  # pyright: ignore[reportArgumentType]
+
+
 def return_annotation(function: object) -> tuple[bool, object]:
     """Whether the function writes a return annotation, and the annotation as written. Other
     annotations are never evaluated, so a parameter type that cannot be resolved is no matter."""
-    if sys.version_info >= (3, 14):  # annotations are lazy: ask for names it cannot resolve as is
-        import annotationlib
-
-        forward = annotationlib.Format.FORWARDREF
-        written = annotationlib.get_annotations(function, format=forward)  # pyright: ignore
-    else:
-        written = inspect.get_annotations(function)  # pyright: ignore[reportArgumentType]
+    try:
+        written = annotations_of(function)
+    except Exception:  # on 3.14, an annotation that raises, such as a: 1/0
+        if sys.version_info < (3, 14):
+            raise
+        written = annotations_of(function, string=True)  # raises too, for some
     return "return" in written, written.get("return")
+
+
+def written_text(function: object, written: object) -> str:
+    """A return annotation as the team wrote it, with one layer of quotes taken off."""
+    try:  # on 3.14 as written in the source; before it, the annotation as stored
+        text = annotations_of(function, string=True).get("return")
+    except Exception:  # an object with no annotations of its own
+        text = None
+    if not isinstance(text, str):
+        reference = getattr(written, "__forward_arg__", None)
+        text = written if isinstance(written, str) else str(reference or written)
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
+        text = text[1:-1]
+    return text
 
 
 def declared_return(function: object) -> object:
@@ -349,8 +373,11 @@ def declared_return(function: object) -> object:
     target = annotated(function)
     try:
         found, written = return_annotation(target)
-    except Exception:  # not a function, class or module, so it has no annotations
-        return None
+    except Exception as exc:
+        if not inspect.isfunction(target):
+            return None  # not a function, class or module, so it has no annotations
+        # On 3.14 annotations are read all at once, and one that raises hides the rest.
+        return Unresolved(f"annotations that raise {type(exc).__name__}")
     if not found:
         return None
     # A stand-in that holds only the return annotation, with the function's own globals, so
@@ -360,8 +387,7 @@ def declared_return(function: object) -> object:
     try:
         return typing.get_type_hints(stand_in)["return"]
     except Exception:  # a name it cannot find, or text that is no type
-        text = getattr(written, "__forward_arg__", None)
-        return Unresolved(written if isinstance(written, str) else str(text or written))
+        return Unresolved(written_text(target, written))
 
 
 def borrowed() -> None:

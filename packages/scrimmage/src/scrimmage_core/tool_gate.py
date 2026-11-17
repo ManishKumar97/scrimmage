@@ -37,6 +37,18 @@ def is_gate(function: object) -> bool:
     return getattr(function, GATED, None) is function
 
 
+def signature_of(tool: Callable[..., object]) -> inspect.Signature:
+    """The tool's signature, for binding its arguments. On Python 3.14 annotations are lazy,
+    so each is kept as written text and never evaluated: one may name a type imported only
+    for type checking, or raise."""
+    if sys.version_info >= (3, 14):
+        import annotationlib
+
+        written = annotationlib.Format.STRING
+        return inspect.signature(tool, annotation_format=written)  # pyright: ignore
+    return inspect.signature(tool)
+
+
 def _arguments(
     tool: Callable[..., object],
     args: tuple[Any, ...],
@@ -52,11 +64,11 @@ def _arguments(
         if built:
             signature = built[0]
         else:
-            signature = inspect.signature(tool)
+            signature = signature_of(tool)
             if built is not None:
                 built.append(signature)
         arguments = dict(signature.bind_partial(*args, **kwargs).arguments)
-    except TypeError:
+    except Exception:  # no signature, args that do not bind, or on 3.14 an annotation that raises
         return {"args": list(args[1:] if bound else args), "kwargs": kwargs}
     first = next(iter(signature.parameters.values()), None)
     if bound and first is not None and first.name in arguments:
