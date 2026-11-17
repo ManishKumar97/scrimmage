@@ -204,8 +204,6 @@ SIGKILL cannot be caught, so it leaves no document.
 | `tools` | In `service`: the tools its gates swap. |
 | `tools_match` | In `service`: whether they are exactly the tools the file lists. |
 | `control` | In `service`: the service's ping to the control server, as the [startup report](schemas.md) holds it. |
-| `clock_gap_s` | In `service`: the service's clock less this machine's, in seconds; positive when the service is ahead. `null` when the service sent no time. |
-| `template` | In `service`: an object with `warnings`, where the file's `body` does not fit the service's `/openapi.json`, and `notes`, what the check could not do. |
 | `notices` | In `service`: the notices the service held when it answered. |
 
 ## scrimmage record --json

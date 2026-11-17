@@ -23,10 +23,11 @@ import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from importlib import metadata, resources
+from importlib import resources
 from pathlib import Path
 from typing import Any, cast
 
+from scrimmage_core import versions
 from scrimmage_core.redact import redact
 
 INSTALL = 'scrimmage-mcp needs the mcp extra; install it with: pip install "scrimmage[mcp]"'
@@ -494,13 +495,6 @@ def settings_from(argv: Sequence[str] | None) -> Settings:
         args.call_timeout,
         (given,) if same else (),
     )
-
-
-def scrimmage_version() -> str:
-    try:
-        return metadata.version("scrimmage")
-    except metadata.PackageNotFoundError:
-        return "unknown"
 
 
 @dataclass
@@ -1071,7 +1065,7 @@ def without_telemetry(server: Server[Any]) -> None:
 def build(state: Scrimmage) -> Server[Any]:
     server: Server[Any] = Server(
         "scrimmage",
-        version=scrimmage_version(),
+        version=versions.installed(),
         instructions=INSTRUCTIONS,
         on_list_tools=state.list_tools,
         on_call_tool=state.call_tool,

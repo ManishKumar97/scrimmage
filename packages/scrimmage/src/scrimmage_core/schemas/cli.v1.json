@@ -802,8 +802,6 @@
             "tools",
             "tools_match",
             "control",
-            "clock_gap_s",
-            "template",
             "notices"
           ],
           "properties": {
@@ -864,36 +862,6 @@
             "control": {
               "type": "object",
               "description": "The service's ping to the control server, as the startup report holds it."
-            },
-            "clock_gap_s": {
-              "type": [
-                "number",
-                "null"
-              ],
-              "description": "The service's clock less this machine's, in seconds; positive when the service is ahead."
-            },
-            "template": {
-              "type": "object",
-              "required": [
-                "warnings",
-                "notes"
-              ],
-              "properties": {
-                "warnings": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  },
-                  "description": "Where the file's body does not fit the service's /openapi.json."
-                },
-                "notes": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  },
-                  "description": "What the check could not do, such as no document found."
-                }
-              }
             },
             "notices": {
               "type": "array",

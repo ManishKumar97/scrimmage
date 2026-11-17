@@ -199,7 +199,6 @@ FLAGS = {
     "check": {"--json": "always passed", "--runs": "passed by the check before a record",
               "--max-cost-usd": "passed by the check before a spend",
               "--service": "never passed, as a check by the server reads the file only",
-              "--strict": "never passed, as it needs --service",
               "path": "the server's --config"},
     "test": {"--json": "always passed", "--compare": "compare",
              "--max-cost-usd": "max_cost_usd", "path": "the server's --config",

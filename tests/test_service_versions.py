@@ -252,7 +252,16 @@ def test_an_unknown_version_never_matches_even_itself(
 
     code, out = against(bench, proxy=rewritten(bench, edit))
     assert code == 2, out
-    assert f"the service runs scrimmage {named} and this runner is {ours};" in out, out
+    said = (
+        f"the service runs scrimmage {named} and this runner has no package metadata; "
+        "install scrimmage in the runner"
+        if runner
+        else f"the service runs scrimmage {named} and this runner is {ours}; "
+        f"install scrimmage {ours} in the service"
+    )
+    assert said in out, out
+    if runner:
+        assert "install scrimmage unknown" not in out, out
     sent_nothing(bench)
 
 
@@ -474,7 +483,7 @@ def test_a_ping_reply_with_a_bad_signature_is_not_taken(
 
     class Liar(BaseHTTPRequestHandler):
         def do_POST(self) -> None:
-            data = json.dumps({"ok": True, "runner_id": "0" * 16, "server_time": time.time()})
+            data = json.dumps({"ok": True, "runner_id": "0" * 16})
             self.send_response(200)
             self.send_header(protocol.SIGNATURE, "0" * 64)
             self.send_header("Content-Length", str(len(data)))
@@ -567,24 +576,6 @@ def test_a_signed_header_older_than_60_s_is_refused_before_any_body_is_read(
 def blob(size: int) -> dict[str, str]:
     data = os.urandom(size)
     return {"run": RUN, "sha256": protocol.digest(data), "data": base64.b64encode(data).decode()}
-
-
-@pytest.mark.design("service.tls_deadlines")
-@pytest.mark.parametrize("skew", [-120, 120, 0], ids=["behind", "ahead", "true"])
-def test_a_fresh_client_with_a_skewed_clock_sends_a_large_blob_after_a_small_request(
-    control_server: ControlServer, skew: int
-) -> None:
-    """The server refuses a large body with a stale header before reading it, and closes the
-    connection; the client learns the offset from a small request first, so it never meets
-    that refusal."""
-    control_server.start()
-    try:
-        client = ControlClient(control_server.url, control_server.token)
-        client.offset = skew  # its clock is wrong by this much, and it has had no reply yet
-        assert client.request("POST", "/v1/blobs", blob(5 * 1024 * 1024))[0] == 200
-        assert abs(client.offset) < 5, client.offset
-    finally:
-        control_server.stop()
 
 
 def test_a_busy_https_setup_does_not_say_it_verified_nothing_was_needed(tmp_path: Path) -> None:

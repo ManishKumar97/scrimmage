@@ -342,8 +342,6 @@ class Runner:
         # One turn per row of a service test: its runs go one after another.
         self.turns: dict[tuple[str, str], threading.Semaphore] = {}
         self.tools_seen: list[str] | None = None  # as the agent's process reported them
-        self.service_warnings: list[str] = []  # what the probe found that does not stop the test
-        self.service_notes: list[str] = []  # what the template check could not check
         self.asked_s = 0.0  # how long the probe asked again while the ping failed
         self.went_silent = False  # the service stopped answering the probe in that wait
         self.control_ping: dict[str, object] | None = None  # the service's ping, as it reported
@@ -704,8 +702,10 @@ class Runner:
         """A worker of the service of another version refused its claim: every run it gets
         would fail the same way, so the test stops."""
         found = self.server.refused_sdk
-        said = service_client.other_version(found[0] if found else None)
-        return service_client.Setup(2, f"{run} was refused: {said}, in every process of it")
+        said = service_client.other_version(
+            found[0] if found else None, "in the service, in every process of it"
+        )
+        return service_client.Setup(2, f"{run} was refused: {said}")
 
     def served_result(
         self,
@@ -736,7 +736,7 @@ class Runner:
 
     def probe_service(self) -> service_client.Probed:
         """The probe, asked again while the service starts: exit 3 when no gated service
-        answers, or the service's clock is too far from this machine's to go on."""
+        answers, or the service's clock and this machine's differ by more than the window."""
         agent = self.config.agent
         _, _, path = service_client.target(agent)
         deadline = time.monotonic() + READY_S
@@ -791,9 +791,8 @@ class Runner:
                 f"the service at POST {path} took the probe's connection but gave no reply: "
                 f"{reply.failed or 'timed out'}{hint}",
             )
-        gap = probed.gap
-        if probed.clock_refused and gap is not None:
-            raise service_client.Setup(3, service_client.clock_stop(gap))
+        if probed.clock_refused:
+            raise service_client.Setup(3, service_client.CLOCK_OFF)
         report = probed.report
         if report is None or not {"asgi", "starlette"} & set(
             cast(list[str], report.get("gates") or [])
@@ -872,20 +871,6 @@ class Runner:
         service_client.check_control(
             report, self.server.runner_id, asked_s=self.asked_s, silent=self.went_silent
         )
-        gap = probed.gap
-        if gap is not None and abs(gap) >= service_client.CLOCK_STOP_S:
-            raise service_client.Setup(3, service_client.clock_stop(gap))
-        if gap is not None and abs(gap) >= service_client.CLOCK_WARN_S:
-            self.service_warnings.append(service_client.clock_text(gap))
-
-        def stopped() -> bool:
-            return self.cancelled or bool(self.stop_flag)
-
-        found = service_client.template_check(self.config.agent, stop=stopped)
-        if stopped():  # Ctrl-C or SIGTERM ended the read
-            raise Interrupted(self.stop_flag[0] if self.stop_flag else "SIGINT")
-        self.service_warnings += found.warnings
-        self.service_notes += found.notes
         self.setup_request()
 
     def setup_request(self) -> None:
@@ -1800,8 +1785,6 @@ def build_report(
             "none matched its method and path"
             for call in web_misses
         ]
-    warnings += runner.service_warnings if runner is not None else []
-    notes += runner.service_notes if runner is not None else []
     if hosted:
         warnings.append(
             f"{plural(hosted, 'model request')} offered provider tools that only read, "

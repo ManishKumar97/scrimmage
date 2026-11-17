@@ -529,7 +529,6 @@ def _handler(control: ControlServer) -> type[BaseHTTPRequestHandler]:
             else:
                 body = self.rfile.read(length) if length else b""
                 status, payload = control.handle(method, self.path, headers, body)
-            payload["server_time"] = control.clock()
             reply = json.dumps(payload).encode()
             signature = protocol.sign_reply(
                 control.token, headers.get(protocol.SIGNATURE, ""), status, reply

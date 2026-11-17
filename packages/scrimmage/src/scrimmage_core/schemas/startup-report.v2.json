@@ -17,8 +17,7 @@
     "chained_sitecustomize",
     "tools",
     "notices",
-    "control",
-    "server_time"
+    "control"
   ],
   "properties": {
     "v": {
@@ -80,10 +79,6 @@
     "control": {
       "description": "The service's signed ping to the control server, sent before it answered.",
       "$ref": "#/$defs/control"
-    },
-    "server_time": {
-      "description": "The service's clock when it answered, in seconds since the epoch.",
-      "type": "number"
     }
   },
   "$defs": {
