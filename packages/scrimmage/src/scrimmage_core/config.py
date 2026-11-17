@@ -1488,10 +1488,10 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
         raise ConfigError(f"{where} do: {problem}")
     if do == "error" and kind not in ("tool", "mcp"):
         raise ConfigError(f"{where} do: 'error' works only on a tool; see {DOCS}")
-    if do == "empty" and kind not in ("mcp", "http"):
+    if do == "empty" and kind not in ("tool", "mcp", "http"):
         raise ConfigError(
-            f"{where} do: 'empty' works only on an MCP tool or a web request; for a model "
-            f"reply that fails to parse, use bad body; see {DOCS}"
+            f"{where} do: 'empty' works only on a tool, an MCP tool or a web request; for a "
+            f"model reply that fails to parse, use bad body; see {DOCS}"
         )
     if do == "bad body" and kind in ("tool", "mcp"):
         raise ConfigError(

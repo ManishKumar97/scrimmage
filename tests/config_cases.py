@@ -105,6 +105,11 @@ do     = "empty"
 forbid = ["Oct 30"]
 
 [[test.fault]]
+call   = "tool:get_order"
+do     = "empty"
+forbid = ["Oct 30"]
+
+[[test.fault]]
 call = "mcp:search"
 do   = "error"
 when = "first 1"
@@ -433,7 +438,6 @@ BAD = [
     ),
     Bad("tool_fault_status", fault('call = "tool:t"\ndo = "status 503"\nwhen = "first 1"\n'), True),
     Bad("web_fault_error", fault('call = "http:a.acme"\ndo = "error"\nwhen = "first 1"\n'), True),
-    Bad("tool_fault_empty", fault('call = "tool:t"\ndo = "empty"\nwhen = "first 1"\n'), True),
     Bad("model_fault_error", fault('call = "model"\ndo = "error"\nwhen = "first 1"\n'), True),
     Bad("tool_fault_refused", fault('call = "tool:t"\ndo = "refused"\nwhen = "first 1"\n'), True),
     Bad("mcp_fault_dns", fault('call = "mcp:docs/search"\ndo = "dns"\nwhen = "first 1"\n'), True),

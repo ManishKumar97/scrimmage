@@ -171,6 +171,7 @@ ALL_TITLES = [
     "`--json` prints at the end.",
     "`--loop asyncio` on Python 3.11.",
     "`bad body` on a streamed model request.",
+    "`empty` needs a declared type with an empty value.",
     "`first N` in children.",
     "`mcp:search` before the second server is known.",
     "`os.fork` warns on Python 3.12 and later.",

@@ -532,6 +532,53 @@ def test_append_on_a_content_and_artifact_tool_changes_the_content_only(project:
     assert line["changed"]["parts"] == ["result"]  # type: ignore[index]
 
 
+@pytest.mark.design("fault.empty_tool_typed")
+@pytest.mark.slow
+def test_empty_on_a_langchain_tool_reaches_the_model_as_an_empty_tool_message(
+    project: Project, fake_openai: Fake
+) -> None:
+    empty = '[[test.fault]]\ncall = "tool:get_order"\ndo   = "empty"\nforbid = ["never said"]\n'
+    graph(project, fault=empty)
+    fake = fake_openai(ACME)
+    result = project.test(fake)
+    assert result.finished, result.out + result.err
+    fault = row(result, "fault 1")
+    line = tool_lines(fault)[0]
+    assert (line["call"], line["action"], line["error"]) == ("tool:get_order", "fault", None)
+    assert line["result"]["preview"] == ""  # type: ignore[index]
+    assert fault[-1]["summary"]["fault_fired"] is True  # type: ignore[index]
+    # The real get_order raises; under empty it never ran, and LangChain sent an empty message.
+    sent = [
+        m
+        for request in fake.requests
+        for m in request["messages"]
+        if m.get("role") == "tool" and m.get("tool_call_id") is not None
+    ]
+    assert any(m["content"] == "" for m in sent), sent
+
+
+@pytest.mark.design("fault.empty_tool_no_empty_value")
+@pytest.mark.slow
+def test_empty_on_a_content_and_artifact_tool_is_a_mistake(project: Project) -> None:
+    empty = '[[test.fault]]\ncall = "tool:get_report"\ndo   = "empty"\nforbid = ["never said"]\n'
+    project.edit('returns = "shipped, Oct 30"', 'returns = ["the report", {a = "b"}]')
+    project.edit('call    = "tool:get_order"', 'call    = "tool:get_report"')
+    project.edit(STOCK_MOCK, "")
+    graph(project, "report_tool", empty)
+    project.edit('answer   = "messages[-1].content"\n', "")
+    project.edit("[agent]\n", '[agent]\nmax_cost_usd = "none"\n')
+    result = project.test()
+    assert result.code == 2, result.out + result.err
+    line = tool_lines(row(result, "fault 1"))[0]
+    assert line["action"] != "fault" and "fault" not in line, line
+    assert row(result, "fault 1")[-1]["summary"]["fault_fired"] is False  # type: ignore[index]
+    fix = (
+        "tool:get_report is a LangChain tool with response_format content_and_artifact, so "
+        'empty cannot tell its empty result; mock it with an empty pair, such as returns = ["", {}]'
+    )
+    assert line["mistake"] == fix and fix in result.out + result.err
+
+
 @pytest.mark.slow
 def test_slow_on_a_sync_tool_in_langgraphs_thread_pool(project: Project, fake_openai: Fake) -> None:
     slow = '[[test.fault]]\ncall = "tool:get_order"\ndo   = "slow 0.3s"\nforbid = ["never said"]\n'

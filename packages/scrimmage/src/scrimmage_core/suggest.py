@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from scrimmage_core import judge
+from scrimmage_core.decide import MISTAKE_REFUSAL
 from scrimmage_core.redact import redact
 
 Doc = dict[str, object]
@@ -159,8 +160,19 @@ def gate_mistakes(lines: Sequence[Doc]) -> list[Doc]:
 
 
 def unchanged_lines(lines: Sequence[Doc]) -> list[Doc]:
-    """Lines whose fault the gate could not carry out; S13a1 writes `unchanged` on them."""
-    return [x for x in lines if isinstance(x.get("unchanged"), dict)]
+    """Lines whose fault the gate could not carry out, so the call ran as in the baseline. A
+    call the gate refused as a mistake in the test also says why, but it never ran."""
+    return [
+        x
+        for x in lines
+        if isinstance(x.get("unchanged"), dict) and x.get("reason") != MISTAKE_REFUSAL
+    ]
+
+
+def refused_mistakes(lines: Sequence[Doc]) -> list[Doc]:
+    """Calls a gate refused because the test asked what cannot be done, such as empty on a
+    tool with no empty value."""
+    return [x for x in lines if x.get("reason") == MISTAKE_REFUSAL and "mistake" in x]
 
 
 def why_unchanged(line: Doc) -> str:
@@ -210,6 +222,8 @@ def main(run: Doc, lines: Sequence[Doc], row: Doc | None) -> Suggestion | NoRule
     # refusal followed by a blind child still reads as the agent's.
     first_by_config = bool(refused) and refused[0].get("by_config") is True
     if outcome == REFUSED_CALL and first_by_config and (found := gate_mistakes(lines)):
+        return test_mistake(found)
+    if fault and left_out == judge.NOT_FIRED and (found := refused_mistakes(lines)):
         return test_mistake(found)
     if fault and left_out == judge.NOT_FIRED and (carried := unchanged_lines(lines)):
         first = carried[0]
