@@ -88,6 +88,7 @@ In `scrimmage.toml`, `service` replaces `function` or `command`:
 | `parallel` | Runs at the same time, each its own request. | 1 |
 | `control` | The `ip:port` the runner listens on, for a service in a container. | the address of `SCRIMMAGE_CONTROL_URL` |
 | `control_tls` | `{cert = "path", key = "path"}`: the certificate and key the runner speaks TLS with. | none |
+| `start` | The command that starts a test copy of the service, with `{port}`; see [A service Scrimmage starts](configuration.md#a-service-scrimmage-starts). | none |
 
 [Configuration](configuration.md#agent) has every key, and `real` and `tools` work as they do for a function.
 

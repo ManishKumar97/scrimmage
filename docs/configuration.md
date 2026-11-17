@@ -11,6 +11,7 @@ Anything this version does not support is rejected as unknown, with exit code 2.
 | `function` | The agent, as `module:function`. Scrimmage calls it with the question and waits for it if it is async. Give exactly one of `function`, `command` and `service`. | none |
 | `command` | The agent as a script, such as `"python bot.py {question}"`. It is split into arguments like a shell's words, and the question fills `{question}` as part of one argument, with no shell. Must hold `{question}`. See [An agent run as a script](scripts.md). | none |
 | `service` | An agent inside a web service, as `http://host:port/path`. Each run is one `POST` there. `https` is not read in this version. See [An agent inside a web service](#an-agent-inside-a-web-service). | none |
+| `start` | With `service`: the command that starts a test copy of the service, such as `"uvicorn shop.service:app --port {port}"`. Scrimmage starts the copy for the test and stops it after. It is split into words like `command`, with no shell. Must hold `{port}`, the free port Scrimmage picks, and `service` must then hold `{port}` as its port, on `127.0.0.1`, `[::1]` or `localhost`. Not with `control` or `control_tls`, which are for a service someone else started. See [A service Scrimmage starts](#a-service-scrimmage-starts). | none |
 | `body` | With `service`: the run's body, sent as JSON. A table, an array or a text that holds `{question}` in a text value. Required with `service`. | none |
 | `headers` | With `service`: the run's headers, as a table of text. A value may hold `${NAME}` and `{session}`, never `{question}`. | empty |
 | `record_grace_s` | With `service`: how long a run's record stays open after its reply, for calls the service makes after it answers. 0 to 60. | 5 |
@@ -280,6 +281,30 @@ body    = {message = "{question}", session = "{session}"}
 answer  = "reply"
 headers = {Authorization = "Bearer ${TEST_TOKEN}"}
 ```
+
+### A service Scrimmage starts
+
+With `start`, Scrimmage starts its own test copy of the service, and stops it when the test ends.
+The team starts nothing by hand.
+
+```toml
+[agent]
+start   = "uvicorn acme.service:app --port {port} --loop asyncio"
+service = "http://127.0.0.1:{port}/chat"
+body    = {message = "{question}"}
+```
+
+`{port}` is a free port on this machine, picked for each test.
+It is filled in the file's own text in `start` and in `service`; a `${NAME}` value that holds `{port}` is sent as written.
+`start` must hold it at least once, and `service` must hold it once, as its port.
+The copy runs on this machine, so the host in `service` must be `127.0.0.1`, `[::1]` or `localhost`.
+`control` and `control_tls` are refused beside `start`: they are for a service someone else started, such as one in a container.
+Without `start`, `{port}` is not read, and `service` must name a port as digits.
+
+The first word of `start` is a program found on `PATH`, or a path from the folder of this file.
+A program it cannot find stops `scrimmage check` with exit 2.
+Activate the virtual environment that has it, or write `python -m uvicorn`.
+`${NAME}` in `start` is filled in after the split, as in `command`, and each value of 8 characters or more is removed from what is recorded.
 
 ## Coming in later versions
 

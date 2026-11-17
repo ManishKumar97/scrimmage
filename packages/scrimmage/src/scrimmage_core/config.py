@@ -5,7 +5,8 @@ and ignored; docs/configuration.md lists what later versions add.
 
 ${NAME} is read in every text value, from the environment, when the file is read; $${ is a
 literal ${. A service's body and headers also read {question} and {session}, where {{ and }}
-are a brace. Each string is read once, so an expanded value is never read again.
+are a brace. With start, start and service read {port}. Each string is read once, so an
+expanded value is never read again.
 """
 
 import builtins
@@ -52,6 +53,7 @@ AGENT_KEYS = {
     "background_real",
     "control",
     "control_tls",
+    "start",
 }
 # An agent inside a web service: these go with service only.
 SERVICE_KEYS = (
@@ -62,7 +64,11 @@ SERVICE_KEYS = (
     "background_real",
     "control",
     "control_tls",
+    "start",
 )
+# With start the runner talks to its own copy of the service on this machine only.
+ATTACH_ONLY = ("control", "control_tls")
+LOOPBACK_HOSTS = ("127.0.0.1", "[::1]", "localhost")
 CONTROL_TLS_KEYS = {"cert", "key"}
 RULE_KEYS = {"expect", "forbid", "pass_rate"}
 TEST_KEYS = {"name", "question", "mock", "fault", *RULE_KEYS}
@@ -101,6 +107,7 @@ IMPORT_PATH = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*:[A-Za-z_]\w*")
 TOOL_NAMES = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*")  # a function, or Class.method
 QUESTION = "{question}"  # in a command, and in a service's body
 SESSION = "{session}"  # in a service's body and headers: new for every run
+PORT = "{port}"  # in start and service: the free port the runner picks for its copy
 SESSION_PREFIX = "scrimmage-"
 MAX_ARGUMENT = 128 * 1024  # Linux's limit on one argument, with its closing NUL
 VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -278,12 +285,14 @@ class Reader:
         return value
 
     def file(self, data: dict[str, object]) -> dict[str, object]:
-        """The whole file. A service's body and headers, and a command, are read later, by
-        their own rules: a command is split first, so a value cannot change the split."""
+        """The whole file. A service's body and headers, a command and start are read later,
+        by their own rules: a command line is split first, so a value cannot change the split."""
         out: dict[str, object] = {}
         for key, value in data.items():
             if key == "agent" and isinstance(value, dict):
-                out[key] = self.walk(cast(object, value), "[agent]", ("body", "headers", "command"))
+                out[key] = self.walk(
+                    cast(object, value), "[agent]", ("body", "headers", "command", "start")
+                )
             elif key == "test" and isinstance(value, list):
                 tests = cast(list[object], value)
                 out[key] = [self.walk(t, test_where(t, i)) for i, t in enumerate(tests, 1)]
@@ -439,6 +448,10 @@ class Agent:
     # against the file's folder, of the certificate chain and key it speaks TLS with.
     control: str = ""
     control_tls: tuple[str, str] | None = None
+    # The command that starts a test copy of the service, split and read as command is; its
+    # pieces fill {port} in the file's own text only.
+    start: tuple[str, ...] = ()
+    start_pieces: tuple[tuple[tuple[bool, str], ...], ...] = ()
 
     def tool_names(self) -> list[str]:
         """Every tool's final name: the one the model sees."""
@@ -467,6 +480,14 @@ def command_args(agent: Agent, question: str) -> list[str]:
     return [
         "".join(text if value else text.replace(QUESTION, question) for value, text in pieces)
         for pieces in agent.command_pieces
+    ]
+
+
+def start_args(agent: Agent, port: int) -> list[str]:
+    """The words that start the service's test copy, {port} filled in the file's own text."""
+    return [
+        "".join(text if value else text.replace(PORT, str(port)) for value, text in pieces)
+        for pieces in agent.start_pieces
     ]
 
 
@@ -565,6 +586,12 @@ def check_references(config: Config) -> list[str]:
         problems.append(
             f"[agent] command: {flag} keeps Python from running Scrimmage's startup file, so the "
             "program would run with no gates; remove it"
+        )
+    if config.agent.start and not can_start(config.agent.start[0], config.root):
+        problems.append(
+            f"[agent] start: {config.agent.start[0]} is not a program it can find; activate "
+            "the virtual environment that has it, or start it through Python, such as "
+            "python -m uvicorn"
         )
     problems += [p for test in config.tests if (p := bad_question(test, config.agent))]
     problems += model_paths_in_real(config.agent)
@@ -869,6 +896,13 @@ def read_agent(table: dict[str, object], reader: Reader | None = None) -> Agent:
             f"{where} children: works only with function or command; a service run refuses "
             f"every process it starts unless real lists it; see {DOCS}"
         )
+    for key in ATTACH_ONLY:
+        if key in table and "start" in table:
+            raise ConfigError(
+                f"{where} {key}: works only for a service someone else started, with no start; "
+                f"with start the runner and its copy of the service talk on this machine; "
+                f"see {DOCS}"
+            )
     timeout = table.get("run_timeout", 120)
     if isinstance(timeout, bool) or not isinstance(timeout, int | float) or timeout <= 0:
         raise ConfigError(f"{where} run_timeout: expected a number of seconds, got {timeout!r}")
@@ -901,6 +935,7 @@ def read_agent(table: dict[str, object], reader: Reader | None = None) -> Agent:
     if "function" in table:
         function = import_path(text(table, "function", where), f"{where} function")
     command, pieces = read_command(table, where, reader) if "command" in table else ((), ())
+    start, start_pieces = read_start(table, where, reader) if "start" in table else ((), ())
     agent = Agent(
         function=function,
         runs=whole(table, "runs", 3, where),
@@ -920,7 +955,7 @@ def read_agent(table: dict[str, object], reader: Reader | None = None) -> Agent:
         children=children,
         command_pieces=pieces,
         command_written=str(table["command"]) if "command" in table else "",
-        service=read_service(table, where) if service else "",
+        service=read_service(table, where, managed="start" in table) if service else "",
         body=read_body(table, where, reader) if service else None,
         headers=read_headers(table.get("headers", {}), f"{where} headers", reader),
         record_grace_s=seconds(table, "record_grace_s", DEFAULT_GRACE_S, MAX_GRACE_S, where),
@@ -928,6 +963,8 @@ def read_agent(table: dict[str, object], reader: Reader | None = None) -> Agent:
         background_real=tuple(background),
         control=read_control(table, where) if "control" in table else "",
         control_tls=read_control_tls(table, where) if "control_tls" in table else None,
+        start=start,
+        start_pieces=start_pieces,
     )
     check_control(agent, where)
     names = agent.tool_names()
@@ -999,27 +1036,55 @@ def check_control(agent: Agent, where: str) -> None:
             )
 
 
-def read_command(
-    table: dict[str, object], where: str, reader: Reader
+def split_words(
+    table: dict[str, object], key: str, where: str, reader: Reader
 ) -> tuple[tuple[str, ...], tuple[tuple[tuple[bool, str], ...], ...]]:
-    """A command's arguments, and their pieces. It is split here, then each argument's
+    """A command line's arguments, and their pieces. It is split here, then each argument's
     ${NAME} is filled in, so neither a question nor a value can change the split."""
     try:
-        parts = shlex.split(text(table, "command", where))
+        parts = shlex.split(text(table, key, where))
     except ValueError as exc:
-        raise ConfigError(f"{where} command: {exc}") from None
+        raise ConfigError(f"{where} {key}: {exc}") from None
     pieces = tuple(
-        tuple((p.kind == "value", p.text) for p in reader.scan(part, f"{where} command"))
+        tuple((p.kind == "value", p.text) for p in reader.scan(part, f"{where} {key}"))
         for part in parts
     )
-    if not any(QUESTION in text for arg in pieces for value, text in arg if not value):
-        raise ConfigError(f"{where} command: must hold {QUESTION}, or the agent gets no question")
     return tuple("".join(text for _, text in arg) for arg in pieces), pieces
 
 
-def read_service(table: dict[str, object], where: str) -> str:
-    """The service's address: http://host:port/path, on any machine the runner reaches."""
+def holds(pieces: tuple[tuple[tuple[bool, str], ...], ...], placeholder: str) -> bool:
+    """The placeholder is in the file's own text, not only in a value from the environment."""
+    return any(placeholder in text for arg in pieces for value, text in arg if not value)
+
+
+def read_command(
+    table: dict[str, object], where: str, reader: Reader
+) -> tuple[tuple[str, ...], tuple[tuple[tuple[bool, str], ...], ...]]:
+    words, pieces = split_words(table, "command", where, reader)
+    if not holds(pieces, QUESTION):
+        raise ConfigError(f"{where} command: must hold {QUESTION}, or the agent gets no question")
+    return words, pieces
+
+
+def read_start(
+    table: dict[str, object], where: str, reader: Reader
+) -> tuple[tuple[str, ...], tuple[tuple[tuple[bool, str], ...], ...]]:
+    """The command that starts the service's test copy. {port} is where the copy listens."""
+    words, pieces = split_words(table, "start", where, reader)
+    if not holds(pieces, PORT):
+        raise ConfigError(
+            f"{where} start: must hold {PORT}, the free port the runner picks, such as "
+            f"--port {PORT}"
+        )
+    return words, pieces
+
+
+def read_service(table: dict[str, object], where: str, *, managed: bool = False) -> str:
+    """The service's address: http://host:port/path, on any machine the runner reaches.
+    managed: the runner starts the service, so the port is {port} and the host is loopback."""
     value = text(table, "service", where)
+    if managed:
+        return read_managed_service(value, where)
     parts = SERVICE_URL.fullmatch(value)
     if parts is not None and parts["scheme"].lower() == "https":
         raise ConfigError(
@@ -1029,6 +1094,29 @@ def read_service(table: dict[str, object], where: str) -> str:
     port = parts["port"] if parts is not None else None
     if parts is None or parts["scheme"] != "http" or (port is not None and int(port) > 65535):
         raise ConfigError(f"{where} service: {value!r} is not of the form http://host:port/path")
+    return value
+
+
+def read_managed_service(value: str, where: str) -> str:
+    """With start: http://<loopback host>:{port}/path, {port} once, as the port."""
+    at = value.find(PORT)
+    parts = SERVICE_URL.fullmatch(value.replace(PORT, "1", 1))
+    if (
+        value.count(PORT) != 1
+        or parts is None
+        or parts["scheme"] != "http"
+        or parts["port"] != "1"
+        or parts.start("port") != at
+    ):
+        raise ConfigError(
+            f"{where} service: with start it must be of the form http://127.0.0.1:{PORT}/path, "
+            f"with {PORT} once, as the port, got {value!r}"
+        )
+    if parts["host"].lower() not in LOOPBACK_HOSTS:
+        raise ConfigError(
+            f"{where} service: with start the runner starts the service on this machine, so "
+            f"the host must be 127.0.0.1, [::1] or localhost, got {parts['host']!r}"
+        )
     return value
 
 
