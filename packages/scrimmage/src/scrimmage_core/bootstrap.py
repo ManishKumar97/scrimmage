@@ -9,6 +9,7 @@ A child whose plan cannot be fetched refuses each call, and tries again for the 
 import ast
 import atexit
 import contextlib
+import functools
 import ipaddress
 import os
 import signal
@@ -17,11 +18,12 @@ import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from types import FrameType
+from types import FrameType, ModuleType
 from typing import Literal, NoReturn
 from urllib.parse import urlsplit
 
 from scrimmage_core import (
+    hooks,
     http_gate,
     labels,
     langchain_gate,
@@ -283,26 +285,46 @@ def control_context(url: str) -> ssl.SSLContext | None:
         service_stop(f"SCRIMMAGE_CONTROL_CA: {exc}")
 
 
-def stop_with_the_copy() -> None:
-    """In a copy the runner started with [agent] start, ask Linux to SIGKILL this process
-    when its parent dies, so a runner killed with SIGKILL leaves no worker serving the port.
+# Set by uvicorn's supervisor, in a copy the runner started, just before it starts each
+# worker: its own pid, so the worker knows it is one.
+SUPERVISOR = "SCRIMMAGE_SUPERVISOR"
 
-    The copy's first process is its group's leader, and scrimmage-run already asked for it to
-    go with the runner. Every other process of the copy was started inside the copy's group:
-    a parent that is no longer in that group is not the one that started it, which died
-    before the setting, so this process ends here."""
-    if os.environ.get("SCRIMMAGE_MANAGED") != "1" or os.getpid() == os.getpgrp():
+
+def stop_with_the_copy() -> None:
+    """In a copy the runner started with [agent] start, ask Linux to SIGKILL each of uvicorn's
+    workers when its supervisor dies, so a runner killed with SIGKILL leaves no worker serving
+    the port. The supervisor that is the copy's first process goes with the runner already,
+    as scrimmage-run asked for it.
+
+    Linux sends the signal when the thread that started the process exits, not the process.
+    uvicorn's supervisor starts its workers from its main thread, which lives as long as it
+    does, but a helper your app starts from a thread that then ends would be killed with that
+    thread. So only uvicorn's workers ask: a multiprocessing child whose parent is the
+    supervisor that marked it. A worker whose supervisor died before the setting ends here."""
+    if os.environ.get("SCRIMMAGE_MANAGED") != "1":
+        return
+    hooks.on_import("uvicorn.supervisors.multiprocess", mark_workers)
+    supervisor = os.environ.pop(SUPERVISOR, "")  # a program the worker starts is no worker
+    if not supervisor.isdigit() or "spawn_main" not in " ".join(getattr(sys, "orig_argv", [])):
         return
     from scrimmage_core import run_command  # only a managed copy needs it
 
-    run_command.stop_with_parent(in_my_group)
+    run_command.stop_with_parent(lambda parent: parent == int(supervisor))
 
 
-def in_my_group(pid: int) -> bool:
-    try:
-        return os.getpgid(pid) == os.getpgrp()
-    except OSError:  # it has gone
-        return False
+def mark_workers(module: ModuleType) -> None:
+    """uvicorn's supervisor: each worker it starts inherits the supervisor's pid in SUPERVISOR."""
+    process = getattr(module, "Process", None)
+    start = getattr(process, "start", None)
+    if process is None or start is None:
+        return  # another uvicorn: its workers are not asked to go with the runner
+
+    @functools.wraps(start)
+    def started(self: object) -> None:
+        os.environ[SUPERVISOR] = str(os.getpid())
+        start(self)
+
+    process.start = started
 
 
 def start_service() -> None:

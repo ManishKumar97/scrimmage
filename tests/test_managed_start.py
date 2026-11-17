@@ -298,6 +298,15 @@ def test_a_managed_test_starts_the_copy_answers_its_runs_and_stops_it(shop: Shop
     )
     seen: list[list[int]] = []
     shop.at_stop.append(lambda copy: seen.append(group(copy.proc.pid)) if copy.proc else None)
+    check_service = runner.Runner.check_service
+
+    def both_active(self: runner.Runner) -> None:
+        # Before the runs: on a loaded machine a worker can still be loading the app when
+        # runs this fast are done.
+        wait_until(lambda: shop.log().read_text().count("active in service mode") == 2, 60)
+        check_service(self)
+
+    shop.monkeypatch.setattr(runner.Runner, "check_service", both_active)
     code, out = shop.test("sh serve.sh {port}", runs=2)
     assert code == 0, out
     assert "SCRIMMAGE_TOKEN_FILE" not in os.environ

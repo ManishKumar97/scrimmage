@@ -38,6 +38,36 @@ from test_managed_start import (
 
 pytestmark = pytest.mark.slow
 __all__ = ["shop", "time_limit"]  # the fixtures, used by name; time_limit keeps 120 s a test
+# An app that, as it loads, starts a helper from a thread that then ends. The helper adds a
+# byte to BEAT_FILE every 0.1 s, and writes its pid beside it.
+THREADED = """import os
+import subprocess
+import sys
+import threading
+import time
+
+
+def started():
+    subprocess.Popen([sys.executable, "beat.py", os.environ["BEAT_FILE"]])
+    time.sleep(0.5)  # the helper is up before this thread ends
+
+
+helper = threading.Thread(target=started)
+helper.start()
+helper.join()
+from acme.service import app  # noqa: E402
+"""
+BEAT = """import os
+import sys
+import time
+
+with open(sys.argv[1] + ".pid", "w") as out:
+    out.write(str(os.getpid()))
+while True:
+    with open(sys.argv[1], "a") as out:
+        out.write("x")
+    time.sleep(0.1)
+"""
 SECOND_TEST = """
 [[test]]
 name     = "order-status-again"
@@ -248,8 +278,9 @@ def test_a_runner_killed_with_sigkill_takes_the_supervisor_and_its_workers(
     holder.go()
     holder.take()  # the first run, held: the test is mid-run
     wait_until(spawned.found_copy)
+    # One worker holds the run; the other may still be loading the app on a loaded machine.
+    wait_until(lambda: shop.log().read_text().count("active in service mode") == 2, within=60)
     workers = [pid for pid in group(spawned.copy) if pid != spawned.copy]
-    assert len(shop.log().read_text().split("active in service mode")) == 3  # both workers
     spawned.proc.kill()
     spawned.proc.wait()
     wait_until(lambda: group(spawned.copy) == [], within=2.0)
@@ -306,3 +337,65 @@ def test_a_port_held_by_a_process_that_never_answers_ends_the_probe_when_the_cop
     assert "the service started with [agent] start exited with code 3 before it was ready" in out
     assert "address already in use" in out, out
     assert took < service_client.PROBE_S / 2, took
+
+
+def test_a_helper_started_from_a_thread_that_ends_runs_until_the_copy_stops(
+    shop: Shop, tmp_path: Path
+) -> None:
+    """Linux sends the parent-death signal when the thread that started a process ends. A
+    helper the app starts from a short-lived thread must not get it: it keeps running after
+    that thread has ended, and the copy's stop at the end of the test ends it."""
+    (shop.root / "threaded.py").write_text(THREADED)
+    (shop.root / "beat.py").write_text(BEAT)
+    beats = tmp_path / "beats"
+    shop.monkeypatch.setenv("BEAT_FILE", str(beats))
+    pid_file = Path(f"{beats}.pid")
+    seen: list[tuple[int, int, bool]] = []
+
+    def beating(copy: Any) -> None:
+        wait_until(pid_file.exists)
+        # Well after the thread that started it has ended.
+        wait_until(lambda: time.time() > pid_file.stat().st_mtime + 2.0, within=10)
+        before = beats.stat().st_size
+        time.sleep(0.5)
+        seen.append((before, beats.stat().st_size, gone(int(pid_file.read_text()))))
+
+    shop.at_stop.append(beating)
+    code, out = shop.test(f"{UVICORN} threaded:app --port {{port}} --loop asyncio")
+    assert code == 0, out
+    before, after, ended = seen[0]
+    assert not ended and after > before, (before, after, "the helper was killed early")
+    helper = int(pid_file.read_text())
+    try:
+        assert gone(helper), "the copy's stop did not end the helper"
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(helper, signal.SIGKILL)
+
+
+def test_ctrl_c_during_the_setup_request_says_it_was_stopped(shop: Shop) -> None:
+    """The model never answers, so the setup request waits on it: a Ctrl-C then stops the
+    test as stopped, not as a setup request Scrimmage did not serve."""
+    hole = socket.socket()
+    hole.bind(("127.0.0.1", 0))
+    hole.listen(8)
+    hole.settimeout(60)
+    shop.monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{hole.getsockname()[1]}/v1")
+    try:
+        path = shop.write(f"{UVICORN} acme.service:app --port {{port}} --loop asyncio")
+        spawned = shop.spawn("test", str(path))
+        call, _ = hole.accept()  # the setup request's model call, which gets no answer
+        try:
+            wait_until(spawned.found_copy)
+            spawned.proc.send_signal(signal.SIGINT)
+            code = spawned.proc.wait(30)
+        finally:
+            call.close()
+    finally:
+        hole.close()
+    out = spawned.text()
+    assert code == 3, out
+    assert "scrimmage: stopped by SIGINT" in out, out
+    assert "not served by Scrimmage" not in out, out
+    assert group(spawned.copy) == [], "a process of the copy was left running"
+    assert spawned.token_folder is not None and not spawned.token_folder.exists()

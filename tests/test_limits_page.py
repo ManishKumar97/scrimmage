@@ -39,6 +39,7 @@ ALL_TITLES = [
     "A hung call under your own SIGTERM handler.",
     "A killed run's holds stay.",
     "A killed runner leaves its token folder.",
+    "A killed runner leaves the copy's other programs.",
     "A killed runner leaves the copy's workers on macOS.",
     "A killed runner takes its runs with it, but not their children.",
     "A last line of output shared with a child.",

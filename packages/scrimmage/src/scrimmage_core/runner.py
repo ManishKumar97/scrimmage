@@ -70,6 +70,7 @@ TAIL_BYTES = 1024 * 1024  # how much of a script's output is read to find its la
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 KILL_GRACE_S = 5.0
 GROUP_POLL_S = 0.01
+KILLED_S = 1.0  # how long a group SIGKILLed may take to be gone
 # A refusal for one of these reasons stops the whole test, not only its row.
 STOP_TEST = (
     "budget",
@@ -778,9 +779,11 @@ class Runner:
         until = time.monotonic() + READY_S
         try:
             return self.probe_ready()
-        except CopyFailed:
-            raise
-        except service_client.Setup:
+        except service_client.Setup as exc:
+            if self.stop_flag:  # Ctrl-C or SIGTERM, which stopped the copy too
+                raise Interrupted(self.stop_flag[0]) from None
+            if isinstance(exc, CopyFailed):
+                raise
             if self.managed is not None and self.managed.lost_its_port(until):
                 if self.stop_flag:  # Ctrl-C or SIGTERM stopped the copy
                     raise Interrupted(self.stop_flag[0]) from None
@@ -966,6 +969,8 @@ class Runner:
         lines = self.store.lines(name)
         summary: dict[str, object] = {"outcome": "setup", "status": reply.status}
         self.store.close_run(name, test.name, "setup", summary)
+        if self.stop_flag:  # Ctrl-C or SIGTERM ended the request, not the service
+            raise Interrupted(self.stop_flag[0])
         gate = reply.gate_refused
         if gate == "version":
             raise self.version_refusal(name)
@@ -1493,6 +1498,13 @@ def stop_groups(procs: Sequence[subprocess.Popen[bytes]]) -> None:
             time.sleep(GROUP_POLL_S)
     for proc in waiting:
         signal_group(proc, signal.SIGKILL)
+    # SIGKILL is not instant: a process killed is still in the group until the kernel has
+    # torn it down, so the caller waits for that, a little, before it removes what they used.
+    deadline = time.monotonic() + KILLED_S
+    while waiting and time.monotonic() < deadline:
+        waiting = [proc for proc in waiting if group_alive(proc)]
+        if waiting:
+            time.sleep(GROUP_POLL_S)
     for proc in procs:
         if proc.poll() is None:  # it left the group by itself
             proc.kill()

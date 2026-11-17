@@ -137,7 +137,9 @@ If none of these applies, the rest of this page is detail for your use case.
 
 - **Stopping the service mid-run.** uvicorn installs its own SIGTERM handler, so runs open when it stops lose their last lines, and read as infrastructure errors.
 
-- **A killed runner leaves the copy's workers on macOS.** On Linux, each process of a copy started with `start` is killed when the process that started it dies, so a runner killed with SIGKILL takes the copy with it. macOS has no such call: there the workers keep serving the port until you stop them.
+- **A killed runner leaves the copy's workers on macOS.** On Linux, the program `start` names and uvicorn's workers are killed when the process that started them dies, so a runner killed with SIGKILL takes a uvicorn copy with it. macOS has no such call: there the workers keep serving the port until you stop them.
+
+- **A killed runner leaves the copy's other programs.** On Linux, a runner killed with SIGKILL takes only the program `start` names and the workers of a uvicorn started directly by it. A program that is not Python, such as `sleep 600 &` in a shell wrapper, a uvicorn under such a wrapper, and a helper your app starts, keep running until you stop them. Scrimmage does not ask them to die with the copy: Linux would kill such a program when the thread that started it ends, and a helper started from a short-lived thread must keep running. The end of a test, Ctrl-C and SIGTERM stop every program in the copy's process group.
 
 - **A killed runner leaves its token folder.** A runner killed with SIGKILL cannot delete the `scrimmage-token-` folder it made in the temporary folder. The token in it opens nothing once that runner is gone, and the system clears the folder with the rest of its temporary files.
 
