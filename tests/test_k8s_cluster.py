@@ -20,6 +20,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from cryptography import x509
 
 from k8s import cluster as kubernetes
 from k8s import images
@@ -190,12 +191,12 @@ def test_a_network_policy_is_enforced(cluster: Cluster, runner_image: str) -> No
         )
 
 
-def handshake(ca: Path, certificate: Path, key: Path) -> str:
+def handshake(ca: Path, certificate: Path, key: Path, host: str = "scrimmage") -> str:
     """A TLS handshake between the SDK's client and server contexts, in memory."""
     client = tls.client_context(ca)
     server = tls.server_context(certificate, key)
     to_server, to_client = ssl.MemoryBIO(), ssl.MemoryBIO()
-    mine = client.wrap_bio(to_server, to_client, server_hostname="scrimmage")
+    mine = client.wrap_bio(to_server, to_client, server_hostname=host)
     theirs = server.wrap_bio(to_client, to_server, server_side=True)
     for _ in range(8):
         for side in (mine, theirs):
@@ -220,6 +221,76 @@ def test_cert_manager_issues_a_certificate_the_sdk_accepts(
         key.write_bytes(base64.b64decode(runner["tls.key"]))
         assert ca.read_text().count("BEGIN CERTIFICATE") == 1
         assert handshake(ca, certificate, key) == "TLSv1.3"
+
+
+def write_secret(folder: Path, data: dict[str, str]) -> tuple[Path, Path, Path]:
+    """The authority, the certificate and the key of a cert-manager Secret, as files."""
+    ca, certificate, key = folder / "ca.crt", folder / "tls.crt", folder / "tls.key"
+    for path in (ca, certificate, key):
+        path.write_bytes(base64.b64decode(data[path.name]))
+    return ca, certificate, key
+
+
+def test_the_authority_signs_only_names_under_its_constraints(
+    cluster: Cluster, tmp_path: Path
+) -> None:
+    tmp_path.chmod(0o700)
+    outside = {
+        "apiVersion": "cert-manager.io/v1",
+        "kind": "Certificate",
+        "metadata": {"name": "outside-constraints", "namespace": "scrimmage-pki"},
+        "spec": {
+            "secretName": "outside-constraints",
+            "duration": "1h",
+            "privateKey": {"algorithm": "ECDSA", "size": 256},
+            "usages": ["server auth", "digital signature"],
+            "dnsNames": ["evil.example.com"],
+            "issuerRef": {"name": "scrimmage-ca", "kind": "Issuer"},
+        },
+    }
+    with cluster.namespace() as namespace:
+        cluster.issue_control_certificate(namespace)
+        # cert-manager's CA Issuer does not check the constraints, so it signs this name.
+        cluster.kubectl("apply", "-f", "-", input=json.dumps(outside))
+        try:
+            cluster.kubectl(
+                "wait", "--for=condition=Ready", "certificate/outside-constraints",
+                "-n", "scrimmage-pki", "--timeout=120s",
+            )  # fmt: skip
+            signed = cluster.json("get", "secret", "outside-constraints", "-n", "scrimmage-pki")
+        finally:
+            cluster.kubectl(
+                "delete", "certificate/outside-constraints", "secret/outside-constraints",
+                "-n", "scrimmage-pki", "--ignore-not-found",
+            )  # fmt: skip
+        control = cluster.json(
+            "get", "secret", f"scrimmage-control-{namespace}", "-n", "scrimmage-pki"
+        )
+    # The host matches the certificate, so only the authority's constraint can refuse it.
+    (tmp_path / "outside").mkdir()
+    ca, certificate, key = write_secret(tmp_path / "outside", signed["data"])
+    with pytest.raises(ssl.SSLCertVerificationError) as refused:
+        handshake(ca, certificate, key, "evil.example.com")
+    assert refused.value.verify_message == "permitted subtree violation", refused.value
+    # Positive control: every name the control certificate carries is in a permitted subtree.
+    (tmp_path / "control").mkdir()
+    ca, certificate, key = write_secret(tmp_path / "control", control["data"])
+    for host in (
+        "scrimmage",
+        f"scrimmage.{namespace}.svc",
+        f"scrimmage.{namespace}.svc.cluster.local",
+    ):
+        assert handshake(ca, certificate, key, host) == "TLSv1.3", host
+    found = x509.load_pem_x509_certificate(ca.read_bytes()).extensions.get_extension_for_class(
+        x509.NameConstraints
+    )
+    assert found.critical
+    assert found.value.permitted_subtrees == [
+        x509.DNSName("scrimmage"),
+        x509.DNSName("svc"),
+        x509.DNSName("cluster.local"),
+    ]
+    assert found.value.excluded_subtrees is None
 
 
 def test_the_harness_never_touches_the_users_kubeconfig(tmp_path: Path) -> None:

@@ -15,7 +15,6 @@ spec:
     - digital signature
   dnsNames:
     - scrimmage
-    - scrimmage.NAMESPACE
     - scrimmage.NAMESPACE.svc
     - scrimmage.NAMESPACE.svc.cluster.local
   issuerRef:

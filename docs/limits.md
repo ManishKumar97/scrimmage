@@ -200,7 +200,10 @@
   A renewed server certificate keeps the same authority, so it needs nothing.
 - **A certificate renewed during a test is seen at the next test.** The runner reads its certificate and key at its start.
   A runner that starts while the kubelet swaps the Secret's files for a renewal can read the new certificate with the old key; it then stops with exit 2, saying the two cannot be used together, and a restart fixes it.
-- **The control authority has no name constraints.** A DNS name constraint permits a name and every name that ends with it, so no fixed set covers `scrimmage.<namespace>` for any namespace.
+- **The control authority's name constraint covers every namespace.** It permits `scrimmage`, `svc` and `cluster.local`, and every name that ends with one of them.
+  A DNS name constraint is a suffix rule, so it cannot narrow the authority to one namespace: every `scrimmage.<namespace>.svc` is inside it.
+  For that reason the control certificate names `scrimmage`, `scrimmage.<namespace>.svc` and `scrimmage.<namespace>.svc.cluster.local`, and not `scrimmage.<namespace>`.
+  The constraint names no IP range, so it does not limit an IP address in a certificate; the shipped `SCRIMMAGE_CONTROL_URL` names the host `scrimmage`.
   The authority is trusted only through `SCRIMMAGE_CONTROL_CA`, and its key lives only in `scrimmage-pki`.
 - **A name lookup can carry data out.** The `dns` policy lets every pod ask cluster DNS, and CoreDNS forwards a name it does not serve to the resolvers upstream.
   So a process in any pod can put data in a name it looks up, and no NetworkPolicy stops it.

@@ -494,9 +494,17 @@ spec:
   commonName: scrimmage-ca
   secretName: scrimmage-ca
   duration: 43800h
-  # No nameConstraints: cert-manager 1.21 accepts them, but a DNS constraint is a suffix rule.
-  # It can permit scrimmage and x.scrimmage, never scrimmage.<namespace>.svc, which the control
-  # certificate must name, unless every test namespace is listed in advance.
+  # A DNS constraint permits a name and every name that ends with it. scrimmage is the host in
+  # SCRIMMAGE_CONTROL_URL, svc covers scrimmage.<namespace>.svc and cluster.local covers
+  # scrimmage.<namespace>.svc.cluster.local. A client that checks the constraint refuses any
+  # other name this authority signs.
+  nameConstraints:
+    critical: true
+    permitted:
+      dnsDomains:
+        - scrimmage
+        - svc
+        - cluster.local
   privateKey:
     algorithm: ECDSA
     size: 256
@@ -535,7 +543,6 @@ spec:
     - digital signature
   dnsNames:
     - scrimmage
-    - scrimmage.NAMESPACE
     - scrimmage.NAMESPACE.svc
     - scrimmage.NAMESPACE.svc.cluster.local
   issuerRef:
