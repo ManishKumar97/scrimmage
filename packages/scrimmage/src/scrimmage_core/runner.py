@@ -46,7 +46,7 @@ from scrimmage_core.config import (
     write_warnings,
 )
 from scrimmage_core.control import ControlServer, proc_key
-from scrimmage_core.managed import Managed, free_port
+from scrimmage_core.managed import FAILED_PROBE_S, CopyFailed, Managed, free_port
 from scrimmage_core.outcomes import (  # the runner's names for them
     INFRA,
     INFRA_ERRORS,
@@ -765,7 +765,20 @@ class Runner:
 
     def probe_service(self) -> service_client.Probed:
         """The probe, asked again while the service starts: exit 3 when no gated service
-        answers, or the service's clock and this machine's differ by more than the window."""
+        answers, or the service's clock and this machine's differ by more than the window.
+
+        With start, a probe that fails first asks whether the copy has exited: one whose port
+        another process took exits, and that process may be what answered the probe."""
+        try:
+            return self.probe_ready()
+        except CopyFailed:
+            raise
+        except service_client.Setup:
+            if self.managed is not None and self.managed.gone(FAILED_PROBE_S):
+                raise self.managed.exited("before it was ready") from None
+            raise
+
+    def probe_ready(self) -> service_client.Probed:
         agent = self.config.agent
         _, _, path = service_client.target(agent)
         deadline = time.monotonic() + READY_S
@@ -1095,8 +1108,9 @@ class Runner:
         self.server.start()
         self.ended = False
         release = nothing
+        completed = False
         try:
-            release = self._catch_signals()
+            release = self.catch_signals()
             if self.config.agent.service:
                 self.waiters = ThreadPoolExecutor(WAITERS, thread_name_prefix="scrimmage-record")
                 if self.managed is not None:
@@ -1123,20 +1137,26 @@ class Runner:
                 self.stop_flag.clear()  # the watcher and the handler may both have noted it
             if name:  # every run has ended, so it is raised where nothing drops it
                 raise Interrupted(name)
+            completed = True
         finally:
-            release()
-            self.cancel()
-            if self.waiters is not None:
-                self.waiters.shutdown()
             try:
-                if self.managed is not None:  # after every record's wait, which it serves
+                self.cancel()
+                if self.waiters is not None:
+                    self.waiters.shutdown()
+                if self.managed is not None:
+                    # After every record's wait, which the copy serves, and before the
+                    # handlers go back: while it stops, a signal is only noted, so the stop
+                    # always reaches its SIGKILL.
                     self.managed.stop()
             finally:
+                release()
                 self.server.stop()
                 shutil.rmtree(self.answers, ignore_errors=True)
+        if completed and self.stop_flag:  # it came while the copy stopped
+            raise Interrupted(self.stop_flag[0])
         return [r for r in results if r is not None]
 
-    def _catch_signals(self) -> Callable[[], None]:
+    def catch_signals(self) -> Callable[[], None]:
         """Stop the runs on SIGINT or SIGTERM. Returns the function that puts everything back.
 
         Python lets only the main thread set a handler or a wakeup fd. From another thread

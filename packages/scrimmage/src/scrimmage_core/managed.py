@@ -25,7 +25,15 @@ from scrimmage_core.service_client import Setup
 LAST_LINES = 20  # how much of service.log a failure shows
 TAIL_BYTES = 64 * 1024  # how much of service.log is read to find those lines
 GONE_S = 1.0  # how long a failed request waits to see that the copy has exited
+# How long a failed probe waits to see that the copy has exited: one that lost its port to
+# another process exits once uvicorn has loaded the app and tried to bind.
+FAILED_PROBE_S = 10.0
+STOP_SIGNALS = {signal.SIGINT, signal.SIGTERM}
 STARTED = "the service started with [agent] start"
+
+
+class CopyFailed(Setup):
+    """Exit 3 that already names the copy and its last lines."""
 
 
 def free_port() -> int:
@@ -95,12 +103,13 @@ class Managed:
     def alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
 
-    def gone(self) -> bool:
-        """The copy has exited. A request it failed can come a moment before its exit."""
+    def gone(self, within: float = GONE_S) -> bool:
+        """The copy has exited, or does within that many seconds. A request it failed can
+        come a moment before its exit."""
         if self.proc is None:
             return False
         try:
-            self.proc.wait(timeout=GONE_S)
+            self.proc.wait(timeout=within)
         except subprocess.TimeoutExpired:
             return False
         return True
@@ -117,16 +126,16 @@ class Managed:
         lines = [line for line in text.splitlines() if line.strip()][-LAST_LINES:]
         return "\n".join(f"  {line}" for line in lines)
 
-    def failed(self, what: str) -> Setup:
+    def failed(self, what: str) -> CopyFailed:
         """Exit 3, with what happened, the log's last lines and, when it is kept, its path."""
         lines = self.last_lines()
         said = f"{STARTED} {what}"
         said += f"; its last lines:\n{lines}" if lines else "; it wrote nothing"
         if self.keep_log:
             said += f"\nits whole output is in {self.log}"
-        return Setup(3, said)
+        return CopyFailed(3, said)
 
-    def exited(self, when: str) -> Setup:
+    def exited(self, when: str) -> CopyFailed:
         """The copy has exited: how, and when, such as before it was ready."""
         assert self.proc is not None and self.proc.returncode is not None
         code = self.proc.returncode
@@ -135,13 +144,22 @@ class Managed:
 
     def stop(self) -> None:
         """SIGTERM to the copy's group, SIGKILL after the runner's grace, then reap it; then the
-        log is scrubbed and the token's folder removed."""
+        log is scrubbed and the token's folder removed, only once the group is gone.
+
+        SIGINT and SIGTERM are blocked in this thread while the group stops, so a second
+        Ctrl-C cannot cut the grace short and skip the SIGKILL. Python still runs its handler
+        on this thread, so each caller has its own handler in place that only notes them.
+        """
         from scrimmage_core.runner import stop_groups  # the runner imports this module
 
         try:
             if self.proc is not None:
-                stop_groups([self.proc])
+                held = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
+                try:
+                    stop_groups([self.proc])
+                finally:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, held)
         finally:
             self.store.scrub_file(self.log)
-            if self.token_folder is not None:
-                shutil.rmtree(self.token_folder, ignore_errors=True)
+        if self.token_folder is not None:  # not after a failed stop: a worker may still run
+            shutil.rmtree(self.token_folder, ignore_errors=True)

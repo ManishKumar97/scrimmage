@@ -129,17 +129,23 @@ def print_lines(lines: list[Line], out: TextIO) -> None:
 
 def check(config: Config, stop_flag: list[str] | None) -> Outcome | client.Setup:
     """Probe the service of config and read its report. A Setup: the service did not answer
-    as a gated one, or the runner's own environment is not ready."""
+    as a gated one, or the runner's own environment is not ready.
+
+    SIGINT and SIGTERM are caught as scrimmage test catches them: the wait ends with
+    Interrupted, and a copy that start began is stopped before the handlers go back, so a
+    signal while it stops is only noted."""
     runner: running.Runner | None = None
+    release = running.nothing
     try:
         runner = running.Runner(config, stop_flag=stop_flag, scratch=True)
+        release = runner.catch_signals()
         runner.server.start()
         if runner.managed is not None:
             runner.managed.start(runner.control_url(runner.server.url))
         probed = runner.probe_service()
-        return inspect(runner, probed)
+        outcome = inspect(runner, probed)
     except client.Setup as setup:
-        return setup
+        outcome = setup
     finally:
         if runner is not None:
             try:
@@ -147,7 +153,13 @@ def check(config: Config, stop_flag: list[str] | None) -> Outcome | client.Setup
                     if runner.managed is not None:
                         runner.managed.stop()
                 finally:
+                    release()
                     runner.server.stop()
             finally:
                 shutil.rmtree(runner.folder.parent, ignore_errors=True)
                 shutil.rmtree(runner.answers, ignore_errors=True)
+    if (
+        runner is not None and runner.stop_flag
+    ):  # it came after the probe, or while the copy stopped
+        raise running.Interrupted(runner.stop_flag[0])
+    return outcome

@@ -7,15 +7,19 @@ SCRIMMAGE_ variable and no token file of the test's own.
 """
 
 import contextlib
+import http.server
 import json
 import os
 import shutil
 import signal
 import stat
+import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from types import FrameType
 from typing import Any
 
 import pytest
@@ -74,7 +78,46 @@ import sys
 print("the shop key is", os.environ["SHOP_KEY"], file=sys.stderr, flush=True)
 from acme.service import app  # noqa: E402
 """
+MARKING = """import os
+import signal
+from pathlib import Path
+
+from acme.service import app
+
+
+def noted(signum, frame):
+    Path(os.environ["STOP_MARK"]).touch()  # the stop has begun; the worker stays up
+
+
+async def marking(scope, receive, send):
+    if scope["type"] == "lifespan":  # after uvicorn has set its own handlers
+        signal.signal(signal.SIGTERM, noted)
+    await app(scope, receive, send)
+"""
 SHOP_KEY = "shop-key-5a1d9c0e7b"
+SCRIMMAGE = Path(sys.executable).parent / "scrimmage"
+TEST_LIMIT_S = 120  # a test that hangs fails here instead
+GROUPS: list[int] = []  # every copy's process group a test started, for the time limit
+
+
+def over_time(signum: int, frame: FrameType | None) -> None:
+    del signum, frame
+    for pgid in GROUPS:  # only the copies' own groups, by their ids
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(pgid, signal.SIGKILL)
+    raise TimeoutError(f"the test ran past {TEST_LIMIT_S} s")
+
+
+@pytest.fixture(autouse=True)
+def time_limit() -> Iterator[None]:
+    previous = signal.signal(signal.SIGALRM, over_time)
+    signal.alarm(TEST_LIMIT_S)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+        GROUPS.clear()
 
 
 def group(pgid: int) -> list[int]:
@@ -90,6 +133,22 @@ def group(pgid: int) -> list[int]:
         if fields[0] != "Z" and int(fields[2]) == pgid:
             found.append(int(entry.name))
     return found
+
+
+def children(pid: int) -> list[int]:
+    found: list[int] = []
+    for task in Path(f"/proc/{pid}/task").glob("*/children"):
+        with contextlib.suppress(OSError):
+            found += [int(x) for x in task.read_text().split()]
+    return found
+
+
+def wait_until(check: Callable[[], object], within: float = 30.0) -> None:
+    deadline = time.monotonic() + within
+    while not check():
+        if time.monotonic() > deadline:
+            raise AssertionError("it did not happen in time")
+        time.sleep(0.02)
 
 
 def environ(pid: int) -> dict[str, str]:
@@ -111,6 +170,7 @@ class Shop:
             "sleepy.py": SLEEPY,
             "stubborn.py": STUBBORN,
             "prints.py": PRINTS,
+            "marking.py": MARKING,
         }.items():
             (self.root / name).write_text(text)
         self.fake = FakeOpenAI(ACME)
@@ -122,12 +182,15 @@ class Shop:
         monkeypatch.setenv("OPENAI_API_KEY", "test")
         self.monkeypatch, self.capsys = monkeypatch, capsys
         self.copies: list[Managed] = []
+        self.spawned: list[Spawned] = []
         self.at_stop: list[Callable[[Managed], None]] = []
         start, stop = Managed.start, Managed.stop
 
         def started(copy: Managed, control_url: str) -> None:
             self.copies.append(copy)
             start(copy, control_url)
+            if copy.proc is not None:
+                GROUPS.append(copy.proc.pid)
 
         def stopping(copy: Managed) -> None:
             try:
@@ -154,10 +217,27 @@ class Shop:
     def test(self, start: str, **kwargs: Any) -> tuple[int, str]:
         return self.run("test", str(self.write(start, **kwargs)))
 
+    def spawn(self, *args: str) -> "Spawned":
+        """The scrimmage command as its own process, as a user's shell starts it, so a signal
+        reaches it and nothing else."""
+        env = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
+        out = (self.root / "out.txt").open("w")
+        try:
+            proc = subprocess.Popen(
+                [str(SCRIMMAGE), *args], cwd=self.root, env=env, stdout=out, stderr=out
+            )
+        finally:
+            out.close()
+        spawned = Spawned(proc, self.root / "out.txt")
+        self.spawned.append(spawned)
+        return spawned
+
     def log(self) -> Path:
         return next((self.root / "scrimmage-runs").glob("*/service.log"))
 
     def close(self) -> None:
+        for spawned in self.spawned:
+            spawned.close()
         self.fake.stop()
         # A test that failed part way leaves nothing behind: SIGKILL to the copy's group by
         # hand, so a broken stop in the code under test cannot leave it running.
@@ -166,6 +246,39 @@ class Shop:
                 with contextlib.suppress(ProcessLookupError):
                     os.killpg(copy.proc.pid, signal.SIGKILL)
                 copy.proc.wait()
+
+
+class Spawned:
+    """A scrimmage command in its own process, and the copy of the service it started."""
+
+    def __init__(self, proc: subprocess.Popen[bytes], out: Path) -> None:
+        self.proc, self.out = proc, out
+        self.copy = 0  # the copy's pid, which leads its process group
+        self.token_folder: Path | None = None
+
+    def found_copy(self) -> bool:
+        """The copy has started, and its environment names the token file."""
+        for pid in children(self.proc.pid):
+            with contextlib.suppress(OSError):
+                named = environ(pid).get("SCRIMMAGE_TOKEN_FILE")
+                if named:
+                    self.copy, self.token_folder = pid, Path(named).parent
+                    GROUPS.append(pid)
+                    return True
+        return False
+
+    def text(self) -> str:
+        return self.out.read_text()
+
+    def close(self) -> None:
+        if self.proc.poll() is None:
+            self.proc.kill()
+            self.proc.wait()
+        if self.copy and group(self.copy):
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(self.copy, signal.SIGKILL)
+        if self.token_folder is not None:
+            shutil.rmtree(self.token_folder, ignore_errors=True)
 
 
 @pytest.fixture
@@ -383,3 +496,97 @@ def test_check_service_starts_and_stops_the_copy(shop: Shop) -> None:
     code, out = shop.run("check", str(path), "--service")
     assert code == 3, out
     assert "RuntimeError: the shop database is down" in out and "whole output" not in out, out
+
+
+def test_a_ctrl_c_while_the_copy_stops_still_kills_its_workers(shop: Shop) -> None:
+    """The runs are done and the copy is stopping: its workers ignore SIGTERM, so it waits
+    out the grace. A Ctrl-C then must not cut the stop short: the SIGKILL still comes, the
+    token's folder goes only once the group is empty, and the test says it was stopped."""
+    mark = shop.root / "stop-began"
+    shop.monkeypatch.setenv("STOP_MARK", str(mark))
+    path = shop.write(f"{UVICORN} marking:marking --port {{port}} --loop asyncio --workers 2")
+    spawned = shop.spawn("test", str(path))
+    wait_until(spawned.found_copy)
+    folder = spawned.token_folder
+    assert folder is not None
+    early: list[list[int]] = []  # the group, when the folder was first found gone
+
+    def watch() -> None:
+        while spawned.proc.poll() is None:
+            if not folder.exists():
+                early.append(group(spawned.copy))
+                return
+            time.sleep(0.005)
+
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    wait_until(mark.exists, within=60)
+    time.sleep(0.5)  # well inside the 5 s grace
+    began = time.monotonic()
+    spawned.proc.send_signal(signal.SIGINT)
+    code = spawned.proc.wait(30)
+    took = time.monotonic() - began
+    watcher.join(10)
+    out = spawned.text()
+    assert code == 3, out
+    assert "scrimmage: stopped by SIGINT; every run was stopped" in out, out
+    assert "Traceback" not in out, out
+    assert group(spawned.copy) == [], "a worker that ignores SIGTERM was left running"
+    assert early == [[]], f"the token folder went while {early} still ran"
+    assert not folder.exists()
+    assert took < runner.KILL_GRACE_S + 2, took
+
+
+def check_service_stopped_by(shop: Shop, sig: signal.Signals) -> None:
+    """scrimmage check --service, stopped while it waits for a copy that never answers."""
+    path = shop.write(f"{UVICORN} sleepy:app --port {{port}} --workers 2")
+    spawned = shop.spawn("check", str(path), "--service")
+    wait_until(spawned.found_copy)
+    wait_until(lambda: len(group(spawned.copy)) >= 3)  # the supervisor and both workers
+    spawned.proc.send_signal(sig)
+    code = spawned.proc.wait(30)
+    out = spawned.text()
+    assert code == 3, out
+    assert f"scrimmage: stopped by {sig.name}" in out, out
+    assert "Traceback" not in out, out
+    assert group(spawned.copy) == [], "a process of the copy was left running"
+    assert spawned.token_folder is not None and not spawned.token_folder.exists()
+
+
+def test_sigterm_during_check_service_stops_the_copy_and_removes_the_token_file(
+    shop: Shop,
+) -> None:
+    check_service_stopped_by(shop, signal.SIGTERM)
+
+
+def test_ctrl_c_during_check_service_stops_the_copy_with_no_traceback(shop: Shop) -> None:
+    check_service_stopped_by(shop, signal.SIGINT)
+
+
+class NotFound(http.server.BaseHTTPRequestHandler):
+    def do_POST(self) -> None:
+        self.send_error(404)
+
+    def log_message(self, format: str, *args: Any) -> None:
+        del format, args
+
+
+def test_a_port_another_process_holds_names_the_copys_exit(shop: Shop) -> None:
+    """Another process takes the port before the copy binds it, and answers the probe with
+    404. The test names the copy's exit and its log's "address already in use", not the
+    process that answered."""
+    holder = http.server.ThreadingHTTPServer(("127.0.0.1", 0), NotFound)
+    held = threading.Thread(target=holder.serve_forever, daemon=True)
+    held.start()
+    try:
+        port = int(holder.server_address[1])
+        shop.monkeypatch.setattr(runner, "free_port", lambda: port)
+        code, out = shop.test(f"{UVICORN} acme.service:app --port {{port}} --loop asyncio")
+    finally:
+        holder.shutdown()
+        holder.server_close()
+    assert code == 3, out
+    # uvicorn exits with code 3 when it cannot bind its port.
+    assert "the service started with [agent] start exited with code 3 before it was ready" in out
+    assert "address already in use" in out, out
+    assert "does not reach Scrimmage" not in out, out

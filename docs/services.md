@@ -7,14 +7,17 @@ A worked example is [An agent inside a web service](examples/service-agent.md).
 
 ## Let Scrimmage start the service
 
-Three lines in `scrimmage.toml` name the command that starts the service, its address and the body of each run:
+Four lines in `scrimmage.toml` name the command that starts the service, its address, the body of each run and where the answer is in the reply:
 
 ```toml
 [agent]
 start   = "uvicorn shop.service:app --port {port} --loop asyncio"
 service = "http://127.0.0.1:{port}/chat"
 body    = {message = "{question}"}
+answer  = "reply"
 ```
+
+`tools`, `real` and each `[[test]]` come from the rest of the file, as for any agent; see [Configuration](configuration.md).
 
 Then one command runs the test:
 
