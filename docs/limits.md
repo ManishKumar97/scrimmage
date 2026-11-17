@@ -324,7 +324,7 @@ Also read the control-path limits under An agent inside a web service.
   The reply is written back as compact JSON, so its bytes differ from the provider's even where its fields do not.
 
 - **`requests N` needs a library that marks its retries.** It counts a retry by the openai library's `x-stainless-retry-count` header.
-  A client that sends none, such as NeMo Guardrails' own, makes each attempt a request; the run then gets a mistake that says to use `first N` or `always`.
+  A client that sends none, such as NeMo Guardrails' own, makes each attempt a request; the run then gets a mistake that says to use `first N` or `always`; `call N` counts attempts too, so it works there.
 
 - **A model's path on a host under `real`.** A POST to `/chat/completions` on a host listed under `real` as a web request runs unbudgeted and cannot be faulted by model name; the run table notes it.
   A web API whose path ends the same way gets the note too, and still runs.

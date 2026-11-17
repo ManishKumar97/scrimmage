@@ -14,11 +14,13 @@ import time
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from scrimmage_core import client as client_module
 from scrimmage_core import config, protocol, service_client, state
+from scrimmage_core import plan as plan_module
 from scrimmage_core.budget import Ledger
 from scrimmage_core.client import WAKE, ControlClient, ControlError, Sender
 from scrimmage_core.control import ControlServer, proc_key
@@ -115,7 +117,17 @@ def with_fault(**fault: object) -> dict[str, object]:
 def test_a_plan_with_an_unknown_fault_word_is_refused() -> None:
     """A runner of a later version may send a word this SDK does not build; running another
     fault in its place would judge the row on a fault nobody asked for."""
-    for do in ("melt", "status", "slow", "status 200", "slow 8", "Timeout"):
+    refused = (
+        "melt",
+        "status",
+        "slow",
+        "status 200",
+        "slow 8",
+        "Timeout",
+        "slow 0s",
+        "slow 99999s",
+    )
+    for do in refused:  # the delays outside 0 < s <= MAX_SLOW_S too, as the file's reader
         with pytest.raises(ValueError, match=f"plan fault {do!r} is not a fault this scrimmage"):
             Plan.from_json(with_fault(do=do))
     known = [d for d in config.FAULTS if d not in ("status", "slow")] + ["status 429", "slow 2s"]
@@ -144,6 +156,18 @@ def test_a_plan_with_an_unknown_fault_key_is_refused() -> None:
     )
     sent = dataclasses.replace(a_plan(), faults=(full,)).to_json()
     assert Plan.from_json(sent).faults == (full,)
+
+
+@pytest.mark.design("protocol.plan_fault_keys_listed")
+def test_every_fault_field_a_plan_carries_is_a_known_plan_key() -> None:
+    """A new Fault field fails here until it is in PLAN_FAULT_KEYS, so a later key is never
+    sent to an SDK that would refuse it, or held by one that would drop it."""
+    judged: dict[str, Any] = {"expect": (("x",),), "forbid": ("x",), "pass_rate": 0.5}
+    fields = dataclasses.fields(config.Fault)
+    filled = config.Fault(**{f.name: judged.get(f.name, "x") for f in fields})
+    carried = {f.name for f in fields} - set(judged)  # never in a plan: the agent must not see it
+    assert carried == plan_module.PLAN_FAULT_KEYS, carried ^ plan_module.PLAN_FAULT_KEYS
+    assert set(plan_module.fault_json(filled)) == plan_module.PLAN_FAULT_KEYS
 
 
 @pytest.mark.design("protocol.wrong_signature")

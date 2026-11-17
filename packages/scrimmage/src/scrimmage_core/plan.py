@@ -7,16 +7,14 @@ from typing import cast
 from scrimmage_core import labels
 from scrimmage_core.config import (
     DEFAULT_RESERVE_OUTPUT_TOKENS,
-    FAULTS,
     MAX_GRACE_S,
     SCHEDULE,
-    SLOW,
-    STATUS,
     Config,
     Fault,
     Mock,
     ModelHost,
     Test,
+    word_problem,
 )
 from scrimmage_core.judge import Rules
 from scrimmage_core.provider_openai import Rates
@@ -24,7 +22,9 @@ from scrimmage_core.provider_openai import Rates
 PLAN_VERSION = 1
 # The keys a fault has in a plan. A runner of a later version may send one this SDK does not
 # know, and running the fault without it would run a fault nobody asked for.
-FAULT_KEYS = frozenset({"call", "do", "when", "raises", "method", "path", "model", "text", "find"})
+PLAN_FAULT_KEYS = frozenset(
+    {"call", "do", "when", "raises", "method", "path", "model", "text", "find"}
+)
 
 
 @dataclass(frozen=True)
@@ -263,11 +263,11 @@ def fault_json(fault: Fault) -> dict[str, object]:
 
 def fault_from(doc: dict[str, object]) -> Fault:
     """A plan's fault, refused when this SDK cannot run it as the runner meant it."""
-    unknown = sorted(set(doc) - FAULT_KEYS)
+    unknown = sorted(set(doc) - PLAN_FAULT_KEYS)
     if unknown:
         raise ValueError(f"plan fault key {unknown[0]!r} is not one this scrimmage knows")
     do, when = string(doc, "do"), string(doc, "when")
-    if not runs(do):
+    if word_problem(do) is not None:
         raise ValueError(f"plan fault {do!r} is not a fault this scrimmage runs")
     if not SCHEDULE.fullmatch(when):
         raise ValueError(f"plan schedule {when!r} is not one this scrimmage runs")
@@ -282,14 +282,6 @@ def fault_from(doc: dict[str, object]) -> Fault:
         text=optional(doc, "text"),
         find=optional(doc, "find"),
     )
-
-
-def runs(do: str) -> bool:
-    """Whether do is a fault word this SDK builds: a word of FAULTS, a status or a delay."""
-    status = STATUS.fullmatch(do)
-    if status is not None:
-        return 400 <= int(status.group("code")) <= 599
-    return SLOW.fullmatch(do) is not None or (do in FAULTS and do not in ("status", "slow"))
 
 
 def rows(config: Config) -> list[Row]:
