@@ -49,6 +49,7 @@ The tests are marked `kind` and `slow`, and they are left out of every run unles
 With it set, a missing `kind`, `kubectl`, `helm` or `docker` makes them fail, not skip.
 The merge gate runs them for a branch only when `uv run python tools/kind_needed.py origin/main` exits 0, which it does for a change under `tests/k8s/`, to a kind test file, under `images/runner/` or to `docs/kubernetes.md`.
 They also run once on main at the end of each slice of work, whatever the script says.
+A change to product code alone does not run kind; the kind run on main at the end of each slice covers it.
 A session takes about four minutes to make its cluster.
 Run one file at a time, in one process:
 

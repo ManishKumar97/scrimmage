@@ -6,8 +6,10 @@ Exit 0 prints each changed file that needs kind, one per line.
 Exit 1 prints nothing: no changed file needs kind.
 Exit 2 means git could not compare against the base, so the answer is unknown.
 
-A file needs kind when it is Kubernetes code or the page that shows its manifests.
-Product files the cluster path relies on have fast tests that run on every merge.
+A file needs kind when it is Kubernetes code, the page that shows its manifests, or a test
+file the kind tests read.
+A change to product code alone does not need kind; the kind run on main at the end of each
+slice covers it.
 Standard library only, so it runs before any environment is installed.
 """
 
@@ -16,8 +18,15 @@ from __future__ import annotations
 import subprocess
 import sys
 
-PREFIXES = ("tests/k8s/", "tests/test_k8s_", "images/runner/")
-FILES = ("tests/test_service_k8s.py", "docs/kubernetes.md")
+PREFIXES = (
+    "tests/k8s/",
+    "tests/test_k8s_",
+    "images/runner/",
+    "tests/example/",
+    "tests/fakes/",
+    "tests/fixtures/openai/",
+)
+FILES = ("tests/test_service_k8s.py", "docs/kubernetes.md", "tests/compose/harness.py")
 
 
 def needed(paths: list[str]) -> list[str]:

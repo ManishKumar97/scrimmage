@@ -1,4 +1,4 @@
-# The acme order bot as a service, with the runner on the host. See the services page of the docs.
+# The acme order bot as a service, with the runner on the host. See the Docker Compose page of the docs.
 # Set before `docker compose up`:
 #   SCRIMMAGE_UID, SCRIMMAGE_GID   the token file owner's ids, from `id -u` and `id -g`
 #   SCRIMMAGE_TOKEN_FILE           the token file, mode 600

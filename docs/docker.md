@@ -1,5 +1,7 @@
 # A service in Docker Compose
 
+This page runs an agent's web service in a container, with the runner on the host; how to start the service and its settings are on [An agent inside a web service](services.md).
+
 ## A service in a container
 
 A container has its own loopback, so a service in one cannot reach a runner on `127.0.0.1`.
@@ -27,7 +29,7 @@ Compose is used for test environments here.
 The file below runs the service in one container, with two workers, and the runner on the host.
 
 ```yaml title="compose.yaml"
-# The acme order bot as a service, with the runner on the host. See the services page of the docs.
+# The acme order bot as a service, with the runner on the host. See the Docker Compose page of the docs.
 # Set before `docker compose up`:
 #   SCRIMMAGE_UID, SCRIMMAGE_GID   the token file owner's ids, from `id -u` and `id -g`
 #   SCRIMMAGE_TOKEN_FILE           the token file, mode 600

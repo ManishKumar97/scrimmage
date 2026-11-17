@@ -1,5 +1,7 @@
 # A service in Kubernetes
 
+This page runs an agent's web service as a Deployment and the runner as a Job in a cluster; how to start the service and its settings are on [An agent inside a web service](services.md).
+
 ## The token and the key in a Kubernetes pod
 
 In a pod, give the token and the control key to Scrimmage as files from a Secret volume, never as `env` with `secretKeyRef`.

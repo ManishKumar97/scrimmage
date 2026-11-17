@@ -60,10 +60,22 @@ def test_a_product_only_change_does_not_need_kind() -> None:
     assert kind_needed.needed(["images/runner/Dockerfile"]) == ["images/runner/Dockerfile"]
 
 
+def test_a_change_to_a_file_the_kind_tests_read_needs_kind() -> None:
+    paths = [
+        "tests/compose/harness.py",
+        "tests/example/acme/service.py",
+        "tests/fakes/openai_server.py",
+        "tests/fixtures/openai/chat.json",
+        "tests/compose/check_junit.py",
+        "tests/test_docs.py",
+    ]
+    assert kind_needed.needed(paths) == paths[:4]
+
+
 def test_every_kind_test_file_is_under_a_trigger(tmp_path: Path) -> None:
     found = [
         path.relative_to(ROOT).as_posix()
-        for path in sorted((ROOT / "tests").glob("*.py"))
+        for path in sorted((ROOT / "tests").rglob("*.py"))
         if KIND_MARK.search(path.read_text())
     ]
     assert len(found) >= 5, found  # the scan sees the repo's kind files
