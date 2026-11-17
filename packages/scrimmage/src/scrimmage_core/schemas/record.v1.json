@@ -696,7 +696,7 @@
                 "null"
               ],
               "pattern": "^[0-9a-f]{64}$",
-              "description": "In a service run: the same digest, taken by the claiming process over the plan its run state held when it sent its last batch. null when that batch carried none, from an older SDK of the same major, or never came."
+              "description": "In a service run: the same digest, taken by the claiming process over the plan its run state held when it sent its last batch. null when that batch never came."
             },
             "claimed_by": {
               "type": "object",
@@ -781,8 +781,7 @@
             "left_group",
             "probe",
             "model_path",
-            "plan_changed",
-            "plan_unreported"
+            "plan_changed"
           ]
         },
         "process": {

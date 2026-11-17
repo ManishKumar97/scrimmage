@@ -198,6 +198,27 @@ def test_a_run_request_whose_plan_cannot_be_claimed_gets_503_and_never_reaches_t
     assert seen_scopes == []
 
 
+class Jumped:
+    """The SDK client's view of the time module, its wall clock five minutes ahead."""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(time, name)
+
+    def time(self) -> float:
+        return time.time() + 300
+
+
+def test_a_claim_refused_for_the_clock_gets_503_clock(
+    svc: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from scrimmage_core import client as control_client
+
+    name = svc.open()
+    monkeypatch.setattr(control_client, "time", Jumped())  # the clock jumps after the probe
+    assert refused_code(run(drive(gated_app(), headers=[svc.header(name)]))) == "clock"
+    assert seen_scopes == []
+
+
 @pytest.mark.design("service.claimed_once")
 def test_a_second_claim_of_a_run_gets_503_claimed(svc: Service) -> None:
     name = svc.open(mocks=mocked("x"), grace=30.0)
@@ -664,7 +685,9 @@ def test_closes_waiting_for_every_slot_never_hold_up_the_claims_that_hold_them(
     def close(name: str) -> None:
         entered.release()
         go.wait(10)
-        RunSender(svc.client, name, {"pid": 1}).close()  # waits for a slot on its thread
+        sender = RunSender(svc.client, name, {"pid": 1})
+        sender.plan_of = lambda: {"run": name}  # a claimed run's last batch names its plan
+        sender.close()  # waits for a slot on its thread
         closed.append(name)
 
     for name in closing:

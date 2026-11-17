@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, TextIO, cast
 
 from scrimmage_core import compare as comparing
 from scrimmage_core import config as settings
-from scrimmage_core import entry, redact
+from scrimmage_core import entry, redact, versions
 from scrimmage_core import plan as planner
 from scrimmage_core import results as results_file
 from scrimmage_core.errors import ConfigError
@@ -45,7 +45,6 @@ if TYPE_CHECKING:
 
 SCHEMAS = Path(__file__).parent / "schemas"
 ENVELOPE_VERSION = 1
-UNKNOWN_VERSION = "unknown"  # Scrimmage runs from a source tree with no package metadata
 LISTS = (MISTAKES, NOTES, WARNINGS, INFRA_ERRORS)
 # The word for each exit code, per command. A command never gives a code it has no word for.
 STATUS = {
@@ -117,11 +116,6 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
         action="store_true",
         help="also probe the service in the file and read its report; sends no run",
     )
-    check.add_argument(
-        "--strict",
-        action="store_true",
-        help="with --service, a template that does not fit /openapi.json is exit 2",
-    )
     for command in (test, record):
         command.add_argument(
             "--max-cost-usd",
@@ -172,8 +166,6 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
         allow_abbrev=False,
     )
     args = parser.parse_args(argv)
-    if args.command == "check" and args.strict and not args.service:
-        parser.error("--strict needs --service")
     if args.command == "cert":
         return cert_command(args)
     if args.command == "path":
@@ -207,7 +199,7 @@ def chosen_command(args: argparse.Namespace) -> Callable[[Path, Found | None], i
             code = run_check(path, found, record_runs, check_cap, hint=not args.service)
             if code != OK or not args.service:
                 return code
-            return run_check_service(path, found, args.strict)
+            return run_check_service(path, found)
 
         return check
     names, refresh, runs = list(args.test), list(args.refresh), str(args.runs)
@@ -250,7 +242,7 @@ def as_json(
     command: str, path: Path, run: Callable[[Path, Found | None], int], process: bool
 ) -> int:
     """Run a command for --json: one document on standard output, whatever happens."""
-    version = scrimmage_version()
+    version = versions.installed()
     found = Found(command, str(path))
     handled = on_main_thread()
     previous = {sig: signal.getsignal(sig) for sig in STOP_SIGNALS} if handled else {}
@@ -282,15 +274,6 @@ def as_json(
             if handler is not None:  # None: set outside Python, which cannot be put back
                 signal.signal(sig, handler)
     return code
-
-
-def scrimmage_version() -> str:
-    import importlib.metadata  # about 20 ms, so only the command that prints the version pays
-
-    try:
-        return importlib.metadata.version("scrimmage")
-    except importlib.metadata.PackageNotFoundError:
-        return UNKNOWN_VERSION
 
 
 def empty_test() -> dict[str, object]:
@@ -513,7 +496,7 @@ def run_test(
         dict[str, object],
         redact.scrubbed({**running.report_json(report), "compare": None}, config.scrub),
     )
-    version = scrimmage_version()
+    version = versions.installed()
     doc = document("test", report.code, str(path), report.every_message, version, **fields)
     # A test the budget or a bad label stopped has rows with fewer runs than planned: it is not
     # a result to keep or to compare with.
@@ -780,7 +763,7 @@ def run_check(
     return OK
 
 
-def run_check_service(path: Path, found: Found | None, strict: bool) -> int:
+def run_check_service(path: Path, found: Found | None) -> int:
     """scrimmage check --service, after the file passed: probe the service and say what it
     reported. Sends no run and no setup request."""
     from scrimmage_core import runner as running
@@ -801,7 +784,7 @@ def run_check_service(path: Path, found: Found | None, strict: bool) -> int:
     stop_point()
     flag = None if found is None else entry.pending
     try:
-        result = service_check.check(config, strict, flag)
+        result = service_check.check(config, flag)
     except running.Interrupted as exc:
         stopped = f"stopped by {exc}"
         if found is None:
@@ -830,9 +813,6 @@ def run_check_service(path: Path, found: Found | None, strict: bool) -> int:
         (kinds[level], redact.remove_values(t, scrub)[0]) for level, t in result.messages
     ]
     document = cast(dict[str, object], redact.scrubbed(result.document, scrub))
-    found.messages += [
-        (NOTES, note) for note in cast(dict[str, list[str]], document["template"])["notes"]
-    ]
     found.fields["service"] = document
     return result.code
 

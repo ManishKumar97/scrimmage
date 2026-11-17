@@ -17,8 +17,7 @@
     "chained_sitecustomize",
     "tools",
     "notices",
-    "control",
-    "server_time"
+    "control"
   ],
   "properties": {
     "v": {
@@ -26,7 +25,7 @@
       "const": 2
     },
     "sdk": {
-      "description": "The version of scrimmage in the service, which the runner compares with its own: another major is refused, another minor or patch is allowed with a warning.",
+      "description": "The version of scrimmage in the service, which the runner compares with its own: any other version is refused.",
       "type": "string"
     },
     "python": {
@@ -80,10 +79,6 @@
     "control": {
       "description": "The service's signed ping to the control server, sent before it answered.",
       "$ref": "#/$defs/control"
-    },
-    "server_time": {
-      "description": "The service's clock when it answered, in seconds since the epoch.",
-      "type": "number"
     }
   },
   "$defs": {

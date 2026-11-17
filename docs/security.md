@@ -21,7 +21,7 @@ It runs before any watcher in that process could be installed, so the scan check
 *Checked by: `tests/test_security_claims.py::test_the_only_processes_scrimmage_starts_are_its_runs`, `tests/test_security_claims.py::test_the_only_connections_are_to_and_from_the_control_server`*
 
 The runner and the code inside your agent talk over one local connection, to a control server that listens on `127.0.0.1` only, on a port chosen for each test.
-A [service in a container](services.md#a-service-in-a-container) is the one exception: there `control` names the address the runner listens on, and the channel runs over TLS.
+A [service in a container](docker.md#a-service-in-a-container) is the one exception: there `control` names the address the runner listens on, and the channel runs over TLS.
 
 *Checked by: `tests/test_security_claims.py::test_the_control_server_listens_on_loopback_only`*
 
@@ -101,9 +101,8 @@ A control server that listens beyond loopback carries plans and record lines, wh
 - That check includes the time.
   A header the token made is good for 60 seconds, so one captured earlier and sent again, with a declared 14 MB body, is refused with `401 clock` before any of the body is read.
   The server reads at most 8 KiB ahead of the headers on every Python version.
-  A client that has had no signed reply yet sends one small request before a body over 4 MB, so a clock that is off is corrected before the large send and not met as a closed connection.
 
-  *Checked by: `tests/test_service_versions.py::test_a_signed_header_older_than_60_s_is_refused_before_any_body_is_read`, `tests/test_service_versions.py::test_a_fresh_client_with_a_skewed_clock_sends_a_large_blob_after_a_small_request`*
+  *Checked by: `tests/test_service_versions.py::test_a_signed_header_older_than_60_s_is_refused_before_any_body_is_read`*
 
 - The service pings the control server before it answers a probe.
   The ping is signed like every request and its reply is signed for it, and it stores nothing.
@@ -111,10 +110,10 @@ A control server that listens beyond loopback carries plans and record lines, wh
 
   *Checked by: `tests/test_service_versions.py::test_the_ping_stores_nothing_and_is_signed`, `tests/test_service_versions.py::test_a_ping_reply_with_a_bad_signature_is_not_taken`, `tests/test_service_versions.py::test_a_ping_answered_by_another_runner_stops_the_test`*
 
-- A claim for a run's plan carries the SDK's version, and the control server refuses a claim from another major, or with no version, with `409 version`.
+- A claim for a run's plan carries the SDK's version, and the control server refuses a claim from another version, or with no version, with `409 version`.
   The gate answers that run `503 version`, and the runner stops the test.
 
-  *Checked by: `tests/test_service_versions.py::test_a_claim_with_no_sdk_field_is_refused`, `tests/test_service_versions.py::test_a_worker_from_another_major_is_refused_at_its_first_claim_and_stops_the_test`*
+  *Checked by: `tests/test_service_versions.py::test_a_claim_with_no_sdk_field_is_refused`, `tests/test_service_versions.py::test_a_worker_of_another_version_is_refused_at_its_first_claim_and_stops_the_test`*
 
 - A connection that fails TLS prints no traceback; the report counts it by OpenSSL's reason.
   The report also counts the runs it sent and the claims it received, so a control server that no service can reach shows on the runner.
@@ -127,7 +126,7 @@ A control server that listens beyond loopback carries plans and record lines, wh
 
 TLS protects what crosses the control channel against a reader on the network.
 It adds nothing against someone who holds the token, and the HMAC stays on every request and reply.
-The runner's requests to the service stay `http://`, and what that exposes is on [An agent inside a web service](services.md#a-service-in-a-container).
+The runner's requests to the service stay `http://`, and what that exposes is on [A service in Docker Compose](docker.md#a-service-in-a-container).
 
 ## A web service's token and run header
 
@@ -167,10 +166,10 @@ So a genuine header replayed, or forwarded by a proxy to another service, gets `
 
 The claiming process's last batch names the plan its run state used, as a digest.
 The digest is HMAC-SHA256 keyed by the service token, over the plan without its `elapsed_s` and `scrub`, so a record on a volume does not let a reader test a guess at a mock's value.
-A run whose digest differs from the runner's own is an infrastructure error, and a last batch with no digest, or a digest of another form, is not compared and says so.
+A run whose digest differs from the runner's own is an infrastructure error, and a claimed run's last batch with no digest is refused, so that run is an infrastructure error too.
 The service token is the one in the service's token file, which lasts across tests, so the token file must never sit on the records volume: whoever reads both can test guesses at the plan.
 
-*Checked by: `tests/test_plan_digest.py::test_the_stored_digest_does_not_reveal_a_scrubbed_value`, `tests/test_plan_digest.py::test_a_run_whose_state_changed_its_plan_is_an_infrastructure_error`, `tests/test_plan_digest.py::test_a_last_batch_with_no_digest_is_not_compared_and_says_so`, `tests/test_plan_digest.py::test_a_digest_of_another_form_is_not_compared_and_names_the_form`*
+*Checked by: `tests/test_plan_digest.py::test_the_stored_digest_does_not_reveal_a_scrubbed_value`, `tests/test_plan_digest.py::test_a_run_whose_state_changed_its_plan_is_an_infrastructure_error`, `tests/test_plan_digest.py::test_a_claimed_runs_last_batch_with_no_digest_is_refused`*
 
 Every `x-scrimmage-` header is removed before your app sees the request, so the app cannot pass the header on.
 The MAC covers the run's name, not the body, so the gate never holds a request's body.
@@ -193,22 +192,22 @@ Each value the file reads with `${NAME}`, of 8 characters or more, is removed fr
 | The app, or a proxy, that forwards incoming headers downstream | nothing: the header is gone before the app sees it | a downstream gated service would get `503 claimed` |
 | Code inside the service's process | read the token from memory | the same as any code in the agent, as for a script |
 | Someone on the path who replays a genuine probe to another worker within 60 seconds | that worker's startup report | disclosed below |
-| Someone who captured a genuine probe whose time was outside the 60 second window and replays it | a signed reply with the service's clock, once to each worker per 120 seconds | disclosed below |
+| Someone who captured a genuine probe whose time was outside the 60 second window and replays it | a signed reply that says only that the clocks differ, once to each worker per 120 seconds | disclosed below |
 
 Each worker keeps its own record of the nonces it has seen, so a probe captured on the loopback path can be replayed once to each other worker within 60 seconds, and gets that worker's startup report.
 The report holds nothing secret, so this version does not share nonces across workers.
 
-A probe whose signature and body are good but whose time is more than 60 seconds off the service's clock gets a signed `409` with the service's time, so the runner can name the gap.
+A probe whose signature and body are good but whose time is more than 60 seconds off the service's clock gets a signed `409` that holds no time.
 Only a holder of the token can make such a probe, so a stranger gets nothing.
-Someone who captured one genuine probe, such as a container with `CAP_NET_RAW` on the bridge, can replay it and learn that Scrimmage is in the service and what its clock reads.
+Someone who captured one genuine probe, such as a container with `CAP_NET_RAW` on the bridge, can replay it and learn only that Scrimmage is in the service.
 Each worker keeps its own nonces and forgets one after 120 seconds, so a replay to another worker, or to the same worker after 120 seconds, gets the signed reply again.
 A replay to the same worker within 120 seconds finds its nonce used and reaches the app as a plain request.
 
-*Checked by: `tests/test_check_service.py::test_a_replayed_stale_probe_is_answered_as_documented`, `tests/test_check_service.py::test_a_gap_above_the_window_gets_a_signed_clock_reply_and_exit_3_naming_the_gap`*
+*Checked by: `tests/test_check_service.py::test_a_replayed_stale_probe_is_answered_as_documented`, `tests/test_check_service.py::test_a_probe_outside_the_window_gets_a_signed_clock_reply_with_no_time_and_exit_3_naming_ntp`*
 
 ## The control channel in a Kubernetes cluster
 
-In a cluster the runner runs as a Job and the agent as a Deployment, set up as [In Kubernetes](services.md#in-kubernetes) shows.
+In a cluster the runner runs as a Job and the agent as a Deployment, set up as [In Kubernetes](kubernetes.md#in-kubernetes) shows.
 The shipped network policies deny all traffic in the namespace, then allow four paths: the agent's pods to the runner on port 7700, the runner to the agent on port 8000, the agent to its model host, and every pod to cluster DNS.
 The tests run Calico, which enforces them; a network plugin that does not enforce NetworkPolicy ignores them.
 

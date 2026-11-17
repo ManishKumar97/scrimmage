@@ -1,8 +1,7 @@
 """scrimmage check --service: what scrimmage test would find before its first run.
 
-It reads the token, binds the control server, sends one probe and one GET for /openapi.json,
-and prints what the service reported. It sends no run and no setup request, so it spends
-nothing and makes no model call.
+It reads the token, binds the control server, sends one probe, and prints what the service
+reported. It sends no run and no setup request, so it spends nothing and makes no model call.
 """
 
 import shutil
@@ -56,16 +55,13 @@ def rtt(control: dict[str, object]) -> str:
     return f"{value:.0f}" if isinstance(value, int | float) else "?"
 
 
-def versions_line(report: dict[str, object]) -> tuple[Line, list[str]]:
-    """The version line, and the warning that goes with it, if any."""
-    ours = versions.installed()
-    theirs = versions.shown(report.get("sdk"))
+def version_line(report: dict[str, object]) -> Line:
+    """One line: the same version on both sides, or the mistake naming both."""
     try:
-        warnings = client.check_versions(report)
+        client.check_version(report)
     except client.Setup as setup:
-        return Line("versions", str(setup), MISTAKE_LEVEL), []
-    text = f"scrimmage {theirs} in the service, {ours} here"
-    return Line("versions", text, WARN if warnings else OK_LEVEL), warnings
+        return Line("version", str(setup), MISTAKE_LEVEL)
+    return Line("version", f"scrimmage {versions.installed()} in the service and here")
 
 
 def notice_lines(report: dict[str, object]) -> list[Line]:
@@ -81,21 +77,18 @@ def notice_lines(report: dict[str, object]) -> list[Line]:
     return found
 
 
-def inspect(runner: running.Runner, probed: client.Probed, strict: bool) -> Outcome:
+def inspect(runner: running.Runner, probed: client.Probed) -> Outcome:
     """Every line of the report, each judged on its own, so one problem hides no other."""
     agent = runner.config.agent
     report = probed.report
     assert report is not None  # probe_service raised without one
-    _, _, path = client.target(agent)
     lines: list[Line] = []
     messages: list[tuple[str, str]] = []
     gates = ", ".join(str(g) for g in cast(list[object], report.get("gates") or []))
     lines.append(
         Line("service", f"POST {agent.service}   gated ({gates}), pid {report.get('pid')}")
     )
-    vline, vwarnings = versions_line(report)
-    lines.append(vline)
-    messages += [(WARN, text) for text in vwarnings]
+    lines.append(version_line(report))
     python = " ".join(str(report.get("python", "")).split())
     lines.append(Line("python", f"{python} at {report.get('executable')}"))
     tools = sorted(str(t) for t in cast(list[object], report.get("tools") or []))
@@ -106,23 +99,6 @@ def inspect(runner: running.Runner, probed: client.Probed, strict: bool) -> Outc
         lines.append(Line("tools", problem, MISTAKE_LEVEL))
     control = cast(dict[str, object], report.get("control") or {})
     lines.append(control_line(control, runner))
-    gap = probed.gap
-    gap_line = Line("clock", "the service sent no time", WARN)
-    if gap is not None:
-        stopped = abs(gap) >= client.CLOCK_STOP_S
-        said = client.clock_stop(gap) if stopped else client.clock_text(gap)
-        warned = abs(gap) >= client.CLOCK_WARN_S
-        gap_line = Line("clock", said, INFRA_LEVEL if stopped else WARN if warned else OK_LEVEL)
-    lines.append(gap_line)
-    found = client.template_check(agent)
-    if found.warnings:
-        lines.append(Line("template", found.warnings[0], MISTAKE_LEVEL if strict else WARN))
-        lines += [Line("", w, MISTAKE_LEVEL if strict else WARN) for w in found.warnings[1:]]
-    elif found.notes:
-        lines.append(Line("template", found.notes[0]))
-    else:
-        lines.append(Line("template", f"fits POST {path.partition('?')[0]} in /openapi.json"))
-    lines += [Line("", note) for note in (found.notes if found.warnings else found.notes[1:])]
     lines += notice_lines(report)
     for line in lines:
         if line.level in (WARN, MISTAKE_LEVEL, INFRA_LEVEL) and line.label != "notices":
@@ -140,8 +116,6 @@ def inspect(runner: running.Runner, probed: client.Probed, strict: bool) -> Outc
         "tools": tools,
         "tools_match": problem is None,
         "control": control,
-        "clock_gap_s": None if gap is None else round(gap, 3),
-        "template": {"warnings": list(found.warnings), "notes": list(found.notes)},
         "notices": cast(list[object], report.get("notices") or []),
     }
     return Outcome(code, lines, messages, document)
@@ -152,7 +126,7 @@ def print_lines(lines: list[Line], out: TextIO) -> None:
         out.write(f"{line.label:<{LABEL_WIDTH}}{line.text}\n")
 
 
-def check(config: Config, strict: bool, stop_flag: list[str] | None) -> Outcome | client.Setup:
+def check(config: Config, stop_flag: list[str] | None) -> Outcome | client.Setup:
     """Probe the service of config and read its report. A Setup: the service did not answer
     as a gated one, or the runner's own environment is not ready."""
     runner: running.Runner | None = None
@@ -160,7 +134,7 @@ def check(config: Config, strict: bool, stop_flag: list[str] | None) -> Outcome 
         runner = running.Runner(config, stop_flag=stop_flag, scratch=True)
         runner.server.start()
         probed = runner.probe_service()
-        return inspect(runner, probed, strict)
+        return inspect(runner, probed)
     except client.Setup as setup:
         return setup
     finally:

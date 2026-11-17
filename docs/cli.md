@@ -50,7 +50,7 @@ Stopping `scrimmage test` (Ctrl-C, or a cancelled CI job) stops every run and ev
 ## scrimmage check
 
 ```bash
-scrimmage check [path/to/scrimmage.toml] [--json] [--runs N] [--max-cost-usd USD] [--service [--strict]]
+scrimmage check [path/to/scrimmage.toml] [--json] [--runs N] [--max-cost-usd USD] [--service]
 ```
 
 Checks the file the way `scrimmage test` does before its first run, and runs nothing.
@@ -85,11 +85,11 @@ scrimmage check: 1 problem; nothing was run
 ### scrimmage check --service
 
 ```bash
-scrimmage check scrimmage.toml --service [--strict] [--json]
+scrimmage check scrimmage.toml --service [--json]
 ```
 
 After the file passes, `--service` checks the [service](services.md) the file names, the way `scrimmage test` does before its first run, and stops there.
-It reads the token file and starts the control server for the length of the command, sends the probe, and makes one `GET` for `/openapi.json`.
+It reads the token file, starts the control server for the length of the command, and sends the probe.
 While the service's ping to the control server times out, is refused or cannot resolve the name, the probe is asked again for up to 30 seconds, so the command can take that long before it names the failure.
 It sends no run and no setup request, makes no model call and leaves no `scrimmage-runs/` folder, so it costs nothing.
 Without `--service`, `scrimmage check` reads the file only, as above.
@@ -98,12 +98,10 @@ Without `--service`, `scrimmage check` reads the file only, as above.
 $ scrimmage check --service
 scrimmage check: scrimmage.toml is valid: 1 test, 2 rows, 2 runs, 4 tools, no budget
 service     POST http://127.0.0.1:8765/chat   gated (asgi, starlette), pid 7
-versions    scrimmage 0.4.0 in the service, 0.4.0 here
+version     scrimmage 0.4.0 in the service and here
 python      3.12.9 (main, Oct  9 2026, 00:00:00) [GCC 12.2.0] at /usr/local/bin/python
 tools       check_inventory, get_order, get_stock, refund_order   (match the file)
 control     http://127.0.0.1:8766 reached, no TLS, on this machine, this runner, 3 ms
-clock       the service is 0.2 s behind this machine
-template    fits POST /chat in /openapi.json
 notices     none
 ```
 
@@ -112,12 +110,10 @@ The exit code is that of the first problem, in the order of the lines.
 
 | Code | Meaning |
 |---|---|
-| 0 | Every line is good. A warning, such as a template that does not fit, still exits 0 |
-| 2 | A mistake to fix: the tools the service gates are not the file's, the service's SDK is another major version, or `--strict` and the template does not fit |
-| 3 | The service is not gated, cannot reach the control server, or its clock is 50 seconds or more from this machine's |
+| 0 | Every line is good. A warning, such as a notice the service holds, still exits 0 |
+| 2 | A mistake to fix: the tools the service gates are not the file's, or the service's SDK is another version |
+| 3 | The service is not gated, cannot reach the control server, or its clock and this machine's differ by more than 60 seconds |
 
-`--strict` makes a template that does not fit `/openapi.json` exit 2.
-It needs `--service`.
 `--json` adds a `service` object to the `check` document; see [JSON output](json-output.md#scrimmage-check-json).
 
 ## scrimmage record
@@ -156,7 +152,7 @@ The schema checks the shape of the file. `scrimmage check` decides.
 scrimmage cert --ip 172.17.0.1 --name host.docker.internal --out .scrimmage-cert [--days 30]
 ```
 
-Makes the certificates for a control server that a service in a container reaches over TLS; see [Services](services.md).
+Makes the certificates for a control server that a service in a container reaches over TLS; see [A service in a container](docker.md#a-service-in-a-container).
 It writes three files into a new folder, mode 0700, and refuses a folder that exists:
 
 | File | What | Mode |

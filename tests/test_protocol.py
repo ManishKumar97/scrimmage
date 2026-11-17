@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from scrimmage_core import client as client_module
-from scrimmage_core import protocol, state
+from scrimmage_core import protocol, service_client, state
 from scrimmage_core.budget import Ledger
 from scrimmage_core.client import WAKE, ControlClient, ControlError, Sender
 from scrimmage_core.control import ControlServer, proc_key
@@ -114,7 +114,7 @@ def test_a_request_signed_with_another_token_is_refused(server: ControlServer) -
     headers[protocol.SIGNATURE] = "0" * 64
     assert raw(server, "GET", "/v1/plans/run-1", headers)[:2] == (
         401,
-        {"error": "bad_signature", "server_time": pytest.approx(time.time(), abs=5)},
+        {"error": "bad_signature"},
     )
     for missing in (protocol.NONCE, protocol.TIME):
         partial = protocol.request_headers(TOKEN, "GET", "/v1/plans/run-1", b"", time.time())
@@ -186,7 +186,7 @@ def test_a_reply_made_for_another_request_is_refused(server: ControlServer) -> N
 
 @pytest.mark.design("protocol.forged_reply")
 def test_a_reply_not_signed_with_the_token_is_refused() -> None:
-    body = json.dumps({"server_time": time.time(), "plan": {"v": 1, "evil": True}}).encode()
+    body = json.dumps({"plan": {"v": 1, "evil": True}}).encode()
     impostor = Impostor(200, body, "f" * 64)
     try:
         with pytest.raises(ControlError, match="not signed for this request"):
@@ -195,17 +195,72 @@ def test_a_reply_not_signed_with_the_token_is_refused() -> None:
         impostor.stop()
 
 
-@pytest.mark.design("protocol.clock_retry")
-def test_a_five_minute_clock_gap_is_recovered_with_one_retry(tmp_path: Path) -> None:
+@pytest.fixture
+def skewed(tmp_path: Path) -> Iterator[ControlServer]:
+    """A control server whose clock is five minutes ahead of this machine's."""
     control = ControlServer(TOKEN, RecordStore(tmp_path / "r"), clock=lambda: time.time() + 300)
     control.start()
     control.open_run("run-1", "baseline", PLAN)
-    try:
-        client = ControlClient(control.url, TOKEN)
-        assert served(client.fetch_plan("run-1")) == PLAN
-        assert client.offset == pytest.approx(300, abs=5)
-    finally:
-        control.stop()
+    yield control
+    control.stop()
+
+
+@pytest.mark.design("protocol.clock_off")
+def test_a_five_minute_clock_gap_stops_at_the_ping_naming_ntp(skewed: ControlServer) -> None:
+    client = ControlClient(skewed.url, TOKEN)
+    ping = client.ping()
+    assert (ping["reached"], ping["error"]) == (False, None), ping
+    assert ping["detail"] == "the control server answered 401 clock", ping
+    with pytest.raises(service_client.Setup) as stopped:
+        service_client.check_control({"control": ping}, skewed.runner_id, asked_s=0.0)
+    assert stopped.value.code == 3
+    assert str(stopped.value) == (
+        "the service's clock and this machine's differ by more than 60 s, so every signed "
+        "request is refused; set both from the same NTP source"
+    )
+
+
+def test_the_client_never_retries_a_clock_refusal(
+    skewed: ControlServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    handled: list[str] = []
+    handle = skewed.handle
+
+    def counted(
+        method: str, path: str, headers: dict[str, str], body: bytes
+    ) -> tuple[int, dict[str, object]]:
+        handled.append(path)
+        return handle(method, path, headers, body)
+
+    monkeypatch.setattr(skewed, "handle", counted)
+    client = ControlClient(skewed.url, TOKEN)
+    assert client.request("GET", "/v1/plans/run-1") == (401, {"error": "clock"})
+    with pytest.raises(ControlError, match="no plan for run-1: clock"):
+        client.fetch_plan("run-1")
+    assert handled == ["/v1/plans/run-1", "/v1/plans/run-1"], handled  # one request each
+
+
+def test_no_control_reply_carries_server_time(server: ControlServer) -> None:
+    """A reply holds only its answer: the client signs with its own clock and learns no other."""
+    replies: list[dict[str, object]] = []
+    for path in ("/v1/plans/run-1", "/v1/plans/run-9", "/v1/other"):
+        headers = protocol.request_headers(TOKEN, "GET", path, b"", time.time())
+        replies.append(raw(server, "GET", path, headers)[1])
+    stale = protocol.request_headers(TOKEN, "GET", "/v1/plans/run-1", b"", time.time() - 120)
+    replies.append(raw(server, "GET", "/v1/plans/run-1", stale)[1])
+    client = ControlClient(server.url, TOKEN)
+    replies.append(client.request("POST", "/v1/ping")[1])
+    replies.append(client.request("POST", "/v1/records", {"lines": []})[1])
+    assert [sorted(reply) for reply in replies] == [
+        ["plan"],
+        ["error"],
+        ["error"],
+        ["error"],
+        ["ok", "runner_id"],
+        ["error"],
+    ], replies
+    timed = [reply for reply in replies if "server_time" in reply]
+    assert not timed, timed
 
 
 @pytest.mark.design("protocol.closed_run")

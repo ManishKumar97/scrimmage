@@ -1,6 +1,6 @@
 """The plan digest: the claiming process says which plan its run's state used, in its last
 batch, and the runner compares it with its own plan. A different plan is an infrastructure
-error, and a last batch from an older SDK with no digest is not compared."""
+error, and a claimed run's last batch with no digest is refused."""
 
 import asyncio
 import contextlib
@@ -11,6 +11,7 @@ import importlib.util
 import json
 import socket
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,10 +20,11 @@ from typing import Any
 import pytest
 
 from conftest import EXAMPLE
-from scrimmage_core import protocol, runner
+from scrimmage_core import protocol, runner, versions
 from scrimmage_core.config import Mock
 from scrimmage_core.control import ControlServer
 from scrimmage_core.plan import Plan
+from scrimmage_core.records import RecordStore
 from test_service import Bench, bench
 
 pytestmark = pytest.mark.slow
@@ -110,6 +112,13 @@ def hold(tmp_path: Path) -> Iterator[Hold]:
 
 def token_of(bench: Bench) -> str:
     return bench.token_file.read_text()
+
+
+def signed(server: ControlServer, path: str, doc: dict[str, object]) -> tuple[int, dict[str, Any]]:
+    body = json.dumps(doc).encode()
+    headers = protocol.request_headers(server.token, "POST", path, body, time.time())
+    status, reply = server.handle("POST", path, headers, body)
+    return status, dict(reply)
 
 
 def runs_of(bench: Bench) -> dict[str, dict[str, Any]]:
@@ -224,30 +233,46 @@ def test_a_run_whose_state_changed_its_plan_is_an_infrastructure_error(bench: Be
 
 
 @pytest.mark.design("service.plan_digest")
-def test_a_last_batch_with_no_digest_is_not_compared_and_says_so(bench: Bench) -> None:
-    """The wire form of a last batch from an older SDK of the same major: no plan_digest."""
+def test_a_claimed_runs_last_batch_with_no_digest_is_refused(bench: Bench, tmp_path: Path) -> None:
+    """A claimer that leaves out its digest has its last batch refused as a bad batch, so the
+    run is never taken as answered with a plan no one can check."""
+    server = ControlServer(TOKEN, RecordStore(tmp_path / "records"))
+    try:
+        for digest in (None, "ab" * 32):
+            run = f"run-{'00' if digest is None else 'ff'}00000000aa"
+            server.open_run(run, "baseline", {"run": run}, service=True)
+            claim = {"run": run, "proc": {"pid": 1}, "sdk": versions.installed()}
+            assert signed(server, "/v1/claims", claim)[0] == 200
+            last: dict[str, object] = {"run": run, "lines": [], "made": 0, "proc": {"pid": 1}}
+            if digest is not None:  # positive control: the same batch with a digest is taken
+                last["plan_digest"] = digest
+            status, reply = signed(server, "/v1/records", last)
+            if digest is None:
+                assert (status, reply) == (400, {"error": "bad_batch"})
+                assert not server.runs[run].ended.is_set()
+            else:
+                assert status == 200, reply
+                assert server.runs[run].claimed_plan_digest == digest
+    finally:
+        server.server.server_close()
+
     served = ControlServer._records  # pyright: ignore[reportPrivateUsage]
 
-    def older(self: ControlServer, body: bytes) -> Any:
+    def undigested(self: ControlServer, body: bytes) -> Any:
         batch = json.loads(body)
         batch.pop("plan_digest", None)
         return served(self, json.dumps(batch).encode())
 
-    bench.monkeypatch.setattr(ControlServer, "_records", older)
-    service = bench.start(
-        SCRIMMAGE_TEST_CHANGE_PLAN="1"
-    )  # a changed plan would differ, if it were compared
-    code, out = bench.test(service.port, runs=3)
+    bench.monkeypatch.setattr(ControlServer, "_records", undigested)
+    service = bench.start()
+    # The refused last batch never comes, so each run waits it out: a short wait.
+    code, out = bench.test(service.port, runs=2, wait=2.0)
     runs = runs_of(bench)
-    assert len(runs) == 3
+    assert len(runs) == 2
     for name, summary in runs.items():
         assert summary["claimed_plan_digest"] is None, name
-        assert summary["plan_digest"], name
-        assert summary["outcome"] == "answered", name
-        notices = [x["notice"] for x in bench.lines(name) if "notice" in x]
-        assert notices == ["plan_unreported"], name
-    assert code == 0, out
-    assert out.count(runner.PLAN_UNREPORTED) == 1, out  # once for the test, not once a run
+        assert summary["outcome"] == "infrastructure error", name
+    assert code == 3, out
 
 
 @pytest.mark.design("service.plan_digest")
@@ -261,31 +286,6 @@ def test_the_runner_digests_its_own_plan_not_the_claimers(bench: Bench) -> None:
         own = protocol.plan_digest(token_of(bench), sent[name])
         assert summary["plan_digest"] == own, name
         assert summary["claimed_plan_digest"] != own, name
-
-
-@pytest.mark.design("service.plan_digest")
-def test_a_digest_of_another_form_is_not_compared_and_names_the_form(bench: Bench) -> None:
-    served = ControlServer._records  # pyright: ignore[reportPrivateUsage]
-
-    def newer(self: ControlServer, body: bytes) -> Any:
-        batch = json.loads(body)
-        if "plan_digest" in batch:
-            assert batch["plan_digest_form"] == protocol.PLAN_DIGEST_FORM
-            batch["plan_digest_form"] = 99
-        return served(self, json.dumps(batch).encode())
-
-    bench.monkeypatch.setattr(ControlServer, "_records", newer)
-    service = bench.start(SCRIMMAGE_TEST_CHANGE_PLAN="1")  # it would differ, if it were compared
-    code, out = bench.test(service.port, runs=2)
-    runs = runs_of(bench)
-    assert len(runs) == 2
-    for name, summary in runs.items():
-        assert summary["claimed_plan_digest"] is None, name
-        assert summary["outcome"] == "answered", name
-        assert [x["notice"] for x in bench.lines(name) if "notice" in x] == ["plan_unreported"]
-    assert code == 0, out
-    said = runner.PLAN_FORM_UNKNOWN.format(form=99, ours=protocol.PLAN_DIGEST_FORM)
-    assert out.count(said) == 1, out
 
 
 # Every key Plan.to_json() can write, and every Plan field, as they are now.
@@ -302,7 +302,7 @@ PLAN_FIELDS = {
 
 
 @pytest.mark.design("service.plan_digest")
-def test_a_new_plan_key_or_field_must_choose_between_the_digest_and_a_new_form() -> None:
+def test_a_new_plan_key_must_be_digested_or_listed_as_undigested() -> None:
     full = a_plan(
         renames=(("acme.tools:get_order", "order"),),
         record=True,
@@ -315,13 +315,12 @@ def test_a_new_plan_key_or_field_must_choose_between_the_digest_and_a_new_form()
     kept = set(full.to_json()) - set(protocol.UNDIGESTED)
     fields = {f.name for f in dataclasses.fields(Plan)}
     advice = (
-        "Plan changed. A key the digest covers changes every digest, so either add it to "
-        "protocol.UNDIGESTED, if it is like elapsed_s and scrub, or bump "
-        "protocol.PLAN_DIGEST_FORM; then update this test's sets."
+        "Plan changed. A new key is digested unless it is listed in protocol.UNDIGESTED, "
+        "as it should be if it is like elapsed_s and scrub; choose, then update this test's "
+        "sets."
     )
     assert kept == DIGESTED_KEYS, (advice, sorted(kept ^ DIGESTED_KEYS))
     assert fields == PLAN_FIELDS, (advice, sorted(fields ^ PLAN_FIELDS))
-    assert protocol.PLAN_DIGEST_FORM == 1, advice  # a new form is a decision, made here
 
 
 @pytest.mark.design("service.plan_digest")

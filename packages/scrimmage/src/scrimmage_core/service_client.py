@@ -9,20 +9,18 @@ import contextlib
 import http.client
 import ipaddress
 import json
-import math
 import os
 import secrets
 import socket
 import ssl
 import threading
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
 
-from scrimmage_core import openapi_check, protocol, records, tls, versions
+from scrimmage_core import protocol, records, tls, versions
 from scrimmage_core.config import (
     SERVICE_URL,
     Agent,
@@ -34,15 +32,19 @@ from scrimmage_core.start import BadAnswerPath, pick
 
 TOKEN_MIN = 32
 CONNECT_S = 2.0  # how long the probe's connection may take before it is asked again
+PROBE_S = 30.0  # the whole probe, from its connection to the last byte of its reply
+PROBE_MAX = 1024 * 1024  # a startup report is a few KB; a longer reply is not Scrimmage's
 STREAMED = ("text/event-stream", "application/x-ndjson", "application/jsonl")
 # The gate's own 503, exactly: what says Scrimmage answered and could not claim the plan.
 GATE_HEADERS = {"content-type", "content-length", "x-scrimmage-error"}
 SERVER_HEADERS = {"date", "server"}
-CLOCK_WARN_S = 10.0  # a gap this large is said
-CLOCK_STOP_S = 50.0  # and this large stops the test: the 60 s window is close
-OPENAPI_GETS = 3  # the document is looked for at most this many times
-OPENAPI_MAX = 4 * 1024 * 1024  # a document larger than this is left unread
-OPENAPI_TIMEOUT_S = 10.0
+CLOCK_OFF = (
+    "the service's clock and this machine's differ by more than 60 s, so every signed request "
+    "is refused; set both from the same NTP source"
+)
+# The ping's detail when the control server refused it for its time: the service's clock and
+# this machine's differ.
+PING_CLOCK = "the control server answered 401 clock"
 
 
 class Setup(Exception):
@@ -65,6 +67,7 @@ class Reply:
     timed_out: bool = False
     connected: bool = True  # False: no connection was made at all
     unanswered: bool = False  # taken, then reset or closed before any HTTP reply began
+    too_long: bool = False  # the reply passed the most bytes the request may read
 
     @property
     def gate_refused(self) -> str | None:
@@ -175,12 +178,6 @@ def post(
     return send("POST", agent, target(agent)[2], headers, body, timeout, connect_timeout)
 
 
-def cut(sock: Any) -> None:
-    """End the connection under a read that is still waiting."""
-    with contextlib.suppress(OSError):
-        sock.shutdown(socket.SHUT_RDWR)
-
-
 def send(
     method: str,
     agent: Agent,
@@ -189,39 +186,31 @@ def send(
     body: bytes | None,
     timeout: float,
     connect_timeout: float | None = None,
+    *,
     limit: int | None = None,
-    deadline: float | None = None,
-    stop: Callable[[], bool] | None = None,
+    deadline_s: float | None = None,
 ) -> Reply:
-    """One request to the service's host and port. limit: the most bytes of reply to read; a
-    longer reply fails. deadline: a time.monotonic() value after which the whole request is
-    cut, however slowly the service sends. stop: asked between chunks; true ends the request."""
+    """One request to the service's host and port. limit: the most bytes of reply to read.
+    deadline_s: the most seconds the request may take once connected, however slowly the
+    service sends; timeout bounds each read only."""
     host, port, _ = target(agent)
-    wait = connect_timeout or timeout
-    if deadline is not None:
-        # The connect is inside the deadline too: it may not run past what is left of it.
-        left = deadline - time.monotonic()
-        if left <= 0:
-            return Reply(timed_out=True, connected=False)
-        wait = min(wait, left)
-    conn = http.client.HTTPConnection(host, port, timeout=wait)
+    conn = http.client.HTTPConnection(host, port, timeout=connect_timeout or timeout)
     try:
         conn.connect()
     except OSError as exc:  # refused, no such host, unreachable, or the connect timed out
         conn.close()
-        if deadline is not None and time.monotonic() >= deadline:
-            return Reply(timed_out=True, connected=False)  # the connect ran into the deadline
         # A reset while connecting is a port that took the connection and cut it, which a
         # fast loopback shows at connect; it is not a missing host.
         cut_short = isinstance(exc, ConnectionResetError)
         return Reply(failed=f"{type(exc).__name__}: {exc}", connected=False, unanswered=cut_short)
     if conn.sock is not None:
         conn.sock.settimeout(timeout)
+    expired = threading.Event()
     cutter: threading.Timer | None = None
-    if deadline is not None and conn.sock is not None:
-        # A socket timeout is per read, so a service that sends a byte a second never reaches
-        # it; shutting the socket down at the deadline ends any read, the headers' included.
-        cutter = threading.Timer(max(deadline - time.monotonic(), 0.0), cut, [conn.sock])
+    if deadline_s is not None and conn.sock is not None:
+        # A read timeout is per read, so a reply sent a byte at a time never meets it; the
+        # socket is shut at the deadline, which ends any read, the headers' included.
+        cutter = threading.Timer(deadline_s, cut, [conn.sock, expired])
         cutter.daemon = True
         cutter.start()
     replied = False
@@ -236,63 +225,39 @@ def send(
             while chunk := response.read1(65536):
                 data += chunk
                 if len(data) > limit:
-                    return Reply(failed=f"the reply is longer than {limit} bytes")
-                if stop is not None and stop():
-                    return Reply(failed="stopped")
-            if deadline is not None and time.monotonic() >= deadline:
-                return Reply(timed_out=True)  # the reply ended because it was cut
+                    return Reply(too_long=True, failed=f"the reply is longer than {limit} bytes")
+        if expired.is_set():
+            return Reply(timed_out=True)  # the reply ended because it was cut
         named = {k.lower(): v for k, v in response.getheaders()}
         return Reply(response.status, named, data)
     except TimeoutError:
         return Reply(timed_out=True)
     except (OSError, http.client.HTTPException, ValueError) as exc:
-        if deadline is not None and time.monotonic() >= deadline:
-            return Reply(timed_out=True)  # the cutter closed the socket under the read
+        if expired.is_set():
+            return Reply(timed_out=True)  # the deadline shut the socket under the read
         cut_short = isinstance(exc, ConnectionError | http.client.RemoteDisconnected)
         return Reply(failed=f"{type(exc).__name__}: {exc}", unanswered=cut_short and not replied)
     finally:
         if cutter is not None:
             cutter.cancel()
+            cutter.join()  # a cut already running ends before the socket is closed
         conn.close()
+
+
+def cut(sock: Any, expired: threading.Event) -> None:
+    """End the connection under a read that is still waiting."""
+    expired.set()
+    with contextlib.suppress(OSError):
+        sock.shutdown(socket.SHUT_RDWR)
 
 
 @dataclass
 class Probed:
-    """The probe's answer, with this machine's clock around it."""
+    """The probe's answer."""
 
     report: dict[str, object] | None
     reply: Reply
-    sent: float = 0.0
-    received: float = 0.0
-    server_time: float | None = None  # from the signed report or the signed clock reply
     clock_refused: bool = False  # signed: this machine's clock is outside the service's window
-
-    @property
-    def gap(self) -> float | None:
-        """The service's clock less this machine's, from the middle of the round trip. None
-        when no signed answer carried the service's time."""
-        if self.server_time is None:
-            return None
-        return self.server_time - (self.sent + self.received) / 2
-
-
-def clock_text(gap: float) -> str:
-    side = "ahead of" if gap > 0 else "behind"
-    return f"the service is {abs(gap):.1f} s {side} this machine"
-
-
-def clock_stop(gap: float) -> str:
-    return (
-        f"{clock_text(gap)}; a request more than 60 s off is refused, so the test stops from "
-        f"{CLOCK_STOP_S:g} s; set both clocks from the same time source"
-    )
-
-
-def seconds(value: object) -> float | None:
-    """A time from a signed reply: a finite number, else None."""
-    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
-        return None
-    return float(value)
 
 
 def probe(agent: Agent, token: str) -> Probed:
@@ -301,15 +266,16 @@ def probe(agent: Agent, token: str) -> Probed:
     app reached by mistake rejects it as a bad request. A signed clock reply says the two
     clocks differ by more than the window."""
     _, _, path = target(agent)
-    sent = time.time()
-    signed = protocol.request_headers(token, "POST", path, b"", sent)
+    signed = protocol.request_headers(token, "POST", path, b"", time.time())
     headers = {
         "x-scrimmage-run": f"probe-{secrets.token_hex(6)}",
         "x-scrimmage-probe": "1",
         **signed,
     }
-    reply = post(agent, headers, b"", 30.0, connect_timeout=CONNECT_S)
-    found = Probed(None, reply, sent, time.time())
+    reply = send(
+        "POST", agent, path, headers, b"", 30.0, CONNECT_S, limit=PROBE_MAX, deadline_s=PROBE_S
+    )
+    found = Probed(None, reply)
     kind = reply.headers.get("x-scrimmage-probe")
     if (reply.status, kind) not in ((200, "report"), (409, "clock")):
         return found
@@ -320,59 +286,36 @@ def probe(agent: Agent, token: str) -> Probed:
         document = json.loads(reply.body)
         if isinstance(document, dict):
             fields = cast(dict[str, object], document)
-            found.server_time = seconds(fields.get("server_time"))
             if kind == "clock":
-                found.clock_refused = (
-                    fields.get("error") == "clock" and found.server_time is not None
-                )
+                found.clock_refused = fields == {"error": "clock"}
             else:
                 found.report = dict(fields)
     return found
 
 
-def install_line(version: str) -> str:
-    return f"install scrimmage {version} in the service"
-
-
-def check_versions(report: dict[str, object]) -> list[str]:
-    """The report's Scrimmage against this runner's: exit 2 for a report older than this
-    runner reads, a version that is not an installed release, or another major. The same major
-    with another release is allowed, and the warning to say so is returned."""
+def other_version(theirs: object, where: str = "in the service") -> str:
+    """What to say when a process of the service runs another Scrimmage than this runner.
+    where: the part of the service to install this runner's version in. A runner with no
+    package metadata has no version to name, so the fix is in the runner instead."""
     ours = versions.installed()
-    found = report.get("v")
-    if found == 1:
-        raise Setup(
-            2,
-            f"the service's Scrimmage is older than this runner (startup report v1); "
-            f"{install_line(ours)}",
+    named = versions.shown(theirs) if isinstance(theirs, str) and theirs else "no version"
+    if ours == versions.UNKNOWN:
+        return (
+            f"the service runs scrimmage {named} and this runner has no package metadata; "
+            "install scrimmage in the runner"
         )
-    if found != 2:
-        raise Setup(
-            2,
-            f"the service's startup report is version {found!r}, which this runner does not "
-            f"read; {install_line(ours)}, or upgrade the runner",
-        )
-    theirs = report.get("sdk")
-    named = versions.shown(theirs)
-    verdict = versions.judge(theirs, ours)
-    if verdict is versions.Verdict.SAME:
-        return []
-    if verdict is versions.Verdict.WARN:
-        return [
-            f"the service runs scrimmage {named} and this runner is {ours}; the same "
-            "major release, so the test goes on"
-        ]
-    if verdict is versions.Verdict.UNREADABLE:
-        raise Setup(
-            2,
-            f"the service's SDK version is {named!r} (this runner is {ours}), which is not "
-            f"an installed scrimmage release; {install_line(ours)}",
-        )
-    raise Setup(
-        2,
-        f"the service runs scrimmage {named} and this runner is {ours}, another major "
-        f"release; {install_line(ours)}",
+    return (
+        f"the service runs scrimmage {named} and this runner is {ours}; "
+        f"install scrimmage {ours} {where}"
     )
+
+
+def check_version(report: dict[str, object]) -> None:
+    """The report's Scrimmage against this runner's: the same known version passes with
+    nothing said, and anything else is exit 2 naming both."""
+    theirs = report.get("sdk")
+    if not versions.same(theirs):
+        raise Setup(2, other_version(theirs))
 
 
 ROUTING_ERRORS = ("TimeoutError", "ConnectionRefusedError", "gaierror")  # asking again may help
@@ -412,14 +355,17 @@ def still_routing(report: dict[str, object] | None) -> bool:
 def check_control(
     report: dict[str, object], runner_id: str, *, asked_s: float, silent: bool = False
 ) -> None:
-    """The service's ping: exit 3 when it could not reach this runner's control server, or
-    reached another runner that holds the same token. asked_s: how long the runner asked
+    """The service's ping: exit 3 when it could not reach this runner's control server, when
+    the control server refused it for its time, or when it reached another runner that holds
+    the same token. asked_s: how long the runner asked
     again, said in the message for the errors it asks again about."""
     control = cast(dict[str, object], report.get("control") or {})
     url = str(control.get("url") or "the control address")
     if control.get("reached") is not True:
         error = control.get("error")
         detail = control.get("detail")
+        if detail == PING_CLOCK:
+            raise Setup(3, CLOCK_OFF)
         if error in ROUTING_ERRORS:
             parts = urlsplit(url)
             hint = HINTS[str(error)].format(host=parts.hostname or url, port=parts.port or "")
@@ -510,52 +456,3 @@ def answer_of(reply: Reply, agent: Agent) -> tuple[str | None, str | None]:
     except (ValueError, BadAnswerPath) as exc:
         return None, str(exc)
     return (found if isinstance(found, str) else json.dumps(found)), None
-
-
-def openapi_note(text: str) -> openapi_check.Result:
-    return openapi_check.Result((), (f"[agent] body: /openapi.json: {text}; not checked",))
-
-
-def openapi_paths(route: str) -> list[str]:
-    """Where the document may be: at the origin, then under each prefix of the service's path,
-    the longest first, at most OPENAPI_GETS in all."""
-    segments = [part for part in route.split("/") if part]
-    prefixes = ["/" + "/".join(segments[:n]) for n in range(len(segments) - 1, 0, -1)]
-    return [f"{prefix}/openapi.json" for prefix in ["", *prefixes]][:OPENAPI_GETS]
-
-
-def template_check(
-    agent: Agent, question: str = "x", stop: Callable[[], bool] | None = None
-) -> openapi_check.Result:
-    """Check the file's body against the service's /openapi.json. A plain GET from this
-    process, with the file's headers and no body, so no gate sees it. A misfit is a warning;
-    every other outcome, such as no document, is a note."""
-    from scrimmage_core.config import new_session
-
-    session = new_session()
-    headers = dict(request_headers(agent, session))
-    route = target(agent)[2].partition("?")[0]
-    asked: list[str] = []
-    end = time.monotonic() + OPENAPI_TIMEOUT_S  # for all the GETs together
-    for where in openapi_paths(route):
-        reply = send(
-            "GET", agent, where, headers, None, OPENAPI_TIMEOUT_S, None, OPENAPI_MAX, end, stop
-        )
-        asked.append(where)
-        if reply.status == 404:
-            continue
-        if reply.status != 200:
-            what = reply.failed or (
-                f"no complete answer in {OPENAPI_TIMEOUT_S:g} s"
-                if reply.timed_out
-                else f"status {reply.status}"
-            )
-            return openapi_note(f"GET {where} got {what}")
-        try:
-            document = json.loads(reply.body)
-        except (ValueError, RecursionError):  # not JSON, or nested past the parser's depth
-            return openapi_note(f"GET {where} did not answer a JSON document")
-        prefix = where.removesuffix("/openapi.json")
-        body = request_body(agent, question, session)
-        return openapi_check.check_template(document, route, "POST", body, prefix=prefix)
-    return openapi_note(f"no document at {', '.join(f'GET {a}' for a in asked)}")

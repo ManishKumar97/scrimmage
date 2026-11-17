@@ -557,7 +557,7 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
         assert form in guide or form.strip("`") in guide, form
     # Every code the gate can answer 503 with has its row, and nothing else has one.
     codes = set(re.findall(r'Unavailable\("([a-z-]+)"\)', Path(asgi_gate.__file__).read_text()))
-    codes |= {"no-such-run", "claimed"}
+    codes |= {*asgi_gate.CLAIM_REFUSALS.values(), asgi_gate.NO_SUCH_RUN}
     rows = set(
         re.findall(r"^\| `([a-z-]+)` \| ", guide.split("## When the gate answers 503")[1], re.M)
     )
@@ -627,7 +627,7 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
 
 @pytest.mark.design("docs.container_shape")
 def test_the_container_shape_tls_and_check_service_are_documented() -> None:
-    guide = page("services.md")
+    guide = page("docker.md")
     compose = (Path(__file__).parent / "compose" / "service" / "compose.yaml").read_text()
     assert compose.strip() in guide  # the page shows the file the Docker tests run
     for words in (
@@ -646,7 +646,7 @@ def test_the_container_shape_tls_and_check_service_are_documented() -> None:
     ):
         assert words in guide, words
     assert "## A service in a container" in guide
-    assert "[A service in a container](../services.md#a-service-in-a-container)" in page(
+    assert "[A service in a container](../docker.md#a-service-in-a-container)" in page(
         "examples/service-agent.md"
     )
     assert "`control_tls`" in page("configuration.md") and "scrimmage cert" in page("cli.md")
@@ -672,8 +672,9 @@ def test_no_documented_fault_fires_on_every_call_with_nothing_to_judge_it() -> N
 
 
 K8S = Path(__file__).parent / "k8s"
-# The files the "In Kubernetes" section shows, each as the cluster tests apply it. The fake
-# model's Deployment is left out: it stands in for the model provider in the tests only. So is
+# The files the Kubernetes page's "In Kubernetes" section shows, each as the cluster tests
+# apply it. The fake model's Deployment is left out: it stands in for the model provider in
+# the tests only. So is
 # the agent from the egress test image, which adds a hook only the tests use.
 K8S_TEST_ONLY = {"fake-model.yaml", "agent-egress.yaml"}
 K8S_SHOWN = {
@@ -685,11 +686,11 @@ K8S_SHOWN = {
 
 
 def kubernetes_docs_problems() -> list[str]:
-    """Each file the services page's "In Kubernetes" section shows, compared with the committed
+    """Each file the Kubernetes page's "In Kubernetes" section shows, compared with the committed
     one the cluster tests apply, and each of them shown once. An empty list is in step."""
-    parts = page("services.md").split("\n## In Kubernetes\n", 1)
+    parts = page("kubernetes.md").split("\n## In Kubernetes\n", 1)
     if len(parts) != 2:
-        return ["services.md has no In Kubernetes section"]
+        return ["kubernetes.md has no In Kubernetes section"]
     section = parts[1].split("\n## ", 1)[0]
     blocks = re.findall(r'(?ms)^```(?:yaml|toml) title="([^"]+)"\n(.*?)^```$', section)
     counts = Counter(title for title, _ in blocks)
@@ -708,4 +709,31 @@ def kubernetes_docs_problems() -> list[str]:
 @pytest.mark.design("docs.kubernetes_manifests")
 def test_the_docs_manifests_are_the_tested_ones() -> None:
     assert kubernetes_docs_problems() == []
-    assert "[In Kubernetes](../services.md#in-kubernetes)" in page("examples/service-agent.md")
+    assert "[In Kubernetes](../kubernetes.md#in-kubernetes)" in page("examples/service-agent.md")
+
+
+@pytest.mark.design("docs.service_pages")
+def test_each_service_use_case_has_its_own_page() -> None:
+    """Docker Compose and Kubernetes each have a page in the nav, the service guide links to
+    both, and neither page's sections is left in the guide."""
+    nav = (DOCS.parent / "mkdocs.yml").read_text().split("\nnav:\n")[1]
+    guide = page("services.md")
+    moved = {
+        "docker.md": (
+            "A service in Docker Compose",
+            "## A service in a container",
+            "### With Docker Compose",
+        ),
+        "kubernetes.md": (
+            "A service in Kubernetes",
+            "## The token and the key in a Kubernetes pod",
+            "## In Kubernetes",
+        ),
+    }
+    for name, (title, *headings) in moved.items():
+        assert f"      - {title}: {name}\n" in nav, name
+        assert page(name).startswith(f"# {title}\n"), name
+        assert f"]({name})" in guide, name
+        for heading in headings:
+            assert re.search(rf"(?m)^{re.escape(heading)}$", page(name)), heading
+            assert not re.search(rf"(?m)^{re.escape(heading)}$", guide), heading

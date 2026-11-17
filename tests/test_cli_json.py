@@ -757,18 +757,25 @@ def test_the_shipped_schema_takes_what_a_later_release_adds() -> None:
 def test_the_version_comes_from_the_package_or_is_unknown(
     project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # The version is read once per process and kept: each case reads it afresh, and the
+    # real one is read again after the test.
     monkeypatch.setattr(importlib.metadata, "version", lambda name: f"sentinel-{name}")
-    assert cli.main(["check", "--json", str(project.toml)]) == 0
-    assert json.loads(capsys.readouterr().out)["scrimmage"] == "sentinel-scrimmage"
+    versions._installed.cache_clear()
+    try:
+        assert cli.main(["check", "--json", str(project.toml)]) == 0
+        assert json.loads(capsys.readouterr().out)["scrimmage"] == "sentinel-scrimmage"
 
-    def missing(name: str) -> str:
-        raise importlib.metadata.PackageNotFoundError(name)
+        def missing(name: str) -> str:
+            raise importlib.metadata.PackageNotFoundError(name)
 
-    monkeypatch.setattr(importlib.metadata, "version", missing)
-    assert cli.main(["check", "--json", str(project.toml)]) == 0
-    doc = json.loads(capsys.readouterr().out)
-    validate(doc)
-    assert doc["scrimmage"] == "unknown"
+        monkeypatch.setattr(importlib.metadata, "version", missing)
+        versions._installed.cache_clear()
+        assert cli.main(["check", "--json", str(project.toml)]) == 0
+        doc = json.loads(capsys.readouterr().out)
+        validate(doc)
+        assert doc["scrimmage"] == "unknown"
+    finally:
+        versions._installed.cache_clear()
 
 
 def test_a_document_that_cannot_be_written_still_gives_one(

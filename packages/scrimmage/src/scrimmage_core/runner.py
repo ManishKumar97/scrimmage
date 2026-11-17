@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO, cast
 
-from scrimmage_core import judge, labels, protocol, service_client, versions
+from scrimmage_core import judge, labels, protocol, service_client
 from scrimmage_core import plan as planner
 from scrimmage_core.budget import Ledger
 from scrimmage_core.config import (
@@ -206,14 +206,6 @@ class Ended:
 
 
 PLAN_CHANGED = "the process that served this run used another plan"
-PLAN_UNREPORTED = (
-    "the service's Scrimmage does not report which plan it used; "
-    "upgrade scrimmage in the service to compare"
-)
-PLAN_FORM_UNKNOWN = (
-    "the service's Scrimmage digests its plan in form {form}, and this runner compares form "
-    "{ours}; use the same scrimmage version in the service to compare"
-)
 READY_S = 30.0  # how long the probe asks a service that does not listen yet
 READY_STEP_S = 0.2
 CONTROL_STEP_S = 1.0  # how often the probe asks again while the service cannot reach the runner
@@ -350,8 +342,6 @@ class Runner:
         # One turn per row of a service test: its runs go one after another.
         self.turns: dict[tuple[str, str], threading.Semaphore] = {}
         self.tools_seen: list[str] | None = None  # as the agent's process reported them
-        self.service_warnings: list[str] = []  # what the probe found that does not stop the test
-        self.service_notes: list[str] = []  # what the template check could not check
         self.asked_s = 0.0  # how long the probe asked again while the ping failed
         self.went_silent = False  # the service stopped answering the probe in that wait
         self.control_ping: dict[str, object] | None = None  # the service's ping, as it reported
@@ -535,23 +525,12 @@ class Runner:
         incomplete = bool(state.dropped) or (ended_itself and (gap or unfinished))
         own_digest = protocol.plan_digest(self.server.token, state.plan) if state.service else None
         # Equal digests say nothing more. Another says the claiming process used another plan.
-        # A last batch with no digest, or one of a form this runner does not compute, is from
-        # another SDK of the same major: no comparison, and a notice says so.
-        form, digest = state.claimed_plan_form, state.claimed_plan_digest
-        comparable = digest is not None and form == protocol.PLAN_DIGEST_FORM
-        claimed = digest if comparable else None
-        changed = comparable and digest != own_digest
-        unreported = state.service and state.ended.is_set() and not comparable
+        # The control server refuses a claimed run's last batch with no digest.
+        claimed = state.claimed_plan_digest
+        changed = claimed is not None and claimed != own_digest
         made = kept_out + [self.left_line(run, row, *entry) for entry in left]
         if changed:
             made.append(self.runner_notice(run, row, "plan_changed", PLAN_CHANGED))
-        elif unreported:
-            said = (
-                PLAN_UNREPORTED
-                if digest is None
-                else PLAN_FORM_UNKNOWN.format(form=form, ours=protocol.PLAN_DIGEST_FORM)
-            )
-            made.append(self.runner_notice(run, row, "plan_unreported", said))
         self.store.add(run, made)
         lines += made
         model = [line for line in lines if line.get("kind") == "model"]
@@ -692,7 +671,8 @@ class Runner:
         streamed = ok and service_client.streamed(reply, agent)
         unclaimed = not self.server.runs[run].fetched and reply.status is not None and gate is None
         wrong_version = gate == "version"
-        if unclaimed or streamed or wrong_version:
+        clock_off = gate == "clock"  # every later claim of this process would be refused too
+        if unclaimed or streamed or wrong_version or clock_off:
             with self.lock:
                 self.cancelled = True  # under this lock, so no run starts from here on
         assert self.waiters is not None  # run_all made it, as this is a service
@@ -710,6 +690,9 @@ class Runner:
         if wrong_version:
             later.result()
             raise self.version_refusal(run)
+        if clock_off:
+            later.result()
+            raise service_client.Setup(3, f"{run} was refused: {service_client.CLOCK_OFF}")
         if streamed:
             later.result()
             raise service_client.Setup(
@@ -720,17 +703,13 @@ class Runner:
         return later
 
     def version_refusal(self, run: str) -> "service_client.Setup":
-        """A worker of the service from another major release refused its claim: every run it
-        gets would fail the same way, so the test stops."""
+        """A worker of the service of another version refused its claim: every run it gets
+        would fail the same way, so the test stops."""
         found = self.server.refused_sdk
-        theirs = "no version" if not found or found[0] is None else versions.shown(found[0])
-        ours = versions.installed()
-        return service_client.Setup(
-            2,
-            f"{run} was refused: a process of the service runs scrimmage {theirs} and "
-            f"this runner is {ours}, another major release; "
-            f"{service_client.install_line(ours)}, in every process of it",
+        said = service_client.other_version(
+            found[0] if found else None, "in the service, in every process of it"
         )
+        return service_client.Setup(2, f"{run} was refused: {said}")
 
     def served_result(
         self,
@@ -749,7 +728,8 @@ class Runner:
         gate = reply.gate_refused
         if gate is not None:
             infra = True
-            mistakes.append(f"the service's gate answered 503 {gate}")
+            said = service_client.CLOCK_OFF if gate == "clock" else None
+            mistakes.append(said or f"the service's gate answered 503 {gate}")
         elif ok and not streamed:
             answer, wrong = service_client.answer_of(reply, agent)
             if wrong is not None:
@@ -761,7 +741,7 @@ class Runner:
 
     def probe_service(self) -> service_client.Probed:
         """The probe, asked again while the service starts: exit 3 when no gated service
-        answers, or the service's clock is too far from this machine's to go on."""
+        answers, or the service's clock and this machine's differ by more than the window."""
         agent = self.config.agent
         _, _, path = service_client.target(agent)
         deadline = time.monotonic() + READY_S
@@ -803,7 +783,20 @@ class Runner:
                 f"cannot reach the service's address for POST {path} ({reply.failed}): no such "
                 "host, or no route to it",
             )
-        if reply.failed is not None or reply.timed_out:
+        if reply.too_long:
+            raise service_client.Setup(
+                3,
+                f"the service at POST {path} answered the probe with more than "
+                f"{service_client.PROBE_MAX // (1024 * 1024)} MiB; Scrimmage's startup report "
+                "is a few KB, so something other than Scrimmage answered",
+            )
+        if reply.timed_out:
+            raise service_client.Setup(
+                3,
+                f"the service at POST {path} did not finish its reply to the probe within "
+                f"{service_client.PROBE_S:g} s",
+            )
+        if reply.failed is not None:
             hint = (
                 "; a container's published port can accept a connection before the app "
                 "inside listens, and this one was still reset or closed with no reply after "
@@ -814,11 +807,10 @@ class Runner:
             raise service_client.Setup(
                 3,
                 f"the service at POST {path} took the probe's connection but gave no reply: "
-                f"{reply.failed or 'timed out'}{hint}",
+                f"{reply.failed}{hint}",
             )
-        gap = probed.gap
-        if probed.clock_refused and gap is not None:
-            raise service_client.Setup(3, service_client.clock_stop(gap))
+        if probed.clock_refused:
+            raise service_client.Setup(3, service_client.CLOCK_OFF)
         report = probed.report
         if report is None or not {"asgi", "starlette"} & set(
             cast(list[str], report.get("gates") or [])
@@ -890,27 +882,13 @@ class Runner:
         report = probed.report
         assert report is not None  # probe_service raised without one
         self.control_ping = cast(dict[str, object] | None, report.get("control"))
-        self.service_warnings += service_client.check_versions(report)
+        service_client.check_version(report)
         problem = self.tools_problem(report)
         if problem is not None:
             raise service_client.Setup(2, problem)
         service_client.check_control(
             report, self.server.runner_id, asked_s=self.asked_s, silent=self.went_silent
         )
-        gap = probed.gap
-        if gap is not None and abs(gap) >= service_client.CLOCK_STOP_S:
-            raise service_client.Setup(3, service_client.clock_stop(gap))
-        if gap is not None and abs(gap) >= service_client.CLOCK_WARN_S:
-            self.service_warnings.append(service_client.clock_text(gap))
-
-        def stopped() -> bool:
-            return self.cancelled or bool(self.stop_flag)
-
-        found = service_client.template_check(self.config.agent, stop=stopped)
-        if stopped():  # Ctrl-C or SIGTERM ended the read
-            raise Interrupted(self.stop_flag[0] if self.stop_flag else "SIGINT")
-        self.service_warnings += found.warnings
-        self.service_notes += found.notes
         self.setup_request()
 
     def setup_request(self) -> None:
@@ -934,6 +912,8 @@ class Runner:
         gate = reply.gate_refused
         if gate == "version":
             raise self.version_refusal(name)
+        if gate == "clock":
+            raise service_client.Setup(3, service_client.CLOCK_OFF)
         if not state.fetched or gate is not None or reply.failed or reply.timed_out:
             why = gate or reply.failed or ("timed out" if reply.timed_out else "never claimed")
             raise service_client.Setup(
@@ -1825,8 +1805,6 @@ def build_report(
             "none matched its method and path"
             for call in web_misses
         ]
-    warnings += runner.service_warnings if runner is not None else []
-    notes += runner.service_notes if runner is not None else []
     if hosted:
         warnings.append(
             f"{plural(hosted, 'model request')} offered provider tools that only read, "
@@ -1841,15 +1819,6 @@ def build_report(
             for r in results
             for line in r.notices
             if line.get("notice") == "model_path"
-        }
-    )
-    # An older SDK in the service says nothing of its plan: once per test, not once per run.
-    notes += sorted(
-        {
-            f"{r.row.test.name}: {line.get('message')}"
-            for r in results
-            for line in r.notices
-            if line.get("notice") == "plan_unreported"
         }
     )
     newer = sorted(

@@ -64,7 +64,6 @@ class Run:
     claimer: dict[str, object] | None = None  # {host, pid} of the claiming process
     # What the claimer's last batch said of the plan its state used; None when it said none.
     claimed_plan_digest: str | None = None
-    claimed_plan_form: int | None = None  # the form that digest is of
     # The claiming process's control load from the run's claim to its close: its last batch.
     control_busy: int | None = None
     control_p99_ms: float | None = None
@@ -210,11 +209,8 @@ class ControlServer:
             run, proc = str(request["run"]), proc_key(request["proc"])
         except (ValueError, KeyError):
             return 400, {"error": "bad_request"}
-        sdk = request.get("sdk")  # a claim that does not say its version is refused like a major
-        if versions.judge(sdk, versions.installed()) in (
-            versions.Verdict.UNREADABLE,
-            versions.Verdict.MAJOR,
-        ):
+        sdk = request.get("sdk")  # a claim that does not say its version is refused too
+        if not versions.same(sdk):
             with self.lock:
                 if not self.refused_sdk:  # the first is the one the runner names
                     self.refused_sdk.append(sdk if isinstance(sdk, str) else None)
@@ -330,7 +326,7 @@ class ControlServer:
             if made is not None and made < 0:
                 raise ValueError("made is negative")
             busy, p99 = control_load(batch)
-            digest, form = plan_digest_of(batch)
+            digest = plan_digest_of(batch)
         except (ValueError, KeyError, TypeError):
             return 400, {"error": "bad_batch"}
         mine = [line for line in lines if line.get("run") == run]
@@ -344,13 +340,14 @@ class ControlServer:
                 senders.add(proc_key(batch.get("proc")))
             if claimer is not None and senders - {claimer}:
                 return 409, {"error": "not_the_claimer"}  # no run spans processes in a service
+            if made is not None and claimer is not None and digest is None:
+                return 400, {"error": "bad_batch"}  # a claimed run's last batch names its plan
             state.dropped += dropped
             if made is not None:
                 state.made[proc_key(batch.get("proc"))] = made
                 state.control_busy, state.control_p99_ms = busy, p99
                 if claimer is not None:
                     state.claimed_plan_digest = digest
-                    state.claimed_plan_form = form
                     state.ended.set()
             accepted = self.store.add(run, mine)
             reasons = [
@@ -383,15 +380,12 @@ def control_load(batch: dict[str, object]) -> tuple[int | None, float | None]:
     return busy, None if p99 is None else float(p99)
 
 
-def plan_digest_of(batch: dict[str, object]) -> tuple[str | None, int | None]:
-    """A last batch's plan_digest and the form it is of, which only a newer SDK sends: 64 hex
-    and a whole number, or absent."""
-    digest, form = batch.get("plan_digest"), batch.get("plan_digest_form")
+def plan_digest_of(batch: dict[str, object]) -> str | None:
+    """A last batch's plan_digest: 64 hex, or absent."""
+    digest = batch.get("plan_digest")
     if digest is not None and not (isinstance(digest, str) and SHA256.fullmatch(digest)):
         raise ValueError("plan_digest is not a digest")
-    if form is not None and (isinstance(form, bool) or not isinstance(form, int)):
-        raise ValueError("plan_digest_form is not a number")
-    return digest, form
+    return digest
 
 
 def claimer_of(proc: object) -> dict[str, object]:
@@ -535,7 +529,6 @@ def _handler(control: ControlServer) -> type[BaseHTTPRequestHandler]:
             else:
                 body = self.rfile.read(length) if length else b""
                 status, payload = control.handle(method, self.path, headers, body)
-            payload["server_time"] = control.clock()
             reply = json.dumps(payload).encode()
             signature = protocol.sign_reply(
                 control.token, headers.get(protocol.SIGNATURE, ""), status, reply
