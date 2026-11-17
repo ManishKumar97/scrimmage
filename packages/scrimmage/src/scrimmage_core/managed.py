@@ -14,6 +14,8 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 from scrimmage_core import plan as planner
@@ -25,9 +27,12 @@ from scrimmage_core.service_client import Setup
 LAST_LINES = 20  # how much of service.log a failure shows
 TAIL_BYTES = 64 * 1024  # how much of service.log is read to find those lines
 GONE_S = 1.0  # how long a failed request waits to see that the copy has exited
-# How long a failed probe waits to see that the copy has exited: one that lost its port to
-# another process exits once uvicorn has loaded the app and tried to bind.
-FAILED_PROBE_S = 10.0
+# Where /proc cannot say whether the copy listens on its port, how long a failed probe waits
+# to see that the copy has exited: one that lost its port to another process exits once
+# uvicorn has loaded the app and tried to bind, about 1 s for the example app.
+FAILED_PROBE_S = 3.0
+LOST_PORT_STEP_S = 0.1
+LISTEN = "0A"  # a listening socket's state in /proc/net/tcp
 STOP_SIGNALS = {signal.SIGINT, signal.SIGTERM}
 STARTED = "the service started with [agent] start"
 
@@ -42,6 +47,24 @@ def free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return int(probe.getsockname()[1])
+
+
+def listening(port: int) -> set[str] | None:
+    """The sockets listening on this port, as a process's fd links name them, from
+    /proc/net/tcp and tcp6; None on a system without them, such as macOS."""
+    found: set[str] = set()
+    read = False
+    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            rows = Path(table).read_text().splitlines()[1:]
+        except OSError:
+            continue
+        read = True
+        for row in rows:
+            fields = row.split()
+            if fields[3] == LISTEN and int(fields[1].rsplit(":", 1)[1], 16) == port:
+                found.add(f"socket:[{fields[9]}]")
+    return found if read else None
 
 
 class Managed:
@@ -59,6 +82,10 @@ class Managed:
         self.keep_log = keep_log
         self.proc: subprocess.Popen[bytes] | None = None
         self.token_folder: Path | None = None
+        # The runner's stop thread stops the copy on a stop signal, and the test's end stops
+        # it too: one at a time, and once.
+        self.lock = threading.Lock()
+        self.stopped = False
 
     def env(self, control_url: str, token_file: Path) -> dict[str, str]:
         """The runner's environment with every SCRIMMAGE_ variable dropped, so a value left
@@ -72,6 +99,7 @@ class Managed:
             SCRIMMAGE_TOOLS=planner.tools_text(agent.tools, agent.renames),
             SCRIMMAGE_ALLOW_IMPORTS=",".join(agent.allowed_imports()),
             SCRIMMAGE_RUNNER_PID=str(os.getpid()),  # run_command asks to be stopped with it
+            SCRIMMAGE_MANAGED="1",  # each worker asks to be stopped with its supervisor
         )
         return env
 
@@ -80,25 +108,26 @@ class Managed:
         Linux kills the copy's supervisor when the thread that started it exits."""
         from scrimmage_core.runner import owner_only  # the runner imports this module
 
-        self.token_folder = Path(tempfile.mkdtemp(prefix="scrimmage-token-"))  # mode 0700
-        token_file = self.token_folder / "token"
-        fd = owner_only(token_file)
-        with os.fdopen(fd, "w") as out:
-            out.write(self.token)
-        words = start_args(self.config.agent, self.port)
-        log = owner_only(self.log)
-        try:
-            self.proc = subprocess.Popen(
-                [sys.executable, "-m", "scrimmage_core.run_command", *words],
-                cwd=self.config.root,
-                env=self.env(control_url, token_file),
-                stdin=subprocess.DEVNULL,
-                stdout=log,
-                stderr=log,
-                start_new_session=True,  # its own process group, so every worker stops too
-            )
-        finally:
-            os.close(log)
+        with self.lock:  # a stop on a signal waits until the copy has started, or comes first
+            self.token_folder = Path(tempfile.mkdtemp(prefix="scrimmage-token-"))  # mode 0700
+            token_file = self.token_folder / "token"
+            fd = owner_only(token_file)
+            with os.fdopen(fd, "w") as out:
+                out.write(self.token)
+            words = start_args(self.config.agent, self.port)
+            log = owner_only(self.log)
+            try:
+                self.proc = subprocess.Popen(
+                    [sys.executable, "-m", "scrimmage_core.run_command", *words],
+                    cwd=self.config.root,
+                    env=self.env(control_url, token_file),
+                    stdin=subprocess.DEVNULL,
+                    stdout=log,
+                    stderr=log,
+                    start_new_session=True,  # its own process group, so every worker stops too
+                )
+            finally:
+                os.close(log)
 
     def alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
@@ -113,6 +142,38 @@ class Managed:
         except subprocess.TimeoutExpired:
             return False
         return True
+
+    def lost_its_port(self, until: float) -> bool:
+        """After a probe that something other than a gated copy answered: whether the copy
+        exits, which one whose port another process took does once it has loaded the app.
+
+        While the copy runs and none of its processes listens on its port, it is still
+        loading the app, so the wait goes on, up to until; once one listens, the copy is what
+        answered. Where /proc cannot say, the wait is FAILED_PROBE_S."""
+        while time.monotonic() < until:
+            if self.gone(LOST_PORT_STEP_S):
+                return True
+            held = self.holds_port()
+            if held is None:
+                return self.gone(FAILED_PROBE_S)
+            if held:
+                return False
+        return False
+
+    def holds_port(self) -> bool | None:
+        """A process of the copy's group listens on its port; None where /proc cannot say."""
+        sockets = listening(self.port)
+        if sockets is None or self.proc is None:
+            return None
+        for entry in Path("/proc").iterdir():
+            try:
+                if not entry.name.isdigit() or os.getpgid(int(entry.name)) != self.proc.pid:
+                    continue
+                if any(os.readlink(fd) in sockets for fd in (entry / "fd").iterdir()):
+                    return True
+            except OSError:  # it ended while it was read, or is another user's
+                continue
+        return False
 
     def last_lines(self) -> str:
         """The log's last lines, each value ${NAME} filled in removed."""
@@ -146,20 +207,29 @@ class Managed:
         """SIGTERM to the copy's group, SIGKILL after the runner's grace, then reap it; then the
         log is scrubbed and the token's folder removed, only once the group is gone.
 
+        The runner's stop thread calls it on Ctrl-C or SIGTERM, so a run in flight ends at
+        once, and the test's end calls it too: the second call waits for the first, and does
+        nothing more. A call before the start does nothing, so the start still happens and
+        the test's end stops that copy.
+
         SIGINT and SIGTERM are blocked in this thread while the group stops, so a second
         Ctrl-C cannot cut the grace short and skip the SIGKILL. Python still runs its handler
-        on this thread, so each caller has its own handler in place that only notes them.
+        on the main thread, so each caller has its own handler in place that only notes them.
         """
         from scrimmage_core.runner import stop_groups  # the runner imports this module
 
-        try:
-            if self.proc is not None:
-                held = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
-                try:
-                    stop_groups([self.proc])
-                finally:
-                    signal.pthread_sigmask(signal.SIG_SETMASK, held)
-        finally:
-            self.store.scrub_file(self.log)
-        if self.token_folder is not None:  # not after a failed stop: a worker may still run
+        with self.lock:
+            if self.stopped or self.token_folder is None:  # stopped, or not started yet
+                return
+            try:
+                if self.proc is not None:
+                    held = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
+                    try:
+                        stop_groups([self.proc])
+                    finally:
+                        signal.pthread_sigmask(signal.SIG_SETMASK, held)
+            finally:
+                self.store.scrub_file(self.log)
+            # Not after a failed stop: a worker may still run.
             shutil.rmtree(self.token_folder, ignore_errors=True)
+            self.stopped = True

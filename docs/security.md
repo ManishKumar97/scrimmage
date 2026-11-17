@@ -132,6 +132,7 @@ The runner's requests to the service stay `http://`, and what that exposes is on
 
 When Scrimmage [starts the service](services.md#let-scrimmage-start-the-service) with `start`, the token is one the runner makes for that test.
 It is in a mode `600` file in a mode `700` folder the runner made, never in an environment variable, and the folder is deleted when the test ends.
+A runner killed with SIGKILL cannot delete it; the folder then stays in the temporary folder, and its token opens nothing, as the control server it signs for has gone with that runner.
 The copy's environment holds none of the runner's own `SCRIMMAGE_` variables, only the settings it needs.
 On this path the control server listens on `127.0.0.1` only, over `http://`.
 

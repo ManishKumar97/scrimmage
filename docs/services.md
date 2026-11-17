@@ -50,6 +50,9 @@ It has mode `600`, and each value `${NAME}` filled in is removed from it when th
 | It does not answer the probe in 30 seconds | exit 3, with its last lines; the copy is stopped |
 | It exits during the test | the run whose request failed is an infrastructure error, no further run is sent, and the test stops with exit 3 and the copy's last lines |
 | The test ends, or Ctrl-C or SIGTERM stops it | the copy is stopped; its exit code is not judged |
+| The runner is killed with SIGKILL | on Linux, the program `start` names and uvicorn's workers under it are killed with it; any other program the copy started keeps running |
+
+On Ctrl-C or SIGTERM the copy is stopped at once, so a run waiting on its reply ends then, not at `run_timeout`.
 
 Another process can take the port in the moment before the copy binds it.
 The copy then exits, its last lines say the address is already in use, and a second run of the test picks another port.
@@ -286,6 +289,13 @@ In a cluster, the runner runs as a Job and the service as a Deployment, with the
 The supervisor loads no app and says nothing.
 gunicorn's workers, `UvicornWorker` included, are forks of one process and have none of Scrimmage's threads, so each stops at its first request and says so.
 Which worker takes a run is up to the kernel, and a run's lines always carry the process that served it.
+
+With `start`, `--workers N` in the command works the same way.
+Every worker is in the copy's process group, so the stop at the end of the test reaches each of them.
+On Linux the program `start` names asks to be killed when the runner dies, and each of uvicorn's workers asks the same of its supervisor.
+So when `start` runs uvicorn itself, a runner killed with SIGKILL leaves no worker serving the port.
+A wrapper such as `sh serve.sh` is the program `start` names, so only the wrapper goes: uvicorn under it, its workers and anything else it started keep running.
+Set `parallel` to the number of workers or less.
 
 Each process sends at most 8 control requests at once, so 8 processes fill the control server's 64 connections.
 A connection past those waits until one frees, or for up to 10 seconds, and then its run is an infrastructure error.

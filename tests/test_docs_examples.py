@@ -7,16 +7,12 @@ one runs that command and compares, line by line.
 The model is the fake OpenAI server, scripted per page below, so no key is needed.
 """
 
-import contextlib
 import os
 import re
-import secrets
-import shlex
 import shutil
-import subprocess
+import signal
 import sys
-import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,9 +20,10 @@ import pytest
 
 from conftest import ACME, EXAMPLE, doc_pages
 from fakes.openai_server import FakeOpenAI, Guard, Rule
-from ports import free_port
 from scrimmage_core.cli import main
+from scrimmage_core.managed import Managed
 from scrimmage_core.outcomes import MISTAKE, OK, ROW_FAILED
+from test_managed_start import group
 
 DOCS = Path(__file__).parents[1] / "docs"
 OUTPUT = "Output"
@@ -42,7 +39,6 @@ class Example:
     start: Path | None = None  # a folder the page starts from, or none
     base: str | None = None  # a page whose files this page starts from
     by_model: dict[str, Rule] | None = None  # models answered by what they are sent
-    service: bool = False  # the page starts a service with its own line before its test
 
 
 # The bot asks for the order, then answers, or says it could not if the tool failed.
@@ -56,87 +52,7 @@ EXAMPLES = {
     "examples/web-request.md": Example(ONE_TOOL, [OK], base="examples/function-agent.md"),
     "examples/judging.md": Example(ONE_TOOL, [ROW_FAILED, OK], base="examples/function-agent.md"),
     "examples/one-model.md": Example(ONE_TOOL, [ROW_FAILED, OK], base="examples/function-agent.md"),
-    "examples/service-agent.md": Example(
-        ONE_TOOL, [OK, OK], base="examples/function-agent.md", service=True
-    ),
 }
-PAGE_PORT = "127.0.0.1:8765"  # the service address the page shows, moved to a free port
-
-
-def start_line(name: str) -> tuple[dict[str, str], list[str]]:
-    """The page's own start line, as written: the variables set before scrimmage-run, and
-    the command from scrimmage-run on, without a trailing &."""
-    for lang, _, body in FENCE.findall((DOCS / name).read_text()):
-        if lang != "bash" or "scrimmage-run " not in body:
-            continue
-        joined = body.replace("\\\n", " ")
-        line = next(x for x in joined.splitlines() if "scrimmage-run " in x)
-        words = [w for w in shlex.split(line) if w != "&"]
-        at = words.index("scrimmage-run")
-        env = dict(w.split("=", 1) for w in words[:at])
-        return env, words[at:]
-    raise AssertionError(f"{name} shows no scrimmage-run line")
-
-
-@contextlib.contextmanager
-def served(root: Path, page: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """The page's service, started with the page's own line, on a free port, until the page
-    ends. The process and every worker it started are gone, by pid, before this returns."""
-    token = root / ".scrimmage-token"
-    token.write_text(secrets.token_hex(32))
-    token.chmod(0o600)
-    control = f"http://127.0.0.1:{free_port()}"
-    port = free_port()
-    toml = root / "scrimmage.toml"
-    toml.write_text(toml.read_text().replace(PAGE_PORT, f"127.0.0.1:{port}"))
-    monkeypatch.setenv("SCRIMMAGE_TOKEN_FILE", str(token))
-    monkeypatch.setenv("SCRIMMAGE_CONTROL_URL", control)
-    bin_dir = Path(sys.executable).parent
-    shown, words = start_line(page)
-    env = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
-    env.update(shown)
-    env.update(
-        PATH=f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
-        SCRIMMAGE_TOKEN_FILE=str(token),  # the page's file and address, here on free ports
-        SCRIMMAGE_CONTROL_URL=control,
-    )
-    command = [str(bin_dir / words[0]), str(bin_dir / words[1]), *words[2:]]
-    command[command.index(PAGE_PORT.rpartition(":")[2])] = str(port)
-    proc = subprocess.Popen(
-        command,
-        cwd=root,
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    ready, said = threading.Event(), []
-
-    def read() -> None:
-        assert proc.stderr is not None
-        for line in proc.stderr:
-            said.append(line)
-            if "Application startup complete" in line:
-                ready.set()
-        ready.set()
-
-    reader = threading.Thread(target=read, daemon=True)
-    reader.start()
-    try:
-        assert ready.wait(60) and proc.poll() is None, "".join(said)
-        yield
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(20)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-        reader.join(10)
-        if proc.stderr is not None:
-            proc.stderr.close()
-        with pytest.raises(ProcessLookupError):  # the service is gone
-            os.kill(proc.pid, 0)
 
 
 @dataclass(frozen=True)
@@ -204,24 +120,13 @@ def check_page(
     )
     monkeypatch.chdir(root)
     codes: list[int] = []
-    command: list[str] = []
-    with contextlib.ExitStack() as stack:
-        run_blocks(name, example, root, codes, command, stack, monkeypatch, capsys)
+    run_blocks(name, root, codes, capsys)
     assert codes == example.codes
 
 
-def run_blocks(
-    name: str,
-    example: Example,
-    root: Path,
-    codes: list[int],
-    command: list[str],
-    stack: contextlib.ExitStack,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+def run_blocks(name: str, root: Path, codes: list[int], capsys: pytest.CaptureFixture[str]) -> None:
     """Each block of the page in order: a file is written, an Output is the command run."""
-    started = False
+    command: list[str] = []
     for lang, title, body in FENCE.findall((DOCS / name).read_text()):
         if lang == "bash":
             shown = [line for line in body.splitlines() if line.startswith("scrimmage ")]
@@ -234,9 +139,6 @@ def run_blocks(
             apply(root, block)
             continue
         with_fake_host(root / "scrimmage.toml")
-        if example.service and command[:1] == ["test"] and not started:
-            stack.enter_context(served(root, name, monkeypatch))
-            started = True
         capsys.readouterr()
         codes.append(main(command))
         out = capsys.readouterr().out
@@ -254,6 +156,53 @@ def test_the_page_runs_and_prints_what_it_shows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     check_page(name, EXAMPLES[name], tmp_path, fake_openai, capsys, monkeypatch)
+
+
+# The service page: Scrimmage starts the service with [agent] start, so the page has no line
+# of its own to start it, and no process of it is left after the test.
+SERVICE = "examples/service-agent.md"
+SERVICE_RUN = Example(ONE_TOOL, [OK, OK], base="examples/function-agent.md")
+
+
+@pytest.mark.slow
+def test_the_example_page_runs_with_a_managed_start(
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in list(os.environ):
+        if name.startswith("SCRIMMAGE_"):
+            monkeypatch.delenv(name)
+    copies: list[Managed] = []
+    start = Managed.start
+
+    def started(copy: Managed, control_url: str) -> None:
+        copies.append(copy)
+        start(copy, control_url)
+
+    monkeypatch.setattr(Managed, "start", started)
+    try:
+        check_page(SERVICE, SERVICE_RUN, tmp_path, fake_openai, capsys, monkeypatch)
+    finally:
+        for copy in copies:  # a test that failed part way leaves nothing running
+            if copy.proc is not None and group(copy.proc.pid):
+                os.killpg(copy.proc.pid, signal.SIGKILL)
+    # The test started its copy, and only the test: every shell line is a scrimmage command,
+    # so the page sets no variable and makes no token file.
+    shell = [
+        line
+        for lang, _, body in FENCE.findall((DOCS / SERVICE).read_text())
+        if lang == "bash"
+        for line in body.splitlines()
+        if line.strip() and not line.startswith("scrimmage ")
+    ]
+    assert shell == []
+    assert not list((tmp_path / "project").glob(".scrimmage-token*"))
+    assert len(copies) == 1  # scrimmage test's; scrimmage check starts none without --service
+    proc = copies[0].proc
+    assert proc is not None and proc.returncode is not None
+    assert group(proc.pid) == [], "a process of the service was left running"
 
 
 # The page on changing a result starts from the function agent. The fake model obeys the
@@ -302,7 +251,7 @@ def test_every_page_with_an_output_is_run() -> None:
         for p in doc_pages(DOCS)
         if any(b.title == OUTPUT for b in blocks(str(p.relative_to(DOCS))))
     }
-    assert pages == {*EXAMPLES, CHANGING, GUARDRAILS}
+    assert pages == {*EXAMPLES, SERVICE, CHANGING, GUARDRAILS}
 
 
 def test_the_landing_page_shows_the_function_agent_as_it_runs() -> None:

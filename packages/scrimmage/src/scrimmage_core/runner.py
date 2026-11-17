@@ -46,7 +46,7 @@ from scrimmage_core.config import (
     write_warnings,
 )
 from scrimmage_core.control import ControlServer, proc_key
-from scrimmage_core.managed import FAILED_PROBE_S, CopyFailed, Managed, free_port
+from scrimmage_core.managed import CopyFailed, Managed, free_port
 from scrimmage_core.outcomes import (  # the runner's names for them
     INFRA,
     INFRA_ERRORS,
@@ -70,6 +70,7 @@ TAIL_BYTES = 1024 * 1024  # how much of a script's output is read to find its la
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 KILL_GRACE_S = 5.0
 GROUP_POLL_S = 0.01
+KILLED_S = 1.0  # how long a group SIGKILLed may take to be gone
 # A refusal for one of these reasons stops the whole test, not only its row.
 STOP_TEST = (
     "budget",
@@ -690,8 +691,14 @@ class Runner:
         unclaimed = not self.server.runs[run].fetched and reply.status is not None and gate is None
         wrong_version = gate == "version"
         clock_off = gate == "clock"  # every later claim of this process would be refused too
-        # The copy the runner started has exited: every later run would fail the same way.
-        dead = reply.failed is not None and self.managed is not None and self.managed.gone()
+        # The copy the runner started has exited: every later run would fail the same way. A
+        # test already stopping, as on Ctrl-C, stopped it itself.
+        dead = (
+            reply.failed is not None
+            and self.managed is not None
+            and not self.cancelled
+            and self.managed.gone()
+        )
         if unclaimed or streamed or wrong_version or clock_off or dead:
             with self.lock:
                 self.cancelled = True  # under this lock, so no run starts from here on
@@ -769,20 +776,30 @@ class Runner:
 
         With start, a probe that fails first asks whether the copy has exited: one whose port
         another process took exits, and that process may be what answered the probe."""
+        until = time.monotonic() + READY_S
         try:
             return self.probe_ready()
-        except CopyFailed:
-            raise
-        except service_client.Setup:
-            if self.managed is not None and self.managed.gone(FAILED_PROBE_S):
+        except service_client.Setup as exc:
+            if self.stop_flag:  # Ctrl-C or SIGTERM, which stopped the copy too
+                raise Interrupted(self.stop_flag[0]) from None
+            if isinstance(exc, CopyFailed):
+                raise
+            if self.managed is not None and self.managed.lost_its_port(until):
+                if self.stop_flag:  # Ctrl-C or SIGTERM stopped the copy
+                    raise Interrupted(self.stop_flag[0]) from None
                 raise self.managed.exited("before it was ready") from None
             raise
+
+    def copy_alive(self) -> Callable[[], bool] | None:
+        """What a probe asks while it waits: whether the copy started with [agent] start still
+        runs, so a process that took its port and never answers holds the probe no longer."""
+        return self.managed.alive if self.managed is not None else None
 
     def probe_ready(self) -> service_client.Probed:
         agent = self.config.agent
         _, _, path = service_client.target(agent)
         deadline = time.monotonic() + READY_S
-        probed = service_client.probe(agent, self.token)
+        probed = service_client.probe(agent, self.token, self.copy_alive())
         reply = probed.reply
 
         def starting(found: service_client.Reply) -> bool:
@@ -800,7 +817,7 @@ class Runner:
             if self.managed is not None and not self.managed.alive():
                 raise self.managed.exited("before it was ready")
             time.sleep(READY_STEP_S)  # nothing tells a closed port it has opened
-            probed = service_client.probe(agent, self.token)
+            probed = service_client.probe(agent, self.token, self.copy_alive())
             reply = probed.reply
         if self.managed is not None and starting(reply):
             if not self.managed.alive():
@@ -894,7 +911,7 @@ class Runner:
             if self.cancelled or self.stop_flag:  # Ctrl-C or SIGTERM ends the wait
                 raise Interrupted(self.stop_flag[0] if self.stop_flag else "SIGINT")
             time.sleep(min(CONTROL_STEP_S, max(deadline - time.monotonic(), 0.0)))
-            again = service_client.probe(self.config.agent, self.token)
+            again = service_client.probe(self.config.agent, self.token, self.copy_alive())
             if again.report is None:  # the service stopped answering: keep what the ping found
                 self.went_silent = True
                 break
@@ -952,6 +969,8 @@ class Runner:
         lines = self.store.lines(name)
         summary: dict[str, object] = {"outcome": "setup", "status": reply.status}
         self.store.close_run(name, test.name, "setup", summary)
+        if self.stop_flag:  # Ctrl-C or SIGTERM ended the request, not the service
+            raise Interrupted(self.stop_flag[0])
         gate = reply.gate_refused
         if gate == "version":
             raise self.version_refusal(name)
@@ -1238,6 +1257,9 @@ class Runner:
                 if not stopped:
                     stopped = True
                     self.cancel()
+                    if self.managed is not None:
+                        # A run in flight waits on the copy, so the copy stops now, not after.
+                        self.managed.stop()
             elif forward != -1:
                 with contextlib.suppress(OSError):  # a full or closed pipe drops the byte
                     os.write(forward, byte)
@@ -1476,6 +1498,13 @@ def stop_groups(procs: Sequence[subprocess.Popen[bytes]]) -> None:
             time.sleep(GROUP_POLL_S)
     for proc in waiting:
         signal_group(proc, signal.SIGKILL)
+    # SIGKILL is not instant: a process killed is still in the group until the kernel has
+    # torn it down, so the caller waits for that, a little, before it removes what they used.
+    deadline = time.monotonic() + KILLED_S
+    while waiting and time.monotonic() < deadline:
+        waiting = [proc for proc in waiting if group_alive(proc)]
+        if waiting:
+            time.sleep(GROUP_POLL_S)
     for proc in procs:
         if proc.poll() is None:  # it left the group by itself
             proc.kill()

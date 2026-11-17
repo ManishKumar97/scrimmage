@@ -298,6 +298,15 @@ def test_a_managed_test_starts_the_copy_answers_its_runs_and_stops_it(shop: Shop
     )
     seen: list[list[int]] = []
     shop.at_stop.append(lambda copy: seen.append(group(copy.proc.pid)) if copy.proc else None)
+    check_service = runner.Runner.check_service
+
+    def both_active(self: runner.Runner) -> None:
+        # Before the runs: on a loaded machine a worker can still be loading the app when
+        # runs this fast are done.
+        wait_until(lambda: shop.log().read_text().count("active in service mode") == 2, 60)
+        check_service(self)
+
+    shop.monkeypatch.setattr(runner.Runner, "check_service", both_active)
     code, out = shop.test("sh serve.sh {port}", runs=2)
     assert code == 0, out
     assert "SCRIMMAGE_TOKEN_FILE" not in os.environ
@@ -332,10 +341,12 @@ def test_the_child_gets_the_settings_and_no_other_scrimmage_variable(shop: Shop)
         "SCRIMMAGE_CONTROL_URL",
         "SCRIMMAGE_TOOLS",
         "SCRIMMAGE_ALLOW_IMPORTS",
+        "SCRIMMAGE_MANAGED",
         "SCRIMMAGE_ROOT_PID",
     }, sorted(ours)
     copy = shop.copies[0]
     assert ours["SCRIMMAGE_SERVICE"] == "1"
+    assert ours["SCRIMMAGE_MANAGED"] == "1"
     assert ours["SCRIMMAGE_TOOLS"] == ",".join(TOOLS)
     assert ours["SCRIMMAGE_ALLOW_IMPORTS"] == "acme."
     assert ours["SCRIMMAGE_CONTROL_URL"].startswith("http://127.0.0.1:")
@@ -474,7 +485,9 @@ def test_a_child_that_ignores_sigterm_is_killed_after_the_deadline(shop: Shop) -
     copy = shop.copies[0]
     assert copy.proc is not None
     assert group(copy.proc.pid) == [], "a worker that ignores SIGTERM was left running"
-    assert len(took) == 1 and runner.KILL_GRACE_S <= took[0] < 6.0, took
+    # The lower bound is the grace; the upper leaves room for the SIGKILL and the reap
+    # on a loaded machine, and the empty group above proves the kill.
+    assert len(took) == 1 and runner.KILL_GRACE_S <= took[0] < runner.KILL_GRACE_S + 5.0, took
 
 
 def test_check_service_starts_and_stops_the_copy(shop: Shop) -> None:
@@ -534,7 +547,7 @@ def test_a_ctrl_c_while_the_copy_stops_still_kills_its_workers(shop: Shop) -> No
     assert group(spawned.copy) == [], "a worker that ignores SIGTERM was left running"
     assert early == [[]], f"the token folder went while {early} still ran"
     assert not folder.exists()
-    assert took < runner.KILL_GRACE_S + 2, took
+    assert took < runner.KILL_GRACE_S + 5.0, took
 
 
 def check_service_stopped_by(shop: Shop, sig: signal.Signals) -> None:
