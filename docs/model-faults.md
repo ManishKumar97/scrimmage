@@ -111,8 +111,11 @@ See [Testing your guardrails](guardrails.md) for the rows that use these.
 | `always` (default) | every matching call | an outage that never ends: does the agent admit it? |
 | `first N` | the first N attempts, retries included | an outage that ends: does the agent recover? |
 | `requests N` | the first N requests, and every retry of each | failing a whole request however many retries the library makes |
+| `call N` | the Nth attempt alone, retries included in the count | one failure in the middle of a run: does the agent carry on? |
 
 `first 3` depends on the library retrying exactly twice.
+`call N` counts attempts as `first N` does, so on a model call the library's retry is the next call and usually absorbs the fault: your agent sees no error.
+To fail a whole request, retries and all, use `requests N`.
 If your client sets its own `max_retries`, use `requests 1`: it fails the request and all its retries, whatever their number.
 `requests N` needs a library that marks its retries, as the openai library does with its `x-stainless-retry-count` header.
 On a client that marks none, such as NeMo Guardrails' own, each attempt would count as a request, so the run gets a mistake that says to use `first N` or `always`.

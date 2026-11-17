@@ -305,6 +305,46 @@ def test_model_faults_and_schedules_are_read(tmp_path: Path, do: str, when: str,
     assert (fault.call, fault.do, fault.when) == (call, do, when)
 
 
+@pytest.mark.design("config.call_n")
+@pytest.mark.parametrize(
+    ("call", "do"),
+    [
+        ("tool:get_order", "timeout"),
+        ("mcp:search", "error"),
+        ("http:orders.acme.internal", "status 503"),
+        ("model", "status 429"),
+        ("model:openai/embeddings", "timeout"),
+    ],
+)
+def test_call_n_is_read_on_every_kind(tmp_path: Path, call: str, do: str) -> None:
+    text = f'[[test.fault]]\ncall = "{call}"\ndo = "{do}"\nwhen = "call 3"\n'
+    fault = with_fault(tmp_path, text).tests[0].faults[-1]
+    assert (fault.call, fault.do, fault.when) == (call, do, "call 3")
+    sent = plan.Plan("run-1", "t", "fault 1", (), (fault,), (), (), 60.0).to_json()
+    assert plan.Plan.from_json(sent).faults == (config.Fault(call, do, "call 3"),)  # SDK runs it
+
+
+@pytest.mark.design("config.call_n_judged_by_the_test")
+def test_call_n_needs_no_row_expect(tmp_path: Path) -> None:
+    """The agent gets the data on every other call, so the test's expect can judge the row."""
+    text = '[[test.fault]]\ncall = "tool:get_order"\ndo = "timeout"\nwhen = "{when}"\n'
+    fault = with_fault(tmp_path, text.format(when="call 1")).tests[0].faults[-1]
+    assert (fault.when, fault.expect, fault.forbid) == ("call 1", None, None)
+    with pytest.raises(ConfigError, match="this fault fires on every call"):
+        with_fault(tmp_path, text.format(when="always"))  # the positive control
+
+
+@pytest.mark.design("config.once_refused")
+@pytest.mark.parametrize("when", ['"once"', "3", '"3"'])
+def test_once_is_refused_naming_first_1(tmp_path: Path, when: str) -> None:
+    text = f'[[test.fault]]\ncall = "tool:get_order"\ndo = "timeout"\nwhen = {when}\n'
+    with pytest.raises(ConfigError, match="is not a schedule") as raised:
+        with_fault(tmp_path, text)
+    said = str(raised.value)
+    assert "write 'first 1' for the first call alone" in said, said
+    assert "'call N' for the Nth call alone" in said, said
+
+
 @pytest.mark.parametrize(
     ("old", "new", "message"),
     [

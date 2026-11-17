@@ -104,7 +104,7 @@ SLOW = re.compile(r"slow (?P<s>\d+(?:\.\d+)?)s")
 CARRIED = ("append", "replace", "slow")
 MAX_SLOW_S = 600.0
 MAX_CHANGE_TEXT = 64 * 1024  # bytes, for text and for find
-SCHEDULE = re.compile(r"always|(?:first|requests) (?P<n>[1-9]\d*)")
+SCHEDULE = re.compile(r"always|(?:first|requests|call) (?P<n>[1-9]\d*)")
 MODEL_KEYS = {"host", "provider"}
 PRICE_KEYS = {"input", "output", "cached_input"}
 DEFAULT_BUDGET_USD = 5.0
@@ -1480,18 +1480,11 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
     keys = known.get(kind, FAULT_KEYS)
     check_keys(table, keys, where)
     do = text(table, "do", where)
-    status = STATUS.fullmatch(do)
-    if status:
-        if kind in ("tool", "mcp"):
-            raise ConfigError(
-                f"{where} do: {do!r} works on a model call or a web request; see {DOCS}"
-            )
-        if not 400 <= int(status.group("code")) <= 599:
-            raise ConfigError(f"{where} do: {do!r} is not an error status (400 to 599)")
-    elif do.startswith("slow"):
-        read_slow(do, where)
-    elif do not in FAULTS or do == "status":
-        raise ConfigError(f"{where} do: {do!r} is not a fault; see {DOCS}")
+    if STATUS.fullmatch(do) and kind in ("tool", "mcp"):
+        raise ConfigError(f"{where} do: {do!r} works on a model call or a web request; see {DOCS}")
+    problem = word_problem(do)
+    if problem is not None:
+        raise ConfigError(f"{where} do: {problem}")
     if do == "error" and kind not in ("tool", "mcp"):
         raise ConfigError(f"{where} do: 'error' works only on a tool; see {DOCS}")
     if do == "empty" and kind != "mcp":
@@ -1506,7 +1499,13 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
     injected, find = read_change(table, do, where)
     when = str(table.get("when", "always"))
     if not SCHEDULE.fullmatch(when):
-        raise ConfigError(f"{where} when: {when!r} is not a schedule; see {DOCS}")
+        # once and a bare number could each mean first 1 or call N, so neither is read.
+        hint = (
+            "; write 'first 1' for the first call alone or 'call N' for the Nth call alone"
+            if when == "once" or when.isdigit()
+            else ""
+        )
+        raise ConfigError(f"{where} when: {when!r} is not a schedule{hint}; see {DOCS}")
     if when.startswith("requests") and kind != "model":
         raise ConfigError(
             f"{where} when: {when!r} counts model requests and their retries; use 'first N' here"
@@ -1562,15 +1561,26 @@ def carried_model_warnings(config: Config) -> list[str]:
     ]
 
 
-def read_slow(do: str, where: str) -> None:
-    """slow takes a fixed number of seconds, written with an s."""
-    seconds = slow_seconds(do)
-    if seconds is None:
-        raise ConfigError(
-            f"{where} do: {do!r} is not a delay; write seconds with an s, such as 'slow 8s'"
-        )
-    if not 0 < seconds <= MAX_SLOW_S:
-        raise ConfigError(f"{where} do: {do!r} must be above 0 and at most {MAX_SLOW_S:g} seconds")
+def word_problem(do: str) -> str | None:
+    """Why do is not a fault word this version builds, whatever the call; None when it is.
+
+    The file's reader and the SDK's plan reader both ask this, so the two cannot drift.
+    """
+    status = STATUS.fullmatch(do)
+    if status:
+        if not 400 <= int(status.group("code")) <= 599:
+            return f"{do!r} is not an error status (400 to 599)"
+        return None
+    if do.startswith("slow"):
+        seconds = slow_seconds(do)  # slow takes a fixed number of seconds, written with an s
+        if seconds is None:
+            return f"{do!r} is not a delay; write seconds with an s, such as 'slow 8s'"
+        if not 0 < seconds <= MAX_SLOW_S:
+            return f"{do!r} must be above 0 and at most {MAX_SLOW_S:g} seconds"
+        return None
+    if do not in FAULTS or do == "status":
+        return f"{do!r} is not a fault; see {DOCS}"
+    return None
 
 
 def change_text(table: dict[str, object], key: str, where: str) -> str:

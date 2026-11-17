@@ -69,7 +69,8 @@ If the tool returns its own type, Scrimmage builds that type from the mock:
 | `reset` | a model call or a web request raises the library's `ReadError`, as if the server dropped the connection |
 | `dns` | a model call or a web request raises the library's `ConnectError`, as if the server's name did not resolve |
 
-A fault fires on every call it names, unless `when` narrows it to the `first N` attempts or the first `requests N`. See [Failing the model](model-faults.md).
+A fault fires on every call it names, unless `when` narrows it to the `first N` attempts, the Nth attempt alone with `call N`, or the first `requests N`.
+See [Failing the model](model-faults.md).
 It fires only in the program Scrimmage started, not in its child processes, unless `children` is set. See [An agent run as a script](scripts.md#faults-in-children).
 If the agent never makes that call in a run, the run is **not exercised**: it was really a baseline run, so it is left out of the row's rate.
 A row where the fault never fired tested nothing, and is reported as a mistake in the test.

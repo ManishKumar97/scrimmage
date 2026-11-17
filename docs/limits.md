@@ -70,7 +70,7 @@ If none of these applies, the rest of this page is detail for your use case.
 
 - **A last line of output shared with a child.** The last printed line is read from one file, so a child that prints after your program comes last, and nothing says so. Print the answer last or use the answer file. See [An agent run as a script](scripts.md#the-answer).
 
-- **`first N` in children.** With `children` set each process counts its own calls, so `first 1` fires once per process.
+- **`first N` in children.** With `children` set each process counts its own calls, so `first 1` fires once per process, and `call 2` on the second call of each.
 
 - **A child's gates wait for the control server.** A child has no sender thread, so each of its gated calls waits for its record line to be sent, and an async gate in a child holds up the event loop for that long.
 
@@ -332,7 +332,7 @@ Also read the control-path limits under An agent inside a web service.
   The reply is written back as compact JSON, so its bytes differ from the provider's even where its fields do not.
 
 - **`requests N` needs a library that marks its retries.** It counts a retry by the openai library's `x-stainless-retry-count` header.
-  A client that sends none, such as NeMo Guardrails' own, makes each attempt a request; the run then gets a mistake that says to use `first N` or `always`.
+  A client that sends none, such as NeMo Guardrails' own, makes each attempt a request; the run then gets a mistake that says to use `first N` or `always`; `call N` counts attempts too, so it works there.
 
 - **A model's path on a host under `real`.** A POST to `/chat/completions` on a host listed under `real` as a web request runs unbudgeted and cannot be faulted by model name; the run table notes it.
   A web API whose path ends the same way gets the note too, and still runs.

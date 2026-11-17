@@ -116,7 +116,8 @@ The message is the one a real failure has on that path.
 On the async path a refused connection reads `All connection attempts failed`, and a reset has no message, as a real one does there.
 The request is never sent, so a `reset` never reaches the server.
 
-`when` can be `always` or `first N`. `requests N` is for model calls only.
+`when` can be `always`, `first N` or `call N`, the Nth matching request alone.
+`requests N` is for model calls only.
 
 ## Mistakes it catches
 

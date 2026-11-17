@@ -88,7 +88,7 @@ That one `tools/list` request reaches the real server.
 | `error` | a result with `is_error` true, which is how a server reports a tool that failed. FastMCP's `call_tool` turns it into `ToolError` |
 | `empty` | a result with no content. On a tool that declares an output schema the library's check fails, as it does for a real empty reply |
 
-`when` can be `always` or `first N`.
+`when` can be `always`, `first N` or `call N`, the Nth matching call alone.
 
 ## What is refused
 
