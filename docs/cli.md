@@ -98,7 +98,7 @@ Without `--service`, `scrimmage check` reads the file only, as above.
 $ scrimmage check --service
 scrimmage check: scrimmage.toml is valid: 1 test, 2 rows, 2 runs, 4 tools, no budget
 service     POST http://127.0.0.1:8765/chat   gated (asgi, starlette), pid 7
-versions    scrimmage 0.4.0 in the service, 0.4.0 here
+version     scrimmage 0.4.0 in the service and here
 python      3.12.9 (main, Oct  9 2026, 00:00:00) [GCC 12.2.0] at /usr/local/bin/python
 tools       check_inventory, get_order, get_stock, refund_order   (match the file)
 control     http://127.0.0.1:8766 reached, no TLS, on this machine, this runner, 3 ms
@@ -113,7 +113,7 @@ The exit code is that of the first problem, in the order of the lines.
 | Code | Meaning |
 |---|---|
 | 0 | Every line is good. A warning, such as a template that does not fit, still exits 0 |
-| 2 | A mistake to fix: the tools the service gates are not the file's, the service's SDK is another major version, or `--strict` and the template does not fit |
+| 2 | A mistake to fix: the tools the service gates are not the file's, the service's SDK is another version, or `--strict` and the template does not fit |
 | 3 | The service is not gated, cannot reach the control server, or its clock is 50 seconds or more from this machine's |
 
 `--strict` makes a template that does not fit `/openapi.json` exit 2.

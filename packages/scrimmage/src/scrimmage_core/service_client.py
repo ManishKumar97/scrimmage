@@ -334,45 +334,19 @@ def install_line(version: str) -> str:
     return f"install scrimmage {version} in the service"
 
 
-def check_versions(report: dict[str, object]) -> list[str]:
-    """The report's Scrimmage against this runner's: exit 2 for a report older than this
-    runner reads, a version that is not an installed release, or another major. The same major
-    with another release is allowed, and the warning to say so is returned."""
+def other_version(theirs: object) -> str:
+    """What to say when a process of the service runs another Scrimmage than this runner."""
     ours = versions.installed()
-    found = report.get("v")
-    if found == 1:
-        raise Setup(
-            2,
-            f"the service's Scrimmage is older than this runner (startup report v1); "
-            f"{install_line(ours)}",
-        )
-    if found != 2:
-        raise Setup(
-            2,
-            f"the service's startup report is version {found!r}, which this runner does not "
-            f"read; {install_line(ours)}, or upgrade the runner",
-        )
+    named = versions.shown(theirs) if isinstance(theirs, str) and theirs else "no version"
+    return f"the service runs scrimmage {named} and this runner is {ours}; {install_line(ours)}"
+
+
+def check_version(report: dict[str, object]) -> None:
+    """The report's Scrimmage against this runner's: the same known version passes with
+    nothing said, and anything else is exit 2 naming both."""
     theirs = report.get("sdk")
-    named = versions.shown(theirs)
-    verdict = versions.judge(theirs, ours)
-    if verdict is versions.Verdict.SAME:
-        return []
-    if verdict is versions.Verdict.WARN:
-        return [
-            f"the service runs scrimmage {named} and this runner is {ours}; the same "
-            "major release, so the test goes on"
-        ]
-    if verdict is versions.Verdict.UNREADABLE:
-        raise Setup(
-            2,
-            f"the service's SDK version is {named!r} (this runner is {ours}), which is not "
-            f"an installed scrimmage release; {install_line(ours)}",
-        )
-    raise Setup(
-        2,
-        f"the service runs scrimmage {named} and this runner is {ours}, another major "
-        f"release; {install_line(ours)}",
-    )
+    if not versions.same(theirs):
+        raise Setup(2, other_version(theirs))
 
 
 ROUTING_ERRORS = ("TimeoutError", "ConnectionRefusedError", "gaierror")  # asking again may help

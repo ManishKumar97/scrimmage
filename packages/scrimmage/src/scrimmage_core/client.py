@@ -505,7 +505,6 @@ class Sender:
             batch["proc"] = self.proc
             if self.plan_of is not None:
                 batch["plan_digest"] = protocol.plan_digest(self.client.token, self.plan_of())
-                batch["plan_digest_form"] = protocol.PLAN_DIGEST_FORM
             # The process's control load from this run's start or claim on. It describes the
             # process: two runs that overlap in one worker count the same requests.
             busy, p99 = self.client.load_since(self.since)

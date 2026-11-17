@@ -56,16 +56,13 @@ def rtt(control: dict[str, object]) -> str:
     return f"{value:.0f}" if isinstance(value, int | float) else "?"
 
 
-def versions_line(report: dict[str, object]) -> tuple[Line, list[str]]:
-    """The version line, and the warning that goes with it, if any."""
-    ours = versions.installed()
-    theirs = versions.shown(report.get("sdk"))
+def version_line(report: dict[str, object]) -> Line:
+    """One line: the same version on both sides, or the mistake naming both."""
     try:
-        warnings = client.check_versions(report)
+        client.check_version(report)
     except client.Setup as setup:
-        return Line("versions", str(setup), MISTAKE_LEVEL), []
-    text = f"scrimmage {theirs} in the service, {ours} here"
-    return Line("versions", text, WARN if warnings else OK_LEVEL), warnings
+        return Line("version", str(setup), MISTAKE_LEVEL)
+    return Line("version", f"scrimmage {versions.installed()} in the service and here")
 
 
 def notice_lines(report: dict[str, object]) -> list[Line]:
@@ -93,9 +90,7 @@ def inspect(runner: running.Runner, probed: client.Probed, strict: bool) -> Outc
     lines.append(
         Line("service", f"POST {agent.service}   gated ({gates}), pid {report.get('pid')}")
     )
-    vline, vwarnings = versions_line(report)
-    lines.append(vline)
-    messages += [(WARN, text) for text in vwarnings]
+    lines.append(version_line(report))
     python = " ".join(str(report.get("python", "")).split())
     lines.append(Line("python", f"{python} at {report.get('executable')}"))
     tools = sorted(str(t) for t in cast(list[object], report.get("tools") or []))

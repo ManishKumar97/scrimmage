@@ -111,10 +111,10 @@ A control server that listens beyond loopback carries plans and record lines, wh
 
   *Checked by: `tests/test_service_versions.py::test_the_ping_stores_nothing_and_is_signed`, `tests/test_service_versions.py::test_a_ping_reply_with_a_bad_signature_is_not_taken`, `tests/test_service_versions.py::test_a_ping_answered_by_another_runner_stops_the_test`*
 
-- A claim for a run's plan carries the SDK's version, and the control server refuses a claim from another major, or with no version, with `409 version`.
+- A claim for a run's plan carries the SDK's version, and the control server refuses a claim from another version, or with no version, with `409 version`.
   The gate answers that run `503 version`, and the runner stops the test.
 
-  *Checked by: `tests/test_service_versions.py::test_a_claim_with_no_sdk_field_is_refused`, `tests/test_service_versions.py::test_a_worker_from_another_major_is_refused_at_its_first_claim_and_stops_the_test`*
+  *Checked by: `tests/test_service_versions.py::test_a_claim_with_no_sdk_field_is_refused`, `tests/test_service_versions.py::test_a_worker_of_another_version_is_refused_at_its_first_claim_and_stops_the_test`*
 
 - A connection that fails TLS prints no traceback; the report counts it by OpenSSL's reason.
   The report also counts the runs it sent and the claims it received, so a control server that no service can reach shows on the runner.
@@ -167,10 +167,10 @@ So a genuine header replayed, or forwarded by a proxy to another service, gets `
 
 The claiming process's last batch names the plan its run state used, as a digest.
 The digest is HMAC-SHA256 keyed by the service token, over the plan without its `elapsed_s` and `scrub`, so a record on a volume does not let a reader test a guess at a mock's value.
-A run whose digest differs from the runner's own is an infrastructure error, and a last batch with no digest, or a digest of another form, is not compared and says so.
+A run whose digest differs from the runner's own is an infrastructure error, and a claimed run's last batch with no digest is refused, so that run is an infrastructure error too.
 The service token is the one in the service's token file, which lasts across tests, so the token file must never sit on the records volume: whoever reads both can test guesses at the plan.
 
-*Checked by: `tests/test_plan_digest.py::test_the_stored_digest_does_not_reveal_a_scrubbed_value`, `tests/test_plan_digest.py::test_a_run_whose_state_changed_its_plan_is_an_infrastructure_error`, `tests/test_plan_digest.py::test_a_last_batch_with_no_digest_is_not_compared_and_says_so`, `tests/test_plan_digest.py::test_a_digest_of_another_form_is_not_compared_and_names_the_form`*
+*Checked by: `tests/test_plan_digest.py::test_the_stored_digest_does_not_reveal_a_scrubbed_value`, `tests/test_plan_digest.py::test_a_run_whose_state_changed_its_plan_is_an_infrastructure_error`, `tests/test_plan_digest.py::test_a_claimed_runs_last_batch_with_no_digest_is_refused`*
 
 Every `x-scrimmage-` header is removed before your app sees the request, so the app cannot pass the header on.
 The MAC covers the run's name, not the body, so the gate never holds a request's body.
