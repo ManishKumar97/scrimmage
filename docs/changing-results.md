@@ -139,6 +139,7 @@ A mistake names the fix, for example: "tool:get_stock is declared to return Stoc
 A call that gave the change no place still uses up its place in `when = "first N"`.
 The call was counted when it was decided, before the gate could know it had no place.
 So under `first 1`, a first call with no place means no call of that run is changed.
+`call N` counts the same way: when the Nth call has no place, no call of that run is changed.
 
 A change that would land on text the record removes, such as a key, is not made, and the line says which rule.
 The record then could not show what the agent saw.

@@ -85,7 +85,7 @@
     },
     "schedule": {
       "type": "string",
-      "pattern": "^(always|first [1-9][0-9]*)$"
+      "pattern": "^(always|(first|call) [1-9][0-9]*)$"
     },
     "expect": {
       "type": "array",
@@ -777,7 +777,7 @@
         },
         "when": {
           "type": "string",
-          "pattern": "^(always|(first|requests) [1-9][0-9]*)$"
+          "pattern": "^(always|(first|requests|call) [1-9][0-9]*)$"
         },
         "raises": {
           "not": {},

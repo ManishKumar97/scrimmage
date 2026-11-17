@@ -104,11 +104,11 @@ def unknowable(call: Call, plan: Plan) -> bool:
 
 
 def schedule(when: str) -> tuple[str, int]:
-    """("always", 0), ("first", N) or ("requests", N)."""
+    """("always", 0), ("first", N), ("requests", N) or ("call", N)."""
     if when == "always":
         return "always", 0
     kind, _, n = when.partition(" ")
-    if kind not in ("first", "requests") or not n.isdigit():
+    if kind not in ("first", "requests", "call") or not n.isdigit():
         raise ValueError(f"schedule {when!r} is not a schedule")
     return kind, int(n)
 
@@ -116,14 +116,18 @@ def schedule(when: str) -> tuple[str, int]:
 def fires(when: str, n: int) -> bool:
     """Whether a schedule fires on the n-th matching call (or request)."""
     kind, limit = schedule(when)
-    return n >= 1 if kind == "always" else 1 <= n <= limit
+    if kind == "always":
+        return n >= 1
+    if kind == "call":
+        return n == limit
+    return 1 <= n <= limit
 
 
 @dataclass
 class Counters:
     """One set of counters per run, shared by every thread and task, behind a lock.
 
-    "first N" and "always" count attempts. "requests N" counts requests: an attempt the
+    "first N", "call N" and "always" count attempts. "requests N" counts requests: an attempt the
     library marks as a retry gets the number of the request it retries.
     """
 

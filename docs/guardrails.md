@@ -315,7 +315,7 @@ That is what the real-model check is for: it runs the rails against OpenAI itsel
   NeMo's rails on tool calls and tool results are not tested here.
 - **Its block message.** A rail that blocks answers `I'm sorry, I can't respond to that.`
 - **Its retries.** NeMo's client tries a failed call three times: once, then twice more, on a timeout and on a 429 or a 500 status.
-  It marks none of them as a retry, so use `first N` or `always` on a rail; `requests N` is a mistake there and says so.
+  It marks none of them as a retry, so use `first N`, `call N` or `always` on a rail; `requests N` is a mistake there and says so.
 - **A failed rail.** When a rail's call fails, NeMo raises, from `generate` and from `check`.
   It has no fail-open or fail-closed setting of its own, so what your user sees is your code's choice: catch it, and return your own text.
 - **A rail that answers nonsense.** A rail reply that is neither yes nor no is not an error to NeMo: it blocks, with its own block message.
