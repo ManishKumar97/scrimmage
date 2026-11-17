@@ -494,6 +494,7 @@ BAD = [
     Bad("start_no_port", MANAGED.replace("--port {port}", "--port 8765"), True),
     Bad("start_service_no_port", MANAGED.replace("127.0.0.1:{port}", "127.0.0.1:8765"), True),
     Bad("start_public_host", MANAGED.replace("127.0.0.1:{port}", "0.0.0.0:{port}"), True),
+    Bad("start_host_from_value", MANAGED.replace("127.0.0.1:{port}", "${HOME}:{port}"), True),
     Bad("start_control", MANAGED.replace("[agent]\n", '[agent]\ncontrol = "127.0.0.1:1"\n'), True),
     Bad("start_without_service", agent('start = "python3 serve.py --port {port}"\n'), True),
     Bad("service_port_without_start", SERVICE.replace("8765", "{port}"), False),

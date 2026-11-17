@@ -1,12 +1,63 @@
 # An agent inside a web service
 
 Many agents answer inside a web service, one request per question, beside every other request the service serves.
-Scrimmage can test such an agent where it runs: you start the service once, and each run of a test is one `POST` to it.
+Scrimmage can test such an agent where it runs: each run of a test is one `POST` to the service.
 This version covers ASGI services under uvicorn, such as FastAPI and Starlette apps.
 A worked example is [An agent inside a web service](examples/service-agent.md).
 
-## Start the service
+## Let Scrimmage start the service
 
+Three lines in `scrimmage.toml` name the command that starts the service, its address and the body of each run:
+
+```toml
+[agent]
+start   = "uvicorn shop.service:app --port {port} --loop asyncio"
+service = "http://127.0.0.1:{port}/chat"
+body    = {message = "{question}"}
+```
+
+Then one command runs the test:
+
+```bash
+scrimmage test scrimmage.toml
+```
+
+What happens:
+
+1. Scrimmage picks a free port on `127.0.0.1` and fills it in where the file writes `{port}`.
+2. It writes a new token to a mode `600` file, in a mode `700` folder it makes in the temporary folder.
+3. It starts the command in `start` through `scrimmage-run`, in the folder of the file, with `SCRIMMAGE_SERVICE=1`, the token file, its control server's address, and `SCRIMMAGE_TOOLS` and `SCRIMMAGE_ALLOW_IMPORTS` built from the file.
+   Every other `SCRIMMAGE_` variable of your shell is left out, so a value from another test never reaches the copy.
+4. It sends [the probe](#before-the-first-run) until a gated process of the copy answers, for up to 30 seconds.
+5. It runs the test.
+6. It stops the copy: SIGTERM to every process of it, workers included, then SIGKILL to any left after 5 seconds.
+   Then it deletes the token's folder.
+
+You make no token file, set no variable and start nothing in the background.
+`--loop asyncio` is needed on Python 3.11 when uvloop is installed, as below.
+Use `127.0.0.1` as the host: uvicorn listens there by default, and `localhost` can name `::1` first.
+The rules for `start` and `{port}` are in [Configuration](configuration.md#a-service-scrimmage-starts).
+
+The copy's standard output and standard error go to one file, `service.log`, in the test's records folder.
+It has mode `600`, and each value `${NAME}` filled in is removed from it when the copy stops.
+
+| When | What the test does |
+|---|---|
+| The copy exits before it is ready | exit 3, with its exit code, its last 20 lines and the path of `service.log` |
+| It does not answer the probe in 30 seconds | exit 3, with its last lines; the copy is stopped |
+| It exits during the test | the run whose request failed is an infrastructure error, no further run is sent, and the test stops with exit 3 and the copy's last lines |
+| The test ends, or Ctrl-C or SIGTERM stops it | the copy is stopped; its exit code is not judged |
+
+Another process can take the port in the moment before the copy binds it.
+The copy then exits, its last lines say the address is already in use, and a second run of the test picks another port.
+A service that takes longer than 30 seconds to start is not covered in this version.
+
+`scrimmage check --service` starts and stops a copy the same way, and sends no run; see [scrimmage check --service](cli.md#scrimmage-check-service).
+
+## Attach to a service you started
+
+For a service you start yourself, or one someone else started, leave `start` out, and give the port in `service` as digits.
+This is the path for a service in a container or a pod.
 The service and the runner share two things: a token, in a file only you can read, and the address of the runner's control server.
 
 ```bash
@@ -114,6 +165,7 @@ The runner checks the service twice before it sends a run.
 **The probe.**
 It sends one signed request, marked as a probe, to the service's address.
 While nothing listens at that address, or a connection is taken and then reset or closed with no reply, it asks again for up to 30 seconds, so a script can start the service in the background and run the test at once.
+With `start`, a copy that exits ends the wait at once.
 If nothing listens by then, the test stops with exit 3 and says so.
 Scrimmage in the service answers with a report signed with the same token: its version, its gates and the tools its gates swap.
 The report's shape is the [startup report schema](schemas.md).

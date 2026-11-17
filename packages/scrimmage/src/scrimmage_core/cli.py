@@ -756,7 +756,9 @@ def run_check(
         f"scrimmage check: {path} is valid: {plural(len(config.tests), 'test')}, "
         f"{plural(rows, 'row')}, {plural(runs, 'run')}, {tools}, {budget}"
     )
-    if agent.service and hint:
+    if agent.start:  # the runner starts it, with every setting: nothing is set by hand
+        print(f"the service starts with: {agent.start_written}")
+    elif agent.service and hint:
         print("start the service with these two set, with scrimmage-run and SCRIMMAGE_SERVICE=1:")
         for line in service_lines(agent):
             print(f"  {line}")

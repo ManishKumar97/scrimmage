@@ -109,12 +109,19 @@ def test_a_port_in_a_value_of_service_is_sent_as_written(tmp_path: Path) -> None
     cfg = config.load(path, {"X": "chat/{port}/x"})
     assert cfg.agent.service == "http://127.0.0.1:{port}/chat/{port}/x"
     assert config.service_url(cfg.agent, 41234) == "http://127.0.0.1:41234/chat/{port}/x"
-    # The host may come from a value too; the file's {port} is still the port.
-    path.write_text(managed(service="http://${HOST}:{port}/chat"))
-    cfg = config.load(path, {"HOST": "localhost"})
-    assert config.service_url(cfg.agent, 7) == "http://localhost:7/chat"
-    with pytest.raises(ConfigError, match=r"the host must be"):
-        config.load(path, {"HOST": "0.0.0.0"})
+
+
+@pytest.mark.parametrize("value", ["127.0.0.1", "localhost", "0.0.0.0"])
+def test_start_needs_a_loopback_host_written_in_the_file(tmp_path: Path, value: str) -> None:
+    """The host is the file's own text, as the schema and the docs say: a ${NAME} host is
+    refused, even one whose value is loopback, and the message shows no value."""
+    path = tmp_path / "scrimmage.toml"
+    for service in ("http://${H}:{port}/chat", "http://127.0.0.${H}:{port}/chat"):
+        path.write_text(managed(service=service))
+        with pytest.raises(ConfigError, match=r"the host is written in the file") as caught:
+            config.load(path, {"H": value})
+        shown = str(caught.value).replace(service, "")
+        assert value not in shown, shown
 
 
 @pytest.mark.parametrize(
@@ -234,6 +241,7 @@ BEFORE: dict[str, object] = {
     "control": "",
     "control_tls": None,
     "start": (),
+    "start_written": "",
     "start_pieces": (),
     "service_pieces": (),
 }

@@ -298,7 +298,8 @@ body    = {message = "{question}"}
 It is filled in the file's own text in `start` and in `service`; a `${NAME}` value that holds `{port}` is sent as written.
 There is no `{{` escape for it: in `start`, `{{port}}` is `{`, the port and `}`, and in `service` it is refused.
 `start` must hold it at least once, and `service` must hold it once, as its port.
-The copy runs on this machine, so the host in `service` must be `127.0.0.1`, `[::1]` or `localhost`.
+The copy runs on this machine, so the host in `service` must be `127.0.0.1`, `[::1]` or `localhost`, written in the file, not from a `${NAME}` value.
+Use `127.0.0.1`: uvicorn listens there by default, and `localhost` can name `::1` first, which costs a refused connection before the client tries `127.0.0.1`.
 `control` and `control_tls` are refused beside `start`: they are for a service someone else started, such as one in a container.
 Without `start`, `{port}` is not read, and `service` must name a port as digits.
 

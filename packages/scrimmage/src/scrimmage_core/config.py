@@ -454,6 +454,7 @@ class Agent:
     # The command that starts a test copy of the service, split and read as command is; its
     # pieces fill {port} in the file's own text only.
     start: tuple[str, ...] = ()
+    start_written: str = ""  # start as the file writes it, ${NAME} and {port} and all
     start_pieces: tuple[tuple[tuple[bool, str], ...], ...] = ()
     service_pieces: tuple[tuple[bool, str], ...] = ()  # with start: service, as start_pieces
 
@@ -983,6 +984,7 @@ def read_agent(table: dict[str, object], reader: Reader | None = None) -> Agent:
         control=read_control(table, where) if "control" in table else "",
         control_tls=read_control_tls(table, where) if "control_tls" in table else None,
         start=start,
+        start_written=str(table["start"]) if "start" in table else "",
         start_pieces=start_pieces,
         service_pieces=address_pieces,
     )
@@ -1128,6 +1130,7 @@ def read_managed_service(
     own text. A ${NAME} value is filled in after, and a {port} in it is sent as written."""
     pieces = tuple((p.kind == "value", p.text) for p in reader.scan(written, f"{where} service"))
     probe = ""  # the address with the file's {port} as 1, to match it as a port
+    literal: list[bool] = []  # for each character of probe: from the file's own text
     at = -1
     found = 0
     for value, piece in pieces:
@@ -1137,6 +1140,7 @@ def read_managed_service(
                 at = len(probe) + piece.index(PORT)
             piece = piece.replace(PORT, "1")
         probe += piece
+        literal += [not value] * len(piece)
     parts = SERVICE_URL.fullmatch(probe)
     if (
         found != 1
@@ -1148,6 +1152,11 @@ def read_managed_service(
         raise ConfigError(
             f"{where} service: with start it must be of the form http://127.0.0.1:{PORT}/path, "
             f"with {PORT} once, as the port, got {written!r}"
+        )
+    if not all(literal[parts.start("host") : parts.end("host")]):
+        raise ConfigError(
+            f"{where} service: with start the host is written in the file, as 127.0.0.1, "
+            f"[::1] or localhost, not read from a ${{NAME}} value, got {written!r}"
         )
     if parts["host"].lower() not in LOOPBACK_HOSTS:
         raise ConfigError(

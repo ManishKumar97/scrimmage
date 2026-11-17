@@ -2,6 +2,7 @@
 
 It reads the token, binds the control server, sends one probe, and prints what the service
 reported. It sends no run and no setup request, so it spends nothing and makes no model call.
+With [agent] start it starts its own copy of the service first, and stops it after.
 """
 
 import shutil
@@ -133,6 +134,8 @@ def check(config: Config, stop_flag: list[str] | None) -> Outcome | client.Setup
     try:
         runner = running.Runner(config, stop_flag=stop_flag, scratch=True)
         runner.server.start()
+        if runner.managed is not None:
+            runner.managed.start(runner.control_url(runner.server.url))
         probed = runner.probe_service()
         return inspect(runner, probed)
     except client.Setup as setup:
@@ -140,7 +143,11 @@ def check(config: Config, stop_flag: list[str] | None) -> Outcome | client.Setup
     finally:
         if runner is not None:
             try:
-                runner.server.stop()
+                try:
+                    if runner.managed is not None:
+                        runner.managed.stop()
+                finally:
+                    runner.server.stop()
             finally:
                 shutil.rmtree(runner.folder.parent, ignore_errors=True)
                 shutil.rmtree(runner.answers, ignore_errors=True)

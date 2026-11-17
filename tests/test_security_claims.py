@@ -45,6 +45,8 @@ def test_the_only_connections_are_to_and_from_the_control_server() -> None:
         ("control.py", "wrap_socket"),  # each accepted connection, in TLS
         # The runner's own request to a team's service, at the address its file names.
         ("service_client.py", "HTTPConnection"),
+        # It binds 127.0.0.1 port 0 and closes it, to pick the port of a service it starts.
+        ("managed.py", "socket"),
     }
     uses = {
         name
@@ -52,7 +54,8 @@ def test_the_only_connections_are_to_and_from_the_control_server() -> None:
         for name in re.findall(r"\bsocket\.(\w+)", path.read_text())
     }
     # SHUT_RDWR: service_client cuts the runner's own probe to the service at its deadline.
-    assert uses == {"gethostname", "SHUT_RDWR"}
+    # socket: managed.py's free port, bound and closed, never connected.
+    assert uses == {"gethostname", "SHUT_RDWR", "socket"}
 
 
 # Every standard-library way to start a process, and the modules that hold them.
@@ -67,10 +70,11 @@ STARTERS = {"subprocess", "pty", "multiprocessing", "concurrent", "asyncio"}
 @pytest.mark.design("security.process_starts_scanned")
 def test_the_only_processes_scrimmage_starts_are_its_runs() -> None:
     """Scrimmage's start-up inside the agent runs before an audit hook could watch it, so this
-    scan is what checks it: no product module but the runner and scrimmage-run starts anything,
-    and the Scrimmage MCP server, a command of its own that never loads into the agent, which
-    starts each scrimmage command it runs. A service starts Python's resource tracker, once, at
-    its startup, before any request."""
+    scan is what checks it: no product module but the runner, the copy of a service that
+    [agent] start names, and scrimmage-run starts anything, and the Scrimmage MCP server, a
+    command of its own that never loads into the agent, which starts each scrimmage command it
+    runs. A service starts Python's resource tracker, once, at its startup, before any
+    request."""
     found = {
         (path.name, " ".join(call.split()))
         for path in PACKAGES.rglob("*.py")
@@ -78,6 +82,8 @@ def test_the_only_processes_scrimmage_starts_are_its_runs() -> None:
     }
     assert found == {
         ("runner.py", "subprocess.Popen("),
+        # The test copy of a service that [agent] start names, through scrimmage-run.
+        ("managed.py", "subprocess.Popen("),
         ("run_command.py", "os.execvpe("),
         ("mcp_server.py", "open_process("),
         # It names the module to patch its thread pool when the agent imports it; it never
@@ -109,6 +115,7 @@ def test_the_only_processes_scrimmage_starts_are_its_runs() -> None:
     assert imports == {
         ("runner.py", "subprocess"),
         ("runner.py", "concurrent"),
+        ("managed.py", "subprocess"),
         ("http_gate.py", "asyncio"),
         ("mcp_gate.py", "asyncio"),
         ("start.py", "asyncio"),
