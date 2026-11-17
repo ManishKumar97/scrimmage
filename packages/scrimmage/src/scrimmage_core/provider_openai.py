@@ -33,9 +33,11 @@ MESSAGES = {
     500: "The server had an error while processing your request. Sorry about that!",
     503: "The engine is currently overloaded, please try again later.",
 }
-# What bad body sends a model call: the first 60 bytes of the spec's Default chat example,
-# so a reader that logs the body sees a real reply's start, cut before it can parse.
+# What bad body sends a model call: the first 60 bytes of the spec's example reply for its
+# operation, so a reader that logs the body sees a real reply's start, and it cannot parse.
 BROKEN_BODY = b'{\n  "id": "chatcmpl-B9MBs8CjcvOU2jLn4n570S5qMJKcT",\n  "objec'
+BROKEN_EMBEDDING = b'{\n  "object": "list",\n  "data": [\n    {\n      "object": "emb'
+BROKEN_RESPONSE = b'{\n  "id": "resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3'
 TYPES = {429: "requests"}
 CODES = {429: "rate_limit_exceeded", 401: "invalid_api_key"}
 
@@ -100,6 +102,15 @@ def op_for(path: str, method: str) -> str | None:
         if clean.endswith(suffix):
             return op
     return None
+
+
+def broken_body(path: str, op: str) -> bytes:
+    """bad body's bytes for this call. A moderation or a token count gets a chat reply's."""
+    if op == "embeddings":
+        return BROKEN_EMBEDDING
+    if path.split("?", 1)[0].rstrip("/").endswith("/responses"):
+        return BROKEN_RESPONSE
+    return BROKEN_BODY
 
 
 def error_body(status: int) -> bytes:

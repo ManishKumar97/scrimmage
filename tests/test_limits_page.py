@@ -18,6 +18,7 @@ ALL_TITLES = [
     "A Vault secret read at a nested mount.",
     "A blind child not started from Python.",
     "A blind child on another Python.",
+    "A body cut by a dropped connection.",
     "A burst of tool calls with no pause while recording.",
     "A call `background_real` lets through is decided once, with what it runs inside.",
     "A call with no plan on no server.",

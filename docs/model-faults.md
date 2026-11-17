@@ -41,10 +41,10 @@ Nothing is sent to the provider for a faulted attempt, so it costs nothing.
 | `refused` | the library's `APIConnectionError`, after its retries |
 | `reset` | the library's `APIConnectionError`, after its retries |
 | `dns` | the library's `APIConnectionError`, after its retries |
-| `bad body` | `json.JSONDecodeError`, at once: a 200 whose JSON body is cut short |
+| `bad body` | `json.JSONDecodeError`, at once: a complete 200 whose JSON does not parse |
 
 Any status from 400 to 599 works.
-`bad body` sends the first 60 bytes of a real chat reply, so a log of it shows a real reply's start.
+`bad body` sends the first 60 bytes of a real reply for the call: an embeddings reply on `model:openai/embeddings`, a Responses reply on `/responses`, and a chat reply on every other call, a moderation or a token count included.
 The library does not retry a 200, so `bad body` meets one attempt.
 On a streamed request it is a mistake in the test, and the call fails at once: a broken stream is a later fault.
 The openai library retries a connection error twice by default, and each attempt meets the fault again, so `when = "first 1"` is absorbed by the first retry.

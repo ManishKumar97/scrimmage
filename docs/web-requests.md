@@ -112,7 +112,7 @@ A `Set-Cookie` header reaches the client's cookie jar, as it would from a real r
 | `reset` | the library's own `ReadError`, caused by a `ConnectionResetError`, as when the server drops the connection |
 | `dns` | the library's own `ConnectError`, caused by a `socket.gaierror`, as when the name does not resolve |
 | `empty` | a 200 with no body and no `Content-Type`, as a broken backend or proxy sends |
-| `bad body` | a 200 with `Content-Type: application/json` and the body `{"data": [{"id": 1, "name": "`, so reading it as JSON raises `json.JSONDecodeError` |
+| `bad body` | a 200 with `Content-Type: application/json; charset=utf-8` and the body `{"data": [{"id": 1, "name": "`, so reading it as JSON raises `json.JSONDecodeError` |
 
 The message is the one a real failure has on that path.
 The `dns` message is Linux's, from glibc. On macOS a real one reads differently, while the class and the errno constant, `socket.EAI_NONAME`, hold.

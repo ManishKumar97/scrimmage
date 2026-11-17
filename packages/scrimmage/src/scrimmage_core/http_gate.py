@@ -681,7 +681,7 @@ def bad_body(
         run.fail(step, ScrimmageMockError(f"{step.call.label} {why}"), mistake=True)
     if step.call.kind == "model":
         headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
-        body = openai_table.BROKEN_BODY
+        body = openai_table.broken_body(str(request.url.path), step.call.name)
     else:
         headers = {"content-type": "application/json; charset=utf-8"}
         body = BROKEN_WEB_BODY

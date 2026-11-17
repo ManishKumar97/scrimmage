@@ -3,6 +3,7 @@ reply the code gets, the line, and that nothing is sent, reserved or fired by mi
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any
 
 import httpx2
@@ -17,6 +18,10 @@ from test_connection_faults import LIBRARIES, PATH_IDS, PATHS, WEB, gated, insta
 from test_http_gate import BODY, URL, Sink
 
 __all__ = ["gated"]  # the fixture, used by name
+
+FIXTURES = Path(__file__).parent / "fixtures" / "openai"
+EMBEDDING_START = (FIXTURES / "embedding.json").read_bytes()[:60]
+RESPONSE_START = (FIXTURES / "response_text.json").read_bytes()[:60]
 
 
 def got(name: str, sync: bool, reached: list[object], url: str = WEB, **kw: Any) -> Any:
@@ -130,7 +135,9 @@ def test_bad_body_on_a_streamed_model_request_is_a_mistake_and_not_fired(
     line = line_of(sink, "model")
     assert line["action"] != "fault", "a fault that was not carried out counted as fired"
     assert "streamed request" in str(line["mistake"])
-    assert line["unchanged"] == {"do": "bad body", "why": line["unchanged"]["why"]}  # type: ignore[index]
+    unchanged = line["unchanged"]
+    assert isinstance(unchanged, dict) and unchanged["do"] == "bad body"
+    assert "streamed request" in str(unchanged["why"])
 
 
 @pytest.mark.design("fault.bad_body_model")
@@ -143,10 +150,39 @@ def test_bad_body_on_a_model_request_that_is_not_streamed_still_fires(gated: Non
     assert line_of(sink, "model")["action"] == "fault"
 
 
+EMBEDDINGS = "https://api.openai.com/v1/embeddings"
+RESPONSES = "https://api.openai.com/v1/responses"
+
+
+@pytest.mark.design("fault.bad_body_model")
+@pytest.mark.parametrize(
+    ("call", "url", "body", "start"),
+    [
+        ("model:*/embeddings", EMBEDDINGS, {"model": "e", "input": "hi"}, EMBEDDING_START),
+        ("model", RESPONSES, {"model": "gpt-4o-mini", "input": "hi"}, RESPONSE_START),
+    ],
+    ids=["embeddings", "responses"],
+)
+def test_bad_body_on_another_op_sends_the_start_of_that_ops_real_reply(
+    gated: None, call: str, url: str, body: dict[str, object], start: bytes
+) -> None:
+    """The bytes are the spec example's own, read from the fixture, so they cannot drift."""
+    sink, _ = install("bad body", call)
+    reached: list[object] = []
+    module: Any = LIBRARIES["httpx2"]
+    client = module.Client(transport=module.MockTransport(lambda r: reached.append(r)))
+    response = client.post(url, json=body)
+    assert reached == [], "the gate sent the request"
+    assert response.content == start and len(start) == 60
+    with pytest.raises(json.JSONDecodeError):
+        response.json()
+    assert line_of(sink, "model")["action"] == "fault"
+
+
 @pytest.mark.design("fault.empty_web")
 def test_empty_on_a_model_call_is_refused_at_load() -> None:
     for call in ("model", "model:*/embeddings"):
-        with pytest.raises(ConfigError, match="'empty' works only on an MCP tool or a web"):
+        with pytest.raises(ConfigError, match="for a model reply that fails to parse, use bad"):
             config.read_fault({"call": call, "do": "empty", "when": "first 1"}, "[[test.fault]]")
 
 
