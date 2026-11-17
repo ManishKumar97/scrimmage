@@ -235,10 +235,10 @@ The tests run Calico, which enforces them; a network plugin that does not enforc
 
   *Checked by: `tests/test_k8s_security.py::test_every_pod_passes_the_restricted_standard`*
 
-- In the default setup, `scrimmage cert` plus `kubectl create secret`, no authority key exists once `scrimmage cert` returns, and the authority is constrained to the three names given, `scrimmage`, `scrimmage.<namespace>.svc` and `scrimmage.<namespace>.svc.cluster.local`, and the names under them.
-  So nothing can sign another control certificate, and the SDK refuses a certificate for another namespace's control name, such as `scrimmage.other.svc`.
+- In the default setup, `scrimmage cert` plus `kubectl create secret`, no authority key exists once `scrimmage cert` returns, and the authority is constrained to the three names given, `scrimmage`, `scrimmage.<namespace>.svc` and `scrimmage.<namespace>.svc.cluster.local`, and the names under them, and excludes every IP address.
+  So nothing can sign another control certificate, and the SDK refuses a certificate for another namespace's control name, such as `scrimmage.other.svc`, and one for an address.
 
-  *Checked by: `tests/test_cert.py::test_cert_writes_no_authority_key`, `tests/test_cert.py::test_the_authority_is_name_constrained_to_the_given_names_and_their_subdomains`, `tests/test_k8s_cluster.py::test_the_default_authority_refuses_a_name_outside_its_three`, `tests/test_k8s_cluster.py::test_the_default_certificates_come_from_scrimmage_cert_and_pass_the_handshake`*
+  *Checked by: `tests/test_cert.py::test_cert_writes_no_authority_key`, `tests/test_cert.py::test_the_authority_is_name_constrained_to_the_given_names_and_their_subdomains`, `tests/test_cert.py::test_an_authority_of_names_alone_refuses_every_address`, `tests/test_k8s_cluster.py::test_the_default_authority_refuses_a_name_outside_its_three`, `tests/test_k8s_cluster.py::test_the_default_certificates_come_from_scrimmage_cert_and_pass_the_handshake`*
 
 - Each process in the agent's pods connects only to the Service `scrimmage` on port 7700 and to the model host, and looks up only those two names.
 

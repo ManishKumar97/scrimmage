@@ -2,6 +2,9 @@
 
 import json
 import re
+import shlex
+import subprocess
+import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import cast
@@ -10,6 +13,7 @@ import pytest
 
 import scrimmage_core
 from conftest import doc_pages
+from k8s import cluster as kubernetes
 from scrimmage_core import cli, config, judge, mcp_gate, outcomes, record, render, suggest
 
 DOCS = Path(__file__).parents[1] / "docs"
@@ -710,6 +714,41 @@ def kubernetes_docs_problems() -> list[str]:
 def test_the_docs_manifests_are_the_tested_ones() -> None:
     assert kubernetes_docs_problems() == []
     assert "[In Kubernetes](../kubernetes.md#in-kubernetes)" in page("examples/service-agent.md")
+
+
+def certificate_block() -> list[list[str]]:
+    """The commands of the Kubernetes page's certificate block, each split as the shell does,
+    with continued lines joined."""
+    section = page("kubernetes.md").split("\n### The certificate\n", 1)[1].split("\n#", 1)[0]
+    (block,) = re.findall(r"(?ms)^```bash\n(set -e\n.*?)^```$", section)
+    return [shlex.split(line) for line in block.replace("\\\n", " ").splitlines()]
+
+
+def test_the_certificate_block_runs_what_the_harness_runs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The commands the page shows are the ones the kind tests make their Secrets with, with
+    $NS for the namespace and .scrimmage-cert for the harness's folder."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    ran: list[list[str]] = []
+
+    def record_only(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        ran.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(kubernetes, "run", record_only)
+    cluster = kubernetes.Cluster("2")
+    cluster.control_secrets("ns1")
+    out = str(cluster.folder / "cert-ns1")
+    harness = [
+        [arg.replace(out, ".scrimmage-cert").replace("ns1", "$NS") for arg in command]
+        for command in ran
+    ]
+    harness[0][0] = "scrimmage"  # the harness names the command by its full path
+    shown = certificate_block()
+    assert shown[:3] == [["set", "-e"], ["NS=my-test"], ["rm", "-rf", ".scrimmage-cert"]]
+    assert shown[-1] == ["rm", "-rf", ".scrimmage-cert"], "the key's folder is removed last"
+    assert shown[3:-1] == harness
 
 
 @pytest.mark.design("docs.service_pages")

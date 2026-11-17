@@ -196,6 +196,7 @@
 - **Nothing between the runner and the agent.** A service mesh or an ingress in front of the agent is not tested; the runner calls the agent's Service directly.
 - **One Job at a time against one `scrimmage` Service.** A second Job behind the same Service fails the ping's runner id check.
 - **The probe reaches one replica.** A second replica whose control channel is broken is not named before the test; its runs end as infrastructure errors.
+- **The default certificate lasts one day.** A runner that starts after it expires exits 2, and a test that outlives it has new handshakes refused; make a new one as [When the certificate expires](kubernetes.md#when-the-certificate-expires) shows.
 - **A new certificate needs the agent's pods restarted.** The SDK reads `SCRIMMAGE_CONTROL_CA` once, at its start, and each `scrimmage cert` makes a new authority.
   With cert-manager, a renewed server certificate keeps the same authority, so it needs nothing.
 - **With cert-manager, a certificate renewed during a test is seen at the next test.** The runner reads its certificate and key at its start.

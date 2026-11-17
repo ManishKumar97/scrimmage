@@ -440,6 +440,10 @@ def test_the_default_authority_refuses_a_name_outside_its_three(
     assert found.value.permitted_subtrees == [
         x509.DNSName(name) for name in kubernetes.control_names(namespace)
     ]
+    assert found.value.excluded_subtrees == [
+        x509.IPAddress(ipaddress.ip_network("0.0.0.0/0")),
+        x509.IPAddress(ipaddress.ip_network("::/0")),
+    ]
 
 
 def test_cert_manager_issues_a_certificate_the_sdk_accepts(
