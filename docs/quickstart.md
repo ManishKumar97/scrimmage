@@ -16,7 +16,7 @@ git clone https://github.com/ManishKumar97/faultline
 cd faultline
 python -m venv .venv
 . .venv/bin/activate
-pip install ./packages/scrimmage ./packages/scrimmage-core openai
+pip install ./packages/scrimmage openai
 export OPENAI_API_KEY=...   # your own key
 cd tests/example
 ```

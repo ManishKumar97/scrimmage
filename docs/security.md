@@ -3,7 +3,7 @@
 This page covers the trust boundaries of a test: where your data goes, how Scrimmage's processes talk to each other, what it keeps in records, and how to report a problem.
 The rules a test applies call by call, such as which calls are refused, are on [Safety](safety.md).
 
-Each statement below is enforced by code in the `scrimmage-core` package.
+Each statement below is enforced by code in the `scrimmage` package.
 The line "Checked by" under it names the test in the repository that fails if the statement stops being true.
 
 ## Your data stays on your machine
@@ -25,7 +25,7 @@ A [service in a container](services.md#a-service-in-a-container) is the one exce
 
 *Checked by: `tests/test_security_claims.py::test_the_control_server_listens_on_loopback_only`*
 
-The `scrimmage-core` package uses only Python's standard library, so it brings in no network client of another project.
+The `scrimmage` package uses only Python's standard library, so it brings in no network client of another project.
 
 *Checked by: `tests/test_stdlib_only.py::test_imports_only_the_standard_library`*
 

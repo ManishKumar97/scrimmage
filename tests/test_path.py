@@ -114,4 +114,4 @@ def test_path_on_a_folder_that_is_not_on_disk_is_exit_2(
     code, out, err = path_output(capsys)
     assert code == 2 and out == ""
     assert f"scrimmage path: {gone} is not a folder on disk" in err
-    assert "install scrimmage-core from its wheel" in err
+    assert "install scrimmage from its wheel" in err

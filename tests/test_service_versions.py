@@ -1,6 +1,6 @@
 """The version rule between a service's SDK and the runner, and the service's ping.
 
-A service in another venv has its own scrimmage-core, built here at the version a test names,
+A service in another venv has its own scrimmage, built here at the version a test names,
 so the SDK in the service is a real install and not a patched number. The runner is this
 process; where a test needs a runner of another version, it patches the one function both
 the runner and its control server read the version through.
@@ -105,7 +105,7 @@ def uv(*args: str, cwd: Path) -> None:
 
 @pytest.fixture(scope="session")
 def sdk_venv(tmp_path_factory: pytest.TempPathFactory) -> Callable[[str], Path]:
-    """The bin folder of a venv that runs the example service with scrimmage-core at the given
+    """The bin folder of a venv that runs the example service with scrimmage at the given
     version: the package built with uv from a copy whose version was set."""
     made: dict[str, Path] = {}
 
@@ -115,14 +115,20 @@ def sdk_venv(tmp_path_factory: pytest.TempPathFactory) -> Callable[[str], Path]:
         folder = tmp_path_factory.mktemp("sdk-" + "".join(c for c in version if c.isalnum()))
         copy = folder / "core"
         shutil.copytree(
-            ROOT / "packages" / "scrimmage-core",
+            ROOT / "packages" / "scrimmage",
             copy,
             ignore=shutil.ignore_patterns("__pycache__", "dist", "*.egg-info"),
         )
         pyproject = copy / "pyproject.toml"
-        text = pyproject.read_text()
-        assert 'version = "0.0.0"' in text
-        pyproject.write_text(text.replace('version = "0.0.0"', f'version = "{version}"', 1))
+        text, found = re.subn(
+            r'^version = "[^"]+"$',
+            f'version = "{version}"',
+            pyproject.read_text(),
+            count=1,
+            flags=re.M,
+        )
+        assert found == 1
+        pyproject.write_text(text)
         uv("build", "--wheel", "--out-dir", str(folder / "dist"), str(copy), cwd=folder)
         wheel = next((folder / "dist").glob("*.whl"))
         uv("venv", "--no-project", "--python", sys.executable, "venv", cwd=folder)
@@ -133,7 +139,6 @@ def sdk_venv(tmp_path_factory: pytest.TempPathFactory) -> Callable[[str], Path]:
             "--python",
             str(python),
             str(wheel),
-            str(ROOT / "packages" / "scrimmage"),
             "openai>=3.46",
             "fastapi==0.162.5",
             "uvicorn==0.54.0",
@@ -193,8 +198,8 @@ def test_an_sdk_one_major_off_is_refused_at_the_probe(
     runner_is(runner)
     code, out = against(bench, sdk_venv(sdk))
     assert code == 2, out
-    assert f"scrimmage-core {sdk} and this runner is {runner}, another major release" in out
-    assert f"install scrimmage-core {runner} in the service" in out
+    assert f"scrimmage {sdk} and this runner is {runner}, another major release" in out
+    assert f"install scrimmage {runner} in the service" in out
     sent_nothing(bench)
 
 
@@ -205,7 +210,7 @@ def test_an_sdk_one_minor_off_warns_and_passes(
     runner_is("1.5.0")
     code, out = against(bench, sdk_venv("1.4.2"))
     assert code == 0, out
-    warning = "the service runs scrimmage-core 1.4.2 and this runner is 1.5.0"
+    warning = "the service runs scrimmage 1.4.2 and this runner is 1.5.0"
     assert out.count(warning) == 1, out  # said once, in the report
     assert "warning: " + warning in out
     # The setup request and the run each claimed their plan, with the SDK's version in it.
@@ -222,17 +227,19 @@ def test_on_0_x_a_minor_off_counts_as_a_major_and_a_patch_off_does_not(
     runner_is("0.1.9")
     code, out = against(bench, sdk_venv("0.1.0"))  # the same 0.1 line: a patch off
     assert code == 0, out
-    assert "the service runs scrimmage-core 0.1.0 and this runner is 0.1.9" in out
+    assert "the service runs scrimmage 0.1.0 and this runner is 0.1.9" in out
 
 
 @pytest.mark.design("service.version_dev_local")
-@pytest.mark.parametrize("sdk", ["0.0.0.dev3", "0.0.0+gabc"], ids=["dev", "local"])
+@pytest.mark.parametrize("sdk", ["0.1.0.dev3", "0.1.0+gabc"], ids=["dev", "local"])
 def test_dev_and_local_versions_compare_by_release_and_warn(
     bench: Bench, sdk_venv: Callable[[str], Path], sdk: str
 ) -> None:
-    code, out = against(bench, sdk_venv(sdk))  # this runner is 0.0.0
+    ours = versions.installed()
+    assert ours == "0.1.0.dev0"  # the same 0.1.0 release as the SDK, another dev or local part
+    code, out = against(bench, sdk_venv(sdk))
     assert code == 0, out
-    assert f"the service runs scrimmage-core {sdk} and this runner is 0.0.0" in out
+    assert f"the service runs scrimmage {sdk} and this runner is {ours}" in out
 
 
 # --- a report that says less than a version we can compare ---------------------------------
@@ -310,7 +317,7 @@ def test_an_unknown_sdk_version_is_refused(bench: Bench, found: str) -> None:
     code, out = against(bench, proxy=rewritten(bench, edit))
     assert code == 2, out
     assert f"the service's SDK version is {found!r}" in out
-    assert "not an installed scrimmage-core release" in out
+    assert "not an installed scrimmage release" in out
     sent_nothing(bench)
 
 
@@ -323,7 +330,7 @@ def test_a_v1_startup_report_names_the_old_sdk(bench: Bench) -> None:
     code, out = against(bench, proxy=rewritten(bench, edit))
     assert code == 2, out
     assert "the service's Scrimmage is older than this runner (startup report v1)" in out
-    assert f"install scrimmage-core {versions.installed()} in the service" in out
+    assert f"install scrimmage {versions.installed()} in the service" in out
     sent_nothing(bench)
 
 
@@ -387,7 +394,8 @@ def test_a_worker_from_another_major_is_refused_at_its_first_claim_and_stops_the
     bench.closers.append(proxy)
     code, out = bench.test(proxy.port, runs=3)
     assert code == 2, out
-    assert "scrimmage-core 1.4.2 and this runner is 0.0.0, another major release" in out
+    ours = versions.installed()
+    assert f"scrimmage 1.4.2 and this runner is {ours}, another major release" in out
     assert "in every process of it" in out
     # The first run stopped the test: the other two were never sent.
     assert sum(1 for run in proxy.seen if run.startswith("run-")) == 1, proxy.seen

@@ -51,10 +51,10 @@ def other_venv(tmp_path_factory: pytest.TempPathFactory) -> Path:
     base = Path(sys.base_prefix) / "bin" / "python3"
     uv("venv", "--no-project", "--python", str(base), "venv", cwd=folder)
     python = folder / "venv" / "bin" / "python"
-    packages = [str(ROOT / "packages" / name) for name in ("scrimmage-core", "scrimmage")]
+    package = str(ROOT / "packages" / "scrimmage")
     # A built wheel is cached by the package's metadata, not by this code.
-    refresh = ["--refresh-package", "scrimmage-core", "--reinstall-package", "scrimmage-core"]
-    uv("pip", "install", *refresh, "--python", str(python), "mcp<2", *packages, cwd=folder)
+    refresh = ["--refresh-package", "scrimmage", "--reinstall-package", "scrimmage"]
+    uv("pip", "install", *refresh, "--python", str(python), "mcp<2", package, cwd=folder)
     return python
 
 
@@ -129,7 +129,7 @@ def test_a_package_build_uv_starts_does_not_stop_the_run(project: Project) -> No
 name = "acme-bot"
 version = "0"
 requires-python = ">=3.11"
-dependencies = ["scrimmage-core", "scrimmage"]
+dependencies = ["scrimmage"]
 
 [build-system]
 requires = ["hatchling"]
@@ -139,7 +139,6 @@ build-backend = "hatchling.build"
 packages = ["acme"]
 
 [tool.uv.sources]
-scrimmage-core = {{path = "{packages / "scrimmage-core"}", editable = true}}
 scrimmage = {{path = "{packages / "scrimmage"}", editable = true}}
 """
     )

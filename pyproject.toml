@@ -2,7 +2,7 @@
 name = "scrimmage-workspace"
 version = "0"
 requires-python = ">=3.11"
-dependencies = ["scrimmage-core", "scrimmage"]
+dependencies = ["scrimmage"]
 
 [tool.uv]
 package = false
@@ -11,7 +11,6 @@ package = false
 members = ["packages/*", "tools/coverage-threads"]
 
 [tool.uv.sources]
-scrimmage-core = { workspace = true }
 scrimmage = { workspace = true }
 coverage-threads = { workspace = true }
 
@@ -74,7 +73,7 @@ markers = [
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["packages/scrimmage-core/src", "packages/scrimmage/src", "tests"]
+src = ["packages/scrimmage/src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
@@ -84,33 +83,27 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
 "vulture_allowlist.py" = ["B018"]
 
 [tool.pyright]
-include = ["packages/scrimmage-core/src", "packages/scrimmage/src", "tools", "tests"]
+include = ["packages/scrimmage/src", "tools", "tests"]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
 # Product code is strict. A gate or adapter module, which reaches into a library's
 # private functions, drops to standard with a "# pyright: standard" line at its top.
-strict = ["packages/scrimmage-core/src", "packages/scrimmage/src"]
+strict = ["packages/scrimmage/src"]
 
 [tool.vulture]
-paths = ["packages/scrimmage-core/src", "packages/scrimmage/src", "tools", "tests", "vulture_allowlist.py"]
+paths = ["packages/scrimmage/src", "tools", "tests", "vulture_allowlist.py"]
 # 60, not 80: vulture rates every unused function and method at 60.
 min_confidence = 60
 
 [tool.importlinter]
-root_packages = ["scrimmage_core", "scrimmage"]
+root_packages = ["scrimmage_core"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "Product code never imports test support"
 type = "forbidden"
-source_modules = ["scrimmage_core", "scrimmage"]
+source_modules = ["scrimmage_core"]
 forbidden_modules = ["fakes", "conftest"]
-
-[[tool.importlinter.contracts]]
-name = "The marker works without the SDK installed"
-type = "forbidden"
-source_modules = ["scrimmage"]
-forbidden_modules = ["scrimmage_core"]
 
 [[tool.importlinter.contracts]]
 name = "The MCP server runs Scrimmage only as a child"
@@ -159,7 +152,7 @@ ignore_imports = [
 [[tool.importlinter.contracts]]
 name = "Only the certificate maker loads cryptography"
 type = "forbidden"
-source_modules = ["scrimmage_core", "scrimmage"]
+source_modules = ["scrimmage_core"]
 forbidden_modules = ["cryptography"]
 ignore_imports = ["scrimmage_core.cert -> cryptography"]
 
@@ -189,7 +182,6 @@ forbidden_modules = [
 
 [tool.coverage.run]
 branch = true
-# The marker package is still empty; it is measured from the slice that builds it.
 source_pkgs = ["scrimmage_core"]
 # The SDK runs inside each run's own program, so measure child processes too.
 patch = ["subprocess"]

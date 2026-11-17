@@ -180,7 +180,7 @@ def test_the_program_under_test_on_a_python_without_the_sdk_stops() -> None:
     ]
     result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode == 1 and "agent ran" not in result.stdout
-    assert "scrimmage-core is not installed for" in result.stderr
+    assert "scrimmage is not installed for" in result.stderr
     # Without scrimmage-run, as with PYTHONPATH set by hand, it is the program under test too.
     by_hand = python(
         "print('agent ran')",

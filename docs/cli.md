@@ -1,7 +1,6 @@
 # Commands
 
-`scrim` is a short name for `scrimmage`: `scrim test` and `scrimmage test` are the same command.
-`python -m scrimmage_core` is the same command too, on the Python that runs it.
+`python -m scrimmage_core` is the same command as `scrimmage`, on the Python that runs it.
 
 ## scrimmage test
 
@@ -99,7 +98,7 @@ Without `--service`, `scrimmage check` reads the file only, as above.
 $ scrimmage check --service
 scrimmage check: scrimmage.toml is valid: 1 test, 2 rows, 2 runs, 4 tools, no budget
 service     POST http://127.0.0.1:8765/chat   gated (asgi, starlette), pid 7
-versions    scrimmage-core 0.4.0 in the service, 0.4.0 here
+versions    scrimmage 0.4.0 in the service, 0.4.0 here
 python      3.12.9 (main, Oct  9 2026, 00:00:00) [GCC 12.2.0] at /usr/local/bin/python
 tools       check_inventory, get_order, get_stock, refund_order   (match the file)
 control     http://127.0.0.1:8766 reached, no TLS, on this machine, this runner, 3 ms
@@ -175,7 +174,7 @@ Making new certificates means running the command again, then restarting the run
 It prints the two lines the service's environment needs, and the `control_tls` line for the file, with absolute paths so the line works from any folder.
 In a container, `SCRIMMAGE_CONTROL_CA` is the path where `ca.pem` is mounted there, not the printed path.
 The port is left as `<port>` for you to fill in.
-The command needs the `cert` extra, `pip install "scrimmage-core[cert]"`; without it the command says so and exits 2.
+The command needs the `cert` extra, `pip install "scrimmage[cert]"`; without it the command says so and exits 2.
 
 | Code | Meaning |
 |---|---|
@@ -195,7 +194,7 @@ It prints nothing else, so `PYTHONPATH=$(scrimmage path)` works in a shell.
 
 A start line you cannot change, such as a Kubernetes manifest, sets that path itself; see [An agent inside a web service](services.md).
 
-It exits 2 when the folder is not a real folder on disk, as in a zipped install, and says to install `scrimmage-core` from its wheel.
+It exits 2 when the folder is not a real folder on disk, as in a zipped install, and says to install `scrimmage` from its wheel.
 
 ## scrimmage show
 

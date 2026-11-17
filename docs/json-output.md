@@ -197,8 +197,8 @@ SIGKILL cannot be caught, so it leaves no document.
 | `url` | In `service`: the service's address, as the file writes it. |
 | `gates` | In `service`: the entry gates installed in the process that answered, such as `asgi`. |
 | `pid` | In `service`: the process that answered. |
-| `sdk` | In `service`: the version of `scrimmage-core` in the service. |
-| `runner_sdk` | In `service`: the version of `scrimmage-core` in the command. |
+| `sdk` | In `service`: the version of `scrimmage` in the service. |
+| `runner_sdk` | In `service`: the version of `scrimmage` in the command. |
 | `python` | In `service`: the service's Python version string. |
 | `executable` | In `service`: the service's Python executable. |
 | `tools` | In `service`: the tools its gates swap. |
@@ -427,12 +427,12 @@ They are added to version 1 and a reader that does not know them ignores them.
 | Field | Meaning |
 |---|---|
 | `plan_digest` | HMAC-SHA256, keyed by the service token, of the plan the runner made for this run, without `elapsed_s` and `scrub`. 64 hex characters. |
-| `claimed_plan_digest` | The same digest, taken by the process that claimed the run, over the plan its own run state held when it sent its last batch. `null` when that batch carried none, which an older `scrimmage-core` of the same major version does not send, or never came. |
+| `claimed_plan_digest` | The same digest, taken by the process that claimed the run, over the plan its own run state held when it sent its last batch. `null` when that batch carried none, which an older `scrimmage` of the same major version does not send, or never came. |
 | `claimed_by` | The process that claimed the run: `{"host": ..., "pid": ...}`. In a pod, `host` is the pod's name. |
 
 The two digests are equal when the process served the plan the runner made.
 When they differ, the run is an infrastructure error, with a `plan_changed` notice line in its record.
-When `claimed_plan_digest` is `null` because the service's `scrimmage-core` is older, nothing is compared, the run's outcome is unchanged, and a `plan_unreported` notice line says so; the report prints it once for the test.
+When `claimed_plan_digest` is `null` because the service's `scrimmage` is older, nothing is compared, the run's outcome is unchanged, and a `plan_unreported` notice line says so; the report prints it once for the test.
 Only the digest is kept, never the plan.
 Without the service token, which is never written to a record, a digest tells a reader nothing about the plan: it is not a plain hash, so a guess at a mock's value cannot be tested against it.
 The service token is the one in the service's token file, which lasts across tests, so the token file must never sit on the records volume.

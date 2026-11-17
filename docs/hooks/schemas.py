@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 SCHEMAS = (
-    Path(__file__).parents[2] / "packages" / "scrimmage-core" / "src" / "scrimmage_core" / "schemas"
+    Path(__file__).parents[2] / "packages" / "scrimmage" / "src" / "scrimmage_core" / "schemas"
 )
 PAGE = "schemas.md"
 MARKER = "<!-- shipped schemas -->"

@@ -25,7 +25,7 @@
       "const": 1
     },
     "sdk": {
-      "description": "The version of scrimmage-core in the service.",
+      "description": "The version of scrimmage in the service.",
       "type": "string"
     },
     "python": {

@@ -29,7 +29,7 @@ from typing import Any, cast
 
 from scrimmage_core.redact import redact
 
-INSTALL = 'scrimmage-mcp needs the mcp extra; install it with: pip install "scrimmage-core[mcp]"'
+INSTALL = 'scrimmage-mcp needs the mcp extra; install it with: pip install "scrimmage[mcp]"'
 
 try:
     import anyio
@@ -498,7 +498,7 @@ def settings_from(argv: Sequence[str] | None) -> Settings:
 
 def scrimmage_version() -> str:
     try:
-        return metadata.version("scrimmage-core")
+        return metadata.version("scrimmage")
     except metadata.PackageNotFoundError:
         return "unknown"
 

@@ -1,6 +1,6 @@
 """The runner's side of a service: its token and address, the probe, and each run's POST.
 
-The standard library's http.client, so scrimmage-core keeps no third-party dependency. The
+The standard library's http.client, so scrimmage keeps no third-party dependency. The
 runner reads the same token file and control address the service was started with, so one
 environment file serves both.
 """
@@ -331,7 +331,7 @@ def probe(agent: Agent, token: str) -> Probed:
 
 
 def install_line(version: str) -> str:
-    return f"install scrimmage-core {version} in the service"
+    return f"install scrimmage {version} in the service"
 
 
 def check_versions(report: dict[str, object]) -> list[str]:
@@ -359,18 +359,18 @@ def check_versions(report: dict[str, object]) -> list[str]:
         return []
     if verdict is versions.Verdict.WARN:
         return [
-            f"the service runs scrimmage-core {named} and this runner is {ours}; the same "
+            f"the service runs scrimmage {named} and this runner is {ours}; the same "
             "major release, so the test goes on"
         ]
     if verdict is versions.Verdict.UNREADABLE:
         raise Setup(
             2,
             f"the service's SDK version is {named!r} (this runner is {ours}), which is not "
-            f"an installed scrimmage-core release; {install_line(ours)}",
+            f"an installed scrimmage release; {install_line(ours)}",
         )
     raise Setup(
         2,
-        f"the service runs scrimmage-core {named} and this runner is {ours}, another major "
+        f"the service runs scrimmage {named} and this runner is {ours}, another major "
         f"release; {install_line(ours)}",
     )
 

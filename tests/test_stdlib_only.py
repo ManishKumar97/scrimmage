@@ -1,6 +1,5 @@
-"""The SDK and the marker load into the team's own process, so they import only the
-standard library. A third-party import there could clash with the team's versions.
-The marker must also work without the SDK installed, so it never imports it."""
+"""The SDK loads into the team's own process, so it imports only the standard library.
+A third-party import there could clash with the team's versions."""
 
 import ast
 import sys
@@ -11,8 +10,7 @@ import pytest
 PACKAGES = Path(__file__).parents[1] / "packages"
 # Each source tree, with the first-party names it may import.
 ALLOWED = {
-    PACKAGES / "scrimmage-core" / "src" / "scrimmage_core": {"scrimmage_core", "scrimmage"},
-    PACKAGES / "scrimmage" / "src" / "scrimmage": {"scrimmage"},
+    PACKAGES / "scrimmage" / "src" / "scrimmage_core": {"scrimmage_core"},
 }
 DYNAMIC = {"import_module", "__import__"}
 # The only places that import a computed name: the team's own module from a mock's
@@ -103,7 +101,7 @@ def test_only_the_mcp_server_command_loads_the_mcp_server(tmp_path: Path) -> Non
     """The server is a command of its own: no other module imports it, so the scrimmage
     command and the code that loads into the agent never bring in the MCP library. The
     import-linter contract cannot see this one, as the server is inside its source package."""
-    core = PACKAGES / "scrimmage-core" / "src" / "scrimmage_core"
+    core = PACKAGES / "scrimmage" / "src" / "scrimmage_core"
     found = [
         p.name
         for p in sorted(core.rglob("*.py"))

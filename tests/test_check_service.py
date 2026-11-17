@@ -22,7 +22,7 @@ from typing import Any, ClassVar, cast
 import pytest
 
 from ports import free_port
-from scrimmage_core import asgi_gate, cli, config, protocol, service_client
+from scrimmage_core import asgi_gate, cli, config, protocol, service_client, versions
 from service_harness import Service, drive
 from test_cli_json import validate
 from test_service import FILE, TOOLS, Bench, bench
@@ -237,7 +237,8 @@ def test_check_service_prints_the_startup_report_and_the_clock_gap(lab: Lab) -> 
         rf"POST http://127\.0\.0\.1:{service.port}/chat   gated \(.*asgi.*\), pid \d+",
         line_of(out, "service"),
     ), out
-    assert line_of(out, "versions") == "scrimmage-core 0.0.0 in the service, 0.0.0 here"
+    ours = versions.installed()
+    assert line_of(out, "versions") == f"scrimmage {ours} in the service, {ours} here"
     assert line_of(out, "python").startswith(sys.version.split()[0]) and " at /" in out
     names = "check_inventory, get_order, get_stock, refund_order"
     assert line_of(out, "tools") == f"{names}   (match the file)"

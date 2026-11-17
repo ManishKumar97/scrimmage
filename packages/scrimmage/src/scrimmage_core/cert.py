@@ -18,7 +18,7 @@ from pathlib import Path
 
 from scrimmage_core.errors import ScrimmageError
 
-INSTALL = 'scrimmage cert needs the cert extra; install it with: pip install "scrimmage-core[cert]"'
+INSTALL = 'scrimmage cert needs the cert extra; install it with: pip install "scrimmage[cert]"'
 MAX_DAYS = 397
 BACKDATE = timedelta(minutes=5)  # a clock a little behind the runner's still accepts it
 CA_NAME = "Scrimmage throwaway authority"

@@ -1,6 +1,6 @@
 """The version rule between the SDK in a service and the runner.
 
-Both sides read the version of the installed `scrimmage-core` and compare releases, with no
+Both sides read the version of the installed `scrimmage` and compare releases, with no
 `packaging` dependency. The major is the first number; while it is 0, the first two, since a
 0.x release may change anything. A different major is refused. The same major with another
 minor, patch, pre-release or local part is allowed, and said once.
@@ -23,7 +23,7 @@ UNKNOWN = "unknown"
 class Verdict(Enum):
     SAME = "same"  # the same release: nothing to say
     WARN = "warn"  # the same major, another release: allowed, and said once
-    UNREADABLE = "unreadable"  # a version that is not an installed scrimmage-core release
+    UNREADABLE = "unreadable"  # a version that is not an installed scrimmage release
     MAJOR = "major"  # another major: refused
 
 
@@ -63,13 +63,13 @@ def _installed() -> str:
     import importlib.metadata
 
     try:
-        return importlib.metadata.version("scrimmage-core")
+        return importlib.metadata.version("scrimmage")
     except importlib.metadata.PackageNotFoundError:
         return UNKNOWN
 
 
 def installed() -> str:
-    """The version of scrimmage-core in this process, or `unknown` when it is not installed."""
+    """The version of scrimmage in this process, or `unknown` when it is not installed."""
     return _installed()
 
 

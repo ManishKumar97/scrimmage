@@ -42,7 +42,7 @@ EXAMPLE = REPO / "tests" / "example"
 BUILD_TIMEOUT_S = 600
 UP_TIMEOUT_S = 60
 SERVICE_PORT = 8765
-# The service's own needs beyond scrimmage-core, which has no dependencies: the web stack and
+# The service's own needs beyond scrimmage, which has no dependencies: the web stack and
 # the model library tests/example/acme imports. Versions come from uv.lock, never a new resolve.
 ROOTS = ("fastapi", "uvicorn", "openai")
 # What the wheels are chosen for: the image's Python and platform.
@@ -142,16 +142,15 @@ def runtime_pins() -> list[str]:
 
 
 def stage_workspace_wheels(wheels: Path) -> None:
-    """Build the two workspace wheels into `wheels`, replacing any earlier ones there."""
+    """Build the workspace wheel into `wheels`, replacing any earlier one there."""
     for old in wheels.glob("scrimmage*.whl"):
         old.unlink()
-    for package in ("scrimmage", "scrimmage-core"):
-        build = ["uv", "build", "--wheel", "--package", package, "--out-dir", str(wheels), "-q"]
-        sh(build, timeout=BUILD_TIMEOUT_S, cwd=REPO)
+    build = ["uv", "build", "--wheel", "--package", "scrimmage", "--out-dir", str(wheels), "-q"]
+    sh(build, timeout=BUILD_TIMEOUT_S, cwd=REPO)
 
 
 def stage() -> None:
-    """Fill wheels/ and app/ in the build context: the pinned wheels, the two workspace
+    """Fill wheels/ and app/ in the build context: the pinned wheels, the workspace
     wheels built here, and the example app."""
     wheels = SERVICE / "wheels"
     wheels.mkdir(exist_ok=True)

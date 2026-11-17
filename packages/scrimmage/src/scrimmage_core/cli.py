@@ -288,7 +288,7 @@ def scrimmage_version() -> str:
     import importlib.metadata  # about 20 ms, so only the command that prints the version pays
 
     try:
-        return importlib.metadata.version("scrimmage-core")
+        return importlib.metadata.version("scrimmage")
     except importlib.metadata.PackageNotFoundError:
         return UNKNOWN_VERSION
 
@@ -854,7 +854,7 @@ def path_command() -> int:
     if not (boot / "sitecustomize.py").is_file():
         print(
             f"scrimmage path: {boot} is not a folder on disk, so PYTHONPATH cannot name it; "
-            "install scrimmage-core from its wheel",
+            "install scrimmage from its wheel",
             file=sys.stderr,
         )
         return MISTAKE

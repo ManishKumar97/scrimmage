@@ -7,25 +7,27 @@ It is tested on Linux only. macOS is expected to work, but it is not in CI.
 Install it in your **test environment only**, never in a production image.
 It patches functions inside your agent's process while a test runs, so it belongs where you test.
 
-## The two packages
+## The package
 
 | Package | Import name | What it is |
 |---|---|---|
-| `scrimmage-core` | `scrimmage_core` | The runner, the commands (`scrimmage`, its short name `scrim`, and `scrimmage-run`), and the code that runs inside your agent during a test |
-| `scrimmage` | `scrimmage` | A small package with no dependencies, for marking tools in your own code. It does nothing unless `scrimmage-core` is installed. In this version it holds no markers yet |
+| `scrimmage` | `scrimmage_core` | The runner, the commands (`scrimmage`, `scrimmage-run` and `scrimmage-mcp`), and the code that runs inside your agent during a test |
 
-`scrimmage-core` depends on `scrimmage` and on nothing else outside Python's standard library.
+It depends on nothing outside Python's standard library.
 So installing it never changes the versions of the libraries your agent uses.
-Its one extra, `scrimmage-core[mcp]`, adds the Scrimmage MCP server, `scrimmage-mcp`, and the `mcp` library it needs; see [Driving Scrimmage from a coding agent](mcp-server.md).
+You never type the import name: you write `scrimmage.toml` and run the commands.
 
-The marker package is installed now, though it holds no markers yet, because it reserves the import name `scrimmage`.
-Later versions put markers there, and code that imports it keeps working, with or without `scrimmage` installed.
+It has two extras.
+`scrimmage[mcp]` adds the Scrimmage MCP server, `scrimmage-mcp`, and the `mcp` library it needs; see [Driving Scrimmage from a coding agent](mcp-server.md).
+`scrimmage[cert]` adds the `cryptography` library that `scrimmage cert` needs.
 
 ## From a clone
 
-Scrimmage is not on PyPI yet, so install it from the repository.
-The `scrim` package on PyPI is another project; here `scrim` is only a command name.
-Each command below installs both packages; name the marker first, so it is found in the clone.
+Scrimmage is not released yet, so install it from the repository.
+The name `scrimmage` on PyPI holds only an empty placeholder, version 0.0.0.
+The package in the repository is version 0.1.0.dev0, a development release.
+pip and uv skip a development release when a final one is found, so a plain `pip install scrimmage` takes the placeholder.
+Install from the folder, or from a wheel with `--no-index`, as below.
 
 ```bash
 git clone https://github.com/ManishKumar97/faultline
@@ -39,7 +41,7 @@ pip is Python's standard package installer.
 ```bash
 python -m venv .venv
 . .venv/bin/activate
-pip install ./packages/scrimmage ./packages/scrimmage-core
+pip install ./packages/scrimmage
 ```
 
 ### With uv
@@ -49,7 +51,7 @@ uv is a fast Python package and project manager from Astral, used in place of pi
 ```bash
 uv venv
 . .venv/bin/activate
-uv pip install ./packages/scrimmage ./packages/scrimmage-core
+uv pip install ./packages/scrimmage
 ```
 
 To use a Python version other than uv's default, add it to the first command, such as `uv venv -p 3.11`.
@@ -57,26 +59,25 @@ To use a Python version other than uv's default, add it to the first command, su
 ### As wheel files
 
 A wheel is Python's built package format.
-Build both wheels once, then install them where the clone is not available, such as a CI image:
+Build the wheel once, then install it where the clone is not available, such as a CI image:
 
 ```bash
-uv build --all-packages --wheel -o dist
-uv pip install --no-index --find-links dist scrimmage-core
+uv build --package scrimmage --wheel -o dist
+uv pip install --no-index --find-links dist scrimmage
 ```
 
 `--no-index` makes the installer look only in `dist`, so nothing of the same name is taken from PyPI.
-With pip, the second command is `pip install --no-index --find-links dist scrimmage-core`.
+With pip, the second command is `pip install --no-index --find-links dist scrimmage`.
 
 ## Check it worked
 
 ```bash
 scrimmage --help
-scrim --help
 scrimmage-run python -c "print('ok')"
-python -c "import scrimmage_core, scrimmage"
+python -c "import scrimmage_core"
 ```
 
-The first two print the same commands, the third prints `ok`, and the last prints nothing.
+The first prints the commands, the second prints `ok`, and the last prints nothing.
 `scrimmage-run` with no test running changes nothing in the program it starts.
 See [Commands](cli.md).
 
