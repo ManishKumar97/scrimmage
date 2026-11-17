@@ -10,13 +10,13 @@ The line "Checked by" under it names the test in the repository that fails if th
 
 Scrimmage has no telemetry and no hosted service.
 It sends nothing to its authors or to any third party.
-The only connections Scrimmage itself makes are to its own control server, and the only processes it starts are the runs of your agent, and, in a service, Python's own resource tracker, once, in the process that serves the app or supervises its workers, before any request.
+The only connections Scrimmage itself makes are to its own control server, and the only processes it starts are the runs of your agent, the test copy of a service that `start` names, and, in a service, Python's own resource tracker, once, in the process that serves the app or supervises its workers, before any request.
 The Scrimmage MCP server, a command of its own, also starts the `scrimmage` command each of its tool calls runs; see [Driving Scrimmage from a coding agent](mcp-server.md).
 
 *Checked by: `tests/test_security_audit.py::test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_sends_the_token`, `tests/test_security_claims.py::test_the_only_connections_are_to_and_from_the_control_server`*
 
 Scrimmage's start-up inside the agent is checked by a source scan, not watched.
-It runs before any watcher in that process could be installed, so the scan checks that no product module but the runner and `scrimmage-run` starts a process, and that only the SDK's client opens a connection.
+It runs before any watcher in that process could be installed, so the scan checks that no product module but the runner, its start of a service's test copy and `scrimmage-run` starts a process, and that only the SDK's client opens a connection.
 
 *Checked by: `tests/test_security_claims.py::test_the_only_processes_scrimmage_starts_are_its_runs`, `tests/test_security_claims.py::test_the_only_connections_are_to_and_from_the_control_server`*
 
@@ -130,7 +130,14 @@ The runner's requests to the service stay `http://`, and what that exposes is on
 
 ## A web service's token and run header
 
-When the agent is [inside a web service](services.md), the service runs before and after the test, so the token is yours, not one the runner makes.
+When Scrimmage [starts the service](services.md#let-scrimmage-start-the-service) with `start`, the token is one the runner makes for that test.
+It is in a mode `600` file in a mode `700` folder the runner made, never in an environment variable, and the folder is deleted when the test ends.
+The copy's environment holds none of the runner's own `SCRIMMAGE_` variables, only the settings it needs.
+On this path the control server listens on `127.0.0.1` only, over `http://`.
+
+*Checked by: `tests/test_managed_start.py::test_the_token_file_is_private_and_gone_after`, `tests/test_managed_start.py::test_the_child_gets_the_settings_and_no_other_scrimmage_variable`*
+
+When you [start the service yourself](services.md#attach-to-a-service-you-started), it runs before and after the test, so the token is yours, not one the runner makes.
 Keep it as you keep a production secret.
 The service and the runner read it from the file `SCRIMMAGE_TOKEN_FILE` names, which must be a plain file you own, with mode `0600`, and hold 32 characters or more.
 A service with `SCRIMMAGE_TOKEN` in its environment stops, so no process environment holds the token.

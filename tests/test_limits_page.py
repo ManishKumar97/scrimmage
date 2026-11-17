@@ -53,6 +53,7 @@ ALL_TITLES = [
     "A name lookup can carry data out.",
     "A new certificate needs the agent's pods restarted.",
     "A process pool's `close()`, `terminate()` or `shutdown()` inside a run is refused.",
+    "A process that leaves the copy's group with `setsid` is not stopped.",
     "A provider that is not OpenAI.",
     "A queue's private parts are not gated.",
     "A rate describes the runs that happened.",

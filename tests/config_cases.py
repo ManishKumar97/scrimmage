@@ -249,12 +249,19 @@ parallel        = 2
     + TEST
 )
 
+# A service the runner starts itself: {port} in both start and service.
+MANAGED = (
+    '[agent]\nstart = "python3 -m uvicorn acme.service:app --port {port} --loop asyncio"\n'
+    'service = "http://127.0.0.1:{port}/chat"\nbody = "{question}"\n' + TEST
+)
+
 GOOD = {
     "carried": CARRIED,
     "minimal": MINIMAL,
     "every_key": EVERY_KEY,
     "service": SERVICE,
     "every_service_key": EVERY_SERVICE_KEY,
+    "managed": MANAGED,
     "script": SCRIPT,
     "recorded": RECORDED,
     "args_hand_written": HAND_ARGS,
@@ -484,6 +491,16 @@ BAD = [
     Bad("header_host", SERVICE.replace("[agent]\n", '[agent]\nheaders = {Host = "a"}\n'), True),
     Bad("grace_too_long", SERVICE.replace("[agent]\n", "[agent]\nrecord_grace_s = 61\n"), True),
     Bad("wait_zero", SERVICE.replace("[agent]\n", "[agent]\nrecord_wait_s = 0\n"), True),
+    Bad("start_no_port", MANAGED.replace("--port {port}", "--port 8765"), True),
+    Bad("start_service_no_port", MANAGED.replace("127.0.0.1:{port}", "127.0.0.1:8765"), True),
+    Bad("start_public_host", MANAGED.replace("127.0.0.1:{port}", "0.0.0.0:{port}"), True),
+    Bad("start_host_from_value", MANAGED.replace("127.0.0.1:{port}", "${HOME}:{port}"), True),
+    Bad("start_control", MANAGED.replace("[agent]\n", '[agent]\ncontrol = "127.0.0.1:1"\n'), True),
+    Bad("start_without_service", agent('start = "python3 serve.py --port {port}"\n'), True),
+    Bad("service_port_without_start", SERVICE.replace("8765", "{port}"), False),
+    # A port from a value, which is never read for {port}. HOME stands in for a value; the
+    # value {port} itself is in test_managed_config.py, which sets it.
+    Bad("start_port_from_value", MANAGED.replace("127.0.0.1:{port}", "127.0.0.1:${HOME}"), False),
     # Below, only the parser can tell: these need the whole file, the folder or the machine.
     # ${NAME} is read from the environment, which the schema cannot see.
     Bad("placeholder_unset", MINIMAL.replace("Where is order 1234?", "${NOT_SET_HOME}"), False),
@@ -525,6 +542,7 @@ BAD = [
     Bad("two_tools_one_name", agent('tools = ["acme.a:get", "acme.b:get"]\n'), False),
     Bad("type_outside", mock('call = "tool:t"\nreturns = 1\ntype = "os.path:Path"\n'), False),
     Bad("program_not_found", SCRIPT.replace("python3 bot.py", "no-such-program-x bot.py"), False),
+    Bad("start_not_found", MANAGED.replace("python3 -m uvicorn", "no-such-uvicorn-x"), False),
     Bad("skipping_flag", SCRIPT.replace("python3 bot.py", "python3 -I bot.py"), False),
     Bad("impossible_rules", test('forbid = ["shipped"]\n'), False),
     # JSON Schema counts 2.0 as a whole number, and no keyword tells it from 2 in

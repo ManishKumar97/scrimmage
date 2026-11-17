@@ -213,6 +213,30 @@
               "children"
             ]
           }
+        },
+        "start": {
+          "required": [
+            "service"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "control"
+                ]
+              },
+              {
+                "required": [
+                  "control_tls"
+                ]
+              }
+            ]
+          },
+          "properties": {
+            "service": {
+              "pattern": "^http://(127\\.0\\.0\\.1|\\[::1\\]|[Ll][Oo][Cc][Aa][Ll][Hh][Oo][Ss][Tt]):\\{port\\}(/[^#\\s]*)?$"
+            }
+          }
         }
       },
       "properties": {
@@ -384,6 +408,11 @@
             }
           },
           "description": "The certificate and key the control server speaks TLS with. Needs control. scrimmage cert makes them."
+        },
+        "start": {
+          "type": "string",
+          "pattern": "\\{port\\}",
+          "description": "The command that starts a test copy of the service, such as uvicorn shop.service:app --port {port}. It must hold {port}, and service must then hold {port} as its port on 127.0.0.1, [::1] or localhost. Not with control or control_tls."
         }
       }
     },

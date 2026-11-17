@@ -60,6 +60,9 @@ With `--max-cost-usd USD` too, it checks `N` under that cap, as `record --runs N
 It catches every bad key, value and label, a tool name that is not in `tools`, a mock's `type` outside your packages, a `command` it cannot find, a flag that would skip Scrimmage's startup file, and a row no answer can pass.
 A file `scrimmage check` passes is one `scrimmage test` starts.
 `--service` is the one form that reaches the network; see below.
+For a [service](services.md), it also prints how the service is started.
+With `start`, that is the command as the file writes it, after `the service starts with:`.
+Without it, it is the two variables to start the service with.
 
 It does not import your code. A misspelled import path, such as `acme.tools:get_ordr`, is found when the first run imports the module, as in `scrimmage test`.
 
@@ -90,6 +93,8 @@ scrimmage check scrimmage.toml --service [--json]
 
 After the file passes, `--service` checks the [service](services.md) the file names, the way `scrimmage test` does before its first run, and stops there.
 It reads the token file, starts the control server for the length of the command, and sends the probe.
+With `start` in the file, it reads no token file: it starts its own copy of the service, as `scrimmage test` does, probes it, and stops it before it exits.
+A copy that fails to start prints its last lines; its `service.log` goes with the command's scratch folder.
 While the service's ping to the control server times out, is refused or cannot resolve the name, the probe is asked again for up to 30 seconds, so the command can take that long before it names the failure.
 It sends no run and no setup request, makes no model call and leaves no `scrimmage-runs/` folder, so it costs nothing.
 Without `--service`, `scrimmage check` reads the file only, as above.
@@ -112,7 +117,7 @@ The exit code is that of the first problem, in the order of the lines.
 |---|---|
 | 0 | Every line is good. A warning, such as a notice the service holds, still exits 0 |
 | 2 | A mistake to fix: the tools the service gates are not the file's, or the service's SDK is another version |
-| 3 | The service is not gated, cannot reach the control server, or its clock and this machine's differ by more than 60 seconds |
+| 3 | The service is not gated, cannot reach the control server, or its clock and this machine's differ by more than 60 seconds; with `start`, the copy exited or did not answer in 30 seconds |
 
 `--json` adds a `service` object to the `check` document; see [JSON output](json-output.md#scrimmage-check-json).
 

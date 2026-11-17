@@ -137,6 +137,8 @@ If none of these applies, the rest of this page is detail for your use case.
 
 - **Stopping the service mid-run.** uvicorn installs its own SIGTERM handler, so runs open when it stops lose their last lines, and read as infrastructure errors.
 
+- **A process that leaves the copy's group with `setsid` is not stopped.** With `start`, Scrimmage stops the copy of the service by its process group, so a process the service starts in a session of its own keeps running after the test.
+
 - **A service run refuses every process start, a library's own too.** The openai library runs `uname -p` through `platform` to name its machine, so a service whose agent calls OpenAI needs `"process:uname"` under `real`. The setup request finds it before any run and names the entry to add.
 
 - **A service run that queues 10,000 record lines it cannot send waits.** Each run keeps up to 10,000 lines while the runner is away. Once full, a refusal or a model call waits for room in the request that made it, so that request slows until the runner answers again; other lines are dropped and counted.

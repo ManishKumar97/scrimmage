@@ -118,7 +118,7 @@ def test_a_stop_signal_read_by_a_late_watcher_is_reported_once(
     """The watcher is held until run_all has cleared the flag, as on a busy machine."""
     cleared = threading.Event()
     original_watch = Runner._watch  # pyright: ignore[reportPrivateUsage]
-    original_catch = Runner._catch_signals  # pyright: ignore[reportPrivateUsage]
+    original_catch = Runner.catch_signals
 
     def late(self: Runner, wake_read: int, forward: int) -> None:
         cleared.wait(WAIT_S)
@@ -134,7 +134,7 @@ def test_a_stop_signal_read_by_a_late_watcher_is_reported_once(
         return after_the_clear
 
     monkeypatch.setattr(Runner, "_watch", late)
-    monkeypatch.setattr(Runner, "_catch_signals", catching)
+    monkeypatch.setattr(Runner, "catch_signals", catching)
     on_first_run(monkeypatch, lambda: os.kill(os.getpid(), signal.SIGTERM))
     assert cli.main(["test", "--json", str(project.toml)]) == 3
     infra = cast(list[dict[str, str]], document(project)["infra"])

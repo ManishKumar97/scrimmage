@@ -34,15 +34,19 @@ from scrimmage_core.budget import Ledger
 from scrimmage_core.config import (
     Agent,
     Config,
+    Expanded,
     Fault,
     Mock,
     Test,
+    as_written,
     carried_model_warnings,
     command_args,
     real_writes,
+    service_url,
     write_warnings,
 )
 from scrimmage_core.control import ControlServer, proc_key
+from scrimmage_core.managed import FAILED_PROBE_S, CopyFailed, Managed, free_port
 from scrimmage_core.outcomes import (  # the runner's names for them
     INFRA,
     INFRA_ERRORS,
@@ -276,6 +280,14 @@ class Runner:
         --service writes none beside the file.
         records: scrimmage test --records, the folder to hold the test's folder, in place of
         scrimmage-runs beside the file."""
+        port = 0
+        if config.agent.start:
+            # The runner starts its own copy of the service on a free port, filled in the
+            # address here, so every request goes there. Its written form keeps {port}.
+            port = free_port()
+            agent = config.agent
+            address = Expanded(service_url(agent, port), str(as_written(agent.service)))
+            config = dataclasses.replace(config, agent=dataclasses.replace(agent, service=address))
         self.config = config
         self.record = record  # scrimmage record: real calls' lines carry what a mock needs
         self.probe = probe  # scrimmage init --probe: the first model request ends the run
@@ -284,7 +296,7 @@ class Runner:
         self.token = secrets.token_hex(32)
         address = ("127.0.0.1", 0)
         tls_context = None
-        if config.agent.service:
+        if config.agent.service and not config.agent.start:
             # A service was started before this runner, with its token and control address:
             # the runner reads the token from its own environment, and the address from the
             # file's control setting or, for a service on this machine, the same environment.
@@ -328,6 +340,12 @@ class Runner:
             raise service_client.Setup(
                 3, f"the control address {address[0]}:{address[1]} cannot be bound: {exc.strerror}"
             ) from None
+        # The copy of the service the runner starts and stops, with start; its token is ours.
+        self.managed = (
+            Managed(config, port, self.token, self.store, keep_log=not scratch)
+            if config.agent.start
+            else None
+        )
         self.answers = Path(tempfile.mkdtemp(prefix="scrimmage-answers-"))
         self.lock = threading.Lock()
         self.sent = 0  # service requests sent: the setup request and every run
@@ -672,12 +690,18 @@ class Runner:
         unclaimed = not self.server.runs[run].fetched and reply.status is not None and gate is None
         wrong_version = gate == "version"
         clock_off = gate == "clock"  # every later claim of this process would be refused too
-        if unclaimed or streamed or wrong_version or clock_off:
+        # The copy the runner started has exited: every later run would fail the same way.
+        dead = reply.failed is not None and self.managed is not None and self.managed.gone()
+        if unclaimed or streamed or wrong_version or clock_off or dead:
             with self.lock:
                 self.cancelled = True  # under this lock, so no run starts from here on
         assert self.waiters is not None  # run_all made it, as this is a service
         # A row's next run waits for this one, so the queue holds at most one wait per row.
         later = self.waiters.submit(self.served_result, run, row, reply, streamed, replied)
+        if dead:
+            later.result()
+            assert self.managed is not None
+            raise self.managed.exited("during the test, so no further run was sent")
         if unclaimed:
             later.result()
             # A process answered without Scrimmage, such as a worker started another way:
@@ -741,7 +765,20 @@ class Runner:
 
     def probe_service(self) -> service_client.Probed:
         """The probe, asked again while the service starts: exit 3 when no gated service
-        answers, or the service's clock and this machine's differ by more than the window."""
+        answers, or the service's clock and this machine's differ by more than the window.
+
+        With start, a probe that fails first asks whether the copy has exited: one whose port
+        another process took exits, and that process may be what answered the probe."""
+        try:
+            return self.probe_ready()
+        except CopyFailed:
+            raise
+        except service_client.Setup:
+            if self.managed is not None and self.managed.gone(FAILED_PROBE_S):
+                raise self.managed.exited("before it was ready") from None
+            raise
+
+    def probe_ready(self) -> service_client.Probed:
         agent = self.config.agent
         _, _, path = service_client.target(agent)
         deadline = time.monotonic() + READY_S
@@ -760,9 +797,15 @@ class Runner:
         while starting(reply) and time.monotonic() < deadline:
             if self.cancelled or self.stop_flag:  # Ctrl-C or SIGTERM ends the wait
                 raise Interrupted(self.stop_flag[0] if self.stop_flag else "SIGINT")
+            if self.managed is not None and not self.managed.alive():
+                raise self.managed.exited("before it was ready")
             time.sleep(READY_STEP_S)  # nothing tells a closed port it has opened
             probed = service_client.probe(agent, self.token)
             reply = probed.reply
+        if self.managed is not None and starting(reply):
+            if not self.managed.alive():
+                raise self.managed.exited("before it was ready")
+            raise self.managed.failed(f"did not answer a probe in {READY_S:g} s")
         if service_client.not_listening(reply) and str(reply.failed).startswith("TimeoutError"):
             raise service_client.Setup(
                 3,
@@ -1065,10 +1108,13 @@ class Runner:
         self.server.start()
         self.ended = False
         release = nothing
+        completed = False
         try:
-            release = self._catch_signals()
+            release = self.catch_signals()
             if self.config.agent.service:
                 self.waiters = ThreadPoolExecutor(WAITERS, thread_name_prefix="scrimmage-record")
+                if self.managed is not None:
+                    self.managed.start(self.control_url(self.server.url))
                 self.check_service()
             with ThreadPoolExecutor(max_workers=self.config.agent.parallel) as pool:
                 base = self.in_turns([row for row in rows if row.fault is None], runs)
@@ -1091,16 +1137,26 @@ class Runner:
                 self.stop_flag.clear()  # the watcher and the handler may both have noted it
             if name:  # every run has ended, so it is raised where nothing drops it
                 raise Interrupted(name)
+            completed = True
         finally:
-            release()
-            self.cancel()
-            if self.waiters is not None:
-                self.waiters.shutdown()
-            self.server.stop()
-            shutil.rmtree(self.answers, ignore_errors=True)
+            try:
+                self.cancel()
+                if self.waiters is not None:
+                    self.waiters.shutdown()
+                if self.managed is not None:
+                    # After every record's wait, which the copy serves, and before the
+                    # handlers go back: while it stops, a signal is only noted, so the stop
+                    # always reaches its SIGKILL.
+                    self.managed.stop()
+            finally:
+                release()
+                self.server.stop()
+                shutil.rmtree(self.answers, ignore_errors=True)
+        if completed and self.stop_flag:  # it came while the copy stopped
+            raise Interrupted(self.stop_flag[0])
         return [r for r in results if r is not None]
 
-    def _catch_signals(self) -> Callable[[], None]:
+    def catch_signals(self) -> Callable[[], None]:
         """Stop the runs on SIGINT or SIGTERM. Returns the function that puts everything back.
 
         Python lets only the main thread set a handler or a wakeup fd. From another thread
