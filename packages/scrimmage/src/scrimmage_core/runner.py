@@ -46,6 +46,7 @@ from scrimmage_core.config import (
     write_warnings,
 )
 from scrimmage_core.control import ControlServer, proc_key
+from scrimmage_core.decide import MISTAKE_REFUSAL
 from scrimmage_core.managed import CopyFailed, Managed, free_port
 from scrimmage_core.outcomes import (  # the runner's names for them
     INFRA,
@@ -577,7 +578,7 @@ class Runner:
             outcome = "infrastructure error"
         elif first in BUDGET_REASONS:
             outcome = "budget reached" if numbers and reached(numbers) else "not reserved"
-        elif state.refused or kept_out:
+        elif (state.refused and first != MISTAKE_REFUSAL) or kept_out:
             outcome = "refused call"
         elif timed_out:
             outcome = "timed out"

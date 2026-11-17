@@ -179,3 +179,5 @@ _._state  # scrimmage_core/process_gate.py: multiprocessing's Pool.__del__ reads
 _.dies  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
 _._on_queue_feeder_error  # tests/test_service_processes.py: a queue's hook its feeder calls
 _.kind_load  # tests/k8s/images.py: the kind tests call it once they load the runner image
+_.LateStock  # tests/test_tool_gate.py: named only in a string annotation, on purpose
+_.CallbackManagerForToolRun  # tests/test_tool_gate.py: named only in a string annotation

@@ -163,17 +163,24 @@ def emptied(state: RunState, step: Step, gated: Gated) -> object:
     why = gated.no_empty
     if why is None:
         declared = changes.declared_return(gated.tool)
-        value = empty_of(declared)
+        value = NO_EMPTY if isinstance(declared, changes.Unresolved) else empty_of(declared)
         if not isinstance(value, NoEmpty):
             state.finish(step, result=value)
             return value
-        shown = getattr(declared, "__name__", None) or str(declared)
-        why = (
-            f"is declared to return {shown}, which has no empty value; mock it with the fields "
-            "of an empty result, or fault the web request inside it"
-        )
+        if isinstance(declared, changes.Unresolved):
+            why = (
+                f"declares a return type Scrimmage cannot resolve ({declared.text!r}); mock "
+                "it, or import the type at run time"
+            )
+        else:
+            shown = getattr(declared, "__name__", None) or str(declared)
+            why = (
+                f"is declared to return {shown}, which has no empty value; mock it with the "
+                "fields of an empty result, or fault the web request inside it"
+            )
     state.unchanged(step, why)
-    step.decision = engine.settled(step.call, state.plan)  # the line is not a fired fault
+    # Not a fired fault, and not real or mock either: the tool never ran.
+    step.decision = engine.Decision("refused", reason=engine.MISTAKE_REFUSAL)
     state.fail(step, ScrimmageMockError(f"{step.call.label} {why}"), mistake=True)
 
 

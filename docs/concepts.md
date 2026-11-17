@@ -71,12 +71,16 @@ Under `empty` the tool's declared return type gives the value:
 | Declared | Value |
 |---|---|
 | `str` | `""` |
-| a list, such as `list[dict]` | `[]` |
-| a dict | `{}` |
-| a tuple | `()` |
-| a type that allows `None`, such as `str \| None`, or no annotation | `None` |
+| a `list`, such as `list[dict]` | `[]` |
+| a `dict` | `{}` |
+| a `tuple` | `()` |
+| a type that allows `None`, such as `str \| None`; `Any`, `object` or a type variable; or no annotation | `None` |
 
-Any other type, such as a pydantic model, has no empty value, so `empty` on it is a mistake in the test, and the message names the fix: mock it with the fields of an empty result, or fault the web request inside the tool.
+The container must be exactly `list`, `dict` or `tuple`; `Sequence`, `Mapping` and `set` are mistakes.
+Any other type, such as a pydantic model, has no empty value, so `empty` on it is a mistake in the test.
+The message names the fix: mock it with the fields of an empty result, or fault the web request inside the tool.
+Only the return annotation is read.
+A return annotation that cannot be resolved when the tool runs, such as a name imported only under `TYPE_CHECKING`, is a mistake too.
 
 A fault fires on every call it names, unless `when` narrows it to the `first N` attempts, the Nth attempt alone with `call N`, or the first `requests N`.
 See [Failing the model](model-faults.md).

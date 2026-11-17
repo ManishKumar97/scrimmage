@@ -9,7 +9,10 @@ agent saw.
 """
 
 import copy
+import functools
+import inspect
 import json
+import sys
 import types
 import typing
 import zlib
@@ -288,6 +291,8 @@ def can_take(declared: object, fault: Fault) -> bool | None:
     says nothing (no annotation, Any, object, a type variable, or a type it cannot read)."""
     if declared is None or declared is typing.Any or declared is object:
         return None
+    if isinstance(declared, Unresolved):
+        return None
     text_ok = fault.do == "append" or fault.find is None
     any_unknown = False
     for member in members(declared):
@@ -306,13 +311,61 @@ def can_take(declared: object, fault: Fault) -> bool | None:
     return None if any_unknown else False
 
 
+@dataclass(frozen=True)
+class Unresolved:
+    """A return annotation that is written but cannot be resolved at run time, such as a
+    name imported only under TYPE_CHECKING. text is the annotation as written."""
+
+    text: str
+
+
+def annotated(function: object) -> object:
+    """What holds the annotations of a callable: a partial's function, a method's function,
+    or a callable object's __call__."""
+    while isinstance(function, functools.partial):
+        function = cast("functools.partial[object]", function).func
+    function = getattr(function, "__func__", function)  # a bound method
+    if not (inspect.isfunction(function) or isinstance(function, type)) and callable(function):
+        function = getattr(type(function).__call__, "__func__", type(function).__call__)
+    return function
+
+
+def return_annotation(function: object) -> tuple[bool, object]:
+    """Whether the function writes a return annotation, and the annotation as written. Other
+    annotations are never evaluated, so a parameter type that cannot be resolved is no matter."""
+    if sys.version_info >= (3, 14):  # annotations are lazy: ask for names it cannot resolve as is
+        import annotationlib
+
+        forward = annotationlib.Format.FORWARDREF
+        written = annotationlib.get_annotations(function, format=forward)  # pyright: ignore
+    else:
+        written = inspect.get_annotations(function)  # pyright: ignore[reportArgumentType]
+    return "return" in written, written.get("return")
+
+
 def declared_return(function: object) -> object:
-    """The return annotation of a function, resolved; None when there is none or it cannot be."""
+    """The return annotation of a function, resolved: None when there is none, Unresolved
+    when it is written but cannot be resolved."""
+    target = annotated(function)
     try:
-        hints = typing.get_type_hints(function)
-    except Exception:  # a forward reference that cannot be resolved, or no hints at all
+        found, written = return_annotation(target)
+    except Exception:  # not a function, class or module, so it has no annotations
         return None
-    return hints.get("return", None) if "return" in hints else None
+    if not found:
+        return None
+    # A stand-in that holds only the return annotation, with the function's own globals, so
+    # typing resolves it, nested forward references and Annotated included, and nothing else.
+    stand_in = types.FunctionType(borrowed.__code__, getattr(target, "__globals__", None) or {})
+    stand_in.__annotations__ = {"return": written}
+    try:
+        return typing.get_type_hints(stand_in)["return"]
+    except Exception:  # a name it cannot find, or text that is no type
+        text = getattr(written, "__forward_arg__", None)
+        return Unresolved(written if isinstance(written, str) else str(text or written))
+
+
+def borrowed() -> None:
+    """The code a stand-in function borrows; it never runs."""
 
 
 def change(value: object, fault: Fault, declared: object = None, where: str = "result") -> Result:

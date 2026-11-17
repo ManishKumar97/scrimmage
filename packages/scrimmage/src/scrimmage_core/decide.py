@@ -17,6 +17,9 @@ from scrimmage_core.plan import Plan
 
 Action = Literal["fault", "mock", "real", "refused"]
 Kind = Literal["tool", "model", "http", "mcp", "process"]
+# The reason of a call a gate refused because the test asks what cannot be done, such as
+# empty on a tool with no empty value. The test is wrong, not the agent: no refused call.
+MISTAKE_REFUSAL = "mistake"
 
 
 @dataclass(frozen=True)
