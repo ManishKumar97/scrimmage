@@ -497,6 +497,9 @@ BAD = [
     Bad("start_control", MANAGED.replace("[agent]\n", '[agent]\ncontrol = "127.0.0.1:1"\n'), True),
     Bad("start_without_service", agent('start = "python3 serve.py --port {port}"\n'), True),
     Bad("service_port_without_start", SERVICE.replace("8765", "{port}"), False),
+    # A port from a value, which is never read for {port}. HOME stands in for a value; the
+    # value {port} itself is in test_managed_config.py, which sets it.
+    Bad("start_port_from_value", MANAGED.replace("127.0.0.1:{port}", "127.0.0.1:${HOME}"), False),
     # Below, only the parser can tell: these need the whole file, the folder or the machine.
     # ${NAME} is read from the environment, which the schema cannot see.
     Bad("placeholder_unset", MINIMAL.replace("Where is order 1234?", "${NOT_SET_HOME}"), False),

@@ -296,6 +296,7 @@ body    = {message = "{question}"}
 
 `{port}` is a free port on this machine, picked for each test.
 It is filled in the file's own text in `start` and in `service`; a `${NAME}` value that holds `{port}` is sent as written.
+There is no `{{` escape for it: in `start`, `{{port}}` is `{`, the port and `}`, and in `service` it is refused.
 `start` must hold it at least once, and `service` must hold it once, as its port.
 The copy runs on this machine, so the host in `service` must be `127.0.0.1`, `[::1]` or `localhost`.
 `control` and `control_tls` are refused beside `start`: they are for a service someone else started, such as one in a container.
@@ -304,6 +305,7 @@ Without `start`, `{port}` is not read, and `service` must name a port as digits.
 The first word of `start` is a program found on `PATH`, or a path from the folder of this file.
 A program it cannot find stops `scrimmage check` with exit 2.
 Activate the virtual environment that has it, or write `python -m uvicorn`.
+A Python flag such as `-I`, `-S` or `-E` keeps Python from running Scrimmage's startup file, so it stops `scrimmage check` with exit 2 too, as in `command`.
 `${NAME}` in `start` is filled in after the split, as in `command`, and each value of 8 characters or more is removed from what is recorded.
 
 ## Coming in later versions

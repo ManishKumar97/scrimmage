@@ -285,13 +285,16 @@ class Reader:
         return value
 
     def file(self, data: dict[str, object]) -> dict[str, object]:
-        """The whole file. A service's body and headers, a command and start are read later,
-        by their own rules: a command line is split first, so a value cannot change the split."""
+        """The whole file. A service's address, body and headers, a command and start are read
+        later, by their own rules: a command line is split first, so a value cannot change the
+        split, and {port} is found in the file's own text only."""
         out: dict[str, object] = {}
         for key, value in data.items():
             if key == "agent" and isinstance(value, dict):
                 out[key] = self.walk(
-                    cast(object, value), "[agent]", ("body", "headers", "command", "start")
+                    cast(object, value),
+                    "[agent]",
+                    ("body", "headers", "command", "start", "service"),
                 )
             elif key == "test" and isinstance(value, list):
                 tests = cast(list[object], value)
@@ -452,6 +455,7 @@ class Agent:
     # pieces fill {port} in the file's own text only.
     start: tuple[str, ...] = ()
     start_pieces: tuple[tuple[tuple[bool, str], ...], ...] = ()
+    service_pieces: tuple[tuple[bool, str], ...] = ()  # with start: service, as start_pieces
 
     def tool_names(self) -> list[str]:
         """Every tool's final name: the one the model sees."""
@@ -489,6 +493,13 @@ def start_args(agent: Agent, port: int) -> list[str]:
         "".join(text if value else text.replace(PORT, str(port)) for value, text in pieces)
         for pieces in agent.start_pieces
     ]
+
+
+def service_url(agent: Agent, port: int) -> str:
+    """The test copy's address, {port} filled in the file's own text."""
+    return "".join(
+        text if value else text.replace(PORT, str(port)) for value, text in agent.service_pieces
+    )
 
 
 def request_body(agent: Agent, question: str, session: str) -> object:
@@ -592,6 +603,11 @@ def check_references(config: Config) -> list[str]:
             f"[agent] start: {config.agent.start[0]} is not a program it can find; activate "
             "the virtual environment that has it, or start it through Python, such as "
             "python -m uvicorn"
+        )
+    if config.agent.start and (flag := skipping_flag(config.agent.start, config.root)):
+        problems.append(
+            f"[agent] start: {flag} keeps Python from running Scrimmage's startup file, so the "
+            "service would run with no gates; remove it"
         )
     problems += [p for test in config.tests if (p := bad_question(test, config.agent))]
     problems += model_paths_in_real(config.agent)
@@ -936,6 +952,9 @@ def read_agent(table: dict[str, object], reader: Reader | None = None) -> Agent:
         function = import_path(text(table, "function", where), f"{where} function")
     command, pieces = read_command(table, where, reader) if "command" in table else ((), ())
     start, start_pieces = read_start(table, where, reader) if "start" in table else ((), ())
+    address, address_pieces = (
+        read_service(table, where, reader, managed="start" in table) if service else ("", ())
+    )
     agent = Agent(
         function=function,
         runs=whole(table, "runs", 3, where),
@@ -955,7 +974,7 @@ def read_agent(table: dict[str, object], reader: Reader | None = None) -> Agent:
         children=children,
         command_pieces=pieces,
         command_written=str(table["command"]) if "command" in table else "",
-        service=read_service(table, where, managed="start" in table) if service else "",
+        service=address,
         body=read_body(table, where, reader) if service else None,
         headers=read_headers(table.get("headers", {}), f"{where} headers", reader),
         record_grace_s=seconds(table, "record_grace_s", DEFAULT_GRACE_S, MAX_GRACE_S, where),
@@ -965,6 +984,7 @@ def read_agent(table: dict[str, object], reader: Reader | None = None) -> Agent:
         control_tls=read_control_tls(table, where) if "control_tls" in table else None,
         start=start,
         start_pieces=start_pieces,
+        service_pieces=address_pieces,
     )
     check_control(agent, where)
     names = agent.tool_names()
@@ -1079,12 +1099,16 @@ def read_start(
     return words, pieces
 
 
-def read_service(table: dict[str, object], where: str, *, managed: bool = False) -> str:
-    """The service's address: http://host:port/path, on any machine the runner reaches.
-    managed: the runner starts the service, so the port is {port} and the host is loopback."""
-    value = text(table, "service", where)
+def read_service(
+    table: dict[str, object], where: str, reader: Reader, *, managed: bool = False
+) -> tuple[str, tuple[tuple[bool, str], ...]]:
+    """The service's address: http://host:port/path, on any machine the runner reaches, and,
+    with managed, its pieces. managed: the runner starts the service, so the port is {port}
+    and the host is loopback."""
+    written = text(table, "service", where)
     if managed:
-        return read_managed_service(value, where)
+        return read_managed_service(written, where, reader)
+    value = reader.expand(written, f"{where} service")
     parts = SERVICE_URL.fullmatch(value)
     if parts is not None and parts["scheme"].lower() == "https":
         raise ConfigError(
@@ -1094,15 +1118,28 @@ def read_service(table: dict[str, object], where: str, *, managed: bool = False)
     port = parts["port"] if parts is not None else None
     if parts is None or parts["scheme"] != "http" or (port is not None and int(port) > 65535):
         raise ConfigError(f"{where} service: {value!r} is not of the form http://host:port/path")
-    return value
+    return value, ()
 
 
-def read_managed_service(value: str, where: str) -> str:
-    """With start: http://<loopback host>:{port}/path, {port} once, as the port."""
-    at = value.find(PORT)
-    parts = SERVICE_URL.fullmatch(value.replace(PORT, "1", 1))
+def read_managed_service(
+    written: str, where: str, reader: Reader
+) -> tuple[str, tuple[tuple[bool, str], ...]]:
+    """With start: http://<loopback host>:{port}/path, {port} once, as the port, in the file's
+    own text. A ${NAME} value is filled in after, and a {port} in it is sent as written."""
+    pieces = tuple((p.kind == "value", p.text) for p in reader.scan(written, f"{where} service"))
+    probe = ""  # the address with the file's {port} as 1, to match it as a port
+    at = -1
+    found = 0
+    for value, piece in pieces:
+        if not value:
+            found += piece.count(PORT)
+            if PORT in piece and at < 0:
+                at = len(probe) + piece.index(PORT)
+            piece = piece.replace(PORT, "1")
+        probe += piece
+    parts = SERVICE_URL.fullmatch(probe)
     if (
-        value.count(PORT) != 1
+        found != 1
         or parts is None
         or parts["scheme"] != "http"
         or parts["port"] != "1"
@@ -1110,14 +1147,17 @@ def read_managed_service(value: str, where: str) -> str:
     ):
         raise ConfigError(
             f"{where} service: with start it must be of the form http://127.0.0.1:{PORT}/path, "
-            f"with {PORT} once, as the port, got {value!r}"
+            f"with {PORT} once, as the port, got {written!r}"
         )
     if parts["host"].lower() not in LOOPBACK_HOSTS:
         raise ConfigError(
             f"{where} service: with start the runner starts the service on this machine, so "
             f"the host must be 127.0.0.1, [::1] or localhost, got {parts['host']!r}"
         )
-    return value
+    filled = "".join(text for _, text in pieces)
+    if any(value for value, _ in pieces):
+        return Expanded(filled, written), pieces
+    return filled, pieces
 
 
 def read_body(table: dict[str, object], where: str, reader: Reader) -> object:

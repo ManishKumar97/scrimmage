@@ -6,6 +6,7 @@ to a service someone else started, so they are refused beside start. A file with
 reads as it did before the key existed.
 """
 
+import dataclasses
 import re
 import sys
 from pathlib import Path
@@ -50,6 +51,10 @@ def test_start_with_port_in_start_and_service_reads(tmp_path: Path) -> None:
     )
     assert cfg.agent.service == "http://127.0.0.1:{port}/chat"
     assert config.start_args(cfg.agent, 41234)[4:6] == ["--port", "41234"]
+    assert config.service_url(cfg.agent, 41234) == "http://127.0.0.1:41234/chat"
+    # {{ is no escape for {port}: {{port}} is a brace, the port and a brace.
+    cfg = load_text(tmp_path, managed(f"{PYTHON} serve.py --port {{{{port}}}}"))
+    assert config.start_args(cfg.agent, 9)[-1] == "{9}"
     # {port} as part of a word, and the other loopback hosts.
     for service in (
         "http://[::1]:{port}/chat",
@@ -83,11 +88,33 @@ def test_start_without_port_is_exit_2(tmp_path: Path) -> None:
         "http://{port}/chat",
         "http://127.0.0.1:8765/{port}",
         "https://127.0.0.1:{port}/chat",
+        # A value's {port} is not the file's: it is sent as written, so it is no port.
+        "http://127.0.0.1:${P}/chat",
+        "http://127.0.0.1:8765/${P}",
+        # {{ is no escape for {port}.
+        "http://127.0.0.1:{{port}}/chat",
     ],
 )
-def test_service_without_port_beside_start_is_exit_2(tmp_path: Path, service: str) -> None:
+def test_service_without_port_beside_start_is_exit_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, service: str
+) -> None:
+    monkeypatch.setenv("P", "{port}")
     with pytest.raises(ConfigError, match=r"\[agent\] service: with start it must be of the form"):
         load_text(tmp_path, managed(service=service))
+
+
+def test_a_port_in_a_value_of_service_is_sent_as_written(tmp_path: Path) -> None:
+    path = tmp_path / "scrimmage.toml"
+    path.write_text(managed(service="http://127.0.0.1:{port}/${X}"))
+    cfg = config.load(path, {"X": "chat/{port}/x"})
+    assert cfg.agent.service == "http://127.0.0.1:{port}/chat/{port}/x"
+    assert config.service_url(cfg.agent, 41234) == "http://127.0.0.1:41234/chat/{port}/x"
+    # The host may come from a value too; the file's {port} is still the port.
+    path.write_text(managed(service="http://${HOST}:{port}/chat"))
+    cfg = config.load(path, {"HOST": "localhost"})
+    assert config.service_url(cfg.agent, 7) == "http://localhost:7/chat"
+    with pytest.raises(ConfigError, match=r"the host must be"):
+        config.load(path, {"HOST": "0.0.0.0"})
 
 
 @pytest.mark.parametrize(
@@ -143,6 +170,22 @@ def test_a_start_program_that_cannot_be_found_is_exit_2(tmp_path: Path, program:
     assert main(["check", str(tmp_path / "scrimmage.toml")]) == 2
 
 
+@pytest.mark.parametrize("flags", ["-I", "-S", "-E", "-W ignore -S"])
+def test_a_start_flag_that_skips_scrimmage_is_exit_2(tmp_path: Path, flags: str) -> None:
+    text = managed(f"{PYTHON} {flags} -m uvicorn acme.service:app --port {{port}}")
+    with pytest.raises(ConfigError, match=r"\[agent\] start: -\w+ keeps Python from running"):
+        load_text(tmp_path, text)
+    assert main(["check", str(tmp_path / "scrimmage.toml")]) == 2
+
+
+def test_a_command_whose_question_comes_only_from_a_value_is_exit_2(tmp_path: Path) -> None:
+    path = tmp_path / "scrimmage.toml"
+    path.write_text('[agent]\ncommand = "python3 bot.py ${Q}"\n' + TEST)
+    # The message's {question} is scrubbed, as the value is {question}: a known, logged gap.
+    with pytest.raises(ConfigError, match=r"\[agent\] command: must hold .*no question"):
+        config.load(path, {"Q": "{question}"})
+
+
 def test_start_fills_names_and_scrubs_them(tmp_path: Path) -> None:
     secret = "sk-start-0123456789abcdef"
     path = tmp_path / "scrimmage.toml"
@@ -163,6 +206,61 @@ def test_start_fills_names_and_scrubs_them(tmp_path: Path) -> None:
     assert not leaked, "a start program's filled value is in the error message"
 
 
+# dataclasses.asdict of each file's Agent as main read it before start existed, with the
+# fields start added, empty.
+BEFORE: dict[str, object] = {
+    "function": "",
+    "runs": 3,
+    "parallel": 1,
+    "run_timeout": 120.0,
+    "tools": (),
+    "real": (),
+    "renames": (),
+    "model_hosts": (),
+    "max_cost_usd": 5.0,
+    "reserve_output_tokens": 4096,
+    "prices": (),
+    "answer": None,
+    "command": (),
+    "children": False,
+    "command_pieces": (),
+    "command_written": "",
+    "service": "",
+    "body": {"message": {"pieces": ({"kind": "question", "text": ""},)}},
+    "headers": (),
+    "record_grace_s": 5.0,
+    "record_wait_s": 10.0,
+    "background_real": (),
+    "control": "",
+    "control_tls": None,
+    "start": (),
+    "start_pieces": (),
+    "service_pieces": (),
+}
+K8S = {
+    **BEFORE,
+    "runs": 30,
+    "run_timeout": 30.0,
+    "tools": (
+        "acme.tools:get_order",
+        "acme.tools:check_inventory",
+        "acme.tools:refund_order",
+        "acme.tools:get_stock",
+    ),
+    "real": ("tool:check_inventory", "process:uname"),
+    "model_hosts": ({"host": "fake-model", "provider": "openai"},),
+    "answer": "reply",
+    "service": "http://acme-agent:8000/chat",
+    "body": {
+        "message": {"pieces": ({"kind": "question", "text": ""},)},
+        "session": {"pieces": ({"kind": "session", "text": ""},)},
+    },
+    "record_grace_s": 0.2,
+    "control": "10.244.0.7:7700",
+    "control_tls": ("/run/scrimmage/tls/tls.crt", "/run/scrimmage/tls/tls.key"),
+}
+
+
 def test_a_service_file_without_start_reads_as_before(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -170,18 +268,32 @@ def test_a_service_file_without_start_reads_as_before(
     monkeypatch.setenv("POD_IP", "10.244.0.7")
     files = [p for p in sorted(TESTS.rglob("*.toml")) if SERVICE_LINE.search(p.read_text())]
     assert [p.relative_to(TESTS).as_posix() for p in files] == ["k8s/scrimmage.toml"]
-    texts = [p.read_text() for p in files] + [
-        f'[agent]\nservice = "http://127.0.0.1:8765/chat"\n{BODY}' + TEST,
-        f'[agent]\nservice = "http://localhost/chat"\n{BODY}control = "127.0.0.1:8766"\n' + TEST,
-        f'[agent]\nservice = "http://acme-agent:8000/"\n{BODY}' + TEST,
+    cases = [
+        (files[0].read_text(), K8S),
+        (
+            f'[agent]\nservice = "http://127.0.0.1:8765/chat"\n{BODY}' + TEST,
+            {**BEFORE, "service": "http://127.0.0.1:8765/chat"},
+        ),
+        (
+            f'[agent]\nservice = "http://localhost/chat"\n{BODY}control = "127.0.0.1:8766"\n'
+            + TEST,
+            {**BEFORE, "service": "http://localhost/chat", "control": "127.0.0.1:8766"},
+        ),
+        (
+            f'[agent]\nservice = "http://acme-agent:8000/"\n{BODY}' + TEST,
+            {**BEFORE, "service": "http://acme-agent:8000/"},
+        ),
     ]
-    for text in texts:
+    for text, expected in cases:
         path = tmp_path / "scrimmage.toml"
         path.write_text(text)
-        agent = config.load(path).agent
-        assert agent.start == () and agent.start_pieces == ()
-        written = text.split("service", 1)[1].split('"')[1]
-        assert agent.service == written
+        assert dataclasses.asdict(config.load(path).agent) == expected, text
+    # A value in an attach-mode service is filled in, and the address keeps its written form.
+    path = tmp_path / "scrimmage.toml"
+    path.write_text(f'[agent]\nservice = "http://127.0.0.1:${{PORT}}/chat"\n{BODY}' + TEST)
+    service = config.load(path, {"PORT": "8765"}).agent.service
+    assert service == "http://127.0.0.1:8765/chat"
+    assert config.as_written(service) == "http://127.0.0.1:${PORT}/chat"
     # {port} means nothing without start: such a file is refused as it was before the key.
     for service in ("http://127.0.0.1:{port}/chat", "http://localhost:{port}/"):
         with pytest.raises(ConfigError, match=r"is not of the form http://host:port/path"):
