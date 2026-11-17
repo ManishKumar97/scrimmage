@@ -38,7 +38,14 @@ from scrimmage_core.budget import ASK_MAX_S, Held, Shortfall
 from scrimmage_core.changes import Changed, Unchangeable
 from scrimmage_core.client import ControlError
 from scrimmage_core.config import CONNECTION, Fault, slow_seconds
-from scrimmage_core.decide import READ_METHODS, Call, Decision, names, schedule, settled
+from scrimmage_core.decide import (
+    MISTAKE_REFUSAL,
+    READ_METHODS,
+    Call,
+    Decision,
+    names,
+    schedule,
+)
 from scrimmage_core.errors import ScrimmageMockError, ScrimmageRefused
 from scrimmage_core.judge import normal
 from scrimmage_core.labels import shown_name
@@ -677,7 +684,8 @@ def bad_body(
             "a request without stream, or use timeout or a status on this one"
         )
         run.unchanged(step, why)
-        step.decision = settled(step.call, run.plan)  # the line is not a fired fault
+        # Not a fired fault, and not real either: nothing was sent.
+        step.decision = Decision("refused", reason=MISTAKE_REFUSAL)
         run.fail(step, ScrimmageMockError(f"{step.call.label} {why}"), mistake=True)
     if step.call.kind == "model":
         headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}

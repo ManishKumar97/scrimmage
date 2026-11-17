@@ -4,14 +4,17 @@ reply the code gets, the line, and that nothing is sent, reserved or fired by mi
 import asyncio
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx2
 import openai
 import pytest
 
-from scrimmage_core import config, http_gate
+from conftest import EXAMPLE_FAULT, Project
+from fakes.openai_server import FakeOpenAI
+from scrimmage_core import cli, config, http_gate, runner, suggest
 from scrimmage_core.config import Fault
+from scrimmage_core.decide import MISTAKE_REFUSAL
 from scrimmage_core.errors import ConfigError, ScrimmageMockError
 from scrimmage_core.provider_openai import BROKEN_BODY
 from test_connection_faults import LIBRARIES, PATH_IDS, PATHS, WEB, gated, install
@@ -133,8 +136,12 @@ def test_bad_body_on_a_streamed_model_request_is_a_mistake_and_not_fired(
         got(name, sync, reached, URL, json={**BODY, "stream": True})
     assert reached == [] and budget.asked == 0
     line = line_of(sink, "model")
-    assert line["action"] != "fault", "a fault that was not carried out counted as fired"
+    # Not a fired fault, and not a real call the provider failed: nothing was sent.
+    assert (line["action"], line["reason"]) == ("refused", MISTAKE_REFUSAL), line
+    assert runner.real_error(line) is None
     assert "streamed request" in str(line["mistake"])
+    # The suggestion reads it as a mistake in the test, never as a call that ran.
+    assert suggest.refused_mistakes([line]) == [line] and suggest.unchanged_lines([line]) == []
     unchanged = line["unchanged"]
     assert isinstance(unchanged, dict) and unchanged["do"] == "bad body"
     assert "streamed request" in str(unchanged["why"])
@@ -211,3 +218,51 @@ def test_a_head_request_under_bad_body_gets_no_body(gated: None) -> None:
     assert response.status_code == 200 and response.content == b""
     assert response.headers["content-length"] == str(len(http_gate.BROKEN_WEB_BODY))
     assert line_of(sink, "http")["status"] == 200
+
+
+STREAMING_BOT = """\
+import sys
+
+import openai
+
+client = openai.OpenAI(max_retries=0)
+messages = [{"role": "user", "content": sys.argv[1]}]
+stream = client.chat.completions.create(model="gpt-4o-mini", messages=messages, stream=True)
+print("".join(c.choices[0].delta.content or "" for c in stream if c.choices))
+"""
+STREAMED_FAULT = '[[test.fault]]\ncall = "model"\ndo = "bad body"\nwhen = "first 1"\n'
+
+
+@pytest.mark.design("fault.bad_body_stream")
+@pytest.mark.slow
+def test_a_run_with_bad_body_on_a_streamed_request_ends_as_a_test_mistake(
+    project: Project, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The gate's mistake is neither the provider failing nor a call the agent chose: exit 2,
+    no "not injected" error, and the run's suggestion is the test's mistake."""
+    (project.root / "bot.py").write_text(STREAMING_BOT)
+    project.edit('function = "acme.agent:answer"', 'command = "python bot.py {question}"')
+    project.edit("[agent]\n", "[agent]\nruns = 1\n")
+    project.edit(EXAMPLE_FAULT, STREAMED_FAULT)
+    fake = FakeOpenAI(["chat_stream"])
+    fake.start()
+    try:
+        result = project.test(fake)
+    finally:
+        fake.stop()
+    said = result.out + result.err
+    assert result.code == 2, said
+    fault = next(lines for lines in result.records() if lines[-1]["row"] == "fault 1")
+    [line] = [x for x in fault if x.get("kind") == "model"]
+    assert (line["action"], line["reason"]) == ("refused", MISTAKE_REFUSAL), line
+    summary = cast("dict[str, Any]", fault[-1]["summary"])
+    assert summary["fault_fired"] is False
+    assert summary["outcome"] not in ("refused call", "infrastructure error"), summary
+    assert "not injected" not in said and "is a streamed request" in said
+    folder = next((project.root / "scrimmage-runs").iterdir())
+    capsys.readouterr()
+    assert cli.main(["show", str(folder), "--run", str(line["run"]), "--json"]) == 0
+    [run] = json.loads(capsys.readouterr().out)["runs"]
+    texts = [str(s["text"]) for s in run["suggestions"]]
+    assert [s["code"] for s in run["suggestions"]][:1] == ["test_mistake"], texts
+    assert not any("ran as it would" in text for text in texts), texts
