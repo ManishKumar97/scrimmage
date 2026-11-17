@@ -1198,3 +1198,14 @@ def test_empty_on_an_async_tool(lines: Lines) -> None:
     assert asyncio.run(gated("1")) == ""
     [line] = lines.lines
     assert line["action"] == "fault" and line["result"] == state.content("")
+
+
+@pytest.mark.design("protocol.plan_refuses_unknown_word")
+def test_a_plan_with_empty_on_a_tool_round_trips() -> None:
+    """The file's reader accepts empty on a tool, and the SDK's plan reader reads it back."""
+    fault = '\n[[test.fault]]\ncall = "tool:get_order"\ndo = "empty"\nwhen = "call 2"\n'
+    loaded = load(AGENT + TEST + fault)
+    row = planner.rows(loaded)[1]
+    sent = planner.plan_for(loaded, row, "run-1")
+    assert sent.faults[0].do == "empty" and sent.faults[0].call == "tool:get_order"
+    assert Plan.from_json(json.loads(json.dumps(sent.to_json()))) == sent
