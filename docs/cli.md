@@ -156,7 +156,7 @@ The schema checks the shape of the file. `scrimmage check` decides.
 scrimmage cert --ip 172.17.0.1 --name host.docker.internal --out .scrimmage-cert [--days 30]
 ```
 
-Makes the certificates for a control server that a service in a container reaches over TLS; see [Services](services.md).
+Makes the certificates for a control server that a service in a container reaches over TLS; see [A service in a container](docker.md#a-service-in-a-container).
 It writes three files into a new folder, mode 0700, and refuses a folder that exists:
 
 | File | What | Mode |

@@ -123,13 +123,13 @@ Each run then went to the service as its own request, under its own plan, while 
 
 The same service runs in a container, with the runner still on the host.
 The control channel then runs over TLS, and the container runs as the token file's owner.
-[A service in a container](../services.md#a-service-in-a-container) has the Compose file, the commands and what crosses the network.
+[A service in a container](../docker.md#a-service-in-a-container) has the Compose file, the commands and what crosses the network.
 
 ## In Kubernetes
 
 In a cluster, the runner runs as a Job and the service as a Deployment of two replicas.
 Each run goes to one replica or the other, and each run's summary names the pod that served it.
 The token and the control key arrive as Secret volumes, and the records stay on a volume after the Job's pod is gone.
-[In Kubernetes](../services.md#in-kubernetes) has every manifest, the commands, and how to read the result.
+[In Kubernetes](../kubernetes.md#in-kubernetes) has every manifest, the commands, and how to read the result.
 
 More: [An agent inside a web service](../services.md), [Configuration](../configuration.md), [Safety](../safety.md).
