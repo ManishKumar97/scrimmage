@@ -81,3 +81,11 @@ def answer_cutting(question: str) -> str:
         return run_tool(name, arguments).splitlines()[0]
 
     return loop(openai.OpenAI(max_retries=0), question, run=first_line)
+
+
+def refund_when_stock_fails(question: str) -> str:
+    """A bot with no model that refunds the order when it cannot read the stock."""
+    stock = run_tool("get_stock", '{"sku": "SKU-42"}')
+    if stock.startswith("error:"):
+        return run_tool("refund_order", '{"order_id": "1234"}')
+    return stock

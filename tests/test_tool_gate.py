@@ -1,6 +1,7 @@
 """The tools-list gate and run state, in one process, with lines kept in a list."""
 
 import asyncio
+import functools
 import inspect
 import json
 import sys
@@ -8,10 +9,12 @@ import threading
 import types
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
+from conftest import ACME, EXAMPLE_FAULT, Project
+from fakes.openai_server import FakeOpenAI
 from report_cases import AGENT, TEST, load
 from report_cases import run as a_run
 from scrimmage_core import decide as engine
@@ -27,6 +30,12 @@ from scrimmage_core.errors import (
 from scrimmage_core.plan import Plan
 from scrimmage_core.redact import redact
 from scrimmage_core.runner import miss_groups
+
+if TYPE_CHECKING:  # imported for the type checker only, so no annotation of them resolves
+    from decimal import Decimal
+    from decimal import Decimal as LateStock  # a model, in the team's code
+
+    from langchain_core.callbacks import CallbackManagerForToolRun
 
 
 @dataclass
@@ -1061,3 +1070,305 @@ def test_slow_on_an_async_tool_without_asyncio_is_a_mistake_and_not_slowed(lines
         "slow on an async tool needs asyncio",
     )  # type: ignore[index]
     assert "needs asyncio" in str(line["mistake"])
+
+
+# empty: the tool's empty value, and the tool never runs.
+
+
+def empty_fault(call: str) -> Fault:
+    return Fault(call, "empty", "always", forbid=("12",))
+
+
+def get_orders(customer: str) -> list[dict[str, str]]:
+    del customer
+    raise AssertionError("an empty fault must never run the tool")
+
+
+def get_totals(customer: str) -> dict[str, int]:
+    del customer
+    raise AssertionError("an empty fault must never run the tool")
+
+
+def get_pair(customer: str) -> tuple[str, int]:
+    del customer
+    raise AssertionError("an empty fault must never run the tool")
+
+
+def get_maybe(sku: str) -> str | None:
+    raise AssertionError("an empty fault must never run the tool")
+
+
+def get_anything(sku):
+    raise AssertionError("an empty fault must never run the tool")
+
+
+@pytest.mark.design("fault.empty_tool_typed")
+def test_empty_on_a_tool_declared_str_returns_an_empty_string(lines: Lines) -> None:
+    install(lines, faults=[empty_fault("tool:get_text")], real=["tool:get_text"])
+    assert tool_gate.gate(get_text, "get_text")("1") == ""
+    [line] = lines.lines
+    assert (line["action"], line["fault"]) == ("fault", {"do": "empty", "when": "always", "n": 1})
+    assert line["result"] == state.content("")
+    assert line["error"] is None and "mistake" not in line and "unchanged" not in line
+
+
+@pytest.mark.design("fault.empty_tool_typed")
+@pytest.mark.parametrize(
+    ("tool", "empty"),
+    [(get_orders, []), (get_totals, {}), (get_pair, ())],
+    ids=["list", "dict", "tuple"],
+)
+def test_empty_on_a_tool_declared_list_dict_or_tuple_returns_an_empty_one(
+    lines: Lines, tool: Any, empty: object
+) -> None:
+    install(lines, faults=[empty_fault(f"tool:{tool.__name__}")])
+    value = tool_gate.gate(tool, tool.__name__)("acme")
+    assert value == empty and type(value) is type(empty)
+    assert lines.lines[0]["action"] == "fault"
+
+
+@pytest.mark.design("fault.empty_tool_typed")
+@pytest.mark.parametrize("tool", [get_maybe, get_anything], ids=["optional", "undeclared"])
+def test_empty_on_an_optional_or_undeclared_tool_returns_none(lines: Lines, tool: Any) -> None:
+    install(lines, faults=[empty_fault(f"tool:{tool.__name__}")])
+    assert tool_gate.gate(tool, tool.__name__)("SKU-42") is None
+    [line] = lines.lines
+    assert line["action"] == "fault" and line["result"] == state.content(None)
+
+
+@pytest.mark.design("fault.empty_tool_typed")
+@pytest.mark.parametrize(
+    ("declared", "empty"),
+    [
+        (list[str] | list[int], []),
+        (dict[str, Any] | None, None),
+        (Any, None),
+        (object, None),
+        (int, tool_gate.NO_EMPTY),
+        (str | list[str], tool_gate.NO_EMPTY),
+        (bytes, tool_gate.NO_EMPTY),
+    ],
+    ids=["two_lists", "optional_dict", "any", "object", "int", "str_or_list", "bytes"],
+)
+def test_the_empty_value_of_each_declared_type(declared: object, empty: object) -> None:
+    assert tool_gate.empty_of(declared) == empty
+
+
+@pytest.mark.design("fault.empty_tool_no_empty_value")
+@pytest.mark.slow
+def test_empty_on_a_tool_declared_to_return_a_model_is_a_mistake_naming_the_fix(
+    project: Project,
+) -> None:
+    empty = '[[test.fault]]\ncall = "tool:get_stock"\ndo = "empty"\nforbid = ["12 in stock"]\n'
+    project.edit(EXAMPLE_FAULT, empty)
+    fake = FakeOpenAI(ACME)
+    fake.start()
+    try:
+        result = project.test(fake)
+    finally:
+        fake.stop()
+    assert result.code == 2, result.out + result.err
+    fault = next(lines for lines in result.records() if lines[-1]["row"] == "fault 1")
+    [line] = [x for x in fault if x.get("call") == "tool:get_stock"]
+    assert (line["action"], line["reason"]) == ("refused", "mistake"), line
+    assert "fault" not in line
+    summary = cast(dict[str, Any], fault[-1]["summary"])
+    assert summary["fault_fired"] is False
+    tools = [x["action"] for x in fault if x.get("kind") == "tool"]
+    assert tools == ["mock", "refused"]  # get_order's mock; get_stock is neither real nor mock
+    calls = summary["calls"]
+    assert (calls["fault"], calls["mock"], calls["refused"], calls["under_real"]) == (0, 1, 1, 0)
+    assert calls["real"] == sum(1 for x in fault if x.get("kind") == "model")  # model calls only
+    assert summary["outcome"] == "crashed", result.out  # the gate's mistake is no refused call
+    assert "made a call the test does not allow" not in result.out
+    fix = (
+        "tool:get_stock is declared to return Stock, which has no empty value; mock it with "
+        "the fields of an empty result, or fault the web request inside it"
+    )
+    assert line["mistake"] == fix and fix in result.out + result.err
+    # The real get_stock raises a RuntimeError of its own: it never ran.
+    assert str(line["error"]).startswith("ScrimmageMockError: tool:get_stock is declared")
+
+
+@pytest.mark.design("fault.empty_tool_no_empty_value")
+@pytest.mark.slow
+def test_an_unlisted_call_after_the_empty_mistake_is_still_a_refused_call(
+    project: Project,
+) -> None:
+    project.edit(
+        'function = "acme.agent:answer"',
+        'function = "acme.agent:refund_when_stock_fails"\nruns = 1\nmax_cost_usd = "none"',
+    )
+    empty = '[[test.fault]]\ncall = "tool:get_stock"\ndo = "empty"\nforbid = ["12 in stock"]\n'
+    project.edit(EXAMPLE_FAULT, empty)
+    result = project.test()
+    assert result.code == 2, result.out + result.err
+    fault = next(lines for lines in result.records() if lines[-1]["row"] == "fault 1")
+    tools = [(x["call"], x["action"], x.get("reason")) for x in fault if x.get("kind") == "tool"]
+    assert tools == [
+        ("tool:get_stock", "refused", "mistake"),
+        ("tool:refund_order", "refused", "unlisted"),
+    ]
+    assert cast(dict[str, Any], fault[-1]["summary"])["outcome"] == "refused call"
+    assert "made a call the test does not allow" in result.out
+    assert "tool:get_stock is declared to return Stock" in result.out
+
+
+@pytest.mark.design("fault.empty_tool_never_runs")
+def test_empty_never_runs_the_tool(lines: Lines) -> None:
+    tool = Inventory()
+
+    def check_inventory(sku: str) -> str:
+        return str(tool(sku))
+
+    for mocked in ([], [Mock("tool:check_inventory", "mocked", None)]):
+        install(lines, mocked, [empty_fault("tool:check_inventory")], ["tool:check_inventory"])
+        assert tool_gate.gate(check_inventory, "check_inventory")("SKU-42") == ""
+    assert tool.ran == 0
+    assert [line["action"] for line in lines.lines] == ["fault", "fault"]
+    assert not any("under" in line or "mock" in line for line in lines.lines)
+
+
+@pytest.mark.design("fault.empty_tool_async")
+def test_empty_on_an_async_tool(lines: Lines) -> None:
+    install(lines, faults=[empty_fault("tool:get_async")], real=["tool:get_async"])
+    gated = tool_gate.gate(get_async, "get_async")
+    assert inspect.iscoroutinefunction(gated)
+    assert asyncio.run(gated("1")) == ""
+    [line] = lines.lines
+    assert line["action"] == "fault" and line["result"] == state.content("")
+
+
+@pytest.mark.design("protocol.plan_refuses_unknown_word")
+def test_a_plan_with_empty_on_a_tool_round_trips() -> None:
+    """The file's reader accepts empty on a tool, and the SDK's plan reader reads it back."""
+    fault = '\n[[test.fault]]\ncall = "tool:get_order"\ndo = "empty"\nwhen = "call 2"\n'
+    loaded = load(AGENT + TEST + fault)
+    row = planner.rows(loaded)[1]
+    sent = planner.plan_for(loaded, row, "run-1")
+    assert sent.faults[0].do == "empty" and sent.faults[0].call == "tool:get_order"
+    assert Plan.from_json(json.loads(json.dumps(sent.to_json()))) == sent
+
+
+# Only the return annotation is resolved: a parameter type that cannot be is no matter.
+
+
+def search_orders(limit: "Decimal") -> list[dict[str, str]]:
+    raise AssertionError("an empty fault must never run the tool")
+
+
+def find_text(limit: "Decimal") -> str:
+    raise AssertionError("an empty fault must never run the tool")
+
+
+def get_late(sku: str) -> "LateStock":
+    raise AssertionError("an empty fault must never run the tool")
+
+
+class Search:
+    """LangChain's own _run signature, with its callback manager imported for typing only."""
+
+    def _run(self, q: str, run_manager: "CallbackManagerForToolRun | None" = None) -> list[str]:
+        raise AssertionError("an empty fault must never run the tool")
+
+
+def orders_of(customer: str, limit: int) -> list[str]:
+    raise AssertionError("an empty fault must never run the tool")
+
+
+class Finder:
+    def __call__(self, q: str) -> dict[str, str]:
+        raise AssertionError("an empty fault must never run the tool")
+
+
+@pytest.mark.design("fault.empty_tool_typed")
+@pytest.mark.parametrize(
+    ("tool", "empty"),
+    [
+        (search_orders, []),
+        (find_text, ""),
+        (Search()._run, []),  # pyright: ignore[reportPrivateUsage]
+        (functools.partial(orders_of, limit=5), []),
+        (Finder(), {}),
+    ],
+    ids=[
+        "type_checking_param_list",
+        "type_checking_param_str",
+        "langchain_run",
+        "partial",
+        "callable",
+    ],
+)
+def test_empty_reads_only_the_return_annotation(lines: Lines, tool: Any, empty: object) -> None:
+    install(lines, faults=[empty_fault("tool:t")])
+    value = tool_gate.gate(tool, "t")("q")
+    assert value == empty and type(value) is type(empty)
+    assert lines.lines[0]["action"] == "fault"
+
+
+@pytest.mark.design("fault.empty_tool_no_empty_value")
+def test_empty_on_a_return_type_that_cannot_be_resolved_is_a_mistake(lines: Lines) -> None:
+    install(lines, faults=[empty_fault("tool:get_late")])
+    fix = (
+        "tool:get_late declares a return type Scrimmage cannot resolve ('LateStock'); mock it, "
+        "or import the type at run time"
+    )
+    with pytest.raises(ScrimmageMockError) as caught:
+        tool_gate.gate(get_late, "get_late")("SKU-42")
+    assert str(caught.value) == fix
+    [line] = lines.lines
+    assert (line["action"], line["reason"], line["mistake"]) == ("refused", "mistake", fix)
+    assert "fault" not in line
+
+
+FUTURE = "from __future__ import annotations\n"
+LAZY = sys.version_info >= (3, 14)  # annotations are evaluated only when asked for
+UNRESOLVED = [
+    pytest.param("", 'def f() -> "Missing": ...', "Missing", id="quoted"),
+    pytest.param(FUTURE, 'def f() -> "Missing": ...', "Missing", id="quoted_future"),
+    pytest.param(FUTURE, "def f() -> Optional[Missing]: ...", "Optional[Missing]", id="future"),
+    pytest.param(
+        "",
+        "def f() -> Optional[Missing]: ...",
+        "Optional[Missing]",
+        id="lazy",
+        marks=pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself fails"),
+    ),
+]
+
+
+def made(head: str, source: str) -> Any:
+    space: dict[str, Any] = {}
+    exec(head + "from typing import Optional\n" + source, space)
+    return space["f"]
+
+
+@pytest.mark.design("fault.empty_tool_no_empty_value")
+@pytest.mark.parametrize(("head", "source", "written"), UNRESOLVED)
+def test_an_unresolved_return_type_is_named_as_written(
+    lines: Lines, head: str, source: str, written: str
+) -> None:
+    install(lines, faults=[empty_fault("tool:f")])
+    with pytest.raises(ScrimmageMockError) as caught:
+        tool_gate.gate(made(head, source), "f")()
+    said = str(caught.value)
+    assert said == (
+        f"tool:f declares a return type Scrimmage cannot resolve ({written!r}); mock it, "
+        "or import the type at run time"
+    )
+    assert "ForwardRef" not in said and "0x" not in said
+
+
+def test_a_parameter_annotation_that_raises_leaves_the_return_type_readable(lines: Lines) -> None:
+    install(lines, faults=[empty_fault("tool:f")])
+    assert tool_gate.gate(made(FUTURE, "def f(a: 1 / 0 = 1) -> str: ..."), "f")() == ""
+
+
+@pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself raises")
+def test_a_lazy_annotation_that_raises_is_a_mistake_not_none(lines: Lines) -> None:
+    """On 3.14 annotations are read all at once: one that raises hides the return type, in
+    every format, so empty cannot tell its value."""
+    install(lines, faults=[empty_fault("tool:f")])
+    with pytest.raises(ScrimmageMockError, match="annotations that raise ZeroDivisionError"):
+        tool_gate.gate(made("", "def f(a: 1 / 0 = 1) -> str: ..."), "f")()
+    assert lines.lines[0]["action"] == "refused"

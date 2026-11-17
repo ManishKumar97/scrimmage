@@ -196,7 +196,7 @@ To act on a miss:
 | Setting | What it does |
 |---|---|
 | `call` | The label of the call to fail, such as `"tool:get_order"`, `"mcp:docs/search"`, `"model"` or `"http:inventory.acme.internal"`. Required. |
-| `do` | The fault: `"timeout"`; on a tool or an MCP tool `"error"`; on an MCP tool `"empty"`; on a model call or a web request `"status 429"` or any status from 400 to 599, and `"refused"`, `"reset"` or `"dns"`, a connection that fails; on a tool, write `"error"` with `raises` for those. On a tool, an MCP tool or a web request, also `"append"` and `"replace"`, which change what a call returns, and `"slow 8s"`, which delays it by that many seconds; the call itself still happens. See [Changing a result](changing-results.md). On a chat model call, `"replace"` with a `model`, which changes the reply's text, and `"slow 8s"`; not `"append"`. See [A guard model](model-faults.md#a-guard-model). Required. |
+| `do` | The fault: `"timeout"`; on a tool or an MCP tool `"error"` and `"empty"`, which on a tool returns the empty value of its declared type (see [Faults](concepts.md#faults)); on a model call or a web request `"status 429"` or any status from 400 to 599, and `"refused"`, `"reset"` or `"dns"`, a connection that fails; on a tool, write `"error"` with `raises` for those. On a tool, an MCP tool or a web request, also `"append"` and `"replace"`, which change what a call returns, and `"slow 8s"`, which delays it by that many seconds; the call itself still happens. See [Changing a result](changing-results.md). On a chat model call, `"replace"` with a `model`, which changes the reply's text, and `"slow 8s"`; not `"append"`. See [A guard model](model-faults.md#a-guard-model). Required. |
 | `raises` | For `"error"` on a Python tool: the error to raise, a built-in such as `"ConnectionError"`, or `package.module:Class` from your agent's packages. Optional. |
 | `text` | With `"append"` and `"replace"`: the text to add, or to put in place. Up to 64 KiB. Required with those two, refused with any other fault. |
 | `find` | With `"replace"`: replace only this text, wherever it is, compared exactly. Without it the whole result is replaced. On a model call, it is looked for in the text of each choice of the reply. Optional. |
@@ -316,6 +316,6 @@ Using one now stops the test: it is rejected as unknown.
 
 - Settings: `records`.
 - Labels: `auth:`, and model providers other than OpenAI.
-- Faults: `empty` on a tool or a web request, `bad body`, `auth error`, `context too long`, `append` on a model call, the other model reply faults, and `status` on a tool.
+- Faults: `empty` on a web request, `bad body`, `auth error`, `context too long`, `append` on a model call, the other model reply faults, and `status` on a tool.
 - Fault options: `retry_after`.
 - Mocks: `returns_from`.

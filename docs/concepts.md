@@ -60,7 +60,7 @@ If the tool returns its own type, Scrimmage builds that type from the mock:
 |---|---|
 | `error` | a tool raises an error: `ToolException` under LangChain, `RuntimeError` in a hand-written loop, or the type named by `raises`; an MCP tool returns a failed result, as a real server does |
 | `timeout` | a tool raises `TimeoutError`; a model call, a web request or an MCP tool raises the library's own timeout error, as if the other side never answered |
-| `empty` | an MCP tool returns a result with no content |
+| `empty` | a tool returns the empty value of its declared return type, and never runs; an MCP tool returns a result with no content |
 | `append` | the call happens, and the text of the fault is added at the end of what it returns |
 | `replace` | the call happens, and what it returns is replaced by the text of the fault, or the `find` text in it is |
 | `slow` | written `slow 8s`: the call happens after that many seconds, so a caller's own deadline can fire first |
@@ -68,6 +68,22 @@ If the tool returns its own type, Scrimmage builds that type from the mock:
 | `refused` | a model call or a web request raises the library's `ConnectError`, as if nothing listened on the server's port |
 | `reset` | a model call or a web request raises the library's `ReadError`, as if the server dropped the connection |
 | `dns` | a model call or a web request raises the library's `ConnectError`, as if the server's name did not resolve |
+
+Under `empty` the tool's declared return type gives the value:
+
+| Declared | Value |
+|---|---|
+| `str` | `""` |
+| a `list`, such as `list[dict]` | `[]` |
+| a `dict` | `{}` |
+| a `tuple` | `()` |
+| a type that allows `None`, such as `str \| None`; `Any`, `object` or a type variable; or no annotation | `None` |
+
+The container must be exactly `list`, `dict` or `tuple`; `Sequence`, `Mapping` and `set` are mistakes.
+Any other type, such as a pydantic model, has no empty value, so `empty` on it is a mistake in the test.
+The message names the fix: mock it with the fields of an empty result, or fault the web request inside the tool.
+Only the return annotation is read.
+A return annotation that cannot be resolved when the tool runs, such as a name imported only under `TYPE_CHECKING`, is a mistake too.
 
 A fault fires on every call it names, unless `when` narrows it to the `first N` attempts, the Nth attempt alone with `call N`, or the first `requests N`.
 See [Failing the model](model-faults.md).

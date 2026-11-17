@@ -729,6 +729,7 @@
               "enum": [
                 "timeout",
                 "error",
+                "empty",
                 "append",
                 "replace"
               ]

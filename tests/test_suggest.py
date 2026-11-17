@@ -395,6 +395,25 @@ def test_an_unchanged_fault_quotes_the_gates_reason_and_cites_its_line() -> None
     assert isinstance(never, suggest.Suggestion) and never.code == "fault_not_fired"
 
 
+def test_a_call_the_gate_refused_as_a_mistake_is_never_said_to_have_run() -> None:
+    """empty on a tool with no empty value: the line says why, but the tool never ran."""
+    fix = "tool:get_stock is declared to return Stock, which has no empty value; mock it"
+    refused = line(
+        2,
+        "tool:get_stock",
+        "refused",
+        reason="mistake",
+        mistake=fix,
+        unchanged={"do": "empty", "why": "is declared to return Stock"},
+    )
+    lines = [line(1), refused]
+    assert suggest.unchanged_lines(lines) == []
+    got = suggest.main(*case("crashed", "left out", judge.NOT_FIRED, lines=lines))
+    assert isinstance(got, suggest.Suggestion) and got.code == "test_mistake", got
+    assert "ran as it would without the fault" not in got.text
+    assert fix in got.text and got.doc["evidence"] == [{"seq": 2, "proc": PROC}]
+
+
 def test_every_main_rule_has_a_case() -> None:
     assert set(RULE_CASES) == set(suggest.MAIN_CODES)  # a new rule needs its evidence pair
 

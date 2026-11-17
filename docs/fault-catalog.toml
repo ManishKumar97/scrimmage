@@ -20,7 +20,7 @@ source = "https://status.openai.com/incidents/ctrsv3lwd797 (OpenAI status page, 
 [[fault]]
 name = "empty"
 origin = "public incident"
-source = "https://aws.amazon.com/message/101925/ (AWS us-east-1, 19-20 October 2025: a race in DynamoDB's DNS automation left an incorrect empty DNS record for the regional endpoint, so clients found no address to connect to)"
+source = "https://status.cloud.google.com/incidents/ow5i3PPK96RduMcb1SsW (Google Cloud, 12 June 2025: policy data with unintended blank fields reached Service Control, whose code had no handling for them, so it crashed and Google Cloud APIs returned 503 errors)"
 
 [[fault]]
 name = "error"

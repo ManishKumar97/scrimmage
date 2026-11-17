@@ -161,6 +161,7 @@ _.tz  # tests/test_results.py: the argument datetime.now is called with, which a
 _.answer_with_a_deadline  # tests/example/acme/docs_bot.py: a test's scrimmage.toml names it
 _.close_connection  # tests/test_web_requests.py: http.server reads it to end a connection
 _.answer_cutting  # tests/example/acme/agent.py: a test's scrimmage.toml names it
+_.refund_when_stock_fails  # tests/example/acme/agent.py: a test's scrimmage.toml names it
 _.check_answer  # tests/example/acme/late.py: the agent looks tools up by name
 _.answer_question_only  # tests/example/acme/guarded.py: a test's scrimmage.toml names it
 _.answer_stripping  # tests/example/acme/guarded.py: a test's scrimmage.toml names it
@@ -179,3 +180,5 @@ _._state  # scrimmage_core/process_gate.py: multiprocessing's Pool.__del__ reads
 _.dies  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
 _._on_queue_feeder_error  # tests/test_service_processes.py: a queue's hook its feeder calls
 _.kind_load  # tests/k8s/images.py: the kind tests call it once they load the runner image
+_.LateStock  # tests/test_tool_gate.py: named only in a string annotation, on purpose
+_.CallbackManagerForToolRun  # tests/test_tool_gate.py: named only in a string annotation

@@ -217,7 +217,8 @@
             "ambiguous_label",
             "blind_child",
             "no_plan",
-            "probe"
+            "probe",
+            "mistake"
           ]
         },
         "provider": {

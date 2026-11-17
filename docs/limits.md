@@ -299,8 +299,10 @@ Also read the control-path limits under An agent inside a web service.
 
 - **One provider.** OpenAI's Chat Completions, Responses and embeddings, and gateways that speak the same format. Other providers come later.
 
-- **A few faults.** `timeout` and `error` on tools, `timeout`, `status N`, `refused`, `reset` and `dns` on model calls and web requests, `timeout`, `error` and `empty` on MCP tools, `append`, `replace` and `slow` on tools, MCP tools and web requests, and `replace` and `slow` on a chat model call.
+- **A few faults.** `timeout`, `error` and `empty` on tools, `timeout`, `status N`, `refused`, `reset` and `dns` on model calls and web requests, `timeout`, `error` and `empty` on MCP tools, `append`, `replace` and `slow` on tools, MCP tools and web requests, and `replace` and `slow` on a chat model call.
   `append` on a model call, and the other faults that change the model's reply, come later.
+
+- **`empty` needs a declared type with an empty value.** On a tool declared to return a model, a dataclass, a number, `bytes`, a `Sequence`, a `Mapping`, a union of two kinds such as `str | list[str]`, or a type that cannot be resolved when it runs, or a LangChain tool with `response_format = "content_and_artifact"`, `empty` is a mistake in the test, and the tool never runs. Mock an empty result instead. See [Faults](concepts.md#faults).
 
 - **Connection faults on a tool or an MCP tool.** `refused`, `reset` and `dns` work where Scrimmage sees the connection, on a model call or a web request. On a tool, write `do = "error"` with `raises = "ConnectionRefusedError"`, `"ConnectionResetError"` or `"OSError"`.
 
