@@ -93,6 +93,8 @@ nav:
       - Agents on a framework: frameworks.md
       - An agent run as a script: scripts.md
       - An agent inside a web service: services.md
+      - A service in Docker Compose: docker.md
+      - A service in Kubernetes: kubernetes.md
       - Web requests: web-requests.md
       - MCP tools: mcp.md
       - Driving Scrimmage from a coding agent: mcp-server.md

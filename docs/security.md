@@ -21,7 +21,7 @@ It runs before any watcher in that process could be installed, so the scan check
 *Checked by: `tests/test_security_claims.py::test_the_only_processes_scrimmage_starts_are_its_runs`, `tests/test_security_claims.py::test_the_only_connections_are_to_and_from_the_control_server`*
 
 The runner and the code inside your agent talk over one local connection, to a control server that listens on `127.0.0.1` only, on a port chosen for each test.
-A [service in a container](services.md#a-service-in-a-container) is the one exception: there `control` names the address the runner listens on, and the channel runs over TLS.
+A [service in a container](docker.md#a-service-in-a-container) is the one exception: there `control` names the address the runner listens on, and the channel runs over TLS.
 
 *Checked by: `tests/test_security_claims.py::test_the_control_server_listens_on_loopback_only`*
 
@@ -127,7 +127,7 @@ A control server that listens beyond loopback carries plans and record lines, wh
 
 TLS protects what crosses the control channel against a reader on the network.
 It adds nothing against someone who holds the token, and the HMAC stays on every request and reply.
-The runner's requests to the service stay `http://`, and what that exposes is on [An agent inside a web service](services.md#a-service-in-a-container).
+The runner's requests to the service stay `http://`, and what that exposes is on [A service in Docker Compose](docker.md#a-service-in-a-container).
 
 ## A web service's token and run header
 
@@ -208,7 +208,7 @@ A replay to the same worker within 120 seconds finds its nonce used and reaches 
 
 ## The control channel in a Kubernetes cluster
 
-In a cluster the runner runs as a Job and the agent as a Deployment, set up as [In Kubernetes](services.md#in-kubernetes) shows.
+In a cluster the runner runs as a Job and the agent as a Deployment, set up as [In Kubernetes](kubernetes.md#in-kubernetes) shows.
 The shipped network policies deny all traffic in the namespace, then allow four paths: the agent's pods to the runner on port 7700, the runner to the agent on port 8000, the agent to its model host, and every pod to cluster DNS.
 The tests run Calico, which enforces them; a network plugin that does not enforce NetworkPolicy ignores them.
 
