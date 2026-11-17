@@ -235,8 +235,8 @@ The tests run Calico, which enforces them; a network plugin that does not enforc
 
   *Checked by: `tests/test_k8s_security.py::test_every_pod_passes_the_restricted_standard`*
 
-- The control authority carries a critical name constraint that permits `scrimmage`, `svc` and `cluster.local`, and the names under them.
-  The authority's Issuer still signs any name it is asked for, but the SDK refuses a certificate for a name outside the constraint, such as `evil.example.com`.
+- The control authority carries a critical name constraint that permits `scrimmage`, `svc` and `cluster.local`, and the names under them, and excludes every IP address.
+  The authority's Issuer still signs any name it is asked for, but the SDK refuses a certificate for a name outside the constraint, such as `evil.example.com`, and one for an address, such as `10.96.0.10`.
 
   *Checked by: `tests/test_k8s_cluster.py::test_the_authority_signs_only_names_under_its_constraints`*
 
@@ -255,7 +255,7 @@ Without them, every pod and every node in the cluster can.
 | Root on a node, or a pod on the host's network | read the runner's requests to the agent, which are `http://`, and the records on the volume | everything, as on any node. This is out of scope |
 | Anyone who can make a Service named `scrimmage` in the namespace | answer the agent's control requests | its certificate fails the check, and the agent sends nothing |
 | Anyone who can read Secrets, or create or edit workloads (pods, Deployments, Jobs and the like), in the namespace | the token and the control server's key: a pod they start mounts any Secret of the namespace, with no RBAC on Secrets | everything. **This is the boundary.** Grant those rights in a test's namespace only to those you would give the token |
-| Anyone who can create a cert-manager `Certificate` or `CertificateRequest` in `scrimmage-pki`, the namespace of the authority and its Issuer | have the authority sign a certificate for `scrimmage` | a certificate the agent accepts, so they can answer as the runner, though with no token they sign no plan. The agent refuses one for a name outside the authority's constraint. cert-manager approves every request by default, so this is a real path. cert-manager's approver-policy project is the production hardening; the tests do not run it |
+| Anyone who can create a cert-manager `Certificate` or `CertificateRequest` in `scrimmage-pki`, the namespace of the authority and its Issuer | have the authority sign a certificate for `scrimmage` | a certificate the agent accepts, so they can answer as the runner, though with no token they sign no plan. The agent refuses one for a name outside the authority's constraint or for an IP address. cert-manager approves every request by default, so this is a real path. cert-manager's approver-policy project is the production hardening; the tests do not run it |
 | A runner pod that is taken over | call the Kubernetes API | nothing: no token is mounted, and its egress reaches only DNS and the agent |
 | A process in the agent's pods | reach any other address | the egress policy drops it. A process can still put data in the names it looks up, which cluster DNS passes on; see [Limits](limits.md#in-a-kubernetes-cluster) |
 

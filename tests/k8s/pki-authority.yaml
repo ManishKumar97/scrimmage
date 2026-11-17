@@ -25,8 +25,8 @@ spec:
   duration: 43800h
   # A DNS constraint permits a name and every name that ends with it. scrimmage is the host in
   # SCRIMMAGE_CONTROL_URL, svc covers scrimmage.<namespace>.svc and cluster.local covers
-  # scrimmage.<namespace>.svc.cluster.local. A client that checks the constraint refuses any
-  # other name this authority signs.
+  # scrimmage.<namespace>.svc.cluster.local. Every IP address is excluded. A client that checks
+  # the constraint refuses any other name or any address this authority signs.
   nameConstraints:
     critical: true
     permitted:
@@ -34,6 +34,10 @@ spec:
         - scrimmage
         - svc
         - cluster.local
+    excluded:
+      ipRanges:
+        - 0.0.0.0/0
+        - "::/0"
   privateKey:
     algorithm: ECDSA
     size: 256

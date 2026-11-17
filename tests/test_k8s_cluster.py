@@ -12,6 +12,7 @@ With the variable set, a missing tool fails a test, never skips it.
 import base64
 import contextlib
 import hashlib
+import ipaddress
 import json
 import os
 import ssl
@@ -231,50 +232,60 @@ def write_secret(folder: Path, data: dict[str, str]) -> tuple[Path, Path, Path]:
     return ca, certificate, key
 
 
+def sign_outside(cluster: Cluster, name: str, **names: list[str]) -> dict[str, str]:
+    """The data of a certificate the authority's Issuer signs for `names`, such as dnsNames or
+    ipAddresses. cert-manager's CA Issuer does not check the constraints, so it signs any."""
+    request = {
+        "apiVersion": "cert-manager.io/v1",
+        "kind": "Certificate",
+        "metadata": {"name": name, "namespace": "scrimmage-pki"},
+        "spec": {
+            "secretName": name,
+            "duration": "1h",
+            "privateKey": {"algorithm": "ECDSA", "size": 256},
+            "usages": ["server auth", "digital signature"],
+            "issuerRef": {"name": "scrimmage-ca", "kind": "Issuer"},
+            **names,
+        },
+    }
+    cluster.kubectl("apply", "-f", "-", input=json.dumps(request))
+    try:
+        cluster.kubectl(
+            "wait", "--for=condition=Ready", f"certificate/{name}",
+            "-n", "scrimmage-pki", "--timeout=120s",
+        )  # fmt: skip
+        return cluster.json("get", "secret", name, "-n", "scrimmage-pki")["data"]
+    finally:
+        cluster.kubectl(
+            "delete", f"certificate/{name}", f"secret/{name}",
+            "-n", "scrimmage-pki", "--ignore-not-found",
+        )  # fmt: skip
+
+
 def test_the_authority_signs_only_names_under_its_constraints(
     cluster: Cluster, tmp_path: Path
 ) -> None:
     tmp_path.chmod(0o700)
-    outside = {
-        "apiVersion": "cert-manager.io/v1",
-        "kind": "Certificate",
-        "metadata": {"name": "outside-constraints", "namespace": "scrimmage-pki"},
-        "spec": {
-            "secretName": "outside-constraints",
-            "duration": "1h",
-            "privateKey": {"algorithm": "ECDSA", "size": 256},
-            "usages": ["server auth", "digital signature"],
-            "dnsNames": ["evil.example.com"],
-            "issuerRef": {"name": "scrimmage-ca", "kind": "Issuer"},
-        },
-    }
     with cluster.namespace() as namespace:
         cluster.issue_control_certificate(namespace)
-        # cert-manager's CA Issuer does not check the constraints, so it signs this name.
-        cluster.kubectl("apply", "-f", "-", input=json.dumps(outside))
-        try:
-            cluster.kubectl(
-                "wait", "--for=condition=Ready", "certificate/outside-constraints",
-                "-n", "scrimmage-pki", "--timeout=120s",
-            )  # fmt: skip
-            signed = cluster.json("get", "secret", "outside-constraints", "-n", "scrimmage-pki")
-        finally:
-            cluster.kubectl(
-                "delete", "certificate/outside-constraints", "secret/outside-constraints",
-                "-n", "scrimmage-pki", "--ignore-not-found",
-            )  # fmt: skip
+        outside = sign_outside(cluster, "outside-name", dnsNames=["evil.example.com"])
+        address = sign_outside(cluster, "outside-address", ipAddresses=["10.96.0.10"])
         control = cluster.json(
             "get", "secret", f"scrimmage-control-{namespace}", "-n", "scrimmage-pki"
-        )
-    # The host matches the certificate, so only the authority's constraint can refuse it.
-    (tmp_path / "outside").mkdir()
-    ca, certificate, key = write_secret(tmp_path / "outside", signed["data"])
-    with pytest.raises(ssl.SSLCertVerificationError) as refused:
-        handshake(ca, certificate, key, "evil.example.com")
-    assert refused.value.verify_message == "permitted subtree violation", refused.value
+        )["data"]
+    # The host matches each certificate, so only the authority's constraint can refuse it.
+    for case, data, host, reason in (
+        ("name", outside, "evil.example.com", "permitted subtree violation"),
+        ("address", address, "10.96.0.10", "excluded subtree violation"),
+    ):
+        (tmp_path / case).mkdir()
+        ca, certificate, key = write_secret(tmp_path / case, data)
+        with pytest.raises(ssl.SSLCertVerificationError) as refused:
+            handshake(ca, certificate, key, host)
+        assert refused.value.verify_message == reason, refused.value
     # Positive control: every name the control certificate carries is in a permitted subtree.
     (tmp_path / "control").mkdir()
-    ca, certificate, key = write_secret(tmp_path / "control", control["data"])
+    ca, certificate, key = write_secret(tmp_path / "control", control)
     for host in (
         "scrimmage",
         f"scrimmage.{namespace}.svc",
@@ -290,7 +301,10 @@ def test_the_authority_signs_only_names_under_its_constraints(
         x509.DNSName("svc"),
         x509.DNSName("cluster.local"),
     ]
-    assert found.value.excluded_subtrees is None
+    assert found.value.excluded_subtrees == [
+        x509.IPAddress(ipaddress.ip_network("0.0.0.0/0")),
+        x509.IPAddress(ipaddress.ip_network("::/0")),
+    ]
 
 
 def test_the_harness_never_touches_the_users_kubeconfig(tmp_path: Path) -> None:
