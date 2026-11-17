@@ -43,7 +43,8 @@ To remove what the tests leave, run `docker rmi $(docker images -q 'scrimmage-co
 
 ## The Kubernetes tests
 
-`tests/test_k8s_cluster.py` makes a kind cluster from `tests/k8s/kind.yaml`: one node, Calico as the network plugin, cert-manager for certificates.
+`tests/test_k8s_cluster.py` makes a kind cluster from `tests/k8s/kind.yaml`: one node and Calico as the network plugin.
+The control certificates come from `scrimmage cert`, as `docs/kubernetes.md` shows; cert-manager is installed only for the two tests of its option.
 kind is a test cluster, the one the Kubernetes project tests itself on.
 The tests are marked `kind` and `slow`, and they are left out of every run unless `SCRIMMAGE_KIND=1` is set.
 With it set, a missing `kind`, `kubectl`, `helm` or `docker` makes them fail, not skip.
@@ -55,7 +56,7 @@ Run one file at a time, in one process:
 
 ```sh
 J=$(mktemp -d)/k8s.xml
-SCRIMMAGE_KIND=1 SCRIMMAGE_LANE=2 test-slot uv run pytest -n 0 -m kind tests/test_k8s_cluster.py --junitxml="$J" && uv run python tests/compose/check_junit.py "$J" 6
+SCRIMMAGE_KIND=1 SCRIMMAGE_LANE=2 test-slot uv run pytest -n 0 -m kind tests/test_k8s_cluster.py --junitxml="$J" && uv run python tests/compose/check_junit.py "$J" 10
 ```
 
 The cluster is named `scrimmage-<lane>`, from `SCRIMMAGE_LANE` (default `1`), and a session deletes only the cluster of its own name.

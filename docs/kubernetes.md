@@ -45,7 +45,7 @@ This repository tests the example service this way on kind, with the files below
 kind is the Kubernetes project's own test cluster; the files are the same on a production cluster.
 
 1. One namespace holds the test, and enforces the Pod Security `restricted` standard.
-2. cert-manager issues the control server's certificate.
+2. `scrimmage cert` makes the control server's certificate, and `kubectl create secret` stores it in two Secrets.
 3. A Secret, `scrimmage-token`, holds the token.
 4. The agent runs as the Deployment `acme-agent`, two replicas of `uvicorn --workers 2`, behind the Service `acme-agent` on port 8000.
 5. The runner runs as the Job `scrimmage-test`, behind the Service `scrimmage` on port 7700.
@@ -53,10 +53,9 @@ kind is the Kubernetes project's own test cluster; the files are the same on a p
 6. NetworkPolicies deny everything in the namespace, then allow the agent to reach the runner on 7700, the runner to reach the agent on 8000, the agent to reach the model, and every pod to reach cluster DNS.
 7. The agent's pods reach the runner at `https://scrimmage:7700`, and the runner reaches the agent at `http://acme-agent:8000/chat`.
 
-The cluster needs three things:
+The cluster needs two things:
 
 - a network plugin that enforces NetworkPolicy, such as Calico, which the tests use;
-- cert-manager, the CNCF project most clusters issue certificates with;
 - a storage class for the records: the tests use `standard`, kind's local-path class, which is for tests only, and a production cluster names a CSI class, such as the EBS one.
 
 `TAG` in an image name stands for your image's tag, and `NAMESPACE` for the test's namespace.
@@ -106,6 +105,37 @@ automountServiceAccountToken: false
 ```
 
 ### The certificate
+
+Make the certificate with [`scrimmage cert`](cli.md#scrimmage-cert), as for Docker, once per test namespace, on the machine that applies the manifests.
+It names the three names the agent's pods may reach the runner by: `scrimmage`, which `SCRIMMAGE_CONTROL_URL` holds, and its two longer forms.
+
+```bash
+NS=my-test
+scrimmage cert --name scrimmage --name scrimmage.$NS.svc --name scrimmage.$NS.svc.cluster.local \
+  --days 1 --out .scrimmage-cert
+kubectl create secret tls scrimmage-control-tls -n $NS \
+  --cert .scrimmage-cert/server.pem --key .scrimmage-cert/server.key
+kubectl create secret generic scrimmage-ca-cert -n $NS --from-file=ca.crt=.scrimmage-cert/ca.pem
+rm -r .scrimmage-cert
+```
+
+`scrimmage-control-tls` holds `tls.crt` and `tls.key` for the runner, and `scrimmage-ca-cert` holds only `ca.crt` for the agent.
+No key is ever in the agent's pod.
+
+- The authority's key is never written: `scrimmage cert` drops it once the server certificate is signed, so nothing in or out of the cluster can sign another control certificate.
+- The authority is limited to the three names given and the names under them, so it is good for this namespace only.
+- `--days 1` because a Job runs one test.
+  For the next test, delete the two Secrets and run the commands again: `kubectl create` refuses a Secret that exists.
+  A new certificate comes from a new authority, so restart the agent's pods after you make one.
+- The server's key passes through the machine that runs `scrimmage cert`, in a folder only you can read, and through the API call of `kubectl create secret`.
+  `rm -r` removes it from the machine.
+
+The tests make the two Secrets with these same commands.
+
+### With cert-manager
+
+A team that already runs cert-manager, the CNCF project many clusters issue certificates with, can make the same two Secrets with it instead.
+The agent and the Job read the same two Secrets either way, so no other manifest changes.
 
 The authority and its Issuer live in a namespace of their own, `scrimmage-pki`, made once per cluster.
 cert-manager signs every request an Issuer gets, so an Issuer in the test's namespace would sign for the control name for anyone who can make a `Certificate` there.
@@ -196,11 +226,9 @@ spec:
     kind: Issuer
 ```
 
-Copy its Secret into the test's namespace as two Secrets: `scrimmage-control-tls` with `tls.crt` and `tls.key` for the runner, and `scrimmage-ca-cert` with only `ca.crt` for the agent.
-No key is ever in the agent's pod.
+Copy its Secret into the test's namespace as the same two Secrets.
 
 ```bash
-NS=my-test
 SOURCE="secret/scrimmage-control-$NS -n scrimmage-pki"
 kubectl create secret generic scrimmage-control-tls -n $NS \
   --from-file=tls.crt=<(kubectl get $SOURCE -o jsonpath='{.data.tls\.crt}' | base64 -d) \
@@ -211,6 +239,8 @@ kubectl create secret generic scrimmage-ca-cert -n $NS \
 
 The key passes through a pipe, never a file.
 The authority lives 5 years and keeps its key, so a renewed server certificate never changes what the agent trusts.
+Its name constraint permits `scrimmage`, `svc` and `cluster.local`, so unlike the default it covers every namespace; [Security](security.md#with-cert-manager) says what follows.
+The tests install cert-manager only for the two tests of this option.
 
 ### The token
 

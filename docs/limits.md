@@ -196,11 +196,11 @@
 - **Nothing between the runner and the agent.** A service mesh or an ingress in front of the agent is not tested; the runner calls the agent's Service directly.
 - **One Job at a time against one `scrimmage` Service.** A second Job behind the same Service fails the ping's runner id check.
 - **The probe reaches one replica.** A second replica whose control channel is broken is not named before the test; its runs end as infrastructure errors.
-- **A new authority needs the agent's pods restarted.** The SDK reads `SCRIMMAGE_CONTROL_CA` once, at its start.
-  A renewed server certificate keeps the same authority, so it needs nothing.
-- **A certificate renewed during a test is seen at the next test.** The runner reads its certificate and key at its start.
+- **A new certificate needs the agent's pods restarted.** The SDK reads `SCRIMMAGE_CONTROL_CA` once, at its start, and each `scrimmage cert` makes a new authority.
+  With cert-manager, a renewed server certificate keeps the same authority, so it needs nothing.
+- **With cert-manager, a certificate renewed during a test is seen at the next test.** The runner reads its certificate and key at its start.
   A runner that starts while the kubelet swaps the Secret's files for a renewal can read the new certificate with the old key; it then stops with exit 2, saying the two cannot be used together, and a restart fixes it.
-- **The control authority's name constraint covers every namespace.** It permits `scrimmage`, `svc` and `cluster.local`, and every name that ends with one of them.
+- **With cert-manager, the control authority's name constraint covers every namespace.** The default authority from `scrimmage cert` names one namespace's three names; cert-manager's permits `scrimmage`, `svc` and `cluster.local`, and every name that ends with one of them.
   A DNS name constraint is a suffix rule, so it cannot narrow the authority to one namespace: every `scrimmage.<namespace>.svc` is inside it.
   For that reason the control certificate names `scrimmage`, `scrimmage.<namespace>.svc` and `scrimmage.<namespace>.svc.cluster.local`, and not `scrimmage.<namespace>`.
   It excludes every IP address, so a certificate from it that names an address is refused; give `SCRIMMAGE_CONTROL_URL` a host name, as the shipped `https://scrimmage:7700` does.

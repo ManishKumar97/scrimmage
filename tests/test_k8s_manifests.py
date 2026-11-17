@@ -137,12 +137,11 @@ def test_the_agent_and_the_fake_model_become_ready(cluster: Cluster, tags: Tags)
         warnings = cluster.deploy(namespace, tags)
         assert "Warning" not in warnings, warnings
         cluster.wait_ready(namespace, "fake-model", "acme-agent")
-        certificate = cluster.json(
-            "get", "certificate", f"scrimmage-control-{namespace}", "-n", "scrimmage-pki"
-        )
-        assert [
-            c["status"] for c in certificate["status"]["conditions"] if c["type"] == "Ready"
-        ] == ["True"]
+        for secret, keys in (
+            (kubernetes.CONTROL_SECRET, ["tls.crt", "tls.key"]),
+            (kubernetes.CA_SECRET, ["ca.crt"]),
+        ):
+            assert sorted(cluster.json("get", "secret", secret, "-n", namespace)["data"]) == keys
         agents = cluster.json(
             "get", "pods", "-n", namespace, "-l", "app.kubernetes.io/name=acme-agent"
         )
@@ -181,7 +180,7 @@ def test_the_token_secret_comes_from_stdin(
     monkeypatch.setattr(kubernetes, "run", watching)
     with cluster.namespace(restricted=True) as namespace:
         token = cluster.create_token_secret(namespace)
-        cluster.issue_control_certificate(namespace)
+        cluster.control_secrets(namespace)
         stored = cluster.kubectl(
             "get", "secret", "scrimmage-token", "-n", namespace,
             "-o", "jsonpath={.data.token}",
