@@ -255,7 +255,17 @@ MANAGED = (
     'service = "http://127.0.0.1:{port}/chat"\nbody = "{question}"\n' + TEST
 )
 
+CONNECTION = MINIMAL + "".join(
+    f'\n[[test.fault]]\ncall = "{call}"\ndo   = "{do}"\nwhen = "first 1"\n'
+    for call, do in (
+        ("model", "refused"),
+        ("model:*/embeddings", "dns"),
+        ("http:inventory.acme.internal", "reset"),
+    )
+)
+
 GOOD = {
+    "connection": CONNECTION,
     "carried": CARRIED,
     "minimal": MINIMAL,
     "every_key": EVERY_KEY,
@@ -414,6 +424,8 @@ BAD = [
     Bad("web_fault_error", fault('call = "http:a.acme"\ndo = "error"\nwhen = "first 1"\n'), True),
     Bad("tool_fault_empty", fault('call = "tool:t"\ndo = "empty"\nwhen = "first 1"\n'), True),
     Bad("model_fault_error", fault('call = "model"\ndo = "error"\nwhen = "first 1"\n'), True),
+    Bad("tool_fault_refused", fault('call = "tool:t"\ndo = "refused"\nwhen = "first 1"\n'), True),
+    Bad("mcp_fault_dns", fault('call = "mcp:docs/search"\ndo = "dns"\nwhen = "first 1"\n'), True),
     Bad(
         "raises_without_error",
         fault('call = "tool:t"\ndo = "timeout"\nraises = "ValueError"\nwhen = "first 1"\n'),

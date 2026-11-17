@@ -13,6 +13,7 @@ import atexit
 import contextlib
 import dataclasses
 import datetime
+import errno
 import hashlib
 import http
 import inspect
@@ -20,6 +21,7 @@ import json
 import math
 import os
 import random
+import socket
 import sys
 import threading
 import time
@@ -35,7 +37,7 @@ from scrimmage_core import provider_openai as openai_table
 from scrimmage_core.budget import ASK_MAX_S, Held, Shortfall
 from scrimmage_core.changes import Changed, Unchangeable
 from scrimmage_core.client import ControlError
-from scrimmage_core.config import Fault, slow_seconds
+from scrimmage_core.config import CONNECTION, Fault, slow_seconds
 from scrimmage_core.decide import READ_METHODS, Call, Decision, names, schedule
 from scrimmage_core.errors import ScrimmageRefused
 from scrimmage_core.judge import normal
@@ -64,6 +66,8 @@ if TYPE_CHECKING:
 # The minor versions this release was tested with, per library.
 TESTED = {"httpx": ((0, 28), (0, 28)), "httpx2": ((2, 16), (2, 16))}
 GATED = "__scrimmage_gate__"
+# What the gate builds faults and mocks from, in the library itself.
+BUILT_FROM = ("Response", "ByteStream", "ReadTimeout", "ConnectError", "ReadError")
 CHAR_PER_TOKEN = 4  # the rough size of a token, for estimates only
 PRICE_KEY_CAP = 300  # a longer name is not shown whole as a price key to paste
 BUDGET_WAIT_S = 30.0  # the longest a call waits for calls in flight to free the budget
@@ -216,7 +220,7 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
         )
         ctx.process.structure(library, message, ctx.stop)
         return
-    if not all(hasattr(module, n) for n in ("Response", "ByteStream", "ReadTimeout")):
+    if not all(hasattr(module, n) for n in BUILT_FROM):
         ctx.process.notice(
             "structure",
             library,
@@ -242,7 +246,7 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
             mode = step.decision.under
             change = slowed_sync(bound, module, step, request)
         if mode == "fault":
-            return fault(bound, module, self, step, request, extra)
+            return fault(bound, module, self, step, request, extra, sync=True)
         if mode == "mock":
             return mocked(bound, module, self, step, request, extra, change)
         reservation = reserve(bound, step, request, extra)
@@ -291,7 +295,7 @@ def patch(module: ModuleType, ctx: Context, library: str = "httpx2") -> None:
             mode = step.decision.under
             change = await slowed_async(bound, module, step, request, extra)
         if mode == "fault":
-            return fault(bound, module, self, step, request, extra)
+            return fault(bound, module, self, step, request, extra, sync=False)
         if mode == "mock":
             return mocked(bound, module, self, step, request, extra, change)
         reservation = None
@@ -628,14 +632,20 @@ def fault(
     step: Step,
     request: Any,
     extra: dict[str, object],
+    *,
+    sync: bool,
 ) -> Any:
     """Build the failure the library would see from a real outage. Nothing is sent."""
     run = ctx.run
     plan_fault = run.plan.faults[step.decision.fault or 0]
     # A carried fault lets the call happen, so it never comes here to be parsed as a status.
-    assert plan_fault.do == "timeout" or plan_fault.do.startswith("status "), plan_fault.do
+    assert plan_fault.do in ("timeout", *CONNECTION) or plan_fault.do.startswith("status "), (
+        plan_fault.do
+    )
     if plan_fault.do == "timeout":
         run.fail(step, module.ReadTimeout("The read operation timed out", request=request))
+    if plan_fault.do in CONNECTION:
+        run.fail(step, connection_failure(module, plan_fault.do, request, sync=sync))
     status = int(plan_fault.do.split()[1])
     if step.call.kind == "model":
         body = openai_table.error_body(status)
@@ -644,6 +654,27 @@ def fault(
         body = reason_phrase(status).encode()
         headers = {"content-type": "text/plain; charset=utf-8"}
     return reply(ctx, module, client, step, request, extra, (status, headers, body))
+
+
+def connection_failure(module: ModuleType, word: str, request: Any, *, sync: bool) -> Exception:
+    """The library's error for a connection that failed, with the OSError under it as its
+    cause, and the message a real one has on this path. On the async path anyio wraps the
+    OSError first: a refused connection reads "All connection attempts failed", and a reset
+    has no message. The errno comes from the platform's constants, which differ by OS."""
+    error: Exception
+    if word == "dns":
+        cause: OSError = socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+        error = module.ConnectError(str(cause), request=request)
+    elif word == "refused":
+        cause = ConnectionRefusedError(errno.ECONNREFUSED, os.strerror(errno.ECONNREFUSED))
+        message = str(cause) if sync else "All connection attempts failed"
+        error = module.ConnectError(message, request=request)
+    else:
+        cause = ConnectionResetError(errno.ECONNRESET, os.strerror(errno.ECONNRESET))
+        error = module.ReadError(str(cause) if sync else "", request=request)
+    error.__cause__ = cause  # as raise ... from cause sets it
+    error.__suppress_context__ = True
+    return error
 
 
 def reason_phrase(status: int) -> str:

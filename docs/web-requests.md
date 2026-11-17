@@ -108,6 +108,13 @@ A `Set-Cookie` header reaches the client's cookie jar, as it would from a real r
 |---|---|
 | `status N` | a real reply with that status, from 400 to 599, and a short plain-text body |
 | `timeout` | the library's own `ReadTimeout` |
+| `refused` | the library's own `ConnectError`, caused by a `ConnectionRefusedError`, as when nothing listens on the port |
+| `reset` | the library's own `ReadError`, caused by a `ConnectionResetError`, as when the server drops the connection |
+| `dns` | the library's own `ConnectError`, caused by a `socket.gaierror`, as when the name does not resolve |
+
+The message is the one a real failure has on that path.
+On the async path a refused connection reads `All connection attempts failed`, and a reset has no message, as a real one does there.
+The request is never sent, so a `reset` never reaches the server.
 
 `when` can be `always` or `first N`. `requests N` is for model calls only.
 
