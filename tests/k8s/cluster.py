@@ -663,7 +663,7 @@ class Cluster:
         return None
 
     def issue_control_certificate(self, namespace: str) -> None:
-        """A server certificate for scrimmage.<namespace>, from the authority, then the two
+        """A server certificate for scrimmage.<namespace>.svc, from the authority, then the two
         Secrets a test namespace holds: the runner's with the key, the agent's with only the
         authority. The key passes through this process's memory, never a file."""
         self.make_authority()  # applying it again changes nothing
