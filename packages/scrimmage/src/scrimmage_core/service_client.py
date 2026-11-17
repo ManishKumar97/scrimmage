@@ -240,6 +240,7 @@ def send(
     finally:
         if cutter is not None:
             cutter.cancel()
+            cutter.join()  # a cut already running ends before the socket is closed
         conn.close()
 
 
