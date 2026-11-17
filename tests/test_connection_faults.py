@@ -5,10 +5,14 @@ import asyncio
 import errno
 import os
 import socket
+import sys
 import types
 from collections.abc import Iterator
 from typing import Any
 
+import anyio
+import httpcore
+import httpcore2
 import httpx
 import httpx2
 import openai
@@ -20,6 +24,7 @@ from scrimmage_core.config import Fault
 from test_http_gate import BODY, URL, Budget, Sink, make_plan
 
 LIBRARIES = {"httpx": httpx, "httpx2": httpx2}
+CORE = {"httpx": httpcore, "httpx2": httpcore2}
 WEB = "https://inventory.acme.internal/stock/SKU-42"
 SYNC_MESSAGE = {
     "refused": f"[Errno {errno.ECONNREFUSED}] {os.strerror(errno.ECONNREFUSED)}",
@@ -144,13 +149,23 @@ def test_reset_raises_the_librarys_read_error(gated: None, name: str, sync: bool
 def test_the_cause_is_the_os_error_a_real_failure_has(
     gated: None, word: str, name: str, sync: bool
 ) -> None:
+    """httpx raises from httpcore's error, which raises from None over the OSError; on the
+    async path anyio's link sits between them for a refused connection and a reset."""
     install(word)
     error = raised(name, sync)
     kind, number = CAUSE[word]
-    cause = error.__cause__
-    assert type(cause) is kind, f"{word}: cause {cause!r}"
-    assert isinstance(cause, OSError) and cause.errno == number
-    assert error.__suppress_context__  # as raise ... from cause leaves it
+    middle = error.__cause__
+    core = CORE[name]
+    assert type(middle) is getattr(core, type(error).__name__), f"{word}: cause {middle!r}"
+    assert middle is not None and error.__context__ is middle and error.__suppress_context__
+    assert middle.__cause__ is None and middle.__suppress_context__  # raise ... from None
+    below = middle.__context__
+    if not sync and word != "dns":
+        anyio_link = OSError if word == "refused" else anyio.BrokenResourceError
+        assert type(below) is anyio_link and below.__suppress_context__, f"{word}: {below!r}"
+        below = below.__cause__
+    assert type(below) is kind, f"{word}: the OSError is {below!r}"
+    assert isinstance(below, OSError) and below.errno == number
 
 
 @pytest.mark.design("fault.connection_costs_nothing")
@@ -220,3 +235,15 @@ def test_a_library_without_the_connection_errors_drops_faults(gated: None) -> No
     library.__dict__.update(parts)
     http_gate.patch(library, ctx)
     assert not ctx.faults and "those do not" in str(sink.lines[0]["message"])
+
+
+@pytest.mark.design("fault.connection_cause")
+def test_a_client_that_never_loaded_httpcore_gets_no_middle_link(
+    gated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transport of the team's own never loads httpcore, so no real failure has its link."""
+    monkeypatch.delitem(sys.modules, "httpcore2")
+    install("refused")
+    error = raised("httpx2", True)
+    assert type(error.__cause__) is ConnectionRefusedError and error.__suppress_context__
+    assert "httpcore2" not in sys.modules  # the gate did not import it

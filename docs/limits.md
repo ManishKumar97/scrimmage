@@ -306,7 +306,9 @@ Also read the control-path limits under An agent inside a web service.
 
 - **An injected `reset` never reaches the server.** The gate raises it before the request is sent. A reset after the server has read the request and done the work, with the reply lost, which tests duplicate writes on retry, is a later fault.
 
-- **The middle of a connection fault's cause chain.** The library's error has the `OSError` a real failure ends in as its `__cause__`, with the same class and errno. The links in between, httpcore's error and, on the async path, anyio's, are not copied. Code that walks the chain to its end sees the same thing; code that reads only `__cause__` sees the `OSError` one step sooner than a real failure gives it.
+- **A connection fault's cause chain, in detail.** The chain has a real failure's shape: the library's error is raised from httpcore's, which holds the `OSError` as its hidden context, and on the async path anyio's link sits between them. Two details differ. On an async refused connection the `ConnectionRefusedError` at the bottom reads `Connection refused`, where a real one says `Connect call failed` and the address. On an async reset, anyio's `BrokenResourceError` lacks the `IndexError` a real one holds behind its cause. A client on a transport of its own, which never loads httpcore, gets the `OSError` as the direct cause.
+
+- **The `dns` message is Linux's.** The gate writes glibc's text, `[Errno -2] Name or service not known`. On macOS a real failed lookup reads differently; the class, `socket.gaierror`, and the errno, `socket.EAI_NONAME` on that platform, still match.
 
 - **A transport's own retries.** An httpx transport built with `retries=N`, such as `httpx.HTTPTransport(retries=2)`, retries a real failed connect below the gate, so it never sees an injected one. Under `when = "always"` the result is the same; under `first 1` a real refused connection can recover inside the transport, while the injected one reaches your code. Scrimmage does not detect the setting.
 

@@ -153,18 +153,42 @@ def injected(word: str, name: str, sync: bool) -> BaseException:
     return raised(name, sync)
 
 
+def name_of(error: BaseException | None) -> str | None:
+    return None if error is None else f"{type(error).__module__}.{type(error).__qualname__}"
+
+
+def chain(error: BaseException) -> list[tuple[str | None, ...]]:
+    """Each link from the top down: its class, the class of its __cause__ and __context__,
+    and __suppress_context__. anyio's BrokenResourceError has an IndexError from its own
+    buffer as context, hidden behind its cause; the gate does not copy it."""
+    links: list[tuple[str | None, ...]] = []
+    link: BaseException | None = error
+    while link is not None:
+        context = link.__context__
+        if type(link).__name__ == "BrokenResourceError" and link.__cause__ is not None:
+            context = None
+        links.append(
+            (
+                name_of(link),
+                name_of(link.__cause__),
+                name_of(context),
+                str(link.__suppress_context__),
+            )
+        )
+        link = link.__cause__ if link.__cause__ is not None else link.__context__
+    return links
+
+
 def root(error: BaseException) -> BaseException:
-    """The OSError at the bottom of the chain. The middle links, httpcore's and on the
-    async path anyio's, are not copied by the gate."""
     while (below := error.__cause__ or error.__context__) is not None:
         error = below
     return error
 
 
 def alike(word: str, real_error: BaseException, fault_error: BaseException) -> None:
-    assert type(fault_error) is type(real_error), (word, real_error, fault_error)
+    """The whole chain has the same shape, and the OSError at its end the same errno."""
+    assert chain(fault_error) == chain(real_error), word
     real_root, fault_root = root(real_error), root(fault_error)
-    assert type(fault_root) is type(real_root), (word, real_root, fault_root)
     assert isinstance(real_root, OSError) and isinstance(fault_root, OSError)
     assert fault_root.errno == real_root.errno
 
@@ -197,8 +221,10 @@ def test_a_real_unresolvable_name_and_the_injected_one_look_the_same(
     gated: None, name: str, sync: bool
 ) -> None:
     real_error = real(name, sync, "http://no-such-host.invalid/stock/SKU-42")
+    if getattr(root(real_error), "errno", None) == socket.EAI_AGAIN:
+        pytest.skip("this machine has no resolver: the real lookup failed with EAI_AGAIN")
     fault_error = injected("dns", name, sync)
-    assert type(fault_error) is type(real_error)
-    assert type(root(fault_error)) is type(root(real_error)) is socket.gaierror
+    alike("dns", real_error, fault_error)
+    assert type(root(real_error)) is socket.gaierror
     # The text after the errno comes from the resolver, so only "[Errno N]" is compared.
     assert str(fault_error).partition("] ")[0] == str(real_error).partition("] ")[0]

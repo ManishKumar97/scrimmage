@@ -113,6 +113,7 @@ A `Set-Cookie` header reaches the client's cookie jar, as it would from a real r
 | `dns` | the library's own `ConnectError`, caused by a `socket.gaierror`, as when the name does not resolve |
 
 The message is the one a real failure has on that path.
+The `dns` message is Linux's, from glibc. On macOS a real one reads differently, while the class and the errno constant, `socket.EAI_NONAME`, hold.
 On the async path a refused connection reads `All connection attempts failed`, and a reset has no message, as a real one does there.
 The request is never sent, so a `reset` never reaches the server.
 

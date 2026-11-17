@@ -68,6 +68,8 @@ TESTED = {"httpx": ((0, 28), (0, 28)), "httpx2": ((2, 16), (2, 16))}
 GATED = "__scrimmage_gate__"
 # What the gate builds faults and mocks from, in the library itself.
 BUILT_FROM = ("Response", "ByteStream", "ReadTimeout", "ConnectError", "ReadError")
+# The transport library each one raises its connection errors from.
+CORE = {"httpx": "httpcore", "httpx2": "httpcore2"}
 CHAR_PER_TOKEN = 4  # the rough size of a token, for estimates only
 PRICE_KEY_CAP = 300  # a longer name is not shown whole as a price key to paste
 BUDGET_WAIT_S = 30.0  # the longest a call waits for calls in flight to free the budget
@@ -657,22 +659,48 @@ def fault(
 
 
 def connection_failure(module: ModuleType, word: str, request: Any, *, sync: bool) -> Exception:
-    """The library's error for a connection that failed, with the OSError under it as its
-    cause, and the message a real one has on this path. On the async path anyio wraps the
-    OSError first: a refused connection reads "All connection attempts failed", and a reset
-    has no message. The errno comes from the platform's constants, which differ by OS."""
-    error: Exception
+    """The library's error for a connection that failed, chained as a real one is.
+
+    httpx raises its error from httpcore's (httpx2 from httpcore2's), and httpcore raises
+    its own from None, so the OSError is its suppressed context. On the async path anyio
+    sits between: a refused connection is an OSError "All connection attempts failed" raised
+    from the ConnectionRefusedError, and a reset is a BrokenResourceError raised from the
+    ConnectionResetError. The errno comes from the platform's constants, which differ by OS."""
+    # Loaded by the library's own transport, which a real connection failure comes from. A
+    # client on a transport of its own, which never loads it, gets no middle link.
+    core = sys.modules.get(CORE[module.__name__])
+    os_error: OSError
     if word == "dns":
-        cause: OSError = socket.gaierror(socket.EAI_NONAME, "Name or service not known")
-        error = module.ConnectError(str(cause), request=request)
+        os_error = socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+        below: BaseException = os_error
+        kind = "ConnectError"
     elif word == "refused":
-        cause = ConnectionRefusedError(errno.ECONNREFUSED, os.strerror(errno.ECONNREFUSED))
-        message = str(cause) if sync else "All connection attempts failed"
-        error = module.ConnectError(message, request=request)
+        os_error = ConnectionRefusedError(errno.ECONNREFUSED, os.strerror(errno.ECONNREFUSED))
+        attempts = OSError("All connection attempts failed")  # raised after its except ended
+        below = os_error if sync else chained(attempts, cause=os_error, context=None)
+        kind = "ConnectError"
     else:
-        cause = ConnectionResetError(errno.ECONNRESET, os.strerror(errno.ECONNRESET))
-        error = module.ReadError(str(cause) if sync else "", request=request)
-    error.__cause__ = cause  # as raise ... from cause sets it
+        os_error = ConnectionResetError(errno.ECONNRESET, os.strerror(errno.ECONNRESET))
+        # anyio's own context here, an IndexError from its buffer, hides behind the cause and
+        # is not copied. Without anyio, as under trio, the link is left out.
+        broken = getattr(sys.modules.get("anyio"), "BrokenResourceError", None)
+        below = os_error if sync or broken is None else chained(broken(), os_error, None)
+        kind = "ReadError"
+    message = "" if below is not os_error and kind == "ReadError" else str(below)
+    error = getattr(module, kind)(message, request=request)
+    if core is None:
+        return chained(error, cause=below, context=below)
+    # httpcore's error is raised from None inside the except that caught the one below.
+    middle = chained(getattr(core, kind)(message), cause=None, context=below)
+    return chained(error, cause=middle, context=middle)
+
+
+def chained(
+    error: Exception, cause: BaseException | None, context: BaseException | None
+) -> Exception:
+    """The error as a raise leaves it: from cause, or from None, with that context."""
+    error.__cause__ = cause
+    error.__context__ = context
     error.__suppress_context__ = True
     return error
 
