@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from scrimmage_core import client as client_module
-from scrimmage_core import protocol, service_client, state
+from scrimmage_core import config, protocol, service_client, state
 from scrimmage_core.budget import Ledger
 from scrimmage_core.client import WAKE, ControlClient, ControlError, Sender
 from scrimmage_core.control import ControlServer, proc_key
@@ -104,6 +104,46 @@ def test_a_fetched_plan_puts_the_runs_start_back_by_its_age() -> None:
         Plan.from_json({**aged.to_json(), "elapsed_s": -1.0})
     assert Plan.from_json(aged.to_json()) == aged
     assert "elapsed_s" not in a_plan().to_json()  # a stored plan round-trips as it was
+
+
+def with_fault(**fault: object) -> dict[str, object]:
+    """a_plan() as the runner sends it, holding one fault written as given."""
+    return {**a_plan().to_json(), "faults": [{"call": "tool:a", "when": "always", **fault}]}
+
+
+@pytest.mark.design("protocol.plan_refuses_unknown_word")
+def test_a_plan_with_an_unknown_fault_word_is_refused() -> None:
+    """A runner of a later version may send a word this SDK does not build; running another
+    fault in its place would judge the row on a fault nobody asked for."""
+    for do in ("melt", "status", "slow", "status 200", "slow 8", "Timeout"):
+        with pytest.raises(ValueError, match=f"plan fault {do!r} is not a fault this scrimmage"):
+            Plan.from_json(with_fault(do=do))
+    known = [d for d in config.FAULTS if d not in ("status", "slow")] + ["status 429", "slow 2s"]
+    for do in known:  # the positive control: every word this version builds is read
+        assert Plan.from_json(with_fault(do=do)).faults[0].do == do
+
+
+@pytest.mark.design("protocol.plan_refuses_unknown_schedule")
+def test_a_plan_with_an_unknown_schedule_is_refused() -> None:
+    for when in ("once", "3", "call 0", "first", "last 2", "call 2 "):
+        with pytest.raises(ValueError, match=f"plan schedule {when!r} is not one"):
+            Plan.from_json(with_fault(do="timeout", when=when))
+    for when in ("always", "first 2", "requests 1", "call 3"):
+        assert Plan.from_json(with_fault(do="timeout", when=when)).faults[0].when == when
+
+
+@pytest.mark.design("protocol.plan_refuses_unknown_key")
+def test_a_plan_with_an_unknown_fault_key_is_refused() -> None:
+    """Dropping a key it does not know, such as a later retry_after, would run the fault
+    without it."""
+    with pytest.raises(ValueError, match="plan fault key 'retry_after' is not one"):
+        Plan.from_json(with_fault(do="status 429", retry_after=2))
+    # Every key the runner writes is read back: a fault with each of them round-trips.
+    full = config.Fault(
+        "tool:a", "replace", "first 1", "X", "GET", "/p", model="m", text="t", find="f"
+    )
+    sent = dataclasses.replace(a_plan(), faults=(full,)).to_json()
+    assert Plan.from_json(sent).faults == (full,)
 
 
 @pytest.mark.design("protocol.wrong_signature")

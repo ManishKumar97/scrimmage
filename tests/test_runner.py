@@ -142,6 +142,24 @@ def test_a_fault_that_never_fires_is_a_test_mistake(project: Project, fake_opena
     assert {s["fault_fired"] for s in result.summaries()} == {None, False}
 
 
+@pytest.mark.design("runner.call_n_not_exercised")
+@pytest.mark.slow
+def test_a_run_with_fewer_than_n_calls_is_not_exercised(
+    project: Project, fake_openai: Fake
+) -> None:
+    """Each run calls get_order once, so call 2 never comes: no run fired, none is judged."""
+    project.edit("[agent]\n", "[agent]\nruns = 2\n")
+    project.edit('do   = "timeout"\nexpect', 'do   = "timeout"\nwhen = "call 2"\nexpect')
+    result = project.test(fake_openai(ACME * 4))
+    assert result.code == 2, result.out + result.err
+    assert "order-status fault 1: tool:get_order timeout call 2" in result.out
+    assert "not exercised, the fault did not fire: 2 answered" in result.out
+    assert "the fault never fired in any run" in result.out
+    fault_rows = [s for s in result.summaries() if s["fault_fired"] is not None]
+    assert [s["fault_fired"] for s in fault_rows] == [False, False]
+    assert [s["outcome"] for s in fault_rows] == ["answered", "answered"]
+
+
 @pytest.mark.design("runner.label_check_first")
 def test_a_misspelled_label_stops_the_test_before_any_model_call(
     project: Project, fake_openai: Fake

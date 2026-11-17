@@ -96,7 +96,7 @@ SLOW = re.compile(r"slow (?P<s>\d+(?:\.\d+)?)s")
 CARRIED = ("append", "replace", "slow")
 MAX_SLOW_S = 600.0
 MAX_CHANGE_TEXT = 64 * 1024  # bytes, for text and for find
-SCHEDULE = re.compile(r"always|(?:first|requests) (?P<n>[1-9]\d*)")
+SCHEDULE = re.compile(r"always|(?:first|requests|call) (?P<n>[1-9]\d*)")
 MODEL_KEYS = {"host", "provider"}
 PRICE_KEYS = {"input", "output", "cached_input"}
 DEFAULT_BUDGET_USD = 5.0
@@ -1492,7 +1492,13 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
     injected, find = read_change(table, do, where)
     when = str(table.get("when", "always"))
     if not SCHEDULE.fullmatch(when):
-        raise ConfigError(f"{where} when: {when!r} is not a schedule; see {DOCS}")
+        # once and a bare number could each mean first 1 or call N, so neither is read.
+        hint = (
+            "; write 'first 1' for the first call alone or 'call N' for the Nth call alone"
+            if when == "once" or when.isdigit()
+            else ""
+        )
+        raise ConfigError(f"{where} when: {when!r} is not a schedule{hint}; see {DOCS}")
     if when.startswith("requests") and kind != "model":
         raise ConfigError(
             f"{where} when: {when!r} counts model requests and their retries; use 'first N' here"

@@ -70,7 +70,7 @@ If none of these applies, the rest of this page is detail for your use case.
 
 - **A last line of output shared with a child.** The last printed line is read from one file, so a child that prints after your program comes last, and nothing says so. Print the answer last or use the answer file. See [An agent run as a script](scripts.md#the-answer).
 
-- **`first N` in children.** With `children` set each process counts its own calls, so `first 1` fires once per process.
+- **`first N` in children.** With `children` set each process counts its own calls, so `first 1` fires once per process, and `call 2` on the second call of each.
 
 - **A child's gates wait for the control server.** A child has no sender thread, so each of its gated calls waits for its record line to be sent, and an async gate in a child holds up the event loop for that long.
 

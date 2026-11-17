@@ -66,7 +66,8 @@ If the tool returns its own type, Scrimmage builds that type from the mock:
 | `slow` | written `slow 8s`: the call happens after that many seconds, so a caller's own deadline can fire first |
 | `status` | written `status 429`: a model call gets a real HTTP error reply, and the library raises its own error, such as `RateLimitError`; a web request gets a reply with that status |
 
-A fault fires on every call it names, unless `when` narrows it to the `first N` attempts or the first `requests N`. See [Failing the model](model-faults.md).
+A fault fires on every call it names, unless `when` narrows it to the `first N` attempts, the Nth attempt alone with `call N`, or the first `requests N`.
+See [Failing the model](model-faults.md).
 It fires only in the program Scrimmage started, not in its child processes, unless `children` is set. See [An agent run as a script](scripts.md#faults-in-children).
 If the agent never makes that call in a run, the run is **not exercised**: it was really a baseline run, so it is left out of the row's rate.
 A row where the fault never fired tested nothing, and is reported as a mistake in the test.
