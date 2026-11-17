@@ -169,7 +169,7 @@ def test_the_job_never_retries(
     monkeypatch.setattr(kubernetes, "CONFIG_FILE", tmp_path / "scrimmage.toml")
     with cluster.namespace(restricted=True) as namespace:
         wait_default_account(cluster, namespace)
-        cluster.issue_control_certificate(namespace)
+        cluster.control_secrets(namespace)
         cluster.create_token_secret(namespace)
         cluster.create_config_map(namespace)
         cluster.apply(namespace, ("service-accounts.yaml", "records-pvc.yaml"), tags)

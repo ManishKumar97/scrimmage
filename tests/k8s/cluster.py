@@ -15,6 +15,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import tomllib
@@ -32,6 +33,9 @@ KIND_CONFIG = HERE / "kind.yaml"
 MANIFESTS = HERE / "manifests"
 CONFIG_FILE = HERE / "scrimmage.toml"
 TOKEN_SECRET = "scrimmage-token"
+CONTROL_SECRET = "scrimmage-control-tls"  # the runner's: tls.crt and tls.key
+CA_SECRET = "scrimmage-ca-cert"  # the agent's: ca.crt alone
+CERT_DAYS = 1  # a Job runs one test
 CONFIG_MAP = "scrimmage-config"
 # What every test namespace holds before its workloads start: the accounts, the volume claim,
 # the Services and the policies. A workload applied first would fail on a missing account.
@@ -91,6 +95,17 @@ class Tags:
             if tag is not None:
                 text = text.replace(placeholder, tag)
         return text
+
+
+def control_names(namespace: str) -> tuple[str, str, str]:
+    """The names the agent's pods may reach the runner by: the Service's short name, which
+    SCRIMMAGE_CONTROL_URL holds, and its two longer forms in the namespace."""
+    return ("scrimmage", f"scrimmage.{namespace}.svc", f"scrimmage.{namespace}.svc.cluster.local")
+
+
+def scrimmage_command() -> str:
+    """The scrimmage command installed beside the Python that runs the tests."""
+    return str(Path(sys.executable).with_name("scrimmage"))
 
 
 def lane() -> str:
@@ -416,6 +431,12 @@ class Cluster:
             timeout=180,
         )
         self.wait_until("every node Ready", self.nodes_ready, timeout=180)
+        # CoreDNS waits for the network, so its pods start only now. Every name a test looks up
+        # needs them. No event is watched: its pods' FailedScheduling from before Calico ran is
+        # old news, not a reason to stop.
+        self.wait_until(
+            "CoreDNS", lambda: self.deployment_ready("kube-system", "coredns"), timeout=180
+        )
 
     def crd_established(self, name: str) -> bool:
         """The CRD exists and its Established condition is True. A CRD the API server has only
@@ -424,7 +445,9 @@ class Cluster:
         conditions = ((crd or {}).get("status") or {}).get("conditions") or []
         return any(c.get("type") == "Established" and c.get("status") == "True" for c in conditions)
 
-    def install_cert_manager(self) -> None:
+    def cert_manager(self) -> None:
+        """cert-manager and the authority in scrimmage-pki, for the option the Kubernetes page
+        shows after the default. A session installs it only when a test asks."""
         cm = PINS["cert-manager"]
         self.helm(
             "install",
@@ -451,6 +474,7 @@ class Cluster:
             "cert-manager",
             "--timeout=120s",
         )
+        self.make_authority()
 
     def make_authority(self) -> None:
         """Apply the authority, retrying while the webhook comes up behind its Service."""
@@ -494,7 +518,6 @@ class Cluster:
             self.begin()
             self.create()
             self.install_calico()
-            self.install_cert_manager()
         for tag in load:
             images.kind_load(tag, self.name)
 
@@ -598,12 +621,12 @@ class Cluster:
         self.kubectl("apply", "-f", "-", input=json.dumps(config))
 
     def deploy(self, namespace: str, tags: Tags, agent: str = "agent.yaml") -> str:
-        """Everything except the Job and the reader: the certificate and its two Secrets, the
+        """Everything except the Job and the reader: the two Secrets of the certificate, the
         token, the file, the accounts, the volume claim, the Services, the policies, the fake
         model and the agent, from `agent`, a file of the Deployment acme-agent. Returns every
         warning kubectl printed, which is empty when the namespace's standard accepts it all.
         Returns before any pod is Ready; see wait_ready."""
-        self.issue_control_certificate(namespace)
+        self.control_secrets(namespace)
         self.create_token_secret(namespace)
         self.create_config_map(namespace)
         warnings = self.apply(namespace, FOUNDATION, tags)
@@ -662,11 +685,33 @@ class Cluster:
             return int(ended["exitCode"]) if ended else None
         return None
 
+    def control_secrets(self, namespace: str) -> None:
+        """The two Secrets a test namespace holds, made as the Kubernetes page shows: scrimmage
+        cert for the three names of control_names, then kubectl create secret for the runner's,
+        with the key, and for the agent's, with only the authority, then the folder removed.
+        The authority's key never leaves scrimmage cert's memory, so nothing can sign again."""
+        out = self.folder / f"cert-{namespace}"
+        names = [arg for name in control_names(namespace) for arg in ("--name", name)]
+        try:
+            run(
+                [scrimmage_command(), "cert", *names, "--days", str(CERT_DAYS), "--out", str(out)],
+                timeout=60,
+            )
+            self.kubectl(
+                "create", "secret", "tls", CONTROL_SECRET, "-n", namespace,
+                "--cert", str(out / "server.pem"), "--key", str(out / "server.key"),
+            )  # fmt: skip
+            self.kubectl(
+                "create", "secret", "generic", CA_SECRET, "-n", namespace,
+                f"--from-file=ca.crt={out / 'ca.pem'}",
+            )  # fmt: skip
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
+
     def issue_control_certificate(self, namespace: str) -> None:
-        """A server certificate for scrimmage.<namespace>.svc, from the authority, then the two
-        Secrets a test namespace holds: the runner's with the key, the agent's with only the
-        authority. The key passes through this process's memory, never a file."""
-        self.make_authority()  # applying it again changes nothing
+        """The cert-manager option, after cert_manager(): a server certificate for the three
+        names from the authority in scrimmage-pki, then the same two Secrets. The key passes
+        through this process's memory, never a file."""
         text = (HERE / "pki-control.yaml").read_text().replace("NAMESPACE", namespace)
         self.kubectl("apply", "-f", "-", input=text)
         source = f"scrimmage-control-{namespace}"
@@ -679,10 +724,7 @@ class Cluster:
             "--timeout=120s",
         )
         data = self.json("get", "secret", source, "-n", "scrimmage-pki")["data"]
-        for name, keys in (
-            ("scrimmage-control-tls", ("tls.crt", "tls.key")),
-            ("scrimmage-ca-cert", ("ca.crt",)),
-        ):
+        for name, keys in ((CONTROL_SECRET, ("tls.crt", "tls.key")), (CA_SECRET, ("ca.crt",))):
             secret = {
                 "apiVersion": "v1",
                 "kind": "Secret",

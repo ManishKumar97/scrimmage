@@ -414,6 +414,7 @@ def main() -> int:
         print(pods)
         probe_load(cluster, namespace, tag)
         probe_secret_volume(cluster, namespace, tag)
+        cluster.cert_manager()  # the two probes below are of the cert-manager option
         probe_certificates(cluster, namespace, tag)
         probe_name_constraints(cluster)
         probe_no_endpoints(cluster, namespace, tag)

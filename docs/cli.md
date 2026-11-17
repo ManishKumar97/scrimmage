@@ -168,6 +168,8 @@ It writes three files into a new folder, mode 0700, and refuses a folder that ex
 
 The authority's key exists only while the command runs and is discarded once the server certificate is signed, so no file can sign another name.
 The authority is limited to the names and addresses you give and their subdomains.
+Given no `--ip`, it excludes every IP address, so it vouches for names alone.
+Given `--ip` with no `--name`, DNS names are not limited, so give both, as the documented setups do.
 Give at least one `--ip` or `--name`; both can be repeated.
 `--days` is the validity, 1 to 397, and 30 by default.
 Making new certificates means running the command again, then restarting the runner and the service.
