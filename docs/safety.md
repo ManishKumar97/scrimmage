@@ -137,6 +137,12 @@ A server started once, at the service's startup, is started outside any run and 
 A request with no run header reaches the app untouched, and so do its calls.
 Work outside any request, while a run is open, follows the outside rules on [An agent inside a web service](services.md#work-outside-any-request).
 
+## A fault sends nothing
+
+Every fault but `append`, `replace` and `slow` is built by the gate, and the call it fails is never sent.
+The fault is decided before mocks and `real` are read, so a fault on a call the test would refuse, such as an unlisted web write, still runs nothing.
+A faulted model call reserves nothing and costs nothing.
+
 ## The budget
 
 A test has a budget, $5 unless you change it. When the runner cannot be reached to check it, the call is refused rather than sent.

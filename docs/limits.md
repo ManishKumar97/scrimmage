@@ -299,8 +299,18 @@ Also read the control-path limits under An agent inside a web service.
 
 - **One provider.** OpenAI's Chat Completions, Responses and embeddings, and gateways that speak the same format. Other providers come later.
 
-- **A few faults.** `timeout` and `error` on tools, `timeout` and `status N` on model calls and web requests, `timeout`, `error` and `empty` on MCP tools, `append`, `replace` and `slow` on tools, MCP tools and web requests, and `replace` and `slow` on a chat model call.
+- **A few faults.** `timeout` and `error` on tools, `timeout`, `status N`, `refused`, `reset` and `dns` on model calls and web requests, `timeout`, `error` and `empty` on MCP tools, `append`, `replace` and `slow` on tools, MCP tools and web requests, and `replace` and `slow` on a chat model call.
   `append` on a model call, and the other faults that change the model's reply, come later.
+
+- **Connection faults on a tool or an MCP tool.** `refused`, `reset` and `dns` work where Scrimmage sees the connection, on a model call or a web request. On a tool, write `do = "error"` with `raises = "ConnectionRefusedError"`, `"ConnectionResetError"` or `"OSError"`.
+
+- **An injected `reset` never reaches the server.** The gate raises it before the request is sent. A reset after the server has read the request and done the work, with the reply lost, which tests duplicate writes on retry, is a later fault.
+
+- **A connection fault's cause chain, in detail.** The chain has a real failure's shape: the library's error is raised from httpcore's, which holds the `OSError` as its hidden context, and on the async path anyio's link sits between them. Two details differ. On an async refused connection the `ConnectionRefusedError` at the bottom reads `Connection refused`, where a real one says `Connect call failed` and the address. On an async reset, anyio's `BrokenResourceError` lacks the `IndexError` a real one holds behind its cause. A client on a transport of its own, which never loads httpcore, gets the `OSError` as the direct cause.
+
+- **The `dns` message is Linux's.** The gate writes glibc's text, `[Errno -2] Name or service not known`. On macOS a real failed lookup reads differently; the class, `socket.gaierror`, and the errno, `socket.EAI_NONAME` on that platform, still match.
+
+- **A transport's own retries.** An httpx transport built with `retries=N`, such as `httpx.HTTPTransport(retries=2)`, retries a real failed connect below the gate, so it never sees an injected one. Under `when = "always"` the result is the same; under `first 1` a real refused connection can recover inside the transport, while the injected one reaches your code. Scrimmage does not detect the setting.
 
 - **Only text and plain data take `append` and `replace`.** A result that is a model object, a dataclass, a number, `None`, `bytes` or a `str` subclass is not changed: the call is left as it is, the line says why, and a row with no place for the change is a mistake in the test. A dict, list or tuple takes only `replace` with `find`, on string values. See [Changing a result](changing-results.md#what-each-kind-of-call-can-take).
 

@@ -772,7 +772,7 @@
         },
         "do": {
           "type": "string",
-          "pattern": "^(timeout|replace|slow [0-9]+(\\.[0-9]+)?s|status [45][0-9][0-9])$"
+          "pattern": "^(timeout|refused|reset|dns|replace|slow [0-9]+(\\.[0-9]+)?s|status [45][0-9][0-9])$"
         },
         "when": {
           "type": "string",
@@ -836,7 +836,7 @@
           "then": {
             "properties": {
               "do": {
-                "pattern": "^(timeout|status [45][0-9][0-9])$"
+                "pattern": "^(timeout|refused|reset|dns|status [45][0-9][0-9])$"
               }
             }
           },
@@ -853,7 +853,7 @@
         },
         "do": {
           "type": "string",
-          "pattern": "^(timeout|append|replace|slow [0-9]+(\\.[0-9]+)?s|status [45][0-9][0-9])$"
+          "pattern": "^(timeout|refused|reset|dns|append|replace|slow [0-9]+(\\.[0-9]+)?s|status [45][0-9][0-9])$"
         },
         "when": {
           "$ref": "#/$defs/schedule"

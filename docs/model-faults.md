@@ -38,8 +38,12 @@ Nothing is sent to the provider for a faulted attempt, so it costs nothing.
 | `status 500` | the library's `InternalServerError`, after its retries |
 | `status 400` | the library's `BadRequestError`, at once |
 | `timeout` | the library's `APITimeoutError`, after its retries |
+| `refused` | the library's `APIConnectionError`, after its retries |
+| `reset` | the library's `APIConnectionError`, after its retries |
+| `dns` | the library's `APIConnectionError`, after its retries |
 
 Any status from 400 to 599 works.
+The openai library retries a connection error twice by default, and each attempt meets the fault again, so `when = "first 1"` is absorbed by the first retry.
 
 Two more let the call happen, on a chat call only:
 
