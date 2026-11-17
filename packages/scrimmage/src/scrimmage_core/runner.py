@@ -671,7 +671,8 @@ class Runner:
         streamed = ok and service_client.streamed(reply, agent)
         unclaimed = not self.server.runs[run].fetched and reply.status is not None and gate is None
         wrong_version = gate == "version"
-        if unclaimed or streamed or wrong_version:
+        clock_off = gate == "clock"  # every later claim of this process would be refused too
+        if unclaimed or streamed or wrong_version or clock_off:
             with self.lock:
                 self.cancelled = True  # under this lock, so no run starts from here on
         assert self.waiters is not None  # run_all made it, as this is a service
@@ -689,6 +690,9 @@ class Runner:
         if wrong_version:
             later.result()
             raise self.version_refusal(run)
+        if clock_off:
+            later.result()
+            raise service_client.Setup(3, f"{run} was refused: {service_client.CLOCK_OFF}")
         if streamed:
             later.result()
             raise service_client.Setup(

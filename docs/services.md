@@ -206,11 +206,12 @@ When the gate cannot run a request under its plan, it answers `503` itself, with
 | `bad-run-header` | The header is malformed, appears twice, or carries a MAC made without the token. No control request is made. |
 | `no-such-run` | The runner has no such run open: it ended, or never was. |
 | `claimed` | Another request claimed this run already, such as a replayed header. |
-| `clock` | The control server refused the claim because the service's clock and the runner's differ by more than 60 seconds, as after a clock jump during the test. The run's message says to set both clocks from the same NTP source. |
+| `version` | The process runs another Scrimmage version than the runner. The test stops with exit 2 and names both versions. |
+| `clock` | The control server refused the claim because the service's clock and the runner's differ by more than 60 seconds, as after a clock jump during the test. The test stops with exit 3 at that run, sends no further run, and says to set both clocks from the same NTP source. |
 | `plan-unavailable` | No control slot was free in about 250 ms, the runner could not be reached, or the plan names a tool or a package the service does not gate. |
 | `structure` | The process found a library it cannot gate after it started listening. Plain requests are still served. |
 
-The runner reads each of these as an infrastructure error for that run, exit 3, and the test goes on.
+The runner reads each of the others as an infrastructure error for that run, exit 3, and the test goes on.
 A reply that only looks like the gate's, or a run whose plan was never claimed, stops the test with exit 3: a process without Scrimmage answered it.
 
 ## In Docker Compose

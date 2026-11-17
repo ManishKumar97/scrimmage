@@ -196,6 +196,13 @@ def checked_name(gate: Gate, runs: list[bytes]) -> str:
     return name
 
 
+# The control server's claim refusals the gate names as its own 503 code. A clock refusal: this
+# process's clock left the runner's 60 s window after the probe. Any other refusal is a run
+# the runner does not hold open.
+CLAIM_REFUSALS = {"claimed": "claimed", "version": "version", "clock": "clock"}
+NO_SUCH_RUN = "no-such-run"
+
+
 async def claimed(gate: Gate, name: str) -> tuple[RunState, RunSender]:
     """The run's plan, claimed on Scrimmage's own threads with a control slot taken on the
     loop: with none free in about 250 ms the request gets 503, holding no thread."""
@@ -212,9 +219,7 @@ async def claimed(gate: Gate, name: str) -> tuple[RunState, RunSender]:
     try:
         doc = await asyncio.wrap_future(gate.executor.submit(work))
     except ClaimRefused as refused:
-        # A clock refusal: this process's clock left the runner's 60 s window after the probe.
-        known = {"claimed": "claimed", "version": "version", "clock": "clock"}
-        code = known.get(refused.code, "no-such-run")
+        code = CLAIM_REFUSALS.get(refused.code, NO_SUCH_RUN)
         raise Unavailable(code) from None
     except (ControlError, Busy):
         raise Unavailable("plan-unavailable") from None

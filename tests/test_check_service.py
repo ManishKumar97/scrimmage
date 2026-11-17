@@ -80,6 +80,8 @@ if JUMP:
 
     def claim(self, run, proc, *, held=False):
         claims.append(run)
+        with open(LOG, "a") as handle:  # each claim the gate made, beside the app's requests
+            handle.write(json.dumps({"method": "CLAIM", "path": run}) + "\\n")
         return first_claim(self, run, proc, held=held)
 
     control_client.ControlClient.claim = claim
@@ -405,13 +407,19 @@ def test_a_replayed_stale_probe_is_answered_as_documented(
         svc.close()
 
 
-def test_a_clock_jump_after_the_probe_names_the_clock_in_the_run(lab: Lab) -> None:
+def test_a_clock_jump_after_the_probe_stops_the_test_at_the_first_run(lab: Lab) -> None:
     port = lab.start(CLAIM_CLOCK_JUMP="300")
-    code, out = lab.bench.test(port)
-    assert code == 3, out  # the setup request passed; the run's claim was refused
-    assert CLOCK_OFF in out, out
+    code, out = lab.bench.test(port, runs=2)
+    assert code == 3, out  # the setup request passed; the first run's claim was refused
+    (said,) = [line for line in out.splitlines() if CLOCK_OFF in line]
+    assert re.fullmatch(rf"scrimmage: run-[0-9a-f]{{12}} was refused: {re.escape(CLOCK_OFF)}", said)
     assert "503 no-such-run" not in out and "503 clock" not in out, out
-    assert [r["method"] for r in lab.requests()].count("POST") == 1  # only the setup request
+    seen = [(r["method"], r["path"]) for r in lab.requests()]
+    claims = [path for method, path in seen if method == "CLAIM"]
+    # The setup request's claim, then the first run's, refused; the second run never reached
+    # the gate, and only the setup request reached the app.
+    assert len(claims) == 2 and claims[0].startswith("setup-"), seen
+    assert [method for method, _ in seen].count("POST") == 1, seen
 
 
 # --- a probe reply that never ends ---------------------------------------------------------

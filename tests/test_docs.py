@@ -557,7 +557,7 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
         assert form in guide or form.strip("`") in guide, form
     # Every code the gate can answer 503 with has its row, and nothing else has one.
     codes = set(re.findall(r'Unavailable\("([a-z-]+)"\)', Path(asgi_gate.__file__).read_text()))
-    codes |= {"no-such-run", "claimed", "clock"}
+    codes |= {*asgi_gate.CLAIM_REFUSALS.values(), asgi_gate.NO_SUCH_RUN}
     rows = set(
         re.findall(r"^\| `([a-z-]+)` \| ", guide.split("## When the gate answers 503")[1], re.M)
     )
