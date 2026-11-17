@@ -208,11 +208,11 @@ class Ended:
 PLAN_CHANGED = "the process that served this run used another plan"
 PLAN_UNREPORTED = (
     "the service's Scrimmage does not report which plan it used; "
-    "upgrade scrimmage-core in the service to compare"
+    "upgrade scrimmage in the service to compare"
 )
 PLAN_FORM_UNKNOWN = (
     "the service's Scrimmage digests its plan in form {form}, and this runner compares form "
-    "{ours}; use the same scrimmage-core version in the service to compare"
+    "{ours}; use the same scrimmage version in the service to compare"
 )
 READY_S = 30.0  # how long the probe asks a service that does not listen yet
 READY_STEP_S = 0.2
@@ -727,7 +727,7 @@ class Runner:
         ours = versions.installed()
         return service_client.Setup(
             2,
-            f"{run} was refused: a process of the service runs scrimmage-core {theirs} and "
+            f"{run} was refused: a process of the service runs scrimmage {theirs} and "
             f"this runner is {ours}, another major release; "
             f"{service_client.install_line(ours)}, in every process of it",
         )

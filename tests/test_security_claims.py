@@ -20,7 +20,7 @@ from test_stdlib_only import imported_roots
 TOKEN = "f00d" * 16
 ROOT = Path(__file__).parents[1]
 PACKAGES = ROOT / "packages"
-SDK = PACKAGES / "scrimmage-core" / "src" / "scrimmage_core"
+SDK = PACKAGES / "scrimmage" / "src" / "scrimmage_core"
 # Every standard-library name that opens a connection or listens for one.
 NETWORK = re.compile(
     r"\b(HTTPS?Connection|urlopen|urlretrieve|create_connection|open_connection|"

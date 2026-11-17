@@ -300,7 +300,7 @@ def test_scrimmage_mcp_without_the_extra_says_how_to_install(bed: Bed) -> None:
     )  # fmt: skip
     assert done.returncode == 2 and done.stdout == ""
     assert done.stderr == mcp_server.INSTALL + "\n"
-    assert 'pip install "scrimmage-core[mcp]"' in done.stderr
+    assert 'pip install "scrimmage[mcp]"' in done.stderr
 
 
 def in_subfolder(bed: Bed) -> None:

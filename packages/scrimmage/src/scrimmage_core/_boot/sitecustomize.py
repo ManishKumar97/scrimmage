@@ -172,8 +172,8 @@ def _start() -> None:
     program = _is_program()
     if not has_sdk and program:
         raise RuntimeError(
-            f"scrimmage-core is not installed for {sys.executable}, so the program under "
-            "test would run with no gates; run it on a Python with scrimmage-core installed"
+            f"scrimmage is not installed for {sys.executable}, so the program under "
+            "test would run with no gates; run it on a Python with scrimmage installed"
         )
     if not has_sdk:
         _keep_out_tools()  # a tool, a build step or a cloud command: leave it alone

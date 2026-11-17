@@ -9,10 +9,11 @@ It speaks MCP over stdio only: the client starts the server, and nothing listens
 
 ## Install
 
-Install the `mcp` extra in the project's environment, the same one that runs your agent:
+Install Scrimmage with the `mcp` extra in the project's environment, the same one that runs your agent.
+From the clone, as on [Install](install.md):
 
 ```bash
-pip install "scrimmage-core[mcp]"
+pip install "./packages/scrimmage[mcp]"
 ```
 
 `scrimmage test` starts your agent on its own Python, so the server must run on that Python too.

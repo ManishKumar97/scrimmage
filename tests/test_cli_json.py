@@ -36,6 +36,7 @@ from scrimmage_core import (
     runner,
     show,
     suggest,
+    versions,
 )
 from scrimmage_core import init as init_module
 from scrimmage_core import render as rendering
@@ -47,7 +48,6 @@ pytestmark = pytest.mark.usefixtures("signals_kept")
 SCHEMAS = Path(scrimmage_core.__file__).parent / "schemas"
 CLI_SCHEMA = json.loads((SCHEMAS / "cli.v1.json").read_text())
 SCRIMMAGE = str(Path(sys.executable).parent / "scrimmage")
-SCRIM = str(Path(sys.executable).parent / "scrim")
 LISTS = ("mistakes", "notes", "warnings", "infra")
 PREFIXES = {
     "mistakes": "test mistake: ",
@@ -213,16 +213,11 @@ def test_each_command_prints_one_document_for_each_exit_code(
 @pytest.mark.slow
 def test_the_envelope_names_the_installed_version(project: Project) -> None:
     doc = one_document(scrimmage("check", "--json", str(project.toml)), "check")
-    assert doc["scrimmage"] == importlib.metadata.version("scrimmage-core")
+    installed = importlib.metadata.version("scrimmage")
+    assert doc["scrimmage"] == installed
+    # The version rule between a service and the runner reads the same package.
+    assert versions.installed() == installed
     assert doc["v"] == 1 and doc["config"] == str(project.toml)
-
-
-@pytest.mark.slow
-def test_scrim_is_the_same_command_under_a_short_name(project: Project) -> None:
-    scripts = importlib.metadata.entry_points(group="console_scripts")
-    assert scripts["scrim"].value == scripts["scrimmage"].value
-    doc = one_document(scrimmage("check", "--json", str(project.toml), command=SCRIM), "check")
-    assert doc["exit"] == 0
 
 
 @pytest.mark.design("json.message_objects")
@@ -764,7 +759,7 @@ def test_the_version_comes_from_the_package_or_is_unknown(
 ) -> None:
     monkeypatch.setattr(importlib.metadata, "version", lambda name: f"sentinel-{name}")
     assert cli.main(["check", "--json", str(project.toml)]) == 0
-    assert json.loads(capsys.readouterr().out)["scrimmage"] == "sentinel-scrimmage-core"
+    assert json.loads(capsys.readouterr().out)["scrimmage"] == "sentinel-scrimmage"
 
     def missing(name: str) -> str:
         raise importlib.metadata.PackageNotFoundError(name)

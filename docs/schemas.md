@@ -1,6 +1,6 @@
 # Schemas
 
-Scrimmage ships JSON Schema files inside the `scrimmage-core` package.
+Scrimmage ships JSON Schema files inside the `scrimmage` package.
 JSON Schema is the standard format for describing the shape of a JSON document.
 Editors, CI checks and API tools read it.
 

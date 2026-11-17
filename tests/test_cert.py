@@ -325,7 +325,7 @@ def test_cert_without_the_extra_says_how_to_install_it(
     with pytest.raises(CertError) as raised:
         make(tmp_path)
     assert str(raised.value) == cert.INSTALL
-    assert "scrimmage-core[cert]" in str(raised.value)
+    assert "scrimmage[cert]" in str(raised.value)
     assert not (tmp_path / "out").exists()
 
 

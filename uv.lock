@@ -17,7 +17,6 @@ resolution-markers = [
 members = [
     "coverage-threads",
     "scrimmage",
-    "scrimmage-core",
     "scrimmage-workspace",
 ]
 
@@ -4018,16 +4017,8 @@ wheels = [
 
 [[package]]
 name = "scrimmage"
-version = "0.0.0"
+version = "0.1.0.dev0"
 source = { editable = "packages/scrimmage" }
-
-[[package]]
-name = "scrimmage-core"
-version = "0.0.0"
-source = { editable = "packages/scrimmage-core" }
-dependencies = [
-    { name = "scrimmage" },
-]
 
 [package.optional-dependencies]
 cert = [
@@ -4041,7 +4032,6 @@ mcp = [
 requires-dist = [
     { name = "cryptography", marker = "extra == 'cert'", specifier = ">=46" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.3,<2.4" },
-    { name = "scrimmage", editable = "packages/scrimmage" },
 ]
 provides-extras = ["mcp", "cert"]
 
@@ -4051,7 +4041,6 @@ version = "0"
 source = { virtual = "." }
 dependencies = [
     { name = "scrimmage" },
-    { name = "scrimmage-core" },
 ]
 
 [package.dev-dependencies]
@@ -4091,10 +4080,7 @@ nemo = [
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "scrimmage", editable = "packages/scrimmage" },
-    { name = "scrimmage-core", editable = "packages/scrimmage-core" },
-]
+requires-dist = [{ name = "scrimmage", editable = "packages/scrimmage" }]
 
 [package.metadata.requires-dev]
 dev = [

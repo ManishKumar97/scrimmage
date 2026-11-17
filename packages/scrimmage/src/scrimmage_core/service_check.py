@@ -64,7 +64,7 @@ def versions_line(report: dict[str, object]) -> tuple[Line, list[str]]:
         warnings = client.check_versions(report)
     except client.Setup as setup:
         return Line("versions", str(setup), MISTAKE_LEVEL), []
-    text = f"scrimmage-core {theirs} in the service, {ours} here"
+    text = f"scrimmage {theirs} in the service, {ours} here"
     return Line("versions", text, WARN if warnings else OK_LEVEL), warnings
 
 

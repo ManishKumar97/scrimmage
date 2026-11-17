@@ -175,7 +175,7 @@ def probe_certificates(cluster: Cluster, namespace: str, tag: str) -> None:
         "cert-manager's authority and server certificate",
         f"ca.crt holds {ca.count('BEGIN CERTIFICATE')} certificate(s)",
     )
-    src = str(Path(__file__).parents[2] / "packages" / "scrimmage-core" / "src")
+    src = str(Path(__file__).parents[2] / "packages" / "scrimmage" / "src")
     for version in ("3.11", "3.12", "3.13", "3.14"):
         done = subprocess.run(
             [
