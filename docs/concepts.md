@@ -65,7 +65,8 @@ If the tool returns its own type, Scrimmage builds that type from the mock:
 | `append` | the call happens, and the text of the fault is added at the end of what it returns |
 | `replace` | the call happens, and what it returns is replaced by the text of the fault, or the `find` text in it is |
 | `slow` | written `slow 8s`: the call happens after that many seconds, so a caller's own deadline can fire first |
-| `status` | written `status 429`: a model call gets a real HTTP error reply, and the library raises its own error, such as `RateLimitError`; a web request gets a reply with that status |
+| `status` | written `status 429`: a model call gets a real HTTP error reply, and the library raises its own error, such as `RateLimitError`; a web request gets a reply with that status; on a model call, `status 401` is OpenAI's own reply to a bad API key, so the library raises `AuthenticationError` |
+| `context too long` | a chat model call gets OpenAI's reply to a prompt over the model's context, and the openai library raises `BadRequestError` with the code `context_length_exceeded` |
 | `refused` | a model call or a web request raises the library's `ConnectError`, as if nothing listened on the server's port |
 | `reset` | a model call or a web request raises the library's `ReadError`, as if the server dropped the connection |
 | `dns` | a model call or a web request raises the library's `ConnectError`, as if the server's name did not resolve |

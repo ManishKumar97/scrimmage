@@ -1,21 +1,28 @@
 """Model faults through the real openai library, against the fake server."""
 
+import asyncio
 import datetime
 import json
 import shutil
 import subprocess
 import time
 from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
+import httpx2
 import openai
 import pytest
 
 from conftest import ACME, EXAMPLE_FAULT, Project, Result
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import config
+from scrimmage_core import config, suggest
 from scrimmage_core import runner as runner_module
+from scrimmage_core.decide import MISTAKE_REFUSAL
+from scrimmage_core.errors import ConfigError, ScrimmageMockError
 from scrimmage_core.runner import Runner
 from test_connection_faults import gated, install
+from test_http_gate import Sink
 
 __all__ = ["gated"]  # the fixture, used by name
 
@@ -431,3 +438,133 @@ def test_first_n_on_that_client_counts_attempts(project: Project, fake_openai: F
     assert calls(row(result, "fault 1")) == [("model:openai", "fault", 0)] * 2
     assert answer(row(result, "fault 1")) == "the model is down"
     assert "does not mark its retries" not in result.out
+
+
+FIXTURES = Path(__file__).parent / "fixtures" / "openai"
+SYNC = {"argvalues": [True, False], "ids": ["sync", "async"]}
+
+
+def captured(name: str) -> dict[str, Any]:
+    return json.loads((FIXTURES / f"{name}.json").read_text())
+
+
+def raised_by(sync: bool, reached: list[object], *, responses: bool = False) -> BaseException:
+    """One chat or Responses call through the openai library, sync or async, to a provider
+    that keeps every request that reaches it; what the call raised."""
+
+    def provider(request: httpx2.Request) -> httpx2.Response:
+        reached.append(request)
+        return httpx2.Response(200, json={})
+
+    transport = httpx2.MockTransport(provider)
+
+    def create(api: Any) -> Any:
+        if responses:
+            return api.responses.create(model="gpt-4o-mini", input="hi")
+        return api.chat.completions.create(
+            model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}]
+        )
+
+    async def go() -> None:
+        async with httpx2.AsyncClient(transport=transport) as http:
+            await create(openai.AsyncOpenAI(api_key="test", http_client=http))
+
+    with pytest.raises(Exception) as caught:
+        if sync:
+            create(openai.OpenAI(api_key="test", http_client=httpx2.Client(transport=transport)))
+        else:
+            asyncio.run(go())
+    return caught.value
+
+
+def model_lines(sink: Sink) -> list[dict[str, object]]:
+    return [x for x in sink.lines if x.get("kind") == "model"]
+
+
+@pytest.mark.design("model.context_too_long")
+@pytest.mark.parametrize("sync", **SYNC)
+def test_context_too_long_raises_bad_request_with_the_real_code(gated: None, sync: bool) -> None:
+    real = captured("real_error_context_length")["body"]["error"]
+    sink, budget = install("context too long", "model")
+    reached: list[object] = []
+    error = raised_by(sync, reached)
+    assert type(error) is openai.BadRequestError
+    assert error.code == "context_length_exceeded" == real["code"]
+    assert error.param == "messages" == real["param"]
+    assert error.type == real["type"]
+    assert error.message == f"Error code: 400 - {real['message']}"
+    assert reached == [], "the faulted request reached the provider"
+    # One attempt: the library does not retry a 400.
+    assert [(x["action"], x.get("status")) for x in model_lines(sink)] == [("fault", 400)]
+    assert budget.asked == 0 and sink.settles == []
+
+
+@pytest.mark.design("model.context_too_long")
+@pytest.mark.parametrize("sync", **SYNC)
+def test_context_too_long_on_a_responses_call_is_a_mistake_and_not_fired(
+    gated: None, sync: bool
+) -> None:
+    sink, budget = install("context too long", "model")
+    reached: list[object] = []
+    error = raised_by(sync, reached, responses=True)
+    assert isinstance(error, ScrimmageMockError), repr(error)
+    assert "is a Responses call" in str(error)
+    assert reached == [] and budget.asked == 0
+    [line] = model_lines(sink)  # one attempt: the library does not retry a mistake
+    # Not a fired fault, and not a real call the provider failed: nothing was sent.
+    assert (line["action"], line["reason"]) == ("refused", MISTAKE_REFUSAL), line
+    assert runner_module.real_error(line) is None
+    assert suggest.refused_mistakes([line]) == [line] and suggest.unchanged_lines([line]) == []
+    unchanged = line["unchanged"]
+    assert isinstance(unchanged, dict) and unchanged["do"] == "context too long"
+
+
+@pytest.mark.design("model.context_too_long")
+@pytest.mark.parametrize(
+    "call",
+    [
+        "http:inventory.acme.internal",
+        "model:*/embeddings",
+        "model:openai/moderations",
+        "tool:get_order",
+        "mcp:docs/search",
+    ],
+)
+def test_context_too_long_is_refused_on_a_web_request_and_a_read_call(call: str) -> None:
+    table: dict[str, object] = {"call": call, "do": "context too long", "when": "first 1"}
+    with pytest.raises(ConfigError, match=r"'context too long' works only on a chat model call"):
+        config.read_fault(table, "[[test.fault]] 1")
+    for chat in ("model", "model:openai"):
+        assert config.read_fault({**table, "call": chat}, "x").do == "context too long"
+
+
+@pytest.mark.design("model.status_401_auth")
+@pytest.mark.parametrize("sync", **SYNC)
+def test_status_401_is_the_real_authentication_error(gated: None, sync: bool) -> None:
+    real = captured("real_error_401")
+    sink, budget = install("status 401", "model")
+    reached: list[object] = []
+    error = raised_by(sync, reached)
+    assert type(error) is openai.AuthenticationError
+    assert error.code == "invalid_api_key" == real["body"]["error"]["code"]
+    assert error.type == "invalid_request_error" and error.param is None
+    assert error.message.startswith("Error code: 401 - Incorrect API key provided: sk-proj-")
+    assert error.response.headers["content-type"] == real["headers"]["content-type"]
+    assert reached == [], "the faulted request reached the provider"
+    # One attempt: the library does not retry a 401.
+    assert [(x["action"], x.get("status")) for x in model_lines(sink)] == [("fault", 401)]
+    assert budget.asked == 0 and sink.settles == []
+
+
+@pytest.mark.design("model.context_too_long")
+def test_a_run_under_context_too_long_sends_the_provider_only_the_real_calls(
+    project: Project, fake_openai: Fake
+) -> None:
+    use(project, "acme.rag:answer", model_fault("context too long", "first 1"))
+    fake = fake_openai(ACME, embedding="embedding")
+    result = project.test(fake)
+    assert result.finished, result.out + result.err
+    sent_only_the_real_calls(result, fake)
+    lines = row(result, "fault 1")
+    assert calls(lines) == [("model:openai/embeddings", "real", 0), ("model:openai", "fault", 0)]
+    assert answer(lines) == "error: BadRequestError"
