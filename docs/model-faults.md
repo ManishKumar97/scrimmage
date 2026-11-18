@@ -148,7 +148,7 @@ The reply is one tool call, as OpenAI's models have sent it:
 ```
 
 `recipient_name` names the first tool your request offers, and `finish_reason` is `tool_calls`.
-A request that offers no tools is left as it is, since a model calls a tool only when it is offered one: the call goes on as in the baseline, and the line says why.
+A request where the model cannot pick a tool of its own is left as it is: one that offers no tools, sets `tool_choice` to `"none"`, names the tool in `tool_choice`, or offers tools in the old `functions` field only. The call goes on as in the baseline, and the line says why.
 If your agent sends the call back in its next request, OpenAI refuses that request with a 400, because the name holds a dot.
 
 ### Where they do not work

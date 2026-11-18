@@ -1630,7 +1630,11 @@ def carried_model_warnings(config: Config) -> list[str]:
         "[agent.prices] and keep the budget on"
         for test in config.tests
         for i, fault in enumerate(test.faults, 1)
-        if labels.kind_of(fault.call) == "model" and carried(fault.do)
+        # The reply faults that change the real reply stop before sending until they are
+        # built, so they make no call to bill yet.
+        if labels.kind_of(fault.call) == "model"
+        and carried(fault.do)
+        and fault.do not in REPLY_FAULTS
     ]
 
 

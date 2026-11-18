@@ -644,8 +644,9 @@ BUILT_REPLIES = ("refuse", "unknown tool")
 
 def reply_checks(run: RunState, step: Step, fields: dict[str, object], path: str) -> None:
     """Before anything is sent: a reply fault this request cannot take is a mistake in the
-    test, and unknown tool on a request that offers no tool is left as it is, since a model
-    calls a tool only when it is offered one. The call then goes on as in the baseline."""
+    test, and unknown tool on a request where the model could not pick a tool of its own is
+    left as it is: no tools, tool_choice "none" or a named tool. The call then goes on as in
+    the baseline."""
     word = run.plan.faults[step.decision.fault or 0].do
     if word not in REPLY_FAULTS:
         return
@@ -674,8 +675,8 @@ def reply_checks(run: RunState, step: Step, fields: dict[str, object], path: str
             f"is a chat call, and {word} is not built yet: this version builds refuse and "
             "unknown tool; fault this call another way",
         )
-    if word == "unknown tool" and not openai_table.offered(path, fields).agent:
-        run.unchanged(step, "the request offers no tools, so a model would call none")
+    if word == "unknown tool" and (why := openai_table.no_free_tool_call(path, fields)):
+        run.unchanged(step, why)
         step.decision = Decision("real")
 
 
@@ -696,7 +697,7 @@ def built_reply(
     if word == "refuse":
         built = openai_table.refusal_reply(fields, tokens)
     else:  # reply_checks let it through only with a tool offered
-        tool = openai_table.offered(str(request.url.path), fields).agent[0]
+        tool = openai_table.tool_call_tools(str(request.url.path), fields)[0]
         built = openai_table.unknown_tool_reply(fields, tokens, tool)
     headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
     return reply(ctx, module, client, step, request, extra, (200, headers, built))

@@ -489,13 +489,14 @@ def test_refuse_on_a_structured_output_request_sets_refusal_and_nulls_content(
     assert reply.choices[0].message.content == openai_table.PLAIN_REFUSAL
 
 
-@pytest.mark.design("proof.real_against_injected_refuse")
+@pytest.mark.design("fault.refuse_parse")
 @pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
-def test_refuse_reaches_parse_as_a_real_refusal_does(
+def test_a_structured_refuse_reaches_parse_and_langchain_as_a_refusal(
     gated: None, loopback: Loopback, sync: bool
 ) -> None:
-    """parse() gives parsed None and the refusal, and LangChain raises its refusal error, from
-    the gate's reply and from the same bytes sent by a server."""
+    """parse() gives parsed None and the refusal, and LangChain raises its refusal error. The
+    gate's bytes are sent again by a server with no run, so the gate's own reply object is
+    shown to be what a socket gives. No real refusal was captured: the form is the guide's."""
     gate_on("refuse")
     injected, body = parsed(loopback, sync)
     injected_error = structured_by_langchain(loopback, sync)
@@ -556,6 +557,58 @@ def test_unknown_tool_on_a_request_with_no_tools_is_not_fired(
         "why": "the request offers no tools, so a model would call none",
     }
     assert suggest.unchanged_lines([line]) == [line] and suggest.refused_mistakes([line]) == []
+
+
+# Requests where the model could not pick a tool of its own, so no real reply has one it
+# was never offered.
+NO_FREE_CHOICE = [
+    ({}, "the request offers no tools, so a model would call none"),
+    (
+        {"tools": SPECS, "tool_choice": "none"},
+        'the request sets tool_choice "none", so a model would call no tool',
+    ),
+    (
+        {"tools": SPECS, "tool_choice": {"type": "function", "function": {"name": "get_stock"}}},
+        "the request's tool_choice names the tool to call, so a model would call that one",
+    ),
+    (
+        {"functions": [{"name": "get_order", "parameters": {"type": "object"}}]},
+        "the request offers tools in the old functions field only, which a model answers "
+        "with function_call, not tool_calls",
+    ),
+]
+
+
+@pytest.mark.design("fault.unknown_tool_not_fired")
+@pytest.mark.parametrize(
+    ("asked", "why"), NO_FREE_CHOICE, ids=["no tools", "none", "named", "functions"]
+)
+def test_unknown_tool_where_the_model_cannot_pick_a_tool_is_not_fired(
+    gated: None, loopback: Loopback, asked: dict[str, Any], why: str
+) -> None:
+    sink, budget = gate_on("unknown tool")
+    _, body = completion(loopback, True, **asked)
+    assert loopback.seen == ["/v1/chat/completions"] and body == REAL_ANSWER
+    assert budget.asked == 1
+    line = line_of(sink, "model")
+    assert line["action"] == "real" and line["unchanged"] == {"do": "unknown tool", "why": why}
+
+
+@pytest.mark.design("fault.unknown_tool")
+@pytest.mark.parametrize(
+    "asked",
+    [{"tool_choice": "auto"}, {"tool_choice": "required"}, {"parallel_tool_calls": False}],
+    ids=["auto", "required", "no parallel calls"],
+)
+def test_unknown_tool_fires_where_the_model_picks_its_own_tool(
+    gated: None, loopback: Loopback, asked: dict[str, Any]
+) -> None:
+    """parallel_tool_calls false is left firing: no source shows either way."""
+    sink, _ = gate_on("unknown tool")
+    reply, _ = completion(loopback, True, tools=SPECS, **asked)
+    assert loopback.seen == []
+    assert reply.choices[0].message.tool_calls[0].function.name == "multi_tool_use.parallel"
+    assert line_of(sink, "model")["action"] == "fault"
 
 
 BUILT = [("refuse", REAL_ANSWER, {}), ("unknown tool", REAL_TOOL_CALL, {"tools": SPECS})]

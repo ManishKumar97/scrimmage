@@ -142,6 +142,7 @@ ALL_TITLES = [
     "Stopping the service mid-run.",
     "Subinterpreters are refused in a run.",
     "The Starlette gate alone lets an outer middleware see the run header.",
+    "The Structured Outputs refusal is the guide's example.",
     "The `dns` message is Linux's.",
     "The cross-run web rule leaves out `outside_tool` and `credential` calls.",
     "The default certificate lasts one day.",

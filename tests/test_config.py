@@ -1,3 +1,4 @@
+import dataclasses
 import re
 from pathlib import Path
 
@@ -991,3 +992,16 @@ def test_a_reply_fault_takes_no_text_find_or_retry_after(word: str) -> None:
     with pytest.raises(ConfigError, match="Give the fault its own expect or forbid"):
         config.read_fault(reply_fault(word, when="always"), "x")
     assert config.read_fault(reply_fault(word, when="always", forbid=["x"]), "x").forbid == ("x",)
+
+
+@pytest.mark.design("config.reply_fault_billed_warning")
+def test_a_reply_fault_not_built_yet_gets_no_billed_warning(tmp_path: Path) -> None:
+    """garble, truncate and bad tool args stop before sending until they are built."""
+    for word, warned in (("garble", 0), ("truncate", 0), ("bad tool args", 0), ("replace", 1)):
+        text = 'text = "x"\n' if word == "replace" else ""
+        block = (
+            f'[[test.fault]]\ncall = "model"\nmodel = "m"\ndo = "{word}"\nwhen = "first 1"\n{text}'
+        )
+        cfg = example(tmp_path, FAULT, block)
+        cfg = dataclasses.replace(cfg, agent=dataclasses.replace(cfg.agent, max_cost_usd=None))
+        assert len(config.carried_model_warnings(cfg)) == warned, word

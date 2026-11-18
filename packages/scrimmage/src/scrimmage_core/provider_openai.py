@@ -245,6 +245,30 @@ def refusal_reply(fields: dict[str, object], tokens_in: int) -> bytes:
     return chat_reply(fields, tokens_in, message, "stop")
 
 
+def tool_call_tools(path: str, fields: dict[str, object]) -> list[str]:
+    """The tools a chat request offers in tools, the field tool_calls answer. The old
+    functions field gets a function_call reply instead, never a tool call."""
+    return offered(path, {k: v for k, v in fields.items() if k != "functions"}).agent
+
+
+def no_free_tool_call(path: str, fields: dict[str, object]) -> str | None:
+    """Why the model could not pick a tool of its own on this request, or None when it could:
+    unknown tool fires only where a real model chose a tool no one offered."""
+    if not tool_call_tools(path, fields):
+        if _list(fields.get("functions")):
+            return (
+                "the request offers tools in the old functions field only, which a model "
+                "answers with function_call, not tool_calls"
+            )
+        return "the request offers no tools, so a model would call none"
+    choice = fields.get("tool_choice")
+    if choice == "none":
+        return 'the request sets tool_choice "none", so a model would call no tool'
+    if _obj(choice).get("type") in ("function", "custom"):
+        return "the request's tool_choice names the tool to call, so a model would call that one"
+    return None
+
+
 def unknown_tool_reply(fields: dict[str, object], tokens_in: int, tool: str) -> bytes:
     """unknown tool: one call to multi_tool_use.parallel, naming the tool the model meant."""
     use: dict[str, object] = {"recipient_name": f"functions.{tool}", "parameters": {}}

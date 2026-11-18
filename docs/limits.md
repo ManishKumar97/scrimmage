@@ -343,8 +343,14 @@ Also read the control-path limits under An agent inside a web service.
 - **The faults in a model's reply are for Chat Completions, not streamed.** `refuse`, `unknown tool`, `garble`, `truncate` and `bad tool args` on a streamed request or a Responses API call are a mistake in the test: the call fails at once and nothing is sent. A changed stream is a later fault.
 
 - **A built reply's counts are an estimate.** `refuse` and `unknown tool` send nothing, so the reply's `usage` holds a rough count of the request and 10 output tokens, and its `system_fingerprint` is the one of the real reply it was made from. The line costs 0.
+  Its `model` is the name your request sent, such as `gpt-4o-mini`, where a real reply names the snapshot, such as `gpt-4o-mini-2024-07-18`.
+  It has one choice, whatever `n` your request asks for.
 
-- **`unknown tool` sends one form.** It is the call to `multi_tool_use.parallel` OpenAI's models have sent. A tool name you pick is not built. If your agent sends that call back, OpenAI's real 400 on the next request ends the run as an infrastructure error.
+- **The Structured Outputs refusal is the guide's example.** No real refusal was captured: the `refusal` text and form come from OpenAI's Structured Outputs guide, and the plain one from a forum report.
+
+- **`unknown tool` sends one form.** It is the call to `multi_tool_use.parallel` OpenAI's models have sent. A tool name you pick is not built.
+  Its arguments name your first tool with `"parameters": {}`, so an agent that unwraps the call runs that tool with no arguments.
+  It fires where the model picks its own tool: not with `tool_choice` `"none"`, a `tool_choice` that names a tool, or tools in the old `functions` field only; those calls are left as they are. It still fires with `parallel_tool_calls` false, as no source shows what a model does then. If your agent sends that call back, OpenAI's real 400 on the next request ends the run as an infrastructure error.
 
 - **A body cut by a dropped connection.** `bad body` sends a whole reply whose JSON does not parse. A reply cut short because the connection dropped is a connection error, not a body to parse: the openai library raises `APIConnectionError` from httpx's `RemoteProtocolError`, after its retries. Scrimmage does not inject that failure.
 
