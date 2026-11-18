@@ -121,6 +121,10 @@ The request is never sent, so a `reset` never reaches the server.
 `empty` and `bad body` are not sent either, so a write under them never runs.
 A `HEAD` request gets the status and the headers, with no body.
 
+`status 429` and `status 503` take `retry_after`, whole seconds from 0 and under `run_timeout`.
+The reply then carries a `Retry-After` header, which your code reads as `response.headers["retry-after"]`, such as `"30"`.
+Neither httpx nor httpx2 waits on it by itself; your own retry code decides.
+
 `when` can be `always`, `first N` or `call N`, the Nth matching request alone.
 `requests N` is for model calls only.
 

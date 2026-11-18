@@ -79,10 +79,12 @@ WEB_MOCK_KEYS = {"call", "method", "path", "status", "headers", "json", "text", 
 # text and find belong to append and replace. On a model call only replace takes them.
 CHANGE_KEYS = {"text", "find"}
 FAULT_KEYS = {"call", "do", "when", "raises", *CHANGE_KEYS, *RULE_KEYS}
-MODEL_FAULT_KEYS = {*FAULT_KEYS, "model"}
+MODEL_FAULT_KEYS = {*FAULT_KEYS, "model", "retry_after"}
 MCP_MOCK_KEYS = {"call", "returns", "recorded", "args"}
 MCP_FAULT_KEYS = {"call", "do", "when", *CHANGE_KEYS, *RULE_KEYS}
-WEB_FAULT_KEYS = {"call", "do", "when", "method", "path", *CHANGE_KEYS, *RULE_KEYS}
+WEB_FAULT_KEYS = {
+    "call", "do", "when", "method", "path", "retry_after", *CHANGE_KEYS, *RULE_KEYS,
+}  # fmt: skip
 # A mock's body is sent as written, so these could only make the reply lie about it.
 BODY_HEADERS = {"content-length", "content-encoding", "transfer-encoding"}
 
@@ -104,6 +106,9 @@ SLOW = re.compile(r"slow (?P<s>\d+(?:\.\d+)?)s")
 # These let the call happen: the fault changes what it returns, or when.
 CARRIED = ("append", "replace", "slow")
 MAX_SLOW_S = 600.0
+# The replies RFC 9110 and RFC 6585 give a Retry-After header: on another status it means
+# nothing to a library.
+RETRY_AFTER = ("status 429", "status 503")
 MAX_CHANGE_TEXT = 64 * 1024  # bytes, for text and for find
 SCHEDULE = re.compile(r"always|(?:first|requests|call) (?P<n>[1-9]\d*)")
 MODEL_KEYS = {"host", "provider"}
@@ -380,6 +385,7 @@ class Fault:
     model: str | None = None  # a model fault can be narrowed to one model name
     text: str | None = None  # append and replace: the injected text
     find: str | None = None  # replace: the text it puts text in place of
+    retry_after: int | None = None  # status 429 and 503: the reply's Retry-After, in seconds
 
     @property
     def target(self) -> str:
@@ -636,6 +642,7 @@ def check_references(config: Config) -> list[str]:
         problems += [
             p for fault in test.faults if (p := carried_problem(test, fault, config.agent))
         ]
+        problems += [p for fault in test.faults if (p := long_wait(test, fault, config.agent))]
         for entry in [*test.mocks, *test.faults]:
             if labels.kind_of(entry.call) != "tool":
                 continue  # a model, web or MCP label cannot be compared with anything yet
@@ -775,6 +782,16 @@ def carried_problem(test: Test, fault: Fault, agent: Agent) -> str | None:
     return (
         f"{where}: {word} lets the call run, so {fault.call} must be mocked or listed under "
         "[agent] real; as written every call it names is refused"
+    )
+
+
+def long_wait(test: Test, fault: Fault, agent: Agent) -> str | None:
+    """A retry_after the run cannot outlast: the code would wait past its own time limit."""
+    if fault.retry_after is None or fault.retry_after < agent.run_timeout:
+        return None
+    return (
+        f"[[test]] {test.name!r}: fault on {fault.target}: retry_after {fault.retry_after} is "
+        f"not under run_timeout, {agent.run_timeout:g}"
     )
 
 
@@ -1531,7 +1548,27 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
         )
     rate = read_pass_rate(table, where)
     model = labels.model_name(table["model"], where) if "model" in table else None
-    return Fault(call, do, when, raises, method, path, expect, forbid, rate, model, injected, find)
+    retry = table.get("retry_after")
+    if "retry_after" in table and (problem := retry_after_problem(do, retry)):
+        raise ConfigError(f"{where} retry_after: {problem}; see {DOCS}")
+    wait = cast(int | None, retry)
+    return Fault(
+        call, do, when, raises, method, path, expect, forbid, rate, model, injected, find, wait
+    )
+
+
+def retry_after_problem(do: str, value: object) -> str | None:
+    """Why a retry_after is not one this version sends; None when it is.
+
+    The file's reader and the SDK's plan reader both ask this, so the two cannot drift."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return f"expected whole seconds from 0, such as 30, got {redact(repr(value))}"
+    if do not in RETRY_AFTER:
+        return (
+            f'works only with do = "status 429" or "status 503", the replies a server sends '
+            f"it on, not with {do!r}"
+        )
+    return None
 
 
 def carried_on_a_model(call: str, do: str, named: bool, where: str) -> None:

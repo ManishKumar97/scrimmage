@@ -74,10 +74,12 @@ def gated() -> Iterator[None]:
     state.install(None)
 
 
-def install(word: str, call: str = "http:inventory.acme.internal") -> tuple[Sink, Counting]:
-    """A run with this connection fault on every call, both libraries gated."""
+def install(
+    word: str, call: str = "http:inventory.acme.internal", **fault: Any
+) -> tuple[Sink, Counting]:
+    """A run with this fault on every call, both libraries gated."""
     sink, budget = Sink(), Counting()
-    plan = make_plan((Fault(call, word, "always"),), budget=1.0)
+    plan = make_plan((Fault(call, word, "always", **fault),), budget=1.0)
     run = state.RunState(plan, sink, [])
     state.install(run)
     ctx = http_gate.Context(run, budget, sink, never_stopped)

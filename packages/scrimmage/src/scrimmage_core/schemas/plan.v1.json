@@ -162,6 +162,22 @@
           },
           "find": {
             "type": "string"
+          },
+          "retry_after": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "dependentSchemas": {
+          "retry_after": {
+            "properties": {
+              "do": {
+                "enum": [
+                  "status 429",
+                  "status 503"
+                ]
+              }
+            }
           }
         }
       }

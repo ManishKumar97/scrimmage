@@ -14,6 +14,7 @@ from scrimmage_core.config import (
     Mock,
     ModelHost,
     Test,
+    retry_after_problem,
     word_problem,
 )
 from scrimmage_core.judge import Rules
@@ -23,7 +24,7 @@ PLAN_VERSION = 1
 # The keys a fault has in a plan. A runner of a later version may send one this SDK does not
 # know, and running the fault without it would run a fault nobody asked for.
 PLAN_FAULT_KEYS = frozenset(
-    {"call", "do", "when", "raises", "method", "path", "model", "text", "find"}
+    {"call", "do", "when", "raises", "method", "path", "model", "text", "find", "retry_after"}
 )
 
 
@@ -255,6 +256,7 @@ def fault_json(fault: Fault) -> dict[str, object]:
         ("model", fault.model),
         ("text", fault.text),
         ("find", fault.find),
+        ("retry_after", fault.retry_after),
     ):
         if value is not None:
             doc[key] = value
@@ -271,6 +273,9 @@ def fault_from(doc: dict[str, object]) -> Fault:
         raise ValueError(f"plan fault {do!r} is not a fault this scrimmage runs")
     if not SCHEDULE.fullmatch(when):
         raise ValueError(f"plan schedule {when!r} is not one this scrimmage runs")
+    retry = doc.get("retry_after")  # null is none, as for the optional keys
+    if retry is not None and (problem := retry_after_problem(do, retry)):
+        raise ValueError(f"plan fault retry_after: {problem}")
     return Fault(
         string(doc, "call"),
         do,
@@ -281,6 +286,7 @@ def fault_from(doc: dict[str, object]) -> Fault:
         model=optional(doc, "model"),
         text=optional(doc, "text"),
         find=optional(doc, "find"),
+        retry_after=cast(int | None, retry),
     )
 
 

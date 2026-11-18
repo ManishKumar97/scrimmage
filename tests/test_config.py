@@ -720,6 +720,59 @@ def test_slow_takes_seconds_under_run_timeout(tmp_path: Path) -> None:
     assert with_fault(tmp_path, carried_fault("slow 119s", 'forbid = ["a"]\n'))
 
 
+RETRY = '[[test.fault]]\ncall = "{call}"\ndo = "{do}"\nwhen = "first 1"\nretry_after = {wait}\n'
+
+
+def retry_fault(do: str, wait: object = 30, call: str = "model") -> str:
+    return RETRY.format(call=call, do=do, wait=wait)
+
+
+@pytest.mark.design("config.retry_after_statuses")
+def test_retry_after_works_only_on_status_429_and_503(tmp_path: Path) -> None:
+    """RFC 9110 and RFC 6585 give the header to a 503 and a 429; on a 400 it means nothing to
+    a library, so it is refused there instead of sent for nothing."""
+    for call in ("model", "model:openai/embeddings", "http:inventory.acme.internal"):
+        for do in config.RETRY_AFTER:
+            fault = with_fault(tmp_path, retry_fault(do, call=call)).tests[0].faults[-1]
+            assert (fault.do, fault.retry_after) == (do, 30)
+    for do in ("status 500", "status 400", "status 502", "timeout", "refused", "bad body"):
+        with pytest.raises(ConfigError, match=r'retry_after: works only with do = "status 429"'):
+            with_fault(tmp_path, retry_fault(do))
+    # A tool's reply has no headers, so the key is not one a tool fault has.
+    with pytest.raises(ConfigError, match="retry_after: unknown setting"):
+        with_fault(tmp_path, retry_fault("timeout", call="tool:get_order"))
+    with pytest.raises(ConfigError, match="retry_after: unknown setting"):
+        with_fault(tmp_path, retry_fault("timeout", call="mcp:docs/search"))
+    assert with_fault(tmp_path, model_fault_without_wait()).tests[0].faults[-1].retry_after is None
+
+
+def model_fault_without_wait() -> str:
+    return '[[test.fault]]\ncall = "model"\ndo = "status 429"\nwhen = "first 1"\n'
+
+
+@pytest.mark.design("config.retry_after_seconds")
+def test_retry_after_is_whole_seconds_under_run_timeout(tmp_path: Path) -> None:
+    """The header's delay form is whole seconds, and a wait the run cannot outlast is a
+    mistake, as for slow."""
+    for wait in (0, 1, 119):
+        fault = with_fault(tmp_path, retry_fault("status 429", wait)).tests[0].faults[-1]
+        assert fault.retry_after == wait
+    for bad in ("-1", "2.5", '"30"', '"30s"', "true", "1e3"):
+        with pytest.raises(ConfigError, match="retry_after: expected whole seconds from 0"):
+            with_fault(tmp_path, retry_fault("status 429", bad))
+    # The example's run_timeout is the default, 120.
+    for wait in (120, 130):
+        with pytest.raises(ConfigError, match=rf"retry_after {wait} is not under run_timeout, 120"):
+            with_fault(tmp_path, retry_fault("status 503", wait))
+    longer = (
+        (EXAMPLE / "scrimmage.toml")
+        .read_text()
+        .replace("[agent]\n", "[agent]\nrun_timeout = 200\n", 1)
+    )
+    loaded = load_text(tmp_path, longer + retry_fault("status 429", 130))
+    assert loaded.tests[0].faults[-1].retry_after == 130
+
+
 NOT_COVERED = '[[test.fault]]\ncall = "{call}"\ndo = "append"\ntext = "x"\n{extra}'
 
 

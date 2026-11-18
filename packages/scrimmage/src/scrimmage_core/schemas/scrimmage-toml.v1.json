@@ -767,6 +767,21 @@
     "model_fault": {
       "type": "object",
       "additionalProperties": false,
+      "dependentSchemas": {
+        "retry_after": {
+          "required": [
+            "do"
+          ],
+          "properties": {
+            "do": {
+              "enum": [
+                "status 429",
+                "status 503"
+              ]
+            }
+          }
+        }
+      },
       "properties": {
         "call": {
           "$ref": "#/$defs/model_label"
@@ -787,6 +802,9 @@
           "type": "string",
           "minLength": 1,
           "pattern": "^[^\\s*]([^*]*[^\\s*])?$"
+        },
+        "retry_after": {
+          "$ref": "#/$defs/retry_after"
         },
         "expect": {
           "$ref": "#/$defs/expect"
@@ -848,6 +866,21 @@
     "web_fault": {
       "type": "object",
       "additionalProperties": false,
+      "dependentSchemas": {
+        "retry_after": {
+          "required": [
+            "do"
+          ],
+          "properties": {
+            "do": {
+              "enum": [
+                "status 429",
+                "status 503"
+              ]
+            }
+          }
+        }
+      },
       "properties": {
         "call": {
           "$ref": "#/$defs/web_label"
@@ -864,6 +897,9 @@
         },
         "path": {
           "$ref": "#/$defs/path"
+        },
+        "retry_after": {
+          "$ref": "#/$defs/retry_after"
         },
         "expect": {
           "$ref": "#/$defs/expect"
@@ -954,6 +990,11 @@
           }
         }
       ]
+    },
+    "retry_after": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Whole seconds for the reply's Retry-After header, under run_timeout. Only with do = \"status 429\" or \"status 503\"."
     },
     "slow": {
       "type": "string",

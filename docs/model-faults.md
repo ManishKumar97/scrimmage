@@ -61,6 +61,36 @@ Both make the real call, so it is reserved and billed as in the baseline row.
 `append` does not work on a model call: append to a tool result the model reads instead, see [Changing a result](changing-results.md).
 Neither works on a call that only reads, such as `model:openai/moderations`, whose reply is not text.
 
+## A rate limit that says how long to wait
+
+A rate limiter's 429 often says how long to wait, in a `Retry-After` header.
+Add `retry_after` to send one:
+
+```toml
+[[test.fault]]
+call        = "model"
+do          = "status 429"
+retry_after = 30
+when        = "first 1"
+```
+
+The 429 carries `retry-after: 30`, and nothing is sent to the provider.
+`retry_after` works with `status 429` and `status 503`, in whole seconds from 0.
+It must be under `run_timeout`, or the test stops with a mistake: `retry_after 130 is not under run_timeout, 120`.
+
+The openai library reads the header before it retries:
+
+| `retry_after` | What the openai library does |
+|---|---|
+| 1 to 120 | waits that many seconds, then retries |
+| over 120 | does not retry: your code gets `RateLimitError` after one attempt |
+| 0 | waits its own short backoff, as with no header |
+
+The wait comes before each retry.
+With `when = "always"` and the library's default of two retries, it waits twice: `retry_after = 60` waits 120 seconds, which can reach `run_timeout`.
+The wait is real, so it counts toward `run_timeout`.
+Scrimmage sends the header in seconds only: not as a date, and not as openai's own `retry-after-ms`.
+
 ## A guard model
 
 A guard model, such as Llama Guard, is a model call like any other; name it by its model name.

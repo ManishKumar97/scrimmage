@@ -668,6 +668,8 @@ def fault(
     else:
         body = reason_phrase(status).encode()
         headers = {"content-type": "text/plain; charset=utf-8"}
+    if plan_fault.retry_after is not None:  # whole seconds, the header's delay form
+        headers["retry-after"] = str(plan_fault.retry_after)
     return reply(ctx, module, client, step, request, extra, (status, headers, body))
 
 

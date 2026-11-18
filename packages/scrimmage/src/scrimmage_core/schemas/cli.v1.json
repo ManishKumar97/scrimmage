@@ -331,7 +331,8 @@
                 "path",
                 "raises",
                 "text",
-                "find"
+                "find",
+                "retry_after"
               ],
               "properties": {
                 "call": {
@@ -408,6 +409,13 @@
                     "string",
                     "null"
                   ]
+                },
+                "retry_after": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
                 }
               }
             }

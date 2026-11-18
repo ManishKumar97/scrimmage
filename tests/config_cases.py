@@ -88,11 +88,12 @@ forbid    = []
 pass_rate = 0.5
 
 [[test.fault]]
-call   = "http:inventory.acme.internal"
-do     = "status 503"
-method = "GET"
-path   = "/stock"
-when   = "first 2"
+call        = "http:inventory.acme.internal"
+do          = "status 503"
+method      = "GET"
+path        = "/stock"
+when        = "first 2"
+retry_after = 0
 
 [[test.fault]]
 call   = "http:inventory.acme.internal"
@@ -115,10 +116,11 @@ do   = "error"
 when = "first 1"
 
 [[test.fault]]
-call  = "model"
-do    = "status 429"
-when  = "requests 2"
-model = "gpt-4o-mini"
+call        = "model"
+do          = "status 429"
+when        = "requests 2"
+model       = "gpt-4o-mini"
+retry_after = 29
 
 [[test.fault]]
 call = "model:openai"
@@ -447,6 +449,41 @@ BAD = [
         "mcp_fault_bad_body",
         fault('call = "mcp:docs/search"\ndo = "bad body"\nwhen = "first 1"\n'),
         True,
+    ),
+    Bad(
+        "retry_after_on_status_500",
+        fault('call = "model"\ndo = "status 500"\nwhen = "first 1"\nretry_after = 2\n'),
+        True,
+    ),
+    Bad(
+        "retry_after_on_timeout",
+        fault('call = "http:a.acme"\ndo = "timeout"\nwhen = "first 1"\nretry_after = 2\n'),
+        True,
+    ),
+    Bad(
+        "retry_after_on_a_tool",
+        fault('call = "tool:t"\ndo = "timeout"\nwhen = "first 1"\nretry_after = 2\n'),
+        True,
+    ),
+    Bad(
+        "retry_after_negative",
+        fault('call = "model"\ndo = "status 429"\nwhen = "first 1"\nretry_after = -1\n'),
+        True,
+    ),
+    Bad(
+        "retry_after_not_whole",
+        fault('call = "model"\ndo = "status 429"\nwhen = "first 1"\nretry_after = 2.5\n'),
+        True,
+    ),
+    Bad(
+        "retry_after_text",
+        fault('call = "model"\ndo = "status 429"\nwhen = "first 1"\nretry_after = "30s"\n'),
+        True,
+    ),
+    Bad(
+        "retry_after_not_under_run_timeout",
+        fault('call = "model"\ndo = "status 429"\nwhen = "first 1"\nretry_after = 120\n'),
+        False,
     ),
     Bad(
         "raises_without_error",

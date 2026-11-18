@@ -517,6 +517,29 @@ def test_an_injected_status_fails_like_a_real_one_at_a_retry_loop(lib: Any, web:
     assert len(web.hits) == 1
 
 
+@pytest.mark.design("web.retry_after")
+def test_retry_after_on_a_web_503_reaches_the_code(lib: Any, web: Web) -> None:
+    """A team's retry loop reads the header and waits what it says; httpx itself does not."""
+    wait = Fault("http:127.0.0.1", "status 503", "first 1", retry_after=7)
+    gate(lib, faults=(wait,))
+    told: list[str | None] = []
+    with lib.Client() as client:
+        reply = client.get(web.url("/fine"))
+        while reply.status_code == 503:
+            told.append(reply.headers.get("retry-after"))
+            reply = client.get(web.url("/fine"))  # a real loop would sleep that long first
+    assert told == ["7"] and reply.status_code == 200
+    assert len(web.hits) == 1  # the faulted attempt was not sent
+    # 0 is a value, sent as "0": retry at once.
+    gate(lib, faults=(Fault("http:127.0.0.1", "status 503", "always", retry_after=0),))
+    with lib.Client() as client:
+        assert client.get(web.url("/fine")).headers.get("retry-after") == "0"
+    # Without retry_after the reply has no such header, as a plain 503 does not.
+    gate(lib, faults=(on_local("status 503"),))
+    with lib.Client() as client:
+        assert "retry-after" not in client.get(web.url("/fine")).headers
+
+
 @pytest.mark.design("web.mock_reply_shape")
 def test_a_json_mock_is_a_real_reply_and_nothing_is_sent(lib: Any) -> None:
     sink = gate(lib, mocks=(web_mock(json={"count": 12}),))
