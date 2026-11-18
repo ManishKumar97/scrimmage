@@ -10,6 +10,7 @@ import threading
 import types
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 import pydantic
@@ -248,6 +249,31 @@ def test_an_enum_mock_with_no_such_member_is_a_mistake_naming_the_members(
     )
     assert str(caught.value) == message
     assert lines.lines[0]["mistake"] == message
+
+
+def find_path(name: str) -> Path | None:
+    return None
+
+
+@pytest.mark.design("mock.typed_from_annotation")
+def test_a_value_that_is_no_table_on_an_optional_class_is_kept_as_written(lines: Lines) -> None:
+    install(lines, [Mock("tool:find_path", "/tmp", None)])
+    value = tool_gate.gate(find_path, "find_path")("a")
+    assert type(value) is str and value == "/tmp"
+
+
+Large = enum.Enum("Large", {f"M{i}": f"v{i}" for i in range(5000)})
+
+
+@pytest.mark.design("mock.misfit_is_a_mistake")
+def test_a_mistake_names_at_most_ten_members_of_a_large_enum(lines: Lines) -> None:
+    install(lines, [Mock("tool:get_text", "sent", f"test_tool_gate:{Large.__name__}")])
+    with pytest.raises(ScrimmageMockError) as caught:
+        tool_gate.gate(get_text, "get_text")("1")
+    first = ", ".join(f"v{i}" for i in range(10))
+    assert str(caught.value) == (
+        f"the mock does not fit test_tool_gate:Large: 'sent' is not one of {first}, and 4990 more"
+    )
 
 
 def test_a_change_the_agent_makes_to_a_mock_value_is_not_seen_by_the_next_call(

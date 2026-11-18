@@ -3,9 +3,9 @@
 A value is turned into the tool's own type when it has one: the mock's type, or the
 tool's return annotation when type is left out. A pydantic model is built with
 model_validate, an Enum from its value, any other class with Type(**returns). A union of
-one class and None builds that class, as TOML cannot write None. A value that does not fit
-is a mistake in the test. Each call gets its own copy, so a change the agent makes to the
-value is not seen by the next call.
+one class and None builds that class from a table, as TOML cannot write None, and keeps any
+other value as written. A value that does not fit is a mistake in the test. Each call gets
+its own copy, so a change the agent makes to the value is not seen by the next call.
 """
 
 import enum
@@ -19,6 +19,8 @@ from scrimmage_core.errors import ScrimmageMockError, ScrimmageRefused
 
 # Any is a class on 3.11 and later, and neither it nor object names a shape to build.
 PLAIN = (str, int, float, bool, list, dict, tuple, type(None), object, typing.Any)
+# The members a mistake names, so a large Enum gives a short line.
+SHOWN_MEMBERS = 10
 
 
 def allowed(path: str, prefixes: list[str]) -> bool:
@@ -50,11 +52,18 @@ def return_type(tool: Callable[..., object]) -> object:
 def fresh(value: object) -> object:
     """A copy of a TOML value: only its lists and tables can change, so only they are copied.
     It is about a third of the cost of copy.deepcopy."""
+    # This relies on the value holding only TOML and JSON types: dicts, lists and scalars.
+    # Any other mutable object in it would be shared between calls.
     if type(value) is dict:
         return {key: fresh(item) for key, item in cast(dict[str, object], value).items()}
     if type(value) is list:
         return [fresh(item) for item in cast(list[object], value)]
     return value
+
+
+def table(value: object) -> bool:
+    """Whether the value is a TOML table. A plain bool, so the value's type is not narrowed."""
+    return isinstance(value, dict)
 
 
 def target_of(declared: object) -> object:
@@ -74,8 +83,8 @@ def build(
     declared = import_object(kind, prefixes) if kind else return_type(tool)
     target = target_of(declared)
     returns = fresh(returns)
-    if returns is None and target is not declared:  # None, from X | None
-        return returns
+    if target is not declared and not table(returns):
+        return returns  # X | None builds X from a table only, so a Path's text stays text
     if not isinstance(target, type) or target in PLAIN:
         return returns
     name = kind or f"{target.__module__}:{target.__qualname__}"
@@ -99,7 +108,10 @@ def member(kind: type[enum.Enum], value: object, name: str) -> enum.Enum:
     try:
         return kind(value)
     except (TypeError, ValueError):
-        values = ", ".join(str(m.value) for m in kind)
+        values = [str(m.value) for m in kind]
+        shown = ", ".join(values[:SHOWN_MEMBERS])
+        if len(values) > SHOWN_MEMBERS:
+            shown += f", and {len(values) - SHOWN_MEMBERS} more"
         raise ScrimmageMockError(
-            f"the mock does not fit {name}: {value!r} is not one of {values}"
+            f"the mock does not fit {name}: {value!r} is not one of {shown}"
         ) from None
