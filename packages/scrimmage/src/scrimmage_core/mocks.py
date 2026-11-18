@@ -2,13 +2,18 @@
 
 A value is turned into the tool's own type when it has one: the mock's type, or the
 tool's return annotation when type is left out. A pydantic model is built with
-model_validate, any other class with Type(**returns). A value that does not fit is a
-mistake in the test.
+model_validate, an Enum from its value, any other class with Type(**returns). A union of
+one class and None builds that class, as TOML cannot write None. A value that does not fit
+is a mistake in the test. Each call gets its own copy, so a change the agent makes to the
+value is not seen by the next call.
 """
 
+import enum
 import importlib
+import types
 import typing
 from collections.abc import Callable
+from typing import cast
 
 from scrimmage_core.errors import ScrimmageMockError, ScrimmageRefused
 
@@ -42,13 +47,40 @@ def return_type(tool: Callable[..., object]) -> object:
     return None if isinstance(declared, changes.Unresolved) else declared
 
 
+def fresh(value: object) -> object:
+    """A copy of a TOML value: only its lists and tables can change, so only they are copied.
+    It is about a third of the cost of copy.deepcopy."""
+    if type(value) is dict:
+        return {key: fresh(item) for key, item in cast(dict[str, object], value).items()}
+    if type(value) is list:
+        return [fresh(item) for item in cast(list[object], value)]
+    return value
+
+
+def target_of(declared: object) -> object:
+    """The class to build for a declared type: a union of one class and None is that class.
+    Any other union keeps the value as written."""
+    from scrimmage_core import changes  # changes imports config, which imports this module
+
+    if typing.get_origin(declared) not in (typing.Union, types.UnionType):
+        return declared
+    kinds = [arg for arg in changes.members(declared) if arg is not types.NoneType]
+    return kinds[0] if len(kinds) == 1 else None
+
+
 def build(
     returns: object, kind: str | None, tool: Callable[..., object], prefixes: list[str]
 ) -> object:
-    target = import_object(kind, prefixes) if kind else return_type(tool)
+    declared = import_object(kind, prefixes) if kind else return_type(tool)
+    target = target_of(declared)
+    returns = fresh(returns)
+    if returns is None and target is not declared:  # None, from X | None
+        return returns
     if not isinstance(target, type) or target in PLAIN:
         return returns
     name = kind or f"{target.__module__}:{target.__qualname__}"
+    if isinstance(target, enum.EnumMeta):  # an Enum class
+        return member(cast("type[enum.Enum]", target), returns, name)
     try:
         validate = getattr(target, "model_validate", None)
         if callable(validate):
@@ -60,3 +92,14 @@ def build(
     except (TypeError, ValueError) as exc:  # pydantic's ValidationError is a ValueError
         raise ScrimmageMockError(f"the mock does not fit {name}: {exc}") from exc
     raise ScrimmageMockError(f"the mock does not fit {name}: expected a table of its fields")
+
+
+def member(kind: type[enum.Enum], value: object, name: str) -> enum.Enum:
+    """The member with this value, as the real tool makes it: Status("shipped")."""
+    try:
+        return kind(value)
+    except (TypeError, ValueError):
+        values = ", ".join(str(m.value) for m in kind)
+        raise ScrimmageMockError(
+            f"the mock does not fit {name}: {value!r} is not one of {values}"
+        ) from None

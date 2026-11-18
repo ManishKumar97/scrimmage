@@ -1,6 +1,7 @@
 """The tools-list gate and run state, in one process, with lines kept in a list."""
 
 import asyncio
+import enum
 import functools
 import inspect
 import json
@@ -9,8 +10,9 @@ import threading
 import types
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Optional, cast
 
+import pydantic
 import pytest
 
 import wrapping
@@ -166,6 +168,99 @@ def test_a_type_outside_the_allowed_prefixes_is_refused_before_import(
 def test_a_plain_annotation_returns_the_value_as_written(lines: Lines) -> None:
     install(lines, [Mock("tool:get_text", "shipped, Oct 30", None)])
     assert tool_gate.gate(get_text, "get_text")("1") == "shipped, Oct 30"
+
+
+class Item(pydantic.BaseModel):
+    sku: str
+    count: int
+
+
+class Status(enum.Enum):
+    SHIPPED = "shipped"
+    PENDING = "pending"
+
+
+def find_stock(sku: str) -> Stock | None:
+    return None
+
+
+def find_stock_old(sku: str) -> Optional[Stock]:  # noqa: UP045 - the spelling under test
+    return None
+
+
+def find_item(sku: str) -> Item | None:
+    return None
+
+
+def find_item_old(sku: str) -> Optional[Item]:  # noqa: UP045 - the spelling under test
+    return None
+
+
+def find_either(sku: str) -> Stock | Item | None:
+    return None
+
+
+def order_status(order_id: str) -> Status:
+    return Status.PENDING
+
+
+def list_items(order_id: str) -> list[dict[str, object]]:
+    return []
+
+
+@pytest.mark.design("mock.typed_from_annotation")
+@pytest.mark.parametrize(
+    ("tool", "built"),
+    [
+        (find_stock, Stock("a", 1)),
+        (find_stock_old, Stock("a", 1)),
+        (find_item, Item(sku="a", count=1)),
+        (find_item_old, Item(sku="a", count=1)),
+        (find_either, {"sku": "a", "count": 1}),  # two classes: the table is kept
+    ],
+    ids=["dataclass-or-none", "optional-dataclass", "model-or-none", "optional-model", "two"],
+)
+def test_a_table_mock_on_an_optional_class_builds_the_class(
+    lines: Lines, tool: Callable[[str], object], built: object
+) -> None:
+    label = tool.__name__
+    install(lines, [Mock(f"tool:{label}", {"sku": "a", "count": 1}, None)])
+    value = tool_gate.gate(tool, label)("a")
+    assert type(value) is type(built) and value == built
+
+
+@pytest.mark.design("mock.typed_from_annotation")
+def test_an_enum_mock_is_built_by_value(lines: Lines) -> None:
+    install(lines, [Mock("tool:order_status", "shipped", None)])
+    assert tool_gate.gate(order_status, "order_status")("1") is Status.SHIPPED
+
+
+@pytest.mark.design("mock.misfit_is_a_mistake")
+@pytest.mark.parametrize("returns", ["sent", "SHIPPED"])  # a name is not a value
+def test_an_enum_mock_with_no_such_member_is_a_mistake_naming_the_members(
+    lines: Lines, returns: str
+) -> None:
+    install(lines, [Mock("tool:order_status", returns, None)])
+    with pytest.raises(ScrimmageMockError) as caught:
+        tool_gate.gate(order_status, "order_status")("1")
+    message = (
+        f"the mock does not fit test_tool_gate:Status: {returns!r} is not one of shipped, pending"
+    )
+    assert str(caught.value) == message
+    assert lines.lines[0]["mistake"] == message
+
+
+def test_a_change_the_agent_makes_to_a_mock_value_is_not_seen_by_the_next_call(
+    lines: Lines,
+) -> None:
+    returns = [{"sku": "a", "tags": ["new"]}]
+    install(lines, [Mock("tool:list_items", returns, None)])
+    gated = tool_gate.gate(list_items, "list_items")
+    first = gated("1")
+    first.append({"sku": "free gift"})
+    cast(list[str], first[0]["tags"]).append("seen")
+    assert gated("1") == [{"sku": "a", "tags": ["new"]}]
+    assert returns == [{"sku": "a", "tags": ["new"]}]  # the plan's own value is unchanged
 
 
 @pytest.mark.design("fault.timeout_tool")
