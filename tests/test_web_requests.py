@@ -530,6 +530,10 @@ def test_retry_after_on_a_web_503_reaches_the_code(lib: Any, web: Web) -> None:
             reply = client.get(web.url("/fine"))  # a real loop would sleep that long first
     assert told == ["7"] and reply.status_code == 200
     assert len(web.hits) == 1  # the faulted attempt was not sent
+    # 0 is a value, sent as "0": retry at once.
+    gate(lib, faults=(Fault("http:127.0.0.1", "status 503", "always", retry_after=0),))
+    with lib.Client() as client:
+        assert client.get(web.url("/fine")).headers.get("retry-after") == "0"
     # Without retry_after the reply has no such header, as a plain 503 does not.
     gate(lib, faults=(on_local("status 503"),))
     with lib.Client() as client:

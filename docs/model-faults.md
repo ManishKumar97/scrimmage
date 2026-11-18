@@ -86,6 +86,8 @@ The openai library reads the header before it retries:
 | over 120 | does not retry: your code gets `RateLimitError` after one attempt |
 | 0 | waits its own short backoff, as with no header |
 
+The wait comes before each retry.
+With `when = "always"` and the library's default of two retries, it waits twice: `retry_after = 60` waits 120 seconds, which can reach `run_timeout`.
 The wait is real, so it counts toward `run_timeout`.
 Scrimmage sends the header in seconds only: not as a date, and not as openai's own `retry-after-ms`.
 

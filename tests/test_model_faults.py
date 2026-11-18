@@ -149,6 +149,19 @@ def test_retry_after_sends_the_header_with_the_429(gated: None) -> None:
     assert "retry-after" not in hi(openai.OpenAI(api_key="test", max_retries=0)).response.headers
 
 
+def sent_only_the_real_calls(result: Result, fake: FakeOpenAI) -> None:
+    """The fake provider got one request per real model line, in every row, so a faulted
+    attempt that reached it would be one too many."""
+    real = [
+        str(x["call"])
+        for lines in result.records()
+        for x in lines
+        if x.get("kind") == "model" and x.get("action") == "real"
+    ]
+    names = {"/v1/embeddings": "model:openai/embeddings", "/v1/chat/completions": "model:openai"}
+    assert sorted(names[p] for p in fake.paths) == sorted(real), (fake.paths, real)
+
+
 def started(line: dict[str, object]) -> datetime.datetime:
     return datetime.datetime.fromisoformat(str(line["start"]).replace("Z", "+00:00"))
 
@@ -157,17 +170,19 @@ def started(line: dict[str, object]) -> datetime.datetime:
 def test_the_openai_library_waits_retry_after_before_its_retry(
     project: Project, fake_openai: Fake
 ) -> None:
-    """The one real wait in this file, 1 s: the library's own first backoff is at most
-    0.5 s, so a gap of 1 s or more is the header's."""
-    wait = model_fault("status 429", "first 1") + "retry_after = 1\n"
+    """The one real wait in this file, 2 s: the library's own first backoff is at most
+    0.5 s, so a gap of 2 s or more is the header's."""
+    wait = model_fault("status 429", "first 1") + "retry_after = 2\n"
     use(project, "acme.rag:answer", wait)
-    result = project.test(fake_openai(ACME, embedding="embedding"))
+    fake = fake_openai(ACME, embedding="embedding")
+    result = project.test(fake)
     assert result.finished, result.out + result.err
+    sent_only_the_real_calls(result, fake)
     lines = row(result, "fault 1")
     chats = [x for x in lines if x.get("call") == "model:openai"]
     assert [(x["action"], x["retry"]) for x in chats[:2]] == [("fault", 0), ("real", 1)]
     gap = (started(chats[1]) - started(chats[0])).total_seconds()
-    assert 1.0 <= gap < 30, gap  # the ceiling is loose: a loaded machine is slow, not wrong
+    assert 2.0 <= gap < 30, gap  # the ceiling is loose: a loaded machine is slow, not wrong
     assert "shipped" in str(answer(lines))
 
 
@@ -180,8 +195,10 @@ def test_a_retry_after_over_120_seconds_stops_the_openai_library_retrying(
     wait = model_fault("status 429", "first 1") + "retry_after = 121\n"
     use(project, "acme.rag:answer", wait, extra="\nrun_timeout = 200")
     begun = time.monotonic()
-    result = project.test(fake_openai(ACME, embedding="embedding"))
+    fake = fake_openai(ACME, embedding="embedding")
+    result = project.test(fake)
     assert result.finished, result.out + result.err
+    sent_only_the_real_calls(result, fake)
     lines = row(result, "fault 1")
     assert calls(lines) == [("model:openai/embeddings", "real", 0), ("model:openai", "fault", 0)]
     assert answer(lines) == "error: RateLimitError"
