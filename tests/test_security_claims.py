@@ -299,7 +299,11 @@ def counting_server() -> Iterator[str]:
 
 # One label of each kind a fault can name. The model host is the same server by another name.
 LABELS = {"model": "model", "http": "http:127.0.0.1", "tool": "tool:lookup", "mcp": "mcp:docs/x"}
-CHAT = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
+# It offers the one tool the run lists, so a fault that needs a tool offered has one.
+LOOKUP = {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}
+CHAT = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}], "tools": [LOOKUP]}
+# A model fault names the model, as the faults in a model's reply must.
+MODEL = {"model": {"model": "gpt-4o-mini"}}
 
 
 def spelled(word: str) -> str:
@@ -308,6 +312,7 @@ def spelled(word: str) -> str:
 
 def loads(word: str, label: str) -> bool:
     table: dict[str, object] = {"call": label, "do": spelled(word), "when": "first 1"}
+    table.update(MODEL.get(label, {}))
     try:
         config.read_fault(table, "[[test.fault]] 1")
     except ConfigError:
@@ -334,7 +339,8 @@ def gated_run() -> Iterator[Callable[..., tuple[state.RunState, Sink]]]:
     def make(*faults: Fault, real: tuple[str, ...] = ()) -> tuple[state.RunState, Sink]:
         sink = Sink()
         hosts = (ModelHost("localhost", "openai"),)
-        plan = Plan("run-1", "t", "row", (), faults, (), real, 60.0, model_hosts=hosts)
+        tools = ("security_claims:lookup",)
+        plan = Plan("run-1", "t", "row", (), faults, tools, real, 60.0, model_hosts=hosts)
         run = state.RunState(plan, sink, [])
         http_gate.patch(httpx2, http_gate.Context(run, Budget(), sink, never_stopped))
         mcp_gate.patch(mcp_session, mcp_gate.Gate(run, sink, never_stopped))
@@ -390,7 +396,8 @@ def test_no_fault_but_the_carried_ones_sends_a_request(
 ) -> None:
     """Every fault word that is not carried, on every kind it loads on: the gate builds the
     failure and nothing reaches the server."""
-    run, sink = gated_run(Fault(LABELS[kind], spelled(word), "first 1"))
+    named = MODEL.get(LABELS[kind], {}).get("model")
+    run, sink = gated_run(Fault(LABELS[kind], spelled(word), "first 1", model=named))
     state.install(run)
     with contextlib.suppress(Exception):  # what the agent gets is each fault's own test
         call(kind, counting_server, run)
@@ -404,6 +411,8 @@ def test_the_words_and_kinds_checked_come_from_what_loads() -> None:
     assert ("refused", "http") in NOT_CARRIED and ("dns", "model") in NOT_CARRIED
     assert ("timeout", "mcp") in NOT_CARRIED and ("error", "tool") in NOT_CARRIED
     assert ("refused", "tool") not in NOT_CARRIED and ("append", "http") not in NOT_CARRIED
+    # The two faults that make a model's whole reply send nothing, so they are checked here.
+    assert ("refuse", "model") in NOT_CARRIED and ("unknown tool", "model") in NOT_CARRIED
 
 
 @pytest.mark.design("security.no_fault_sends")

@@ -37,7 +37,7 @@ from scrimmage_core import provider_openai as openai_table
 from scrimmage_core.budget import ASK_MAX_S, Held, Shortfall
 from scrimmage_core.changes import Changed, Unchangeable
 from scrimmage_core.client import ControlError
-from scrimmage_core.config import CONNECTION, Fault, slow_seconds
+from scrimmage_core.config import CONNECTION, REPLY_FAULTS, Fault, slow_seconds
 from scrimmage_core.decide import (
     MISTAKE_REFUSAL,
     READ_METHODS,
@@ -480,6 +480,8 @@ def prepare(
                 "JSON",
             )
         check_tools(ctx, run, step, fields, str(request.url.path))
+    if call.kind == "model" and step.decision.action == "fault":
+        reply_checks(run, step, fields or {}, str(request.url.path))
     return ctx, step, extra
 
 
@@ -636,6 +638,70 @@ def check_tools(
         )
 
 
+# Built in this version: the two that make the whole reply, on Chat Completions.
+BUILT_REPLIES = ("refuse", "unknown tool")
+
+
+def reply_checks(run: RunState, step: Step, fields: dict[str, object], path: str) -> None:
+    """Before anything is sent: a reply fault this request cannot take is a mistake in the
+    test, and unknown tool on a request that offers no tool is left as it is, since a model
+    calls a tool only when it is offered one. The call then goes on as in the baseline."""
+    word = run.plan.faults[step.decision.fault or 0].do
+    if word not in REPLY_FAULTS:
+        return
+    if step.extra.get("stream") is True:
+        not_carried_out(
+            run,
+            step,
+            f"is a streamed request, and {word} changes a reply that is not streamed; turn "
+            "streaming off for this model, or use timeout or a status on this one",
+        )
+    if openai_table.is_responses(path):
+        if word == "unknown tool":
+            not_carried_out(
+                run,
+                step,
+                "is a Responses call, and a call to a tool no one offered is seen on Chat "
+                "Completions only; fault a chat call",
+            )
+        not_carried_out(
+            run, step, f"is a Responses call, and {word} works on Chat Completions only for now"
+        )
+    if word not in BUILT_REPLIES:
+        not_carried_out(
+            run,
+            step,
+            f"is a chat call, and {word} is not built yet: this version builds refuse and "
+            "unknown tool; fault this call another way",
+        )
+    if word == "unknown tool" and not openai_table.offered(path, fields).agent:
+        run.unchanged(step, "the request offers no tools, so a model would call none")
+        step.decision = Decision("real")
+
+
+def built_reply(
+    ctx: Bound,
+    module: ModuleType,
+    client: Any,
+    step: Step,
+    request: Any,
+    extra: dict[str, object],
+    word: str,
+) -> Any:
+    """refuse or unknown tool: the whole 200 reply, made from a real one. Nothing is sent, so
+    the counts are an estimate and the line costs nothing."""
+    body = body_of(request) or b""
+    fields = openai_table.request_fields(body) or {}
+    tokens = len(body) // CHAR_PER_TOKEN
+    if word == "refuse":
+        built = openai_table.refusal_reply(fields, tokens)
+    else:  # reply_checks let it through only with a tool offered
+        tool = openai_table.offered(str(request.url.path), fields).agent[0]
+        built = openai_table.unknown_tool_reply(fields, tokens, tool)
+    headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
+    return reply(ctx, module, client, step, request, extra, (200, headers, built))
+
+
 def fault(
     ctx: Bound,
     module: ModuleType,
@@ -650,9 +716,9 @@ def fault(
     run = ctx.run
     plan_fault = run.plan.faults[step.decision.fault or 0]
     # A carried fault lets the call happen, so it never comes here to be parsed as a status.
-    assert plan_fault.do in ("timeout", "empty", "bad body", "context too long", *CONNECTION) or (
-        plan_fault.do.startswith("status ")
-    ), plan_fault.do
+    assert plan_fault.do in (
+        "timeout", "empty", "bad body", "context too long", *CONNECTION, *BUILT_REPLIES
+    ) or plan_fault.do.startswith("status "), plan_fault.do  # fmt: skip
     if plan_fault.do == "timeout":
         run.fail(step, module.ReadTimeout("The read operation timed out", request=request))
     if plan_fault.do in CONNECTION:
@@ -661,6 +727,8 @@ def fault(
         return reply(ctx, module, client, step, request, extra, (200, {}, b""))
     if plan_fault.do == "bad body":
         return bad_body(ctx, module, client, step, request, extra)
+    if plan_fault.do in BUILT_REPLIES:
+        return built_reply(ctx, module, client, step, request, extra, plan_fault.do)
     if plan_fault.do == "context too long":
         if openai_table.is_responses(str(request.url.path)):
             not_carried_out(

@@ -8,7 +8,7 @@ import pytest
 from scrimmage_core.config import FAULTS
 
 CATALOG = Path(__file__).parents[1] / "docs" / "fault-catalog.toml"
-ORIGINS = {"public incident", "trace"}
+ORIGINS = {"public incident", "trace", "provider docs"}
 
 
 def problems(catalog: dict[str, object]) -> list[str]:

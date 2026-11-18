@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -939,3 +940,54 @@ def test_connection_faults_work_on_model_and_web_only(tmp_path: Path, word: str)
     # What the message names loads, as a built-in a tool raises.
     named = model_fault("error", "first 1", "tool:get_order") + f'raises = "{raises}"\n'
     assert example(tmp_path, FAULT, named).tests[0].faults[0].raises == raises
+
+
+REPLY_WORDS = ("garble", "truncate", "unknown tool", "bad tool args", "refuse")
+
+
+def reply_fault(do: str, **more: object) -> dict[str, object]:
+    return {"call": "model", "do": do, "when": "first 1", "model": "gpt-4o-mini", **more}
+
+
+@pytest.mark.design("config.reply_fault_model")
+@pytest.mark.parametrize("word", REPLY_WORDS)
+def test_a_reply_fault_needs_a_model_name(word: str) -> None:
+    table = reply_fault(word)
+    loaded = config.read_fault(table, "x")
+    assert loaded == config.Fault("model", word, "first 1", model="gpt-4o-mini")
+    del table["model"]
+    with pytest.raises(ConfigError, match=f"model: {word} on a model call needs the model's name"):
+        config.read_fault(table, "x")
+
+
+@pytest.mark.design("config.reply_fault_chat_only")
+@pytest.mark.parametrize("word", REPLY_WORDS)
+def test_a_reply_fault_works_on_a_chat_model_call_only(word: str) -> None:
+    for call in ("model", "model:openai"):
+        assert config.read_fault(reply_fault(word, call=call), "x").call == call
+    for call in (
+        "model:*/embeddings",
+        "model:openai/moderations",
+        "tool:get_order",
+        "mcp:docs/search",
+        "http:inventory.acme.internal",
+    ):
+        with pytest.raises(ConfigError, match=f"'{word}' works only on a chat model call"):
+            config.read_fault(reply_fault(word, call=call), "x")
+
+
+@pytest.mark.design("config.reply_fault_keys")
+@pytest.mark.parametrize("word", REPLY_WORDS)
+def test_a_reply_fault_takes_no_text_find_or_retry_after(word: str) -> None:
+    for key, value, said in (
+        ("text", "x", "text: works only with do = 'append' or 'replace'"),
+        ("find", "x", "find: works only with do = 'append' or 'replace'"),
+        ("retry_after", 3, 'retry_after: works only with do = "status 429" or "status 503"'),
+        ("raises", "OSError", "raises: works only with do = 'error'"),
+    ):
+        with pytest.raises(ConfigError, match=re.escape(said)):
+            config.read_fault(reply_fault(word, **{key: value}), "x")
+    # Under always a reply fault needs its own rule, as any fault that hides the data does.
+    with pytest.raises(ConfigError, match="Give the fault its own expect or forbid"):
+        config.read_fault(reply_fault(word, when="always"), "x")
+    assert config.read_fault(reply_fault(word, when="always", forbid=["x"]), "x").forbid == ("x",)
