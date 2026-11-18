@@ -13,13 +13,14 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
+import wrapping
 from conftest import ACME, EXAMPLE_FAULT, Project
 from fakes.openai_server import FakeOpenAI
 from report_cases import AGENT, TEST, load
 from report_cases import run as a_run
+from scrimmage_core import changes, state, tool_gate
 from scrimmage_core import decide as engine
 from scrimmage_core import plan as planner
-from scrimmage_core import state, tool_gate
 from scrimmage_core.config import Fault, Mock
 from scrimmage_core.errors import (
     ScrimmageMockError,
@@ -1441,3 +1442,50 @@ def test_a_mock_on_a_return_type_that_cannot_be_resolved_is_kept_as_written(
     assert tool_gate.gate(tool(), "f")("SKU-42") == {"sku": "SKU-42", "count": 12}
     install(Lines(), [Mock("tool:f", {"sku": "SKU-42", "count": 12}, "test_tool_gate:Stock")])
     assert tool_gate.gate(tool(), "f")("SKU-42") == Stock("SKU-42", 12)
+
+
+def decorated(decorator: Callable[..., Any], returns: str) -> Any:
+    """A tool in a module under the future import, wrapped by a decorator from another
+    module, whose globals name neither Stock nor Rows."""
+    space: dict[str, Any] = {"Stock": Stock, "Rows": list[str], "decorator": decorator}
+    source = f"@decorator\ndef f(sku: str) -> {returns}:\n    raise AssertionError\n"
+    exec(FUTURE + source, space)
+    return space["f"]
+
+
+DECORATORS = [
+    pytest.param(wrapping.logged, id="wraps"),
+    pytest.param(wrapping.twice_logged, id="chain"),
+    pytest.param(wrapping.Logged, id="update_wrapper_object"),
+]
+
+
+@pytest.mark.design("mock.typed_from_annotation")
+@pytest.mark.parametrize("decorator", DECORATORS)
+def test_a_mock_on_a_decorated_tool_is_built_into_its_return_type(
+    lines: Lines, decorator: Callable[..., Any]
+) -> None:
+    install(lines, [Mock("tool:f", {"sku": "A", "count": 1}, None)])
+    assert tool_gate.gate(decorated(decorator, "Stock"), "f")("A") == Stock("A", 1)
+
+
+@pytest.mark.design("fault.empty_tool_typed")
+@pytest.mark.parametrize("returns", ["list[str]", "Rows"])
+@pytest.mark.parametrize("decorator", DECORATORS)
+def test_empty_on_a_decorated_tool_reads_the_tools_own_module(
+    lines: Lines, decorator: Callable[..., Any], returns: str
+) -> None:
+    install(lines, faults=[empty_fault("tool:f")])
+    value = tool_gate.gate(decorated(decorator, returns), "f")("A")
+    assert value == [] and type(value) is list
+    assert lines.lines[0]["action"] == "fault"
+
+
+@pytest.mark.parametrize("decorator", DECORATORS)
+def test_a_decorated_tool_whose_type_cannot_be_resolved_stays_unresolved(
+    lines: Lines, decorator: Callable[..., Any]
+) -> None:
+    tool = decorated(decorator, "LateStock")
+    assert changes.declared_return(tool) == changes.Unresolved("LateStock")
+    install(lines, [Mock("tool:f", {"sku": "A", "count": 1}, None)])
+    assert tool_gate.gate(tool, "f")("A") == {"sku": "A", "count": 1}
