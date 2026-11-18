@@ -10,7 +10,7 @@ run, and every later one, into an infrastructure error, never into a result.
 The positive control for all five is test_service_k8s.py's passing Job: the same manifests
 without the fault. Like the other cluster tests, these run only with SCRIMMAGE_KIND=1:
 
-    SCRIMMAGE_KIND=1 SCRIMMAGE_LANE=3 test-slot uv run pytest -n 0 -m kind \
+    SCRIMMAGE_KIND=1 SCRIMMAGE_LANE=3 uv run pytest -n 0 -m kind \
         tests/test_k8s_failures.py
 """
 

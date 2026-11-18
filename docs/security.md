@@ -446,9 +446,8 @@ Public APIs stay in scope, such as `ForkingPickler.register` and `copyreg`.
 
 If you find a security problem in Scrimmage, please report it privately, not in a public issue.
 
-!!! warning "Contact to be added"
-    PLACEHOLDER: the private reporting channel is not set yet.
-    The maintainer will add it here and in `SECURITY.md` before the first release.
+Report it through GitHub's private vulnerability reporting.
+On the repository's Security tab, choose "Report a vulnerability".
 
 Please include what you found, how to reproduce it, and the version or commit you tested.
 `SECURITY.md` in the repository says how a report is handled.

@@ -4,8 +4,8 @@
 
 Please report a security problem in Scrimmage privately, not in a public issue.
 
-PLACEHOLDER: the private reporting channel is not set yet.
-The maintainer will add it here before the first release.
+Report it through GitHub's private vulnerability reporting.
+On the repository's Security tab, choose "Report a vulnerability".
 
 Please include what you found, how to reproduce it, and the version or commit you tested.
 

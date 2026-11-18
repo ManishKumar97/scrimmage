@@ -4,7 +4,7 @@ never reaches a command line. The Job against two replicas is another file's.
 
 Like the cluster tests, these run only with SCRIMMAGE_KIND=1, one file at a time:
 
-    SCRIMMAGE_KIND=1 SCRIMMAGE_LANE=2 test-slot uv run pytest -n 0 -m kind \
+    SCRIMMAGE_KIND=1 SCRIMMAGE_LANE=2 uv run pytest -n 0 -m kind \
         tests/test_k8s_manifests.py
 """
 
