@@ -384,7 +384,7 @@ def answer(question):
 @pytest.mark.design("record.web_binary")
 def test_a_binary_reply_falls_back_to_a_mock_of_the_tool(team: Team) -> None:
     team.service.routes["/png"] = (200, {"content-type": "image/png"}, b"\x89PNG\r\n\x1a\n\xff\xfe")
-    team.service.routes["/br"] = (200, {"content-encoding": "br"}, b"\x8b\x02\x80compressed")
+    team.service.routes["/lzw"] = (200, {"content-encoding": "compress"}, b"\x1f\x9d\x90compressed")
     team.write(
         """
 def picture(name):
@@ -392,7 +392,7 @@ def picture(name):
     return "a picture"
 
 def pressed(name):
-    http_get("/br")
+    http_get("/lzw")
     return "pressed"
 
 def answer(question):
@@ -406,7 +406,7 @@ def answer(question):
     done = team.record()
     assert done.code == 1, done.out  # a call is listed under manual, as C.J3.19 says
     assert [m["call"] for m in done.mocks()] == ["tool:picture", "tool:pressed"]
-    assert {m["path"] for m in done.manual("binary")} == {"/png", "/br"}
+    assert {m["path"] for m in done.manual("binary")} == {"/png", "/lzw"}
     assert done.counts == {"calls_seen": 2, "calls_written": 2}
     text = team.out_path.read_text()
     assert "A mock of tool:picture" in text

@@ -734,7 +734,7 @@ def test_a_secret_in_the_path_or_the_body_is_marked(web: Sink) -> None:
 @pytest.mark.design("record.web_fields")
 def test_a_body_that_is_not_utf8_or_is_packed_another_way_is_marked(web: Sink) -> None:
     def binary(kind: str) -> str:
-        headers = {"content-encoding": "br"} if kind == "br" else {}
+        headers = {"content-encoding": "compress"} if kind == "compress" else {}
         body = b"\x89PNG\r\n\x1a\n" if kind == "png" else b"plain"
 
         def answer(request: httpx2.Request) -> httpx2.Response:
@@ -745,7 +745,7 @@ def test_a_body_that_is_not_utf8_or_is_packed_another_way_is_marked(web: Sink) -
         return kind
 
     gated(binary)(kind="png")
-    gated(binary)(kind="br")
+    gated(binary)(kind="compress")
     found = [line["recorded"] for line in web.calls() if line["kind"] == "http"]
     assert [f["utf8"] for f in found] == [False, False]
 

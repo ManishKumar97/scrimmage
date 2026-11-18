@@ -54,6 +54,9 @@ OWN_PROCESS = {
     "mcp_server.py": {"anyio", "jsonschema", "mcp", "mcp_types"},
     # scrimmage cert, installed with the cert extra, run by hand and never imported by the rest.
     "cert.py": {"cryptography"},
+    # br is undone with the program's own brotli, loaded only when a br reply arrives. httpx
+    # asks for br only when it imports, so it is the team's version, never one Scrimmage adds.
+    "changes.py": {"brotli", "brotlicffi"},
 }
 
 
