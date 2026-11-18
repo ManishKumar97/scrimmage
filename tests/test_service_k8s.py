@@ -8,7 +8,7 @@ is mixed into its stdout.
 
 Like the other cluster tests, these run only with SCRIMMAGE_KIND=1, one file at a time:
 
-    SCRIMMAGE_KIND=1 SCRIMMAGE_LANE=2 test-slot uv run pytest -n 0 -m kind \
+    SCRIMMAGE_KIND=1 SCRIMMAGE_LANE=2 uv run pytest -n 0 -m kind \
         tests/test_service_k8s.py
 """
 

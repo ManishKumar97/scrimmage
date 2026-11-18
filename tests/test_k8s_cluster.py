@@ -5,7 +5,7 @@ left behind on the user's machine.
 These need Docker and a kind cluster, which takes minutes, so they run only with
 SCRIMMAGE_KIND=1, one file at a time:
 
-    SCRIMMAGE_KIND=1 SCRIMMAGE_LANE=2 test-slot uv run pytest -n 0 -m kind tests/test_k8s_cluster.py
+    SCRIMMAGE_KIND=1 SCRIMMAGE_LANE=2 uv run pytest -n 0 -m kind tests/test_k8s_cluster.py
 
 With the variable set, a missing tool fails a test, never skips it.
 """
