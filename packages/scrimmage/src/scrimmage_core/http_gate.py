@@ -38,8 +38,15 @@ from scrimmage_core.budget import ASK_MAX_S, Held, Shortfall
 from scrimmage_core.changes import Changed, Unchangeable
 from scrimmage_core.client import ControlError
 from scrimmage_core.config import CONNECTION, Fault, slow_seconds
-from scrimmage_core.decide import READ_METHODS, Call, Decision, names, schedule
-from scrimmage_core.errors import ScrimmageRefused
+from scrimmage_core.decide import (
+    MISTAKE_REFUSAL,
+    READ_METHODS,
+    Call,
+    Decision,
+    names,
+    schedule,
+)
+from scrimmage_core.errors import ScrimmageMockError, ScrimmageRefused
 from scrimmage_core.judge import normal
 from scrimmage_core.labels import shown_name
 from scrimmage_core.plan import Plan
@@ -68,6 +75,8 @@ TESTED = {"httpx": ((0, 28), (0, 28)), "httpx2": ((2, 16), (2, 16))}
 GATED = "__scrimmage_gate__"
 # What the gate builds faults and mocks from, in the library itself.
 BUILT_FROM = ("Response", "ByteStream", "ReadTimeout", "ConnectError", "ReadError")
+# What bad body sends a web request: a list cut off inside a string, so it never parses.
+BROKEN_WEB_BODY = b'{"data": [{"id": 1, "name": "'
 # The transport library each one raises its connection errors from.
 CORE = {"httpx": "httpcore", "httpx2": "httpcore2"}
 CHAR_PER_TOKEN = 4  # the rough size of a token, for estimates only
@@ -641,13 +650,17 @@ def fault(
     run = ctx.run
     plan_fault = run.plan.faults[step.decision.fault or 0]
     # A carried fault lets the call happen, so it never comes here to be parsed as a status.
-    assert plan_fault.do in ("timeout", *CONNECTION) or plan_fault.do.startswith("status "), (
-        plan_fault.do
-    )
+    assert plan_fault.do in ("timeout", "empty", "bad body", *CONNECTION) or (
+        plan_fault.do.startswith("status ")
+    ), plan_fault.do
     if plan_fault.do == "timeout":
         run.fail(step, module.ReadTimeout("The read operation timed out", request=request))
     if plan_fault.do in CONNECTION:
         run.fail(step, connection_failure(module, plan_fault.do, request, sync=sync))
+    if plan_fault.do == "empty":  # a broken backend's reply: no body, and nothing says its type
+        return reply(ctx, module, client, step, request, extra, (200, {}, b""))
+    if plan_fault.do == "bad body":
+        return bad_body(ctx, module, client, step, request, extra)
     status = int(plan_fault.do.split()[1])
     if step.call.kind == "model":
         body = openai_table.error_body(status)
@@ -656,6 +669,31 @@ def fault(
         body = reason_phrase(status).encode()
         headers = {"content-type": "text/plain; charset=utf-8"}
     return reply(ctx, module, client, step, request, extra, (status, headers, body))
+
+
+def bad_body(
+    ctx: Bound, module: ModuleType, client: Any, step: Step, request: Any, extra: dict[str, object]
+) -> Any:
+    """A 200 that says it is JSON and is cut short, so it does not parse. A streamed model
+    request would need a broken stream, a fault this version does not build: a mistake in
+    the test, raised at once and not counted as fired."""
+    run = ctx.run
+    if step.call.kind == "model" and extra.get("stream") is True:
+        why = (
+            "is a streamed request, and bad body breaks a reply that is not streamed; fault "
+            "a request without stream, or use timeout or a status on this one"
+        )
+        run.unchanged(step, why)
+        # Not a fired fault, and not real either: nothing was sent.
+        step.decision = Decision("refused", reason=MISTAKE_REFUSAL)
+        run.fail(step, ScrimmageMockError(f"{step.call.label} {why}"), mistake=True)
+    if step.call.kind == "model":
+        headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
+        body = openai_table.broken_body(str(request.url.path), step.call.name)
+    else:
+        headers = {"content-type": "application/json; charset=utf-8"}
+        body = BROKEN_WEB_BODY
+    return reply(ctx, module, client, step, request, extra, (200, headers, body))
 
 
 def connection_failure(module: ModuleType, word: str, request: Any, *, sync: bool) -> Exception:

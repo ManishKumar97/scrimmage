@@ -1,22 +1,26 @@
 """A real failure against the injected one: the code that meets it cannot tell.
 
-A real get_order that times out, and real refused, reset and unresolvable connections on
-httpx and httpx2, sync and async."""
+A real get_order that times out, real refused, reset and unresolvable connections on
+httpx and httpx2, sync and async, and a real broken JSON reply and a real empty one."""
 
 import asyncio
+import http.server
+import json
 import shutil
 import socket
 import struct
 import threading
 from collections.abc import Callable, Iterator
-from typing import Any
+from typing import Any, cast
 
+import openai
 import pytest
 
 from conftest import ACME, EXAMPLE_FAULT, Project
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import state
-from test_connection_faults import LIBRARIES, PATH_IDS, PATHS, gated, install, raised
+from scrimmage_core import http_gate, state
+from scrimmage_core import provider_openai as openai_table
+from test_connection_faults import LIBRARIES, PATH_IDS, PATHS, WEB, gated, install, raised
 
 __all__ = ["gated"]  # the fixture, used by name
 
@@ -228,3 +232,123 @@ def test_a_real_unresolvable_name_and_the_injected_one_look_the_same(
     assert type(root(real_error)) is socket.gaierror
     # The text after the errno comes from the resolver, so only "[Errno N]" is compared.
     assert str(fault_error).partition("] ")[0] == str(real_error).partition("] ")[0]
+
+
+class Fixed(http.server.BaseHTTPRequestHandler):
+    """Answers every request with the reply its server was given, after reading the request."""
+
+    def answer(self) -> None:
+        self.rfile.read(int(self.headers.get("content-length") or 0))
+        headers, body = cast("FixedServer", self.server).reply
+        self.send_response(200)
+        for name, value in headers.items():
+            self.send_header(name, value)
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    do_GET = do_POST = answer
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+class FixedServer(http.server.ThreadingHTTPServer):
+    reply: tuple[dict[str, str], bytes]
+
+
+@pytest.fixture
+def fixed_server() -> Iterator[Callable[[dict[str, str], bytes], str]]:
+    """Starts loopback servers that each send one set reply; gives each one's base URL."""
+    servers: list[FixedServer] = []
+
+    def start(headers: dict[str, str], body: bytes) -> str:
+        server = FixedServer(("127.0.0.1", 0), Fixed)
+        server.reply = (headers, body)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        servers.append(server)
+        return f"http://127.0.0.1:{server.server_address[1]}"
+
+    yield start
+    for server in servers:
+        server.shutdown()
+        server.server_close()
+
+
+def fetched(name: str, sync: bool, url: str) -> Any:
+    """A GET through that library and path, read to its end."""
+    module: Any = LIBRARIES[name]
+    if sync:
+        return module.Client().get(url)
+
+    async def go() -> Any:
+        async with module.AsyncClient() as client:
+            return await client.get(url)
+
+    return asyncio.run(go())
+
+
+def parsed(response: Any) -> tuple[str, int]:
+    """What reading the reply as JSON raises: its class and pos, never its message, whose
+    wording has changed between Python releases."""
+    with pytest.raises(json.JSONDecodeError) as caught:
+        response.json()
+    return type(caught.value).__name__, caught.value.pos
+
+
+def seen(response: Any) -> tuple[object, ...]:
+    """What code reads of a reply, apart from the headers every server adds, such as Date."""
+    headers = response.headers
+    return (
+        response.status_code,
+        response.content,
+        headers.get("content-type"),
+        headers.get("content-length"),
+        parsed(response),
+    )
+
+
+def chat(base_url: str) -> BaseException:
+    """One chat call through the openai library; what it raised."""
+    api = openai.OpenAI(api_key="test", base_url=base_url)
+    with pytest.raises(Exception) as caught:
+        api.chat.completions.create(
+            model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}]
+        )
+    return caught.value
+
+
+@pytest.mark.design("proof.real_against_injected_bad_body")
+@pytest.mark.parametrize(("name", "sync"), PATHS, ids=PATH_IDS)
+def test_a_real_broken_json_reply_and_bad_body_look_the_same(
+    gated: None, fixed_server: Callable[[dict[str, str], bytes], str], name: str, sync: bool
+) -> None:
+    """On a web request on each path, and on a model call through the openai library."""
+    web = {"content-type": "application/json; charset=utf-8"}
+    real_web = fetched(name, sync, fixed_server(web, http_gate.BROKEN_WEB_BODY) + "/stock/1")
+    install("bad body")
+    assert seen(fetched(name, sync, WEB)) == seen(real_web)
+    if (name, sync) != ("httpx2", True):  # the openai library sends through httpx2's client
+        return
+    state.install(None)
+    model = {"content-type": "application/json", "x-request-id": "req_1"}
+    real_model = chat(fixed_server(model, openai_table.BROKEN_BODY) + "/v1")
+    sink, _ = install("bad body", "model")
+    fault_model = chat("https://api.openai.com/v1")
+    assert type(fault_model) is type(real_model) is json.JSONDecodeError
+    assert isinstance(fault_model, json.JSONDecodeError)
+    assert isinstance(real_model, json.JSONDecodeError)
+    assert fault_model.pos == real_model.pos
+    # A 200 is never retried, real or injected, so one attempt has a line.
+    assert [x["action"] for x in sink.lines if x.get("kind") == "model"] == ["fault"]
+
+
+@pytest.mark.design("proof.real_against_injected_empty")
+@pytest.mark.parametrize(("name", "sync"), PATHS, ids=PATH_IDS)
+def test_a_real_empty_reply_and_the_injected_one_look_the_same(
+    gated: None, fixed_server: Callable[[dict[str, str], bytes], str], name: str, sync: bool
+) -> None:
+    real_reply = fetched(name, sync, fixed_server({}, b"") + "/stock/1")
+    install("empty")
+    assert seen(fetched(name, sync, WEB)) == seen(real_reply)
+    assert seen(real_reply)[:4] == (200, b"", None, "0")

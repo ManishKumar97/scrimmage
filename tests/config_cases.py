@@ -269,8 +269,19 @@ CONNECTION = MINIMAL + "".join(
     )
 )
 
+REPLY = MINIMAL + "".join(
+    f'\n[[test.fault]]\ncall = "{call}"\ndo   = "{do}"\nwhen = "call 2"\n'
+    for call, do in (
+        ("model", "bad body"),
+        ("model:*/embeddings", "bad body"),
+        ("http:inventory.acme.internal", "bad body"),
+        ("http:inventory.acme.internal", "empty"),
+    )
+)
+
 GOOD = {
     "connection": CONNECTION,
+    "reply": REPLY,
     "carried": CARRIED,
     "minimal": MINIMAL,
     "every_key": EVERY_KEY,
@@ -430,6 +441,13 @@ BAD = [
     Bad("model_fault_error", fault('call = "model"\ndo = "error"\nwhen = "first 1"\n'), True),
     Bad("tool_fault_refused", fault('call = "tool:t"\ndo = "refused"\nwhen = "first 1"\n'), True),
     Bad("mcp_fault_dns", fault('call = "mcp:docs/search"\ndo = "dns"\nwhen = "first 1"\n'), True),
+    Bad("model_fault_empty", fault('call = "model"\ndo = "empty"\nwhen = "first 1"\n'), True),
+    Bad("tool_fault_bad_body", fault('call = "tool:t"\ndo = "bad body"\nwhen = "first 1"\n'), True),
+    Bad(
+        "mcp_fault_bad_body",
+        fault('call = "mcp:docs/search"\ndo = "bad body"\nwhen = "first 1"\n'),
+        True,
+    ),
     Bad(
         "raises_without_error",
         fault('call = "tool:t"\ndo = "timeout"\nraises = "ValueError"\nwhen = "first 1"\n'),
