@@ -299,7 +299,7 @@ Also read the control-path limits under An agent inside a web service.
 
 - **One provider.** OpenAI's Chat Completions, Responses and embeddings, and gateways that speak the same format. Other providers come later.
 
-- **A few faults.** `timeout`, `error` and `empty` on tools, `timeout`, `status N`, `refused`, `reset`, `dns` and `bad body` on model calls and web requests, `empty` on web requests, `timeout`, `error` and `empty` on MCP tools, `append`, `replace` and `slow` on tools, MCP tools and web requests, and `replace` and `slow` on a chat model call.
+- **A few faults.** `timeout`, `error` and `empty` on tools, `timeout`, `status N`, `refused`, `reset`, `dns` and `bad body` on model calls and web requests, `context too long` on a chat model call, `empty` on web requests, `timeout`, `error` and `empty` on MCP tools, `append`, `replace` and `slow` on tools, MCP tools and web requests, and `replace` and `slow` on a chat model call.
   `append` on a model call, and the other faults that change the model's reply, come later.
 
 - **`empty` needs a declared type with an empty value.** On a tool declared to return a model, a dataclass, a number, `bytes`, a `Sequence`, a `Mapping`, a union of two kinds such as `str | list[str]`, or a type that cannot be resolved when it runs, or a LangChain tool with `response_format = "content_and_artifact"`, `empty` is a mistake in the test, and the tool never runs. Mock an empty result instead. See [Faults](concepts.md#faults).
@@ -336,6 +336,9 @@ Also read the control-path limits under An agent inside a web service.
   The reply is written back as compact JSON, so its bytes differ from the provider's even where its fields do not.
 
 - **`bad body` on a streamed model request.** It is a mistake in the test: the call fails at once and the fault is not counted as fired. A stream cut midway is a later fault. Fault a request that is not streamed, or use `timeout` or a status on this one.
+
+- **`context too long` is OpenAI's Chat Completions reply.** On a Responses call it is a mistake in the test: the call fails at once and the fault is not counted as fired. Other providers' replies come with those providers.
+  The message names the numbers of the real reply it was saved from, 128000 and 140008 tokens, not your model's context or your prompt's length.
 
 - **A body cut by a dropped connection.** `bad body` sends a whole reply whose JSON does not parse. A reply cut short because the connection dropped is a connection error, not a body to parse: the openai library raises `APIConnectionError` from httpx's `RemoteProtocolError`, after its retries. Scrimmage does not inject that failure.
 

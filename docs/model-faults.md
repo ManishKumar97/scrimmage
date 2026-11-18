@@ -37,6 +37,8 @@ Nothing is sent to the provider for a faulted attempt, so it costs nothing.
 | `status 429` | the library's `RateLimitError`, after its retries |
 | `status 500` | the library's `InternalServerError`, after its retries |
 | `status 400` | the library's `BadRequestError`, at once |
+| `status 401` | the library's `AuthenticationError`, at once, with the code `invalid_api_key`: OpenAI's reply to a bad API key |
+| `context too long` | the library's `BadRequestError`, at once, with the code `context_length_exceeded`: OpenAI's reply to a prompt over the model's context |
 | `timeout` | the library's `APITimeoutError`, after its retries |
 | `refused` | the library's `APIConnectionError`, after its retries |
 | `reset` | the library's `APIConnectionError`, after its retries |
@@ -60,6 +62,29 @@ Both make the real call, so it is reserved and billed as in the baseline row.
 `replace` needs `model`, or it would rewrite every model's answer, the main model's too.
 `append` does not work on a model call: append to a tool result the model reads instead, see [Changing a result](changing-results.md).
 Neither works on a call that only reads, such as `model:openai/moderations`, whose reply is not text.
+
+## A bad API key, and a prompt that is too long
+
+`status 401` is the auth error.
+Its body is copied from a real OpenAI 401, the reply to a request with a key that was not real: the code `invalid_api_key`, and the message `Incorrect API key provided: sk-proj-****...xxxx. You can find your API key at ...`.
+The key fragment in the message is made up.
+As in the real reply, the content type is `text/plain` while the body is JSON; the openai library reads it either way.
+
+`context too long` is the error OpenAI sends when a chat request is longer than the model's context:
+
+```toml
+[[test.fault]]
+call = "model"
+do   = "context too long"
+when = "first 1"
+```
+
+The openai library raises `BadRequestError` with `code` `context_length_exceeded` and `param` `messages`, and does not retry it.
+An agent that shortens its prompt when it reads that code can be tested this way.
+The body is copied from a real reply, so its message names that request's numbers: `This model's maximum context length is 128000 tokens. However, your messages resulted in 140008 tokens.`
+They are not your model's context or your prompt's length.
+It works on a chat call, `model` or `model:openai`, and not on a call that only reads, such as `model:*/embeddings`.
+On a Responses call it is a mistake in the test, and the call fails at once: the Responses API's reply is not this one.
 
 ## A rate limit that says how long to wait
 

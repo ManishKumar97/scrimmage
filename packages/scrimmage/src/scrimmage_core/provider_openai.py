@@ -20,11 +20,15 @@ READ_PATHS = {
 }
 FREE_OPS = ("moderations", "input_tokens")  # no tokens billed, so nothing to reserve
 
-# Every body is the spec's Error object. The 429 message is as OpenAI's rate-limit
-# cookbook shows it, its code from the spec's error code list; the others are from
-# OpenAI's error codes page. A status with no documented message gets a plain one.
+# Every body is the spec's Error object. The 401 message is a real 401's, its key fragment
+# made up; the 429 message is as OpenAI's rate-limit cookbook shows it, its code from the
+# spec's error code list; the others are from OpenAI's error codes page. A status with no
+# documented message gets a plain one.
 MESSAGES = {
-    401: "Incorrect API key provided.",
+    401: (
+        f"Incorrect API key provided: sk-proj-{'*' * 44}xxxx. "
+        "You can find your API key at https://platform.openai.com/account/api-keys."
+    ),
     429: (
         "Rate limit reached for default-codex in organization org-{id} on requests per "
         "min. Limit: 20.000000 / min. Current: 24.000000 / min. Contact support@openai.com "
@@ -40,6 +44,20 @@ BROKEN_EMBEDDING = b'{\n  "object": "list",\n  "data": [\n    {\n      "object":
 BROKEN_RESPONSE = b'{\n  "id": "resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3'
 TYPES = {429: "requests"}
 CODES = {429: "rate_limit_exceeded", 401: "invalid_api_key"}
+# A real 401 says it is text/plain, though its body is JSON, and names its status at the top
+# level too. The openai library parses an error's body whatever its content type says.
+TEXT_PLAIN = (401,)
+# A real reply to a gpt-4o-mini request of 140008 tokens. The numbers are that request's,
+# not the faulted one's: the gate does not count a request's tokens.
+CONTEXT_TOO_LONG = {
+    "message": (
+        "This model's maximum context length is 128000 tokens. However, your messages "
+        "resulted in 140008 tokens. Please reduce the length of the messages."
+    ),
+    "type": "invalid_request_error",
+    "param": "messages",
+    "code": "context_length_exceeded",
+}
 
 
 @dataclass(frozen=True)
@@ -104,11 +122,16 @@ def op_for(path: str, method: str) -> str | None:
     return None
 
 
+def is_responses(path: str) -> bool:
+    """A Responses API call, not a chat completion."""
+    return path.split("?", 1)[0].rstrip("/").endswith("/responses")
+
+
 def broken_body(path: str, op: str) -> bytes:
     """bad body's bytes for this call. A moderation or a token count gets a chat reply's."""
     if op == "embeddings":
         return BROKEN_EMBEDDING
-    if path.split("?", 1)[0].rstrip("/").endswith("/responses"):
+    if is_responses(path):
         return BROKEN_RESPONSE
     return BROKEN_BODY
 
@@ -120,7 +143,19 @@ def error_body(status: int) -> bytes:
         "param": None,
         "code": CODES.get(status),
     }
+    if status in TEXT_PLAIN:
+        return json.dumps({"error": error, "status": status}).encode()
     return json.dumps({"error": error}).encode()
+
+
+def error_type(status: int) -> str:
+    """The content type of an error reply with this status."""
+    return "text/plain" if status in TEXT_PLAIN else "application/json"
+
+
+def context_too_long_body() -> bytes:
+    """What OpenAI sends, with status 400, for a chat request longer than the context."""
+    return json.dumps({"error": CONTEXT_TOO_LONG}).encode()
 
 
 def request_fields(body: bytes) -> dict[str, object] | None:

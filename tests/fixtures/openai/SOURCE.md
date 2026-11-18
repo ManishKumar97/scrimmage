@@ -47,7 +47,7 @@ Where the spec shows a placeholder, the placeholder is removed so the file is va
 | `error_500.json` | The `Error` object | The message OpenAI's API sends for a server error |
 | `response_stream.sse` | Create a model response, example Streaming | Without the `...` line |
 
-The 401, 500 and 503 messages in Scrimmage's own error bodies are from OpenAI's error codes page, `examples/data/oai_docs/error-codes.txt` in the `openai/openai-cookbook` repository.
+The 500 and 503 messages in Scrimmage's own error bodies are from OpenAI's error codes page, `examples/data/oai_docs/error-codes.txt` in the `openai/openai-cookbook` repository.
 
 These are real replies, saved from the real-model check on 6 November 2026 with `gpt-4o-mini` and `text-embedding-3-small`.
 `tests/test_fixtures_match_real.py` keeps the fake's replies the same shape as them.
@@ -57,6 +57,16 @@ These are real replies, saved from the real-model check on 6 November 2026 with 
 | `real_chat_tool_call.json` | The bot's first chat request |
 | `real_chat_answer.json` | The chat request after the tool result |
 | `real_embedding.json` | The bot's embedding request |
+
+These are real error replies, saved on 17 November 2026 from OpenAI's Chat Completions API.
+Each holds the status, the `content-type` and the body; every other header is left out.
+The key fragment in the 401 message is made up.
+`tests/test_fixtures_match_real.py` keeps Scrimmage's injected errors equal to them.
+
+| File | Reply to |
+|---|---|
+| `real_error_401.json` | A chat request with a key that is not real |
+| `real_error_context_length.json` | A chat request to `gpt-4o-mini` of about 140,000 tokens |
 
 `rail_real_shape.json` is shaped like a NeMo rail's reply from `gpt-4.1-mini`, seen in the real-model check on 12 November 2026.
 It keeps the real reply's layout: pretty-printed, with `logprobs` and `refusal` null, `usage`, `service_tier` and `system_fingerprint`, and longer than a record line's preview.

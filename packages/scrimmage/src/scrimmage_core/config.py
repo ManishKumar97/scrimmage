@@ -93,7 +93,7 @@ JUDGING = "docs/judging.md"
 # The faults this version builds. Each one has an entry in docs/fault-catalog.toml.
 FAULTS = (
     "timeout", "status", "error", "empty", "append", "replace", "slow", "refused", "reset", "dns",
-    "bad body",
+    "bad body", "context too long",
 )  # fmt: skip
 # A connection that fails: on a model call or a web request, with what a tool raises instead.
 CONNECTION = {
@@ -1514,6 +1514,11 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
         raise ConfigError(
             f"{where} do: 'bad body' works on a model call or a web request, whose reply is a "
             f"body to parse; on a tool, fault the web request inside it; see {DOCS}"
+        )
+    if do == "context too long" and (kind != "model" or "/" in call):
+        raise ConfigError(
+            f"{where} do: 'context too long' works only on a chat model call, such as "
+            f'call = "model", the one OpenAI sends it for; see docs/model-faults.md'
         )
     if do in CONNECTION and kind in ("tool", "mcp"):
         raise ConfigError(

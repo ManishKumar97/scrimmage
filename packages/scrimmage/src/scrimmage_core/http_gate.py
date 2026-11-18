@@ -650,7 +650,7 @@ def fault(
     run = ctx.run
     plan_fault = run.plan.faults[step.decision.fault or 0]
     # A carried fault lets the call happen, so it never comes here to be parsed as a status.
-    assert plan_fault.do in ("timeout", "empty", "bad body", *CONNECTION) or (
+    assert plan_fault.do in ("timeout", "empty", "bad body", "context too long", *CONNECTION) or (
         plan_fault.do.startswith("status ")
     ), plan_fault.do
     if plan_fault.do == "timeout":
@@ -661,10 +661,22 @@ def fault(
         return reply(ctx, module, client, step, request, extra, (200, {}, b""))
     if plan_fault.do == "bad body":
         return bad_body(ctx, module, client, step, request, extra)
+    if plan_fault.do == "context too long":
+        if openai_table.is_responses(str(request.url.path)):
+            not_carried_out(
+                run,
+                step,
+                "is a Responses call, and context too long sends Chat Completions' error; "
+                "fault a chat call, or use a status on this one",
+            )
+        headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
+        body = openai_table.context_too_long_body()
+        return reply(ctx, module, client, step, request, extra, (400, headers, body))
     status = int(plan_fault.do.split()[1])
     if step.call.kind == "model":
         body = openai_table.error_body(status)
-        headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
+        kind = openai_table.error_type(status)
+        headers = {"content-type": kind, "x-request-id": "req_scrimmage_injected"}
     else:
         body = reason_phrase(status).encode()
         headers = {"content-type": "text/plain; charset=utf-8"}
@@ -681,14 +693,12 @@ def bad_body(
     the test, raised at once and not counted as fired."""
     run = ctx.run
     if step.call.kind == "model" and extra.get("stream") is True:
-        why = (
+        not_carried_out(
+            run,
+            step,
             "is a streamed request, and bad body breaks a reply that is not streamed; fault "
-            "a request without stream, or use timeout or a status on this one"
+            "a request without stream, or use timeout or a status on this one",
         )
-        run.unchanged(step, why)
-        # Not a fired fault, and not real either: nothing was sent.
-        step.decision = Decision("refused", reason=MISTAKE_REFUSAL)
-        run.fail(step, ScrimmageMockError(f"{step.call.label} {why}"), mistake=True)
     if step.call.kind == "model":
         headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
         body = openai_table.broken_body(str(request.url.path), step.call.name)
@@ -696,6 +706,14 @@ def bad_body(
         headers = {"content-type": "application/json; charset=utf-8"}
         body = BROKEN_WEB_BODY
     return reply(ctx, module, client, step, request, extra, (200, headers, body))
+
+
+def not_carried_out(run: RunState, step: Step, why: str) -> NoReturn:
+    """A fault this call cannot take is a mistake in the test, raised at once. It is not a
+    fired fault, and not real either: nothing was sent."""
+    run.unchanged(step, why)
+    step.decision = Decision("refused", reason=MISTAKE_REFUSAL)
+    run.fail(step, ScrimmageMockError(f"{step.call.label} {why}"), mistake=True)
 
 
 def connection_failure(module: ModuleType, word: str, request: Any, *, sync: bool) -> Exception:

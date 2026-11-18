@@ -278,6 +278,8 @@ REPLY = MINIMAL + "".join(
         ("model:*/embeddings", "bad body"),
         ("http:inventory.acme.internal", "bad body"),
         ("http:inventory.acme.internal", "empty"),
+        ("model", "context too long"),
+        ("model:openai", "context too long"),
     )
 )
 
@@ -449,6 +451,19 @@ BAD = [
         "mcp_fault_bad_body",
         fault('call = "mcp:docs/search"\ndo = "bad body"\nwhen = "first 1"\n'),
         True,
+    ),
+    *(
+        Bad(
+            f"context_too_long_on_{name}",
+            fault(f'call = "{call}"\ndo = "context too long"\nwhen = "first 1"\n'),
+            True,
+        )
+        for name, call in (
+            ("embeddings", "model:*/embeddings"),
+            ("web", "http:inventory.acme.internal"),
+            ("tool", "tool:t"),
+            ("mcp", "mcp:docs/search"),
+        )
     ),
     Bad(
         "retry_after_on_status_500",
