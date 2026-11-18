@@ -480,7 +480,7 @@ def test_a_real_test_leaves_a_folder_show_can_read(
 ) -> None:
     result = project.test(fake_openai(ACME))
     assert result.code in (0, 1), result.out + result.err
-    folder = max((project.root / "scrimmage-runs").iterdir())
+    folder = max(p for p in (project.root / "scrimmage-runs").iterdir() if p.is_dir())
     done = shown(capsys, str(folder))
     assert done.code == 0 and "order-status" in done.out
     table = [line for line in result.out.splitlines()[1:] if line]

@@ -244,7 +244,8 @@ def test_a_run_with_bad_body_on_a_streamed_request_ends_as_a_test_mistake(
     project.edit('function = "acme.agent:answer"', 'command = "python bot.py {question}"')
     project.edit("[agent]\n", "[agent]\nruns = 1\n")
     project.edit(EXAMPLE_FAULT, STREAMED_FAULT)
-    fake = FakeOpenAI(["chat_stream"])
+    project.edit('expect   = ["shipped", ["Oct 30", "October 30"]]', 'expect   = ["Hello"]')
+    fake = FakeOpenAI(["chat_stream"])  # the streamed answer is "Hello"
     fake.start()
     try:
         result = project.test(fake)
@@ -252,6 +253,13 @@ def test_a_run_with_bad_body_on_a_streamed_request_ends_as_a_test_mistake(
         fake.stop()
     said = result.out + result.err
     assert result.code == 2, said
+    # The baseline passes, so the table shows the fault row's own result: none, as a mistake.
+    table = [x for x in said.splitlines() if x.startswith("order-status")]
+    assert len(table) == 2, table
+    assert "baseline" in table[0] and table[0].endswith("pass"), table
+    assert "fault 1" in table[1] and table[1].endswith("no result"), table
+    assert "test mistake: order-status fault 1: no result: the fault never fired" in said
+    assert "test mistake: order-status fault 1: run-" in said
     fault = next(lines for lines in result.records() if lines[-1]["row"] == "fault 1")
     [line] = [x for x in fault if x.get("kind") == "model"]
     assert (line["action"], line["reason"]) == ("refused", MISTAKE_REFUSAL), line
@@ -259,7 +267,7 @@ def test_a_run_with_bad_body_on_a_streamed_request_ends_as_a_test_mistake(
     assert summary["fault_fired"] is False
     assert summary["outcome"] not in ("refused call", "infrastructure error"), summary
     assert "not injected" not in said and "is a streamed request" in said
-    folder = next((project.root / "scrimmage-runs").iterdir())
+    folder = next(p for p in (project.root / "scrimmage-runs").iterdir() if p.is_dir())
     capsys.readouterr()
     assert cli.main(["show", str(folder), "--run", str(line["run"]), "--json"]) == 0
     [run] = json.loads(capsys.readouterr().out)["runs"]
