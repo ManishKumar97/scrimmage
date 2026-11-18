@@ -999,7 +999,7 @@ def test_a_second_spend_while_one_runs_is_refused(bed: Bed, second: str) -> None
 def alive(pid: int) -> bool:
     try:
         state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
-    except FileNotFoundError:
+    except OSError:
         return False
     return state not in ("Z", "X")  # a zombie, or a process being reaped now
 
