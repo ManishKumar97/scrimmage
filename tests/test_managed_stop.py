@@ -308,12 +308,25 @@ def test_a_port_taken_while_the_app_loads_slowly_names_the_copys_exit(shop: Shop
 
 
 def test_a_copy_that_answers_without_the_gate_is_named_at_once(shop: Shop) -> None:
-    """The copy itself listens on its port but has no gate: no wait for it to exit."""
-    began = time.monotonic()
+    """The copy itself listens on its port but has no gate: no wait for it to exit.
+
+    Only the check after the failed probe is timed. Starting the copy takes longer on a
+    loaded machine, and no deadline covers it."""
+    lost_its_port = managed.Managed.lost_its_port
+    checks: list[tuple[bool, float]] = []
+
+    def timed(copy: managed.Managed, until: float) -> bool:
+        began = time.monotonic()
+        lost = lost_its_port(copy, until)
+        checks.append((lost, time.monotonic() - began))
+        return lost
+
+    shop.monkeypatch.setattr(managed.Managed, "lost_its_port", timed)
     code, out = shop.test(f"{sys.executable} -m http.server {{port}} --bind 127.0.0.1")
-    took = time.monotonic() - began
     assert code == 3, out
     assert "x-scrimmage-run does not reach Scrimmage" in out, out
+    [(lost, took)] = checks
+    assert not lost, "the copy that answered was taken for one that lost its port"
     assert took < managed.FAILED_PROBE_S, took
 
 

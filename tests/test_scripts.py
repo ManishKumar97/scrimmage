@@ -104,7 +104,7 @@ def alive(pid: int) -> bool:
         with open(f"/proc/{pid}/stat") as stat_file:
             # a zombie (Z), or a process being reaped now (X), has ended
             return stat_file.read().rpartition(")")[2].split()[0] not in ("Z", "X")
-    except FileNotFoundError:
+    except OSError:
         return False
 
 
