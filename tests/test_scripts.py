@@ -1,5 +1,6 @@
 """An agent run as a script: the command, its answer, its children and how it stops."""
 
+import contextlib
 import json
 import os
 import signal
@@ -101,7 +102,8 @@ def root_and_other(result: Result) -> tuple[Line, Line]:
 def alive(pid: int) -> bool:
     try:
         with open(f"/proc/{pid}/stat") as stat_file:
-            return stat_file.read().rpartition(")")[2].split()[0] != "Z"
+            # a zombie (Z), or a process being reaped now (X), has ended
+            return stat_file.read().rpartition(")")[2].split()[0] not in ("Z", "X")
     except FileNotFoundError:
         return False
 
@@ -1503,7 +1505,8 @@ def test_with_no_sweep_a_daemon_lives_on_and_its_write_stays_refused(
         (project.root / "the run ended").write_text("yes")
         assert wait_for(project.root / "result") == "ScrimmageRefused"
     finally:
-        os.kill(pid, signal.SIGKILL)
+        with contextlib.suppress(ProcessLookupError):  # it can end before the kill
+            os.kill(pid, signal.SIGKILL)
 
 
 WAIT = "import time; time.sleep(600)"

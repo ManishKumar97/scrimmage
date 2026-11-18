@@ -1,5 +1,6 @@
 """Stopping the runs: all at once, and with the runner when it is killed."""
 
+import contextlib
 import os
 import signal
 import subprocess
@@ -26,7 +27,8 @@ IGNORES_TERM = (
 def gone(pid: int) -> bool:
     try:
         with open(f"/proc/{pid}/stat") as stat:
-            return stat.read().rsplit(")", 1)[1].split()[0] == "Z"  # a zombie is ended
+            # a zombie (Z) is ended, and so is a process its parent is reaping now (X)
+            return stat.read().rsplit(")", 1)[1].split()[0] in ("Z", "X")
     except (FileNotFoundError, ProcessLookupError):  # reaped before the open, or the read
         return True
 
@@ -80,7 +82,7 @@ def running_program(pid: int) -> bool:
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as cmdline:
             return cmdline.read().startswith(b"sh\0")
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):  # reaped before the open, or the read
         return False
 
 
@@ -119,10 +121,14 @@ def test_a_run_ends_when_its_runner_is_killed() -> None:
             time.sleep(0.01)
         assert gone(pid), f"the run outlived its runner (state {state(pid)})"
     finally:
-        if pid and not gone(pid):
-            os.kill(pid, signal.SIGKILL)
-        if mini.poll() is None:
-            mini.kill()
-            mini.wait()
-        if mini.stdout is not None:
-            mini.stdout.close()
+        try:
+            if pid and not gone(pid):
+                # it can be reaped between the check and the kill
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(pid, signal.SIGKILL)
+            if mini.poll() is None:
+                mini.kill()
+                mini.wait()
+        finally:
+            if mini.stdout is not None:
+                mini.stdout.close()

@@ -7,6 +7,7 @@ one runs that command and compares, line by line.
 The model is the fake OpenAI server, scripted per page below, so no key is needed.
 """
 
+import contextlib
 import os
 import re
 import shutil
@@ -187,7 +188,8 @@ def test_the_example_page_runs_with_a_managed_start(
     finally:
         for copy in copies:  # a test that failed part way leaves nothing running
             if copy.proc is not None and group(copy.proc.pid):
-                os.killpg(copy.proc.pid, signal.SIGKILL)
+                with contextlib.suppress(ProcessLookupError):  # it can end after the check
+                    os.killpg(copy.proc.pid, signal.SIGKILL)
     # The test started its copy, and only the test: every shell line is a scrimmage command,
     # so the page sets no variable and makes no token file.
     shell = [

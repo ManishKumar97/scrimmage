@@ -1001,7 +1001,7 @@ def alive(pid: int) -> bool:
         state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
     except FileNotFoundError:
         return False
-    return state != "Z"
+    return state not in ("Z", "X")  # a zombie, or a process being reaped now
 
 
 def test_the_lock_is_held_until_a_cancelled_spend_has_stopped(bed: Bed) -> None:

@@ -121,7 +121,7 @@ def time_limit() -> Iterator[None]:
 
 
 def group(pgid: int) -> list[int]:
-    """The processes of a process group that are still running, zombies left out."""
+    """The processes of a process group still running; ended ones (Z, X) left out."""
     found: list[int] = []
     for entry in Path("/proc").iterdir():
         if not entry.name.isdigit():
@@ -130,7 +130,7 @@ def group(pgid: int) -> list[int]:
             fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
         except OSError:
             continue  # it ended while it was read
-        if fields[0] != "Z" and int(fields[2]) == pgid:
+        if fields[0] not in ("Z", "X") and int(fields[2]) == pgid:
             found.append(int(entry.name))
     return found
 
