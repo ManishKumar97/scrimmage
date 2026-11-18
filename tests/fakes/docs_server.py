@@ -3,19 +3,23 @@
 python docs_server.py <stdio|http|sse> <name> <log> <mode> [port]
 
 Every tool call it really receives goes on a line of the log, so a test can prove that a
-call never arrived. The mode is how its tools really behave: ok, fail, wrong, empty, slow.
+call never arrived, and every tools/list request on a line of <log>.lists. The mode is how
+its tools really behave: ok, fail, wrong, empty, slow. Two modes change only its listing:
+paged lists search on a second page, and hidden never lists title, though title answers.
 """
 
 import sys
 import time
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import (
     CallToolResult,
     CreateMessageRequestParams,
     ImageContent,
+    ListToolsResult,
+    PaginatedRequestParams,
     SamplingMessage,
     TextContent,
     ToolAnnotations,
@@ -32,8 +36,28 @@ class Ticket(TypedDict):
     note: str
 
 
+LATER = "page-2"  # the paged listing's cursor
+
+
 def serve(transport: str, name: str, log: str, mode: str, port: int = 0) -> None:
-    server = MCPServer(name)
+    class Listing(MCPServer):
+        async def _handle_list_tools(
+            self, ctx: Any, params: PaginatedRequestParams | None
+        ) -> ListToolsResult:
+            cursor = None if params is None else params.cursor
+            with Path(f"{log}.lists").open("a") as file:
+                file.write(f"{cursor}\n")
+            tools = await self.list_tools()
+            if mode == "hidden":
+                return ListToolsResult(tools=[t for t in tools if t.name != "title"])
+            if mode == "paged" and cursor is None:
+                first = [t for t in tools if t.name != "search"]
+                return ListToolsResult(tools=first, next_cursor=LATER)
+            if mode == "paged":
+                return ListToolsResult(tools=[t for t in tools if t.name == "search"])
+            return ListToolsResult(tools=tools)
+
+    server = Listing(name)
 
     def received(tool: str, value: str) -> None:
         with Path(log).open("a") as file:

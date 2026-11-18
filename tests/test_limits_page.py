@@ -70,6 +70,7 @@ ALL_TITLES = [
     "A rule cannot tell where a word came from.",
     "A run's changes to its process carry over.",
     "A secret with no pattern under an innocent key is written.",
+    "A server that pages its tool list.",
     "A service row's runs go one after another.",
     "A service run is stricter than a script about processes.",
     "A service run refuses every process start, a library's own too.",

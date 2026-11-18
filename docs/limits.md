@@ -267,6 +267,8 @@ Also read the control-path limits under An agent inside a web service.
 
 - **A mock on a closed MCP session still answers.** A mock or a fault sends nothing, so it never finds out that the connection has gone.
 
+- **A server that pages its tool list.** Scrimmage reads only the first page. When that page has a next page and lacks the mocked tool, the mock answers even if the tool does not exist, so a misspelled label is not caught. See [MCP tools](mcp.md#mocks).
+
 ### Web requests and recorded mocks
 
 - **POSTs a library sends by itself.** Everything through httpx or httpx2 is gated, so these are refused too until listed: the SDK of another model provider, telemetry exporters, and credential requests such as an OAuth token POST, including one an MCP client sends, even to the MCP server's own host.

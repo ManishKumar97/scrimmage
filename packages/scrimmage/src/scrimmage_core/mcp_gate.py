@@ -13,6 +13,7 @@ import contextlib
 import copy
 import json
 import sys
+import weakref
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ from typing import Any
 from scrimmage_core import capture, changes, delay, hooks
 from scrimmage_core.config import slow_seconds
 from scrimmage_core.decide import Call
+from scrimmage_core.errors import ScrimmageMockError
 from scrimmage_core.http_gate import MCP_TRANSPORT, endpoint_of, params, refuse
 from scrimmage_core.process_gate import EXEMPT
 from scrimmage_core.redact import redact
@@ -89,6 +91,10 @@ class Gate:
         self.shaped: set[str] = set()  # labels whose listing declares an output schema
         self.schemas: dict[str, dict[str, Any]] = {}  # label -> that output schema
         self.read_only: set[str] = set()  # labels the server marks as read-only
+        # Per run: each label the gate listed its server for, and why it is not a tool there.
+        self.asked: weakref.WeakKeyDictionary[RunState, dict[str, str | None]] = (
+            weakref.WeakKeyDictionary()
+        )
 
     def learn(self, server: str | None, reply: Any, run: RunState | None = None) -> None:
         """Read one tools/list reply, with or without a run. A tool it names is one this
@@ -387,7 +393,8 @@ async def carried(
     cancel = None
     if keep is not None:
         try:
-            found = await saved(gate, step, keep, reply)
+            found, unknown = await saved(gate, run, step, keep, reply)
+            mistake = mistake or unknown
         except asyncio.CancelledError as exc:
             found, cancel = capture.unsaved(capture.UNSAVABLE, "the run was cancelled"), exc
         except Exception as exc:  # recording only observes the call, so it never fails it
@@ -402,8 +409,11 @@ async def carried(
     return reply
 
 
-async def saved(gate: Gate, step: Step, keep: Kept, reply: Any) -> dict[str, object]:
-    """C.J3.34: the result is saved only if a mock built from it gives the same result.
+async def saved(
+    gate: Gate, run: RunState, step: Step, keep: Kept, reply: Any
+) -> tuple[dict[str, object], str | None]:
+    """C.J3.34: the result is saved only if a mock built from it gives the same result. Also
+    the mistake to write on the call's line, when the server's own listing lacks the tool.
 
     The mock is built as scrimmage test builds it, which lists the server's tools first when
     the agent never did, so this does too. A failed result needs no listing: it is never
@@ -412,21 +422,23 @@ async def saved(gate: Gate, step: Step, keep: Kept, reply: Any) -> dict[str, obj
     real = wire_form(reply)
     failed = capture.failed_result(real)
     if failed is not None:
-        return failed
-    if step.call.label not in gate.listed:
-        try:
-            await keep.session.list_tools()
-        except Exception as exc:
-            return capture.unsaved(
-                capture.UNSAVABLE, f"listing the server's tools failed: {type(exc).__name__}"
-            )
+        return failed, None
+    try:
+        why = await unlisted(gate, run, step, keep.session)
+    except Exception as exc:
+        return capture.unsaved(
+            capture.UNSAVABLE, f"listing the server's tools failed: {type(exc).__name__}"
+        ), None
+    if why is not None:
+        mistake = f"{why}, so a mock of it would be a mistake. Fix the call, or remove it"
+        return capture.unsaved(capture.UNSAVABLE, mistake), mistake
     shaped = step.call.label in gate.shaped
 
     def rebuild(value: object) -> object:
         # The library reads every reply with this pydantic TypeAdapter, as it reads a mock's.
         return wire_form(keep.result_type.validate_python(mock_result(value, shaped)))
 
-    return capture.mcp_value(real, keep.arguments, rebuild)
+    return capture.mcp_value(real, keep.arguments, rebuild), None
 
 
 def asyncio_free_sleep() -> Callable[[float], Awaitable[None]]:
@@ -703,13 +715,45 @@ async def mock_reply(gate: Gate, run: RunState, step: Step, session: Any) -> dic
     """A real tool result. Its text is the value, and a declared shape fills the structured
     result, so a value of the wrong shape fails call_tool's own check."""
     value = run.plan.mocks[step.decision.mock or 0].returns
-    if step.call.label not in gate.listed:
-        try:
-            await session.list_tools()  # as call_tool's own check does, for a tool it has not seen
-        except BaseException as exc:
-            run.finish(step, error=exc)
-            raise
+    try:
+        why = await unlisted(gate, run, step, session)
+    except BaseException as exc:
+        run.finish(step, error=exc)
+        raise
+    if why is not None:
+        run.fail(
+            step, ScrimmageMockError(f"{why}. Fix the mock's call, or remove it"), mistake=True
+        )
     return mock_result(value, step.call.label in gate.shaped)
+
+
+SHOWN_TOOLS = 10  # a mistake names this many of the server's tools, then how many more
+
+
+async def unlisted(gate: Gate, run: RunState, step: Step, session: Any) -> str | None:
+    """Why the call's tool is not one its server has, when the server's own listing says so.
+
+    A tool the gate has not seen listed is listed, as call_tool's own check does, once per
+    label in a run. Only a complete listing is proof: one with a next page says nothing.
+    """
+    label = step.call.label
+    asked = gate.asked.setdefault(run, {})
+    if label not in gate.listed and label not in asked:
+        listing = await session.list_tools()
+        asked[label] = None
+        if label not in gate.listed and listing.next_cursor is None:
+            asked[label] = lacking(step.call, server_of(session), [t.name for t in listing.tools])
+    return None if label in gate.listed else asked.get(label)
+
+
+def lacking(call: Call, server: str | None, tools: list[str]) -> str:
+    """The mistake's first part: the label, and the tools the server does have."""
+    lister = f"server {server}" if server else "the server"
+    names = sorted(tools)
+    more = len(names) - SHOWN_TOOLS
+    shown = ", ".join(names[:SHOWN_TOOLS]) + (f" and {more} more" if more > 0 else "")
+    has = f"its tools are {shown}" if names else "it lists no tools"
+    return f"{call.label} is not a tool {lister} lists; {has}"
 
 
 def mock_result(value: object, shaped: bool) -> dict[str, object]:
