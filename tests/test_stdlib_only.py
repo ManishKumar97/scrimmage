@@ -57,10 +57,15 @@ OWN_PROCESS = {
 }
 
 
+# Standard-library modules of a newer Python the package supports. Each is imported only
+# under a version check, so an older Python's sys.stdlib_module_names does not list it.
+NEWER_STDLIB = {"annotationlib"}  # Python 3.14
+
+
 @pytest.mark.parametrize(("path", "ours"), CASES, ids=[str(p.name) for p, _ in CASES])
 def test_imports_only_the_standard_library(path: Path, ours: set[str]) -> None:
     ours = ours | OWN_PROCESS.get(path.name, set())
-    outside = imported_roots(path) - set(sys.stdlib_module_names) - ours
+    outside = imported_roots(path) - set(sys.stdlib_module_names) - NEWER_STDLIB - ours
     assert not outside, f"{path} imports {sorted(outside)}"
 
 
