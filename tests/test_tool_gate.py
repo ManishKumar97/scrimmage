@@ -7,19 +7,20 @@ import json
 import sys
 import threading
 import types
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
+import wrapping
 from conftest import ACME, EXAMPLE_FAULT, Project
 from fakes.openai_server import FakeOpenAI
 from report_cases import AGENT, TEST, load
 from report_cases import run as a_run
+from scrimmage_core import changes, state, tool_gate
 from scrimmage_core import decide as engine
 from scrimmage_core import plan as planner
-from scrimmage_core import state, tool_gate
 from scrimmage_core.config import Fault, Mock
 from scrimmage_core.errors import (
     ScrimmageMockError,
@@ -1372,3 +1373,119 @@ def test_a_lazy_annotation_that_raises_is_a_mistake_not_none(lines: Lines) -> No
     with pytest.raises(ScrimmageMockError, match="annotations that raise ZeroDivisionError"):
         tool_gate.gate(made("", "def f(a: 1 / 0 = 1) -> str: ..."), "f")()
     assert lines.lines[0]["action"] == "refused"
+
+
+def checking_tool(head: str, returns: str) -> Any:
+    """A tool whose parameter type is imported only for type checking, as a team writes it:
+    quoted, under from __future__ import annotations, or on 3.14 bare and lazy."""
+    space: dict[str, Any] = {"Stock": Stock}
+    sku = '"Decimal"' if head == "quoted" else "Decimal"
+    source = f"def f(sku: {sku}, *, n: int = 1) -> {returns}:\n    raise AssertionError\n"
+    exec((FUTURE if head == "future" else "") + source, space)
+    return space["f"]
+
+
+CHECKING = [
+    pytest.param("quoted", id="quoted"),
+    pytest.param("future", id="future"),
+    pytest.param(
+        "lazy",
+        id="lazy",
+        marks=pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself fails"),
+    ),
+]
+
+
+@pytest.mark.design("mock.typed_from_annotation")
+@pytest.mark.parametrize("head", CHECKING)
+def test_a_mock_is_built_into_the_return_type_whatever_the_parameters(
+    lines: Lines, head: str
+) -> None:
+    tool = checking_tool(head, "Stock")
+    install(lines, [Mock("tool:f", {"sku": "SKU-42", "count": 12}, None)])
+    assert tool_gate.gate(tool, "f")("SKU-42") == Stock("SKU-42", 12)
+    install(Lines(), [Mock("tool:f", {"sku": "SKU-42"}, None)])
+    with pytest.raises(ScrimmageMockError, match="does not fit test_tool_gate:Stock"):
+        tool_gate.gate(tool, "f")("SKU-42")
+
+
+@pytest.mark.parametrize("head", CHECKING)
+def test_a_text_mock_works_whatever_the_parameters(lines: Lines, head: str) -> None:
+    install(lines, [Mock("tool:f", "mocked", None)])
+    assert tool_gate.gate(checking_tool(head, "str"), "f")("SKU-42") == "mocked"
+    assert lines.lines[0]["action"] == "mock"
+
+
+UNRESOLVED_MOCKED = [
+    pytest.param(lambda: get_late, id="quoted"),
+    pytest.param(lambda: checking_tool("future", "LateStock"), id="future"),
+    pytest.param(
+        lambda: checking_tool("lazy", "LateStock"),
+        id="lazy",
+        marks=pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself fails"),
+    ),
+    pytest.param(
+        lambda: made("", "def f(a: 1 / 0 = 1) -> str: ..."),
+        id="lazy_raises",
+        marks=pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself raises"),
+    ),
+]
+
+
+@pytest.mark.design("mock.loose_annotation")
+@pytest.mark.parametrize("tool", UNRESOLVED_MOCKED)
+def test_a_mock_on_a_return_type_that_cannot_be_resolved_is_kept_as_written(
+    lines: Lines, tool: Callable[[], Any]
+) -> None:
+    """As on Any: the mock has its value, so it is not checked; its type names the class."""
+    install(lines, [Mock("tool:f", {"sku": "SKU-42", "count": 12}, None)])
+    assert tool_gate.gate(tool(), "f")("SKU-42") == {"sku": "SKU-42", "count": 12}
+    install(Lines(), [Mock("tool:f", {"sku": "SKU-42", "count": 12}, "test_tool_gate:Stock")])
+    assert tool_gate.gate(tool(), "f")("SKU-42") == Stock("SKU-42", 12)
+
+
+def decorated(decorator: Callable[..., Any], returns: str) -> Any:
+    """A tool in a module under the future import, wrapped by a decorator from another
+    module, whose globals name neither Stock nor Rows."""
+    space: dict[str, Any] = {"Stock": Stock, "Rows": list[str], "decorator": decorator}
+    source = f"@decorator\ndef f(sku: str) -> {returns}:\n    raise AssertionError\n"
+    exec(FUTURE + source, space)
+    return space["f"]
+
+
+DECORATORS = [
+    pytest.param(wrapping.logged, id="wraps"),
+    pytest.param(wrapping.twice_logged, id="chain"),
+    pytest.param(wrapping.Logged, id="update_wrapper_object"),
+]
+
+
+@pytest.mark.design("mock.typed_from_annotation")
+@pytest.mark.parametrize("decorator", DECORATORS)
+def test_a_mock_on_a_decorated_tool_is_built_into_its_return_type(
+    lines: Lines, decorator: Callable[..., Any]
+) -> None:
+    install(lines, [Mock("tool:f", {"sku": "A", "count": 1}, None)])
+    assert tool_gate.gate(decorated(decorator, "Stock"), "f")("A") == Stock("A", 1)
+
+
+@pytest.mark.design("fault.empty_tool_typed")
+@pytest.mark.parametrize("returns", ["list[str]", "Rows"])
+@pytest.mark.parametrize("decorator", DECORATORS)
+def test_empty_on_a_decorated_tool_reads_the_tools_own_module(
+    lines: Lines, decorator: Callable[..., Any], returns: str
+) -> None:
+    install(lines, faults=[empty_fault("tool:f")])
+    value = tool_gate.gate(decorated(decorator, returns), "f")("A")
+    assert value == [] and type(value) is list
+    assert lines.lines[0]["action"] == "fault"
+
+
+@pytest.mark.parametrize("decorator", DECORATORS)
+def test_a_decorated_tool_whose_type_cannot_be_resolved_stays_unresolved(
+    lines: Lines, decorator: Callable[..., Any]
+) -> None:
+    tool = decorated(decorator, "LateStock")
+    assert changes.declared_return(tool) == changes.Unresolved("LateStock")
+    install(lines, [Mock("tool:f", {"sku": "A", "count": 1}, None)])
+    assert tool_gate.gate(tool, "f")("A") == {"sku": "A", "count": 1}

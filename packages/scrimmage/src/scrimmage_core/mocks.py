@@ -7,7 +7,6 @@ mistake in the test.
 """
 
 import importlib
-import inspect
 import typing
 from collections.abc import Callable
 
@@ -34,11 +33,13 @@ def import_object(path: str, prefixes: list[str]) -> object:
 
 
 def return_type(tool: Callable[..., object]) -> object:
-    try:
-        return typing.get_type_hints(tool).get("return")
-    except Exception:  # a forward reference that cannot be resolved
-        annotation = inspect.signature(tool).return_annotation
-        return None if isinstance(annotation, str) else annotation
+    """The tool's return annotation, resolved alone, so a parameter type that cannot be
+    resolved is no matter. None when there is none or it cannot be resolved: as on Any, the
+    mock is kept as written, and a mock's type names the class to build."""
+    from scrimmage_core import changes  # changes imports config, which imports this module
+
+    declared = changes.declared_return(tool)
+    return None if isinstance(declared, changes.Unresolved) else declared
 
 
 def build(

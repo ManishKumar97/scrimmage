@@ -321,13 +321,25 @@ class Unresolved:
 
 def annotated(function: object) -> object:
     """What holds the annotations of a callable: a partial's function, a method's function,
-    or a callable object's __call__."""
+    the function an object made by functools.update_wrapper wraps, or a callable object's
+    __call__. A function made by functools.wraps holds them itself, copied."""
     while isinstance(function, functools.partial):
         function = cast("functools.partial[object]", function).func
     function = getattr(function, "__func__", function)  # a bound method
     if not (inspect.isfunction(function) or isinstance(function, type)) and callable(function):
+        if hasattr(function, "__wrapped__"):
+            return unwrapped(function)
         function = getattr(type(function).__call__, "__func__", type(function).__call__)
     return function
+
+
+def unwrapped(function: object) -> object:
+    """The function at the end of a chain of __wrapped__, whose globals name what the team's
+    module imported. A wrapper's are its decorator's module's, so typing reads these too."""
+    try:
+        return inspect.unwrap(function)  # pyright: ignore[reportArgumentType]
+    except ValueError:  # a chain that loops
+        return function
 
 
 def annotations_of(function: object, string: bool = False) -> dict[str, object]:
@@ -382,7 +394,8 @@ def declared_return(function: object) -> object:
         return None
     # A stand-in that holds only the return annotation, with the function's own globals, so
     # typing resolves it, nested forward references and Annotated included, and nothing else.
-    stand_in = types.FunctionType(borrowed.__code__, getattr(target, "__globals__", None) or {})
+    space = cast("dict[str, object]", getattr(unwrapped(target), "__globals__", None) or {})
+    stand_in = types.FunctionType(borrowed.__code__, space)
     stand_in.__annotations__ = {"return": written}
     try:
         return typing.get_type_hints(stand_in)["return"]
