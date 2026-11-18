@@ -14,7 +14,7 @@ import time
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -146,16 +146,38 @@ def test_a_plan_with_an_unknown_schedule_is_refused() -> None:
 
 @pytest.mark.design("protocol.plan_refuses_unknown_key")
 def test_a_plan_with_an_unknown_fault_key_is_refused() -> None:
-    """Dropping a key it does not know, such as a later retry_after, would run the fault
+    """Dropping a key it does not know, such as a later jitter, would run the fault
     without it."""
-    with pytest.raises(ValueError, match="plan fault key 'retry_after' is not one"):
-        Plan.from_json(with_fault(do="status 429", retry_after=2))
+    with pytest.raises(ValueError, match="plan fault key 'jitter' is not one"):
+        Plan.from_json(with_fault(do="status 429", jitter=2))
     # Every key the runner writes is read back: a fault with each of them round-trips.
     full = config.Fault(
         "tool:a", "replace", "first 1", "X", "GET", "/p", model="m", text="t", find="f"
     )
     sent = dataclasses.replace(a_plan(), faults=(full,)).to_json()
     assert Plan.from_json(sent).faults == (full,)
+
+
+@pytest.mark.design("protocol.retry_after_round_trip")
+def test_retry_after_survives_the_plan_round_trip() -> None:
+    """An SDK that lost it would send the 429 with no header, and the library would wait its
+    own short backoff instead of the server's."""
+    for wait in (0, 30):
+        fault = config.Fault("model", "status 429", "first 1", retry_after=wait)
+        sent = dataclasses.replace(a_plan(), faults=(fault,)).to_json()
+        assert cast(list[dict[str, object]], sent["faults"])[0]["retry_after"] == wait
+        assert Plan.from_json(json.loads(json.dumps(sent))).faults == (fault,)
+    # A corrupt or hand-made plan is refused by the same rules as the file.
+    for do, wait, problem in (
+        ("status 500", 2, 'works only with do = "status 429" or "status 503"'),
+        ("timeout", 2, 'works only with do = "status 429" or "status 503"'),
+        ("status 429", -1, "expected whole seconds from 0"),
+        ("status 429", 2.5, "expected whole seconds from 0"),
+        ("status 429", True, "expected whole seconds from 0"),
+        ("status 429", "2", "expected whole seconds from 0"),
+    ):
+        with pytest.raises(ValueError, match=f"plan fault retry_after: {problem}"):
+            Plan.from_json(with_fault(do=do, retry_after=wait))
 
 
 @pytest.mark.design("protocol.plan_fault_keys_listed")

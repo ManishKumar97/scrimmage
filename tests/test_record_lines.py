@@ -950,3 +950,34 @@ def test_a_find_holding_a_url_with_a_query_reaches_the_gate_raw(sink: Sink) -> N
     assert "token=abc" not in json.dumps(line)
     shown = runner.fault_json(fault)
     assert shown is not None and shown["find"] == "https://x.test/p?[removed]"
+
+
+@pytest.mark.design("record.retry_after")
+def test_a_faulted_line_names_its_retry_after(sink: Sink) -> None:
+    """The line says what the reply told the code to wait, so a slow run reads as the wait
+    it was given, not as a hang."""
+    host = "http:inventory.acme.internal"
+    faults = (
+        config.Fault(host, "status 503", "first 1", path="/waits", retry_after=30),
+        config.Fault(host, "status 503", "first 1", path="/plain"),
+    )
+    plan = Plan("run-1", "t", "fault 1", (), faults, (), (host,), 60.0)
+    run = state.RunState(plan, sink, ALLOWED, blobs=sink)
+    state.install(run)
+    sync_send = httpx2.Client._send_single_request
+    try:
+        http_gate.patch(httpx2, http_gate.Context(run, cast(Any, None), sink, pytest.fail))
+        fetch("/waits")
+        fetch("/waits")  # the fault is spent: real, with no fault object
+        fetch("/plain")
+    finally:
+        httpx2.Client._send_single_request = sync_send  # type: ignore[method-assign]
+    validator = jsonschema.Draft202012Validator(RECORD)
+    waited, after, plain = lines = sink.calls()
+    for line in lines:
+        validator.validate(line)
+    assert waited["fault"] == {"do": "status 503", "when": "first 1", "n": 1, "retry_after": 30}
+    assert after["action"] == "real" and "fault" not in after
+    assert plain["fault"] == {"do": "status 503", "when": "first 1", "n": 1}
+    bad = {**waited, "fault": {**waited["fault"], "retry_after": -1}}
+    assert list(validator.iter_errors(bad))

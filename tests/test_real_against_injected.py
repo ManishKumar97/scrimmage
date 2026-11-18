@@ -1,7 +1,8 @@
 """A real failure against the injected one: the code that meets it cannot tell.
 
 A real get_order that times out, real refused, reset and unresolvable connections on
-httpx and httpx2, sync and async, and a real broken JSON reply and a real empty one."""
+httpx and httpx2, sync and async, a real broken JSON reply and a real empty one, and a
+real rate limiter's Retry-After."""
 
 import asyncio
 import http.server
@@ -10,10 +11,13 @@ import shutil
 import socket
 import struct
 import threading
+import time
+import types
 from collections.abc import Callable, Iterator
 from typing import Any, cast
 
 import openai
+import openai._base_client as openai_base
 import pytest
 
 from conftest import ACME, EXAMPLE_FAULT, Project
@@ -352,3 +356,69 @@ def test_a_real_empty_reply_and_the_injected_one_look_the_same(
     install("empty")
     assert seen(fetched(name, sync, WEB)) == seen(real_reply)
     assert seen(real_reply)[:4] == (200, b"", None, "0")
+
+
+class Limited(http.server.BaseHTTPRequestHandler):
+    """A rate limiter: every request gets a 429 with its server's Retry-After."""
+
+    def do_POST(self) -> None:
+        self.rfile.read(int(self.headers.get("content-length") or 0))
+        server = cast("LimitedServer", self.server)
+        server.hits += 1
+        body = openai_table.error_body(429)
+        self.send_response(429)
+        self.send_header("content-type", "application/json")
+        self.send_header("x-request-id", "req_1")
+        self.send_header("retry-after", server.retry_after)
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+class LimitedServer(http.server.ThreadingHTTPServer):
+    retry_after: str
+    hits: int = 0
+
+
+@pytest.fixture
+def waits(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """The openai library's waits between attempts, kept and not slept, so a 30 s wait costs
+    nothing. Only the library's own reference to time is replaced; the wait it computes is
+    the one it would sleep."""
+    kept: list[float] = []
+    clock = types.SimpleNamespace(sleep=kept.append, time=time.time)
+    monkeypatch.setattr(openai_base, "time", clock)
+    return kept
+
+
+@pytest.mark.design("proof.real_against_injected_retry_after")
+@pytest.mark.parametrize("wait", [30, 121])
+def test_a_real_retry_after_and_the_injected_one_make_the_library_wait_the_same(
+    gated: None, waits: list[float], wait: int
+) -> None:
+    """At 30 s the library waits 30 s before each of its two retries; over 120 s it does
+    not retry at all. Real and injected alike."""
+    server = LimitedServer(("127.0.0.1", 0), Limited)
+    server.retry_after = str(wait)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        state.install(None)
+        url = f"http://127.0.0.1:{server.server_address[1]}/v1"
+        real_error = chat(url)
+    finally:
+        server.shutdown()
+        server.server_close()
+    real_waits, real_attempts = list(waits), server.hits
+    waits.clear()
+    sink, _ = install("status 429", "model", retry_after=wait)
+    fault_error = chat("https://api.openai.com/v1")
+    fault_attempts = len([x for x in sink.lines if x.get("action") == "fault"])
+    assert type(fault_error) is type(real_error) is openai.RateLimitError
+    assert (waits, fault_attempts) == (real_waits, real_attempts)
+    assert (real_waits, real_attempts) == (([float(wait)] * 2, 3) if wait <= 120 else ([], 1))
+    assert isinstance(fault_error, openai.RateLimitError)
+    assert isinstance(real_error, openai.RateLimitError)
+    assert fault_error.response.headers["retry-after"] == real_error.response.headers["retry-after"]

@@ -842,7 +842,10 @@ class RunState:
         )
         if decision.fault is not None:
             fault = self.plan.faults[decision.fault]
-            line["fault"] = {"do": fault.do, "when": fault.when, "n": decision.n}
+            fired: dict[str, object] = {"do": fault.do, "when": fault.when, "n": decision.n}
+            if fault.retry_after is not None:
+                fired["retry_after"] = fault.retry_after
+            line["fault"] = fired
         if decision.mock is not None:
             line["mock"] = decision.mock
         if decision.under is not None:

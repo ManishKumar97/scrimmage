@@ -1,11 +1,13 @@
 """Model faults through the real openai library, against the fake server."""
 
+import datetime
 import json
 import shutil
 import subprocess
 import time
 from collections.abc import Callable
 
+import openai
 import pytest
 
 from conftest import ACME, EXAMPLE_FAULT, Project, Result
@@ -13,6 +15,9 @@ from fakes.openai_server import FakeOpenAI
 from scrimmage_core import config
 from scrimmage_core import runner as runner_module
 from scrimmage_core.runner import Runner
+from test_connection_faults import gated, install
+
+__all__ = ["gated"]  # the fixture, used by name
 
 # Every test here, or nearly, starts a process or a real scrimmage test run.
 pytestmark = pytest.mark.slow
@@ -110,6 +115,77 @@ def test_a_fault_on_the_first_attempt_only_is_absorbed_by_the_librarys_retry(
     lines = row(result, "fault 1")
     assert [x[1] for x in calls(lines)[1:3]] == ["fault", "real"]
     assert "shipped" in str(answer(lines))
+
+
+def hi(api: openai.OpenAI) -> openai.APIStatusError:
+    """One chat call; the status error it raised."""
+    with pytest.raises(openai.APIStatusError) as caught:
+        api.chat.completions.create(
+            model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}]
+        )
+    return caught.value
+
+
+@pytest.mark.design("model.retry_after_header")
+def test_retry_after_sends_the_header_with_the_429(gated: None) -> None:
+    """The header a rate limiter sends, in seconds, the form RFC 9110 gives. The openai
+    library reads its own retry-after-ms first, so sending both would make one of them
+    the wait; only retry-after is sent."""
+    for do, error in (
+        ("status 429", openai.RateLimitError),
+        ("status 503", openai.InternalServerError),
+    ):
+        sink, budget = install(do, "model", retry_after=30)
+        api = openai.OpenAI(api_key="test", max_retries=0)  # one attempt: the reply itself
+        raised = hi(api)
+        assert type(raised) is error
+        assert raised.response.status_code == int(do.split()[1])
+        assert raised.response.headers["retry-after"] == "30"
+        assert "retry-after-ms" not in raised.response.headers
+        [line] = [x for x in sink.lines if x.get("kind") == "model"]
+        assert line["fault"] == {"do": do, "when": "always", "n": 1, "retry_after": 30}
+        assert budget.asked == 0  # nothing reserved: nothing was sent
+    install("status 429", "model")
+    assert "retry-after" not in hi(openai.OpenAI(api_key="test", max_retries=0)).response.headers
+
+
+def started(line: dict[str, object]) -> datetime.datetime:
+    return datetime.datetime.fromisoformat(str(line["start"]).replace("Z", "+00:00"))
+
+
+@pytest.mark.design("model.retry_after_waits")
+def test_the_openai_library_waits_retry_after_before_its_retry(
+    project: Project, fake_openai: Fake
+) -> None:
+    """The one real wait in this file, 1 s: the library's own first backoff is at most
+    0.5 s, so a gap of 1 s or more is the header's."""
+    wait = model_fault("status 429", "first 1") + "retry_after = 1\n"
+    use(project, "acme.rag:answer", wait)
+    result = project.test(fake_openai(ACME, embedding="embedding"))
+    assert result.finished, result.out + result.err
+    lines = row(result, "fault 1")
+    chats = [x for x in lines if x.get("call") == "model:openai"]
+    assert [(x["action"], x["retry"]) for x in chats[:2]] == [("fault", 0), ("real", 1)]
+    gap = (started(chats[1]) - started(chats[0])).total_seconds()
+    assert 1.0 <= gap < 30, gap  # the ceiling is loose: a loaded machine is slow, not wrong
+    assert "shipped" in str(answer(lines))
+
+
+@pytest.mark.design("model.retry_after_over_120")
+def test_a_retry_after_over_120_seconds_stops_the_openai_library_retrying(
+    project: Project, fake_openai: Fake
+) -> None:
+    """openai 3.x does not retry when the server asks for more than two minutes. No wait
+    happens, so the test is fast; without the header the library would retry at once."""
+    wait = model_fault("status 429", "first 1") + "retry_after = 121\n"
+    use(project, "acme.rag:answer", wait, extra="\nrun_timeout = 200")
+    begun = time.monotonic()
+    result = project.test(fake_openai(ACME, embedding="embedding"))
+    assert result.finished, result.out + result.err
+    lines = row(result, "fault 1")
+    assert calls(lines) == [("model:openai/embeddings", "real", 0), ("model:openai", "fault", 0)]
+    assert answer(lines) == "error: RateLimitError"
+    assert time.monotonic() - begun < 120  # it did not wait
 
 
 @pytest.mark.design("model.embeddings_labelled_real")

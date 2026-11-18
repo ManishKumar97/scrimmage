@@ -200,6 +200,7 @@ To act on a miss:
 | `raises` | For `"error"` on a Python tool: the error to raise, a built-in such as `"ConnectionError"`, or `package.module:Class` from your agent's packages. Optional. |
 | `text` | With `"append"` and `"replace"`: the text to add, or to put in place. Up to 64 KiB. Required with those two, refused with any other fault. |
 | `find` | With `"replace"`: replace only this text, wherever it is, compared exactly. Without it the whole result is replaced. On a model call, it is looked for in the text of each choice of the reply. Optional. |
+| `retry_after` | With `"status 429"` or `"status 503"` on a model call or a web request: the reply's `Retry-After` header, in whole seconds from 0. It must be under `run_timeout`. See [A rate limit that says how long to wait](model-faults.md#a-rate-limit-that-says-how-long-to-wait). Optional. |
 | `when` | When it fires: `"always"`, the default; `"first N"`, the first N attempts; `"call N"`, the Nth attempt alone; or on a model call `"requests N"`, the first N requests and every retry of each. `"once"` and a bare number are refused: write `"first 1"` or `"call N"`. |
 | `method` | On a web request: fail only this method. |
 | `path` | On a web request: fail only this exact path, with no query string. |
@@ -317,5 +318,4 @@ Using one now stops the test: it is rejected as unknown.
 - Settings: `records`.
 - Labels: `auth:`, and model providers other than OpenAI.
 - Faults: `auth error`, `context too long`, `append` on a model call, the other model reply faults, and `status` on a tool.
-- Fault options: `retry_after`.
 - Mocks: `returns_from`.
