@@ -16,6 +16,10 @@ DYNAMIC = {"import_module", "__import__"}
 # The only places that import a computed name: the team's own module from a mock's
 # type, and the agent's function in the starter. Both are under SCRIMMAGE_ALLOW_IMPORTS.
 COMPUTED_ALLOWED = {("mocks.py", "import_object"), ("start.py", "main")}
+# A library of the team's own, loaded by name in one function only. br is undone with the
+# program's own brotli, found when a br reply arrives; httpx asks for br only when it
+# imports, so it is the team's version, never one Scrimmage adds.
+OPTIONAL_ALLOWED = {("changes.py", "brotli_module"): {"brotli", "brotlicffi"}}
 
 
 def imported_roots(path: Path) -> set[str]:
@@ -41,7 +45,9 @@ def imported_roots(path: Path) -> set[str]:
             if name in DYNAMIC and node.args:
                 arg = node.args[0]
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                    roots.add(arg.value.split(".")[0])
+                    root = arg.value.split(".")[0]
+                    if root not in OPTIONAL_ALLOWED.get((path.name, owner.get(node, "")), ()):
+                        roots.add(root)
                 elif (path.name, owner.get(node, "")) not in COMPUTED_ALLOWED:
                     roots.add(f"<computed name in {owner.get(node, 'module level')}>")
     return roots
@@ -54,9 +60,6 @@ OWN_PROCESS = {
     "mcp_server.py": {"anyio", "jsonschema", "mcp", "mcp_types"},
     # scrimmage cert, installed with the cert extra, run by hand and never imported by the rest.
     "cert.py": {"cryptography"},
-    # br is undone with the program's own brotli, loaded only when a br reply arrives. httpx
-    # asks for br only when it imports, so it is the team's version, never one Scrimmage adds.
-    "changes.py": {"brotli", "brotlicffi"},
 }
 
 

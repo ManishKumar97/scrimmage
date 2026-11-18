@@ -322,6 +322,8 @@ Also read the control-path limits under An agent inside a web service.
   A model reply encoded with `zstd` is not changed either, and its cost is estimated from its size.
   A `br` reply is read with `brotli` or `brotlicffi` 1.2 or later from your program's environment; httpx and httpx2 ask for `br` only when one of them is installed.
   Without one, or with an older one, a `br` reply is not changed, the line says why, and a model reply's cost is estimated from its size.
+  `brotlipy`, which also installs as `brotli`, counts as none: it cannot stop at a size, so Scrimmage leaves `br` alone while httpx still unpacks it for your program.
+  A packed reply is unpacked to 10 MB at most for the record, so a larger one's `bytes` on the line shows that cap, not its full size.
 
 - **`slow` outside asyncio.** A `slow` fault on an async tool or web request under trio needs an asyncio loop to wait on, so the call is not slowed and the line says so. An MCP call waits with anyio, which works on both.
 

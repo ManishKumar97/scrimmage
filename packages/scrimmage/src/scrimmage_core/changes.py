@@ -577,20 +577,32 @@ def packed_why(encoding: str) -> str | None:
 
 @functools.cache
 def brotli_module() -> types.ModuleType | None:
-    """The program's own brotli, else brotlicffi, if it can cap what it unpacks, as 1.2 and
-    later can. Never a dependency: httpx and httpx2 ask for br only when one of them imports."""
+    """The program's own brotli, else brotlicffi, whichever first can cap what it unpacks.
+    Never a dependency: httpx and httpx2 ask for br only when one of them imports."""
     try:
         module = importlib.import_module("brotli")
     except ImportError:
-        try:
-            module = importlib.import_module("brotlicffi")
-        except ImportError:
-            return None
+        module = None
+    if module is not None and can_cap(module):
+        return module
     try:
-        module.Decompressor().process(b"", output_buffer_limit=1)
-    except TypeError:
-        return None  # older than 1.2, which would unpack a small bomb whole
-    return module
+        module = importlib.import_module("brotlicffi")
+    except ImportError:
+        return None
+    return module if can_cap(module) else None
+
+
+def can_cap(module: types.ModuleType) -> bool:
+    """Whether its decompressor stops at a size, as brotli and brotlicffi 1.2 and later do.
+    An older one would unpack a small bomb whole, and brotlipy, which also installs as
+    brotli, has no process at all: either is taken as not installed."""
+    try:
+        unpack = module.Decompressor()
+        unpack.process(b"", output_buffer_limit=1)
+        unpack.is_finished()
+        return isinstance(module.error, type) and issubclass(module.error, Exception)
+    except Exception:
+        return False
 
 
 def unbrotli(raw: bytes) -> bytes | None:

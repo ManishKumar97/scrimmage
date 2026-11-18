@@ -110,6 +110,10 @@ jobs:
           uv run coverage run -m pytest
           uv run coverage combine
           mv .coverage ".coverage.py${{ matrix.python }}"
+      # br is undone with the program's own brotli, which the dev group leaves out, so the
+      # br tests skip above. This runs them with it, never as a dependency of the package.
+      - name: The br tests, with brotli installed
+        run: uv run --with brotli pytest tests/test_encodings.py tests/test_model_replace.py tests/test_changes.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         if: matrix.python != '3.11'
         with:
