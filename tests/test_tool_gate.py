@@ -7,7 +7,7 @@ import json
 import sys
 import threading
 import types
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -1372,3 +1372,72 @@ def test_a_lazy_annotation_that_raises_is_a_mistake_not_none(lines: Lines) -> No
     with pytest.raises(ScrimmageMockError, match="annotations that raise ZeroDivisionError"):
         tool_gate.gate(made("", "def f(a: 1 / 0 = 1) -> str: ..."), "f")()
     assert lines.lines[0]["action"] == "refused"
+
+
+def checking_tool(head: str, returns: str) -> Any:
+    """A tool whose parameter type is imported only for type checking, as a team writes it:
+    quoted, under from __future__ import annotations, or on 3.14 bare and lazy."""
+    space: dict[str, Any] = {"Stock": Stock}
+    sku = '"Decimal"' if head == "quoted" else "Decimal"
+    source = f"def f(sku: {sku}, *, n: int = 1) -> {returns}:\n    raise AssertionError\n"
+    exec((FUTURE if head == "future" else "") + source, space)
+    return space["f"]
+
+
+CHECKING = [
+    pytest.param("quoted", id="quoted"),
+    pytest.param("future", id="future"),
+    pytest.param(
+        "lazy",
+        id="lazy",
+        marks=pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself fails"),
+    ),
+]
+
+
+@pytest.mark.design("mock.typed_from_annotation")
+@pytest.mark.parametrize("head", CHECKING)
+def test_a_mock_is_built_into_the_return_type_whatever_the_parameters(
+    lines: Lines, head: str
+) -> None:
+    tool = checking_tool(head, "Stock")
+    install(lines, [Mock("tool:f", {"sku": "SKU-42", "count": 12}, None)])
+    assert tool_gate.gate(tool, "f")("SKU-42") == Stock("SKU-42", 12)
+    install(Lines(), [Mock("tool:f", {"sku": "SKU-42"}, None)])
+    with pytest.raises(ScrimmageMockError, match="does not fit test_tool_gate:Stock"):
+        tool_gate.gate(tool, "f")("SKU-42")
+
+
+@pytest.mark.parametrize("head", CHECKING)
+def test_a_text_mock_works_whatever_the_parameters(lines: Lines, head: str) -> None:
+    install(lines, [Mock("tool:f", "mocked", None)])
+    assert tool_gate.gate(checking_tool(head, "str"), "f")("SKU-42") == "mocked"
+    assert lines.lines[0]["action"] == "mock"
+
+
+UNRESOLVED_MOCKED = [
+    pytest.param(lambda: get_late, id="quoted"),
+    pytest.param(lambda: checking_tool("future", "LateStock"), id="future"),
+    pytest.param(
+        lambda: checking_tool("lazy", "LateStock"),
+        id="lazy",
+        marks=pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself fails"),
+    ),
+    pytest.param(
+        lambda: made("", "def f(a: 1 / 0 = 1) -> str: ..."),
+        id="lazy_raises",
+        marks=pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself raises"),
+    ),
+]
+
+
+@pytest.mark.design("mock.loose_annotation")
+@pytest.mark.parametrize("tool", UNRESOLVED_MOCKED)
+def test_a_mock_on_a_return_type_that_cannot_be_resolved_is_kept_as_written(
+    lines: Lines, tool: Callable[[], Any]
+) -> None:
+    """As on Any: the mock has its value, so it is not checked; its type names the class."""
+    install(lines, [Mock("tool:f", {"sku": "SKU-42", "count": 12}, None)])
+    assert tool_gate.gate(tool(), "f")("SKU-42") == {"sku": "SKU-42", "count": 12}
+    install(Lines(), [Mock("tool:f", {"sku": "SKU-42", "count": 12}, "test_tool_gate:Stock")])
+    assert tool_gate.gate(tool(), "f")("SKU-42") == Stock("SKU-42", 12)
