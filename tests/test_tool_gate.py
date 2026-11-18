@@ -262,6 +262,39 @@ def test_a_value_that_is_no_table_on_an_optional_class_is_kept_as_written(lines:
     assert type(value) is str and value == "/tmp"
 
 
+class Priority(enum.IntEnum):
+    LOW = 1
+    HIGH = 2
+
+
+def find_status(order_id: str) -> Status | None:
+    return None
+
+
+def find_priority(order_id: str) -> Priority | None:
+    return None
+
+
+@pytest.mark.design("mock.typed_from_annotation")
+@pytest.mark.parametrize(
+    ("tool", "returns", "built"),
+    [
+        (find_status, "shipped", Status.SHIPPED),
+        (find_status, "other", "other"),
+        (find_priority, 2, Priority.HIGH),
+        (find_priority, 7, 7),
+    ],
+    ids=["enum-member", "enum-other", "int-enum-member", "int-enum-other"],
+)
+def test_an_optional_enum_builds_a_member_and_keeps_any_other_value(
+    lines: Lines, tool: Callable[[str], object], returns: object, built: object
+) -> None:
+    label = tool.__name__
+    install(lines, [Mock(f"tool:{label}", returns, None)])
+    value = tool_gate.gate(tool, label)("1")
+    assert type(value) is type(built) and value == built
+
+
 Large = enum.Enum("Large", {f"M{i}": f"v{i}" for i in range(5000)})
 
 

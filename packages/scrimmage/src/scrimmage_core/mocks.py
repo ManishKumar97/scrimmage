@@ -84,7 +84,11 @@ def build(
     target = target_of(declared)
     returns = fresh(returns)
     if target is not declared and not table(returns):
-        return returns  # X | None builds X from a table only, so a Path's text stays text
+        # X | None builds X from a table only, so a Path's text stays text; an Enum's
+        # member value builds the member, and any other value stays as written.
+        if isinstance(target, enum.EnumMeta):
+            return member_or_value(cast("type[enum.Enum]", target), returns)
+        return returns
     if not isinstance(target, type) or target in PLAIN:
         return returns
     name = kind or f"{target.__module__}:{target.__qualname__}"
@@ -101,6 +105,15 @@ def build(
     except (TypeError, ValueError) as exc:  # pydantic's ValidationError is a ValueError
         raise ScrimmageMockError(f"the mock does not fit {name}: {exc}") from exc
     raise ScrimmageMockError(f"the mock does not fit {name}: expected a table of its fields")
+
+
+def member_or_value(kind: type[enum.Enum], value: object) -> object:
+    """The member with this value, or the value as written: under E | None, a value that is
+    no member passed through before Enums were built, so it is never a mistake."""
+    try:
+        return kind(value)
+    except (TypeError, ValueError):
+        return value
 
 
 def member(kind: type[enum.Enum], value: object, name: str) -> enum.Enum:
