@@ -367,7 +367,7 @@ def alive(pid: int) -> bool:
         state = Path(f"/proc/{pid}/stat").read_text().split()[2]
     except OSError:
         return False
-    return state != "Z"
+    return state not in ("Z", "X")  # a zombie, or a process being reaped now
 
 
 @pytest.mark.slow

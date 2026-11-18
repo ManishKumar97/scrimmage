@@ -133,12 +133,12 @@ def held_file(shop: Shop, start: str, *, extra: str = "", second: bool = False) 
 
 
 def gone(pid: int) -> bool:
-    """The process has exited: no entry, or a zombie its parent has not reaped yet."""
+    """The process has exited: no entry, a zombie (Z), or one being reaped now (X)."""
     try:
         fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
     except OSError:
         return True
-    return fields[0] == "Z"
+    return fields[0] in ("Z", "X")
 
 
 def test_ctrl_c_during_the_ready_wait_stops_the_child(shop: Shop) -> None:

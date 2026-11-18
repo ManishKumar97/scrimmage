@@ -27,7 +27,8 @@ IGNORES_TERM = (
 def gone(pid: int) -> bool:
     try:
         with open(f"/proc/{pid}/stat") as stat:
-            return stat.read().rsplit(")", 1)[1].split()[0] == "Z"  # a zombie is ended
+            # a zombie (Z) is ended, and so is a process its parent is reaping now (X)
+            return stat.read().rsplit(")", 1)[1].split()[0] in ("Z", "X")
     except (FileNotFoundError, ProcessLookupError):  # reaped before the open, or the read
         return True
 
@@ -122,7 +123,7 @@ def test_a_run_ends_when_its_runner_is_killed() -> None:
     finally:
         try:
             if pid and not gone(pid):
-                # it can end between the check and the kill; the first failure must show
+                # it can be reaped between the check and the kill
                 with contextlib.suppress(ProcessLookupError):
                     os.kill(pid, signal.SIGKILL)
             if mini.poll() is None:
