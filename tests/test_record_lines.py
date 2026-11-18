@@ -965,13 +965,17 @@ def test_a_faulted_line_names_its_retry_after(sink: Sink) -> None:
     run = state.RunState(plan, sink, ALLOWED, blobs=sink)
     state.install(run)
     sync_send = httpx2.Client._send_single_request
+    async_send = httpx2.AsyncClient._send_single_request
     try:
         http_gate.patch(httpx2, http_gate.Context(run, cast(Any, None), sink, pytest.fail))
         fetch("/waits")
         fetch("/waits")  # the fault is spent: real, with no fault object
         fetch("/plain")
     finally:
+        # patch() gates both clients, so both are put back: a gate left on the async one
+        # has no budget client, and a later async test in this process fails or hangs.
         httpx2.Client._send_single_request = sync_send  # type: ignore[method-assign]
+        httpx2.AsyncClient._send_single_request = async_send  # type: ignore[method-assign]
     validator = jsonschema.Draft202012Validator(RECORD)
     waited, after, plain = lines = sink.calls()
     for line in lines:
