@@ -1557,3 +1557,27 @@ def test_a_really_imported_type_holding_a_plumbing_name_is_kept(project: Project
     )
     module = import_module(project, "wrapper", text)
     assert langchain_gate.plumbing_names(module.f) == {"config"}
+
+
+@pytest.mark.design("adapter.plumbing_not_recorded")
+@ON_314
+def test_a_name_mangled_parameter_still_lets_config_be_filtered(project: Project) -> None:
+    text = (
+        "from langchain_core.runnables import RunnableConfig\n\n\n"
+        "class T:\n"
+        "    def m(self, __sku, config: RunnableConfig = None, x: 1 / 0 = None): ...\n"
+    )
+    module = import_module(project, "mangled", text)
+    assert langchain_gate.plumbing_names(module.T.m) == {"config"}
+
+
+@pytest.mark.design("adapter.plumbing_not_recorded")
+def test_a_literal_value_naming_a_plumbing_type_is_not_plumbing(project: Project) -> None:
+    text = (
+        "from typing import Literal, Optional\n"
+        "from langchain_core.runnables import RunnableConfig\n\n\n"
+        "def f(mode: Literal['RunnableConfig'], opt: Optional[Literal['RunnableConfig']],"
+        " config: Optional[RunnableConfig] = None): ...\n"
+    )
+    module = import_module(project, "literal", text)
+    assert langchain_gate.plumbing_names(module.f) == {"config"}
