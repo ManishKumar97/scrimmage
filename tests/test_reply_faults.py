@@ -792,6 +792,36 @@ def test_refuse_on_a_plain_responses_request_is_text_with_the_real_replys_fields
     assert got.id != real.id and got.usage.output_tokens == openai_table.BUILT_OUTPUT_TOKENS
 
 
+@pytest.mark.design("fault.refuse_responses")
+def test_a_built_responses_refusal_repeats_the_requests_own_fields(
+    gated: None, loopback: Loopback
+) -> None:
+    """A real reply repeats what the request set; text keeps the verbosity a reply adds."""
+    gate_on("refuse")
+    got = responses_api(
+        loopback,
+        True,
+        store=False,
+        instructions="Be brief.",
+        temperature=0.2,
+        top_p=0.5,
+        metadata={"row": "7"},
+        tool_choice="required",
+        tools=RESPONSE_SPECS,
+        text={"format": {"type": "text"}},
+        reasoning={"effort": "low"},
+    )
+    assert (got.store, got.instructions, got.temperature, got.top_p) == (
+        False, "Be brief.", 0.2, 0.5,
+    )  # fmt: skip
+    assert (got.metadata, got.tool_choice) == ({"row": "7"}, "required")
+    assert got.text.verbosity == "medium" and got.reasoning.effort == "low"
+    assert got.reasoning.summary is None
+    gate_on("refuse")
+    plain = responses_api(loopback, True)
+    assert (plain.store, plain.instructions, plain.temperature) == (True, None, 1.0)
+
+
 @pytest.mark.design("fault.unknown_tool_responses")
 @pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
 def test_unknown_tool_on_responses_is_a_mistake_and_nothing_is_sent(
@@ -818,20 +848,62 @@ def plan_on_call_1(word: str) -> Plan:
 def test_a_request_chained_to_a_changed_reply_is_a_mistake_and_not_sent(
     gated: None, loopback: Loopback, word: str, sent: int, sync: bool
 ) -> None:
-    """OpenAI stored the real reply under a changed reply's id, and nothing under a built
-    one's, so chaining to either would build the next turn from what the agent never saw."""
+    """A changed or built reply has a made-up id, so OpenAI holds nothing under it: a request
+    chained to it could not build the next turn from what the agent got."""
     sink, budget = gate_plan(plan_on_call_1(word))
     loopback.body = json.dumps(REAL_RESPONSE).encode()
     first = responses_api(loopback, sync)
     assert len(loopback.seen) == budget.asked == sent
-    with pytest.raises(ScrimmageMockError, match="sets previous_response_id resp_"):
+    assert first.id != REAL_RESPONSE["id"]
+    with pytest.raises(ScrimmageMockError, match="asks OpenAI to look up resp_"):
         responses_api(loopback, sync, input="And order 5678?", previous_response_id=first.id)
     assert len(loopback.seen) == budget.asked == sent  # the chained request is never sent
     faulted, chained = model_lines(sink)
     assert faulted["action"] == "fault"
     assert (chained["action"], chained["reason"]) == ("refused", MISTAKE_REFUSAL)
-    assert f"previous_response_id {first.id}" in str(chained["mistake"])
-    assert "send the conversation in input" in str(chained["mistake"])
+    assert f"look up {first.id}," in str(chained["mistake"])
+    assert str(chained["mistake"]).endswith(
+        "send the conversation in input instead, as the OpenAI Agents SDK does by default"
+    )
+
+
+@pytest.mark.design("fault.responses_chain")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+@pytest.mark.parametrize(("word", "sent"), [("garble", 1), ("refuse", 0)], ids=["changed", "built"])
+def test_an_item_reference_to_a_faulted_item_is_a_mistake_and_not_sent(
+    gated: None, loopback: Loopback, word: str, sent: int, sync: bool
+) -> None:
+    """OpenAI reads an item_reference from the item it stored, and holds none under a faulted
+    item's made-up id. A reference to another item goes on."""
+    sink, budget = gate_plan(plan_on_call_1(word))
+    loopback.body = json.dumps(REAL_RESPONSE).encode()
+    first = responses_api(loopback, sync)
+    [item] = first.output
+    asked = [{"type": "item_reference", "id": item.id}, {"role": "user", "content": "More?"}]
+    with pytest.raises(ScrimmageMockError, match=f"asks OpenAI to look up {item.id},"):
+        responses_api(loopback, sync, input=asked)
+    assert len(loopback.seen) == budget.asked == sent
+    other = [{"type": "item_reference", "id": "msg_" + "2" * 50}, asked[1]]
+    responses_api(loopback, sync, input=other)
+    assert len(loopback.seen) == sent + 1
+    assert [x["action"] for x in model_lines(sink)] == ["fault", "refused", "real"]
+
+
+@pytest.mark.design("fault.responses_conversation")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+@pytest.mark.parametrize("word", ["garble", "refuse"])
+def test_a_reply_fault_in_a_responses_conversation_is_a_mistake_and_nothing_is_sent(
+    gated: None, loopback: Loopback, word: str, sync: bool
+) -> None:
+    """OpenAI adds each reply to a conversation it keeps: the real one after a changed reply,
+    none after a built one. The next turn would be built from what the agent never got."""
+    sink, budget = gate_on(word)
+    with pytest.raises(ScrimmageMockError, match="is a Responses call in a conversation"):
+        responses_api(loopback, sync, conversation="conv_" + "3" * 50)
+    assert loopback.seen == [] and budget.asked == 0
+    line = line_of(sink, "model")
+    assert (line["action"], line["reason"]) == ("refused", MISTAKE_REFUSAL)
+    assert "fault" not in line and "send the conversation in input" in str(line["mistake"])
 
 
 @pytest.mark.design("fault.responses_chain")

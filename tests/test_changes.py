@@ -3,6 +3,7 @@
 import copy
 import gzip
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -549,7 +550,7 @@ def test_a_reply_change_reads_a_gzip_body_and_writes_it_plain(word: str) -> None
 # The Responses API: a real gpt-4o-mini answer, and function_call items in the spec's form.
 REAL_RESPONSE_FILE = FIXTURES / "real_response_answer.json"
 REAL_RESPONSE = json.loads(REAL_RESPONSE_FILE.read_text())["body"]
-KEPT_ON_RESPONSES = ("id", "object", "created_at", "model", "usage", "service_tier", "billing")
+KEPT_ON_RESPONSES = ("object", "created_at", "model", "usage", "service_tier", "billing")
 
 
 def response_with(*items: dict[str, Any]) -> dict[str, Any]:
@@ -651,12 +652,13 @@ def test_bad_tool_args_on_responses_breaks_each_function_call_item() -> None:
         with pytest.raises(json.JSONDecodeError):
             json.loads(arguments)
     assert (done.count, done.parts) == (2, ("output[1].arguments", "output[2].arguments"))
-    # The names, ids and statuses stay, and so does the text.
-    assert [(i["id"], i["call_id"], i["name"], i["status"]) for i in new["output"][1:]] == [
-        ("fc_1", "call_1", "get_order", "completed"),
-        ("fc_2", "call_2", "get_order", "completed"),
+    # The names, call ids and statuses stay, and so does the text.
+    assert [(i["call_id"], i["name"], i["status"]) for i in new["output"][1:]] == [
+        ("call_1", "get_order", "completed"),
+        ("call_2", "get_order", "completed"),
     ]
-    assert new["output"][0] == reply["output"][0] and new["status"] == "completed"
+    assert new["output"][0]["content"] == reply["output"][0]["content"]
+    assert new["status"] == "completed"
     assert kept(new) == kept(reply)
     assert not_made_on_responses("bad tool args", REAL_RESPONSE) == (
         "the reply has no tool call with arguments to break",
@@ -680,7 +682,7 @@ def test_garble_on_responses_changes_each_output_text_part() -> None:
         "output[0].content[1].text",
         "output[2].content[0].text",
     )
-    assert new["output"][1] == reply["output"][1]  # the function call stays
+    assert {**new["output"][1], "id": ""} == {**reply["output"][1], "id": ""}  # it stays
     new, _ = made_on_responses("garble", REAL_RESPONSE)
     assert new["output"][0]["content"][0]["text"] == f"Order 1234 has been {THAI}"
     assert kept(new) == kept(REAL_RESPONSE) and new["status"] == "completed"
@@ -689,3 +691,26 @@ def test_garble_on_responses_changes_each_output_text_part() -> None:
         ((message("  "),), "the reply has no text"),
     ):
         assert not_made_on_responses("garble", response_with(*items)) == (why, "data")
+
+
+ID = r"[0-9a-f]{50}"
+
+
+@pytest.mark.design("fault.responses_fresh_ids")
+@pytest.mark.parametrize("word", ["garble", "truncate", "bad tool args"])
+def test_a_changed_response_gets_fresh_ids_in_openai_forms(word: str) -> None:
+    """OpenAI reads an item resent under a stored id as it stored it, so the changed reply and
+    its items get new made-up ids, which OpenAI reads as sent. call_id stays: the agent pairs
+    its function_call_output by it."""
+    call = {**function_call('{"order_id":"1234"}'), "id": "fc_" + "a" * 50}
+    reply = response_with(REAL_RESPONSE["output"][0], call)
+    if word != "bad tool args":
+        reply["output"] = reply["output"][:1]
+    new, _ = made_on_responses(word, reply)
+    again, _ = made_on_responses(word, reply)
+    assert re.fullmatch(f"resp_{ID}", new["id"]) and new["id"] != REAL_RESPONSE["id"]
+    assert new["id"] != again["id"]
+    for got, real in zip(new["output"], reply["output"], strict=True):
+        prefix = {"message": "msg_", "function_call": "fc_"}[real["type"]]
+        assert re.fullmatch(prefix + ID, got["id"]) and got["id"] != real["id"]
+        assert got.get("call_id") == real.get("call_id")

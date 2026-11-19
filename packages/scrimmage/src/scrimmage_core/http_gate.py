@@ -483,9 +483,9 @@ def prepare(
         reply_checks(run, step, fields or {}, str(request.url.path))
     if call.kind == "model" and call.name == "chat" and fields is not None:
         if openai_table.is_responses(str(request.url.path)):
-            # Never marked: OpenAI takes back an item id it never made, and a request chained
-            # to a faulted reply is a mistake, so no 400 is known to follow a fault here. One
-            # that does stays an infrastructure error.
+            # Never marked: OpenAI takes an item id it never made and reads the item as sent,
+            # and a request that looks up a faulted reply is a mistake, so no 400 is known to
+            # follow a fault here. One that does stays an infrastructure error.
             chain_check(run, step, fields)
         else:
             # Decided as the request is sent: one sent before a fault fired holds nothing.
@@ -668,22 +668,32 @@ def reply_checks(run: RunState, step: Step, fields: dict[str, object], path: str
             "is a Responses call, and a call to a tool no one offered is seen on Chat "
             "Completions only; fault a chat call",
         )
+    if openai_table.is_responses(path) and fields.get("conversation") is not None:
+        not_carried_out(
+            run,
+            step,
+            f"is a Responses call in a conversation OpenAI keeps, and {word} would leave the "
+            f"real reply, or none, in it for the next turn; {IN_INPUT}",
+        )
     if word == "unknown tool" and (why := openai_table.no_free_tool_call(path, fields)):
         run.unchanged(step, why)
         step.decision = Decision("real")
 
 
+IN_INPUT = "send the conversation in input instead, as the OpenAI Agents SDK does by default"
+
+
 def chain_check(run: RunState, step: Step, fields: dict[str, object]) -> None:
-    """Before anything is sent: a Responses request chained to a reply a fault changed or
-    built is a mistake in the test. OpenAI stored the real reply under that id, or none at
-    all, so the model would build the next turn from what the agent never saw."""
-    previous = run.chains_to_a_fault(fields)
-    if previous is None:
+    """Before anything is sent: a Responses request that asks OpenAI to look up a reply or
+    an item a fault changed or built, as previous_response_id or an item_reference, is a
+    mistake in the test. Its id is made up, so OpenAI holds nothing under it, and the model
+    could not build the next turn from what the agent got."""
+    found = run.chains_to_a_fault(fields)
+    if found is None:
         return
     why = (
-        f"sets previous_response_id {previous}, a reply a fault changed or built, and OpenAI "
-        "holds the real reply under that id, or none; send the conversation in input instead, "
-        "as the OpenAI Agents SDK does by default, or set store false"
+        f"asks OpenAI to look up {found}, a reply or an item a fault changed or built, and "
+        f"OpenAI holds nothing under that id; {IN_INPUT}"
     )
     if step.decision.fault is not None:
         not_carried_out(run, step, why)
@@ -728,11 +738,11 @@ def faulted(
     responses: bool,
     ids_only: bool = False,
 ) -> None:
-    """Keep what a fired fault in a model's reply gave the agent: on Responses the reply's id,
+    """Keep what a fired fault in a model's reply gave the agent: on Responses its ids,
     which a later request may not chain to; on chat what a later request built from it
     carries."""
     if responses:
-        ctx.run.add_faulted_response(openai_table.response_id(gave))
+        ctx.run.add_faulted_reply(openai_table.response_ids(gave))
     else:
         ctx.run.add_reply_fault_markers(
             step.call.label, openai_table.given(fields, gave, ids_only=ids_only)

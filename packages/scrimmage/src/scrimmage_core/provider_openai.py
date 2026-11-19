@@ -250,8 +250,8 @@ def refusal_reply(fields: dict[str, object], tokens_in: int) -> bytes:
 # A real gpt-4o-mini Responses reply, saved on 18 November 2026
 # (tests/fixtures/openai/real_response_answer.json): every field a built reply has, in the real
 # order. The output, the ids, the times, the model and the counts are put in for each reply.
-# The fields that echo a request are set as for a request that sets none of them, but the
-# text format, the output limit and previous_response_id, which are the request's own.
+# A field that echoes a request takes the request's value when the request sets it, as a
+# real reply does; tools is left empty, as a reply writes each tool in its own longer form.
 RESPONSE_REPLY: dict[str, object] = {
     "id": "",
     "object": "response",
@@ -302,7 +302,26 @@ RESPONSE_REPLY: dict[str, object] = {
     "user": None,
     "metadata": {},
 }
-RESPONSE_ECHOED = ("max_output_tokens", "previous_response_id", "text")
+RESPONSE_ECHOED = (
+    "instructions",
+    "max_output_tokens",
+    "max_tool_calls",
+    "metadata",
+    "parallel_tool_calls",
+    "previous_response_id",
+    "prompt_cache_key",
+    "safety_identifier",
+    "store",
+    "temperature",
+    "tool_choice",
+    "top_logprobs",
+    "top_p",
+    "truncation",
+    "user",
+)
+# Echoed as objects: the request's keys over the reply's own, such as text's verbosity.
+RESPONSE_MERGED = ("reasoning", "text")
+ITEM_PREFIXES = {"message": "msg_", "function_call": "fc_"}  # the item ids a reply makes
 RESPONSE_ID_LENGTH = 50  # after resp_ and msg_, in lowercase hex, as in real ids
 
 
@@ -324,7 +343,10 @@ def response_refusal_reply(fields: dict[str, object], tokens_in: int) -> bytes:
         part = {"type": "output_text", "annotations": [], "logprobs": [], "text": PLAIN_REFUSAL}
     now = int(time.time())
     reply = dict(RESPONSE_REPLY)
-    reply.update({key: fields[key] for key in RESPONSE_ECHOED if key in fields})
+    reply.update({key: fields[key] for key in RESPONSE_ECHOED if fields.get(key) is not None})
+    for key in RESPONSE_MERGED:
+        if asked := _obj(fields.get(key)):
+            reply[key] = {**cast("dict[str, object]", reply[key]), **asked}
     reply.update(
         id=made_up_hex_id("resp_"),
         created_at=now,
@@ -354,10 +376,24 @@ def response_refusal_reply(fields: dict[str, object], tokens_in: int) -> bytes:
     return json.dumps(reply, ensure_ascii=False, indent=2).encode()
 
 
-def response_id(reply: bytes) -> str | None:
-    """The id of a Responses reply, which a later request may name as previous_response_id."""
-    found = _obj(request_fields(reply)).get("id")
-    return found if isinstance(found, str) and found else None
+def response_ids(reply: bytes) -> list[str]:
+    """The ids of a Responses reply and of its output items: a later request may name the
+    reply as previous_response_id, and an item in an item_reference."""
+    value = _obj(request_fields(reply))
+    found = [value.get("id"), *(_obj(item).get("id") for item in _list(value.get("output")))]
+    return [i for i in found if isinstance(i, str) and i]
+
+
+def references(fields: dict[str, object]) -> list[str]:
+    """What a Responses request asks OpenAI to look up: its previous_response_id, and the id
+    of each item_reference in its input."""
+    found = [fields.get("previous_response_id")]
+    found += [
+        _obj(item).get("id")
+        for item in _list(fields.get("input"))
+        if _obj(item).get("type") == "item_reference"
+    ]
+    return [i for i in found if isinstance(i, str)]
 
 
 def tool_call_tools(path: str, fields: dict[str, object]) -> list[str]:

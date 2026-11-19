@@ -90,6 +90,7 @@ These are real replies to `gpt-4o-mini` requests, saved on 18 November 2026 from
 | File | Reply to |
 |---|---|
 | `real_response_incomplete.json` | A Responses question with `max_output_tokens = 16`: a 200 with `status` `incomplete`, `incomplete_details.reason` `max_output_tokens`, and its message item `incomplete` |
+| `real_response_function_call_truncated.json` | A Responses request with one strict tool, `tool_choice = "required"` and `max_output_tokens = 16`, saved on 19 November 2026: a 200 with `status` `incomplete`, `incomplete_details.reason` `max_output_tokens`, and the `function_call` item `incomplete` with its arguments cut, unlike Chat Completions' 400 |
 | `real_response_answer.json` | A Responses request with one tool, whose `input` holds a `function_call` item with a made-up `fc_` id and its `function_call_output`: a 200, the model answered from the tool result |
 
 `rail_real_shape.json` is shaped like a NeMo rail's reply from `gpt-4.1-mini`, seen in the real-model check on 12 November 2026.

@@ -22,6 +22,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
 
+from scrimmage_core import provider_openai as openai_table
 from scrimmage_core.config import Fault
 from scrimmage_core.redact import redact, spans
 
@@ -1088,6 +1089,20 @@ def no_output_text(output: list[object]) -> str:
     return "the reply has no text"
 
 
+def with_fresh_ids(value: dict[str, object], output: list[object]) -> dict[str, object]:
+    """The changed reply under new ids in OpenAI's forms, for the reply and each message and
+    function call. OpenAI stored the real reply under the real ids, and an item resent with a
+    stored id is read as stored, not as sent: under a made-up id the model reads what the
+    agent got. call_id stays, as the agent pairs its function_call_output by it."""
+    value["id"] = openai_table.made_up_hex_id("resp_")
+    for raw in output:
+        item = as_dict(raw)
+        prefix = None if item is None else openai_table.ITEM_PREFIXES.get(str(item.get("type")))
+        if item is not None and prefix is not None and "id" in item:
+            item["id"] = openai_table.made_up_hex_id(prefix)
+    return value
+
+
 def garble_responses(
     status: int,
     op: str,
@@ -1110,7 +1125,7 @@ def garble_responses(
         parts.append(f"output[{i}].content[{j}].text")
     if not count:
         return Unchangeable(no_output_text(output), "data")
-    return rewritten(value, headers, count, parts)
+    return rewritten(with_fresh_ids(value, output), headers, count, parts)
 
 
 def truncate_responses(
@@ -1151,7 +1166,7 @@ def truncate_responses(
     value.update(status="incomplete", incomplete_details={"reason": "max_output_tokens"})
     if "completed_at" in value:  # an incomplete reply never completed
         value["completed_at"] = None
-    return rewritten(value, headers, 1, [where])
+    return rewritten(with_fresh_ids(value, output), headers, 1, [where])
 
 
 def break_args_responses(
@@ -1178,7 +1193,7 @@ def break_args_responses(
         parts.append(f"output[{i}].arguments")
     if not count:
         return Unchangeable("the reply has no tool call with arguments to break", "data")
-    return rewritten(value, headers, count, parts)
+    return rewritten(with_fresh_ids(value, output), headers, count, parts)
 
 
 RESPONSES_CHANGES = {
