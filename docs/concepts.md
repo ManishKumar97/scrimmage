@@ -51,8 +51,14 @@ A mock's `returns` is written in TOML.
 If the tool returns its own type, Scrimmage builds that type from the mock:
 
 - the type is read from the tool's return annotation, such as `-> Stock`, or from the mock's `type`;
-- a pydantic model is built with `model_validate`, any other class with `Type(**returns)`;
-- a mock that does not fit the type is a mistake in the test.
+- `-> Stock | None` and `-> Optional[Stock]` build a `Stock` from a table, as TOML cannot write `None`, and keep any other value as written, so `-> Path | None` with `"/tmp"` gives the text, and `-> Status | None` builds the member a value names and keeps any other value as written;
+- a pydantic model is built with `model_validate`, an `Enum` from its value, `Status("shipped")`, and any other class with `Type(**returns)`;
+- a mock that does not fit the type is a mistake in the test, and an `Enum` value that is no member names the first 10 members.
+
+A `Flag` takes any valid combination of its members, such as `3` for `READ | WRITE`; the mistake for a value that is no combination lists only the single members.
+
+Any other union, such as `-> Stock | Order`, keeps the value as written.
+Each call gets its own copy of the value, so a change the agent makes to it is not seen by the next call.
 
 ## Faults
 

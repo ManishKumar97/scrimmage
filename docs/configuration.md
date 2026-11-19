@@ -105,7 +105,7 @@ The record never holds `self` or `cls`, only the arguments after them.
 |---|---|
 | `call` | The label of the call to mock, such as `"tool:get_order"`, `"mcp:docs/search"` or `"http:inventory.acme.internal"`. A model call cannot be mocked: it is real or a fault. Required. |
 | `returns` | The value to return, in TOML: text, a number, true or false, a list or a table. Required for a tool and an MCP tool. Dates and times are not allowed; write them as text. |
-| `type` | On a Python tool: the type to build the value into, as `module:Class`. Optional; read from the tool's return annotation when left out. Only the return annotation is read, so a parameter type imported only under `TYPE_CHECKING` does not matter. A return annotation that cannot be resolved when the tool runs is not checked, and the value is kept as written; name its class here. |
+| `type` | On a Python tool: the type to build the value into, as `module:Class`. Optional; read from the tool's return annotation when left out. An annotation of one class or `None`, such as `-> Stock \| None`, builds the class from a table; any other value is kept as written, except that an `Enum` member's value builds that member. An `Enum` is built from its value, so `returns = "shipped"` builds `Status("shipped")`. Only the return annotation is read, so a parameter type imported only under `TYPE_CHECKING` does not matter. A return annotation that cannot be resolved when the tool runs is not checked, and the value is kept as written; name its class here. |
 | `method` | On a web request: match only this method. |
 | `path` | On a web request: match only this exact path, with no query string. |
 | `status` | On a web request: the status of the reply. 200 by default. |
