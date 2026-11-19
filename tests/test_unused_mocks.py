@@ -71,27 +71,52 @@ def test_an_unused_tool_mock_is_a_note_without_a_tools_list() -> None:
     assert not unchecked.about("called get_order") and unchecked.code == 2
 
 
-# The six rows of the table in C13b.6: (name, mocks, used, tools list, kind, text, exit code).
+# The six rows of the table in C13b.6: (name, mocks, used, tools list, tools reported, kind,
+# text, exit code). The "tool, list" row reports none, so only the tools list checks its label.
 ROWS = [
-    ("web", WEB_MOCK, set(), True, "mistakes", "no request matched the mock on http:", 2),
-    ("mcp", MCP_MOCK, set(), True, "mistakes", "no call matched the mock on mcp:docs/search", 2),
-    ("tool, no list", TOOL_MOCK, set(), False, "notes", "called get_order, so its mock", 0),
-    ("tool, list", TOOL_MOCK, set(), True, "notes", "called get_order, so its mock", 0),
-    ("other args", ARGS_MOCK + OTHER_ARGS, {1}, True, "notes", "called with other arguments", 0),
-    ("recorded", RECORDED, set(), True, "notes", "recorded mock on tool:get_order with", 0),
+    ("web", WEB_MOCK, set(), True, SEEN, "mistakes", "no request matched the mock on http:", 2),
+    (
+        "mcp",
+        MCP_MOCK,
+        set(),
+        True,
+        SEEN,
+        "mistakes",
+        "no call matched the mock on mcp:docs/search",
+        2,
+    ),
+    ("tool, no list", TOOL_MOCK, set(), False, SEEN, "notes", "called get_order, so its mock", 0),
+    ("tool, list", TOOL_MOCK, set(), True, None, "notes", "called get_order, so its mock", 0),
+    (
+        "other args",
+        ARGS_MOCK + OTHER_ARGS,
+        {1},
+        True,
+        SEEN,
+        "notes",
+        "called with other arguments",
+        0,
+    ),
+    ("recorded", RECORDED, set(), True, SEEN, "notes", "recorded mock on tool:get_order with", 0),
 ]
 
 
 @pytest.mark.design("record.marker_unused_is_note")
 @pytest.mark.parametrize(
-    ("mocks", "used", "listed", "kind", "text", "code"),
+    ("mocks", "used", "listed", "seen", "kind", "text", "code"),
     [r[1:] for r in ROWS],
     ids=[r[0] for r in ROWS],
 )
 def test_each_kind_of_unused_mock_gets_exactly_one_line(
-    mocks: str, used: set[int], listed: bool, kind: str, text: str, code: int
+    mocks: str,
+    used: set[int],
+    listed: bool,
+    seen: list[str] | None,
+    kind: str,
+    text: str,
+    code: int,
 ) -> None:
-    got = printed(AGENT if listed else NO_TOOLS_LIST, mocks, used, SEEN)
+    got = printed(AGENT if listed else NO_TOOLS_LIST, mocks, used, seen)
     (found,) = got.about(text)
     assert found[0] == kind, got.text
     assert got.code == code, got.text

@@ -163,7 +163,8 @@ Such a call is refused unless its label is under `real` by name, such as `"tool:
 `scrimmage record` on a file with these mocks follows the same rule.
 
 An unused hand-written tool mock is a note, whether or not `[agent] tools` is set.
-Its label was checked against the tools list, or against the tools the agent reported, so it cannot be a typo.
+Its label was checked against the tools list, or, in a plain run with no tools list, against the tools the agent reported when its process ended, so it cannot be a typo.
+A service run with no tools list has neither, because a service process does not end between runs, so the test ends with the mistake "no run reported the agent's tools".
 Whether the model calls a tool changes from run to run, so the test does not fail on it.
 An unused mock with `args` is a note when its tool was called with other arguments.
 An unused recorded mock is a note too, because a later run that does not repeat a recorded call leaves it unused by design.
