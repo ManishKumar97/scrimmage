@@ -19,7 +19,7 @@ scrimmage record [path] [--test NAME] [--refresh LABEL] [--runs N] [--json]
 
 `--refresh LABEL` records a label again that already has a mock, such as after an API changed. The mocks on that label leave the plan and the output, so the call runs for real.
 A `returns_from` mock with `args` stays as it is, because record cannot write the value its function builds, and it keeps answering its own calls while the label's other calls are recorded.
-A `returns_from` mock with no `args` answers every call, so `--refresh` stops with exit 2 for that label: give the mock `args`, or refresh another label.
+A `returns_from` mock with no `args` answers every call, so `--refresh` stops with exit 2 for that label: give the mock `args`, refresh another label, or limit `--test` to the tests that do not use it.
 It stops with exit 2 before any run for a label that would not run for real: a tool or an MCP tool not under `real`, or a web label whose mocks are not all on reads or under `real`.
 
 ```
