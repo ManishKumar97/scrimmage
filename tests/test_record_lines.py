@@ -1319,6 +1319,42 @@ def test_a_400_after_a_model_replace_is_not_marked(sink: Sink) -> None:
     assert "after_reply_fault" not in answered, answered
 
 
+MALFORMED_IDS = {
+    "tool result": {"role": "tool", "tool_call_id": ["call_1"], "content": "x"},
+    "tool call": {
+        "role": "assistant",
+        "tool_calls": [
+            {"id": {"x": 1}, "type": "function", "function": {"name": "f", "arguments": "{}"}}
+        ],
+    },
+}
+
+
+@pytest.mark.design("record.after_reply_fault")
+@pytest.mark.parametrize("faulted", [False, True], ids=["no reply fault", "after a refusal"])
+@pytest.mark.parametrize("bad", MALFORMED_IDS.values(), ids=MALFORMED_IDS.keys())
+def test_a_tool_call_id_that_is_not_a_string_reaches_the_provider_and_gets_its_400(
+    sink: Sink, faulted: bool, bad: dict[str, object]
+) -> None:
+    """A list or an object as a tool call id is the agent's own mistake. The request goes
+    on to the provider, and the agent gets its real 400, whether a reply fault fired or not."""
+    reached: list[httpx2.Request] = []
+
+    def provider(request: httpx2.Request) -> httpx2.Response:
+        reached.append(request)
+        return rejected(request)
+
+    faults = (config.Fault("model", "refuse", "call 1", model=MODEL),) if faulted else ()
+    with model_gate(sink, *faults):
+        api = model_client(provider)
+        before: list[Any] = answered_back(ask(api, ASKED)) if faulted else list(ASKED)
+        with pytest.raises(openai.BadRequestError):
+            ask(api, [*before, bad])
+    assert len(reached) == 1  # a refused call 1 is built by the gate and never sent
+    sent = model_lines_of(sink)[-1]
+    assert (sent["action"], sent["status"]) == ("real", 400)
+
+
 @pytest.mark.design("record.after_reply_fault")
 def test_in_a_service_run_only_the_request_that_carries_the_fault_is_marked(sink: Sink) -> None:
     """One service run, two 400s in flight at once: x sends the faulted call back, y is a
