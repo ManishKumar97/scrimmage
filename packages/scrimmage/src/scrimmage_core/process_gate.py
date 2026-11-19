@@ -166,8 +166,13 @@ def service_start(event: str, args: tuple[Any, ...]) -> None:
         return
     if not PROGRAM.fullmatch(program):  # an empty name, or one with a line break or odd bytes
         call = Call("process", "process:?", line)
+        where = (
+            "outside any request while a test run was open"
+            if isinstance(run, Outside)
+            else ("inside a test run")
+        )
         message = (
-            f"{line} was started inside a test run, and its program has no plain name that "
+            f"{line} was started {where}, and its program has no plain name that "
             "[agent] real could list, so it is refused. Start it by a name such as uname, "
             "through a link or wrapper whose name real can list."
         )
