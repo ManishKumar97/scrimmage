@@ -218,17 +218,22 @@ def check_type(state: RunState, step: Step, gated: Gated, index: int, value: obj
     """Say once per run when a mock's value does not fit the tool's declared return type. It
     is checked before the framework shapes it, as the team wrote it. Never a mistake: the
     annotation can be the wrong one. Two threads at once may both say it; the report counts
-    runs, not lines."""
+    runs, not lines. The check is advice: an error in it, such as an annotation whose text
+    raises, ends the check and never the call."""
     state.mocks_checked.add(index)
     mock = state.plan.mocks[index]
-    declared = changes.declared_return(gated.tool)
-    name = step.call.name
-    note = mocks.unresolved(value, mock.type, declared, name)
+    try:
+        declared = changes.declared_return(gated.tool)
+        name = step.call.name
+        note = mocks.unresolved(value, mock.type, declared, name, mock.returns_from)
+        wrong = (
+            None if note else mocks.mismatch(value, mock.type, declared, name, mock.returns_from)
+        )
+    except Exception:
+        return
     if note is not None:
         state.notice("mock_type", "scrimmage", note, extra={"mock": index, "note": True})
-        return
-    wrong = mocks.mismatch(value, mock.type, declared, name, mock.returns_from)
-    if wrong is not None:
+    elif wrong is not None:
         message = f"the mock on {step.call.label} {wrong}"
         state.notice("mock_type", "scrimmage", message, extra={"mock": index})
 

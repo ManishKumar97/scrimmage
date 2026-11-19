@@ -10,6 +10,7 @@ A value TOML cannot hold, such as bytes, is built by the team's own function: re
 A built value that does not fit the tool's return annotation gets a warning, never a mistake.
 """
 
+import collections.abc
 import enum
 import importlib
 import inspect
@@ -22,6 +23,17 @@ from scrimmage_core.errors import ScrimmageMockError, ScrimmageRefused
 
 # Any is a class on 3.11 and later, and neither it nor object names a shape to build.
 PLAIN = (str, int, float, bool, list, dict, tuple, type(None), object, typing.Any)
+# Results a list fits, as an agent loops over it: the check says nothing for them.
+STREAMS = (
+    collections.abc.Iterable,
+    collections.abc.Iterator,
+    collections.abc.Generator,
+    collections.abc.AsyncIterable,
+    collections.abc.AsyncIterator,
+    collections.abc.AsyncGenerator,
+)
+# The text changes.declared_return gives in place of annotations that raise on 3.14.
+RAISING = "annotations that raise "
 # The members a mistake names, so a large Enum gives a short line.
 SHOWN_MEMBERS = 10
 
@@ -196,41 +208,52 @@ def mismatch(
     return None
 
 
-def unresolved(value: object, kind: str | None, declared: object, name: str) -> str | None:
-    """The note for a table kept as written because the return type cannot be resolved."""
+def unresolved(
+    value: object, kind: str | None, declared: object, name: str, factory: str | None = None
+) -> str | None:
+    """The note for a table kept as written because the return type cannot be resolved. A
+    returns_from mock builds its own value, and type is refused beside it: nothing to say."""
     from scrimmage_core import changes  # changes imports config, which imports this module
 
-    if kind is not None or not isinstance(declared, changes.Unresolved) or not table(value):
+    if kind is not None or factory is not None:
         return None
-    last = declared.text.strip("'\"").rpartition(".")[2]
-    last = last if last.isidentifier() else "Class"
+    if not isinstance(declared, changes.Unresolved) or not table(value):
+        return None
+    if declared.text.startswith(RAISING):  # on 3.14: not the annotation's text, so not quoted
+        error = declared.text.removeprefix(RAISING)
+        what = f"declares a return annotation that raises {error}"
+        last = "Class"
+    else:
+        what = f"declares a return type Scrimmage cannot resolve ({declared.text!r})"
+        last = declared.text.strip("'\"").rpartition(".")[2]
+        last = last if last.isidentifier() else "Class"
     return (
-        f"{name} declares a return type Scrimmage cannot resolve ({declared.text!r}), so the "
-        f'mock is kept as a table; name the class with type = "module:{last}"'
+        f'{name} {what}, so the mock is kept as a table; name the class with type = "module:{last}"'
     )
 
 
 def fits(value: object, declared: object) -> bool | None:
     """Whether a value fits a declared type: None when the type tells nothing, such as none,
-    Any, object, a type variable, Literal, a NewType, a Protocol or an unresolved type. An
-    int fits float, a bool fits int, a bytearray fits bytes, and a list fits tuple, as TOML
-    has no tuple."""
+    Any, object, None alone (TOML cannot write None), a type variable, Literal, a NewType, a
+    Protocol, an iterator or generator, or an unresolved type. An int fits float, a bool
+    fits int, a bytearray fits bytes, and a list fits tuple, as TOML has no tuple."""
     from scrimmage_core import changes  # changes imports config, which imports this module
 
     declared = plain_of(declared)
     if typing.get_origin(declared) in (typing.Union, types.UnionType):
-        found = [fits(value, member) for member in changes.members(declared)]
+        found = [
+            value is None if member is types.NoneType else fits(value, member)
+            for member in changes.members(declared)
+        ]
         return True if True in found else None if None in found else False
-    if declared is None or declared is typing.Any or declared is object:
+    if any(declared is said for said in (None, types.NoneType, typing.Any, object)):
         return None
     if isinstance(declared, typing.TypeVar | typing.NewType | changes.Unresolved):
         return None
-    if declared is types.NoneType:
-        return value is None
     origin = typing.get_origin(declared) or declared
-    if origin is typing.Literal or not isinstance(origin, type):
+    if origin is typing.Literal or not isinstance(origin, type) or origin in STREAMS:
         return None
-    if typing.is_typeddict(origin):
+    if typed_dict(origin):
         return isinstance(value, dict)  # isinstance refuses a TypedDict
     if getattr(origin, "_is_protocol", False):
         return None
@@ -242,6 +265,14 @@ def fits(value: object, declared: object) -> bool | None:
         return isinstance(value, origin)
     except Exception:  # a class whose own instance check raises tells nothing
         return None
+
+
+def typed_dict(kind: type) -> bool:
+    """A TypedDict, made by typing or by typing_extensions, whose classes typing does not
+    know: both are dict subclasses with the keys they require."""
+    return typing.is_typeddict(kind) or (
+        dict in getattr(kind, "__mro__", ()) and hasattr(kind, "__required_keys__")
+    )
 
 
 def plain_of(declared: object) -> object:
@@ -307,7 +338,7 @@ def fix_for(value: object, declared: object) -> str:
     for member in changes.members(plain_of(declared)):
         origin = plain_of(member)
         origin = typing.get_origin(origin) or origin
-        if isinstance(origin, type) and typing.is_typeddict(origin):
+        if isinstance(origin, type) and typed_dict(origin):
             origin = dict
         if origin in WRITTEN:
             ways.append(WRITTEN[origin])

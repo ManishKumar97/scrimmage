@@ -1439,8 +1439,10 @@ def mock_type_lines(config: Config, results: list[RunResult]) -> tuple[list[str]
         said: dict[tuple[int, bool], tuple[str, set[str]]] = {}
         for r in mine:
             for line in r.notices:
-                if line.get("notice") == "mock_type":
-                    key = (int(str(line.get("mock"))), line.get("note") is True)
+                index = line.get("mock")
+                # A line from another SDK version may lack its mock: it is left out.
+                if line.get("notice") == "mock_type" and type(index) is int:
+                    key = (index, line.get("note") is True)
                     said.setdefault(key, (str(line.get("message")), set()))[1].add(r.run)
         for (_, note), (message, runs) in sorted(said.items()):
             if note:

@@ -5,12 +5,14 @@ import functools
 import json
 import shutil
 import tomllib
+import types
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
 from conftest import OK, ROW_FAILED, Project, Result
-from scrimmage_core import changes, mocks
+from scrimmage_core import changes, mocks, runner
 from scrimmage_core.cli import main
 
 # Every test here, or nearly, runs scrimmage test, which starts the agent's process.
@@ -20,9 +22,11 @@ SHAPES = '''
 import dataclasses
 import enum
 from typing import TYPE_CHECKING, Annotated, Any, Literal, NamedTuple, NewType, Optional
+from collections.abc import Generator, Iterator
 from typing import Protocol, TypedDict, TypeVar
 
 import pydantic
+import typing_extensions
 
 if TYPE_CHECKING:
     from acme.elsewhere import Missing
@@ -72,6 +76,22 @@ class Row(TypedDict):
     sku: str
 
 
+class OldRow(typing_extensions.TypedDict):  # as pydantic asks for before Python 3.12
+    sku: str
+
+
+class Marker:
+    """An annotation object whose text cannot be shown."""
+
+    def __repr__(self) -> str:
+        raise RuntimeError("no text")
+
+    __str__ = __repr__
+
+
+MARK = Marker()
+
+
 class Sized(Protocol):
     def size(self) -> int: ...
 
@@ -105,6 +125,15 @@ def invoice(key: str) -> bytes: ...
 def orders(key: str) -> list[Order]: ...
 def either(key: str) -> Stock | Error: ...
 def hidden(key: str) -> "Missing": ...
+def nothing(key: str) -> None: ...
+def lines(key: str) -> Iterator[str]: ...
+def made(key: str) -> Generator[str, None, None]: ...
+def old_row(key: str) -> OldRow: ...
+def marked(key: str) -> MARK: ...
+
+
+def a_table() -> dict:
+    return {"sku": "a"}
 
 
 def a_stock() -> Stock:
@@ -188,6 +217,15 @@ VALID = {
         "hidden",
         'returns = {sku = "a", count = 1}\ntype = "acme.shapes:Stock"',
     ),
+    # A table from returns_from on an unresolved return: type is refused beside it.
+    "returns_from on an unresolved return": ("hidden", 'returns_from = "acme.shapes:a_table"'),
+    # TOML cannot write None, so a write tool's mock says something else.
+    "None with text": ("nothing", 'returns = "sent"'),
+    "None with a table": ("nothing", "returns = {}"),
+    # An agent loops over a list as over the real iterator.
+    "an Iterator with a list": ("lines", 'returns = ["a", "b"]'),
+    "a Generator with a list": ("made", 'returns = ["a", "b"]'),
+    "a typing_extensions TypedDict with a table": ("old_row", 'returns = {sku = "a"}'),
 }
 
 
@@ -226,6 +264,12 @@ WRONG = {
         'returns = {sku = "a", count = 1}\ntype = "acme.shapes:Stock"',
         "builds acme.shapes:Stock, but row is declared to return Row; fix the mock's type, or "
         "the annotation",
+    ),
+    "type naming a class for a typing_extensions TypedDict": (
+        "old_row",
+        'returns = {sku = "a", count = 1}\ntype = "acme.shapes:Stock"',
+        "builds acme.shapes:Stock, but old_row is declared to return OldRow; fix the mock's "
+        "type, or the annotation",
     ),
     "table items for list[Order]": (
         "orders",
@@ -413,6 +457,16 @@ def test_a_content_and_artifact_pair_gets_no_warning(project: Project, annotatio
     assert [line["action"] for line in calls] == ["mock"]
 
 
+@pytest.mark.design("mock.type_check_never_breaks_a_call")
+def test_an_error_in_the_check_never_breaks_the_call(project: Project) -> None:
+    write(project, "marked", 'returns = {sku = "a"}')
+    result = project.test()
+    assert result.code == OK, result.out + result.err
+    assert said(result) == [] and notices(result) == []
+    calls = [line for run in result.records() for line in run if line.get("kind") == "tool"]
+    assert [(line["action"], line["error"]) for line in calls] == [("mock", None)]
+
+
 # The rules the report lines rest on, on the function itself.
 
 
@@ -433,4 +487,29 @@ def test_the_check_reads_annotated_typed_dicts_and_containers_as_the_contract_sa
     assert check([1], declared=tuple[int, ...]) is None  # TOML has no tuple
     assert check(bytearray(b"x"), declared=bytes) is None and check("x", declared=bytes)
     assert mocks.fits({"a": 1}, changes.Unresolved("Missing")) is None
+    assert check("x", declared=type(None)) is None and check("x", declared=str | None) is None
+    assert check({"a": 1}, declared=str | None) is not None  # None in a union still reads X
+
+
+@pytest.mark.design("mock.type_check_unresolved")
+def test_annotations_that_raise_are_not_quoted_as_the_annotation() -> None:
+    raising = changes.Unresolved("annotations that raise ZeroDivisionError")
+    assert mocks.unresolved({"a": 1}, None, raising, "t") == (
+        "t declares a return annotation that raises ZeroDivisionError, so the mock is kept as "
+        'a table; name the class with type = "module:Class"'
+    )
+    assert mocks.unresolved({"a": 1}, None, raising, "t", "acme.m:f") is None
+
+
+@pytest.mark.design("mock.type_check_once")
+def test_a_mock_type_notice_without_its_mock_is_left_out_of_the_report() -> None:
+    test = types.SimpleNamespace(name="t")
+    line = {"notice": "mock_type", "message": "the mock on tool:x returns a table"}
+    row = types.SimpleNamespace(test=test)
+    result = types.SimpleNamespace(
+        row=row, outcome="answered", run="r", notices=[line, {**line, "mock": 0}]
+    )
+    config = cast(Any, types.SimpleNamespace(tests=[test]))
+    found = runner.mock_type_lines(config, cast(Any, [result]))
+    assert found == (["in test 't' the mock on tool:x returns a table (1 of 1 runs)"], [])
     assert json.dumps(mocks.type_text(dict[str, list[Path]])) == '"dict[str, list[Path]]"'
