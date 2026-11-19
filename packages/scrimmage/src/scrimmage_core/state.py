@@ -366,6 +366,9 @@ class RunState:
         # requests, each noted once: both belong to this run, never to the process.
         self.open: set[Callable[[bool], None]] = set()
         self.model_paths: set[str] = set()
+        # The mocks whose value was checked against the tool's return type, by index: once
+        # per mock per run.
+        self.mocks_checked: set[int] = set()
         self.name = "" if plan is None else plan.run
         # In a service: the request's own call into the app has returned, so a later call
         # in this run comes from a thread or task that outlived it.

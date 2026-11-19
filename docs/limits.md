@@ -33,6 +33,8 @@ If none of these applies, the rest of this page is detail for your use case.
 
 - **The editor schema checks shape only.** `scrimmage schema` cannot see a tool name against `tools`, a type outside your packages or a program on your `PATH`. `scrimmage check` decides.
 
+- **The mock type check reads the outer type and the first item.** A mock's value is checked against its tool's return annotation by its outer type, such as `list` or `dict`, and, when the items are a class, by its first item only. So `-> list[str]` with a number in the list gets no warning, and `-> list[Order]` with one table among built items is warned only if the table comes first. A wrong value is a warning, never a mistake, because the annotation can be the wrong one.
+
 - **`--json` prints at the end.** One document, when the command ends; nothing is printed while a test runs.
 
 ## A function or a script agent

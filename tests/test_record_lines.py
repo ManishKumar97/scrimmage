@@ -783,6 +783,28 @@ def test_every_recording_line_fits_the_record_schema(web: Sink) -> None:
     assert list(validator.iter_errors(bad))
 
 
+@pytest.mark.design("record.lines_fit_schema")
+def test_a_mock_type_notice_fits_the_record_schema(sink: Sink) -> None:
+    def get_name(order_id: str) -> str:
+        raise AssertionError("mocked")
+
+    def get_hidden(order_id: str) -> "NamedNowhere":  # type: ignore[name-defined]  # noqa: F821
+        raise AssertionError("mocked")
+
+    wrong = (Mock("tool:get_name", {"a": 1}, None), Mock("tool:get_hidden", {"a": 1}, None))
+    recording(sink, wrong, real=(), record=False)
+    for order_id in ("1", "2"):
+        gated(get_name)(order_id=order_id)
+        gated(get_hidden)(order_id=order_id)
+    said = [line for line in sink.lines if line.get("notice") == "mock_type"]
+    assert [(line["mock"], line.get("note")) for line in said] == [(0, None), (1, True)]
+    validator = jsonschema.Draft202012Validator(RECORD)
+    for line in said:
+        validator.validate(line)
+    for field, wrong_value in (("mock", -1), ("note", "yes")):
+        assert list(validator.iter_errors({**said[0], field: wrong_value})), field
+
+
 def test_a_value_built_only_of_toml_parts_reads_back_from_its_saved_text(sink: Sink) -> None:
     recording(sink)
     gated(get_dict)(order_id="1")
