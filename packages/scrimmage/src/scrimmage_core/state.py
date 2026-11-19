@@ -761,7 +761,7 @@ class RunState:
         same label gave the agent."""
         with self._lock:
             kept = list(self.reply_fault_markers.get(label, ()))
-        return any(openai_table.carries(fields, gave) for gave in kept)
+        return openai_table.carries(fields, kept)
 
     def unchanged(self, step: Step, why: str) -> None:
         """A carried fault could not change this call: it gets what the baseline gives it, and

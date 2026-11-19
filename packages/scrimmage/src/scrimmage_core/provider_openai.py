@@ -6,11 +6,13 @@ tokens and sort the tools the model is offered. A built reply, for refuse and un
 also takes the time and new ids, as a real one has.
 """
 
+import hashlib
 import json
 import re
 import secrets
 import string
 import time
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import cast
 
@@ -287,10 +289,11 @@ class Given:
     """What a faulted chat reply gave the agent, in the forms a request built from it carries
     back. ids: the reply's tool call ids, made fresh for each reply, so no other conversation
     holds them. prefixes: for each choice, the faulted request's messages and then the
-    message the agent got, compared with None and empty values left out."""
+    message the agent got, with None and empty values left out, kept as their count and
+    digest. A run that faults every call keeps a few bytes per fault, not the conversation."""
 
     ids: frozenset[str] = frozenset()
-    prefixes: tuple[tuple[object, ...], ...] = ()
+    prefixes: frozenset[tuple[int, bytes]] = frozenset()
 
 
 def given(fields: dict[str, object], reply: bytes, *, ids_only: bool) -> Given:
@@ -309,23 +312,50 @@ def given(fields: dict[str, object], reply: bytes, *, ids_only: bool) -> Given:
     if ids_only:
         return Given(ids)
     asked = [_normal(item) for item in _list(fields.get("messages"))]
-    prefixes = tuple((*asked, _normal(message)) for message in messages if message)
+    prefixes = frozenset(_digest([*asked, _normal(message)]) for message in messages if message)
     return Given(ids, prefixes)
 
 
-def carries(fields: dict[str, object], gave: Given) -> bool:
-    """Whether a chat request's messages carry what a faulted reply gave: an assistant tool
-    call or a tool result with one of its tool call ids, or messages that start with the
-    faulted request's messages and the reply's message."""
+def carries(fields: dict[str, object], kept: Sequence[Given]) -> bool:
+    """Whether a chat request's messages carry what any of these faulted replies gave: an
+    assistant tool call or a tool result with one of its tool call ids, or messages that
+    start with a faulted request's messages and its reply's message. The request is hashed
+    once, message by message, so the check grows with the request, not with the faults."""
+    ids = frozenset[str]().union(*(gave.ids for gave in kept))
     messages = [_obj(item) for item in _list(fields.get("messages"))]
     for message in messages:
         calls = [_obj(call).get("id") for call in _list(message.get("tool_calls"))]
-        if message.get("role") == "assistant" and any(i in gave.ids for i in calls):
+        if message.get("role") == "assistant" and any(i in ids for i in calls):
             return True
-        if message.get("role") == "tool" and message.get("tool_call_id") in gave.ids:
+        if message.get("role") == "tool" and message.get("tool_call_id") in ids:
             return True
-    sent = tuple(_normal(message) for message in messages)
-    return any(sent[: len(prefix)] == prefix for prefix in gave.prefixes)
+    wanted = frozenset[tuple[int, bytes]]().union(*(gave.prefixes for gave in kept))
+    counts = {count for count, _ in wanted}
+    if not counts:
+        return False
+    sent = (_normal(message) for message in messages[: max(counts)])
+    return any(found in wanted for found in _running(sent, counts))
+
+
+def _digest(prefix: list[object]) -> tuple[int, bytes]:
+    """The count and digest of these messages, as a request that starts with them gets."""
+    *_, last = _running(prefix, {len(prefix)})
+    return last
+
+
+def _running(messages: Iterable[object], counts: set[int]) -> Iterator[tuple[int, bytes]]:
+    """For each count in counts, the count and the sha256 of the canonical JSON of the list
+    of the first that many messages. One hash is built message by message, so a long
+    request is read once. A key order or a space does not change it; a value does."""
+    whole = hashlib.sha256(b"[")
+    for count, message in enumerate(messages, 1):
+        if count > 1:
+            whole.update(b",")
+        whole.update(json.dumps(message, sort_keys=True, separators=(",", ":")).encode())
+        if count in counts:
+            part = whole.copy()
+            part.update(b"]")
+            yield count, part.digest()
 
 
 def _normal(value: object) -> object:
