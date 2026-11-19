@@ -148,11 +148,21 @@ def test_an_unsavable_reason_names_a_real_dict_key_by_position_never_by_name() -
     reply = {"ok": 1, secret: {"deep": 2**70}}
     with pytest.raises(capture.Unsavable) as caught:
         capture.plain(reply, "returns")
-    assert str(caught.value) == "returns[1][0]: an integer beyond 64 bits, which TOML cannot hold"
+    assert str(caught.value) == "returns{1}{0}: an integer beyond 64 bits, which TOML cannot hold"
     recorded = capture.tool_value(reply, {}, get_inner, same, [])
     assert recorded["code"] == "unsavable", recorded
     leaked = secret in str(caught.value) or secret in str(recorded)
     assert not leaked, "a key from the real reply was named"
+
+
+@pytest.mark.design("record.unsavable")
+def test_an_argument_is_named_at_the_top_and_by_position_below_it() -> None:
+    secret = "sk-live-PROBEKEY-7f3a9c"
+    with pytest.raises(capture.Unsavable) as caught:
+        capture.plain({"query": {"ok": 1, secret: 2**70}}, "args", named=True)
+    assert str(caught.value) == "args.query{1}: an integer beyond 64 bits, which TOML cannot hold"
+    leaked = secret in str(caught.value)
+    assert not leaked, "a key below the top of the arguments was named"
 
 
 @pytest.mark.design("record.unsavable")

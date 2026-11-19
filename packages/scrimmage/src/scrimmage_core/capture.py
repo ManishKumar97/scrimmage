@@ -89,7 +89,7 @@ def text_problem(text: str) -> str | None:
     return None
 
 
-def plain(value: object, place: str) -> object:
+def plain(value: object, place: str, named: bool = False) -> object:
     """A copy made only of what TOML and JSON hold, read by exact type.
 
     A subclass, such as a StrEnum, an IntEnum or a defaultdict, is not its base: the mock
@@ -98,12 +98,12 @@ def plain(value: object, place: str) -> object:
     is nested too deep for Python's stack, is Unsavable too.
     """
     try:
-        return walk_plain(value, place)
+        return walk_plain(value, place, named)
     except RecursionError:
         raise Unsavable(f"{place}: nested too deep, or holds itself") from None
 
 
-def walk_plain(value: object, place: str) -> object:
+def walk_plain(value: object, place: str, named: bool = False) -> object:
     kind = type(value)
     if kind is int:
         if not INT64[0] <= cast(int, value) <= INT64[1]:
@@ -123,8 +123,10 @@ def walk_plain(value: object, place: str) -> object:
                 raise Unsavable(f"{place}: a key that is not text, a {kind_of(key)}")
             if why := text_problem(key):
                 raise Unsavable(f"{place}: a key that is {why}")
-            # The place names the key's position, never the key: the key came from a real reply.
-            out[key] = walk_plain(item, f"{place}[{position}]")
+            # Only the top level of a call's arguments is named: those keys are the team's own
+            # parameter names. Any other key came from a real reply, so the place gives its
+            # position in braces, which no list index looks like.
+            out[key] = walk_plain(item, f"{place}.{key}" if named else f"{place}{{{position}}}")
         return out
     raise Unsavable(f"{place}: a {kind_of(value)}, which a mock cannot hold")
 
@@ -417,7 +419,7 @@ def shown_args(value: object, differing: Sequence[str]) -> str | None:
 def converted(arguments: object) -> object | None:
     """A call's arguments as a recorded mock holds them, or None if no mock can."""
     try:
-        return plain(arguments, "args")
+        return plain(arguments, "args", named=True)
     except Unsavable:
         return None
 
@@ -429,7 +431,7 @@ def saved_arguments(arguments: object) -> tuple[object, dict[str, object] | None
     match the real call again.
     """
     try:
-        fields = plain(arguments, "args")
+        fields = plain(arguments, "args", named=True)
     except Unsavable as exc:
         return None, unsaved(UNSAVABLE, str(exc))
     cleaned, removed = clean(fields)
