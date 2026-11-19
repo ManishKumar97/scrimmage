@@ -75,7 +75,7 @@ source = "https://www.anthropic.com/engineering/a-postmortem-of-three-recent-iss
 [[fault]]
 name = "truncate"
 origin = "trace"
-source = "A real reply from OpenAI's Chat Completions API, 18 November 2026: a gpt-4o-mini request with max_completion_tokens = 5 got status 200, its text cut short, with finish_reason length; and OpenAI's own text for finish_reason, as the openai Python library 3.46 ships it in types/chat/chat_completion.py: \"length if the maximum number of tokens specified in the request was reached\""
+source = "A real reply from OpenAI's Chat Completions API, 18 November 2026: a gpt-4o-mini request with max_completion_tokens = 5 got status 200, its text cut short, with finish_reason length; the same limit on a request with one tool, with tool_choice required and with it left to the model, got status 400, \"Could not finish the message because max_tokens or model output limit was reached\"; and OpenAI's own text for finish_reason, as the openai Python library 3.46 ships it in types/chat/chat_completion.py: \"length if the maximum number of tokens specified in the request was reached\""
 
 [[fault]]
 name = "unknown tool"

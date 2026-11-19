@@ -303,8 +303,8 @@ Also read the control-path limits under An agent inside a web service.
 
 - **One provider.** OpenAI's Chat Completions, Responses and embeddings, and gateways that speak the same format. Other providers come later.
 
-- **A few faults.** `timeout`, `error` and `empty` on tools, `timeout`, `status N`, `refused`, `reset`, `dns` and `bad body` on model calls and web requests, `context too long` on a chat model call, `empty` on web requests, `timeout`, `error` and `empty` on MCP tools, `append`, `replace` and `slow` on tools, MCP tools and web requests, and `replace`, `slow`, `refuse` and `unknown tool` on a chat model call.
-  `append` on a model call, and `garble`, `truncate` and `bad tool args`, come later: a row with one of those three is a mistake in the test, and nothing is sent.
+- **A few faults.** `timeout`, `error` and `empty` on tools, `timeout`, `status N`, `refused`, `reset`, `dns` and `bad body` on model calls and web requests, `context too long` on a chat model call, `empty` on web requests, `timeout`, `error` and `empty` on MCP tools, `append`, `replace` and `slow` on tools, MCP tools and web requests, and `replace`, `slow`, `refuse`, `unknown tool`, `garble`, `truncate` and `bad tool args` on a chat model call.
+  `append` on a model call comes later.
 
 - **`empty` needs a declared type with an empty value.** On a tool declared to return a model, a dataclass, a number, `bytes`, a `Sequence`, a `Mapping`, a union of two kinds such as `str | list[str]`, or a type that cannot be resolved when it runs, or a LangChain tool with `response_format = "content_and_artifact"`, `empty` is a mistake in the test, and the tool never runs. Mock an empty result instead. See [Faults](concepts.md#faults).
 
@@ -354,6 +354,15 @@ Also read the control-path limits under An agent inside a web service.
 - **A built reply's counts are an estimate.** `refuse` and `unknown tool` send nothing, so the reply's `usage` holds a rough count of the request and 10 output tokens, and its `system_fingerprint` is the one of the real reply it was made from. The line costs 0.
   Its `model` is the name your request sent, such as `gpt-4o-mini`, where a real reply names the snapshot, such as `gpt-4o-mini-2024-07-18`.
   It has one choice, whatever `n` your request asks for.
+
+- **A changed reply keeps the real counts.** After `garble`, `truncate` or `bad tool args`, the reply's `usage` is what the model was billed for, so the line's cost is true. A cut reply's `completion_tokens` is then more than its text holds, and an agent that compares it with its own `max_completion_tokens` sees a reply that was not cut by the limit.
+  The changed reply is written back as compact JSON, so its bytes differ from the provider's even where its fields do not.
+
+- **`truncate` on a very short text.** A text of one character cannot be cut shorter, so the agent gets the same text with `finish_reason` `length`, and the fault counts as fired.
+
+- **`garble` is one form of corrupted output.** It puts the stray token of one documented incident in every fifth word. Scrambled letters, other scripts and broken code are not built. A text in a script with no spaces between words is one word, so it changes once.
+
+- **`bad tool args` breaks the JSON only.** Arguments that parse but break the tool's schema, such as a missing required field, are not built.
 
 - **The Structured Outputs refusal is the guide's example.** No real refusal was captured: the `refusal` text and form come from OpenAI's Structured Outputs guide, and the plain one from a forum report.
 
