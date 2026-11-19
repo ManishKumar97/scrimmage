@@ -1628,7 +1628,13 @@ def test_check_summary_lists_the_labels_under_real_and_the_entry_point(project: 
         "[[test]]\n", "[agent.prices]\ngpt-4o-mini = {input = 0, output = 0.6}\n\n[[test]]\n"
     )
     assert summary_of(check_doc(project))["prices"] == {
-        "gpt-4o-mini": {"input": 0, "output": 0.6, "cached_input": None}
+        "gpt-4o-mini": {
+            "input": 0,
+            "output": 0.6,
+            "cached_input": None,
+            "cache_write_30m": None,
+            "cache_write_12h": None,
+        }
     }
 
 

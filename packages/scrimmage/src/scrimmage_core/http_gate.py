@@ -1017,7 +1017,7 @@ def hold_for(ctx: Bound, step: Step, request: Any, extra: dict[str, object]) -> 
     body = body_of(request) or b""
     fields = openai_table.request_fields(body) if body else None
     output = openai_table.max_output(fields or {}) or plan.reserve_output_tokens
-    return openai_table.cost(len(body) // CHAR_PER_TOKEN, output, rates)
+    return openai_table.most_cost(len(body) // CHAR_PER_TOKEN, output, rates)
 
 
 def reserve(ctx: Bound, step: Step, request: Any, extra: dict[str, object]) -> int | None:
@@ -1756,7 +1756,8 @@ def record(
         tokens_out = len(body) // CHAR_PER_TOKEN
     free = step.call.name in openai_table.FREE_OPS
     rates = openai_table.Rates(0.0, 0.0) if free else prices_of(ctx, str(extra.get("model", "")))
-    usd = openai_table.cost(tokens_in, tokens_out, rates, cached) if rates else None
+    writes = used.written_30m, used.written_12h  # both 0 when the counts are not known
+    usd = openai_table.cost(tokens_in, tokens_out, rates, cached, *writes) if rates else None
     extra.update(
         status=response.status_code,
         result=blob(body, ctx.sender, total=size, scrub=ctx.run.secrets),

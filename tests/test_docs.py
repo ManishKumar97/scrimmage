@@ -156,6 +156,19 @@ def test_cached_input_prices_and_their_default_are_documented() -> None:
     assert "**Cached input on OpenAI only.**" in page("limits.md")
 
 
+@pytest.mark.design("docs.cache_write")
+def test_cache_write_prices_and_the_current_table_are_documented() -> None:
+    guide = page("model-faults.md")
+    assert "### Cache writes" in guide
+    for word in ("input_tokens_details.cache_write_tokens", "ttl_12h_tokens", "ttl_30m_tokens"):
+        assert word in guide, word
+    assert "checked against OpenAI's pricing page on 19 November 2026" in guide
+    for model in ("gpt-5", "gpt-5-mini", "gpt-5-nano"):
+        assert f"`{model}`" in guide.split("### Prices")[1].split("### ")[0], model
+    assert "**One price per kind of token.**" in page("limits.md")
+    assert "`cache_write_30m`" in page("json-output.md")
+
+
 @pytest.mark.design("docs.method_tools")
 def test_tools_that_are_methods_and_their_limits_are_documented() -> None:
     text = page("configuration.md")

@@ -443,7 +443,7 @@ Every test has a budget for the whole run of `scrimmage test`. It is $5 unless y
 max_cost_usd = 0.50
 ```
 
-Before each model call, Scrimmage reserves what the call could cost: an estimate of its input at the full input price, plus its `max_tokens` (or `reserve_output_tokens`, 4096 by default) at the output price.
+Before each model call, Scrimmage reserves what the call could cost: an estimate of its input at the full input price, or at the cache-write price if that is higher, plus its `max_tokens` (or `reserve_output_tokens`, 4096 by default) at the output price.
 After the call, the real cost from the reply replaces the reservation.
 Scrimmage reads it from the reply's usage, after undoing `gzip`, `deflate` or `br`; for `br` it uses your program's own `brotli` or `brotlicffi` 1.2 or later, which is also what makes httpx ask for `br`.
 So four calls at once cannot all slip past the limit.
@@ -512,7 +512,10 @@ To hold less, set `max_tokens` on the call, lower `reserve_output_tokens`, or lo
 
 ### Prices
 
-Scrimmage ships prices for common OpenAI models, cached input included, checked against OpenAI's pricing page on 7 November 2026.
+Scrimmage ships prices for common OpenAI models, cached input included, checked against OpenAI's pricing page on 19 November 2026.
+They cover `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5-pro`, `gpt-5.1`, `gpt-5.2`, `gpt-5.2-pro`, `gpt-5.3-codex`, `gpt-5.4-mini`, `gpt-5.4-nano` and the `text-embedding-3` models.
+A model with a higher price above 272K input tokens, such as `gpt-5.4`, `gpt-5.5` or a `gpt-5.6` model, is not in the table, because one price per kind of token would price a long call too low.
+Give it under `[agent.prices]`, at the long-context price if a call can go over 272K input tokens.
 A dated model, such as `gpt-4o-mini-2024-07-18`, uses its family's price.
 For any other model, give the price in dollars per million tokens:
 
@@ -548,6 +551,21 @@ With `max_cost_usd = "none"`, no price is needed, and tokens are still counted.
 
 A reply without usable token counts gets a rough cost, worked out from how many bytes went each way, and its record line has `cost_estimated` set.
 On Chat Completions a stream only carries counts if your request sets `stream_options.include_usage`. Scrimmage leaves your request as it is, so without that setting those costs are rough ones. The Responses API always sends counts in its last event.
+
+### Cache writes
+
+On newer OpenAI models, such as `gpt-5.6-luna`, a token written to the prompt cache costs more than a plain input token: 1.25 times the input price for 30 minutes, 2.5 times for 12 hours.
+OpenAI bills each input token once, as plain input, as cached or as written, so the cached and written counts are parts of the input count.
+Scrimmage reads the written count from `input_tokens_details.cache_write_tokens` on Responses, split by `cache_write_tokens_details.ttl_30m_tokens` and `ttl_12h_tokens`, and from `prompt_tokens_details.cache_write_tokens` on Chat Completions, where writes last 30 minutes.
+
+| Reply | Price of each input token |
+|---|---|
+| 12000 input tokens: 4000 cached, 3000 written for 30 minutes, 4000 for 12 hours, on `"gpt-5.6-luna" = {input = 0.2, cached_input = 0.02, cache_write_30m = 0.25, cache_write_12h = 0.5, output = 1.2}` | 1000 at $0.20, 4000 at $0.02, 3000 at $0.25 and 4000 at $0.50 per million |
+| a price with no `cache_write_30m` or `cache_write_12h` | written tokens at `input`, as on a model that charges nothing extra to write |
+| a written count above the input tokens not cached, or not a whole number | every input token not cached as written for 12 hours |
+
+The written counts are not on the record line; `cost_usd` includes them.
+The reservation before a call counts every input token at the highest of `input`, `cache_write_30m` and `cache_write_12h`, since the provider may write any of them to its cache.
 
 ## Use a gateway
 

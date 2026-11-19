@@ -319,6 +319,14 @@
               "cached_input": {
                 "type": "number",
                 "minimum": 0
+              },
+              "cache_write_30m": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cache_write_12h": {
+                "type": "number",
+                "minimum": 0
               }
             }
           }

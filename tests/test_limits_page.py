@@ -127,6 +127,7 @@ ALL_TITLES = [
     "One `runs` for every row.",
     "One framework.",
     "One node.",
+    "One price per kind of token.",
     "One provider.",
     "One runner per service at a time.",
     "One unsafe tool blocks its whole name.",

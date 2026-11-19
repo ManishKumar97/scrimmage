@@ -415,6 +415,8 @@ Also read the control-path limits under An agent inside a web service.
 
 - **Prices need checking.** The built-in price table is small; check it against your provider's pricing, and use `[agent.prices]` for anything else.
 
+- **One price per kind of token.** A price has no long-context tier, so models priced higher above 272K input tokens, such as `gpt-5.4`, `gpt-5.5` and the `gpt-5.6` models, are not in the built-in table. Under `[agent.prices]`, give such a model its long-context price if a call can go over 272K input tokens, or a long call costs more than the record says.
+
 - **A hold that cannot end while a call waits.** A call that its own run's calls would keep out, even if every other run finished, waits at most 30 seconds, or half the time its run has left. A stream the agent keeps open across a second call, or one it stopped reading without closing, keeps its hold, so the second call ends in a "not reserved" stop. A hold in another run is waited for until near this run's `run_timeout`.
 
 - **A killed runner takes its runs with it, but not their children.** On Linux each run is asked to be killed with SIGKILL when the runner dies, even if it ignores SIGTERM. A run's own child processes are not covered, and on other systems nothing is set, so a run can outlive a runner killed there.

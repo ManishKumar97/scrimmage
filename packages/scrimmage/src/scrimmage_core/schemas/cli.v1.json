@@ -773,7 +773,9 @@
                     "required": [
                       "input",
                       "output",
-                      "cached_input"
+                      "cached_input",
+                      "cache_write_30m",
+                      "cache_write_12h"
                     ],
                     "properties": {
                       "input": {
@@ -785,6 +787,20 @@
                         "minimum": 0
                       },
                       "cached_input": {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "minimum": 0
+                      },
+                      "cache_write_30m": {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "minimum": 0
+                      },
+                      "cache_write_12h": {
                         "type": [
                           "number",
                           "null"

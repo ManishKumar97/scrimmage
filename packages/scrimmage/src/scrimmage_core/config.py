@@ -118,7 +118,7 @@ RETRY_AFTER = ("status 429", "status 503")
 MAX_CHANGE_TEXT = 64 * 1024  # bytes, for text and for find
 SCHEDULE = re.compile(r"always|(?:first|requests|call) (?P<n>[1-9]\d*)")
 MODEL_KEYS = {"host", "provider"}
-PRICE_KEYS = {"input", "output", "cached_input"}
+PRICE_KEYS = {"input", "output", "cached_input", "cache_write_30m", "cache_write_12h"}
 DEFAULT_BUDGET_USD = 5.0
 DEFAULT_RESERVE_OUTPUT_TOKENS = 4096
 # Where the answer is in what the agent returns, such as messages[-1].content.
@@ -1316,7 +1316,16 @@ def read_prices(value: object, where: str) -> tuple[tuple[str, Rates], ...]:
                 f"{item} cached_input: {cached:g} is above input, {rate:g}; a cached token "
                 "costs at most a full one"
             )
-        prices.append((model, Rates(rate, output, cached)))
+        writes: list[float | None] = []
+        for key in ("cache_write_30m", "cache_write_12h"):
+            write = dollars(entry, key, item) if key in entry else None
+            if write is not None and write < rate:
+                raise ConfigError(
+                    f"{item} {key}: {write:g} is below input, {rate:g}; a token written to "
+                    "the cache costs at least a full one"
+                )
+            writes.append(write)
+        prices.append((model, Rates(rate, output, cached, *writes)))
     return tuple(prices)
 
 

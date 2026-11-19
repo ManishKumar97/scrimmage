@@ -130,6 +130,12 @@
         },
         "cached_input": {
           "$ref": "#/$defs/dollars"
+        },
+        "cache_write_30m": {
+          "$ref": "#/$defs/dollars"
+        },
+        "cache_write_12h": {
+          "$ref": "#/$defs/dollars"
         }
       }
     },
