@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
 
+import httpx
 import pytest
 
 from fakes.openai_server import FakeOpenAI
@@ -234,6 +235,30 @@ def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
     """A stray does not fail the run, so the run's end lists them where they are seen."""
     if strays:
         terminalreporter.write_line(f"{len(strays)} stray process start(s): {'; '.join(strays)}")
+
+
+try:
+    import httpx2
+except ImportError:  # the gate tests need it; the rest of the suite does not
+    httpx2 = None
+
+SEND_OWNERS: tuple[Any, ...] = tuple(
+    owner
+    for module in (httpx, httpx2)
+    if module is not None
+    for owner in (module.Client, module.AsyncClient)
+)
+
+
+@pytest.fixture(autouse=True)
+def gated_sends_are_put_back() -> Iterator[None]:
+    """A gate patches `_send_single_request` on the sync and async client of each library.
+    Whatever a test leaves there, the next test gets the library's own again."""
+    before = [(owner, owner.__dict__["_send_single_request"]) for owner in SEND_OWNERS]
+    yield
+    for owner, send in before:
+        if owner.__dict__["_send_single_request"] is not send:
+            owner._send_single_request = send
 
 
 @pytest.fixture(autouse=True)

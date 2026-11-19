@@ -416,7 +416,6 @@ def unpatch(module: Any) -> None:
 def lib(request: pytest.FixtureRequest) -> Iterator[Any]:
     module: ModuleType = request.param
     yield module
-    unpatch(module)
     state.install(None)
 
 

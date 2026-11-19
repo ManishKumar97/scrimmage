@@ -102,15 +102,6 @@ def plain() -> contextvars.Context:
     return context
 
 
-@pytest.fixture
-def patched_httpx2() -> Iterator[None]:
-    sync_send = httpx2.Client._send_single_request
-    async_send = httpx2.AsyncClient._send_single_request
-    yield
-    httpx2.Client._send_single_request = sync_send  # type: ignore[method-assign]
-    httpx2.AsyncClient._send_single_request = async_send  # type: ignore[method-assign]
-
-
 class Reply:
     def __init__(self, tools: list[dict[str, object]]) -> None:
         self.tools = tools
@@ -160,7 +151,6 @@ def test_a_tool_listed_with_no_run_is_seen_by_every_later_run(
 
 
 @pytest.mark.design("service.no_gate_keeps_a_run")
-@pytest.mark.usefixtures("patched_httpx2")
 def test_no_gate_keeps_a_run_state_between_calls(service: state.ProcessState) -> None:
     """Each gate kind, called under run A then run B: every line lands in its own run."""
     mocks = (
@@ -261,7 +251,6 @@ def test_every_contextvar_in_scrimmage_core_is_carried() -> None:
 
 
 @pytest.mark.design("service.web_replies_per_run")
-@pytest.mark.usefixtures("patched_httpx2")
 def test_web_gate_open_replies_and_model_paths_are_per_run(service: state.ProcessState) -> None:
     a, b = (
         state.RunState(a_plan(name, real=("http:models.test",)), Sink(), [], process=service)

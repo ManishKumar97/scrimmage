@@ -825,6 +825,27 @@ def test_a_service_test_answers_its_runs_and_keeps_the_setup_record(bench: Bench
     assert all(summaries[r]["outcome"] == "answered" for r in runs)
 
 
+@pytest.mark.design("service.runs_answered")
+def test_every_line_of_a_service_runs_setup_record_fits_the_record_schema(bench: Bench) -> None:
+    import jsonschema
+
+    import scrimmage_core
+
+    body = json.loads((Path(scrimmage_core.__file__).parent / "schemas/record.v1.json").read_text())
+    check = jsonschema.Draft202012Validator(body, format_checker=jsonschema.FormatChecker())
+    service = bench.start()
+    code, out = bench.test(service.port, runs=1)
+    assert code == 0, out
+    files = list((bench.root / "scrimmage-runs").glob("*/setup-*.jsonl"))
+    assert len(files) == 1
+    bad = [
+        f"{line}: {error.message}"
+        for line in files[0].read_text().splitlines()
+        for error in check.iter_errors(json.loads(line))
+    ]
+    assert not bad, "\n".join(bad)
+
+
 def a_service_runner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, address: str = "127.0.0.1:9"
 ) -> Any:

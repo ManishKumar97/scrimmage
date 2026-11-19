@@ -104,7 +104,8 @@ def build(
         if isinstance(target, enum.EnumMeta):
             return member_or_value(cast("type[enum.Enum]", target), returns)
         return returns
-    if not isinstance(target, type) or target in PLAIN:
+    # By identity: `in` would call the class's own __eq__, which a team's metaclass can make raise.
+    if not isinstance(target, type) or any(target is plain for plain in PLAIN):
         return returns
     name = kind or f"{target.__module__}:{target.__qualname__}"
     if isinstance(target, enum.EnumMeta):  # an Enum class
@@ -115,13 +116,27 @@ def build(
             return validate(returns)
         if isinstance(returns, dict):
             return target(**returns)
-        if isinstance(returns, target):
-            return returns
     except (TypeError, ValueError) as exc:  # pydantic's ValidationError is a ValueError
         raise ScrimmageMockError(f"the mock does not fit {name}: {exc}") from exc
+    if is_instance(returns, target, name):
+        return returns
     raise ScrimmageMockError(
         f"the mock does not fit {name}: expected a table of its fields; a value no table "
         "can build is built by a function named with returns_from"
+    )
+
+
+def is_instance(value: object, target: type, name: str) -> bool:
+    """isinstance against the team's class, whose own __instancecheck__ may raise. That is a
+    mistake in the team's class, named by its error's class only, raised outside the except
+    block so it holds no reference to the error: its message can quote a value."""
+    failed: str | None = None
+    try:
+        return isinstance(value, target)
+    except Exception as exc:  # the team's own hook
+        failed = type(exc).__name__
+    raise ScrimmageMockError(
+        f"the mock does not fit {name}: the class's isinstance check raised {failed}"
     )
 
 

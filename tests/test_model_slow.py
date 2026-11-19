@@ -10,7 +10,7 @@ import httpx2
 import openai
 import pytest
 
-from model_gate import GUARD, SENDS, URL, Gate, Provider, ask, guard
+from model_gate import GUARD, URL, Gate, Provider, ask, guard
 from scrimmage_core import state
 from scrimmage_core.config import Fault
 from scrimmage_core.errors import ScrimmageStopped
@@ -19,7 +19,6 @@ from scrimmage_core.errors import ScrimmageStopped
 @pytest.fixture(autouse=True)
 def gated() -> Iterator[None]:
     yield
-    httpx2.Client._send_single_request, httpx2.AsyncClient._send_single_request = SENDS
     state.install(None)
 
 

@@ -520,7 +520,9 @@ class Runner:
             for written in ("log", "out"):  # even when the run's end failed
                 self.store.scrub_file(self.folder / f"{run}.{written}")
         ended = Ended(answer, timed_out, proc.returncode == 0, kept_out, left)
-        return self.concluded(run, row, state, ended)
+        result = self.concluded(run, row, state, ended)
+        self.check_labels(result)
+        return result
 
     def concluded(self, run: str, row: planner.Row, state: Any, ended: "Ended") -> RunResult:
         """A run's outcome, result and summary, from its record and how it ended: a program
@@ -674,7 +676,6 @@ class Runner:
         if state.control_busy is not None:
             summary.update(control_busy=state.control_busy, control_p99_ms=state.control_p99_ms)
         self.store.close_run(run, row.test.name, row.name, summary)
-        self.check_labels(result)
         return result
 
     def send(self, header: str, question: str) -> service_client.Reply:
@@ -776,7 +777,23 @@ class Runner:
         if state.broken or state.refusals:
             self._refused(run, "structure" if state.broken else state.refusals[0])
         ended = Ended(answer, reply.timed_out, ok and answer is not None, [], [], infra, mistakes)
-        return self.concluded(run, row, state, ended)
+        result = self.concluded(run, row, state, ended)
+        self.check_labels(result)
+        return result
+
+    def conclude_setup(
+        self, run: str, row: planner.Row, state: Any, reply: service_client.Reply
+    ) -> None:
+        """The setup request's summary, in the same shape as a run's. Its labels are not
+        checked here: the first run does that, as before."""
+        agent = self.config.agent
+        ok = reply.status is not None and 200 <= reply.status < 300
+        answer = None
+        if ok and not service_client.streamed(reply, agent):
+            answer = service_client.answer_of(reply, agent)[0]
+        infra = reply.failed is not None or reply.gate_refused is not None
+        ended = Ended(answer, reply.timed_out, answer is not None, [], [], infra)
+        self.concluded(run, row, state, ended)
 
     def probe_service(self) -> service_client.Probed:
         """The probe, asked again while the service starts: exit 3 when no gated service
@@ -975,8 +992,7 @@ class Runner:
         reply = self.send(header, test.question)
         state = self.wait_record(name, time.monotonic())
         lines = self.store.lines(name)
-        summary: dict[str, object] = {"outcome": "setup", "status": reply.status}
-        self.store.close_run(name, test.name, "setup", summary)
+        self.conclude_setup(name, row, state, reply)
         if self.stop_flag:  # Ctrl-C or SIGTERM ended the request, not the service
             raise Interrupted(self.stop_flag[0])
         gate = reply.gate_refused

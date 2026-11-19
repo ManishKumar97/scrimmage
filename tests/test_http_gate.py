@@ -83,11 +83,7 @@ def make_plan(
 
 @pytest.fixture
 def gated() -> Iterator[None]:
-    sync_send = httpx2.Client._send_single_request
-    async_send = httpx2.AsyncClient._send_single_request
     yield
-    httpx2.Client._send_single_request = sync_send  # type: ignore[method-assign]
-    httpx2.AsyncClient._send_single_request = async_send  # type: ignore[method-assign]
     state.install(None)
 
 
@@ -268,7 +264,15 @@ def test_a_task_cancelled_while_it_reserves_gives_the_reservation_back(gated: No
                 await task
             release.set()  # the thread gets its reservation with nobody to use it
 
-    asyncio.run(go())  # it waits for the thread, which gives the reservation back
+    async def within_seconds() -> None:
+        # A gate left on by an earlier test would never reach Held.reserve, and this wait
+        # would sit in a test slot. It fails here instead.
+        try:
+            await asyncio.wait_for(go(), 5)
+        finally:
+            release.set()  # a held thread must not outlive a failure
+
+    asyncio.run(within_seconds())  # it waits for the thread, which gives the reservation back
     assert sink.settles == [(1, 0.0)]
     assert [str(x["error"]).split(":")[0] for x in sink.lines] == ["CancelledError"]
     assert real_error(sink.lines[0]) is None  # cancelling is not the provider failing

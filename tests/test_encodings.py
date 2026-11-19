@@ -25,7 +25,7 @@ import pytest
 from openai.types.chat import ChatCompletion
 
 from fakes.openai_server import FIXTURES
-from model_gate import SENDS, Budget, Sink
+from model_gate import Budget, Sink
 from scrimmage_core import changes, http_gate, provider_openai, state
 from scrimmage_core.budget import Ledger
 from scrimmage_core.changes import Unchangeable
@@ -135,7 +135,6 @@ def provider() -> Iterator[Provider]:
     started = Provider()
     yield started
     started.stop()
-    httpx2.Client._send_single_request, httpx2.AsyncClient._send_single_request = SENDS
     state.install(None)
 
 
@@ -279,9 +278,6 @@ def httpx_offers_br() -> bool:
         return "br" in client.headers.get("accept-encoding", "")
 
 
-HTTPX_SENDS = (httpx.Client._send_single_request, httpx.AsyncClient._send_single_request)
-
-
 @pytest.mark.design("budget.br_reply_counts")
 @pytest.mark.skipif(
     BR is not None or not httpx_offers_br(),
@@ -298,13 +294,10 @@ def test_a_br_reply_scrimmage_cannot_unpack_is_estimated_and_holds_nothing(
     provider.send("br")
     real = json.loads(REAL)["choices"][0]["message"]["content"]
     ask_for = {"model": MODEL, "messages": [{"role": "user", "content": "Where is order 1234?"}]}
-    try:
-        with httpx.Client() as client:
-            for _ in range(2):
-                got = client.post(f"{provider.url}/chat/completions", json=ask_for)
-                assert got.json()["choices"][0]["message"]["content"] == real
-    finally:
-        httpx.Client._send_single_request, httpx.AsyncClient._send_single_request = HTTPX_SENDS
+    with httpx.Client() as client:
+        for _ in range(2):
+            got = client.post(f"{provider.url}/chat/completions", json=ask_for)
+            assert got.json()["choices"][0]["message"]["content"] == real
     assert "br" in provider.asked[0]
     lines = gate.lines()
     assert len(lines) == 2 and len(gate.sink.settles) == 2

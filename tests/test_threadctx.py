@@ -50,12 +50,8 @@ def service() -> Iterator[state.ProcessState]:
 
 @pytest.fixture
 def web(service: state.ProcessState) -> Iterator[None]:
-    sync_send = httpx2.Client._send_single_request
-    async_send = httpx2.AsyncClient._send_single_request
     http_gate.patch(httpx2, http_gate.Context(service, Budget(), None, service.stop))
     yield
-    httpx2.Client._send_single_request = sync_send  # type: ignore[method-assign]
-    httpx2.AsyncClient._send_single_request = async_send  # type: ignore[method-assign]
 
 
 def a_run(
