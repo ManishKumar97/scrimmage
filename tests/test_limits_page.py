@@ -84,6 +84,7 @@ ALL_TITLES = [
     "A tool in a file another program runs.",
     "A tool its server answers but does not list.",
     "A tool made with `model_construct`.",
+    "A tool with no readable source on Python 3.14.",
     "A tool's function called directly.",
     "A transport's own retries.",
     "A value that changes between runs is frozen by its mock.",
