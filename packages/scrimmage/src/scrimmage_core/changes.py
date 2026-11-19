@@ -403,7 +403,11 @@ def declared_return(function: object) -> object:
     try:
         return typing.get_type_hints(stand_in)["return"]
     except Exception:  # a name it cannot find, or text that is no type
+        pass
+    try:
         return Unresolved(written_text(target, written))
+    except Exception as exc:  # the team's own type, whose __getattr__ or __str__ raises
+        return Unresolved(f"annotations that raise {type(exc).__name__}")
 
 
 def borrowed() -> None:

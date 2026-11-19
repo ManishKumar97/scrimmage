@@ -14,6 +14,7 @@ import pytest
 from conftest import OK, ROW_FAILED, Project, Result
 from scrimmage_core import changes, mocks, runner
 from scrimmage_core.cli import main
+from scrimmage_core.outcomes import MISTAKE
 
 # Every test here, or nearly, runs scrimmage test, which starts the agent's process.
 pytestmark = pytest.mark.slow
@@ -92,6 +93,35 @@ class Marker:
 MARK = Marker()
 
 
+class RaisingEq(type):
+    def __eq__(cls, other):
+        raise RuntimeError("no eq")
+
+    __hash__ = type.__hash__
+
+
+class Compared(metaclass=RaisingEq):
+    pass
+
+
+class RaisingAttr(type):
+    def __getattr__(cls, name):
+        raise RuntimeError("no attr " + name)
+
+
+class Odd(metaclass=RaisingAttr):
+    pass
+
+
+class RaisingCheck(type):
+    def __instancecheck__(cls, obj):
+        raise RuntimeError("no instance check")
+
+
+class Checked(metaclass=RaisingCheck):
+    pass
+
+
 class Sized(Protocol):
     def size(self) -> int: ...
 
@@ -130,6 +160,9 @@ def lines(key: str) -> Iterator[str]: ...
 def made(key: str) -> Generator[str, None, None]: ...
 def old_row(key: str) -> OldRow: ...
 def marked(key: str) -> MARK: ...
+def compared(key: str) -> Compared: ...
+def odd(key: str) -> Odd: ...
+def checked(key: str) -> Checked: ...
 
 
 def a_table() -> dict:
@@ -513,3 +546,38 @@ def test_a_mock_type_notice_without_its_mock_is_left_out_of_the_report() -> None
     found = runner.mock_type_lines(config, cast(Any, [result]))
     assert found == (["in test 't' the mock on tool:x returns a table (1 of 1 runs)"], [])
     assert json.dumps(mocks.type_text(dict[str, list[Path]])) == '"dict[str, list[Path]]"'
+
+
+# A class whose own hooks raise is the team's mistake: the run says so, and does not crash.
+
+
+@pytest.mark.design("mock.type_check_never_breaks_a_call")
+def test_a_return_class_whose_eq_raises_still_builds(project: Project) -> None:
+    write(project, "compared", "returns = {}")
+    result = project.test()
+    assert result.code == OK, result.out + result.err
+    assert "crashed" not in result.out + result.err
+
+
+@pytest.mark.design("mock.type_check_never_breaks_a_call")
+def test_a_return_class_whose_getattr_raises_does_not_crash_the_run(project: Project) -> None:
+    write(project, "odd", "returns = {a = 1}")
+    result = project.test()
+    assert result.code == OK, result.out + result.err
+    assert "crashed" not in result.out + result.err
+
+
+@pytest.mark.design("mock.type_check_never_breaks_a_call")
+def test_a_return_class_whose_instancecheck_raises_is_a_mistake_naming_the_error_class(
+    project: Project,
+) -> None:
+    write(project, "checked", 'returns = "text"')
+    result = project.test()
+    shown = result.out + result.err
+    assert result.code == MISTAKE, shown
+    assert (
+        "the mock does not fit acme.shapes:Checked: the class's isinstance check raised "
+        "RuntimeError"
+    ) in shown
+    leaked = "no instance check" in shown
+    assert not leaked, "the error's message was quoted"
