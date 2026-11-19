@@ -110,6 +110,22 @@ def answer_twice(question: str) -> str:
     return asyncio.run(go())
 
 
+def answer_after_editing_the_first(question: str) -> str:
+    """The bot edits the list of hits it got from call 1, then calls again."""
+
+    async def go() -> str:
+        async with connected() as session:
+            await session.list_tools()
+            first = await session.call_tool(TOOL, {"q": "refunds"}, read_timeout_seconds=LIMIT)
+            hits = (first.structured_content or {})["hits"]
+            hits.append("added by the bot")
+            return (
+                f"first={hits} second={described(await session.call_tool(TOOL, {'q': 'refunds'}))}"
+            )
+
+    return asyncio.run(go())
+
+
 def find_docs(question: str) -> str:
     """A Python tool that makes its own MCP call."""
     return answer(question)
