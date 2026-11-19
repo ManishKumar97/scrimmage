@@ -512,13 +512,9 @@ class Server:
 
 @pytest.fixture
 def web(sink: Sink) -> Iterator[Sink]:
-    sync_send = httpx2.Client._send_single_request
-    async_send = httpx2.AsyncClient._send_single_request
     run = recording(sink)
     http_gate.patch(httpx2, http_gate.Context(run, cast(Any, None), sink, pytest.fail))
     yield sink
-    httpx2.Client._send_single_request = sync_send  # type: ignore[method-assign]
-    httpx2.AsyncClient._send_single_request = async_send  # type: ignore[method-assign]
 
 
 def fetch(path: str) -> str:
@@ -991,18 +987,10 @@ def test_a_faulted_line_names_its_retry_after(sink: Sink) -> None:
     plan = Plan("run-1", "t", "fault 1", (), faults, (), (host,), 60.0)
     run = state.RunState(plan, sink, ALLOWED, blobs=sink)
     state.install(run)
-    sync_send = httpx2.Client._send_single_request
-    async_send = httpx2.AsyncClient._send_single_request
-    try:
-        http_gate.patch(httpx2, http_gate.Context(run, cast(Any, None), sink, pytest.fail))
-        fetch("/waits")
-        fetch("/waits")  # the fault is spent: real, with no fault object
-        fetch("/plain")
-    finally:
-        # patch() gates both clients, so both are put back: a gate left on the async one
-        # has no budget client, and a later async test in this process fails or hangs.
-        httpx2.Client._send_single_request = sync_send  # type: ignore[method-assign]
-        httpx2.AsyncClient._send_single_request = async_send  # type: ignore[method-assign]
+    http_gate.patch(httpx2, http_gate.Context(run, cast(Any, None), sink, pytest.fail))
+    fetch("/waits")
+    fetch("/waits")  # the fault is spent: real, with no fault object
+    fetch("/plain")
     validator = jsonschema.Draft202012Validator(RECORD)
     waited, after, plain = lines = sink.calls()
     for line in lines:
@@ -1039,14 +1027,8 @@ def model_gate(sink: Sink, *faults: config.Fault) -> Iterator[None]:
     )  # fmt: skip
     run = state.RunState(plan, sink, ALLOWED, blobs=sink)
     state.install(run)
-    sync_send = httpx2.Client._send_single_request
-    async_send = httpx2.AsyncClient._send_single_request
-    try:
-        http_gate.patch(httpx2, http_gate.Context(run, Budget(1.0), sink, pytest.fail))
-        yield
-    finally:
-        httpx2.Client._send_single_request = sync_send  # type: ignore[method-assign]
-        httpx2.AsyncClient._send_single_request = async_send  # type: ignore[method-assign]
+    http_gate.patch(httpx2, http_gate.Context(run, Budget(1.0), sink, pytest.fail))
+    yield
 
 
 def model_client(
@@ -1378,8 +1360,6 @@ def test_in_a_service_run_only_the_request_that_carries_the_fault_is_marked(sink
         context.run(state.SLOT.set, state.Joined(run.name, run))
         return context
 
-    sync_send = httpx2.Client._send_single_request
-    async_send = httpx2.AsyncClient._send_single_request
     errors: dict[str, BaseException] = {}
     try:
         http_gate.patch(httpx2, http_gate.Context(process, Budget(1.0), sink, pytest.fail))
@@ -1403,8 +1383,6 @@ def test_in_a_service_run_only_the_request_that_carries_the_fault_is_marked(sink
         for thread in threads:
             thread.join(timeout=20)
     finally:
-        httpx2.Client._send_single_request = sync_send  # type: ignore[method-assign]
-        httpx2.AsyncClient._send_single_request = async_send  # type: ignore[method-assign]
         state.install_process(None)
     assert sorted(errors) == ["x", "y"]
     fired, *answered = model_lines_of(sink)

@@ -19,7 +19,7 @@ import pytest
 
 from conftest import Project
 from fakes.openai_server import FakeOpenAI
-from model_gate import GUARD, PRICE, SENDS, URL, Gate, Provider, ask, completion, guard
+from model_gate import GUARD, PRICE, URL, Gate, Provider, ask, completion, guard
 from scrimmage_core import changes, config, outcomes, provider_openai, show, state
 from scrimmage_core.cli import main
 from scrimmage_core.config import Fault
@@ -31,7 +31,6 @@ SECRET = "sk-" + "a1b2c3d4" * 3  # a shape the redaction rules remove
 @pytest.fixture(autouse=True)
 def gated() -> Iterator[None]:
     yield
-    httpx2.Client._send_single_request, httpx2.AsyncClient._send_single_request = SENDS
     state.install(None)
 
 
