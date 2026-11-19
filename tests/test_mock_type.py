@@ -122,6 +122,18 @@ class Checked(metaclass=RaisingCheck):
     pass
 
 
+class BadSkuError(Exception):
+    pass
+
+
+@dataclasses.dataclass
+class BadSku:
+    sku: str
+
+    def __post_init__(self):
+        raise BadSkuError("rejected sku-secret-value")
+
+
 class Sized(Protocol):
     def size(self) -> int: ...
 
@@ -163,6 +175,7 @@ def marked(key: str) -> MARK: ...
 def compared(key: str) -> Compared: ...
 def odd(key: str) -> Odd: ...
 def checked(key: str) -> Checked: ...
+def bad_sku(key: str) -> BadSku: ...
 
 
 def a_table() -> dict:
@@ -580,4 +593,30 @@ def test_a_return_class_whose_instancecheck_raises_is_a_mistake_naming_the_error
         "RuntimeError"
     ) in shown
     leaked = "no instance check" in shown
+    assert not leaked, "the error's message was quoted"
+
+
+@pytest.mark.design("mock.type_check_never_breaks_a_call")
+def test_a_return_class_whose_post_init_raises_is_a_mistake_naming_the_error_class(
+    project: Project,
+) -> None:
+    write(project, "bad_sku", 'returns = {sku = "a"}')
+    result = project.test()
+    shown = result.out + result.err
+    assert result.code == MISTAKE, shown
+    assert "the mock does not fit acme.shapes:BadSku: building it raised BadSkuError" in shown
+    leaked = "sku-secret-value" in shown
+    assert not leaked, "the error's message was quoted"
+
+
+@pytest.mark.design("mock.type_check_never_breaks_a_call")
+def test_an_explicit_type_whose_getattr_raises_is_a_mistake_naming_the_error_class(
+    project: Project,
+) -> None:
+    write(project, "odd", 'returns = {a = 1}\ntype    = "acme.shapes:Odd"')
+    result = project.test()
+    shown = result.out + result.err
+    assert result.code == MISTAKE, shown
+    assert "the mock does not fit acme.shapes:Odd: building it raised RuntimeError" in shown
+    leaked = "no attr" in shown
     assert not leaked, "the error's message was quoted"

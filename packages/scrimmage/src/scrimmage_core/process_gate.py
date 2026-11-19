@@ -165,14 +165,17 @@ def service_start(event: str, args: tuple[Any, ...]) -> None:
         refuse_other(run, "process:fork", "os.fork", "a fork would carry this run into a copy")
         return
     if not PROGRAM.fullmatch(program):  # an empty name, or one with a line break or odd bytes
-        step = run.decide(Call("process", "process:?", line), {"command": line})
-        refused(
-            run,
-            step,
+        call = Call("process", "process:?", line)
+        message = (
             f"{line} was started inside a test run, and its program has no plain name that "
             "[agent] real could list, so it is refused. Start it by a name such as uname, "
-            "through a link or wrapper whose name real can list.",
+            "through a link or wrapper whose name real can list."
         )
+        if isinstance(run, Outside):  # no entry could let it through, so no entry is named
+            for open_run in run.runs:
+                open_run.outside_refused(call, message, None, {"command": line})
+            raise ScrimmageRefused(message)
+        refused(run, run.decide(call, {"command": line}), message)
         return
     label = f"process:{program}"
     step = run.decide(Call("process", label, program), {"command": line})
