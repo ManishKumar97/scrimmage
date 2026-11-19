@@ -1572,6 +1572,22 @@ def test_a_name_mangled_parameter_still_lets_config_be_filtered(project: Project
 
 
 @pytest.mark.design("adapter.plumbing_not_recorded")
+@ON_314
+def test_a_name_mangled_parameter_of_a_nested_function_still_lets_config_be_filtered(
+    project: Project,
+) -> None:
+    text = (
+        "from langchain_core.runnables import RunnableConfig\n\n\n"
+        "class W:\n"
+        "    def make(self):\n"
+        "        def inner(__sku, config: RunnableConfig = None, x: 1 / 0 = None): ...\n\n"
+        "        return inner\n"
+    )
+    module = import_module(project, "nested_mangled", text)
+    assert langchain_gate.plumbing_names(module.W().make()) == {"config"}
+
+
+@pytest.mark.design("adapter.plumbing_not_recorded")
 def test_a_literal_value_naming_a_plumbing_type_is_not_plumbing(project: Project) -> None:
     text = (
         "from typing import Literal, Optional\n"
