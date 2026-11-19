@@ -800,8 +800,16 @@
             "left_group",
             "probe",
             "model_path",
-            "plan_changed"
+            "plan_changed",
+            "mock_type"
           ]
+        },
+        "mock": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "note": {
+          "type": "boolean"
         },
         "process": {
           "type": "object",

@@ -7,8 +7,10 @@ one class and None builds that class from a table, as TOML cannot write None, an
 other value as written. A value that does not fit is a mistake in the test. Each call gets
 its own copy, so a change the agent makes to the value is not seen by the next call.
 A value TOML cannot hold, such as bytes, is built by the team's own function: returns_from.
+A built value that does not fit the tool's return annotation gets a warning, never a mistake.
 """
 
+import collections.abc
 import enum
 import importlib
 import inspect
@@ -21,6 +23,17 @@ from scrimmage_core.errors import ScrimmageMockError, ScrimmageRefused
 
 # Any is a class on 3.11 and later, and neither it nor object names a shape to build.
 PLAIN = (str, int, float, bool, list, dict, tuple, type(None), object, typing.Any)
+# Results a list fits, as an agent loops over it: the check says nothing for them.
+STREAMS = (
+    collections.abc.Iterable,
+    collections.abc.Iterator,
+    collections.abc.Generator,
+    collections.abc.AsyncIterable,
+    collections.abc.AsyncIterator,
+    collections.abc.AsyncGenerator,
+)
+# The text changes.declared_return gives in place of annotations that raise on 3.14.
+RAISING = "annotations that raise "
 # The members a mistake names, so a large Enum gives a short line.
 SHOWN_MEMBERS = 10
 
@@ -148,6 +161,216 @@ def produced(path: str, prefixes: list[str]) -> object:
             f"returns_from {path} must be a plain function, not async: it returned an awaitable"
         )
     return value
+
+
+# How a fix asks for a value of each plain kind, as TOML writes it.
+WRITTEN = {
+    str: "text",
+    bool: "true or false",
+    int: "an integer",
+    float: "a number",
+    list: "a list",
+    tuple: "a list",
+    dict: "a table",
+}
+
+
+def mismatch(
+    value: object, kind: str | None, declared: object, name: str, factory: str | None = None
+) -> str | None:
+    """What is wrong with a built mock value, against the tool's declared return type, and
+    the fix; None when it fits, or when the declared type tells nothing. value is the mock
+    as built, before a framework shapes it; kind is the mock's type, factory its returns_from.
+    Only the outer type is checked, and, for a class item type, the first item."""
+    shown = type_text(declared)
+    if fits(value, declared) is False:
+        if factory is not None:
+            return (
+                f"returns_from {factory} gives {a_kind(value)}, but {name} is declared to "
+                f"return {shown}; fix the function, or the annotation"
+            )
+        if kind is not None:
+            return (
+                f"builds {kind}, but {name} is declared to return {shown}; fix the mock's "
+                "type, or the annotation"
+            )
+        return (
+            f"returns {written_as(value)}, but {name} is declared to return {shown}; "
+            f"{fix_for(value, declared)}"
+        )
+    item = item_type(declared)
+    first = first_item(value)
+    if factory is None and item is not None and table(first) and fits(first, item) is False:
+        return (
+            f"keeps its items as tables, but {name} is declared to return {shown}; "
+            "use returns_from to build them, or fix the annotation"
+        )
+    return None
+
+
+def unresolved(
+    value: object, kind: str | None, declared: object, name: str, factory: str | None = None
+) -> str | None:
+    """The note for a table kept as written because the return type cannot be resolved. A
+    returns_from mock builds its own value, and type is refused beside it: nothing to say."""
+    from scrimmage_core import changes  # changes imports config, which imports this module
+
+    if kind is not None or factory is not None:
+        return None
+    if not isinstance(declared, changes.Unresolved) or not table(value):
+        return None
+    if declared.text.startswith(RAISING):  # on 3.14: not the annotation's text, so not quoted
+        error = declared.text.removeprefix(RAISING)
+        what = f"declares a return annotation that raises {error}"
+        last = "Class"
+    else:
+        what = f"declares a return type Scrimmage cannot resolve ({declared.text!r})"
+        last = declared.text.strip("'\"").rpartition(".")[2]
+        last = last if last.isidentifier() else "Class"
+    return (
+        f'{name} {what}, so the mock is kept as a table; name the class with type = "module:{last}"'
+    )
+
+
+def fits(value: object, declared: object) -> bool | None:
+    """Whether a value fits a declared type: None when the type tells nothing, such as none,
+    Any, object, None alone (TOML cannot write None), a type variable, Literal, a NewType, a
+    Protocol, an iterator or generator, or an unresolved type. An int fits float, a bool
+    fits int, a bytearray fits bytes, and a list fits tuple, as TOML has no tuple."""
+    from scrimmage_core import changes  # changes imports config, which imports this module
+
+    declared = plain_of(declared)
+    if typing.get_origin(declared) in (typing.Union, types.UnionType):
+        found = [
+            value is None if member is types.NoneType else fits(value, member)
+            for member in changes.members(declared)
+        ]
+        return True if True in found else None if None in found else False
+    if any(declared is said for said in (None, types.NoneType, typing.Any, object)):
+        return None
+    if isinstance(declared, typing.TypeVar | typing.NewType | changes.Unresolved):
+        return None
+    origin = typing.get_origin(declared) or declared
+    if origin is typing.Literal or not isinstance(origin, type) or origin in STREAMS:
+        return None
+    if typed_dict(origin):
+        return isinstance(value, dict)  # isinstance refuses a TypedDict
+    if getattr(origin, "_is_protocol", False):
+        return None
+    if (origin is float and type(value) is int) or (origin is tuple and isinstance(value, list)):
+        return True
+    if origin is bytes and isinstance(value, bytearray | memoryview):  # as typing once promoted
+        return True
+    try:
+        return isinstance(value, origin)
+    except Exception:  # a class whose own instance check raises tells nothing
+        return None
+
+
+def typed_dict(kind: type) -> bool:
+    """A TypedDict, made by typing or by typing_extensions, whose classes typing does not
+    know: both are dict subclasses with the keys they require."""
+    return typing.is_typeddict(kind) or (
+        dict in getattr(kind, "__mro__", ()) and hasattr(kind, "__required_keys__")
+    )
+
+
+def plain_of(declared: object) -> object:
+    """Annotated[X, ...] read as X."""
+    while typing.get_origin(declared) is typing.Annotated:
+        declared = typing.get_args(declared)[0]
+    return declared
+
+
+def item_type(declared: object) -> object:
+    """The item type of list[X], tuple[X, ...] or dict[str, X] when X is a class that is no
+    plain kind; else None."""
+    declared = plain_of(declared)
+    origin, args = typing.get_origin(declared), typing.get_args(declared)
+    homogeneous = origin is tuple and len(args) == 2 and args[1] is Ellipsis
+    if (origin is list and len(args) == 1) or homogeneous:
+        item = args[0]
+    elif origin is dict and len(args) == 2:
+        item = args[1]
+    else:
+        return None
+    item = plain_of(item)
+    return item if isinstance(item, type) and item not in PLAIN else None
+
+
+def first_item(value: object) -> object:
+    if isinstance(value, list) and value:
+        return cast(list[object], value)[0]
+    if isinstance(value, dict) and value:
+        return next(iter(cast(dict[object, object], value).values()))
+    return None
+
+
+def a_kind(value: object) -> str:
+    """A value by its class, as a returns_from function gave it."""
+    return "None" if value is None else f"a {type(value).__qualname__}"
+
+
+def written_as(value: object) -> str:
+    """A TOML value as the team wrote it."""
+    if isinstance(value, dict):
+        return "a table"
+    if isinstance(value, list):
+        return "a list"
+    if isinstance(value, str):
+        return "text"
+    if isinstance(value, bool):
+        return "true or false"
+    if isinstance(value, int):
+        return "an integer"
+    if isinstance(value, float):
+        return "a number"
+    return a_kind(value)
+
+
+def fix_for(value: object, declared: object) -> str:
+    """The fix for a written value that does not fit: write it as the declared kind, name
+    the class to build with type, or build it with returns_from."""
+    from scrimmage_core import changes  # changes imports config, which imports this module
+
+    ways: list[str] = []
+    classes = False
+    for member in changes.members(plain_of(declared)):
+        origin = plain_of(member)
+        origin = typing.get_origin(origin) or origin
+        if isinstance(origin, type) and typed_dict(origin):
+            origin = dict
+        if origin in WRITTEN:
+            ways.append(WRITTEN[origin])
+        elif origin is not types.NoneType:
+            classes = True
+    ways = list(dict.fromkeys(ways))
+    if ways:
+        return f"write returns as {' or '.join(ways)}, or fix the annotation"
+    if classes and table(value):
+        return "name the class to build with type, or fix the annotation"
+    if classes:
+        return "build the value with returns_from, or fix the annotation"
+    return "fix the mock, or the annotation"
+
+
+def type_text(declared: object) -> str:
+    """A declared type as a person writes it: Stock, list[Order], Stock | None."""
+    from scrimmage_core import changes  # changes imports config, which imports this module
+
+    declared = plain_of(declared)
+    if typing.get_origin(declared) in (typing.Union, types.UnionType):
+        return " | ".join(type_text(member) for member in changes.members(declared))
+    if declared is types.NoneType or declared is None:
+        return "None"
+    if declared is Ellipsis:
+        return "..."
+    origin, args = typing.get_origin(declared), typing.get_args(declared)
+    if origin is not None and args and isinstance(origin, type):
+        return f"{origin.__qualname__}[{', '.join(type_text(arg) for arg in args)}]"
+    if isinstance(declared, type):
+        return declared.__qualname__
+    return str(declared).removeprefix("typing.")
 
 
 def member_or_value(kind: type[enum.Enum], value: object) -> object:

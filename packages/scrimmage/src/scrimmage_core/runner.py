@@ -1429,6 +1429,31 @@ def unused_mocks(
     return notes, mistakes, recorded
 
 
+def mock_type_lines(config: Config, results: list[RunResult]) -> tuple[list[str], list[str]]:
+    """The mock type check, as (warnings, notes): one line per test and mock, however many
+    runs and calls said it. A warning counts the runs that said it."""
+    warnings: list[str] = []
+    notes: list[str] = []
+    for test in config.tests:
+        mine = [r for r in results if r.row.test == test and r.outcome != "stopped"]
+        said: dict[tuple[int, bool], tuple[str, set[str]]] = {}
+        for r in mine:
+            for line in r.notices:
+                index = line.get("mock")
+                # A line from another SDK version may lack its mock: it is left out.
+                if line.get("notice") == "mock_type" and type(index) is int:
+                    key = (index, line.get("note") is True)
+                    said.setdefault(key, (str(line.get("message")), set()))[1].add(r.run)
+        for (_, note), (message, runs) in sorted(said.items()):
+            if note:
+                notes.append(f"in test {test.name!r} {message}")
+            else:
+                warnings.append(
+                    f"in test {test.name!r} {message} ({len(runs)} of {len(mine)} runs)"
+                )
+    return warnings, notes
+
+
 def recorded_call(mock: Mock) -> str:
     """A recorded mock as a person finds it: its label, and its arguments or its request."""
     if labels.kind_of(mock.call) == "http":
@@ -1941,6 +1966,9 @@ def build_report(
             if line.get("notice") == "model_path"
         }
     )
+    typed_warnings, typed_notes = mock_type_lines(config, results)
+    warnings += typed_warnings
+    notes += typed_notes
     newer = sorted(
         {
             str(line.get("message"))

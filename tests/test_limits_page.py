@@ -156,6 +156,7 @@ ALL_TITLES = [
     "The faults in a model's reply are for Chat Completions, not streamed.",
     "The first Python with the SDK owns the run.",
     "The first in line waits for room.",
+    "The mock type check reads the outer type and the first item.",
     "The old SSE transport for MCP.",
     "The plan holds `find` as written.",
     "The probe reaches one replica.",
