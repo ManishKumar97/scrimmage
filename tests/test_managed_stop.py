@@ -308,13 +308,45 @@ def test_a_port_taken_while_the_app_loads_slowly_names_the_copys_exit(shop: Shop
 
 
 def test_a_copy_that_answers_without_the_gate_is_named_at_once(shop: Shop) -> None:
-    """The copy itself listens on its port but has no gate: no wait for it to exit."""
-    began = time.monotonic()
+    """The copy itself listens on its port but has no gate: no wait for it to exit.
+
+    Timed from the probe's reply to the runner's exit 3, and the check for a lost port on
+    its own. Starting the copy takes longer on a loaded machine, and no deadline covers it."""
+    probe, lost_its_port = service_client.probe, managed.Managed.lost_its_port
+    probe_service = runner.Runner.probe_service
+    replied: list[float] = []
+    checks: list[tuple[bool, float]] = []
+    ended: list[float] = []
+
+    def probed(*args: Any) -> service_client.Probed:
+        found = probe(*args)
+        replied.append(time.monotonic())
+        return found
+
+    def timed(copy: managed.Managed, until: float) -> bool:
+        began = time.monotonic()
+        lost = lost_its_port(copy, until)
+        checks.append((lost, time.monotonic() - began))
+        return lost
+
+    def raised(self: runner.Runner) -> service_client.Probed:
+        try:
+            return probe_service(self)
+        finally:
+            ended.append(time.monotonic())
+
+    shop.monkeypatch.setattr(service_client, "probe", probed)
+    shop.monkeypatch.setattr(managed.Managed, "lost_its_port", timed)
+    shop.monkeypatch.setattr(runner.Runner, "probe_service", raised)
     code, out = shop.test(f"{sys.executable} -m http.server {{port}} --bind 127.0.0.1")
-    took = time.monotonic() - began
     assert code == 3, out
     assert "x-scrimmage-run does not reach Scrimmage" in out, out
+    [(lost, took)] = checks
+    assert not lost, "the copy that answered was taken for one that lost its port"
     assert took < managed.FAILED_PROBE_S, took
+    [end] = ended
+    named = end - replied[-1]
+    assert named < managed.FAILED_PROBE_S, named
 
 
 def test_a_port_held_by_a_process_that_never_answers_ends_the_probe_when_the_copy_exits(

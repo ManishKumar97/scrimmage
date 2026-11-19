@@ -85,3 +85,13 @@ def test_no_docs_command_installs_scrimmage_from_the_index() -> None:
         and any(re.match(r"scrimmage(\[[\w,]*\])?($|[<>=!~ ])", w) for w in words[2:])
     ]
     assert from_index == []
+
+
+def test_the_package_ships_the_repo_license_under_apache_2() -> None:
+    meta = importlib.metadata.metadata("scrimmage")
+    assert meta["License-Expression"] == "Apache-2.0"
+    # The wheel takes LICENSE from the package folder: a copy of the repo's, kept the same.
+    root = DOCS.parent
+    shipped = (root / "packages" / "scrimmage" / "LICENSE").read_bytes()
+    assert shipped == (root / "LICENSE").read_bytes()
+    assert shipped.lstrip().startswith(b"Apache License\n")

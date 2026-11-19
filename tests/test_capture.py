@@ -7,7 +7,7 @@ from typing import NamedTuple, cast
 import pydantic
 import pytest
 
-from scrimmage_core import capture, state
+from scrimmage_core import capture, mocks, state
 from scrimmage_core.redact import REMOVED
 
 
@@ -210,6 +210,26 @@ def test_a_value_whose_class_a_mock_cannot_name_or_build_is_unsavable() -> None:
         "code": "unsavable",
         "why": "returns: a mock built from it fails with ScrimmageMockError",
     }
+
+
+def find_stock(sku: str) -> Stock | None:
+    return None
+
+
+@pytest.mark.design("record.strict_equal")
+def test_an_optional_class_return_still_records_and_round_trips() -> None:
+    allowed = [f"{__name__}."]
+    saved = capture.tool_value(Stock("a", 1), {"sku": "a"}, find_stock, same, allowed)
+    assert saved == {
+        "value": {"sku": "a", "count": 1},
+        "args": {"sku": "a"},
+        "removed": [],
+        "type": f"{__name__}:Stock",
+    }
+    # The mock built from the saved value, with or without its type, is the real value.
+    for kind in (f"{__name__}:Stock", None):
+        assert mocks.build(saved["value"], kind, find_stock, allowed) == Stock("a", 1)
+    assert capture.tool_value(None, {}, find_stock, same, allowed)["value"] is None
 
 
 def test_arguments_a_mock_cannot_hold_convert_to_none() -> None:

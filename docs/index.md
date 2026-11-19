@@ -94,8 +94,8 @@ The whole project is on the [function agent](examples/function-agent.md) page.
 - An agent that is a Python function, with its own loop or on LangGraph, or a Python script and the child processes it starts.
   LangGraph is LangChain's library for agents built as a graph of steps; teams use it to run tool-calling agents.
 - Its own Python tools, and the web requests inside them sent with httpx or httpx2.
-  httpx is a widely used Python HTTP client, and the `openai` library sends its requests with it.
-  httpx2 is a newer client from the Pydantic team, which the `mcp` library uses.
+  httpx is a widely used Python HTTP client.
+  httpx2 is its successor from the Pydantic team; the `openai` and `mcp` libraries send their requests with it.
 - Tools on MCP servers.
   MCP, the Model Context Protocol, is a standard way for an agent to call tools that run in a separate program; agent frameworks and coding assistants use it.
 - OpenAI model calls, and gateways that speak the same format, with a spending limit for each test.

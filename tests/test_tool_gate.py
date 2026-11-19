@@ -1,25 +1,29 @@
 """The tools-list gate and run state, in one process, with lines kept in a list."""
 
 import asyncio
+import enum
 import functools
 import inspect
 import json
 import sys
 import threading
 import types
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Optional, cast
 
+import pydantic
 import pytest
 
+import wrapping
 from conftest import ACME, EXAMPLE_FAULT, Project
 from fakes.openai_server import FakeOpenAI
 from report_cases import AGENT, TEST, load
 from report_cases import run as a_run
+from scrimmage_core import changes, state, tool_gate
 from scrimmage_core import decide as engine
 from scrimmage_core import plan as planner
-from scrimmage_core import state, tool_gate
 from scrimmage_core.config import Fault, Mock
 from scrimmage_core.errors import (
     ScrimmageMockError,
@@ -165,6 +169,157 @@ def test_a_type_outside_the_allowed_prefixes_is_refused_before_import(
 def test_a_plain_annotation_returns_the_value_as_written(lines: Lines) -> None:
     install(lines, [Mock("tool:get_text", "shipped, Oct 30", None)])
     assert tool_gate.gate(get_text, "get_text")("1") == "shipped, Oct 30"
+
+
+class Item(pydantic.BaseModel):
+    sku: str
+    count: int
+
+
+class Status(enum.Enum):
+    SHIPPED = "shipped"
+    PENDING = "pending"
+
+
+def find_stock(sku: str) -> Stock | None:
+    return None
+
+
+def find_stock_old(sku: str) -> Optional[Stock]:  # noqa: UP045 - the spelling under test
+    return None
+
+
+def find_item(sku: str) -> Item | None:
+    return None
+
+
+def find_item_old(sku: str) -> Optional[Item]:  # noqa: UP045 - the spelling under test
+    return None
+
+
+def find_either(sku: str) -> Stock | Item | None:
+    return None
+
+
+def order_status(order_id: str) -> Status:
+    return Status.PENDING
+
+
+def list_items(order_id: str) -> list[dict[str, object]]:
+    return []
+
+
+@pytest.mark.design("mock.typed_from_annotation")
+@pytest.mark.parametrize(
+    ("tool", "built"),
+    [
+        (find_stock, Stock("a", 1)),
+        (find_stock_old, Stock("a", 1)),
+        (find_item, Item(sku="a", count=1)),
+        (find_item_old, Item(sku="a", count=1)),
+        (find_either, {"sku": "a", "count": 1}),  # two classes: the table is kept
+    ],
+    ids=["dataclass-or-none", "optional-dataclass", "model-or-none", "optional-model", "two"],
+)
+def test_a_table_mock_on_an_optional_class_builds_the_class(
+    lines: Lines, tool: Callable[[str], object], built: object
+) -> None:
+    label = tool.__name__
+    install(lines, [Mock(f"tool:{label}", {"sku": "a", "count": 1}, None)])
+    value = tool_gate.gate(tool, label)("a")
+    assert type(value) is type(built) and value == built
+
+
+@pytest.mark.design("mock.typed_from_annotation")
+def test_an_enum_mock_is_built_by_value(lines: Lines) -> None:
+    install(lines, [Mock("tool:order_status", "shipped", None)])
+    assert tool_gate.gate(order_status, "order_status")("1") is Status.SHIPPED
+
+
+@pytest.mark.design("mock.misfit_is_a_mistake")
+@pytest.mark.parametrize("returns", ["sent", "SHIPPED"])  # a name is not a value
+def test_an_enum_mock_with_no_such_member_is_a_mistake_naming_the_members(
+    lines: Lines, returns: str
+) -> None:
+    install(lines, [Mock("tool:order_status", returns, None)])
+    with pytest.raises(ScrimmageMockError) as caught:
+        tool_gate.gate(order_status, "order_status")("1")
+    message = (
+        f"the mock does not fit test_tool_gate:Status: {returns!r} is not one of shipped, pending"
+    )
+    assert str(caught.value) == message
+    assert lines.lines[0]["mistake"] == message
+
+
+def find_path(name: str) -> Path | None:
+    return None
+
+
+@pytest.mark.design("mock.typed_from_annotation")
+def test_a_value_that_is_no_table_on_an_optional_class_is_kept_as_written(lines: Lines) -> None:
+    install(lines, [Mock("tool:find_path", "/tmp", None)])
+    value = tool_gate.gate(find_path, "find_path")("a")
+    assert type(value) is str and value == "/tmp"
+
+
+class Priority(enum.IntEnum):
+    LOW = 1
+    HIGH = 2
+
+
+def find_status(order_id: str) -> Status | None:
+    return None
+
+
+def find_priority(order_id: str) -> Priority | None:
+    return None
+
+
+@pytest.mark.design("mock.typed_from_annotation")
+@pytest.mark.parametrize(
+    ("tool", "returns", "built"),
+    [
+        (find_status, "shipped", Status.SHIPPED),
+        (find_status, "other", "other"),
+        (find_priority, 2, Priority.HIGH),
+        (find_priority, 7, 7),
+    ],
+    ids=["enum-member", "enum-other", "int-enum-member", "int-enum-other"],
+)
+def test_an_optional_enum_builds_a_member_and_keeps_any_other_value(
+    lines: Lines, tool: Callable[[str], object], returns: object, built: object
+) -> None:
+    label = tool.__name__
+    install(lines, [Mock(f"tool:{label}", returns, None)])
+    value = tool_gate.gate(tool, label)("1")
+    assert type(value) is type(built) and value == built
+
+
+Large = enum.Enum("Large", {f"M{i}": f"v{i}" for i in range(5000)})
+
+
+@pytest.mark.design("mock.misfit_is_a_mistake")
+def test_a_mistake_names_at_most_ten_members_of_a_large_enum(lines: Lines) -> None:
+    install(lines, [Mock("tool:get_text", "sent", f"test_tool_gate:{Large.__name__}")])
+    with pytest.raises(ScrimmageMockError) as caught:
+        tool_gate.gate(get_text, "get_text")("1")
+    first = ", ".join(f"v{i}" for i in range(10))
+    assert str(caught.value) == (
+        f"the mock does not fit test_tool_gate:Large: 'sent' is not one of {first}, and 4990 more"
+    )
+
+
+def test_a_change_the_agent_makes_to_a_mock_value_is_not_seen_by_the_next_call(
+    lines: Lines,
+) -> None:
+    returns = [{"sku": "a", "tags": ["new"]}]
+    install(lines, [Mock("tool:list_items", returns, None)])
+    gated = tool_gate.gate(list_items, "list_items")
+    first = gated("1")
+    first.append({"sku": "free gift"})
+    cast(list[str], first[0]["tags"]).append("seen")
+    assert gated("1") == [{"sku": "a", "tags": ["new"]}]
+    assert returns == [{"sku": "a", "tags": ["new"]}]  # the plan's own value is unchanged
 
 
 @pytest.mark.design("fault.timeout_tool")
@@ -1372,3 +1527,119 @@ def test_a_lazy_annotation_that_raises_is_a_mistake_not_none(lines: Lines) -> No
     with pytest.raises(ScrimmageMockError, match="annotations that raise ZeroDivisionError"):
         tool_gate.gate(made("", "def f(a: 1 / 0 = 1) -> str: ..."), "f")()
     assert lines.lines[0]["action"] == "refused"
+
+
+def checking_tool(head: str, returns: str) -> Any:
+    """A tool whose parameter type is imported only for type checking, as a team writes it:
+    quoted, under from __future__ import annotations, or on 3.14 bare and lazy."""
+    space: dict[str, Any] = {"Stock": Stock}
+    sku = '"Decimal"' if head == "quoted" else "Decimal"
+    source = f"def f(sku: {sku}, *, n: int = 1) -> {returns}:\n    raise AssertionError\n"
+    exec((FUTURE if head == "future" else "") + source, space)
+    return space["f"]
+
+
+CHECKING = [
+    pytest.param("quoted", id="quoted"),
+    pytest.param("future", id="future"),
+    pytest.param(
+        "lazy",
+        id="lazy",
+        marks=pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself fails"),
+    ),
+]
+
+
+@pytest.mark.design("mock.typed_from_annotation")
+@pytest.mark.parametrize("head", CHECKING)
+def test_a_mock_is_built_into_the_return_type_whatever_the_parameters(
+    lines: Lines, head: str
+) -> None:
+    tool = checking_tool(head, "Stock")
+    install(lines, [Mock("tool:f", {"sku": "SKU-42", "count": 12}, None)])
+    assert tool_gate.gate(tool, "f")("SKU-42") == Stock("SKU-42", 12)
+    install(Lines(), [Mock("tool:f", {"sku": "SKU-42"}, None)])
+    with pytest.raises(ScrimmageMockError, match="does not fit test_tool_gate:Stock"):
+        tool_gate.gate(tool, "f")("SKU-42")
+
+
+@pytest.mark.parametrize("head", CHECKING)
+def test_a_text_mock_works_whatever_the_parameters(lines: Lines, head: str) -> None:
+    install(lines, [Mock("tool:f", "mocked", None)])
+    assert tool_gate.gate(checking_tool(head, "str"), "f")("SKU-42") == "mocked"
+    assert lines.lines[0]["action"] == "mock"
+
+
+UNRESOLVED_MOCKED = [
+    pytest.param(lambda: get_late, id="quoted"),
+    pytest.param(lambda: checking_tool("future", "LateStock"), id="future"),
+    pytest.param(
+        lambda: checking_tool("lazy", "LateStock"),
+        id="lazy",
+        marks=pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself fails"),
+    ),
+    pytest.param(
+        lambda: made("", "def f(a: 1 / 0 = 1) -> str: ..."),
+        id="lazy_raises",
+        marks=pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself raises"),
+    ),
+]
+
+
+@pytest.mark.design("mock.loose_annotation")
+@pytest.mark.parametrize("tool", UNRESOLVED_MOCKED)
+def test_a_mock_on_a_return_type_that_cannot_be_resolved_is_kept_as_written(
+    lines: Lines, tool: Callable[[], Any]
+) -> None:
+    """As on Any: the mock has its value, so it is not checked; its type names the class."""
+    install(lines, [Mock("tool:f", {"sku": "SKU-42", "count": 12}, None)])
+    assert tool_gate.gate(tool(), "f")("SKU-42") == {"sku": "SKU-42", "count": 12}
+    install(Lines(), [Mock("tool:f", {"sku": "SKU-42", "count": 12}, "test_tool_gate:Stock")])
+    assert tool_gate.gate(tool(), "f")("SKU-42") == Stock("SKU-42", 12)
+
+
+def decorated(decorator: Callable[..., Any], returns: str) -> Any:
+    """A tool in a module under the future import, wrapped by a decorator from another
+    module, whose globals name neither Stock nor Rows."""
+    space: dict[str, Any] = {"Stock": Stock, "Rows": list[str], "decorator": decorator}
+    source = f"@decorator\ndef f(sku: str) -> {returns}:\n    raise AssertionError\n"
+    exec(FUTURE + source, space)
+    return space["f"]
+
+
+DECORATORS = [
+    pytest.param(wrapping.logged, id="wraps"),
+    pytest.param(wrapping.twice_logged, id="chain"),
+    pytest.param(wrapping.Logged, id="update_wrapper_object"),
+]
+
+
+@pytest.mark.design("mock.typed_from_annotation")
+@pytest.mark.parametrize("decorator", DECORATORS)
+def test_a_mock_on_a_decorated_tool_is_built_into_its_return_type(
+    lines: Lines, decorator: Callable[..., Any]
+) -> None:
+    install(lines, [Mock("tool:f", {"sku": "A", "count": 1}, None)])
+    assert tool_gate.gate(decorated(decorator, "Stock"), "f")("A") == Stock("A", 1)
+
+
+@pytest.mark.design("fault.empty_tool_typed")
+@pytest.mark.parametrize("returns", ["list[str]", "Rows"])
+@pytest.mark.parametrize("decorator", DECORATORS)
+def test_empty_on_a_decorated_tool_reads_the_tools_own_module(
+    lines: Lines, decorator: Callable[..., Any], returns: str
+) -> None:
+    install(lines, faults=[empty_fault("tool:f")])
+    value = tool_gate.gate(decorated(decorator, returns), "f")("A")
+    assert value == [] and type(value) is list
+    assert lines.lines[0]["action"] == "fault"
+
+
+@pytest.mark.parametrize("decorator", DECORATORS)
+def test_a_decorated_tool_whose_type_cannot_be_resolved_stays_unresolved(
+    lines: Lines, decorator: Callable[..., Any]
+) -> None:
+    tool = decorated(decorator, "LateStock")
+    assert changes.declared_return(tool) == changes.Unresolved("LateStock")
+    install(lines, [Mock("tool:f", {"sku": "A", "count": 1}, None)])
+    assert tool_gate.gate(tool, "f")("A") == {"sku": "A", "count": 1}

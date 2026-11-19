@@ -186,7 +186,7 @@ The same version passes, and nothing is said.
 Any other version, even another patch or dev release, stops the test with exit 2 before any run, with one message naming both versions and the install line:
 
 ```text
-the service runs scrimmage 0.4.1 and this runner is 0.4.0; install scrimmage 0.4.0 in the service
+the service runs scrimmage 0.1.0.dev1 and this runner is 0.1.0.dev0; install scrimmage 0.1.0.dev0 in the service
 ```
 
 A version of `unknown`, from a `scrimmage` with no package metadata, never matches, not even another `unknown`.

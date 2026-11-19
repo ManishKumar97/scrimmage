@@ -12,8 +12,8 @@ Every other limit is listed below, grouped by how your agent runs.
   List each tool's function under `tools`; see [the `tools` setting](configuration.md#agent).
 - **httpx only.** Web requests through httpx and httpx2 are gated; `requests`, `aiohttp`, `urllib` and raw sockets run unrecorded and ungated.
   A write through `requests` or `aiohttp` reaches the real system.
-  The openai SDK uses httpx, so model calls are covered.
-  Move the call to httpx, or list the tool that makes it under `tools`; see [What is covered](web-requests.md#what-is-covered).
+  The openai SDK uses httpx2, so model calls are covered.
+  Move the call to httpx or httpx2, or list the tool that makes it under `tools`; see [What is covered](web-requests.md#what-is-covered).
 - **No streaming replies.** A service that streams its answer stops the test with exit 2, and a streamed model or web reply cannot take `replace` or `append`.
   Test a route that returns one reply; see [Each run](services.md#each-run).
 - **Rules match text, not meaning.** `expect` finds text, so "shipped" passes inside "has not shipped".
@@ -352,7 +352,7 @@ Also read the control-path limits under An agent inside a web service.
   Its arguments name your first tool with `"parameters": {}`, so an agent that unwraps the call runs that tool with no arguments.
   It fires where the model picks its own tool: not with `tool_choice` `"none"`, a `tool_choice` that names a tool, or tools in the old `functions` field only; those calls are left as they are. It still fires with `parallel_tool_calls` false, as no source shows what a model does then. If your agent sends that call back, OpenAI's real 400 on the next request ends the run as an infrastructure error.
 
-- **A body cut by a dropped connection.** `bad body` sends a whole reply whose JSON does not parse. A reply cut short because the connection dropped is a connection error, not a body to parse: the openai library raises `APIConnectionError` from httpx's `RemoteProtocolError`, after its retries. Scrimmage does not inject that failure.
+- **A body cut by a dropped connection.** `bad body` sends a whole reply whose JSON does not parse. A reply cut short because the connection dropped is a connection error, not a body to parse: the openai library raises `APIConnectionError` from httpx2's `RemoteProtocolError`, after its retries. Scrimmage does not inject that failure.
 
 - **`requests N` needs a library that marks its retries.** It counts a retry by the openai library's `x-stainless-retry-count` header.
   A client that sends none, such as NeMo Guardrails' own, makes each attempt a request; the run then gets a mistake that says to use `first N` or `always`; `call N` counts attempts too, so it works there.
