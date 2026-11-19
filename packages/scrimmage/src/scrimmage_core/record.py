@@ -1455,11 +1455,21 @@ def block_text(found: TestRecord, when: str) -> str:
 def skeleton(entry: ManualEntry) -> str:
     """A listed call, as commented lines, where its mock would go."""
     head = f"scrimmage record could not write this mock: {entry.call}: {entry.message}."
-    hint = (
-        f"A mock of {entry.instead} was written in its place."
-        if entry.instead is not None
-        else "Write it by hand, or leave the tool under real."
+    # A tool's value TOML cannot hold, such as bytes, can only be built by a function.
+    built = (
+        entry.call.startswith("tool:")
+        and entry.code == UNSAVABLE
+        and entry.message.startswith("returns")
     )
+    if entry.instead is not None:
+        hint = f"A mock of {entry.instead} was written in its place."
+    elif built:
+        hint = (
+            "Build the value with a function of no arguments, named with returns_from, "
+            "or leave the tool under real."
+        )
+    else:
+        hint = "Write it by hand, or leave the tool under real."
     lines = [head, hint]
     if entry.shown is not None:
         lines.append(f"{entry.call} with {entry.shown}")
@@ -1469,6 +1479,8 @@ def skeleton(entry: ManualEntry) -> str:
         lines.append(f"args    = {toml_write.inline(entry.args)}")
     if entry.method is not None:
         lines += [f'method  = "{entry.method}"', f'path    = "{entry.path}"', "status  = ..."]
+    elif built and entry.instead is None:
+        lines.append('returns_from = "package.module:function"')
     else:
         lines.append("returns = ...")
     return "\n".join(toml_write.comment(line) for line in lines) + "\n"

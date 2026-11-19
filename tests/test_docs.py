@@ -38,7 +38,8 @@ def test_every_setting_is_documented() -> None:
         "mock",
         "fault",
     }
-    missing = sorted(k for k in keys if not mentioned(text, k))
+    # A row of its own, so a setting named only in prose, or in a later section, is missed.
+    missing = sorted(k for k in keys if f"| `{k}` |" not in text)
     assert not missing, f"settings with no entry in docs/configuration.md: {missing}"
 
 

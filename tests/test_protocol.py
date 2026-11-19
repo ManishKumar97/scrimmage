@@ -180,6 +180,19 @@ def test_retry_after_survives_the_plan_round_trip() -> None:
             Plan.from_json(with_fault(do=do, retry_after=wait))
 
 
+@pytest.mark.design("protocol.returns_from_round_trip")
+def test_returns_from_survives_the_plan_round_trip() -> None:
+    """An SDK that lost it would find a mock with no value, and give the agent None."""
+    made = config.Mock("tool:a", None, None, returns_from="acme.test_mocks:invoice_pdf")
+    narrowed = dataclasses.replace(made, args={"invoice_id": "INV-7"}, recorded=True)
+    for mock in (made, narrowed):
+        sent = dataclasses.replace(a_plan(), mocks=(mock,)).to_json()
+        doc = cast(list[dict[str, object]], sent["mocks"])[0]
+        assert doc["returns_from"] == "acme.test_mocks:invoice_pdf"
+        assert "returns" not in doc and "type" not in doc  # the factory builds the value
+        assert Plan.from_json(json.loads(json.dumps(sent))).mocks == (mock,)
+
+
 @pytest.mark.design("protocol.plan_fault_keys_listed")
 def test_every_fault_field_a_plan_carries_is_a_known_plan_key() -> None:
     """A new Fault field fails here until it is in PLAN_FAULT_KEYS, so a later key is never

@@ -208,6 +208,8 @@ def mock_json(mock: Mock) -> dict[str, object]:
 
 
 def plain_mock_json(mock: Mock) -> dict[str, object]:
+    if mock.returns_from is not None:
+        return {"call": mock.call, "returns_from": mock.returns_from}
     if labels.kind_of(mock.call) != "http":
         doc: dict[str, object] = {"call": mock.call, "returns": mock.returns}
         if mock.type is not None:
@@ -232,6 +234,8 @@ def mock_from(doc: dict[str, object]) -> Mock:
     recorded = doc.get("recorded") is True
     if labels.kind_of(call) != "http":
         args = None if doc.get("args") is None else obj(doc["args"])
+        if (made := optional(doc, "returns_from")) is not None:
+            return Mock(call, None, None, recorded=recorded, args=args, returns_from=made)
         return Mock(call, doc["returns"], optional(doc, "type"), recorded=recorded, args=args)
     return Mock(
         call,

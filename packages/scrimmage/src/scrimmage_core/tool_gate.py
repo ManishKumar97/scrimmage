@@ -201,6 +201,8 @@ def build_mock(state: RunState, step: Step, gated: Gated) -> object:
     assert step.decision.mock is not None
     mock = state.plan.mocks[step.decision.mock]
     try:
+        if mock.returns_from is not None:
+            return gated.shape(mocks.produced(mock.returns_from, state.allowed))
         return gated.shape(mocks.build(mock.returns, mock.type, gated.tool, state.allowed))
     except ScrimmageMockError as exc:
         state.finish(step, error=exc, mistake=str(exc))

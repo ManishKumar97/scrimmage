@@ -104,7 +104,8 @@ The record never holds `self` or `cls`, only the arguments after them.
 | Setting | What it does |
 |---|---|
 | `call` | The label of the call to mock, such as `"tool:get_order"`, `"mcp:docs/search"` or `"http:inventory.acme.internal"`. A model call cannot be mocked: it is real or a fault. Required. |
-| `returns` | The value to return, in TOML: text, a number, true or false, a list or a table. Required for a tool and an MCP tool. Dates and times are not allowed; write them as text. |
+| `returns` | The value to return, in TOML: text, a number, true or false, a list or a table. Required for an MCP tool, and for a tool with no `returns_from`. Dates and times are not allowed; write them as text. |
+| `returns_from` | On a Python tool: a function of no arguments that builds the value, as `module:function`, for a value TOML cannot hold, such as `bytes`. It is called on every mocked call. Give `returns` or `returns_from`, not both, and no `type` beside it. See [Mocks built by a function](#mocks-built-by-a-function). |
 | `type` | On a Python tool: the type to build the value into, as `module:Class`. Optional; read from the tool's return annotation when left out. An annotation of one class or `None`, such as `-> Stock \| None`, builds the class from a table; any other value is kept as written, except that an `Enum` member's value builds that member. An `Enum` is built from its value, so `returns = "shipped"` builds `Status("shipped")`. Only the return annotation is read, so a parameter type imported only under `TYPE_CHECKING` does not matter. A return annotation that cannot be resolved when the tool runs is not checked, and the value is kept as written; name its class here. |
 | `method` | On a web request: match only this method. |
 | `path` | On a web request: match only this exact path, with no query string. |
@@ -190,6 +191,40 @@ To act on a miss:
 | Both values answered | Add a second mock for the other value. |
 | One reply for any value | Remove `args`. |
 | A miss to stop the run | Remove the tool from `real`. |
+
+### Mocks built by a function
+
+TOML has no bytes, and no form for a `datetime`, a list of models or a class that is not built from a table.
+A tool that returns one can still be mocked: name a function that builds the value with `returns_from`.
+
+```toml
+[[test.mock]]
+call         = "tool:get_invoice"
+returns_from = "acme.test_mocks:invoice_pdf"
+```
+
+```python
+# acme/test_mocks.py
+def invoice_pdf() -> bytes:
+    return b"%PDF-1.7 fixed test invoice"
+```
+
+The function takes no arguments.
+It is called on every mocked call, so a change the agent makes to one value is not seen by the next call.
+Its value goes to the agent as it is: nothing is built from it, and `type` is refused beside it.
+To give a different value per argument set, add `args` and one mock for each set.
+
+The function must be in one of your agent's own packages, the ones that `function` and `tools` name.
+One outside them is a mistake, exit code 2, before the first run.
+It runs inside your agent's process, as a `type`'s class does; see [Security](security.md#the-plan-is-data).
+
+These are mistakes in the test, exit code 2:
+
+- `returns_from` with `returns` or `type`;
+- `returns_from` on an MCP or web mock, whose reply is JSON or text that `returns`, `json` or `text` already holds;
+- an `async` function, or one that returns an awaitable;
+- a function that raises.
+  The line names the function and its error's class, never the error's message, which can quote a value.
 
 ## [[test.fault]]
 
@@ -318,4 +353,3 @@ Using one now stops the test: it is rejected as unknown.
 - Settings: `records`.
 - Labels: `auth:`, and model providers other than OpenAI.
 - Faults: `append` on a model call, and `status` on a tool.
-- Mocks: `returns_from`.

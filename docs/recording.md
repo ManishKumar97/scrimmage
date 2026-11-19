@@ -34,6 +34,9 @@ model calls cost $0.0012 of a budget of $5
 next: diff scrimmage.toml scrimmage.recorded.toml, then scrimmage test scrimmage.recorded.toml
 ```
 
+A `by hand` line is a call that record could not write a mock for, with the reason.
+`tool:get_invoice` above returns bytes, which TOML cannot hold, so its fix is a mock built by a function; see [Reading the output](#reading-the-output).
+
 ## Recording more than one run
 
 A model does not always send the same arguments.
@@ -151,12 +154,16 @@ A call that could not be written is a commented skeleton at the end of its test,
 
 ```toml
 # scrimmage record could not write this mock: tool:get_invoice: returns: a bytes, which a mock cannot hold.
-# Write it by hand, or leave the tool under real.
+# Build the value with a function of no arguments, named with returns_from, or leave the tool under real.
 # [[test.mock]]
 # call    = "tool:get_invoice"
 # args    = {invoice_id = "INV-7"}
-# returns = ...
+# returns_from = "package.module:function"
 ```
+
+A value a mock cannot hold, such as bytes, gets a `returns_from` line: write the function, name it there, and uncomment the block.
+See [Mocks built by a function](configuration.md#mocks-built-by-a-function).
+Any other reason gets `returns = ...` and "Write it by hand, or leave the tool under real."
 
 Being commented, it changes nothing a test reads.
 The `args` line is written only when the call's arguments were read whole, held no secret and were plain, so it can be uncommented as it is.

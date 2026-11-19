@@ -2006,6 +2006,26 @@ def test_a_skeleton_carries_exact_args_for_a_tool_call(team: Team) -> None:
     assert tomllib.loads(text)["test"][0].get("mock") is None  # a comment: the file reads the same
 
 
+@pytest.mark.design("record.skeleton_returns_from")
+def test_a_value_a_mock_cannot_hold_names_returns_from(team: Team) -> None:
+    pdf = "def dollars(key):\n    return b'%PDF-1.7'\n"
+    text, done = skeleton_of(team, "dollars", '"d"', pdf)
+    assert done.manual()[0]["message"] == "returns: a bytes, which a mock cannot hold"
+    assert (
+        "# scrimmage record could not write this mock: tool:dollars: returns: a bytes, which a "
+        "mock cannot hold.\n# Build the value with a function of no arguments, named with "
+        "returns_from, or leave the tool under real.\n"
+    ) in text
+    assert (
+        '# call    = "tool:dollars"\n# args    = {key = "d"}\n'
+        '# returns_from = "package.module:function"\n'
+    ) in text
+    assert "# returns = ..." not in text and "Write it by hand" not in text
+    # A None in the value keeps the old hint: a table without it may be all the test needs.
+    text, _ = skeleton_of(team, "dollars", '"d"')
+    assert "returns_from" not in text and "Write it by hand" in text
+
+
 @pytest.mark.design("record.skeleton")
 def test_a_skeleton_has_no_args_line_when_the_arguments_held_a_secret(team: Team) -> None:
     both = DOLLARS.replace("(key)", "(key, password='x')")
