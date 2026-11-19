@@ -840,8 +840,8 @@ INVOICE_FROM = '[[test.mock]]\ncall = "tool:get_invoice"\n'
 REFRESH_REFUSAL = (
     "--refresh tool:get_invoice: a returns_from mock with no args answers every call to the "
     "label, so nothing would run for real and any other mock on it would be dropped for "
-    "nothing; give it args, refresh another label, or limit --test to the tests that do not "
-    "use it"
+    "nothing; give it args, refresh another label, or limit --test to tests that mock this "
+    "label with args"
 )
 
 
