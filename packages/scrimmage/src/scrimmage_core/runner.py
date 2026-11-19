@@ -1832,11 +1832,21 @@ def build_report(
     )
     mistakes += wrong
     notes += recorded
+    # The tool labels were checked against the tools list, or against the tools a run reported.
+    # Only then is an unused tool mock a note rather than a possible typo.
+    labels_checked = bool(config.agent.tools) or (
+        runner is not None and runner.tools_seen is not None
+    )
+    if stopped_by is None and labels_checked:
+        notes += unused
     if runner is not None and not config.agent.tools:
         mistakes += runner.label_problems
-        if stopped_by is None and runner.tools_seen is not None:
-            notes += unused
-        elif stopped_by is None and results and any(map(tool_labels, config.tests)):
+        if (
+            stopped_by is None
+            and runner.tools_seen is None
+            and results
+            and any(map(tool_labels, config.tests))
+        ):
             mistakes.append(
                 "no run reported the agent's tools, so the tool labels in this file were not "
                 "checked; see the run logs"
