@@ -11,9 +11,10 @@ import time
 import traceback
 import warnings
 from collections.abc import Callable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 
 import pytest
 
@@ -55,8 +56,8 @@ PROCESS_STARTS = frozenset(
 
 @dataclass
 class Start:
-    """A process start seen by the audit hook, the thread that made it and, for a thread an
-    earlier test's body left running, that test."""
+    """A process start seen by the audit hook, the thread that made it and the test whose
+    work it was, if any."""
 
     event: str
     thread: threading.Thread
@@ -66,16 +67,19 @@ class Start:
 
 @dataclass
 class Watch:
-    """The process starts of the running test, told apart by thread.
+    """The process starts of the running test, told apart by the test whose work made them.
 
     The audit hook sees every thread of the worker. A thread an earlier test's body started
     and left running, as loky's manager thread was, may start a process during this test;
-    that start is a stray, not this test's. Any other thread counts against the test: its
-    own, one born during it, and one a fixture made at any scope, such as a shared pool.
+    that start is a stray, not this test's. Work this test submitted to a pool is its own,
+    on whichever thread it runs, even one an earlier test's body made. Any other thread
+    counts against the test: its own, one born during it, and one a fixture made at any
+    scope, such as a shared pool.
     """
 
     test: threading.Thread | None = None  # None outside the guard's window
     node: str = ""
+    body: bool = False  # the test function itself is running
     mine: list[Start] = field(default_factory=list[Start])
     stray: list[Start] = field(default_factory=list[Start])
 
@@ -105,20 +109,73 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
 def pytest_runtest_call(item: pytest.Item) -> None:
     del item
     label_threads(None)  # born in this test's fixtures' setup
+    watch.body = True
 
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_teardown(item: pytest.Item) -> None:
+    watch.body = False
     label_threads(item.nodeid)  # born in this test's body
+
+
+class Work(threading.local):
+    """The test that submitted the pool task this thread is running, if any.
+
+    A thread-local, not a context variable: asyncio.to_thread runs its task in a copy of the
+    caller's context, which would hide the tag."""
+
+    owner: str | None = None
+
+
+work = Work()
+
+
+def owner_here() -> str | None:
+    """The test whose work the current thread is doing, or None for no test's.
+
+    A pool task belongs to the test that submitted it. Otherwise the thread belongs to the
+    test whose body it was born in: the running one for the test's own thread and any
+    thread not yet labeled during the body.
+    """
+    if work.owner is not None:
+        return work.owner
+    thread = threading.current_thread()
+    if watch.body and (thread is watch.test or thread not in born_in):
+        return watch.node
+    return born_in.get(thread)
+
+
+P = ParamSpec("P")
+T = TypeVar("T")
+real_submit = ThreadPoolExecutor.submit
+
+
+def owned_submit(
+    self: ThreadPoolExecutor, fn: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
+) -> Future[T]:
+    """Submit fn as the submitter's work, so a lazy pool's thread, born in an earlier
+    test's body, does not make this test's start a stray."""
+    owner = owner_here()
+
+    def as_owner() -> T:
+        before, work.owner = work.owner, owner
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            work.owner = before
+
+    return real_submit(self, as_owner)
+
+
+ThreadPoolExecutor.submit = owned_submit
 
 
 def note(event: str) -> None:
     if watch.test is None:
         return
-    thread = threading.current_thread()
-    left_by = born_in.get(thread)  # None too for a thread born in this phase
-    start = Start(event, thread, "".join(traceback.format_stack()[:-2]), left_by)
-    if thread is not watch.test and left_by is not None and left_by != watch.node:
+    owner = owner_here()
+    start = Start(event, threading.current_thread(), "".join(traceback.format_stack()[:-2]), owner)
+    if owner is not None and owner != watch.node:
         watch.stray.append(start)
     else:
         watch.mine.append(start)
@@ -146,6 +203,23 @@ multiprocessing.process.BaseProcess.start = noted_process_start
 
 class StrayProcessWarning(pytest.PytestWarning):
     """A thread an earlier test left running started a process during this test."""
+
+
+# The session's strays, one line each, for the summary at its end. Under xdist the
+# controller gets each worker's warnings through this hook, so it holds them all.
+strays: list[str] = []
+
+
+def pytest_warning_recorded(warning_message: warnings.WarningMessage, nodeid: str) -> None:
+    if warning_message.category is StrayProcessWarning:
+        first = str(warning_message.message).splitlines()[0].removesuffix(":")
+        strays.append(f"{first} during {nodeid}")
+
+
+def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
+    """A stray does not fail the run, so the run's end lists them where they are seen."""
+    if strays:
+        terminalreporter.write_line(f"{len(strays)} stray process start(s): {'; '.join(strays)}")
 
 
 @pytest.fixture(autouse=True)
