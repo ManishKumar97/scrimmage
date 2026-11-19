@@ -10,7 +10,6 @@ import threading
 import time
 import traceback
 import warnings
-import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,39 +55,70 @@ PROCESS_STARTS = frozenset(
 
 @dataclass
 class Start:
-    """A process start seen by the audit hook, and the thread that made it."""
+    """A process start seen by the audit hook, the thread that made it and, for a thread an
+    earlier test's body left running, that test."""
 
     event: str
     thread: threading.Thread
     stack: str
+    left_by: str | None
 
 
 @dataclass
 class Watch:
     """The process starts of the running test, told apart by thread.
 
-    The audit hook sees every thread of the worker. A thread an earlier test left running
-    may start a process while this test runs; that start is not this test's to answer for.
-    So a start counts against the test only from its own thread or a thread born during it.
+    The audit hook sees every thread of the worker. A thread an earlier test's body started
+    and left running, as loky's manager thread was, may start a process during this test;
+    that start is a stray, not this test's. Any other thread counts against the test: its
+    own, one born during it, and one a fixture made at any scope, such as a shared pool.
     """
 
-    test: threading.Thread | None = None  # None between tests
-    older: set[threading.Thread] = field(default_factory=set[threading.Thread])
+    test: threading.Thread | None = None  # None outside the guard's window
+    node: str = ""
     mine: list[Start] = field(default_factory=list[Start])
     stray: list[Start] = field(default_factory=list[Start])
 
 
 watch = Watch()
-# The test during which each thread was first seen, so a stray start names who left it.
-born_in: weakref.WeakKeyDictionary[threading.Thread, str] = weakref.WeakKeyDictionary()
+# Each live thread, and the test whose body it was born in, or None for one born in a
+# fixture's setup or teardown or outside any test. Strong references, so a label cannot
+# vanish under a lookup; dead threads are dropped at each phase, so it stays small.
+born_in: dict[threading.Thread, str | None] = {}
+
+
+def label_threads(test: str | None) -> None:
+    """Every thread born since the last phase began was born in the phase now ending."""
+    for thread in [t for t in born_in if not t.is_alive()]:
+        del born_in[thread]
+    for thread in threading.enumerate():
+        born_in.setdefault(thread, test)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    del item
+    label_threads(None)  # born between tests or in the last teardown
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_call(item: pytest.Item) -> None:
+    del item
+    label_threads(None)  # born in this test's fixtures' setup
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_teardown(item: pytest.Item) -> None:
+    label_threads(item.nodeid)  # born in this test's body
 
 
 def note(event: str) -> None:
     if watch.test is None:
         return
     thread = threading.current_thread()
-    start = Start(event, thread, "".join(traceback.format_stack()[:-2]))
-    if thread is not watch.test and thread in watch.older:
+    left_by = born_in.get(thread)  # None too for a thread born in this phase
+    start = Start(event, thread, "".join(traceback.format_stack()[:-2]), left_by)
+    if thread is not watch.test and left_by is not None and left_by != watch.node:
         watch.stray.append(start)
     else:
         watch.mine.append(start)
@@ -135,26 +165,22 @@ def no_sender_thread_outlives_its_test() -> Iterator[None]:
 def fast_tests_start_no_process(request: pytest.FixtureRequest) -> Iterator[None]:
     """A test not marked slow fails if it starts a process, so the fast tier stays fast.
 
-    A start from a thread that outlived an earlier test is reported as a warning naming
-    that thread and the test that left it, and does not fail this one.
+    A start from a thread an earlier test's body left running is reported as a warning
+    naming that thread and that test, and does not fail this one.
     """
-    watch.older = set(threading.enumerate())
-    for thread in watch.older:  # born outside any test, as in a wider fixture
-        born_in.setdefault(thread, f"the setup before {request.node.nodeid}")
     watch.mine, watch.stray = [], []
+    watch.node = request.node.nodeid
     watch.test = threading.current_thread()
     yield
     watch.test = None
-    for thread in threading.enumerate():
-        born_in.setdefault(thread, request.node.nodeid)
     with warnings.catch_warnings():  # the run's "error" filter would fail this test for it
         warnings.simplefilter("always", StrayProcessWarning)
         for start in watch.stray:
-            left_by = born_in[start.thread]
             warnings.warn(
                 StrayProcessWarning(
                     f"{start.event} from thread {start.thread.name!r} "
-                    f"(ident {start.thread.ident}), left running by {left_by}:\n{start.stack}"
+                    f"(ident {start.thread.ident}), left running by {start.left_by}:\n"
+                    f"{start.stack}"
                 ),
                 stacklevel=1,
             )
