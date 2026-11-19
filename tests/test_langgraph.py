@@ -4,6 +4,7 @@ import asyncio
 import functools
 import importlib.util
 import json
+import linecache
 import sys
 import threading
 import time
@@ -1490,3 +1491,69 @@ def test_config_is_filtered_beside_an_annotation_that_raises(project: Project) -
     spec.loader.exec_module(module)
     assert langchain_gate.plumbing_names(module.f) == {"config"}
     assert langchain_gate.plumbing_names(module.g) == set()
+
+
+def import_module(project: Project, name: str, text: str) -> Any:
+    source = project.root / "acme" / f"{name}.py"
+    source.write_text(text)
+    spec = importlib.util.spec_from_file_location(name, source)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+ON_314 = pytest.mark.skipif(sys.version_info < (3, 14), reason="before 3.14 the annotation raises")
+
+
+@pytest.mark.design("adapter.plumbing_not_recorded")
+@ON_314
+def test_a_source_with_no_statement_gives_no_names(project: Project) -> None:
+    text = "def f(sku, config: 'RunnableConfig' = None, x: 1 / 0 = None): ...\n"
+    module = import_module(project, "emptied", text)
+    (project.root / "acme" / "emptied.py").write_text("# gone\n")
+    linecache.clearcache()
+    assert langchain_gate.plumbing_names(module.f) == set()
+
+
+@pytest.mark.design("adapter.plumbing_not_recorded")
+@ON_314
+def test_a_source_changed_after_import_gives_no_names(project: Project) -> None:
+    text = "def f(sku, config: 'RunnableConfig' = None, x: 1 / 0 = None): ...\n"
+    module = import_module(project, "changed", text)
+    (project.root / "acme" / "changed.py").write_text(text.replace("config:", "opts:"))
+    linecache.clearcache()
+    assert langchain_gate.plumbing_names(module.f) == set()
+
+
+@pytest.mark.design("adapter.plumbing_not_recorded")
+@ON_314
+def test_a_method_with_a_column_zero_string_is_still_read(project: Project) -> None:
+    text = (
+        "class T:\n"
+        "    def run(self, sku, config: 'RunnableConfig' = None, x: 1 / 0 = None):\n"
+        '        return """\n'
+        "text at column 0\n"
+        '"""\n'
+    )
+    module = import_module(project, "column_zero", text)
+    assert langchain_gate.plumbing_names(module.T.run) == {"config"}
+
+
+@pytest.mark.design("adapter.plumbing_not_recorded")
+@ON_314
+def test_a_function_with_no_source_gives_no_names() -> None:
+    scope: dict[str, Any] = {}
+    exec("def g(sku, config: 'RunnableConfig' = None, x: 1 / 0 = None): ...", scope)
+    assert langchain_gate.plumbing_names(scope["g"]) == set()
+
+
+@pytest.mark.design("adapter.plumbing_not_recorded")
+def test_a_really_imported_type_holding_a_plumbing_name_is_kept(project: Project) -> None:
+    text = (
+        "from langchain_core.runnables import RunnableConfig\n\n\n"
+        "class MyRunnableConfigWrapper: ...\n\n\n"
+        "def f(sku, opts: MyRunnableConfigWrapper = None, config: RunnableConfig = None): ...\n"
+    )
+    module = import_module(project, "wrapper", text)
+    assert langchain_gate.plumbing_names(module.f) == {"config"}
