@@ -143,6 +143,19 @@ def test_text_with_no_utf8_form_is_unsavable(value: object, why: str) -> None:
 
 
 @pytest.mark.design("record.unsavable")
+def test_an_unsavable_reason_names_a_real_dict_key_by_position_never_by_name() -> None:
+    secret = "sk-live-PROBEKEY-7f3a9c"
+    reply = {"ok": 1, secret: {"deep": 2**70}}
+    with pytest.raises(capture.Unsavable) as caught:
+        capture.plain(reply, "returns")
+    assert str(caught.value) == "returns[1][0]: an integer beyond 64 bits, which TOML cannot hold"
+    recorded = capture.tool_value(reply, {}, get_inner, same, [])
+    assert recorded["code"] == "unsavable", recorded
+    leaked = secret in str(caught.value) or secret in str(recorded)
+    assert not leaked, "a key from the real reply was named"
+
+
+@pytest.mark.design("record.unsavable")
 def test_a_value_that_holds_itself_or_nests_too_deep_is_unsavable() -> None:
     itself: list[object] = []
     itself.append(itself)

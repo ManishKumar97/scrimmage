@@ -299,9 +299,13 @@ That is the trust a `type` already has: its class's own code runs when the value
 The plan carries only the function's name.
 Calls the function makes pass the gates like any other code in the run.
 If it raises, even `SystemExit`, the record names the function and the error's class, never the error's message, which can quote a value.
-A mock that its class rejects is a mistake that can name a field or a dict key from the mock's data, but never a value.
+A mock that its class rejects is a mistake that can name a field or a key the team wrote, and never a value.
+That holds for an Enum too: the mistake names the class and its members, not the value given.
+A reply that cannot be saved as a mock is named in the record by position, such as `returns[2]`, never by a key of the reply.
+One place can still name a key from a real reply.
+When a reply is a dict and the mock built from it differs, the reason can name the dict key where they differ, and never a value.
 
-*Checked by: `tests/test_bootstrap.py::test_a_type_outside_the_allowed_prefixes_is_refused_before_import`, `tests/test_bootstrap.py::test_a_returns_from_outside_the_allowed_prefixes_stops_the_program_before_the_agent_runs`, `tests/test_tool_gate.py::test_a_type_outside_the_allowed_prefixes_is_refused_before_import`, `tests/test_schemas.py::test_the_sdk_rejects_a_bad_plan`, `tests/test_returns_from.py::test_a_factory_outside_the_allowed_imports_is_never_imported`, `tests/test_returns_from.py::test_a_factory_that_raises_is_a_mistake_naming_it_and_not_its_message`, `tests/test_mock_type.py::test_a_value_the_class_rejects_is_in_no_report_record_or_log`*
+*Checked by: `tests/test_bootstrap.py::test_a_type_outside_the_allowed_prefixes_is_refused_before_import`, `tests/test_bootstrap.py::test_a_returns_from_outside_the_allowed_prefixes_stops_the_program_before_the_agent_runs`, `tests/test_tool_gate.py::test_a_type_outside_the_allowed_prefixes_is_refused_before_import`, `tests/test_schemas.py::test_the_sdk_rejects_a_bad_plan`, `tests/test_returns_from.py::test_a_factory_outside_the_allowed_imports_is_never_imported`, `tests/test_returns_from.py::test_a_factory_that_raises_is_a_mistake_naming_it_and_not_its_message`, `tests/test_mock_type.py::test_a_value_the_class_rejects_is_in_no_report_record_or_log`, `tests/test_mock_type.py::test_an_enum_value_that_is_no_member_is_in_no_report_record_or_log`, `tests/test_capture.py::test_an_unsavable_reason_names_a_real_dict_key_by_position_never_by_name`*
 
 ## A fault sends nothing
 

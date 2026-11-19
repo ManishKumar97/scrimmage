@@ -118,12 +118,13 @@ def walk_plain(value: object, place: str) -> object:
         return [walk_plain(item, f"{place}[{i}]") for i, item in enumerate(items)]
     if kind is dict:
         out: dict[str, object] = {}
-        for key, item in cast(dict[object, object], value).items():
+        for position, (key, item) in enumerate(cast(dict[object, object], value).items()):
             if type(key) is not str:
                 raise Unsavable(f"{place}: a key that is not text, a {kind_of(key)}")
             if why := text_problem(key):
                 raise Unsavable(f"{place}: a key that is {why}")
-            out[key] = walk_plain(item, f"{place}.{key}")
+            # The place names the key's position, never the key: the key came from a real reply.
+            out[key] = walk_plain(item, f"{place}[{position}]")
         return out
     raise Unsavable(f"{place}: a {kind_of(value)}, which a mock cannot hold")
 
