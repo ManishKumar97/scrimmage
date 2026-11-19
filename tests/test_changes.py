@@ -456,6 +456,14 @@ def test_truncate_on_tool_calls_only_sends_the_real_400() -> None:
         "content-length": str(len(done.body)),
     }
     assert (done.count, done.parts) == (1, ("error",))
+    # With several choices, one of tool calls alone makes the whole reply that 400: a real
+    # limit inside it fails the request, whatever the other choices hold.
+    several = copy.deepcopy(REAL_TOOL_CALL)
+    several["choices"] += [
+        {**copy.deepcopy(REAL_ANSWER["choices"][0]), "index": 1},
+    ]
+    new, done = made("truncate", several)
+    assert (done.status, new) == (400, real["body"])
     # A reply with neither text nor a tool call is left as it is.
     said = not_made("truncate", reply_with(None))
     assert (said.why, said.kind) == ("the reply has no text and no tool call", "data")

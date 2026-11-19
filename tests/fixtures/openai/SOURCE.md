@@ -76,6 +76,7 @@ Each JSON file holds the status, the `content-type` and the body; every other he
 |---|---|
 | `real_chat_truncated.json` | A chat question with `max_completion_tokens = 5`: a 200 with its text cut and `finish_reason` `length` |
 | `real_chat_tool_call_truncated.json` | A chat request with one tool, `tool_choice = "required"` and `max_completion_tokens = 5`: a 400, because the limit landed inside the tool call |
+| `real_chat_tool_call_truncated_auto.json` | The same request with `tool_choice` left out, so the model chose the call, saved on 19 November 2026: the same 400 |
 | `real_chat_answer_br.bin` | A chat question sent with `Accept-Encoding: gzip, deflate, br`: the body as it came, a 200 with `content-type` `application/json` and `content-encoding` `br` |
 
 `rail_real_shape.json` is shaped like a NeMo rail's reply from `gpt-4.1-mini`, seen in the real-model check on 12 November 2026.

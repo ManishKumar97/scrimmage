@@ -358,6 +358,8 @@ Also read the control-path limits under An agent inside a web service.
 - **A changed reply keeps the real counts.** After `garble`, `truncate` or `bad tool args`, the reply's `usage` is what the model was billed for, so the line's cost is true. A cut reply's `completion_tokens` is then more than its text holds, and an agent that compares it with its own `max_completion_tokens` sees a reply that was not cut by the limit.
   The changed reply is written back as compact JSON, so its bytes differ from the provider's even where its fields do not.
 
+- **`truncate` on a very short text.** A text of one character cannot be cut shorter, so the agent gets the same text with `finish_reason` `length`, and the fault counts as fired.
+
 - **`garble` is one form of corrupted output.** It puts the stray token of one documented incident in every fifth word. Scrambled letters, other scripts and broken code are not built. A text in a script with no spaces between words is one word, so it changes once.
 
 - **`bad tool args` breaks the JSON only.** Arguments that parse but break the tool's schema, such as a missing required field, are not built.

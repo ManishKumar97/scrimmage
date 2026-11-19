@@ -448,7 +448,19 @@ def test_a_real_retry_after_and_the_injected_one_make_the_library_wait_the_same(
 # The faults that change a real model reply, against a real reply of that kind. Both sides go
 # through the openai library, and LangChain, over a real socket from the same loopback server.
 REAL_TRUNCATED = json.loads((FIXTURES / "real_chat_truncated.json").read_text())
-REAL_CUT_CALL = json.loads((FIXTURES / "real_chat_tool_call_truncated.json").read_text())
+# Two real cuts inside a tool call, one with tool_choice required and one with it left out.
+REAL_CUT_CALLS = [
+    pytest.param(
+        json.loads((FIXTURES / "real_chat_tool_call_truncated.json").read_text()),
+        {"tool_choice": "required"},
+        id="required",
+    ),
+    pytest.param(
+        json.loads((FIXTURES / "real_chat_tool_call_truncated_auto.json").read_text()),
+        {},
+        id="auto",
+    ),
+]
 
 
 def parse_error(server: Loopback, sync: bool) -> BaseException | None:
@@ -543,21 +555,27 @@ def test_a_real_truncated_reply_and_truncate_parse_the_same(
 
 @pytest.mark.design("proof.real_against_injected_truncate_tool_call")
 @pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+@pytest.mark.parametrize(("capture", "choice"), REAL_CUT_CALLS)
 def test_a_real_truncated_tool_call_and_truncate_parse_the_same(
-    gated: None, loopback: Loopback, sync: bool
+    gated: None,
+    loopback: Loopback,
+    capture: dict[str, Any],
+    choice: dict[str, str],
+    sync: bool,
 ) -> None:
-    """A real limit inside a tool call is OpenAI's 400, saved on 18 November 2026; truncate on
+    """A real limit inside a tool call is OpenAI's 400, saved on 18 and 19 November 2026 with
+    tool_choice required and with it left to the model; truncate on
     a real tool call gives the agent the same 400. The openai library raises the same
     BadRequestError on both and does not retry it, and LangChain raises its own subclass of it
     on both."""
     sink, _ = gate_on("truncate")
     loopback.body = REAL_TOOL_CALL
-    injected = status_error(loopback, sync, tools=SPECS)
+    injected = status_error(loopback, sync, tools=SPECS, **choice)
     injected_chain = by_langchain(loopback, sync, tools=SPECS)
     assert loopback.seen == ["/v1/chat/completions"] * 2, "retried, or never sent"
     assert [x["action"] for x in model_lines(sink)] == ["fault", "fault"]
-    as_real(loopback, json.dumps(REAL_CUT_CALL["body"]).encode(), REAL_CUT_CALL["status"])
-    real = status_error(loopback, sync, tools=SPECS)
+    as_real(loopback, json.dumps(capture["body"]).encode(), capture["status"])
+    real = status_error(loopback, sync, tools=SPECS, **choice)
     real_chain = by_langchain(loopback, sync, tools=SPECS)
     assert loopback.seen == ["/v1/chat/completions"] * 2
     assert type(injected) is type(real) is openai.BadRequestError

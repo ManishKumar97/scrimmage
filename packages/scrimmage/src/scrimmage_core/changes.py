@@ -911,6 +911,11 @@ def cut(text: str) -> str:
     return text[:at] if at > 0 else text[: max(1, middle)]
 
 
+def has_text(message: dict[str, object]) -> bool:
+    text = message.get("content")
+    return isinstance(text, str) and bool(text)  # tool calls often come with ""
+
+
 def truncate_chat(
     status: int,
     op: str,
@@ -921,30 +926,27 @@ def truncate_chat(
     decoded: bool = False,
 ) -> WebChanged | Unchangeable:
     """Cut each choice's text as the token limit does, with finish_reason length. A choice cut
-    in its text never reached its tool calls, so they go. A reply with only tool calls becomes
-    the 400 OpenAI sends when the limit lands inside one. usage stays as it was billed."""
+    in its text never reached its tool calls, so they go. When any choice holds only tool
+    calls, the whole reply becomes the 400 OpenAI sends when the limit lands inside one, with
+    tool_choice left to the model or required, as captured. usage stays as it was billed."""
     read = chat_reply(status, op, headers, body, fault.do, decoded=decoded)
     if isinstance(read, Unchangeable):
         return read
     value, choices = read
-    count, parts, calls = 0, list[str](), False
-    for i, choice in enumerate(choices):
-        message = message_of(choice)
-        if message is None:
+    messages = [(i, choice, message_of(choice)) for i, choice in enumerate(choices)]
+    if any(m is not None and not has_text(m) and m.get("tool_calls") for _, _, m in messages):
+        return rewritten(CUT_IN_A_TOOL_CALL, headers, 1, ["error"], 400)
+    count, parts = 0, list[str]()
+    for i, choice, message in messages:
+        if message is None or not has_text(message):
             continue
-        text = message.get("content")
-        if not isinstance(text, str) or not text:  # tool calls often come with ""
-            calls = calls or bool(message.get("tool_calls"))
-            continue
-        message["content"] = cut(text)
+        message["content"] = cut(cast(str, message["content"]))
         message.pop("tool_calls", None)
         cast("dict[str, object]", choice)["finish_reason"] = "length"
         count += 1
         parts.append(f"choices[{i}].message.content")
     if count:
         return rewritten(value, headers, count, parts)
-    if calls:
-        return rewritten(CUT_IN_A_TOOL_CALL, headers, 1, ["error"], 400)
     why = no_text(choices)
     if why == "the reply has no text":
         why = "the reply has no text and no tool call"

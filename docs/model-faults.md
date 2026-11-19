@@ -162,7 +162,7 @@ Each changes the real reply and leaves every other field as the model sent it: `
 |---|---|---|
 | `garble` | every fifth word of each choice's text becomes `สวัสดี`; a text of fewer than five words has its last word replaced | the reply has no text, such as tool calls alone or a refusal |
 | `truncate` | each choice's text is cut at the last space at or before its middle, and its `finish_reason` becomes `length`; a choice cut in its text loses its tool calls, as it never reached them | the reply has no text and no tool call |
-| `truncate`, on a reply of tool calls alone | the agent gets OpenAI's own 400: `Could not finish the message because max_tokens or model output limit was reached. Please try again with higher max_tokens.` | |
+| `truncate`, on a reply where a choice holds tool calls alone | the agent gets OpenAI's own 400: `Could not finish the message because max_tokens or model output limit was reached. Please try again with higher max_tokens.` | |
 | `bad tool args` | the arguments of every tool call lose their last `}`, so `{"order_id":"1234"}` becomes `{"order_id":"1234"` | the reply has no tool call |
 
 A reply that is left as it is goes to your agent unchanged, and the line says why in `unchanged`.
@@ -171,7 +171,9 @@ The fault has not fired, so the run is left out of the row's result.
 What your agent's code meets is what it meets on a real reply of that kind:
 
 - After `truncate` on text, `client.chat.completions.parse()` raises `LengthFinishReasonError`.
-- After `truncate` on tool calls alone, the openai library raises `BadRequestError`, and does not retry it. OpenAI sends no cut-off tool call: when the limit lands inside one, the whole request fails.
+- After `truncate` on tool calls alone, the openai library raises `BadRequestError`, and does not retry it.
+  OpenAI sends no cut-off tool call: when the limit lands inside one, the whole request fails with this 400.
+  Two real replies show it, one with `tool_choice` left to the model and one with `tool_choice` `"required"`.
 - After `bad tool args`, `json.loads` raises `JSONDecodeError`, and LangChain puts the call in `invalid_tool_calls`.
 
 To `garble`, a word is what lies between spaces or line breaks, and those stay as they were.

@@ -36,7 +36,7 @@ from scrimmage_core import provider_openai as openai_table
 from scrimmage_core.budget import ASK_MAX_S, Held, Shortfall
 from scrimmage_core.changes import Changed, Unchangeable
 from scrimmage_core.client import ControlError
-from scrimmage_core.config import CONNECTION, REPLY_FAULTS, Fault, slow_seconds
+from scrimmage_core.config import BUILT_REPLIES, CONNECTION, REPLY_FAULTS, Fault, slow_seconds
 from scrimmage_core.decide import (
     MISTAKE_REFUSAL,
     READ_METHODS,
@@ -635,10 +635,6 @@ def check_tools(
             f"the model would be offered {', '.join(unseen)}, which no gate sees, so a call to "
             f"it could run for real unchecked; {why or fix}",
         )
-
-
-# The two reply faults that make the whole reply, so nothing is sent; the others change it.
-BUILT_REPLIES = ("refuse", "unknown tool")
 
 
 def reply_checks(run: RunState, step: Step, fields: dict[str, object], path: str) -> None:

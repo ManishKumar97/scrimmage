@@ -3,6 +3,7 @@ model's reply, in one process: the reply the code gets, the line, and that nothi
 reserved or fired by mistake."""
 
 import asyncio
+import dataclasses
 import gzip
 import http.server
 import json
@@ -29,6 +30,7 @@ from scrimmage_core.decide import MISTAKE_REFUSAL
 from scrimmage_core.errors import ConfigError, ScrimmageMockError
 from scrimmage_core.plan import Plan
 from scrimmage_core.provider_openai import BROKEN_BODY
+from scrimmage_core.redact import REMOVED
 from test_connection_faults import (
     LIBRARIES,
     PATH_IDS,
@@ -372,8 +374,13 @@ def plan_with(word: str | None) -> Plan:
 
 def gate_on(word: str) -> tuple[Sink, Counting]:
     """That run, with both libraries gated."""
+    return gate_plan(plan_with(word))
+
+
+def gate_plan(plan: Plan) -> tuple[Sink, Counting]:
+    """This plan's run, with both libraries gated."""
     sink, budget = Sink(), Counting()
-    run = state.RunState(plan_with(word), sink, [])
+    run = state.RunState(plan, sink, [])
     state.install(run)
     ctx = http_gate.Context(run, budget, sink, never_stopped)
     for name, module in LIBRARIES.items():
@@ -847,13 +854,18 @@ def test_a_changed_reply_line_keeps_the_real_reply_and_the_one_the_agent_got(
             "the model said Or...",
             "; truncate gave the agent: Order 1234 has been",
         ),
-        ("truncate", 400): ('{ "id"', "; truncate gave the agent: a 400 error: Could not finish"),
+        ("truncate", 400): (
+            "the model called get_order; truncate gave the agent: a 400 error",
+            "",
+        ),
         ("bad tool args", 200): (
             'the model said {"ord',
             '; bad tool args gave the agent: {"order_id":"1234"',
         ),
     }[word, status]
     assert shown.startswith(real_start) and agent_part in shown, shown
+    if status == 400:  # nothing cut: the whole line fits
+        assert shown == real_start, shown
 
 
 @pytest.mark.design("budget.carried_reply_fault")
@@ -890,6 +902,76 @@ def test_a_carried_reply_fault_reserves_and_bills_as_the_baseline(
     assert faulted["cost_usd"] == baseline["cost_usd"] == round(real_cost(real), 8)
     assert faulted["cost_estimated"] is baseline["cost_estimated"] is False
     assert faulted["action"] == "fault" and baseline["action"] == "real"
+
+
+SK = "sk-proj-" + "a1B2c3D4e5F6g7H8i9J0"  # a key by its pattern
+SCRUB = "acme-vault-pass-7781"  # a value the plan's scrub names
+
+
+def kept_secrets(sink: Sink, line: dict[str, object]) -> list[str]:
+    """Which of the two secrets the line, its real reply or the agent's reply still holds."""
+    changed = cast("dict[str, Any]", line["changed"])
+    result = cast("dict[str, Any]", line["result"])
+    held = [
+        json.dumps(line).encode(),
+        sink.blobs[result["sha256"]],
+        sink.blobs[changed["reply"]["sha256"]],
+    ]
+    return [s for s in (SK, SCRUB) if any(s.encode() in data for data in held)]
+
+
+@pytest.mark.design("record.changed_reply_redacted")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_a_changed_model_reply_is_redacted_as_the_result_is(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    """The agent reads both secrets; neither reply on the record holds them."""
+    real = json.loads(REAL_ANSWER)
+    said = f"Key {SK} and {SCRUB} were in the note for order 1234."
+    real["choices"][0]["message"]["content"] = said
+    loopback.body = json.dumps(real).encode()
+    sink, _ = gate_plan(dataclasses.replace(plan_with("garble"), scrub=(SCRUB,)))
+    reply, _ = completion(loopback, sync)
+    text = reply.choices[0].message.content
+    assert SK in text and SCRUB in text and THAI in text  # garble hit the fifth word only
+    line = line_of(sink, "model")
+    leaked = kept_secrets(sink, line)
+    assert not leaked, "a secret is on the record"
+    reply_blob = sink.blobs[cast("dict[str, Any]", line["changed"])["reply"]["sha256"]]
+    assert reply_blob.count(REMOVED.encode()) == 2
+
+
+@pytest.mark.design("record.changed_reply_redacted")
+@pytest.mark.parametrize(("name", "sync"), PATHS, ids=PATH_IDS)
+def test_a_changed_web_reply_is_redacted_as_the_result_is(
+    gated: None, name: str, sync: bool
+) -> None:
+    fault = Fault("http:inventory.acme.internal", "replace", "always", text="12", find="none")
+    plan = Plan(
+        "run-1", "t", "row", (), (fault,), (), (), 60.0, scrub=(SCRUB,),
+    )  # fmt: skip
+    sink, _ = gate_plan(plan)
+    module: Any = LIBRARIES[name]
+    body = {"sku": "SKU-42", "left": "none", "key": SK, "note": SCRUB}
+
+    def answer(request: Any) -> Any:
+        return module.Response(200, json=body)
+
+    transport = module.MockTransport(answer)
+    if sync:
+        response = module.Client(transport=transport).get(WEB)
+    else:
+
+        async def go() -> Any:
+            async with module.AsyncClient(transport=transport) as client:
+                return await client.get(WEB)
+
+        response = asyncio.run(go())
+    assert response.json() == {**body, "left": "12"}  # the agent reads both secrets
+    line = line_of(sink, "http")
+    assert line["action"] == "fault"
+    leaked = kept_secrets(sink, line)
+    assert not leaked, "a secret is on the record"
 
 
 ENCODED = [

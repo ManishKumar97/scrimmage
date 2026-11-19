@@ -194,6 +194,7 @@ ALL_TITLES = [
     "`scrimmage record` runs one baseline.",
     "`slow` is not a late reply after the work.",
     "`slow` outside asyncio.",
+    "`truncate` on a very short text.",
     "`unknown tool` sends one form.",
     "asyncio only for async agents.",
     "gunicorn is not covered, with `UvicornWorker` either.",
