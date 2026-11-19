@@ -464,6 +464,11 @@ def test_truncate_on_tool_calls_only_sends_the_real_400() -> None:
     ]
     new, done = made("truncate", several)
     assert (done.status, new) == (400, real["body"])
+    # The tool-calls-only choice need not be the first: any choice makes the 400.
+    text_first = copy.deepcopy(REAL_ANSWER)
+    text_first["choices"].append({**copy.deepcopy(REAL_TOOL_CALL["choices"][0]), "index": 1})
+    new, done = made("truncate", text_first)
+    assert (done.status, new) == (400, real["body"])
     # A reply with neither text nor a tool call is left as it is.
     said = not_made("truncate", reply_with(None))
     assert (said.why, said.kind) == ("the reply has no text and no tool call", "data")
