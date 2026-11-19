@@ -5,6 +5,7 @@ import gc
 import json
 import time
 import tracemalloc
+from collections.abc import Mapping, Sequence
 
 from scrimmage_core import provider_openai as openai_table
 from scrimmage_core import state
@@ -19,7 +20,7 @@ MAX_KEPT = 5 * 1024 * 1024  # the goal is under 1 MB; the bound leaves room for 
 MAX_CHECK_S = 0.050  # the goal is under 10 ms
 
 
-def sent(messages: list[dict[str, object]]) -> dict[str, object]:
+def sent(messages: Sequence[Mapping[str, object]]) -> dict[str, object]:
     """A chat request as the gate reads it: its body parsed fresh, as from a real request."""
     body = json.dumps({"model": "gpt-4o-mini", "messages": messages}).encode()
     return openai_table.request_fields(body) or {}
@@ -79,3 +80,32 @@ def test_markers_for_a_long_run_with_every_reply_faulted_stay_small_and_quick() 
     assert kept < MAX_KEPT, f"markers keep {kept} bytes"
     slowest = max(carrying_s, other_s)
     assert slowest < MAX_CHECK_S, f"one check takes {slowest * 1e3:.1f} ms"
+
+
+def faulted(
+    run: state.RunState, asked: Sequence[Mapping[str, object]], text: str
+) -> dict[str, object]:
+    """One faulted text reply to these messages, kept as a marker, and the message the agent
+    got, as it sends it back."""
+    fields = sent(asked)
+    reply = {"role": "assistant", "content": text, "refusal": None}
+    built = openai_table.chat_reply(fields, 0, reply, "stop")
+    run.add_reply_fault_markers(LABEL, openai_table.given(fields, built, ids_only=False))
+    return {"role": "assistant", "content": text}
+
+
+def test_two_faults_of_different_lengths_on_one_label_are_each_matched_alone() -> None:
+    """A short conversation and a long one share their first message, and each got a faulted
+    reply. A request is marked when it starts with either one, and not when one message past
+    the short one's length is changed."""
+    run = state.RunState(Plan("run-1", "t", "baseline", (), (), (), (), 60.0), Sink(), [])
+    first = {"role": "user", "content": "Where is order 1234?"}
+    more = [{"role": "user", "content": "It is late."}, {"role": "user", "content": "Help."}]
+    short = faulted(run, [first], "Short reply.")
+    long = faulted(run, [first, *more], "Long reply.")
+    then = {"role": "user", "content": "Try again."}
+    assert run.carries_reply_fault(LABEL, sent([first, *more, long, then]))  # the long one
+    assert run.carries_reply_fault(LABEL, sent([first, short, then]))  # the short one
+    changed = {"role": "user", "content": "Help!"}
+    assert not run.carries_reply_fault(LABEL, sent([first, more[0], changed, long, then]))
+    assert not run.carries_reply_fault(LABEL, sent([first, *more, then]))

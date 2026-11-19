@@ -320,14 +320,18 @@ def carries(fields: dict[str, object], kept: Sequence[Given]) -> bool:
     """Whether a chat request's messages carry what any of these faulted replies gave: an
     assistant tool call or a tool result with one of its tool call ids, or messages that
     start with a faulted request's messages and its reply's message. The request is hashed
-    once, message by message, so the check grows with the request, not with the faults."""
+    once, message by message, so the check grows with the request, not with the faults. An
+    id that is not a string is the agent's own mistake: it matches nothing, and the request
+    goes on to the provider, which answers it."""
+    if not kept:
+        return False
     ids = frozenset[str]().union(*(gave.ids for gave in kept))
     messages = [_obj(item) for item in _list(fields.get("messages"))]
     for message in messages:
         calls = [_obj(call).get("id") for call in _list(message.get("tool_calls"))]
-        if message.get("role") == "assistant" and any(i in ids for i in calls):
+        if message.get("role") == "assistant" and any(_among(i, ids) for i in calls):
             return True
-        if message.get("role") == "tool" and message.get("tool_call_id") in ids:
+        if message.get("role") == "tool" and _among(message.get("tool_call_id"), ids):
             return True
     wanted = frozenset[tuple[int, bytes]]().union(*(gave.prefixes for gave in kept))
     counts = {count for count, _ in wanted}
@@ -335,6 +339,12 @@ def carries(fields: dict[str, object], kept: Sequence[Given]) -> bool:
         return False
     sent = (_normal(message) for message in messages[: max(counts)])
     return any(found in wanted for found in _running(sent, counts))
+
+
+def _among(found: object, ids: frozenset[str]) -> bool:
+    """Whether a tool call id a request sends is one of these. A list or an object as an id
+    cannot be looked up in a set, and is never one of them."""
+    return isinstance(found, str) and found in ids
 
 
 def _digest(prefix: list[object]) -> tuple[int, bytes]:
