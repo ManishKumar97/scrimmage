@@ -130,6 +130,7 @@ RESPONSES_AGENT = {
 CHAT_AGENT = {"function", "custom"}
 DATED = re.compile(r"-\d{4}-\d{2}-\d{2}$")
 MAX_TOKENS = 1_000_000_000  # a larger count is not a count
+MAX_CHOICES = 128  # the most choices, n, a Chat request may ask for
 
 
 def op_for(path: str, method: str) -> str | None:
@@ -568,6 +569,15 @@ def max_output(fields: dict[str, object]) -> int | None:
     return None
 
 
+def choices(fields: dict[str, object]) -> int:
+    """How many choices a Chat request asks for. Each is billed for its own output, and
+    each has its own output limit. A value the API refuses is never billed, so it is 1."""
+    value = fields.get("n")
+    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_CHOICES:
+        return value
+    return 1
+
+
 @dataclass
 class Usage:
     input: int = 0
@@ -681,10 +691,12 @@ def cost(
     return (full + tokens_out * rates.output) / 1_000_000
 
 
-def most_cost(tokens_in: int, tokens_out: int, rates: Rates) -> float:
+def most_cost(tokens_in: int, tokens_out: int, rates: Rates, *, responses: bool) -> float:
     """What a call could cost at most: every input token at the input or cache-write rate,
-    whichever is dearer, since the provider may write any of them to its cache."""
-    rate = max(rates.input, rates.cache_write_30m or 0.0, rates.cache_write_12h or 0.0)
+    whichever is dearer, since the provider may write any of them to its cache. Only the
+    Responses API can write for 12 hours; Chat Completions writes for 30 minutes."""
+    longest = rates.cache_write_12h if responses else None
+    rate = max(rates.input, rates.cache_write_30m or 0.0, longest or 0.0)
     return (tokens_in * rate + tokens_out * rates.output) / 1_000_000
 
 

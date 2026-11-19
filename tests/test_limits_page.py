@@ -25,6 +25,7 @@ ALL_TITLES = [
     "A built reply's counts are an estimate.",
     "A burst of tool calls with no pause while recording.",
     "A call `background_real` lets through is decided once, with what it runs inside.",
+    "A call can cost more than its hold.",
     "A call with no plan on no server.",
     "A change over text the record removes is not made.",
     "A changed reply keeps the real counts.",

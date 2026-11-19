@@ -444,10 +444,12 @@ Every test has a budget for the whole run of `scrimmage test`. It is $5 unless y
 max_cost_usd = 0.50
 ```
 
-Before each model call, Scrimmage reserves what the call could cost: an estimate of its input at the full input price, or at the cache-write price if that is higher, plus its `max_tokens` (or `reserve_output_tokens`, 4096 by default) at the output price.
+Before each model call, Scrimmage reserves an estimate of what the call could cost: its input at the full input price, or at the dearest cache-write price its API allows if that is higher, plus its `max_tokens` (or `reserve_output_tokens`, 4096 by default) at the output price, times `n` on Chat Completions, which bills the output of every choice.
 After the call, the real cost from the reply replaces the reservation.
 Scrimmage reads it from the reply's usage, after undoing `gzip`, `deflate` or `br`; for `br` it uses your program's own `brotli` or `brotlicffi` 1.2 or later, which is also what makes httpx ask for `br`.
-So four calls at once cannot all slip past the limit.
+So calls at once cannot together pass the limit while each costs no more than it reserved.
+A call can cost more: a reply with no output limit that writes more than `reserve_output_tokens`, or an input with more tokens than the estimate, such as an image.
+Then the limit can be passed by what the calls cost above their reservations, added together; see [A call can cost more than its hold](limits.md#the-budget).
 The real cost prices the input tokens the provider served from its prompt cache at the cached price, as OpenAI bills them.
 
 To turn the budget off on purpose:
@@ -568,10 +570,12 @@ On Chat Completions, Scrimmage reads the field the openai library names in the s
 | a price with no `cache_write_30m` or `cache_write_12h` | written tokens at `input`, as on a model that charges nothing extra to write |
 | a written count above the input tokens not cached, or not a whole number | every input token not cached as written for 12 hours |
 | a split by lifetime with no written count | every input token not cached as written for 12 hours |
-| no usable counts, a call that failed after it was sent, or a redirect off the model host | the rough cost prices every input token at the highest of `input`, `cache_write_30m` and `cache_write_12h` |
+| no usable counts, a call that failed after it was sent, or a redirect off the model host | the rough cost prices every input token at the highest of `input`, `cache_write_30m` and, on Responses, `cache_write_12h` |
 
 The written counts are not on the record line; `cost_usd` includes them.
 The reservation before a call counts every input token at the highest of `input`, `cache_write_30m` and `cache_write_12h`, since the provider may write any of them to its cache.
+On Chat Completions, where writes last 30 minutes, it leaves out `cache_write_12h`.
+On `gpt-5.6-luna`, 100K input tokens and 4096 output tokens reserve $0.0549 on Responses and $0.0299 on Chat Completions.
 
 ## Use a gateway
 
