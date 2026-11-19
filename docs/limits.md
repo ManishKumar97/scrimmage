@@ -269,6 +269,8 @@ Also read the control-path limits under An agent inside a web service.
 
 - **A server that pages its tool list.** Scrimmage reads only the first page. When that page has a next page and lacks the mocked tool, the mock answers even if the tool does not exist, so a misspelled label is not caught. See [MCP tools](mcp.md#mocks).
 
+- **A tool its server answers but does not list.** A server that lists tools by permission but takes calls by name can answer a tool it never lists. Such a tool cannot be mocked or recorded, and the test stops with exit code 2. List the tool on that server, or run it for real under `real`. See [MCP tools](mcp.md#mocks).
+
 ### Web requests and recorded mocks
 
 - **POSTs a library sends by itself.** Everything through httpx or httpx2 is gated, so these are refused too until listed: the SDK of another model provider, telemetry exporters, and credential requests such as an OAuth token POST, including one an MCP client sends, even to the MCP server's own host.

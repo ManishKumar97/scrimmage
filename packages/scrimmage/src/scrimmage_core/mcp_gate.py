@@ -734,15 +734,23 @@ async def unlisted(gate: Gate, run: RunState, step: Step, session: Any) -> str |
     """Why the call's tool is not one its server has, when the server's own listing says so.
 
     A tool the gate has not seen listed is listed, as call_tool's own check does, once per
-    label in a run. Only a complete listing is proof: one with a next page says nothing.
+    label in a run. Only a complete listing is proof: one with a next page says nothing, and
+    so does a reply that is not a listing, such as one a client of its own returns.
     """
     label = step.call.label
     asked = gate.asked.setdefault(run, {})
     if label not in gate.listed and label not in asked:
         listing = await session.list_tools()
-        asked[label] = None
-        if label not in gate.listed and listing.next_cursor is None:
-            asked[label] = lacking(step.call, server_of(session), [t.name for t in listing.tools])
+        tools: object = getattr(listing, "tools", None)
+        found = [getattr(tool, "name", None) for tool in tools] if isinstance(tools, list) else []
+        names = [name for name in found if isinstance(name, str)]
+        proof = (
+            isinstance(tools, list)
+            and len(names) == len(found)
+            and getattr(listing, "next_cursor", "unknown") is None
+        )
+        unknown = proof and label not in gate.listed
+        asked[label] = lacking(step.call, server_of(session), names) if unknown else None
     return None if label in gate.listed else asked.get(label)
 
 

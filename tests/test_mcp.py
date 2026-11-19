@@ -669,6 +669,46 @@ def test_the_mistake_names_at_most_ten_tools(count: int, named: str) -> None:
     assert nameless == "mcp:x is not a tool the server lists; it lists no tools"
 
 
+@dataclass
+class OddSession:
+    """A session whose list_tools gives something that is not a ListToolsResult."""
+
+    reply: object
+    server_info: object = None
+    listed: int = 0
+
+    async def list_tools(self) -> object:
+        self.listed += 1
+        return self.reply
+
+
+@pytest.mark.design("mcp.unlisted_mock")
+@pytest.mark.parametrize(
+    "reply",
+    [
+        None,
+        {"tools": [], "nextCursor": None},
+        types.SimpleNamespace(tools=[]),
+        types.SimpleNamespace(tools=None, next_cursor=None),
+        types.SimpleNamespace(tools=[object()], next_cursor=None),
+    ],
+    ids=["none", "a-dict", "no-cursor-field", "no-tools", "a-tool-with-no-name"],
+)
+def test_a_listing_that_is_not_a_list_tools_result_says_nothing(reply: object) -> None:
+    sink = Sink()
+    run = state.RunState(a_plan(mocks=(Mock(TYPO, "x", None),)), sink, [])
+    gate = mcp_gate.Gate(run, None, pytest.fail)
+    session = OddSession(reply)
+    for _ in range(2):
+        step = run.decide(run.with_args(mcp_gate.call_for("docs", "serch"), {}), {})
+        assert asyncio.run(mcp_gate.mock_reply(gate, run, step, session))["content"] == [
+            {"type": "text", "text": "x"}
+        ]
+        run.finish(step)
+    assert session.listed == 1
+    assert not any("mistake" in line for line in sink.lines), sink.lines
+
+
 @pytest.mark.design("mcp.never_fired")
 @pytest.mark.slow
 def test_a_fault_no_call_met_is_a_test_mistake(docs: Docs) -> None:

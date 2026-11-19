@@ -79,6 +79,7 @@ ALL_TITLES = [
     "A sync caller that gives up leaves its thread behind.",
     "A tool changed after the last check.",
     "A tool in a file another program runs.",
+    "A tool its server answers but does not list.",
     "A tool made with `model_construct`.",
     "A tool's function called directly.",
     "A transport's own retries.",

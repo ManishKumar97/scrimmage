@@ -89,6 +89,7 @@ mcp:docs/serch is not a tool server docs lists; its tools are fetch, search. Fix
 
 A listing that has a next page proves nothing, so then the mock answers as usual.
 `scrimmage record` applies the same rule: a real call to a tool its server does not list is a test mistake, and its result is not saved.
+So a tool a server answers but does not list cannot be mocked or recorded: list it on that server, or run it for real under `real`.
 
 ## Faults
 
