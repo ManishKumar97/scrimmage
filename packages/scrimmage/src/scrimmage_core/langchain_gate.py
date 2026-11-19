@@ -16,10 +16,10 @@ import typing
 import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from types import ModuleType
+from types import FunctionType, ModuleType
 from typing import Any, cast
 
-from scrimmage_core import hooks, tool_gate
+from scrimmage_core import changes, hooks, tool_gate
 from scrimmage_core.errors import ScrimmageMockError, ScrimmageRefused
 from scrimmage_core.http_gate import params
 from scrimmage_core.state import ProcessState, RunState, carried, in_service
@@ -295,16 +295,33 @@ def checked(
 
 
 def plumbing_names(function: Callable[..., Any]) -> set[str]:
-    """Parameters annotated with one of LangChain's own types."""
+    """Parameters annotated with one of LangChain's own types.
+
+    Each annotation is resolved alone, so a type that exists only under TYPE_CHECKING hides
+    nothing else. One that cannot be resolved is matched by its written text.
+    """
+    target = changes.annotated(function)
     try:
-        hints = typing.get_type_hints(function)
-    except Exception:  # a forward reference that cannot be resolved
+        written = changes.annotations_of(target)
+    except Exception:  # on 3.14, an annotation that raises hides the rest
         return set()
-    return {
-        name
-        for name, hint in hints.items()
-        if any(kind in repr(hint) or getattr(hint, "__name__", "") == kind for kind in PLUMBING)
-    }
+    space = cast("dict[str, object]", getattr(changes.unwrapped(target), "__globals__", None) or {})
+    names: set[str] = set()
+    for name, annotation in written.items():
+        if name == "return":
+            continue
+        stand_in = FunctionType(changes.borrowed.__code__, space)
+        stand_in.__annotations__ = {name: annotation}
+        try:
+            hint = typing.get_type_hints(stand_in)[name]
+            text = repr(hint)
+            plain = getattr(hint, "__name__", "") in PLUMBING
+        except Exception:  # a name it cannot find, or text that is no type
+            text = getattr(annotation, "__forward_arg__", None) or str(annotation)
+            plain = False
+        if plain or any(kind in text for kind in PLUMBING):
+            names.add(name)
+    return names
 
 
 def arguments(

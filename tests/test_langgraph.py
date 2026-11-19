@@ -1297,3 +1297,87 @@ def test_a_library_import_that_raises_is_no_version(monkeypatch: pytest.MonkeyPa
     monkeypatch.delitem(sys.modules, "importlib.metadata")
     monkeypatch.setattr(sys, "meta_path", [Raises(), *sys.meta_path])
     assert langchain_gate.version() is None
+
+
+BESIDE_HIDDEN = """
+from typing import TYPE_CHECKING
+
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from acme.models import Stock
+
+
+class Input(BaseModel):
+    sku: str
+
+
+class Beside(BaseTool):
+    name: str = "beside_hidden"
+    description: str = "A tool with a type that exists only for the type checker."
+    args_schema: type[BaseModel] = Input
+
+    def _run(  # type: ignore[override]
+        self, sku: str, config: RunnableConfig, stock: "Stock | None" = None
+    ) -> str:
+        return sku
+
+
+def plumb(question: str) -> str:
+    return Beside()._run(sku="SKU-42", config={"configurable": {"secret": "hidden-value"}})
+"""
+
+QUOTED_CONFIG = """
+from typing import TYPE_CHECKING
+
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from langchain_core.runnables import RunnableConfig
+
+
+class Input(BaseModel):
+    sku: str
+
+
+class Quoted(BaseTool):
+    name: str = "quoted_config"
+    description: str = "A tool whose config type is written but not importable."
+    args_schema: type[BaseModel] = Input
+
+    def _run(self, sku: str, config: "RunnableConfig") -> str:  # type: ignore[override]
+        return sku
+
+
+def plumb(question: str) -> str:
+    return Quoted()._run(sku="SKU-42", config={"configurable": {"secret": "hidden-value"}})
+"""
+
+
+def recorded_preview(project: Project, source: str, call: str) -> object:
+    graph(project, "answer", "")
+    project.edit("acme.graph:answer", "acme.hidden:plumb")
+    (project.root / "acme" / "hidden.py").write_text(source)
+    project.edit('answer   = "messages[-1].content"\n', "")
+    project.edit('real     = ["tool:check_inventory"]', 'real = ["tool:*"]')
+    (lines,) = project.test().records()
+    args = next(x["args"] for x in tool_lines(lines) if x["call"] == call)
+    assert isinstance(args, dict)
+    return args["preview"]
+
+
+@pytest.mark.design("adapter.plumbing_not_recorded")
+@pytest.mark.slow
+def test_config_is_filtered_beside_a_type_checking_only_parameter(project: Project) -> None:
+    preview = recorded_preview(project, BESIDE_HIDDEN, "tool:beside_hidden")
+    assert preview == '{"sku": "SKU-42"}'  # no config in the recorded arguments
+
+
+@pytest.mark.design("adapter.plumbing_not_recorded")
+@pytest.mark.slow
+def test_a_quoted_runnable_config_is_filtered(project: Project) -> None:
+    preview = recorded_preview(project, QUOTED_CONFIG, "tool:quoted_config")
+    assert preview == '{"sku": "SKU-42"}'
