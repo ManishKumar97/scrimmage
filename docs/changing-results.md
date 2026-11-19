@@ -198,10 +198,11 @@ A changed call is a line with `action` `fault`, `under` saying what the call got
 | `changed.text` | the fault's own text, with its hash, size and a 200-character preview; never redacted |
 | `changed.find` | the preview with secrets removed, and the hash of the text as you wrote it |
 | `changed.count` and `changed.parts` | how many places changed, and up to five of them, such as `content[0].text` or `$.order.status` |
+| `changed.reply` | on a changed reply to a real web request or model call, the reply the agent got, with secrets removed |
 | `unchanged` | `do` and `why`, on a call the fault could not change; the line then has the baseline's `action` and no `fault` |
 | `slowed_ms` and `cut_by` | on a slowed call, how long it waited and what ended the wait early |
 
-What the agent saw is not stored.
+For a tool, an MCP tool or a mock, what the agent saw is not stored.
 It is `result` with `changed` applied.
 The run's `calls` counts `under_real`: the calls whose real code or request ran beneath a carried fault.
 

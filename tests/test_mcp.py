@@ -206,6 +206,21 @@ def test_the_shape_is_checked_for_a_tool_the_bot_never_listed(docs: Docs, transp
 
 
 @pytest.mark.design("mcp.mock_text")
+@BOTH
+@pytest.mark.slow
+def test_a_list_the_bot_edits_in_one_mock_reply_is_whole_in_the_next(
+    docs: Docs, transport: str
+) -> None:
+    docs.start(transport)
+    result = docs.run("acme.docs_bot:answer_after_editing_the_first", MOCK)
+    assert result.code == 0, result.out
+    assert "first=['mocked', 'added by the bot']" in answer_of(result), result.out
+    assert "second=error=False" in answer_of(result)
+    assert "structured={'hits': ['mocked'], 'total': 1}" in answer_of(result), answer_of(result)
+    assert docs.received() == []
+
+
+@pytest.mark.design("mcp.mock_text")
 @pytest.mark.slow
 def test_a_mock_is_text_or_json_and_fills_the_structured_result_only_for_a_shape(
     docs: Docs,

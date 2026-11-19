@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import BinaryIO, cast
 
 from scrimmage_core import results, suggest
+from scrimmage_core.config import CHANGED_REPLIES
 from scrimmage_core.judge import BASELINE_FAILED
 from scrimmage_core.outcomes import PREVIEW, plural
 from scrimmage_core.records import RECORD_VERSION, Refused, open_owned
@@ -33,8 +34,11 @@ SUMMARY_BYTES = 16 * 1024 * 1024  # how far back from the end a summary line is 
 CAME_BACK = 80
 SHA256 = re.compile(r"[0-9a-f]{64}")
 REPLY_BYTES = 1024 * 1024  # a model reply's side-folder item over this is not read for its text
-# A part a model replace changed, which names the choice whose text it was.
-CHOICE_PART = re.compile(r"choices\[(\d+)\]\.message\.content")
+# A part a change to a model reply names: a choice's text, or a tool call's arguments.
+CHOICE_PART = re.compile(
+    r"choices\[(\d+)\]\.message\.(?:content|tool_calls\[(\d+)\]\.function\.arguments)"
+)
+FIRST_TEXT = "choices[0].message.content"
 LOG_TAIL = 200
 LOG_READ = 64 * 1024  # the end of a .log looked at to find its last line
 OTHERS = 20  # run ids listed for one row
@@ -206,10 +210,9 @@ def came_back(line: Doc, folder: Path | None = None) -> str:
             text = str(cast(Doc, result).get("preview") or "")
         elif result is not None:
             text = str(result)
-        added = " ".join(redact(injected(line)).split())
+        added = " ".join(redact(injected(line, folder)).split())
         if added and line.get("kind") == "model":  # the reply's text, not its JSON
-            said = model_said(line, folder)
-            text = text if said is None else f"the model said {redact_decoded(said)}"
+            text = model_part(line, folder) or text
         if added:  # the real result is cut first, so what the agent got still shows
             room = max(CAME_BACK - len(added), 20)
             real = " ".join(redact(text).split())
@@ -218,30 +221,78 @@ def came_back(line: Doc, folder: Path | None = None) -> str:
     return text if len(text) <= CAME_BACK else text[: CAME_BACK - 3] + "..."
 
 
+def model_part(line: Doc, folder: Path | None) -> str | None:
+    """What the model really sent, as show puts it beside what the agent got: the text it
+    said, or, when the agent got an error in place of tool calls, the call it made."""
+    changed = line.get("changed")
+    result = line.get("result")
+    if isinstance(changed, dict) and cast(Doc, changed).get("status") is not None:
+        if not isinstance(result, dict):
+            return None
+        called = first_call(reply_of(cast(Doc, result), folder))
+        return None if called is None else f"the model called {redact_decoded(called)}"
+    said = model_said(line, folder)
+    return None if said is None else f"the model said {redact_decoded(said)}"
+
+
+def first_call(reply: object) -> str | None:
+    """The name of the first tool a chat completion calls."""
+    choices = cast(Doc, reply).get("choices") if isinstance(reply, dict) else None
+    for choice in cast(list[object], choices) if isinstance(choices, list) else []:
+        message = cast(Doc, choice).get("message") if isinstance(choice, dict) else None
+        calls = cast(Doc, message).get("tool_calls") if isinstance(message, dict) else None
+        held = cast(list[object], calls) if isinstance(calls, list) else []
+        call = held[0] if held else None
+        function = cast(Doc, call).get("function") if isinstance(call, dict) else None
+        name = cast(Doc, function).get("name") if isinstance(function, dict) else None
+        if isinstance(name, str):
+            return name
+    return None
+
+
 def model_said(line: Doc, folder: Path | None) -> str | None:
-    """The text a replaced model reply really held: the changed choice's message content, read
-    from the reply's side-folder item, which was redacted when it was recorded. The line's
-    preview is the reply's first characters, so it is used only when it holds the whole reply.
-    None when neither can be read."""
+    """The text a changed model reply really held, at the first place the change named: a
+    choice's message content, or a tool call's arguments. Read from the reply's side-folder
+    item, which was redacted when it was recorded. The line's preview is the reply's first
+    characters, so it is used only when it holds the whole reply. None when neither can be
+    read."""
     result = line.get("result")
     if not isinstance(result, dict):
         return None
-    entry = cast(Doc, result)
+    return held_at(reply_of(cast(Doc, result), folder), changed_part(line))
+
+
+def reply_of(entry: Doc, folder: Path | None) -> object:
+    """A recorded reply, parsed; None if it cannot be read or parsed."""
     data = reply_data(entry, folder)
     if data is None:
         data = str(entry.get("preview") or "")
     try:
-        reply: object = json.loads(data)
+        return json.loads(data)
     except ValueError:
         return None
+
+
+def held_at(reply: object, part: str) -> str | None:
+    """The string at a part of a chat completion, such as choices[0].message.content."""
+    found = CHOICE_PART.fullmatch(part)
     choices = cast(Doc, reply).get("choices") if isinstance(reply, dict) else None
-    index = changed_choice(line)
-    if not isinstance(choices, list) or index >= len(cast(list[object], choices)):
+    if found is None or not isinstance(choices, list):
         return None
-    choice = cast(list[object], choices)[index]
+    listed, index = cast(list[object], choices), int(found.group(1))
+    choice = listed[index] if index < len(listed) else None
     message = cast(Doc, choice).get("message") if isinstance(choice, dict) else None
-    content = cast(Doc, message).get("content") if isinstance(message, dict) else None
-    return content if isinstance(content, str) else None
+    if not isinstance(message, dict):
+        return None
+    value: object = cast(Doc, message).get("content")
+    if found.group(2) is not None:
+        calls = cast(Doc, message).get("tool_calls")
+        held = cast(list[object], calls) if isinstance(calls, list) else []
+        call = int(found.group(2))
+        item = held[call] if call < len(held) else None
+        function = cast(Doc, item).get("function") if isinstance(item, dict) else None
+        value = cast(Doc, function).get("arguments") if isinstance(function, dict) else None
+    return value if isinstance(value, str) else None
 
 
 def reply_data(entry: Doc, folder: Path | None) -> str | None:
@@ -277,22 +328,43 @@ def blob_bytes(blobs: Path, name: str) -> bytes | None:
     return None if len(data) > REPLY_BYTES else data
 
 
-def changed_choice(line: Doc) -> int:
-    """The first choice a replace changed, from the line's parts; the first choice if none."""
+def changed_part(line: Doc) -> str:
+    """The first part of a model reply a change named; the first choice's text if none."""
     changed = line.get("changed")
     parts = cast(Doc, changed).get("parts") if isinstance(changed, dict) else None
     for part in cast(list[object], parts) if isinstance(parts, list) else []:
-        if found := CHOICE_PART.fullmatch(str(part)):
-            return int(found.group(1))
-    return 0
+        if CHOICE_PART.fullmatch(str(part)):
+            return str(part)
+    return FIRST_TEXT
 
 
-def injected(line: Doc) -> str:
+def agent_got(line: Doc, folder: Path | None) -> str:
+    """What a fault in a model's reply gave the agent, from the reply the line keeps beside
+    the real one: the changed text or arguments, or an error's status. The error's message
+    is in the reply the line keeps; the column has room for the status only."""
+    changed = cast(Doc, line.get("changed"))
+    entry = changed.get("reply")
+    if not isinstance(entry, dict):
+        return ""
+    status = changed.get("status")
+    if status is not None:
+        return f"a {status} error"
+    reply = reply_of(cast(Doc, entry), folder)
+    held = held_at(reply, changed_part(line))
+    if held is None:
+        return str(cast(Doc, entry).get("preview") or "")
+    return redact_decoded(held)
+
+
+def injected(line: Doc, folder: Path | None = None) -> str:
     """What a carried fault gave the agent in place of the real result, which came back: the
-    fault's own text, from the line. Empty for any other line."""
+    fault's own text, from the line, or the changed model reply. Empty for any other line."""
     changed, fault = line.get("changed"), line.get("fault")
     if not isinstance(changed, dict) or not isinstance(fault, dict):
         return ""
+    do = str(cast(Doc, fault).get("do") or "")
+    if do in CHANGED_REPLIES:
+        return f"; {do} gave the agent: {agent_got(line, folder)}"
     held = cast(Doc, changed).get("text")
     text = str(cast(Doc, held).get("preview") or "") if isinstance(held, dict) else ""
     word = str(cast(Doc, fault).get("do") or "").partition(" ")[0]

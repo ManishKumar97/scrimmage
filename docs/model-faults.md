@@ -96,7 +96,7 @@ Each fault copies a case seen in the real world:
 | `refuse` | a refusal in place of the answer | OpenAI's Structured Outputs guide, and a forum report of `gpt-4o-mini` refusing in plain text |
 | `unknown tool` | a call to `multi_tool_use.parallel`, a tool your agent never offered | OpenAI forum reports from November 2023 to July 2024 |
 | `garble` | the real reply with every fifth word replaced by `สวัสดี` | Anthropic's postmortem of August and September 2025: stray Thai or Chinese tokens in English replies |
-| `truncate` | the real reply cut short, with `finish_reason` `length` | a real reply cut by `max_completion_tokens` |
+| `truncate` | the real reply cut short, with `finish_reason` `length`; for a reply of tool calls alone, OpenAI's 400 for a reply cut inside a tool call | real replies cut by `max_completion_tokens` |
 | `bad tool args` | the real tool calls with arguments that are not valid JSON | OpenAI's API reference: "the model does not always generate valid JSON" |
 
 Each needs `model`, as `replace` does, so a guard or a judge beside the main model is left alone:
@@ -120,8 +120,11 @@ What each costs:
 | `refuse`, `unknown tool` | not sent: Scrimmage builds the whole reply | no, and nothing is reserved |
 | `garble`, `truncate`, `bad tool args` | sent, then the reply is changed | yes, as in the baseline row, reserved first |
 
-`garble`, `truncate` and `bad tool args` are not built yet.
-A row with one is a mistake in the test: the call fails at once, before anything is sent.
+`garble`, `truncate` and `bad tool args` send the real request, so the call is reserved and costs what the baseline's does.
+The reply's `usage` stays the model's own counts, so the line's cost is what was billed.
+The record keeps both replies: `result` is the real one, and `changed.reply` the one your agent got.
+When your agent got another status than the real reply's, as after `truncate` on tool calls alone, `changed.status` holds it.
+`scrimmage show` prints them side by side, as `the model said ...; garble gave the agent: ...`.
 
 A built reply is made from a real `gpt-4o-mini` reply: the same fields, with new ids in OpenAI's forms, the time, and the model your request named.
 Its `usage` holds a rough count of your request's tokens and 10 output tokens, but nothing was sent, so the line costs 0.
@@ -150,6 +153,33 @@ The reply is one tool call, as OpenAI's models have sent it:
 `recipient_name` names the first tool your request offers, and `finish_reason` is `tool_calls`.
 A request where the model cannot pick a tool of its own is left as it is: one that offers no tools, sets `tool_choice` to `"none"`, names the tool in `tool_choice`, or offers tools in the old `functions` field only. The call goes on as in the baseline, and the line says why.
 If your agent sends the call back in its next request, OpenAI refuses that request with a 400, because the name holds a dot.
+
+### `garble`, `truncate` and `bad tool args`
+
+Each changes the real reply and leaves every other field as the model sent it: `id`, `model`, `usage` and `system_fingerprint`, and the headers but the length and the encoding.
+
+| Fault | The change | Left as it is when |
+|---|---|---|
+| `garble` | every fifth word of each choice's text becomes `สวัสดี`; a text of fewer than five words has its last word replaced | the reply has no text, such as tool calls alone or a refusal |
+| `truncate` | each choice's text is cut at the last space at or before its middle, and its `finish_reason` becomes `length`; a choice cut in its text loses its tool calls, as it never reached them | the reply has no text and no tool call |
+| `truncate`, on a reply where a choice holds tool calls alone | the agent gets OpenAI's own 400: `Could not finish the message because max_tokens or model output limit was reached. Please try again with higher max_tokens.` | |
+| `bad tool args` | the arguments of every tool call lose their last `}`, so `{"order_id":"1234"}` becomes `{"order_id":"1234"` | the reply has no tool call |
+
+A reply that is left as it is goes to your agent unchanged, and the line says why in `unchanged`.
+The fault has not fired, so the run is left out of the row's result.
+
+What your agent's code meets is what it meets on a real reply of that kind:
+
+- After `truncate` on text, `client.chat.completions.parse()` raises `LengthFinishReasonError`.
+- After `truncate` on tool calls alone, the openai library raises `BadRequestError`, and does not retry it.
+  OpenAI sends no cut-off tool call: when the limit lands inside one, the whole request fails with this 400.
+  Two real replies show it, one with `tool_choice` left to the model and one with `tool_choice` `"required"`.
+- After `bad tool args`, `json.loads` raises `JSONDecodeError`, and LangChain puts the call in `invalid_tool_calls`.
+
+To `garble`, a word is what lies between spaces or line breaks, and those stay as they were.
+Text in a script that puts no spaces between words, such as Thai or Japanese, is one word to it.
+
+A reply in gzip or deflate is unpacked, changed and sent to your agent with no encoding, and so is one in `br` when your program has `brotli` or `brotlicffi` 1.2 or later, see [Limits](limits.md).
 
 ### The 400 after a reply fault
 

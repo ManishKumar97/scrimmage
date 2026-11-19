@@ -3,6 +3,8 @@ model's reply, in one process: the reply the code gets, the line, and that nothi
 reserved or fired by mistake."""
 
 import asyncio
+import dataclasses
+import gzip
 import http.server
 import json
 import re
@@ -13,6 +15,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import httpx2
+import jsonschema
 import openai
 import pydantic
 import pytest
@@ -20,13 +23,14 @@ from pydantic import SecretStr
 
 from conftest import EXAMPLE_FAULT, Project
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import cli, config, http_gate, runner, state, suggest
+from scrimmage_core import changes, cli, config, http_gate, runner, show, state, suggest
 from scrimmage_core import provider_openai as openai_table
 from scrimmage_core.config import Fault, ModelHost
 from scrimmage_core.decide import MISTAKE_REFUSAL
 from scrimmage_core.errors import ConfigError, ScrimmageMockError
 from scrimmage_core.plan import Plan
 from scrimmage_core.provider_openai import BROKEN_BODY
+from scrimmage_core.redact import REMOVED
 from test_connection_faults import (
     LIBRARIES,
     PATH_IDS,
@@ -321,6 +325,8 @@ class Loopback:
 
     def __init__(self) -> None:
         self.body = REAL_ANSWER
+        self.status = 200
+        self.headers = dict(JSON_HEADERS)
         self.seen: list[str] = []
         loop = self
 
@@ -328,8 +334,8 @@ class Loopback:
             def do_POST(self) -> None:
                 self.rfile.read(int(self.headers.get("Content-Length", "0")))
                 loop.seen.append(self.path)
-                self.send_response(200)
-                for name, value in JSON_HEADERS.items():
+                self.send_response(loop.status)
+                for name, value in loop.headers.items():
                     self.send_header(name, value)
                 self.send_header("Content-Length", str(len(loop.body)))
                 self.end_headers()
@@ -368,8 +374,13 @@ def plan_with(word: str | None) -> Plan:
 
 def gate_on(word: str) -> tuple[Sink, Counting]:
     """That run, with both libraries gated."""
+    return gate_plan(plan_with(word))
+
+
+def gate_plan(plan: Plan) -> tuple[Sink, Counting]:
+    """This plan's run, with both libraries gated."""
     sink, budget = Sink(), Counting()
-    run = state.RunState(plan_with(word), sink, [])
+    run = state.RunState(plan, sink, [])
     state.install(run)
     ctx = http_gate.Context(run, budget, sink, never_stopped)
     for name, module in LIBRARIES.items():
@@ -444,10 +455,11 @@ def fields_of(value: object) -> object:
     return None
 
 
-def as_real(server: Loopback, body: bytes) -> None:
-    """The run ends, and the server sends these bytes as a real model would."""
+def as_real(server: Loopback, body: bytes, status: int = 200) -> None:
+    """The run ends, and the server sends these bytes, with this status, as a real model
+    would."""
     state.install(None)
-    server.body = body
+    server.body, server.status = body, status
     server.seen.clear()
 
 
@@ -715,16 +727,300 @@ def test_a_reply_fault_on_a_responses_call_is_a_mistake_and_nothing_is_sent(
     assert (line["action"], line["reason"]) == ("refused", MISTAKE_REFUSAL)
 
 
-@pytest.mark.design("fault.reply_not_built")
-@pytest.mark.parametrize("word", ["garble", "truncate", "bad tool args"])
-def test_a_reply_fault_that_changes_the_real_reply_is_not_built_and_sends_nothing(
-    gated: None, loopback: Loopback, word: str
+# The three that change the real reply: each word, the real reply it changes, and what the
+# request offers.
+THAI = "สวัสดี"
+RECORD = json.loads((Path(http_gate.__file__).parent / "schemas" / "record.v1.json").read_text())
+CARRIED = [
+    ("garble", REAL_ANSWER, {}),
+    ("truncate", REAL_ANSWER, {}),
+    ("truncate", REAL_TOOL_CALL, {"tools": SPECS}),
+    ("bad tool args", REAL_TOOL_CALL, {"tools": SPECS}),
+]
+CARRIED_IDS = ["garble", "truncate", "truncate a tool call", "bad tool args"]
+REFUSAL = json.dumps(
+    {
+        **json.loads(REAL_ANSWER),
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": None, "refusal": "I can't."},
+                "logprobs": None,
+                "finish_reason": "stop",
+            }
+        ],
+    }
+).encode()
+
+
+def agent_got(server: Loopback, sync: bool, **request: Any) -> tuple[int, bytes, Any]:
+    """The status, the bytes and the headers of the reply the openai library read, also when
+    it raised on the status."""
+    kw: dict[str, Any] = {"model": MODEL, "messages": QUESTION, **request}
+
+    def through(raw: Any) -> tuple[int, bytes, Any]:
+        response = raw.http_response
+        return response.status_code, response.content, response.headers
+
+    try:
+        if sync:
+            api = openai.OpenAI(base_url=server.url, api_key="test", max_retries=0)
+            return through(api.chat.completions.with_raw_response.create(**kw))
+
+        async def go() -> tuple[int, bytes, Any]:
+            api = openai.AsyncOpenAI(base_url=server.url, api_key="test", max_retries=0)
+            return through(await api.chat.completions.with_raw_response.create(**kw))
+
+        return asyncio.run(go())
+    except openai.APIStatusError as error:
+        response = error.response
+        return response.status_code, response.content, response.headers
+
+
+def real_cost(reply: bytes) -> float:
+    used = json.loads(reply)["usage"]
+    rates = openai_table.price(MODEL, {})
+    assert rates is not None
+    return openai_table.cost(used["prompt_tokens"], used["completion_tokens"], rates)
+
+
+@pytest.mark.design("fault.reply_not_fired")
+@pytest.mark.parametrize(
+    ("word", "body", "why"),
+    [
+        ("garble", REAL_TOOL_CALL, "the reply has only tool calls and no text"),
+        ("bad tool args", REAL_ANSWER, "the reply has no tool call with arguments to break"),
+        ("truncate", REFUSAL, "the reply is a refusal with no text"),
+    ],
+    ids=["garble on tool calls", "bad tool args on text", "truncate on a refusal"],
+)
+def test_a_reply_with_nothing_to_change_is_not_fired_and_says_why(
+    gated: None, loopback: Loopback, word: str, body: bytes, why: str
 ) -> None:
+    """The agent gets the real reply byte for byte, and the run is left out of the row."""
     sink, budget = gate_on(word)
-    with pytest.raises(ScrimmageMockError, match="is not built yet"):
-        completion(loopback, True, tools=SPECS)
-    assert loopback.seen == [] and budget.asked == 0
-    assert line_of(sink, "model")["reason"] == MISTAKE_REFUSAL
+    loopback.body = body
+    status, got_bytes, _ = agent_got(loopback, True, tools=SPECS)
+    assert (status, got_bytes) == (200, body)
+    assert loopback.seen == ["/v1/chat/completions"] and budget.asked == 1
+    line = line_of(sink, "model")
+    assert line["action"] == "real" and "fault" not in line and "changed" not in line, line
+    assert line["unchanged"] == {"do": word, "why": why}
+    assert suggest.unchanged_lines([line]) == [line] and suggest.refused_mistakes([line]) == []
+    assert "mistake" not in line
+
+
+def written(sink: Sink, folder: Path) -> Path:
+    """The side-folder items written out as a records folder holds them, for show."""
+    (folder / "blobs").mkdir()
+    for sha, data in sink.blobs.items():
+        (folder / "blobs" / sha).write_bytes(data)
+    return folder
+
+
+@pytest.mark.design("record.changed_reply")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+@pytest.mark.parametrize(("word", "real", "asked"), CARRIED, ids=CARRIED_IDS)
+def test_a_changed_reply_line_keeps_the_real_reply_and_the_one_the_agent_got(
+    gated: None,
+    loopback: Loopback,
+    tmp_path: Path,
+    word: str,
+    real: bytes,
+    asked: dict[str, Any],
+    sync: bool,
+) -> None:
+    sink, _ = gate_on(word)
+    loopback.body = real
+    status, got_bytes, headers = agent_got(loopback, sync, **asked)
+    assert got_bytes != real and headers["x-request-id"] == "req_real"
+    line = line_of(sink, "model")
+    assert (line["action"], line["under"], line["status"]) == ("fault", "real", 200)
+    changed = cast("dict[str, Any]", line["changed"])
+    result = cast("dict[str, Any]", line["result"])
+    assert sink.blobs[result["sha256"]] == real  # the real reply, as the model sent it
+    assert sink.blobs[changed["reply"]["sha256"]] == got_bytes  # the one the agent read
+    assert "text" not in changed  # a fault in a model's reply has no text of its own
+    jsonschema.Draft202012Validator(RECORD).validate(line)
+    assert changed.get("status") == (None if status == 200 else status)
+    # show prints both, cut to fit its column: what the model said, then what the agent got.
+    shown = show.came_back(line, written(sink, tmp_path))
+    real_start, agent_part = {
+        ("garble", 200): (
+            "the model said Or...",
+            f"; garble gave the agent: Order 1234 has been {THAI}",
+        ),
+        ("truncate", 200): (
+            "the model said Or...",
+            "; truncate gave the agent: Order 1234 has been",
+        ),
+        ("truncate", 400): (
+            "the model called get_order; truncate gave the agent: a 400 error",
+            "",
+        ),
+        ("bad tool args", 200): (
+            'the model said {"ord',
+            '; bad tool args gave the agent: {"order_id":"1234"',
+        ),
+    }[word, status]
+    assert shown.startswith(real_start) and agent_part in shown, shown
+    if status == 400:  # nothing cut: the whole line fits
+        assert shown == real_start, shown
+
+
+@pytest.mark.design("budget.carried_reply_fault")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+@pytest.mark.parametrize(("word", "real", "asked"), CARRIED, ids=CARRIED_IDS)
+def test_a_carried_reply_fault_reserves_and_bills_as_the_baseline(
+    gated: None,
+    loopback: Loopback,
+    word: str,
+    real: bytes,
+    asked: dict[str, Any],
+    sync: bool,
+) -> None:
+    """The real call is sent and billed: reserved once before it is sent, settled once at the
+    real reply's usage, as in a run with no fault."""
+    loopback.body = real
+    sink, budget = gate_on(word)
+    lines: list[dict[str, object]] = []
+    settles: list[list[float]] = []
+    for plan in (plan_with(word), plan_with(None)):  # the same gate, server and request
+        state.install(state.RunState(plan, sink, []))
+        loopback.seen.clear()
+        sink.lines.clear()
+        sink.settles.clear()
+        budget.asked = 0
+        agent_got(loopback, sync, **asked)
+        assert loopback.seen == ["/v1/chat/completions"], "the real call was not sent once"
+        assert budget.asked == 1, "the real call was not reserved once"
+        lines.append(line_of(sink, "model"))
+        settles.append([usd for _, usd in sink.settles])
+    faulted, baseline = lines
+    assert settles[0] == settles[1] == [pytest.approx(real_cost(real))]
+    assert faulted["tokens"] == baseline["tokens"]
+    assert faulted["cost_usd"] == baseline["cost_usd"] == round(real_cost(real), 8)
+    assert faulted["cost_estimated"] is baseline["cost_estimated"] is False
+    assert faulted["action"] == "fault" and baseline["action"] == "real"
+
+
+SK = "sk-proj-" + "a1B2c3D4e5F6g7H8i9J0"  # a key by its pattern
+SCRUB = "acme-vault-pass-7781"  # a value the plan's scrub names
+
+
+def kept_secrets(sink: Sink, line: dict[str, object]) -> list[str]:
+    """Which of the two secrets the line, its real reply or the agent's reply still holds."""
+    changed = cast("dict[str, Any]", line["changed"])
+    result = cast("dict[str, Any]", line["result"])
+    held = [
+        json.dumps(line).encode(),
+        sink.blobs[result["sha256"]],
+        sink.blobs[changed["reply"]["sha256"]],
+    ]
+    return [s for s in (SK, SCRUB) if any(s.encode() in data for data in held)]
+
+
+@pytest.mark.design("record.changed_reply_redacted")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_a_changed_model_reply_is_redacted_as_the_result_is(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    """The agent reads both secrets; neither reply on the record holds them."""
+    real = json.loads(REAL_ANSWER)
+    said = f"Key {SK} and {SCRUB} were in the note for order 1234."
+    real["choices"][0]["message"]["content"] = said
+    loopback.body = json.dumps(real).encode()
+    sink, _ = gate_plan(dataclasses.replace(plan_with("garble"), scrub=(SCRUB,)))
+    reply, _ = completion(loopback, sync)
+    text = reply.choices[0].message.content
+    assert SK in text and SCRUB in text and THAI in text  # garble hit the fifth word only
+    line = line_of(sink, "model")
+    leaked = kept_secrets(sink, line)
+    assert not leaked, "a secret is on the record"
+    reply_blob = sink.blobs[cast("dict[str, Any]", line["changed"])["reply"]["sha256"]]
+    assert reply_blob.count(REMOVED.encode()) == 2
+
+
+@pytest.mark.design("record.changed_reply_redacted")
+@pytest.mark.parametrize(("name", "sync"), PATHS, ids=PATH_IDS)
+def test_a_changed_web_reply_is_redacted_as_the_result_is(
+    gated: None, name: str, sync: bool
+) -> None:
+    fault = Fault("http:inventory.acme.internal", "replace", "always", text="12", find="none")
+    plan = Plan(
+        "run-1", "t", "row", (), (fault,), (), (), 60.0, scrub=(SCRUB,),
+    )  # fmt: skip
+    sink, _ = gate_plan(plan)
+    module: Any = LIBRARIES[name]
+    body = {"sku": "SKU-42", "left": "none", "key": SK, "note": SCRUB}
+
+    def answer(request: Any) -> Any:
+        return module.Response(200, json=body)
+
+    transport = module.MockTransport(answer)
+    if sync:
+        response = module.Client(transport=transport).get(WEB)
+    else:
+
+        async def go() -> Any:
+            async with module.AsyncClient(transport=transport) as client:
+                return await client.get(WEB)
+
+        response = asyncio.run(go())
+    assert response.json() == {**body, "left": "12"}  # the agent reads both secrets
+    line = line_of(sink, "http")
+    assert line["action"] == "fault"
+    leaked = kept_secrets(sink, line)
+    assert not leaked, "a secret is on the record"
+
+
+ENCODED = [
+    pytest.param("gzip", id="gzip"),
+    pytest.param(
+        "br",
+        id="br",
+        marks=pytest.mark.skipif(
+            changes.brotli_module() is None,
+            reason="br needs brotli or brotlicffi 1.2 or later; run with uv run --with brotli",
+        ),
+    ),
+]
+REAL_BR = (FIXTURES / "real_chat_answer_br.bin").read_bytes()  # as OpenAI sent it, in br
+
+
+@pytest.mark.design("fault.reply_encoded")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+@pytest.mark.parametrize("encoding", ENCODED)
+def test_a_gzip_and_a_br_reply_are_changed_and_sent_unencoded(
+    gated: None, loopback: Loopback, encoding: str, sync: bool
+) -> None:
+    """The br reply is a real one, as OpenAI sent it to a client that offers br. The agent's
+    copy has no content-encoding, so its client reads it as plain JSON."""
+    if encoding == "gzip":
+        plain = REAL_ANSWER
+        loopback.body = gzip.compress(REAL_ANSWER)
+    else:
+        brotli = changes.brotli_module()
+        assert brotli is not None
+        plain = brotli.decompress(REAL_BR)
+        loopback.body = REAL_BR
+    loopback.headers = {**JSON_HEADERS, "content-encoding": encoding}
+    sink, _ = gate_on("garble")
+    reply, got_bytes = completion(loopback, sync)
+    assert THAI in reply.choices[0].message.content
+    line = line_of(sink, "model")
+    assert sink.blobs[cast("dict[str, Any]", line["result"])["sha256"]] == plain
+    changed = cast("dict[str, Any]", line["changed"])
+    assert sink.blobs[changed["reply"]["sha256"]] == got_bytes
+    used = json.loads(plain)["usage"]
+    assert line["tokens"] == {
+        "input": used["prompt_tokens"],
+        "output": used["completion_tokens"],
+        "cached": 0,
+    }
+    _, _, headers = agent_got(loopback, sync)
+    assert "content-encoding" not in headers
+    assert headers["content-length"] == str(len(got_bytes))
 
 
 REFUSE_AND_UNKNOWN = """\

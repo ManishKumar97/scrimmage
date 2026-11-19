@@ -479,14 +479,23 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "text",
             "count",
             "parts"
           ],
           "properties": {
             "text": {
               "$ref": "#/$defs/content",
-              "description": "The fault's own text, never redacted."
+              "description": "The fault's own text, never redacted. A fault in a model's reply has none."
+            },
+            "reply": {
+              "$ref": "#/$defs/content",
+              "description": "The reply the agent got in place of the real one, which stays the line's result."
+            },
+            "status": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 599,
+              "description": "The status the agent got, when it is not the real reply's: truncate on a reply with only tool calls."
             },
             "find": {
               "$ref": "#/$defs/content",

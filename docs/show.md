@@ -48,6 +48,9 @@ Calls are in the order they started.
 A call made inside another, such as a web request inside a tool, is indented under it.
 A call that had a mock on its label and matched none says `real (no mock matched)` or `refused (no mock matched)`.
 `came back` is the call's error, or the start of its result, cut at 80 characters.
+On a model reply a fault changed, it is what the model said, then what the agent got, read from the two replies the line keeps: `the model said Or...; garble gave the agent: Order 1234 has been สวัสดี and i...`.
+The model's part is cut first, so the agent's part still shows.
+When the agent got an error in place of the model's tool calls, it names the tool: `the model called get_order; truncate gave the agent: a 400 error`.
 At most 200 calls print for one run, and the rest are counted.
 A run that crashed or timed out also prints the last line of its `.log`, cut at 200 characters, and the log's path.
 

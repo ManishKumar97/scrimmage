@@ -13,6 +13,7 @@ import functools
 import importlib
 import inspect
 import json
+import re
 import sys
 import types
 import typing
@@ -519,12 +520,14 @@ BODY_HEADERS = ("content-length", "content-encoding", "transfer-encoding")
 
 @dataclass(frozen=True)
 class WebChanged:
-    """A changed reply: the body, the headers it goes with, and what changed."""
+    """A changed reply: the body, the headers it goes with, what changed, and the status
+    when the agent gets another than the real one."""
 
     body: bytes
     headers: list[tuple[str, str]]
     count: int
     parts: tuple[str, ...]
+    status: int | None = None
 
 
 def header(headers: Sequence[tuple[str, str]], name: str) -> str | None:
@@ -719,24 +722,27 @@ def change_web(
     return WebChanged(new_body, kept, count, parts)
 
 
-STREAMED = (
-    "replace on a model call needs a reply that is not streamed; turn streaming off for this "
-    "model, or fault it another way"
-)
+def streamed(word: str) -> str:
+    return (
+        f"{word} on a model call needs a reply that is not streamed; turn streaming off for "
+        "this model, or fault it another way"
+    )
 
 
-def chat_kind(status: int, op: str, headers: Sequence[tuple[str, str]]) -> Unchangeable | None:
-    """None when a model reply's headers allow a replace on its text, else why not. Decided by
-    the headers alone, so a stream is never read to find out."""
+def chat_kind(
+    status: int, op: str, headers: Sequence[tuple[str, str]], word: str = "replace"
+) -> Unchangeable | None:
+    """None when a model reply's headers allow a change to its content, else why not. Decided
+    by the headers alone, so a stream is never read to find out."""
     if op != "chat":
         return Unchangeable(
-            f"replace on a model call works on Chat Completions only, and this call is {op}; "
+            f"{word} on a model call works on Chat Completions only, and this call is {op}; "
             "fault it another way",
             "unsupported",
         )
     kind = media_type(header(headers, "content-type") or "")
     if kind == "text/event-stream":
-        return Unchangeable(STREAMED, "unsupported")
+        return Unchangeable(streamed(word), "unsupported")
     if status != 200:
         return Unchangeable(f"the reply status is {status}, which is not changed", "data")
     packed = packed_why(header(headers, "content-encoding") or "")
@@ -745,6 +751,53 @@ def chat_kind(status: int, op: str, headers: Sequence[tuple[str, str]]) -> Uncha
     if kind != "application/json":
         return Unchangeable(f"the reply is {kind or 'of no type'}, not a chat completion")
     return None
+
+
+def chat_reply(
+    status: int,
+    op: str,
+    headers: Sequence[tuple[str, str]],
+    body: bytes,
+    word: str,
+    *,
+    decoded: bool,
+) -> tuple[dict[str, object], list[object]] | Unchangeable:
+    """A chat completion, parsed, and its choices; or why it cannot be changed."""
+    said = chat_kind(status, op, headers, word)
+    if said is not None:
+        return said
+    encoding = "" if decoded else (header(headers, "content-encoding") or "")
+    plain_body = unpacked(body, encoding)
+    if plain_body is None:
+        return Unchangeable("the body will not unpack")
+    try:
+        value = json.loads(plain_body)
+    except (ValueError, RecursionError):
+        return Unchangeable("the body is not JSON that parses")
+    choices = cast("dict[str, object]", value).get("choices") if isinstance(value, dict) else None
+    if not isinstance(choices, list):
+        return Unchangeable("the reply has no choices")
+    return cast("dict[str, object]", value), cast("list[object]", choices)
+
+
+def message_of(choice: object) -> dict[str, object] | None:
+    held = cast("dict[str, object]", choice).get("message") if isinstance(choice, dict) else None
+    return cast("dict[str, object]", held) if isinstance(held, dict) else None
+
+
+def rewritten(
+    value: object,
+    headers: Sequence[tuple[str, str]],
+    count: int,
+    parts: list[str],
+    status: int | None = None,
+) -> WebChanged:
+    """The changed reply as compact JSON, with no encoding and its own length. Every other
+    header stays as the provider sent it."""
+    new_body = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    kept = [(k, v) for k, v in headers if k.lower() not in BODY_HEADERS]
+    kept.append(("content-length", str(len(new_body))))
+    return WebChanged(new_body, kept, count, tuple(parts[:SHOWN_PARTS]), status)
 
 
 def change_chat(
@@ -759,30 +812,15 @@ def change_chat(
     """Replace the text of each choice of a chat completion. A choice with no text, such as
     tool calls only or a refusal, keeps its place; a reply with no text anywhere is not
     changed. A model's text is changed as text, even when it looks like JSON."""
-    said = chat_kind(status, op, headers)
-    if said is not None:
-        return said
-    encoding = "" if decoded else (header(headers, "content-encoding") or "")
-    plain_body = unpacked(body, encoding)
-    if plain_body is None:
-        return Unchangeable("the body will not unpack")
-    try:
-        value = json.loads(plain_body)
-    except (ValueError, RecursionError):
-        return Unchangeable("the body is not JSON that parses")
-    choices = cast("dict[str, object]", value).get("choices") if isinstance(value, dict) else None
-    if not isinstance(choices, list):
-        return Unchangeable("the reply has no choices")
+    read = chat_reply(status, op, headers, body, fault.do, decoded=decoded)
+    if isinstance(read, Unchangeable):
+        return read
+    value, choices = read
     count, parts, missed = 0, list[str](), list[Unchangeable]()
-    for i, choice in enumerate(cast("list[object]", choices)):
-        message = (
-            cast("dict[str, object]", choice).get("message") if isinstance(choice, dict) else None
-        )
-        if not isinstance(message, dict):
-            continue
-        message = cast("dict[str, object]", message)
-        text = message.get("content")
-        if not isinstance(text, str) or not text:  # tool calls often come with ""
+    for i, choice in enumerate(choices):
+        message = message_of(choice)
+        text = None if message is None else message.get("content")
+        if message is None or not isinstance(text, str) or not text:  # tool calls: often ""
             continue
         done = change_text(text, fault, f"choices[{i}].message.content", sniff=False)
         if isinstance(done, Unchangeable):
@@ -794,11 +832,178 @@ def change_chat(
     if not count:
         if missed:
             return next((m for m in missed if m.mistake), missed[0])
-        return Unchangeable(no_text(cast("list[object]", choices)), "data")
-    new_body = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    kept = [(k, v) for k, v in headers if k.lower() not in BODY_HEADERS]
-    kept.append(("content-length", str(len(new_body))))
-    return WebChanged(new_body, kept, count, tuple(parts[:SHOWN_PARTS]))
+        return Unchangeable(no_text(choices), "data")
+    return rewritten(value, headers, count, parts)
+
+
+# The stray token of Anthropic's postmortem of August and September 2025, its own example of
+# what turned up in the middle of English replies on the Claude API.
+GARBLE_TOKEN = "สวัสดี"
+GARBLE_EVERY = 5
+WORD = re.compile(r"\S+")
+
+
+def garbled(text: str) -> tuple[str, int]:
+    """Every fifth word becomes the stray token; with fewer than five, the last word does. A
+    word runs between spaces or line breaks, which stay as they were. Returns the text and
+    how many words changed."""
+    words = list(WORD.finditer(text))
+    picked = words[GARBLE_EVERY - 1 :: GARBLE_EVERY] or words[-1:]
+    out: list[str] = []
+    at = 0
+    for word in picked:
+        out += [text[at : word.start()], GARBLE_TOKEN]
+        at = word.end()
+    return "".join([*out, text[at:]]), len(picked)
+
+
+def garble_chat(
+    status: int,
+    op: str,
+    headers: Sequence[tuple[str, str]],
+    body: bytes,
+    fault: Fault,
+    *,
+    decoded: bool = False,
+) -> WebChanged | Unchangeable:
+    """Put the stray token in each choice's text. Every other field stays as it was sent."""
+    read = chat_reply(status, op, headers, body, fault.do, decoded=decoded)
+    if isinstance(read, Unchangeable):
+        return read
+    value, choices = read
+    count, parts = 0, list[str]()
+    for i, choice in enumerate(choices):
+        message = message_of(choice)
+        text = None if message is None else message.get("content")
+        if message is None or not isinstance(text, str):
+            continue
+        new, words = garbled(text)
+        if words:
+            message["content"] = new
+            count += words
+            parts.append(f"choices[{i}].message.content")
+    if not count:
+        return Unchangeable(no_text(choices), "data")
+    return rewritten(value, headers, count, parts)
+
+
+# OpenAI's reply, with status 400, when the token limit lands inside a tool call, saved on
+# 18 November 2026: a cut tool call is never sent as one.
+CUT_IN_A_TOOL_CALL: dict[str, object] = {
+    "error": {
+        "message": (
+            "Could not finish the message because max_tokens or model output limit was "
+            "reached. Please try again with higher max_tokens."
+        ),
+        "type": "invalid_request_error",
+        "param": None,
+        "code": None,
+    }
+}
+
+
+def cut(text: str) -> str:
+    """The text up to the last space at or before its middle, as a token limit leaves it: the
+    space starts the next token, so it goes too. With no such space, the first half, and at
+    least one character."""
+    middle = len(text) // 2
+    at = text.rfind(" ", 1, middle + 1)
+    return text[:at] if at > 0 else text[: max(1, middle)]
+
+
+def has_text(message: dict[str, object]) -> bool:
+    text = message.get("content")
+    return isinstance(text, str) and bool(text)  # tool calls often come with ""
+
+
+def truncate_chat(
+    status: int,
+    op: str,
+    headers: Sequence[tuple[str, str]],
+    body: bytes,
+    fault: Fault,
+    *,
+    decoded: bool = False,
+) -> WebChanged | Unchangeable:
+    """Cut each choice's text as the token limit does, with finish_reason length. A choice cut
+    in its text never reached its tool calls, so they go. When any choice holds only tool
+    calls, the whole reply becomes the 400 OpenAI sends when the limit lands inside one, with
+    tool_choice left to the model or required, as captured. usage stays as it was billed."""
+    read = chat_reply(status, op, headers, body, fault.do, decoded=decoded)
+    if isinstance(read, Unchangeable):
+        return read
+    value, choices = read
+    messages = [(i, choice, message_of(choice)) for i, choice in enumerate(choices)]
+    if any(m is not None and not has_text(m) and m.get("tool_calls") for _, _, m in messages):
+        return rewritten(CUT_IN_A_TOOL_CALL, headers, 1, ["error"], 400)
+    count, parts = 0, list[str]()
+    for i, choice, message in messages:
+        if message is None or not has_text(message):
+            continue
+        message["content"] = cut(cast(str, message["content"]))
+        message.pop("tool_calls", None)
+        cast("dict[str, object]", choice)["finish_reason"] = "length"
+        count += 1
+        parts.append(f"choices[{i}].message.content")
+    if count:
+        return rewritten(value, headers, count, parts)
+    why = no_text(choices)
+    if why == "the reply has no text":
+        why = "the reply has no text and no tool call"
+    return Unchangeable(why, "data")
+
+
+def broken_args(arguments: str) -> str | None:
+    """The arguments without their last closing brace, so they no longer parse; None with no
+    brace to remove."""
+    at = arguments.rfind("}")
+    return None if at == -1 else arguments[:at] + arguments[at + 1 :]
+
+
+def break_args_chat(
+    status: int,
+    op: str,
+    headers: Sequence[tuple[str, str]],
+    body: bytes,
+    fault: Fault,
+    *,
+    decoded: bool = False,
+) -> WebChanged | Unchangeable:
+    """Break the arguments of every function tool call in every choice."""
+    read = chat_reply(status, op, headers, body, fault.do, decoded=decoded)
+    if isinstance(read, Unchangeable):
+        return read
+    value, choices = read
+    count, parts = 0, list[str]()
+    for i, choice in enumerate(choices):
+        message = message_of(choice)
+        held = None if message is None else message.get("tool_calls")
+        for j, call in enumerate(cast("list[object]", held) if isinstance(held, list) else []):
+            function = (
+                cast("dict[str, object]", call).get("function") if isinstance(call, dict) else None
+            )
+            if not isinstance(function, dict):
+                continue
+            function = cast("dict[str, object]", function)
+            arguments = function.get("arguments")
+            broken = broken_args(arguments) if isinstance(arguments, str) else None
+            if broken is None:
+                continue
+            function["arguments"] = broken
+            count += 1
+            parts.append(f"choices[{i}].message.tool_calls[{j}].function.arguments")
+    if not count:
+        return Unchangeable("the reply has no tool call with arguments to break", "data")
+    return rewritten(value, headers, count, parts)
+
+
+# The change each carried fault makes to a chat completion, by its word.
+CHAT_CHANGES = {
+    "replace": change_chat,
+    "garble": garble_chat,
+    "truncate": truncate_chat,
+    "bad tool args": break_args_chat,
+}
 
 
 def no_text(choices: list[object]) -> str:

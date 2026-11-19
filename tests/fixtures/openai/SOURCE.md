@@ -73,6 +73,17 @@ It is the reply to a chat request whose history holds an assistant call to `mult
 OpenAI refuses the dot in the tool name.
 `tests/test_runner.py` serves it from the fake OpenAI API, as the answer to the request an agent sends after `unknown tool`.
 
+These are real replies to `gpt-4o-mini` chat requests, saved on 18 November 2026 from OpenAI's Chat Completions API.
+Each JSON file holds the status, the `content-type` and the body; every other header, the request id included, is left out.
+`tests/test_real_against_injected.py` compares the reply faults against them.
+
+| File | Reply to |
+|---|---|
+| `real_chat_truncated.json` | A chat question with `max_completion_tokens = 5`: a 200 with its text cut and `finish_reason` `length` |
+| `real_chat_tool_call_truncated.json` | A chat request with one tool, `tool_choice = "required"` and `max_completion_tokens = 5`: a 400, because the limit landed inside the tool call |
+| `real_chat_tool_call_truncated_auto.json` | The same request with `tool_choice` left out, so the model chose the call, saved on 19 November 2026: the same 400 |
+| `real_chat_answer_br.bin` | A chat question sent with `Accept-Encoding: gzip, deflate, br`: the body as it came, a 200 with `content-type` `application/json` and `content-encoding` `br` |
+
 `rail_real_shape.json` is shaped like a NeMo rail's reply from `gpt-4.1-mini`, seen in the real-model check on 12 November 2026.
 It keeps the real reply's layout: pretty-printed, with `logprobs` and `refusal` null, `usage`, `service_tier` and `system_fingerprint`, and longer than a record line's preview.
 The id, the time and the fingerprint are made up.
