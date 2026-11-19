@@ -296,6 +296,27 @@ def checked(
     return sync_checked
 
 
+def mangled(name: str, owner: list[str]) -> str:
+    """The name the compiler gives a parameter such as __sku inside a class."""
+    cls = owner[0].lstrip("_") if owner and owner[0] != "<locals>" else ""
+    if cls and name.startswith("__") and not name.endswith("__"):
+        return f"_{cls}{name}"
+    return name
+
+
+def type_words(hint: object) -> list[str]:
+    """The names in a resolved type, leaving out the values inside a Literal."""
+    if typing.get_origin(hint) is typing.Literal:
+        return []
+    args = typing.get_args(hint)
+    if not args:
+        return re.findall(r"[A-Za-z_]\w*", repr(hint))
+    words = re.findall(r"[A-Za-z_]\w*", repr(typing.get_origin(hint)))
+    for arg in args:
+        words += [w for a in (arg if isinstance(arg, list) else [arg]) for w in type_words(a)]
+    return words
+
+
 def written_in_source(function: object) -> dict[str, str]:
     """Each parameter's annotation as written in the function's source.
 
@@ -315,8 +336,10 @@ def written_in_source(function: object) -> dict[str, str]:
         return {}
     found = node.args
     every = [*found.posonlyargs, *found.args, *found.kwonlyargs]
-    code = getattr(changes.unwrapped(function), "__code__", None)
-    if code is None or [a.arg for a in every] != list(
+    real = changes.unwrapped(function)
+    code = getattr(real, "__code__", None)
+    owner = getattr(real, "__qualname__", "").split(".")[-2:-1]
+    if code is None or [mangled(a.arg, owner) for a in every] != list(
         code.co_varnames[: code.co_argcount + code.co_kwonlyargcount]
     ):  # the file changed after it was imported
         return {}
@@ -348,7 +371,7 @@ def plumbing_names(function: Callable[..., Any]) -> set[str]:
         try:
             hint = typing.get_type_hints(stand_in)[name]
             found = getattr(hint, "__name__", "") in PLUMBING or any(
-                word in PLUMBING for word in re.findall(r"[A-Za-z_]\w*", repr(hint))
+                word in PLUMBING for word in type_words(hint)
             )
         except Exception:  # a name it cannot find, or text that is no type
             text = getattr(annotation, "__forward_arg__", None) or str(annotation)

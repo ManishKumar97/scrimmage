@@ -95,6 +95,7 @@ ALL_TITLES = [
     "A waiter keeps its place until it stops waiting.",
     "A web mock cannot match a query or a body.",
     "A wrapper that is a Python program with no Scrimmage.",
+    "A wrapper whose `__wrapped__` was set by hand to another function.",
     "An MCP label that reads two ways.",
     "An MCP result with several text items.",
     "An `_arun` that starts `_run` on the default executor itself",
