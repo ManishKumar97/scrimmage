@@ -15,15 +15,19 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ParamSpec, TypeVar
+from typing import Any, ParamSpec, TypeVar, cast
 
 import httpx
+import jsonschema
 import pytest
+from jsonschema.exceptions import best_match
 
+import scrimmage_core
 from fakes.openai_server import FakeOpenAI
 from scrimmage_core import runner
 from scrimmage_core.cli import main
 from scrimmage_core.outcomes import OK, ROW_FAILED
+from scrimmage_core.state import RunState
 
 EXAMPLE = Path(__file__).parent / "example"
 
@@ -248,6 +252,38 @@ SEND_OWNERS: tuple[Any, ...] = tuple(
     if module is not None
     for owner in (module.Client, module.AsyncClient)
 )
+
+
+RECORD_SCHEMA = json.loads(
+    (Path(scrimmage_core.__file__).parent / "schemas" / "record.v1.json").read_text()
+)
+RECORD_CHECK = jsonschema.Draft202012Validator(RECORD_SCHEMA)
+
+
+@pytest.fixture(autouse=True)
+def every_record_line_matches_the_public_schema(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Each line a run writes is checked against record.v1.json, the schema the docs publish.
+
+    A line the schema refuses is a record a user's own validator would refuse. The check
+    wraps RunState.put, so every line that reaches a sink passes it; the errors are
+    collected and fail the test at teardown, so the writer's own code path is not changed.
+    """
+    bad: list[str] = []
+    put = RunState.put
+
+    def checked(self: RunState, line: dict[str, object], *, keep: bool) -> None:
+        if (error := best_match(RECORD_CHECK.iter_errors(cast("Any", line)))) is not None:
+            where = "/".join(str(p) for p in error.absolute_path) or "(line)"
+            bad.append(f"{where}: {error.message[:200]}\n    line: {json.dumps(line, default=str)}")
+        put(self, line, keep=keep)
+
+    monkeypatch.setattr(RunState, "put", checked)
+    yield
+    monkeypatch.undo()
+    if bad:
+        pytest.fail(
+            f"{len(bad)} record line(s) fail record.v1.json:\n" + "\n".join(bad[:5]), pytrace=False
+        )
 
 
 @pytest.fixture(autouse=True)

@@ -811,8 +811,18 @@
             "probe",
             "model_path",
             "plan_changed",
-            "mock_type"
+            "mock_type",
+            "background",
+            "lost_context"
           ]
+        },
+        "call": {
+          "type": "string",
+          "description": "On a background or lost_context notice: the label of the call made outside any request."
+        },
+        "background_entry": {
+          "type": "string",
+          "description": "On a background or lost_context notice: the background_real entry that lets the call through."
         },
         "mock": {
           "type": "integer",

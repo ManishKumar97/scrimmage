@@ -453,6 +453,16 @@ Its `reason` is `orphan` and its `outside` is `true`.
 `background_entry` is the `background_real` entry that would let the call through, and it is absent when no entry would.
 A run with such a line is an infrastructure error, because the run cannot tell the call was not its own.
 
+### A notice line for a call outside any request
+
+A call made outside any request while a service run is open writes a notice line into the record of each open run.
+A read or a model call that is not listed in `background_real` gets the notice `lost_context`.
+The run it lands in may not hold every call that belongs to it, so the run is an infrastructure error.
+A call that is listed gets the notice `background`, and it runs.
+Both lines carry `call`, the call's label, such as `http:stock.test` or `process:multiprocessing`.
+Both also carry `background_entry`, the `background_real` entry that lets the call through, such as `http:stock.test GET /items`.
+
+
 ## Values that can grow
 
 Until the first release, a field or a value may still be renamed or removed.
