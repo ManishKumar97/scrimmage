@@ -7,10 +7,13 @@ tool's own code. The team writes no tools list. The SDK never imports LangChain:
 patches it when the agent imports it.
 """
 
+import ast
 import contextlib
 import contextvars
 import functools
 import inspect
+import re
+import textwrap
 import threading
 import typing
 import weakref
@@ -294,6 +297,20 @@ def checked(
     return sync_checked
 
 
+def written_in_source(function: object) -> dict[str, str]:
+    """Each parameter's annotation as written in the function's source; none when it has none."""
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(function)))  # pyright: ignore
+    except (OSError, TypeError, SyntaxError):
+        return {}
+    node = tree.body[0]
+    if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+        return {}
+    found = node.args
+    every = [*found.posonlyargs, *found.args, *found.kwonlyargs]
+    return {a.arg: ast.unparse(a.annotation) for a in every if a.annotation is not None}
+
+
 def plumbing_names(function: Callable[..., Any]) -> set[str]:
     """Parameters annotated with one of LangChain's own types.
 
@@ -303,8 +320,12 @@ def plumbing_names(function: Callable[..., Any]) -> set[str]:
     target = changes.annotated(function)
     try:
         written = changes.annotations_of(target)
-    except Exception:  # on 3.14, an annotation that raises hides the rest
-        return set()
+    except Exception:  # on 3.14 one annotation that raises, such as 1/0, hides the rest
+        return {
+            name
+            for name, text in written_in_source(target).items()
+            if any(word in PLUMBING for word in re.findall(r"[A-Za-z_]\w*", text))
+        }
     space = cast("dict[str, object]", getattr(changes.unwrapped(target), "__globals__", None) or {})
     names: set[str] = set()
     for name, annotation in written.items():
@@ -314,12 +335,13 @@ def plumbing_names(function: Callable[..., Any]) -> set[str]:
         stand_in.__annotations__ = {name: annotation}
         try:
             hint = typing.get_type_hints(stand_in)[name]
-            text = repr(hint)
-            plain = getattr(hint, "__name__", "") in PLUMBING
+            found = getattr(hint, "__name__", "") in PLUMBING or any(
+                kind in repr(hint) for kind in PLUMBING
+            )
         except Exception:  # a name it cannot find, or text that is no type
             text = getattr(annotation, "__forward_arg__", None) or str(annotation)
-            plain = False
-        if plain or any(kind in text for kind in PLUMBING):
+            found = any(word in PLUMBING for word in re.findall(r"[A-Za-z_]\w*", text))
+        if found:
             names.add(name)
     return names
 
@@ -346,9 +368,12 @@ def withheld(tool: Any) -> frozenset[str]:
     comparing that schema with what the model gets. A dict schema has no such fields.
     """
     names = set[str](getattr(tool, "_injected_args_keys", ()))
-    offered = getattr(getattr(tool, "tool_call_schema", None), "model_fields", None)
-    if offered is not None:
-        names |= set(tool.get_input_schema().model_fields) - set(offered)
+    try:
+        offered = getattr(getattr(tool, "tool_call_schema", None), "model_fields", None)
+        if offered is not None:
+            names |= set(tool.get_input_schema().model_fields) - set(offered)
+    except Exception:  # a parameter type that exists only for the type checker: no schema
+        pass
     return frozenset(names)
 
 

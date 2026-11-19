@@ -231,6 +231,8 @@ Also read the control-path limits under An agent inside a web service.
 
 - **One unsafe tool blocks its whole name.** A second, gated tool of the same name stops the test too, even if only that one is offered.
 
+- **A plumbing type imported under another name.** If `RunnableConfig as HiddenCfg` is imported only under `TYPE_CHECKING`, a `config: HiddenCfg` argument on a direct `_run` call is recorded, because the written name does not say what it is.
+
 - **LangChain versions.** Tested with langchain-core 1.7. A newer one gets a notice; an older one gets none.
 
 - **A library that changes its tool functions** stops the program. Faults are not dropped with refusals kept, because the error type is part of what the gate relies on. The same goes for `mcp`: a mock must never become a real call.

@@ -2,6 +2,7 @@
 
 import asyncio
 import functools
+import importlib.util
 import json
 import sys
 import threading
@@ -1320,13 +1321,41 @@ class Beside(BaseTool):
     args_schema: type[BaseModel] = Input
 
     def _run(  # type: ignore[override]
-        self, sku: str, config: RunnableConfig, stock: "Stock | None" = None
+        self, sku: str, stock: "Stock | None" = None, *, config: RunnableConfig
     ) -> str:
         return sku
 
 
+CONFIG = {"configurable": {"secret": "hidden-value"}}
+
+
 def plumb(question: str) -> str:
-    return Beside()._run(sku="SKU-42", config={"configurable": {"secret": "hidden-value"}})
+    return Beside()._run(sku="SKU-42", config=CONFIG)
+
+
+def node_graph():  # type: ignore[no-untyped-def]
+    from langgraph.graph import START, MessagesState, StateGraph
+    from langgraph.prebuilt import ToolNode
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("tools", ToolNode([Beside()]))
+    builder.add_edge(START, "tools")
+    return builder.compile()
+
+
+def node_state():  # type: ignore[no-untyped-def]
+    from langchain_core.messages import AIMessage
+
+    call = {"name": "beside_hidden", "args": {"sku": "SKU-42"}, "id": "1"}
+    return {"messages": [AIMessage(content="", tool_calls=[call])]}
+
+
+def through_node(question: str) -> str:
+    return str(node_graph().invoke(node_state(), CONFIG))
+
+
+async def through_node_async(question: str) -> str:
+    return str(await node_graph().ainvoke(node_state(), CONFIG))
 """
 
 QUOTED_CONFIG = """
@@ -1357,9 +1386,9 @@ def plumb(question: str) -> str:
 """
 
 
-def recorded_preview(project: Project, source: str, call: str) -> object:
+def recorded_preview(project: Project, source: str, call: str, function: str = "plumb") -> object:
     graph(project, "answer", "")
-    project.edit("acme.graph:answer", "acme.hidden:plumb")
+    project.edit("acme.graph:answer", f"acme.hidden:{function}")
     (project.root / "acme" / "hidden.py").write_text(source)
     project.edit('answer   = "messages[-1].content"\n', "")
     project.edit('real     = ["tool:check_inventory"]', 'real = ["tool:*"]')
@@ -1381,3 +1410,83 @@ def test_config_is_filtered_beside_a_type_checking_only_parameter(project: Proje
 def test_a_quoted_runnable_config_is_filtered(project: Project) -> None:
     preview = recorded_preview(project, QUOTED_CONFIG, "tool:quoted_config")
     assert preview == '{"sku": "SKU-42"}'
+
+
+@pytest.mark.design("adapter.plumbing_not_recorded")
+@pytest.mark.slow
+@pytest.mark.parametrize("function", ["through_node", "through_node_async"])
+def test_a_tool_run_by_toolnode_records_no_config(project: Project, function: str) -> None:
+    # LangChain passes no config to such a _run, so this pins the path agents use.
+    preview = recorded_preview(project, BESIDE_HIDDEN, "tool:beside_hidden", function)
+    assert preview == '{"sku": "SKU-42"}'
+
+
+NAMED_PIECE = """
+from typing import TYPE_CHECKING
+
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from acme.models import MyRunnableConfigWrapper, Settings
+
+
+class Input(BaseModel):
+    sku: str
+
+
+class Piece(BaseTool):
+    name: str = "piece_of_a_name"
+    description: str = "A real input whose type name holds a plumbing name."
+    args_schema: type[BaseModel] = Input
+
+    def _run(self, sku: str, opts: "MyRunnableConfigWrapper" = None) -> str:
+        return sku
+
+
+class NoSchema(BaseTool):
+    name: str = "no_schema"
+    description: str = "A tool with no args_schema and a type only the type checker has."
+
+    def _run(self, sku: str, config: "Settings" = None) -> str:  # type: ignore[override]
+        return sku
+
+
+def plumb(question: str) -> str:
+    Piece()._run(sku="SKU-42", opts={"mode": "kept"})
+    return NoSchema()._run(sku="SKU-42", config={"mode": "kept"})
+"""
+
+
+@pytest.mark.design("adapter.plumbing_not_recorded")
+@pytest.mark.slow
+def test_an_unresolved_type_is_matched_by_whole_names(project: Project) -> None:
+    preview = recorded_preview(project, NAMED_PIECE, "tool:piece_of_a_name")
+    assert preview == '{"opts": {"mode": "kept"}, "sku": "SKU-42"}'
+
+
+@pytest.mark.design("adapter.plumbing_not_recorded")
+@pytest.mark.slow
+def test_a_tool_with_no_schema_and_a_hidden_type_still_runs_and_is_recorded(
+    project: Project,
+) -> None:
+    preview = recorded_preview(project, NAMED_PIECE, "tool:no_schema")
+    assert preview == '{"config": {"mode": "kept"}, "sku": "SKU-42"}'
+
+
+@pytest.mark.design("adapter.plumbing_not_recorded")
+@pytest.mark.skipif(sys.version_info < (3, 14), reason="before 3.14 the annotation raises at def")
+def test_config_is_filtered_beside_an_annotation_that_raises(project: Project) -> None:
+    # On 3.14 annotations are lazy, so reading them all at once raises for the whole function.
+    source = project.root / "acme" / "raises.py"
+    source.write_text(
+        "from langchain_core.runnables import RunnableConfig\n\n\n"
+        "def f(sku: str, config: RunnableConfig = None, x: 1 / 0 = None): ...\n\n\n"
+        "def g(sku: str, opts: 'MyRunnableConfigWrapper' = None, x: 1 / 0 = None): ...\n"
+    )
+    spec = importlib.util.spec_from_file_location("raises", source)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert langchain_gate.plumbing_names(module.f) == {"config"}
+    assert langchain_gate.plumbing_names(module.g) == set()
