@@ -39,6 +39,7 @@ Prices for models the built-in table does not know, in dollars per million token
 [agent.prices]
 llama-70b = {input = 0.6, output = 0.6}
 acme-gpt = {input = 2.0, cached_input = 0.5, output = 8.0}
+"gpt-5.6-luna" = {input = 0.2, cached_input = 0.02, cache_write_30m = 0.25, cache_write_12h = 0.5, output = 1.2}
 ```
 
 | Key | What it is |
@@ -46,6 +47,10 @@ acme-gpt = {input = 2.0, cached_input = 0.5, output = 8.0}
 | `input` | The price of an input token. Required. |
 | `output` | The price of an output token. Required. |
 | `cached_input` | The price of an input token the provider served from its prompt cache. Optional, and at most `input`. Without it, cached tokens cost the full `input` price, which can only overstate the cost. |
+| `cache_write_30m` | The price of an input token the provider wrote to its prompt cache for 30 minutes. Optional, and at least `input`. Without it, written tokens cost the full `input` price, as on a model that charges nothing extra to write its cache. |
+| `cache_write_12h` | The same for a token written for 12 hours, a choice on the Responses API. Optional, and at least `input`. |
+
+The `gpt-5.6-luna` example is its price up to 272K input tokens; a call over that costs more, so give the long-context price if your calls can be that long. See [One price per kind of token](limits.md#the-budget).
 
 A price here replaces the built-in one whole: `gpt-4o = {input = 2.5, output = 10}` has no cached price, even though the built-in table has one.
 

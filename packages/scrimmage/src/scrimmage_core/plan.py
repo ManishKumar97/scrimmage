@@ -155,14 +155,26 @@ class Plan:
 
 def price_json(price: Rates) -> dict[str, float]:
     doc = {"input": price.input, "output": price.output}
-    if price.cached_input is not None:
-        doc["cached_input"] = price.cached_input
+    optional = {
+        "cached_input": price.cached_input,
+        "cache_write_30m": price.cache_write_30m,
+        "cache_write_12h": price.cache_write_12h,
+    }
+    doc.update({key: rate for key, rate in optional.items() if rate is not None})
     return doc
 
 
 def price_from(doc: dict[str, object]) -> Rates:
-    cached = None if doc.get("cached_input") is None else number(doc, "cached_input")
-    return Rates(number(doc, "input"), number(doc, "output"), cached)
+    def rate(key: str) -> float | None:
+        return None if doc.get(key) is None else number(doc, key)
+
+    return Rates(
+        number(doc, "input"),
+        number(doc, "output"),
+        rate("cached_input"),
+        rate("cache_write_30m"),
+        rate("cache_write_12h"),
+    )
 
 
 def tools_text(tools: tuple[str, ...], renames: tuple[tuple[str, str], ...]) -> str:

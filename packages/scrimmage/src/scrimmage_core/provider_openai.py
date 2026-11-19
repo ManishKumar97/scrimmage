@@ -69,15 +69,22 @@ CONTEXT_TOO_LONG = {
 @dataclass(frozen=True)
 class Rates:
     """Dollars per million tokens. With no cached rate, cached tokens cost the full input
-    rate: a price that guesses must guess high, or the budget could let through more."""
+    rate: a price that guesses must guess high, or the budget could let through more. With
+    no cache-write rate, a written token costs the full input rate, as on a model that
+    charges nothing extra to write its cache."""
 
     input: float
     output: float
     cached_input: float | None = None
+    cache_write_30m: float | None = None  # a token written to the cache for 30 minutes
+    cache_write_12h: float | None = None  # for 12 hours, a Responses API choice
 
 
-# Checked against OpenAI's pricing page on 7 November 2026, standard tier; check again
-# before each release. A team overrides or adds a model under [agent.prices].
+# Checked against OpenAI's pricing page on 19 November 2026, standard tier; check again
+# before each release. A team overrides or adds a model under [agent.prices]. A model with
+# a long-context price, above 272K input tokens, is left out, such as gpt-5.4, gpt-5.5
+# and the gpt-5.6 models: one rate per kind of token would price a long call low. Only
+# those models price a cache write, so no model here has one.
 PRICES: dict[str, Rates] = {
     "gpt-4o": Rates(2.50, 10.00, 1.25),
     # Its own price, not its family's; shut down, so no longer on the pricing page. No
@@ -86,7 +93,17 @@ PRICES: dict[str, Rates] = {
     "gpt-4o-mini": Rates(0.15, 0.60, 0.075),
     "gpt-4.1": Rates(2.00, 8.00, 0.50),
     "gpt-4.1-mini": Rates(0.40, 1.60, 0.10),
-    "gpt-4.1-nano": Rates(0.10, 0.40, 0.025),
+    "gpt-4.1-nano": Rates(0.10, 0.40, 0.025),  # as on 7 November; off the page since
+    "gpt-5": Rates(1.25, 10.00, 0.125),
+    "gpt-5-mini": Rates(0.25, 2.00, 0.025),
+    "gpt-5-nano": Rates(0.05, 0.40, 0.005),
+    "gpt-5-pro": Rates(15.00, 120.00),  # the page gives no cached rate
+    "gpt-5.1": Rates(1.25, 10.00, 0.125),
+    "gpt-5.2": Rates(1.75, 14.00, 0.175),
+    "gpt-5.2-pro": Rates(21.00, 168.00),
+    "gpt-5.3-codex": Rates(1.75, 14.00, 0.175),
+    "gpt-5.4-mini": Rates(0.75, 4.50, 0.075),
+    "gpt-5.4-nano": Rates(0.20, 1.25, 0.02),
     "text-embedding-3-small": Rates(0.02, 0.0),
     "text-embedding-3-large": Rates(0.13, 0.0),
 }
@@ -557,6 +574,8 @@ class Usage:
     output: int = 0
     known: bool = False
     cached: int = 0  # input tokens the provider served from its prompt cache
+    written_30m: int = 0  # input tokens written to the cache for 30 minutes
+    written_12h: int = 0  # and for 12 hours
 
 
 def usage(body: bytes, *, output_required: bool = True) -> Usage:
@@ -584,15 +603,52 @@ def usage(body: bytes, *, output_required: bool = True) -> Usage:
         if tokens_out is None and not output_required:
             tokens_out = 0
         if tokens_in is not None and tokens_out is not None:
-            found = Usage(tokens_in, tokens_out, True, cached_count(numbers, tokens_in))
+            cached = cached_count(numbers, tokens_in)
+            found = Usage(tokens_in, tokens_out, True, cached)
+            found.written_30m, found.written_12h = written(numbers, tokens_in - cached)
     return found
 
 
+def _details(numbers: dict[str, object]) -> dict[str, object]:
+    """Chat names the block prompt_tokens_details, Responses input_tokens_details. A Chat
+    block that is not a table, such as a null beside a filled Responses one, is passed over."""
+    for key in ("prompt_tokens_details", "input_tokens_details"):
+        block = numbers.get(key)
+        if isinstance(block, dict):
+            return _obj(cast(object, block))
+    return {}
+
+
 def cached_count(numbers: dict[str, object], tokens_in: int) -> int:
-    """Chat names the block prompt_tokens_details, Responses input_tokens_details."""
-    details = _obj(numbers.get("prompt_tokens_details", numbers.get("input_tokens_details")))
-    cached = _count(details, "cached_tokens", "cached_tokens")
+    cached = _count(_details(numbers), "cached_tokens", "cached_tokens")
     return cached if cached is not None and cached <= tokens_in else 0
+
+
+def written(numbers: dict[str, object], uncached: int) -> tuple[int, int]:
+    """The input tokens written to the cache, for 30 minutes and for 12 hours.
+
+    OpenAI bills each input token once: as plain input, as a cached read or as a write, so
+    the writes are a part of the input tokens that were not cached. Responses splits them
+    by lifetime, ttl_30m_tokens and ttl_12h_tokens, which sum to cache_write_tokens; Chat
+    Completions writes for 30 minutes only and gives no split. OpenAI states the relation
+    for Responses; Chat's cache_write_tokens is read the same way, as its SDK field names
+    it, but no real Chat reply with writes has confirmed it. No write count is no write.
+    A count that cannot be trusted is read high: every uncached token written for 12 hours.
+    So is a split with no total, which says writes were made but not how many.
+    """
+    details = _details(numbers)
+    if "cache_write_tokens" not in details:
+        return (0, uncached) if "cache_write_tokens_details" in details else (0, 0)
+    total = _count(details, "cache_write_tokens", "cache_write_tokens")
+    if total is None or total > uncached:
+        return 0, uncached
+    split = _obj(details.get("cache_write_tokens_details"))
+    if "ttl_12h_tokens" not in split:
+        return total, 0
+    long = _count(split, "ttl_12h_tokens", "ttl_12h_tokens")
+    if long is None or long > total:
+        return 0, total
+    return total - long, long
 
 
 def price(model: str, overrides: dict[str, Rates]) -> Rates | None:
@@ -609,11 +665,31 @@ def price(model: str, overrides: dict[str, Rates]) -> Rates | None:
     return None
 
 
-def cost(tokens_in: int, tokens_out: int, rates: Rates, cached: int = 0) -> float:
-    """What a call costs. cached is the part of tokens_in served from the prompt cache."""
-    cached_rate = rates.input if rates.cached_input is None else rates.cached_input
-    full = (tokens_in - cached) * rates.input + cached * cached_rate
+def cost(
+    tokens_in: int,
+    tokens_out: int,
+    rates: Rates,
+    cached: int = 0,
+    written_30m: int = 0,
+    written_12h: int = 0,
+) -> float:
+    """What a call costs. cached and the written counts are parts of tokens_in."""
+    plain = tokens_in - cached - written_30m - written_12h
+    full = plain * rates.input + cached * _or_input(rates.cached_input, rates)
+    full += written_30m * _or_input(rates.cache_write_30m, rates)
+    full += written_12h * _or_input(rates.cache_write_12h, rates)
     return (full + tokens_out * rates.output) / 1_000_000
+
+
+def most_cost(tokens_in: int, tokens_out: int, rates: Rates) -> float:
+    """What a call could cost at most: every input token at the input or cache-write rate,
+    whichever is dearer, since the provider may write any of them to its cache."""
+    rate = max(rates.input, rates.cache_write_30m or 0.0, rates.cache_write_12h or 0.0)
+    return (tokens_in * rate + tokens_out * rates.output) / 1_000_000
+
+
+def _or_input(rate: float | None, rates: Rates) -> float:
+    return rates.input if rate is None else rate
 
 
 @dataclass

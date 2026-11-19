@@ -1017,7 +1017,7 @@ def hold_for(ctx: Bound, step: Step, request: Any, extra: dict[str, object]) -> 
     body = body_of(request) or b""
     fields = openai_table.request_fields(body) if body else None
     output = openai_table.max_output(fields or {}) or plan.reserve_output_tokens
-    return openai_table.cost(len(body) // CHAR_PER_TOKEN, output, rates)
+    return openai_table.most_cost(len(body) // CHAR_PER_TOKEN, output, rates)
 
 
 def reserve(ctx: Bound, step: Step, request: Any, extra: dict[str, object]) -> int | None:
@@ -1297,7 +1297,7 @@ def redirected_away(
     """Stop here: past this hop the gate would not see the call, so nothing could price it."""
     rates = prices_of(ctx, str(extra.get("model", "")))
     tokens = len(body_of(request) or b"") // CHAR_PER_TOKEN
-    usd = openai_table.cost(tokens, 0, rates) if rates else None
+    usd = openai_table.most_cost(tokens, 0, rates) if rates else None
     extra.update(cost_usd=usd, cost_estimated=usd is not None)
     settle(ctx, reservation, usd or 0.0)
     ctx.run.refuse(step, "redirect_off_host")
@@ -1328,7 +1328,7 @@ def failed(
     usd: float | None = 0.0
     if not isinstance(error, never_sent):
         tokens = len(body_of(request) or b"") // CHAR_PER_TOKEN
-        usd = openai_table.cost(tokens, 0, rates) if rates else None
+        usd = openai_table.most_cost(tokens, 0, rates) if rates else None
         extra["cost_estimated"] = usd is not None
     extra["cost_usd"] = usd
     ctx.run.finish(step, error=error)
@@ -1756,7 +1756,12 @@ def record(
         tokens_out = len(body) // CHAR_PER_TOKEN
     free = step.call.name in openai_table.FREE_OPS
     rates = openai_table.Rates(0.0, 0.0) if free else prices_of(ctx, str(extra.get("model", "")))
-    usd = openai_table.cost(tokens_in, tokens_out, rates, cached) if rates else None
+    usd = None
+    if rates and used.known:
+        writes = used.written_30m, used.written_12h
+        usd = openai_table.cost(tokens_in, tokens_out, rates, cached, *writes)
+    elif rates:  # a guess from the sizes, so every input token at its dearest rate
+        usd = openai_table.most_cost(tokens_in, tokens_out, rates)
     extra.update(
         status=response.status_code,
         result=blob(body, ctx.sender, total=size, scrub=ctx.run.secrets),

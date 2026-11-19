@@ -743,7 +743,13 @@ def run_check(
         "entry": {"kind": entry_kind, "value": entry_value},
         # The prices [agent.prices] sets; any other model takes the built-in table's.
         "prices": {
-            model: {"input": r.input, "output": r.output, "cached_input": r.cached_input}
+            model: {
+                "input": r.input,
+                "output": r.output,
+                "cached_input": r.cached_input,
+                "cache_write_30m": r.cache_write_30m,
+                "cache_write_12h": r.cache_write_12h,
+            }
             for model, r in agent.prices
         },
     }
