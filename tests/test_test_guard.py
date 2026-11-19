@@ -79,6 +79,16 @@ def test_submit_to_an_interpreter_pool() -> None:
         assert pool.submit(pow, 2, 3).result() == 8
 
 
+@pytest.mark.skipif(sys.version_info < (3, 14), reason="InterpreterPoolExecutor is 3.14's")
+def test_submit_to_an_interpreter_pool_subclass() -> None:
+    # A subclass is still an interpreter pool: the guard must leave its task unwrapped too.
+    class OwnPool(concurrent.futures.InterpreterPoolExecutor):
+        pass
+
+    with OwnPool(1) as pool:
+        assert pool.submit(pow, 2, 3).result() == 8
+
+
 @pytest.mark.slow
 def test_slow_start() -> None:
     subprocess.run(["true"], check=True)
@@ -191,6 +201,16 @@ def test_an_interpreter_pool_still_runs_its_task(session: tuple[dict[str, str], 
     """Its task crosses into a subinterpreter, which a wrapped task could not."""
     got, out = session
     assert got["test_submit_to_an_interpreter_pool"] == (
+        "passed" if sys.version_info >= (3, 14) else "skipped"
+    ), out
+
+
+def test_an_interpreter_pool_subclass_still_runs_its_task(
+    session: tuple[dict[str, str], str],
+) -> None:
+    """A subclass is still an interpreter pool, so its task is left unwrapped too."""
+    got, out = session
+    assert got["test_submit_to_an_interpreter_pool_subclass"] == (
         "passed" if sys.version_info >= (3, 14) else "skipped"
     ), out
 
