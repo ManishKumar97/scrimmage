@@ -67,6 +67,7 @@ _.answer_with_reads  # tests/example/acme/docs_bot.py: a test's scrimmage.toml n
 _.handbook  # tests/fakes/docs_server.py: the MCP server calls its resources by name
 _.summarise  # tests/fakes/docs_server.py: the MCP server calls its prompts by name
 _.answer_three_times  # tests/example/acme/docs_bot.py: a test's scrimmage.toml names it
+_.answer_after_editing_the_first  # tests/example/acme/docs_bot.py: a test's scrimmage.toml names it
 _._handle_list_tools  # tests/fakes/docs_server.py: MCPServer hands it to its low-level server
 _.answer_slashed_tool  # tests/example/acme/docs_bot.py: a test's scrimmage.toml names it
 _.answer_two_readings  # tests/example/acme/docs_bot.py: a test's scrimmage.toml names it
