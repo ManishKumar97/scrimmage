@@ -200,11 +200,11 @@ A tool that returns one can still be mocked: name a function that builds the val
 ```toml
 [[test.mock]]
 call         = "tool:get_invoice"
-returns_from = "acme.test_mocks:invoice_pdf"
+returns_from = "acme.mock_values:invoice_pdf"
 ```
 
 ```python
-# acme/test_mocks.py
+# acme/mock_values.py
 def invoice_pdf() -> bytes:
     return b"%PDF-1.7 fixed test invoice"
 ```

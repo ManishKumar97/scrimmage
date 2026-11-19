@@ -115,24 +115,31 @@ def build(
 def produced(path: str, prefixes: list[str]) -> object:
     """A returns_from mock's value: the team's function, called with no arguments on every
     call, so a change the agent makes to one value is not seen by the next call. A function
-    that cannot be imported, is async, or raises is a mistake. The line names the error's
-    class only: its message can quote a value."""
+    that cannot be imported, is async, or raises is a mistake. The mistake names the error's
+    class only, and is raised outside the except block, so it holds no reference to the
+    error: its message can quote a value. SystemExit is the team's error too; a
+    KeyboardInterrupt still stops the run."""
+    failed: str | None = None
+    factory: object = None
     try:
         factory = import_object(path, prefixes)  # the prefix is checked before the import
     except ScrimmageRefused as exc:
-        raise ScrimmageMockError(f"returns_from {exc}") from None
-    except Exception as exc:  # the module's own code, or a name it does not have
-        raise ScrimmageMockError(
-            f"returns_from {path} cannot be imported: it raised {type(exc).__name__}"
-        ) from None
+        failed = f"returns_from {exc}"
+    except (Exception, SystemExit) as exc:  # the module's own code, or a missing name
+        failed = f"returns_from {path} cannot be imported: it raised {type(exc).__name__}"
+    if failed is not None:
+        raise ScrimmageMockError(failed)
     if inspect.iscoroutinefunction(factory) or inspect.isasyncgenfunction(factory):
         raise ScrimmageMockError(f"returns_from {path} must be a plain function, not async")
     if not callable(factory):
         raise ScrimmageMockError(f"returns_from {path} is not a function")
+    value: object = None
     try:
         value = factory()
-    except Exception as exc:  # the team's code: a broken test, not a broken agent
-        raise ScrimmageMockError(f"returns_from {path} raised {type(exc).__name__}") from None
+    except (Exception, SystemExit) as exc:  # the team's code: a broken test, not a broken agent
+        failed = f"returns_from {path} raised {type(exc).__name__}"
+    if failed is not None:
+        raise ScrimmageMockError(failed)
     if inspect.isawaitable(value):
         close = getattr(value, "close", None)
         if callable(close):

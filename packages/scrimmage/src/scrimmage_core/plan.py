@@ -232,6 +232,10 @@ def plain_mock_json(mock: Mock) -> dict[str, object]:
 def mock_from(doc: dict[str, object]) -> Mock:
     call = string(doc, "call")
     recorded = doc.get("recorded") is True
+    if "returns_from" in doc and (
+        labels.kind_of(call) != "tool" or "returns" in doc or "type" in doc
+    ):
+        raise ValueError("plan mock returns_from: only on a tool mock, with no returns or type")
     if labels.kind_of(call) != "http":
         args = None if doc.get("args") is None else obj(doc["args"])
         if (made := optional(doc, "returns_from")) is not None:

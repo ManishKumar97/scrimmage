@@ -17,7 +17,9 @@ scrimmage record [path] [--test NAME] [--refresh LABEL] [--runs N] [--json]
 
 `--test NAME` records only that test, and can be given more than once. A name that is not in the file exits 2 before any run.
 
-`--refresh LABEL` records a label again that already has a mock, such as after an API changed. The mocks on that label leave the plan and the output, so the call runs for real. It stops with exit 2 before any run for a label that would not run for real: a tool or an MCP tool not under `real`, or a web label whose mocks are not all on reads or under `real`.
+`--refresh LABEL` records a label again that already has a mock, such as after an API changed. The mocks on that label leave the plan and the output, so the call runs for real.
+A `returns_from` mock on that label stays as it is, because record cannot write the value its function builds.
+It stops with exit 2 before any run for a label that would not run for real: a tool or an MCP tool not under `real`, or a web label whose mocks are not all on reads or under `real`.
 
 ```
 $ scrimmage record
@@ -156,12 +158,12 @@ A call that could not be written is a commented skeleton at the end of its test,
 # scrimmage record could not write this mock: tool:get_invoice: returns: a bytes, which a mock cannot hold.
 # Build the value with a function of no arguments, named with returns_from, or leave the tool under real.
 # [[test.mock]]
-# call    = "tool:get_invoice"
-# args    = {invoice_id = "INV-7"}
+# call         = "tool:get_invoice"
+# args         = {invoice_id = "INV-7"}
 # returns_from = "package.module:function"
 ```
 
-A value a mock cannot hold, such as bytes, gets a `returns_from` line: write the function, name it there, and uncomment the block.
+A tool value a mock cannot hold, such as bytes or a value that holds None, gets a `returns_from` line: write the function, name it there, and uncomment the block.
 See [Mocks built by a function](configuration.md#mocks-built-by-a-function).
 Any other reason gets `returns = ...` and "Write it by hand, or leave the tool under real."
 

@@ -1,7 +1,9 @@
 """A mock built by the team's own function: returns_from, for a value TOML cannot hold."""
 
+import gc
 import json
 import sys
+import warnings
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 
@@ -43,7 +45,7 @@ expect   = ["PDF"]
 
 [[test.mock]]
 call         = "tool:get_invoice"
-returns_from = "acme.test_mocks:invoice_pdf"
+returns_from = "acme.mock_values:invoice_pdf"
 """
 
 
@@ -86,6 +88,10 @@ def counted() -> bytearray:  # a bytearray, so the agent can change it
 
 def broken() -> bytes:
     raise ValueError("card 4242-4242-4242-4242 is not on file")
+
+
+def exits() -> bytes:
+    raise SystemExit("card 4242 8888")
 
 
 async def coroutine_factory() -> bytes:
@@ -148,13 +154,20 @@ def test_returns_from_with_args_answers_only_those_arguments(lines: Lines) -> No
 
 
 @pytest.mark.design("mock.returns_from_raises")
-def test_a_factory_that_raises_is_a_mistake_naming_it_and_not_its_message(lines: Lines) -> None:
-    install(lines, [made(broken)])
+@pytest.mark.parametrize(
+    ("factory", "kind"), [(broken, "ValueError"), (exits, "SystemExit")], ids=["error", "exit"]
+)
+def test_a_factory_that_raises_is_a_mistake_naming_it_and_not_its_message(
+    lines: Lines, factory: Callable[[], object], kind: str
+) -> None:
+    install(lines, [made(factory)])
     with pytest.raises(ScrimmageMockError) as caught:
         tool_gate.gate(get_invoice, "get_invoice")("INV-7")
-    message = f"returns_from {HERE}:broken raised ValueError"
+    message = f"returns_from {HERE}:{factory.__name__} raised {kind}"
     assert str(caught.value) == message
-    assert caught.value.__cause__ is None and caught.value.__suppress_context__
+    # Nothing that walks the chain reaches the factory's error, and so its message.
+    chain = [caught.value.__cause__, caught.value.__context__]
+    assert chain == [None, None], chain
     assert lines.lines[0]["mistake"] == message
     leaked = "4242" in json.dumps(lines.lines) or "4242" in str(caught.value)
     assert not leaked, "the factory's error message reached a line"
@@ -175,12 +188,21 @@ def test_an_async_factory_is_a_mistake(
         tool_gate.gate(get_invoice, "get_invoice")("INV-7")
     message = f"returns_from {HERE}:{factory.__name__} must be a plain function, not async{tail}"
     assert str(caught.value) == message and lines.lines[0]["mistake"] == message
+    # The traceback holds the coroutine; once it is gone, a coroutine left open would warn.
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        del caught
+        state.install(None)
+        lines.lines.clear()
+        gc.collect()
+    unawaited = [str(w.message) for w in seen if "never awaited" in str(w.message)]
+    assert unawaited == [], unawaited
 
 
 @pytest.mark.design("mock.returns_from_packages")
 def test_a_factory_outside_the_agents_packages_is_refused_at_load(tmp_path: Path) -> None:
     path = tmp_path / "scrimmage.toml"
-    path.write_text(INVOICE_TEST.replace("acme.test_mocks:", "billing.fixtures:"))
+    path.write_text(INVOICE_TEST.replace("acme.mock_values:", "billing.fixtures:"))
     with pytest.raises(ConfigError) as caught:
         config.load(path)
     assert str(caught.value) == (
@@ -188,7 +210,7 @@ def test_a_factory_outside_the_agents_packages_is_refused_at_load(tmp_path: Path
         "packages (acme.), so it is refused"
     )
     path.write_text(INVOICE_TEST)  # under acme., it loads
-    assert config.load(path).tests[0].mocks[0].returns_from == "acme.test_mocks:invoice_pdf"
+    assert config.load(path).tests[0].mocks[0].returns_from == "acme.mock_values:invoice_pdf"
 
 
 @pytest.mark.design("imports.returns_from_refused_before_import")

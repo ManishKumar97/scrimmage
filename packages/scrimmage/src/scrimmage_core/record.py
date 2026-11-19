@@ -1072,8 +1072,11 @@ def prepare(
     places: dict[str, list[int]] = {}
     refreshed: dict[str, list[int]] = {}
     for test in chosen:
+        # A returns_from mock stays: record cannot write the value its function builds.
         taken = {
-            i for i, mock in enumerate(test.mocks) if any(mock.call == label for label in refresh)
+            i
+            for i, mock in enumerate(test.mocks)
+            if mock.call in refresh and mock.returns_from is None
         }
         kept = [i for i in range(len(test.mocks)) if i not in taken]
         places[test.name] = kept
@@ -1455,12 +1458,14 @@ def block_text(found: TestRecord, when: str) -> str:
 def skeleton(entry: ManualEntry) -> str:
     """A listed call, as commented lines, where its mock would go."""
     head = f"scrimmage record could not write this mock: {entry.call}: {entry.message}."
-    # A tool's value TOML cannot hold, such as bytes, can only be built by a function.
+    # A tool's value TOML cannot hold, such as bytes or None, can only be built by a function.
     built = (
         entry.call.startswith("tool:")
-        and entry.code == UNSAVABLE
+        and entry.instead is None
+        and entry.code in (UNSAVABLE, NULL)
         and entry.message.startswith("returns")
     )
+    width = len("returns_from" if built else "returns")  # the column the keys are padded to
     if entry.instead is not None:
         hint = f"A mock of {entry.instead} was written in its place."
     elif built:
@@ -1474,12 +1479,12 @@ def skeleton(entry: ManualEntry) -> str:
     if entry.shown is not None:
         lines.append(f"{entry.call} with {entry.shown}")
     lines.append("[[test.mock]]")
-    lines.append(f'call    = "{entry.call}"')
+    lines.append(f'{"call":<{width}} = "{entry.call}"')
     if entry.args is not None:
-        lines.append(f"args    = {toml_write.inline(entry.args)}")
+        lines.append(f"{'args':<{width}} = {toml_write.inline(entry.args)}")
     if entry.method is not None:
         lines += [f'method  = "{entry.method}"', f'path    = "{entry.path}"', "status  = ..."]
-    elif built and entry.instead is None:
+    elif built:
         lines.append('returns_from = "package.module:function"')
     else:
         lines.append("returns = ...")

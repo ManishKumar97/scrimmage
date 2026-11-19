@@ -249,7 +249,8 @@ def problem(gate: Gate, plan: Plan) -> str | None:
     """Why this process cannot follow the plan: an import outside SCRIMMAGE_ALLOW_IMPORTS, or
     tools other than the ones its gates swap."""
     raises = [f.raises for f in plan.faults if f.raises and ":" in f.raises]
-    paths = [*plan.tools, *(m.type for m in plan.mocks if m.type), *raises]
+    made = [m.returns_from for m in plan.mocks if m.returns_from]
+    paths = [*plan.tools, *(m.type for m in plan.mocks if m.type), *made, *raises]
     outside = next((path for path in paths if not allowed(path, gate.prefixes)), None)
     if outside is not None:
         return f"{outside} is outside SCRIMMAGE_ALLOW_IMPORTS"

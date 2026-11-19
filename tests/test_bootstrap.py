@@ -230,6 +230,21 @@ def test_a_type_outside_the_allowed_prefixes_is_refused_before_import(
     assert "agent ran" not in result.stdout and not marker.exists()
 
 
+@pytest.mark.design("imports.returns_from_refused_before_start")
+def test_a_returns_from_outside_the_allowed_prefixes_stops_the_program_before_the_agent_runs(
+    control: ControlServer, tmp_path: Path
+) -> None:
+    marker = tmp_path / "imported"
+    (tmp_path / "evil.py").write_text(
+        f"import pathlib\npathlib.Path({str(marker)!r}).write_text('yes')\ndef make(): pass\n"
+    )
+    mock = {"call": "tool:a", "returns_from": "evil:make"}
+    control.open_run("run-1", "baseline", plan(mocks=[mock]))
+    result = python("print('agent ran')", joined(control), cwd=tmp_path)
+    assert "evil:make is outside SCRIMMAGE_ALLOW_IMPORTS (acme.)" in result.stderr
+    assert "agent ran" not in result.stdout and not marker.exists()
+
+
 @pytest.mark.design("imports.raises_refused_before_import")
 def test_a_fault_type_outside_the_allowed_prefixes_is_refused_before_import(
     control: ControlServer, tmp_path: Path

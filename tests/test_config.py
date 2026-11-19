@@ -577,7 +577,7 @@ def test_a_web_mock_with_args_is_still_rejected(tmp_path: Path) -> None:
         load_text(tmp_path, web)
 
 
-FACTORY = 'call = "tool:t"\nreturns_from = "acme.test_mocks:invoice_pdf"\n'
+FACTORY = 'call = "tool:t"\nreturns_from = "acme.mock_values:invoice_pdf"\n'
 
 
 def toml_schema_errors(text: str) -> list[str]:
@@ -592,7 +592,7 @@ def test_returns_from_is_refused_with_returns_or_type(tmp_path: Path) -> None:
     alone = config_cases.mock(FACTORY + 'args = {invoice_id = "INV-7"}\n')
     mock = load_text(tmp_path, alone).tests[0].mocks[0]
     assert (mock.returns_from, mock.returns, mock.type) == (
-        "acme.test_mocks:invoice_pdf",
+        "acme.mock_values:invoice_pdf",
         None,
         None,
     )

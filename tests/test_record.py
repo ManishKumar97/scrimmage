@@ -190,7 +190,8 @@ class Team:
         if doc["out"] is not None:
             text = self.out_path.read_text()
             for entry in (m for found in doc["tests"] for m in found["manual"]):
-                assert f'# call    = "{entry["call"]}"' in text, entry  # a skeleton per listing
+                call = re.escape(f'= "{entry["call"]}"')
+                assert re.search(f"# call +{call}", text), entry  # a skeleton per listing
         else:
             assert doc["numbers"]["calls_written"] == 0
         return Done(code, doc, captured.out, captured.err, self)
@@ -818,6 +819,32 @@ def answer(question):
     assert any("replaced" in n["message"] for n in done.doc["notes"])
 
 
+@pytest.mark.design("record.refresh_keeps_returns_from")
+def test_refresh_keeps_a_returns_from_mock_as_it_is(team: Team) -> None:
+    team.write(
+        """
+def pdf():
+    return b"%PDF-1.7 built"
+
+def get_invoice(invoice_id):
+    return b"%PDF-1.7 real"
+
+def answer(question):
+    get_invoice("INV-7")
+    return "ok"
+""",
+        ["bot:get_invoice"],
+        ("tool:get_invoice",),
+        tests=ONE_TEST + '[[test.mock]]\ncall = "tool:get_invoice"\nreturns_from = "bot:pdf"\n',
+    )
+    done = team.record("--refresh", "tool:get_invoice")
+    assert done.code == 0, done.out
+    assert done.test["kept"] == [{"call": "tool:get_invoice", "mock": 1}]
+    assert done.test["written"] == [] and done.manual() == []
+    (mock,) = tomllib.loads(team.out_path.read_text())["test"][0]["mock"]
+    assert mock == {"call": "tool:get_invoice", "returns_from": "bot:pdf"}
+
+
 @pytest.mark.design("record.schema_line_first")
 @pytest.mark.design("record.provenance")
 @pytest.mark.design("record.tool_star_warns")
@@ -917,7 +944,7 @@ def answer(question):
     dollars = next(m for m in loaded.tests[0].mocks if m.call == "tool:dollars")
     assert dollars.returns == "cost ${HOME}"
     for call in ("tool:nothing", "tool:pic"):
-        assert f'# call    = "{call}"' in text
+        assert f'# call         = "{call}"' in text  # a value TOML cannot hold: returns_from
     assert "# [[test.mock]]" in text
     code, out = team.test_output()
     assert code == 1, out  # the bot's answer has no "ok", so its one row fails its expect
@@ -2002,7 +2029,11 @@ def skeleton_of(team: Team, call: str, arg: str, defs: str = DOLLARS) -> tuple[s
 @pytest.mark.design("record.skeleton")
 def test_a_skeleton_carries_exact_args_for_a_tool_call(team: Team) -> None:
     text, _ = skeleton_of(team, "dollars", '"d"')
-    assert '# call    = "tool:dollars"\n# args    = {key = "d"}\n# returns = ...' in text
+    # Its value holds None, which TOML cannot write, so the skeleton names returns_from.
+    assert (
+        '# call         = "tool:dollars"\n# args         = {key = "d"}\n'
+        '# returns_from = "package.module:function"\n'
+    ) in text
     assert tomllib.loads(text)["test"][0].get("mock") is None  # a comment: the file reads the same
 
 
@@ -2017,13 +2048,19 @@ def test_a_value_a_mock_cannot_hold_names_returns_from(team: Team) -> None:
         "returns_from, or leave the tool under real.\n"
     ) in text
     assert (
-        '# call    = "tool:dollars"\n# args    = {key = "d"}\n'
+        '# call         = "tool:dollars"\n# args         = {key = "d"}\n'
         '# returns_from = "package.module:function"\n'
     ) in text
     assert "# returns = ..." not in text and "Write it by hand" not in text
-    # A None in the value keeps the old hint: a table without it may be all the test needs.
-    text, _ = skeleton_of(team, "dollars", '"d"')
+    # A None in the value, which TOML has no form for, names it too.
+    text, done = skeleton_of(team, "dollars", '"d"')
+    assert done.manual()[0]["message"] == "returns holds None, which TOML cannot write"
+    assert "returns_from" in text and "Write it by hand" not in text
+    # Any other reason, such as a secret in the arguments, keeps the old hint.
+    both = DOLLARS.replace("(key)", "(key, password='x')")
+    text, _ = skeleton_of(team, "dollars", f'"{SK}"', both)
     assert "returns_from" not in text and "Write it by hand" in text
+    assert '# call    = "tool:dollars"\n# returns = ...' in text
 
 
 @pytest.mark.design("record.skeleton")

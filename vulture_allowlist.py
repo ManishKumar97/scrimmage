@@ -91,7 +91,7 @@ _.answer_old_functions  # tests/example/acme/rag.py: named by import path in a t
 _.answer_renamed  # tests/example/acme/rag.py: named by import path in a test's scrimmage.toml
 _.answer_renamed_responses  # tests/example/acme/rag.py: named by import path in a test
 _.use_httpx2  # tests/example/acme/slow.py: named by import path in a test's scrimmage.toml
-_.invoice_pdf  # tests/example/acme/test_mocks.py: named by a mock's returns_from in a test
+_.invoice_pdf  # tests/example/acme/mock_values.py: named by a mock's returns_from in a test
 _.answer_one_stops_the_rest  # tests/example/acme/rag.py: named by import path in a test
 _.answer_one_odd_tool_stops_the_rest  # tests/example/acme/rag.py: named by import path in a test
 _.answer_one_unseen_stops_the_rest  # tests/example/acme/rag.py: named by import path in a test
