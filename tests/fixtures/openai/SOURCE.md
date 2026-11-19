@@ -68,6 +68,11 @@ The key fragment in the 401 message is made up.
 | `real_error_401.json` | A chat request with a key that is not real |
 | `real_error_context_length.json` | A chat request to `gpt-4o-mini` of about 140,000 tokens |
 
+`real_error_tool_name.json` was saved the same way on 18 November 2026, from `gpt-4o-mini`.
+It is the reply to a chat request whose history holds an assistant call to `multi_tool_use.parallel` and its tool result.
+OpenAI refuses the dot in the tool name.
+`tests/test_runner.py` serves it from the fake OpenAI API, as the answer to the request an agent sends after `unknown tool`.
+
 `rail_real_shape.json` is shaped like a NeMo rail's reply from `gpt-4.1-mini`, seen in the real-model check on 12 November 2026.
 It keeps the real reply's layout: pretty-printed, with `logprobs` and `refusal` null, `usage`, `service_tier` and `system_fingerprint`, and longer than a record line's preview.
 The id, the time and the fingerprint are made up.

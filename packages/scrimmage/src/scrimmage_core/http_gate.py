@@ -700,6 +700,7 @@ def built_reply(
         tool = openai_table.tool_call_tools(str(request.url.path), fields)[0]
         built = openai_table.unknown_tool_reply(fields, tokens, tool)
     headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
+    ctx.run.reply_faulted = True
     return reply(ctx, module, client, step, request, extra, (200, headers, built))
 
 
@@ -1637,6 +1638,8 @@ def capture(
             usd = record(ctx, step, request, response, extra, b"".join(chunks), size[0])
         except Exception:  # the agent's own call must never fail because of the arithmetic
             extra.update(status=response.status_code, cost_usd=None, cost_estimated=False)
+        if after_reply_fault(ctx, step, extra):
+            extra["after_reply_fault"] = True
         ctx.run.finish(step)
         settle(ctx, reservation, usd)
 
@@ -1659,6 +1662,18 @@ def capture(
 
     ctx.open.add(finish)
     response.stream = wrap(module, response.stream, keep, finish, broke, sync=sync)
+
+
+def after_reply_fault(ctx: Bound, step: Step, extra: dict[str, object]) -> bool:
+    """A model's real 400, in a run where a fault in a model's reply fired before it. The
+    agent built this request from the faulted reply, as from a real one, so the 400 is the
+    agent's own result. Any other status says nothing about the agent."""
+    return (
+        step.call.kind == "model"
+        and step.decision.action == "real"
+        and extra.get("status") == 400
+        and ctx.run.reply_faulted
+    )
 
 
 def record(

@@ -1302,6 +1302,9 @@ def real_error(line: dict[str, object]) -> str | None:
     if error and not error.startswith(NOT_A_FAILURE):
         return f"{line.get('call')} failed with {error.split(':')[0]}"
     status = int(str(line.get("status") or 0))
+    # The provider's answer to a request the agent built from a faulted reply: its result.
+    if status == 400 and line.get("after_reply_fault") is True:
+        return None
     return f"{line.get('call')} returned {status}" if status >= 400 else None
 
 

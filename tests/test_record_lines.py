@@ -19,6 +19,7 @@ from typing import Any, NamedTuple, cast
 
 import httpx2
 import jsonschema
+import openai
 import pydantic
 import pytest
 
@@ -38,6 +39,7 @@ from scrimmage_core import plan as planner
 from scrimmage_core.config import Mock
 from scrimmage_core.plan import Plan
 from scrimmage_core.redact import REMOVED
+from test_http_gate import Budget
 
 HERE = __name__
 ALLOWED = [f"{HERE}."]
@@ -985,3 +987,65 @@ def test_a_faulted_line_names_its_retry_after(sink: Sink) -> None:
     assert plain["fault"] == {"do": "status 503", "when": "first 1", "n": 1}
     bad = {**waited, "fault": {**waited["fault"], "retry_after": -1}}
     assert list(validator.iter_errors(bad))
+
+
+TOOL_NAME_400 = json.loads(
+    (Path(__file__).parent / "fixtures" / "openai" / "real_error_tool_name.json").read_text()
+)
+ORDER_SPEC = [{"type": "function", "function": {"name": "get_order", "parameters": {}}}]
+
+
+@pytest.mark.design("record.after_reply_fault")
+def test_the_line_of_a_400_after_a_reply_fault_says_so(sink: Sink) -> None:
+    """unknown tool on call 1; the code sends the call back, and the provider answers with
+    OpenAI's real 400 for the dotted name. That line says it came after a reply fault."""
+    fault = config.Fault("model", "unknown tool", "call 1", model="gpt-4o-mini")
+    plan = Plan(
+        "run-1", "t", "fault 1", (), (fault,), ("acme.tools:get_order",), (), 60.0,
+        model_hosts=(config.ModelHost("127.0.0.1", "openai"),), budget_usd=1.0,
+    )  # fmt: skip
+    run = state.RunState(plan, sink, ALLOWED, blobs=sink)
+    state.install(run)
+    reached: list[httpx2.Request] = []
+
+    def provider(request: httpx2.Request) -> httpx2.Response:
+        reached.append(request)
+        headers = cast(dict[str, str], TOOL_NAME_400["headers"])
+        return httpx2.Response(400, headers=headers, json=TOOL_NAME_400["body"])
+
+    sync_send = httpx2.Client._send_single_request
+    async_send = httpx2.AsyncClient._send_single_request
+    try:
+        http_gate.patch(httpx2, http_gate.Context(run, Budget(1.0), sink, pytest.fail))
+        http = httpx2.Client(transport=httpx2.MockTransport(provider))
+        api = openai.OpenAI(
+            base_url="http://127.0.0.1/v1", api_key="test", max_retries=0, http_client=http
+        )
+        question: list[Any] = [{"role": "user", "content": "Where is order 1234?"}]
+        first = api.chat.completions.create(
+            model="gpt-4o-mini", messages=question, tools=cast(Any, ORDER_SPEC)
+        )
+        message = first.choices[0].message
+        [call] = message.tool_calls or []
+        sent_back = [
+            *question,
+            message.model_dump(exclude_none=True),
+            {"role": "tool", "tool_call_id": call.id, "content": "error: no such tool"},
+        ]
+        with pytest.raises(openai.BadRequestError) as caught:
+            api.chat.completions.create(
+                model="gpt-4o-mini", messages=sent_back, tools=cast(Any, ORDER_SPEC)
+            )
+    finally:
+        httpx2.Client._send_single_request = sync_send  # type: ignore[method-assign]
+        httpx2.AsyncClient._send_single_request = async_send  # type: ignore[method-assign]
+    assert caught.value.code == "invalid_value" and len(reached) == 1
+    validator = jsonschema.Draft202012Validator(RECORD)
+    fired, answered = lines = [x for x in sink.calls() if x["kind"] == "model"]
+    for line in lines:
+        validator.validate(line)
+    assert (fired["action"], fired["status"]) == ("fault", 200)
+    assert "after_reply_fault" not in fired
+    assert (answered["action"], answered["status"]) == ("real", 400)
+    assert answered["after_reply_fault"] is True
+    assert list(validator.iter_errors({**answered, "after_reply_fault": False}))

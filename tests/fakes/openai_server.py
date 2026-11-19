@@ -9,6 +9,7 @@ A fixture name may start with a status, such as "429:error_429", for a real erro
 reply. "a|b" serves a, or b to a conversation where a tool failed, as a model would
 change its answer. "a@b" serves a, or b to a conversation where a tool result holds
 a note addressed to the assistant, as a model that obeys one would answer.
+A saved real reply, a file of its status, headers and body, is sent with its own status.
 A ".sse" fixture is sent as a stream of server-sent events. Embeddings, moderations and
 the Responses API each have one fixture of their own. A request it has no reply for gets
 an error, and the error is kept, so a test cannot pass by accident. This is test support
@@ -21,6 +22,7 @@ attack, or a guard that is never asked, changes the outcome of a test.
 """
 
 import json
+import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -54,6 +56,12 @@ class Reply:
         # Read every file up front, so a missing fixture fails the test before it runs.
         self.body = path.read_bytes()
         self.stream = path.suffix == ".sse"
+        # A saved real reply holds its status, its content-type and its body: the body is
+        # sent, with that status.
+        saved = json.loads(self.body) if path.suffix == ".json" else None
+        if isinstance(saved, dict) and set(saved) == {"status", "headers", "body"}:
+            self.status = int(saved["status"])
+            self.body = json.dumps(saved["body"]).encode()
 
 
 def tool_failed(request: dict[str, Any]) -> bool:
@@ -135,6 +143,36 @@ class Obeys:
         )
         if not asked and holds(request, self.marker, ("tool", "user")):
             return Reply(self.obey)
+        turn = sum(1 for m in messages if m.get("role") == "assistant")
+        return Reply(self.turns[turn]) if turn < len(self.turns) else None
+
+
+# The pattern OpenAI checks each tool name in a chat request's history against.
+TOOL_NAME = re.compile(r"[a-zA-Z0-9_-]+")
+
+
+@dataclass(frozen=True)
+class ToolNames:
+    """A main model whose API checks the tool names in the history, as OpenAI's does: a
+    request holding a name outside its pattern, such as `multi_tool_use.parallel`, gets
+    `refused`. Otherwise the turn's fixture; None past the end of the list."""
+
+    turns: tuple[str, ...]
+    refused: str = "real_error_tool_name"
+
+    def __post_init__(self) -> None:
+        for name in (self.refused, *self.turns):
+            Reply(name)  # a missing fixture fails before the test runs
+
+    def __call__(self, request: dict[str, Any]) -> "Reply | None":
+        messages = request.get("messages", [])
+        names = [
+            str(call.get("function", {}).get("name"))
+            for m in messages
+            for call in m.get("tool_calls") or []
+        ]
+        if not all(TOOL_NAME.fullmatch(name) for name in names):
+            return Reply(self.refused)
         turn = sum(1 for m in messages if m.get("role") == "assistant")
         return Reply(self.turns[turn]) if turn < len(self.turns) else None
 

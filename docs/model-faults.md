@@ -151,6 +151,16 @@ The reply is one tool call, as OpenAI's models have sent it:
 A request where the model cannot pick a tool of its own is left as it is: one that offers no tools, sets `tool_choice` to `"none"`, names the tool in `tool_choice`, or offers tools in the old `functions` field only. The call goes on as in the baseline, and the line says why.
 If your agent sends the call back in its next request, OpenAI refuses that request with a 400, because the name holds a dot.
 
+### The 400 after a reply fault
+
+A real 400 from the model, after a reply fault fired earlier in the same run, is your agent's result, not an infrastructure error.
+Your agent built that request from the faulted reply, as it would from a real one, so the 400 is what the real misbehaviour leads to.
+The run is judged as it ended: an agent that does not catch the error crashes, and the row fails.
+The 400's line has `after_reply_fault` set to `true`, so the record shows why it was not counted as an infrastructure error.
+Any other status, such as a 401, a 429 or a 500, is still an infrastructure error: it says nothing about the request your agent built.
+So is a 400 with no reply fault before it in the run.
+Only the process the fault fired in marks its 400s: a 400 sent from a child process the agent started is still an infrastructure error.
+
 ### Where they do not work
 
 A streamed request is a mistake in the test, found from the request's `stream`, so the call fails at once and nothing is sent.

@@ -356,6 +356,9 @@ class RunState:
         # The text each changed call put in a result, so a later model request can be
         # looked at for it: a heuristic note when it never got there.
         self.injected: list[str] = []
+        # Set when a fault in a model's reply fired, so the 400 a model answers the agent's
+        # next request with is the agent's own result.
+        self.reply_faulted = False
         self.end_program: Callable[[], None] = lambda: None  # set where a run has a sender
         # The web gate's replies not read to their end, and the model paths it ran as web
         # requests, each noted once: both belong to this run, never to the process.
