@@ -309,36 +309,160 @@ def test_a_later_field_in_the_control_objects_fits_both_schemas() -> None:
         assert not list(jsonschema.Draft202012Validator(control).iter_errors(found))
 
 
-def refusal_reasons() -> set[str]:
-    """Every reason the gates write on a refused call, read from the code that writes it:
-    Decision("refused", reason=...), run.refuse(step, ...), and a `reason = a if x else b`
-    that a refuse call then names."""
-    found: set[str] = set()
-    for path in sorted(Path(scrimmage_core.__file__).parent.glob("*.py")):
-        if path.name == "runner.py":  # it reads reasons and writes none
-            continue
-        for node in ast.walk(ast.parse(path.read_text())):
-            if isinstance(node, ast.Call):
-                name = ast.unparse(node.func).rpartition(".")[2]
-                if name == "Decision":
-                    for key in node.keywords:
-                        if key.arg == "reason" and isinstance(key.value, ast.Constant):
-                            found.add(str(key.value.value))
-                refusing = name == "refuse" and len(node.args) > 1
-                if refusing and isinstance(node.args[1], ast.Constant):
-                    found.add(str(node.args[1].value))
-            if isinstance(node, ast.Assign) and isinstance(node.value, ast.IfExp):
-                targets = [ast.unparse(t) for t in node.targets]
-                for c in (node.value.body, node.value.orelse):
-                    if targets == ["reason"] and isinstance(c, ast.Constant):
-                        found.add(str(c.value))
-    return found
+Func = ast.FunctionDef | ast.AsyncFunctionDef
+
+
+class Gates:
+    """The gate modules of one package, read as syntax, to find every refusal reason written.
+
+    A reason is read where it is written: a `reason=` keyword on any call, the second argument
+    of `.refuse(step, reason)`, `x["reason"] = ...` and `x.reason = ...`. Its value may be a
+    string, a module constant here or in another gate module (`engine.MISTAKE_REFUSAL`), a local
+    name assigned from those, or an if-else or `or` of them.
+    A read of another `.reason` passes on a reason written (and read) elsewhere. Anything else
+    is listed in `unreadable`, so a new way of writing a reason fails the test instead of
+    slipping past it."""
+
+    def __init__(self, package: Path) -> None:
+        # runner.py reads reasons from the records and writes none
+        paths = [p for p in sorted(package.glob("*.py")) if p.name != "runner.py"]
+        self.trees = {p.stem: ast.parse(p.read_text()) for p in paths}
+        self.files = {stem: package / f"{stem}.py" for stem in self.trees}
+        self.found: set[str] = set()
+        self.unreadable: list[str] = []
+        for stem, tree in self.trees.items():
+            self.walk(stem, tree, None)
+
+    def walk(self, stem: str, node: ast.AST, func: Func | None) -> None:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            func = node
+        for value, line in self.written(node):
+            self.take(stem, value, func, line)
+        for child in ast.iter_child_nodes(node):
+            self.walk(stem, child, func)
+
+    def written(self, node: ast.AST) -> list[tuple[ast.expr, int]]:
+        """The expressions this one node writes as a refusal reason."""
+        out: list[tuple[ast.expr, int]] = []
+        if isinstance(node, ast.Call):
+            name = ast.unparse(node.func).rpartition(".")[2]
+            out += [(k.value, node.lineno) for k in node.keywords if k.arg == "reason"]
+            if name == "Decision" and len(node.args) > 1:
+                out.append((ast.Name(id="<positional Decision argument>"), node.lineno))
+            if name == "refuse" and isinstance(node.func, ast.Attribute):
+                if len(node.args) > 1:
+                    out.append((node.args[1], node.lineno))
+                elif not any(k.arg == "reason" for k in node.keywords):
+                    out.append((ast.Name(id="<refuse without a reason>"), node.lineno))
+        if isinstance(node, ast.Assign | ast.AnnAssign) and node.value is not None:
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for t in targets:
+                keyed = isinstance(t, ast.Subscript) and ast.unparse(t.slice) in (
+                    "'reason'",
+                    '"reason"',
+                )
+                if keyed or (isinstance(t, ast.Attribute) and t.attr == "reason"):
+                    out.append((node.value, node.lineno))
+        return out
+
+    def take(self, stem: str, value: ast.expr, func: Func | None, line: int) -> None:
+        try:
+            self.found |= self.resolve(stem, value, func, 0)
+        except ValueError as why:
+            self.unreadable.append(f"{self.files[stem].name}:{line}: {why}")
+
+    def resolve(self, stem: str, node: ast.expr, func: Func | None, depth: int) -> set[str]:
+        if depth > 8:
+            raise ValueError("a reason chain too deep to follow")
+        deeper = depth + 1
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return {node.value}
+        if isinstance(node, ast.Constant) and node.value is None:
+            return set()
+        if isinstance(node, ast.IfExp):
+            return self.resolve(stem, node.body, func, deeper) | self.resolve(
+                stem, node.orelse, func, deeper
+            )
+        if isinstance(node, ast.BoolOp):
+            return set().union(*(self.resolve(stem, v, func, deeper) for v in node.values))
+        if isinstance(node, ast.Attribute):
+            if node.attr == "reason":  # another reason, read from a decision that wrote it
+                return set()
+            if isinstance(node.value, ast.Name):
+                module = self.module_alias(stem, node.value.id)
+                if module is not None:
+                    return self.constant(module, node.attr, deeper)
+        if isinstance(node, ast.Name):
+            if node.id.startswith("<"):
+                raise ValueError(node.id[1:-1] + ": give the reason by keyword, or name it")
+            local = self.local_values(func, node.id)
+            if local:
+                return set().union(*(self.resolve(stem, v, func, deeper) for v in local))
+            if func is not None and func.name == "refuse" and node.id in params(func):
+                return set()  # `refuse(self, step, reason)`: its callers are all read here
+            return self.constant(stem, node.id, deeper)
+        raise ValueError(f"a refusal reason the test cannot read: {ast.unparse(node)}")
+
+    def local_values(self, func: Func | None, name: str) -> list[ast.expr]:
+        if func is None:
+            return []
+        values: list[ast.expr] = []
+        for n in ast.walk(func):
+            if isinstance(n, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == name for t in n.targets
+            ):
+                values.append(n.value)
+            if isinstance(n, ast.AnnAssign) and n.value is not None and is_name(n.target, name):
+                values.append(n.value)
+        return values
+
+    def constant(self, stem: str, name: str, depth: int) -> set[str]:
+        """A module-level `NAME = ...` here, or the one a `from x import NAME` names."""
+        tree = self.trees.get(stem)
+        if tree is None:
+            raise ValueError(f"module {stem} is not in the package")
+        for n in tree.body:
+            if isinstance(n, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == name for t in n.targets
+            ):
+                return self.resolve(stem, n.value, None, depth)
+            if isinstance(n, ast.ImportFrom) and n.module is not None:
+                for a in n.names:
+                    if (a.asname or a.name) == name and n.module.startswith("scrimmage_core."):
+                        return self.constant(n.module.rpartition(".")[2], a.name, depth)
+        raise ValueError(f"a reason name the test cannot follow: {name}")
+
+    def module_alias(self, stem: str, name: str) -> str | None:
+        """`from scrimmage_core import decide as engine` makes `engine` the module `decide`."""
+        for n in self.trees[stem].body:
+            if isinstance(n, ast.ImportFrom) and n.module == "scrimmage_core":
+                for a in n.names:
+                    if (a.asname or a.name) == name and a.name in self.trees:
+                        return a.name
+        return None
+
+
+def is_name(node: ast.expr, name: str) -> bool:
+    return isinstance(node, ast.Name) and node.id == name
+
+
+def params(func: Func) -> set[str]:
+    a = func.args
+    return {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
+
+
+def refusal_reasons(package: Path | None = None) -> set[str]:
+    """Every reason the gates write on a refused call, read from the code that writes it."""
+    gates = Gates(package or Path(scrimmage_core.__file__).parent)
+    assert not gates.unreadable, "\n".join(gates.unreadable)
+    return gates.found
 
 
 @pytest.mark.design("schema.record")
 def test_every_reason_a_gate_can_write_is_in_the_record_schemas_list() -> None:
     reasons = refusal_reasons()
-    assert {"orphan", "service_child", "budget_held", "unlisted"} <= reasons  # the walk saw them
+    # the walk saw them, the constant one (`mistake`) and the ones named through a local too
+    assert {"orphan", "service_child", "budget_held", "unlisted", "mistake"} <= reasons
     body = cast(Any, schema("record"))
     listed = set(body["$defs"]["call"]["properties"]["reason"]["enum"])
     assert not reasons - listed, f"record.v1.json does not list {sorted(reasons - listed)}"

@@ -698,18 +698,25 @@ class RunState:
             self._going(step)
         self.finish(step, error=ScrimmageRefused(message), mistake=message)
 
-    def outside_refused(self, call: engine.Call, message: str, entry: str | None) -> None:
+    def outside_refused(
+        self,
+        call: engine.Call,
+        message: str,
+        entry: str | None,
+        args: dict[str, object] | None = None,
+    ) -> None:
         """A write made outside any request while this run was open was refused. The line is
         this run's, so the run is an infrastructure error: it cannot tell the call was not
         its own. The run is not poisoned: its own calls still follow its plan. entry: the
-        background_real entry that would let it through, or None if none would."""
+        background_real entry that would let it through, or None if none would. args: what
+        the line keeps of the call."""
         extra: dict[str, object] = {"outside": True}
         if entry is not None:
             extra["background_entry"] = entry
         step = Step(
             call,
             engine.Decision("refused", reason="orphan"),
-            {},
+            {} if args is None else args,
             now_iso(),
             time.monotonic(),
             extra=extra,
