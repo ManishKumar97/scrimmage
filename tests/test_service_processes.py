@@ -283,23 +283,32 @@ def test_a_service_child_refusal_names_the_real_entry_in_the_error_setup_and_rep
 
 
 @pytest.mark.design("service.every_start_refused")
+@pytest.mark.parametrize("where", ["in_a_request", "outside_any_request"])
 @pytest.mark.parametrize(
     "program", ["/usr/bin/", "/tmp/a\nb", "/tmp/a\n"], ids=["slash", "mid", "end"]
 )
 def test_a_program_with_no_plain_name_is_refused_and_its_line_fits_the_record_schema(
-    service: state.ProcessState, program: str
+    service: state.ProcessState, program: str, where: str
 ) -> None:
     run = a_run(service, real=("process:uname", "process:python3"))
-    message = refused(run, lambda: subprocess.run([program], check=True))
+    start = lambda: subprocess.run([program], check=True)  # noqa: E731
+    message = refused(run, start) if where == "in_a_request" else refused_outside(start)
     assert message == (
         f"{shlex.join([program])} was started inside a test run, and its program has no plain "
         "name that [agent] real could list, so it is refused. Start it by a name such as "
         "uname, through a link or wrapper whose name real can list."
     )
     line = lines(run)[0]
-    assert line["call"] == "process:?" and line["reason"] == "service_child"
+    assert line["call"] == "process:?"
+    kept = json.loads(line["args"]["preview"])  # the line keeps the command
+    assert kept == {"command": shlex.join([program])}
     check = jsonschema.Draft202012Validator(RECORD)
     assert [e.message for e in check.iter_errors(line)] == []
+    if where == "in_a_request":
+        assert line["reason"] == "service_child"
+    else:  # no background_real entry could let it through, so none is named
+        assert (line["reason"], line["outside"]) == ("orphan", True)
+        assert "background_entry" not in line
     listed = a_run(service, real=("process:uname",))  # a plain name still runs, with its line
     under(listed, lambda: subprocess.run(["uname"], check=True, capture_output=True))
     assert [x["call"] for x in lines(listed)] == ["process:uname"]
