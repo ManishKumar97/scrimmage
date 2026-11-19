@@ -53,6 +53,9 @@ _.pytest_configure  # tests/conftest.py: pytest calls hooks by name
 _.pytest_collection_modifyitems  # tests/conftest.py: pytest calls hooks by name
 _.coverage_init  # tools/coverage-threads: coverage.py calls a plugin's init by name
 _.pytest_sessionfinish  # tests/conftest.py: pytest calls hooks by name
+_.pytest_runtest_setup  # tests/conftest.py: pytest calls hooks by name
+_.pytest_runtest_call  # tests/conftest.py: pytest calls hooks by name
+_.pytest_runtest_teardown  # tests/conftest.py: pytest calls hooks by name
 _.exitstatus  # tests/conftest.py: pytest reads it to set the exit code
 _.answer_streamed  # tests/example/acme/rag.py: named by import path in a test's scrimmage.toml
 _.answer_priceless  # tests/example/acme/rag.py: named by import path in a test's scrimmage.toml
@@ -66,6 +69,9 @@ _.answer_unknown_request  # tests/example/acme/docs_bot.py: a test's scrimmage.t
 _.answer_with_reads  # tests/example/acme/docs_bot.py: a test's scrimmage.toml names it
 _.handbook  # tests/fakes/docs_server.py: the MCP server calls its resources by name
 _.summarise  # tests/fakes/docs_server.py: the MCP server calls its prompts by name
+_.answer_three_times  # tests/example/acme/docs_bot.py: a test's scrimmage.toml names it
+_.answer_after_editing_the_first  # tests/example/acme/docs_bot.py: a test's scrimmage.toml names it
+_._handle_list_tools  # tests/fakes/docs_server.py: MCPServer hands it to its low-level server
 _.answer_slashed_tool  # tests/example/acme/docs_bot.py: a test's scrimmage.toml names it
 _.answer_two_readings  # tests/example/acme/docs_bot.py: a test's scrimmage.toml names it
 _.answer_fastmcp_two_servers  # tests/example/acme/docs_bot.py: a test's scrimmage.toml names it

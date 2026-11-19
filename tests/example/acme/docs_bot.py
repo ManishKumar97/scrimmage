@@ -110,6 +110,22 @@ def answer_twice(question: str) -> str:
     return asyncio.run(go())
 
 
+def answer_after_editing_the_first(question: str) -> str:
+    """The bot edits the list of hits it got from call 1, then calls again."""
+
+    async def go() -> str:
+        async with connected() as session:
+            await session.list_tools()
+            first = await session.call_tool(TOOL, {"q": "refunds"}, read_timeout_seconds=LIMIT)
+            hits = (first.structured_content or {})["hits"]
+            hits.append("added by the bot")
+            return (
+                f"first={hits} second={described(await session.call_tool(TOOL, {'q': 'refunds'}))}"
+            )
+
+    return asyncio.run(go())
+
+
 def find_docs(question: str) -> str:
     """A Python tool that makes its own MCP call."""
     return answer(question)
@@ -125,6 +141,22 @@ def answer_not_listed(question: str) -> str:
     async def go() -> str:
         async with connected() as session:
             return await search(session)
+
+    return asyncio.run(go())
+
+
+def answer_three_times(question: str) -> str:
+    """The bot calls a tool it never listed three times, and lives through any error."""
+
+    async def once(session: ClientSession) -> str:
+        try:
+            return await search(session)
+        except Exception as exc:
+            return type(exc).__name__
+
+    async def go() -> str:
+        async with connected() as session:
+            return " then ".join([await once(session) for _ in range(3)])
 
     return asyncio.run(go())
 

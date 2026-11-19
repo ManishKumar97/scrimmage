@@ -89,6 +89,11 @@ class Docs:
     def received(self) -> list[str]:
         return self.log.read_text().splitlines() if self.log.exists() else []
 
+    def listings(self) -> list[str]:
+        """The cursor of each tools/list request the server received, as text."""
+        lists = Path(f"{self.log}.lists")
+        return lists.read_text().splitlines() if lists.exists() else []
+
     def run(self, function: str, body: str, extra: str = "") -> Result:
         """One scrimmage test. Its records move aside, so a Result reads only its own."""
         self.project.toml.write_text(toml(function, body, extra))
@@ -197,6 +202,21 @@ def test_the_shape_is_checked_for_a_tool_the_bot_never_listed(docs: Docs, transp
     shape = f'[[test.mock]]\ncall = "{LABEL}"\nreturns = {{hits = "not a list"}}\n'
     result = docs.run("acme.docs_bot:answer_not_listed", shape)
     assert answer_of(result).startswith("RuntimeError Invalid structured content")
+    assert docs.received() == []
+
+
+@pytest.mark.design("mcp.mock_text")
+@BOTH
+@pytest.mark.slow
+def test_a_list_the_bot_edits_in_one_mock_reply_is_whole_in_the_next(
+    docs: Docs, transport: str
+) -> None:
+    docs.start(transport)
+    result = docs.run("acme.docs_bot:answer_after_editing_the_first", MOCK)
+    assert result.code == 0, result.out
+    assert "first=['mocked', 'added by the bot']" in answer_of(result), result.out
+    assert "second=error=False" in answer_of(result)
+    assert "structured={'hits': ['mocked'], 'total': 1}" in answer_of(result), answer_of(result)
     assert docs.received() == []
 
 
@@ -552,6 +572,156 @@ def test_a_mock_no_call_used_is_a_test_mistake(docs: Docs) -> None:
     result = docs.run("acme.docs_bot:answer", MOCK + typo)
     assert result.code == 2, result.out
     assert "no call matched the mock on mcp:docs/serach" in result.out
+
+
+TYPO = "mcp:docs/serch"
+TYPO_MOCK = f'[[test.mock]]\ncall = "{TYPO}"\nreturns = "x"\n'
+THE_TOOLS = "its tools are chatty, delete_doc, note, search, ticket, title"
+
+
+@pytest.mark.design("mcp.unlisted_mock")
+@BOTH
+@pytest.mark.slow
+def test_a_mock_on_a_tool_the_server_does_not_list_is_a_mistake_naming_its_tools(
+    docs: Docs, transport: str
+) -> None:
+    docs.start(transport)
+    docs.project.monkeypatch.setenv("DOCS_TOOL", "serch")
+    result = docs.run("acme.docs_bot:answer", TYPO_MOCK)
+    assert result.code == 2, result.out
+    said = f"{TYPO} is not a tool server docs lists; {THE_TOOLS}. Fix the mock's call, or remove it"
+    assert said in result.out, result.out
+    assert docs.received() == []
+    fits_the_schema(result)
+
+
+@pytest.mark.design("mcp.unlisted_mock")
+@BOTH
+@pytest.mark.slow
+def test_a_mock_on_a_listed_tool_the_bot_never_listed_stays_clean(
+    docs: Docs, transport: str
+) -> None:
+    docs.start(transport)
+    result = docs.run("acme.docs_bot:answer_not_listed", MOCK)
+    assert result.code == 0, result.out
+    assert "mistake" not in result.out
+    assert "structured={'hits': ['mocked'], 'total': 1}" in answer_of(result)
+    assert docs.listings() == ["None"]  # the gate's own listing, which found the tool
+
+
+@pytest.mark.design("mcp.unlisted_mock")
+@BOTH
+@pytest.mark.slow
+def test_the_server_is_listed_once_per_label_per_run(docs: Docs, transport: str) -> None:
+    docs.start(transport)
+    docs.project.monkeypatch.setenv("DOCS_TOOL", "serch")
+    result = docs.run("acme.docs_bot:answer_three_times", TYPO_MOCK)
+    assert result.code == 2, result.out
+    assert answer_of(result) == " then ".join(["ScrimmageMockError"] * 3)
+    lines = [x for x in row(result, "baseline") if x.get("call") == TYPO]
+    assert len(lines) == 3 and all(THE_TOOLS in x["mistake"] for x in lines), lines
+    assert docs.listings() == ["None"]  # three mocked calls, one tools/list request
+
+
+@pytest.mark.design("mcp.unlisted_mock")
+@BOTH
+@pytest.mark.slow
+def test_a_paged_listing_that_lacks_the_tool_says_nothing(docs: Docs, transport: str) -> None:
+    docs.start(transport, "paged")
+    result = docs.run("acme.docs_bot:answer_not_listed", MOCK)
+    assert result.code == 0, result.out
+    assert "mistake" not in result.out
+    assert "error=False" in answer_of(result) and "mocked" in answer_of(result)
+    assert docs.listings()[0] == "None"  # the first page, which has no search on it
+    assert docs.received() == []
+
+
+@pytest.mark.design("mcp.unlisted_mock")
+@pytest.mark.slow
+def test_recording_a_tool_the_server_does_not_list_is_a_mistake(docs: Docs) -> None:
+    docs.start("stdio", "hidden")
+    docs.project.monkeypatch.setenv("DOCS_TOOL", "title")
+    recording(docs)
+    hidden = "mcp:docs/title"
+    result = docs.run("acme.docs_bot:answer_not_listed", "", f'real = ["{hidden}"]')
+    assert docs.received() == ["title refunds"]  # the real call ran
+    assert result.code == 2, result.out
+    said = f"{hidden} is not a tool server docs lists; its tools are chatty, delete_doc, note"
+    assert said in result.out, result.out
+    found = recorded_line(result, hidden)
+    assert found["code"] == "unsavable" and "a mock of it would be a mistake" in found["why"]
+    fits_the_schema(result)
+
+
+@pytest.mark.design("mcp.unlisted_mock")
+@pytest.mark.slow
+def test_a_fault_on_an_unlisted_tool_still_fires(docs: Docs) -> None:
+    docs.start("stdio")
+    docs.project.monkeypatch.setenv("DOCS_TOOL", "serch")
+    fault = f'[[test.fault]]\ncall = "{TYPO}"\ndo = "error"\nforbid = ["never said"]\n'
+    result = docs.run("acme.docs_bot:answer_not_listed", fault, f'real = ["{TYPO}"]')
+    assert calls(result, "fault 1") == [(TYPO, "fault")]
+    assert "error=True" in answer_of(result, "fault 1")
+    assert not any("mistake" in x for x in row(result, "fault 1")), row(result, "fault 1")
+    assert "is not a tool server" not in result.out
+
+
+@pytest.mark.design("mcp.unlisted_mock")
+@pytest.mark.parametrize(
+    ("count", "named"),
+    [
+        (0, "it lists no tools"),
+        (2, "its tools are t00, t01"),
+        (10, "its tools are t00, t01, t02, t03, t04, t05, t06, t07, t08, t09"),
+        (13, "its tools are t00, t01, t02, t03, t04, t05, t06, t07, t08, t09 and 3 more"),
+    ],
+)
+def test_the_mistake_names_at_most_ten_tools(count: int, named: str) -> None:
+    tools = [f"t{n:02}" for n in reversed(range(count))]  # named sorted, whatever the order
+    said = mcp_gate.lacking(mcp_gate.call_for("docs", "x"), "docs", tools)
+    assert said == f"mcp:docs/x is not a tool server docs lists; {named}"
+    nameless = mcp_gate.lacking(mcp_gate.call_for(None, "x"), None, [])
+    assert nameless == "mcp:x is not a tool the server lists; it lists no tools"
+
+
+@dataclass
+class OddSession:
+    """A session whose list_tools gives something that is not a ListToolsResult."""
+
+    reply: object
+    server_info: object = None
+    listed: int = 0
+
+    async def list_tools(self) -> object:
+        self.listed += 1
+        return self.reply
+
+
+@pytest.mark.design("mcp.unlisted_mock")
+@pytest.mark.parametrize(
+    "reply",
+    [
+        None,
+        {"tools": [], "nextCursor": None},
+        types.SimpleNamespace(tools=[]),
+        types.SimpleNamespace(tools=None, next_cursor=None),
+        types.SimpleNamespace(tools=[object()], next_cursor=None),
+    ],
+    ids=["none", "a-dict", "no-cursor-field", "no-tools", "a-tool-with-no-name"],
+)
+def test_a_listing_that_is_not_a_list_tools_result_says_nothing(reply: object) -> None:
+    sink = Sink()
+    run = state.RunState(a_plan(mocks=(Mock(TYPO, "x", None),)), sink, [])
+    gate = mcp_gate.Gate(run, None, pytest.fail)
+    session = OddSession(reply)
+    for _ in range(2):
+        step = run.decide(run.with_args(mcp_gate.call_for("docs", "serch"), {}), {})
+        assert asyncio.run(mcp_gate.mock_reply(gate, run, step, session))["content"] == [
+            {"type": "text", "text": "x"}
+        ]
+        run.finish(step)
+    assert session.listed == 1
+    assert not any("mistake" in line for line in sink.lines), sink.lines
 
 
 @pytest.mark.design("mcp.never_fired")
