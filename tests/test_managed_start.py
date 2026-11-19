@@ -25,7 +25,7 @@ from typing import Any
 import pytest
 
 from conftest import ACME, EXAMPLE
-from scrimmage_core import config, runner
+from scrimmage_core import config, managed, runner
 from scrimmage_core.cli import main
 from scrimmage_core.managed import Managed
 
@@ -451,6 +451,7 @@ def test_a_child_that_exits_before_ready_is_exit_3_with_its_last_lines(shop: Sho
     assert "the service started with [agent] start exited with code 1 before it was ready" in out
     assert "RuntimeError: the shop database is down" in out, out
     assert f"its whole output is in {shop.log()}" in out, out
+    assert len(shop.copies[0].ports) == 1 and "was taken before" not in out, out  # once
     # It said so as soon as the copy exited, not after the probe's 30 s.
     assert took < runner.READY_S / 2, took
 
@@ -584,22 +585,68 @@ class NotFound(http.server.BaseHTTPRequestHandler):
         del format, args
 
 
-def test_a_port_another_process_holds_names_the_copys_exit(shop: Shop) -> None:
-    """Another process takes the port before the copy binds it, and answers the probe with
-    404. The test names the copy's exit and its log's "address already in use", not the
-    process that answered."""
+@contextlib.contextmanager
+def held_port() -> Iterator[int]:
+    """A port another process holds, as one that took it between the pick and the bind:
+    it answers every request with 404."""
     holder = http.server.ThreadingHTTPServer(("127.0.0.1", 0), NotFound)
     held = threading.Thread(target=holder.serve_forever, daemon=True)
     held.start()
     try:
-        port = int(holder.server_address[1])
-        shop.monkeypatch.setattr(runner, "free_port", lambda: port)
-        code, out = shop.test(f"{UVICORN} acme.service:app --port {{port}} --loop asyncio")
+        yield int(holder.server_address[1])
     finally:
         holder.shutdown()
         holder.server_close()
+
+
+def test_a_port_taken_before_the_bind_starts_the_copy_again_on_another(shop: Shop) -> None:
+    """The first port the runner picks is taken before the copy binds it: the copy exits
+    with uvicorn's "address already in use", and the runner starts it again on a new port,
+    which every run then goes to."""
+    real = managed.free_port
+    with held_port() as taken:
+        picks = iter([taken])
+        shop.monkeypatch.setattr(runner, "free_port", lambda: next(picks, None) or real())
+        code, out = shop.test(f"{UVICORN} acme.service:app --port {{port}} --loop asyncio")
+    assert code == 0, out
+    copy = shop.copies[0]
+    assert len(shop.copies) == 1 and copy.ports == [taken, copy.port] and copy.port != taken
+    again = f"started it again on port {copy.port}, start 2 of {managed.START_TRIES}"
+    assert f"scrimmage: port {taken} was taken before the service bound it; {again}" in out
+    log = shop.log().read_text()
+    # uvicorn on 3.14 puts "[errno 98]" between the address and "address already in use".
+    assert f"('127.0.0.1', {taken}): " in log and "address already in use" in log, log
+    assert f"Uvicorn running on http://127.0.0.1:{copy.port}" in log, log
+    records = list((shop.root / "scrimmage-runs").glob("*/run-*.jsonl"))
+    assert records and all(r.read_text() for r in records)
+    assert copy.proc is not None and group(copy.proc.pid) == []
+
+
+def test_a_port_the_command_fixes_is_not_started_again(shop: Shop) -> None:
+    """The command holds {port}, but binds a port of its own that another process holds:
+    a new port would not help, so the copy is started once and its bind error shown."""
+    with held_port() as fixed:
+        start = f"{UVICORN} acme.service:app --port {fixed} --root-path /{{port}} --loop asyncio"
+        code, out = shop.test(start)
+    assert code == 3, out
+    assert f"('127.0.0.1', {fixed}): " in out and "address already in use" in out, out
+    assert "was taken before" not in out and "starts on ports" not in out, out
+    assert len(shop.copies) == 1 and len(shop.copies[0].ports) == 1
+
+
+def test_a_port_another_process_holds_names_the_copys_exit(shop: Shop) -> None:
+    """Another process takes the port before the copy binds it, and answers the probe with
+    404, at every start. The test names the copy's exit and its log's "address already in
+    use", not the process that answered, once the starts are used up."""
+    with held_port() as port:
+        shop.monkeypatch.setattr(runner, "free_port", lambda: port)
+        code, out = shop.test(f"{UVICORN} acme.service:app --port {{port}} --loop asyncio")
     assert code == 3, out
     # uvicorn exits with code 3 when it cannot bind its port.
-    assert "the service started with [agent] start exited with code 3 before it was ready" in out
+    tries = managed.START_TRIES
+    ports = ", ".join([str(port)] * tries)
+    exited = "the service started with [agent] start exited with code 3 before it was ready"
+    assert f"{exited}, after {tries} starts on ports {ports}" in out, out
+    assert out.count("was taken before the service bound it") == tries - 1, out
     assert "address already in use" in out, out
     assert "does not reach Scrimmage" not in out, out

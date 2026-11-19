@@ -8,6 +8,7 @@ that uvicorn restarts mid-test can still read it.
 """
 
 import os
+import re
 import shutil
 import signal
 import socket
@@ -35,6 +36,12 @@ LOST_PORT_STEP_S = 0.1
 LISTEN = "0A"  # a listening socket's state in /proc/net/tcp
 STOP_SIGNALS = {signal.SIGINT, signal.SIGTERM}
 STARTED = "the service started with [agent] start"
+# A copy whose port another process took between the pick and its bind is started again on
+# a new port, up to this many starts in all.
+START_TRIES = 3
+# How a server says its bind failed: uvicorn and Python "address already in use", Node
+# "EADDRINUSE", Gunicorn "Connection in use". The line must also name the copy's port.
+IN_USE = re.compile(r"\bin use\b|EADDRINUSE", re.IGNORECASE)
 
 
 class CopyFailed(Setup):
@@ -43,7 +50,7 @@ class CopyFailed(Setup):
 
 def free_port() -> int:
     """A port nothing holds on 127.0.0.1. Another process can take it before the copy binds it;
-    the copy then exits, and its log says the address is in use."""
+    the copy then exits, its log says the address is in use, and it is started again."""
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return int(probe.getsockname()[1])
@@ -82,6 +89,9 @@ class Managed:
         self.keep_log = keep_log
         self.proc: subprocess.Popen[bytes] | None = None
         self.token_folder: Path | None = None
+        self.control_url = ""
+        self.ports = [port]  # one for each start: a port taken before the bind gets another
+        self.log_from = 0  # where this start's output begins in service.log
         # The runner's stop thread stops the copy on a stop signal, and the test's end stops
         # it too: one at a time, and once.
         self.lock = threading.Lock()
@@ -114,20 +124,60 @@ class Managed:
             fd = owner_only(token_file)
             with os.fdopen(fd, "w") as out:
                 out.write(self.token)
-            words = start_args(self.config.agent, self.port)
-            log = owner_only(self.log)
-            try:
-                self.proc = subprocess.Popen(
-                    [sys.executable, "-m", "scrimmage_core.run_command", *words],
-                    cwd=self.config.root,
-                    env=self.env(control_url, token_file),
-                    stdin=subprocess.DEVNULL,
-                    stdout=log,
-                    stderr=log,
-                    start_new_session=True,  # its own process group, so every worker stops too
-                )
-            finally:
-                os.close(log)
+            self.control_url = control_url
+            self.launch(owner_only(self.log))
+
+    def launch(self, log: int) -> None:
+        """The copy's process, on self.port, its output to log, which it closes."""
+        assert self.token_folder is not None
+        try:
+            self.log_from = os.fstat(log).st_size
+            self.proc = subprocess.Popen(
+                [sys.executable, "-m", "scrimmage_core.run_command", *self.words()],
+                cwd=self.config.root,
+                env=self.env(self.control_url, self.token_folder / "token"),
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=log,
+                start_new_session=True,  # its own process group, so every worker stops too
+            )
+        finally:
+            os.close(log)
+
+    def words(self) -> list[str]:
+        return start_args(self.config.agent, self.port)
+
+    def port_taken(self) -> bool:
+        """The copy exited because another process took its port before it bound it: a
+        line of this start's output says an address is in use and names the copy's port.
+        Never for a copy that still runs, failed another way, or could not bind a port the
+        command fixes itself, which a new port would not change."""
+        if self.proc is None or self.proc.poll() is None:
+            return False
+        if self.words() == start_args(self.config.agent, self.port + 1):
+            return False  # the port is not in the command, so another would not help
+        try:
+            with self.log.open("rb") as handle:
+                handle.seek(self.log_from)
+                text = handle.read(TAIL_BYTES).decode("utf-8", "replace")
+        except OSError:
+            return False
+        port = re.compile(rf"(?<!\d){self.port}(?!\d)")
+        return any(IN_USE.search(line) and port.search(line) for line in text.splitlines())
+
+    def start_again(self, port: int, config: Config) -> bool:
+        """After port_taken: the copy's group reaped, then the copy started on port, its
+        output added to the same log. False when a stop came first, so none is started."""
+        from scrimmage_core.runner import stop_groups  # the runner imports this module
+
+        with self.lock:
+            if self.stopped or self.proc is None:
+                return False
+            stop_groups([self.proc])  # a worker it left behind would hold the old port
+            self.config, self.port = config, port
+            self.ports.append(port)
+            self.launch(os.open(self.log, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW))
+            return True
 
     def alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
@@ -201,6 +251,8 @@ class Managed:
         assert self.proc is not None and self.proc.returncode is not None
         code = self.proc.returncode
         how = f"code {code}" if code >= 0 else f"signal {signal.Signals(-code).name}"
+        if len(self.ports) > 1:
+            when += f", after {len(self.ports)} starts on ports {', '.join(map(str, self.ports))}"
         return self.failed(f"exited with {how} {when}")
 
     def stop(self) -> None:
