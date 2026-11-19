@@ -267,6 +267,10 @@ Also read the control-path limits under An agent inside a web service.
 
 - **A mock on a closed MCP session still answers.** A mock or a fault sends nothing, so it never finds out that the connection has gone.
 
+- **A server that pages its tool list.** Scrimmage reads only the first page. When that page has a next page and lacks the mocked tool, the mock answers even if the tool does not exist, so a misspelled label is not caught. See [MCP tools](mcp.md#mocks).
+
+- **A tool its server answers but does not list.** A server that lists tools by permission but takes calls by name can answer a tool it never lists. Such a tool cannot be mocked or recorded, and the test stops with exit code 2. List the tool on that server, or run it for real under `real`. See [MCP tools](mcp.md#mocks).
+
 ### Web requests and recorded mocks
 
 - **POSTs a library sends by itself.** Everything through httpx or httpx2 is gated, so these are refused too until listed: the SDK of another model provider, telemetry exporters, and credential requests such as an OAuth token POST, including one an MCP client sends, even to the MCP server's own host.
@@ -318,7 +322,12 @@ Also read the control-path limits under An agent inside a web service.
 
 - **An MCP result with several text items.** `append` goes on the last one, and an agent that reads only `content[0].text` never sees it. With structured content, `replace` with `find` must change both the text and the structured content to count.
 
-- **Web bodies that are not text or JSON.** A reply that is a stream (`text/event-stream`, NDJSON), has another content type, is encoded with `br` or `zstd`, or is over 10 MB is not changed. A digest header, such as `Content-MD5`, no longer matches a changed body. Clients other than httpx and httpx2, such as `requests`, `aiohttp` and `urllib`, are not seen, so the fault never fires.
+- **Web bodies that are not text or JSON.** A reply that is a stream (`text/event-stream`, NDJSON), has another content type, is encoded with `zstd`, or is over 10 MB is not changed. A digest header, such as `Content-MD5`, no longer matches a changed body. Clients other than httpx and httpx2, such as `requests`, `aiohttp` and `urllib`, are not seen, so the fault never fires.
+  A model reply encoded with `zstd` is not changed either, and its cost is estimated from its size.
+  A `br` reply is read with `brotli` or `brotlicffi` 1.2 or later from your program's environment; httpx and httpx2 ask for `br` only when one of them is installed.
+  Without one, or with an older one, a `br` reply is not changed, the line says why, and a model reply's cost is estimated from its size.
+  `brotlipy`, which also installs as `brotli`, counts as none: it cannot stop at a size, so Scrimmage leaves `br` alone while httpx still unpacks it for your program.
+  A packed reply is unpacked to 10 MB at most for the record, so a larger one's `bytes` on the line shows that cap, not its full size.
 
 - **`slow` outside asyncio.** A `slow` fault on an async tool or web request under trio needs an asyncio loop to wait on, so the call is not slowed and the line says so. An MCP call waits with anyio, which works on both.
 

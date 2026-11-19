@@ -10,6 +10,7 @@ agent saw.
 
 import copy
 import functools
+import importlib
 import inspect
 import json
 import sys
@@ -508,7 +509,11 @@ def change_mcp_result(raw: dict[str, object], fault: Fault) -> Result:
 
 
 WEB_CAP = 10 * 1024 * 1024  # a body over this is not read to be changed
-PACKED = ("", "identity", "gzip", "deflate")  # content-encodings a body is read through
+PACKED = ("", "identity", "gzip", "deflate", "br")  # content-encodings a body is read through
+NO_BROTLI = (
+    "the reply is encoded with br, and neither brotli nor brotlicffi 1.2 or later is installed "
+    "to unpack it"
+)
 BODY_HEADERS = ("content-length", "content-encoding", "transfer-encoding")
 
 
@@ -559,9 +564,9 @@ def web_kind(status: int, method: str, headers: Sequence[tuple[str, str]]) -> st
         return Unchangeable("the request was a HEAD, which has no body", "data")
     if not 200 <= status < 300 or status == 204:
         return Unchangeable(f"the reply status is {status}, which is not changed", "data")
-    encoding = (header(headers, "content-encoding") or "").strip().lower()
-    if encoding not in PACKED:
-        return Unchangeable(f"the reply is encoded with {encoding}, which is not changed")
+    packed = packed_why(header(headers, "content-encoding") or "")
+    if packed is not None:
+        return Unchangeable(packed)
     declared = header(headers, "content-type")
     if declared is None:
         return Unchangeable("the reply has no content-type, so its body is not read as text")
@@ -573,9 +578,67 @@ def web_kind(status: int, method: str, headers: Sequence[tuple[str, str]]) -> st
     return Unchangeable(f"the reply is {kind}, which is not text or JSON")
 
 
-def unpacked(raw: bytes, encoding: str) -> bytes | None:
-    """The body with gzip or deflate undone; None if it will not unpack."""
+def packed_why(encoding: str) -> str | None:
+    """None when a body in this content-encoding can be read, else why not."""
     encoding = encoding.strip().lower()
+    if encoding not in PACKED:
+        return f"the reply is encoded with {encoding}, which is not changed"
+    if encoding == "br" and brotli_module() is None:
+        return NO_BROTLI
+    return None
+
+
+@functools.cache
+def brotli_module() -> types.ModuleType | None:
+    """The program's own brotli, else brotlicffi, whichever first can cap what it unpacks.
+    Never a dependency: httpx and httpx2 ask for br only when one of them imports."""
+    try:
+        module = importlib.import_module("brotli")
+    except ImportError:
+        module = None
+    if module is not None and can_cap(module):
+        return module
+    try:
+        module = importlib.import_module("brotlicffi")
+    except ImportError:
+        return None
+    return module if can_cap(module) else None
+
+
+def can_cap(module: types.ModuleType) -> bool:
+    """Whether its decompressor stops at a size, as brotli and brotlicffi 1.2 and later do.
+    An older one would unpack a small bomb whole, and brotlipy, which also installs as
+    brotli, has no process at all: either is taken as not installed."""
+    try:
+        unpack = module.Decompressor()
+        unpack.process(b"", output_buffer_limit=1)
+        unpack.is_finished()
+        return isinstance(module.error, type) and issubclass(module.error, Exception)
+    except Exception:
+        return False
+
+
+def unbrotli(raw: bytes) -> bytes | None:
+    """The body with br undone, cut at the cap and one byte; None if it will not unpack."""
+    module = brotli_module()
+    if module is None:
+        return None
+    unpack = module.Decompressor()
+    try:
+        body = bytes(unpack.process(raw, output_buffer_limit=WEB_CAP + 1))
+    except module.error:  # trailing bytes after the stream are an error too
+        return None
+    if not unpack.is_finished() and len(body) <= WEB_CAP:
+        return None  # the stream ended early: a cut-off body must not pass for a whole one
+    return body[: WEB_CAP + 1]
+
+
+def unpacked(raw: bytes, encoding: str) -> bytes | None:
+    """The body with gzip, deflate or br undone; None if it will not unpack. Any other
+    encoding comes back as it is. The one decoder for every reply the gate reads."""
+    encoding = encoding.strip().lower()
+    if encoding == "br":
+        return unbrotli(raw)
     bits = {"gzip": 16 + zlib.MAX_WBITS, "deflate": zlib.MAX_WBITS}.get(encoding)
     if bits is None:
         return raw
@@ -676,9 +739,9 @@ def chat_kind(status: int, op: str, headers: Sequence[tuple[str, str]]) -> Uncha
         return Unchangeable(STREAMED, "unsupported")
     if status != 200:
         return Unchangeable(f"the reply status is {status}, which is not changed", "data")
-    encoding = (header(headers, "content-encoding") or "").strip().lower()
-    if encoding not in PACKED:
-        return Unchangeable(f"the reply is encoded with {encoding}, which is not changed")
+    packed = packed_why(header(headers, "content-encoding") or "")
+    if packed is not None:
+        return Unchangeable(packed)
     if kind != "application/json":
         return Unchangeable(f"the reply is {kind or 'of no type'}, not a chat completion")
     return None

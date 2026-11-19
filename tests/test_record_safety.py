@@ -11,6 +11,7 @@ from typing import cast
 
 import pydantic
 import pytest
+from mcp.types import ListToolsResult, Tool
 
 from fakes.openai_server import FakeOpenAI
 from scrimmage_core import capture, mcp_gate, state
@@ -150,14 +151,22 @@ class Reader:
 
 
 class Session:
+    """Lists the server's one tool, search, and the gate learns it, as the gated
+    send_request does with a real listing."""
+
     def __init__(self, fails: BaseException | None = None) -> None:
         self.fails = fails
         self.listed = 0
+        self.gate: mcp_gate.Gate | None = None
 
-    async def list_tools(self) -> None:
+    async def list_tools(self) -> ListToolsResult:
         self.listed += 1
         if self.fails is not None:
             raise self.fails
+        listing = ListToolsResult(tools=[Tool(name="search", input_schema={"type": "object"})])
+        assert self.gate is not None
+        self.gate.learn("docs", listing)
+        return listing
 
 
 def text_result(text: str, **more: object) -> dict[str, object]:
@@ -169,6 +178,7 @@ def mcp_call(
 ) -> tuple[object, state.RunState]:
     run = recording(sink, real=("mcp:docs/search",))
     gate = mcp_gate.Gate(run, sink, pytest.fail)
+    session.gate = gate
     step = run.decide(Call("mcp", "mcp:docs/search", "search", short="mcp:search"), {})
 
     async def sent() -> Reply:

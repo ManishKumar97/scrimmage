@@ -78,7 +78,18 @@ Write the value as the server sends it.
 A tool whose declared schema has one `result` field, as FastMCP makes for a tool that returns text, needs `returns = {result = "text"}`.
 
 If your code never listed the tools, Scrimmage lists them first, as the library's check does.
-That one `tools/list` request reaches the real server.
+That one `tools/list` request reaches the real server, once for each mocked label in a run.
+
+A mock on a tool the server does not list is a test mistake, and the test ends with exit code 2.
+The message names the server's tools, at most 10 of them:
+
+```text
+mcp:docs/serch is not a tool server docs lists; its tools are fetch, search. Fix the mock's call, or remove it
+```
+
+A listing that has a next page proves nothing, so then the mock answers as usual.
+`scrimmage record` applies the same rule: a real call to a tool its server does not list is a test mistake, and its result is not saved.
+So a tool a server answers but does not list cannot be mocked or recorded: list it on that server, or run it for real under `real`.
 
 ## Faults
 

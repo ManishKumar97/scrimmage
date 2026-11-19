@@ -20,7 +20,7 @@ import pytest
 from conftest import Project
 from fakes.openai_server import FakeOpenAI
 from model_gate import GUARD, PRICE, SENDS, URL, Gate, Provider, ask, completion, guard
-from scrimmage_core import config, outcomes, provider_openai, show, state
+from scrimmage_core import changes, config, outcomes, provider_openai, show, state
 from scrimmage_core.cli import main
 from scrimmage_core.config import Fault
 from scrimmage_core.errors import ConfigError
@@ -130,6 +130,29 @@ def test_replace_on_a_gzip_reply() -> None:
     assert "content-encoding" not in raw.headers
     assert raw.headers["content-length"] == str(len(raw.http_response.content))
     assert json.loads(gate.result())["choices"][0]["message"]["content"] == "unsafe\nS14"
+
+
+@pytest.mark.design("budget.br_reply_counts")
+@pytest.mark.skipif(
+    changes.brotli_module() is None,
+    reason="br needs brotli or brotlicffi 1.2 or later; run with uv run --with brotli",
+)
+def test_replace_on_a_br_reply() -> None:
+    brotli = changes.brotli_module()
+    assert brotli is not None
+    gate = Gate(replace())
+    packed = brotli.compress(json.dumps(completion()).encode())
+    headers = {"content-type": "application/json", "content-encoding": "br"}
+    provider = Provider(
+        gate.events, lambda r: httpx2.Response(200, headers=headers, content=packed)
+    )
+    raw = guard(provider).chat.completions.with_raw_response.create(
+        model=GUARD, messages=[{"role": "user", "content": "x"}]
+    )
+    assert raw.parse().choices[0].message.content == "safe"
+    assert "content-encoding" not in raw.headers
+    assert json.loads(gate.result())["choices"][0]["message"]["content"] == "unsafe\nS14"
+    assert gate.line["tokens"] == {"input": 1000, "output": 10, "cached": 0}
 
 
 def test_a_longer_replacement_is_read_whole() -> None:

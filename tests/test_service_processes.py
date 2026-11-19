@@ -1152,8 +1152,10 @@ def test_a_plain_and_a_listed_outside_loky_task_run_while_a_run_is_open(
         listed = a_run(service, background=("process:multiprocessing",))
         assert outside(lambda: executor.submit(len, "abcd").result(30)) == 4
         assert not any(x.get("reason") == "orphan" for x in sink_of(listed).lines)
-    finally:  # never waits on a stuck task, and ends its workers
-        plain(lambda: executor.shutdown(wait=False, kill_workers=True))
+    finally:
+        # kill_workers ends a stuck task, and the wait lets its manager thread finish the
+        # kill, which starts `pgrep`, before the test ends rather than in a later test.
+        bounded(lambda: executor.shutdown(wait=True, kill_workers=True))
 
 
 @pytest.mark.design("service.pool_teardown")

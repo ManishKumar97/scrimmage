@@ -25,7 +25,6 @@ import socket
 import sys
 import threading
 import time
-import zlib
 from collections.abc import Callable, Iterator
 from contextvars import ContextVar
 from types import ModuleType
@@ -1729,7 +1728,7 @@ def web_recorded(request: Any, response: Any, body: bytes, encoding: str) -> dic
         what = "HashiCorp Vault's API, as its reply's envelope says"
     if what is not None:
         return {"code": "credential", "why": f"a request to {what} is never recorded"}
-    unpacked = encoding.strip().lower() in ("", "identity", "gzip", "deflate")
+    unpacked = changes.packed_why(encoding) is None
     try:
         found = redacted(body.decode("utf-8"))[1]
     except UnicodeDecodeError:
@@ -1745,15 +1744,10 @@ def web_recorded(request: Any, response: Any, body: bytes, encoding: str) -> dic
 
 
 def decoded(raw: bytes, encoding: str) -> bytes:
-    """Undo gzip or deflate so the token counts can be read; anything else stays as is."""
-    try:
-        if encoding.strip() == "gzip":
-            return zlib.decompress(raw, 16 + zlib.MAX_WBITS)
-        if encoding.strip() == "deflate":
-            return zlib.decompress(raw)
-    except zlib.error:
-        return raw
-    return raw
+    """Undo gzip, deflate or br so the token counts can be read. A body that will not unpack,
+    such as one already unpacked in memory, stays as it is."""
+    body = changes.unpacked(raw, encoding)
+    return raw if body is None else body
 
 
 def wrap(
