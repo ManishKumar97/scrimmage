@@ -7,19 +7,22 @@ tool's own code. The team writes no tools list. The SDK never imports LangChain:
 patches it when the agent imports it.
 """
 
+import ast
 import contextlib
 import contextvars
 import functools
 import inspect
+import re
+import textwrap
 import threading
 import typing
 import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from types import ModuleType
+from types import FunctionType, ModuleType
 from typing import Any, cast
 
-from scrimmage_core import hooks, tool_gate
+from scrimmage_core import changes, hooks, tool_gate
 from scrimmage_core.errors import ScrimmageMockError, ScrimmageRefused
 from scrimmage_core.http_gate import params
 from scrimmage_core.state import ProcessState, RunState, carried, in_service
@@ -294,17 +297,53 @@ def checked(
     return sync_checked
 
 
-def plumbing_names(function: Callable[..., Any]) -> set[str]:
-    """Parameters annotated with one of LangChain's own types."""
+def written_in_source(function: object) -> dict[str, str]:
+    """Each parameter's annotation as written in the function's source; none when it has none."""
     try:
-        hints = typing.get_type_hints(function)
-    except Exception:  # a forward reference that cannot be resolved
-        return set()
-    return {
-        name
-        for name, hint in hints.items()
-        if any(kind in repr(hint) or getattr(hint, "__name__", "") == kind for kind in PLUMBING)
-    }
+        tree = ast.parse(textwrap.dedent(inspect.getsource(function)))  # pyright: ignore
+    except (OSError, TypeError, SyntaxError):
+        return {}
+    node = tree.body[0]
+    if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+        return {}
+    found = node.args
+    every = [*found.posonlyargs, *found.args, *found.kwonlyargs]
+    return {a.arg: ast.unparse(a.annotation) for a in every if a.annotation is not None}
+
+
+def plumbing_names(function: Callable[..., Any]) -> set[str]:
+    """Parameters annotated with one of LangChain's own types.
+
+    Each annotation is resolved alone, so a type that exists only under TYPE_CHECKING hides
+    nothing else. One that cannot be resolved is matched by its written text.
+    """
+    target = changes.annotated(function)
+    try:
+        written = changes.annotations_of(target)
+    except Exception:  # on 3.14 one annotation that raises, such as 1/0, hides the rest
+        return {
+            name
+            for name, text in written_in_source(target).items()
+            if any(word in PLUMBING for word in re.findall(r"[A-Za-z_]\w*", text))
+        }
+    space = cast("dict[str, object]", getattr(changes.unwrapped(target), "__globals__", None) or {})
+    names: set[str] = set()
+    for name, annotation in written.items():
+        if name == "return":
+            continue
+        stand_in = FunctionType(changes.borrowed.__code__, space)
+        stand_in.__annotations__ = {name: annotation}
+        try:
+            hint = typing.get_type_hints(stand_in)[name]
+            found = getattr(hint, "__name__", "") in PLUMBING or any(
+                kind in repr(hint) for kind in PLUMBING
+            )
+        except Exception:  # a name it cannot find, or text that is no type
+            text = getattr(annotation, "__forward_arg__", None) or str(annotation)
+            found = any(word in PLUMBING for word in re.findall(r"[A-Za-z_]\w*", text))
+        if found:
+            names.add(name)
+    return names
 
 
 def arguments(
@@ -329,9 +368,12 @@ def withheld(tool: Any) -> frozenset[str]:
     comparing that schema with what the model gets. A dict schema has no such fields.
     """
     names = set[str](getattr(tool, "_injected_args_keys", ()))
-    offered = getattr(getattr(tool, "tool_call_schema", None), "model_fields", None)
-    if offered is not None:
-        names |= set(tool.get_input_schema().model_fields) - set(offered)
+    try:
+        offered = getattr(getattr(tool, "tool_call_schema", None), "model_fields", None)
+        if offered is not None:
+            names |= set(tool.get_input_schema().model_fields) - set(offered)
+    except Exception:  # a parameter type that exists only for the type checker: no schema
+        pass
     return frozenset(names)
 
 
