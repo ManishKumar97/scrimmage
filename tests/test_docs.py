@@ -167,6 +167,17 @@ def test_cache_write_prices_and_the_current_table_are_documented() -> None:
         assert f"`{model}`" in guide.split("### Prices")[1].split("### ")[0], model
     assert "**One price per kind of token.**" in page("limits.md")
     assert "`cache_write_30m`" in page("json-output.md")
+    assert "On Chat Completions, where writes last 30 minutes, it leaves out" in guide
+
+
+@pytest.mark.design("docs.hold_can_be_passed")
+def test_a_call_that_costs_more_than_its_hold_is_documented() -> None:
+    guide = page("model-faults.md")
+    assert "cannot together pass the limit while each costs no more than it reserved" in guide
+    assert "](limits.md#the-budget)" in guide
+    limits = page("limits.md").split("### The budget")[1].split("### ")[0]
+    assert "**A call can cost more than its hold.**" in limits
+    assert "the test spends $0.1967" in limits
 
 
 @pytest.mark.design("docs.method_tools")

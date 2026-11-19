@@ -413,6 +413,13 @@ Also read the control-path limits under An agent inside a web service.
 
 ### The budget
 
+- **A call can cost more than its hold.** The hold counts the input as 4 bytes a token and the output as the call's own limit, or `reserve_output_tokens` when it sets none.
+  A reply that writes more, or an input with more tokens than that, such as an image, costs more than was held, and its full cost is counted.
+  So calls in flight at once can pass `max_cost_usd`, by up to what they cost above their holds, added together.
+  Three `gpt-4.1` calls with no `max_tokens` each hold about $0.0328, so all three fit in $0.10 at once; if each writes 8192 output tokens, the test spends $0.1967.
+  Once money spent passes the limit, every later call is refused at once.
+  Set `max_tokens`, `max_completion_tokens` or `max_output_tokens` on each call to bound its output; nothing bounds the input estimate.
+
 - **Prices need checking.** The built-in price table is small; check it against your provider's pricing, and use `[agent.prices]` for anything else.
 
 - **One price per kind of token.** A price has no long-context tier, so models priced higher above 272K input tokens, such as `gpt-5.4`, `gpt-5.5` and the `gpt-5.6` models, are not in the built-in table. Under `[agent.prices]`, give such a model its long-context price if a call can go over 272K input tokens, or a long call costs more than the record says.

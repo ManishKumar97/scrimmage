@@ -7,17 +7,22 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
+import httpx2
 import jsonschema
 import pytest
 
 import scrimmage_core
 from conftest import ACME, EXAMPLE_FAULT, Project, TimeLimit
 from fakes.openai_server import FIXTURES, FakeOpenAI
+from scrimmage_core import http_gate, state
 from scrimmage_core import provider_openai as table
 from scrimmage_core.budget import Ledger, Shortfall
 from scrimmage_core.client import ControlClient, ControlError
 from scrimmage_core.control import ControlServer
 from scrimmage_core.records import RecordStore
+from test_http_gate import URL, Budget, Sink, gated, make_plan
+
+__all__ = ["gated"]  # the fixture, used by name
 
 Fake = Callable[..., FakeOpenAI]
 TOKEN = "e" * 64
@@ -509,3 +514,56 @@ def test_a_failed_baseline_skips_its_fault_rows(project: Project, fake_openai: F
     assert result.code == 2
     assert len(result.records()) == 2  # the baseline's two runs, and no fault row
     assert "baseline failed" in result.out
+
+
+class Settling(Sink):
+    """Hands each settle straight to the ledger, as the runner does."""
+
+    def __init__(self, ledger: Ledger) -> None:
+        super().__init__()
+        self.ledger = ledger
+
+    def put_settle(self, reservation: int, usd: float) -> None:
+        super().put_settle(reservation, usd)
+        self.ledger.settle(reservation, usd)
+
+
+@pytest.mark.design("budget.hold_can_be_passed")
+def test_calls_at_once_that_pass_their_holds_pass_the_limit_by_that_much(gated: None) -> None:
+    """Three gpt-4.1 calls with no output limit each hold 4096 output tokens, about $0.0328,
+    so all three fit in $0.10 at once. Each then writes 8192, about $0.0656, and the test
+    spends $0.1967: the limit is passed by what the calls cost above their holds."""
+    budget = Budget(limit=0.10)
+    sink = Settling(budget.ledger)
+    run = state.RunState(make_plan(budget=0.10), sink, [])
+    state.install(run)
+    http_gate.patch(httpx2, http_gate.Context(run, budget, sink, list[str]().append))
+    together = threading.Barrier(3)
+    reply = {"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 8192}}
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        together.wait(timeout=10)  # all three are reserved before any settles
+        return httpx2.Response(200, json=reply)
+
+    held: list[float] = []
+    reserve = budget.ledger.reserve
+
+    def watch(usd: float, *rest: Any) -> int | Shortfall:
+        held.append(usd)
+        return reserve(usd, *rest)
+
+    budget.ledger.reserve = watch  # type: ignore[method-assign]
+    sent = {"model": "gpt-4.1", "messages": [{"role": "user", "content": "hi"}]}
+    post = httpx2.Client(transport=httpx2.MockTransport(answer)).post
+    calls = [threading.Thread(target=post, args=(URL,), kwargs={"json": sent}) for _ in range(3)]
+    for call in calls:
+        call.start()
+    for call in calls:
+        call.join()
+    each = (10 * 2.00 + 8192 * 8.00) / 1e6  # gpt-4.1: $2 in and $8 out per million
+    assert [round(h, 4) for h in held] == [0.0328] * 3 and sum(held) <= 0.10
+    assert [usd for _, usd in sink.settles] == [pytest.approx(each)] * 3
+    assert round(budget.ledger.spent, 4) == 0.1967
+    # Passed by at most what the calls cost above their holds, as the docs say.
+    above = sum(each - h for h in held)
+    assert round(above, 4) == 0.0983 and budget.ledger.spent - 0.10 <= above
