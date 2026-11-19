@@ -1102,7 +1102,7 @@ def refresh_problems(label: str, tests: list[settings.Test], config: settings.Co
             f"--refresh {label}: a returns_from mock with no args answers every call to the "
             "label, so nothing would run for real and any other mock on it would be dropped "
             "for nothing; give it args, refresh another label, or limit --test "
-            "to tests that mock this label with args"
+            "to tests with no returns_from mock without args on this label"
         ]
     real = list(config.agent.real)
     kind = labels.kind_of(label)

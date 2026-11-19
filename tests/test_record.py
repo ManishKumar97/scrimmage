@@ -840,8 +840,8 @@ INVOICE_FROM = '[[test.mock]]\ncall = "tool:get_invoice"\n'
 REFRESH_REFUSAL = (
     "--refresh tool:get_invoice: a returns_from mock with no args answers every call to the "
     "label, so nothing would run for real and any other mock on it would be dropped for "
-    "nothing; give it args, refresh another label, or limit --test to tests that mock this "
-    "label with args"
+    "nothing; give it args, refresh another label, or limit --test to tests with no "
+    "returns_from mock without args on this label"
 )
 
 
@@ -868,6 +868,18 @@ def test_refresh_refuses_a_label_with_only_a_returns_from_mock(team: Team) -> No
     assert done.code == 2, done.out
     assert not (team.root / "scrimmage-runs").exists()
     assert done.doc["mistakes"][0]["message"] == REFRESH_REFUSAL
+
+
+@pytest.mark.design("record.refresh_keeps_returns_from")
+def test_refresh_limited_to_a_test_with_a_plain_returns_mock_is_not_refused(team: Team) -> None:
+    other = '\n[[test]]\nname     = "u"\nquestion = "q"\nexpect   = ["ok"]\n' + INVOICE_FROM
+    mocks = '[[test.mock]]\ncall = "tool:get_invoice"\nreturns = "hand"\n' + other
+    invoice_team(team, mocks + 'returns_from = "bot:pdf"\n')
+    refused = team.record("--refresh", "tool:get_invoice")
+    assert refused.code == 2 and refused.doc["mistakes"][0]["message"] == REFRESH_REFUSAL
+    done = team.record("--refresh", "tool:get_invoice", "--test", "t")
+    assert done.code != 2, done.out
+    assert not done.doc["mistakes"], done.doc["mistakes"]
 
 
 @pytest.mark.design("record.refresh_keeps_returns_from")
