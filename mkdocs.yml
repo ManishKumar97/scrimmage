@@ -8,7 +8,9 @@
 # hook thin, so there is little to port.
 site_name: Scrimmage
 site_description: An in-process fault injector for AI agents under test.
-repo_url: https://github.com/ManishKumar97/faultline
+site_url: https://manishkumar97.github.io/scrimmage/
+repo_url: https://github.com/ManishKumar97/scrimmage
+repo_name: ManishKumar97/scrimmage
 edit_uri: ""
 
 docs_dir: docs
@@ -113,4 +115,5 @@ nav:
       - Safety: safety.md
       - Security: security.md
   - Benchmarks: benchmarks.md
+  - License: license.md
   - Changelog: changelog.md

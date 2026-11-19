@@ -20,6 +20,23 @@ A gated call that writes, such as a listed refund tool, an MCP tool call or an h
 Every gated call goes into a record on your machine, so you can see what the agent was given and what it did next.
 [Safety](safety.md) lists what is gated, and [Limits](limits.md) lists what is not.
 
+## Install
+
+Scrimmage needs Python 3.11 or later.
+It is not released on PyPI yet, so you install it from a clone of the repository.
+A plain `pip install scrimmage` takes an empty placeholder, so do not use it.
+
+```bash
+git clone https://github.com/ManishKumar97/faultline
+cd faultline
+python -m venv .venv
+. .venv/bin/activate
+pip install ./packages/scrimmage
+```
+
+[Install](install.md) has uv, a wheel and the extras.
+Then follow the [5-minute quickstart](quickstart.md): a failing row, then a fix.
+
 [Install](install.md){ .md-button .md-button--primary }
 [Quickstart](quickstart.md){ .md-button }
 
@@ -129,6 +146,8 @@ and it judges each answer with rules you write, over repeated runs.
 ## Next
 
 - [Install](install.md), then the [Quickstart](quickstart.md): a failing row, then a fix.
+- [Judging an answer](judging.md), [Failing the model](model-faults.md) and [Testing your guardrails](guardrails.md): the main use cases.
 - [Examples](examples/index.md): scripts, LangGraph, MCP, web requests, judging and one model.
 - [Safety](safety.md) and [Security](security.md): what a test can and cannot do to your systems and data.
 - [Configuration](configuration.md), [Commands](cli.md) and [JSON output](json-output.md): the reference.
+- [Source on GitHub](https://github.com/ManishKumar97/scrimmage), the [License](license.md) (Apache-2.0) and [Security](security.md).
