@@ -247,6 +247,155 @@ def refusal_reply(fields: dict[str, object], tokens_in: int) -> bytes:
     return chat_reply(fields, tokens_in, message, "stop")
 
 
+# A real gpt-4o-mini Responses reply, saved on 18 November 2026
+# (tests/fixtures/openai/real_response_answer.json): every field a built reply has, in the real
+# order. The output, the ids, the times, the model and the counts are put in for each reply.
+# A field that echoes a request takes the request's value when the request sets it, as a
+# real reply does; tools is left empty, as a reply writes each tool in its own longer form.
+RESPONSE_REPLY: dict[str, object] = {
+    "id": "",
+    "object": "response",
+    "created_at": 0,
+    "status": "completed",
+    "access_programs": None,
+    "background": False,
+    "billing": {"payer": "developer"},
+    "completed_at": 0,
+    "error": None,
+    "frequency_penalty": 0.0,
+    "image": {"context_compression": "disabled"},
+    "incomplete_details": None,
+    "input_transformations": [],
+    "instructions": None,
+    "max_output_tokens": None,
+    "max_tool_calls": None,
+    "model": "",
+    "moderation": None,
+    "output": [],
+    "parallel_tool_calls": True,
+    "presence_penalty": 0.0,
+    "previous_response_id": None,
+    "prompt_cache_key": None,
+    "prompt_cache_retention": "in_memory",
+    "reasoning": {"context": None, "effort": None, "summary": None},
+    "safety_identifier": None,
+    "service_tier": "default",
+    "store": True,
+    "temperature": 1.0,
+    "text": {"format": {"type": "text"}, "verbosity": "medium"},
+    "tool_choice": "auto",
+    "tool_usage": {
+        "image_gen": {
+            "input_tokens": 0,
+            "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+            "output_tokens": 0,
+            "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+            "total_tokens": 0,
+        },
+        "web_search": {"num_requests": 0},
+    },
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 1.0,
+    "truncation": "disabled",
+    "usage": {},
+    "user": None,
+    "metadata": {},
+}
+RESPONSE_ECHOED = (
+    "instructions",
+    "max_output_tokens",
+    "max_tool_calls",
+    "metadata",
+    "parallel_tool_calls",
+    "previous_response_id",
+    "prompt_cache_key",
+    "safety_identifier",
+    "store",
+    "temperature",
+    "tool_choice",
+    "top_logprobs",
+    "top_p",
+    "truncation",
+    "user",
+)
+# Echoed as objects: the request's keys over the reply's own, such as text's verbosity.
+RESPONSE_MERGED = ("reasoning", "text")
+ITEM_PREFIXES = {"message": "msg_", "function_call": "fc_"}  # the item ids a reply makes
+RESPONSE_ID_LENGTH = 50  # after resp_ and msg_, in lowercase hex, as in real ids
+
+
+def made_up_hex_id(prefix: str) -> str:
+    return prefix + secrets.token_hex(RESPONSE_ID_LENGTH // 2)
+
+
+def structured_response(fields: dict[str, object]) -> bool:
+    """A Responses request that asks for Structured Outputs: a text.format of type json_schema."""
+    return _obj(_obj(fields.get("text")).get("format")).get("type") == "json_schema"
+
+
+def response_refusal_reply(fields: dict[str, object], tokens_in: int) -> bytes:
+    """refuse on Responses: a refusal content part under Structured Outputs, else plain text,
+    in one completed assistant message."""
+    if structured_response(fields):
+        part: dict[str, object] = {"type": "refusal", "refusal": STRUCTURED_REFUSAL}
+    else:
+        part = {"type": "output_text", "annotations": [], "logprobs": [], "text": PLAIN_REFUSAL}
+    now = int(time.time())
+    reply = dict(RESPONSE_REPLY)
+    reply.update({key: fields[key] for key in RESPONSE_ECHOED if fields.get(key) is not None})
+    for key in RESPONSE_MERGED:
+        if asked := _obj(fields.get(key)):
+            reply[key] = {**cast("dict[str, object]", reply[key]), **asked}
+    reply.update(
+        id=made_up_hex_id("resp_"),
+        created_at=now,
+        completed_at=now,
+        model=model_name(fields) or "",
+        output=[
+            {
+                "id": made_up_hex_id("msg_"),
+                "type": "message",
+                "status": "completed",
+                "content": [part],
+                "role": "assistant",
+            }
+        ],
+        usage={
+            "input_tokens": tokens_in,
+            "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 0},
+                "cached_tokens": 0,
+            },
+            "output_tokens": BUILT_OUTPUT_TOKENS,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": tokens_in + BUILT_OUTPUT_TOKENS,
+        },
+    )
+    return json.dumps(reply, ensure_ascii=False, indent=2).encode()
+
+
+def response_ids(reply: bytes) -> list[str]:
+    """The ids of a Responses reply and of its output items: a later request may name the
+    reply as previous_response_id, and an item in an item_reference."""
+    value = _obj(request_fields(reply))
+    found = [value.get("id"), *(_obj(item).get("id") for item in _list(value.get("output")))]
+    return [i for i in found if isinstance(i, str) and i]
+
+
+def references(fields: dict[str, object]) -> list[str]:
+    """What a Responses request asks OpenAI to look up: its previous_response_id, and the id
+    of each item_reference in its input."""
+    found = [fields.get("previous_response_id")]
+    found += [
+        _obj(item).get("id")
+        for item in _list(fields.get("input"))
+        if _obj(item).get("type") == "item_reference"
+    ]
+    return [i for i in found if isinstance(i, str)]
+
+
 def tool_call_tools(path: str, fields: dict[str, object]) -> list[str]:
     """The tools a chat request offers in tools, the field tool_calls answer. The old
     functions field gets a function_call reply instead, never a tool call."""

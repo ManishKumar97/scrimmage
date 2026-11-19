@@ -40,11 +40,14 @@ from test_reply_faults import (
     THAI,
     Loopback,
     as_real,
+    but_tools,
     completion,
     fields_of,
     gate_on,
     loopback,
     model_lines,
+    response_fields,
+    responses_api,
 )
 
 __all__ = ["gated", "loopback"]  # the fixtures, used by name
@@ -666,3 +669,138 @@ def test_a_garbled_reply_parses_into_the_same_fields_as_the_real_one(
     again, _ = completion(loopback, sync)
     assert again.model_dump() == injected.model_dump()
     assert by_langchain(loopback, sync).content == injected_chain.content
+
+
+# The Responses API: a real reply cut by max_output_tokens = 16, and a real whole answer that
+# truncate cuts. Both were saved from gpt-4o-mini on 18 November 2026.
+REAL_INCOMPLETE = json.loads((FIXTURES / "real_response_incomplete.json").read_text())
+REAL_RESPONSE = json.loads((FIXTURES / "real_response_answer.json").read_text())
+
+
+@pytest.mark.design("proof.real_against_injected_truncate_responses")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_a_real_incomplete_response_and_truncate_parse_the_same(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    """The capture is a real Responses reply cut by max_output_tokens; the injected one is
+    truncate on a real whole answer. The output_text property and incomplete_details agree,
+    and usage stays what the model was billed for."""
+    gate_on("truncate")
+    loopback.body = json.dumps(REAL_RESPONSE["body"]).encode()
+    injected = responses_api(loopback, sync)
+    assert loopback.seen == ["/v1/responses"]  # the real call is made
+    as_real(loopback, json.dumps(REAL_INCOMPLETE["body"]).encode(), REAL_INCOMPLETE["status"])
+    real = responses_api(loopback, sync)
+    # tools echoes each request's own: the whole answer's offered one, the cut one's none.
+    assert but_tools(response_fields(injected)) == but_tools(response_fields(real))
+    assert injected.status == real.status == "incomplete"
+    assert injected.incomplete_details == real.incomplete_details
+    assert injected.incomplete_details.reason == "max_output_tokens"
+    assert [i.status for i in injected.output] == [i.status for i in real.output] == ["incomplete"]
+    assert injected.completed_at is None and real.completed_at is None
+    whole = REAL_RESPONSE["body"]["output"][0]["content"][0]["text"]
+    assert isinstance(real.output_text, str) and real.output_text
+    assert injected.output_text == "Order 1234 has" and whole.startswith(injected.output_text)
+    billed = REAL_RESPONSE["body"]["usage"]
+    assert (injected.usage.input_tokens, injected.usage.output_tokens) == (
+        billed["input_tokens"],
+        billed["output_tokens"],
+    )
+
+
+# A real Responses function call cut by max_output_tokens = 16, with tool_choice required,
+# saved on 19 November 2026: a 200 with the arguments cut, not a 400 as on chat.
+REAL_CUT_CALL = json.loads((FIXTURES / "real_response_function_call_truncated.json").read_text())
+CUT_TOOLS = [
+    {
+        "type": "function",
+        "name": "get_order",
+        "description": "Look up an order.",
+        "parameters": REAL_CUT_CALL["body"]["tools"][0]["parameters"],
+        "strict": True,
+    }
+]
+
+
+def whole_call() -> dict[str, Any]:
+    """The capture as the call would have come had the limit not landed in it: its arguments
+    finished by hand, and the reply and the item completed."""
+    body = json.loads(json.dumps(REAL_CUT_CALL["body"]))
+    [item] = body["output"]
+    item.update(status="completed", arguments=item["arguments"] + '1234"}')
+    body.update(status="completed", incomplete_details=None, completed_at=body["created_at"] + 1)
+    return body
+
+
+@pytest.mark.design("proof.real_against_injected_truncate_responses_call")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_a_real_cut_function_call_and_truncate_parse_the_same(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    """truncate on a whole function call gives the agent what OpenAI sent when the limit
+    landed in one: the reply and the item incomplete, for max_output_tokens, and arguments
+    that do not parse, under the same call_id."""
+    whole = whole_call()
+    json.loads(whole["output"][0]["arguments"])  # finished by hand, it parses
+    gate_on("truncate")
+    loopback.body = json.dumps(whole).encode()
+    asked: dict[str, Any] = {"tools": CUT_TOOLS, "tool_choice": "required"}
+    injected = responses_api(loopback, sync, **asked)
+    assert loopback.seen == ["/v1/responses"]
+    as_real(loopback, json.dumps(REAL_CUT_CALL["body"]).encode(), REAL_CUT_CALL["status"])
+    real = responses_api(loopback, sync, **asked)
+    assert response_fields(injected) == response_fields(real)
+    assert injected.status == real.status == "incomplete"
+    assert injected.incomplete_details == real.incomplete_details
+    [injected_call], [real_call] = injected.output, real.output
+    assert injected_call.status == real_call.status == "incomplete"
+    assert injected_call.call_id == real_call.call_id and injected_call.id != real_call.id
+    assert whole["output"][0]["arguments"].startswith(injected_call.arguments)
+    for call in (injected_call, real_call):
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(call.arguments)
+
+
+def by_langchain_responses(server: Loopback, sync: bool) -> Any:
+    """LangChain's ChatOpenAI on the Responses API, on the same server: its message."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", "'asyncio.iscoroutinefunction' is deprecated", DeprecationWarning
+        )
+        from langchain_openai import ChatOpenAI
+
+        model = ChatOpenAI(
+            model=MODEL,
+            base_url=server.url,
+            api_key=SecretStr("test"),
+            max_retries=0,
+            use_responses_api=True,
+        )
+        if sync:
+            return model.invoke("Where is order 1234?")
+        return asyncio.run(model.ainvoke("Where is order 1234?"))
+
+
+@pytest.mark.design("proof.real_against_injected_garble_responses")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_a_garbled_response_reads_as_the_real_one_in_the_openai_library_and_langchain(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    """garble on a real Responses answer: the openai library sets the same fields as on the
+    real reply, and LangChain's Responses path gives the same kind of message, with the
+    stray token in its text."""
+    loopback.body = json.dumps(REAL_RESPONSE["body"]).encode()
+    gate_on("garble")
+    injected = responses_api(loopback, sync)
+    injected_chain = by_langchain_responses(loopback, sync)
+    assert loopback.seen == ["/v1/responses"] * 2
+    state.install(None)
+    real = responses_api(loopback, sync)
+    real_chain = by_langchain_responses(loopback, sync)
+    assert response_fields(injected) == response_fields(real)
+    assert injected.output_text == f"Order 1234 has been {THAI}" != real.output_text
+    assert type(injected_chain) is type(real_chain)
+    assert injected_chain.text == injected.output_text
+    assert real_chain.text == real.output_text
+    assert injected_chain.id != real_chain.id  # the made-up reply id, as LangChain keeps it
+    assert sorted(injected_chain.response_metadata) == sorted(real_chain.response_metadata)

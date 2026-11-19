@@ -357,7 +357,18 @@ Also read the control-path limits under An agent inside a web service.
 - **`context too long` is OpenAI's Chat Completions reply.** On a Responses call it is a mistake in the test: the call fails at once and the fault is not counted as fired. Other providers' replies come with those providers.
   The message names the numbers of the real reply it was saved from, 128000 and 140008 tokens, not your model's context or your prompt's length.
 
-- **The faults in a model's reply are for Chat Completions, not streamed.** `refuse`, `unknown tool`, `garble`, `truncate` and `bad tool args` on a streamed request or a Responses API call are a mistake in the test: the call fails at once and nothing is sent. A changed stream is a later fault.
+- **The faults in a model's reply are not for a streamed request.** `refuse`, `unknown tool`, `garble`, `truncate` and `bad tool args` on a streamed request are a mistake in the test: the call fails at once and nothing is sent. A changed stream is a later fault.
+
+- **`unknown tool` is for Chat Completions.** On a Responses API call it is a mistake in the test, and nothing is sent: no source shows a model call a tool no one offered there.
+
+- **A Responses agent that chains to a faulted reply is not supported.** A request whose `previous_response_id`, or an `item_reference` in its `input`, names a reply or an item a fault changed or built is a mistake in the test, and it is not sent: OpenAI holds nothing under those made-up ids. Send the conversation in `input`, as the OpenAI Agents SDK does by default.
+  A reply fault on a request that names a `conversation` is a mistake in the test too, and nothing is sent: OpenAI would keep the real reply in that conversation, or none.
+
+- **`truncate` on Responses keeps the real counts.** The reply's `usage.output_tokens` is what the model was billed for, not the request's `max_output_tokens`. With no text, the last `function_call` item is cut, as a real reply cut inside a call is.
+
+- **A 400 after a reply fault on Responses is an infrastructure error.** OpenAI takes back a Responses message or function call under an id it never made and reads it as sent, as two real requests showed, so no 400 is known to follow a fault there, and none is marked `after_reply_fault`.
+
+- **A built Responses reply's other fields are fixed.** After `refuse`, the reply repeats the fields your request set, such as `instructions`, `store`, `temperature`, `tool_choice` and `text`. Its `tools` is empty whatever your request sent, and `model` is the name your request sent.
 
 - **A built reply's counts are an estimate.** `refuse` and `unknown tool` send nothing, so the reply's `usage` holds a rough count of the request and 10 output tokens, and its `system_fingerprint` is the one of the real reply it was made from. The line costs 0.
   Its `model` is the name your request sent, such as `gpt-4o-mini`, where a real reply names the snapshot, such as `gpt-4o-mini-2024-07-18`.
