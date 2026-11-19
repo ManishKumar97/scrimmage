@@ -78,9 +78,9 @@ Each call gets its own copy of the value, so a change the agent makes to it is n
 | `dns` | a model call or a web request raises the library's `ConnectError`, as if the server's name did not resolve |
 | `refuse` | a chat model call gets a 200 whose answer is a refusal, in the form a real one takes for that request; nothing is sent |
 | `unknown tool` | a chat model call that offers tools gets a 200 that calls `multi_tool_use.parallel`, a tool no agent offers, as OpenAI's models have done; nothing is sent |
-| `garble` | the chat model call happens, and every fifth word of its reply becomes a stray token, as in a real incident; not built yet |
-| `truncate` | the chat model call happens, and its reply is cut short with `finish_reason` `length`; not built yet |
-| `bad tool args` | the chat model call happens, and the arguments of its tool calls no longer parse as JSON; not built yet |
+| `garble` | the chat model call happens, and every fifth word of its reply becomes a stray token, as in a real incident |
+| `truncate` | the chat model call happens, and its reply is cut short with `finish_reason` `length`; a reply of tool calls alone becomes the 400 OpenAI sends when the limit lands inside a tool call |
+| `bad tool args` | the chat model call happens, and the arguments of its tool calls no longer parse as JSON |
 
 Under `empty` the tool's declared return type gives the value:
 
