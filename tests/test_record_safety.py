@@ -303,7 +303,7 @@ def test_an_error_in_the_teams_type_is_unsavable_and_one_in_scrimmage_is_scrimma
     found = capture.tool_value(value, {}, get_validated, same, [f"{__name__}."])
     assert found == {
         "code": "unsavable",
-        "why": "returns: a mock built from it fails with RuntimeError",
+        "why": "returns: a mock built from it fails with ScrimmageMockError",
     }
     # A bug in Scrimmage's own code: differ called with arguments it does not take.
     monkeypatch.setattr(capture, "differ", capture.text_problem)

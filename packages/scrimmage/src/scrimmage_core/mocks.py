@@ -110,14 +110,21 @@ def build(
     name = kind or f"{target.__module__}:{target.__qualname__}"
     if isinstance(target, enum.EnumMeta):  # an Enum class
         return member(cast("type[enum.Enum]", target), returns, name)
+    failed: str | None = None
     try:
         validate = getattr(target, "model_validate", None)
         if callable(validate):
             return validate(returns)
-        if isinstance(returns, dict):
-            return target(**returns)
+        if table(returns):
+            return target(**cast("dict[str, object]", returns))
     except (TypeError, ValueError) as exc:  # pydantic's ValidationError is a ValueError
         raise ScrimmageMockError(f"the mock does not fit {name}: {exc}") from exc
+    except Exception as exc:  # the team's own code: a class hook or __post_init__ of its own
+        failed = type(exc).__name__
+    if failed is not None:
+        # Outside the except block, so the mistake holds no reference to the error: its
+        # message can quote a value. Only the error's class is named.
+        raise ScrimmageMockError(f"the mock does not fit {name}: building it raised {failed}")
     if is_instance(returns, target, name):
         return returns
     raise ScrimmageMockError(
