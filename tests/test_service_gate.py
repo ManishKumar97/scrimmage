@@ -27,9 +27,7 @@ from scrimmage_core.plan import Plan
 from service_harness import Service, drive, eventually
 from service_harness import service as make_service
 from test_http_gate import Budget
-from test_service_units import Sink, patched_httpx2, sink_of
-
-__all__ = ["patched_httpx2"]  # a fixture, used by name
+from test_service_units import Sink, sink_of
 
 seen_scopes: list[dict[str, Any]] = []
 
@@ -583,7 +581,7 @@ def test_both_gates_present_handle_a_request_once(svc: Service) -> None:
 
 
 @pytest.mark.design("service.starlette_alone")
-def test_starlette_gate_alone_under_testclient(svc: Service, patched_httpx2: None) -> None:
+def test_starlette_gate_alone_under_testclient(svc: Service) -> None:
     from starlette.applications import Starlette
     from starlette.responses import JSONResponse
     from starlette.routing import Route
@@ -755,7 +753,7 @@ def test_a_forked_worker_such_as_gunicorns_stops_at_its_first_serve(svc: Service
 
 @pytest.mark.design("service.in_process_runs_as_caller")
 def test_an_app_in_this_process_runs_as_its_caller_and_only_exact_transports_are_in_process(
-    svc: Service, patched_httpx2: None
+    svc: Service,
 ) -> None:
     http_gate.patch(httpx2, http_gate.Context(svc.process, Budget(), None, svc.process.stop))
     wrote: list[str] = []

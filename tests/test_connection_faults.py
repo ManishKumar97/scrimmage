@@ -63,14 +63,7 @@ def never_stopped(why: str) -> None:
 
 @pytest.fixture
 def gated() -> Iterator[None]:
-    sends = {
-        module: (module.Client._send_single_request, module.AsyncClient._send_single_request)
-        for module in LIBRARIES.values()
-    }
     yield
-    for module, (sync_send, async_send) in sends.items():
-        module.Client._send_single_request = sync_send  # type: ignore[method-assign]
-        module.AsyncClient._send_single_request = async_send  # type: ignore[method-assign]
     state.install(None)
 
 

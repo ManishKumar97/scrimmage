@@ -333,7 +333,6 @@ NOT_CARRIED = [
 @pytest.fixture
 def gated_run() -> Iterator[Callable[..., tuple[state.RunState, Sink]]]:
     """Makes a run with these faults and gates this process's httpx2 and MCP on it."""
-    sends = (httpx2.Client._send_single_request, httpx2.AsyncClient._send_single_request)
     mcp_send = mcp_session.ClientSession.send_request
 
     def make(*faults: Fault, real: tuple[str, ...] = ()) -> tuple[state.RunState, Sink]:
@@ -347,7 +346,6 @@ def gated_run() -> Iterator[Callable[..., tuple[state.RunState, Sink]]]:
         return run, sink
 
     yield make
-    httpx2.Client._send_single_request, httpx2.AsyncClient._send_single_request = sends
     mcp_session.ClientSession.send_request = mcp_send  # type: ignore[method-assign]
     state.install(None)
 
