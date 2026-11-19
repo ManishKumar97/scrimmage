@@ -213,8 +213,8 @@ def test_a_chat_stream_with_no_counts_is_estimated_at_the_dearest_input_rate(
         reply.read()
     line = sink.lines[0]
     assert line["cost_estimated"] is True
-    # Every input token at the 12-hour write rate, the dearest; output at its own rate.
-    guess = (len(sent) // 4 * 0.50 + len(stream) // 4 * 1.20) / 1e6
+    # Every input token at the 30-minute write rate, the dearest on Chat; output at its own.
+    guess = (len(sent) // 4 * 0.25 + len(stream) // 4 * 1.20) / 1e6
     assert line["cost_usd"] == pytest.approx(round(guess, 8))
 
 
@@ -287,6 +287,36 @@ def test_the_reservation_holds_input_at_its_dearest_rate(
     usd = table.cost(12000, 10, rates, 4000, 3000, 4000)
     assert sink.lines[0]["cost_usd"] == pytest.approx(round(usd, 8))
     assert sink.lines[0]["tokens"] == {"input": 12000, "output": 10, "cached": 4000}
+
+
+@pytest.mark.design("cache_write.chat_hold_30m")
+def test_a_chat_hold_takes_input_at_most_at_the_30_minute_write_rate(gated: None) -> None:
+    """Chat Completions cannot write for 12 hours, so its worst input rate is the 30-minute
+    one. On gpt-5.6-luna, 100K input and 4096 output hold $0.0299 on Chat, not $0.0549."""
+    budget = Budget(limit=1000.0)
+    install(make_plan(budget=1000.0, prices=(("gpt-5.6-luna", LUNA),)), budget)
+    messages = [{"role": "user", "content": "x" * 400_000}]  # 100K tokens at 4 bytes each
+    sent = json.dumps({"model": "gpt-5.6-luna", "messages": messages, "max_tokens": 4096})
+    held: list[float] = []
+    real = budget.ledger.reserve
+
+    def watch(usd: float, *rest: Any) -> object:
+        held.append(usd)
+        return real(usd, *rest)
+
+    budget.ledger.reserve = watch  # type: ignore[method-assign, assignment]
+    reply = {
+        "object": "chat.completion",
+        "choices": [],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+    }
+    answer = httpx2.MockTransport(lambda request: httpx2.Response(200, json=reply))
+    httpx2.Client(transport=answer).post(CHAT, content=sent.encode())
+    assert [round(h, 4) for h in held] == [0.0299]
+    assert held == [pytest.approx((len(sent) // 4 * 0.25 + 4096 * 1.20) / 1e6)]
+    # The same tokens on Responses may be written for 12 hours, so they hold at that rate.
+    assert round(table.most_cost(100_000, 4096, LUNA, responses=True), 4) == 0.0549
+    assert round(table.most_cost(100_000, 4096, LUNA, responses=False), 4) == 0.0299
 
 
 @pytest.mark.design("cache_write.recorded_cost")

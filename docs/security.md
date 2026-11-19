@@ -393,8 +393,7 @@ Model calls run for real, so a test has a budget, $5 unless you change `max_cost
 
 The cap can still be passed:
 
-- The estimate assumes `max_tokens`, or `reserve_output_tokens` when a request sets none.
-  A reply that uses more output than that costs more than was reserved, so one call can take the total over the limit.
+- Calls that cost more than their reservation, a reply past its output limit or an input with more tokens than the estimate, can together pass the cap by what they cost above it; see [A call can cost more than its hold](limits.md#the-budget).
 - A provider that is not OpenAI's format, listed under `real` as a web host, is not budgeted at all.
 - A run killed with SIGKILL can leave a reservation that never settles.
   It counts as spent, so the cap errs low, not high.
