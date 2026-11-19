@@ -129,6 +129,22 @@ def answer_not_listed(question: str) -> str:
     return asyncio.run(go())
 
 
+def answer_three_times(question: str) -> str:
+    """The bot calls a tool it never listed three times, and lives through any error."""
+
+    async def once(session: ClientSession) -> str:
+        try:
+            return await search(session)
+        except Exception as exc:
+            return type(exc).__name__
+
+    async def go() -> str:
+        async with connected() as session:
+            return " then ".join([await once(session) for _ in range(3)])
+
+    return asyncio.run(go())
+
+
 def answer_with_the_runs_environment(question: str) -> str:
     """The server inherits everything, Scrimmage's own variables too."""
 
