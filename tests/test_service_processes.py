@@ -16,6 +16,7 @@ import multiprocessing.connection
 import multiprocessing.pool
 import os
 import pickle
+import shlex
 import shutil
 import subprocess
 import sys
@@ -290,7 +291,11 @@ def test_a_program_with_no_plain_name_is_refused_and_its_line_fits_the_record_sc
 ) -> None:
     run = a_run(service, real=("process:uname", "process:python3"))
     message = refused(run, lambda: subprocess.run([program], check=True))
-    assert "no plain name" in message and "Add" not in message
+    assert message == (
+        f"{shlex.join([program])} was started inside a test run, and its program has no plain "
+        "name that [agent] real could list, so it is refused. Start it by a name such as "
+        "uname, through a link or wrapper whose name real can list."
+    )
     line = lines(run)[0]
     assert line["call"] == "process:?" and line["reason"] == "service_child"
     check = jsonschema.Draft202012Validator(RECORD)

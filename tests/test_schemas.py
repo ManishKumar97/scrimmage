@@ -1,5 +1,6 @@
 """The formats are JSON Schemas: the plan, the record and scrimmage.toml, held to the code."""
 
+import ast
 import json
 import os
 import re
@@ -306,3 +307,38 @@ def test_a_later_field_in_the_control_objects_fits_both_schemas() -> None:
     assert ping.get("additionalProperties") is not False
     for control in (startup, ping):
         assert not list(jsonschema.Draft202012Validator(control).iter_errors(found))
+
+
+def refusal_reasons() -> set[str]:
+    """Every reason the gates write on a refused call, read from the code that writes it:
+    Decision("refused", reason=...), run.refuse(step, ...), and a `reason = a if x else b`
+    that a refuse call then names."""
+    found: set[str] = set()
+    for path in sorted(Path(scrimmage_core.__file__).parent.glob("*.py")):
+        if path.name == "runner.py":  # it reads reasons and writes none
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Call):
+                name = ast.unparse(node.func).rpartition(".")[2]
+                if name == "Decision":
+                    for key in node.keywords:
+                        if key.arg == "reason" and isinstance(key.value, ast.Constant):
+                            found.add(str(key.value.value))
+                refusing = name == "refuse" and len(node.args) > 1
+                if refusing and isinstance(node.args[1], ast.Constant):
+                    found.add(str(node.args[1].value))
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.IfExp):
+                targets = [ast.unparse(t) for t in node.targets]
+                for c in (node.value.body, node.value.orelse):
+                    if targets == ["reason"] and isinstance(c, ast.Constant):
+                        found.add(str(c.value))
+    return found
+
+
+@pytest.mark.design("schema.record")
+def test_every_reason_a_gate_can_write_is_in_the_record_schemas_list() -> None:
+    reasons = refusal_reasons()
+    assert {"orphan", "service_child", "budget_held", "unlisted"} <= reasons  # the walk saw them
+    body = cast(Any, schema("record"))
+    listed = set(body["$defs"]["call"]["properties"]["reason"]["enum"])
+    assert not reasons - listed, f"record.v1.json does not list {sorted(reasons - listed)}"

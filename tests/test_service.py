@@ -23,8 +23,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+import jsonschema
 import pytest
 
+import scrimmage_core
 from conftest import EXAMPLE
 from ports import free_port
 from scrimmage_core import protocol
@@ -36,6 +38,7 @@ from service_harness import eventually
 
 pytestmark = pytest.mark.slow
 BIN = Path(sys.executable).parent
+RECORD = json.loads((Path(scrimmage_core.__file__).parent / "schemas/record.v1.json").read_text())
 TOOLS = (
     "acme.tools:get_order,acme.tools:check_inventory,acme.tools:refund_order,acme.tools:get_stock"
 )
@@ -458,6 +461,9 @@ def test_a_plain_requests_waited_work_runs_and_work_it_left_running_meets_the_ou
     ]
     refused = [x for x in lab.lines(name) if x.get("reason") == "orphan"]
     assert [x["call"] for x in refused] == ["tool:check_inventory"]
+    assert refused[0]["outside"] is True and "background_entry" in refused[0]
+    check = jsonschema.Draft202012Validator(RECORD)
+    assert [e.message for x in lab.lines(name) for e in check.iter_errors(x)] == []
 
 
 @pytest.mark.design("service.sync_endpoint")

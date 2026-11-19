@@ -446,6 +446,13 @@ Scrimmage counts it in no row, no run total and no `result.json`, so a reader th
 A call line's `call` for a process start is `process:` and the program's base name, such as `process:uname`.
 A program with no plain name is `process:?`.
 
+### A call line refused outside any request
+
+A write made outside any request while a service run is open is refused, and the line is written into that run's record.
+Its `reason` is `orphan` and its `outside` is `true`.
+`background_entry` is the `background_real` entry that would let the call through, and it is absent when no entry would.
+A run with such a line is an infrastructure error, because the run cannot tell the call was not its own.
+
 ## Values that can grow
 
 Until the first release, a field or a value may still be renamed or removed.
