@@ -296,9 +296,19 @@ def checked(
     return sync_checked
 
 
-def mangled(name: str, owner: list[str]) -> str:
+def owning_class(qualname: str) -> str:
+    """The nearest class around a function, read from its __qualname__; "" when none."""
+    parts = qualname.split(".")[:-1]  # the last part is the function's own name
+    for index in range(len(parts) - 1, -1, -1):
+        after = parts[index + 1] if index + 1 < len(parts) else ""
+        if parts[index] != "<locals>" and after != "<locals>":
+            return parts[index]
+    return ""
+
+
+def mangled(name: str, owner: str) -> str:
     """The name the compiler gives a parameter such as __sku inside a class."""
-    cls = owner[0].lstrip("_") if owner and owner[0] != "<locals>" else ""
+    cls = owner.lstrip("_")
     if cls and name.startswith("__") and not name.endswith("__"):
         return f"_{cls}{name}"
     return name
@@ -338,7 +348,7 @@ def written_in_source(function: object) -> dict[str, str]:
     every = [*found.posonlyargs, *found.args, *found.kwonlyargs]
     real = changes.unwrapped(function)
     code = getattr(real, "__code__", None)
-    owner = getattr(real, "__qualname__", "").split(".")[-2:-1]
+    owner = owning_class(getattr(real, "__qualname__", ""))
     if code is None or [mangled(a.arg, owner) for a in every] != list(
         code.co_varnames[: code.co_argcount + code.co_kwonlyargcount]
     ):  # the file changed after it was imported
