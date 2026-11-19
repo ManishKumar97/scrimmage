@@ -134,6 +134,26 @@ class BadSku:
         raise BadSkuError("rejected sku-secret-value")
 
 
+class Keyed(pydantic.BaseModel):
+    api_key: str = pydantic.Field(pattern="^pk-")
+
+
+@dataclasses.dataclass
+class PlainKey:
+    api_key: str
+
+    def __post_init__(self):
+        raise ValueError("bad key " + self.api_key)
+
+
+@dataclasses.dataclass
+class Looked:
+    sku: str
+
+    def __post_init__(self):
+        self.name = lookup(self.sku)  # a listed tool, called while the mock is built
+
+
 class Sized(Protocol):
     def size(self) -> int: ...
 
@@ -176,6 +196,10 @@ def compared(key: str) -> Compared: ...
 def odd(key: str) -> Odd: ...
 def checked(key: str) -> Checked: ...
 def bad_sku(key: str) -> BadSku: ...
+def keyed(key: str) -> Keyed: ...
+def plain_key(key: str) -> PlainKey: ...
+def looked(key: str) -> Looked: ...
+def lookup(key: str) -> str: ...
 
 
 def a_table() -> dict:
@@ -620,3 +644,55 @@ def test_an_explicit_type_whose_getattr_raises_is_a_mistake_naming_the_error_cla
     assert "the mock does not fit acme.shapes:Odd: building it raised RuntimeError" in shown
     leaked = "no attr" in shown
     assert not leaked, "the error's message was quoted"
+
+
+# A value the team's class rejects is never copied out of the mock: a known secret shape,
+# which records redact, and one of no known shape, which nothing would redact.
+REJECTED = ["sk-live-PROBESECRET-7f3a9c", "customer-ssn-123-45-6789"]
+
+
+@pytest.mark.design("mock.type_check_never_breaks_a_call")
+@pytest.mark.parametrize("value", REJECTED, ids=["secret shape", "unknown shape"])
+@pytest.mark.parametrize(
+    ("tool", "why"),
+    [
+        ("keyed", "acme.shapes:Keyed: ValidationError at api_key (string_pattern_mismatch)"),
+        ("plain_key", "acme.shapes:PlainKey: building it raised ValueError"),
+    ],
+    ids=["pydantic", "dataclass"],
+)
+def test_a_value_the_class_rejects_is_in_no_report_record_or_log(
+    project: Project, tool: str, why: str, value: str
+) -> None:
+    write(project, tool, f'returns = {{api_key = "{value}"}}')
+    result = project.test()
+    shown = result.out + result.err
+    assert result.code == MISTAKE, shown
+    files = [f for f in (project.root / "scrimmage-runs").rglob("*") if f.is_file()]
+    assert {f.suffix for f in files} >= {".json", ".jsonl", ".log"}, files
+    found = [f.suffix for f in files if value in f.read_text(errors="replace")]
+    leaked = value in shown or bool(found)
+    assert not leaked, f"the mock's value was copied out, into {found or 'the report'}"
+    assert f"the mock does not fit {why}" in shown
+
+
+@pytest.mark.design("mock.type_check_never_breaks_a_call")
+def test_a_wrong_key_names_the_key_and_no_value(project: Project) -> None:
+    write(project, "stock", 'returns = {sku = "a-hidden-sku", cnt = 1}')
+    result = project.test()
+    shown = result.out + result.err
+    assert result.code == MISTAKE, shown
+    assert "the mock does not fit acme.shapes:Stock: missing a required argument: 'count'" in shown
+    leaked = "a-hidden-sku" in shown
+    assert not leaked, "the mock's value was quoted"
+
+
+@pytest.mark.design("mock.type_check_never_breaks_a_call")
+def test_a_refused_call_inside_the_class_is_not_blamed_on_the_class(project: Project) -> None:
+    write(project, "looked", 'returns = {sku = "a"}')
+    project.edit('["acme.shapes:looked"]', '["acme.shapes:looked", "acme.shapes:lookup"]')
+    result = project.test()
+    shown = result.out + result.err
+    assert result.code == MISTAKE, shown
+    assert "tool:lookup" in shown, shown
+    assert "does not fit" not in shown, shown
