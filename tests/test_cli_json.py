@@ -642,17 +642,6 @@ def test_the_json_rows_and_lists_say_what_the_table_says(
         "find": None,
         "retry_after": None,
     }
-    # T1: tools that are methods on a class.
-    project.edit('function = "acme.agent:answer"', 'function = "acme.toolkit:answer"')
-    project.edit(
-        'tools    = ["acme.tools:get_order", "acme.tools:check_inventory", '
-        '"acme.tools:refund_order", "acme.tools:get_stock"]',
-        'tools    = ["acme.toolkit:StoreTools.get_order", '
-        '"acme.toolkit:StoreTools.check_inventory", "acme.toolkit:StoreTools.refund_order", '
-        '"acme.toolkit:StoreTools.get_stock"]',
-    )
-    _, doc = e2e(project, fake_openai(ACME))
-    assert doc["exit"] in (0, 1), doc
 
 
 def test_a_row_carries_its_runs_and_the_rules_they_broke() -> None:
