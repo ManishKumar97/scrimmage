@@ -56,6 +56,8 @@ _.pytest_sessionfinish  # tests/conftest.py: pytest calls hooks by name
 _.pytest_runtest_setup  # tests/conftest.py: pytest calls hooks by name
 _.pytest_runtest_call  # tests/conftest.py: pytest calls hooks by name
 _.pytest_runtest_teardown  # tests/conftest.py: pytest calls hooks by name
+_.pytest_warning_recorded  # tests/conftest.py: pytest calls hooks by name
+_.pytest_terminal_summary  # tests/conftest.py: pytest calls hooks by name
 _.exitstatus  # tests/conftest.py: pytest reads it to set the exit code
 _.answer_streamed  # tests/example/acme/rag.py: named by import path in a test's scrimmage.toml
 _.answer_priceless  # tests/example/acme/rag.py: named by import path in a test's scrimmage.toml
