@@ -221,6 +221,7 @@ After `truncate`, the openai library's `output_text` holds the cut text, as on a
 A cut `function_call` is what OpenAI sends when the limit lands inside one on Responses: a 200 with the arguments cut, not the 400 Chat Completions sends.
 A changed reply comes under new made-up ids, for the reply and for each message and function call, in OpenAI's forms; each `call_id` stays, so your agent pairs its tool results as before.
 OpenAI reads an item your agent sends back under a stored id as it stored it, the real text, and one under an id it never made as it was sent.
+It holds on a reasoning model too: on `gpt-5-nano`, a real reasoning item followed by a message under a made-up `msg_` id was accepted, and the text sent was read.
 So the new ids make the next turn read what your agent got.
 Under Structured Outputs, `client.responses.parse()` gives `output_parsed` as `None` after `refuse`, with the refusal part in the message.
 The built `refuse` reply is made from a real `gpt-4o-mini` Responses reply, with new `resp_` and `msg_` ids; it repeats the fields your request set, such as `instructions`, `store`, `temperature`, `text` and `previous_response_id`, as a real reply does.
