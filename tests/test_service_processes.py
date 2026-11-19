@@ -293,8 +293,13 @@ def test_a_program_with_no_plain_name_is_refused_and_its_line_fits_the_record_sc
     run = a_run(service, real=("process:uname", "process:python3"))
     start = lambda: subprocess.run([program], check=True)  # noqa: E731
     message = refused(run, start) if where == "in_a_request" else refused_outside(start)
+    started = (
+        "inside a test run"
+        if where == "in_a_request"
+        else ("outside any request while a test run was open")
+    )
     assert message == (
-        f"{shlex.join([program])} was started inside a test run, and its program has no plain "
+        f"{shlex.join([program])} was started {started}, and its program has no plain "
         "name that [agent] real could list, so it is refused. Start it by a name such as "
         "uname, through a link or wrapper whose name real can list."
     )
