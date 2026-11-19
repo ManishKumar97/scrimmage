@@ -1097,6 +1097,12 @@ def refresh_problems(label: str, tests: list[settings.Test], config: settings.Co
     mocks = [mock for test in tests for mock in test.mocks if mock.call == label]
     if not mocks:
         return [f"--refresh {label}: no test mocks this label"]
+    if any(mock.returns_from is not None and mock.args is None for mock in mocks):
+        return [
+            f"--refresh {label}: a returns_from mock with no args answers every call to the "
+            "label, so nothing would run for real and the other mocks on it would be dropped "
+            "for nothing; give it args, or refresh another label"
+        ]
     real = list(config.agent.real)
     kind = labels.kind_of(label)
     if kind in ("tool", "mcp"):

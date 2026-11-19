@@ -819,30 +819,66 @@ def answer(question):
     assert any("replaced" in n["message"] for n in done.doc["notes"])
 
 
-@pytest.mark.design("record.refresh_keeps_returns_from")
-def test_refresh_keeps_a_returns_from_mock_as_it_is(team: Team) -> None:
-    team.write(
-        """
+INVOICE_BOT = """
 def pdf():
     return b"%PDF-1.7 built"
 
 def get_invoice(invoice_id):
-    return b"%PDF-1.7 real"
+    return b"%PDF-1.7 real " + invoice_id.encode()
 
 def answer(question):
     get_invoice("INV-7")
+    get_invoice("INV-8")
     return "ok"
-""",
-        ["bot:get_invoice"],
-        ("tool:get_invoice",),
-        tests=ONE_TEST + '[[test.mock]]\ncall = "tool:get_invoice"\nreturns_from = "bot:pdf"\n',
-    )
+"""
+INVOICE_HAND = (
+    '[[test.mock]]\ncall = "tool:get_invoice"\nargs = {invoice_id = "INV-8"}\nreturns = "hand"\n\n'
+)
+INVOICE_FROM = '[[test.mock]]\ncall = "tool:get_invoice"\n'
+
+
+def invoice_team(team: Team, mocks: str) -> None:
+    team.write(INVOICE_BOT, ["bot:get_invoice"], ("tool:get_invoice",), tests=ONE_TEST + mocks)
+
+
+@pytest.mark.design("record.refresh_keeps_returns_from")
+def test_refresh_refuses_a_returns_from_mock_that_answers_every_call(team: Team) -> None:
+    invoice_team(team, INVOICE_HAND + INVOICE_FROM + 'returns_from = "bot:pdf"\n')
+    before = team.toml.read_text()
     done = team.record("--refresh", "tool:get_invoice")
-    assert done.code == 0, done.out
+    assert done.code == 2, done.out
+    assert not (team.root / "scrimmage-runs").exists()
+    message = done.doc["mistakes"][0]["message"]
+    assert "tool:get_invoice" in message and "returns_from" in message
+    assert "give it args, or refresh another label" in message
+    assert team.toml.read_text() == before and not team.out_path.exists()
+
+
+@pytest.mark.design("record.refresh_keeps_returns_from")
+def test_refresh_refuses_a_label_with_only_a_returns_from_mock(team: Team) -> None:
+    invoice_team(team, INVOICE_FROM + 'returns_from = "bot:pdf"\n')
+    done = team.record("--refresh", "tool:get_invoice")
+    assert done.code == 2, done.out
+    assert not (team.root / "scrimmage-runs").exists()
+    assert "returns_from" in done.doc["mistakes"][0]["message"]
+
+
+@pytest.mark.design("record.refresh_keeps_returns_from")
+def test_refresh_keeps_a_returns_from_mock_with_args_and_records_the_rest(team: Team) -> None:
+    invoice_team(team, INVOICE_FROM + 'args = {invoice_id = "INV-7"}\nreturns_from = "bot:pdf"\n')
+    done = team.record("--refresh", "tool:get_invoice")
+    assert done.code == 1, done.out  # incomplete: the bytes of INV-8 cannot be saved
     assert done.test["kept"] == [{"call": "tool:get_invoice", "mock": 1}]
-    assert done.test["written"] == [] and done.manual() == []
+    # Only INV-8 ran for real: seen once. INV-7 stays with the mock.
+    assert done.test["written"] == []
+    (sets,) = done.test["argument_sets"]
+    assert sets["call"] == "tool:get_invoice" and sets["seen"] == 1 and sets["written"] == 0
     (mock,) = tomllib.loads(team.out_path.read_text())["test"][0]["mock"]
-    assert mock == {"call": "tool:get_invoice", "returns_from": "bot:pdf"}
+    assert mock == {
+        "call": "tool:get_invoice",
+        "args": {"invoice_id": "INV-7"},
+        "returns_from": "bot:pdf",
+    }
 
 
 @pytest.mark.design("record.schema_line_first")

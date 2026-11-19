@@ -13,7 +13,6 @@ import contextvars
 import functools
 import inspect
 import re
-import textwrap
 import threading
 import typing
 import weakref
@@ -298,16 +297,29 @@ def checked(
 
 
 def written_in_source(function: object) -> dict[str, str]:
-    """Each parameter's annotation as written in the function's source; none when it has none."""
+    """Each parameter's annotation as written in the function's source.
+
+    None when there is no readable source, or when the source no longer matches the code that ran.
+    """
     try:
-        tree = ast.parse(textwrap.dedent(inspect.getsource(function)))  # pyright: ignore
+        source = inspect.getsource(function)  # pyright: ignore
+        indented = source[:1].isspace()
+        tree = ast.parse(("if 1:\n" if indented else "") + source)
     except (OSError, TypeError, SyntaxError):
         return {}
-    node = tree.body[0]
+    body = tree.body
+    if indented and body and isinstance(body[0], ast.If):
+        body = body[0].body
+    node = body[0] if body else None
     if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
         return {}
     found = node.args
     every = [*found.posonlyargs, *found.args, *found.kwonlyargs]
+    code = getattr(changes.unwrapped(function), "__code__", None)
+    if code is None or [a.arg for a in every] != list(
+        code.co_varnames[: code.co_argcount + code.co_kwonlyargcount]
+    ):  # the file changed after it was imported
+        return {}
     return {a.arg: ast.unparse(a.annotation) for a in every if a.annotation is not None}
 
 
@@ -336,7 +348,7 @@ def plumbing_names(function: Callable[..., Any]) -> set[str]:
         try:
             hint = typing.get_type_hints(stand_in)[name]
             found = getattr(hint, "__name__", "") in PLUMBING or any(
-                kind in repr(hint) for kind in PLUMBING
+                word in PLUMBING for word in re.findall(r"[A-Za-z_]\w*", repr(hint))
             )
         except Exception:  # a name it cannot find, or text that is no type
             text = getattr(annotation, "__forward_arg__", None) or str(annotation)
