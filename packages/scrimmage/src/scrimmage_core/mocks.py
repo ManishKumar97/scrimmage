@@ -114,19 +114,21 @@ def build(
     if isinstance(target, enum.EnumMeta):  # an Enum class
         return member(cast("type[enum.Enum]", target), returns, name)
     failed: tuple[str, str] | None = None
+    fields: dict[str, object] | None = None  # set when the class itself is called
     try:
         validate = getattr(target, "model_validate", None)
         if callable(validate):
             return validate(returns)
         if table(returns):
             fields = cast("dict[str, object]", returns)
-            failed = unbound(target, fields)
-            if failed is None:
-                return target(**fields)
+            return target(**fields)
     except ScrimmageError:  # Scrimmage's own: a refused or stopped call in the team's code
         raise
     except Exception as exc:  # the team's own code: its validation, a hook or __post_init__
-        failed = (type(exc).__name__, failure(exc))
+        keys = (
+            unbound(target, fields) if isinstance(exc, TypeError) and fields is not None else None
+        )
+        failed = (type(exc).__name__, keys or failure(exc))
     if failed is not None:
         # Outside the except block, so the mistake holds no reference to the error: its
         # message can quote a value. The text names keys and error kinds, never a value.
@@ -140,19 +142,30 @@ def build(
     )
 
 
-def unbound(target: type, fields: dict[str, object]) -> tuple[str, str] | None:
-    """Why the table's keys do not fit the class's parameters, as a TypeError would say, or
-    None. Binding's text names keys, never values. A class whose signature cannot be read is
-    not checked: on 3.14 a field type imported only for type checking raises NameError here,
-    though the class builds."""
+def signature_of(tool: Callable[..., object]) -> inspect.Signature:
+    """The tool's signature, for binding its arguments. On Python 3.14 annotations are lazy,
+    so each is kept as written text and never evaluated: one may name a type imported only
+    for type checking, or raise."""
+    if sys.version_info >= (3, 14):
+        import annotationlib
+
+        written = annotationlib.Format.STRING
+        return inspect.signature(tool, annotation_format=written)  # pyright: ignore
+    return inspect.signature(tool)
+
+
+def unbound(target: type, fields: dict[str, object]) -> str | None:
+    """Why the table's keys do not fit the class's parameters, or None. Read only once the
+    class has raised TypeError, as a signature can be narrower than what the class takes,
+    such as a decorated __init__'s. Binding's text names keys, never values."""
     try:
-        signature = inspect.signature(target)
-    except Exception:  # no signature, or one whose annotations raise: the class still decides
+        signature = signature_of(target)
+    except Exception:  # no signature, or the team's own class hook raised: say the class only
         return None
     try:
         signature.bind(**fields)
     except TypeError as exc:
-        return ("TypeError", str(exc))
+        return str(exc)
     return None
 
 

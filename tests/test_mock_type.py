@@ -21,6 +21,7 @@ pytestmark = pytest.mark.slow
 
 SHAPES = '''
 import dataclasses
+import functools
 import enum
 from typing import TYPE_CHECKING, Annotated, Any, Literal, NamedTuple, NewType, Optional
 from collections.abc import Generator, Iterator
@@ -154,6 +155,24 @@ class Looked:
         self.name = lookup(self.sku)  # a listed tool, called while the mock is built
 
 
+def accepts_aliases(init):
+    """A decorator that takes an old keyword name: the signature shows the inner one only."""
+
+    @functools.wraps(init)
+    def wrapper(self, **kwargs):
+        if "sku_id" in kwargs:
+            kwargs["sku"] = kwargs.pop("sku_id")
+        return init(self, **kwargs)
+
+    return wrapper
+
+
+class Aliased:
+    @accepts_aliases
+    def __init__(self, sku: str) -> None:
+        self.sku = sku
+
+
 class Sized(Protocol):
     def size(self) -> int: ...
 
@@ -200,6 +219,7 @@ def keyed(key: str) -> Keyed: ...
 def plain_key(key: str) -> PlainKey: ...
 def looked(key: str) -> Looked: ...
 def lookup(key: str) -> str: ...
+def aliased(key: str) -> Aliased: ...
 
 
 def a_table() -> dict:
@@ -296,6 +316,8 @@ VALID = {
     "an Iterator with a list": ("lines", 'returns = ["a", "b"]'),
     "a Generator with a list": ("made", 'returns = ["a", "b"]'),
     "a typing_extensions TypedDict with a table": ("old_row", 'returns = {sku = "a"}'),
+    # The class is called before its signature is read: a decorator can take more keys.
+    "a decorated __init__ taking an old key name": ("aliased", 'returns = {sku_id = "a"}'),
 }
 
 

@@ -1571,7 +1571,7 @@ def test_a_mock_is_built_into_the_return_type_whatever_the_parameters(
 
 def checking_class(head: str) -> Any:
     """A tool returning a dataclass with a field type imported only for type checking. On
-    3.14 reading that class's signature raises NameError, though the class builds."""
+    3.14 its signature raises NameError unless the annotations are read as text."""
     space: dict[str, Any] = {"__name__": __name__}
     other = '"Decimal | None"' if head == "quoted" else "Decimal | None"
     source = (
@@ -1592,7 +1592,8 @@ def test_a_class_with_an_unresolved_field_type_is_built_and_a_missing_key_named(
     install(lines, [Mock("tool:f", {"sku": "SKU-42"}, None)])
     assert tool_gate.gate(tool, "f")("SKU-42").sku == "SKU-42"
     install(Lines(), [Mock("tool:f", {"cnt": 1}, None)])
-    with pytest.raises(ScrimmageMockError, match="does not fit test_tool_gate:Late") as raised:
+    missing = "does not fit test_tool_gate:Late: missing a required argument: 'sku'"
+    with pytest.raises(ScrimmageMockError, match=missing) as raised:
         tool_gate.gate(tool, "f")("SKU-42")
     assert raised.value.cause == "TypeError"
 
