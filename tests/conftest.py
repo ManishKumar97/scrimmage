@@ -1,3 +1,4 @@
+import concurrent.futures
 import json
 import multiprocessing.process
 import os
@@ -75,6 +76,12 @@ class Watch:
     on whichever thread it runs, even one an earlier test's body made. Any other thread
     counts against the test: its own, one born during it, and one a fixture made at any
     scope, such as a shared pool.
+
+    Only ThreadPoolExecutor tasks carry their test, so some starts still only warn or go
+    unseen. A worker born in an earlier test's body and fed some other way only warns: anyio's
+    worker on a portal or TestClient kept between tests, or a raw thread fed by a queue. A
+    start inside a ProcessPoolExecutor child or an InterpreterPoolExecutor's subinterpreter
+    is not seen: the child reports nothing back, and the audit hook is this interpreter's.
     """
 
     test: threading.Thread | None = None  # None outside the guard's window
@@ -148,13 +155,20 @@ def owner_here() -> str | None:
 P = ParamSpec("P")
 T = TypeVar("T")
 real_submit = ThreadPoolExecutor.submit
+# Python 3.14's subclass sends each task into a subinterpreter, and a closure cannot cross.
+interpreter_pool: type | None = getattr(concurrent.futures, "InterpreterPoolExecutor", None)
 
 
 def owned_submit(
     self: ThreadPoolExecutor, fn: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
 ) -> Future[T]:
     """Submit fn as the submitter's work, so a lazy pool's thread, born in an earlier
-    test's body, does not make this test's start a stray."""
+    test's body, does not make this test's start a stray.
+
+    An InterpreterPoolExecutor's task is left as it is: it runs in a subinterpreter, where
+    this interpreter's audit hook does not see a start, so a tag would tell nothing."""
+    if interpreter_pool is not None and isinstance(self, interpreter_pool):
+        return real_submit(self, fn, *args, **kwargs)
     owner = owner_here()
 
     def as_owner() -> T:

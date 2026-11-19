@@ -17,7 +17,9 @@ pytestmark = pytest.mark.slow  # each case starts a pytest
 TESTS = Path(__file__).parent
 PLUGINS_OFF = ("-p", "no:cacheprovider", "-p", "no:langsmith_plugin")
 CASES = """
+import concurrent.futures
 import subprocess
+import sys
 import threading
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -60,6 +62,21 @@ def test_warms_a_lazy_pool(lazy_pool: ThreadPoolExecutor) -> None:
 
 def test_start_through_a_lazy_pool(lazy_pool: ThreadPoolExecutor) -> None:
     lazy_pool.submit(subprocess.run, ["true"], check=True).result()
+
+
+def test_start_through_a_lazy_pool_from_its_own_thread(lazy_pool: ThreadPoolExecutor) -> None:
+    def submit() -> None:
+        lazy_pool.submit(subprocess.run, ["true"], check=True).result()
+
+    thread = threading.Thread(target=submit)
+    thread.start()
+    thread.join()
+
+
+@pytest.mark.skipif(sys.version_info < (3, 14), reason="InterpreterPoolExecutor is 3.14's")
+def test_submit_to_an_interpreter_pool() -> None:
+    with concurrent.futures.InterpreterPoolExecutor(1) as pool:
+        assert pool.submit(pow, 2, 3).result() == 8
 
 
 @pytest.mark.slow
@@ -159,6 +176,23 @@ def test_a_start_through_a_pool_an_earlier_test_woke_fails(
     got, out = session
     assert got["test_warms_a_lazy_pool"] == "passed", out
     assert got["test_start_through_a_lazy_pool"] == "error", out
+
+
+def test_a_start_through_a_woken_pool_from_a_thread_the_test_starts_fails(
+    session: tuple[dict[str, str], str],
+) -> None:
+    """The submitting thread was born in this test's body and has no label yet: its task is
+    still this test's."""
+    got, out = session
+    assert got["test_start_through_a_lazy_pool_from_its_own_thread"] == "error", out
+
+
+def test_an_interpreter_pool_still_runs_its_task(session: tuple[dict[str, str], str]) -> None:
+    """Its task crosses into a subinterpreter, which a wrapped task could not."""
+    got, out = session
+    assert got["test_submit_to_an_interpreter_pool"] == (
+        "passed" if sys.version_info >= (3, 14) else "skipped"
+    ), out
 
 
 def test_the_run_ends_with_a_line_listing_each_stray(session: tuple[dict[str, str], str]) -> None:
