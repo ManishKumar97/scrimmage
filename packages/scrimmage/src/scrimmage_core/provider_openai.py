@@ -610,8 +610,13 @@ def usage(body: bytes, *, output_required: bool = True) -> Usage:
 
 
 def _details(numbers: dict[str, object]) -> dict[str, object]:
-    """Chat names the block prompt_tokens_details, Responses input_tokens_details."""
-    return _obj(numbers.get("prompt_tokens_details", numbers.get("input_tokens_details")))
+    """Chat names the block prompt_tokens_details, Responses input_tokens_details. A Chat
+    block that is not a table, such as a null beside a filled Responses one, is passed over."""
+    for key in ("prompt_tokens_details", "input_tokens_details"):
+        block = numbers.get(key)
+        if isinstance(block, dict):
+            return _obj(cast(object, block))
+    return {}
 
 
 def cached_count(numbers: dict[str, object], tokens_in: int) -> int:
@@ -625,12 +630,15 @@ def written(numbers: dict[str, object], uncached: int) -> tuple[int, int]:
     OpenAI bills each input token once: as plain input, as a cached read or as a write, so
     the writes are a part of the input tokens that were not cached. Responses splits them
     by lifetime, ttl_30m_tokens and ttl_12h_tokens, which sum to cache_write_tokens; Chat
-    Completions writes for 30 minutes only and gives no split. No write count is no write.
+    Completions writes for 30 minutes only and gives no split. OpenAI states the relation
+    for Responses; Chat's cache_write_tokens is read the same way, as its SDK field names
+    it, but no real Chat reply with writes has confirmed it. No write count is no write.
     A count that cannot be trusted is read high: every uncached token written for 12 hours.
+    So is a split with no total, which says writes were made but not how many.
     """
     details = _details(numbers)
     if "cache_write_tokens" not in details:
-        return 0, 0
+        return (0, uncached) if "cache_write_tokens_details" in details else (0, 0)
     total = _count(details, "cache_write_tokens", "cache_write_tokens")
     if total is None or total > uncached:
         return 0, uncached

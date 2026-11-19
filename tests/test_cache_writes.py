@@ -162,6 +162,14 @@ def test_the_written_counts_are_read_from_a_streamed_reply() -> None:
             },
             (0, 7000),
         ),
+        # A split by lifetime with no total: writes were made, but how many is not known.
+        (
+            {
+                "cached_tokens": 4000,
+                "cache_write_tokens_details": {"ttl_12h_tokens": 900, "ttl_30m_tokens": 0},
+            },
+            (0, 8000),
+        ),
     ],
 )
 def test_a_written_count_that_cannot_be_trusted_is_read_high(
@@ -170,6 +178,59 @@ def test_a_written_count_that_cannot_be_trusted_is_read_high(
     usage = {"input_tokens": 12000, "output_tokens": 10, "input_tokens_details": details}
     used = table.usage(reply_of(usage))
     assert (used.written_30m, used.written_12h) == written
+
+
+@pytest.mark.design("cache_write.null_chat_block")
+def test_a_null_chat_block_beside_a_filled_responses_one_reads_the_filled_one() -> None:
+    # As a gateway that fills both names might send it.
+    usage = {
+        "input_tokens": 1000,
+        "output_tokens": 10,
+        "prompt_tokens_details": None,
+        "input_tokens_details": {"cached_tokens": 50, "cache_write_tokens": 900},
+    }
+    used = table.usage(reply_of(usage))
+    assert (used.cached, used.written_30m, used.written_12h) == (50, 900, 0)
+
+
+# A team price with write rates, gpt-5.6-luna's standard ones, per million tokens.
+LUNA = table.Rates(0.20, 1.20, 0.02, 0.25, 0.50)
+CHAT = "https://api.openai.com/v1/chat/completions"
+
+
+@pytest.mark.design("cache_write.estimate_dearest")
+def test_a_chat_stream_with_no_counts_is_estimated_at_the_dearest_input_rate(
+    gated: None,
+) -> None:
+    sink, _ = install(make_plan(budget=5.0, prices=(("gpt-5.6-luna", LUNA),)), Budget(5.0))
+    chunk = {"object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {}}]}
+    stream = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode()
+    headers = {"content-type": "text/event-stream"}
+    answer = httpx2.MockTransport(lambda r: httpx2.Response(200, content=stream, headers=headers))
+    body = {"model": "gpt-5.6-luna", "messages": [{"role": "user", "content": "hi"}]}
+    sent = json.dumps({**body, "stream": True}).encode()  # no stream_options.include_usage
+    with httpx2.Client(transport=answer).stream("POST", CHAT, content=sent) as reply:
+        reply.read()
+    line = sink.lines[0]
+    assert line["cost_estimated"] is True
+    # Every input token at the 12-hour write rate, the dearest; output at its own rate.
+    guess = (len(sent) // 4 * 0.50 + len(stream) // 4 * 1.20) / 1e6
+    assert line["cost_usd"] == pytest.approx(round(guess, 8))
+
+
+@pytest.mark.design("cache_write.failed_dearest")
+def test_a_timed_out_call_is_estimated_at_the_dearest_input_rate(gated: None) -> None:
+    sink, _ = install(make_plan(budget=5.0, prices=(("gpt-5.6-luna", LUNA),)), Budget(5.0))
+
+    def time_out(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ReadTimeout("timed out", request=request)
+
+    sent = json.dumps({"model": "gpt-5.6-luna", "input": "hi"}).encode()
+    with pytest.raises(httpx2.ReadTimeout):
+        httpx2.Client(transport=httpx2.MockTransport(time_out)).post(RESPONSES, content=sent)
+    line = sink.lines[0]
+    assert line["cost_estimated"] is True
+    assert line["cost_usd"] == pytest.approx(len(sent) // 4 * 0.50 / 1e6)
 
 
 @pytest.mark.design("cache_write.cost_by_hand")

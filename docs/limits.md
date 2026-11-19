@@ -429,6 +429,8 @@ Also read the control-path limits under An agent inside a web service.
 
 - **Cached input on OpenAI only.** Cached tokens are read from OpenAI's usage fields. A gateway that reports them another way, or a price under `[agent.prices]` with no `cached_input`, prices every input token at the full rate, so the cost is high, never low.
 
+- **Cache writes on Chat Completions are unconfirmed.** OpenAI states for Responses that written tokens are part of the input count and apart from cached ones. Scrimmage reads Chat Completions' `prompt_tokens_details.cache_write_tokens` the same way, as the openai library names it, but no real Chat Completions reply with writes has confirmed it.
+
 ### Judging an answer
 
 - **Rules are plain text.** `expect` and `forbid` find text in the answer, with no word boundaries, numbers or meaning. "shipped" is found in "has not shipped", and Markdown stays in the answer. See [Judging an answer](judging.md).

@@ -515,6 +515,7 @@ To hold less, set `max_tokens` on the call, lower `reserve_output_tokens`, or lo
 
 Scrimmage ships prices for common OpenAI models, cached input included, checked against OpenAI's pricing page on 19 November 2026.
 They cover `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5-pro`, `gpt-5.1`, `gpt-5.2`, `gpt-5.2-pro`, `gpt-5.3-codex`, `gpt-5.4-mini`, `gpt-5.4-nano` and the `text-embedding-3` models.
+`gpt-4.1-nano` is no longer on that page, so its price is the one listed on 7 November 2026.
 A model with a higher price above 272K input tokens, such as `gpt-5.4`, `gpt-5.5` or a `gpt-5.6` model, is not in the table, because one price per kind of token would price a long call too low.
 Give it under `[agent.prices]`, at the long-context price if a call can go over 272K input tokens.
 A dated model, such as `gpt-4o-mini-2024-07-18`, uses its family's price.
@@ -558,12 +559,16 @@ On Chat Completions a stream only carries counts if your request sets `stream_op
 On newer OpenAI models, such as `gpt-5.6-luna`, a token written to the prompt cache costs more than a plain input token: 1.25 times the input price for 30 minutes, 2.5 times for 12 hours.
 OpenAI bills each input token once, as plain input, as cached or as written, so the cached and written counts are parts of the input count.
 Scrimmage reads the written count from `input_tokens_details.cache_write_tokens` on Responses, split by `cache_write_tokens_details.ttl_30m_tokens` and `ttl_12h_tokens`, and from `prompt_tokens_details.cache_write_tokens` on Chat Completions, where writes last 30 minutes.
+OpenAI states that the counts are parts of the input count for Responses only.
+On Chat Completions, Scrimmage reads the field the openai library names in the same way, and no real Chat Completions reply with writes has confirmed it yet.
 
 | Reply | Price of each input token |
 |---|---|
 | 12000 input tokens: 4000 cached, 3000 written for 30 minutes, 4000 for 12 hours, on `"gpt-5.6-luna" = {input = 0.2, cached_input = 0.02, cache_write_30m = 0.25, cache_write_12h = 0.5, output = 1.2}` | 1000 at $0.20, 4000 at $0.02, 3000 at $0.25 and 4000 at $0.50 per million |
 | a price with no `cache_write_30m` or `cache_write_12h` | written tokens at `input`, as on a model that charges nothing extra to write |
 | a written count above the input tokens not cached, or not a whole number | every input token not cached as written for 12 hours |
+| a split by lifetime with no written count | every input token not cached as written for 12 hours |
+| no usable counts, a call that failed after it was sent, or a redirect off the model host | the rough cost prices every input token at the highest of `input`, `cache_write_30m` and `cache_write_12h` |
 
 The written counts are not on the record line; `cost_usd` includes them.
 The reservation before a call counts every input token at the highest of `input`, `cache_write_30m` and `cache_write_12h`, since the provider may write any of them to its cache.

@@ -50,6 +50,8 @@ acme-gpt = {input = 2.0, cached_input = 0.5, output = 8.0}
 | `cache_write_30m` | The price of an input token the provider wrote to its prompt cache for 30 minutes. Optional, and at least `input`. Without it, written tokens cost the full `input` price, as on a model that charges nothing extra to write its cache. |
 | `cache_write_12h` | The same for a token written for 12 hours, a choice on the Responses API. Optional, and at least `input`. |
 
+The `gpt-5.6-luna` example is its price up to 272K input tokens; a call over that costs more, so give the long-context price if your calls can be that long. See [One price per kind of token](limits.md#the-budget).
+
 A price here replaces the built-in one whole: `gpt-4o = {input = 2.5, output = 10}` has no cached price, even though the built-in table has one.
 
 Scrimmage imports only modules under your agent's own top-level packages, the ones `function` and `tools` name. For a script, that is the ones `tools` names.
