@@ -221,7 +221,8 @@
             "const": "tool:*"
           },
           {
-            "const": "process:python"
+            "type": "string",
+            "pattern": "^process:[A-Za-z0-9_][A-Za-z0-9._+-]*(?![\\s\\S])$"
           },
           {
             "$ref": "#/$defs/mcp_label"

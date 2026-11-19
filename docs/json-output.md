@@ -435,6 +435,24 @@ Only the digest is kept, never the plan.
 Without the service token, which is never written to a record, a digest tells a reader nothing about the plan: it is not a plain hash, so a guess at a mock's value cannot be tested against it.
 The service token is the one in the service's token file, which lasts across tests, so the token file must never sit on the records volume.
 
+### The setup request's summary line
+
+A test of a service first sends one setup request, a baseline run named `setup-` and 12 hex digits.
+Its record has a summary line of the same shape as any run's, with `row` set to `baseline` and `judged` and `cost_usd` filled in.
+Nothing in the line says it is a setup.
+Only the `setup-` prefix of the file name and the `run` field tells it apart from a baseline run.
+Scrimmage counts it in no row, no run total and no `result.json`, so a reader that groups summary lines by `test` and `row` must skip `run` names that start with `setup-`.
+
+A call line's `call` for a process start is `process:` and the program's base name, such as `process:uname`.
+A program with no plain name is `process:?`.
+
+### A call line refused outside any request
+
+A write made outside any request while a service run is open is refused, and the line is written into that run's record.
+Its `reason` is `orphan` and its `outside` is `true`.
+`background_entry` is the `background_real` entry that would let the call through, and it is absent when no entry would.
+A run with such a line is an infrastructure error, because the run cannot tell the call was not its own.
+
 ## Values that can grow
 
 Until the first release, a field or a value may still be renamed or removed.

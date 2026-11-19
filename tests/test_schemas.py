@@ -1,12 +1,13 @@
 """The formats are JSON Schemas: the plan, the record and scrimmage.toml, held to the code."""
 
+import ast
 import json
 import os
 import re
 import sys
 import tomllib
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import jsonschema
 import pytest
@@ -93,6 +94,33 @@ def test_a_served_plan_with_the_runs_age_fits_the_schema_and_round_trips() -> No
     assert plan.Plan.from_json(doc).to_json() == doc
     with pytest.raises(jsonschema.ValidationError):
         validator("plan").validate({**DESIGN_PLAN, "elapsed_s": -1})
+
+
+@pytest.mark.design("schema.plan")
+def test_a_plan_that_lists_a_program_fits_the_schema(tmp_path: Path) -> None:
+    path = tmp_path / "scrimmage.toml"
+    path.write_text(
+        '[agent]\nservice = "http://127.0.0.1:9/chat"\nbody = {message = "{question}"}\n'
+        'answer = "reply"\nreal = ["process:uname", "process:python", "process:g++"]\n'
+        'background_real = ["process:uname"]\n\n[[test]]\nname = "t"\nquestion = "q"\n'
+        'expect = ["x"]\n'
+    )
+    cfg = config.load(path)
+    doc: Any = cast(
+        dict[str, Any], plan.plan_for(cfg, plan.rows(cfg)[0], "run-0123456789ab").to_json()
+    )
+    assert doc["real"] == ["process:uname", "process:python", "process:g++"]
+    validator("plan").validate(json.loads(json.dumps(doc)))
+    for bad in ["process:", "process:a\n", "process:a b", "process:?"]:
+        assert list(validator("plan").iter_errors({**doc, "real": [bad]})), bad
+
+
+@pytest.mark.design("schema.record")
+def test_a_process_call_label_fits_the_record_schema_only_as_a_plain_name() -> None:
+    for name in ["process:uname", "process:python3.12", "process:g++", "process:?"]:
+        assert list(validator("record").iter_errors({**DESIGN_LINE, "call": name})) == [], name
+    for name in ["process:", "process:a\n", "process:a\nb", "process: ", "process:??"]:
+        assert list(validator("record").iter_errors({**DESIGN_LINE, "call": name})), name
 
 
 @pytest.mark.design("schema.record")
@@ -279,3 +307,38 @@ def test_a_later_field_in_the_control_objects_fits_both_schemas() -> None:
     assert ping.get("additionalProperties") is not False
     for control in (startup, ping):
         assert not list(jsonschema.Draft202012Validator(control).iter_errors(found))
+
+
+def refusal_reasons() -> set[str]:
+    """Every reason the gates write on a refused call, read from the code that writes it:
+    Decision("refused", reason=...), run.refuse(step, ...), and a `reason = a if x else b`
+    that a refuse call then names."""
+    found: set[str] = set()
+    for path in sorted(Path(scrimmage_core.__file__).parent.glob("*.py")):
+        if path.name == "runner.py":  # it reads reasons and writes none
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Call):
+                name = ast.unparse(node.func).rpartition(".")[2]
+                if name == "Decision":
+                    for key in node.keywords:
+                        if key.arg == "reason" and isinstance(key.value, ast.Constant):
+                            found.add(str(key.value.value))
+                refusing = name == "refuse" and len(node.args) > 1
+                if refusing and isinstance(node.args[1], ast.Constant):
+                    found.add(str(node.args[1].value))
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.IfExp):
+                targets = [ast.unparse(t) for t in node.targets]
+                for c in (node.value.body, node.value.orelse):
+                    if targets == ["reason"] and isinstance(c, ast.Constant):
+                        found.add(str(c.value))
+    return found
+
+
+@pytest.mark.design("schema.record")
+def test_every_reason_a_gate_can_write_is_in_the_record_schemas_list() -> None:
+    reasons = refusal_reasons()
+    assert {"orphan", "service_child", "budget_held", "unlisted"} <= reasons  # the walk saw them
+    body = cast(Any, schema("record"))
+    listed = set(body["$defs"]["call"]["properties"]["reason"]["enum"])
+    assert not reasons - listed, f"record.v1.json does not list {sorted(reasons - listed)}"

@@ -10,11 +10,13 @@ import collections
 import contextlib
 import contextvars
 import gc
+import json
 import multiprocessing
 import multiprocessing.connection
 import multiprocessing.pool
 import os
 import pickle
+import shlex
 import shutil
 import subprocess
 import sys
@@ -24,14 +26,19 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+import jsonschema
 import pytest
 
+import scrimmage_core
 from scrimmage_core import process_gate, state, threadctx
 from scrimmage_core.errors import ScrimmageRefused
 from scrimmage_core.plan import Plan
 from service_harness import eventually
 from test_service_units import Sink, sink_of
 
+RECORD = json.loads(
+    (Path(scrimmage_core.__file__).parent / "schemas" / "record.v1.json").read_text()
+)
 PLAIN = state.Plain()  # one plain request, still being served
 
 pytestmark = pytest.mark.slow
@@ -273,6 +280,30 @@ def test_a_service_child_refusal_names_the_real_entry_in_the_error_setup_and_rep
     assert message == fix
     line = lines(run)[0]
     assert (line["call"], line["reason"], line["mistake"]) == ("process:git", "service_child", fix)
+
+
+@pytest.mark.design("service.every_start_refused")
+@pytest.mark.parametrize(
+    "program", ["/usr/bin/", "/tmp/a\nb", "/tmp/a\n"], ids=["slash", "mid", "end"]
+)
+def test_a_program_with_no_plain_name_is_refused_and_its_line_fits_the_record_schema(
+    service: state.ProcessState, program: str
+) -> None:
+    run = a_run(service, real=("process:uname", "process:python3"))
+    message = refused(run, lambda: subprocess.run([program], check=True))
+    assert message == (
+        f"{shlex.join([program])} was started inside a test run, and its program has no plain "
+        "name that [agent] real could list, so it is refused. Start it by a name such as "
+        "uname, through a link or wrapper whose name real can list."
+    )
+    line = lines(run)[0]
+    assert line["call"] == "process:?" and line["reason"] == "service_child"
+    check = jsonschema.Draft202012Validator(RECORD)
+    assert [e.message for e in check.iter_errors(line)] == []
+    listed = a_run(service, real=("process:uname",))  # a plain name still runs, with its line
+    under(listed, lambda: subprocess.run(["uname"], check=True, capture_output=True))
+    assert [x["call"] for x in lines(listed)] == ["process:uname"]
+    assert [e.message for e in check.iter_errors(lines(listed)[0])] == []
 
 
 @pytest.mark.design("service.hidden_shell_out")
