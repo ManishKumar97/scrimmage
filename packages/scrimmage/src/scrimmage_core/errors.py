@@ -18,7 +18,14 @@ class ScrimmageStopped(ScrimmageError):
 
 
 class ScrimmageMockError(ScrimmageError):
-    """A mock or a fault cannot be built as the test says. A mistake in the test."""
+    """A mock or a fault cannot be built as the test says. A mistake in the test.
+
+    cause: the class name of the team's error that made the mock fail to build, if one did.
+    Only the name, as the error's message can quote the value."""
+
+    def __init__(self, message: str, *, cause: str | None = None) -> None:
+        super().__init__(message)
+        self.cause = cause
 
 
 class ConfigError(ScrimmageError):

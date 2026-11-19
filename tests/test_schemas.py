@@ -311,6 +311,15 @@ def test_a_later_field_in_the_control_objects_fits_both_schemas() -> None:
 
 Func = ast.FunctionDef | ast.AsyncFunctionDef
 
+# Dicts with a "reason" key that are not a record line, by file and the function that builds
+# them. Any other such dict fails the scan, as it could become a line with a reason it never read.
+NOT_A_LINE = {
+    ("state.py", "unreadable_miss"),  # the mock_miss object, its own field of a line
+    ("state.py", "miss_evidence"),  # the same, for a miss that has a mock to name
+    ("changes.py", "truncate_responses"),  # a provider's `incomplete_details` on a model reply
+    ("runner.py", "miss_groups"),  # a report's miss rows, built from lines already read
+}
+
 
 class Gates:
     """The gate modules of one package, read as syntax, to find every refusal reason written.
@@ -319,15 +328,24 @@ class Gates:
     of `.refuse(step, reason)`, `x["reason"] = ...` and `x.reason = ...`. Its value may be a
     string, a module constant here or in another gate module (`engine.MISTAKE_REFUSAL`), a local
     name assigned from those, or an if-else or `or` of them.
-    A read of another `.reason` passes on a reason written (and read) elsewhere. Anything else
-    is listed in `unreadable`, so a new way of writing a reason fails the test instead of
-    slipping past it."""
+    A read of `decision.reason` passes on a reason written (and read) where the decision was
+    built. The `reason` parameter of a method named `refuse` in a class does the same, as its
+    callers are all read. Anything else is listed in `unreadable`, so a new way of writing a
+    reason fails the test instead of slipping past it: `**` on a `Decision`, `setattr`, a
+    `{"reason": ...}` dict (unless it is in `NOT_A_LINE`), a module-level `refuse`.
+    Every module of the package is read, `runner.py` too."""
 
     def __init__(self, package: Path) -> None:
-        # runner.py reads reasons from the records and writes none
-        paths = [p for p in sorted(package.glob("*.py")) if p.name != "runner.py"]
+        paths = sorted(package.glob("*.py"))
         self.trees = {p.stem: ast.parse(p.read_text()) for p in paths}
         self.files = {stem: package / f"{stem}.py" for stem in self.trees}
+        self.methods = {
+            id(n)
+            for tree in self.trees.values()
+            for c in ast.walk(tree)
+            if isinstance(c, ast.ClassDef)
+            for n in c.body
+        }
         self.found: set[str] = set()
         self.unreadable: list[str] = []
         for stem, tree in self.trees.items():
@@ -338,6 +356,16 @@ class Gates:
             func = node
         for value, line in self.written(node):
             self.take(stem, value, func, line)
+        if isinstance(node, ast.Dict) and any(
+            isinstance(k, ast.Constant) and k.value == "reason" for k in node.keys
+        ):
+            where = (f"{stem}.py", func.name if func is not None else "")
+            if where not in NOT_A_LINE:
+                self.unreadable.append(
+                    f"{where[0]}:{node.lineno}: a dict with a reason key, which could become a "
+                    "line the scan cannot read; write the reason by keyword, or if the dict is "
+                    f"not a line, list {where} in NOT_A_LINE"
+                )
         for child in ast.iter_child_nodes(node):
             self.walk(stem, child, func)
 
@@ -347,6 +375,12 @@ class Gates:
         if isinstance(node, ast.Call):
             name = ast.unparse(node.func).rpartition(".")[2]
             out += [(k.value, node.lineno) for k in node.keywords if k.arg == "reason"]
+            if name == "Decision" and any(k.arg is None for k in node.keywords):
+                out.append((ast.Name(id="<** on a Decision>"), node.lineno))
+            if name == "setattr" and any(
+                isinstance(a, ast.Constant) and a.value == "reason" for a in node.args
+            ):
+                out.append((ast.Name(id="<setattr of reason>"), node.lineno))
             if name == "Decision" and len(node.args) > 1:
                 out.append((ast.Name(id="<positional Decision argument>"), node.lineno))
             if name == "refuse" and isinstance(node.func, ast.Attribute):
@@ -386,8 +420,8 @@ class Gates:
         if isinstance(node, ast.BoolOp):
             return set().union(*(self.resolve(stem, v, func, deeper) for v in node.values))
         if isinstance(node, ast.Attribute):
-            if node.attr == "reason":  # another reason, read from a decision that wrote it
-                return set()
+            if node.attr == "reason" and ast.unparse(node.value).rpartition(".")[2] == "decision":
+                return set()  # a reason a Decision was built with, read where that was
             if isinstance(node.value, ast.Name):
                 module = self.module_alias(stem, node.value.id)
                 if module is not None:
@@ -398,8 +432,13 @@ class Gates:
             local = self.local_values(func, node.id)
             if local:
                 return set().union(*(self.resolve(stem, v, func, deeper) for v in local))
-            if func is not None and func.name == "refuse" and node.id in params(func):
-                return set()  # `refuse(self, step, reason)`: its callers are all read here
+            if (
+                func is not None
+                and func.name == "refuse"
+                and id(func) in self.methods
+                and node.id in params(func)
+            ):
+                return set()  # `RunState.refuse(self, step, reason)`: its callers are all read
             return self.constant(stem, node.id, deeper)
         raise ValueError(f"a refusal reason the test cannot read: {ast.unparse(node)}")
 

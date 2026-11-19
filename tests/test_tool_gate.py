@@ -145,10 +145,16 @@ def test_a_mock_that_does_not_fit_is_a_mistake(lines: Lines, returns: object) ->
     assert "does not fit" in str(lines.lines[0]["mistake"])
 
 
-def test_a_validation_error_is_a_mistake(lines: Lines) -> None:
+def test_a_validation_error_is_a_mistake_that_holds_only_its_class(lines: Lines) -> None:
     install(lines, [Mock("tool:get_validated", {"count": 1}, None)])
-    with pytest.raises(ScrimmageMockError, match="sku is required"):
+    with pytest.raises(ScrimmageMockError, match="building it raised ValueError") as raised:
         tool_gate.gate(get_validated, "get_validated")("SKU-42")
+    # The team's message can quote the value, so the mistake keeps neither it nor the error.
+    mistake = raised.value
+    assert mistake.cause == "ValueError"
+    assert mistake.__cause__ is None and mistake.__context__ is None
+    leaked = "sku is required" in str(mistake.args)
+    assert not leaked, "the error's message was kept"
 
 
 def test_an_explicit_type_wins_over_the_annotation(lines: Lines) -> None:
@@ -1561,6 +1567,35 @@ def test_a_mock_is_built_into_the_return_type_whatever_the_parameters(
     install(Lines(), [Mock("tool:f", {"sku": "SKU-42"}, None)])
     with pytest.raises(ScrimmageMockError, match="does not fit test_tool_gate:Stock"):
         tool_gate.gate(tool, "f")("SKU-42")
+
+
+def checking_class(head: str) -> Any:
+    """A tool returning a dataclass with a field type imported only for type checking. On
+    3.14 its signature raises NameError unless the annotations are read as text."""
+    space: dict[str, Any] = {"__name__": __name__}
+    other = '"Decimal | None"' if head == "quoted" else "Decimal | None"
+    source = (
+        "import dataclasses\n@dataclasses.dataclass\nclass Late:\n"
+        f"    sku: str\n    other: {other} = None\n"
+        "def f(sku: str) -> Late:\n    raise AssertionError\n"
+    )
+    exec((FUTURE if head == "future" else "") + source, space)
+    return space["f"]
+
+
+@pytest.mark.design("mock.typed_from_annotation")
+@pytest.mark.parametrize("head", CHECKING)
+def test_a_class_with_an_unresolved_field_type_is_built_and_a_missing_key_named(
+    lines: Lines, head: str
+) -> None:
+    tool = checking_class(head)
+    install(lines, [Mock("tool:f", {"sku": "SKU-42"}, None)])
+    assert tool_gate.gate(tool, "f")("SKU-42").sku == "SKU-42"
+    install(Lines(), [Mock("tool:f", {"cnt": 1}, None)])
+    missing = "does not fit test_tool_gate:Late: missing a required argument: 'sku'"
+    with pytest.raises(ScrimmageMockError, match=missing) as raised:
+        tool_gate.gate(tool, "f")("SKU-42")
+    assert raised.value.cause == "TypeError"
 
 
 @pytest.mark.parametrize("head", CHECKING)

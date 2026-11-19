@@ -299,8 +299,9 @@ That is the trust a `type` already has: its class's own code runs when the value
 The plan carries only the function's name.
 Calls the function makes pass the gates like any other code in the run.
 If it raises, even `SystemExit`, the record names the function and the error's class, never the error's message, which can quote a value.
+A mock that its class rejects is a mistake that can name a field or a dict key from the mock's data, but never a value.
 
-*Checked by: `tests/test_bootstrap.py::test_a_type_outside_the_allowed_prefixes_is_refused_before_import`, `tests/test_bootstrap.py::test_a_returns_from_outside_the_allowed_prefixes_stops_the_program_before_the_agent_runs`, `tests/test_tool_gate.py::test_a_type_outside_the_allowed_prefixes_is_refused_before_import`, `tests/test_schemas.py::test_the_sdk_rejects_a_bad_plan`, `tests/test_returns_from.py::test_a_factory_outside_the_allowed_imports_is_never_imported`, `tests/test_returns_from.py::test_a_factory_that_raises_is_a_mistake_naming_it_and_not_its_message`*
+*Checked by: `tests/test_bootstrap.py::test_a_type_outside_the_allowed_prefixes_is_refused_before_import`, `tests/test_bootstrap.py::test_a_returns_from_outside_the_allowed_prefixes_stops_the_program_before_the_agent_runs`, `tests/test_tool_gate.py::test_a_type_outside_the_allowed_prefixes_is_refused_before_import`, `tests/test_schemas.py::test_the_sdk_rejects_a_bad_plan`, `tests/test_returns_from.py::test_a_factory_outside_the_allowed_imports_is_never_imported`, `tests/test_returns_from.py::test_a_factory_that_raises_is_a_mistake_naming_it_and_not_its_message`, `tests/test_mock_type.py::test_a_value_the_class_rejects_is_in_no_report_record_or_log`*
 
 ## A fault sends nothing
 
@@ -388,8 +389,7 @@ Model calls run for real, so a test has a budget, $5 unless you change `max_cost
 
 The cap can still be passed:
 
-- The estimate assumes `max_tokens`, or `reserve_output_tokens` when a request sets none.
-  A reply that uses more output than that costs more than was reserved, so one call can take the total over the limit.
+- Calls that cost more than their reservation, a reply past its output limit or an input with more tokens than the estimate, can together pass the cap by what they cost above it; see [A call can cost more than its hold](limits.md#the-budget).
 - A provider that is not OpenAI's format, listed under `real` as a web host, is not budgeted at all.
 - A run killed with SIGKILL can leave a reservation that never settles.
   It counts as spent, so the cap errs low, not high.

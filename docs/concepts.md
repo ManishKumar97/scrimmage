@@ -55,6 +55,8 @@ If the tool returns its own type, Scrimmage builds that type from the mock:
 - `-> Stock | None` and `-> Optional[Stock]` build a `Stock` from a table, as TOML cannot write `None`, and keep any other value as written, so `-> Path | None` with `"/tmp"` gives the text, and `-> Status | None` builds the member a value names and keeps any other value as written;
 - a pydantic model is built with `model_validate`, an `Enum` from its value, `Status("shipped")`, and any other class with `Type(**returns)`;
 - a mock that does not fit the type is a mistake in the test, and an `Enum` value that is no member names the first 10 members.
+  When the class rejects a table, the mistake names a missing or unknown key, a pydantic model's failing fields and their error types, or the error's class.
+  It never quotes the error's message, which can quote a value.
 
 A `Flag` takes any valid combination of its members, such as `3` for `READ | WRITE`; the mistake for a value that is no combination lists only the single members.
 
