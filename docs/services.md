@@ -235,8 +235,12 @@ NTP, the Network Time Protocol, is what servers use to keep their clocks in step
 **The setup request.**
 Then it sends the first test's baseline once, as a run named `setup-` and 12 hex digits.
 Its record is kept beside the runs, and its model calls count toward the budget, but no row counts it.
+Its summary line has the shape of a run's: `row` is `baseline` and `judged` and the cost are filled in.
+Only the `setup-` prefix of its file and `run` name tells it apart, and it is never counted in a result.
+A reader that groups summary lines by `test` and `row` must skip every run whose name starts with `setup-`.
 It must be claimed by Scrimmage in the service, answer 2xx with an answer where `answer` says, refuse nothing, make its model call inside its run, and see no call outside any request.
 A refusal names the entry to add, such as `"process:uname"` under `real`, and stops the test with exit 2.
+A program with no plain name, such as a path that ends in `/` or a name with a line break, is refused as `process:?`, and no entry in `real` can list it.
 A reply with no model call inside the run stops it with exit 3: the run's context is lost on the agent's main path, so every run would be an infrastructure error.
 
 ## Each run

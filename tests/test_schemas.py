@@ -6,7 +6,7 @@ import re
 import sys
 import tomllib
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import jsonschema
 import pytest
@@ -93,6 +93,33 @@ def test_a_served_plan_with_the_runs_age_fits_the_schema_and_round_trips() -> No
     assert plan.Plan.from_json(doc).to_json() == doc
     with pytest.raises(jsonschema.ValidationError):
         validator("plan").validate({**DESIGN_PLAN, "elapsed_s": -1})
+
+
+@pytest.mark.design("schema.plan")
+def test_a_plan_that_lists_a_program_fits_the_schema(tmp_path: Path) -> None:
+    path = tmp_path / "scrimmage.toml"
+    path.write_text(
+        '[agent]\nservice = "http://127.0.0.1:9/chat"\nbody = {message = "{question}"}\n'
+        'answer = "reply"\nreal = ["process:uname", "process:python", "process:g++"]\n'
+        'background_real = ["process:uname"]\n\n[[test]]\nname = "t"\nquestion = "q"\n'
+        'expect = ["x"]\n'
+    )
+    cfg = config.load(path)
+    doc: Any = cast(
+        dict[str, Any], plan.plan_for(cfg, plan.rows(cfg)[0], "run-0123456789ab").to_json()
+    )
+    assert doc["real"] == ["process:uname", "process:python", "process:g++"]
+    validator("plan").validate(json.loads(json.dumps(doc)))
+    for bad in ["process:", "process:a\n", "process:a b", "process:?"]:
+        assert list(validator("plan").iter_errors({**doc, "real": [bad]})), bad
+
+
+@pytest.mark.design("schema.record")
+def test_a_process_call_label_fits_the_record_schema_only_as_a_plain_name() -> None:
+    for name in ["process:uname", "process:python3.12", "process:g++", "process:?"]:
+        assert list(validator("record").iter_errors({**DESIGN_LINE, "call": name})) == [], name
+    for name in ["process:", "process:a\n", "process:a\nb", "process: ", "process:??"]:
+        assert list(validator("record").iter_errors({**DESIGN_LINE, "call": name})), name
 
 
 @pytest.mark.design("schema.record")

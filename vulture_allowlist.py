@@ -160,7 +160,6 @@ _.delete_doc  # tests/fakes/docs_server.py: the MCP server calls its tools by na
 _.output_model  # tests/fakes/docs_server.py: read by the MCP server's result check
 _._handle_resumption_request  # tests/test_mcp.py: a stand-in the MCP gate wraps by name
 _.handle_get_stream  # tests/test_mcp.py: a stand-in the MCP gate wraps by name
-_.patched_httpx2  # tests/test_service_units.py: a fixture, which pytest.mark.usefixtures names
 _.signals_kept  # tests/conftest.py: a fixture, which pytest.mark.usefixtures names as text
 _.fast_tests_start_no_process  # tests/conftest.py: an autouse fixture, which pytest runs by itself
 _.no_sender_thread_outlives_its_test  # tests/conftest.py: an autouse fixture, run by pytest

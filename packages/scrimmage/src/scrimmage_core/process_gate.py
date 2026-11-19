@@ -31,6 +31,7 @@ from scrimmage_core import hooks, python_args, state
 from scrimmage_core.decide import Call, Decision
 from scrimmage_core.errors import ScrimmageRefused
 from scrimmage_core.labels import PROCESS as LABEL
+from scrimmage_core.labels import PROGRAM
 from scrimmage_core.state import (
     Outside,
     RunState,
@@ -162,6 +163,9 @@ def service_start(event: str, args: tuple[Any, ...]) -> None:
     program, line = program_of(event, args)
     if program is None:
         refuse_other(run, "process:fork", "os.fork", "a fork would carry this run into a copy")
+        return
+    if not PROGRAM.fullmatch(program):  # an empty name, or one with a line break or odd bytes
+        refuse_other(run, "process:?", line, "its program has no plain name that real could list")
         return
     label = f"process:{program}"
     step = run.decide(Call("process", label, program), {"command": line})
