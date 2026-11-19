@@ -545,6 +545,10 @@
         "carries_injected": {
           "const": true,
           "description": "A model request that holds the text a fault put in a result (a heuristic)."
+        },
+        "after_reply_fault": {
+          "const": true,
+          "description": "A model's real 400 to a chat request that, as sent, held what a fault in a model's reply gave the agent: the agent's result, not an infrastructure error."
         }
       }
     },

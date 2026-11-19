@@ -370,7 +370,8 @@ Also read the control-path limits under An agent inside a web service.
 
 - **`unknown tool` sends one form.** It is the call to `multi_tool_use.parallel` OpenAI's models have sent. A tool name you pick is not built.
   Its arguments name your first tool with `"parameters": {}`, so an agent that unwraps the call runs that tool with no arguments.
-  It fires where the model picks its own tool: not with `tool_choice` `"none"`, a `tool_choice` that names a tool, or tools in the old `functions` field only; those calls are left as they are. It still fires with `parallel_tool_calls` false, as no source shows what a model does then. If your agent sends that call back, OpenAI's real 400 on the next request ends the run as an infrastructure error.
+  It fires where the model picks its own tool: not with `tool_choice` `"none"`, a `tool_choice` that names a tool, or tools in the old `functions` field only; those calls are left as they are. It still fires with `parallel_tool_calls` false, as no source shows what a model does then.
+  If your agent sends that call back, OpenAI's real 400 on the next request is judged as the run's outcome, and its line is marked `after_reply_fault`; see [The 400 after a reply fault](model-faults.md#the-400-after-a-reply-fault).
 
 - **A body cut by a dropped connection.** `bad body` sends a whole reply whose JSON does not parse. A reply cut short because the connection dropped is a connection error, not a body to parse: the openai library raises `APIConnectionError` from httpx2's `RemoteProtocolError`, after its retries. Scrimmage does not inject that failure.
 

@@ -174,6 +174,8 @@ class Step:
     slowed_ms: int | None = None
     cut_by: str | None = None
     waiting_since: float | None = None  # while a slowed call waits: when it began
+    # A chat request that, as sent, held what a fault in a model's reply gave the agent.
+    carries_reply_fault: bool = False
 
 
 def this_process() -> dict[str, object]:
@@ -356,6 +358,9 @@ class RunState:
         # The text each changed call put in a result, so a later model request can be
         # looked at for it: a heuristic note when it never got there.
         self.injected: list[str] = []
+        # What each fault in a model's reply gave the agent, by the call's label: a later
+        # request to that label that carries one was built from the faulted reply.
+        self.reply_fault_markers: dict[str, list[openai_table.Given]] = {}
         self.end_program: Callable[[], None] = lambda: None  # set where a run has a sender
         # The web gate's replies not read to their end, and the model paths it ran as web
         # requests, each noted once: both belong to this run, never to the process.
@@ -743,6 +748,20 @@ class RunState:
         if extra is not None:
             line.update(extra)
         self.put(line, keep=True)
+
+    def add_reply_fault_markers(self, label: str, gave: openai_table.Given) -> None:
+        """Keep what a fired fault in a model's reply gave the agent. Called where the faulted
+        reply is made, built or changed, and only then."""
+        if gave.ids or gave.prefixes:
+            with self._lock:
+                self.reply_fault_markers.setdefault(label, []).append(gave)
+
+    def carries_reply_fault(self, label: str, fields: dict[str, object]) -> bool:
+        """Whether this chat request, as it is sent, carries what a fault in a reply from the
+        same label gave the agent."""
+        with self._lock:
+            kept = list(self.reply_fault_markers.get(label, ()))
+        return any(openai_table.carries(fields, gave) for gave in kept)
 
     def unchanged(self, step: Step, why: str) -> None:
         """A carried fault could not change this call: it gets what the baseline gives it, and

@@ -282,6 +282,63 @@ def unknown_tool_reply(fields: dict[str, object], tokens_in: int, tool: str) -> 
     return chat_reply(fields, tokens_in, message, "tool_calls")
 
 
+@dataclass(frozen=True)
+class Given:
+    """What a faulted chat reply gave the agent, in the forms a request built from it carries
+    back. ids: the reply's tool call ids, made fresh for each reply, so no other conversation
+    holds them. prefixes: for each choice, the faulted request's messages and then the
+    message the agent got, compared with None and empty values left out."""
+
+    ids: frozenset[str] = frozenset()
+    prefixes: tuple[tuple[object, ...], ...] = ()
+
+
+def given(fields: dict[str, object], reply: bytes, *, ids_only: bool) -> Given:
+    """What this reply to this request gave the agent. ids_only: the tool call ids alone, for
+    a reply whose message any model may send, such as a call to multi_tool_use.parallel."""
+    messages = [
+        _obj(_obj(choice).get("message"))
+        for choice in _list(_obj(request_fields(reply)).get("choices"))
+    ]
+    ids = frozenset(
+        found
+        for message in messages
+        for call in _list(message.get("tool_calls"))
+        if isinstance(found := _obj(call).get("id"), str) and found
+    )
+    if ids_only:
+        return Given(ids)
+    asked = [_normal(item) for item in _list(fields.get("messages"))]
+    prefixes = tuple((*asked, _normal(message)) for message in messages if message)
+    return Given(ids, prefixes)
+
+
+def carries(fields: dict[str, object], gave: Given) -> bool:
+    """Whether a chat request's messages carry what a faulted reply gave: an assistant tool
+    call or a tool result with one of its tool call ids, or messages that start with the
+    faulted request's messages and the reply's message."""
+    messages = [_obj(item) for item in _list(fields.get("messages"))]
+    for message in messages:
+        calls = [_obj(call).get("id") for call in _list(message.get("tool_calls"))]
+        if message.get("role") == "assistant" and any(i in gave.ids for i in calls):
+            return True
+        if message.get("role") == "tool" and message.get("tool_call_id") in gave.ids:
+            return True
+    sent = tuple(_normal(message) for message in messages)
+    return any(sent[: len(prefix)] == prefix for prefix in gave.prefixes)
+
+
+def _normal(value: object) -> object:
+    """A message as a later request may write it again: None, empty and missing are alike, as
+    a client that drops None fields sends them."""
+    if isinstance(value, dict):
+        kept = {str(k): _normal(v) for k, v in cast(dict[object, object], value).items()}
+        return {k: v for k, v in kept.items() if v not in (None, "", [], {})}
+    if isinstance(value, list):
+        return [_normal(item) for item in cast(list[object], value)]
+    return value
+
+
 def request_fields(body: bytes) -> dict[str, object] | None:
     """A request's JSON fields, or None when the body cannot be read as a JSON object."""
     try:

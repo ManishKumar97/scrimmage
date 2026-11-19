@@ -481,6 +481,9 @@ def prepare(
         check_tools(ctx, run, step, fields, str(request.url.path))
     if call.kind == "model" and step.decision.action == "fault":
         reply_checks(run, step, fields or {}, str(request.url.path))
+    if call.kind == "model" and call.name == "chat" and fields is not None:
+        # Decided as the request is sent: one sent before a fault fired holds nothing of it.
+        step.carries_reply_fault = run.carries_reply_fault(call.label, fields)
     return ctx, step, extra
 
 
@@ -688,6 +691,8 @@ def built_reply(
         tool = openai_table.tool_call_tools(str(request.url.path), fields)[0]
         built = openai_table.unknown_tool_reply(fields, tokens, tool)
     headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
+    gave = openai_table.given(fields, built, ids_only=word == "unknown tool")
+    ctx.run.add_reply_fault_markers(step.call.label, gave)
     return reply(ctx, module, client, step, request, extra, (200, headers, built))
 
 
@@ -1441,6 +1446,10 @@ def changed_reply(
         return rebuilt(module, client, request, response, headers, module.ByteStream(body))
     reply = blob(done.body, ctx.sender, scrub=ctx.run.secrets)
     ctx.run.changed(step, Changed(None, done.count, done.parts), reply=reply, status=done.status)
+    if step.call.kind == "model" and fault.do in REPLY_FAULTS:  # never a model replace
+        asked = openai_table.request_fields(body_of(request) or b"") or {}
+        gave = openai_table.given(asked, done.body, ids_only=False)
+        ctx.run.add_reply_fault_markers(step.call.label, gave)
     stream = module.ByteStream(done.body)
     return rebuilt(module, client, request, response, done.headers, stream, done.status)
 
@@ -1631,6 +1640,8 @@ def capture(
             usd = record(ctx, step, request, response, extra, b"".join(chunks), size[0])
         except Exception:  # the agent's own call must never fail because of the arithmetic
             extra.update(status=response.status_code, cost_usd=None, cost_estimated=False)
+        if after_reply_fault(step, extra):
+            extra["after_reply_fault"] = True
         ctx.run.finish(step)
         settle(ctx, reservation, usd)
 
@@ -1653,6 +1664,16 @@ def capture(
 
     ctx.open.add(finish)
     response.stream = wrap(module, response.stream, keep, finish, broke, sync=sync)
+
+
+def after_reply_fault(step: Step, extra: dict[str, object]) -> bool:
+    """A model's real 400 to a chat request that, as it was sent, held what a fault in a
+    model's reply gave the agent. The agent built this request from the faulted reply, as
+    from a real one, so the 400 is the agent's own result. Any other status, or a request
+    that held nothing of it, says nothing about the agent."""
+    return (
+        step.carries_reply_fault and step.decision.action == "real" and extra.get("status") == 400
+    )
 
 
 def record(

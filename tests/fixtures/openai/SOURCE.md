@@ -68,6 +68,11 @@ The key fragment in the 401 message is made up.
 | `real_error_401.json` | A chat request with a key that is not real |
 | `real_error_context_length.json` | A chat request to `gpt-4o-mini` of about 140,000 tokens |
 
+`real_error_tool_name.json` was saved the same way on 18 November 2026, from `gpt-4o-mini`.
+It is the reply to a chat request whose history holds an assistant call to `multi_tool_use.parallel` and its tool result.
+OpenAI refuses the dot in the tool name.
+`tests/test_runner.py` serves it from the fake OpenAI API, as the answer to the request an agent sends after `unknown tool`.
+
 These are real replies to `gpt-4o-mini` chat requests, saved on 18 November 2026 from OpenAI's Chat Completions API.
 Each JSON file holds the status, the `content-type` and the body; every other header, the request id included, is left out.
 `tests/test_real_against_injected.py` compares the reply faults against them.

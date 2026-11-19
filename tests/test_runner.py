@@ -9,13 +9,14 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import jsonschema
 import pytest
 
 import scrimmage_core
-from conftest import ACME, EXAMPLE_FAULT, Project, TimeLimit
-from fakes.openai_server import FakeOpenAI
+from conftest import ACME, EXAMPLE_FAULT, Project, Result, TimeLimit
+from fakes.openai_server import FakeOpenAI, ToolNames
 from scrimmage_core import config, state, tool_gate
 from scrimmage_core import runner as runner_module
 from scrimmage_core.plan import Plan
@@ -669,3 +670,120 @@ def test_real_writes_under_a_fault_are_counted_and_noted(
     ), result.out
     summary = next(x for x in result.records() if x[-1]["row"] == "fault 1")[-1]["summary"]  # type: ignore[index]
     assert summary["calls"]["under_real"] == 1  # type: ignore[index]
+
+
+# The order bot under unknown tool: it runs the tool the model named, fails, and sends the
+# call back in its next request, which OpenAI answers with a 400 for the dot in the name.
+UNKNOWN_TOOL_FIRST = (
+    '[[test.fault]]\ncall = "model"\nmodel = "gpt-4o-mini"\ndo = "unknown tool"\nwhen = "call 1"\n'
+)
+
+
+def model_lines(result: Result, row: str) -> list[dict[str, object]]:
+    lines = next(lines for lines in result.records() if lines[-1]["row"] == row)
+    return [x for x in lines if x.get("kind") == "model"]
+
+
+def summary_of(result: Result, row: str) -> dict[str, object]:
+    lines = next(lines for lines in result.records() if lines[-1]["row"] == row)
+    return cast(dict[str, object], lines[-1]["summary"])
+
+
+@pytest.mark.design("runner.after_reply_fault")
+@pytest.mark.slow
+def test_a_400_after_unknown_tool_is_the_runs_outcome_not_infrastructure(
+    project: Project, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    project.edit("[agent]\n", "[agent]\nruns = 1\n")
+    project.edit(EXAMPLE_FAULT, UNKNOWN_TOOL_FIRST)
+    fake = fake_openai([], by_model={"gpt-4o-mini": ToolNames(tuple(ACME))})
+    result = project.test(fake)
+    said = result.out + result.err
+    # The bot does not catch the 400, so it crashes: a result about the bot, and a fail.
+    assert result.code == 1, said
+    assert "not injected" not in said and "infrastructure error" not in said, said
+    model = model_lines(result, "fault 1")
+    assert [(x["action"], x.get("status")) for x in model] == [("fault", 200), ("real", 400)]
+    assert "after_reply_fault" not in model[0] and model[1]["after_reply_fault"] is True
+    summary = summary_of(result, "fault 1")
+    assert summary["outcome"] == "crashed" and summary["fault_fired"] is True, summary
+    # The 400 is OpenAI's real one, served to the one request that held the dotted name.
+    [sent] = [r for r in fake.requests if "multi_tool_use.parallel" in json.dumps(r)]
+    assert sent["messages"][1]["tool_calls"][0]["function"]["name"] == "multi_tool_use.parallel"
+    assert summary_of(result, "baseline")["outcome"] == "answered"
+
+
+@pytest.mark.design("runner.after_reply_fault")
+@pytest.mark.slow
+def test_a_400_with_no_reply_fault_before_it_is_still_infrastructure(
+    project: Project, fake_openai: Fake
+) -> None:
+    """The same 400 on the second call, with no reply fault fired before it: the baseline
+    has none, and the fault row's is on call 3, which the bot never reaches, as it crashes
+    on the 400. OpenAI failing by itself. A fault that fires after a caught 400 is in
+    test_record_lines.py."""
+    project.edit("[agent]\n", "[agent]\nruns = 1\n")
+    project.edit(EXAMPLE_FAULT, UNKNOWN_TOOL_FIRST.replace("call 1", "call 3"))
+    result = project.test(fake_openai(["acme_get_order", "real_error_tool_name"]))
+    said = result.out + result.err
+    assert result.code == 3, said
+    assert {s["outcome"] for s in result.summaries()} == {"infrastructure error"}
+    assert "model:openai returned 400, not injected" in said, said
+    for row in ("baseline", "fault 1"):
+        model = model_lines(result, row)
+        assert [(x["action"], x.get("status")) for x in model] == [("real", 200), ("real", 400)]
+        assert not any("after_reply_fault" in x for x in model), model
+
+
+@pytest.mark.design("runner.after_reply_fault")
+@pytest.mark.slow
+def test_a_500_after_a_reply_fault_is_still_infrastructure(
+    project: Project, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    """A 500 says nothing about the request the agent built: only a 400 is let through."""
+    project.edit("[agent]\n", "[agent]\nruns = 1\n")
+    project.edit(EXAMPLE_FAULT, UNKNOWN_TOOL_FIRST)
+    rule = ToolNames(tuple(ACME), refused="500:error_500")
+    result = project.test(fake_openai([], by_model={"gpt-4o-mini": rule}))
+    said = result.out + result.err
+    assert result.code == 3, said
+    assert "model:openai returned 500, not injected" in said, said
+    model = model_lines(result, "fault 1")
+    assert [(x["action"], x.get("status")) for x in model] == [("fault", 200), ("real", 500)]
+    assert "after_reply_fault" not in model[1], model[1]
+    assert summary_of(result, "fault 1")["outcome"] == "infrastructure error"
+    # The runner holds the line too: a 500 marked as after a reply fault is not let through.
+    assert runner_module.real_error({**model[1], "after_reply_fault": True}, model) is not None
+
+
+def line_at(
+    seq: int, action: str, status: int, do: str | None = None, pid: int = 1
+) -> dict[str, object]:
+    line: dict[str, object] = {
+        "call": "model:openai", "kind": "model", "action": action, "status": status,
+        "seq": seq, "proc": {"host": "h", "pid": pid, "started": "t"},
+    }  # fmt: skip
+    if do is not None:
+        line["fault"] = {"do": do, "when": "call 1", "n": 1}
+    return line
+
+
+@pytest.mark.design("runner.after_reply_fault")
+@pytest.mark.parametrize(
+    ("before", "why"),
+    [
+        ([], "no fault line at all"),
+        ([line_at(3, "fault", 200, "unknown tool")], "the reply fault came after the 400"),
+        ([line_at(1, "fault", 503, "status 503")], "the fault before it is not in a reply"),
+        ([line_at(1, "fault", 200, "unknown tool", pid=2)], "the fault was in another process"),
+    ],
+)
+def test_a_marked_400_with_no_reply_fault_line_before_it_is_still_infrastructure(
+    before: list[dict[str, object]], why: str
+) -> None:
+    """The runner does not trust the gate's mark alone."""
+    marked = {**line_at(2, "real", 400), "after_reply_fault": True}
+    lines = [*before, marked]
+    assert runner_module.real_error(marked, lines) == "model:openai returned 400", why
+    fired = [line_at(1, "fault", 200, "unknown tool"), marked]
+    assert runner_module.real_error(marked, fired) is None
