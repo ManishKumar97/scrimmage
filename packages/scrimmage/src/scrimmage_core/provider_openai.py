@@ -282,6 +282,39 @@ def unknown_tool_reply(fields: dict[str, object], tokens_in: int, tool: str) -> 
     return chat_reply(fields, tokens_in, message, "tool_calls")
 
 
+def reply_markers(reply: bytes) -> set[str]:
+    """What a chat reply gave the agent, that a request built from it carries back: each
+    tool call's id and name, and each message's text or refusal."""
+    found: set[str] = set()
+    for choice in _list(_obj(request_fields(reply)).get("choices")):
+        found |= said(_obj(_obj(choice).get("message")))
+    return found
+
+
+def said(message: dict[str, object]) -> set[str]:
+    """An assistant message's text, refusal, and tool call ids and names."""
+    found = {v for k in ("content", "refusal") if isinstance(v := message.get(k), str) and v}
+    for call in _list(message.get("tool_calls")):
+        found |= {
+            v
+            for v in (_obj(call).get("id"), _obj(_obj(call).get("function")).get("name"))
+            if isinstance(v, str) and v
+        }
+    return found
+
+
+def holds_reply(fields: dict[str, object], markers: set[str]) -> bool:
+    """Whether a chat request's history holds what a faulted reply gave: an assistant message
+    with one of its tool call ids, names or texts, or a tool result for one of its calls."""
+    for item in _list(fields.get("messages")):
+        message = _obj(item)
+        if message.get("role") == "assistant" and said(message) & markers:
+            return True
+        if message.get("role") == "tool" and message.get("tool_call_id") in markers:
+            return True
+    return False
+
+
 def request_fields(body: bytes) -> dict[str, object] | None:
     """A request's JSON fields, or None when the body cannot be read as a JSON object."""
     try:

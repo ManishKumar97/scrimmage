@@ -174,6 +174,8 @@ class Step:
     slowed_ms: int | None = None
     cut_by: str | None = None
     waiting_since: float | None = None  # while a slowed call waits: when it began
+    # A chat request that, as sent, held what a fault in a model's reply gave the agent.
+    carries_reply_fault: bool = False
 
 
 def this_process() -> dict[str, object]:
@@ -356,9 +358,9 @@ class RunState:
         # The text each changed call put in a result, so a later model request can be
         # looked at for it: a heuristic note when it never got there.
         self.injected: list[str] = []
-        # Set when a fault in a model's reply fired, so the 400 a model answers the agent's
-        # next request with is the agent's own result.
-        self.reply_faulted = False
+        # What each fault in a model's reply gave the agent, by the call's label: a later
+        # request to that label that holds one was built from the faulted reply.
+        self.reply_fault_markers: dict[str, set[str]] = {}
         self.end_program: Callable[[], None] = lambda: None  # set where a run has a sender
         # The web gate's replies not read to their end, and the model paths it ran as web
         # requests, each noted once: both belong to this run, never to the process.
@@ -746,6 +748,19 @@ class RunState:
         if extra is not None:
             line.update(extra)
         self.put(line, keep=True)
+
+    def add_reply_fault_markers(self, label: str, markers: Iterable[str]) -> None:
+        """Keep what a fired fault in a model's reply gave the agent: its tool call ids and
+        names, or its text. Called once a faulted reply is handed to the agent."""
+        with self._lock:
+            self.reply_fault_markers.setdefault(label, set()).update(m for m in markers if m)
+
+    def carries_reply_fault(self, label: str, fields: dict[str, object]) -> bool:
+        """Whether this chat request, as it is sent, holds what a fault in a reply from the
+        same label gave the agent."""
+        with self._lock:
+            markers = set(self.reply_fault_markers.get(label, ()))
+        return bool(markers) and openai_table.holds_reply(fields, markers)
 
     def unchanged(self, step: Step, why: str) -> None:
         """A carried fault could not change this call: it gets what the baseline gives it, and

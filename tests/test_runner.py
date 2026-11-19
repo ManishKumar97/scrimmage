@@ -718,8 +718,10 @@ def test_a_400_after_unknown_tool_is_the_runs_outcome_not_infrastructure(
 def test_a_400_with_no_reply_fault_before_it_is_still_infrastructure(
     project: Project, fake_openai: Fake
 ) -> None:
-    """The same 400 on the second call, where the reply fault comes later, on call 3, and
-    on the baseline, which has none: OpenAI failing by itself."""
+    """The same 400 on the second call, with no reply fault fired before it: the baseline
+    has none, and the fault row's is on call 3, which the bot never reaches, as it crashes
+    on the 400. OpenAI failing by itself. A fault that fires after a caught 400 is in
+    test_record_lines.py."""
     project.edit("[agent]\n", "[agent]\nruns = 1\n")
     project.edit(EXAMPLE_FAULT, UNKNOWN_TOOL_FIRST.replace("call 1", "call 3"))
     result = project.test(fake_openai(["acme_get_order", "real_error_tool_name"]))
@@ -751,4 +753,37 @@ def test_a_500_after_a_reply_fault_is_still_infrastructure(
     assert "after_reply_fault" not in model[1], model[1]
     assert summary_of(result, "fault 1")["outcome"] == "infrastructure error"
     # The runner holds the line too: a 500 marked as after a reply fault is not let through.
-    assert runner_module.real_error({**model[1], "after_reply_fault": True}) is not None
+    assert runner_module.real_error({**model[1], "after_reply_fault": True}, model) is not None
+
+
+def line_at(
+    seq: int, action: str, status: int, do: str | None = None, pid: int = 1
+) -> dict[str, object]:
+    line: dict[str, object] = {
+        "call": "model:openai", "kind": "model", "action": action, "status": status,
+        "seq": seq, "proc": {"host": "h", "pid": pid, "started": "t"},
+    }  # fmt: skip
+    if do is not None:
+        line["fault"] = {"do": do, "when": "call 1", "n": 1}
+    return line
+
+
+@pytest.mark.design("runner.after_reply_fault")
+@pytest.mark.parametrize(
+    ("before", "why"),
+    [
+        ([], "no fault line at all"),
+        ([line_at(3, "fault", 200, "unknown tool")], "the reply fault came after the 400"),
+        ([line_at(1, "fault", 503, "status 503")], "the fault before it is not in a reply"),
+        ([line_at(1, "fault", 200, "unknown tool", pid=2)], "the fault was in another process"),
+    ],
+)
+def test_a_marked_400_with_no_reply_fault_line_before_it_is_still_infrastructure(
+    before: list[dict[str, object]], why: str
+) -> None:
+    """The runner does not trust the gate's mark alone."""
+    marked = {**line_at(2, "real", 400), "after_reply_fault": True}
+    lines = [*before, marked]
+    assert runner_module.real_error(marked, lines) == "model:openai returned 400", why
+    fired = [line_at(1, "fault", 200, "unknown tool"), marked]
+    assert runner_module.real_error(marked, fired) is None

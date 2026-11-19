@@ -32,6 +32,7 @@ from scrimmage_core import judge, labels, protocol, service_client
 from scrimmage_core import plan as planner
 from scrimmage_core.budget import Ledger
 from scrimmage_core.config import (
+    REPLY_FAULTS,
     Agent,
     Config,
     Expanded,
@@ -557,7 +558,7 @@ class Runner:
         notices = [line for line in lines if "notice" in line]
         cost = sum(float(str(line.get("cost_usd") or 0)) for line in model)
         # The provider failing by itself says nothing about the agent.
-        real_errors = [e for e in map(real_error, model) if e is not None]
+        real_errors = [e for e in (real_error(x, model) for x in model) if e is not None]
         broken = any(n.get("notice") == "structure" for n in notices)
         # No plan, or a call made outside the run's context: says nothing about the agent.
         no_plan = "no_plan" in state.refusals or context_lost(lines)
@@ -1294,8 +1295,9 @@ def nothing() -> None:
     """The release of a signal setup that set nothing."""
 
 
-def real_error(line: dict[str, object]) -> str | None:
-    """How a model call the gate let through failed by itself, if it did."""
+def real_error(line: dict[str, object], model: Sequence[dict[str, object]] = ()) -> str | None:
+    """How a model call the gate let through failed by itself, if it did. model: the run's
+    model lines, which a 400 the gate marked as after a reply fault is checked against."""
     if line.get("action") != "real":
         return None
     error = str(line.get("error") or "")
@@ -1303,9 +1305,22 @@ def real_error(line: dict[str, object]) -> str | None:
         return f"{line.get('call')} failed with {error.split(':')[0]}"
     status = int(str(line.get("status") or 0))
     # The provider's answer to a request the agent built from a faulted reply: its result.
-    if status == 400 and line.get("after_reply_fault") is True:
+    if status == 400 and line.get("after_reply_fault") is True and reply_fault_before(line, model):
         return None
     return f"{line.get('call')} returned {status}" if status >= 400 else None
+
+
+def reply_fault_before(line: dict[str, object], model: Sequence[dict[str, object]]) -> bool:
+    """Whether a fault in a model's reply fired in the same process before this line. The
+    gate's mark alone is not trusted."""
+    proc, seq = proc_key(line.get("proc")), int(str(line.get("seq") or 0))
+    return any(
+        x.get("action") == "fault"
+        and cast(dict[str, object], x.get("fault") or {}).get("do") in REPLY_FAULTS
+        and proc_key(x.get("proc")) == proc
+        and int(str(x.get("seq") or 0)) < seq
+        for x in model
+    )
 
 
 class Interrupted(Exception):

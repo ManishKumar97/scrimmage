@@ -539,7 +539,7 @@
         },
         "after_reply_fault": {
           "const": true,
-          "description": "A model's real 400 after a fault in a model's reply fired in the same run: the agent's result, not an infrastructure error."
+          "description": "A model's real 400 to a chat request that, as sent, held what a fault in a model's reply gave the agent: the agent's result, not an infrastructure error."
         }
       }
     },

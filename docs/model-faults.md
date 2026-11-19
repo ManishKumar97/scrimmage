@@ -153,12 +153,19 @@ If your agent sends the call back in its next request, OpenAI refuses that reque
 
 ### The 400 after a reply fault
 
-A real 400 from the model, after a reply fault fired earlier in the same run, is your agent's result, not an infrastructure error.
-Your agent built that request from the faulted reply, as it would from a real one, so the 400 is what the real misbehaviour leads to.
+A real 400 from the model, on a chat request built from a faulted reply, is your agent's result, not an infrastructure error.
+The 400 is what the real misbehaviour leads to.
+"Built from it" is read from the request as it is sent: its history holds the faulted reply's tool call id or tool name, a tool result for that call, or the refusal text.
+The request also goes to the same model call, such as `model:openai`.
 The run is judged as it ended: an agent that does not catch the error crashes, and the row fails.
 The 400's line has `after_reply_fault` set to `true`, so the record shows why it was not counted as an infrastructure error.
-Any other status, such as a 401, a 429 or a 500, is still an infrastructure error: it says nothing about the request your agent built.
-So is a 400 with no reply fault before it in the run.
+These stay infrastructure errors, as they say nothing about a request your agent built from the fault:
+
+- any other status, such as a 401, a 429 or a 500;
+- a 400 on a request that holds nothing of the faulted reply, such as an embeddings call or a fresh conversation;
+- a 400 on a request sent before the fault fired, even when its reply comes back after;
+- a 400 after any other fault, such as `timeout` or `status 503`.
+
 Only the process the fault fired in marks its 400s: a 400 sent from a child process the agent started is still an infrastructure error.
 
 ### Where they do not work

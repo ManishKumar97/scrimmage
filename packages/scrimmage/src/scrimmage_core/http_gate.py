@@ -481,6 +481,9 @@ def prepare(
         check_tools(ctx, run, step, fields, str(request.url.path))
     if call.kind == "model" and step.decision.action == "fault":
         reply_checks(run, step, fields or {}, str(request.url.path))
+    if call.kind == "model" and call.name == "chat" and fields is not None:
+        # Decided as the request is sent: one sent before a fault fired holds nothing of it.
+        step.carries_reply_fault = run.carries_reply_fault(call.label, fields)
     return ctx, step, extra
 
 
@@ -699,7 +702,7 @@ def built_reply(
         tool = openai_table.tool_call_tools(str(request.url.path), fields)[0]
         built = openai_table.unknown_tool_reply(fields, tokens, tool)
     headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
-    ctx.run.reply_faulted = True
+    ctx.run.add_reply_fault_markers(step.call.label, openai_table.reply_markers(built))
     return reply(ctx, module, client, step, request, extra, (200, headers, built))
 
 
@@ -1637,7 +1640,7 @@ def capture(
             usd = record(ctx, step, request, response, extra, b"".join(chunks), size[0])
         except Exception:  # the agent's own call must never fail because of the arithmetic
             extra.update(status=response.status_code, cost_usd=None, cost_estimated=False)
-        if after_reply_fault(ctx, step, extra):
+        if after_reply_fault(step, extra):
             extra["after_reply_fault"] = True
         ctx.run.finish(step)
         settle(ctx, reservation, usd)
@@ -1663,15 +1666,13 @@ def capture(
     response.stream = wrap(module, response.stream, keep, finish, broke, sync=sync)
 
 
-def after_reply_fault(ctx: Bound, step: Step, extra: dict[str, object]) -> bool:
-    """A model's real 400, in a run where a fault in a model's reply fired before it. The
-    agent built this request from the faulted reply, as from a real one, so the 400 is the
-    agent's own result. Any other status says nothing about the agent."""
+def after_reply_fault(step: Step, extra: dict[str, object]) -> bool:
+    """A model's real 400 to a chat request that, as it was sent, held what a fault in a
+    model's reply gave the agent. The agent built this request from the faulted reply, as
+    from a real one, so the 400 is the agent's own result. Any other status, or a request
+    that held nothing of it, says nothing about the agent."""
     return (
-        step.call.kind == "model"
-        and step.decision.action == "real"
-        and extra.get("status") == 400
-        and ctx.run.reply_faulted
+        step.carries_reply_fault and step.decision.action == "real" and extra.get("status") == 400
     )
 
 
