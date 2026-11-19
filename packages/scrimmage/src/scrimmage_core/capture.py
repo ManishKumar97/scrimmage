@@ -71,6 +71,14 @@ def kind_of(value: object) -> str:
     return type(value).__name__
 
 
+def failed_with(exc: BaseException) -> str:
+    """The class of the error that made a mock fail to build: the team's own, which
+    ScrimmageMockError keeps by name, or the error's own class."""
+    if isinstance(exc, ScrimmageMockError) and exc.cause is not None:
+        return exc.cause
+    return kind_of(exc)
+
+
 def text_problem(text: str) -> str | None:
     """Why a text cannot be saved: a lone surrogate, such as a file name's undecodable byte,
     has no UTF-8 form, so neither JSON nor TOML can hold it."""
@@ -456,7 +464,7 @@ def tool_value(
         if ours(exc):
             return scrimmage_error(exc)
         # The error's type only: its message, such as pydantic's, can quote the value.
-        return unsaved(UNSAVABLE, f"returns: a mock built from it fails with {kind_of(exc)}")
+        return unsaved(UNSAVABLE, f"returns: a mock built from it fails with {failed_with(exc)}")
     if where is not None:
         return unsaved(UNSAVABLE, where)
     args, problem = saved_arguments(arguments)
@@ -469,7 +477,7 @@ def tool_value(
         except Exception as exc:
             return unsaved(
                 SECRET_CHANGED_SHAPE,
-                f"returns: with its secrets removed it no longer fits, {kind_of(exc)}",
+                f"returns: with its secrets removed it no longer fits, {failed_with(exc)}",
             )
     embedded = json_text_problem(cleaned, "returns")
     if embedded is not None:

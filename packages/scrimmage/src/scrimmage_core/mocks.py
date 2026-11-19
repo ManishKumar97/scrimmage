@@ -14,12 +14,13 @@ import collections.abc
 import enum
 import importlib
 import inspect
+import sys
 import types
 import typing
 from collections.abc import Callable
 from typing import cast
 
-from scrimmage_core.errors import ScrimmageMockError, ScrimmageRefused
+from scrimmage_core.errors import ScrimmageError, ScrimmageMockError, ScrimmageRefused
 
 # Any is a class on 3.11 and later, and neither it nor object names a shape to build.
 PLAIN = (str, int, float, bool, list, dict, tuple, type(None), object, typing.Any)
@@ -36,6 +37,8 @@ STREAMS = (
 RAISING = "annotations that raise "
 # The members a mistake names, so a large Enum gives a short line.
 SHOWN_MEMBERS = 10
+# The pydantic errors a mistake names.
+SHOWN_ERRORS = 10
 
 
 def allowed(path: str, prefixes: list[str]) -> bool:
@@ -110,27 +113,81 @@ def build(
     name = kind or f"{target.__module__}:{target.__qualname__}"
     if isinstance(target, enum.EnumMeta):  # an Enum class
         return member(cast("type[enum.Enum]", target), returns, name)
-    failed: str | None = None
+    failed: tuple[str, str] | None = None
+    fields: dict[str, object] | None = None  # set when the class itself is called
     try:
         validate = getattr(target, "model_validate", None)
         if callable(validate):
             return validate(returns)
         if table(returns):
-            return target(**cast("dict[str, object]", returns))
-    except (TypeError, ValueError) as exc:  # pydantic's ValidationError is a ValueError
-        raise ScrimmageMockError(f"the mock does not fit {name}: {exc}") from exc
-    except Exception as exc:  # the team's own code: a class hook or __post_init__ of its own
-        failed = type(exc).__name__
+            fields = cast("dict[str, object]", returns)
+            return target(**fields)
+    except ScrimmageError:  # Scrimmage's own: a refused or stopped call in the team's code
+        raise
+    except Exception as exc:  # the team's own code: its validation, a hook or __post_init__
+        keys = (
+            unbound(target, fields) if isinstance(exc, TypeError) and fields is not None else None
+        )
+        failed = (type(exc).__name__, keys or failure(exc))
     if failed is not None:
         # Outside the except block, so the mistake holds no reference to the error: its
-        # message can quote a value. Only the error's class is named.
-        raise ScrimmageMockError(f"the mock does not fit {name}: building it raised {failed}")
+        # message can quote a value. The text names keys and error kinds, never a value.
+        cause, why = failed
+        raise ScrimmageMockError(f"the mock does not fit {name}: {why}", cause=cause)
     if is_instance(returns, target, name):
         return returns
     raise ScrimmageMockError(
         f"the mock does not fit {name}: expected a table of its fields; a value no table "
         "can build is built by a function named with returns_from"
     )
+
+
+def signature_of(tool: Callable[..., object]) -> inspect.Signature:
+    """The tool's signature, for binding its arguments. On Python 3.14 annotations are lazy,
+    so each is kept as written text and never evaluated: one may name a type imported only
+    for type checking, or raise."""
+    if sys.version_info >= (3, 14):
+        import annotationlib
+
+        written = annotationlib.Format.STRING
+        return inspect.signature(tool, annotation_format=written)  # pyright: ignore
+    return inspect.signature(tool)
+
+
+def unbound(target: type, fields: dict[str, object]) -> str | None:
+    """Why the table's keys do not fit the class's parameters, or None. Read only once the
+    class has raised TypeError, as a signature can be narrower than what the class takes,
+    such as a decorated __init__'s. Binding's text names keys, never values."""
+    try:
+        signature = signature_of(target)
+    except Exception:  # no signature, or the team's own class hook raised: say the class only
+        return None
+    try:
+        signature.bind(**fields)
+    except TypeError as exc:
+        return str(exc)
+    return None
+
+
+def failure(exc: Exception) -> str:
+    """What failed, without the error's message, which can quote the value: a pydantic
+    error's fields and error types, or any other error's class."""
+    pydantic_core = sys.modules.get("pydantic_core")
+    if pydantic_core is not None and isinstance(exc, pydantic_core.ValidationError):
+        try:
+            read = cast("Callable[..., list[dict[str, object]]]", getattr(exc, "errors", None))
+            errors = read(include_input=False, include_url=False)
+            found = [f"{place(error['loc'])} ({error['type']})" for error in errors]
+        except Exception:  # an error whose details cannot be read: its class still says it
+            return f"building it raised {type(exc).__name__}"
+        more = f", and {len(found) - SHOWN_ERRORS} more" if len(found) > SHOWN_ERRORS else ""
+        return f"{type(exc).__name__} at {', '.join(found[:SHOWN_ERRORS])}{more}"
+    return f"building it raised {type(exc).__name__}"
+
+
+def place(loc: object) -> str:
+    """A pydantic error's location as text: the field names and item indexes to it."""
+    return ".".join(str(part) for part in cast("tuple[object, ...]", loc)) or "the whole value"
 
 
 def is_instance(value: object, target: type, name: str) -> bool:

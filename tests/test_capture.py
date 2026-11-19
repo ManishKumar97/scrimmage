@@ -208,7 +208,7 @@ def test_a_value_whose_class_a_mock_cannot_name_or_build_is_unsavable() -> None:
     failed = capture.tool_value(picky, {}, get_picky, same, [f"{__name__}."])
     assert failed == {
         "code": "unsavable",
-        "why": "returns: a mock built from it fails with ScrimmageMockError",
+        "why": "returns: a mock built from it fails with TypeError",
     }
 
 
