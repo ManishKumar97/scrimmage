@@ -206,10 +206,35 @@ These stay infrastructure errors, as they say nothing about a request your agent
 
 Only the process the fault fired in marks its 400s: a 400 sent from a child process the agent started is still an infrastructure error.
 
+### On the Responses API
+
+`refuse`, `garble`, `truncate` and `bad tool args` work on a Responses API call too, in the Responses API's own form:
+
+| Fault | What your agent gets on Responses | Left as it is when |
+|---|---|---|
+| `refuse` | one assistant message: a `refusal` part with `I'm sorry, I cannot assist with that request.` when the request's `text.format` is of type `json_schema`, else an `output_text` part with `I'm sorry, I can't assist with that.` | |
+| `garble` | every fifth word of each `output_text` part becomes `สวัสดี` | the reply has no text |
+| `truncate` | the first text is cut at the last space at or before its middle, and what came after it goes; with no text, the last `function_call` item's `arguments` are cut. The item and the reply get `status` `incomplete`, `incomplete_details` becomes `{"reason": "max_output_tokens"}`, and `completed_at` becomes null | the reply has no text and no tool call |
+| `bad tool args` | each `function_call` item's `arguments` lose their last `}` | the reply has no tool call |
+
+After `truncate`, the openai library's `output_text` holds the cut text, as on a real reply cut by `max_output_tokens`.
+Under Structured Outputs, `client.responses.parse()` gives `output_parsed` as `None` after `refuse`, with the refusal part in the message.
+The built `refuse` reply is made from a real `gpt-4o-mini` Responses reply, with new `resp_` and `msg_` ids; it repeats your request's `text`, `max_output_tokens` and `previous_response_id`.
+`unknown tool` on a Responses call is a mistake in the test, and nothing is sent: no source shows a model call a tool no one offered there.
+
+A Responses request can chain to an earlier reply with `previous_response_id`.
+OpenAI then builds the next turn from the reply it stored, not from the one your agent got.
+For a changed reply it stored the real one, and for a built reply it stored nothing.
+So a request in the same run whose `previous_response_id` names a reply a fault changed or built is a mistake in the test, and it is not sent.
+Send the conversation in `input` instead, as the OpenAI Agents SDK does by default.
+A request chained to a real reply goes on as in the baseline.
+
+A 400 on Responses after a reply fault stays an infrastructure error.
+OpenAI takes back an item id it never made, so no 400 is known to follow a fault there.
+
 ### Where they do not work
 
 A streamed request is a mistake in the test, found from the request's `stream`, so the call fails at once and nothing is sent.
-A Responses API call is a mistake in the test too: these faults work on Chat Completions only.
 
 ## A rate limit that says how long to wait
 

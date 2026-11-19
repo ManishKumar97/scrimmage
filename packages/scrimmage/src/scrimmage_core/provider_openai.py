@@ -247,6 +247,119 @@ def refusal_reply(fields: dict[str, object], tokens_in: int) -> bytes:
     return chat_reply(fields, tokens_in, message, "stop")
 
 
+# A real gpt-4o-mini Responses reply, saved on 18 November 2026
+# (tests/fixtures/openai/real_response_answer.json): every field a built reply has, in the real
+# order. The output, the ids, the times, the model and the counts are put in for each reply.
+# The fields that echo a request are set as for a request that sets none of them, but the
+# text format, the output limit and previous_response_id, which are the request's own.
+RESPONSE_REPLY: dict[str, object] = {
+    "id": "",
+    "object": "response",
+    "created_at": 0,
+    "status": "completed",
+    "access_programs": None,
+    "background": False,
+    "billing": {"payer": "developer"},
+    "completed_at": 0,
+    "error": None,
+    "frequency_penalty": 0.0,
+    "image": {"context_compression": "disabled"},
+    "incomplete_details": None,
+    "input_transformations": [],
+    "instructions": None,
+    "max_output_tokens": None,
+    "max_tool_calls": None,
+    "model": "",
+    "moderation": None,
+    "output": [],
+    "parallel_tool_calls": True,
+    "presence_penalty": 0.0,
+    "previous_response_id": None,
+    "prompt_cache_key": None,
+    "prompt_cache_retention": "in_memory",
+    "reasoning": {"context": None, "effort": None, "summary": None},
+    "safety_identifier": None,
+    "service_tier": "default",
+    "store": True,
+    "temperature": 1.0,
+    "text": {"format": {"type": "text"}, "verbosity": "medium"},
+    "tool_choice": "auto",
+    "tool_usage": {
+        "image_gen": {
+            "input_tokens": 0,
+            "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+            "output_tokens": 0,
+            "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+            "total_tokens": 0,
+        },
+        "web_search": {"num_requests": 0},
+    },
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 1.0,
+    "truncation": "disabled",
+    "usage": {},
+    "user": None,
+    "metadata": {},
+}
+RESPONSE_ECHOED = ("max_output_tokens", "previous_response_id", "text")
+RESPONSE_ID_LENGTH = 50  # after resp_ and msg_, in lowercase hex, as in real ids
+
+
+def made_up_hex_id(prefix: str) -> str:
+    return prefix + secrets.token_hex(RESPONSE_ID_LENGTH // 2)
+
+
+def structured_response(fields: dict[str, object]) -> bool:
+    """A Responses request that asks for Structured Outputs: a text.format of type json_schema."""
+    return _obj(_obj(fields.get("text")).get("format")).get("type") == "json_schema"
+
+
+def response_refusal_reply(fields: dict[str, object], tokens_in: int) -> bytes:
+    """refuse on Responses: a refusal content part under Structured Outputs, else plain text,
+    in one completed assistant message."""
+    if structured_response(fields):
+        part: dict[str, object] = {"type": "refusal", "refusal": STRUCTURED_REFUSAL}
+    else:
+        part = {"type": "output_text", "annotations": [], "logprobs": [], "text": PLAIN_REFUSAL}
+    now = int(time.time())
+    reply = dict(RESPONSE_REPLY)
+    reply.update({key: fields[key] for key in RESPONSE_ECHOED if key in fields})
+    reply.update(
+        id=made_up_hex_id("resp_"),
+        created_at=now,
+        completed_at=now,
+        model=model_name(fields) or "",
+        output=[
+            {
+                "id": made_up_hex_id("msg_"),
+                "type": "message",
+                "status": "completed",
+                "content": [part],
+                "role": "assistant",
+            }
+        ],
+        usage={
+            "input_tokens": tokens_in,
+            "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 0},
+                "cached_tokens": 0,
+            },
+            "output_tokens": BUILT_OUTPUT_TOKENS,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": tokens_in + BUILT_OUTPUT_TOKENS,
+        },
+    )
+    return json.dumps(reply, ensure_ascii=False, indent=2).encode()
+
+
+def response_id(reply: bytes) -> str | None:
+    """The id of a Responses reply, which a later request may name as previous_response_id."""
+    found = _obj(request_fields(reply)).get("id")
+    return found if isinstance(found, str) and found else None
+
+
 def tool_call_tools(path: str, fields: dict[str, object]) -> list[str]:
     """The tools a chat request offers in tools, the field tool_calls answer. The old
     functions field gets a function_call reply instead, never a tool call."""

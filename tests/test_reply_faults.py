@@ -714,17 +714,145 @@ def test_a_streamed_call_under_refuse_reaches_the_openai_library_as_the_mistake(
     assert [x["action"] for x in model_lines(sink)] == ["refused"]
 
 
-@pytest.mark.design("fault.reply_responses")
-@pytest.mark.parametrize("word", REPLY_WORDS)
-def test_a_reply_fault_on_a_responses_call_is_a_mistake_and_nothing_is_sent(
-    gated: None, loopback: Loopback, word: str
+# The Responses API. A real gpt-4o-mini answer, saved on 18 November 2026.
+REAL_RESPONSE = json.loads((FIXTURES / "real_response_answer.json").read_text())["body"]
+RESPONSE_SPECS = [
+    {"type": "function", "name": name, "parameters": {"type": "object"}}
+    for name in ("get_order", "get_stock")
+]
+
+
+def responses_api(server: Loopback, sync: bool, how: str = "create", **request: Any) -> Any:
+    """One Responses call through the openai library, create or parse: what it made of the
+    reply."""
+    kw: dict[str, Any] = {"model": MODEL, "input": "Where is order 1234?", **request}
+    if sync:
+        api = openai.OpenAI(base_url=server.url, api_key="test", max_retries=0)
+        return getattr(api.responses, how)(**kw)
+
+    async def go() -> Any:
+        api = openai.AsyncOpenAI(base_url=server.url, api_key="test", max_retries=0)
+        return await getattr(api.responses, how)(**kw)
+
+    return asyncio.run(go())
+
+
+def response_fields(value: object) -> object:
+    """The fields the library set, recursively, and the names of those it has no field for:
+    a real Responses reply holds a few, such as billing."""
+    if isinstance(value, pydantic.BaseModel):
+        known = {name: response_fields(getattr(value, name)) for name in value.model_fields_set}
+        return {**known, "unknown": sorted(value.model_extra or {})}
+    if isinstance(value, list):
+        return [response_fields(item) for item in cast("list[object]", value)]
+    return None
+
+
+def but_tools(fields: object) -> dict[str, object]:
+    """A reply's field set without tools, which echoes each request's own."""
+    return {**cast("dict[str, object]", fields), "tools": None}
+
+
+@pytest.mark.design("fault.refuse_responses")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_refuse_on_a_responses_structured_request_is_a_refusal_content_part(
+    gated: None, loopback: Loopback, sync: bool
 ) -> None:
-    sink, budget = gate_on(word)
-    with pytest.raises(ScrimmageMockError, match="is a Responses call"):
-        httpx2.Client().post(f"{loopback.url}/responses", json={"model": MODEL, "input": "hi"})
+    """responses.parse with a Pydantic model asks for Structured Outputs: the reply's message
+    holds a refusal part, so output_parsed is None and output_text is empty, as on a real
+    refusal. Nothing is sent or reserved, and the line has no cost."""
+    sink, budget = gate_on("refuse")
+    got = responses_api(loopback, sync, "parse", text_format=Order)
+    assert loopback.seen == [] and budget.asked == 0
+    [item] = got.output
+    [part] = item.content
+    assert (part.type, part.refusal) == ("refusal", openai_table.STRUCTURED_REFUSAL)
+    assert got.output_parsed is None and got.output_text == ""
+    assert (got.status, item.status, got.model) == ("completed", "completed", MODEL)
+    assert re.fullmatch(r"resp_[0-9a-f]{50}", got.id) and re.fullmatch(r"msg_[0-9a-f]{50}", item.id)
+    assert got.text.format.type == "json_schema"  # the request's own format, echoed
+    line = line_of(sink, "model")
+    assert line["action"] == "fault" and "cost_usd" not in line and budget.asked == 0
+
+
+@pytest.mark.design("fault.refuse_responses")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_refuse_on_a_plain_responses_request_is_text_with_the_real_replys_fields(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    """A plain request's refusal is ordinary output text. The built reply sets the same fields
+    as the real answer it was made from, those the library has no field for included."""
+    gate_on("refuse")
+    got = responses_api(loopback, sync)
+    assert loopback.seen == []
+    assert got.output_text == openai_table.PLAIN_REFUSAL
+    as_real(loopback, json.dumps(REAL_RESPONSE).encode())
+    real = responses_api(loopback, sync)
+    assert but_tools(response_fields(got)) == but_tools(response_fields(real))
+    assert got.id != real.id and got.usage.output_tokens == openai_table.BUILT_OUTPUT_TOKENS
+
+
+@pytest.mark.design("fault.unknown_tool_responses")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_unknown_tool_on_responses_is_a_mistake_and_nothing_is_sent(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    sink, budget = gate_on("unknown tool")
+    with pytest.raises(ScrimmageMockError, match="is a Responses call, and a call to a tool"):
+        responses_api(loopback, sync, tools=RESPONSE_SPECS)
     assert loopback.seen == [] and budget.asked == 0
     line = line_of(sink, "model")
     assert (line["action"], line["reason"]) == ("refused", MISTAKE_REFUSAL)
+    assert "fault" not in line
+
+
+def plan_on_call_1(word: str) -> Plan:
+    """A run with this reply fault on the first model call only."""
+    plan = plan_with(word)
+    return dataclasses.replace(plan, faults=(dataclasses.replace(plan.faults[0], when="call 1"),))
+
+
+@pytest.mark.design("fault.responses_chain")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+@pytest.mark.parametrize(("word", "sent"), [("garble", 1), ("refuse", 0)], ids=["changed", "built"])
+def test_a_request_chained_to_a_changed_reply_is_a_mistake_and_not_sent(
+    gated: None, loopback: Loopback, word: str, sent: int, sync: bool
+) -> None:
+    """OpenAI stored the real reply under a changed reply's id, and nothing under a built
+    one's, so chaining to either would build the next turn from what the agent never saw."""
+    sink, budget = gate_plan(plan_on_call_1(word))
+    loopback.body = json.dumps(REAL_RESPONSE).encode()
+    first = responses_api(loopback, sync)
+    assert len(loopback.seen) == budget.asked == sent
+    with pytest.raises(ScrimmageMockError, match="sets previous_response_id resp_"):
+        responses_api(loopback, sync, input="And order 5678?", previous_response_id=first.id)
+    assert len(loopback.seen) == budget.asked == sent  # the chained request is never sent
+    faulted, chained = model_lines(sink)
+    assert faulted["action"] == "fault"
+    assert (chained["action"], chained["reason"]) == ("refused", MISTAKE_REFUSAL)
+    assert f"previous_response_id {first.id}" in str(chained["mistake"])
+    assert "send the conversation in input" in str(chained["mistake"])
+
+
+@pytest.mark.design("fault.responses_chain")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_a_request_chained_to_a_real_reply_goes_on(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    """After a fault changed one reply, a request chained to another, real, reply is sent as
+    in the baseline, and so is one chained to a reply from before the run."""
+    sink, _ = gate_plan(plan_on_call_1("garble"))
+    loopback.body = json.dumps(REAL_RESPONSE).encode()
+    faulted = responses_api(loopback, sync)
+    other = {**REAL_RESPONSE, "id": "resp_" + "0" * 50}
+    loopback.body = json.dumps(other).encode()
+    real = responses_api(loopback, sync, input="And order 5678?")
+    assert real.id == other["id"] != faulted.id
+    after = responses_api(loopback, sync, input="Thanks.", previous_response_id=real.id)
+    earlier = responses_api(loopback, sync, input="Hi.", previous_response_id="resp_" + "1" * 50)
+    assert after.output_text == earlier.output_text == "Order 1234 has been shipped."
+    assert loopback.seen == ["/v1/responses"] * 4
+    assert [x["action"] for x in model_lines(sink)] == ["fault", "real", "real", "real"]
 
 
 # The three that change the real reply: each word, the real reply it changes, and what the

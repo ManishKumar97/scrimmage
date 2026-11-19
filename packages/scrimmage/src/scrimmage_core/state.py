@@ -361,6 +361,9 @@ class RunState:
         # What each fault in a model's reply gave the agent, by the call's label: a later
         # request to that label that carries one was built from the faulted reply.
         self.reply_fault_markers: dict[str, list[openai_table.Given]] = {}
+        # The ids of the Responses replies a fault changed or built: OpenAI holds the real
+        # reply, or none, under each, so a later request may not chain to one.
+        self.faulted_responses: set[str] = set()
         self.end_program: Callable[[], None] = lambda: None  # set where a run has a sender
         # The web gate's replies not read to their end, and the model paths it ran as web
         # requests, each noted once: both belong to this run, never to the process.
@@ -755,6 +758,21 @@ class RunState:
         if gave.ids or gave.prefixes:
             with self._lock:
                 self.reply_fault_markers.setdefault(label, []).append(gave)
+
+    def add_faulted_response(self, response_id: str | None) -> None:
+        """Keep the id of a Responses reply a fired fault changed or built."""
+        if response_id is not None:
+            with self._lock:
+                self.faulted_responses.add(response_id)
+
+    def chains_to_a_fault(self, fields: dict[str, object]) -> str | None:
+        """The previous_response_id this Responses request names, when it is a reply a fault
+        changed or built; else None."""
+        previous = fields.get("previous_response_id")
+        if not isinstance(previous, str):
+            return None
+        with self._lock:
+            return previous if previous in self.faulted_responses else None
 
     def carries_reply_fault(self, label: str, fields: dict[str, object]) -> bool:
         """Whether this chat request, as it is sent, carries what a fault in a reply from the

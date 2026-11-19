@@ -482,8 +482,14 @@ def prepare(
     if call.kind == "model" and step.decision.action == "fault":
         reply_checks(run, step, fields or {}, str(request.url.path))
     if call.kind == "model" and call.name == "chat" and fields is not None:
-        # Decided as the request is sent: one sent before a fault fired holds nothing of it.
-        step.carries_reply_fault = run.carries_reply_fault(call.label, fields)
+        if openai_table.is_responses(str(request.url.path)):
+            # Never marked: OpenAI takes back an item id it never made, and a request chained
+            # to a faulted reply is a mistake, so no 400 is known to follow a fault here. One
+            # that does stays an infrastructure error.
+            chain_check(run, step, fields)
+        else:
+            # Decided as the request is sent: one sent before a fault fired holds nothing.
+            step.carries_reply_fault = run.carries_reply_fault(call.label, fields)
     return ctx, step, extra
 
 
@@ -655,20 +661,34 @@ def reply_checks(run: RunState, step: Step, fields: dict[str, object], path: str
             f"is a streamed request, and {word} changes a reply that is not streamed; turn "
             "streaming off for this model, or use timeout or a status on this one",
         )
-    if openai_table.is_responses(path):
-        if word == "unknown tool":
-            not_carried_out(
-                run,
-                step,
-                "is a Responses call, and a call to a tool no one offered is seen on Chat "
-                "Completions only; fault a chat call",
-            )
+    if word == "unknown tool" and openai_table.is_responses(path):
         not_carried_out(
-            run, step, f"is a Responses call, and {word} works on Chat Completions only for now"
+            run,
+            step,
+            "is a Responses call, and a call to a tool no one offered is seen on Chat "
+            "Completions only; fault a chat call",
         )
     if word == "unknown tool" and (why := openai_table.no_free_tool_call(path, fields)):
         run.unchanged(step, why)
         step.decision = Decision("real")
+
+
+def chain_check(run: RunState, step: Step, fields: dict[str, object]) -> None:
+    """Before anything is sent: a Responses request chained to a reply a fault changed or
+    built is a mistake in the test. OpenAI stored the real reply under that id, or none at
+    all, so the model would build the next turn from what the agent never saw."""
+    previous = run.chains_to_a_fault(fields)
+    if previous is None:
+        return
+    why = (
+        f"sets previous_response_id {previous}, a reply a fault changed or built, and OpenAI "
+        "holds the real reply under that id, or none; send the conversation in input instead, "
+        "as the OpenAI Agents SDK does by default, or set store false"
+    )
+    if step.decision.fault is not None:
+        not_carried_out(run, step, why)
+    step.decision = Decision("refused", reason=MISTAKE_REFUSAL)
+    run.fail(step, ScrimmageMockError(f"{step.call.label} {why}"), mistake=True)
 
 
 def built_reply(
@@ -685,15 +705,38 @@ def built_reply(
     body = body_of(request) or b""
     fields = openai_table.request_fields(body) or {}
     tokens = len(body) // CHAR_PER_TOKEN
-    if word == "refuse":
+    path = str(request.url.path)
+    responses = openai_table.is_responses(path)
+    if word == "refuse" and responses:
+        built = openai_table.response_refusal_reply(fields, tokens)
+    elif word == "refuse":
         built = openai_table.refusal_reply(fields, tokens)
-    else:  # reply_checks let it through only with a tool offered
-        tool = openai_table.tool_call_tools(str(request.url.path), fields)[0]
+    else:  # reply_checks let it through only on chat, with a tool offered
+        tool = openai_table.tool_call_tools(path, fields)[0]
         built = openai_table.unknown_tool_reply(fields, tokens, tool)
     headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
-    gave = openai_table.given(fields, built, ids_only=word == "unknown tool")
-    ctx.run.add_reply_fault_markers(step.call.label, gave)
+    faulted(ctx, step, fields, built, responses=responses, ids_only=word == "unknown tool")
     return reply(ctx, module, client, step, request, extra, (200, headers, built))
+
+
+def faulted(
+    ctx: Bound,
+    step: Step,
+    fields: dict[str, object],
+    gave: bytes,
+    *,
+    responses: bool,
+    ids_only: bool = False,
+) -> None:
+    """Keep what a fired fault in a model's reply gave the agent: on Responses the reply's id,
+    which a later request may not chain to; on chat what a later request built from it
+    carries."""
+    if responses:
+        ctx.run.add_faulted_response(openai_table.response_id(gave))
+    else:
+        ctx.run.add_reply_fault_markers(
+            step.call.label, openai_table.given(fields, gave, ids_only=ids_only)
+        )
 
 
 def fault(
@@ -1360,7 +1403,7 @@ def left_as_it_is(ctx: Bound, step: Step, extra: dict[str, object], said: Unchan
 def model_op(step: Step, request: Any) -> str:
     """What a model call is, for a change to its reply: a Responses call is a chat to the
     engine, yet its reply has no choices to change."""
-    if path_of(request.url).rstrip("/").endswith("/responses"):
+    if openai_table.is_responses(path_of(request.url)):
         return "responses"
     return str(step.call.name)
 
@@ -1432,9 +1475,10 @@ def changed_reply(
     body = b"".join(chunks)
     headers = response.headers.multi_items()
     status = response.status_code
+    op = model_op(step, request)
     if step.call.kind == "model":
-        change = changes.CHAT_CHANGES[fault.do]
-        done = change(status, model_op(step, request), headers, body, fault, decoded=loaded)
+        change = changes.model_change(fault.do, op)
+        done = change(status, op, headers, body, fault, decoded=loaded)
     else:
         done = changes.change_web(status, str(request.method), headers, body, fault, decoded=loaded)
     if isinstance(done, Unchangeable):
@@ -1448,8 +1492,7 @@ def changed_reply(
     ctx.run.changed(step, Changed(None, done.count, done.parts), reply=reply, status=done.status)
     if step.call.kind == "model" and fault.do in REPLY_FAULTS:  # never a model replace
         asked = openai_table.request_fields(body_of(request) or b"") or {}
-        gave = openai_table.given(asked, done.body, ids_only=False)
-        ctx.run.add_reply_fault_markers(step.call.label, gave)
+        faulted(ctx, step, asked, done.body, responses=op == "responses")
     stream = module.ByteStream(done.body)
     return rebuilt(module, client, request, response, done.headers, stream, done.status)
 

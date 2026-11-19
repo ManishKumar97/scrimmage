@@ -18,7 +18,7 @@ import sys
 import types
 import typing
 import zlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
 
@@ -729,17 +729,25 @@ def streamed(word: str) -> str:
     )
 
 
+# The carried faults that change a Responses reply too. replace stays on Chat Completions.
+ON_RESPONSES = ("garble", "truncate", "bad tool args")
+
+
+def only_on_chat(word: str, op: str) -> Unchangeable:
+    return Unchangeable(
+        f"{word} on a model call works on Chat Completions only, and this call is {op}; "
+        "fault it another way",
+        "unsupported",
+    )
+
+
 def chat_kind(
     status: int, op: str, headers: Sequence[tuple[str, str]], word: str = "replace"
 ) -> Unchangeable | None:
     """None when a model reply's headers allow a change to its content, else why not. Decided
     by the headers alone, so a stream is never read to find out."""
-    if op != "chat":
-        return Unchangeable(
-            f"{word} on a model call works on Chat Completions only, and this call is {op}; "
-            "fault it another way",
-            "unsupported",
-        )
+    if op != "chat" and not (op == "responses" and word in ON_RESPONSES):
+        return only_on_chat(word, op)
     kind = media_type(header(headers, "content-type") or "")
     if kind == "text/event-stream":
         return Unchangeable(streamed(word), "unsupported")
@@ -763,7 +771,7 @@ def chat_reply(
     decoded: bool,
 ) -> tuple[dict[str, object], list[object]] | Unchangeable:
     """A chat completion, parsed, and its choices; or why it cannot be changed."""
-    said = chat_kind(status, op, headers, word)
+    said = chat_kind(status, op, headers, word) if op == "chat" else only_on_chat(word, op)
     if said is not None:
         return said
     encoding = "" if decoded else (header(headers, "content-encoding") or "")
@@ -1004,6 +1012,188 @@ CHAT_CHANGES = {
     "truncate": truncate_chat,
     "bad tool args": break_args_chat,
 }
+
+
+def response_reply(
+    status: int,
+    op: str,
+    headers: Sequence[tuple[str, str]],
+    body: bytes,
+    word: str,
+    *,
+    decoded: bool,
+) -> tuple[dict[str, object], list[object]] | Unchangeable:
+    """A Responses reply, parsed, and its output items; or why it cannot be changed."""
+    said = chat_kind(status, op, headers, word)
+    if said is not None:
+        return said
+    encoding = "" if decoded else (header(headers, "content-encoding") or "")
+    plain_body = unpacked(body, encoding)
+    if plain_body is None:
+        return Unchangeable("the body will not unpack")
+    try:
+        value = json.loads(plain_body)
+    except (ValueError, RecursionError):
+        return Unchangeable("the body is not JSON that parses")
+    output = cast("dict[str, object]", value).get("output") if isinstance(value, dict) else None
+    if not isinstance(output, list):
+        return Unchangeable("the reply has no output")
+    return cast("dict[str, object]", value), cast("list[object]", output)
+
+
+def as_dict(value: object) -> dict[str, object] | None:
+    return cast("dict[str, object]", value) if isinstance(value, dict) else None
+
+
+def text_parts(output: list[object]) -> list[tuple[int, int, dict[str, object]]]:
+    """Each output_text part with text, in order: its item, its place, and the part."""
+    found: list[tuple[int, int, dict[str, object]]] = []
+    for i, raw in enumerate(output):
+        item = as_dict(raw)
+        held = None if item is None or item.get("type") != "message" else item.get("content")
+        for j, raw_part in enumerate(cast("list[object]", held) if isinstance(held, list) else []):
+            part = as_dict(raw_part)
+            if part is not None and part.get("type") == "output_text":
+                text = part.get("text")
+                if isinstance(text, str) and text:
+                    found.append((i, j, part))
+    return found
+
+
+def function_calls(output: list[object]) -> list[tuple[int, dict[str, object]]]:
+    """Each function_call item whose arguments are text, in order, with its place."""
+    items = [(i, as_dict(raw)) for i, raw in enumerate(output)]
+    return [
+        (i, item)
+        for i, item in items
+        if item is not None
+        and item.get("type") == "function_call"
+        and isinstance(item.get("arguments"), str)
+    ]
+
+
+def no_output_text(output: list[object]) -> str:
+    """Why a Responses reply had no text to change."""
+    items = [as_dict(raw) or {} for raw in output]
+    parts = [
+        as_dict(part) or {}
+        for item in items
+        if item.get("type") == "message"
+        for part in cast("list[object]", item.get("content") or [])
+    ]
+    if any(part.get("type") == "refusal" for part in parts):
+        return "the reply is a refusal with no text"
+    if any(item.get("type") == "function_call" for item in items):
+        return "the reply has only tool calls and no text"
+    return "the reply has no text"
+
+
+def garble_responses(
+    status: int,
+    op: str,
+    headers: Sequence[tuple[str, str]],
+    body: bytes,
+    fault: Fault,
+    *,
+    decoded: bool = False,
+) -> WebChanged | Unchangeable:
+    """Put the stray token in each output_text part. Every other field stays as it was sent."""
+    read = response_reply(status, op, headers, body, fault.do, decoded=decoded)
+    if isinstance(read, Unchangeable):
+        return read
+    value, output = read
+    count, parts = 0, list[str]()
+    for i, j, part in text_parts(output):
+        new, words = garbled(cast(str, part["text"]))
+        part["text"] = new
+        count += words
+        parts.append(f"output[{i}].content[{j}].text")
+    if not count:
+        return Unchangeable(no_output_text(output), "data")
+    return rewritten(value, headers, count, parts)
+
+
+def truncate_responses(
+    status: int,
+    op: str,
+    headers: Sequence[tuple[str, str]],
+    body: bytes,
+    fault: Fault,
+    *,
+    decoded: bool = False,
+) -> WebChanged | Unchangeable:
+    """Stop the reply as max_output_tokens does: the first text is cut, and what came after it
+    was never made, so it goes. With no text, the last function call's arguments are cut. The
+    item and the reply are incomplete, for max_output_tokens, as captured; usage stays as it
+    was billed."""
+    read = response_reply(status, op, headers, body, fault.do, decoded=decoded)
+    if isinstance(read, Unchangeable):
+        return read
+    value, output = read
+    texts, calls = text_parts(output), function_calls(output)
+    if texts:
+        i, j, part = texts[0]
+        part["text"] = cut(cast(str, part["text"]))
+        item = cast("dict[str, object]", output[i])
+        item["content"] = cast("list[object]", item["content"])[: j + 1]
+        where = f"output[{i}].content[{j}].text"
+    elif calls:
+        i, item = calls[-1]
+        item["arguments"] = cut(cast(str, item["arguments"]))
+        where = f"output[{i}].arguments"
+    else:
+        why = no_output_text(output)
+        if why == "the reply has no text":
+            why = "the reply has no text and no tool call"
+        return Unchangeable(why, "data")
+    item["status"] = "incomplete"
+    del output[i + 1 :]
+    value.update(status="incomplete", incomplete_details={"reason": "max_output_tokens"})
+    if "completed_at" in value:  # an incomplete reply never completed
+        value["completed_at"] = None
+    return rewritten(value, headers, 1, [where])
+
+
+def break_args_responses(
+    status: int,
+    op: str,
+    headers: Sequence[tuple[str, str]],
+    body: bytes,
+    fault: Fault,
+    *,
+    decoded: bool = False,
+) -> WebChanged | Unchangeable:
+    """Break the arguments of every function_call item."""
+    read = response_reply(status, op, headers, body, fault.do, decoded=decoded)
+    if isinstance(read, Unchangeable):
+        return read
+    value, output = read
+    count, parts = 0, list[str]()
+    for i, item in function_calls(output):
+        broken = broken_args(cast(str, item["arguments"]))
+        if broken is None:
+            continue
+        item["arguments"] = broken
+        count += 1
+        parts.append(f"output[{i}].arguments")
+    if not count:
+        return Unchangeable("the reply has no tool call with arguments to break", "data")
+    return rewritten(value, headers, count, parts)
+
+
+RESPONSES_CHANGES = {
+    "garble": garble_responses,
+    "truncate": truncate_responses,
+    "bad tool args": break_args_responses,
+}
+
+
+def model_change(word: str, op: str) -> Callable[..., WebChanged | Unchangeable]:
+    """The change a carried fault makes to a model's reply of this kind. replace on a
+    Responses reply keeps the chat change, which says it works on Chat Completions only."""
+    if op == "responses" and word in RESPONSES_CHANGES:
+        return RESPONSES_CHANGES[word]
+    return CHAT_CHANGES[word]
 
 
 def no_text(choices: list[object]) -> str:

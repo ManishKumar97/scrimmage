@@ -544,3 +544,148 @@ def test_a_reply_change_reads_a_gzip_body_and_writes_it_plain(word: str) -> None
         said = change(word, packed, status, op, [("content-type", kind)])
         assert isinstance(said, Unchangeable)
         assert said.why.startswith((f"{word} on a model call", "the reply status is 500"))
+
+
+# The Responses API: a real gpt-4o-mini answer, and function_call items in the spec's form.
+REAL_RESPONSE_FILE = FIXTURES / "real_response_answer.json"
+REAL_RESPONSE = json.loads(REAL_RESPONSE_FILE.read_text())["body"]
+KEPT_ON_RESPONSES = ("id", "object", "created_at", "model", "usage", "service_tier", "billing")
+
+
+def response_with(*items: dict[str, Any]) -> dict[str, Any]:
+    """The real Responses answer with these output items."""
+    reply = copy.deepcopy(REAL_RESPONSE)
+    reply["output"] = [copy.deepcopy(item) for item in items]
+    return reply
+
+
+def message(*texts: str) -> dict[str, Any]:
+    parts = [{"type": "output_text", "annotations": [], "logprobs": [], "text": t} for t in texts]
+    return {"id": "msg_1", "type": "message", "status": "completed", "content": parts,
+            "role": "assistant"}  # fmt: skip
+
+
+def function_call(arguments: str, n: int = 1) -> dict[str, Any]:
+    return {
+        "id": f"fc_{n}",
+        "type": "function_call",
+        "status": "completed",
+        "arguments": arguments,
+        "call_id": f"call_{n}",
+        "name": "get_order",
+    }
+
+
+def on_responses(word: str, reply: object) -> changes.WebChanged | Unchangeable:
+    change_of = changes.model_change(word, "responses")
+    body = json.dumps(reply).encode()
+    return change_of(200, "responses", REAL_HEADERS, body, reply_fault(word))
+
+
+def made_on_responses(word: str, reply: object) -> tuple[dict[str, Any], changes.WebChanged]:
+    done = on_responses(word, reply)
+    assert isinstance(done, changes.WebChanged), done
+    return json.loads(done.body), done
+
+
+def not_made_on_responses(word: str, reply: object) -> tuple[str, str]:
+    said = on_responses(word, reply)
+    assert isinstance(said, Unchangeable), said
+    return said.why, said.kind
+
+
+def kept(reply: dict[str, Any]) -> dict[str, Any]:
+    return {k: reply[k] for k in KEPT_ON_RESPONSES}
+
+
+@pytest.mark.design("fault.truncate_responses")
+def test_truncate_on_responses_sets_incomplete_and_max_output_tokens() -> None:
+    """As a real reply cut by max_output_tokens is: the reply and its item incomplete, the
+    reason max_output_tokens, completed_at null, and usage as it was billed."""
+    real = json.loads((FIXTURES / "real_response_incomplete.json").read_text())["body"]
+    new, done = made_on_responses("truncate", REAL_RESPONSE)
+    assert new["output"][0]["content"][0]["text"] == "Order 1234 has"
+    for key in ("status", "incomplete_details", "completed_at"):
+        assert new[key] == real[key], key
+    assert new["output"][0]["status"] == real["output"][0]["status"] == "incomplete"
+    assert kept(new) == kept(REAL_RESPONSE)
+    assert list(new) == list(REAL_RESPONSE)  # no field added or dropped, in the real order
+    assert (done.count, done.parts, done.status) == (1, ("output[0].content[0].text",), None)
+    # The first text is cut, and what came after it was never made, so it goes.
+    both = response_with(
+        message("Let me look that order up.", "Second part."), function_call('{"a":"1"}')
+    )
+    new, _ = made_on_responses("truncate", both)
+    assert [item["type"] for item in new["output"]] == ["message"]
+    assert [part["text"] for part in new["output"][0]["content"]] == ["Let me look"]
+    # With no text, the last function call's arguments are cut, and that item is incomplete.
+    calls = response_with(function_call('{"order_id":"1234"}'), function_call('{"x":"5678"}', 2))
+    new, done = made_on_responses("truncate", calls)
+    assert [item["arguments"] for item in new["output"]] == ['{"order_id":"1234"}', '{"x":"']
+    assert [item["status"] for item in new["output"]] == ["completed", "incomplete"]
+    assert (new["status"], done.parts) == ("incomplete", ("output[1].arguments",))
+    # A reply with neither, such as a refusal, is left as it is.
+    refusal = response_with({**message(), "content": [{"type": "refusal", "refusal": "No."}]})
+    assert not_made_on_responses("truncate", refusal) == (
+        "the reply is a refusal with no text",
+        "data",
+    )
+    assert not_made_on_responses("truncate", response_with()) == (
+        "the reply has no text and no tool call",
+        "data",
+    )
+    assert json.loads(REAL_RESPONSE_FILE.read_text())["body"] == REAL_RESPONSE  # not in place
+
+
+@pytest.mark.design("fault.bad_tool_args_responses")
+def test_bad_tool_args_on_responses_breaks_each_function_call_item() -> None:
+    reply = response_with(
+        message("Looking."),
+        function_call('{"order_id":"1234"}'),
+        function_call('{"sku": {"id": "SKU-42"}} ', 2),
+    )
+    new, done = made_on_responses("bad tool args", reply)
+    broken = [item["arguments"] for item in new["output"][1:]]
+    assert broken == ['{"order_id":"1234"', '{"sku": {"id": "SKU-42"} ']
+    for arguments in broken:
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(arguments)
+    assert (done.count, done.parts) == (2, ("output[1].arguments", "output[2].arguments"))
+    # The names, ids and statuses stay, and so does the text.
+    assert [(i["id"], i["call_id"], i["name"], i["status"]) for i in new["output"][1:]] == [
+        ("fc_1", "call_1", "get_order", "completed"),
+        ("fc_2", "call_2", "get_order", "completed"),
+    ]
+    assert new["output"][0] == reply["output"][0] and new["status"] == "completed"
+    assert kept(new) == kept(reply)
+    assert not_made_on_responses("bad tool args", REAL_RESPONSE) == (
+        "the reply has no tool call with arguments to break",
+        "data",
+    )
+
+
+@pytest.mark.design("fault.garble_responses")
+def test_garble_on_responses_changes_each_output_text_part() -> None:
+    reply = response_with(
+        message("Your order 1234 shipped on Monday", "Done."),
+        function_call('{"order_id":"1234"}'),
+        {**message("a b c d e"), "id": "msg_2"},
+    )
+    new, done = made_on_responses("garble", reply)
+    texts = [[p["text"] for p in i["content"]] for i in new["output"] if i["type"] == "message"]
+    assert texts == [[f"Your order 1234 shipped {THAI} Monday", THAI], [f"a b c d {THAI}"]]
+    assert done.count == 3
+    assert done.parts == (
+        "output[0].content[0].text",
+        "output[0].content[1].text",
+        "output[2].content[0].text",
+    )
+    assert new["output"][1] == reply["output"][1]  # the function call stays
+    new, _ = made_on_responses("garble", REAL_RESPONSE)
+    assert new["output"][0]["content"][0]["text"] == f"Order 1234 has been {THAI}"
+    assert kept(new) == kept(REAL_RESPONSE) and new["status"] == "completed"
+    for items, why in (
+        ((function_call("{}"),), "the reply has only tool calls and no text"),
+        ((message("  "),), "the reply has no text"),
+    ):
+        assert not_made_on_responses("garble", response_with(*items)) == (why, "data")

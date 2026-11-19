@@ -15,10 +15,13 @@ SIX = [
 ]
 
 ALL_TITLES = [
+    "A 400 after a reply fault on Responses is an infrastructure error.",
+    "A Responses agent that chains to a faulted reply is not supported.",
     "A Vault secret read at a nested mount.",
     "A blind child not started from Python.",
     "A blind child on another Python.",
     "A body cut by a dropped connection.",
+    "A built Responses reply's other fields are fixed.",
     "A built reply's counts are an estimate.",
     "A burst of tool calls with no pause while recording.",
     "A call `background_real` lets through is decided once, with what it runs inside.",
@@ -152,7 +155,7 @@ ALL_TITLES = [
     "The cross-run web rule leaves out `outside_tool` and `credential` calls.",
     "The default certificate lasts one day.",
     "The editor schema checks shape only.",
-    "The faults in a model's reply are for Chat Completions, not streamed.",
+    "The faults in a model's reply are not for a streamed request.",
     "The first Python with the SDK owns the run.",
     "The first in line waits for room.",
     "The old SSE transport for MCP.",
@@ -196,7 +199,9 @@ ALL_TITLES = [
     "`scrimmage record` runs one baseline.",
     "`slow` is not a late reply after the work.",
     "`slow` outside asyncio.",
+    "`truncate` on Responses keeps the real counts.",
     "`truncate` on a very short text.",
+    "`unknown tool` is for Chat Completions.",
     "`unknown tool` sends one form.",
     "asyncio only for async agents.",
     "gunicorn is not covered, with `UvicornWorker` either.",

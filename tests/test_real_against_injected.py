@@ -40,11 +40,14 @@ from test_reply_faults import (
     THAI,
     Loopback,
     as_real,
+    but_tools,
     completion,
     fields_of,
     gate_on,
     loopback,
     model_lines,
+    response_fields,
+    responses_api,
 )
 
 __all__ = ["gated", "loopback"]  # the fixtures, used by name
@@ -666,3 +669,40 @@ def test_a_garbled_reply_parses_into_the_same_fields_as_the_real_one(
     again, _ = completion(loopback, sync)
     assert again.model_dump() == injected.model_dump()
     assert by_langchain(loopback, sync).content == injected_chain.content
+
+
+# The Responses API: a real reply cut by max_output_tokens = 16, and a real whole answer that
+# truncate cuts. Both were saved from gpt-4o-mini on 18 November 2026.
+REAL_INCOMPLETE = json.loads((FIXTURES / "real_response_incomplete.json").read_text())
+REAL_RESPONSE = json.loads((FIXTURES / "real_response_answer.json").read_text())
+
+
+@pytest.mark.design("proof.real_against_injected_truncate_responses")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_a_real_incomplete_response_and_truncate_parse_the_same(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    """The capture is a real Responses reply cut by max_output_tokens; the injected one is
+    truncate on a real whole answer. The output_text property and incomplete_details agree,
+    and usage stays what the model was billed for."""
+    gate_on("truncate")
+    loopback.body = json.dumps(REAL_RESPONSE["body"]).encode()
+    injected = responses_api(loopback, sync)
+    assert loopback.seen == ["/v1/responses"]  # the real call is made
+    as_real(loopback, json.dumps(REAL_INCOMPLETE["body"]).encode(), REAL_INCOMPLETE["status"])
+    real = responses_api(loopback, sync)
+    # tools echoes each request's own: the whole answer's offered one, the cut one's none.
+    assert but_tools(response_fields(injected)) == but_tools(response_fields(real))
+    assert injected.status == real.status == "incomplete"
+    assert injected.incomplete_details == real.incomplete_details
+    assert injected.incomplete_details.reason == "max_output_tokens"
+    assert [i.status for i in injected.output] == [i.status for i in real.output] == ["incomplete"]
+    assert injected.completed_at is None and real.completed_at is None
+    whole = REAL_RESPONSE["body"]["output"][0]["content"][0]["text"]
+    assert isinstance(real.output_text, str) and real.output_text
+    assert injected.output_text == "Order 1234 has" and whole.startswith(injected.output_text)
+    billed = REAL_RESPONSE["body"]["usage"]
+    assert (injected.usage.input_tokens, injected.usage.output_tokens) == (
+        billed["input_tokens"],
+        billed["output_tokens"],
+    )
