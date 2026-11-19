@@ -109,6 +109,8 @@ CARRIED = ("append", "replace", "slow", "garble", "truncate", "bad tool args")
 # A model's reply that came back 200 and is wrong. refuse and unknown tool throw the real
 # reply away, so they are built and nothing is sent; the other three change the real one.
 REPLY_FAULTS = ("garble", "truncate", "unknown tool", "bad tool args", "refuse")
+BUILT_REPLIES = ("refuse", "unknown tool")
+CHANGED_REPLIES = tuple(word for word in REPLY_FAULTS if word not in BUILT_REPLIES)
 MAX_SLOW_S = 600.0
 # The replies RFC 9110 and RFC 6585 give a Retry-After header: on another status it means
 # nothing to a library.

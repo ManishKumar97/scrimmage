@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import Any
 
-from scrimmage_core import capture, changes, delay, hooks
+from scrimmage_core import capture, changes, delay, hooks, mocks
 from scrimmage_core.config import slow_seconds
 from scrimmage_core.decide import Call
 from scrimmage_core.errors import ScrimmageMockError
@@ -714,7 +714,7 @@ def fault_reply(module: ModuleType, run: RunState, step: Step, method: str) -> d
 async def mock_reply(gate: Gate, run: RunState, step: Step, session: Any) -> dict[str, object]:
     """A real tool result. Its text is the value, and a declared shape fills the structured
     result, so a value of the wrong shape fails call_tool's own check."""
-    value = run.plan.mocks[step.decision.mock or 0].returns
+    value = mocks.fresh(run.plan.mocks[step.decision.mock or 0].returns)
     try:
         why = await unlisted(gate, run, step, session)
     except BaseException as exc:

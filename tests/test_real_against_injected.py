@@ -5,6 +5,7 @@ httpx and httpx2, sync and async, a real broken JSON reply and a real empty one,
 real rate limiter's Retry-After."""
 
 import asyncio
+import gzip
 import http.server
 import json
 import shutil
@@ -13,20 +14,40 @@ import struct
 import threading
 import time
 import types
+import warnings
 from collections.abc import Callable, Iterator
 from typing import Any, cast
 
 import openai
 import openai._base_client as openai_base
 import pytest
+from pydantic import SecretStr
 
 from conftest import ACME, EXAMPLE_FAULT, Project
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import http_gate, state
+from scrimmage_core import changes, http_gate, state
 from scrimmage_core import provider_openai as openai_table
 from test_connection_faults import LIBRARIES, PATH_IDS, PATHS, WEB, gated, install, raised
+from test_reply_faults import (
+    FIXTURES,
+    JSON_HEADERS,
+    MODEL,
+    QUESTION,
+    REAL_ANSWER,
+    REAL_TOOL_CALL,
+    SPECS,
+    SYNC_IDS,
+    THAI,
+    Loopback,
+    as_real,
+    completion,
+    fields_of,
+    gate_on,
+    loopback,
+    model_lines,
+)
 
-__all__ = ["gated"]  # the fixture, used by name
+__all__ = ["gated", "loopback"]  # the fixtures, used by name
 
 # Every test here, or nearly, starts a process or a real scrimmage test run.
 pytestmark = pytest.mark.slow
@@ -422,3 +443,226 @@ def test_a_real_retry_after_and_the_injected_one_make_the_library_wait_the_same(
     assert isinstance(fault_error, openai.RateLimitError)
     assert isinstance(real_error, openai.RateLimitError)
     assert fault_error.response.headers["retry-after"] == real_error.response.headers["retry-after"]
+
+
+# The faults that change a real model reply, against a real reply of that kind. Both sides go
+# through the openai library, and LangChain, over a real socket from the same loopback server.
+REAL_TRUNCATED = json.loads((FIXTURES / "real_chat_truncated.json").read_text())
+# Two real cuts inside a tool call, one with tool_choice required and one with it left out.
+REAL_CUT_CALLS = [
+    pytest.param(
+        json.loads((FIXTURES / "real_chat_tool_call_truncated.json").read_text()),
+        {"tool_choice": "required"},
+        id="required",
+    ),
+    pytest.param(
+        json.loads((FIXTURES / "real_chat_tool_call_truncated_auto.json").read_text()),
+        {},
+        id="auto",
+    ),
+]
+
+
+def parse_error(server: Loopback, sync: bool) -> BaseException | None:
+    """What client.chat.completions.parse raised on the server's reply, if anything."""
+    kw: dict[str, Any] = {"model": MODEL, "messages": QUESTION}
+    try:
+        if sync:
+            openai.OpenAI(
+                base_url=server.url, api_key="test", max_retries=0
+            ).chat.completions.parse(**kw)
+        else:
+
+            async def go() -> None:
+                api = openai.AsyncOpenAI(base_url=server.url, api_key="test", max_retries=0)
+                await api.chat.completions.parse(**kw)
+
+            asyncio.run(go())
+    except Exception as exc:
+        return exc
+    return None
+
+
+def by_langchain(server: Loopback, sync: bool, **bound: Any) -> Any:
+    """LangChain's ChatOpenAI on the same server, with these tools: the message, or what it
+    raised."""
+    with warnings.catch_warnings():
+        # langsmith, which langchain_openai loads, calls an asyncio function Python 3.14
+        # deprecates, and this suite turns warnings into errors.
+        warnings.filterwarnings(
+            "ignore", "'asyncio.iscoroutinefunction' is deprecated", DeprecationWarning
+        )
+        from langchain_openai import ChatOpenAI
+
+        model: Any = ChatOpenAI(
+            model=MODEL, base_url=server.url, api_key=SecretStr("test"), max_retries=0
+        )
+        if bound:
+            model = model.bind_tools(bound["tools"])
+        try:
+            if sync:
+                return model.invoke("Where is order 1234?")
+            return asyncio.run(model.ainvoke("Where is order 1234?"))
+        except Exception as exc:
+            return exc
+
+
+def status_error(server: Loopback, sync: bool, **request: Any) -> openai.APIStatusError:
+    """The openai library's error on the server's reply, with its default retries: a 400 is
+    not retried, real or injected."""
+    kw: dict[str, Any] = {"model": MODEL, "messages": QUESTION, **request}
+    with pytest.raises(openai.APIStatusError) as caught:
+        if sync:
+            openai.OpenAI(base_url=server.url, api_key="test").chat.completions.create(**kw)
+        else:
+
+            async def go() -> None:
+                await openai.AsyncOpenAI(
+                    base_url=server.url, api_key="test"
+                ).chat.completions.create(**kw)
+
+            asyncio.run(go())
+    return caught.value
+
+
+@pytest.mark.design("proof.real_against_injected_truncate")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_a_real_truncated_reply_and_truncate_parse_the_same(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    """The capture is a real reply cut by max_completion_tokens = 5; the injected one is
+    truncate on a real whole answer. parse() raises LengthFinishReasonError on both."""
+    gate_on("truncate")
+    injected, _ = completion(loopback, sync)
+    injected_error = parse_error(loopback, sync)
+    injected_chain = by_langchain(loopback, sync)
+    assert loopback.seen == ["/v1/chat/completions"] * 3  # the real call is made
+    as_real(loopback, json.dumps(REAL_TRUNCATED["body"]).encode(), REAL_TRUNCATED["status"])
+    real, _ = completion(loopback, sync)
+    real_error = parse_error(loopback, sync)
+    real_chain = by_langchain(loopback, sync)
+    assert fields_of(injected) == fields_of(real)
+    assert injected.choices[0].finish_reason == real.choices[0].finish_reason == "length"
+    assert type(injected_error) is type(real_error) is openai.LengthFinishReasonError
+    assert isinstance(injected_error, openai.LengthFinishReasonError)
+    assert isinstance(real_error, openai.LengthFinishReasonError)
+    assert fields_of(injected_error.completion) == fields_of(real_error.completion)
+    # LangChain reads both as a message whose finish_reason says it was cut.
+    assert type(injected_chain) is type(real_chain)
+    assert injected_chain.response_metadata["finish_reason"] == "length"
+    assert real_chain.response_metadata["finish_reason"] == "length"
+
+
+@pytest.mark.design("proof.real_against_injected_truncate_tool_call")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+@pytest.mark.parametrize(("capture", "choice"), REAL_CUT_CALLS)
+def test_a_real_truncated_tool_call_and_truncate_parse_the_same(
+    gated: None,
+    loopback: Loopback,
+    capture: dict[str, Any],
+    choice: dict[str, str],
+    sync: bool,
+) -> None:
+    """A real limit inside a tool call is OpenAI's 400, saved on 18 and 19 November 2026 with
+    tool_choice required and with it left to the model; truncate on
+    a real tool call gives the agent the same 400. The openai library raises the same
+    BadRequestError on both and does not retry it, and LangChain raises its own subclass of it
+    on both."""
+    sink, _ = gate_on("truncate")
+    loopback.body = REAL_TOOL_CALL
+    injected = status_error(loopback, sync, tools=SPECS, **choice)
+    injected_chain = by_langchain(loopback, sync, tools=SPECS)
+    assert loopback.seen == ["/v1/chat/completions"] * 2, "retried, or never sent"
+    assert [x["action"] for x in model_lines(sink)] == ["fault", "fault"]
+    as_real(loopback, json.dumps(capture["body"]).encode(), capture["status"])
+    real = status_error(loopback, sync, tools=SPECS, **choice)
+    real_chain = by_langchain(loopback, sync, tools=SPECS)
+    assert loopback.seen == ["/v1/chat/completions"] * 2
+    assert type(injected) is type(real) is openai.BadRequestError
+    assert (injected.status_code, injected.body, injected.message, injected.code) == (
+        real.status_code,
+        real.body,
+        real.message,
+        real.code,
+    )
+    assert (injected.type, injected.param) == (real.type, real.param)
+    assert injected.response.headers["content-type"] == real.response.headers["content-type"]
+    assert type(injected_chain) is type(real_chain)  # its own subclass
+    assert isinstance(injected_chain, openai.BadRequestError)
+    assert str(injected_chain) == str(real_chain)
+
+
+@pytest.mark.design("proof.real_against_injected_bad_tool_args")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_broken_arguments_parse_as_a_real_reply_of_that_kind(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    """The real side is the real tool call with its arguments broken by hand, as the spec says a
+    model may send them. json.loads fails at the same place, and LangChain puts both calls in
+    invalid_tool_calls."""
+    gate_on("bad tool args")
+    loopback.body = REAL_TOOL_CALL
+    injected, _ = completion(loopback, sync, tools=SPECS)
+    injected_chain = by_langchain(loopback, sync, tools=SPECS)
+    whole = b'"arguments": "{\\"order_id\\":\\"1234\\"}"'
+    assert REAL_TOOL_CALL.count(whole) == 1
+    by_hand = REAL_TOOL_CALL.replace(whole, b'"arguments": "{\\"order_id\\":\\"1234\\""')
+    as_real(loopback, by_hand)
+    real, _ = completion(loopback, sync, tools=SPECS)
+    real_chain = by_langchain(loopback, sync, tools=SPECS)
+    assert fields_of(injected) == fields_of(real)
+    [injected_call] = injected.choices[0].message.tool_calls
+    [real_call] = real.choices[0].message.tool_calls
+    assert injected_call.model_dump() == real_call.model_dump()
+    errors: list[tuple[str, int]] = []
+    for call in (injected_call, real_call):
+        with pytest.raises(json.JSONDecodeError) as caught:
+            json.loads(call.function.arguments)
+        errors.append((caught.value.msg, caught.value.pos))
+    assert errors[0] == errors[1]
+    assert injected_chain.tool_calls == real_chain.tool_calls == []
+    assert injected_chain.invalid_tool_calls == real_chain.invalid_tool_calls
+    [invalid] = real_chain.invalid_tool_calls
+    assert (invalid["name"], invalid["args"]) == ("get_order", '{"order_id":"1234"')
+
+
+GARBLED_ENCODINGS = [
+    pytest.param("identity", id="plain"),
+    pytest.param("gzip", id="gzip"),
+    pytest.param(
+        "br",
+        id="br",
+        marks=pytest.mark.skipif(
+            changes.brotli_module() is None,
+            reason="br needs brotli or brotlicffi 1.2 or later; run with uv run --with brotli",
+        ),
+    ),
+]
+
+
+@pytest.mark.design("proof.real_against_injected_garble")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+@pytest.mark.parametrize("encoding", GARBLED_ENCODINGS)
+def test_a_garbled_reply_parses_into_the_same_fields_as_the_real_one(
+    gated: None, loopback: Loopback, encoding: str, sync: bool
+) -> None:
+    """garble on a real answer, sent plain, in gzip or in br: the openai library sets the same
+    fields as on the real reply, and the gate's bytes sent again by a server with no run give
+    the same object, so the gate's own reply is what a socket gives."""
+    packed = {"identity": lambda b: b, "gzip": gzip.compress}
+    pack = packed.get(encoding) or (lambda b: cast(Any, changes.brotli_module()).compress(b))
+    loopback.headers = {**JSON_HEADERS, "content-encoding": encoding}
+    loopback.body = pack(REAL_ANSWER)
+    gate_on("garble")
+    injected, sent = completion(loopback, sync)
+    injected_chain = by_langchain(loopback, sync)
+    assert THAI in injected.choices[0].message.content
+    assert THAI in injected_chain.content
+    state.install(None)
+    real, _ = completion(loopback, sync)  # the real answer, as the model sent it
+    assert fields_of(injected) == fields_of(real)
+    loopback.headers = dict(JSON_HEADERS)
+    as_real(loopback, sent)
+    again, _ = completion(loopback, sync)
+    assert again.model_dump() == injected.model_dump()
+    assert by_langchain(loopback, sync).content == injected_chain.content

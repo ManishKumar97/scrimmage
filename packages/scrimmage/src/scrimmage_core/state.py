@@ -755,16 +755,28 @@ class RunState:
             )
         step.unchanged = {"do": "" if fault is None else fault.do, "why": why}
 
-    def changed(self, step: Step, done: Changed) -> None:
+    def changed(
+        self,
+        step: Step,
+        done: Changed,
+        *,
+        reply: dict[str, object] | None = None,
+        status: int | None = None,
+    ) -> None:
         """Say what a carried fault changed. The text is the fault's own, shown as written;
-        find is cleaned for its preview and hashed as written."""
+        find is cleaned for its preview and hashed as written. A fault in a model's reply has
+        no text of its own. reply: the reply the agent got in place of the real one, which
+        stays the line's result; status: its status, when it is not the real one's."""
         assert step.decision.fault is not None
         fault = self.plan.faults[step.decision.fault]
-        shown: dict[str, object] = {
-            "text": content(remove_values(fault.text or "", self.secrets)[0], clean=False),
-            "count": done.count,
-            "parts": list(done.parts),
-        }
+        shown: dict[str, object] = {}
+        if fault.text is not None:
+            shown["text"] = content(remove_values(fault.text, self.secrets)[0], clean=False)
+        shown.update(count=done.count, parts=list(done.parts))
+        if reply is not None:
+            shown["reply"] = reply
+        if status is not None:
+            shown["status"] = status
         if fault.find is not None:
             raw = fault.find.encode("utf-8", "backslashreplace")
             shown["find"] = {
