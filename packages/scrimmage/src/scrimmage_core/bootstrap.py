@@ -144,7 +144,8 @@ def report_tools(run_state: state.RunState) -> None:
 def outside(plan: Plan, prefixes: list[str]) -> str | None:
     """The first import path in the plan that SCRIMMAGE_ALLOW_IMPORTS does not cover."""
     raises = [f.raises for f in plan.faults if f.raises and ":" in f.raises]
-    paths = [*plan.tools, *(m.type for m in plan.mocks if m.type), *raises]
+    made = [m.returns_from for m in plan.mocks if m.returns_from]
+    paths = [*plan.tools, *(m.type for m in plan.mocks if m.type), *made, *raises]
     return next((path for path in paths if not allowed(path, prefixes)), None)
 
 

@@ -289,11 +289,18 @@ For each run, the runner sends the code inside your agent a plan: which calls to
 The plan is data only.
 It holds no code.
 
-Two settings name Python objects: a mock's `type` and a fault's `raises`.
+Three settings name Python objects: a mock's `type` and `returns_from`, and a fault's `raises`.
 Scrimmage imports such a name only if it is under one of your agent's own top-level packages, the ones that `function` and `tools` name.
-The check runs before the import, and at the start of each process, so a plan that names anything else stops the program before your agent runs.
+The check runs when the file loads, at the start of each process, and again before the import.
+So a plan that names anything else stops the program before your agent runs.
 
-*Checked by: `tests/test_bootstrap.py::test_a_type_outside_the_allowed_prefixes_is_refused_before_import`, `tests/test_tool_gate.py::test_a_type_outside_the_allowed_prefixes_is_refused_before_import`, `tests/test_schemas.py::test_the_sdk_rejects_a_bad_plan`*
+A `returns_from` function is your code, and it runs inside your agent's process at each mocked call.
+That is the trust a `type` already has: its class's own code runs when the value is built.
+The plan carries only the function's name.
+Calls the function makes pass the gates like any other code in the run.
+If it raises, even `SystemExit`, the record names the function and the error's class, never the error's message, which can quote a value.
+
+*Checked by: `tests/test_bootstrap.py::test_a_type_outside_the_allowed_prefixes_is_refused_before_import`, `tests/test_bootstrap.py::test_a_returns_from_outside_the_allowed_prefixes_stops_the_program_before_the_agent_runs`, `tests/test_tool_gate.py::test_a_type_outside_the_allowed_prefixes_is_refused_before_import`, `tests/test_schemas.py::test_the_sdk_rejects_a_bad_plan`, `tests/test_returns_from.py::test_a_factory_outside_the_allowed_imports_is_never_imported`, `tests/test_returns_from.py::test_a_factory_that_raises_is_a_mistake_naming_it_and_not_its_message`*
 
 ## A fault sends nothing
 
@@ -429,7 +436,7 @@ See [Failing the model, and keeping a budget](model-faults.md).
 
 - **Your agent's own output.** The per-run `.log` and `.out` files hold whatever your agent printed, and they are not cleaned, except of the values the file reads with `${NAME}`.
   They are readable only by you; keep them like any test log.
-- **A hostile `scrimmage.toml`.** `function` and `command` name code that runs, so treat the file like code.
+- **A hostile `scrimmage.toml`.** `function`, `command` and `returns_from` name code that runs, so treat the file like code.
   A CI job that holds model API keys must not run `scrimmage test` on a pull request from an outside contributor.
 
 [Limits](limits.md) lists every known gap of this version, and [Safety](safety.md) the rules each gate applies.

@@ -73,8 +73,8 @@ CONTROL_TLS_KEYS = {"cert", "key"}
 RULE_KEYS = {"expect", "forbid", "pass_rate"}
 TEST_KEYS = {"name", "question", "mock", "fault", *RULE_KEYS}
 # recorded marks a mock scrimmage record wrote; args, on a tool or MCP mock, the arguments
-# it answers, exactly.
-MOCK_KEYS = {"call", "returns", "type", "recorded", "args"}
+# it answers, exactly. returns_from names the function that builds a tool mock's value.
+MOCK_KEYS = {"call", "returns", "returns_from", "type", "recorded", "args"}
 WEB_MOCK_KEYS = {"call", "method", "path", "status", "headers", "json", "text", "recorded"}
 # text and find belong to append and replace. On a model call only replace takes them.
 CHANGE_KEYS = {"text", "find"}
@@ -374,6 +374,7 @@ class Mock:
     text: str | None = None
     recorded: bool = False  # written by scrimmage record: unused, it is a note, not a mistake
     args: dict[str, object] | None = None  # the mock answers only these exact arguments
+    returns_from: str | None = None  # a tool mock: the function that builds its value
 
 
 @dataclass(frozen=True)
@@ -659,11 +660,13 @@ def check_references(config: Config) -> list[str]:
                     f"[[test]] {test.name!r}: {entry.call} names no tool in [agent] tools; "
                     f"the tools are {', '.join(names) or 'none'}"
                 )
-        paths = [m.type for m in test.mocks] + [f.raises for f in test.faults]
-        for path in paths:
+        paths = [("type", m.type) for m in test.mocks]
+        paths += [("returns_from", m.returns_from) for m in test.mocks]
+        paths += [("type", f.raises) for f in test.faults]
+        for key, path in paths:
             if path and ":" in path and not allowed(path, config.agent.allowed_imports()):
                 problems.append(
-                    f"[[test]] {test.name!r}: type {path} is outside the agent's packages "
+                    f"[[test]] {test.name!r}: {key} {path} is outside the agent's packages "
                     f"({', '.join(config.agent.allowed_imports())}), so it is refused"
                 )
     for entry in config.agent.real:
@@ -1482,16 +1485,31 @@ def read_args(table: dict[str, object], where: str) -> dict[str, object] | None:
 def read_mock(table: dict[str, object], where: str) -> Mock:
     written = text(table, "call", where)
     call = kept(written, labels.check(written, f"{where} call"))
-    if labels.kind_of(call) == "http":
+    kind_of = labels.kind_of(call)
+    if "returns_from" in table and kind_of in ("http", "mcp"):
+        fix = "json or text" if kind_of == "http" else "returns"
+        raise ConfigError(
+            f"{where} returns_from: works on a tool mock only; this reply is JSON or text, "
+            f"so write it with {fix}"
+        )
+    if kind_of == "http":
         return read_web_mock(table, call, where)
-    check_keys(table, MCP_MOCK_KEYS if labels.kind_of(call) == "mcp" else MOCK_KEYS, where)
+    check_keys(table, MCP_MOCK_KEYS if kind_of == "mcp" else MOCK_KEYS, where)
+    recorded = read_recorded(table, where)
+    args = read_args(table, where)
+    if "returns_from" in table:
+        for key in ("returns", "type"):
+            if key in table:
+                raise ConfigError(
+                    f"{where} {key}: returns_from builds the value itself; remove {key}"
+                )
+        path = import_path(text(table, "returns_from", where), f"{where} returns_from")
+        return Mock(call, None, None, recorded=recorded, args=args, returns_from=path)
     if "returns" not in table:
         raise ConfigError(f"{where} returns: required")
     kind = table.get("type")
     if kind is not None:
         kind = import_path(text(table, "type", where), f"{where} type")
-    recorded = read_recorded(table, where)
-    args = read_args(table, where)
     return Mock(call, table["returns"], kind, recorded=recorded, args=args)
 
 

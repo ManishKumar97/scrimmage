@@ -494,14 +494,47 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "call",
-        "returns"
+        "call"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "returns"
+          ],
+          "not": {
+            "required": [
+              "returns_from"
+            ]
+          }
+        },
+        {
+          "required": [
+            "returns_from"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "returns"
+                ]
+              },
+              {
+                "required": [
+                  "type"
+                ]
+              }
+            ]
+          }
+        }
       ],
       "properties": {
         "call": {
           "$ref": "#/$defs/tool_label"
         },
         "returns": {},
+        "returns_from": {
+          "$ref": "#/$defs/import_path"
+        },
         "type": {
           "$ref": "#/$defs/import_path"
         },

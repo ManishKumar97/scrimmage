@@ -43,6 +43,28 @@
             "additionalProperties": false,
             "required": [
               "call",
+              "returns_from"
+            ],
+            "properties": {
+              "call": {
+                "$ref": "#/$defs/tool_label"
+              },
+              "returns_from": {
+                "$ref": "#/$defs/import_path"
+              },
+              "recorded": {
+                "type": "boolean"
+              },
+              "args": {
+                "type": "object"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "call",
               "returns"
             ],
             "properties": {

@@ -1,7 +1,10 @@
 import dataclasses
+import json
 import re
+import tomllib
 from pathlib import Path
 
+import jsonschema
 import pytest
 
 import config_cases
@@ -80,7 +83,6 @@ def test_a_bad_value_names_its_table_and_key(tmp_path: Path) -> None:
         ('call = "tool:get_order"\ndo', 'call = "model:openai/images"\ndo', "not a model call"),
         ("[agent]\n", '[agent]\nrecords = "x"\n', "records: unknown setting"),
         ("[agent]\n", "[agent]\nrnus = 50\n", "rnus: unknown setting"),
-        ('returns = "shipped, Oct 30"', 'returns_from = "acme.m:f"', "returns_from: unknown"),
     ],
 )
 def test_anything_this_version_does_not_support_is_rejected(
@@ -573,6 +575,53 @@ def test_a_web_mock_with_args_is_still_rejected(tmp_path: Path) -> None:
     web = config_cases.mock('call = "http:a.acme"\nrecorded = true\nargs = {a = 1}\n')
     with pytest.raises(ConfigError, match="args: unknown setting"):
         load_text(tmp_path, web)
+
+
+FACTORY = 'call = "tool:t"\nreturns_from = "acme.mock_values:invoice_pdf"\n'
+
+
+def toml_schema_errors(text: str) -> list[str]:
+    body = json.loads((Path(config.__file__).parent / "schemas/scrimmage-toml.v1.json").read_text())
+    return [
+        e.message for e in jsonschema.Draft202012Validator(body).iter_errors(tomllib.loads(text))
+    ]
+
+
+@pytest.mark.design("config.returns_from_alone")
+def test_returns_from_is_refused_with_returns_or_type(tmp_path: Path) -> None:
+    alone = config_cases.mock(FACTORY + 'args = {invoice_id = "INV-7"}\n')
+    mock = load_text(tmp_path, alone).tests[0].mocks[0]
+    assert (mock.returns_from, mock.returns, mock.type) == (
+        "acme.mock_values:invoice_pdf",
+        None,
+        None,
+    )
+    assert mock.args == {"invoice_id": "INV-7"}
+    assert toml_schema_errors(alone) == []
+    for extra, key in (('returns = "x"\n', "returns"), ('type = "acme.models:Stock"\n', "type")):
+        text = config_cases.mock(FACTORY + extra)
+        message = (
+            f"[[test.mock]] 1 of 't' {key}: returns_from builds the value itself; remove {key}"
+        )
+        with pytest.raises(ConfigError) as caught:
+            load_text(tmp_path, text)
+        assert str(caught.value) == message
+        assert toml_schema_errors(text), key  # the schema refuses the shape too
+
+
+@pytest.mark.design("config.returns_from_tools_only")
+@pytest.mark.parametrize(
+    ("call", "fix"), [("mcp:docs/search", "returns"), ("http:api.acme.com", "json or text")]
+)
+def test_returns_from_is_refused_on_mcp_and_web_mocks(tmp_path: Path, call: str, fix: str) -> None:
+    text = config_cases.mock(FACTORY.replace("tool:t", call))
+    with pytest.raises(ConfigError) as caught:
+        load_text(tmp_path, text)
+    assert str(caught.value) == (
+        "[[test.mock]] 1 of 't' returns_from: works on a tool mock only; this reply is JSON or "
+        f"text, so write it with {fix}"
+    )
+    assert toml_schema_errors(text), call
 
 
 @pytest.mark.design("config.args_only_recorded")

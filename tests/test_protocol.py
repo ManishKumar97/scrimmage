@@ -180,6 +180,30 @@ def test_retry_after_survives_the_plan_round_trip() -> None:
             Plan.from_json(with_fault(do=do, retry_after=wait))
 
 
+@pytest.mark.design("protocol.returns_from_round_trip")
+def test_returns_from_survives_the_plan_round_trip() -> None:
+    """An SDK that lost it would find a mock with no value, and give the agent None."""
+    made = config.Mock("tool:a", None, None, returns_from="acme.mock_values:invoice_pdf")
+    narrowed = dataclasses.replace(made, args={"invoice_id": "INV-7"}, recorded=True)
+    for mock in (made, narrowed):
+        sent = dataclasses.replace(a_plan(), mocks=(mock,)).to_json()
+        doc = cast(list[dict[str, object]], sent["mocks"])[0]
+        assert doc["returns_from"] == "acme.mock_values:invoice_pdf"
+        assert "returns" not in doc and "type" not in doc  # the factory builds the value
+        assert Plan.from_json(json.loads(json.dumps(sent))).mocks == (mock,)
+    # A forged plan is refused by the same rules as the file and the schema.
+    path = "acme.mock_values:invoice_pdf"
+    for bad in (
+        {"call": "mcp:docs/search", "returns_from": path},
+        {"call": "http:api.acme.com", "status": 200, "returns_from": path},
+        {"call": "tool:a", "returns_from": path, "returns": 1},
+        {"call": "tool:a", "returns_from": path, "type": "acme.models:Stock"},
+    ):
+        doc = {**a_plan().to_json(), "mocks": [bad]}
+        with pytest.raises(ValueError, match="plan mock returns_from: only on a tool mock"):
+            Plan.from_json(doc)
+
+
 @pytest.mark.design("protocol.plan_fault_keys_listed")
 def test_every_fault_field_a_plan_carries_is_a_known_plan_key() -> None:
     """A new Fault field fails here until it is in PLAN_FAULT_KEYS, so a later key is never

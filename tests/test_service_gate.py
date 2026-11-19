@@ -191,6 +191,9 @@ def test_a_run_request_whose_plan_cannot_be_claimed_gets_503_and_never_reaches_t
     assert (
         refused_code(run(drive(gated_app(), headers=[svc.header(outside)]))) == "plan-unavailable"
     )
+    # A function to build a mock's value, outside it too.
+    made = svc.open(mocks=(Mock("tool:get_order", None, None, returns_from="other.mocks:make"),))
+    assert refused_code(run(drive(gated_app(), headers=[svc.header(made)]))) == "plan-unavailable"
     # The runner stopped.
     gone = svc.open()
     svc.server.stop()
