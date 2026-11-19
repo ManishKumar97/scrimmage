@@ -86,6 +86,76 @@ They are not your model's context or your prompt's length.
 It works on a chat call, `model` or `model:openai`, and not on a call that only reads, such as `model:*/embeddings`.
 On a Responses call it is a mistake in the test, and the call fails at once: the Responses API's reply is not this one.
 
+## A reply that comes back wrong
+
+These are the quiet failures: the model answers 200, the time and the cost look normal, and the reply is wrong.
+Each fault copies a case seen in the real world:
+
+| Fault | What your agent gets | Where it was seen |
+|---|---|---|
+| `refuse` | a refusal in place of the answer | OpenAI's Structured Outputs guide, and a forum report of `gpt-4o-mini` refusing in plain text |
+| `unknown tool` | a call to `multi_tool_use.parallel`, a tool your agent never offered | OpenAI forum reports from November 2023 to July 2024 |
+| `garble` | the real reply with every fifth word replaced by `สวัสดี` | Anthropic's postmortem of August and September 2025: stray Thai or Chinese tokens in English replies |
+| `truncate` | the real reply cut short, with `finish_reason` `length` | a real reply cut by `max_completion_tokens` |
+| `bad tool args` | the real tool calls with arguments that are not valid JSON | OpenAI's API reference: "the model does not always generate valid JSON" |
+
+Each needs `model`, as `replace` does, so a guard or a judge beside the main model is left alone:
+
+```toml
+[[test.fault]]
+call   = "model"
+model  = "gpt-4o-mini"
+do     = "refuse"
+when   = "call 2"
+expect = [["sorry", "could not"]]
+```
+
+They work on a chat call, `model` or `model:openai`, and take no `text`, `find` or `retry_after`.
+Under `when = "always"` each needs its own `expect` or `forbid`, as any fault that hides the data does.
+
+What each costs:
+
+| Fault | The real call | Billed |
+|---|---|---|
+| `refuse`, `unknown tool` | not sent: Scrimmage builds the whole reply | no, and nothing is reserved |
+| `garble`, `truncate`, `bad tool args` | sent, then the reply is changed | yes, as in the baseline row, reserved first |
+
+`garble`, `truncate` and `bad tool args` are not built yet.
+A row with one is a mistake in the test: the call fails at once, before anything is sent.
+
+A built reply is made from a real `gpt-4o-mini` reply: the same fields, with new ids in OpenAI's forms, the time, and the model your request named.
+Its `usage` holds a rough count of your request's tokens and 10 output tokens, but nothing was sent, so the line costs 0.
+
+### The two forms of `refuse`
+
+A real refusal has the form your request asked for:
+
+| The request | The reply |
+|---|---|
+| Structured Outputs: `response_format` of type `json_schema`, as `client.chat.completions.parse()` and LangChain's `with_structured_output` send | `content` null, and `refusal` set to `I'm sorry, I cannot assist with that request.` |
+| anything else, JSON mode included | `content` set to `I'm sorry, I can't assist with that.`, and `refusal` null |
+
+`finish_reason` is `stop` either way.
+Under Structured Outputs, `parse()` gives `parsed` as `None` with the refusal beside it, and LangChain raises `OpenAIRefusalError`, as they do for a real one.
+On a plain request the refusal is ordinary text, so an agent that only checks `refusal` misses it, as it would in production.
+
+### `unknown tool`
+
+The reply is one tool call, as OpenAI's models have sent it:
+
+```json
+{"name": "multi_tool_use.parallel", "arguments": "{\"tool_uses\":[{\"recipient_name\":\"functions.get_order\",\"parameters\":{}}]}"}
+```
+
+`recipient_name` names the first tool your request offers, and `finish_reason` is `tool_calls`.
+A request where the model cannot pick a tool of its own is left as it is: one that offers no tools, sets `tool_choice` to `"none"`, names the tool in `tool_choice`, or offers tools in the old `functions` field only. The call goes on as in the baseline, and the line says why.
+If your agent sends the call back in its next request, OpenAI refuses that request with a 400, because the name holds a dot.
+
+### Where they do not work
+
+A streamed request is a mistake in the test, found from the request's `stream`, so the call fails at once and nothing is sent.
+A Responses API call is a mistake in the test too: these faults work on Chat Completions only.
+
 ## A rate limit that says how long to wait
 
 A rate limiter's 429 often says how long to wait, in a `Retry-After` header.

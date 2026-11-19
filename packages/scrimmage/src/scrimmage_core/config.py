@@ -93,7 +93,8 @@ JUDGING = "docs/judging.md"
 # The faults this version builds. Each one has an entry in docs/fault-catalog.toml.
 FAULTS = (
     "timeout", "status", "error", "empty", "append", "replace", "slow", "refused", "reset", "dns",
-    "bad body", "context too long",
+    "bad body", "context too long", "garble", "truncate", "unknown tool", "bad tool args",
+    "refuse",
 )  # fmt: skip
 # A connection that fails: on a model call or a web request, with what a tool raises instead.
 CONNECTION = {
@@ -104,7 +105,10 @@ CONNECTION = {
 STATUS = re.compile(r"status (?P<code>\d{3})")
 SLOW = re.compile(r"slow (?P<s>\d+(?:\.\d+)?)s")
 # These let the call happen: the fault changes what it returns, or when.
-CARRIED = ("append", "replace", "slow")
+CARRIED = ("append", "replace", "slow", "garble", "truncate", "bad tool args")
+# A model's reply that came back 200 and is wrong. refuse and unknown tool throw the real
+# reply away, so they are built and nothing is sent; the other three change the real one.
+REPLY_FAULTS = ("garble", "truncate", "unknown tool", "bad tool args", "refuse")
 MAX_SLOW_S = 600.0
 # The replies RFC 9110 and RFC 6585 give a Retry-After header: on another status it means
 # nothing to a library.
@@ -394,8 +398,9 @@ class Fault:
 
 
 def carried(do: str) -> bool:
-    """Whether a fault word lets the call happen: append, replace and slow."""
-    return do.partition(" ")[0] in CARRIED
+    """Whether a fault word lets the call happen: append, replace, slow, and the reply faults
+    that change the real reply."""
+    return do in CARRIED or do.partition(" ")[0] == "slow"
 
 
 def slow_seconds(do: str) -> float | None:
@@ -1491,6 +1496,8 @@ def read_mock(table: dict[str, object], where: str) -> Mock:
 def read_fault(table: dict[str, object], where: str) -> Fault:
     call = labels.check(text(table, "call", where), f"{where} call")
     kind = labels.kind_of(call)
+    if table.get("do") in REPLY_FAULTS:
+        reply_fault_on(call, str(table["do"]), "model" in table, where)
     # First, so text on a model fault is told why, not that the key is unknown.
     if kind == "model" and isinstance(table.get("do"), str) and carried(str(table["do"])):
         carried_on_a_model(call, str(table["do"]), "model" in table, where)
@@ -1597,6 +1604,21 @@ def carried_on_a_model(call: str, do: str, named: bool, where: str) -> None:
         )
 
 
+def reply_fault_on(call: str, do: str, named: bool, where: str) -> None:
+    """A reply fault changes or makes a chat model's answer, so it needs a chat model call and
+    one model named, as replace does."""
+    if labels.kind_of(call) != "model" or "/" in call:
+        raise ConfigError(
+            f'{where} do: {do!r} works only on a chat model call, such as call = "model", '
+            "whose reply is the model's answer; see docs/model-faults.md"
+        )
+    if not named:
+        raise ConfigError(
+            f"{where} model: {do} on a model call needs the model's name, or it would change "
+            "every model's answer, the main model's too; add model = \"...\""
+        )
+
+
 def carried_model_warnings(config: Config) -> list[str]:
     """A replace or slow on a model call still makes the real call, billed. With the budget
     off nothing stops those calls but the run time."""
@@ -1608,7 +1630,11 @@ def carried_model_warnings(config: Config) -> list[str]:
         "[agent.prices] and keep the budget on"
         for test in config.tests
         for i, fault in enumerate(test.faults, 1)
-        if labels.kind_of(fault.call) == "model" and carried(fault.do)
+        # The reply faults that change the real reply stop before sending until they are
+        # built, so they make no call to bill yet.
+        if labels.kind_of(fault.call) == "model"
+        and carried(fault.do)
+        and fault.do not in REPLY_FAULTS
     ]
 
 

@@ -1,24 +1,44 @@
-"""empty on a web request and bad body on a web request or a model call, in one process: the
-reply the code gets, the line, and that nothing is sent, reserved or fired by mistake."""
+"""empty on a web request, bad body on a web request or a model call, and the faults in a
+model's reply, in one process: the reply the code gets, the line, and that nothing is sent,
+reserved or fired by mistake."""
 
 import asyncio
+import http.server
 import json
+import re
+import threading
+import warnings
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, cast
 
 import httpx2
 import openai
+import pydantic
 import pytest
+from pydantic import SecretStr
 
 from conftest import EXAMPLE_FAULT, Project
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import cli, config, http_gate, runner, suggest
-from scrimmage_core.config import Fault
+from scrimmage_core import cli, config, http_gate, runner, state, suggest
+from scrimmage_core import provider_openai as openai_table
+from scrimmage_core.config import Fault, ModelHost
 from scrimmage_core.decide import MISTAKE_REFUSAL
 from scrimmage_core.errors import ConfigError, ScrimmageMockError
+from scrimmage_core.plan import Plan
 from scrimmage_core.provider_openai import BROKEN_BODY
-from test_connection_faults import LIBRARIES, PATH_IDS, PATHS, WEB, gated, install
+from test_connection_faults import (
+    LIBRARIES,
+    PATH_IDS,
+    PATHS,
+    WEB,
+    Counting,
+    gated,
+    install,
+    never_stopped,
+)
 from test_http_gate import BODY, URL, Sink
+from test_model_faults import sent_only_the_real_calls
 
 __all__ = ["gated"]  # the fixture, used by name
 
@@ -274,3 +294,477 @@ def test_a_run_with_bad_body_on_a_streamed_request_ends_as_a_test_mistake(
     texts = [str(s["text"]) for s in run["suggestions"]]
     assert [s["code"] for s in run["suggestions"]][:1] == ["test_mistake"], texts
     assert not any("ran as it would" in text for text in texts), texts
+
+
+# The faults in a model's reply. The real side of each pair is a loopback server that sends
+# the bytes, with no run, so the openai library and LangChain read them over a real socket.
+MODEL = "gpt-4o-mini"
+ORDER_TOOLS = ("acme.tools:get_order", "acme.tools:get_stock")
+SPECS = [
+    {"type": "function", "function": {"name": name, "parameters": {"type": "object"}}}
+    for name in ("get_order", "get_stock")
+]
+QUESTION = [{"role": "user", "content": "Where is order 1234?"}]
+REAL_ANSWER = (FIXTURES / "real_chat_answer.json").read_bytes()
+REAL_TOOL_CALL = (FIXTURES / "real_chat_tool_call.json").read_bytes()
+JSON_HEADERS = {"content-type": "application/json", "x-request-id": "req_real"}
+REPLY_WORDS = ("garble", "truncate", "unknown tool", "bad tool args", "refuse")
+SYNC_IDS = ["sync", "async"]
+
+
+class Order(pydantic.BaseModel):
+    status: str
+
+
+class Loopback:
+    """A model server on 127.0.0.1 that sends one reply, and counts what reaches it."""
+
+    def __init__(self) -> None:
+        self.body = REAL_ANSWER
+        self.seen: list[str] = []
+        loop = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                loop.seen.append(self.path)
+                self.send_response(200)
+                for name, value in JSON_HEADERS.items():
+                    self.send_header(name, value)
+                self.send_header("Content-Length", str(len(loop.body)))
+                self.end_headers()
+                self.wfile.write(loop.body)
+
+            def log_message(self, format: str, *args: object) -> None:
+                del format, args
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.server.server_address[1]}/v1"
+
+
+@pytest.fixture
+def loopback() -> Iterator[Loopback]:
+    server = Loopback()
+    server.thread.start()
+    yield server
+    server.server.shutdown()
+    server.server.server_close()
+    server.thread.join()
+
+
+def plan_with(word: str | None) -> Plan:
+    """A run with this reply fault on every call to the model, or none; the loopback is a
+    model host."""
+    faults = () if word is None else (Fault("model", word, "always", model=MODEL),)
+    return Plan(
+        "run-1", "t", "row", (), faults, ORDER_TOOLS, (), 60.0,
+        model_hosts=(ModelHost("127.0.0.1", "openai"),), budget_usd=1.0,
+    )  # fmt: skip
+
+
+def gate_on(word: str) -> tuple[Sink, Counting]:
+    """That run, with both libraries gated."""
+    sink, budget = Sink(), Counting()
+    run = state.RunState(plan_with(word), sink, [])
+    state.install(run)
+    ctx = http_gate.Context(run, budget, sink, never_stopped)
+    for name, module in LIBRARIES.items():
+        http_gate.patch(module, ctx, name)
+    return sink, budget
+
+
+def completion(server: Loopback, sync: bool, **request: Any) -> tuple[Any, bytes]:
+    """One chat call through the openai library: what it made of the reply, and its bytes."""
+    kw: dict[str, Any] = {"model": MODEL, "messages": QUESTION, **request}
+    if sync:
+        api = openai.OpenAI(base_url=server.url, api_key="test", max_retries=0)
+        raw = api.chat.completions.with_raw_response.create(**kw)
+        return raw.parse(), raw.http_response.content
+
+    async def go() -> tuple[Any, bytes]:
+        api = openai.AsyncOpenAI(base_url=server.url, api_key="test", max_retries=0)
+        raw = await api.chat.completions.with_raw_response.create(**kw)
+        return raw.parse(), raw.http_response.content
+
+    return asyncio.run(go())
+
+
+def parsed(server: Loopback, sync: bool) -> tuple[Any, bytes]:
+    """client.chat.completions.parse with a Pydantic model, as Structured Outputs code calls it."""
+    kw: dict[str, Any] = {"model": MODEL, "messages": QUESTION, "response_format": Order}
+    if sync:
+        api = openai.OpenAI(base_url=server.url, api_key="test", max_retries=0)
+        raw = api.chat.completions.with_raw_response.parse(**kw)
+        return raw.parse(), raw.http_response.content
+
+    async def go() -> tuple[Any, bytes]:
+        api = openai.AsyncOpenAI(base_url=server.url, api_key="test", max_retries=0)
+        raw = await api.chat.completions.with_raw_response.parse(**kw)
+        return raw.parse(), raw.http_response.content
+
+    return asyncio.run(go())
+
+
+def structured_by_langchain(server: Loopback, sync: bool) -> BaseException | None:
+    """LangChain's with_structured_output on the same server; what it raised."""
+    with warnings.catch_warnings():
+        # langsmith, which langchain_openai loads, calls an asyncio function Python 3.14
+        # deprecates, and this suite turns warnings into errors.
+        warnings.filterwarnings(
+            "ignore", "'asyncio.iscoroutinefunction' is deprecated", DeprecationWarning
+        )
+        from langchain_openai import ChatOpenAI
+
+        model = ChatOpenAI(
+            model=MODEL, base_url=server.url, api_key=SecretStr("test"), max_retries=0
+        )
+        chain = model.with_structured_output(Order)
+        try:
+            if sync:
+                chain.invoke("Where is order 1234?")
+            else:
+                asyncio.run(chain.ainvoke("Where is order 1234?"))
+        except Exception as exc:
+            return exc
+    return None
+
+
+def fields_of(value: object) -> object:
+    """The fields the library set, recursively, with no field it did not know."""
+    if isinstance(value, pydantic.BaseModel):
+        extra = value.model_extra
+        assert not extra, f"{type(value).__name__} has fields it does not know: {extra}"
+        return {name: fields_of(getattr(value, name)) for name in sorted(value.model_fields_set)}
+    if isinstance(value, list):
+        return [fields_of(item) for item in cast("list[object]", value)]
+    return None
+
+
+def as_real(server: Loopback, body: bytes) -> None:
+    """The run ends, and the server sends these bytes as a real model would."""
+    state.install(None)
+    server.body = body
+    server.seen.clear()
+
+
+def model_lines(sink: Sink) -> list[dict[str, object]]:
+    return [x for x in sink.lines if x.get("kind") == "model"]
+
+
+@pytest.mark.design("fault.refuse_plain")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_refuse_on_a_plain_request_is_text_with_a_null_refusal(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    sink, _ = gate_on("refuse")
+    reply, _ = completion(loopback, sync)
+    assert loopback.seen == [], "the gate sent the request"
+    [choice] = reply.choices
+    assert choice.message.content == "I'm sorry, I can't assist with that."
+    assert choice.message.refusal is None and choice.finish_reason == "stop"
+    line = line_of(sink, "model")
+    assert (line["action"], line["status"]) == ("fault", 200)
+
+
+@pytest.mark.design("fault.refuse_structured")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_refuse_on_a_structured_output_request_sets_refusal_and_nulls_content(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    schema = {"name": "order", "schema": {"type": "object"}, "strict": True}
+    gate_on("refuse")
+    format_ = {"type": "json_schema", "json_schema": schema}
+    reply, _ = completion(loopback, sync, response_format=format_)
+    assert loopback.seen == []
+    [choice] = reply.choices
+    assert choice.message.content is None and choice.finish_reason == "stop"
+    assert choice.message.refusal == "I'm sorry, I cannot assist with that request."
+    # JSON mode is not Structured Outputs: a refusal there is plain text.
+    reply, _ = completion(loopback, sync, response_format={"type": "json_object"})
+    assert reply.choices[0].message.refusal is None
+    assert reply.choices[0].message.content == openai_table.PLAIN_REFUSAL
+
+
+@pytest.mark.design("fault.refuse_parse")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_a_structured_refuse_reaches_parse_and_langchain_as_a_refusal(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    """parse() gives parsed None and the refusal, and LangChain raises its refusal error. The
+    gate's bytes are sent again by a server with no run, so the gate's own reply object is
+    shown to be what a socket gives. No real refusal was captured: the form is the guide's."""
+    gate_on("refuse")
+    injected, body = parsed(loopback, sync)
+    injected_error = structured_by_langchain(loopback, sync)
+    assert loopback.seen == [], "the gate sent the request"
+    as_real(loopback, body)
+    real, _ = parsed(loopback, sync)
+    real_error = structured_by_langchain(loopback, sync)
+    assert len(loopback.seen) == 2, "the real side never reached the server"
+    for reply in (injected, real):
+        message = reply.choices[0].message
+        assert message.parsed is None and message.refusal == openai_table.STRUCTURED_REFUSAL
+    assert injected.model_dump() == real.model_dump()
+    assert type(injected_error).__name__ == "OpenAIRefusalError", repr(injected_error)
+    assert type(real_error) is type(injected_error)
+    assert str(real_error) == str(injected_error) == openai_table.STRUCTURED_REFUSAL
+
+
+@pytest.mark.design("fault.unknown_tool")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_unknown_tool_calls_multi_tool_use_parallel_naming_the_first_offered_tool(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    sink, _ = gate_on("unknown tool")
+    reply, _ = completion(loopback, sync, tools=SPECS)
+    assert loopback.seen == [], "the gate sent the request"
+    [choice] = reply.choices
+    assert choice.finish_reason == "tool_calls" and choice.message.content is None
+    [call] = choice.message.tool_calls
+    assert call.type == "function" and call.function.name == "multi_tool_use.parallel"
+    assert json.loads(call.function.arguments) == {
+        "tool_uses": [{"recipient_name": "functions.get_order", "parameters": {}}]
+    }
+    # New ids in OpenAI's forms, and the request's own model.
+    assert re.fullmatch(r"call_[A-Za-z0-9]{24}", call.id), call.id
+    assert re.fullmatch(r"chatcmpl-[A-Za-z0-9]{29}", reply.id), reply.id
+    assert reply.model == MODEL
+    again, _ = completion(loopback, sync, tools=SPECS)
+    assert again.id != reply.id and again.choices[0].message.tool_calls[0].id != call.id
+    assert [x["action"] for x in model_lines(sink)] == ["fault", "fault"]
+
+
+@pytest.mark.design("fault.unknown_tool_not_fired")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+def test_unknown_tool_on_a_request_with_no_tools_is_not_fired(
+    gated: None, loopback: Loopback, sync: bool
+) -> None:
+    """OpenAI sends tool calls only when tools are offered, so the call goes on as in the
+    baseline: sent, reserved, and the agent gets the real reply."""
+    sink, budget = gate_on("unknown tool")
+    reply, body = completion(loopback, sync)
+    assert loopback.seen == ["/v1/chat/completions"] and body == REAL_ANSWER
+    assert reply.choices[0].message.content.startswith("Order 1234 has been shipped")
+    assert budget.asked == 1, "the real call was not reserved"
+    line = line_of(sink, "model")
+    assert line["action"] == "real" and "fault" not in line, line
+    assert line["unchanged"] == {
+        "do": "unknown tool",
+        "why": "the request offers no tools, so a model would call none",
+    }
+    assert suggest.unchanged_lines([line]) == [line] and suggest.refused_mistakes([line]) == []
+
+
+# Requests where the model could not pick a tool of its own, so no real reply has one it
+# was never offered.
+NO_FREE_CHOICE = [
+    ({}, "the request offers no tools, so a model would call none"),
+    (
+        {"tools": SPECS, "tool_choice": "none"},
+        'the request sets tool_choice "none", so a model would call no tool',
+    ),
+    (
+        {"tools": SPECS, "tool_choice": {"type": "function", "function": {"name": "get_stock"}}},
+        "the request's tool_choice names the tool to call, so a model would call that one",
+    ),
+    (
+        {"functions": [{"name": "get_order", "parameters": {"type": "object"}}]},
+        "the request offers tools in the old functions field only, which a model answers "
+        "with function_call, not tool_calls",
+    ),
+]
+
+
+@pytest.mark.design("fault.unknown_tool_not_fired")
+@pytest.mark.parametrize(
+    ("asked", "why"), NO_FREE_CHOICE, ids=["no tools", "none", "named", "functions"]
+)
+def test_unknown_tool_where_the_model_cannot_pick_a_tool_is_not_fired(
+    gated: None, loopback: Loopback, asked: dict[str, Any], why: str
+) -> None:
+    sink, budget = gate_on("unknown tool")
+    _, body = completion(loopback, True, **asked)
+    assert loopback.seen == ["/v1/chat/completions"] and body == REAL_ANSWER
+    assert budget.asked == 1
+    line = line_of(sink, "model")
+    assert line["action"] == "real" and line["unchanged"] == {"do": "unknown tool", "why": why}
+
+
+@pytest.mark.design("fault.unknown_tool")
+@pytest.mark.parametrize(
+    "asked",
+    [{"tool_choice": "auto"}, {"tool_choice": "required"}, {"parallel_tool_calls": False}],
+    ids=["auto", "required", "no parallel calls"],
+)
+def test_unknown_tool_fires_where_the_model_picks_its_own_tool(
+    gated: None, loopback: Loopback, asked: dict[str, Any]
+) -> None:
+    """parallel_tool_calls false is left firing: no source shows either way."""
+    sink, _ = gate_on("unknown tool")
+    reply, _ = completion(loopback, True, tools=SPECS, **asked)
+    assert loopback.seen == []
+    assert reply.choices[0].message.tool_calls[0].function.name == "multi_tool_use.parallel"
+    assert line_of(sink, "model")["action"] == "fault"
+
+
+BUILT = [("refuse", REAL_ANSWER, {}), ("unknown tool", REAL_TOOL_CALL, {"tools": SPECS})]
+
+
+@pytest.mark.design("proof.real_against_injected_built_reply")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+@pytest.mark.parametrize(("word", "capture", "asked"), BUILT, ids=["refuse", "unknown tool"])
+def test_a_built_reply_parses_into_the_same_fields_as_the_capture_it_came_from(
+    gated: None,
+    loopback: Loopback,
+    word: str,
+    capture: bytes,
+    asked: dict[str, Any],
+    sync: bool,
+) -> None:
+    """A real gpt-4o-mini reply, sent by a server, and the gate's built one: the openai library
+    sets the same fields on both, every one a field it knows."""
+    gate_on(word)
+    injected, _ = completion(loopback, sync, **asked)
+    assert loopback.seen == []
+    as_real(loopback, capture)
+    real, _ = completion(loopback, sync, **asked)
+    assert loopback.seen == ["/v1/chat/completions"]
+    assert fields_of(injected) == fields_of(real)
+    assert injected.object == real.object and injected.service_tier == real.service_tier
+
+
+@pytest.mark.design("security.built_reply_sends_nothing")
+@pytest.mark.parametrize("sync", [True, False], ids=SYNC_IDS)
+@pytest.mark.parametrize(
+    ("word", "asked"), [(w, a) for w, _, a in BUILT], ids=["refuse", "unknown tool"]
+)
+def test_a_built_reply_costs_nothing_and_reserves_nothing(
+    gated: None, loopback: Loopback, word: str, asked: dict[str, Any], sync: bool
+) -> None:
+    sink, budget = gate_on(word)
+    reply, _ = completion(loopback, sync, **asked)
+    assert loopback.seen == [], "the gate sent the request"
+    assert budget.asked == 0 and sink.settles == []
+    line = line_of(sink, "model")
+    assert line["action"] == "fault" and "cost_usd" not in line and "tokens" not in line
+    # The counts on the reply are an estimate of the request and a short answer.
+    assert reply.usage.completion_tokens == 10 and reply.usage.prompt_tokens > 0
+    # The positive control: the same gate, server and request, in a run with no fault.
+    state.install(state.RunState(plan_with(None), sink, []))
+    completion(loopback, sync, **asked)
+    assert loopback.seen == ["/v1/chat/completions"] and budget.asked == 1
+
+
+@pytest.mark.design("fault.reply_stream")
+@pytest.mark.parametrize("word", REPLY_WORDS)
+@pytest.mark.parametrize(("name", "sync"), PATHS, ids=PATH_IDS)
+def test_a_reply_fault_on_a_streamed_request_is_a_mistake_and_nothing_is_sent(
+    gated: None, loopback: Loopback, word: str, name: str, sync: bool
+) -> None:
+    """Found from the request's own stream = true, before anything is sent or reserved."""
+    sink, budget = gate_on(word)
+    module: Any = LIBRARIES[name]
+    body = {"model": MODEL, "messages": QUESTION, "tools": SPECS, "stream": True}
+    url = f"{loopback.url}/chat/completions"
+
+    async def go() -> None:
+        async with module.AsyncClient() as client:
+            await client.post(url, json=body)
+
+    with pytest.raises(ScrimmageMockError, match="is a streamed request"):
+        if sync:
+            module.Client().post(url, json=body)
+        else:
+            asyncio.run(go())
+    assert loopback.seen == [] and budget.asked == 0
+    line = line_of(sink, "model")
+    assert (line["action"], line["reason"]) == ("refused", MISTAKE_REFUSAL), line
+    assert runner.real_error(line) is None
+    unchanged = line["unchanged"]
+    assert isinstance(unchanged, dict) and unchanged["do"] == word
+    assert suggest.refused_mistakes([line]) == [line] and suggest.unchanged_lines([line]) == []
+
+
+@pytest.mark.design("fault.reply_stream")
+def test_a_streamed_call_under_refuse_reaches_the_openai_library_as_the_mistake(
+    gated: None, loopback: Loopback
+) -> None:
+    """The openai library neither retries the mistake nor turns it into a connection error."""
+    sink, _ = gate_on("refuse")
+    api = openai.OpenAI(base_url=loopback.url, api_key="test", max_retries=2)
+    with pytest.raises(ScrimmageMockError):
+        api.chat.completions.create(model=MODEL, messages=QUESTION, stream=True)  # type: ignore[arg-type]
+    assert loopback.seen == []
+    assert [x["action"] for x in model_lines(sink)] == ["refused"]
+
+
+@pytest.mark.design("fault.reply_responses")
+@pytest.mark.parametrize("word", REPLY_WORDS)
+def test_a_reply_fault_on_a_responses_call_is_a_mistake_and_nothing_is_sent(
+    gated: None, loopback: Loopback, word: str
+) -> None:
+    sink, budget = gate_on(word)
+    with pytest.raises(ScrimmageMockError, match="is a Responses call"):
+        httpx2.Client().post(f"{loopback.url}/responses", json={"model": MODEL, "input": "hi"})
+    assert loopback.seen == [] and budget.asked == 0
+    line = line_of(sink, "model")
+    assert (line["action"], line["reason"]) == ("refused", MISTAKE_REFUSAL)
+
+
+@pytest.mark.design("fault.reply_not_built")
+@pytest.mark.parametrize("word", ["garble", "truncate", "bad tool args"])
+def test_a_reply_fault_that_changes_the_real_reply_is_not_built_and_sends_nothing(
+    gated: None, loopback: Loopback, word: str
+) -> None:
+    sink, budget = gate_on(word)
+    with pytest.raises(ScrimmageMockError, match="is not built yet"):
+        completion(loopback, True, tools=SPECS)
+    assert loopback.seen == [] and budget.asked == 0
+    assert line_of(sink, "model")["reason"] == MISTAKE_REFUSAL
+
+
+REFUSE_AND_UNKNOWN = """\
+[[test.fault]]
+call   = "model"
+model  = "gpt-4o-mini"
+do     = "unknown tool"
+when   = "call 1"
+forbid = ["never said"]
+
+[[test.fault]]
+call   = "model"
+model  = "gpt-4o-mini"
+do     = "refuse"
+when   = "call 2"
+forbid = ["never said"]
+"""
+
+
+@pytest.mark.design("security.built_reply_sends_nothing")
+@pytest.mark.slow
+def test_a_run_under_refuse_and_unknown_tool_sends_only_the_real_calls(
+    project: Project, fake_openai: Callable[..., FakeOpenAI]
+) -> None:
+    """The order bot and the fake provider: one request per real line, so a built reply that
+    reached the provider would be one too many. The bot meets each as it would a real one."""
+    project.edit("[agent]\n", "[agent]\nruns = 1\n")
+    project.edit(EXAMPLE_FAULT, REFUSE_AND_UNKNOWN)
+    fake = fake_openai(["acme_get_order", "acme_get_stock", "acme_answer|acme_admits"])
+    result = project.test(fake)
+    assert result.finished, result.out + result.err
+    sent_only_the_real_calls(result, fake)
+    rows = {lines[-1]["row"]: lines for lines in result.records()}
+    unknown = [x for x in rows["fault 1"] if x.get("kind") == "model"]
+    refused = [x for x in rows["fault 2"] if x.get("kind") == "model"]
+    assert [x["action"] for x in unknown] == ["fault", "real", "real"]
+    assert [x["action"] for x in refused] == ["real", "fault"]
+    assert all(not x.get("cost_usd") for x in unknown + refused if x["action"] == "fault")
+    # The bot ran the tool the model named, failed, and told the model so.
+    told = [m for r in fake.requests for m in r["messages"] if m.get("role") == "tool"]
+    assert any("multi_tool_use.parallel" in str(m["content"]) for m in told), told
+    summary = rows["fault 2"][-1]["summary"]
+    assert isinstance(summary, dict) and summary["answer"] == openai_table.PLAIN_REFUSAL

@@ -271,15 +271,28 @@ CONNECTION = MINIMAL + "".join(
     )
 )
 
-REPLY = MINIMAL + "".join(
-    f'\n[[test.fault]]\ncall = "{call}"\ndo   = "{do}"\nwhen = "call 2"\n'
-    for call, do in (
-        ("model", "bad body"),
-        ("model:*/embeddings", "bad body"),
-        ("http:inventory.acme.internal", "bad body"),
-        ("http:inventory.acme.internal", "empty"),
-        ("model", "context too long"),
-        ("model:openai", "context too long"),
+REPLY = (
+    MINIMAL
+    + "".join(
+        f'\n[[test.fault]]\ncall = "{call}"\ndo   = "{do}"\nwhen = "call 2"\n'
+        for call, do in (
+            ("model", "bad body"),
+            ("model:*/embeddings", "bad body"),
+            ("http:inventory.acme.internal", "bad body"),
+            ("http:inventory.acme.internal", "empty"),
+            ("model", "context too long"),
+            ("model:openai", "context too long"),
+        )
+    )
+    + "".join(
+        f'\n[[test.fault]]\ncall = "{call}"\nmodel = "m"\ndo   = "{do}"\nwhen = "call 1"\n'
+        for call, do in (
+            ("model", "garble"),
+            ("model", "truncate"),
+            ("model", "unknown tool"),
+            ("model:openai", "bad tool args"),
+            ("model:openai", "refuse"),
+        )
     )
 )
 
@@ -464,6 +477,25 @@ BAD = [
             ("tool", "tool:t"),
             ("mcp", "mcp:docs/search"),
         )
+    ),
+    Bad("refuse_with_no_model", fault('call = "model"\ndo = "refuse"\nwhen = "first 1"\n'), True),
+    *(
+        Bad(
+            f"{word.replace(' ', '_')}_on_{name}",
+            fault(f'call = "{call}"\nmodel = "m"\ndo = "{word}"\nwhen = "first 1"\n'),
+            True,
+        )
+        for word, name, call in (
+            ("garble", "embeddings", "model:*/embeddings"),
+            ("unknown tool", "tool", "tool:t"),
+            ("truncate", "web", "http:inventory.acme.internal"),
+            ("bad tool args", "mcp", "mcp:docs/search"),
+        )
+    ),
+    Bad(
+        "text_with_refuse",
+        fault('call = "model"\nmodel = "m"\ndo = "refuse"\nwhen = "first 1"\ntext = "x"\n'),
+        True,
     ),
     Bad(
         "retry_after_on_status_500",

@@ -2,11 +2,15 @@
 
 Pure functions of a request's host, path and body, or of a reply's body. The gate uses
 them to label a call, build a fault the openai library reads as a real error, count
-tokens and sort the tools the model is offered.
+tokens and sort the tools the model is offered. A built reply, for refuse and unknown tool,
+also takes the time and new ids, as a real one has.
 """
 
 import json
 import re
+import secrets
+import string
+import time
 from dataclasses import dataclass, field
 from typing import cast
 
@@ -156,6 +160,126 @@ def error_type(status: int) -> str:
 def context_too_long_body() -> bytes:
     """What OpenAI sends, with status 400, for a chat request longer than the context."""
     return json.dumps({"error": CONTEXT_TOO_LONG}).encode()
+
+
+# A real gpt-4o-mini reply, saved on 6 November 2026 (tests/fixtures/openai/real_chat_answer.json
+# and real_chat_tool_call.json): every field a built reply has, in the real order. The message,
+# the ids, the time, the model and the counts are put in for each reply.
+CHAT_REPLY: dict[str, object] = {
+    "id": "",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "",
+    "choices": [],
+    "usage": {},
+    "service_tier": "default",
+    "system_fingerprint": "fp_9c7097be58",
+}
+USAGE_DETAILS: dict[str, dict[str, int]] = {
+    "prompt_tokens_details": {"cached_tokens": 0, "audio_tokens": 0},
+    "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "audio_tokens": 0,
+        "accepted_prediction_tokens": 0,
+        "rejected_prediction_tokens": 0,
+    },
+}
+BUILT_OUTPUT_TOKENS = 10  # a built reply's output count: about its own length
+# A refusal under Structured Outputs is its own field, with OpenAI's example text from the
+# Structured Outputs guide; on a plain request a real refusal is ordinary text, as seen from
+# gpt-4o-mini in a forum report of 26 August 2024.
+STRUCTURED_REFUSAL = "I'm sorry, I cannot assist with that request."
+PLAIN_REFUSAL = "I'm sorry, I can't assist with that."
+# The tool OpenAI's models have called though no agent offers it, reported from November
+# 2023 to July 2024. Its arguments name the offered tool it meant, prefixed with functions.
+PARALLEL_TOOL = "multi_tool_use.parallel"
+ID_LETTERS = string.ascii_letters + string.digits
+CHAT_ID_LENGTH = 29  # after chatcmpl-, as in real ids
+CALL_ID_LENGTH = 24  # after call_
+
+
+def made_up_id(prefix: str, length: int) -> str:
+    """An id in OpenAI's form. secrets, so the agent's own random sequence is left alone."""
+    return prefix + "".join(secrets.choice(ID_LETTERS) for _ in range(length))
+
+
+def structured(fields: dict[str, object]) -> bool:
+    """A chat request that asks for Structured Outputs: a response_format of type json_schema."""
+    return _obj(fields.get("response_format")).get("type") == "json_schema"
+
+
+def chat_reply(
+    fields: dict[str, object], tokens_in: int, message: dict[str, object], finish: str
+) -> bytes:
+    """A whole chat completion holding this one message, as a real one is laid out."""
+    reply = dict(CHAT_REPLY)
+    reply.update(
+        id=made_up_id("chatcmpl-", CHAT_ID_LENGTH),
+        created=int(time.time()),
+        model=model_name(fields) or "",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", **message, "annotations": list[object]()},
+                "logprobs": None,
+                "finish_reason": finish,
+            }
+        ],
+        usage={
+            "prompt_tokens": tokens_in,
+            "completion_tokens": BUILT_OUTPUT_TOKENS,
+            "total_tokens": tokens_in + BUILT_OUTPUT_TOKENS,
+            **USAGE_DETAILS,
+        },
+    )
+    return json.dumps(reply, ensure_ascii=False, indent=2).encode()
+
+
+def refusal_reply(fields: dict[str, object], tokens_in: int) -> bytes:
+    """refuse: the refusal field under Structured Outputs, else plain text. Either way the
+    model stopped, so finish_reason is stop."""
+    if structured(fields):
+        message: dict[str, object] = {"content": None, "refusal": STRUCTURED_REFUSAL}
+    else:
+        message = {"content": PLAIN_REFUSAL, "refusal": None}
+    return chat_reply(fields, tokens_in, message, "stop")
+
+
+def tool_call_tools(path: str, fields: dict[str, object]) -> list[str]:
+    """The tools a chat request offers in tools, the field tool_calls answer. The old
+    functions field gets a function_call reply instead, never a tool call."""
+    return offered(path, {k: v for k, v in fields.items() if k != "functions"}).agent
+
+
+def no_free_tool_call(path: str, fields: dict[str, object]) -> str | None:
+    """Why the model could not pick a tool of its own on this request, or None when it could:
+    unknown tool fires only where a real model chose a tool no one offered."""
+    if not tool_call_tools(path, fields):
+        if _list(fields.get("functions")):
+            return (
+                "the request offers tools in the old functions field only, which a model "
+                "answers with function_call, not tool_calls"
+            )
+        return "the request offers no tools, so a model would call none"
+    choice = fields.get("tool_choice")
+    if choice == "none":
+        return 'the request sets tool_choice "none", so a model would call no tool'
+    if _obj(choice).get("type") in ("function", "custom"):
+        return "the request's tool_choice names the tool to call, so a model would call that one"
+    return None
+
+
+def unknown_tool_reply(fields: dict[str, object], tokens_in: int, tool: str) -> bytes:
+    """unknown tool: one call to multi_tool_use.parallel, naming the tool the model meant."""
+    use: dict[str, object] = {"recipient_name": f"functions.{tool}", "parameters": {}}
+    uses = {"tool_uses": [use]}
+    call = {
+        "id": made_up_id("call_", CALL_ID_LENGTH),
+        "type": "function",
+        "function": {"name": PARALLEL_TOOL, "arguments": json.dumps(uses, separators=(",", ":"))},
+    }
+    message: dict[str, object] = {"content": None, "tool_calls": [call], "refusal": None}
+    return chat_reply(fields, tokens_in, message, "tool_calls")
 
 
 def request_fields(body: bytes) -> dict[str, object] | None:

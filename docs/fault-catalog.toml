@@ -3,7 +3,7 @@
 #
 # [[fault]]
 # name = "timeout"                 # the fault word a team writes in scrimmage.toml
-# origin = "public incident"       # "public incident" or "trace"
+# origin = "public incident"       # "public incident", "trace" or "provider docs"
 # source = "https://..."           # the incident's public URL, or a description of
 #                                  # the trace with nothing private in it
 
@@ -66,3 +66,28 @@ source = "A real reply from OpenAI's Chat Completions API, 17 November 2026: a g
 name = "dns"
 origin = "public incident"
 source = "https://aws.amazon.com/message/101925/ (AWS us-east-1, 19-20 October 2025: a latent defect in DynamoDB's automated DNS management caused endpoint resolution failures, so customers and dependent AWS services could not establish new connections)"
+
+[[fault]]
+name = "garble"
+origin = "public incident"
+source = "https://www.anthropic.com/engineering/a-postmortem-of-three-recent-issues (Anthropic, 25 August to 2 September 2025: a misconfiguration on the Claude API's TPU servers occasionally gave a high probability to tokens that should rarely be produced, so replies to English prompts held Thai or Chinese characters, such as \"สวัสดี\" in the middle of the response, and code held obvious syntax errors)"
+
+[[fault]]
+name = "truncate"
+origin = "trace"
+source = "A real reply from OpenAI's Chat Completions API, 18 November 2026: a gpt-4o-mini request with max_completion_tokens = 5 got status 200, its text cut short, with finish_reason length; and OpenAI's own text for finish_reason, as the openai Python library 3.46 ships it in types/chat/chat_completion.py: \"length if the maximum number of tokens specified in the request was reached\""
+
+[[fault]]
+name = "unknown tool"
+origin = "public incident"
+source = "https://community.openai.com/t/model-tries-to-call-unknown-function-multi-tool-use-parallel/490653 (OpenAI developer forum, 9 November 2023: the model called multi_tool_use.parallel, a tool the agent never offered) and https://community.openai.com/t/gpt-4-0125-preview-hallucinating-tool-calls/609610 (1 February 2024, gpt-4-0125-preview: the same call, and OpenAI then refused the next request because the name does not match its tool name pattern)"
+
+[[fault]]
+name = "bad tool args"
+origin = "provider docs"
+source = "OpenAI's own text for a tool call's arguments, as the openai Python library 3.46 ships it in types/chat/chat_completion_message_function_tool_call.py: \"the model does not always generate valid JSON, and may hallucinate parameters not defined by your function schema\"; and https://community.openai.com/t/malformed-jsons-in-gpt-4-1-mini/1286180 (OpenAI developer forum, 12 June 2025: gpt-4.1-mini on the Responses API sent tool arguments that are not valid JSON)"
+
+[[fault]]
+name = "refuse"
+origin = "provider docs"
+source = "https://developers.openai.com/api/docs/guides/structured-outputs (OpenAI's Structured Outputs guide: a refusal is a refusal field, with the example \"I'm sorry, I cannot assist with that request.\") and https://community.openai.com/t/the-refusal-in-the-api-is-always-null/922367 (OpenAI developer forum, 26 August 2024: gpt-4o-mini with no structured output refused in content, \"I'm sorry, I can't assist with that.\", with refusal null)"

@@ -788,7 +788,7 @@
         },
         "do": {
           "type": "string",
-          "pattern": "^(timeout|refused|reset|dns|bad body|context too long|replace|slow [0-9]+(\\.[0-9]+)?s|status [45][0-9][0-9])$"
+          "pattern": "^(timeout|refused|reset|dns|bad body|context too long|garble|truncate|unknown tool|bad tool args|refuse|replace|slow [0-9]+(\\.[0-9]+)?s|status [45][0-9][0-9])$"
         },
         "when": {
           "type": "string",
@@ -830,7 +830,14 @@
             ],
             "properties": {
               "do": {
-                "const": "replace"
+                "enum": [
+                  "replace",
+                  "garble",
+                  "truncate",
+                  "unknown tool",
+                  "bad tool args",
+                  "refuse"
+                ]
               }
             }
           },
@@ -839,7 +846,7 @@
               "model"
             ]
           },
-          "description": "replace on a model call needs the model's name."
+          "description": "replace and the faults in a model's reply need the model's name."
         },
         {
           "if": {
@@ -859,7 +866,7 @@
               }
             }
           },
-          "description": "replace, slow and context too long work on a chat call, not on a call that only reads."
+          "description": "replace, slow, context too long and the faults in a model's reply work on a chat call, not on a call that only reads."
         }
       ]
     },
