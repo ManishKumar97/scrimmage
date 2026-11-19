@@ -34,6 +34,7 @@ This version knows these labels:
 | `http:<host>` | a web request to that host. See [Web requests](web-requests.md) |
 | `mcp:<server>/<tool>`, `mcp:<tool>` | a tool on an MCP server. See [MCP tools](mcp.md) |
 | `process:python` | a Python child that would run with no gates (only under `real`). See [An agent run as a script](scripts.md#a-python-child-scrimmage-cannot-reach) |
+| `process:<program>` | a process start in a service run, such as `process:uname`. See [Services](services.md) |
 
 ## What a call can get
 
