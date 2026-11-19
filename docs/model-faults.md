@@ -185,14 +185,22 @@ A reply in gzip or deflate is unpacked, changed and sent to your agent with no e
 
 A real 400 from the model, on a chat request built from a faulted reply, is your agent's result, not an infrastructure error.
 The 400 is what the real misbehaviour leads to.
-"Built from it" is read from the request as it is sent: its history holds the faulted reply's tool call id or tool name, a tool result for that call, or the refusal text.
-The request also goes to the same model call, such as `model:openai`.
+"Built from it" is read from the request as it is sent, to the same model call, such as `model:openai`, and means one of two things:
+
+- its messages hold a tool call id the faulted reply made, as an assistant tool call or a tool result's `tool_call_id`;
+- its messages start with the faulted request's messages and then the message your agent got, compared with null and empty fields left out.
+
+After `unknown tool` only the first counts, as a real model sends calls to `multi_tool_use.parallel` too.
+After `refuse`, `garble`, `truncate` and `bad tool args` either counts.
+A text alone never counts: a fresh conversation that repeats the refusal, or a real call to `multi_tool_use.parallel` with an id of its own, is not built from the fault.
+An agent that rewrites the message it got before sending it back, such as one that keeps only part of it, is not matched, and its 400 stays an infrastructure error.
+`replace` on a model call is not a reply fault, so a 400 after it stays an infrastructure error too.
 The run is judged as it ended: an agent that does not catch the error crashes, and the row fails.
 The 400's line has `after_reply_fault` set to `true`, so the record shows why it was not counted as an infrastructure error.
 These stay infrastructure errors, as they say nothing about a request your agent built from the fault:
 
 - any other status, such as a 401, a 429 or a 500;
-- a 400 on a request that holds nothing of the faulted reply, such as an embeddings call or a fresh conversation;
+- a 400 on a request not built from the faulted reply, such as an embeddings call or another conversation;
 - a 400 on a request sent before the fault fired, even when its reply comes back after;
 - a 400 after any other fault, such as `timeout` or `status 503`.
 

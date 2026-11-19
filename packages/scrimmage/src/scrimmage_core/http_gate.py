@@ -691,7 +691,8 @@ def built_reply(
         tool = openai_table.tool_call_tools(str(request.url.path), fields)[0]
         built = openai_table.unknown_tool_reply(fields, tokens, tool)
     headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
-    ctx.run.add_reply_fault_markers(step.call.label, openai_table.reply_markers(built))
+    gave = openai_table.given(fields, built, ids_only=word == "unknown tool")
+    ctx.run.add_reply_fault_markers(step.call.label, gave)
     return reply(ctx, module, client, step, request, extra, (200, headers, built))
 
 
@@ -1445,6 +1446,10 @@ def changed_reply(
         return rebuilt(module, client, request, response, headers, module.ByteStream(body))
     reply = blob(done.body, ctx.sender, scrub=ctx.run.secrets)
     ctx.run.changed(step, Changed(None, done.count, done.parts), reply=reply, status=done.status)
+    if step.call.kind == "model" and fault.do in REPLY_FAULTS:  # never a model replace
+        asked = openai_table.request_fields(body_of(request) or b"") or {}
+        gave = openai_table.given(asked, done.body, ids_only=False)
+        ctx.run.add_reply_fault_markers(step.call.label, gave)
     stream = module.ByteStream(done.body)
     return rebuilt(module, client, request, response, done.headers, stream, done.status)
 
