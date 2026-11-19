@@ -637,7 +637,7 @@ def check_tools(
         )
 
 
-# Built in this version: the two that make the whole reply, on Chat Completions.
+# The two reply faults that make the whole reply, so nothing is sent; the others change it.
 BUILT_REPLIES = ("refuse", "unknown tool")
 
 
@@ -666,13 +666,6 @@ def reply_checks(run: RunState, step: Step, fields: dict[str, object], path: str
             )
         not_carried_out(
             run, step, f"is a Responses call, and {word} works on Chat Completions only for now"
-        )
-    if word not in BUILT_REPLIES:
-        not_carried_out(
-            run,
-            step,
-            f"is a chat call, and {word} is not built yet: this version builds refuse and "
-            "unknown tool; fault this call another way",
         )
     if word == "unknown tool" and (why := openai_table.no_free_tool_call(path, fields)):
         run.unchanged(step, why)
@@ -1377,8 +1370,9 @@ def decided_by_headers(
     """Whether the headers alone rule the change out: a status, a type, an encoding, a size.
     Then the reply goes on untouched, and a stream is never read early."""
     headers = response.headers.multi_items()
+    word = ctx.run.plan.faults[step.decision.fault or 0].do
     verdict = (
-        changes.chat_kind(response.status_code, model_op(step, request), headers)
+        changes.chat_kind(response.status_code, model_op(step, request), headers, word)
         if step.call.kind == "model"
         else changes.web_kind(response.status_code, str(request.method), headers)
     )
@@ -1399,10 +1393,12 @@ def rebuilt(
     response: Any,
     headers: Any,
     stream: Any,
+    status: int | None = None,
 ) -> Any:
-    """A reply like the real one, with another body and the headers that go with it."""
+    """A reply like the real one, with another body and the headers that go with it, and
+    another status if one is given."""
     new = module.Response(
-        response.status_code,
+        response.status_code if status is None else status,
         headers=headers,
         stream=stream,
         request=request,
@@ -1430,15 +1426,16 @@ def changed_reply(
     loaded: bool,
 ) -> Any:
     """The reply the agent gets once the whole body is read: changed if it can be, else as it
-    was sent. The line records the original."""
+    was sent. The line records the original as its result, and the agent's beside it. A model
+    reply takes the change of the fault's word."""
     body = b"".join(chunks)
     headers = response.headers.multi_items()
     status = response.status_code
-    done = (
-        changes.change_chat(status, model_op(step, request), headers, body, fault, decoded=loaded)
-        if step.call.kind == "model"
-        else changes.change_web(status, str(request.method), headers, body, fault, decoded=loaded)
-    )
+    if step.call.kind == "model":
+        change = changes.CHAT_CHANGES[fault.do]
+        done = change(status, model_op(step, request), headers, body, fault, decoded=loaded)
+    else:
+        done = changes.change_web(status, str(request.method), headers, body, fault, decoded=loaded)
     if isinstance(done, Unchangeable):
         left_as_it_is(ctx, step, extra, done)
         headers = response.headers.multi_items()
@@ -1446,8 +1443,10 @@ def changed_reply(
             kept = [(k, v) for k, v in headers if k.lower() not in changes.BODY_HEADERS]
             headers = [*kept, ("content-length", str(len(body)))]
         return rebuilt(module, client, request, response, headers, module.ByteStream(body))
-    ctx.run.changed(step, Changed(None, done.count, done.parts))
-    return rebuilt(module, client, request, response, done.headers, module.ByteStream(done.body))
+    reply = blob(done.body, ctx.sender, scrub=ctx.run.secrets)
+    ctx.run.changed(step, Changed(None, done.count, done.parts), reply=reply, status=done.status)
+    stream = module.ByteStream(done.body)
+    return rebuilt(module, client, request, response, done.headers, stream, done.status)
 
 
 def replaying(

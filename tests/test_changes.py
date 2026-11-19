@@ -1,7 +1,11 @@
 """The change an append or replace makes, as pure functions."""
 
+import copy
+import gzip
 import json
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -330,3 +334,200 @@ def test_a_replace_that_touches_a_secret_in_a_json_text_inside_data_is_refused()
     body = json.dumps({"msg": f"hello {KEY}"})
     clash = left(changes.change_data({"body": body}, fault("replace", "y", "hello")))
     assert clash.kind == "span"
+
+
+# The faults in a model's reply, on real gpt-4o-mini replies.
+FIXTURES = Path(__file__).parent / "fixtures" / "openai"
+REAL_ANSWER_FILE = FIXTURES / "real_chat_answer.json"
+REAL_TOOL_CALL_FILE = FIXTURES / "real_chat_tool_call.json"
+REAL_ANSWER = json.loads(REAL_ANSWER_FILE.read_text())
+REAL_TOOL_CALL = json.loads(REAL_TOOL_CALL_FILE.read_text())
+THAI = "สวัสดี"  # the token of Anthropic's postmortem
+REAL_HEADERS = [*JSON, ("x-request-id", "req_real"), ("content-length", "999")]
+
+
+def reply_fault(word: str) -> Fault:
+    return Fault("model", word, "always", model="gpt-4o-mini")
+
+
+def reply_with(content: object, **message: object) -> dict[str, Any]:
+    """The real answer with this content in its one choice, and these message fields."""
+    reply = copy.deepcopy(REAL_ANSWER)
+    reply["choices"][0]["message"] = {**reply["choices"][0]["message"], "content": content}
+    reply["choices"][0]["message"].update(message)
+    return reply
+
+
+def change(
+    word: str, reply: object, status: int = 200, op: str = "chat", headers: Any = None
+) -> changes.WebChanged | Unchangeable:
+    body = reply if isinstance(reply, bytes) else json.dumps(reply).encode()
+    held = REAL_HEADERS if headers is None else headers
+    return changes.CHAT_CHANGES[word](status, op, held, body, reply_fault(word))
+
+
+def made(word: str, reply: object) -> tuple[dict[str, Any], changes.WebChanged]:
+    """The change of this word on a 200 chat reply: the new reply, parsed, and the change."""
+    done = change(word, reply)
+    assert isinstance(done, changes.WebChanged), done
+    return json.loads(done.body), done
+
+
+def not_made(word: str, reply: object) -> Unchangeable:
+    said = change(word, reply)
+    assert isinstance(said, Unchangeable), said
+    return said
+
+
+def text_of(reply: dict[str, Any], choice: int = 0) -> str:
+    return reply["choices"][choice]["message"]["content"]
+
+
+@pytest.mark.design("fault.garble")
+def test_garble_puts_the_incident_token_in_every_fifth_word() -> None:
+    said = "Your order 1234 shipped on Monday and arrives Friday"
+    new, done = made("garble", reply_with(said))
+    assert text_of(new) == f"Your order 1234 shipped {THAI} Monday and arrives Friday"
+    assert (done.count, done.parts) == (1, ("choices[0].message.content",))
+    # The 5th, 10th and 15th words; the spaces and line breaks between words stay.
+    words = " ".join(f"w{i}" for i in range(1, 11)) + "\n\nw11 w12 w13 w14  w15 w16"
+    new, done = made("garble", reply_with(words))
+    assert text_of(new) == f"w1 w2 w3 w4 {THAI} w6 w7 w8 w9 {THAI}\n\nw11 w12 w13 w14  {THAI} w16"
+    assert done.count == 3
+    # Every choice with text is garbled; one with none keeps its place.
+    two = reply_with("a b c d e")
+    two["choices"].append({**copy.deepcopy(two["choices"][0]), "index": 1})
+    two["choices"].insert(1, {"index": 2, "message": {"content": None, "refusal": "no"}})
+    new, done = made("garble", two)
+    assert [c["message"]["content"] for c in new["choices"]] == [
+        f"a b c d {THAI}",
+        None,
+        f"a b c d {THAI}",
+    ]
+    assert done.parts == ("choices[0].message.content", "choices[2].message.content")
+
+
+@pytest.mark.design("fault.garble")
+def test_garble_changes_the_last_word_of_a_short_reply() -> None:
+    new, done = made("garble", reply_with("Hello! How are you?"))
+    assert (text_of(new), done.count) == (f"Hello! How are {THAI}", 1)
+    assert text_of(made("garble", reply_with("Done."))[0]) == THAI
+    # Text with no word, a refusal and tool calls alone have nothing to garble.
+    for reply, why in (
+        (reply_with("  \n"), "the reply has no text"),
+        (reply_with(None, refusal="I can't."), "the reply is a refusal with no text"),
+        (REAL_TOOL_CALL, "the reply has only tool calls and no text"),
+    ):
+        said = not_made("garble", reply)
+        assert (said.why, said.kind) == (why, "data")
+
+
+@pytest.mark.design("fault.truncate")
+def test_truncate_cuts_at_a_space_and_sets_length() -> None:
+    said = text_of(REAL_ANSWER)  # "Order 1234 has been shipped and is expected to arrive..."
+    new, done = made("truncate", REAL_ANSWER)
+    assert text_of(new) == said[: said.rfind(" ", 0, len(said) // 2 + 1)]
+    assert text_of(new) == "Order 1234 has been shipped and is"
+    assert new["choices"][0]["finish_reason"] == "length"
+    assert (done.count, done.parts, done.status) == (1, ("choices[0].message.content",), None)
+    # A space right at the middle is cut at, and goes with the cut, as a real one does; with
+    # no space, the first half is kept, never less than one character.
+    for text, kept in (("abc def", "abc"), ("abcdefgh", "abcd"), ("a", "a"), (" leading", " lea")):
+        assert text_of(made("truncate", reply_with(text))[0]) == kept, text
+    # A choice cut in its text never reached its tool calls, so they go with the cut.
+    mixed = reply_with("Let me look that order up for you now.")
+    calls = REAL_TOOL_CALL["choices"][0]["message"]["tool_calls"]
+    mixed["choices"][0]["message"]["tool_calls"] = calls
+    new, _ = made("truncate", mixed)
+    assert "tool_calls" not in new["choices"][0]["message"]
+    assert new["choices"][0]["finish_reason"] == "length"
+
+
+@pytest.mark.design("fault.truncate_tool_call")
+def test_truncate_on_tool_calls_only_sends_the_real_400() -> None:
+    """A real limit inside a tool call gives no cut-off call: OpenAI answers 400, as saved on
+    18 November 2026. The headers but the length stay the real reply's."""
+    real = json.loads((FIXTURES / "real_chat_tool_call_truncated.json").read_text())
+    new, done = made("truncate", REAL_TOOL_CALL)
+    assert (done.status, new) == (real["status"], real["body"])
+    assert dict(done.headers) == {
+        "content-type": "application/json",
+        "x-request-id": "req_real",
+        "content-length": str(len(done.body)),
+    }
+    assert (done.count, done.parts) == (1, ("error",))
+    # A reply with neither text nor a tool call is left as it is.
+    said = not_made("truncate", reply_with(None))
+    assert (said.why, said.kind) == ("the reply has no text and no tool call", "data")
+
+
+@pytest.mark.design("fault.bad_tool_args")
+def test_bad_tool_args_breaks_every_tool_call() -> None:
+    reply = copy.deepcopy(REAL_TOOL_CALL)
+    [call] = reply["choices"][0]["message"]["tool_calls"]
+    second = {**copy.deepcopy(call), "id": "call_2"}
+    second["function"]["arguments"] = '{"sku": {"id": "SKU-42"}} '
+    reply["choices"][0]["message"]["tool_calls"].append(second)
+    reply["choices"].append({**copy.deepcopy(reply["choices"][0]), "index": 1})
+    new, done = made("bad tool args", reply)
+    broken = [
+        [c["function"]["arguments"] for c in choice["message"]["tool_calls"]]
+        for choice in new["choices"]
+    ]
+    assert broken == [['{"order_id":"1234"', '{"sku": {"id": "SKU-42"} ']] * 2
+    for arguments in (a for choice in broken for a in choice):
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(arguments)
+    assert done.count == 4
+    assert done.parts[:2] == (
+        "choices[0].message.tool_calls[0].function.arguments",
+        "choices[0].message.tool_calls[1].function.arguments",
+    )
+    # The names and ids stay; a reply with no tool call is left as it is.
+    assert new["choices"][0]["message"]["tool_calls"][1]["id"] == "call_2"
+    assert new["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "get_order"
+    said = not_made("bad tool args", REAL_ANSWER)
+    assert (said.why, said.kind) == ("the reply has no tool call with arguments to break", "data")
+
+
+@pytest.mark.design("fault.reply_keeps_the_rest")
+@pytest.mark.parametrize(
+    ("word", "source"),
+    [
+        ("garble", REAL_ANSWER_FILE),
+        ("truncate", REAL_ANSWER_FILE),
+        ("bad tool args", REAL_TOOL_CALL_FILE),
+    ],
+)
+def test_each_change_keeps_id_model_usage_and_fingerprint(word: str, source: Path) -> None:
+    """usage stays what the model was billed for, so the line's cost is the real one."""
+    reply = json.loads(source.read_text())
+    new, done = made(word, reply)
+    kept = ("id", "object", "created", "model", "usage", "service_tier", "system_fingerprint")
+    assert {k: new[k] for k in kept} == {k: reply[k] for k in kept}
+    assert list(new) == list(reply)  # no field added or dropped, in the real order
+    # The new body has its own length and no encoding; the other headers are the real ones.
+    assert dict(done.headers)["content-length"] == str(len(done.body))
+    assert dict(done.headers)["x-request-id"] == "req_real"
+    assert reply == json.loads(source.read_text())  # the real reply is not changed in place
+
+
+@pytest.mark.design("fault.reply_keeps_the_rest")
+@pytest.mark.parametrize("word", ["garble", "truncate", "bad tool args"])
+def test_a_reply_change_reads_a_gzip_body_and_writes_it_plain(word: str) -> None:
+    reply = REAL_TOOL_CALL if word == "bad tool args" else REAL_ANSWER
+    packed = gzip.compress(json.dumps(reply).encode())
+    headers = [*JSON, ("content-encoding", "gzip"), ("content-length", str(len(packed)))]
+    done = change(word, packed, headers=headers)
+    assert isinstance(done, changes.WebChanged)
+    assert "content-encoding" not in dict(done.headers)
+    assert json.loads(done.body)["usage"] == reply["usage"]
+    # A stream, a status other than 200 and a Responses reply are not changed.
+    for status, op, kind in (
+        (200, "chat", "text/event-stream"),
+        (500, "chat", "application/json"),
+        (200, "responses", "application/json"),
+    ):
+        said = change(word, packed, status, op, [("content-type", kind)])
+        assert isinstance(said, Unchangeable)
+        assert said.why.startswith((f"{word} on a model call", "the reply status is 500"))
