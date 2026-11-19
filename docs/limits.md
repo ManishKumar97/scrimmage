@@ -318,7 +318,12 @@ Also read the control-path limits under An agent inside a web service.
 
 - **An MCP result with several text items.** `append` goes on the last one, and an agent that reads only `content[0].text` never sees it. With structured content, `replace` with `find` must change both the text and the structured content to count.
 
-- **Web bodies that are not text or JSON.** A reply that is a stream (`text/event-stream`, NDJSON), has another content type, is encoded with `br` or `zstd`, or is over 10 MB is not changed. A digest header, such as `Content-MD5`, no longer matches a changed body. Clients other than httpx and httpx2, such as `requests`, `aiohttp` and `urllib`, are not seen, so the fault never fires.
+- **Web bodies that are not text or JSON.** A reply that is a stream (`text/event-stream`, NDJSON), has another content type, is encoded with `zstd`, or is over 10 MB is not changed. A digest header, such as `Content-MD5`, no longer matches a changed body. Clients other than httpx and httpx2, such as `requests`, `aiohttp` and `urllib`, are not seen, so the fault never fires.
+  A model reply encoded with `zstd` is not changed either, and its cost is estimated from its size.
+  A `br` reply is read with `brotli` or `brotlicffi` 1.2 or later from your program's environment; httpx and httpx2 ask for `br` only when one of them is installed.
+  Without one, or with an older one, a `br` reply is not changed, the line says why, and a model reply's cost is estimated from its size.
+  `brotlipy`, which also installs as `brotli`, counts as none: it cannot stop at a size, so Scrimmage leaves `br` alone while httpx still unpacks it for your program.
+  A packed reply is unpacked to 10 MB at most for the record, so a larger one's `bytes` on the line shows that cap, not its full size.
 
 - **`slow` outside asyncio.** A `slow` fault on an async tool or web request under trio needs an asyncio loop to wait on, so the call is not slowed and the line says so. An MCP call waits with anyio, which works on both.
 

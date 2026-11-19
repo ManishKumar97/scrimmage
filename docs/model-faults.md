@@ -361,6 +361,7 @@ max_cost_usd = 0.50
 
 Before each model call, Scrimmage reserves what the call could cost: an estimate of its input at the full input price, plus its `max_tokens` (or `reserve_output_tokens`, 4096 by default) at the output price.
 After the call, the real cost from the reply replaces the reservation.
+Scrimmage reads it from the reply's usage, after undoing `gzip`, `deflate` or `br`; for `br` it uses your program's own `brotli` or `brotlicffi` 1.2 or later, which is also what makes httpx ask for `br`.
 So four calls at once cannot all slip past the limit.
 The real cost prices the input tokens the provider served from its prompt cache at the cached price, as OpenAI bills them.
 

@@ -118,7 +118,7 @@ A real injection in structured data is a string field, such as a ticket's descri
 | A web reply, 2xx, `text/*` or JSON | text as text; JSON as data, with `find` only. The new body goes with a new `content-length` and no `content-encoding` |
 | A chat model call | `replace` on the text of its reply, with a `model`; `slow` too; not `append`. See [A guard model](model-faults.md#a-guard-model) |
 
-A web reply that is `text/event-stream`, has another content type, is encoded with anything but gzip or deflate, or is over 10 MB is not changed; a stream is never read to find out.
+A web reply that is `text/event-stream`, has another content type, is encoded with anything but gzip, deflate or br, or is over 10 MB is not changed; a stream is never read to find out.
 Text that parses as a JSON object or array is changed the JSON way: `append` cannot, and `replace` with `find` changes string values and writes valid JSON back.
 
 ## When a call has no place for the change

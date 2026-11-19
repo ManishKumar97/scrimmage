@@ -275,7 +275,7 @@ JSON = [("content-type", "application/json")]
     [
         (200, "chat", [("content-type", "text/html")], b"{}", "the reply is text/html, not a"),
         (200, "chat", [], b"{}", "the reply is of no type, not a chat completion"),
-        (200, "chat", [*JSON, ("content-encoding", "br")], b"{}", "encoded with br"),
+        (200, "chat", [*JSON, ("content-encoding", "zstd")], b"{}", "encoded with zstd"),
         (200, "chat", [*JSON, ("content-encoding", "gzip")], b"not gzip", "will not unpack"),
         (200, "chat", JSON, b"{oops", "the body is not JSON that parses"),
         (200, "chat", JSON, b"[]", "the reply has no choices"),
