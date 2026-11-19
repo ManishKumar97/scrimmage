@@ -235,6 +235,8 @@ Also read the control-path limits under An agent inside a web service.
 
 - **A tool with no readable source on Python 3.14.** A function made in the REPL or by `exec`, or kept as a `.pyc` only, has no source to read, so a `config` argument beside an annotation that cannot be resolved is recorded.
 
+- **A wrapper whose `__wrapped__` was set by hand to another function.** On Python 3.14, beside an annotation that cannot be resolved, Scrimmage reads the names of the function `__wrapped__` points to, so a `config` argument can be recorded.
+
 - **LangChain versions.** Tested with langchain-core 1.7. A newer one gets a notice; an older one gets none.
 
 - **A library that changes its tool functions** stops the program. Faults are not dropped with refusals kept, because the error type is part of what the gate relies on. The same goes for `mcp`: a mock must never become a real call.
