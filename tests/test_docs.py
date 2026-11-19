@@ -178,6 +178,11 @@ def test_a_call_that_costs_more_than_its_hold_is_documented() -> None:
     limits = page("limits.md").split("### The budget")[1].split("### ")[0]
     assert "**A call can cost more than its hold.**" in limits
     assert "the test spends $0.1967" in limits
+    assert "times `n` on Chat Completions" in limits and "times `n` on Chat Completions" in guide
+    assert "when Scrimmage cannot read the request body" in limits
+    security = page("security.md")
+    assert "so one call can take the total over the limit" not in security
+    assert "can together pass the cap" in security and "](limits.md#the-budget)" in security
 
 
 @pytest.mark.design("docs.method_tools")

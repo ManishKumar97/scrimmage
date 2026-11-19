@@ -1023,6 +1023,8 @@ def hold_for(ctx: Bound, step: Step, request: Any, extra: dict[str, object]) -> 
     body = body_of(request) or b""
     fields = openai_table.request_fields(body) if body else None
     output = openai_table.max_output(fields or {}) or plan.reserve_output_tokens
+    if step.call.name == "chat" and not openai_table.is_responses(str(request.url.path)):
+        output *= openai_table.choices(fields or {})  # Responses has no n
     return worst(request, len(body) // CHAR_PER_TOKEN, output, rates)
 
 

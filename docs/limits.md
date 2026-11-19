@@ -413,12 +413,13 @@ Also read the control-path limits under An agent inside a web service.
 
 ### The budget
 
-- **A call can cost more than its hold.** The hold counts the input as 4 bytes a token and the output as the call's own limit, or `reserve_output_tokens` when it sets none.
+- **A call can cost more than its hold.** The hold counts the input as 4 bytes a token and the output as the call's own limit, times `n` on Chat Completions, which bills the output of every choice.
+  It falls back to `reserve_output_tokens` when the call sets no limit, when the limit is not a positive whole number, and when Scrimmage cannot read the request body: a compressed body, one sent from a generator, or a multipart one.
   A reply that writes more, or an input with more tokens than that, such as an image, costs more than was held, and its full cost is counted.
   So calls in flight at once can pass `max_cost_usd`, by up to what they cost above their holds, added together.
   Three `gpt-4.1` calls with no `max_tokens` each hold about $0.0328, so all three fit in $0.10 at once; if each writes 8192 output tokens, the test spends $0.1967.
   Once money spent passes the limit, every later call is refused at once.
-  Set `max_tokens`, `max_completion_tokens` or `max_output_tokens` on each call to bound its output; nothing bounds the input estimate.
+  Set `max_tokens`, `max_completion_tokens` or `max_output_tokens` on each call, in a body Scrimmage can read, to bound its output, `n` choices included; nothing bounds the input estimate.
 
 - **Prices need checking.** The built-in price table is small; check it against your provider's pricing, and use `[agent.prices]` for anything else.
 

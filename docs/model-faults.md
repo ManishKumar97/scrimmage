@@ -444,7 +444,7 @@ Every test has a budget for the whole run of `scrimmage test`. It is $5 unless y
 max_cost_usd = 0.50
 ```
 
-Before each model call, Scrimmage reserves an estimate of what the call could cost: its input at the full input price, or at the dearest cache-write price its API allows if that is higher, plus its `max_tokens` (or `reserve_output_tokens`, 4096 by default) at the output price.
+Before each model call, Scrimmage reserves an estimate of what the call could cost: its input at the full input price, or at the dearest cache-write price its API allows if that is higher, plus its `max_tokens` (or `reserve_output_tokens`, 4096 by default) at the output price, times `n` on Chat Completions, which bills the output of every choice.
 After the call, the real cost from the reply replaces the reservation.
 Scrimmage reads it from the reply's usage, after undoing `gzip`, `deflate` or `br`; for `br` it uses your program's own `brotli` or `brotlicffi` 1.2 or later, which is also what makes httpx ask for `br`.
 So calls at once cannot together pass the limit while each costs no more than it reserved.

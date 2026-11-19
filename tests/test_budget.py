@@ -214,6 +214,45 @@ def test_a_request_can_set_its_own_output_limit() -> None:
     assert table.max_output({"max_tokens": True}) is None
 
 
+@pytest.mark.design("budget.hold_per_choice")
+@pytest.mark.parametrize(
+    ("url", "fields", "output"),
+    [
+        (URL, {"max_tokens": 100, "n": 8}, 800),  # Chat bills the output of every choice
+        (URL, {"n": 2}, 2 * 4096),  # with no limit, reserve_output_tokens per choice
+        (URL, {"max_tokens": 100, "n": 128}, 12_800),  # the most the API takes
+        (URL, {"max_tokens": 100, "n": 129}, 100),  # refused by the API, so never billed
+        (URL, {"max_tokens": 100, "n": 0}, 100),
+        (URL, {"max_tokens": 100, "n": 8.0}, 100),  # not an int: refused by the API
+        (URL, {"max_tokens": 100, "n": True}, 100),
+        (URL, {"max_tokens": 100, "n": None}, 100),
+        # Responses has no n: max_output_tokens bounds the whole response.
+        ("https://api.openai.com/v1/responses", {"max_output_tokens": 100, "n": 8}, 100),
+    ],
+)
+def test_a_chat_hold_counts_the_output_of_every_choice(
+    gated: None, url: str, fields: dict[str, object], output: int
+) -> None:
+    budget = Budget(limit=1000.0)
+    run = state.RunState(make_plan(budget=1000.0), Sink(), [])
+    state.install(run)
+    http_gate.patch(httpx2, http_gate.Context(run, budget, Sink(), list[str]().append))
+    held: list[float] = []
+    reserve = budget.ledger.reserve
+
+    def watch(usd: float, *rest: Any) -> int | Shortfall:
+        held.append(usd)
+        return reserve(usd, *rest)
+
+    budget.ledger.reserve = watch  # type: ignore[method-assign]
+    sent = json.dumps({"model": "gpt-4.1", "input": "hi", **fields}).encode()
+    reply = {"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+    answer = httpx2.MockTransport(lambda request: httpx2.Response(200, json=reply))
+    httpx2.Client(transport=answer).post(url, content=sent)
+    # gpt-4.1: $2 in and $8 out per million, the input estimated at 4 bytes a token.
+    assert held == [pytest.approx((len(sent) // 4 * 2.00 + output * 8.00) / 1e6)]
+
+
 @pytest.mark.design("budget.costs_reach_the_record")
 @pytest.mark.slow
 def test_a_runs_cost_is_summed_from_its_real_replies(project: Project, fake_openai: Fake) -> None:

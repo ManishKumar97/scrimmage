@@ -130,6 +130,7 @@ RESPONSES_AGENT = {
 CHAT_AGENT = {"function", "custom"}
 DATED = re.compile(r"-\d{4}-\d{2}-\d{2}$")
 MAX_TOKENS = 1_000_000_000  # a larger count is not a count
+MAX_CHOICES = 128  # the most choices, n, a Chat request may ask for
 
 
 def op_for(path: str, method: str) -> str | None:
@@ -566,6 +567,15 @@ def max_output(fields: dict[str, object]) -> int | None:
         if isinstance(value, int) and not isinstance(value, bool) and 0 < value <= MAX_TOKENS:
             return value
     return None
+
+
+def choices(fields: dict[str, object]) -> int:
+    """How many choices a Chat request asks for. Each is billed for its own output, and
+    each has its own output limit. A value the API refuses is never billed, so it is 1."""
+    value = fields.get("n")
+    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_CHOICES:
+        return value
+    return 1
 
 
 @dataclass
