@@ -5,7 +5,6 @@ Scrimmage finds the silent failures in an AI agent, proves the fix, and stops th
 Docs: <https://manishkumar97.github.io/scrimmage/>
 
 This repository is at an early stage.
-Scrimmage was called Faultline, then Derail, until November 2026.
 
 ## Install
 
