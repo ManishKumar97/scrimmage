@@ -60,6 +60,19 @@ Scrimmage has no word list for "admits the failure". You write the words your ag
 
 `forbid = []` on a fault drops the test's list for that row.
 
+To judge a row by what the answer must not say, write `expect = []` with a `forbid` that has something in it:
+
+```toml
+[[test.fault]]
+call   = "tool:send_email"
+do     = "error"
+expect = []
+forbid = ["has been sent"]
+```
+
+An empty `expect` needs a `forbid` on the same row, or nothing would judge the answer, and Scrimmage refuses the file.
+A test's own `expect` can never be empty.
+
 A fault that fires on every call must have its own `expect` or a `forbid` with something in it.
 An agent with no data can still write the expected words from general knowledge, and a rule cannot tell where the words came from, so such a row would pass when it should not. Scrimmage refuses the file, with exit code 2.
 A fault with `when = "first N"` or `"requests N"` may use the test's rules. That is right for a recovery row, where the agent should retry and give the same answer as the baseline.

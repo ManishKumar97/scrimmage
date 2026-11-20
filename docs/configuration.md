@@ -249,7 +249,7 @@ These are mistakes in the test, exit code 2:
 | `method` | On a web request: fail only this method. |
 | `path` | On a web request: fail only this exact path, with no query string. |
 | `model` | On a model call: fail only calls to this model, such as `"gpt-4.1"`. The whole name your code sends, compared exactly. Required with `"replace"` and the faults in a model's reply. See [Failing one model](model-faults.md#failing-one-model). |
-| `expect` | Replaces the test's for this row. A fault that fires on every call needs this or `forbid`, except `append` and `replace` with `find`, where the agent still gets the data; with `first N` or `call N` it can use the test's. See [Judging an answer](judging.md). |
+| `expect` | Replaces the test's for this row. `[]` is allowed only with a `forbid` that has a text in it, so the row is judged by `forbid` alone. A fault that fires on every call needs this or `forbid`, except `append` and `replace` with `find`, where the agent still gets the data; with `first N` or `call N` it can use the test's. See [Judging an answer](judging.md). |
 | `forbid` | Replaces the test's for this row. `[]` drops the test's list. |
 | `pass_rate` | Replaces the test's for this row. |
 
