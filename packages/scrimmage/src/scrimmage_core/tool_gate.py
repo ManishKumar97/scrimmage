@@ -529,8 +529,9 @@ def module_spec(name: str, extra: list[str]) -> importlib.machinery.ModuleSpec |
     This asks the finders on sys.meta_path, as an import does, so an editable install that
     maps a name through its own finder is found. importlib.util.find_spec is not used: for a
     dotted name it imports the parent packages, which would run the team's code early.
-    Scrimmage's own walk imports nothing. A finder of the team's that imports a module while
-    it looks raises ImportedDuringLookup, because that module's code ran with no gate yet.
+    Scrimmage's own walk imports nothing. A finder of the team's that imports a module outside
+    the standard library while it looks raises ImportedDuringLookup, because that module's code
+    ran with no gate yet.
     """
     spec = None
     full = ""
@@ -556,8 +557,14 @@ def _find_one(
         path = top if here is None and finder is importlib.machinery.PathFinder else here
         before = set(sys.modules)
         spec = finder.find_spec(full, path)
-        if imported := sorted(set(sys.modules) - before):
-            who = type(finder).__qualname__
+        # A finder may load a standard library helper on first use; that runs no team code.
+        imported = sorted(
+            m
+            for m in set(sys.modules) - before
+            if m.partition(".")[0] not in sys.stdlib_module_names
+        )
+        if imported:
+            who = getattr(finder, "__qualname__", type(finder).__qualname__)
             raise ImportedDuringLookup(
                 f"{who} imported {', '.join(imported)} while Scrimmage looked up {full}, "
                 f"so {full} cannot be gated, as its code ran before any gate was in place"

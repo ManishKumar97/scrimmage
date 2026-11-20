@@ -122,3 +122,96 @@ def test_an_editable_package_tool_is_found_gated_and_never_imported(
     text = "\n".join(r.read_text() for r in records)
     assert records and '"call": "tool:get_order"' in text, text
     assert "cannot be found" not in text
+
+
+FRONT_FINDER = """
+import importlib, sys
+class Front:
+    @classmethod
+    def find_spec(cls, name, path=None, target=None):
+        if "." in name and name.split(".")[0] == "shop":
+            importlib.import_module(name.rpartition(".")[0])
+        return None
+sys.meta_path.insert(0, Front)
+"""
+
+
+def test_a_finder_that_imports_the_package_stops_the_program_before_any_call(
+    editable: tuple[Path, Path],
+) -> None:
+    """The program path: the run ends with exit 2, names the finder, and no tool call runs."""
+    venv, folder = editable
+    env = clean_env(venv)
+    python = str(venv / "bin" / "python")
+    purelib = Path(
+        run(
+            [python, "-c", "import sysconfig;print(sysconfig.get_paths()['purelib'])"], folder, env
+        ).strip()
+    )
+    (purelib / "zz_front.py").write_text(FRONT_FINDER)
+    (purelib / "zz_front.pth").write_text("import zz_front\n")
+    test = folder / "stopped"
+    test.mkdir()
+    (test / "scrimmage.toml").write_text(CONFIG)
+    (test / "bot.py").write_text(
+        "import shop\n\ndef answer(q: str) -> str:\n    return shop.tools.get_order('1')\n"
+    )
+    try:
+        done = subprocess.run(
+            [str(venv / "bin" / "scrimmage"), "test", "scrimmage.toml"],
+            cwd=test,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    finally:
+        (purelib / "zz_front.pth").unlink()
+        (purelib / "zz_front.py").unlink()
+    out = done.stdout + done.stderr
+    assert done.returncode == 2, out
+    assert "Front imported shop while Scrimmage looked up shop.tools" in out, out
+    records = "\n".join(r.read_text() for r in (test / "scrimmage-runs").glob("*/run-*.jsonl"))
+    assert '"action": "real"' not in records, records
+
+
+def test_a_finder_that_imports_the_package_stops_the_service(tmp_path: Path) -> None:
+    """The service path: the process ends with exit 1 before it serves a request."""
+    mapped = tmp_path / "pkgs"
+    (mapped / "svc_pkg").mkdir(parents=True)
+    (mapped / "svc_pkg" / "__init__.py").write_text("")
+    (mapped / "svc_pkg" / "tools.py").write_text("def get_order(order_id):\n    return 'x'\n")
+    token = tmp_path / "token"
+    token.write_text("a" * 64)
+    token.chmod(0o600)
+    code = (
+        "import importlib, sys\n"
+        "class Front:\n"
+        "    @classmethod\n"
+        "    def find_spec(cls, name, path=None, target=None):\n"
+        "        if name == 'svc_pkg.tools':\n"
+        "            importlib.import_module('svc_pkg')\n"
+        "sys.meta_path.insert(0, Front)\n"
+        "from scrimmage_core import bootstrap\n"
+        "bootstrap.start_service()\n"
+        "print('served')\n"
+    )
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
+    env.update(
+        PYTHONPATH=str(mapped),
+        SCRIMMAGE_SERVICE="1",
+        SCRIMMAGE_TOKEN_FILE=str(token),
+        SCRIMMAGE_CONTROL_URL="http://127.0.0.1:1",
+        SCRIMMAGE_TOOLS="svc_pkg.tools:get_order",
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert done.returncode == 1, (done.stdout, done.stderr)
+    assert "Front imported svc_pkg while Scrimmage looked up svc_pkg.tools" in done.stderr
+    assert "served" not in done.stdout

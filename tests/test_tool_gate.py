@@ -643,6 +643,54 @@ def test_a_finder_that_imports_the_parent_fails_the_lookup(
         sys.modules.pop("mapped_pkg", None)
 
 
+def test_a_finder_that_loads_the_standard_library_does_not_fail_the_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A zip or wheel finder may import csv or zipfile on first use; no team code runs."""
+    import importlib.abc
+
+    mapped = a_mapped_package(tmp_path)
+    monkeypatch.syspath_prepend(str(mapped))
+    for name in ("csv", "zipfile", "importlib.metadata"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    class Lazy(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path, target=None):  # type: ignore[no-untyped-def]
+            if fullname.startswith("mapped_pkg"):
+                import csv  # noqa: F401
+                import importlib.metadata  # noqa: F401
+                import zipfile  # noqa: F401
+
+            return None
+
+    monkeypatch.setattr(sys, "meta_path", [Lazy(), *sys.meta_path])
+    assert tool_gate.module_spec("mapped_pkg.tools", []) is not None
+    assert "mapped_pkg" not in sys.modules
+
+
+def test_a_finder_that_is_a_class_is_named_by_its_own_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PathFinder and setuptools' finder sit on meta_path as classes, never as instances."""
+    import importlib
+
+    mapped = a_mapped_package(tmp_path)
+    monkeypatch.syspath_prepend(str(mapped))
+
+    class ClassFinder:
+        @classmethod
+        def find_spec(cls, fullname, path=None, target=None):  # type: ignore[no-untyped-def]
+            if fullname == "mapped_pkg.tools":
+                importlib.import_module("mapped_pkg")
+
+    monkeypatch.setattr(sys, "meta_path", [ClassFinder, *sys.meta_path])
+    try:
+        with pytest.raises(tool_gate.ImportedDuringLookup, match=r"ClassFinder imported"):
+            tool_gate.module_spec("mapped_pkg.tools", [])
+    finally:
+        sys.modules.pop("mapped_pkg", None)
+
+
 @pytest.mark.design("record.redacts_errors")
 def test_errors_and_mistakes_are_redacted(lines: Lines) -> None:
     install(lines, real=["tool:*"])
