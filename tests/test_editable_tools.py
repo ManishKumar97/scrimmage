@@ -7,8 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from scrimmage_core import tool_gate
-
 pytestmark = pytest.mark.slow
 
 ROOT = Path(__file__).parents[1]
@@ -56,10 +54,13 @@ def run(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> str
     return done.stdout
 
 
-@pytest.fixture(params=["setuptools-uv", "setuptools-pip", "hatchling-uv"])
-def editable(request: pytest.FixtureRequest, tmp_path: Path) -> tuple[Path, Path]:
+@pytest.fixture(scope="module", params=["setuptools-uv", "setuptools-pip", "hatchling-uv"])
+def editable(
+    request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
+) -> tuple[Path, Path]:
     """A venv with Scrimmage and a package `shop` installed editable; the package, the venv."""
     kind, _, installer = str(request.param).partition("-")
+    tmp_path = tmp_path_factory.mktemp(str(request.param))
     package = tmp_path / "proj"
     (package / "src" / "shop").mkdir(parents=True)
     (package / "pyproject.toml").write_text(SETUPTOOLS if kind == "setuptools" else HATCH)
@@ -92,6 +93,7 @@ def clean_env(venv: Path) -> dict[str, str]:
 def test_an_editable_package_tool_is_found_gated_and_never_imported(
     editable: tuple[Path, Path],
 ) -> None:
+    """One venv per layout: a name in no package is still not found."""
     venv, folder = editable
     env = clean_env(venv)
     python = str(venv / "bin" / "python")
@@ -102,6 +104,8 @@ def test_an_editable_package_tool_is_found_gated_and_never_imported(
         "tool_gate.module_spec('shop.nope', []) is None)"
     )
     assert run([python, "-c", code], folder, env).split() == ["True", "True"]
+    code = "from scrimmage_core import tool_gate; print(tool_gate.module_spec('shopp.tools', []))"
+    assert run([python, "-c", code], folder, env).strip() == "None"
     assert not (folder / "imported").exists(), "the lookup imported the package"
 
     test = folder / "test"
@@ -118,41 +122,3 @@ def test_an_editable_package_tool_is_found_gated_and_never_imported(
     text = "\n".join(r.read_text() for r in records)
     assert records and '"call": "tool:get_order"' in text, text
     assert "cannot be found" not in text
-
-
-def test_a_tool_in_no_package_is_still_not_found(editable: tuple[Path, Path]) -> None:
-    venv, folder = editable
-    env = clean_env(venv)
-    python = str(venv / "bin" / "python")
-    code = "from scrimmage_core import tool_gate; print(tool_gate.module_spec('shopp.tools', []))"
-    assert run([python, "-c", code], folder, env).strip() == "None"
-
-
-def test_a_finder_on_meta_path_is_asked_with_its_parents_folders(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """No import: the parent's spec gives the folders the next part is searched in."""
-    import importlib.abc
-    import importlib.machinery
-    import importlib.util
-
-    seen: list[tuple[str, object]] = []
-    mapped = tmp_path / "real"
-    (mapped / "mapped_pkg").mkdir(parents=True)
-    (mapped / "mapped_pkg" / "__init__.py").write_text(
-        f"import pathlib\npathlib.Path({str(tmp_path / 'm')!r}).write_text('x')\n"
-    )
-    (mapped / "mapped_pkg" / "tools.py").write_text("")
-
-    class Finder(importlib.abc.MetaPathFinder):
-        def find_spec(self, fullname, path, target=None):  # type: ignore[no-untyped-def]
-            seen.append((fullname, path))
-            if fullname.partition(".")[0] != "mapped_pkg":
-                return None
-            return importlib.machinery.PathFinder.find_spec(fullname, path or [str(mapped)])
-
-    monkeypatch.setattr(sys, "meta_path", [Finder(), *sys.meta_path])
-    assert tool_gate.module_spec("mapped_pkg.tools", []) is not None
-    assert seen[0] == ("mapped_pkg", None)
-    assert seen[1] == ("mapped_pkg.tools", [str(mapped / "mapped_pkg")])
-    assert not (tmp_path / "m").exists() and "mapped_pkg" not in sys.modules

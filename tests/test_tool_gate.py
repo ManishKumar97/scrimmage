@@ -580,6 +580,69 @@ def test_module_exists_does_not_import(tmp_path: object) -> None:
     assert "pkg_never" not in sys.modules
 
 
+def a_mapped_package(tmp_path: Path) -> Path:
+    """A package that only a meta_path finder can place, whose own import leaves a mark."""
+    mapped = tmp_path / "real"
+    (mapped / "mapped_pkg").mkdir(parents=True)
+    (mapped / "mapped_pkg" / "__init__.py").write_text(
+        f"import pathlib\npathlib.Path({str(tmp_path / 'm')!r}).write_text('x')\n"
+    )
+    (mapped / "mapped_pkg" / "tools.py").write_text("")
+    return mapped
+
+
+def test_a_finder_on_meta_path_is_asked_with_its_parents_folders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No import: the parent's spec gives the folders the next part is searched in."""
+    import importlib.abc
+    import importlib.machinery
+
+    seen: list[tuple[str, object]] = []
+    mapped = a_mapped_package(tmp_path)
+
+    class Finder(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path, target=None):  # type: ignore[no-untyped-def]
+            seen.append((fullname, path))
+            if fullname.partition(".")[0] != "mapped_pkg":
+                return None
+            return importlib.machinery.PathFinder.find_spec(fullname, path or [str(mapped)])
+
+    monkeypatch.setattr(sys, "meta_path", [Finder(), *sys.meta_path])
+    assert tool_gate.module_spec("mapped_pkg.tools", []) is not None
+    assert seen[0] == ("mapped_pkg", None)
+    assert seen[1] == ("mapped_pkg.tools", [str(mapped / "mapped_pkg")])
+    assert not (tmp_path / "m").exists() and "mapped_pkg" not in sys.modules
+
+
+def test_a_finder_that_imports_the_parent_fails_the_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The package's code ran with no gate in place, so the tool cannot be trusted as gated."""
+    import importlib
+    import importlib.abc
+    import importlib.machinery
+
+    mapped = a_mapped_package(tmp_path)
+    monkeypatch.syspath_prepend(str(mapped))
+
+    class Eager(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path, target=None):  # type: ignore[no-untyped-def]
+            if fullname == "mapped_pkg.tools":
+                importlib.import_module("mapped_pkg")
+            return None
+
+    monkeypatch.setattr(sys, "meta_path", [Eager(), *sys.meta_path])
+    try:
+        with pytest.raises(tool_gate.ImportedDuringLookup) as caught:
+            tool_gate.module_spec("mapped_pkg.tools", [])
+        assert "Eager imported mapped_pkg while Scrimmage looked up mapped_pkg.tools" in str(
+            caught.value
+        )
+    finally:
+        sys.modules.pop("mapped_pkg", None)
+
+
 @pytest.mark.design("record.redacts_errors")
 def test_errors_and_mistakes_are_redacted(lines: Lines) -> None:
     install(lines, real=["tool:*"])
