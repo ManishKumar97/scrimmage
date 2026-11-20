@@ -392,7 +392,8 @@ READS = 6  # reads of a JSON string inside a JSON string, then the passes run to
 READ_MAX_LENGTH = 65536
 READ_MAX_BACKSLASHES = 4096
 # The characters the reads may process, summed, as a multiple of the text's length. Past it the
-# check answers True, so a text under the caps above still costs about one scan more, not six.
+# check answers True, so a text under the caps above is read at most about three times, then
+# the passes run.
 READ_WORK_FACTOR = 3
 READ_WORK_FLOOR = 8192  # a small text may always be read to the limit: that is cheap
 
