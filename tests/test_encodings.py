@@ -37,7 +37,7 @@ MODEL = "gpt-4o-mini"
 PRICE = provider_openai.Rates(1.0, 2.0)  # dollars per million tokens
 REAL = (FIXTURES / "real_chat_answer.json").read_bytes()  # a real reply, 158 in and 18 out
 BR = changes.brotli_module()
-needs_brotli = pytest.mark.skipif(
+NO_BROTLI = pytest.mark.skipif(
     BR is None, reason="br needs brotli or brotlicffi 1.2 or later; run with uv run --with brotli"
 )
 PACKERS: dict[str, Callable[[bytes], bytes]] = {
@@ -51,7 +51,7 @@ ENCODINGS = [
     "identity",
     "gzip",
     "deflate",
-    pytest.param("br", marks=needs_brotli),
+    pytest.param("br", marks=[NO_BROTLI, pytest.mark.needs_brotli]),
 ]
 
 
@@ -146,7 +146,8 @@ def ask(provider: Provider, **kw: Any) -> ChatCompletion:
 
 
 @pytest.mark.design("budget.br_reply_counts")
-@needs_brotli
+@NO_BROTLI
+@pytest.mark.needs_brotli
 def test_a_br_reply_records_its_real_usage_and_cost(provider: Provider) -> None:
     gate = Gate()
     provider.send("br")
@@ -170,7 +171,8 @@ def long_answer(times: int) -> bytes:
 
 
 @pytest.mark.design("budget.br_reply_counts")
-@needs_brotli
+@NO_BROTLI
+@pytest.mark.needs_brotli
 def test_the_budget_refuses_the_call_a_br_reply_leaves_no_room_for(provider: Provider) -> None:
     real = provider_openai.cost(158, 900, PRICE)  # about $0.00196
     # Each call holds about $0.002 for its 1000 output tokens. One fits; after one real call,
@@ -279,6 +281,7 @@ def httpx_offers_br() -> bool:
 
 
 @pytest.mark.design("budget.br_reply_counts")
+@pytest.mark.needs_brotlipy
 @pytest.mark.skipif(
     BR is not None or not httpx_offers_br(),
     reason="needs a br decoder httpx can use and Scrimmage cannot; run with uv run --with brotlipy",
@@ -307,7 +310,8 @@ def test_a_br_reply_scrimmage_cannot_unpack_is_estimated_and_holds_nothing(
 
 
 @pytest.mark.design("budget.br_reply_counts")
-@needs_brotli
+@NO_BROTLI
+@pytest.mark.needs_brotli
 def test_a_br_bomb_is_never_unpacked_past_the_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     br = BR
     assert br is not None
@@ -338,7 +342,8 @@ def test_a_br_bomb_is_never_unpacked_past_the_cap(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.design("budget.br_reply_counts")
-@needs_brotli
+@NO_BROTLI
+@pytest.mark.needs_brotli
 @pytest.mark.parametrize("how", ["cut off", "trailing bytes"])
 def test_a_cut_off_br_body_is_never_changed_as_if_whole(how: str) -> None:
     assert BR is not None

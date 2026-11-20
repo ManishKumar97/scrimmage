@@ -140,6 +140,7 @@ def test_the_hidden_sitecustomize_is_the_one_found_by_name(tmp_path: Path) -> No
 
 
 @pytest.mark.design("boot.chains_apport")
+@pytest.mark.needs_system_python
 @pytest.mark.skipif(
     not APPORT.exists(), reason="needs Ubuntu's Python and its apport sitecustomize"
 )
@@ -151,6 +152,7 @@ def test_ubuntus_apport_hook_still_installs() -> None:
 
 
 @pytest.mark.design("boot.child_other_python_untouched")
+@pytest.mark.needs_system_python
 @pytest.mark.skipif(not UBUNTU_PYTHON.exists(), reason="needs a second Python without Scrimmage")
 def test_a_child_on_a_python_without_the_sdk_is_left_alone() -> None:
     # Like the aws CLI started by the agent: it inherits the variables, but not Scrimmage.
@@ -164,6 +166,7 @@ def test_a_child_on_a_python_without_the_sdk_is_left_alone() -> None:
 
 
 @pytest.mark.design("boot.root_other_python_stops")
+@pytest.mark.needs_system_python
 @pytest.mark.skipif(not UBUNTU_PYTHON.exists(), reason="needs a second Python without Scrimmage")
 def test_the_program_under_test_on_a_python_without_the_sdk_stops() -> None:
     # The runner's own step: scrimmage-run sets SCRIMMAGE_ROOT_PID, then becomes the

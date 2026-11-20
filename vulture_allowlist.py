@@ -53,6 +53,7 @@ _.pytest_configure  # tests/conftest.py: pytest calls hooks by name
 _.pytest_collection_modifyitems  # tests/conftest.py: pytest calls hooks by name
 _.coverage_init  # tools/coverage-threads: coverage.py calls a plugin's init by name
 _.pytest_sessionfinish  # tests/conftest.py: pytest calls hooks by name
+_.pytest_runtest_makereport  # tests/conftest.py: pytest calls hooks by name
 _.pytest_runtest_setup  # tests/conftest.py: pytest calls hooks by name
 _.pytest_runtest_call  # tests/conftest.py: pytest calls hooks by name
 _.pytest_runtest_teardown  # tests/conftest.py: pytest calls hooks by name

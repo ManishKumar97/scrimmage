@@ -11,7 +11,7 @@ import threading
 import time
 import traceback
 import warnings
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -114,8 +114,11 @@ def label_threads(test: str | None) -> None:
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item: pytest.Item) -> None:
-    del item
     label_threads(None)  # born between tests or in the last teardown
+    # First of all, so no module or session fixture starts for a test that will not run.
+    for mark in item.iter_markers("needs_python"):
+        if outside_python_range(mark):
+            pytest.skip(mark.kwargs["reason"])
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -407,17 +410,64 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         items[:] = [item for item in items if item not in left_out]
 
 
-def pytest_sessionfinish(session: pytest.Session) -> None:
-    """In CI a skipped test fails the run: a safety check that did not run proves nothing.
+# In CI a skip is expected only when the test's own marks say so, never from its reason text.
+# needs_python(min=, max=, reason=) skips outside that range of Python versions (both ends
+# inclusive, as (major, minor)), and a skip it makes is expected. A group mark names tests
+# that another CI step runs, with the variable set to 1: there the same skip fails the run,
+# so a step that lost its dependency cannot go quiet. Everywhere else it is expected.
+GROUPS = {
+    "needs_brotli": "SCRIMMAGE_BROTLI",
+    "needs_brotlipy": "SCRIMMAGE_BROTLIPY",
+    "needs_nemo": "SCRIMMAGE_NEMO",
+    "needs_system_python": "SCRIMMAGE_SYSTEM_PYTHON",
+    "needs_inherit_context": "SCRIMMAGE_INHERIT_CONTEXT",
+}
 
-    A skip is fine on a laptop without Ubuntu's Python; CI must have everything.
-    Under xdist only the controller has a terminal reporter, and it gets every worker's
-    skips, so the check runs there and a worker's session does nothing.
+
+def outside_python_range(mark: pytest.Mark) -> bool:
+    now = sys.version_info[:2]
+    low, high = mark.kwargs.get("min"), mark.kwargs.get("max")
+    return (low is not None and now < low) or (high is not None and now > high)
+
+
+def skip_is_expected(item: pytest.Item) -> bool:
+    if any(outside_python_range(m) for m in item.iter_markers("needs_python")):
+        return True
+    if item.get_closest_marker("with_inherit_context_flag") and getattr(
+        sys.flags, "thread_inherit_context", 0
+    ):
+        return True
+    return any(
+        item.get_closest_marker(name) and os.environ.get(variable) != "1"
+        for name, variable in GROUPS.items()
+    )
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+    report = yield
+    if report.skipped and call.when == "setup" and skip_is_expected(item):
+        report.user_properties.append(("expected_skip", True))
+    return report
+
+
+def pytest_sessionfinish(session: pytest.Session) -> None:
+    """In CI an unexpected skip fails the run: a safety check that did not run proves nothing.
+
+    A skip is fine on a laptop without Ubuntu's Python; CI must have everything, except
+    what skip_is_expected names. Under xdist only the controller has a terminal reporter,
+    and it gets every worker's skips, so the check runs there and a worker does nothing.
     """
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     skipped = reporter.stats.get("skipped", []) if reporter else []
-    if os.environ.get("CI") and skipped:
-        names = ", ".join(report.nodeid for report in skipped)
+    # A collection report, from a skip at module level, has no user_properties.
+    unexpected = [
+        r for r in skipped if ("expected_skip", True) not in getattr(r, "user_properties", [])
+    ]
+    if os.environ.get("CI") and unexpected:
+        names = ", ".join(r.nodeid for r in unexpected)
         print(f"\nskipped tests are not allowed in CI: {names}")
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
 

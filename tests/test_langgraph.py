@@ -1476,7 +1476,7 @@ def test_a_tool_with_no_schema_and_a_hidden_type_still_runs_and_is_recorded(
 
 
 @pytest.mark.design("adapter.plumbing_not_recorded")
-@pytest.mark.skipif(sys.version_info < (3, 14), reason="before 3.14 the annotation raises at def")
+@pytest.mark.needs_python(min=(3, 14), reason="before 3.14 the annotation raises at def")
 def test_config_is_filtered_beside_an_annotation_that_raises(project: Project) -> None:
     # On 3.14 annotations are lazy, so reading them all at once raises for the whole function.
     source = project.root / "acme" / "raises.py"
@@ -1503,7 +1503,7 @@ def import_module(project: Project, name: str, text: str) -> Any:
     return module
 
 
-ON_314 = pytest.mark.skipif(sys.version_info < (3, 14), reason="before 3.14 the annotation raises")
+ON_314 = pytest.mark.needs_python(min=(3, 14), reason="before 3.14 the annotation raises")
 
 
 @pytest.mark.design("adapter.plumbing_not_recorded")

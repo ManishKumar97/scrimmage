@@ -5,6 +5,7 @@ Each case runs in a pytest of its own under the suite's conftest, so the guard s
 small session it can be judged on.
 """
 
+import os
 import subprocess
 import sys
 import xml.etree.ElementTree as ElementTree
@@ -73,13 +74,13 @@ def test_start_through_a_lazy_pool_from_its_own_thread(lazy_pool: ThreadPoolExec
     thread.join()
 
 
-@pytest.mark.skipif(sys.version_info < (3, 14), reason="InterpreterPoolExecutor is 3.14's")
+@pytest.mark.needs_python(min=(3, 14), reason="InterpreterPoolExecutor is 3.14's")
 def test_submit_to_an_interpreter_pool() -> None:
     with concurrent.futures.InterpreterPoolExecutor(1) as pool:
         assert pool.submit(pow, 2, 3).result() == 8
 
 
-@pytest.mark.skipif(sys.version_info < (3, 14), reason="InterpreterPoolExecutor is 3.14's")
+@pytest.mark.needs_python(min=(3, 14), reason="InterpreterPoolExecutor is 3.14's")
 def test_submit_to_an_interpreter_pool_subclass() -> None:
     # A subclass is still an interpreter pool: the guard must leave its task unwrapped too.
     class OwnPool(concurrent.futures.InterpreterPoolExecutor):
@@ -123,7 +124,7 @@ def run_cases(folder: Path, *options: str) -> tuple[dict[str, str], str]:
     (folder / "test_cases.py").write_text(CASES)
     (folder / "pytest.ini").write_text(
         f"[pytest]\npythonpath = {TESTS}\nfilterwarnings = error\n"
-        "markers =\n    slow: starts a process\n"
+        "markers =\n    slow: starts a process\n    needs_python(min, max, reason): a range\n"
     )
     report = folder / "report.xml"
     done = subprocess.run(
@@ -230,3 +231,30 @@ def test_the_stray_line_is_shown_under_xdist(tmp_path: Path) -> None:
     got, out = run_cases(tmp_path, "-n", "2", "--dist", "loadfile")
     assert got["test_runs_while_the_left_thread_starts_one"] == "passed", out
     assert "1 stray process start(s): subprocess.Popen from thread 'left-behind'" in out, out
+
+
+@pytest.mark.parametrize("in_ci", [True, False], ids=["in CI", "not in CI"])
+def test_a_module_level_skip_fails_a_run_in_ci_and_only_there(tmp_path: Path, in_ci: bool) -> None:
+    """A skip at collection has no user_properties; it counts as unexpected, and never crashes."""
+    (tmp_path / "conftest.py").write_text((TESTS / "conftest.py").read_text())
+    (tmp_path / "test_gone.py").write_text(
+        "import pytest\npytest.skip('no module', allow_module_level=True)\n"
+    )
+    (tmp_path / "pytest.ini").write_text(
+        f"[pytest]\npythonpath = {TESTS}\nmarkers =\n    slow: starts a process\n"
+    )
+    env = {k: v for k, v in os.environ.items() if k != "CI"} | ({"CI": "1"} if in_ci else {})
+    done = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-n", "0", *PLUGINS_OFF],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    out = done.stdout + done.stderr
+    assert "Traceback" not in out and "INTERNALERROR" not in out, out
+    # Exit 5 is "no tests collected", what a plain run gives; in CI the skip turns it into 1.
+    assert (done.returncode, "skipped tests are not allowed in CI" in out) == (
+        (1, True) if in_ci else (5, False)
+    ), out
