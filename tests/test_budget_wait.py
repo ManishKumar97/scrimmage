@@ -882,13 +882,14 @@ import openai
 from scrimmage_core import http_gate
 
 question = sys.argv[1]
-# The test's server chose this run's role when it answered the plan request, which came
-# before this code ran, so the role file is already there.
+# The role file exists because the plan is fetched at bootstrap import, before this code runs,
+# and the test's server writes the file before it answers that request.
 role = Path(f"role-{os.environ['SCRIMMAGE_RUN']}").read_text()
 client = openai.OpenAI(max_retries=0)
 messages = [{"role": "user", "content": question}]
 if role == "hold":
     client.chat.completions.create(model="gpt-4o-mini", messages=messages, stream=True)
+    time.sleep(2)  # the waiter's plan must wait for this: a server that does not wait fails
     Path("holding").touch()
     time.sleep(600)  # the stream stays open until the test stops this run
 else:
@@ -901,7 +902,7 @@ else:
     print(reply.choices[0].message.content)
 '''
 RUN_TIMEOUT_S = 600.0  # a tenth of it is 60 s, so the margin is not cut below RUN_MARGIN_S
-HOLD_WAIT_S = 120.0  # the longest a plan request waits for the hold, so a test fails, not hangs
+HOLD_WAIT_S = 8.0  # under the control client's 10 s timeout, so the test fails, not hangs
 STARTUP_S = RUN_TIMEOUT_S - 60.0  # run_timeout less the margin: no time is left to wait
 
 
@@ -928,6 +929,7 @@ def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
 
     fetches: list[str] = []
     roles: dict[str, str] = {}
+    no_hold: list[str] = []
     election = threading.Lock()
 
     def slow_start(server: control.ControlServer, run: str) -> tuple[int, dict[str, object]]:
@@ -937,6 +939,8 @@ def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
             deadline = time.monotonic() + HOLD_WAIT_S
             while not (project.root / "holding").exists() and time.monotonic() < deadline:
                 time.sleep(0.02)
+            if not (project.root / "holding").exists():
+                no_hold.append(run)  # ends both runs at once, and the test says why
         held_on = (project.root / "holding").exists()
         age = time.monotonic() - server.runs[run].opened
         fetches.append(f"{run} role={role} holding={held_on} age_before={age:.3f}")
@@ -969,7 +973,7 @@ def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
 
     monkeypatch.setattr(control.ControlServer, "_plan", slow_start)
     monkeypatch.setattr(control.ControlServer, "_reserve", reserve)
-    time_limit.at(lambda: bool(asked_again))
+    time_limit.at(lambda: bool(asked_again) or bool(no_hold))
     (project.root / "race.py").write_text(RACE)
     project.edit(
         'function = "acme.agent:answer"',
@@ -992,6 +996,7 @@ def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
         f"plan fetches={fetches}\nreserves={asked}"
     )
     now = f"now={time.monotonic():.3f}"
+    assert no_hold == [], f"the hold was not on after {HOLD_WAIT_S:g}s; {result.out}\n{seen}"
     assert asked_again == [], f"{result.out}\n{seen} {now}\n{logs}"
     assert result.code == 2, f"{result.out}\n{seen} {now}\n{logs}"
     assert sorted(str(s["outcome"]) for s in result.summaries()) == ["not reserved", "stopped"]
