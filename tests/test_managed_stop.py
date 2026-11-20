@@ -31,6 +31,7 @@ from test_managed_start import (
     NotFound,
     Shop,
     group,
+    no_proc,
     shop,
     time_limit,
     wait_until,
@@ -38,6 +39,10 @@ from test_managed_start import (
 
 pytestmark = pytest.mark.slow
 __all__ = ["shop", "time_limit"]  # the fixtures, used by name; time_limit keeps 120 s a test
+# An app's load, longer than the 3 s that a copy without /proc was once given to exit: CI's
+# 3.12 runner, measuring coverage in every process, took longer than that to load uvicorn.
+SLOW_LOAD_S = 4.0
+AT_ONCE_S = 3.0  # how soon a copy that answers without the gate is named, with /proc
 # An app that, as it loads, starts a helper from a thread that then ends. The helper adds a
 # byte to BEAT_FILE every 0.1 s, and writes its pid beside it.
 THREADED = """import os
@@ -287,11 +292,18 @@ def test_a_runner_killed_with_sigkill_takes_the_supervisor_and_its_workers(
     assert all(gone(pid) for pid in workers), workers
 
 
-def test_a_port_taken_while_the_app_loads_slowly_names_the_copys_exit(shop: Shop) -> None:
-    """The app takes longer to load than the fixed wait: the copy holds no socket on its port
-    meanwhile, so the wait goes on until it exits, and the test names its exit."""
+@pytest.mark.parametrize("proc", [True, False], ids=["proc", "no-proc"])
+def test_a_port_taken_while_the_app_loads_slowly_names_the_copys_exit(
+    shop: Shop, proc: bool
+) -> None:
+    """The app takes SLOW_LOAD_S to load, as an app's imports can on a loaded machine, while
+    another process holds its port at every start. With /proc, the copy holds no socket on
+    its port meanwhile; without it, nothing says who answered. Either way the wait goes on
+    until the copy exits, and the test names its exit, after its starts."""
+    if not proc:
+        no_proc(shop)
     (shop.root / "slowapp.py").write_text(
-        f"import time\n\ntime.sleep({managed.FAILED_PROBE_S + 1:g})\nfrom acme.service import app\n"
+        f"import time\n\ntime.sleep({SLOW_LOAD_S:g})\nfrom acme.service import app\n"
     )
     holder = http.server.ThreadingHTTPServer(("127.0.0.1", 0), NotFound)
     threading.Thread(target=holder.serve_forever, daemon=True).start()
@@ -305,6 +317,7 @@ def test_a_port_taken_while_the_app_loads_slowly_names_the_copys_exit(shop: Shop
     assert code == 3, out
     assert "the service started with [agent] start exited with code 3 before it was ready" in out
     assert "address already in use" in out, out
+    assert f"after {managed.START_TRIES} starts on ports" in out, out
 
 
 def test_a_copy_that_answers_without_the_gate_is_named_at_once(shop: Shop) -> None:
@@ -343,10 +356,10 @@ def test_a_copy_that_answers_without_the_gate_is_named_at_once(shop: Shop) -> No
     assert "x-scrimmage-run does not reach Scrimmage" in out, out
     [(lost, took)] = checks
     assert not lost, "the copy that answered was taken for one that lost its port"
-    assert took < managed.FAILED_PROBE_S, took
+    assert took < AT_ONCE_S, took
     [end] = ended
     named = end - replied[-1]
-    assert named < managed.FAILED_PROBE_S, named
+    assert named < AT_ONCE_S, named
 
 
 def test_a_port_held_by_a_process_that_never_answers_ends_the_probe_when_the_copy_exits(

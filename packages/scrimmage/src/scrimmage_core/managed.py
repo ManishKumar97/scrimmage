@@ -29,10 +29,6 @@ from scrimmage_core.service_client import Setup
 LAST_LINES = 20  # how much of service.log a failure shows
 TAIL_BYTES = 64 * 1024  # how much of service.log is read to find those lines
 GONE_S = 1.0  # how long a failed request waits to see that the copy has exited
-# Where /proc cannot say whether the copy listens on its port, how long a failed probe waits
-# to see that the copy has exited: one that lost its port to another process exits once
-# uvicorn has loaded the app and tried to bind, about 1 s for the example app.
-FAILED_PROBE_S = 3.0
 LOST_PORT_STEP_S = 0.1
 LISTEN = "0A"  # a listening socket's state in /proc/net/tcp
 # States in /proc/net/tcp of a socket that no longer holds its port against a new bind.
@@ -244,13 +240,16 @@ class Managed:
 
         While the copy runs and none of its processes listens on its port, it is still
         loading the app, so the wait goes on, up to until; once one listens, the copy is what
-        answered. Where /proc cannot say, the wait is FAILED_PROBE_S."""
+        answered. Where /proc cannot say, the wait for its exit goes on up to until too: a
+        copy that loses its port exits only once it has loaded the app and tried to bind,
+        which takes as long as its imports do on a loaded machine, so no shorter wait is
+        safe. A copy that answers without the gate is then named at until."""
         while time.monotonic() < until:
             if self.gone(LOST_PORT_STEP_S):
                 return True
             held = self.holds_port()
             if held is None:
-                return self.gone(FAILED_PROBE_S)
+                return self.gone(max(0.0, until - time.monotonic()))
             if held:
                 return False
         return False

@@ -182,6 +182,7 @@ ALL_TITLES = [
     "What a stdio server does by itself.",
     "With cert-manager, a certificate renewed during a test is seen at the next test.",
     "With cert-manager, the control authority's name constraint covers every namespace.",
+    "Without `/proc`, a copy that answers with no gate is named only after 30 seconds.",
     "Work outside any request has a cost while a test runs.",
     "`${` in an injected text.",
     "`--json` prints at the end.",
