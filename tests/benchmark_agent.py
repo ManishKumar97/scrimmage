@@ -171,7 +171,8 @@ def case_tool_mock(rec: Recorder) -> None:
 
 
 def case_tool_miss(rec: Recorder) -> None:
-    # The run holds a mock of this tool for order A1 only, so this call matches none.
+    # Its test holds a mock of this tool for order A1 only, so this call matches none. The
+    # mock is in a test of its own, so no other case pays for its miss checks.
     rec.take("tool_miss", lambda: tool_miss("Z9"))
 
 
