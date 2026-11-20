@@ -251,9 +251,11 @@ def test_an_enum_mock_with_no_such_member_is_a_mistake_naming_the_members(
     with pytest.raises(ScrimmageMockError) as caught:
         tool_gate.gate(order_status, "order_status")("1")
     message = (
-        f"the mock does not fit test_tool_gate:Status: {returns!r} is not one of shipped, pending"
+        "the mock does not fit test_tool_gate:Status: the value is not one of shipped, pending"
     )
     assert str(caught.value) == message
+    leaked = returns in str(caught.value).split("is not one of")[0]
+    assert not leaked, "the mock's value was quoted"
     assert lines.lines[0]["mistake"] == message
 
 
@@ -310,9 +312,8 @@ def test_a_mistake_names_at_most_ten_members_of_a_large_enum(lines: Lines) -> No
     with pytest.raises(ScrimmageMockError) as caught:
         tool_gate.gate(get_text, "get_text")("1")
     first = ", ".join(f"v{i}" for i in range(10))
-    assert str(caught.value) == (
-        f"the mock does not fit test_tool_gate:Large: 'sent' is not one of {first}, and 4990 more"
-    )
+    message = "the mock does not fit test_tool_gate:Large: the value is not one of"
+    assert str(caught.value) == f"{message} {first}, and 4990 more"
 
 
 def test_a_change_the_agent_makes_to_a_mock_value_is_not_seen_by_the_next_call(

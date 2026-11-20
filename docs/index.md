@@ -27,8 +27,8 @@ It is not released on PyPI yet, so you install it from a clone of the repository
 A plain `pip install scrimmage` takes an empty placeholder, so do not use it.
 
 ```bash
-git clone https://github.com/ManishKumar97/faultline
-cd faultline
+git clone https://github.com/ManishKumar97/scrimmage
+cd scrimmage
 python -m venv .venv
 . .venv/bin/activate
 pip install ./packages/scrimmage

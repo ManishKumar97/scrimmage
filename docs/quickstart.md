@@ -12,8 +12,8 @@ The rest of this page walks through the example with a file already written.
 ## 1. Get the example and install Scrimmage
 
 ```bash
-git clone https://github.com/ManishKumar97/faultline
-cd faultline
+git clone https://github.com/ManishKumar97/scrimmage
+cd scrimmage
 python -m venv .venv
 . .venv/bin/activate
 pip install ./packages/scrimmage openai
@@ -116,7 +116,7 @@ scrimmage test
 ```
 
 ```text title="Output"
-scrimmage test: 1 test, 2 rows, 6 runs; records in /home/me/faultline/tests/example/scrimmage-runs/20261107T193000Z-4c1d2a
+scrimmage test: 1 test, 2 rows, 6 runs; records in /home/me/scrimmage/tests/example/scrimmage-runs/20261107T193000Z-4c1d2a
 test          row       fault                   runs  fired  done  passed  rate  range    tools  cost     result
 order-status  baseline  -                       3     -      3     3/3     100%  44-100%  2.0    0.00016  pass
 order-status  fault 1   tool:get_order timeout  3     3      3     3/3     100%  44-100%  2.0    0.00016  pass
@@ -154,14 +154,14 @@ scrimmage test
 ```
 
 ```text title="Output"
-scrimmage test: 1 test, 3 rows, 9 runs; records in /home/me/faultline/tests/example/scrimmage-runs/20261107T193100Z-9e0b17
+scrimmage test: 1 test, 3 rows, 9 runs; records in /home/me/scrimmage/tests/example/scrimmage-runs/20261107T193100Z-9e0b17
 test          row       fault                     runs  fired  done  passed  rate  range    tools  cost     result
 order-status  baseline  -                         3     -      3     3/3     100%  44-100%  2.0    0.00016  pass
 order-status  fault 1   tool:get_order timeout    3     3      3     3/3     100%  44-100%  2.0    0.00016  pass
 order-status  fault 2   model status 429 first 1  3     3      0     0/3     0%    0-56%    0.0    0.00000  fail
 range: a 95% Wilson interval, from these runs alone
 fail: order-status fault 2: 0/3 passed, pass_rate is 1
-  3 runs: crashed: /home/me/faultline/tests/example/scrimmage-runs/20261107T193100Z-9e0b17/run-312d14f54352.log, /home/me/faultline/tests/example/scrimmage-runs/20261107T193100Z-9e0b17/run-a5fa971e377c.log, /home/me/faultline/tests/example/scrimmage-runs/20261107T193100Z-9e0b17/run-355cdc9d4a47.log
+  3 runs: crashed: /home/me/scrimmage/tests/example/scrimmage-runs/20261107T193100Z-9e0b17/run-312d14f54352.log, /home/me/scrimmage/tests/example/scrimmage-runs/20261107T193100Z-9e0b17/run-a5fa971e377c.log, /home/me/scrimmage/tests/example/scrimmage-runs/20261107T193100Z-9e0b17/run-355cdc9d4a47.log
 model calls cost $0.0003 of a budget of $5
 note: order-status fault 2: 3 crashed
 ```
@@ -190,7 +190,7 @@ scrimmage test
 ```
 
 ```text title="Output"
-scrimmage test: 1 test, 3 rows, 9 runs; records in /home/me/faultline/tests/example/scrimmage-runs/20261107T193200Z-27f0c3
+scrimmage test: 1 test, 3 rows, 9 runs; records in /home/me/scrimmage/tests/example/scrimmage-runs/20261107T193200Z-27f0c3
 test          row       fault                     runs  fired  done  passed  rate  range    tools  cost     result
 order-status  baseline  -                         3     -      3     3/3     100%  44-100%  2.0    0.00016  pass
 order-status  fault 1   tool:get_order timeout    3     3      3     3/3     100%  44-100%  2.0    0.00016  pass

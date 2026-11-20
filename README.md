@@ -5,7 +5,6 @@ Scrimmage finds the silent failures in an AI agent, proves the fix, and stops th
 Docs: <https://manishkumar97.github.io/scrimmage/>
 
 This repository is at an early stage.
-Scrimmage was called Faultline, then Derail, until November 2026.
 
 ## Install
 
@@ -13,8 +12,8 @@ Scrimmage is not released on PyPI yet, so install it from a clone.
 It needs Python 3.11 or later.
 
 ```bash
-git clone https://github.com/ManishKumar97/faultline
-cd faultline
+git clone https://github.com/ManishKumar97/scrimmage
+cd scrimmage
 python -m venv .venv
 . .venv/bin/activate
 pip install ./packages/scrimmage
