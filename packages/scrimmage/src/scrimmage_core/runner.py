@@ -353,6 +353,7 @@ class Runner:
         self.stopped_rows: set[tuple[str, str]] = set()
         self.row_of: dict[str, planner.Row] = {}
         self.cancelled = False
+        self.turned_away = 0  # runs one() did not start because the test was cancelled
         # A service run's record wait, which runs beside the next runs: each waits on an event,
         # so a thread each costs nothing while it waits. Made by run_all, for a service only.
         self.waiters: ThreadPoolExecutor | None = None
@@ -452,7 +453,10 @@ class Runner:
 
     def one_now(self, row: planner.Row) -> "RunResult | Future[RunResult] | None":
         with self.lock:
-            if self.cancelled or (row.test.name, row.name) in self.stopped_rows:
+            if self.cancelled:
+                self.turned_away += 1
+                return None
+            if (row.test.name, row.name) in self.stopped_rows:
                 return None
             run = f"run-{secrets.token_hex(6)}"
             self.row_of[run] = row
@@ -465,6 +469,8 @@ class Runner:
         self.server.open_run(run, row.name, plan.to_json(), service=service)
         if self.cancelled:
             self.server.close_run(run)
+            with self.lock:
+                self.turned_away += 1
             return None
         if service:
             return self.served(run, row)
@@ -1206,7 +1212,7 @@ class Runner:
                 name = self.stop_flag[0] if self.stop_flag else ""
                 self.stop_flag.clear()  # the watcher and the handler may both have noted it
             if name:  # every run has ended, so it is raised where nothing drops it
-                raise Interrupted(name, ended(results))
+                raise Interrupted(name, ended(results), self.cut(results))
             completed = True
         finally:
             try:
@@ -1223,8 +1229,15 @@ class Runner:
                 self.server.stop()
                 shutil.rmtree(self.answers, ignore_errors=True)
         if completed and self.stop_flag:  # it came while the copy stopped
-            raise Interrupted(self.stop_flag[0], ended(results))
+            raise Interrupted(self.stop_flag[0], ended(results), self.cut(results))
         return [r for r in results if r is not None]
+
+    def cut(self, results: "list[RunResult | None]") -> int:
+        """How many runs the signal cut: those it stopped, and those it kept from starting."""
+        with self.lock:
+            return self.turned_away + sum(
+                1 for r in results if r is not None and r.outcome == "stopped"
+            )
 
     def catch_signals(self) -> Callable[[], None]:
         """Stop the runs on SIGINT or SIGTERM. Returns the function that puts everything back.
@@ -1375,11 +1388,13 @@ class Interrupted(Exception):
     """scrimmage test got SIGTERM or SIGINT.
 
     results: the runs that ended by themselves before it, not those it stopped.
+    cut: how many runs it cut, stopped or kept from starting. 0 means every run had ended.
     """
 
-    def __init__(self, name: str, results: "list[RunResult] | None" = None) -> None:
+    def __init__(self, name: str, results: "list[RunResult] | None" = None, cut: int = 0) -> None:
         super().__init__(name)
         self.results = results or []
+        self.cut = cut
 
 
 def reported_tools(notices: list[dict[str, object]]) -> list[str] | None:
