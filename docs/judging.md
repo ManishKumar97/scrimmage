@@ -130,6 +130,7 @@ Scrimmage reads a row in this order:
 The floor is `runs // 2 + 1` judged runs, whatever `pass_rate` is: 3 of 5, 2 of 3, 1 of 1.
 Under it the test did not test, so a row never passes on one run out of five.
 At or above it the rate decides, and a note says how many runs counted, such as `note: order-status fault 1: 4 of 5 runs judged`.
+A row that a refusal ended early counts the runs that ran, and the note says how many were planned, such as `1 of 2 runs judged; 3 were planned`.
 A run where the fault did not fire does not block a row, unless so many are missing that the row falls under the floor.
 
 With `runs = 5` and `pass_rate = 0.8`, 4 of 5 passes and 3 of 5 fails.

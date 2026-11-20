@@ -1856,7 +1856,11 @@ def build_report(
         if judged and verdict.verdict == judge.NO_RESULT and not entry.refused:
             mistakes.append(f"{where}: no result: {no_result_reason(entry, config.agent.runs)}")
         elif verdict.judged < config.agent.runs:
-            notes.append(f"{where}: {verdict.judged} of {config.agent.runs} runs judged")
+            # A refusal ends a row early. The header counts the runs that ran, so this does too.
+            planned = config.agent.runs
+            ran_n = min(len(mine), planned)
+            cut = f"; {planned} were planned" if ran_n < planned else ""
+            notes.append(f"{where}: {verdict.judged} of {ran_n} runs judged{cut}")
         ran = [r for r in mine if r.outcome != "stopped"]
         if row.fault is not None and ran and not any(r.fault_fired for r in ran):
             reasons = why_unchanged(ran)
