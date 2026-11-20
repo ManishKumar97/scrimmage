@@ -109,15 +109,35 @@ def test_a_build_repeats_byte_for_byte(built: dict[str, Path], tmp_path: Path) -
     assert {p.name: sha256(p) for p in again} == {p.name: sha256(p) for p in built.values()}
 
 
+def sdist_top(sdist: Path) -> set[str]:
+    """The first path part of every entry in the sdist, below its one root folder."""
+    with tarfile.open(sdist) as archive:
+        return {n.split("/")[1] for n in archive.getnames() if n.count("/") >= 1} - {""}
+
+
+TOP = {"src", "pyproject.toml", "README.md", "LICENSE", "PKG-INFO"}
+
+
 @pytest.mark.slow
 def test_the_sdist_holds_only_the_package(built: dict[str, Path]) -> None:
+    # hatchling adds the repository's own public ignore file when it builds inside the clone
+    assert sdist_top(built["sdist"]) - {".gitignore"} == TOP
     with tarfile.open(built["sdist"]) as sdist:
         names = [n.split("/", 1)[1] for n in sdist.getnames() if "/" in n]
-    for wanted in ("src/scrimmage_core/__init__.py", "pyproject.toml", "README.md", "LICENSE"):
-        assert wanted in names, f"{wanted} is not in the sdist"
-    for name in names:
-        foreign = {"tests", "docs", "private", ".env", "CLAUDE.md"} & set(name.split("/"))
-        assert not foreign, f"{name} does not belong in the sdist"
+    assert "src/scrimmage_core/__init__.py" in names
+
+
+@pytest.mark.slow
+def test_a_file_beside_the_package_does_not_reach_the_sdist(tmp_path: Path) -> None:
+    """A working tree may hold files that no .gitignore names, such as ones a developer hides
+    in .git/info/exclude, which the build never reads. Only the allowlist keeps them out."""
+    copy = tmp_path / "package"
+    shutil.copytree(PACKAGE, copy, ignore=shutil.ignore_patterns("__pycache__"))
+    for name in ("CLAUDE.md", "NOTES.md", ".claude/settings.json", "runs/a.json", "testbed/b"):
+        (copy / name).parent.mkdir(parents=True, exist_ok=True)
+        (copy / name).write_text("decoy")
+    files = build(copy, tmp_path / "dist", "--sdist")
+    assert sdist_top(files[0]) == TOP
 
 
 @pytest.mark.slow
