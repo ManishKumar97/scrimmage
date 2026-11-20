@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import tarfile
 import zipfile
 from pathlib import Path
 
@@ -102,3 +103,23 @@ def test_version_prints_the_installed_version(capsys: pytest.CaptureFixture[str]
 def test_a_build_repeats_byte_for_byte(built: dict[str, Path], tmp_path: Path) -> None:
     again = build(PACKAGE, tmp_path / "again")
     assert {p.name: sha256(p) for p in again} == {p.name: sha256(p) for p in built.values()}
+
+
+@pytest.mark.slow
+def test_the_sdist_holds_only_the_package(built: dict[str, Path]) -> None:
+    with tarfile.open(built["sdist"]) as sdist:
+        names = [n.split("/", 1)[1] for n in sdist.getnames() if "/" in n]
+    for wanted in ("src/scrimmage_core/__init__.py", "pyproject.toml", "README.md", "LICENSE"):
+        assert wanted in names, f"{wanted} is not in the sdist"
+    for name in names:
+        foreign = {"tests", "docs", "private", ".env", "CLAUDE.md"} & set(name.split("/"))
+        assert not foreign, f"{name} does not belong in the sdist"
+
+
+@pytest.mark.slow
+def test_pip_builds_the_same_wheel_from_the_sdist(built: dict[str, Path], tmp_path: Path) -> None:
+    python = venv(tmp_path, "3.11", seed=True)
+    out = tmp_path / "wheels"
+    run(python, "-m", "pip", "wheel", "--no-deps", "-w", out, built["sdist"], cwd=tmp_path)
+    (made,) = out.iterdir()
+    assert wheel_names(made) == wheel_names(built["wheel"])
