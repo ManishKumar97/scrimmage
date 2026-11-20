@@ -18,12 +18,17 @@ from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
 
 import httpx
+import jsonschema
 import pytest
+from jsonschema.exceptions import best_match
 
+import scrimmage_core
 from fakes.openai_server import FakeOpenAI
 from scrimmage_core import runner
 from scrimmage_core.cli import main
 from scrimmage_core.outcomes import OK, ROW_FAILED
+from scrimmage_core.records import RecordStore
+from scrimmage_core.state import RunState
 
 EXAMPLE = Path(__file__).parent / "example"
 
@@ -248,6 +253,71 @@ SEND_OWNERS: tuple[Any, ...] = tuple(
     if module is not None
     for owner in (module.Client, module.AsyncClient)
 )
+
+
+RECORD_SCHEMA = json.loads(
+    (Path(scrimmage_core.__file__).parent / "schemas" / "record.v1.json").read_text()
+)
+RECORD_CHECK = jsonschema.Draft202012Validator(RECORD_SCHEMA)
+
+
+def schema_error(line: object) -> str | None:
+    """What record.v1.json refuses in a line, with the line, or None. The line is read as a
+    reader of the file would read it: through JSON."""
+    seen = json.loads(json.dumps(line, default=str))
+    if (error := best_match(RECORD_CHECK.iter_errors(seen))) is None:
+        return None
+    where = "/".join(str(p) for p in error.absolute_path) or "(line)"
+    return f"{where}: {error.message[:200]}\n    line: {json.dumps(seen)}"
+
+
+@pytest.fixture(autouse=True)
+def every_record_line_matches_the_public_schema(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[None]:
+    """Each record line is checked against record.v1.json, the schema the docs publish.
+
+    A line the schema refuses is a record a user's own validator would refuse. Two places
+    are wrapped. RunState.put sees the lines the gates of this process write. RecordStore.add
+    and close_run are the one place every line reaches a file: the lines of a service worker
+    or a child process, which come over /v1/records, and the runner's own lines, such as
+    each summary. A test that posts hand-made lines on purpose is marked stub_record_lines
+    and skips the store check. The errors are collected and fail the test at teardown, so
+    the writers' own code paths are not changed.
+    """
+    bad: list[str] = []
+    put, add, close = RunState.put, RecordStore.add, RecordStore.close_run
+
+    def note(line: object) -> None:
+        if (message := schema_error(line)) is not None:
+            bad.append(message)
+
+    def checked_put(self: RunState, line: dict[str, object], *, keep: bool) -> None:
+        note(line)
+        put(self, line, keep=keep)
+
+    monkeypatch.setattr(RunState, "put", checked_put)
+    if request.node.get_closest_marker("stub_record_lines") is None:
+
+        def checked_add(self: RecordStore, run: str, lines: list[dict[str, object]]) -> int:
+            for line in lines:
+                note(line)
+            return add(self, run, lines)
+
+        def checked_close(
+            self: RecordStore, run: str, test: str, row: str, summary: dict[str, object]
+        ) -> None:
+            note({"v": 1, "run": run, "test": test, "row": row, "summary": summary})
+            close(self, run, test, row, summary)
+
+        monkeypatch.setattr(RecordStore, "add", checked_add)
+        monkeypatch.setattr(RecordStore, "close_run", checked_close)
+    yield
+    monkeypatch.undo()
+    if bad:
+        pytest.fail(
+            f"{len(bad)} record line(s) fail record.v1.json:\n" + "\n".join(bad[:5]), pytrace=False
+        )
 
 
 @pytest.fixture(autouse=True)

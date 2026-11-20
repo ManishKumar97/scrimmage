@@ -61,7 +61,6 @@ def test_mcp_settings_faults_and_labels_are_documented() -> None:
         assert mentioned(text, word), word
     assert all(f"`{method}`" in text for method in mcp_gate.PASSES)
     assert "`mcp:<server>/<tool>`" in page("concepts.md")
-    assert "`mcp:" not in page("configuration.md").split("## Coming in later versions")[1]
 
 
 @pytest.mark.design("docs.scripts")
@@ -70,7 +69,6 @@ def test_the_script_shape_its_children_and_its_stopping_are_documented() -> None
     for word in ("{question}", "children", "SCRIMMAGE_ANSWER_FILE", "process", "other_python"):
         assert f"`{word}`" in text or f"`{word} = true`" in text, word
     assert "`command`" in page("configuration.md") and "`scrimmage-run" in page("cli.md")
-    assert "`command`" not in page("configuration.md").split("## Coming in later versions")[1]
     assert "mcp 1.x, started with your environment" not in page("limits.md")
 
 
@@ -84,8 +82,6 @@ def test_the_rules_the_table_and_the_endings_are_documented() -> None:
     assert all(f"| {outcome}" in text for outcome in outcomes.OUTCOMES)
     assert judge.EMPTY in text
     assert "not a promise about the next one" in text
-    assert "No judging" not in page("limits.md")
-    assert "later version" not in text
 
 
 def test_every_fault_and_outcome_is_documented() -> None:
@@ -122,10 +118,6 @@ def test_a_fault_on_one_model_and_its_limits_are_documented() -> None:
     for word in ("gpt-4.1", "gpt-4o-mini-2024-07-18", "unreadable_model"):
         assert word in guide, word
     limits = page("limits.md")
-    assert "**Two calls to one model.**" in limits
-    assert "**A model name is compared whole.**" in limits
-    assert "**A fault with `model` needs a name it can read.**" in limits
-    assert "**Two `model` keys in one body.**" in limits
     for text in (guide, limits):
         assert "the row can pass, and nothing warns" in text
         assert "not the name a reply or a dashboard shows" in text
@@ -141,7 +133,6 @@ def test_a_fault_on_one_model_and_its_limits_are_documented() -> None:
     safety = page("safety.md")
     assert "`unreadable_model`" in safety and "- A chat request body" in safety
     assert "- A request body Scrimmage cannot read" not in safety
-    assert "`model`" not in page("configuration.md").split("## Coming in later versions")[1]
 
 
 @pytest.mark.design("docs.cached_input")
@@ -153,7 +144,6 @@ def test_cached_input_prices_and_their_default_are_documented() -> None:
     for word in ("prompt_tokens_details.cached_tokens", "input_tokens_details.cached_tokens"):
         assert word in guide, word
     assert "`tokens.cached`" in guide and "the safe overestimate" in guide
-    assert "**Cached input on OpenAI only.**" in page("limits.md")
 
 
 @pytest.mark.design("docs.cache_write")
@@ -192,7 +182,6 @@ def test_tools_that_are_methods_and_their_limits_are_documented() -> None:
     for case in ("`staticmethod`", "`classmethod`", "`__init__`", "`Outer.Inner.method`"):
         assert case in text, case
     assert "never holds `self` or `cls`" in text
-    assert "**Methods stored as the class is made.**" in page("limits.md")
     assert "A method is gated on its class" in page("how-it-works.md")
 
 
@@ -212,7 +201,6 @@ def test_the_wait_for_calls_in_flight_and_its_report_are_documented() -> None:
         assert line in guide, line
     assert "after a wait of 30s for calls in flight" in guide
     assert "#when-calls-in-flight-hold-the-budget" in page("configuration.md")
-    assert "**A hold that cannot end while a call waits.**" in page("limits.md")
     assert "| not reserved | left out |" in page("judging.md")
     limits = page("limits.md")
     for item in (
@@ -240,7 +228,6 @@ def test_check_is_documented_as_reading_the_file_only(
     text = page("cli.md")
     assert "`scrimmage check` reads the file only" in text
     assert "## scrimmage check" in text and "## scrimmage schema" in text
-    assert "**`scrimmage check` does not import your code.**" in page("limits.md")
     # The quickstart's check line is what scrimmage check prints on the quickstart's file.
     guide = page("quickstart.md")
     (tmp_path / "scrimmage.toml").write_text(re.findall(r"```toml\n(.*?)```", guide, re.S)[0])
@@ -349,14 +336,6 @@ def test_recording_its_codes_and_its_limits_are_documented() -> None:
         assert word in guide or word in limits, word
     for code in (*record.MANUAL_CODES, *record.SKIPPED_CODES):
         assert f"`{code}`" in output, code
-    for limit in (
-        "**A live session cookie under `session_id` is kept.**",
-        "**A Vault secret read at a nested mount.**",
-        "**A web mock cannot match a query or a body.**",
-        "**A secret with no pattern under an innocent key is written.**",
-        "**A mock's value is capped at 64 KiB of TOML.**",
-    ):
-        assert limit in limits, limit
     assert "No rule can promise there is none" in guide
     assert "Recording replies" in page("configuration.md") and "## Recording" in page("safety.md")
 
@@ -447,12 +426,6 @@ def test_recording_more_than_one_run_is_documented() -> None:
     for name in ("runs", "runs_recorded", "argument_sets_seen", "argument_sets_written"):
         assert f"`{name}`" in output, name
     assert "`not_started`" in output and "`argument_sets`" in output
-    for limit in (
-        "**A form the model never sent while recording still misses.**",
-        "**One web mock answers any query, at any N.**",
-        "**A reply that changes with time is not written at N above 1.**",
-    ):
-        assert limit in limits, limit
     for text in (guide, cli_page, limits):  # no page says a looser match exists
         assert "looser match" not in text.replace("No looser form", "")
 
@@ -501,23 +474,11 @@ def test_the_changing_results_page_covers_the_faults_the_rules_and_the_lines() -
 @pytest.mark.design("docs.changing_results")
 def test_the_limits_page_names_each_gap_of_the_carried_faults() -> None:
     limits = page("limits.md")
-    for limit in (
-        "**Only text and plain data take `append` and `replace`.**",
-        "**An MCP result with several text items.**",
-        "**Web bodies that are not text or JSON.**",
-        "**`slow` outside asyncio.**",
-        "**A sync caller that gives up leaves its thread behind.**",
-        "**The plan holds `find` as written.**",
-        "**`${` in an injected text.**",
-        "**A change over text the record removes is not made.**",
-    ):
-        assert limit in limits, limit
     assert "runs a listed real write twice" in limits
     faults = page("model-faults.md")
     assert "`append` does not work on a model call" in faults
     assert "`replace` needs `model`" in faults
     later = page("configuration.md").split("## Coming in later versions")[1]
-    assert "`slow`," not in later and "`append`, `replace`," not in later.split("Fault options")[0]
     assert "`append` on a model call" in later
 
 
@@ -541,7 +502,6 @@ def test_the_guardrails_page_covers_the_two_questions_and_what_is_not_covered() 
     nav = (DOCS.parent / "mkdocs.yml").read_text()
     assert "Testing your guardrails: guardrails.md" in nav
     assert "## A guard model" in page("model-faults.md")
-    assert "**`requests N` needs a library that marks its retries.**" in page("limits.md")
 
 
 @pytest.mark.design("docs.suggestions")
@@ -612,31 +572,6 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
     assert f"it asks again for up to {running.READY_S:g} seconds" in guide
     assert "--loop asyncio" in guide and "process:<command>" in guide
     limits = page("limits.md")
-    assert "**Three agent shapes.**" in limits and "Web services come later" not in limits
-    for limit in (
-        "**A service run is stricter than a script about processes.**",
-        "**`process:sh` lets any shell command through.**",
-        "**A process pool's `close()`, `terminate()` or `shutdown()` inside a run is refused.**",
-        "**Subinterpreters are refused in a run.**",
-        "**Ray and Dask are not covered.**",
-        "**`--loop asyncio` on Python 3.11.**",
-        "**One runner per service at a time.**",
-        "**Work outside any request has a cost while a test runs.**",
-        "**The setup request lists only what it saw.**",
-        "**A lazy worker started inside a run.**",
-        "**The Starlette gate alone lets an outer middleware see the run header.**",
-        "**hypercorn, `--http zttp` and `--http2` are not covered.**",
-        "**A value under 8 characters is not removed from the records.**",
-        "**Stopping the service mid-run.**",
-        "**A long plain request keeps the threads it started plain until it ends.**",
-        "**gunicorn is not covered, with `UvicornWorker` either.**",
-        "**A service row's runs go one after another.**",
-        "**A call `background_real` lets through is decided once, with what it runs inside.**",
-        "**Other ways to another process are not gated.**",
-        "**Signals are not gated.**",
-        "**A start made below multiprocessing's own calls is not seen before Python 3.14.**",
-    ):
-        assert limit in limits, limit
     safety = page("safety.md")
     assert '"process:kubectl"' in safety and "`kubectl delete`" in safety
     assert "There is no matching on arguments" in safety

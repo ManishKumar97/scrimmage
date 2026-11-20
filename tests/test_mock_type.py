@@ -699,6 +699,27 @@ def test_a_value_the_class_rejects_is_in_no_report_record_or_log(
 
 
 @pytest.mark.design("mock.type_check_never_breaks_a_call")
+@pytest.mark.parametrize("value", REJECTED, ids=["secret shape", "unknown shape"])
+def test_an_enum_value_that_is_no_member_is_in_no_report_record_or_log(
+    project: Project, value: str
+) -> None:
+    write(project, "status", f'returns = "{value}"')
+    result = project.test()
+    shown = result.out + result.err
+    assert result.code == MISTAKE, shown
+    root = project.root / "scrimmage-runs"
+    files = [f for f in root.rglob("*") if f.is_file()]
+    assert {f.suffix for f in files} >= {".json", ".jsonl", ".log"}, files
+    found = [f.name for f in files if value in f.read_text(errors="replace")]
+    leaked = value in shown or bool(found)
+    assert not leaked, f"the mock's value was copied out, into {found or 'the report'}"
+    assert (
+        "the mock does not fit acme.shapes:Status: the value is not one of shipped, pending"
+        in shown
+    )
+
+
+@pytest.mark.design("mock.type_check_never_breaks_a_call")
 def test_a_wrong_key_names_the_key_and_no_value(project: Project) -> None:
     write(project, "stock", 'returns = {sku = "a-hidden-sku", cnt = 1}')
     result = project.test()

@@ -74,6 +74,7 @@ markers = [
     "needs_system_python: needs Ubuntu's own Python; the startup job runs it with SCRIMMAGE_SYSTEM_PYTHON=1",
     "needs_inherit_context: needs Python 3.14 with -X thread_inherit_context=1; CI runs it with SCRIMMAGE_INHERIT_CONTEXT=1",
     "with_inherit_context_flag: cannot run under -X thread_inherit_context=1; its skip there is expected",
+    "stub_record_lines: posts hand-made record lines on purpose, so the record-line schema check skips the store",
     "kind: makes a kind cluster; runs only with SCRIMMAGE_KIND=1 and -n 0",
 ]
 

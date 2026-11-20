@@ -27,6 +27,8 @@ from scrimmage_core.control import ControlServer, proc_key
 from scrimmage_core.plan import Plan, no_plan
 from scrimmage_core.records import RecordStore
 
+pytestmark = pytest.mark.stub_record_lines  # the tests post hand-made lines on purpose
+
 TOKEN = "a" * 64
 PLAN: dict[str, object] = {"v": 1}
 

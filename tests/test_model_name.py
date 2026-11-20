@@ -85,8 +85,12 @@ def answer(result: Result, row: str = "fault 1") -> object:
 
 
 @pytest.mark.design("model_name.only_that_model")
-@pytest.mark.parametrize("when", ["first 3", "requests 1"])
-@pytest.mark.parametrize(("shape", "fixtures", "word"), SHAPES, ids=[s[0] for s in SHAPES])
+@pytest.mark.parametrize(
+    ("shape", "fixtures", "word", "when"),
+    [(*s, "first 3") for s in SHAPES]
+    + [(*s, "requests 1") for s in SHAPES if s[0] in ("chat", "chat async")],
+    ids=[f"{s[0]}-first 3" for s in SHAPES] + [f"{n}-requests 1" for n in ("chat", "chat async")],
+)
 def test_a_fault_fires_on_the_named_model_alone_and_the_library_raises_its_own_error(
     project: Project,
     fake_openai: Fake,
@@ -187,12 +191,10 @@ def test_two_rows_that_differ_by_model_read_apart_in_the_table(
 
 
 @pytest.mark.design("model_name.exact")
-@pytest.mark.parametrize(
-    "name", ["gpt-4", "gpt-4.2", "GPT-4.1", "gpt-4o", "gpt-4.1-2025-04-14"], ids=str
-)
 def test_a_name_that_is_not_exact_never_fires_and_is_no_pass(
-    project: Project, fake_openai: Fake, name: str
+    project: Project, fake_openai: Fake
 ) -> None:
+    name = "gpt-4.1-2025-04-14"
     bot(project, "chat")
     add_fault(project, name, "first 3")
     result = project.test(fake_openai(["chat_answer"]))

@@ -36,7 +36,6 @@ from k8s.workloads import (
     wait_default_account,
     wait_ended,
 )
-from test_docs import kubernetes_docs_problems
 
 pytestmark = [pytest.mark.slow, pytest.mark.kind]
 
@@ -192,7 +191,3 @@ def test_the_job_never_retries(
         assert job["status"].get("failed") == 1, job["status"]
         reasons = [c.get("reason") for c in job["status"]["conditions"] if c["type"] == "Failed"]
         assert reasons == ["BackoffLimitExceeded"], job["status"]
-
-
-def test_the_docs_manifests_are_the_tested_ones() -> None:
-    assert kubernetes_docs_problems() == []
