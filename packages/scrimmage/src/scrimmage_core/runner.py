@@ -1686,7 +1686,7 @@ class RowReport:
 def row_reports(
     config: Config, results: list[RunResult], interrupted: bool = False
 ) -> list[RowReport]:
-    """interrupted: a signal cut the test, so a baseline that did not pass was cut, not failed."""
+    """interrupted: a signal cut the test, so a baseline with no result was cut, not failed."""
     reports: list[RowReport] = []
     for row in planner.rows(config):
         mine = [r for r in results if r.row == row]
@@ -1696,7 +1696,9 @@ def row_reports(
         )
         # The baseline is its test's first row, so it is judged before its fault rows.
         baseline = next(r for r in reports if r.row.test == row.test) if row.fault else None
-        failed = baseline is not None and baseline.result.verdict != judge.PASS and not interrupted
+        failed = baseline is not None and baseline.result.verdict != judge.PASS
+        if failed and interrupted and baseline is not None:
+            failed = baseline.result.verdict != judge.NO_RESULT  # that one was cut, not failed
         reports.append(RowReport(row, mine, result, failed))
     return reports
 

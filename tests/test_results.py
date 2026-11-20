@@ -11,10 +11,11 @@ from typing import cast
 import pytest
 
 from conftest import Project
-from report_cases import AGENT, FAULT, TEST, load
+from report_cases import AGENT, FAULT, TEST, load, run
 from scrimmage_core import cli, config, entry, results, runner
+from scrimmage_core import plan as planner
 from scrimmage_core.records import RecordStore, Refused, read_regular
-from scrimmage_core.runner import Runner, row_json, row_reports
+from scrimmage_core.runner import Runner, RunResult, row_json, row_reports
 
 pytestmark = pytest.mark.usefixtures("signals_kept")
 
@@ -311,3 +312,19 @@ def test_the_open_flag_alone_refuses_a_symlink(
         with pytest.raises((Refused, OSError)):
             read_regular(link, 100)
     assert read_regular(target, 100) == b"{}"
+
+
+def test_a_signal_drops_the_baseline_failed_mark_only_for_a_baseline_it_cut() -> None:
+    cfg = load(AGENT + TEST + FAULT)
+    base = planner.rows(cfg)[0]
+
+    def marks(results: list[RunResult], interrupted: bool) -> tuple[str, bool]:
+        baseline, fault = row_reports(cfg, results, interrupted)
+        assert baseline.result.verdict in ("fail", "no result")
+        return baseline.result.verdict, fault.baseline_failed
+
+    crashed = [run(base, i, "crashed", None) for i in range(3)]
+    assert marks(crashed, True) == ("fail", True)  # it really failed, with every run ended
+    assert marks(crashed, False) == ("fail", True)
+    cut = [run(base, i, "stopped", None) for i in range(3)]
+    assert marks(cut, True) == ("no result", False)  # the signal cut it
