@@ -3,16 +3,20 @@ clean venv runs the quickstart from the wheel alone, away from this repository."
 
 import hashlib
 import importlib.metadata
+import json
 import os
 import re
 import shutil
 import subprocess
 import tarfile
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
+from conftest import EXAMPLE
+from fakes.openai_server import FakeOpenAI
 from scrimmage_core.cli import main
 
 ROOT = Path(__file__).parents[1]
@@ -123,3 +127,39 @@ def test_pip_builds_the_same_wheel_from_the_sdist(built: dict[str, Path], tmp_pa
     run(python, "-m", "pip", "wheel", "--no-deps", "-w", out, built["sdist"], cwd=tmp_path)
     (made,) = out.iterdir()
     assert wheel_names(made) == wheel_names(built["wheel"])
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("version", ["3.11", "3.14"])
+def test_a_clean_venv_runs_the_quickstart_from_the_wheel(
+    version: str,
+    built: dict[str, Path],
+    tmp_path: Path,
+    fake_openai: Callable[..., FakeOpenAI],
+) -> None:
+    python = venv(tmp_path / "env", version)
+    run("uv", "pip", "install", "--python", python, "--no-index", built["wheel"], cwd=tmp_path)
+    run("uv", "pip", "install", "--python", python, "openai", cwd=tmp_path)
+
+    # Nothing of this repository is on the venv's path, and Scrimmage is the wheel's copy.
+    probe = (
+        "import json, sys, scrimmage_core; print(json.dumps([sys.path, scrimmage_core.__file__]))"
+    )
+    paths, module = json.loads(run(python, "-c", probe, cwd=tmp_path))
+    inside = [p for p in [*paths, module] if p and Path(p).resolve().is_relative_to(ROOT)]
+    assert not inside, f"the venv sees this repository: {inside}"
+    assert "site-packages" in module
+
+    project = tmp_path / "example"
+    shutil.copytree(
+        EXAMPLE, project, ignore=shutil.ignore_patterns("__pycache__", "scrimmage-runs")
+    )
+    fake = fake_openai(QUICKSTART)
+    env = {**clean_env(), "OPENAI_BASE_URL": fake.base_url, "OPENAI_API_KEY": "test"}
+    scrimmage = python.parent / "scrimmage"
+    shown = run(scrimmage, "--version", cwd=project, env=env)
+    assert re.fullmatch(r"scrimmage 0\.1\.0\S*\n", shown), shown
+    run(scrimmage, "check", cwd=project, env=env)
+    table = run(scrimmage, "test", cwd=project, env=env)
+    passed = [line for line in table.splitlines() if line.rstrip().endswith("pass")]
+    assert len(passed) == 2, table
