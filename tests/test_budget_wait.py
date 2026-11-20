@@ -871,15 +871,9 @@ def test_a_stream_held_open_across_a_second_call_ends_in_a_clear_stop(project: P
     assert "was reached" not in result.out
 
 
-SLOW_START = """\
-# The first run takes the budget. The second starts its program once the first holds it.
-if mkdir first 2>/dev/null; then exec python race.py hold "$1"; fi
-while [ ! -e holding ]; do sleep 0.05; done
-exec python race.py wait "$1"
-"""
-
 RACE = '''"""Run A opens a stream, which holds the budget, and keeps it open. Run B needs room."""
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -887,11 +881,15 @@ from pathlib import Path
 import openai
 from scrimmage_core import http_gate
 
-role, question = sys.argv[1], sys.argv[2]
+question = sys.argv[1]
+# The role file exists because the plan is fetched at bootstrap import, before this code runs,
+# and the test's server writes the file before it answers that request.
+role = Path(f"role-{os.environ['SCRIMMAGE_RUN']}").read_text()
 client = openai.OpenAI(max_retries=0)
 messages = [{"role": "user", "content": question}]
 if role == "hold":
     client.chat.completions.create(model="gpt-4o-mini", messages=messages, stream=True)
+    time.sleep(2)  # the waiter's plan must wait for this: a server that does not wait fails
     Path("holding").touch()
     time.sleep(600)  # the stream stays open until the test stops this run
 else:
@@ -904,6 +902,7 @@ else:
     print(reply.choices[0].message.content)
 '''
 RUN_TIMEOUT_S = 600.0  # a tenth of it is 60 s, so the margin is not cut below RUN_MARGIN_S
+HOLD_WAIT_S = 8.0  # under the control client's 10 s timeout, so the test fails, not hangs
 STARTUP_S = RUN_TIMEOUT_S - 60.0  # run_timeout less the margin: no time is left to wait
 
 
@@ -920,16 +919,33 @@ def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
     plan. Only the margin is then left, so any wait at all is one the design forbids, and the
     limit arrives the moment a call asks again. The first build waited, and timed out.
     The holding run keeps its real age, so its own start-up races no limit.
+
+    The test's server picks the roles, not the programs: the first run to ask for its plan
+    holds, and the plan of the next waits, inside the server, until the hold is on. A shell
+    race to pick the holder let two runs both hold in CI, and the one whose plan came first
+    was not aged, so it waited and asked again.
     """
     real_plan = control.ControlServer._plan
 
     fetches: list[str] = []
+    roles: dict[str, str] = {}
+    no_hold: list[str] = []
+    election = threading.Lock()
 
     def slow_start(server: control.ControlServer, run: str) -> tuple[int, dict[str, object]]:
+        with election:
+            role = roles.setdefault(run, "wait" if roles else "hold")
+        if role == "wait":  # the request waits here, so no plan reaches it before the hold
+            deadline = time.monotonic() + HOLD_WAIT_S
+            while not (project.root / "holding").exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            if not (project.root / "holding").exists():
+                no_hold.append(run)  # ends both runs at once, and the test says why
         held_on = (project.root / "holding").exists()
         age = time.monotonic() - server.runs[run].opened
-        fetches.append(f"{run} holding={held_on} age_before={age:.3f}")
-        if held_on:  # the waiting run starts once the hold is on
+        fetches.append(f"{run} role={role} holding={held_on} age_before={age:.3f}")
+        (project.root / f"role-{run}").write_text(role)
+        if role == "wait":
             server.runs[run].opened = time.monotonic() - STARTUP_S
         status, reply = real_plan(server, run)
         plan = reply.get("plan")
@@ -957,12 +973,11 @@ def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
 
     monkeypatch.setattr(control.ControlServer, "_plan", slow_start)
     monkeypatch.setattr(control.ControlServer, "_reserve", reserve)
-    time_limit.at(lambda: bool(asked_again))
-    (project.root / "slow_start.sh").write_text(SLOW_START)
+    time_limit.at(lambda: bool(asked_again) or bool(no_hold))
     (project.root / "race.py").write_text(RACE)
     project.edit(
         'function = "acme.agent:answer"',
-        'command = "sh slow_start.sh {question}"\nruns = 2\nparallel = 2\nmax_cost_usd = 0.004\n'
+        'command = "python race.py {question}"\nruns = 2\nparallel = 2\nmax_cost_usd = 0.004\n'
         f"run_timeout = {RUN_TIMEOUT_S:g}",
     )
     project.edit(EXAMPLE_FAULT, "")
@@ -981,6 +996,7 @@ def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
         f"plan fetches={fetches}\nreserves={asked}"
     )
     now = f"now={time.monotonic():.3f}"
+    assert no_hold == [], f"the hold was not on after {HOLD_WAIT_S:g}s; {result.out}\n{seen}"
     assert asked_again == [], f"{result.out}\n{seen} {now}\n{logs}"
     assert result.code == 2, f"{result.out}\n{seen} {now}\n{logs}"
     assert sorted(str(s["outcome"]) for s in result.summaries()) == ["not reserved", "stopped"]
