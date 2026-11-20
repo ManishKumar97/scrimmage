@@ -59,17 +59,17 @@ FIRST_LINE = "import time; print(time.time_ns())"
 
 
 # The enforced ceilings: what a change may never cost, in the unit the name says.
-# They are wide, so a busy machine does not reach them: 11.6x today's quiet cost for a tool
+# They are wide, so a busy machine does not reach them: 9.7x the 2026-11-20 quiet cost for a tool
 # call, 19.6x for sync HTTP, 20.1x async, 23x MCP, 12.2x for a sync model call, 11x async,
 # and 10.6x to 12.3x for the CLI. Only the tool ceiling catches one added round trip to the
 # runner: HTTP needs about 5.7 ms added and a model call about 18 ms. ROUND_TRIPS catches those.
 # "Seen under load" is the worst of 3 attempts with 16 busy loops on the 4 CPUs.
 CALL_BUDGETS_US = {
-    "tool_sync": 500.0,  # 43 µs quiet, 53 µs seen under load
-    "tool_async": 500.0,  # 43 µs quiet, 54 µs seen under load
+    "tool_sync": 500.0,  # 51 µs quiet (2026-11-20, load not re-measured)
+    "tool_async": 500.0,  # 52 µs quiet (2026-11-20, load not re-measured)
     # A miss costs about 100 to 150 µs a call: the mock search, the nearest mock and the
     # evidence. The ceiling is wide, as the others are, so it catches only a large slowdown.
-    "tool_miss": 1500.0,  # 100 to 150 µs quiet
+    "tool_miss": 1500.0,  # 146 µs quiet (2026-11-20)
     "http_sync": 6000.0,  # 307 µs quiet, 2.4 ms seen under load
     # Raised from 7000: 3574 µs was seen under 16 busy loops, and 7000 was 1.96x that, under
     # the 2x rule. 7500 is 2.10x.
@@ -263,7 +263,19 @@ def run_gated(
     profile: Path | None = None,
     scrub: bool = False,
 ) -> dict[str, dict[str, list[int]]]:
-    """The agent under a real scrimmage test."""
+    """The agent under a real scrimmage test. The args miss case runs in a test of its own: its
+    mock would otherwise add its miss checks to every other tool call in the plan."""
+    names = cases.split(",")
+    if "tool_miss" in names and len(names) > 1:
+        rest = ",".join(name for name in names if name != "tool_miss")
+        kwargs: dict[str, Any] = {"mode": mode, "profile": profile, "scrub": scrub}
+        return {
+            **run_gated(servers, out, rest, budget, **kwargs),
+            # No budget: this test makes no model call, which a budget reads as a mistake.
+            **run_gated(
+                servers, out.with_name(f"{out.stem}-miss.json"), "tool_miss", '"none"', **kwargs
+            ),
+        }
     project = out.parent / f"project-{out.stem}"
     project.mkdir()
     mocks = "tool_mock" in cases
