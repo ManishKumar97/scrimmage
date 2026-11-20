@@ -392,6 +392,7 @@ def test_a_start_that_fails_leaves_no_wrapper_on_the_thread(
     assert "run" not in worker.__dict__
 
 
+@pytest.mark.needs_python(max=(3, 13), reason="3.14 sets the thread context and wraps no run")
 def test_a_start_interrupted_after_the_thread_began_leaves_its_wrapper(
     service: state.ProcessState,
 ) -> None:
