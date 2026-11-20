@@ -91,6 +91,15 @@ Before you push, run everything, as CI does:
 uv run pytest
 ```
 
+## Skips in CI
+
+With `CI` set, a skipped test fails the run, unless the test's marks expect the skip.
+`needs_python(min=(3, 14), reason=...)` skips outside that range of Python versions, and that skip is expected.
+A group mark is for tests that another CI step runs: `needs_brotli`, `needs_brotlipy`, `needs_nemo`, `needs_system_python` and `needs_inherit_context`.
+Each has a variable, `SCRIMMAGE_BROTLI`, `SCRIMMAGE_BROTLIPY`, `SCRIMMAGE_NEMO`, `SCRIMMAGE_SYSTEM_PYTHON` and `SCRIMMAGE_INHERIT_CONTEXT`.
+A marked skip is expected when the variable is not 1, and fails the run when it is 1, which is how the step that runs those tests (`pytest -m needs_brotli`, for example) proves they ran.
+The reason text counts for nothing, so a new skip in CI needs a mark, and a step that selects it by mark.
+
 ## Coverage
 
 CI measures branch coverage on Python 3.12 and later, in every process a test starts, and 3.11 runs every test with no tracer.

@@ -42,7 +42,6 @@ RECORD = json.loads(
 PLAIN = state.Plain()  # one plain request, still being served
 
 pytestmark = pytest.mark.slow
-ON_314 = sys.version_info >= (3, 14)
 _hooked: list[bool] = []
 
 
@@ -216,7 +215,7 @@ def test_shell_true_python_write_in_a_run_is_refused_and_the_file_is_not_written
 
 
 @pytest.mark.design("service.interpreters_refused")
-@pytest.mark.skipif(not ON_314, reason="subinterpreters are new in Python 3.14")
+@pytest.mark.needs_python(min=(3, 14), reason="subinterpreters are new in Python 3.14")
 def test_an_interpreter_pool_executor_submit_in_a_run_is_refused(
     service: state.ProcessState, tmp_path: Path
 ) -> None:
@@ -236,7 +235,7 @@ def interpreter() -> Any:
 
 
 @pytest.mark.design("service.interpreters_refused")
-@pytest.mark.skipif(not ON_314, reason="subinterpreters are new in Python 3.14")
+@pytest.mark.needs_python(min=(3, 14), reason="subinterpreters are new in Python 3.14")
 def test_interpreter_exec_in_a_run_is_refused(service: state.ProcessState, tmp_path: Path) -> None:
     sub = interpreter()
     code = f"open({str(tmp_path / 'w')!r}, 'w').write('x')"
@@ -246,7 +245,7 @@ def test_interpreter_exec_in_a_run_is_refused(service: state.ProcessState, tmp_p
 
 
 @pytest.mark.design("service.interpreters_refused")
-@pytest.mark.skipif(not ON_314, reason="subinterpreters are new in Python 3.14")
+@pytest.mark.needs_python(min=(3, 14), reason="subinterpreters are new in Python 3.14")
 def test_interpreter_call_in_a_run_is_refused(service: state.ProcessState, tmp_path: Path) -> None:
     sub = interpreter()
     refused(a_run(service), lambda: sub.call(write, str(tmp_path / "w")))
@@ -255,7 +254,7 @@ def test_interpreter_call_in_a_run_is_refused(service: state.ProcessState, tmp_p
 
 
 @pytest.mark.design("service.interpreters_refused")
-@pytest.mark.skipif(not ON_314, reason="subinterpreters are new in Python 3.14")
+@pytest.mark.needs_python(min=(3, 14), reason="subinterpreters are new in Python 3.14")
 def test_interpreter_call_in_thread_in_a_run_is_refused(
     service: state.ProcessState, tmp_path: Path
 ) -> None:
@@ -401,7 +400,7 @@ def leftover_start(service: state.ProcessState, popen: Callable[[], object]) -> 
 
 
 @pytest.mark.design("service.fork_exec_once")
-@pytest.mark.skipif(not ON_314, reason="_posixsubprocess.fork_exec is audited from 3.14")
+@pytest.mark.needs_python(min=(3, 14), reason="_posixsubprocess.fork_exec is audited from 3.14")
 def test_a_popen_that_went_through_posix_spawn_lets_no_later_start_pass(
     service: state.ProcessState,
 ) -> None:
@@ -412,7 +411,7 @@ def test_a_popen_that_went_through_posix_spawn_lets_no_later_start_pass(
 
 
 @pytest.mark.design("service.fork_exec_once")
-@pytest.mark.skipif(not ON_314, reason="_posixsubprocess.fork_exec is audited from 3.14")
+@pytest.mark.needs_python(min=(3, 14), reason="_posixsubprocess.fork_exec is audited from 3.14")
 def test_a_popen_that_failed_before_its_start_lets_no_later_start_pass(
     service: state.ProcessState,
 ) -> None:
@@ -1252,7 +1251,7 @@ def test_a_send_a_team_hook_makes_inside_a_pools_teardown_is_still_decided(
 
 
 @pytest.mark.design("service.interpreters_refused")
-@pytest.mark.skipif(not ON_314, reason="subinterpreters are new in Python 3.14")
+@pytest.mark.needs_python(min=(3, 14), reason="subinterpreters are new in Python 3.14")
 def test_a_put_on_a_subinterpreters_queue_in_a_run_is_refused(
     service: state.ProcessState,
 ) -> None:
@@ -1266,7 +1265,7 @@ def test_a_put_on_a_subinterpreters_queue_in_a_run_is_refused(
 
 
 @pytest.mark.design("service.interpreters_refused")
-@pytest.mark.skipif(not ON_314, reason="subinterpreters are new in Python 3.14")
+@pytest.mark.needs_python(min=(3, 14), reason="subinterpreters are new in Python 3.14")
 def test_a_thread_pool_submit_on_an_interpreter_pool_in_a_run_is_refused(
     service: state.ProcessState,
 ) -> None:

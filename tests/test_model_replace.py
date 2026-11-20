@@ -132,6 +132,7 @@ def test_replace_on_a_gzip_reply() -> None:
 
 
 @pytest.mark.design("budget.br_reply_counts")
+@pytest.mark.needs_brotli
 @pytest.mark.skipif(
     changes.brotli_module() is None,
     reason="br needs brotli or brotlicffi 1.2 or later; run with uv run --with brotli",

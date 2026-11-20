@@ -53,6 +53,7 @@ _.pytest_configure  # tests/conftest.py: pytest calls hooks by name
 _.pytest_collection_modifyitems  # tests/conftest.py: pytest calls hooks by name
 _.coverage_init  # tools/coverage-threads: coverage.py calls a plugin's init by name
 _.pytest_sessionfinish  # tests/conftest.py: pytest calls hooks by name
+_.pytest_runtest_makereport  # tests/conftest.py: pytest calls hooks by name
 _.pytest_runtest_setup  # tests/conftest.py: pytest calls hooks by name
 _.pytest_runtest_call  # tests/conftest.py: pytest calls hooks by name
 _.pytest_runtest_teardown  # tests/conftest.py: pytest calls hooks by name
@@ -164,6 +165,7 @@ _.signals_kept  # tests/conftest.py: a fixture, which pytest.mark.usefixtures na
 _.fast_tests_start_no_process  # tests/conftest.py: an autouse fixture, which pytest runs by itself
 _.no_sender_thread_outlives_its_test  # tests/conftest.py: an autouse fixture, run by pytest
 _.gated_sends_are_put_back  # tests/conftest.py: an autouse fixture, run by pytest
+_.skip_outside_python_range  # tests/conftest.py: an autouse fixture, run by pytest
 _.pytestmark  # tests/test_cli_json.py and test_check.py: pytest reads it from the module
 _.nothing_pending  # tests/test_cli_in_process.py and test_results.py: an autouse fixture
 _.tz  # tests/test_results.py: the argument datetime.now is called with, which a stand-in ignores

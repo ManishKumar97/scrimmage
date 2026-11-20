@@ -73,13 +73,13 @@ def test_start_through_a_lazy_pool_from_its_own_thread(lazy_pool: ThreadPoolExec
     thread.join()
 
 
-@pytest.mark.skipif(sys.version_info < (3, 14), reason="InterpreterPoolExecutor is 3.14's")
+@pytest.mark.needs_python(min=(3, 14), reason="InterpreterPoolExecutor is 3.14's")
 def test_submit_to_an_interpreter_pool() -> None:
     with concurrent.futures.InterpreterPoolExecutor(1) as pool:
         assert pool.submit(pow, 2, 3).result() == 8
 
 
-@pytest.mark.skipif(sys.version_info < (3, 14), reason="InterpreterPoolExecutor is 3.14's")
+@pytest.mark.needs_python(min=(3, 14), reason="InterpreterPoolExecutor is 3.14's")
 def test_submit_to_an_interpreter_pool_subclass() -> None:
     # A subclass is still an interpreter pool: the guard must leave its task unwrapped too.
     class OwnPool(concurrent.futures.InterpreterPoolExecutor):

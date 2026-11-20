@@ -635,10 +635,13 @@ GARBLED_ENCODINGS = [
     pytest.param(
         "br",
         id="br",
-        marks=pytest.mark.skipif(
-            changes.brotli_module() is None,
-            reason="br needs brotli or brotlicffi 1.2 or later; run with uv run --with brotli",
-        ),
+        marks=[
+            pytest.mark.needs_brotli,
+            pytest.mark.skipif(
+                changes.brotli_module() is None,
+                reason="br needs brotli or brotlicffi 1.2 or later; run with uv run --with brotli",
+            ),
+        ],
     ),
 ]
 

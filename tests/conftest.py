@@ -3,7 +3,6 @@ import json
 import multiprocessing.process
 import os
 import platform
-import re
 import shutil
 import signal
 import subprocess
@@ -12,7 +11,7 @@ import threading
 import time
 import traceback
 import warnings
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -338,31 +337,54 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         items[:] = [item for item in items if item not in left_out]
 
 
-# A skip whose reason matches is expected, and CI lets it stand. The first kind cannot apply
-# on that Python at all. The second kind is run by another CI step: that step sets the
-# variable to 1, and then the same skip fails the run, so a step that lost its dependency
-# cannot go quiet.
-VERSION_GATE = re.compile(r"\b3\.1[1-4]\b")
-RUN_ELSEWHERE = [
-    (re.compile(r"uv run --with brotli\b"), "SCRIMMAGE_BROTLI"),
-    (re.compile(r"uv run --with brotlipy\b"), "SCRIMMAGE_BROTLIPY"),
-    (re.compile(r"Ubuntu's Python|second Python without Scrimmage"), "SCRIMMAGE_SYSTEM_PYTHON"),
-    (re.compile(r"nemoguardrails is not installed"), "SCRIMMAGE_NEMO"),
-]
+# In CI a skip is expected only when the test's own marks say so, never from its reason text.
+# needs_python(min=, max=, reason=) skips outside that range of Python versions (both ends
+# inclusive, as (major, minor)), and a skip it makes is expected. A group mark names tests
+# that another CI step runs, with the variable set to 1: there the same skip fails the run,
+# so a step that lost its dependency cannot go quiet. Everywhere else it is expected.
+GROUPS = {
+    "needs_brotli": "SCRIMMAGE_BROTLI",
+    "needs_brotlipy": "SCRIMMAGE_BROTLIPY",
+    "needs_nemo": "SCRIMMAGE_NEMO",
+    "needs_system_python": "SCRIMMAGE_SYSTEM_PYTHON",
+    "needs_inherit_context": "SCRIMMAGE_INHERIT_CONTEXT",
+}
 
 
-def skip_reason(report: Any) -> str:
-    longrepr = report.longrepr
-    return str(longrepr[2]) if isinstance(longrepr, tuple) else str(longrepr)
+def outside_python_range(mark: pytest.Mark) -> bool:
+    now = sys.version_info[:2]
+    low, high = mark.kwargs.get("min"), mark.kwargs.get("max")
+    return (low is not None and now < low) or (high is not None and now > high)
 
 
-def skip_is_expected(reason: str) -> bool:
-    if VERSION_GATE.search(reason):
+@pytest.fixture(autouse=True)
+def skip_outside_python_range(request: pytest.FixtureRequest) -> None:
+    for mark in request.node.iter_markers("needs_python"):
+        if outside_python_range(mark):
+            pytest.skip(mark.kwargs["reason"])
+
+
+def skip_is_expected(item: pytest.Item) -> bool:
+    if any(outside_python_range(m) for m in item.iter_markers("needs_python")):
+        return True
+    if item.get_closest_marker("with_inherit_context_flag") and getattr(
+        sys.flags, "thread_inherit_context", 0
+    ):
         return True
     return any(
-        pattern.search(reason) and os.environ.get(variable) != "1"
-        for pattern, variable in RUN_ELSEWHERE
+        item.get_closest_marker(name) and os.environ.get(variable) != "1"
+        for name, variable in GROUPS.items()
     )
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+    report = yield
+    if report.skipped and call.when == "setup" and skip_is_expected(item):
+        report.user_properties.append(("expected_skip", True))
+    return report
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:
@@ -374,9 +396,9 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     """
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     skipped = reporter.stats.get("skipped", []) if reporter else []
-    unexpected = [r for r in skipped if not skip_is_expected(skip_reason(r))]
+    unexpected = [r for r in skipped if ("expected_skip", True) not in r.user_properties]
     if os.environ.get("CI") and unexpected:
-        names = ", ".join(f"{r.nodeid} ({skip_reason(r)})" for r in unexpected)
+        names = ", ".join(r.nodeid for r in unexpected)
         print(f"\nskipped tests are not allowed in CI: {names}")
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
 

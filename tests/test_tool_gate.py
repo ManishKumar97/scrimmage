@@ -1483,7 +1483,6 @@ def test_empty_on_a_return_type_that_cannot_be_resolved_is_a_mistake(lines: Line
 
 
 FUTURE = "from __future__ import annotations\n"
-LAZY = sys.version_info >= (3, 14)  # annotations are evaluated only when asked for
 UNRESOLVED = [
     pytest.param("", 'def f() -> "Missing": ...', "Missing", id="quoted"),
     pytest.param(FUTURE, 'def f() -> "Missing": ...', "Missing", id="quoted_future"),
@@ -1493,7 +1492,7 @@ UNRESOLVED = [
         "def f() -> Optional[Missing]: ...",
         "Optional[Missing]",
         id="lazy",
-        marks=pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself fails"),
+        marks=pytest.mark.needs_python(min=(3, 14), reason="before 3.14 the def itself fails"),
     ),
 ]
 
@@ -1525,7 +1524,7 @@ def test_a_parameter_annotation_that_raises_leaves_the_return_type_readable(line
     assert tool_gate.gate(made(FUTURE, "def f(a: 1 / 0 = 1) -> str: ..."), "f")() == ""
 
 
-@pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself raises")
+@pytest.mark.needs_python(min=(3, 14), reason="before 3.14 the def itself raises")
 def test_a_lazy_annotation_that_raises_is_a_mistake_not_none(lines: Lines) -> None:
     """On 3.14 annotations are read all at once: one that raises hides the return type, in
     every format, so empty cannot tell its value."""
@@ -1551,7 +1550,7 @@ CHECKING = [
     pytest.param(
         "lazy",
         id="lazy",
-        marks=pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself fails"),
+        marks=pytest.mark.needs_python(min=(3, 14), reason="before 3.14 the def itself fails"),
     ),
 ]
 
@@ -1611,12 +1610,12 @@ UNRESOLVED_MOCKED = [
     pytest.param(
         lambda: checking_tool("lazy", "LateStock"),
         id="lazy",
-        marks=pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself fails"),
+        marks=pytest.mark.needs_python(min=(3, 14), reason="before 3.14 the def itself fails"),
     ),
     pytest.param(
         lambda: made("", "def f(a: 1 / 0 = 1) -> str: ..."),
         id="lazy_raises",
-        marks=pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself raises"),
+        marks=pytest.mark.needs_python(min=(3, 14), reason="before 3.14 the def itself raises"),
     ),
 ]
 

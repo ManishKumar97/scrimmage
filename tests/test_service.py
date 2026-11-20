@@ -394,7 +394,7 @@ def test_the_token_file_must_be_0600_and_owned(lab: Lab) -> None:
 
 
 @pytest.mark.design("service.loop_check_message")
-@pytest.mark.skipif(sys.version_info >= (3, 12), reason="uvloop is stopped on Python 3.11 only")
+@pytest.mark.needs_python(max=(3, 11), reason="uvloop is stopped on Python 3.11 only")
 def test_uvloop_on_3_11_stops_the_service_with_one_prefix(lab: Lab) -> None:
     pytest.importorskip("uvloop")
     service = lab.start("--loop", "uvloop", wait=False)
