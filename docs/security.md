@@ -306,7 +306,7 @@ That holds for an Enum too: the mistake names the class and its members, not the
 The reason that a reply cannot be saved as a mock names a dict entry of the reply by position, never by its key.
 A position is written in braces, such as `returns{2}{0}`, so it is not taken for a list index like `returns[2]`.
 The top level of a call's arguments is named, as those keys are your tool's own parameter names.
-Three places can still name a key from a real reply.
+Besides that mistake, three places in a recording can still name a key from a real reply.
 `capture.differ` says where a rebuilt mock differs from the reply, and its text can reach the terminal.
 The reason for a JSON text inside a reply that holds a secret names the secret-shaped key, such as `password`.
 The record line's `result.preview` holds the reply as it was, under pattern redaction only, as "Records hold your data as it was" says below.
