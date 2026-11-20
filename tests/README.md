@@ -1,5 +1,15 @@
 # Tests
 
+The command for everyday work is the fast tier:
+
+```sh
+uv run pytest -m "not slow"
+```
+
+It takes about 1.5 minutes.
+`uv run pytest` runs everything, and takes about 16 minutes.
+CI runs the fast tier first, then the slow tier, so a broken change fails early.
+
 The suite has two tiers.
 
 | Tier | What is in it | Command |
@@ -79,13 +89,13 @@ Run it the same way, and check the count with `tests/compose/check_junit.py`.
 
 ## While you work
 
-Run the fast tier, then the slow tests of the area you changed:
+Run the fast tier while you iterate, then the slow tests of the area you changed:
 
 ```sh
 uv run pytest -m "not slow" && uv run pytest -m slow tests/test_budget_wait.py
 ```
 
-Before you push, run everything, as CI does:
+Before you push, run everything once:
 
 ```sh
 uv run pytest
