@@ -157,6 +157,36 @@ jobs:
           include-hidden-files: true
           retention-days: 1
 
+  newest:
+    name: Newest releases of the gated libraries, on Python 3.14
+    # What a team gets from a fresh install, which the lock does not hold: the newest release
+    # of each library a gate patches. A new release can break a gate with no commit of ours.
+    # The mcp extra caps mcp at 2.3, so mcp upgrades only within that.
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.14"
+      UV_PYTHON_PREFERENCE: only-managed
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync
+      - name: Upgrade the gated libraries past the lock
+        run: |
+          uv pip install --upgrade openai httpx httpx2 langchain-core langgraph "mcp>=2.3,<2.4"
+          uv pip list | grep -E "^(openai|httpx|httpx2|langchain-core|langgraph|mcp) "
+      # --no-sync keeps the upgrade. tests/test_tested_range.py fails when a library is newer
+      # than the range its gate was tested with.
+      - name: The gate tests, with the newest releases
+        run: >-
+          uv run --no-sync pytest
+          tests/test_tested_range.py tests/test_http_gate.py tests/test_tool_gate.py
+          tests/test_langgraph.py tests/test_mcp.py tests/test_model_faults.py
+          tests/test_model_replace.py
+
   coverage:
     name: Branch coverage across the matrix
     needs: tests
