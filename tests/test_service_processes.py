@@ -55,6 +55,28 @@ def write_pair(path: str, _: object) -> str:
     return write(path)
 
 
+@pytest.fixture(autouse=True)
+def collected_between_tests() -> Iterator[None]:
+    """The cyclic collector runs only here, between tests, never inside one.
+
+    Nearly every test here leaves a queue or a pool in a reference cycle, and a lock in it
+    holds a named semaphore, which the collector frees by calling the resource tracker. If
+    that collection starts while a later test is making a lock, the tracker is in the middle
+    of its own call, and CPython 3.12 raises ReentrantCallError and warns (gh-109629). The
+    warning is an error here, so a worker failed on whichever test the collector met. Python
+    gives no way to make that call safe, so the collector waits for a point where no
+    tracker call is running."""
+    gc.collect()
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if was_enabled:
+            gc.enable()
+        gc.collect()
+
+
 @pytest.fixture
 def service() -> Iterator[state.ProcessState]:
     process = state.ProcessState(service=True)
