@@ -114,8 +114,11 @@ def label_threads(test: str | None) -> None:
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item: pytest.Item) -> None:
-    del item
     label_threads(None)  # born between tests or in the last teardown
+    # First of all, so no module or session fixture starts for a test that will not run.
+    for mark in item.iter_markers("needs_python"):
+        if outside_python_range(mark):
+            pytest.skip(mark.kwargs["reason"])
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -427,13 +430,6 @@ def outside_python_range(mark: pytest.Mark) -> bool:
     return (low is not None and now < low) or (high is not None and now > high)
 
 
-@pytest.fixture(autouse=True)
-def skip_outside_python_range(request: pytest.FixtureRequest) -> None:
-    for mark in request.node.iter_markers("needs_python"):
-        if outside_python_range(mark):
-            pytest.skip(mark.kwargs["reason"])
-
-
 def skip_is_expected(item: pytest.Item) -> bool:
     if any(outside_python_range(m) for m in item.iter_markers("needs_python")):
         return True
@@ -466,7 +462,10 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     """
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     skipped = reporter.stats.get("skipped", []) if reporter else []
-    unexpected = [r for r in skipped if ("expected_skip", True) not in r.user_properties]
+    # A collection report, from a skip at module level, has no user_properties.
+    unexpected = [
+        r for r in skipped if ("expected_skip", True) not in getattr(r, "user_properties", [])
+    ]
     if os.environ.get("CI") and unexpected:
         names = ", ".join(r.nodeid for r in unexpected)
         print(f"\nskipped tests are not allowed in CI: {names}")
