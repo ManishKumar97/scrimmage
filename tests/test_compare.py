@@ -467,3 +467,56 @@ def test_a_comparison_that_fails_keeps_the_tests_exit_and_warns(
     doc = json.loads(capsys.readouterr().out)
     assert code == 0 == doc["exit"] and doc["compare"] is None
     assert "could not be made" in doc["warnings"][0]["message"]
+
+
+def interrupted_after_one_run(project: Project, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The first run ends with an answer; SIGTERM comes as the second starts."""
+    cfg = config.load(project.toml)
+    first = planner.rows(cfg)[0]
+    sent: list[bool] = []
+
+    def one(self: Runner, row: object) -> RunResult | None:
+        if sent:
+            return None
+        sent.append(True)
+        done = run(first, 0)
+        os.kill(os.getpid(), signal.SIGTERM)
+        return done
+
+    monkeypatch.setattr(Runner, "one", one)
+
+
+def test_a_stopped_test_keeps_a_result_for_the_runs_that_ended(
+    project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    interrupted_after_one_run(project, monkeypatch)
+    code = cli.main(["test", "--json", str(project.toml)])
+    doc = json.loads(capsys.readouterr().out)
+    assert code == doc["exit"] == 3 and doc["stopped_by"] == "interrupted"
+    (folder,) = folders(project)
+    assert doc["result_file"] == str(folder / "result.json")
+    kept = json.loads((folder / "result.json").read_text())
+    assert kept["stopped_by"] == "interrupted" and kept["exit"] == 3
+    assert [(r["row"], r["runs"], r["done"]) for r in kept["rows"] if r["done"]] == [
+        ("baseline", 1, 1)
+    ]
+    infra = [m["message"] for m in kept["infra"]]
+    assert infra[-1] == "stopped by SIGTERM; every run was stopped"
+    capsys.readouterr()
+    faulted_run(folder, real_id(folder.name), "order-status", "baseline")  # the fake run's record
+    assert cli.main(["show", str(folder)]) == 0
+    shown = capsys.readouterr()
+    assert "baseline" in shown.out and "stopped by a signal" in shown.out
+
+
+def test_a_stopped_result_is_not_a_result_to_compare_with(
+    project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    interrupted_after_one_run(project, monkeypatch)
+    assert cli.main(["test", str(project.toml)]) == 3
+    (folder,) = folders(project)
+    line = capsys.readouterr().err
+    assert f"1 run had ended, and {folder / 'result.json'} holds them" in line
+    doc = json.loads((folder / "result.json").read_text())
+    (why,) = compare.problems_with(doc, "earlier")
+    assert "stopped" in why

@@ -20,6 +20,7 @@ from scrimmage_core.records import Refused, read_regular
 RESULT_FILE = "result.json"
 MAX_BYTES = 16 * 1024 * 1024
 ENVELOPE_VERSION = 1  # cli.ENVELOPE_VERSION; the result is the envelope's own document
+STOPPED_BY_SIGNAL = "interrupted"  # a result's stopped_by when SIGINT or SIGTERM ended the test
 HASH_VERSION = 1  # the format of test_sha256; a change to its inputs bumps this
 
 

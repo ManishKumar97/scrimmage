@@ -1206,7 +1206,7 @@ class Runner:
                 name = self.stop_flag[0] if self.stop_flag else ""
                 self.stop_flag.clear()  # the watcher and the handler may both have noted it
             if name:  # every run has ended, so it is raised where nothing drops it
-                raise Interrupted(name)
+                raise Interrupted(name, ended(results))
             completed = True
         finally:
             try:
@@ -1223,7 +1223,7 @@ class Runner:
                 self.server.stop()
                 shutil.rmtree(self.answers, ignore_errors=True)
         if completed and self.stop_flag:  # it came while the copy stopped
-            raise Interrupted(self.stop_flag[0])
+            raise Interrupted(self.stop_flag[0], ended(results))
         return [r for r in results if r is not None]
 
     def catch_signals(self) -> Callable[[], None]:
@@ -1366,8 +1366,20 @@ def reply_fault_before(line: dict[str, object], model: Sequence[dict[str, object
     )
 
 
+def ended(results: "Iterable[RunResult | None]") -> list[RunResult]:
+    """The runs that ended on their own: a run a signal stopped says nothing about the agent."""
+    return [r for r in results if r is not None and r.outcome != "stopped"]
+
+
 class Interrupted(Exception):
-    """scrimmage test got SIGTERM or SIGINT."""
+    """scrimmage test got SIGTERM or SIGINT.
+
+    results: the runs that ended by themselves before it, not those it stopped.
+    """
+
+    def __init__(self, name: str, results: "list[RunResult] | None" = None) -> None:
+        super().__init__(name)
+        self.results = results or []
 
 
 def reported_tools(notices: list[dict[str, object]]) -> list[str] | None:

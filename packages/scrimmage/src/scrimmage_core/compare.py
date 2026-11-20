@@ -11,7 +11,7 @@ from typing import cast
 
 from scrimmage_core.judge import BASELINE_FAILED, wilson
 from scrimmage_core.render import fault_text
-from scrimmage_core.results import shape_problems
+from scrimmage_core.results import STOPPED_BY_SIGNAL, shape_problems
 
 BETTER, WORSE, UNCLEAR, NO_RESULT, NEW, GONE = (
     "better",
@@ -40,6 +40,8 @@ Doc = dict[str, object]
 
 def problems_with(doc: Doc, which: str) -> list[str]:
     """Why a result cannot be compared at all, if it cannot."""
+    if doc.get("stopped_by") == STOPPED_BY_SIGNAL:  # its rows have fewer runs than planned
+        return [f"the {which} result is of a test that was stopped, so it is not compared"]
     return shape_problems(doc, which)
 
 

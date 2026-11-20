@@ -14,6 +14,7 @@ With `--json` it prints one JSON document in place of the table; see [JSON outpu
 It never raises it: the lower of the two is the cap, and a file with `max_cost_usd = "none"` gets `USD`.
 The report and the document's `budget_usd` name the cap used.
 A test that finished writes `result.json` into its records folder, so `scrimmage show` can read it later.
+A test stopped with Ctrl-C writes one too, for the runs that had ended, marked stopped.
 `--records DIR` puts the records folder inside `DIR`, in place of `scrimmage-runs/` beside the file.
 Use it when the file's own folder cannot be written, such as a file mounted from a Kubernetes ConfigMap.
 A `DIR` that is missing is made, mode `0700`, with a `.gitignore` inside it.
