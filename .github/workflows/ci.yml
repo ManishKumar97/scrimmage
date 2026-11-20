@@ -176,8 +176,8 @@ jobs:
       - run: uv sync
       - name: Upgrade the gated libraries past the lock
         run: |
-          uv pip install --upgrade openai httpx httpx2 langchain-core langgraph "mcp>=2.3,<2.4"
-          uv pip list | grep -E "^(openai|httpx|httpx2|langchain-core|langgraph|mcp) "
+          uv pip install --upgrade openai httpx httpx2 langchain-core langchain-openai langgraph "mcp>=2.3,<2.4"
+          uv pip list | grep -E "^(openai|httpx|httpx2|langchain-core|langchain-openai|langgraph|mcp) "
       # --no-sync keeps the upgrade. tests/test_tested_range.py fails when a library is newer
       # than the range its gate was tested with.
       - name: The gate tests, with the newest releases
