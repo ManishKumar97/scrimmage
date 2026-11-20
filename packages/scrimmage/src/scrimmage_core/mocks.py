@@ -11,12 +11,14 @@ A built value that does not fit the tool's return annotation gets a warning, nev
 """
 
 import collections.abc
+import contextlib
 import enum
 import importlib
 import inspect
 import sys
 import types
 import typing
+import weakref
 from collections.abc import Callable
 from typing import cast
 
@@ -57,14 +59,33 @@ def import_object(path: str, prefixes: list[str]) -> object:
     return getattr(importlib.import_module(module), attr)
 
 
+# Resolved return types by tool object, held weakly so a tool that is dropped is forgotten.
+# Only a resolved type, or None for no annotation, is kept: an Unresolved one is looked up
+# again on the next call, so a forward reference that becomes resolvable later still resolves.
+# A key is the tool object itself, never its name, so two tools with one name never share.
+# A tool whose annotations are rewritten after its first mocked call keeps its first type.
+RESOLVED: "weakref.WeakKeyDictionary[Callable[..., object], object]" = weakref.WeakKeyDictionary()
+
+
 def return_type(tool: Callable[..., object]) -> object:
     """The tool's return annotation, resolved alone, so a parameter type that cannot be
     resolved is no matter. None when there is none or it cannot be resolved: as on Any, the
     mock is kept as written, and a mock's type names the class to build."""
     from scrimmage_core import changes  # changes imports config, which imports this module
 
+    try:
+        return RESOLVED[tool]
+    except KeyError:
+        pass
+    except TypeError:  # not hashable or not weakly referenceable: resolved on every call
+        declared = changes.declared_return(tool)
+        return None if isinstance(declared, changes.Unresolved) else declared
     declared = changes.declared_return(tool)
-    return None if isinstance(declared, changes.Unresolved) else declared
+    if isinstance(declared, changes.Unresolved):
+        return None
+    with contextlib.suppress(TypeError):  # not weakly referenceable: resolved on every call
+        RESOLVED[tool] = declared
+    return declared
 
 
 def fresh(value: object) -> object:

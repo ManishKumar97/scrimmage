@@ -21,7 +21,7 @@ from conftest import ACME, EXAMPLE_FAULT, Project
 from fakes.openai_server import FakeOpenAI
 from report_cases import AGENT, TEST, load
 from report_cases import run as a_run
-from scrimmage_core import changes, state, tool_gate
+from scrimmage_core import changes, mocks, state, tool_gate
 from scrimmage_core import decide as engine
 from scrimmage_core import plan as planner
 from scrimmage_core.config import Fault, Mock
@@ -1742,6 +1742,28 @@ def test_a_mock_on_a_return_type_that_cannot_be_resolved_is_kept_as_written(
     assert tool_gate.gate(tool(), "f")("SKU-42") == {"sku": "SKU-42", "count": 12}
     install(Lines(), [Mock("tool:f", {"sku": "SKU-42", "count": 12}, "test_tool_gate:Stock")])
     assert tool_gate.gate(tool(), "f")("SKU-42") == Stock("SKU-42", 12)
+
+
+def test_a_return_type_that_resolves_later_is_built_on_the_later_call(lines: Lines) -> None:
+    """An unresolved type is looked up again on the next call, never kept."""
+    space: dict[str, Any] = {}
+    exec('def f(sku: str) -> "Late": ...', space)
+    tool = space["f"]
+    install(lines, [Mock("tool:f", {"sku": "A", "count": 1}, None)])
+    gated = tool_gate.gate(tool, "f")
+    assert gated("A") == {"sku": "A", "count": 1}  # Late is not yet a name: kept as written
+    space["Late"] = Stock
+    assert gated("A") == Stock("A", 1)
+    assert mocks.return_type(tool) is Stock
+
+
+def test_two_tools_with_one_name_do_not_share_a_return_type() -> None:
+    first: dict[str, Any] = {"Out": Stock}
+    second: dict[str, Any] = {"Out": dict}
+    exec("def f() -> Out: ...", first)
+    exec("def f() -> Out: ...", second)
+    assert mocks.return_type(first["f"]) is Stock
+    assert mocks.return_type(second["f"]) is dict
 
 
 def decorated(decorator: Callable[..., Any], returns: str) -> Any:
