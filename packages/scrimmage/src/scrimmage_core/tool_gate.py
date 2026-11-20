@@ -519,15 +519,38 @@ def swap_method(
 
 
 def module_spec(name: str, extra: list[str]) -> importlib.machinery.ModuleSpec | None:
-    """Where a module is, without importing it or its packages."""
-    path: list[str] | None = [*sys.path, *extra]
+    """Where a module is, without importing it or its packages.
+
+    This asks the finders on sys.meta_path, as an import does, so an editable install that
+    maps a name through its own finder is found. importlib.util.find_spec is not used: for a
+    dotted name it imports the parent packages, which would run the team's code early.
+    """
     spec = None
+    full = ""
     for part in name.split("."):
-        spec = importlib.machinery.PathFinder.find_spec(part, path)
+        full = f"{full}.{part}" if full else part
+        here: list[str] | None = None
+        if spec is not None:
+            here = list(spec.submodule_search_locations or [])
+        spec = _find_one(full, here, [*sys.path, *extra])
         if spec is None:
             return None
-        path = list(spec.submodule_search_locations or [])
     return spec
+
+
+def _find_one(
+    full: str, here: list[str] | None, top: list[str]
+) -> importlib.machinery.ModuleSpec | None:
+    """The first spec a finder gives. here is the parent's folders, None for a top name,
+    which the path finder searches in top, the folders of the run."""
+    for finder in list(sys.meta_path):
+        if isinstance(finder, hooks.ImportHook) or not hasattr(finder, "find_spec"):
+            continue  # our own hook only wraps a loader, it finds nothing new
+        path = top if here is None and finder is importlib.machinery.PathFinder else here
+        spec = finder.find_spec(full, path)
+        if spec is not None:
+            return spec
+    return None
 
 
 def targets(paths: Sequence[str]) -> dict[str, list[str]]:
