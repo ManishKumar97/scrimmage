@@ -187,6 +187,17 @@ def test_an_empty_answer_fails_by_name(answer: str) -> None:
     assert broken_texts(answer, RULES) == [judge.EMPTY]
 
 
+@pytest.mark.design("judge.forbid_alone")
+def test_a_row_judged_by_forbid_alone_still_fails_an_empty_answer_and_a_crash() -> None:
+    rules = Rules((), ("refunded",), 1.0)
+    assert judge_run("answered", "I could not reach the model.", True, rules).verdict == judge.PASS
+    assert judge_run("answered", "Refunded.", True, rules).verdict == judge.FAIL
+    for answer in ("", "   ", "\u200b"):
+        assert [b.kind for b in judge_run("answered", answer, True, rules).broken] == ["empty"]
+    assert judge_run("crashed", None, True, rules).verdict == judge.FAIL
+    assert judge_run("timed out", None, True, rules).verdict == judge.FAIL
+
+
 @pytest.mark.design("judge.what_is_judged")
 @pytest.mark.parametrize(
     ("outcome", "broken"),

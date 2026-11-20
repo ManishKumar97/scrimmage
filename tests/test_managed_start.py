@@ -602,7 +602,11 @@ def test_a_ctrl_c_while_the_copy_stops_still_kills_its_workers(shop: Shop) -> No
     watcher.join(10)
     out = spawned.text()
     assert code == 3, out
-    assert "scrimmage: stopped by SIGINT; every run was stopped" in out, out
+    # Every run had ended, so none was cut, and their result is kept, marked stopped.
+    assert "scrimmage: stopped by SIGINT after every run had ended" in out, out
+    (result,) = (shop.root / "scrimmage-runs").glob("*/result.json")
+    kept = json.loads(result.read_text())
+    assert kept["stopped_by"] == "interrupted" and kept["rows"], kept
     assert "Traceback" not in out, out
     assert group(spawned.copy) == [], "a worker that ignores SIGTERM was left running"
     assert early == [[]], f"the token folder went while {early} still ran"

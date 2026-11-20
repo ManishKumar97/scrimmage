@@ -94,10 +94,10 @@ The text of a message can change in any release.
 |---|---|
 | `records` | The folder that holds this test's records, as the text's first line names it: under `scrimmage-runs/` beside the file, or under `--records DIR`. `null` when the file did not load, so no folder was made. |
 | `tests` | How many `[[test]]` tables the file has. |
-| `rows` | One object per table row, in the table's order. Empty when the file did not load, when a signal stopped the test, or when Scrimmage itself failed. A test a refusal stopped, such as for the budget, still has every row, and the rows that did not run have `runs` 0. |
+| `rows` | One object per table row, in the table's order. Empty when the file did not load, when a signal stopped the test before any run ended, or when Scrimmage itself failed. After a signal, it holds the rows of the runs that had ended. A test a refusal stopped, such as for the budget, still has every row, and the rows that did not run have `runs` 0. |
 | `cost_usd` | What the model calls cost, in dollars. |
 | `budget_usd` | The cost cap the test ran under: `max_cost_usd`, or the lower `--max-cost-usd`, or `null` when the budget is off. |
-| `stopped_by` | The reason a refusal stopped the whole test, such as `budget`, or `null`. |
+| `stopped_by` | The reason a refusal stopped the whole test, such as `budget`, or `null`. `interrupted` when SIGINT or SIGTERM stopped it after some runs had ended: the rows count only those runs, and `result.json` is written. |
 | `mock_misses` | The calls that had a mock on their label and matched none, one object per distinct call, below. Absent in `scrimmage record --json`. At most 200, real calls first. |
 | `mock_misses_left_out` | How many more misses than the 200 listed. |
 | `runs_sent` | With a service: the requests the runner sent to it, the setup request and every run. Absent for a function or a script. |
@@ -105,7 +105,7 @@ The text of a message can change in any release.
 | `control_cut` | With a service: the control server's connections that the read or whole-request timeouts cut. Near zero in a healthy test. |
 | `control_ping` | With a service: what the service's signed ping to the control server found before the first run: `reached`, `tls`, `error`, `detail`, `rtt_ms`, `runner_id` and `url`, as the [startup report](schemas.md) gives them. Present in every finished service test. A test that stops at the probe or at the ping has no `control_ping`: the reason is in `infra`. |
 | `control_tls_failed` | With a service: connections that failed TLS, counted by OpenSSL's reason, such as `unknown ca`. Always present for a service, and empty without `control_tls`. |
-| `result_file` | The `result.json` this test wrote into `records`: the same document, but for this field, which the file leaves out, and `compare`, which is always `null` in the file. `null` when it was not written: a write failed, or the test did not finish. See [Reading a finished test](show.md). |
+| `result_file` | The `result.json` this test wrote into `records`: the same document, but for this field, which the file leaves out, and `compare`, which is always `null` in the file. `null` when it was not written: a write failed, or the test did not finish. A test a signal stopped after some runs had ended writes it, with `stopped_by` set to `interrupted`. See [Reading a finished test](show.md). |
 | `compare` | `null`, or with `--compare` the comparison with the earlier test, below. |
 
 Each object in `mock_misses`:
@@ -487,7 +487,7 @@ A reader that gets a value it does not know reads it as other.
 | `reason` | `arguments`, `request`, `no_mock`, `unreadable` | read as other |
 | `action` | `real`, `refused` in a mock miss; `real`, `mock`, `fault`, `refused` in a line of a run | read as other |
 | `change` | `better`, `worse`, `unclear`, `no result`, `new`, `gone` | read as other |
-| `stopped_by` | `budget`, `budget_held`, `no_price`, `unknown_tool_type`, `unseen_tool`, `structure`, `ambiguous_label`, `unknown_label` | read as other |
+| `stopped_by` | `budget`, `budget_held`, `no_price`, `unknown_tool_type`, `unseen_tool`, `structure`, `ambiguous_label`, `unknown_label`; in a test's document also `interrupted` | read as other |
 
 `cli.v1.json` lists the values of the release that ships it, and also takes any other text there, so a reader may check a document against any version 1 copy of the schema.
 A field or value it does not list then fits; the reader ignores the field and reads the value as other.

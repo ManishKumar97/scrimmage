@@ -11,7 +11,10 @@ A finished `scrimmage test` writes `result.json` into its records folder, as soo
 It holds the document `scrimmage test --json` prints, see [JSON output](json-output.md), except that `result_file` is left out and `compare` is always `null` in the file, so a later command can read the rows without rerunning anything.
 The file is readable by its owner only, as the records are.
 
-A test that a signal, an infrastructure error or any refusal that stops the whole test, such as the budget, stopped writes no `result.json`: its rows have fewer runs than planned, and a half result is worse than none.
+A test that an infrastructure error or a refusal that stops the whole test, such as the budget, stopped writes no `result.json`: its rows have fewer runs than planned, and a half result is worse than none.
+A test that SIGINT (Ctrl-C) or SIGTERM stopped writes one for the runs that had ended, if any had, and marks it `"stopped_by": "interrupted"` with exit 3.
+`scrimmage show` reads it like any other, and its table counts only those runs.
+`--compare` refuses it, as the runs are fewer than planned.
 A write that fails is one warning, and the test's exit code does not change.
 `--json` adds `result_file`, the file's path.
 

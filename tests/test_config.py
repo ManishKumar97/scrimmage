@@ -9,7 +9,7 @@ import pytest
 
 import config_cases
 from conftest import EXAMPLE
-from scrimmage_core import config, plan
+from scrimmage_core import config, judge, plan
 from scrimmage_core.errors import ConfigError
 from scrimmage_core.provider_openai import Rates
 
@@ -520,6 +520,41 @@ def test_a_row_no_answer_can_pass_is_named_with_its_model(tmp_path: Path) -> Non
     )
     with pytest.raises(ConfigError, match=r"fault on model gpt-4\.1: no answer can pass"):
         with_fault(tmp_path, text)
+
+
+@pytest.mark.design("config.forbid_only_fault_row")
+def test_a_fault_row_can_be_judged_by_forbid_alone(tmp_path: Path) -> None:
+    head = '[[test.fault]]\ncall = "model"\ndo = "status 429"\n'
+    row = head + 'expect = []\nforbid = ["sent"]\n'
+    fault = with_fault(tmp_path, row).tests[0].faults[-1]
+    assert (fault.expect, fault.forbid) == ((), ("sent",))
+    assert last_fault_rules(with_fault(tmp_path, row)).expect == ()
+    assert toml_schema_errors((EXAMPLE / "scrimmage.toml").read_text() + row) == []
+    for bad in ("expect = []\n", "expect = []\nforbid = []\n"):
+        with pytest.raises(ConfigError, match=r"expect: \[\] judges this row by its forbid alone"):
+            with_fault(tmp_path, head + bad)
+    with pytest.raises(ConfigError, match="expected a list of text, got"):  # a test still needs one
+        load_text(tmp_path, config_cases.MINIMAL.replace('expect = ["shipped"]', "expect = []"))
+
+
+def last_fault_rules(cfg: config.Config) -> judge.Rules:
+    test = cfg.tests[0]
+    return test.rules_for(test.faults[-1])
+
+
+@pytest.mark.design("config.duplicate_fault_row")
+def test_two_identical_fault_rows_are_refused(tmp_path: Path) -> None:
+    row = '[[test.fault]]\ncall = "model"\ndo = "status 429"\nforbid = ["sent"]\n'
+    other = row.replace("429", "500")
+    assert with_fault(tmp_path, row + other)  # rows that differ are fine
+    for own in ('forbid = ["other"]', 'expect = ["sorry"]'):  # only the rules differ
+        assert with_fault(tmp_path, row + row.replace('forbid = ["sent"]', own))
+    with pytest.raises(ConfigError) as caught:
+        with_fault(tmp_path, row + other + "\n" + row)
+    assert str(caught.value) == (
+        "[[test.fault]] 4 of 'order-status': the same as [[test.fault]] 2; a repeated row "
+        "runs the same fault again, and runs in [agent] already sets how many times every row runs"
+    )
 
 
 @pytest.mark.design("budget.snapshot_prices")

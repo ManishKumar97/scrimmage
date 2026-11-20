@@ -590,8 +590,10 @@ def table_text(doc: Doc, folder: Path) -> list[str]:
     )
     table = [row_cells(r) for r in rows]
     names = [f"{r['test']} {r['row']}" for r in rows]
+    stopped = doc.get("stopped_by") == results.STOPPED_BY_SIGNAL
     return [
         head,
+        *(["stopped by a signal: each row counts only the runs that had ended"] if stopped else []),
         *table_lines([HEAD, *table], names),
         "range: a 95% Wilson interval, from these runs alone",
     ]

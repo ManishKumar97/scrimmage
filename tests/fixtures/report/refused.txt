@@ -9,7 +9,7 @@ note: order-status fault 1: under this fault the agent called tool:refund_order,
   1 run: refused tool:refund_order: run-fault1-0
   1 run: refused process:python: run-fault1-1
 model calls cost $0.0006 of a budget of $5
-note: order-status baseline: 1 of 3 runs judged
+note: order-status baseline: 1 of 2 runs judged; 3 were planned
 note: order-status baseline: 1 refused call
 note: order-status fault 1: 2 refused call
 test mistake: order-status baseline: run-baseline-1 made a call the test does not allow; see its record

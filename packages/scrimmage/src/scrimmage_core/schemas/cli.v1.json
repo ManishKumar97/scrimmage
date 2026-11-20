@@ -200,7 +200,8 @@
                 "unseen_tool",
                 "structure",
                 "ambiguous_label",
-                "unknown_label"
+                "unknown_label",
+                "interrupted"
               ]
             },
             {

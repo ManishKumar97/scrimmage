@@ -105,6 +105,24 @@
         ]
       }
     },
+    "fault_expect": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/text"
+          },
+          {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/$defs/text"
+            }
+          }
+        ]
+      },
+      "description": "On a fault row, [] with a forbid judges the row by its forbid alone."
+    },
     "pass_rate": {
       "type": "number",
       "exclusiveMinimum": 0,
@@ -787,7 +805,7 @@
           "description": "A built-in exception, or package.module:Class."
         },
         "expect": {
-          "$ref": "#/$defs/expect"
+          "$ref": "#/$defs/fault_expect"
         },
         "forbid": {
           "$ref": "#/$defs/texts"
@@ -846,7 +864,7 @@
           "$ref": "#/$defs/retry_after"
         },
         "expect": {
-          "$ref": "#/$defs/expect"
+          "$ref": "#/$defs/fault_expect"
         },
         "forbid": {
           "$ref": "#/$defs/texts"
@@ -948,7 +966,7 @@
           "$ref": "#/$defs/retry_after"
         },
         "expect": {
-          "$ref": "#/$defs/expect"
+          "$ref": "#/$defs/fault_expect"
         },
         "forbid": {
           "$ref": "#/$defs/texts"
@@ -991,7 +1009,7 @@
           "$ref": "#/$defs/schedule"
         },
         "expect": {
-          "$ref": "#/$defs/expect"
+          "$ref": "#/$defs/fault_expect"
         },
         "forbid": {
           "$ref": "#/$defs/texts"

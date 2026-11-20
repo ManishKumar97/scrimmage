@@ -60,6 +60,20 @@ Scrimmage has no word list for "admits the failure". You write the words your ag
 
 `forbid = []` on a fault drops the test's list for that row.
 
+To judge a row by what the answer must not say, write `expect = []` with a `forbid` that has something in it:
+
+```toml
+[[test.fault]]
+call   = "tool:send_email"
+do     = "error"
+expect = []
+forbid = ["has been sent"]
+```
+
+An empty `expect` needs a `forbid` on the same row, or nothing would judge the answer, and Scrimmage refuses the file.
+A test's own `expect` can never be empty.
+A forbid-only row still fails an empty answer, a crash and a time-out; a non-empty answer free of every forbidden text passes, even one such as "I could not reach the model."
+
 A fault that fires on every call must have its own `expect` or a `forbid` with something in it.
 An agent with no data can still write the expected words from general knowledge, and a rule cannot tell where the words came from, so such a row would pass when it should not. Scrimmage refuses the file, with exit code 2.
 A fault with `when = "first N"` or `"requests N"` may use the test's rules. That is right for a recovery row, where the agent should retry and give the same answer as the baseline.
@@ -117,6 +131,7 @@ Scrimmage reads a row in this order:
 The floor is `runs // 2 + 1` judged runs, whatever `pass_rate` is: 3 of 5, 2 of 3, 1 of 1.
 Under it the test did not test, so a row never passes on one run out of five.
 At or above it the rate decides, and a note says how many runs counted, such as `note: order-status fault 1: 4 of 5 runs judged`.
+A row that a refusal ended early counts the runs that ran, and the note says how many were planned, such as `1 of 2 runs judged; 3 were planned`.
 A run where the fault did not fire does not block a row, unless so many are missing that the row falls under the floor.
 
 With `runs = 5` and `pass_rate = 0.8`, 4 of 5 passes and 3 of 5 fails.

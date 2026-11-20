@@ -22,14 +22,33 @@ Anything this version does not support is rejected as unknown, with exit code 2.
 | `children` | `true` fires faults in child processes too, and lets a child on another Python join if it has Scrimmage installed. Not with `service`. See [Faults in children](scripts.md#faults-in-children). | `false` |
 | `tools` | The agent's own tools, as `module:function` import paths, or `module:Class.method` for a tool that is a method. Scrimmage swaps each one for a gate when your code imports its module. Scrimmage finds the module the way an import does, asking the finders on `sys.meta_path` and importing nothing itself, so a package installed with `pip install -e` or `uv pip install -e` works. A finder of your own that imports a module outside the standard library while it looks stops the run, with the finder named. When the model sees a different name, write `{path = "package.tools:lookup_order", name = "lookup-order"}`; labels use the name the model sees, which for a method is its own name. See [Tools that are methods](#tools-that-are-methods). | empty |
 | `real` | Calls that are safe to run for real when a test does not mock them, such as `"tool:check_inventory"`, `"tool:*"` for every tool, `"mcp:docs/search"` for a tool on an MCP server, `"hosted:mcp/orders"` for a hosted MCP server, `"process:python"` for a Python child that does not join, or a web write such as `"http:orders.acme.internal POST /refunds"`. Model calls are not listed: they are real unless a fault names them. | empty |
-| `runs` | How many times each row runs. | 3 |
+| `runs` | How many times each row runs. It is one number for every row, the baseline and each fault; a row cannot have its own. Two identical `[[test.fault]]` rows are refused, so raise `runs` to run every row more often. | 3 |
 | `parallel` | How many runs go at the same time. | 4; 1 with `service` |
 | `run_timeout` | Seconds one run may take before it is stopped and marked "timed out". It counts from when Scrimmage starts the program, so start-up time counts too. | 120 |
 | `max_cost_usd` | The most the whole test may spend on model calls, in dollars. `"none"` turns the budget off, on purpose. | 5 |
 | `model_hosts` | Extra hosts whose requests are model calls, such as a gateway, each with the format it speaks: `[{host = "llm-gateway.internal", provider = "openai"}]`. A host name only, with no port. | empty |
 | `reserve_output_tokens` | The output tokens a budget reservation assumes when a request does not set `max_tokens`. A call that does not fit while others hold the budget waits for them; see [When calls in flight hold the budget](model-faults.md#when-calls-in-flight-hold-the-budget). | 4096 |
 | `prices` | Prices for other models, as the table below. The key `""` prices a call that sends no model name. | empty |
-| `answer` | Where the answer is in what the function returns, such as `"messages[-1].content"`, or in a service's JSON reply, such as `"reply"`. With `function` or `service`. Required when the function returns anything but text, as the whole value would hold tool results too. See [Agents on a framework](frameworks.md). | the returned text, or a service's whole reply |
+| `answer` | Where the answer is in what the function returns, such as `"messages[-1].text"`, or in a service's JSON reply, such as `"reply"`. With `function` or `service`. Required when the function returns anything but text, as the whole value would hold tool results too. See [Agents on a framework](frameworks.md). | the returned text, or a service's whole reply |
+
+### The function and its input
+
+Scrimmage calls `function` with the test's `question` as one text.
+If your agent takes something else, such as a LangGraph graph that takes a dict, write a small wrapper that turns the text into the agent's own input, and name the wrapper:
+
+```python
+# package/graph.py
+def answer(question: str) -> dict:
+    return graph.invoke({"messages": [("user", question)]})
+```
+
+```toml
+[agent]
+function = "package.graph:answer"
+answer   = "messages[-1].text"
+```
+
+See [Agents on a framework](frameworks.md) for the whole example.
 
 ## [agent.prices]
 
@@ -249,7 +268,7 @@ These are mistakes in the test, exit code 2:
 | `method` | On a web request: fail only this method. |
 | `path` | On a web request: fail only this exact path, with no query string. |
 | `model` | On a model call: fail only calls to this model, such as `"gpt-4.1"`. The whole name your code sends, compared exactly. Required with `"replace"` and the faults in a model's reply. See [Failing one model](model-faults.md#failing-one-model). |
-| `expect` | Replaces the test's for this row. A fault that fires on every call needs this or `forbid`, except `append` and `replace` with `find`, where the agent still gets the data; with `first N` or `call N` it can use the test's. See [Judging an answer](judging.md). |
+| `expect` | Replaces the test's for this row. `[]` is allowed only with a `forbid` that has a text in it, so the row is judged by `forbid` alone. A fault that fires on every call needs this or `forbid`, except `append` and `replace` with `find`, where the agent still gets the data; with `first N` or `call N` it can use the test's. See [Judging an answer](judging.md). |
 | `forbid` | Replaces the test's for this row. `[]` drops the test's list. |
 | `pass_rate` | Replaces the test's for this row. |
 

@@ -64,7 +64,7 @@ from scrimmage_core.outcomes import (  # the runner's names for them
 from scrimmage_core.records import RECORD_VERSION, RecordStore
 from scrimmage_core.redact import redact, redact_decoded
 from scrimmage_core.render import HEAD, miss_text, row_cells, table_lines
-from scrimmage_core.results import HASH_VERSION, row_hash
+from scrimmage_core.results import HASH_VERSION, STOPPED_BY_SIGNAL, row_hash
 from scrimmage_core.state import COMMAND_CAP, now_iso
 
 END = b"\x00"  # ends the stop watcher; no signal has the number 0
@@ -1206,7 +1206,7 @@ class Runner:
                 name = self.stop_flag[0] if self.stop_flag else ""
                 self.stop_flag.clear()  # the watcher and the handler may both have noted it
             if name:  # every run has ended, so it is raised where nothing drops it
-                raise Interrupted(name)
+                raise Interrupted(name, ended(results))
             completed = True
         finally:
             try:
@@ -1223,7 +1223,7 @@ class Runner:
                 self.server.stop()
                 shutil.rmtree(self.answers, ignore_errors=True)
         if completed and self.stop_flag:  # it came while the copy stopped
-            raise Interrupted(self.stop_flag[0])
+            raise Interrupted(self.stop_flag[0], ended(results))
         return [r for r in results if r is not None]
 
     def catch_signals(self) -> Callable[[], None]:
@@ -1366,8 +1366,20 @@ def reply_fault_before(line: dict[str, object], model: Sequence[dict[str, object
     )
 
 
+def ended(results: "Iterable[RunResult | None]") -> list[RunResult]:
+    """The runs that ended on their own: a run a signal stopped says nothing about the agent."""
+    return [r for r in results if r is not None and r.outcome != "stopped"]
+
+
 class Interrupted(Exception):
-    """scrimmage test got SIGTERM or SIGINT."""
+    """scrimmage test got SIGTERM or SIGINT.
+
+    results: the runs that ended by themselves before it, not those it stopped.
+    """
+
+    def __init__(self, name: str, results: "list[RunResult] | None" = None) -> None:
+        super().__init__(name)
+        self.results = results or []
 
 
 def reported_tools(notices: list[dict[str, object]]) -> list[str] | None:
@@ -1656,7 +1668,10 @@ class RowReport:
         return any(r.outcome == "refused call" for r in self.runs)
 
 
-def row_reports(config: Config, results: list[RunResult]) -> list[RowReport]:
+def row_reports(
+    config: Config, results: list[RunResult], interrupted: bool = False
+) -> list[RowReport]:
+    """interrupted: a signal cut the test, so a baseline that did not pass was cut, not failed."""
     reports: list[RowReport] = []
     for row in planner.rows(config):
         mine = [r for r in results if r.row == row]
@@ -1666,7 +1681,7 @@ def row_reports(config: Config, results: list[RunResult]) -> list[RowReport]:
         )
         # The baseline is its test's first row, so it is judged before its fault rows.
         baseline = next(r for r in reports if r.row.test == row.test) if row.fault else None
-        failed = baseline is not None and baseline.result.verdict != judge.PASS
+        failed = baseline is not None and baseline.result.verdict != judge.PASS and not interrupted
         reports.append(RowReport(row, mine, result, failed))
     return reports
 
@@ -1831,7 +1846,8 @@ def build_report(
 ) -> Report:
     """What a run of tests found. judged=False is for scrimmage record, whose one run is not a
     rate: a row with no result, a failed rule and a mock no run used are then not mistakes."""
-    reports = row_reports(config, results)
+    cut = runner is not None and runner.stopped_by == STOPPED_BY_SIGNAL
+    reports = row_reports(config, results, cut)
     table = [HEAD, *(row_cells(row_json(entry, config.agent)) for entry in reports)]
     mistakes: list[str] = []
     notes: list[str] = []
@@ -1844,7 +1860,11 @@ def build_report(
         if judged and verdict.verdict == judge.NO_RESULT and not entry.refused:
             mistakes.append(f"{where}: no result: {no_result_reason(entry, config.agent.runs)}")
         elif verdict.judged < config.agent.runs:
-            notes.append(f"{where}: {verdict.judged} of {config.agent.runs} runs judged")
+            # A refusal ends a row early. The header counts the runs that ran, so this does too.
+            planned = config.agent.runs
+            ran_n = min(len(mine), planned)
+            cut = f"; {planned} were planned" if ran_n < planned else ""
+            notes.append(f"{where}: {verdict.judged} of {ran_n} runs judged{cut}")
         ran = [r for r in mine if r.outcome != "stopped"]
         if row.fault is not None and ran and not any(r.fault_fired for r in ran):
             reasons = why_unchanged(ran)

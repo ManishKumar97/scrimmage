@@ -582,6 +582,13 @@ def read_file(path: Path, data: dict[str, object], reader: Reader) -> Config:
         if test.name in seen:
             raise ConfigError(f"[[test]] {test.name!r}: name is used twice")
         seen.add(test.name)
+        for j, fault in enumerate(test.faults, 1):
+            if (first := test.faults.index(fault) + 1) != j:
+                raise ConfigError(
+                    f"[[test.fault]] {j} of {test.name!r}: the same as [[test.fault]] {first}; "
+                    "a repeated row runs the same fault again, and runs in [agent] already sets "
+                    "how many times every row runs"
+                )
         parsed.append(test)
     config = Config(agent, tuple(parsed), path.parent, tuple(sorted(reader.scrub)))
     problems = check_references(config)
@@ -1387,12 +1394,19 @@ def rule_text(value: object, where: str) -> str:
     return value
 
 
-def read_expect(table: dict[str, object], where: str) -> tuple[tuple[str, ...], ...] | None:
-    """Each item is one text, or a list of texts of which any one will do."""
+def read_expect(
+    table: dict[str, object], where: str, forbid_alone: bool = False
+) -> tuple[tuple[str, ...], ...] | None:
+    """Each item is one text, or a list of texts of which any one will do.
+
+    On a fault row, an empty list is how a row is judged by its forbid alone.
+    """
     if "expect" not in table:
         return None
     items = as_list(table["expect"], f"{where} expect")
     if not items:
+        if forbid_alone:
+            return ()
         raise ConfigError(f"{where} expect: expected a list of text, got []")
     expect: list[tuple[str, ...]] = []
     for item in items:
@@ -1578,7 +1592,13 @@ def read_fault(table: dict[str, object], where: str) -> Fault:
             f"{where} when: {when!r} counts model requests and their retries; use 'first N' here"
         )
     method, path = narrowing(table, where) if kind == "http" else (None, None)
-    expect, forbid = read_expect(table, where), read_forbid(table, where)
+    forbid = read_forbid(table, where)
+    if table.get("expect") == [] and not forbid:
+        raise ConfigError(
+            f"{where} expect: [] judges this row by its forbid alone, so give the row a forbid "
+            f"with at least one text; otherwise write what the answer must hold; see {JUDGING}"
+        )
+    expect = read_expect(table, where, forbid_alone=True)
     # The agent still gets the data under append, and under a replace of part of it.
     gets_data = do == "append" or (do == "replace" and find is not None)
     if when == "always" and expect is None and not forbid and not gets_data:
