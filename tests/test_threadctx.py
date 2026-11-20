@@ -392,6 +392,36 @@ def test_a_start_that_fails_leaves_no_wrapper_on_the_thread(
     assert "run" not in worker.__dict__
 
 
+@pytest.mark.needs_python(max=(3, 13), reason="3.14 sets the thread context and wraps no run")
+def test_a_start_interrupted_after_the_thread_began_leaves_its_wrapper(
+    service: state.ProcessState,
+) -> None:
+    """Thread.start waits for the new thread, and an interrupt there leaves a thread that
+    runs. Taking the wrapper off then would race it: the thread must run with its context."""
+    go = threading.Event()
+    found: list[object] = []
+    done = threading.Event()
+
+    class Interrupted(threading.Event):
+        def wait(self, timeout: float | None = None) -> bool:
+            while worker.ident is None:  # the new thread exists
+                pass
+            raise KeyboardInterrupt
+
+        def set(self) -> None:
+            go.wait(5)  # hold the new thread before its run, until the start has raised
+            super().set()
+
+    worker = threading.Thread(target=lambda: (found.append(state.SLOT.get()), done.set()))
+    worker._started = Interrupted()  # type: ignore[attr-defined]
+    with pytest.raises(KeyboardInterrupt):
+        plain().run(threading.Thread.start, worker)
+    go.set()
+    assert done.wait(5), "the thread never ran"
+    worker.join(5)
+    assert found == [PLAIN]
+
+
 @pytest.mark.design("service.wrapped_once")
 def test_a_thread_is_never_wrapped_twice(service: state.ProcessState) -> None:
     start = threading.Thread.start

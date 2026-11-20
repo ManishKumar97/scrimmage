@@ -1450,7 +1450,9 @@ def test_a_suggestions_evidence_item_is_a_record_line_or_the_summary(
 
 
 @pytest.mark.design("json.text_unchanged")
-def test_text_output_is_unchanged(project: Project, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_result_json_is_written_and_not_named_in_the_text(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """`scrimmage test` writes result.json and never names it in its text."""
     monkeypatch.setattr(Runner, "one", lambda self, row: None)
     project.capsys.readouterr()

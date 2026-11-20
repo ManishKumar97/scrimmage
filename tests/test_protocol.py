@@ -27,8 +27,6 @@ from scrimmage_core.control import ControlServer, proc_key
 from scrimmage_core.plan import Plan, no_plan
 from scrimmage_core.records import RecordStore
 
-pytestmark = pytest.mark.stub_record_lines  # the tests post hand-made lines on purpose
-
 TOKEN = "a" * 64
 PLAN: dict[str, object] = {"v": 1}
 
@@ -67,7 +65,13 @@ def raw(
 
 
 def line(seq: int, run: str = "run-1") -> dict[str, object]:
-    return {"v": 1, "run": run, "row": "baseline", "seq": seq, "proc": {"pid": 1}}
+    return {
+        "v": 1, "run": run, "test": "t", "row": "baseline", "seq": seq,
+        "proc": {"host": "h", "pid": 1, "started": "2026-01-01T00:00:00Z"},
+        "call": "tool:t", "kind": "tool", "action": "real",
+        "args": {"sha256": "0" * 64, "bytes": 2, "preview": "{}"},
+        "result": None, "error": None, "start": "2026-01-01T00:00:00Z", "ms": 0,
+    }  # fmt: skip
 
 
 def served(fetched: object) -> object:
