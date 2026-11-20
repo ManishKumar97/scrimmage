@@ -141,6 +141,20 @@ AUTH_NAME = re.compile(r"(?:.*[_-])?authorization", re.ASCII | re.IGNORECASE)
 LABELS = ("name", "key", "header", "field")
 
 
+# The names a literal is made of. A name that holds another (pgpassword holds password, and
+# authtoken, accesstoken hold token) is left out.
+FIELD_LITERAL_NAMES = (
+    "password",
+    "passwd",
+    "token",
+    "secret",
+    "secret_access_key",
+    "api_key",
+    "api%5fkey",
+    "pgpass",
+    "mysql_pwd",
+)
+
 SECRETS = (
     # OpenAI and Anthropic keys
     Secret(r"sk-(?:proj-|ant-|svcacct-)?[A-Za-z0-9_-]{16,}", ("sk-",), name="openai-key"),
@@ -166,9 +180,12 @@ SECRETS = (
         name="bearer-token",
     ),
     Secret(BASIC, ("authorization",), lowercase=True, name="basic-credential"),
+    # FIELD has the name and then = or %3d with nothing between, so each literal is a name and
+    # its separator. A bare "token" would hold in every OpenAI body (max_tokens), and the
+    # regex would run on every request. pgpassword= holds password=, so it needs none.
     Secret(
         FORM,
-        ("password", "passwd", "token", "secret", "api_key", "api%5fkey", "pgpass", "mysql_pwd"),
+        tuple(f"{name}{sep}" for name in FIELD_LITERAL_NAMES for sep in ("=", "%3d")),
         True,
         "form-field",
     ),
@@ -357,12 +374,18 @@ ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
 
 def holds_candidate(text: str) -> bool:
     """Whether any pass could match: the text holds a string every match of that pass holds."""
+    nested = False
     if "\\u" in text:  # a JSON escape can hide a letter: p\u0061ssword
+        # In a JSON string inside a JSON string the = is \\u003d, and one read leaves a
+        # backslash before it. Then the name alone, as it was before the separator was added.
+        nested = "\\\\u" in text
         text = ESCAPE.sub(lambda found: chr(int(found.group(1), 16)), text)
     if "://" in text or "eyJ" in text or any(lit in text for lit in LITERALS):
         return True
     lowered = text.lower()
-    return any(lit in lowered for lit in LOWER_LITERALS)
+    if any(lit in lowered for lit in LOWER_LITERALS):
+        return True
+    return nested and any(name in lowered for name in FIELD_LITERAL_NAMES)
 
 
 def plain(text: str, decoded: bool = False) -> tuple[str, int]:

@@ -118,14 +118,24 @@ SAMPLES = {
     "xapp-": "xapp-" + "2" * 10,
     "bearer": "bearer " + "f" * 16,
     "authorization": "Authorization: Basic dXNlcjpwYXNz",
-    "password": "password=hunter2",
-    "passwd": "passwd=hunter2",
-    "token": "token=hunter2",
-    "secret": "secret=hunter2",
-    "api_key": "api_key=hunter2",
-    "api%5fkey": "api%5Fkey%3Dhunter2",
-    "pgpass": "PGPASS=hunter2",
-    "mysql_pwd": "MYSQL_PWD=hunter2",
+    "password=": "password=hunter2",
+    "password%3d": "password%3Dhunter2",
+    "passwd=": "passwd=hunter2",
+    "passwd%3d": "passwd%3dhunter2",
+    "token=": "token=hunter2",
+    "token%3d": "token%3Dhunter2",
+    "secret=": "secret=hunter2",
+    "secret%3d": "secret%3Dhunter2",
+    "secret_access_key=": "secret_access_key=hunter2",
+    "secret_access_key%3d": "SECRET_ACCESS_KEY%3Dhunter2",
+    "api_key=": "api_key=hunter2",
+    "api_key%3d": "api_key%3Dhunter2",
+    "api%5fkey=": "api%5Fkey=hunter2",
+    "api%5fkey%3d": "api%5Fkey%3Dhunter2",
+    "pgpass=": "PGPASS=hunter2",
+    "pgpass%3d": "PGPASS%3Dhunter2",
+    "mysql_pwd=": "MYSQL_PWD=hunter2",
+    "mysql_pwd%3d": "MYSQL_PWD%3Dhunter2",
     "Illegal header": "Illegal header value b'x'",
 }
 JWT_SAMPLE = (
@@ -280,16 +290,16 @@ HARMLESS_NAMES = [
     "Next_Page_Token",
 ]
 
+# The secrets that came with the form-field and Basic passes: the Basic literal and the field names.
+NEW_NAMES = {"authorization", *redact_module.FIELD_LITERAL_NAMES}
 NEW_LITERALS = {
     "authorization",
-    "password",
-    "passwd",
-    "token",
-    "secret",
-    "api_key",
-    "api%5fkey",
-    "pgpass",
-    "mysql_pwd",
+    *(
+        lit
+        for secret in redact_module.SECRETS
+        if secret.name == "form-field"
+        for lit in secret.literals
+    ),
 }
 B64 = "dXNlcjpwYXNz"
 # The text, the part of it that is removed, and the secret that must not be left.
@@ -510,7 +520,9 @@ def test_redacted_json_text_is_still_json() -> None:
 # A Bearer token whose last characters are the word bearer, then a space and another token:
 # the old module removed the first token alone, as one match cannot start inside another,
 # and the new one reads the token again from that word, so it removes the second one too.
-BEARER_IN_BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]*bearer\s")
+# The same holds when the token runs into the start of another key, as in bearer gggIllegal
+# header value: the old pass could not see that key inside the token it removed.
+BEARER_IN_BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]*(?:bearer\s|Illegal header\s)")
 
 
 def removes_more(new: str, old: str) -> bool:
@@ -535,7 +547,7 @@ def test_the_new_secrets_leave_what_the_other_passes_remove_as_it_was() -> None:
     holding a new literal changes only in the secret: the kept tests do."""
     rng = random.Random(20261112)
     # texts from the old corpus, with none of the new kinds in them
-    benign = [t for t in corpus() if not any(lit in t.lower() for lit in NEW_LITERALS)][:400]
+    benign = [t for t in corpus() if not any(lit in t.lower() for lit in NEW_NAMES)][:400]
     assert len(benign) == 400
     for text in benign:
         as_before_or_more_removed(text, redact(text), without_new_passes(text))
@@ -1618,3 +1630,92 @@ def test_the_rule_names_on_the_security_page_are_the_ones_in_messages() -> None:
     names = {secret.name for secret in redact_module.SECRETS} | {"url", "jwt", "json", "secret"}
     assert "" not in names
     assert security_rule_names() == names
+
+
+def decoded_strings(text: str, depth: int = 0) -> Iterator[str]:
+    """The text, and every string in it as the redactor reads it: a JSON text is parsed and
+    each string in it is read again, as a JSON string inside a JSON string is."""
+    yield text
+    if depth > 4 or text.strip()[:1] not in ("{", "[", '"'):
+        return
+    try:
+        tree = json.loads(text)
+    except ValueError:
+        return
+    stack = [tree]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, str):
+            yield from decoded_strings(node, depth + 1)
+        elif isinstance(node, dict):
+            stack.extend(node.keys())
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+
+
+def mixed_case(rng: random.Random, word: str) -> str:
+    return "".join(c.upper() if rng.random() < 0.5 else c for c in word)
+
+
+def generated_field_texts() -> list[str]:
+    """Texts that the form-field pattern matches, built from its own grammar: every name it
+    has, either separator in any case, any NAME_ prefix, a break before the name, then the
+    text wrapped in JSON once to three times, with the = escaped as \\uXXXX at random. The
+    pattern's separator is the only thing that follows a name, so this is every way a text can
+    reach it."""
+    rng = random.Random(20261120)
+    names = [
+        *redact_module.FIELD_LITERAL_NAMES,
+        "pgpassword",
+        "authtoken",
+        "accesstoken",
+        "PGPASSWORD",
+        "x_api%5Fkey",
+    ]
+    breaks = ["", " ", "&", "?", ",", "\n", "\\n", "\\t", "\\u0026", "%2C", "%26", "%3B", '"', "'"]
+    prefixes = ["db", "gh", "AWS", "x1"]
+    values = ["hunter2", "", "a&b", "<x>", '"q"']
+    out: list[str] = []
+    for _ in range(4000):
+        name = mixed_case(rng, rng.choice(names))
+        prefix = "".join(
+            f"{mixed_case(rng, rng.choice(prefixes))}_" for _ in range(rng.randint(0, 2))
+        )
+        sep = mixed_case(rng, rng.choice(["=", "%3d"]))
+        text = f"{rng.choice(breaks)}{prefix}{name}{sep}{rng.choice(values)}"
+        if rng.random() < 0.3:
+            text = f"Request max_tokens=4 total_tokens=9 {text} usage"
+        if rng.random() < 0.3:
+            text = text.replace("=", "\\u003d", 1)  # as raw text, for a decoder to undo
+        for _ in range(rng.choice([0, 0, 1, 2, 3])):
+            text = json.dumps(text, ensure_ascii=rng.random() < 0.5)
+            if rng.random() < 0.5:
+                text = json.dumps({"k": text})
+            if rng.random() < 0.3:  # a writer that escapes the separator
+                text = text.replace("=", "\\u003d").replace("%3", "\\u00253")
+        out.append(text)
+    return out
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_the_pre_check_holds_for_every_text_a_pattern_can_match_at_any_json_depth() -> None:
+    """The pre-check names a separator, so it must pass for every text in which some pattern
+    matches a string the redactor reads. If it skipped one, the secret would be recorded."""
+    texts = [*generated_field_texts(), *corpus(), *SAMPLES.values()]
+    matched = 0
+    for text in texts:
+        for string in decoded_strings(text):
+            if redact_module.PATTERNS.search(string) is not None:
+                matched += 1
+                assert redact_module.holds_candidate(text), text
+                break
+    assert matched > 3000, matched
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_a_word_that_holds_a_field_name_alone_does_not_start_the_pass() -> None:
+    """max_tokens, a token count and prose hold token and secret, but no name with its
+    separator, so they skip the pattern. This is what keeps a model call cheap."""
+    for text in ("max_tokens", "total_tokens: 9", "the secret is out", "password = x", "token"):
+        assert not redact_module.holds_candidate(text), text
