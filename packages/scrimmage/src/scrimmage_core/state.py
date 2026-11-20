@@ -324,10 +324,13 @@ class RunState:
         tools: tuple[str, ...] = (),
         blobs: BlobSink | None = None,
         process: ProcessState | None = None,
+        asked: float | None = None,
     ) -> None:
         """A child passes no plan: load fetches it, and tools names its gates until then.
 
         process: what the process knows, shared by all its runs; with none, a run of its own.
+        asked: the time.monotonic() just before the plan was requested; with a plan, the run's
+        age counts from there, so the time taken to receive and parse it is not lost.
         """
         self.child = plan is None
         self._plan: Plan | None = None
@@ -381,13 +384,17 @@ class RunState:
         # later read each task's context instead.
         self.tasks: weakref.WeakSet[Any] = weakref.WeakSet()
         if plan is not None:
-            self._arrived(plan)
+            self._arrived(plan, self.began if asked is None else asked)
 
-    def _arrived(self, plan: Plan) -> Plan:
+    def _arrived(self, plan: Plan, asked: float) -> Plan:
         """Take a plan the runner just sent. Its elapsed_s is the run's age on the runner's
         clock, so the run's time counts from when the runner started it, not from when this
-        process loaded. Only a length of time crosses between the two processes' clocks."""
-        self.began = time.monotonic() - plan.elapsed_s
+        process loaded. Only a length of time crosses between the two processes' clocks.
+
+        asked is when the request was sent, before the reply was received and read. The age
+        is taken from then, so it can only be too large, never too small: a wait for the
+        budget that ends by this age never ends after the runner's limit."""
+        self.began = asked - plan.elapsed_s
         return self._take(plan)
 
     def _take(self, plan: Plan) -> Plan:
@@ -410,9 +417,10 @@ class RunState:
             if self._missing is not None and time.monotonic() < self._try_again_at:
                 return self._missing
             assert self._load is not None
+            asked = time.monotonic()
             fetched = self._load()
             if fetched.unavailable is None:
-                return self._arrived(fetched)
+                return self._arrived(fetched, asked)
             self._missing = fetched
             self._try_again_at = time.monotonic() + PLAN_RETRY_S
             return fetched

@@ -17,6 +17,7 @@ import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
+import httpx2
 import pytest
 
 from conftest import EXAMPLE_FAULT, Project, Result, TimeLimit
@@ -28,8 +29,9 @@ from scrimmage_core.client import ControlClient, ControlError
 from scrimmage_core.config import Agent
 from scrimmage_core.control import ControlServer
 from scrimmage_core.errors import ScrimmageRefused
+from scrimmage_core.plan import Plan
 from scrimmage_core.records import RecordStore
-from test_http_gate import BODY, URL, Budget, client, gated, install, make_plan
+from test_http_gate import BODY, URL, Budget, Sink, client, gated, install, make_plan, stopper
 
 Fake = Callable[..., FakeOpenAI]
 TOKEN = "f" * 64
@@ -628,6 +630,53 @@ def test_a_wait_on_another_run_shrinks_by_the_time_the_runner_says_has_passed(
     assert bound - took - 0.001 <= clock.waited <= bound + 0.001
     numbers = sink.lines[0]["budget"]
     assert isinstance(numbers, dict) and numbers["own"] is False
+
+
+class Shared:
+    """One clock for the run's state and the gate: it moves only when told to."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, now: float) -> None:
+        self.now = now
+        self.slept: list[float] = []
+        monkeypatch.setattr(state, "time", self)
+        monkeypatch.setattr(http_gate, "time", self)
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += max(seconds, 1e-6)
+
+
+@pytest.mark.design("wait.counts_from_the_runners_start")
+def test_the_time_a_plan_takes_to_arrive_counts_in_the_runs_age(
+    gated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The plan says the run was 100 s old when the runner sent it. Receiving and reading it
+    took 15 s more, so the run is 115 s old of 120 s. Counting from the arrival made it 100 s,
+    and a wait on another run's hold went on to 10 s past the limit's margin."""
+    clock = Shared(monkeypatch, 1000.0)
+    plan = make_plan(budget=0.004, time_limit_s=120.0, elapsed_s=100.0)
+
+    def slow_load() -> Plan:
+        clock.now += 15.0  # the reply arriving and being checked and parsed
+        return plan
+
+    budget = Budget(limit=0.004)
+    budget.ledger.reserve(0.003, "run-other", LABEL)  # a hold that never settles
+    sink = Sink()
+    run = state.RunState(None, sink, [], load=slow_load)
+    state.install(run)
+    http_gate.patch(httpx2, http_gate.Context(run, budget, sink, stopper([])))
+    with pytest.raises(ScrimmageRefused, match="model:openai in run-other"):
+        client().post(URL, json=BODY)
+    assert clock.slept == [], "5 s are left, less than the 10 s margin: no wait at all"
+    refusal = sink.lines[-1]
+    assert refusal["reason"] == "budget_held", sink.lines
+    numbers = refusal["budget"]
+    assert isinstance(numbers, dict) and numbers["waited_s"] == 0.0
+    assert not budget.ledger._line, "no ticket is left to be asked again"
 
 
 def held_forever(
