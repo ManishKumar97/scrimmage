@@ -56,6 +56,9 @@ uv pip install ./packages/scrimmage
 
 To use a Python version other than uv's default, add it to the first command, such as `uv venv -p 3.11`.
 
+In a project uv manages, a later `uv sync` removes Scrimmage from the environment unless it is a dependency of the project.
+Add it with `uv add --dev ./packages/scrimmage`, and `uv sync` keeps it.
+
 ### As wheel files
 
 A wheel is Python's built package format.

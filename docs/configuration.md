@@ -31,6 +31,25 @@ Anything this version does not support is rejected as unknown, with exit code 2.
 | `prices` | Prices for other models, as the table below. The key `""` prices a call that sends no model name. | empty |
 | `answer` | Where the answer is in what the function returns, such as `"messages[-1].content"`, or in a service's JSON reply, such as `"reply"`. With `function` or `service`. Required when the function returns anything but text, as the whole value would hold tool results too. See [Agents on a framework](frameworks.md). | the returned text, or a service's whole reply |
 
+### The function and its input
+
+Scrimmage calls `function` with the test's `question` as one text.
+If your agent takes something else, such as a LangGraph graph that takes a dict, write a small wrapper that turns the text into the agent's own input, and name the wrapper:
+
+```python
+# package/graph.py
+def answer(question: str) -> dict:
+    return graph.invoke({"messages": [("user", question)]})
+```
+
+```toml
+[agent]
+function = "package.graph:answer"
+answer   = "messages[-1].content"
+```
+
+See [Agents on a framework](frameworks.md) for the whole example.
+
 ## [agent.prices]
 
 Prices for models the built-in table does not know, in dollars per million tokens.

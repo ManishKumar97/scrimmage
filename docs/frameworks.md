@@ -47,6 +47,11 @@ expect = [["sorry", "unable"]]
 forbid = ["shipped"]
 ```
 
+`answer` in the Python above is the wrapper.
+Scrimmage gives `function` the test's `question` as one text, and the graph takes a dict, so the wrapper builds the dict.
+Name the wrapper under `function`, never the graph itself.
+If the graph needs a thread id or other config, pass it in the wrapper's `invoke` call.
+
 A graph returns its state, not text, so `answer` says where the answer is in what your function returned.
 A path can use field names, dots and indexes.
 It must lead to the answer, as text or a number. A path to a list or a table is a test mistake, because tool results in it could pass a rule.
