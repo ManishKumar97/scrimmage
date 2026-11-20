@@ -923,8 +923,12 @@ def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
     """
     real_plan = control.ControlServer._plan
 
+    fetches: list[str] = []
+
     def slow_start(server: control.ControlServer, run: str) -> tuple[int, dict[str, object]]:
-        if (project.root / "holding").exists():  # the waiting run starts once the hold is on
+        held_on = (project.root / "holding").exists()
+        fetches.append(f"{run} aged={held_on}")
+        if held_on:  # the waiting run starts once the hold is on
             server.runs[run].opened = time.monotonic() - STARTUP_S
         return real_plan(server, run)
 
@@ -949,7 +953,14 @@ def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
     project.edit(EXAMPLE_FAULT, "")
     result = run_on_fake(project, ["chat_stream_usage"])
     assert time_limit.given == [RUN_TIMEOUT_S] * 2
-    assert result.code == 2, result.out
+    # Twice in CI both runs ran to their 600 s limit and the output said only "timed out". The
+    # runs' own logs and what the limit saw go in the message, so the next one shows why.
+    logs = "\n".join(
+        f"--- {log.name}\n{log.read_text(errors='replace')}"
+        for log in sorted(result.root.glob("scrimmage-runs/*/run-*.log"))
+    )
+    seen = f"reached={time_limit.reached} asked_again={asked_again} plan fetches={fetches}"
+    assert result.code == 2, f"{result.out}\n{seen}\n{logs}"
     assert sorted(str(s["outcome"]) for s in result.summaries()) == ["not reserved", "stopped"]
     assert "test mistake: a model call could not be reserved" in result.out
     assert asked_again == [] and True not in time_limit.reached
