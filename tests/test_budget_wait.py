@@ -923,18 +923,37 @@ def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
     """
     real_plan = control.ControlServer._plan
 
+    fetches: list[str] = []
+
     def slow_start(server: control.ControlServer, run: str) -> tuple[int, dict[str, object]]:
-        if (project.root / "holding").exists():  # the waiting run starts once the hold is on
+        held_on = (project.root / "holding").exists()
+        age = time.monotonic() - server.runs[run].opened
+        fetches.append(f"{run} holding={held_on} age_before={age:.3f}")
+        if held_on:  # the waiting run starts once the hold is on
             server.runs[run].opened = time.monotonic() - STARTUP_S
-        return real_plan(server, run)
+        status, reply = real_plan(server, run)
+        plan = reply.get("plan")
+        sent = plan.get("elapsed_s") if isinstance(plan, dict) else None
+        fetches[-1] += f" elapsed_s_sent={sent}"
+        return status, reply
 
     real_reserve = control.ControlServer._reserve
     asked_again: list[str] = []
+    asked: list[str] = []
 
     def reserve(server: control.ControlServer, body: bytes) -> tuple[int, dict[str, object]]:
-        if json.loads(body).get("ticket") is not None:
-            asked_again.append("waiting")
-        return real_reserve(server, body)
+        sent = json.loads(body)
+        at = time.monotonic()
+        if sent.get("ticket") is not None:
+            asked_again.append(f"{sent.get('run')} at {at:.3f}")
+        status, reply = real_reserve(server, body)
+        asked.append(  # every call: who, with which ticket, when, and what came back
+            f"{sent.get('run')} ticket={sent.get('ticket')} at={at:.3f} "
+            f"status={status} ok={reply.get('ok')} why={reply.get('why')} "
+            f"retry_s={reply.get('retry_s')} reply_ticket={reply.get('ticket')} "
+            f"margin={http_gate.RUN_MARGIN_S}"
+        )
+        return status, reply
 
     monkeypatch.setattr(control.ControlServer, "_plan", slow_start)
     monkeypatch.setattr(control.ControlServer, "_reserve", reserve)
@@ -949,10 +968,24 @@ def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
     project.edit(EXAMPLE_FAULT, "")
     result = run_on_fake(project, ["chat_stream_usage"])
     assert time_limit.given == [RUN_TIMEOUT_S] * 2
-    assert result.code == 2, result.out
+    # In CI both runs were "timed out" and the output said no more. The runs' files and what
+    # the server saw go in the message, so the next one shows which run asked again and when.
+    files = sorted(
+        f
+        for pattern in ("run-*.log", "run-*.out", "*.jsonl")
+        for f in result.root.glob(f"scrimmage-runs/*/{pattern}")
+    )
+    logs = "\n".join(f"--- {f.name}\n{f.read_text(errors='replace')}" for f in files)
+    seen = (
+        f"reached={time_limit.reached} asked_again={asked_again}\n"
+        f"plan fetches={fetches}\nreserves={asked}"
+    )
+    now = f"now={time.monotonic():.3f}"
+    assert asked_again == [], f"{result.out}\n{seen} {now}\n{logs}"
+    assert result.code == 2, f"{result.out}\n{seen} {now}\n{logs}"
     assert sorted(str(s["outcome"]) for s in result.summaries()) == ["not reserved", "stopped"]
     assert "test mistake: a model call could not be reserved" in result.out
-    assert asked_again == [] and True not in time_limit.reached
+    assert True not in time_limit.reached
 
 
 @pytest.mark.design("wait.leak_reported")
