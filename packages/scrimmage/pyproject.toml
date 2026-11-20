@@ -7,6 +7,21 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = []
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Testing",
+]
+
+[project.urls]
+Documentation = "https://manishkumar97.github.io/scrimmage/"
+Source = "https://github.com/ManishKumar97/scrimmage"
+Issues = "https://github.com/ManishKumar97/scrimmage/issues"
 
 [project.optional-dependencies]
 # The Scrimmage MCP server. Pinned to one minor: its middleware list may change within 2.x.
