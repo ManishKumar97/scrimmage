@@ -96,3 +96,9 @@ def test_version_prints_the_installed_version(capsys: pytest.CaptureFixture[str]
         main(["--version"])
     assert stop.value.code == 0
     assert capsys.readouterr().out == f"scrimmage {importlib.metadata.version('scrimmage')}\n"
+
+
+@pytest.mark.slow
+def test_a_build_repeats_byte_for_byte(built: dict[str, Path], tmp_path: Path) -> None:
+    again = build(PACKAGE, tmp_path / "again")
+    assert {p.name: sha256(p) for p in again} == {p.name: sha256(p) for p in built.values()}
