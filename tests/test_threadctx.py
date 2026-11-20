@@ -322,6 +322,32 @@ def test_inherit_context_on_3_14_keeps_the_teams_variables(service: state.Proces
     assert context.run(in_thread, lambda: (TEAM.get(), seen())) == ("mine", "run-a")
 
 
+@pytest.mark.design("service.thread_no_cycle")
+def test_a_thread_started_in_a_request_is_freed_without_the_cyclic_collector(
+    service: state.ProcessState,
+) -> None:
+    """What a thread holds, such as a process pool's named semaphores, must go when the
+    thread ends and its last name is dropped, not whenever the collector next runs."""
+    import gc
+    import weakref
+
+    def start_and_join() -> weakref.ref[threading.Thread]:
+        worker = threading.Thread(target=lambda: None)
+        worker.start()
+        worker.join()
+        return weakref.ref(worker)
+
+    gc.collect()
+    gc.disable()
+    try:
+        plain_ref = plain().run(start_and_join)
+        outside_ref = contextvars.Context().run(start_and_join)  # started outside any request
+        assert plain_ref() is None
+        assert outside_ref() is None
+    finally:
+        gc.enable()
+
+
 @pytest.mark.design("service.wrapped_once")
 def test_a_thread_is_never_wrapped_twice(service: state.ProcessState) -> None:
     start = threading.Thread.start

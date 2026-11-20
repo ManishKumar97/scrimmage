@@ -59,13 +59,14 @@ def write_pair(path: str, _: object) -> str:
 def collected_between_tests() -> Iterator[None]:
     """The cyclic collector runs only here, between tests, never inside one.
 
-    Nearly every test here leaves a queue or a pool in a reference cycle, and a lock in it
-    holds a named semaphore, which the collector frees by calling the resource tracker. If
-    that collection starts while a later test is making a lock, the tracker is in the middle
-    of its own call, and CPython 3.12 raises ReentrantCallError and warns (gh-109629). The
-    warning is an error here, so a worker failed on whichever test the collector met. Python
-    gives no way to make that call safe, so the collector waits for a point where no
-    tracker call is running."""
+    A queue, its feeder thread and a pytest.raises traceback each leave a reference cycle,
+    and a lock in one holds a named semaphore that the collector frees by calling the
+    resource tracker. If that collection starts while a later test is making a lock, the
+    tracker is in the middle of its own call. Python 3.11 and 3.12 then raise
+    ReentrantCallError and warn (the fix for the hang in gh-109593 is gh-109629), and the
+    warning is an error here. Scrimmage's own thread wrapper used to add such cycles
+    (threadctx.run_in); with it fixed, the tests' own cycles remain, so the collector
+    waits for a point where no tracker call is running."""
     gc.collect()
     was_enabled = gc.isenabled()
     gc.disable()

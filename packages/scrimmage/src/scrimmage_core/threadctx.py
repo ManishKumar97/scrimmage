@@ -137,6 +137,24 @@ def start_patched(original: Callable[[threading.Thread], None]) -> Callable[...,
     return start
 
 
+def run_in(thread: threading.Thread, context: contextvars.Context) -> None:
+    """Make the thread's run go through context, before 3.14 gave a thread a context.
+
+    The wrapper holds the thread's own bound run, and the thread holds the wrapper in its
+    __dict__: a cycle that only the cyclic collector breaks, and everything the thread holds,
+    such as a process pool's named semaphores, waits for it. So the wrapper takes itself off
+    the thread once it has run."""
+    run = thread.run
+
+    def wrapped() -> None:
+        try:
+            context.run(run)
+        finally:
+            thread.__dict__.pop("run", None)
+
+    thread.run = wrapped  # type: ignore[method-assign]
+
+
 def start_outside(thread: threading.Thread) -> None:
     """A pool's thread starts outside any run, untagged, whatever its creator's slot."""
     if HAS_THREAD_CONTEXT:
@@ -145,9 +163,7 @@ def start_outside(thread: threading.Thread) -> None:
             given = contextvars.copy_context()  # what the stdlib would give it
         thread._context = outside_context(given)  # type: ignore[attr-defined]
         return
-    run = thread.run
-    context = outside_context()
-    thread.run = lambda: context.run(run)  # type: ignore[method-assign]
+    run_in(thread, outside_context())
 
 
 def carry_into(thread: threading.Thread) -> None:
@@ -158,9 +174,7 @@ def carry_into(thread: threading.Thread) -> None:
             return
         thread._context = own_context(values())  # type: ignore[attr-defined]
         return
-    run = thread.run
-    context = own_context(values())
-    thread.run = lambda: context.run(run)  # type: ignore[method-assign]
+    run_in(thread, own_context(values()))
 
 
 def install(process: ProcessState) -> None:

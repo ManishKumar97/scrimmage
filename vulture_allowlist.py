@@ -164,6 +164,7 @@ _.signals_kept  # tests/conftest.py: a fixture, which pytest.mark.usefixtures na
 _.fast_tests_start_no_process  # tests/conftest.py: an autouse fixture, which pytest runs by itself
 _.no_sender_thread_outlives_its_test  # tests/conftest.py: an autouse fixture, run by pytest
 _.every_record_line_matches_the_public_schema  # tests/conftest.py: autouse
+_.collected_between_tests  # tests/test_service_processes.py: an autouse fixture, run by pytest
 _.gated_sends_are_put_back  # tests/conftest.py: an autouse fixture, run by pytest
 _.pytestmark  # tests/test_cli_json.py and test_check.py: pytest reads it from the module
 _.nothing_pending  # tests/test_cli_in_process.py and test_results.py: an autouse fixture
