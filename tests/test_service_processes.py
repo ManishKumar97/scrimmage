@@ -1867,3 +1867,23 @@ def test_a_process_pools_notifier_is_no_pipe_within_this_process(
     finally:
         plain(pool.terminate)
         stopped(pool)
+
+
+def test_closed_thread_pools_leave_no_pool_ends_and_no_fds(
+    service: state.ProcessState,
+) -> None:
+    """A map entry whose value holds its own key keeps the key, and the key's two pipe ends,
+    open for good: a service that makes a pool per request would run out of descriptors."""
+    count = 40
+    gc.collect()
+    before = len(os.listdir("/proc/self/fd"))
+    entries = len(process_gate.POOL_ENDS)
+    for _ in range(count):
+        pool = plain(lambda: multiprocessing.pool.ThreadPool(1))
+        plain(pool.close)
+        plain(pool.join)
+        del pool
+    gc.collect()
+    assert len(process_gate.POOL_ENDS) == entries, "a closed pool left entries in POOL_ENDS"
+    leaked = len(os.listdir("/proc/self/fd")) - before
+    assert leaked < count, f"{count} closed pools leaked {leaked} descriptors"
