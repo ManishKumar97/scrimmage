@@ -802,3 +802,18 @@ def test_the_readme_on_pypi_is_a_page_for_a_new_visitor(
     (project / "scrimmage.toml").write_text(block)
     assert cli.main(["check", str(project / "scrimmage.toml")]) == 0
     assert "2 rows" in capsys.readouterr().out  # the baseline and the timeout fault
+
+
+def test_the_ci_page_warns_that_the_file_runs_code_and_its_sample_guards_the_fork() -> None:
+    text = page("ci.md")
+    assert "`scrimmage.toml` names code that Scrimmage imports and runs." in text
+    assert "runs that pull request's code, with every secret the job holds" in text
+    assert "Never under `pull_request_target`." in text
+    (sample,) = re.findall(r"```yaml\n(.*?)```", text, re.S)
+    assert "if: github.event.pull_request.head.repo.full_name == github.repository" in sample
+    assert re.search(r"^on:\n  pull_request:$", sample, re.M)
+    assert "pull_request_target" not in sample
+    assert "permissions:\n  contents: read" in sample
+    assert "${{ secrets.OPENAI_API_KEY }}" in sample
+    for use in re.findall(r"uses: (\S+)", sample):  # every action is pinned to a full SHA
+        assert re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", use), use
