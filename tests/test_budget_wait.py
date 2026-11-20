@@ -956,25 +956,24 @@ RUN_TIMEOUT_S = 600.0  # a tenth of it is 60 s, so the margin is not cut below R
 STARTUP_S = RUN_TIMEOUT_S - 60.0  # run_timeout less the margin: no time is left to wait
 
 
-@pytest.mark.design("wait.slow_start_end_to_end")
-@pytest.mark.slow
-def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
-    project: Project, monkeypatch: pytest.MonkeyPatch, time_limit: TimeLimit
-) -> None:
-    """A program that takes most of its run_timeout to load, as `uv run` on a cold cache can,
-    then waits on another run's hold. Its wait must end before the runner's limit, so the run
-    reads "not reserved", not "timed out".
-
-    No real time passes: the waiting run is made STARTUP_S old when its program asks for its
-    plan. Only the margin is then left, so any wait at all is one the design forbids, and the
-    limit arrives the moment a call asks again. The first build waited, and timed out.
-    The holding run keeps its real age, so its own start-up races no limit.
-    """
+def slow_start_run(
+    project: Project,
+    monkeypatch: pytest.MonkeyPatch,
+    time_limit: TimeLimit,
+    *,
+    age: float,
+    reply_delay: float = 0.0,
+) -> tuple[Result, list[str]]:
+    """Two runs, the second waiting on the first's hold. The second is made `age` seconds old
+    when its program asks for its plan, and the reply is sent `reply_delay` s late."""
     real_plan = control.ControlServer._plan
 
     def slow_start(server: control.ControlServer, run: str) -> tuple[int, dict[str, object]]:
         if (project.root / "holding").exists():  # the waiting run starts once the hold is on
-            server.runs[run].opened = time.monotonic() - STARTUP_S
+            server.runs[run].opened = time.monotonic() - age
+            answer = real_plan(server, run)  # the reply is made now, with the age it has now
+            time.sleep(reply_delay)
+            return answer
         return real_plan(server, run)
 
     real_reserve = control.ControlServer._reserve
@@ -997,10 +996,45 @@ def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
     )
     project.edit(EXAMPLE_FAULT, "")
     result = run_on_fake(project, ["chat_stream_usage"])
+    return result, asked_again
+
+
+@pytest.mark.design("wait.slow_start_end_to_end")
+@pytest.mark.slow
+def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
+    project: Project, monkeypatch: pytest.MonkeyPatch, time_limit: TimeLimit
+) -> None:
+    """A program that takes most of its run_timeout to load, as `uv run` on a cold cache can,
+    then waits on another run's hold. Its wait must end before the runner's limit, so the run
+    reads "not reserved", not "timed out".
+
+    No real time passes: the waiting run is made STARTUP_S old when its program asks for its
+    plan. Only the margin is then left, so any wait at all is one the design forbids, and the
+    limit arrives the moment a call asks again. The first build waited, and timed out.
+    The holding run keeps its real age, so its own start-up races no limit.
+    """
+    result, asked_again = slow_start_run(project, monkeypatch, time_limit, age=STARTUP_S)
     assert time_limit.given == [RUN_TIMEOUT_S] * 2
     assert result.code == 2, result.out
     assert sorted(str(s["outcome"]) for s in result.summaries()) == ["not reserved", "stopped"]
     assert "test mistake: a model call could not be reserved" in result.out
+    assert asked_again == [] and True not in time_limit.reached
+
+
+@pytest.mark.design("wait.slow_start_end_to_end")
+@pytest.mark.slow
+def test_a_slow_plan_reply_counts_in_the_runs_age(
+    project: Project, monkeypatch: pytest.MonkeyPatch, time_limit: TimeLimit
+) -> None:
+    """The plan says the run has 64 s left, 4 s more than the margin. The reply then takes 8 s
+    to arrive (the control client gives up at 10 s), so the margin is gone. The run's age
+    counts from its request, so it does not wait at all. Counted from the reply, it would
+    wait 4 s and ask again."""
+    result, asked_again = slow_start_run(
+        project, monkeypatch, time_limit, age=STARTUP_S - 4.0, reply_delay=8.0
+    )
+    assert result.code == 2, result.out
+    assert sorted(str(s["outcome"]) for s in result.summaries()) == ["not reserved", "stopped"]
     assert asked_again == [] and True not in time_limit.reached
 
 

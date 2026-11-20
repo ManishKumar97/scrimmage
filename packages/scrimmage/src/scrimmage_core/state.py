@@ -330,7 +330,8 @@ class RunState:
 
         process: what the process knows, shared by all its runs; with none, a run of its own.
         asked: the time.monotonic() just before the plan was requested; with a plan, the run's
-        age counts from there, so the time taken to receive and parse it is not lost.
+        age counts from there, so the time taken to receive and parse it is not lost. A child
+        passes none: the plan property stamps it, just before load asks.
         """
         self.child = plan is None
         self._plan: Plan | None = None
