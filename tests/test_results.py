@@ -11,10 +11,11 @@ from typing import cast
 import pytest
 
 from conftest import Project
-from report_cases import AGENT, FAULT, TEST, load
+from report_cases import AGENT, FAULT, TEST, load, run
 from scrimmage_core import cli, config, entry, results, runner
+from scrimmage_core import plan as planner
 from scrimmage_core.records import RecordStore, Refused, read_regular
-from scrimmage_core.runner import Runner, row_json, row_reports
+from scrimmage_core.runner import Runner, RunResult, row_json, row_reports
 
 pytestmark = pytest.mark.usefixtures("signals_kept")
 
@@ -311,3 +312,44 @@ def test_the_open_flag_alone_refuses_a_symlink(
         with pytest.raises((Refused, OSError)):
             read_regular(link, 100)
     assert read_regular(target, 100) == b"{}"
+
+
+def test_a_signal_drops_the_baseline_failed_mark_only_for_a_baseline_it_cut() -> None:
+    cfg = load(AGENT + TEST + FAULT)
+    base = planner.rows(cfg)[0]
+
+    def marks(results: list[RunResult], interrupted: bool) -> tuple[str, bool]:
+        baseline, fault = row_reports(cfg, results, interrupted)
+        assert baseline.result.verdict in ("fail", "no result")
+        return baseline.result.verdict, fault.baseline_failed
+
+    crashed = [run(base, i, "crashed", None) for i in range(3)]
+    assert marks(crashed, True) == ("fail", True)  # it really failed, with every run ended
+    assert marks(crashed, False) == ("fail", True)
+    cut = [run(base, i, "stopped", None) for i in range(3)]
+    assert marks(cut, True) == ("no result", False)  # the signal cut it
+
+
+def test_the_runner_counts_the_runs_a_signal_cut(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = config.load(project.toml)
+    base = planner.rows(cfg)[0]
+    made = Runner(cfg)
+    try:
+        assert made.cut([]) == 0
+        made.stopped_rows.add((base.test.name, base.name))
+        assert made.one_now(base) is None and made.turned_away == 0  # a refusal, not a signal
+        made.stopped_rows.clear()
+        made.cancelled = True
+        assert made.one_now(base) is None and made.turned_away == 1  # kept from starting
+        made.cancelled = False
+        monkeypatch.setattr(  # the signal comes as the run opens
+            made.server, "open_run", lambda *a, **k: setattr(made, "cancelled", True)
+        )
+        monkeypatch.setattr(made.server, "close_run", lambda run: None)
+        assert made.one_now(base) is None and made.turned_away == 2
+        assert made.cut([]) == 2
+        assert made.cut([run(base, 0, "stopped", None), run(base, 1)]) == 3  # one it stopped
+    finally:
+        made.server.server.server_close()

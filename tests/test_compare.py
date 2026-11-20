@@ -477,6 +477,7 @@ def interrupted_after_one_run(project: Project, monkeypatch: pytest.MonkeyPatch)
 
     def one(self: Runner, row: object) -> RunResult | None:
         if sent:
+            self.turned_away += 1  # what the real one() counts when the test is cancelled
             return None
         sent.append(True)
         done = run(first, 0)
@@ -484,6 +485,29 @@ def interrupted_after_one_run(project: Project, monkeypatch: pytest.MonkeyPatch)
         return done
 
     monkeypatch.setattr(Runner, "one", one)
+
+
+def test_a_signal_after_every_baseline_run_failed_says_every_run_had_ended(
+    project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Every baseline run crashes, so the fault row is skipped and never planned to run.
+    The signal comes after the last run: none was cut, so the message must not say one was."""
+    project.toml.write_text(SOURCE)
+    base = planner.rows(config.load(project.toml))[0]
+    calls: list[int] = []
+
+    def one(self: Runner, row: object) -> RunResult | None:
+        calls.append(1)
+        done = run(base, len(calls), "crashed", None)
+        if len(calls) == 10:
+            os.kill(os.getpid(), signal.SIGTERM)
+        return done
+
+    monkeypatch.setattr(Runner, "one", one)
+    assert cli.main(["test", "--json", str(project.toml)]) == 3
+    doc = json.loads(capsys.readouterr().out)
+    assert len(calls) == 10, "the fault row was skipped, so only the baseline ran"
+    assert doc["infra"][-1]["message"] == "stopped by SIGTERM after every run had ended"
 
 
 def test_a_stopped_test_keeps_a_result_for_the_runs_that_ended(

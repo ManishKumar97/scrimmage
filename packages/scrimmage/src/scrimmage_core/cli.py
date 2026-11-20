@@ -585,8 +585,7 @@ def save_stopped(
     if runner.stopped_by is not None:
         return StoppedResult(stopped, stopped)
     count = plural(len(interrupted.results), "run")
-    planned = len(planner.rows(config)) * config.agent.runs
-    if len(interrupted.results) >= planned:  # it came as the copy stopped: no run was cut
+    if not interrupted.cut:  # it came as the copy stopped, or after the last run: none was cut
         stopped = f"stopped by {interrupted} after every run had ended"
     else:
         stopped = f"stopped by {interrupted}; the runs still going were stopped"
