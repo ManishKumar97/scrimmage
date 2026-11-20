@@ -73,11 +73,29 @@ class Stopped(BaseException):
     """
 
 
+class PrintVersion(argparse.Action):
+    """--version: print `scrimmage <version>` and stop. The metadata is read only when asked."""
+
+    def __init__(self, option_strings: Sequence[str], dest: str, **kwargs: object) -> None:
+        super().__init__(option_strings, dest, nargs=0, help="print the version and exit")
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None = None,
+    ) -> None:
+        sys.stdout.write(f"scrimmage {versions.installed()}\n")
+        parser.exit()
+
+
 def main(argv: list[str] | None = None, *, process: bool = False) -> int:
     """The scrimmage command. process: this is the scrimmage process itself, which exits on the
     code returned, so signals stay ignored after the document is printed."""
     # No abbreviations: entry.py looks for --json itself, so --js would skip its handlers.
     parser = argparse.ArgumentParser(prog="scrimmage", allow_abbrev=False)
+    parser.add_argument("--version", action=PrintVersion)
     commands = parser.add_subparsers(dest="command", required=True)
     test = commands.add_parser("test", help="run every test in scrimmage.toml", allow_abbrev=False)
     check = commands.add_parser(
