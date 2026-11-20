@@ -11,8 +11,7 @@ Treat them as a guide to the size of each cost, not as a promise about yours.
 - Commit: `2b011b8`.
 - Date: 2026-11-20, 14:15 UTC.
 - The run had the machine to itself, with no other work running.
-- The load average was 0.76 when the run was staged and 1.34 at its start, from a `uv sync` that had just finished.
-- It was 1.27 after the run.
+- The load average was 0.76 when the run was staged, 1.34 at its start and 1.27 after it.
 - Libraries, as pinned in `uv.lock` at that commit: httpx 0.28.1, httpx2 2.16.0, openai 3.46.0, mcp 2.3.0, uvicorn 0.54.0 and langchain-core 1.8.4.
 
 **To reproduce them,** from the root of a clone, after `uv sync`:
@@ -65,7 +64,8 @@ The MCP rows use the stdio transport.
 ## Change since the last page
 
 The last page came from runs on 2026-11-09 and 2026-11-11.
-A bisect on 2026-11-20 explained the rows that moved.
+A bisect on 2026-11-20 found the cause of some of the rows that moved.
+Others moved and are not explained.
 
 - Model calls grew after PR #46 on 11 November.
   A redaction pre-check matched `max_tokens` in every body, so its full pattern ran on every request and reply.
@@ -76,16 +76,23 @@ A bisect on 2026-11-20 explained the rows that moved.
   It now takes 50.4 µs, against 48.0 µs on the old page.
 - The 9 November tool rows measured a shared plan that later gained an args-miss mock.
   PR #161 measures that row in its own plan, so the old and new tool rows are not the same measure.
-- What is left is on a real tool call.
-  It adds about 52 µs now, against 43 µs on 9 November, which is 9 µs more.
-  The bisect put that on miss recording (PR #42) and the scan for secret literals.
-- Startup grew about 15 ms, for example 68.2 to 86.2 ms to the first line for a root process, and 45.2 to 61.0 ms for the import of `scrimmage_core.cli`.
-  That comes from the redactor compiling more patterns and from config, and it is tracked.
+- A real tool call adds about 52 µs now, against 43 µs on 9 November, which is 9 µs more.
+  A profile in the bisect measured about 3 µs of that from miss recording (PR #42) and about 4 µs from the scan for secret literals.
+  These are about figures from a profile, not exact shares.
+- Startup grew.
+  The first line of a root process went from 68.2 to 86.2 ms (+18.0), and the import of `scrimmage_core.cli` from 45.2 to 61.0 ms (+15.8).
+  It was measured with `python -X importtime`.
+  The redactor's own import time went from 1.1 to 5.6 ms, mostly regex compiling, and the config module's from 5.1 to 8.5 ms.
 
-The MCP call went from 257.3 to 341.0 µs at the median, which is 33 percent.
-That change is not explained.
-The bisect did not cover it, and its spread in this run, 315.1 to 392.9, is wide.
-The other first-table rows moved by less than 20 percent, except the tool rows, which are explained above.
+These rows moved by 14 percent or more and are not explained:
+
+- The MCP call, 257.3 to 341.0 µs (+33%).
+  Its spread in this run, 315.1 to 392.9, is wide.
+- The sync web request, 306.8 to 356.9 µs (+16%).
+- The async web request, 372.8 to 444.4 µs (+19%).
+- The args miss, 132.1 to 150.1 µs (+14%).
+
+The other rows moved by less than that.
 
 ## Not measured
 
