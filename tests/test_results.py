@@ -328,3 +328,28 @@ def test_a_signal_drops_the_baseline_failed_mark_only_for_a_baseline_it_cut() ->
     assert marks(crashed, False) == ("fail", True)
     cut = [run(base, i, "stopped", None) for i in range(3)]
     assert marks(cut, True) == ("no result", False)  # the signal cut it
+
+
+def test_the_runner_counts_the_runs_a_signal_cut(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = config.load(project.toml)
+    base = planner.rows(cfg)[0]
+    made = Runner(cfg)
+    try:
+        assert made.cut([]) == 0
+        made.stopped_rows.add((base.test.name, base.name))
+        assert made.one_now(base) is None and made.turned_away == 0  # a refusal, not a signal
+        made.stopped_rows.clear()
+        made.cancelled = True
+        assert made.one_now(base) is None and made.turned_away == 1  # kept from starting
+        made.cancelled = False
+        monkeypatch.setattr(  # the signal comes as the run opens
+            made.server, "open_run", lambda *a, **k: setattr(made, "cancelled", True)
+        )
+        monkeypatch.setattr(made.server, "close_run", lambda run: None)
+        assert made.one_now(base) is None and made.turned_away == 2
+        assert made.cut([]) == 2
+        assert made.cut([run(base, 0, "stopped", None), run(base, 1)]) == 3  # one it stopped
+    finally:
+        made.server.server.server_close()
