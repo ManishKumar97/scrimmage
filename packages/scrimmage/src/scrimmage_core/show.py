@@ -6,7 +6,6 @@ that is not a plain file is refused by name. A line it prints was redacted when 
 recorded, and is redacted again here.
 """
 
-import hashlib
 import json
 import os
 import re
@@ -305,6 +304,8 @@ def reply_data(entry: Doc, folder: Path | None) -> str | None:
     except (Refused, OSError):
         return None
     # A side-folder item is named by its content's hash, so one that does not match is not it.
+    import hashlib
+
     if data is None or hashlib.sha256(data).hexdigest() != sha:
         return None
     return data.decode("utf-8", "replace")

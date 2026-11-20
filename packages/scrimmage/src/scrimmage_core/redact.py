@@ -97,17 +97,35 @@ FORM = (
     + rf"{bounded(STEP)}))"
     + ")"
 )
+
+
+# The patterns are compiled on first use, not at import: most calls hold none of the
+# literals that gate them, and compiling them all costs about 5 ms in every process that
+# loads Scrimmage.
 # The rest of a value from where the pattern stopped. A run stops at the same place from any
 # step inside it, so one read serves every name inside one run.
-VALUE_RUN = re.compile(rf"(?:{STEP})*")
-MARKED_RUN = re.compile(rf"(?:{MARKED_STEP})*")
-SHAPE_OR_NAME_RE = re.compile(SHAPE_OR_NAME)
+@functools.cache
+def value_run() -> re.Pattern[str]:
+    return re.compile(rf"(?:{STEP})*")
+
+
+@functools.cache
+def marked_run() -> re.Pattern[str]:
+    return re.compile(rf"(?:{MARKED_STEP})*")
+
+
+@functools.cache
+def shape_or_name() -> re.Pattern[str]:
+    return re.compile(SHAPE_OR_NAME)
+
+
 # Where FORM's value ends, a removed value may go on past an escape, as in abc\"2zz. It goes
 # on only when more of the value follows the escape: one before a space, a bracket, a comma,
 # a colon or the end closes an escaped string instead, as the second \" in {\"a\":\"b\"}.
 GOES_ON = r"""(?=[^&\s"'<>\\,;:()\[\]{}])"""
 
 
+@functools.cache
 def continuation(escape: str) -> re.Pattern[str]:
     """What a value goes on with where FORM's value ends: escapes with more of the value
     after them, and the value between them. Each step reads only the text ahead, so where it
@@ -120,20 +138,32 @@ def continuation(escape: str) -> re.Pattern[str]:
 # In a string read out of JSON, or a Python string, every escape is already undone: a \n
 # there is a backslash and a letter, as in C:\new, and a raw quote is a character, as \"
 # became one, unless the name sits inside a quote, which the quote then closes.
-GOES_ON_RAW = continuation(r"\\[\"']")
-GOES_ON_DECODED = continuation(r"\\[\"'nr]|[\"']")
-GOES_ON_DECODED_INSIDE = continuation(r"\\[\"'nr]")
+GOES_ON_RAW = r"\\[\"']"
+GOES_ON_DECODED = r"\\[\"'nr]|[\"']"
+GOES_ON_DECODED_INSIDE = r"\\[\"'nr]"
+
+
 # The harmless prefixes, checked on the match: next_page_token is found and then kept.
-HARMLESS_NAME = re.compile(
-    rf"(?:[A-Za-z0-9]+_)*(?:(?:{HARMLESS})_{FIELD}|(?:{HARMLESS_TOKEN})_token(?:=|%3d))",
-    re.ASCII | re.IGNORECASE,
-)
+@functools.cache
+def harmless_name() -> re.Pattern[str]:
+    return re.compile(
+        rf"(?:[A-Za-z0-9]+_)*(?:(?:{HARMLESS})_{FIELD}|(?:{HARMLESS_TOKEN})_token(?:=|%3d))",
+        re.ASCII | re.IGNORECASE,
+    )
+
+
 CODE_VALUES = ("None", "True", "False")
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
 # A Basic credential in an Authorization header, as a header line, JSON, a command line or a
 # list of byte pairs. ASCII only, so the lowered text holds the literal.
 BASIC = r"(?ai:authorization)(?:\W|b(?=[\"'])){1,8}(?ai:basic)\s+[A-Za-z0-9+/_-]{8,}={0,2}"
-BASIC_RE = re.compile(BASIC)
+
+
+@functools.cache
+def basic_re() -> re.Pattern[str]:
+    return re.compile(BASIC)
+
+
 # In a JSON object or list the name and the value are separate strings, so the rule that
 # needs both is tried on the pair: an Authorization header with a Basic value. The name may
 # end in authorization after _ or -, as in HTTP_AUTHORIZATION and X-Forwarded-Authorization.
@@ -192,7 +222,13 @@ SECRETS = (
     # h11 quotes the bad header
     Secret(r"Illegal header (?:name|value) .*", ("Illegal header",), name="header-text"),
 )
-PATTERNS = re.compile("|".join(secret.pattern for secret in SECRETS))
+
+
+@functools.cache
+def patterns() -> re.Pattern[str]:
+    return re.compile("|".join(secret.pattern for secret in SECRETS))
+
+
 LITERALS = tuple(lit for secret in SECRETS if not secret.lowercase for lit in secret.literals)
 LOWER_LITERALS = tuple(lit for secret in SECRETS if secret.lowercase for lit in secret.literals)
 # Every form-field literal holds = or %3d, so a text with neither skips all of them.
@@ -206,9 +242,14 @@ OTHER_LOWER_LITERALS = tuple(lit for lit in LOWER_LITERALS if lit not in FIELD_L
 # so a large base64 body stays linear. What comes before it, such as the n of an escaped
 # newline, is kept.
 TOKEN = "[A-Za-z0-9_-]"
-JWT = re.compile(
-    rf"(?<!{TOKEN})((?>{TOKEN}*?eyJ)){TOKEN}{{8,}}+\.{TOKEN}{{8,}}+\.{TOKEN}{{8,}}+(?:\.{TOKEN}+)*+"
-)
+
+
+@functools.cache
+def jwt() -> re.Pattern[str]:
+    return re.compile(
+        rf"(?<!{TOKEN})((?>{TOKEN}*?eyJ)){TOKEN}{{8,}}+\.{TOKEN}{{8,}}+\.{TOKEN}{{8,}}+(?:\.{TOKEN}+)*+"
+    )
+
 
 # A query or a password may hold a raw ' or \, so only these end a URL. A quote or a bracket
 # that closes the URL is given back after the cut.
@@ -315,30 +356,30 @@ def key_removals(text: str, decoded: bool = False) -> list[tuple[int, int, str]]
     reads = Reads(text)
     parentheses = Parentheses(text)
     at = 0
-    while (found := PATTERNS.search(text, at)) is not None:
+    while (found := patterns().search(text, at)) is not None:
         # The pattern stops a value before a field name or a key shape; its run goes on.
         # resume: where the whole match ends. end: where a removed place ends, past an escape
         # with more of the value after it. code_end: what code_value reads.
         resume = end = code_end = found.end()
         if found.start("value") >= 0:
-            resume = reads.end(VALUE_RUN, resume)
-            goes_on = GOES_ON_RAW
+            resume = reads.end(value_run(), resume)
+            goes_on = continuation(GOES_ON_RAW)
             if decoded:
                 inside = found.group("inside") is not None
-                goes_on = GOES_ON_DECODED_INSIDE if inside else GOES_ON_DECODED
+                goes_on = continuation(GOES_ON_DECODED_INSIDE if inside else GOES_ON_DECODED)
             end = reads.end(goes_on, resume)
             # Its first character is all code_value reads past the value: an escape is never
             # part of a name.
             code_end = min(end, resume + 1)
         elif found.start("marked") >= 0:
-            resume = end = reads.end(MARKED_RUN, resume)
+            resume = end = reads.end(marked_run(), resume)
         at = resume
         if found.start("bearer") >= 0:
             # A Bearer token's characters can start a key shape or a field name, as the
             # Authorization in Bearer QQQAuthorization: Basic ...: the whole token is removed,
             # and the text from the first one that starts in it is read again, so what starts
             # there and goes on past the token joins it.
-            shape = SHAPE_OR_NAME_RE.search(text, found.start() + 1)
+            shape = shape_or_name().search(text, found.start() + 1)
             if shape is not None and shape.start() < found.end():
                 at = shape.start()
         field = found.group("field")
@@ -347,9 +388,9 @@ def key_removals(text: str, decoded: bool = False) -> list[tuple[int, int, str]]
             # again. A kept field, a harmless name such as next_page_token or code, ends
             # there. A removed one does not, and what is found there joins it, as a Bearer
             # token that starts inside the value and goes on past its end.
-            shape = SHAPE_OR_NAME_RE.search(text, found.start() + 1)
+            shape = shape_or_name().search(text, found.start() + 1)
             bound = len(text) if shape is None else shape.start()
-            if HARMLESS_NAME.match(field) is not None or code_value(found, code_end, parentheses):
+            if harmless_name().match(field) is not None or code_value(found, code_end, parentheses):
                 at = min(found.end(), bound)
                 continue
             at = min(resume, bound)
@@ -476,7 +517,7 @@ def plain(text: str, decoded: bool = False) -> tuple[str, int]:
     if "://" in text:
         text = URL.sub(url, text)
     if "eyJ" in text:
-        text, jwts = JWT.subn(no_jwt, text)
+        text, jwts = jwt().subn(no_jwt, text)
     lowered = text.lower()
     if any(lit in text for lit in LITERALS) or any(lit in lowered for lit in LOWER_LITERALS):
         text, keys = remove_keys(text, decoded)
@@ -517,7 +558,7 @@ def basic_value(value: object) -> bool:
     return (
         isinstance(value, str)
         and not isinstance(value, Number)
-        and BASIC_RE.search("authorization: " + value) is not None
+        and basic_re().search("authorization: " + value) is not None
     )
 
 
@@ -889,7 +930,7 @@ def replacements(text: str) -> list[Replacement]:
     pieces = [Piece(text, 0, len(text), None)]
     passes: list[Callable[[str], list[tuple[int, int, str, str]]]] = [
         lambda now: [(m.start(), m.end(), plain_url(m), "url") for m in URL.finditer(now)],
-        lambda now: [(m.start(), m.end(), no_jwt(m), "jwt") for m in JWT.finditer(now)],
+        lambda now: [(m.start(), m.end(), no_jwt(m), "jwt") for m in jwt().finditer(now)],
         # The same places remove_keys removes.
         lambda now: [(a, b, REMOVED, secret_rule(first)) for a, b, first in key_removals(now)],
     ]

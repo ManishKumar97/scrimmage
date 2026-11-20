@@ -14,7 +14,6 @@ import ipaddress
 import math
 import os
 import re
-import secrets
 import shlex
 import shutil
 import tomllib
@@ -351,7 +350,7 @@ def braced(text: str, i: int, where: str) -> tuple[Piece, int] | None:
 
 def new_session() -> str:
     """A run's {session}: new for every run, and never the run's name."""
-    return SESSION_PREFIX + secrets.token_hex(8)
+    return SESSION_PREFIX + os.urandom(8).hex()
 
 
 def literal(data: object) -> object:
