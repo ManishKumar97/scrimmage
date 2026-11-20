@@ -912,10 +912,11 @@ STARTUP_S = RUN_TIMEOUT_S - 60.0  # run_timeout less the margin: no time is left
     ("made_age", "reply_delay"),
     [
         (STARTUP_S, 0.0),
-        # The plan says 64 s are left, 4 s more than the margin. The reply then takes 7 s
-        # (the control client gives up at 10 s), so the margin is gone. The run's age counts
-        # from its request, so it does not wait. Counted from the reply, it would wait 4 s.
-        (STARTUP_S - 4.0, 7.0),
+        # The plan says 64 s are left when the server makes it. The request has by then waited
+        # at least 2 s for the hold, and the reply then takes 3 s more, so the margin is gone
+        # by the time the program has it. The run's age counts from its request, so it does not
+        # wait. Counted from the reply, it would have 64 s less its own start-up, and wait.
+        (STARTUP_S - 4.0, 3.0),
     ],
     ids=["start-up", "slow-reply"],
 )
@@ -948,6 +949,7 @@ def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
     election = threading.Lock()
 
     def slow_start(server: control.ControlServer, run: str) -> tuple[int, dict[str, object]]:
+        requested = time.monotonic()
         with election:
             role = roles.setdefault(run, "wait" if roles else "hold")
         if role == "wait":  # the request waits here, so no plan reaches it before the hold
@@ -967,7 +969,9 @@ def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
         sent = plan.get("elapsed_s") if isinstance(plan, dict) else None
         fetches[-1] += f" elapsed_s_sent={sent}"
         if role == "wait":
-            time.sleep(reply_delay)  # the reply was made with its age above, and is late
+            # The reply was made with its age above, and is late. The whole request stays
+            # under 9 s, so the control client's 10 s timeout is never what ends it.
+            time.sleep(max(0.0, min(reply_delay, 9.0 - (time.monotonic() - requested))))
         return status, reply
 
     real_reserve = control.ControlServer._reserve
