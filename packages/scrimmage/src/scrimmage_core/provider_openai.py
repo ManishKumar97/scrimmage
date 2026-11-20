@@ -6,10 +6,8 @@ tokens and sort the tools the model is offered. A built reply, for refuse and un
 also takes the time and new ids, as a real one has.
 """
 
-import hashlib
 import json
 import re
-import secrets
 import string
 import time
 from collections.abc import Iterable, Iterator, Sequence
@@ -220,6 +218,8 @@ CALL_ID_LENGTH = 24  # after call_
 
 def made_up_id(prefix: str, length: int) -> str:
     """An id in OpenAI's form. secrets, so the agent's own random sequence is left alone."""
+    import secrets  # not at import: only a made-up reply needs it, and it pulls in random
+
     return prefix + "".join(secrets.choice(ID_LETTERS) for _ in range(length))
 
 
@@ -344,6 +344,8 @@ RESPONSE_ID_LENGTH = 50  # after resp_ and msg_, in lowercase hex, as in real id
 
 
 def made_up_hex_id(prefix: str) -> str:
+    import secrets
+
     return prefix + secrets.token_hex(RESPONSE_ID_LENGTH // 2)
 
 
@@ -524,6 +526,8 @@ def _running(messages: Iterable[object], counts: set[int]) -> Iterator[tuple[int
     """For each count in counts, the count and the sha256 of the canonical JSON of the list
     of the first that many messages. One hash is built message by message, so a long
     request is read once. A key order or a space does not change it; a value does."""
+    import hashlib
+
     whole = hashlib.sha256(b"[")
     for count, message in enumerate(messages, 1):
         if count > 1:

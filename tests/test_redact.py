@@ -154,7 +154,7 @@ def reference(text: str) -> tuple[str, int]:
         return kept
 
     text = redact_module.URL.sub(url, text)
-    text, jwts = redact_module.JWT.subn(redact_module.no_jwt, text)
+    text, jwts = redact_module.jwt().subn(redact_module.no_jwt, text)
     text, keys = redact_module.remove_keys(text)
     return text, count + jwts + keys
 
@@ -270,7 +270,7 @@ def test_a_lookalike_letter_never_matches_a_lowercase_pattern_the_pre_check_miss
                         continue
                     tried += 1
                     changed = sample[:at] + mark + sample[at + 1 :]
-                    if redact_module.PATTERNS.search(changed):
+                    if redact_module.patterns().search(changed):
                         lowered = changed.lower()
                         assert any(lit in lowered for lit in redact_module.LOWER_LITERALS), changed
     assert tried > 0
@@ -383,7 +383,7 @@ def without_new_passes(text: str) -> str:
         )
     )
     text = redact_module.URL.sub(redact_module.plain_url, text)
-    text = redact_module.JWT.sub(redact_module.no_jwt, text)
+    text = redact_module.jwt().sub(redact_module.no_jwt, text)
     return old.sub(redact_module.REMOVED, text)
 
 
@@ -1191,10 +1191,10 @@ def test_every_key_shape_starts_where_a_kept_value_is_cut() -> None:
     for secret in redact_module.SECRETS:
         for literal in secret.literals:
             if secret.name != "form-field":
-                assert redact_module.SHAPE_OR_NAME_RE.match(literal), literal
+                assert redact_module.shape_or_name().match(literal), literal
     for text in [*SAMPLES.values(), *(shape for shape, _ in SECRET_SHAPES), *corpus()]:
-        for found in redact_module.PATTERNS.finditer(text):
-            assert redact_module.SHAPE_OR_NAME_RE.match(text, found.start()), text
+        for found in redact_module.patterns().finditer(text):
+            assert redact_module.shape_or_name().match(text, found.start()), text
 
 
 KEPT_PREFIXES = [
@@ -1261,17 +1261,31 @@ class CountedScan:
 
 
 # What the key pass reads on with past where a pattern stops, and what it searches with.
-RUNS = ("GOES_ON_RAW", "GOES_ON_DECODED", "GOES_ON_DECODED_INSIDE", "VALUE_RUN", "MARKED_RUN")
-SEARCHES = ("PATTERNS", "SHAPE_OR_NAME_RE")
+RUNS = ("continuation", "value_run", "marked_run")
+SEARCHES = ("patterns", "shape_or_name")
 
 
 def continuation_reads(
     monkeypatch: pytest.MonkeyPatch, clean: Callable[[], object], names: tuple[str, ...] = RUNS
 ) -> int:
-    counted = [CountedScan(getattr(redact_module, name)) for name in names]
+    counted: list[CountedScan] = []
+
+    def counting(getter: Callable[..., re.Pattern[str]]) -> Callable[..., CountedScan]:
+        """The getter, giving one counted scan for each pattern it builds, as the real one
+        gives one pattern, so the key pass still reuses a read."""
+        made: dict[tuple[object, ...], CountedScan] = {}
+
+        def get(*args: object) -> CountedScan:
+            if args not in made:
+                made[args] = CountedScan(getter(*args))
+                counted.append(made[args])
+            return made[args]
+
+        return get
+
     with monkeypatch.context() as patched:
-        for name, scan in zip(names, counted, strict=True):
-            patched.setattr(redact_module, name, scan)
+        for name in names:
+            patched.setattr(redact_module, name, counting(getattr(redact_module, name)))
         clean()
     return sum(scan.read for scan in counted)
 
@@ -1710,7 +1724,7 @@ def test_the_pre_check_holds_for_every_text_a_pattern_can_match_at_any_json_dept
     matched = 0
     for text in texts:
         for string in decoded_strings(text):
-            if redact_module.PATTERNS.search(string) is not None:
+            if redact_module.patterns().search(string) is not None:
                 matched += 1
                 assert redact_module.holds_candidate(text), text
                 break

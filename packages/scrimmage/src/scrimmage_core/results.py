@@ -6,10 +6,8 @@ Standard library and the plan only: nothing here starts a program or opens a soc
 """
 
 import contextlib
-import hashlib
 import json
 import os
-import secrets
 from pathlib import Path
 from typing import cast
 
@@ -26,6 +24,8 @@ HASH_VERSION = 1  # the format of test_sha256; a change to its inputs bumps this
 
 def write(folder: Path, doc: dict[str, object]) -> Path:
     """The document into `folder`, owner-only, whole or not at all."""
+    import secrets
+
     target = folder / RESULT_FILE
     temp = folder / f".result-{secrets.token_hex(6)}.tmp"
     text = json.dumps(doc, indent=2) + "\n"
@@ -92,6 +92,8 @@ def row_hash(test: Test, fault: Fault | None, agent: Agent) -> str:
     canonical = json.dumps(
         as_written(doc), sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
     )
+    import hashlib
+
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
