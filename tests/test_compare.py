@@ -565,6 +565,6 @@ def test_a_signal_after_a_refusal_keeps_the_refusals_reason_and_no_result(
     monkeypatch.setattr(Runner, "one", one)
     assert cli.main(["test", "--json", str(project.toml)]) == 3
     doc = json.loads(capsys.readouterr().out)
-    assert doc["stopped_by"] is None and doc["result_file"] is None
+    assert doc["stopped_by"] == "budget" and doc["result_file"] is None
     (folder,) = folders(project)
     assert not (folder / "result.json").exists()

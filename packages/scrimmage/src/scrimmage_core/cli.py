@@ -490,6 +490,8 @@ def run_test(
             return INFRA
         if compare is not None:
             found.messages.append((NOTES, NOT_FINISHED))
+        if runner is not None and runner.stopped_by is not None:
+            found.fields["stopped_by"] = runner.stopped_by  # a refusal's reason, or the signal
         if kept is not None:
             stopped = kept.message
             found.messages += kept.messages
@@ -564,7 +566,11 @@ def save_stopped(
     if runner.stopped_by is not None:
         return StoppedResult(stopped, stopped)
     count = plural(len(interrupted.results), "run")
-    stopped = f"stopped by {interrupted}; the runs still going were stopped"
+    planned = len(planner.rows(config)) * config.agent.runs
+    if len(interrupted.results) >= planned:  # it came as the copy stopped: no run was cut
+        stopped = f"stopped by {interrupted} after every run had ended"
+    else:
+        stopped = f"stopped by {interrupted}; the runs still going were stopped"
     try:
         runner.stopped_by = results_file.STOPPED_BY_SIGNAL
         report = running.build_report(config, interrupted.results, runner.folder, runner)
