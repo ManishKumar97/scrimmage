@@ -94,6 +94,22 @@ async def marking(scope, receive, send):
         signal.signal(signal.SIGTERM, noted)
     await app(scope, receive, send)
 """
+# Prints a line that names its port and says "in use", then fails, with no bind at all.
+CHATTY = """import sys
+
+port, which = sys.argv[1], sys.argv[2]
+said = {
+    "unused": f"DEBUG: port {port} not in use by a previous run, continuing",
+    "session": f"INFO: config listen_port={port}; session store in use: redis",
+}
+print(said[which], flush=True)
+raise SystemExit(1)
+"""
+# Leaves a child in the copy's group, notes its pid in $1, then becomes uvicorn on $2.
+LINGERS = """sleep 600 &
+echo $! >> "$1"
+exec PYTHON -m uvicorn acme.service:app --port "$2" --loop asyncio
+"""
 SHOP_KEY = "shop-key-5a1d9c0e7b"
 SCRIMMAGE = Path(sys.executable).parent / "scrimmage"
 TEST_LIMIT_S = 120  # a test that hangs fails here instead
@@ -171,6 +187,8 @@ class Shop:
             "stubborn.py": STUBBORN,
             "prints.py": PRINTS,
             "marking.py": MARKING,
+            "chatty.py": CHATTY,
+            "lingers.sh": LINGERS.replace("PYTHON", sys.executable),
         }.items():
             (self.root / name).write_text(text)
         self.fake = FakeOpenAI(ACME)
@@ -599,10 +617,21 @@ def held_port() -> Iterator[int]:
         holder.server_close()
 
 
-def test_a_port_taken_before_the_bind_starts_the_copy_again_on_another(shop: Shop) -> None:
+def no_proc(shop: Shop) -> None:
+    """As on a system without /proc/net/tcp, such as macOS: who holds a port is unknown."""
+    shop.monkeypatch.setattr(managed, "sockets_on", lambda port, listen_only=False: None)
+
+
+@pytest.mark.parametrize("proc", [True, False], ids=["proc", "no-proc"])
+def test_a_port_taken_before_the_bind_starts_the_copy_again_on_another(
+    shop: Shop, proc: bool
+) -> None:
     """The first port the runner picks is taken before the copy binds it: the copy exits
     with uvicorn's "address already in use", and the runner starts it again on a new port,
-    which every run then goes to."""
+    which every run then goes to. With /proc, the socket that holds the port says so;
+    without it, uvicorn's line does."""
+    if not proc:
+        no_proc(shop)
     real = managed.free_port
     with held_port() as taken:
         picks = iter([taken])
@@ -620,6 +649,51 @@ def test_a_port_taken_before_the_bind_starts_the_copy_again_on_another(shop: Sho
     records = list((shop.root / "scrimmage-runs").glob("*/run-*.jsonl"))
     assert records and all(r.read_text() for r in records)
     assert copy.proc is not None and group(copy.proc.pid) == []
+
+
+@pytest.mark.parametrize("which", ["unused", "session"])
+@pytest.mark.parametrize("proc", [True, False], ids=["proc", "no-proc"])
+def test_a_line_that_says_in_use_with_the_port_is_not_started_again(
+    shop: Shop, which: str, proc: bool
+) -> None:
+    """A copy that prints its port beside the words "in use", then fails with no bind,
+    lost no port: it is started once."""
+    if not proc:
+        no_proc(shop)
+    code, out = shop.test(f"{sys.executable} chatty.py {{port}} {which}")
+    assert code == 3, out
+    assert "exited with code 1 before it was ready" in out and "in use" in out, out
+    assert "was taken before" not in out and "starts on ports" not in out, out
+    assert len(shop.copies) == 1 and len(shop.copies[0].ports) == 1
+
+
+def alive(pid: int) -> bool:
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except OSError:
+        return False
+    return state not in ("Z", "X")
+
+
+def test_a_start_again_stops_what_the_last_start_left_in_its_group(shop: Shop) -> None:
+    """The first start leaves a child in its group, then fails to bind a port another
+    process took: that child is stopped before the copy starts again, not left running."""
+    pids = shop.root / "children.txt"
+    real = managed.free_port
+    try:
+        with held_port() as taken:
+            picks = iter([taken])
+            shop.monkeypatch.setattr(runner, "free_port", lambda: next(picks, None) or real())
+            code, out = shop.test(f"sh lingers.sh {pids} {{port}}")
+        assert code == 0, out
+        assert shop.copies[0].ports[0] == taken and len(shop.copies[0].ports) == 2, out
+        left = [int(pid) for pid in pids.read_text().split()]
+        assert len(left) == 2, left
+        assert [pid for pid in left if alive(pid)] == [], "a start's child was left running"
+    finally:
+        for pid in [int(pid) for pid in pids.read_text().split()] if pids.exists() else []:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
 
 
 def test_a_port_the_command_fixes_is_not_started_again(shop: Shop) -> None:

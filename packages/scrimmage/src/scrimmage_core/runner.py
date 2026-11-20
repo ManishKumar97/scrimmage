@@ -817,7 +817,7 @@ class Runner:
         address every request goes to and in the copy's command, and a new start."""
         taken, port = managed.port, free_port()
         config = on_port(self.config, port)
-        if not managed.start_again(port, config):  # a stop came first
+        if not managed.start_again(port, config, lambda: bool(self.stop_flag)):  # a stop
             raise Interrupted(self.stop_flag[0] if self.stop_flag else "SIGINT")
         self.config = config
         print(
