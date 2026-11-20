@@ -32,6 +32,12 @@ expect   = ["shipped"]
 [[test.mock]]
 call    = "tool:get_order"
 returns = "shipped, Oct 30"
+
+[[test.fault]]
+call   = "tool:get_order"
+do     = "timeout"
+expect = [["unable", "sorry", "try again"]]
+forbid = ["Oct 30"]
 ```
 
 Then check the file, which runs nothing, and run the test:
