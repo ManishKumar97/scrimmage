@@ -102,6 +102,8 @@ FORM = (
 # The patterns are compiled on first use, not at import: most calls hold none of the
 # literals that gate them, and compiling them all costs about 5 ms in every process that
 # loads Scrimmage.
+
+
 # The rest of a value from where the pattern stopped. A run stops at the same place from any
 # step inside it, so one read serves every name inside one run.
 @functools.cache
