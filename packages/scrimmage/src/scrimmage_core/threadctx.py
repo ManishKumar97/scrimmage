@@ -108,6 +108,17 @@ def carrying(fn: Callable[..., Any]) -> Callable[..., Any]:
     return task
 
 
+def started(original: Callable[[threading.Thread], None], thread: threading.Thread) -> None:
+    """The real start of a thread run_in has wrapped. If it fails, as when the system can
+    start no more threads, the thread never runs, so the wrapper never takes itself off:
+    take it off here, or its cycle waits for the collector."""
+    try:
+        original(thread)
+    except BaseException:
+        thread.__dict__.pop("run", None)
+        raise
+
+
 def start_patched(original: Callable[[threading.Thread], None]) -> Callable[..., None]:
     def start(self: threading.Thread) -> None:
         if not state.in_service():
@@ -117,13 +128,13 @@ def start_patched(original: Callable[[threading.Thread], None]) -> Callable[...,
         state.note_feeder(self)
         if spawning() or isinstance(self, tuple(POOL_THREADS)):
             start_outside(self)
-            return original(self)
+            return started(original, self)
         slot = SLOT.get()
         if is_plain(slot) and not getattr(self, MARK, False):
             # A plain request's thread shares its marker: plain while the request is served.
             setattr(self, MARK, True)
             carry_into(self)
-            return original(self)
+            return started(original, self)
         if not isinstance(slot, Joined):
             return original(self)
         TAGS[self] = slot.run
@@ -131,10 +142,28 @@ def start_patched(original: Callable[[threading.Thread], None]) -> Callable[...,
             return original(self)
         setattr(self, MARK, True)
         carry_into(self)
-        return original(self)
+        return started(original, self)
 
     setattr(start, MARK, True)
     return start
+
+
+def run_in(thread: threading.Thread, context: contextvars.Context) -> None:
+    """Make the thread's run go through context, before 3.14 gave a thread a context.
+
+    The wrapper holds the thread's own bound run, and the thread holds the wrapper in its
+    __dict__: a cycle that only the cyclic collector breaks, and everything the thread holds,
+    such as a process pool's named semaphores, waits for it. So the wrapper takes itself off
+    the thread once it has run."""
+    run = thread.run
+
+    def wrapped() -> None:
+        try:
+            context.run(run)
+        finally:
+            thread.__dict__.pop("run", None)
+
+    thread.run = wrapped  # type: ignore[method-assign]
 
 
 def start_outside(thread: threading.Thread) -> None:
@@ -145,9 +174,7 @@ def start_outside(thread: threading.Thread) -> None:
             given = contextvars.copy_context()  # what the stdlib would give it
         thread._context = outside_context(given)  # type: ignore[attr-defined]
         return
-    run = thread.run
-    context = outside_context()
-    thread.run = lambda: context.run(run)  # type: ignore[method-assign]
+    run_in(thread, outside_context())
 
 
 def carry_into(thread: threading.Thread) -> None:
@@ -158,9 +185,7 @@ def carry_into(thread: threading.Thread) -> None:
             return
         thread._context = own_context(values())  # type: ignore[attr-defined]
         return
-    run = thread.run
-    context = own_context(values())
-    thread.run = lambda: context.run(run)  # type: ignore[method-assign]
+    run_in(thread, own_context(values()))
 
 
 def install(process: ProcessState) -> None:

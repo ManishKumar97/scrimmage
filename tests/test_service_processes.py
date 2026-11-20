@@ -54,6 +54,29 @@ def write_pair(path: str, _: object) -> str:
     return write(path)
 
 
+@pytest.fixture(autouse=True)
+def collected_between_tests() -> Iterator[None]:
+    """The cyclic collector runs only here, between tests, never inside one.
+
+    A refusal's traceback, held by pytest.raises or by a pool's result, leaves a reference
+    cycle, and a lock in it holds a named semaphore that the collector frees by calling the
+    resource tracker. If that collection starts while a later test is making a lock, the
+    tracker is in the middle of its own call. Python 3.11 and 3.12 then raise
+    ReentrantCallError and warn (the fix for the hang in gh-109593 is gh-109629), and the
+    warning is an error here. Scrimmage's own thread wrapper used to add such cycles
+    (threadctx.run_in); with it fixed, the tests' own cycles remain, so the collector
+    waits for a point where no tracker call is running."""
+    gc.collect()
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if was_enabled:
+            gc.enable()
+        gc.collect()
+
+
 @pytest.fixture
 def service() -> Iterator[state.ProcessState]:
     process = state.ProcessState(service=True)
