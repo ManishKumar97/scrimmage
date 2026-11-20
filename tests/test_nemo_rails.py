@@ -18,6 +18,7 @@ from fakes.openai_server import CHAT_PATH, FakeOpenAI, Guard, Obeys
 # dependency group, which a plain `uv sync` leaves out, and it does not install on 3.14 yet.
 pytestmark = [
     pytest.mark.slow,
+    pytest.mark.needs_nemo,
     pytest.mark.skipif(
         importlib.util.find_spec("nemoguardrails") is None,
         reason="nemoguardrails is not installed; run uv sync --group nemo",

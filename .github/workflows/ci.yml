@@ -59,10 +59,14 @@ jobs:
 
   system-python:
     name: Startup tests on Ubuntu's Python
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: the tests name Ubuntu 24.04's own Python 3.12, and the
+    # newer image ships only Python 3.14 under /usr/bin.
+    runs-on: ubuntu-24.04
     env:
       # A distribution's Python has its own sitecustomize, which Scrimmage must chain to.
       UV_PYTHON: /usr/bin/python3.12
+      # The system-Python tests run here, so a skip of one fails this job.
+      SCRIMMAGE_SYSTEM_PYTHON: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
@@ -70,8 +74,16 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
         with:
           version: ${{ env.UV_VERSION }}
+      # CI fails a skipped test, and the apport test needs Ubuntu's apport hook module.
+      - name: Ubuntu's apport hook, and a check that the system Python is the one named
+        run: |
+          sudo apt-get install -y --no-install-recommends python3-apport
+          /usr/bin/python3.12 -c "import sys; assert sys.version_info[:2] == (3, 12), sys.version"
+          test -f /usr/lib/python3.12/sitecustomize.py
       - run: uv sync
       - run: uv run pytest tests/test_other_python.py tests/test_bootstrap.py tests/test_process_gate.py
+      # Every test marked needs_system_python, in whatever file it is.
+      - run: uv run pytest -m needs_system_python
 
   tests:
     name: Tests on Python ${{ matrix.python }}
@@ -85,6 +97,8 @@ jobs:
       UV_PYTHON: ${{ matrix.python }}
       # Ubuntu's own 3.12 starts each process far more slowly than uv's build.
       UV_PYTHON_PREFERENCE: only-managed
+      # NeMo does not install on 3.14 yet, so its tests may skip there and nowhere else.
+      SCRIMMAGE_NEMO: ${{ matrix.python != '3.14' && '1' || '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
@@ -92,7 +106,7 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
         with:
           version: ${{ env.UV_VERSION }}
-      - run: uv sync
+      - run: uv sync --group nemo
       - name: Check the job runs the Python it names
         run: uv run python -c "import sys; v = '.'.join(map(str, sys.version_info[:2])); assert v == '${{ matrix.python }}', v"
       # Python 3.11's sys.settrace raises RuntimeError in a thread that starts while another
@@ -117,8 +131,24 @@ jobs:
           mv .coverage ".coverage.py${{ matrix.python }}"
       # br is undone with the program's own brotli, which the dev group leaves out, so the
       # br tests skip above. This runs them with it, never as a dependency of the package.
+      # The variable makes a skip of a marked test fail this step.
       - name: The br tests, with brotli installed
-        run: uv run --with brotli pytest tests/test_encodings.py tests/test_model_replace.py tests/test_changes.py
+        env:
+          SCRIMMAGE_BROTLI: "1"
+        run: uv run --with brotli pytest -m needs_brotli
+      # The old brotlipy package: httpx unpacks br with it and Scrimmage cannot, so leaves it.
+      - name: The br tests, with brotlipy installed
+        env:
+          SCRIMMAGE_BROTLIPY: "1"
+        run: uv run --with brotlipy pytest -m needs_brotlipy
+      # Python 3.14 copies context into a new thread only with this flag. The environment
+      # variable is the same as -X thread_inherit_context=1, and pytest-xdist's workers keep it.
+      - name: The thread tests, with thread_inherit_context on
+        if: matrix.python == '3.14'
+        env:
+          SCRIMMAGE_INHERIT_CONTEXT: "1"
+          PYTHON_THREAD_INHERIT_CONTEXT: "1"
+        run: uv run pytest -m needs_inherit_context
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         if: matrix.python != '3.11'
         with:

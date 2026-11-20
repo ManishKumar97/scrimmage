@@ -8,6 +8,7 @@ that uvicorn restarts mid-test can still read it.
 """
 
 import os
+import re
 import shutil
 import signal
 import socket
@@ -16,6 +17,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from scrimmage_core import plan as planner
@@ -33,8 +35,17 @@ GONE_S = 1.0  # how long a failed request waits to see that the copy has exited
 FAILED_PROBE_S = 3.0
 LOST_PORT_STEP_S = 0.1
 LISTEN = "0A"  # a listening socket's state in /proc/net/tcp
+# States in /proc/net/tcp of a socket that no longer holds its port against a new bind.
+RELEASED = {"06", "07"}  # TIME_WAIT, CLOSE
 STOP_SIGNALS = {signal.SIGINT, signal.SIGTERM}
 STARTED = "the service started with [agent] start"
+# A copy whose port another process took between the pick and its bind is started again on
+# a new port, up to this many starts in all.
+START_TRIES = 3
+# Where /proc cannot say who holds the port: how a server says its bind failed, as uvicorn
+# and Python "address already in use" or "Errno 98", and Node "EADDRINUSE". The same line
+# must name the copy's port as an address does, ":PORT" or ", PORT)".
+IN_USE = re.compile(r"address already in use|EADDRINUSE|Errno 98", re.IGNORECASE)
 
 
 class CopyFailed(Setup):
@@ -43,7 +54,7 @@ class CopyFailed(Setup):
 
 def free_port() -> int:
     """A port nothing holds on 127.0.0.1. Another process can take it before the copy binds it;
-    the copy then exits, and its log says the address is in use."""
+    the copy then exits, its log says the address is in use, and it is started again."""
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return int(probe.getsockname()[1])
@@ -52,6 +63,16 @@ def free_port() -> int:
 def listening(port: int) -> set[str] | None:
     """The sockets listening on this port, as a process's fd links name them, from
     /proc/net/tcp and tcp6; None on a system without them, such as macOS."""
+    return sockets_on(port, listen_only=True)
+
+
+def sockets_on(port: int, *, listen_only: bool = False) -> set[str] | None:
+    """The sockets whose own end is this port and that hold it against a new bind, a
+    listener or a connection; listen_only: listeners only. None without /proc.
+
+    A row with inode 0 is left out: an orphan the kernel keeps closing, such as the dead
+    copy's own accepted connection in FIN_WAIT2, which no process holds and which does not
+    stop a bind with SO_REUSEADDR."""
     found: set[str] = set()
     read = False
     for table in ("/proc/net/tcp", "/proc/net/tcp6"):
@@ -62,7 +83,10 @@ def listening(port: int) -> set[str] | None:
         read = True
         for row in rows:
             fields = row.split()
-            if fields[3] == LISTEN and int(fields[1].rsplit(":", 1)[1], 16) == port:
+            state = fields[3]
+            held = state == LISTEN if listen_only else state not in RELEASED
+            orphan = fields[9] == "0"
+            if held and not orphan and int(fields[1].rsplit(":", 1)[1], 16) == port:
                 found.add(f"socket:[{fields[9]}]")
     return found if read else None
 
@@ -82,6 +106,9 @@ class Managed:
         self.keep_log = keep_log
         self.proc: subprocess.Popen[bytes] | None = None
         self.token_folder: Path | None = None
+        self.control_url = ""
+        self.ports = [port]  # one for each start: a port taken before the bind gets another
+        self.log_from = 0  # where this start's output begins in service.log
         # The runner's stop thread stops the copy on a stop signal, and the test's end stops
         # it too: one at a time, and once.
         self.lock = threading.Lock()
@@ -114,20 +141,88 @@ class Managed:
             fd = owner_only(token_file)
             with os.fdopen(fd, "w") as out:
                 out.write(self.token)
-            words = start_args(self.config.agent, self.port)
-            log = owner_only(self.log)
+            self.control_url = control_url
+            self.launch(owner_only(self.log))
+
+    def launch(self, log: int) -> None:
+        """The copy's process, on self.port, its output to log, which it closes."""
+        assert self.token_folder is not None
+        try:
+            self.log_from = os.fstat(log).st_size
+            self.proc = subprocess.Popen(
+                [sys.executable, "-m", "scrimmage_core.run_command", *self.words()],
+                cwd=self.config.root,
+                env=self.env(self.control_url, self.token_folder / "token"),
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=log,
+                start_new_session=True,  # its own process group, so every worker stops too
+            )
+        finally:
+            os.close(log)
+
+    def words(self) -> list[str]:
+        return start_args(self.config.agent, self.port)
+
+    def port_taken(self) -> bool:
+        """The copy exited because another process took its port before it bound it: a
+        socket of no process of the copy's group holds that port. Never for a copy that
+        still runs, exited with code 0, as a start that forks a daemon does, or failed
+        another way, or could not bind a port the command fixes
+        itself, which a new port would not change. Where /proc cannot say, a line of this
+        start's output must say its bind failed and name its port."""
+        if self.proc is None or self.proc.poll() is None:
+            return False
+        if self.proc.returncode == 0:  # a failed bind is never a clean exit; a daemon's is
+            return False
+        if self.words() == start_args(self.config.agent, self.port + 1):
+            return False  # the port is not in the command, so another would not help
+        held = sockets_on(self.port)
+        if held is not None:
+            return bool(held - self.group_sockets())
+        return self.said_port_taken()
+
+    def group_sockets(self) -> set[str]:
+        """What the fds of the copy's group's processes link to, its sockets among them."""
+        found: set[str] = set()
+        if self.proc is None:
+            return found
+        for entry in Path("/proc").iterdir():
             try:
-                self.proc = subprocess.Popen(
-                    [sys.executable, "-m", "scrimmage_core.run_command", *words],
-                    cwd=self.config.root,
-                    env=self.env(control_url, token_file),
-                    stdin=subprocess.DEVNULL,
-                    stdout=log,
-                    stderr=log,
-                    start_new_session=True,  # its own process group, so every worker stops too
-                )
-            finally:
-                os.close(log)
+                if not entry.name.isdigit() or os.getpgid(int(entry.name)) != self.proc.pid:
+                    continue
+                found.update(os.readlink(fd) for fd in (entry / "fd").iterdir())
+            except OSError:  # it ended while it was read, or is another user's
+                continue
+        return found
+
+    def said_port_taken(self) -> bool:
+        """A line of this start's last output says its bind failed, on the copy's port."""
+        try:
+            with self.log.open("rb") as handle:
+                handle.seek(max(self.log_from, self.log.stat().st_size - TAIL_BYTES))
+                text = handle.read().decode("utf-8", "replace")
+        except OSError:
+            return False
+        port = re.compile(rf"(?::{self.port}|, {self.port}\))(?!\d)")
+        return any(IN_USE.search(line) and port.search(line) for line in text.splitlines())
+
+    def start_again(self, port: int, config: Config, stopping: Callable[[], bool]) -> bool:
+        """After port_taken: the copy's group reaped, then the copy started on port, its
+        output added to the same log. False when a stop came first, or during the reap as
+        stopping says, so none is started."""
+        from scrimmage_core.runner import stop_groups  # the runner imports this module
+
+        with self.lock:
+            if self.stopped or self.proc is None:
+                return False
+            stop_groups([self.proc])  # a process it left behind would live on unstopped
+            if stopping():  # a stop signal came during the reap; its stop waits on the lock
+                return False
+            self.config, self.port = config, port
+            self.ports.append(port)
+            self.launch(os.open(self.log, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW))
+            return True
 
     def alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
@@ -165,15 +260,7 @@ class Managed:
         sockets = listening(self.port)
         if sockets is None or self.proc is None:
             return None
-        for entry in Path("/proc").iterdir():
-            try:
-                if not entry.name.isdigit() or os.getpgid(int(entry.name)) != self.proc.pid:
-                    continue
-                if any(os.readlink(fd) in sockets for fd in (entry / "fd").iterdir()):
-                    return True
-            except OSError:  # it ended while it was read, or is another user's
-                continue
-        return False
+        return bool(sockets & self.group_sockets())
 
     def last_lines(self) -> str:
         """The log's last lines, each value ${NAME} filled in removed."""
@@ -201,6 +288,8 @@ class Managed:
         assert self.proc is not None and self.proc.returncode is not None
         code = self.proc.returncode
         how = f"code {code}" if code >= 0 else f"signal {signal.Signals(-code).name}"
+        if len(self.ports) > 1:
+            when += f", after {len(self.ports)} starts on ports {', '.join(map(str, self.ports))}"
         return self.failed(f"exited with {how} {when}")
 
     def stop(self) -> None:

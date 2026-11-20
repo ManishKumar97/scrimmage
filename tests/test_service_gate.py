@@ -229,6 +229,7 @@ def test_a_second_claim_of_a_run_gets_503_claimed(svc: Service) -> None:
 
 
 @pytest.mark.design("service.claimer_only")
+@pytest.mark.stub_record_lines
 def test_lines_from_a_process_that_did_not_claim_are_refused(svc: Service) -> None:
     name = svc.open()
     mine = {"host": "h", "pid": 1, "started": "a"}

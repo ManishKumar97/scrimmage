@@ -30,8 +30,8 @@ pip and uv skip a development release when a final one is found, so a plain `pip
 Install from the folder, or from a wheel with `--no-index`, as below.
 
 ```bash
-git clone https://github.com/ManishKumar97/faultline
-cd faultline
+git clone https://github.com/ManishKumar97/scrimmage
+cd scrimmage
 ```
 
 ### With pip

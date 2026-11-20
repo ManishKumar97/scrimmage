@@ -471,5 +471,5 @@ def member(kind: type[enum.Enum], value: object, name: str) -> enum.Enum:
         if len(values) > SHOWN_MEMBERS:
             shown += f", and {len(values) - SHOWN_MEMBERS} more"
         raise ScrimmageMockError(
-            f"the mock does not fit {name}: {value!r} is not one of {shown}"
+            f"the mock does not fit {name}: the value is not one of {shown}"
         ) from None

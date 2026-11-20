@@ -67,6 +67,14 @@ markers = [
     "design(tag): the design point this test proves, as a short public name",
     "slow: starts a process or a real scrimmage test run; left out of the fast tier",
     "docker: needs a Docker daemon; run with -n 0",
+    "needs_python(min, max, reason): runs only on Python versions in the range, ends inclusive as (major, minor); a skip outside it is expected in CI",
+    "needs_brotli: needs brotli; CI runs it with `uv run --with brotli pytest -m needs_brotli` and SCRIMMAGE_BROTLI=1",
+    "needs_brotlipy: needs brotlipy; CI runs it with `uv run --with brotlipy pytest -m needs_brotlipy` and SCRIMMAGE_BROTLIPY=1",
+    "needs_nemo: needs the nemo group; CI sets SCRIMMAGE_NEMO=1 on every Python that installs it",
+    "needs_system_python: needs Ubuntu's own Python; the startup job runs it with SCRIMMAGE_SYSTEM_PYTHON=1",
+    "needs_inherit_context: needs Python 3.14 with -X thread_inherit_context=1; CI runs it with SCRIMMAGE_INHERIT_CONTEXT=1",
+    "with_inherit_context_flag: cannot run under -X thread_inherit_context=1; its skip there is expected",
+    "stub_record_lines: posts hand-made record lines on purpose, so the record-line schema check skips the store",
     "kind: makes a kind cluster; runs only with SCRIMMAGE_KIND=1 and -n 0",
 ]
 

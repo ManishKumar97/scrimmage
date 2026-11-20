@@ -48,7 +48,7 @@ from scrimmage_core.config import (
 )
 from scrimmage_core.control import ControlServer, proc_key
 from scrimmage_core.decide import MISTAKE_REFUSAL
-from scrimmage_core.managed import CopyFailed, Managed, free_port
+from scrimmage_core.managed import START_TRIES, CopyFailed, Managed, free_port
 from scrimmage_core.outcomes import (  # the runner's names for them
     INFRA,
     INFRA_ERRORS,
@@ -285,12 +285,8 @@ class Runner:
         scrimmage-runs beside the file."""
         port = 0
         if config.agent.start:
-            # The runner starts its own copy of the service on a free port, filled in the
-            # address here, so every request goes there. Its written form keeps {port}.
             port = free_port()
-            agent = config.agent
-            address = Expanded(service_url(agent, port), str(as_written(agent.service)))
-            config = dataclasses.replace(config, agent=dataclasses.replace(agent, service=address))
+            config = on_port(config, port)
         self.config = config
         self.record = record  # scrimmage record: real calls' lines carry what a mock needs
         self.probe = probe  # scrimmage init --probe: the first model request ends the run
@@ -800,7 +796,38 @@ class Runner:
         answers, or the service's clock and this machine's differ by more than the window.
 
         With start, a probe that fails first asks whether the copy has exited: one whose port
-        another process took exits, and that process may be what answered the probe."""
+        another process took exits, and that process may be what answered the probe. Such a
+        copy is started again on a new port, up to START_TRIES starts; one that failed in any
+        other way is not."""
+        while True:
+            try:
+                return self.probe_until_ready()
+            except CopyFailed:
+                managed = self.managed
+                if self.stop_flag:  # Ctrl-C or SIGTERM, which stopped the copy too
+                    raise Interrupted(self.stop_flag[0]) from None
+                if managed is None or len(managed.ports) >= START_TRIES:
+                    raise
+                if not managed.port_taken():
+                    raise
+                self.start_copy_again(managed)
+
+    def start_copy_again(self, managed: Managed) -> None:
+        """The copy lost its port to another process before it bound it: a new port, in the
+        address every request goes to and in the copy's command, and a new start."""
+        taken, port = managed.port, free_port()
+        config = on_port(self.config, port)
+        if not managed.start_again(port, config, lambda: bool(self.stop_flag)):  # a stop
+            raise Interrupted(self.stop_flag[0] if self.stop_flag else "SIGINT")
+        self.config = config
+        print(
+            f"scrimmage: port {taken} was taken before the service bound it; started it "
+            f"again on port {port}, start {len(managed.ports)} of {START_TRIES}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    def probe_until_ready(self) -> service_client.Probed:
         until = time.monotonic() + READY_S
         try:
             return self.probe_ready()
@@ -1518,6 +1545,14 @@ def kill_those_who_left(run: str, group: int) -> list[tuple[int, str]]:
             continue
         killed.append((pid, command.strip()))
     return killed
+
+
+def on_port(config: Config, port: int) -> Config:
+    """With start: the config whose address is the copy's on port, so every request goes
+    there. Its written form keeps {port}."""
+    agent = config.agent
+    address = Expanded(service_url(agent, port), str(as_written(agent.service)))
+    return dataclasses.replace(config, agent=dataclasses.replace(agent, service=address))
 
 
 def owner_only(path: Path) -> int:

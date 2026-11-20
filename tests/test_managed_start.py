@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -25,7 +26,7 @@ from typing import Any
 import pytest
 
 from conftest import ACME, EXAMPLE
-from scrimmage_core import config, runner
+from scrimmage_core import config, managed, runner
 from scrimmage_core.cli import main
 from scrimmage_core.managed import Managed
 
@@ -93,6 +94,60 @@ async def marking(scope, receive, send):
     if scope["type"] == "lifespan":  # after uvicorn has set its own handlers
         signal.signal(signal.SIGTERM, noted)
     await app(scope, receive, send)
+"""
+# Prints a line that names its port and says "in use", then fails, with no bind at all.
+CHATTY = """import sys
+
+port, which = sys.argv[1], sys.argv[2]
+said = {
+    "unused": f"DEBUG: port {port} not in use by a previous run, continuing",
+    "session": f"INFO: config listen_port={port}; session store in use: redis",
+}
+print(said[which], flush=True)
+raise SystemExit(1)
+"""
+# Binds its port, then serves no request: a client that sends "hold" crashes it, and that
+# client keeps its end open, so the dead copy's end of that connection waits in FIN_WAIT2.
+HOLDS = """import socket
+import sys
+
+server = socket.socket()
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server.bind(("127.0.0.1", int(sys.argv[1])))
+server.listen()
+print("bound", flush=True)
+kept = []
+while True:
+    conn, _ = server.accept()
+    kept.append(conn)
+    conn.settimeout(1.0)
+    try:
+        if conn.recv(4) == b"hold":
+            raise RuntimeError("the shop crashed while it held a client")
+    except TimeoutError:
+        continue
+"""
+# Forks a daemon that leaves the copy's session, binds the port and writes its pid to $1;
+# the command itself exits 0.
+DAEMON = """import os
+import socket
+import sys
+import time
+
+if os.fork() == 0:
+    os.setsid()
+    server = socket.socket()
+    server.bind(("127.0.0.1", int(sys.argv[2])))
+    server.listen()
+    with open(sys.argv[1], "a") as out:
+        out.write(f"{os.getpid()}\\n")
+    time.sleep(120)
+    os._exit(0)
+"""
+# Leaves a child in the copy's group, notes its pid in $1, then becomes uvicorn on $2.
+LINGERS = """sleep 600 &
+echo $! >> "$1"
+exec PYTHON -m uvicorn acme.service:app --port "$2" --loop asyncio
 """
 SHOP_KEY = "shop-key-5a1d9c0e7b"
 SCRIMMAGE = Path(sys.executable).parent / "scrimmage"
@@ -171,6 +226,10 @@ class Shop:
             "stubborn.py": STUBBORN,
             "prints.py": PRINTS,
             "marking.py": MARKING,
+            "chatty.py": CHATTY,
+            "holds.py": HOLDS,
+            "daemon.py": DAEMON,
+            "lingers.sh": LINGERS.replace("PYTHON", sys.executable),
         }.items():
             (self.root / name).write_text(text)
         self.fake = FakeOpenAI(ACME)
@@ -451,6 +510,7 @@ def test_a_child_that_exits_before_ready_is_exit_3_with_its_last_lines(shop: Sho
     assert "the service started with [agent] start exited with code 1 before it was ready" in out
     assert "RuntimeError: the shop database is down" in out, out
     assert f"its whole output is in {shop.log()}" in out, out
+    assert len(shop.copies[0].ports) == 1 and "was taken before" not in out, out  # once
     # It said so as soon as the copy exited, not after the probe's 30 s.
     assert took < runner.READY_S / 2, took
 
@@ -584,22 +644,184 @@ class NotFound(http.server.BaseHTTPRequestHandler):
         del format, args
 
 
-def test_a_port_another_process_holds_names_the_copys_exit(shop: Shop) -> None:
-    """Another process takes the port before the copy binds it, and answers the probe with
-    404. The test names the copy's exit and its log's "address already in use", not the
-    process that answered."""
+@contextlib.contextmanager
+def held_port() -> Iterator[int]:
+    """A port another process holds, as one that took it between the pick and the bind:
+    it answers every request with 404."""
     holder = http.server.ThreadingHTTPServer(("127.0.0.1", 0), NotFound)
     held = threading.Thread(target=holder.serve_forever, daemon=True)
     held.start()
     try:
-        port = int(holder.server_address[1])
-        shop.monkeypatch.setattr(runner, "free_port", lambda: port)
-        code, out = shop.test(f"{UVICORN} acme.service:app --port {{port}} --loop asyncio")
+        yield int(holder.server_address[1])
     finally:
         holder.shutdown()
         holder.server_close()
+
+
+def no_proc(shop: Shop) -> None:
+    """As on a system without /proc/net/tcp, such as macOS: who holds a port is unknown."""
+    shop.monkeypatch.setattr(managed, "sockets_on", lambda port, listen_only=False: None)
+
+
+@pytest.mark.parametrize("proc", [True, False], ids=["proc", "no-proc"])
+def test_a_port_taken_before_the_bind_starts_the_copy_again_on_another(
+    shop: Shop, proc: bool
+) -> None:
+    """The first port the runner picks is taken before the copy binds it: the copy exits
+    with uvicorn's "address already in use", and the runner starts it again on a new port,
+    which every run then goes to. With /proc, the socket that holds the port says so;
+    without it, uvicorn's line does."""
+    if not proc:
+        no_proc(shop)
+    real = managed.free_port
+    with held_port() as taken:
+        picks = iter([taken])
+        shop.monkeypatch.setattr(runner, "free_port", lambda: next(picks, None) or real())
+        code, out = shop.test(f"{UVICORN} acme.service:app --port {{port}} --loop asyncio")
+    assert code == 0, out
+    copy = shop.copies[0]
+    assert len(shop.copies) == 1 and copy.ports == [taken, copy.port] and copy.port != taken
+    again = f"started it again on port {copy.port}, start 2 of {managed.START_TRIES}"
+    assert f"scrimmage: port {taken} was taken before the service bound it; {again}" in out
+    log = shop.log().read_text()
+    # uvicorn on 3.14 puts "[errno 98]" between the address and "address already in use".
+    assert f"('127.0.0.1', {taken}): " in log and "address already in use" in log, log
+    assert f"Uvicorn running on http://127.0.0.1:{copy.port}" in log, log
+    records = list((shop.root / "scrimmage-runs").glob("*/run-*.jsonl"))
+    assert records and all(r.read_text() for r in records)
+    assert copy.proc is not None and group(copy.proc.pid) == []
+
+
+@pytest.mark.parametrize("which", ["unused", "session"])
+@pytest.mark.parametrize("proc", [True, False], ids=["proc", "no-proc"])
+def test_a_line_that_says_in_use_with_the_port_is_not_started_again(
+    shop: Shop, which: str, proc: bool
+) -> None:
+    """A copy that prints its port beside the words "in use", then fails with no bind,
+    lost no port: it is started once."""
+    if not proc:
+        no_proc(shop)
+    code, out = shop.test(f"{sys.executable} chatty.py {{port}} {which}")
+    assert code == 3, out
+    assert "exited with code 1 before it was ready" in out and "in use" in out, out
+    assert "was taken before" not in out and "starts on ports" not in out, out
+    assert len(shop.copies) == 1 and len(shop.copies[0].ports) == 1
+
+
+def test_a_dead_copys_own_connection_is_not_another_process_on_its_port(shop: Shop) -> None:
+    """The copy binds its port, takes a client's connection, and crashes while the client
+    keeps its end open. The copy's end then waits in FIN_WAIT2, owned by no process: that
+    is not another process on the port, so the copy is started once."""
+    real = managed.free_port
+    picked: list[int] = []
+    shop.monkeypatch.setattr(runner, "free_port", lambda: picked.append(real()) or picked[-1])
+    clients: list[socket.socket] = []
+    done = threading.Event()
+
+    def hold() -> None:
+        while not done.is_set():
+            if not picked:
+                time.sleep(0.02)
+                continue
+            client = socket.socket()
+            try:
+                client.connect(("127.0.0.1", picked[0]))
+            except OSError:
+                client.close()
+                time.sleep(0.02)
+                continue
+            client.sendall(b"hold")
+            clients.append(client)  # kept open until the test has ended
+            return
+
+    holder = threading.Thread(target=hold, daemon=True)
+    holder.start()
+    try:
+        code, out = shop.test(f"{sys.executable} holds.py {{port}}")
+    finally:
+        done.set()
+        holder.join(5)
+        for client in clients:
+            client.close()
+    assert clients, "the client never reached the copy"
+    assert code == 3, out
+    assert "RuntimeError: the shop crashed while it held a client" in out, out
+    assert "was taken before" not in out and "starts on ports" not in out, out
+    assert len(shop.copies) == 1 and shop.copies[0].ports == picked[:1], out
+
+
+def test_a_start_that_forks_a_daemon_and_exits_0_is_not_started_again(shop: Shop) -> None:
+    """The command forks a daemon into a session of its own, which binds the port, and
+    exits 0: a clean exit is no failed bind, so the copy is started once, and one daemon
+    is left, the documented limit of setsid."""
+    pids = shop.root / "daemons.txt"
+    try:
+        code, out = shop.test(f"{sys.executable} daemon.py {pids} {{port}}")
+        assert code == 3, out
+        assert "exited with code 0 before it was ready" in out, out
+        assert "was taken before" not in out and "starts on ports" not in out, out
+        assert len(shop.copies) == 1 and len(shop.copies[0].ports) == 1
+    finally:
+        wait_until(pids.exists, 10)
+        for pid in [int(pid) for pid in pids.read_text().split()]:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
+
+
+def alive(pid: int) -> bool:
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except OSError:
+        return False
+    return state not in ("Z", "X")
+
+
+def test_a_start_again_stops_what_the_last_start_left_in_its_group(shop: Shop) -> None:
+    """The first start leaves a child in its group, then fails to bind a port another
+    process took: that child is stopped before the copy starts again, not left running."""
+    pids = shop.root / "children.txt"
+    real = managed.free_port
+    try:
+        with held_port() as taken:
+            picks = iter([taken])
+            shop.monkeypatch.setattr(runner, "free_port", lambda: next(picks, None) or real())
+            code, out = shop.test(f"sh lingers.sh {pids} {{port}}")
+        assert code == 0, out
+        assert shop.copies[0].ports[0] == taken and len(shop.copies[0].ports) == 2, out
+        left = [int(pid) for pid in pids.read_text().split()]
+        assert len(left) == 2, left
+        assert [pid for pid in left if alive(pid)] == [], "a start's child was left running"
+    finally:
+        for pid in [int(pid) for pid in pids.read_text().split()] if pids.exists() else []:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
+
+
+def test_a_port_the_command_fixes_is_not_started_again(shop: Shop) -> None:
+    """The command holds {port}, but binds a port of its own that another process holds:
+    a new port would not help, so the copy is started once and its bind error shown."""
+    with held_port() as fixed:
+        start = f"{UVICORN} acme.service:app --port {fixed} --root-path /{{port}} --loop asyncio"
+        code, out = shop.test(start)
+    assert code == 3, out
+    assert f"('127.0.0.1', {fixed}): " in out and "address already in use" in out, out
+    assert "was taken before" not in out and "starts on ports" not in out, out
+    assert len(shop.copies) == 1 and len(shop.copies[0].ports) == 1
+
+
+def test_a_port_another_process_holds_names_the_copys_exit(shop: Shop) -> None:
+    """Another process takes the port before the copy binds it, and answers the probe with
+    404, at every start. The test names the copy's exit and its log's "address already in
+    use", not the process that answered, once the starts are used up."""
+    with held_port() as port:
+        shop.monkeypatch.setattr(runner, "free_port", lambda: port)
+        code, out = shop.test(f"{UVICORN} acme.service:app --port {{port}} --loop asyncio")
     assert code == 3, out
     # uvicorn exits with code 3 when it cannot bind its port.
-    assert "the service started with [agent] start exited with code 3 before it was ready" in out
+    tries = managed.START_TRIES
+    ports = ", ".join([str(port)] * tries)
+    exited = "the service started with [agent] start exited with code 3 before it was ready"
+    assert f"{exited}, after {tries} starts on ports {ports}" in out, out
+    assert out.count("was taken before the service bound it") == tries - 1, out
     assert "address already in use" in out, out
     assert "does not reach Scrimmage" not in out, out

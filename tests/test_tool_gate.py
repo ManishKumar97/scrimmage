@@ -251,9 +251,11 @@ def test_an_enum_mock_with_no_such_member_is_a_mistake_naming_the_members(
     with pytest.raises(ScrimmageMockError) as caught:
         tool_gate.gate(order_status, "order_status")("1")
     message = (
-        f"the mock does not fit test_tool_gate:Status: {returns!r} is not one of shipped, pending"
+        "the mock does not fit test_tool_gate:Status: the value is not one of shipped, pending"
     )
     assert str(caught.value) == message
+    leaked = returns in str(caught.value).split("is not one of")[0]
+    assert not leaked, "the mock's value was quoted"
     assert lines.lines[0]["mistake"] == message
 
 
@@ -310,9 +312,8 @@ def test_a_mistake_names_at_most_ten_members_of_a_large_enum(lines: Lines) -> No
     with pytest.raises(ScrimmageMockError) as caught:
         tool_gate.gate(get_text, "get_text")("1")
     first = ", ".join(f"v{i}" for i in range(10))
-    assert str(caught.value) == (
-        f"the mock does not fit test_tool_gate:Large: 'sent' is not one of {first}, and 4990 more"
-    )
+    message = "the mock does not fit test_tool_gate:Large: the value is not one of"
+    assert str(caught.value) == f"{message} {first}, and 4990 more"
 
 
 def test_a_change_the_agent_makes_to_a_mock_value_is_not_seen_by_the_next_call(
@@ -1483,7 +1484,6 @@ def test_empty_on_a_return_type_that_cannot_be_resolved_is_a_mistake(lines: Line
 
 
 FUTURE = "from __future__ import annotations\n"
-LAZY = sys.version_info >= (3, 14)  # annotations are evaluated only when asked for
 UNRESOLVED = [
     pytest.param("", 'def f() -> "Missing": ...', "Missing", id="quoted"),
     pytest.param(FUTURE, 'def f() -> "Missing": ...', "Missing", id="quoted_future"),
@@ -1493,7 +1493,7 @@ UNRESOLVED = [
         "def f() -> Optional[Missing]: ...",
         "Optional[Missing]",
         id="lazy",
-        marks=pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself fails"),
+        marks=pytest.mark.needs_python(min=(3, 14), reason="before 3.14 the def itself fails"),
     ),
 ]
 
@@ -1525,7 +1525,7 @@ def test_a_parameter_annotation_that_raises_leaves_the_return_type_readable(line
     assert tool_gate.gate(made(FUTURE, "def f(a: 1 / 0 = 1) -> str: ..."), "f")() == ""
 
 
-@pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself raises")
+@pytest.mark.needs_python(min=(3, 14), reason="before 3.14 the def itself raises")
 def test_a_lazy_annotation_that_raises_is_a_mistake_not_none(lines: Lines) -> None:
     """On 3.14 annotations are read all at once: one that raises hides the return type, in
     every format, so empty cannot tell its value."""
@@ -1551,7 +1551,7 @@ CHECKING = [
     pytest.param(
         "lazy",
         id="lazy",
-        marks=pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself fails"),
+        marks=pytest.mark.needs_python(min=(3, 14), reason="before 3.14 the def itself fails"),
     ),
 ]
 
@@ -1611,12 +1611,12 @@ UNRESOLVED_MOCKED = [
     pytest.param(
         lambda: checking_tool("lazy", "LateStock"),
         id="lazy",
-        marks=pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself fails"),
+        marks=pytest.mark.needs_python(min=(3, 14), reason="before 3.14 the def itself fails"),
     ),
     pytest.param(
         lambda: made("", "def f(a: 1 / 0 = 1) -> str: ..."),
         id="lazy_raises",
-        marks=pytest.mark.skipif(not LAZY, reason="before 3.14 the def itself raises"),
+        marks=pytest.mark.needs_python(min=(3, 14), reason="before 3.14 the def itself raises"),
     ),
 ]
 

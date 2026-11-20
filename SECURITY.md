@@ -11,8 +11,6 @@ Please include what you found, how to reproduce it, and the version or commit yo
 
 ## How a report is handled
 
-DRAFT, to be confirmed by the maintainer:
-
 - **Response:** a first reply within 5 working days, and an assessment within 15 working days.
 - **Supported versions:** Scrimmage has no release yet.
   Until 1.0, only the latest release, and the `main` branch, get security fixes.

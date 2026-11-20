@@ -11,19 +11,24 @@ import threading
 import time
 import traceback
 import warnings
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
 
 import httpx
+import jsonschema
 import pytest
+from jsonschema.exceptions import best_match
 
+import scrimmage_core
 from fakes.openai_server import FakeOpenAI
 from scrimmage_core import runner
 from scrimmage_core.cli import main
 from scrimmage_core.outcomes import OK, ROW_FAILED
+from scrimmage_core.records import RecordStore
+from scrimmage_core.state import RunState
 
 EXAMPLE = Path(__file__).parent / "example"
 
@@ -109,8 +114,11 @@ def label_threads(test: str | None) -> None:
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item: pytest.Item) -> None:
-    del item
     label_threads(None)  # born between tests or in the last teardown
+    # First of all, so no module or session fixture starts for a test that will not run.
+    for mark in item.iter_markers("needs_python"):
+        if outside_python_range(mark):
+            pytest.skip(mark.kwargs["reason"])
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -250,6 +258,71 @@ SEND_OWNERS: tuple[Any, ...] = tuple(
 )
 
 
+RECORD_SCHEMA = json.loads(
+    (Path(scrimmage_core.__file__).parent / "schemas" / "record.v1.json").read_text()
+)
+RECORD_CHECK = jsonschema.Draft202012Validator(RECORD_SCHEMA)
+
+
+def schema_error(line: object) -> str | None:
+    """What record.v1.json refuses in a line, with the line, or None. The line is read as a
+    reader of the file would read it: through JSON."""
+    seen = json.loads(json.dumps(line, default=str))
+    if (error := best_match(RECORD_CHECK.iter_errors(seen))) is None:
+        return None
+    where = "/".join(str(p) for p in error.absolute_path) or "(line)"
+    return f"{where}: {error.message[:200]}\n    line: {json.dumps(seen)}"
+
+
+@pytest.fixture(autouse=True)
+def every_record_line_matches_the_public_schema(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[None]:
+    """Each record line is checked against record.v1.json, the schema the docs publish.
+
+    A line the schema refuses is a record a user's own validator would refuse. Two places
+    are wrapped. RunState.put sees the lines the gates of this process write. RecordStore.add
+    and close_run are the one place every line reaches a file: the lines of a service worker
+    or a child process, which come over /v1/records, and the runner's own lines, such as
+    each summary. A test that posts hand-made lines on purpose is marked stub_record_lines
+    and skips the store check. The errors are collected and fail the test at teardown, so
+    the writers' own code paths are not changed.
+    """
+    bad: list[str] = []
+    put, add, close = RunState.put, RecordStore.add, RecordStore.close_run
+
+    def note(line: object) -> None:
+        if (message := schema_error(line)) is not None:
+            bad.append(message)
+
+    def checked_put(self: RunState, line: dict[str, object], *, keep: bool) -> None:
+        note(line)
+        put(self, line, keep=keep)
+
+    monkeypatch.setattr(RunState, "put", checked_put)
+    if request.node.get_closest_marker("stub_record_lines") is None:
+
+        def checked_add(self: RecordStore, run: str, lines: list[dict[str, object]]) -> int:
+            for line in lines:
+                note(line)
+            return add(self, run, lines)
+
+        def checked_close(
+            self: RecordStore, run: str, test: str, row: str, summary: dict[str, object]
+        ) -> None:
+            note({"v": 1, "run": run, "test": test, "row": row, "summary": summary})
+            close(self, run, test, row, summary)
+
+        monkeypatch.setattr(RecordStore, "add", checked_add)
+        monkeypatch.setattr(RecordStore, "close_run", checked_close)
+    yield
+    monkeypatch.undo()
+    if bad:
+        pytest.fail(
+            f"{len(bad)} record line(s) fail record.v1.json:\n" + "\n".join(bad[:5]), pytrace=False
+        )
+
+
 @pytest.fixture(autouse=True)
 def gated_sends_are_put_back() -> Iterator[None]:
     """A gate patches `_send_single_request` on the sync and async client of each library.
@@ -337,17 +410,64 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         items[:] = [item for item in items if item not in left_out]
 
 
-def pytest_sessionfinish(session: pytest.Session) -> None:
-    """In CI a skipped test fails the run: a safety check that did not run proves nothing.
+# In CI a skip is expected only when the test's own marks say so, never from its reason text.
+# needs_python(min=, max=, reason=) skips outside that range of Python versions (both ends
+# inclusive, as (major, minor)), and a skip it makes is expected. A group mark names tests
+# that another CI step runs, with the variable set to 1: there the same skip fails the run,
+# so a step that lost its dependency cannot go quiet. Everywhere else it is expected.
+GROUPS = {
+    "needs_brotli": "SCRIMMAGE_BROTLI",
+    "needs_brotlipy": "SCRIMMAGE_BROTLIPY",
+    "needs_nemo": "SCRIMMAGE_NEMO",
+    "needs_system_python": "SCRIMMAGE_SYSTEM_PYTHON",
+    "needs_inherit_context": "SCRIMMAGE_INHERIT_CONTEXT",
+}
 
-    A skip is fine on a laptop without Ubuntu's Python; CI must have everything.
-    Under xdist only the controller has a terminal reporter, and it gets every worker's
-    skips, so the check runs there and a worker's session does nothing.
+
+def outside_python_range(mark: pytest.Mark) -> bool:
+    now = sys.version_info[:2]
+    low, high = mark.kwargs.get("min"), mark.kwargs.get("max")
+    return (low is not None and now < low) or (high is not None and now > high)
+
+
+def skip_is_expected(item: pytest.Item) -> bool:
+    if any(outside_python_range(m) for m in item.iter_markers("needs_python")):
+        return True
+    if item.get_closest_marker("with_inherit_context_flag") and getattr(
+        sys.flags, "thread_inherit_context", 0
+    ):
+        return True
+    return any(
+        item.get_closest_marker(name) and os.environ.get(variable) != "1"
+        for name, variable in GROUPS.items()
+    )
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+    report = yield
+    if report.skipped and call.when == "setup" and skip_is_expected(item):
+        report.user_properties.append(("expected_skip", True))
+    return report
+
+
+def pytest_sessionfinish(session: pytest.Session) -> None:
+    """In CI an unexpected skip fails the run: a safety check that did not run proves nothing.
+
+    A skip is fine on a laptop without Ubuntu's Python; CI must have everything, except
+    what skip_is_expected names. Under xdist only the controller has a terminal reporter,
+    and it gets every worker's skips, so the check runs there and a worker does nothing.
     """
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     skipped = reporter.stats.get("skipped", []) if reporter else []
-    if os.environ.get("CI") and skipped:
-        names = ", ".join(report.nodeid for report in skipped)
+    # A collection report, from a skip at module level, has no user_properties.
+    unexpected = [
+        r for r in skipped if ("expected_skip", True) not in getattr(r, "user_properties", [])
+    ]
+    if os.environ.get("CI") and unexpected:
+        names = ", ".join(r.nodeid for r in unexpected)
         print(f"\nskipped tests are not allowed in CI: {names}")
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
 

@@ -31,7 +31,6 @@ from test_service_units import Sink, sink_of
 PLAIN = state.Plain()  # one plain request, still being served
 
 INHERITS = threadctx.inherits()
-ON_314 = sys.version_info >= (3, 14)
 TEAM: contextvars.ContextVar[str] = contextvars.ContextVar("team_variable", default="unset")
 
 
@@ -288,7 +287,7 @@ def test_a_thread_a_plain_request_left_running_meets_the_outside_rules_once_it_r
 
 
 @pytest.mark.design("service.explicit_context_kept")
-@pytest.mark.skipif(not ON_314, reason="Thread(context=...) is new in Python 3.14")
+@pytest.mark.needs_python(min=(3, 14), reason="Thread(context=...) is new in Python 3.14")
 def test_an_explicit_context_on_3_14_is_kept_and_a_call_in_it_is_an_orphan(
     service: state.ProcessState,
 ) -> None:
@@ -314,6 +313,7 @@ def test_an_explicit_context_on_3_14_is_kept_and_a_call_in_it_is_an_orphan(
 
 
 @pytest.mark.design("service.inherit_context_kept")
+@pytest.mark.needs_inherit_context
 @pytest.mark.skipif(not INHERITS, reason="needs Python 3.14 with -X thread_inherit_context=1")
 def test_inherit_context_on_3_14_keeps_the_teams_variables(service: state.ProcessState) -> None:
     run = a_run(service, "run-a")
@@ -342,6 +342,7 @@ def test_a_thread_is_never_wrapped_twice(service: state.ProcessState) -> None:
 
 
 @pytest.mark.design("service.team_variables_untouched")
+@pytest.mark.with_inherit_context_flag
 @pytest.mark.skipif(INHERITS, reason="under thread_inherit_context the stdlib copies them")
 def test_a_thread_started_in_a_run_does_not_carry_the_teams_variables(
     service: state.ProcessState,

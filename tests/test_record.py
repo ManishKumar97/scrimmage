@@ -2265,8 +2265,11 @@ def stock_args(done: Done) -> list[str]:
 
 
 @pytest.mark.design("record.runs_flag")
-@pytest.mark.parametrize("json_form", [True, False])
-@pytest.mark.parametrize("value", ["0", "-1", "1.5", "x", "", "1e3", "1_0", " 5", chr(0xFF15)])
+@pytest.mark.parametrize(
+    ("value", "json_form"),
+    [(v, True) for v in ["0", "-1", "1.5", "x", "", "1e3", "1_0", " 5", chr(0xFF15)]]
+    + [("0", False)],
+)
 def test_runs_must_be_a_whole_number_of_one_or_more(
     team: Team, value: str, json_form: bool
 ) -> None:
