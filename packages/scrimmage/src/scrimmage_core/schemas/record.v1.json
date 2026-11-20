@@ -728,13 +728,16 @@
               "description": "In a service run: the same digest, taken by the claiming process over the plan its run state held when it sent its last batch. null when that batch never came."
             },
             "claimed_by": {
-              "type": "object",
+              "type": [
+                "object",
+                "null"
+              ],
               "additionalProperties": false,
               "required": [
                 "host",
                 "pid"
               ],
-              "description": "In a service run: the process that claimed the run. In a pod, host is the pod's name.",
+              "description": "In a service run: the process that claimed the run. In a pod, host is the pod's name. null when no process claimed the run.",
               "properties": {
                 "host": {
                   "type": [
@@ -822,7 +825,7 @@
         },
         "background_entry": {
           "type": "string",
-          "description": "On a background or lost_context notice: the background_real entry that lets the call through."
+          "description": "On a background or lost_context notice: the background_real entry that lets the call through (background) or would let it through (lost_context)."
         },
         "mock": {
           "type": "integer",

@@ -426,7 +426,7 @@ They are added to version 1 and a reader that does not know them ignores them.
 |---|---|
 | `plan_digest` | HMAC-SHA256, keyed by the service token, of the plan the runner made for this run, without `elapsed_s` and `scrub`. 64 hex characters. |
 | `claimed_plan_digest` | The same digest, taken by the process that claimed the run, over the plan its own run state held when it sent its last batch. `null` when that batch never came. |
-| `claimed_by` | The process that claimed the run: `{"host": ..., "pid": ...}`. In a pod, `host` is the pod's name. |
+| `claimed_by` | The process that claimed the run: `{"host": ..., "pid": ...}`. In a pod, `host` is the pod's name. `null` when no process claimed the run. |
 
 The two digests are equal when the process served the plan the runner made.
 When they differ, the run is an infrastructure error, with a `plan_changed` notice line in its record.
@@ -460,7 +460,9 @@ A read or a model call that is not listed in `background_real` gets the notice `
 The run it lands in may not hold every call that belongs to it, so the run is an infrastructure error.
 A call that is listed gets the notice `background`, and it runs.
 Both lines carry `call`, the call's label, such as `http:stock.test` or `process:multiprocessing`.
-Both also carry `background_entry`, the `background_real` entry that lets the call through, such as `http:stock.test GET /items`.
+Both also carry `background_entry`, such as `http:stock.test GET /items`.
+On a `background` notice it is the `background_real` entry that lets the call through.
+On a `lost_context` notice it is the entry that would let the call through.
 
 
 ## Values that can grow
