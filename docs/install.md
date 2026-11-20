@@ -57,7 +57,9 @@ uv pip install ./packages/scrimmage
 To use a Python version other than uv's default, add it to the first command, such as `uv venv -p 3.11`.
 
 In a project uv manages, a later `uv sync` removes Scrimmage from the environment unless it is a dependency of the project.
-Add it with `uv add --dev ./packages/scrimmage`, and `uv sync` keeps it.
+From your own project's folder, run `uv add --dev /path/to/scrimmage/packages/scrimmage`, and `uv sync` keeps it.
+That writes a path source into your `pyproject.toml` and `uv.lock`, so CI and your teammates need the clone at the same path.
+To keep Scrimmage out of the project's files instead, run `uv sync --inexact`, which leaves extra packages alone.
 
 ### As wheel files
 

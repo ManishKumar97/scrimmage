@@ -501,7 +501,13 @@ def test_a_stopped_test_keeps_a_result_for_the_runs_that_ended(
         ("baseline", 1, 1)
     ]
     infra = [m["message"] for m in kept["infra"]]
-    assert infra[-1] == "stopped by SIGTERM; every run was stopped"
+    assert infra[-1] == "stopped by SIGTERM; the runs still going were stopped"
+    # The document on standard output says what the file says.
+    assert doc["rows"] == kept["rows"] and doc["rows"]
+    assert [m["message"] for m in doc["infra"]] == infra
+    assert doc["mistakes"] == kept["mistakes"] and doc["notes"] == kept["notes"]
+    # The baseline was cut, not failed: the fault row has no result, not "baseline failed".
+    assert [r["result"] for r in kept["rows"]][1:] == ["no result"] * (len(kept["rows"]) - 1)
     capsys.readouterr()
     faulted_run(folder, real_id(folder.name), "order-status", "baseline")  # the fake run's record
     assert cli.main(["show", str(folder)]) == 0
@@ -520,3 +526,45 @@ def test_a_stopped_result_is_not_a_result_to_compare_with(
     doc = json.loads((folder / "result.json").read_text())
     (why,) = compare.problems_with(doc, "earlier")
     assert "stopped" in why
+
+
+def test_a_stopped_result_is_refused_on_either_side_of_a_comparison(
+    project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    scripted(project, monkeypatch, 10, 10)
+    cli.main(["test", str(project.toml)])
+    (full,) = folders(project)
+    monkeypatch.undo()
+    interrupted_after_one_run(project, monkeypatch)
+    cli.main(["test", str(project.toml)])
+    (stopped,) = set(folders(project)) - {full}
+    capsys.readouterr()
+    for folder in (stopped, full):
+        faulted_run(folder, real_id(folder.name), "order-status", "baseline")
+    assert cli.main(["show", str(stopped), "--compare", str(full)]) == 2
+    assert "the later result is of a test that was stopped" in capsys.readouterr().err
+    assert cli.main(["show", str(full), "--compare", str(stopped)]) == 2
+    assert "the earlier result is of a test that was stopped" in capsys.readouterr().err
+
+
+def test_a_signal_after_a_refusal_keeps_the_refusals_reason_and_no_result(
+    project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cfg = config.load(project.toml)
+    first = planner.rows(cfg)[0]
+    sent: list[bool] = []
+
+    def one(self: Runner, row: object) -> RunResult | None:
+        if sent:
+            return None
+        sent.append(True)
+        self.stopped_by = "budget"
+        os.kill(os.getpid(), signal.SIGTERM)
+        return run(first, 0)
+
+    monkeypatch.setattr(Runner, "one", one)
+    assert cli.main(["test", "--json", str(project.toml)]) == 3
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["stopped_by"] is None and doc["result_file"] is None
+    (folder,) = folders(project)
+    assert not (folder / "result.json").exists()

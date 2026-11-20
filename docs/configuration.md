@@ -29,7 +29,7 @@ Anything this version does not support is rejected as unknown, with exit code 2.
 | `model_hosts` | Extra hosts whose requests are model calls, such as a gateway, each with the format it speaks: `[{host = "llm-gateway.internal", provider = "openai"}]`. A host name only, with no port. | empty |
 | `reserve_output_tokens` | The output tokens a budget reservation assumes when a request does not set `max_tokens`. A call that does not fit while others hold the budget waits for them; see [When calls in flight hold the budget](model-faults.md#when-calls-in-flight-hold-the-budget). | 4096 |
 | `prices` | Prices for other models, as the table below. The key `""` prices a call that sends no model name. | empty |
-| `answer` | Where the answer is in what the function returns, such as `"messages[-1].content"`, or in a service's JSON reply, such as `"reply"`. With `function` or `service`. Required when the function returns anything but text, as the whole value would hold tool results too. See [Agents on a framework](frameworks.md). | the returned text, or a service's whole reply |
+| `answer` | Where the answer is in what the function returns, such as `"messages[-1].text"`, or in a service's JSON reply, such as `"reply"`. With `function` or `service`. Required when the function returns anything but text, as the whole value would hold tool results too. See [Agents on a framework](frameworks.md). | the returned text, or a service's whole reply |
 
 ### The function and its input
 
@@ -45,7 +45,7 @@ def answer(question: str) -> dict:
 ```toml
 [agent]
 function = "package.graph:answer"
-answer   = "messages[-1].content"
+answer   = "messages[-1].text"
 ```
 
 See [Agents on a framework](frameworks.md) for the whole example.

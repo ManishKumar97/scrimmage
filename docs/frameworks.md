@@ -28,7 +28,7 @@ def answer(question: str) -> dict:
 ```toml
 [agent]
 function = "package.graph:answer"
-answer   = "messages[-1].content"
+answer   = "messages[-1].text"
 real     = ["tool:check_inventory"]
 
 [[test]]

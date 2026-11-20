@@ -64,7 +64,7 @@ from scrimmage_core.outcomes import (  # the runner's names for them
 from scrimmage_core.records import RECORD_VERSION, RecordStore
 from scrimmage_core.redact import redact, redact_decoded
 from scrimmage_core.render import HEAD, miss_text, row_cells, table_lines
-from scrimmage_core.results import HASH_VERSION, row_hash
+from scrimmage_core.results import HASH_VERSION, STOPPED_BY_SIGNAL, row_hash
 from scrimmage_core.state import COMMAND_CAP, now_iso
 
 END = b"\x00"  # ends the stop watcher; no signal has the number 0
@@ -1668,7 +1668,10 @@ class RowReport:
         return any(r.outcome == "refused call" for r in self.runs)
 
 
-def row_reports(config: Config, results: list[RunResult]) -> list[RowReport]:
+def row_reports(
+    config: Config, results: list[RunResult], interrupted: bool = False
+) -> list[RowReport]:
+    """interrupted: a signal cut the test, so a baseline that did not pass was cut, not failed."""
     reports: list[RowReport] = []
     for row in planner.rows(config):
         mine = [r for r in results if r.row == row]
@@ -1678,7 +1681,7 @@ def row_reports(config: Config, results: list[RunResult]) -> list[RowReport]:
         )
         # The baseline is its test's first row, so it is judged before its fault rows.
         baseline = next(r for r in reports if r.row.test == row.test) if row.fault else None
-        failed = baseline is not None and baseline.result.verdict != judge.PASS
+        failed = baseline is not None and baseline.result.verdict != judge.PASS and not interrupted
         reports.append(RowReport(row, mine, result, failed))
     return reports
 
@@ -1843,7 +1846,8 @@ def build_report(
 ) -> Report:
     """What a run of tests found. judged=False is for scrimmage record, whose one run is not a
     rate: a row with no result, a failed rule and a mock no run used are then not mistakes."""
-    reports = row_reports(config, results)
+    cut = runner is not None and runner.stopped_by == STOPPED_BY_SIGNAL
+    reports = row_reports(config, results, cut)
     table = [HEAD, *(row_cells(row_json(entry, config.agent)) for entry in reports)]
     mistakes: list[str] = []
     notes: list[str] = []

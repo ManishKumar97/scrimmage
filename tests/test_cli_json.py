@@ -40,6 +40,7 @@ from scrimmage_core import (
 )
 from scrimmage_core import init as init_module
 from scrimmage_core import render as rendering
+from scrimmage_core import results as results_file
 from scrimmage_core.runner import Runner, build_report, print_report, report_json
 from show_cases import faulted_run, real_id, write_folder
 
@@ -309,6 +310,68 @@ def test_sigint_during_a_test_still_prints_one_document(
     assert cast(float, doc["cost_usd"]) > 0, doc["cost_usd"]
 
 
+ANSWER_THEN_HANG = '''"""The first run answers; the next makes its call, then hangs."""
+
+import time
+from pathlib import Path
+
+import openai
+
+
+def answer(question):
+    reply = openai.OpenAI(max_retries=0).chat.completions.create(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": question}]
+    )
+    first = Path("first")
+    if not first.exists():
+        first.touch()
+        return reply.choices[0].message.content or "answered"
+    Path("called").touch()
+    time.sleep(600)
+    return "never"
+'''
+
+
+@pytest.mark.design("json.interrupted_keeps_result")
+@pytest.mark.slow
+def test_sigint_after_one_run_ended_keeps_a_result_that_show_reads(
+    project: Project, fake_openai: Fake, leftovers: list[subprocess.Popen[str]]
+) -> None:
+    (project.root / "acme" / "answer_then_hang.py").write_text(ANSWER_THEN_HANG)
+    project.edit(
+        'function = "acme.agent:answer"',
+        'function = "acme.answer_then_hang:answer"\nruns = 2\nparallel = 1\nrun_timeout = 120',
+    )
+    project.edit(project.toml.read_text().split("[[test.fault]]")[1], "")
+    project.edit("[[test.fault]]", "")
+    fake = fake_openai(["chat_answer", "chat_answer"])
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
+    proc = subprocess.Popen(
+        [SCRIMMAGE, "test", "--json", str(project.toml)],
+        env={**env, **model_env(fake)}, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )  # fmt: skip
+    leftovers.append(proc)
+    wait_for(project.root / "called")  # one run ended; the second is in its sleep
+    proc.send_signal(signal.SIGINT)
+    out, err = proc.communicate(timeout=60)
+    done = Done(proc.returncode, out, err)
+    assert done.code == 3, out + err
+    doc = one_document(done, "test")
+    assert doc["stopped_by"] == "interrupted" and doc["result_file"] is not None
+    assert [(r["row"], r["done"]) for r in cast(list[dict[str, Any]], doc["rows"])] == [
+        ("baseline", 1)
+    ]
+    result = Path(cast(str, doc["result_file"]))
+    kept = json.loads(result.read_text())
+    assert kept["rows"] == doc["rows"] and kept["stopped_by"] == "interrupted"
+    shown = subprocess.run(
+        [SCRIMMAGE, "show", str(result.parent)],
+        env=env, capture_output=True, text=True, timeout=60,
+    )  # fmt: skip
+    assert shown.returncode == 0, shown.stderr
+    assert "stopped by a signal" in shown.stdout and "baseline" in shown.stdout
+
+
 def test_ctrl_c_outside_the_runs_is_still_one_document(
     project: Project, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -439,7 +502,12 @@ def test_each_enum_lists_every_value_the_code_gives() -> None:
     assert found["judged"] == list(judge.RUN_VERDICTS)
     assert found["outcome"] == list(outcomes.OUTCOMES)
     assert found["kind"] == list(judge.KINDS)
-    assert found["stopped_by"] == list(runner.STOPPED_BY) * 2  # a test's, then a record's
+    # A test's, which adds the signal that stopped it, then a record's.
+    assert found["stopped_by"] == [
+        *runner.STOPPED_BY,
+        results_file.STOPPED_BY_SIGNAL,
+        *runner.STOPPED_BY,
+    ]
     assert found["change"] == list(compare.CHANGES)
     assert found["action"] == ["real", "refused", *show.ACTIONS]  # a miss's, then a line's
     # A record's code, then a suggestion's.

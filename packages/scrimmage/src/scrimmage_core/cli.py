@@ -480,19 +480,22 @@ def run_test(
         if runner is not None:
             runner.server.server.server_close()
     if stopped is not None:
-        written = None
+        kept: StoppedResult | None = None
         if interrupted is not None and runner is not None and interrupted.results:
-            stopped, written = save_stopped(config, runner, interrupted, stopped, path)
+            kept = save_stopped(config, runner, interrupted, stopped, path)
         if found is None:
-            print(f"scrimmage: {stopped}", file=sys.stderr)
+            print(f"scrimmage: {stopped if kept is None else kept.line}", file=sys.stderr)
             if compare is not None:
                 print(f"scrimmage: {NOT_FINISHED}", file=sys.stderr)
             return INFRA
         if compare is not None:
             found.messages.append((NOTES, NOT_FINISHED))
-        if written is not None:
-            found.fields["result_file"] = str(written)
-            found.fields["stopped_by"] = results_file.STOPPED_BY_SIGNAL
+        if kept is not None:
+            stopped = kept.message
+            found.messages += kept.messages
+            if kept.fields:  # the document says what the partial report found, as the file does
+                found.fields.clear()
+                found.fields.update(kept.fields, result_file=kept.written and str(kept.written))
         return found.fail(stopped)
     assert runner is not None
     report = running.build_report(config, results, runner.folder, runner)
@@ -533,20 +536,35 @@ def run_test(
 NOT_FINISHED = "the test did not finish, so it has no result to compare"
 
 
+@dataclasses.dataclass
+class StoppedResult:
+    """What a signal left of a test: the report's parts, and where result.json went."""
+
+    message: str  # the infra message the document and the file carry
+    line: str  # the same, for the text form: with how many runs had ended and where they are
+    written: Path | None = None
+    messages: list[tuple[str, str]] = dataclasses.field(default_factory=list[tuple[str, str]])
+    fields: dict[str, object] = dataclasses.field(default_factory=dict[str, object])
+
+
 def save_stopped(
     config: settings.Config,
     runner: Runner,
     interrupted: Interrupted,
     stopped: str,
     path: Path,
-) -> tuple[str, Path | None]:
+) -> StoppedResult:
     """A signal stopped the test: keep result.json for the runs that had ended, marked stopped.
 
-    Returns the line that says how the test ended, and the file's path or None. It never
-    changes the exit code, and a failure to build or write the file is said in that line.
+    It never changes the exit code, and a failure to build or write the file is said in the
+    line. A test an earlier refusal, such as the budget, stopped keeps no result, as before.
     """
     from scrimmage_core import runner as running
 
+    if runner.stopped_by is not None:
+        return StoppedResult(stopped, stopped)
+    count = plural(len(interrupted.results), "run")
+    stopped = f"stopped by {interrupted}; the runs still going were stopped"
     try:
         runner.stopped_by = results_file.STOPPED_BY_SIGNAL
         report = running.build_report(config, interrupted.results, runner.folder, runner)
@@ -558,15 +576,23 @@ def save_stopped(
             dict[str, object],
             redact.scrubbed({**running.report_json(report), "compare": None}, config.scrub),
         )
-        said.append((INFRA_ERRORS, stopped))
-        doc = document("test", INFRA, str(path), said, versions.installed(), **fields)
+        doc = document(
+            "test",
+            INFRA,
+            str(path),
+            [*said, (INFRA_ERRORS, stopped)],
+            versions.installed(),
+            **fields,
+        )
     except Exception as exc:  # the stop is what the exit code states, whatever happens here
-        return f"{stopped}; the finished runs have no {results_file.RESULT_FILE}: {exc!r}", None
+        runner.stopped_by = None
+        line = f"{stopped}; the {count} that had ended have no {results_file.RESULT_FILE}: {exc!r}"
+        return StoppedResult(stopped, line)
     written, warning = save_result(runner.folder, doc)
     if written is None:
-        return f"{stopped}; {warning}", None
-    count = plural(len(interrupted.results), "run")
-    return f"{stopped}; {count} had ended, and {written} holds them", written
+        return StoppedResult(stopped, f"{stopped}; {warning}", None, said, fields)
+    line = f"{stopped}; {count} had ended, and {written} holds them"
+    return StoppedResult(stopped, line, written, said, fields)
 
 
 def test_mistakes(problems: list[str], found: Found | None) -> int:
@@ -956,6 +982,8 @@ def run_show(
             shown.mistakes += problems
         elif shown.result is None:
             shown.mistakes.append(f"{shown.records}: has no {results_file.RESULT_FILE} to compare")
+        elif later := comparing.problems_with(shown.result, "later"):
+            shown.mistakes += later
         else:
             compared = comparing.document(
                 str(compare), earlier, comparing.rows(earlier, shown.result)

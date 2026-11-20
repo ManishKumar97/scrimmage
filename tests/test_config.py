@@ -547,6 +547,8 @@ def test_two_identical_fault_rows_are_refused(tmp_path: Path) -> None:
     row = '[[test.fault]]\ncall = "model"\ndo = "status 429"\nforbid = ["sent"]\n'
     other = row.replace("429", "500")
     assert with_fault(tmp_path, row + other)  # rows that differ are fine
+    for own in ('forbid = ["other"]', 'expect = ["sorry"]'):  # only the rules differ
+        assert with_fault(tmp_path, row + row.replace('forbid = ["sent"]', own))
     with pytest.raises(ConfigError) as caught:
         with_fault(tmp_path, row + other + "\n" + row)
     assert str(caught.value) == (

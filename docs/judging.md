@@ -72,6 +72,7 @@ forbid = ["has been sent"]
 
 An empty `expect` needs a `forbid` on the same row, or nothing would judge the answer, and Scrimmage refuses the file.
 A test's own `expect` can never be empty.
+A forbid-only row still fails an empty answer, a crash and a time-out; a non-empty answer free of every forbidden text passes, even one such as "I could not reach the model."
 
 A fault that fires on every call must have its own `expect` or a `forbid` with something in it.
 An agent with no data can still write the expected words from general knowledge, and a rule cannot tell where the words came from, so such a row would pass when it should not. Scrimmage refuses the file, with exit code 2.
