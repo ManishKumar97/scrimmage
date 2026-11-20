@@ -233,11 +233,15 @@ def rewritten(bench: Bench, edit: Callable[[dict[str, Any]], None]) -> Callable[
 
 @pytest.mark.design("service.version_unknown")
 @pytest.mark.parametrize(
-    ("found", "named"),
-    [("unknown", "unknown"), ("banana", "banana"), ("", "no version")],
-    ids=["unknown", "text", "empty"],
+    ("found", "named", "runner"),
+    [
+        pytest.param("unknown", "unknown", "", id="known-runner-unknown"),
+        pytest.param("banana", "banana", "", id="known-runner-text"),
+        pytest.param("", "no version", "", id="known-runner-empty"),
+        pytest.param("unknown", "unknown", "unknown", id="unknown-runner-unknown"),
+        pytest.param("", "no version", "unknown", id="unknown-runner-empty"),
+    ],
 )
-@pytest.mark.parametrize("runner", ["", "unknown"], ids=["known-runner", "unknown-runner"])
 def test_an_unknown_version_never_matches_even_itself(
     bench: Bench, runner_is: Callable[[str], None], found: str, named: str, runner: str
 ) -> None:

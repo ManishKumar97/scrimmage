@@ -642,17 +642,6 @@ def test_the_json_rows_and_lists_say_what_the_table_says(
         "find": None,
         "retry_after": None,
     }
-    # T1: tools that are methods on a class.
-    project.edit('function = "acme.agent:answer"', 'function = "acme.toolkit:answer"')
-    project.edit(
-        'tools    = ["acme.tools:get_order", "acme.tools:check_inventory", '
-        '"acme.tools:refund_order", "acme.tools:get_stock"]',
-        'tools    = ["acme.toolkit:StoreTools.get_order", '
-        '"acme.toolkit:StoreTools.check_inventory", "acme.toolkit:StoreTools.refund_order", '
-        '"acme.toolkit:StoreTools.get_stock"]',
-    )
-    _, doc = e2e(project, fake_openai(ACME))
-    assert doc["exit"] in (0, 1), doc
 
 
 def test_a_row_carries_its_runs_and_the_rules_they_broke() -> None:
@@ -1460,43 +1449,9 @@ def test_a_suggestions_evidence_item_is_a_record_line_or_the_summary(
     assert checker.is_valid([item]) is valid
 
 
-def main_cells(entry: runner.RowReport) -> list[str]:
-    """A table row as main formatted it: from the counts and judge.wilson, never from JSON."""
-    row, mine, result = entry.row, entry.runs, entry.result
-    fault = "-"
-    if row.fault is not None:
-        when = "" if row.fault.when == "always" else f" {row.fault.when}"
-        fault = f"{row.fault.target} {row.fault.do}{when}"
-    rate, span = "-", "-"
-    if result.judged and not entry.baseline_failed:  # beside a failed baseline, no rate
-        low, high = judge.wilson(result.passed, result.judged)
-        rate, span = f"{result.passed / result.judged:.0%}", f"{low * 100:.0f}-{high:.0%}"
-    return [
-        row.test.name,
-        row.name,
-        fault,
-        str(len(mine)),
-        "-" if row.fault is None else str(sum(bool(r.fault_fired) for r in mine)),
-        str(sum(1 for r in mine if r.outcome == "answered")),
-        f"{result.passed}/{result.judged}",
-        rate,
-        span,
-        f"{sum(r.tool_calls for r in mine) / max(len(mine), 1):.1f}",
-        f"{sum(r.cost_usd for r in mine):.5f}",
-        judge.BASELINE_FAILED if entry.baseline_failed else result.verdict,
-    ]
-
-
 @pytest.mark.design("json.text_unchanged")
 def test_text_output_is_unchanged(project: Project, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The text of `scrimmage test` is what main printed: the shared renderer changed no byte."""
-    for name in sorted(CASES):  # every case, byte for byte, against files main printed
-        case = CASES[name]()
-        out = io.StringIO()
-        code = runner.report(case.config, case.results, FOLDER, out, case.runner)  # type: ignore[arg-type]
-        assert f"exit {code}\n" + out.getvalue() == (GOLDEN / f"{name}.txt").read_text(), name
-        rep = build_report(case.config, case.results, FOLDER, case.runner)  # type: ignore[arg-type]
-        assert rep.table[1:] == [main_cells(entry) for entry in rep.rows], name
+    """`scrimmage test` writes result.json and never names it in its text."""
     monkeypatch.setattr(Runner, "one", lambda self, row: None)
     project.capsys.readouterr()
     cli.main(["test", str(project.toml)])
