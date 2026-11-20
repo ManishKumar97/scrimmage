@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+import yaml
 
 import scrimmage_core
 from conftest import EXAMPLE, doc_pages
@@ -802,3 +803,36 @@ def test_the_readme_on_pypi_is_a_page_for_a_new_visitor(
     (project / "scrimmage.toml").write_text(block)
     assert cli.main(["check", str(project / "scrimmage.toml")]) == 0
     assert "2 rows" in capsys.readouterr().out  # the baseline and the timeout fault
+
+
+def test_the_ci_page_warns_that_the_file_runs_code_and_its_sample_guards_the_fork() -> None:
+    text = page("ci.md")
+    assert "`scrimmage.toml` names code that Scrimmage imports and runs." in text
+    assert "runs that pull request's code, with every secret the job holds" in text
+    for trigger in (
+        "pull_request_target",
+        "workflow_run",
+        "issue_comment",
+        "pull_request_review_comment",
+    ):
+        assert f"`{trigger}`" in text.split("## Before this works")[0], trigger
+    assert "Any trigger that checks out a pull request's head while the job holds secrets" in text
+    (sample,) = re.findall(r"```yaml\n(.*?)```", text, re.S)
+    assert "pull_request_target" not in sample
+    assert "|| true" not in sample
+    workflow = yaml.safe_load(sample)
+    assert workflow[True] == {"pull_request": None}  # PyYAML reads the key `on` as True
+    assert workflow["permissions"] == {"contents": "read"}
+    assert "env" not in workflow
+    (job,) = workflow["jobs"].values()
+    assert job["if"] == "github.event.pull_request.head.repo.full_name == github.repository"
+    assert "env" not in job
+    steps = job["steps"]
+    for step in steps:
+        if step.get("uses", "").startswith("actions/checkout@"):
+            assert step["with"]["persist-credentials"] is False
+        if "uses" in step:  # every action is pinned to a full SHA
+            assert re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", step["uses"]), step["uses"]
+    holders = [s for s in steps if "secrets." in str(s.get("env", {}))]
+    assert [s["run"] for s in holders] == ["uv run scrimmage test --max-cost-usd 1"]
+    assert not [s for s in steps if "secrets." in str({k: v for k, v in s.items() if k != "env"})]

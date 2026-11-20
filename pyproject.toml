@@ -34,6 +34,8 @@ dev = [
     "cryptography>=46",
     "fastmcp>=4.1.6",
     "pytest-xdist>=3.8.0",
+    # tests/test_docs.py parses the CI sample workflow
+    "pyyaml>=6",
     # tests/test_mcp_server.py proves the Scrimmage MCP server makes no span.
     "opentelemetry-sdk>=1.45",
     # tests/test_threadctx.py checks a service on uvloop, which uvicorn picks when installed.

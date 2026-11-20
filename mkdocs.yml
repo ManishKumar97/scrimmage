@@ -105,6 +105,7 @@ nav:
       - Testing your guardrails: guardrails.md
       - Recording replies: recording.md
       - Reading a finished test: show.md
+      - Running Scrimmage in CI: ci.md
   - Reference:
       - Commands: cli.md
       - JSON output: json-output.md
