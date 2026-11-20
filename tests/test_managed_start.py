@@ -762,10 +762,12 @@ def test_a_start_that_forks_a_daemon_and_exits_0_is_not_started_again(shop: Shop
         assert "was taken before" not in out and "starts on ports" not in out, out
         assert len(shop.copies) == 1 and len(shop.copies[0].ports) == 1
     finally:
-        wait_until(pids.exists, 10)
-        for pid in [int(pid) for pid in pids.read_text().split()]:
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(pid, signal.SIGKILL)
+        with contextlib.suppress(AssertionError):  # no file: leave the real failure showing
+            wait_until(pids.exists, 10)
+        if pids.exists():
+            for pid in [int(pid) for pid in pids.read_text().split()]:
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(pid, signal.SIGKILL)
 
 
 def alive(pid: int) -> bool:
