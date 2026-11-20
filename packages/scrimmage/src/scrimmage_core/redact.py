@@ -141,6 +141,20 @@ AUTH_NAME = re.compile(r"(?:.*[_-])?authorization", re.ASCII | re.IGNORECASE)
 LABELS = ("name", "key", "header", "field")
 
 
+# The names a literal is made of. A name that holds another (pgpassword holds password, and
+# authtoken, accesstoken hold token) is left out.
+FIELD_LITERAL_NAMES = (
+    "password",
+    "passwd",
+    "token",
+    "secret",
+    "secret_access_key",
+    "api_key",
+    "api%5fkey",
+    "pgpass",
+    "mysql_pwd",
+)
+
 SECRETS = (
     # OpenAI and Anthropic keys
     Secret(r"sk-(?:proj-|ant-|svcacct-)?[A-Za-z0-9_-]{16,}", ("sk-",), name="openai-key"),
@@ -166,9 +180,12 @@ SECRETS = (
         name="bearer-token",
     ),
     Secret(BASIC, ("authorization",), lowercase=True, name="basic-credential"),
+    # FIELD has the name and then = or %3d with nothing between, so each literal is a name and
+    # its separator. A bare "token" would hold in every OpenAI body (max_tokens), and the
+    # regex would run on every request. pgpassword= holds password=, so it needs none.
     Secret(
         FORM,
-        ("password", "passwd", "token", "secret", "api_key", "api%5fkey", "pgpass", "mysql_pwd"),
+        tuple(f"{name}{sep}" for name in FIELD_LITERAL_NAMES for sep in ("=", "%3d")),
         True,
         "form-field",
     ),
@@ -178,6 +195,11 @@ SECRETS = (
 PATTERNS = re.compile("|".join(secret.pattern for secret in SECRETS))
 LITERALS = tuple(lit for secret in SECRETS if not secret.lowercase for lit in secret.literals)
 LOWER_LITERALS = tuple(lit for secret in SECRETS if secret.lowercase for lit in secret.literals)
+# Every form-field literal holds = or %3d, so a text with neither skips all of them.
+FIELD_LITERALS = tuple(
+    lit for secret in SECRETS if secret.name == "form-field" for lit in secret.literals
+)
+OTHER_LOWER_LITERALS = tuple(lit for lit in LOWER_LITERALS if lit not in FIELD_LITERALS)
 
 
 # A JWT. Each run of token characters is tried once, from its first eyJ, with no backing up,
@@ -352,17 +374,82 @@ def remove_keys(text: str, decoded: bool = False) -> tuple[str, int]:
     return "".join(out), len(places)
 
 
-ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
+UNICODE_ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
+# The two-character JSON escapes other than the backslash, which read_json handles first.
+SIMPLE_ESCAPES = (
+    ('\\"', '"'),
+    ("\\/", "/"),
+    ("\\b", "\b"),
+    ("\\f", "\f"),
+    ("\\n", "\n"),
+    ("\\r", "\r"),
+    ("\\t", "\t"),
+)
+PAIR = "\x00"  # stands for an escaped backslash while the other escapes are read
+READS = 6  # reads of a JSON string inside a JSON string, then the passes run to be safe
+# The reads cost at most a few passes over the text, but a large text that is mostly
+# backslashes costs more to read than the passes it might save, so it runs them at once.
+READ_MAX_LENGTH = 65536
+READ_MAX_BACKSLASHES = 4096
 
 
-def holds_candidate(text: str) -> bool:
-    """Whether any pass could match: the text holds a string every match of that pass holds."""
-    if "\\u" in text:  # a JSON escape can hide a letter: p\u0061ssword
-        text = ESCAPE.sub(lambda found: chr(int(found.group(1), 16)), text)
+def unicode_char(found: re.Match[str]) -> str:
+    """The character a \\uXXXX escape stands for. A NUL is left as written: it is PAIR."""
+    code = int(found.group(1), 16)
+    return chr(code) if code else found.group()
+
+
+def read_json(text: str) -> str:
+    """The text read once as the inside of a JSON string, left to right: an escaped
+    backslash is one backslash, and the character after it is not read as an escape. Pairs
+    of backslashes go first, which is the same left to right, as a run of them pairs up from
+    its start and an odd one out then escapes the next character."""
+    paired = "\\\\" in text
+    if paired:
+        text = text.replace("\\\\", PAIR)
+    for escape, char in SIMPLE_ESCAPES:
+        if escape in text:
+            text = text.replace(escape, char)
+    if "\\u" in text:
+        text = UNICODE_ESCAPE.sub(unicode_char, text)
+    return text.replace(PAIR, "\\") if paired else text
+
+
+def holds_literal(text: str) -> bool:
     if "://" in text or "eyJ" in text or any(lit in text for lit in LITERALS):
         return True
     lowered = text.lower()
-    return any(lit in lowered for lit in LOWER_LITERALS)
+    if any(lit in lowered for lit in OTHER_LOWER_LITERALS):
+        return True
+    return ("=" in lowered or "%3d" in lowered) and any(lit in lowered for lit in FIELD_LITERALS)
+
+
+def holds_candidate(text: str) -> bool:
+    """Whether any pass could match: the text holds a string every match of that pass holds.
+    A JSON escape can hide a letter or the = (p\\u0061ssword, password\\u003d), and a JSON string
+    inside a JSON string hides it deeper, so the text is also read as a JSON string again
+    and again until it stops changing, and each reading is looked at. Whatever the reading
+    cannot settle cheaply or surely, it answers True, so it never costs more than the passes."""
+    backslashes = text.count("\\")
+    if len(text) > READ_MAX_LENGTH and backslashes > READ_MAX_BACKSLASHES:
+        return True  # before any scan: the passes scan the text themselves
+    if holds_literal(text):
+        return True
+    if not backslashes:
+        return False
+    if PAIR in text:
+        return True
+    current = text
+    for _ in range(READS):
+        read = read_json(current)
+        if read == current:
+            return False
+        if holds_literal(read):
+            return True
+        if "\\" not in read:
+            return False  # nothing left to read
+        current = read
+    return True  # still changing after READS: too deep to rule out
 
 
 def plain(text: str, decoded: bool = False) -> tuple[str, int]:
