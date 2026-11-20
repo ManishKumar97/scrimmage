@@ -391,6 +391,11 @@ READS = 6  # reads of a JSON string inside a JSON string, then the passes run to
 # backslashes costs more to read than the passes it might save, so it runs them at once.
 READ_MAX_LENGTH = 65536
 READ_MAX_BACKSLASHES = 4096
+# The characters the reads may process, summed, as a multiple of the text's length. Past it the
+# check answers True, so a text under the caps above is read at most about three times, then
+# the passes run.
+READ_WORK_FACTOR = 3
+READ_WORK_FLOOR = 8192  # a small text may always be read to the limit: that is cheap
 
 
 def unicode_char(found: re.Match[str]) -> str:
@@ -429,7 +434,7 @@ def holds_candidate(text: str) -> bool:
     A JSON escape can hide a letter or the = (p\\u0061ssword, password\\u003d), and a JSON string
     inside a JSON string hides it deeper, so the text is also read as a JSON string again
     and again until it stops changing, and each reading is looked at. Whatever the reading
-    cannot settle cheaply or surely, it answers True, so it never costs more than the passes."""
+    cannot settle surely, or within the read work budget, it answers True and the passes run."""
     backslashes = text.count("\\")
     if len(text) > READ_MAX_LENGTH and backslashes > READ_MAX_BACKSLASHES:
         return True  # before any scan: the passes scan the text themselves
@@ -440,7 +445,11 @@ def holds_candidate(text: str) -> bool:
     if PAIR in text:
         return True
     current = text
+    work = max(READ_WORK_FACTOR * len(text), READ_WORK_FLOOR)
     for _ in range(READS):
+        work -= len(current)
+        if work < 0:
+            return True  # the reads have cost as much as the passes might
         read = read_json(current)
         if read == current:
             return False

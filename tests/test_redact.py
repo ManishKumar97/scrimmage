@@ -1741,8 +1741,8 @@ def test_read_json_reads_a_string_as_a_json_reader_does() -> None:
 def test_a_large_text_of_mostly_backslashes_is_not_read_it_runs_the_passes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The pre-check must never cost more than skipping it: past its budget it answers True
-    at once, without reading the text."""
+    """The pre-check's reads are bounded: a text over the length and backslash caps answers True
+    at once, without reading it."""
 
     def refuse(text: str) -> str:
         raise AssertionError("read a text over the budget")
@@ -1750,3 +1750,38 @@ def test_a_large_text_of_mostly_backslashes_is_not_read_it_runs_the_passes(
     monkeypatch.setattr(redact_module, "read_json", refuse)
     assert redact_module.holds_candidate("\\\\" * 500_000)
     assert redact_module.holds_candidate("a\x00\\n")  # PAIR in the text, so no safe read
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_a_text_just_under_the_caps_is_read_for_a_bounded_amount_of_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The caps alone let a 1 MB text with 4096 backslashes in 64 runs go through all six
+    reads, about ten times the cost of one scan. The characters read, summed over the reads,
+    stay within the work budget, and past it the answer is True: the passes run."""
+    text = "".join("\\" * 64 + "b" * (16384 - 64) for _ in range(64))
+    assert len(text) == 1 << 20
+    assert text.count("\\") == redact_module.READ_MAX_BACKSLASHES
+    seen: list[int] = []
+    real_read = redact_module.read_json
+
+    def counting(current: str) -> str:
+        seen.append(len(current))
+        return real_read(current)
+
+    monkeypatch.setattr(redact_module, "read_json", counting)
+    assert redact_module.holds_candidate(text)
+    assert sum(seen) <= redact_module.READ_WORK_FACTOR * len(text), seen
+    assert len(seen) < redact_module.READS, seen
+    # a small text is read as deep as the limit: that is cheap, and the answer stays exact
+    seen.clear()
+    nested = "a"
+    for _ in range(5):
+        nested = json.dumps({"k": nested + "\n"})
+    assert not redact_module.holds_candidate(nested)
+    assert len(seen) == 5, seen
+    # with no budget at all the same text is not read, so it is the floor that allows the reads
+    monkeypatch.setattr(redact_module, "READ_WORK_FACTOR", 0)
+    assert not redact_module.holds_candidate(nested)
+    monkeypatch.setattr(redact_module, "READ_WORK_FLOOR", 0)
+    assert redact_module.holds_candidate(nested)
