@@ -3,7 +3,17 @@
 These are real measurements, all from one machine.
 Treat them as a guide to the size of each cost, not as a promise about yours.
 
-**Machine:** a Microsoft Azure `Standard_D4as_v4` virtual machine, x86_64, with 4 vCPUs and Linux, running Python 3.11.17, otherwise idle.
+**Machine:** a Microsoft Azure `Standard_D4as_v4` virtual machine, x86_64, with 4 vCPUs and Linux, running Python 3.11.17.
+
+**Where the numbers come from:**
+
+- Every number on this page comes from one run of `tests/benchmark.py` with the default 5 rounds.
+- Commit: `2b011b8`.
+- Date: 2026-11-20, 14:15 UTC.
+- The run had the machine to itself, with no other work running.
+- The load average was 0.76 when the run was staged and 1.34 at its start, from a `uv sync` that had just finished.
+- It was 1.27 after the run.
+- Libraries, as pinned in `uv.lock` at that commit: httpx 0.28.1, httpx2 2.16.0, openai 3.46.0, mcp 2.3.0, uvicorn 0.54.0 and langchain-core 1.8.4.
 
 **To reproduce them,** from the root of a clone, after `uv sync`:
 
@@ -28,31 +38,54 @@ The table gives the time added at the median and at the 99th percentile, in micr
 
 | Call | Ungated p50 | Gated p50 | Added p50 (spread) | Ungated p99 | Gated p99 | Added p99 (spread) |
 |---|---|---|---|---|---|---|
-| Tool call, sync | 0.2 | 43.3 | 43.1 (42.6 to 43.5) | 0.2 | 102.1 | 101.9 (91.3 to 109.6) |
-| Tool call, async | 0.3 | 43.3 | 43.0 (42.8 to 43.6) | 0.3 | 96.7 | 96.4 (86.7 to 105.6) |
-| Tool call, args miss, on a tool under `real` | 0.2 | 132.3 | 132.1 (130.8 to 136.0) | 0.3 | 335.1 | 334.9 (310.5 to 354.9) |
-| Web request through httpx, sync | 357.9 | 673.6 | 306.8 (280.5 to 320.5) | 514.9 | 1095.6 | 585.4 (523.0 to 1017.2) |
-| Web request through httpx, async | 697.8 | 1074.6 | 372.8 (348.5 to 397.1) | 941.0 | 1508.6 | 600.0 (488.9 to 1131.8) |
-| Model call, sync, budget on | 1231.0 | 2890.4 | 1645.5 (1610.1 to 1696.6) | 1383.4 | 3867.7 | 2484.3 (2081.9 to 3363.0) |
-| Model call, async, budget on | 1543.7 | 3640.7 | 2071.2 (2036.5 to 2121.0) | 1761.0 | 5633.1 | 3962.1 (3476.7 to 4301.5) |
-| Model call, sync, budget off | 1231.0 | 1730.8 | 499.8 (464.5 to 540.5) | 1383.4 | 2442.2 | 1069.4 (514.7 to 1173.3) |
-| Model call, async, budget off | 1543.7 | 2155.2 | 614.2 (531.1 to 621.6) | 1761.0 | 2762.6 | 1047.4 (881.6 to 2331.6) |
-| MCP tool call, stdio, async | 1305.5 | 1564.3 | 257.3 (220.9 to 270.3) | 1444.6 | 2198.2 | 725.0 (628.4 to 1004.7) |
-
-The args miss row comes from a separate run on 2026-11-11, made while other work shared the machine, so it is noisier than the other rows, which come from an earlier run.
+| Tool call, sync | 0.2 | 52.3 | 52.1 (51.1 to 52.8) | 0.2 | 119.6 | 119.4 (108.9 to 129.4) |
+| Tool call, async | 0.3 | 52.2 | 51.9 (51.5 to 52.1) | 0.3 | 111.9 | 111.6 (108.3 to 118.2) |
+| Tool call, args miss, on a tool under `real` | 0.2 | 150.3 | 150.1 (148.7 to 152.7) | 0.3 | 382.2 | 381.9 (330.9 to 443.3) |
+| Web request through httpx, sync | 387.8 | 746.9 | 356.9 (266.2 to 385.7) | 564.4 | 1311.3 | 732.1 (631.2 to 989.6) |
+| Web request through httpx, async | 694.1 | 1136.7 | 444.4 (431.0 to 460.0) | 884.8 | 1673.3 | 806.4 (705.1 to 833.4) |
+| Model call, sync, budget on | 1308.8 | 3038.3 | 1733.6 (1686.8 to 1829.1) | 1517.0 | 4333.7 | 2678.8 (2158.9 to 3047.2) |
+| Model call, async, budget on | 1628.0 | 3842.0 | 2214.0 (2173.9 to 2301.7) | 2326.8 | 6284.0 | 4565.6 (3339.1 to 4624.2) |
+| Model call, sync, budget off | 1308.8 | 1794.1 | 485.2 (467.0 to 491.9) | 1517.0 | 2457.1 | 775.9 (368.5 to 1386.9) |
+| Model call, async, budget off | 1628.0 | 2240.3 | 611.8 (588.7 to 648.4) | 2326.8 | 3674.2 | 1720.1 (894.9 to 2568.7) |
+| MCP tool call, stdio, async | 1355.5 | 1688.3 | 341.0 (315.1 to 392.9) | 1717.8 | 2600.5 | 1082.8 (376.5 to 1184.3) |
 
 A mocked call makes no real call, so it has no ungated row to compare with.
-A mocked tool call takes 48.0 µs at the median, and a mocked web request 185.5 µs.
-A call that misses a mock with `args`, on a tool under `real` by name, runs for real and adds about 132 µs, as it looks for the nearest mock and keeps the evidence.
+A mocked tool call takes 50.4 µs at the median, and a mocked web request 208.5 µs.
+A call that misses a mock with `args`, on a tool under `real` by name, runs for real and adds about 150 µs, as it looks for the nearest mock and keeps the evidence.
 
 A gated model call with a budget on makes one extra signed request to the runner, to reserve the call's money.
 That is the largest part of the time it adds.
 
 A real provider's response time was not measured here.
-If a model call takes 200 ms, 2 ms adds 1 percent.
+If a model call takes 200 ms, the 1.7 ms a sync call adds with a budget on is 0.9 percent, and the 2.2 ms an async call adds is 1.1 percent.
 
 The MCP library has no sync client, so MCP has only an async row.
 The MCP rows use the stdio transport.
+
+## Change since the last page
+
+The last page came from runs on 2026-11-09 and 2026-11-11.
+A bisect on 2026-11-20 explained the rows that moved.
+
+- Model calls grew after PR #46 on 11 November.
+  A redaction pre-check matched `max_tokens` in every body, so its full pattern ran on every request and reply.
+  PR #162 fixed it, and the redactor is now also faster than before on nested text.
+  The model rows are back near the old page: 1733.6 µs against 1645.5 µs for a sync call with a budget on, and 2214.0 against 2071.2 for an async one.
+- A mocked tool call grew after PR #105, which resolved the return type on every call.
+  PR #161 caches it.
+  It now takes 50.4 µs, against 48.0 µs on the old page.
+- The 9 November tool rows measured a shared plan that later gained an args-miss mock.
+  PR #161 measures that row in its own plan, so the old and new tool rows are not the same measure.
+- What is left is on a real tool call.
+  It adds about 52 µs now, against 43 µs on 9 November, which is 9 µs more.
+  The bisect put that on miss recording (PR #42) and the scan for secret literals.
+- Startup grew about 15 ms, for example 68.2 to 86.2 ms to the first line for a root process, and 45.2 to 61.0 ms for the import of `scrimmage_core.cli`.
+  That comes from the redactor compiling more patterns and from config, and it is tracked.
+
+The MCP call went from 257.3 to 341.0 µs at the median, which is 33 percent.
+That change is not explained.
+The bisect did not cover it, and its spread in this run, 315.1 to 392.9, is wide.
+The other first-table rows moved by less than 20 percent, except the tool rows, which are explained above.
 
 ## Not measured
 
@@ -69,10 +102,10 @@ Each column is in milliseconds, against plain Python.
 
 | Process | First line (spread) | Added | Exit (spread) | Added |
 |---|---|---|---|---|
-| Plain Python | 9.1 (9.0 to 9.3) | 0 | 11.0 (10.9 to 11.1) | 0 |
-| Hooks loaded, root process | 77.5 (77.0 to 78.1) | 68.2 | 92.4 (91.7 to 92.7) | 81.3 |
-| Hooks loaded, child process | 75.4 (74.9 to 75.7) | 66.3 | 87.6 (87.1 to 88.6) | 76.7 |
-| Through `scrimmage-run`, the real path | 98.8 (98.1 to 99.2) | 89.5 | 113.3 (113.0 to 113.9) | 102.2 |
+| Plain Python | 9.2 (9.1 to 9.5) | 0 | 11.3 (11.2 to 11.5) | 0 |
+| Hooks loaded, root process | 95.7 (95.0 to 96.8) | 86.2 | 112.9 (112.3 to 114.8) | 101.5 |
+| Hooks loaded, child process | 92.6 (91.9 to 94.4) | 83.3 | 107.0 (106.3 to 108.2) | 95.7 |
+| Through `scrimmage-run`, the real path | 118.4 (117.1 to 120.6) | 109.2 | 135.9 (134.3 to 136.2) | 124.6 |
 
 A run's root process wakes the thread that sends records when it exits, so its last records go at once and it does not wait for that thread's 100 ms window.
 A child process sends each record as it is made, so it has none left to send.
@@ -83,10 +116,10 @@ Wall time in milliseconds, with the median of 5 repeats of 5 commands each.
 
 | Command | Wall ms (spread) | Added to plain Python |
 |---|---|---|
-| Plain Python | 11.2 (11.1 to 11.9) | 0 |
-| Import of `scrimmage_core.cli` | 56.4 (56.1 to 57.0) | 45.2 |
-| `scrimmage --help` | 59.9 (59.8 to 61.5) | 48.7 |
-| `scrimmage check` on the example | 60.2 (59.6 to 62.0) | 49.0 |
+| Plain Python | 11.5 (11.2 to 11.7) | 0 |
+| Import of `scrimmage_core.cli` | 72.6 (71.9 to 72.7) | 61.0 |
+| `scrimmage --help` | 76.8 (76.7 to 78.0) | 65.6 |
+| `scrimmage check` on the example | 76.5 (75.7 to 77.0) | 65.0 |
 
 ## Runner overhead per run
 
@@ -95,19 +128,20 @@ The cost per run comes from the slope between a test of 1 run and a test of 11 r
 
 | Measure | ms (spread) |
 |---|---|
-| Whole cost of one run | 162.0 (157.2 to 162.1) |
-| The same agent under plain Python | 11.9 (11.8 to 12.4) |
-| Added per run by the runner and hooks | 150.1 (145.1 to 150.3) |
-| Fixed cost of one `scrimmage test` | 541.1 (539.2 to 544.0) |
+| Whole cost of one run | 168.2 (166.9 to 169.0) |
+| The same agent under plain Python | 12.3 (12.1 to 13.8) |
+| Added per run by the runner and hooks | 155.5 (154.8 to 156.2) |
+| Fixed cost of one `scrimmage test` | 584.7 (584.4 to 593.5) |
 
 ## Budgets
 
 The suite's slow tier has a test, `tests/test_benchmark_budgets.py`, that fails when a cost goes over its ceiling.
 The ceilings are set far above today's quiet numbers, and above the worst seen on a machine under heavy load.
-That is 11.6 times for a tool call, 19.6 times for a sync web request, 18.8 times for an async one, 23.3 times for an MCP call, 12.2 times for a sync model call, 9.7 times for an async one, and 10.6 to 12.3 times for the CLI.
+That is 9.6 times for a tool call, 16.8 times for a sync web request, 16.9 times for an async one, 17.6 times for an MCP call, 11.5 times for a sync model call, 10.4 times for an async one, and 8.0 to 9.1 times for the CLI.
 So they do not fail because the machine is busy, and they catch only a large slowdown.
 Of the per-call ceilings, only the tool call's catches one added round trip to the runner.
-A web request needs about 5.7 ms added to fail, and a model call about 18 ms.
+A sync web request needs about 5.6 ms added to fail, and an async one about 7.1 ms.
+A sync model call needs about 18.3 ms added to fail, and an async one about 20.8 ms.
 The wait at exit is not caught by a ceiling.
 A test that sets the sender's window to an hour catches it, with no clock.
 
@@ -126,8 +160,8 @@ Nothing enforces a smaller slowdown.
 |---|---|
 | Tool call, added | 500 µs |
 | Tool call that misses a mock, added | 1.5 ms |
-| Web request, added | 6 ms sync, 7 ms async |
-| Model call with a budget, added | 20 ms |
+| Web request, added | 6 ms sync, 7.5 ms async |
+| Model call with a budget, added | 20 ms sync, 23 ms async |
 | MCP tool call, added | 6 ms |
 | Startup, added to the first line | 800 ms |
 | Startup, added to process exit | 1150 ms |
