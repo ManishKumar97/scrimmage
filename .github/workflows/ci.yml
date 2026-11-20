@@ -59,7 +59,9 @@ jobs:
 
   system-python:
     name: Startup tests on Ubuntu's Python
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: the tests name Ubuntu 24.04's own Python 3.12, and the
+    # newer image ships only Python 3.14 under /usr/bin.
+    runs-on: ubuntu-24.04
     env:
       # A distribution's Python has its own sitecustomize, which Scrimmage must chain to.
       UV_PYTHON: /usr/bin/python3.12
@@ -70,6 +72,12 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
         with:
           version: ${{ env.UV_VERSION }}
+      # CI fails a skipped test, and the apport test needs Ubuntu's apport hook module.
+      - name: Ubuntu's apport hook, and a check that the system Python is the one named
+        run: |
+          sudo apt-get install -y --no-install-recommends python3-apport
+          /usr/bin/python3.12 -c "import sys; assert sys.version_info[:2] == (3, 12), sys.version"
+          test -f /usr/lib/python3.12/sitecustomize.py
       - run: uv sync
       - run: uv run pytest tests/test_other_python.py tests/test_bootstrap.py tests/test_process_gate.py
 
