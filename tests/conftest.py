@@ -3,6 +3,7 @@ import json
 import multiprocessing.process
 import os
 import platform
+import re
 import shutil
 import signal
 import subprocess
@@ -337,17 +338,45 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         items[:] = [item for item in items if item not in left_out]
 
 
-def pytest_sessionfinish(session: pytest.Session) -> None:
-    """In CI a skipped test fails the run: a safety check that did not run proves nothing.
+# A skip whose reason matches is expected, and CI lets it stand. The first kind cannot apply
+# on that Python at all. The second kind is run by another CI step: that step sets the
+# variable to 1, and then the same skip fails the run, so a step that lost its dependency
+# cannot go quiet.
+VERSION_GATE = re.compile(r"\b3\.1[1-4]\b")
+RUN_ELSEWHERE = [
+    (re.compile(r"uv run --with brotli\b"), "SCRIMMAGE_BROTLI"),
+    (re.compile(r"uv run --with brotlipy\b"), "SCRIMMAGE_BROTLIPY"),
+    (re.compile(r"Ubuntu's Python|second Python without Scrimmage"), "SCRIMMAGE_SYSTEM_PYTHON"),
+    (re.compile(r"nemoguardrails is not installed"), "SCRIMMAGE_NEMO"),
+]
 
-    A skip is fine on a laptop without Ubuntu's Python; CI must have everything.
-    Under xdist only the controller has a terminal reporter, and it gets every worker's
-    skips, so the check runs there and a worker's session does nothing.
+
+def skip_reason(report: Any) -> str:
+    longrepr = report.longrepr
+    return str(longrepr[2]) if isinstance(longrepr, tuple) else str(longrepr)
+
+
+def skip_is_expected(reason: str) -> bool:
+    if VERSION_GATE.search(reason):
+        return True
+    return any(
+        pattern.search(reason) and os.environ.get(variable) != "1"
+        for pattern, variable in RUN_ELSEWHERE
+    )
+
+
+def pytest_sessionfinish(session: pytest.Session) -> None:
+    """In CI an unexpected skip fails the run: a safety check that did not run proves nothing.
+
+    A skip is fine on a laptop without Ubuntu's Python; CI must have everything, except
+    what skip_is_expected names. Under xdist only the controller has a terminal reporter,
+    and it gets every worker's skips, so the check runs there and a worker does nothing.
     """
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     skipped = reporter.stats.get("skipped", []) if reporter else []
-    if os.environ.get("CI") and skipped:
-        names = ", ".join(report.nodeid for report in skipped)
+    unexpected = [r for r in skipped if not skip_is_expected(skip_reason(r))]
+    if os.environ.get("CI") and unexpected:
+        names = ", ".join(f"{r.nodeid} ({skip_reason(r)})" for r in unexpected)
         print(f"\nskipped tests are not allowed in CI: {names}")
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
 

@@ -65,6 +65,8 @@ jobs:
     env:
       # A distribution's Python has its own sitecustomize, which Scrimmage must chain to.
       UV_PYTHON: /usr/bin/python3.12
+      # The system-Python tests run here, so a skip of one fails this job.
+      SCRIMMAGE_SYSTEM_PYTHON: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
@@ -93,6 +95,8 @@ jobs:
       UV_PYTHON: ${{ matrix.python }}
       # Ubuntu's own 3.12 starts each process far more slowly than uv's build.
       UV_PYTHON_PREFERENCE: only-managed
+      # NeMo does not install on 3.14 yet, so its tests may skip there and nowhere else.
+      SCRIMMAGE_NEMO: ${{ matrix.python != '3.14' && '1' || '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
@@ -100,7 +104,7 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
         with:
           version: ${{ env.UV_VERSION }}
-      - run: uv sync
+      - run: uv sync --group nemo
       - name: Check the job runs the Python it names
         run: uv run python -c "import sys; v = '.'.join(map(str, sys.version_info[:2])); assert v == '${{ matrix.python }}', v"
       # Python 3.11's sys.settrace raises RuntimeError in a thread that starts while another
@@ -120,8 +124,16 @@ jobs:
           mv .coverage ".coverage.py${{ matrix.python }}"
       # br is undone with the program's own brotli, which the dev group leaves out, so the
       # br tests skip above. This runs them with it, never as a dependency of the package.
+      # The variable makes a skip of a br test fail this step.
       - name: The br tests, with brotli installed
-        run: uv run --with brotli pytest tests/test_encodings.py tests/test_model_replace.py tests/test_changes.py
+        env:
+          SCRIMMAGE_BROTLI: "1"
+        run: uv run --with brotli pytest tests/test_encodings.py tests/test_model_replace.py tests/test_changes.py tests/test_reply_faults.py tests/test_real_against_injected.py
+      # The old brotlipy package: httpx unpacks br with it and Scrimmage cannot, so leaves it.
+      - name: The br tests, with brotlipy installed
+        env:
+          SCRIMMAGE_BROTLIPY: "1"
+        run: uv run --with brotlipy pytest tests/test_encodings.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         if: matrix.python != '3.11'
         with:
