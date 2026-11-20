@@ -460,6 +460,16 @@ def internal(method: Callable[..., Any]) -> Any:
 _teardown = threading.local()  # set while a pool tears itself down: Pool.__del__, its finalizer
 
 
+def pool_ends(given: object) -> list[object]:
+    """The ends recorded for a pool or a queue; a queue's own entry names itself weakly."""
+    ends: list[object] = []
+    for end in POOL_ENDS.get(given, ()):
+        found = cast("object | None", end() if isinstance(end, weakref.ref) else end)
+        if found is not None:
+            ends.append(found)
+    return ends
+
+
 def teardown(method: Callable[..., Any]) -> Any:
     """A pool's teardown when it is dropped, Pool.__del__ and the finalizer's _terminate_pool:
     it sends its workers their stop and starts nothing, under any slot."""
@@ -472,7 +482,7 @@ def teardown(method: Callable[..., Any]) -> Any:
         mine: list[object] = []
         for given in [*args, *kwargs.values()]:
             with contextlib.suppress(TypeError):
-                mine += POOL_ENDS.get(given, ())
+                mine += pool_ends(given)
         was = getattr(_teardown, "ends", ())
         _teardown.ends = tuple(mine)
         try:
@@ -733,7 +743,9 @@ def thread_pool_init(method: Callable[..., Any], threads: type, ended: object) -
             mine = [e for e in (queue, writer, reader) if e is not None]
             ends += mine
             with contextlib.suppress(TypeError):
-                POOL_ENDS[queue] = tuple(mine)
+                # The queue is the key, so its own entry holds it only weakly: a value that
+                # holds its key keeps it, and its two pipe ends, open for good.
+                POOL_ENDS[queue] = (weakref.ref(queue), *(e for e in mine if e is not queue))
                 if isinstance(self, threads) and name == "_change_notifier":
                     for end in mine:
                         IN_PROCESS_QUEUES.add(end)  # a pipe within this process
