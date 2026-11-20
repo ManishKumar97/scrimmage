@@ -86,6 +86,7 @@ class PrintVersion(argparse.Action):
         values: object,
         option_string: str | None = None,
     ) -> None:
+        del namespace, values, option_string  # the flag takes no value and sets nothing
         sys.stdout.write(f"scrimmage {versions.installed()}\n")
         parser.exit()
 
