@@ -582,6 +582,13 @@ def read_file(path: Path, data: dict[str, object], reader: Reader) -> Config:
         if test.name in seen:
             raise ConfigError(f"[[test]] {test.name!r}: name is used twice")
         seen.add(test.name)
+        for j, fault in enumerate(test.faults, 1):
+            if (first := test.faults.index(fault) + 1) != j:
+                raise ConfigError(
+                    f"[[test.fault]] {j} of {test.name!r}: the same as [[test.fault]] {first}; "
+                    "a repeated row runs the same fault again, and runs in [agent] already sets "
+                    "how many times every row runs"
+                )
         parsed.append(test)
     config = Config(agent, tuple(parsed), path.parent, tuple(sorted(reader.scrub)))
     problems = check_references(config)

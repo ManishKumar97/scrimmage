@@ -542,6 +542,19 @@ def last_fault_rules(cfg: config.Config) -> judge.Rules:
     return test.rules_for(test.faults[-1])
 
 
+@pytest.mark.design("config.duplicate_fault_row")
+def test_two_identical_fault_rows_are_refused(tmp_path: Path) -> None:
+    row = '[[test.fault]]\ncall = "model"\ndo = "status 429"\nforbid = ["sent"]\n'
+    other = row.replace("429", "500")
+    assert with_fault(tmp_path, row + other)  # rows that differ are fine
+    with pytest.raises(ConfigError) as caught:
+        with_fault(tmp_path, row + other + "\n" + row)
+    assert str(caught.value) == (
+        "[[test.fault]] 4 of 'order-status': the same as [[test.fault]] 2; a repeated row "
+        "runs the same fault again, and runs in [agent] already sets how many times every row runs"
+    )
+
+
 @pytest.mark.design("budget.snapshot_prices")
 def test_a_snapshot_priced_apart_from_its_family_has_its_own_row() -> None:
     from scrimmage_core import provider_openai as table
