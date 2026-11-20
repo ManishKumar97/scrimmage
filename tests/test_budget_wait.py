@@ -17,7 +17,6 @@ import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
-import httpx2
 import pytest
 
 from conftest import EXAMPLE_FAULT, Project, Result, TimeLimit
@@ -29,9 +28,8 @@ from scrimmage_core.client import ControlClient, ControlError
 from scrimmage_core.config import Agent
 from scrimmage_core.control import ControlServer
 from scrimmage_core.errors import ScrimmageRefused
-from scrimmage_core.plan import Plan
 from scrimmage_core.records import RecordStore
-from test_http_gate import BODY, URL, Budget, Sink, client, gated, install, make_plan, stopper
+from test_http_gate import BODY, URL, Budget, client, gated, install, make_plan
 
 Fake = Callable[..., FakeOpenAI]
 TOKEN = "f" * 64
@@ -632,53 +630,6 @@ def test_a_wait_on_another_run_shrinks_by_the_time_the_runner_says_has_passed(
     assert isinstance(numbers, dict) and numbers["own"] is False
 
 
-class Shared:
-    """One clock for the run's state and the gate: it moves only when told to."""
-
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, now: float) -> None:
-        self.now = now
-        self.slept: list[float] = []
-        monkeypatch.setattr(state, "time", self)
-        monkeypatch.setattr(http_gate, "time", self)
-
-    def monotonic(self) -> float:
-        return self.now
-
-    def sleep(self, seconds: float) -> None:
-        self.slept.append(seconds)
-        self.now += max(seconds, 1e-6)
-
-
-@pytest.mark.design("wait.counts_from_the_runners_start")
-def test_the_time_a_plan_takes_to_arrive_counts_in_the_runs_age(
-    gated: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The plan says the run was 100 s old when the runner sent it. Receiving and reading it
-    took 15 s more, so the run is 115 s old of 120 s. Counting from the arrival made it 100 s,
-    and a wait on another run's hold went on to 10 s past the limit's margin."""
-    clock = Shared(monkeypatch, 1000.0)
-    plan = make_plan(budget=0.004, time_limit_s=120.0, elapsed_s=100.0)
-
-    def slow_load() -> Plan:
-        clock.now += 15.0  # the reply arriving and being checked and parsed
-        return plan
-
-    budget = Budget(limit=0.004)
-    budget.ledger.reserve(0.003, "run-other", LABEL)  # a hold that never settles
-    sink = Sink()
-    run = state.RunState(None, sink, [], load=slow_load)
-    state.install(run)
-    http_gate.patch(httpx2, http_gate.Context(run, budget, sink, stopper([])))
-    with pytest.raises(ScrimmageRefused, match="model:openai in run-other"):
-        client().post(URL, json=BODY)
-    assert clock.slept == [], "5 s are left, less than the 10 s margin: no wait at all"
-    refusal = sink.lines[-1]
-    assert refusal["reason"] == "budget_held", sink.lines
-    numbers = refusal["budget"]
-    assert isinstance(numbers, dict) and numbers["waited_s"] == 0.0
-    assert not budget.ledger._line, "no ticket is left to be asked again"
-
-
 def held_forever(
     limit: float, time_limit: float = 1.0, run: str = "run-1"
 ) -> tuple[Budget, list[object]]:
@@ -920,15 +871,9 @@ def test_a_stream_held_open_across_a_second_call_ends_in_a_clear_stop(project: P
     assert "was reached" not in result.out
 
 
-SLOW_START = """\
-# The first run takes the budget. The second starts its program once the first holds it.
-if mkdir first 2>/dev/null; then exec python race.py hold "$1"; fi
-while [ ! -e holding ]; do sleep 0.05; done
-exec python race.py wait "$1"
-"""
-
 RACE = '''"""Run A opens a stream, which holds the budget, and keeps it open. Run B needs room."""
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -936,11 +881,15 @@ from pathlib import Path
 import openai
 from scrimmage_core import http_gate
 
-role, question = sys.argv[1], sys.argv[2]
+question = sys.argv[1]
+# The role file exists because the plan is fetched at bootstrap import, before this code runs,
+# and the test's server writes the file before it answers that request.
+role = Path(f"role-{os.environ['SCRIMMAGE_RUN']}").read_text()
 client = openai.OpenAI(max_retries=0)
 messages = [{"role": "user", "content": question}]
 if role == "hold":
     client.chat.completions.create(model="gpt-4o-mini", messages=messages, stream=True)
+    time.sleep(2)  # the waiter's plan must wait for this: a server that does not wait fails
     Path("holding").touch()
     time.sleep(600)  # the stream stays open until the test stops this run
 else:
@@ -953,56 +902,29 @@ else:
     print(reply.choices[0].message.content)
 '''
 RUN_TIMEOUT_S = 600.0  # a tenth of it is 60 s, so the margin is not cut below RUN_MARGIN_S
+HOLD_WAIT_S = 8.0  # under the control client's 10 s timeout, so the test fails, not hangs
 STARTUP_S = RUN_TIMEOUT_S - 60.0  # run_timeout less the margin: no time is left to wait
-
-
-def slow_start_run(
-    project: Project,
-    monkeypatch: pytest.MonkeyPatch,
-    time_limit: TimeLimit,
-    *,
-    age: float,
-    reply_delay: float = 0.0,
-) -> tuple[Result, list[str]]:
-    """Two runs, the second waiting on the first's hold. The second is made `age` seconds old
-    when its program asks for its plan, and the reply is sent `reply_delay` s late."""
-    real_plan = control.ControlServer._plan
-
-    def slow_start(server: control.ControlServer, run: str) -> tuple[int, dict[str, object]]:
-        if (project.root / "holding").exists():  # the waiting run starts once the hold is on
-            server.runs[run].opened = time.monotonic() - age
-            answer = real_plan(server, run)  # the reply is made now, with the age it has now
-            time.sleep(reply_delay)
-            return answer
-        return real_plan(server, run)
-
-    real_reserve = control.ControlServer._reserve
-    asked_again: list[str] = []
-
-    def reserve(server: control.ControlServer, body: bytes) -> tuple[int, dict[str, object]]:
-        if json.loads(body).get("ticket") is not None:
-            asked_again.append("waiting")
-        return real_reserve(server, body)
-
-    monkeypatch.setattr(control.ControlServer, "_plan", slow_start)
-    monkeypatch.setattr(control.ControlServer, "_reserve", reserve)
-    time_limit.at(lambda: bool(asked_again))
-    (project.root / "slow_start.sh").write_text(SLOW_START)
-    (project.root / "race.py").write_text(RACE)
-    project.edit(
-        'function = "acme.agent:answer"',
-        'command = "sh slow_start.sh {question}"\nruns = 2\nparallel = 2\nmax_cost_usd = 0.004\n'
-        f"run_timeout = {RUN_TIMEOUT_S:g}",
-    )
-    project.edit(EXAMPLE_FAULT, "")
-    result = run_on_fake(project, ["chat_stream_usage"])
-    return result, asked_again
 
 
 @pytest.mark.design("wait.slow_start_end_to_end")
 @pytest.mark.slow
+@pytest.mark.parametrize(
+    ("made_age", "reply_delay"),
+    [
+        (STARTUP_S, 0.0),
+        # The plan says 64 s are left, 4 s more than the margin. The reply then takes 7 s
+        # (the control client gives up at 10 s), so the margin is gone. The run's age counts
+        # from its request, so it does not wait. Counted from the reply, it would wait 4 s.
+        (STARTUP_S - 4.0, 7.0),
+    ],
+    ids=["start-up", "slow-reply"],
+)
 def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
-    project: Project, monkeypatch: pytest.MonkeyPatch, time_limit: TimeLimit
+    project: Project,
+    monkeypatch: pytest.MonkeyPatch,
+    time_limit: TimeLimit,
+    made_age: float,
+    reply_delay: float,
 ) -> None:
     """A program that takes most of its run_timeout to load, as `uv run` on a cold cache can,
     then waits on another run's hold. Its wait must end before the runner's limit, so the run
@@ -1012,30 +934,91 @@ def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
     plan. Only the margin is then left, so any wait at all is one the design forbids, and the
     limit arrives the moment a call asks again. The first build waited, and timed out.
     The holding run keeps its real age, so its own start-up races no limit.
+
+    The test's server picks the roles, not the programs: the first run to ask for its plan
+    holds, and the plan of the next waits, inside the server, until the hold is on. A shell
+    race to pick the holder let two runs both hold in CI, and the one whose plan came first
+    was not aged, so it waited and asked again.
     """
-    result, asked_again = slow_start_run(project, monkeypatch, time_limit, age=STARTUP_S)
+    real_plan = control.ControlServer._plan
+
+    fetches: list[str] = []
+    roles: dict[str, str] = {}
+    no_hold: list[str] = []
+    election = threading.Lock()
+
+    def slow_start(server: control.ControlServer, run: str) -> tuple[int, dict[str, object]]:
+        with election:
+            role = roles.setdefault(run, "wait" if roles else "hold")
+        if role == "wait":  # the request waits here, so no plan reaches it before the hold
+            deadline = time.monotonic() + HOLD_WAIT_S
+            while not (project.root / "holding").exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            if not (project.root / "holding").exists():
+                no_hold.append(run)  # ends both runs at once, and the test says why
+        held_on = (project.root / "holding").exists()
+        age = time.monotonic() - server.runs[run].opened
+        fetches.append(f"{run} role={role} holding={held_on} age_before={age:.3f}")
+        (project.root / f"role-{run}").write_text(role)
+        if role == "wait":
+            server.runs[run].opened = time.monotonic() - made_age
+        status, reply = real_plan(server, run)
+        plan = reply.get("plan")
+        sent = plan.get("elapsed_s") if isinstance(plan, dict) else None
+        fetches[-1] += f" elapsed_s_sent={sent}"
+        if role == "wait":
+            time.sleep(reply_delay)  # the reply was made with its age above, and is late
+        return status, reply
+
+    real_reserve = control.ControlServer._reserve
+    asked_again: list[str] = []
+    asked: list[str] = []
+
+    def reserve(server: control.ControlServer, body: bytes) -> tuple[int, dict[str, object]]:
+        sent = json.loads(body)
+        at = time.monotonic()
+        if sent.get("ticket") is not None:
+            asked_again.append(f"{sent.get('run')} at {at:.3f}")
+        status, reply = real_reserve(server, body)
+        asked.append(  # every call: who, with which ticket, when, and what came back
+            f"{sent.get('run')} ticket={sent.get('ticket')} at={at:.3f} "
+            f"status={status} ok={reply.get('ok')} why={reply.get('why')} "
+            f"retry_s={reply.get('retry_s')} reply_ticket={reply.get('ticket')} "
+            f"margin={http_gate.RUN_MARGIN_S}"
+        )
+        return status, reply
+
+    monkeypatch.setattr(control.ControlServer, "_plan", slow_start)
+    monkeypatch.setattr(control.ControlServer, "_reserve", reserve)
+    time_limit.at(lambda: bool(asked_again) or bool(no_hold))
+    (project.root / "race.py").write_text(RACE)
+    project.edit(
+        'function = "acme.agent:answer"',
+        'command = "python race.py {question}"\nruns = 2\nparallel = 2\nmax_cost_usd = 0.004\n'
+        f"run_timeout = {RUN_TIMEOUT_S:g}",
+    )
+    project.edit(EXAMPLE_FAULT, "")
+    result = run_on_fake(project, ["chat_stream_usage"])
     assert time_limit.given == [RUN_TIMEOUT_S] * 2
-    assert result.code == 2, result.out
+    # In CI both runs were "timed out" and the output said no more. The runs' files and what
+    # the server saw go in the message, so the next one shows which run asked again and when.
+    files = sorted(
+        f
+        for pattern in ("run-*.log", "run-*.out", "*.jsonl")
+        for f in result.root.glob(f"scrimmage-runs/*/{pattern}")
+    )
+    logs = "\n".join(f"--- {f.name}\n{f.read_text(errors='replace')}" for f in files)
+    seen = (
+        f"reached={time_limit.reached} asked_again={asked_again}\n"
+        f"plan fetches={fetches}\nreserves={asked}"
+    )
+    now = f"now={time.monotonic():.3f}"
+    assert no_hold == [], f"the hold was not on after {HOLD_WAIT_S:g}s; {result.out}\n{seen}"
+    assert asked_again == [], f"{result.out}\n{seen} {now}\n{logs}"
+    assert result.code == 2, f"{result.out}\n{seen} {now}\n{logs}"
     assert sorted(str(s["outcome"]) for s in result.summaries()) == ["not reserved", "stopped"]
     assert "test mistake: a model call could not be reserved" in result.out
-    assert asked_again == [] and True not in time_limit.reached
-
-
-@pytest.mark.design("wait.slow_start_end_to_end")
-@pytest.mark.slow
-def test_a_slow_plan_reply_counts_in_the_runs_age(
-    project: Project, monkeypatch: pytest.MonkeyPatch, time_limit: TimeLimit
-) -> None:
-    """The plan says the run has 64 s left, 4 s more than the margin. The reply then takes 8 s
-    to arrive (the control client gives up at 10 s), so the margin is gone. The run's age
-    counts from its request, so it does not wait at all. Counted from the reply, it would
-    wait 4 s and ask again."""
-    result, asked_again = slow_start_run(
-        project, monkeypatch, time_limit, age=STARTUP_S - 4.0, reply_delay=8.0
-    )
-    assert result.code == 2, result.out
-    assert sorted(str(s["outcome"]) for s in result.summaries()) == ["not reserved", "stopped"]
-    assert asked_again == [] and True not in time_limit.reached
+    assert True not in time_limit.reached
 
 
 @pytest.mark.design("wait.leak_reported")
