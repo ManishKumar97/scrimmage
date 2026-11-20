@@ -57,6 +57,11 @@ def row(result: Result, name: str) -> list[dict[str, object]]:
     return next(lines for lines in result.records() if lines[-1]["row"] == name)
 
 
+def having(sink: Any, key: str) -> list[dict[str, object]]:
+    """The sink's lines that carry key, so a version notice before them shifts none."""
+    return [x for x in sink.lines if key in x]
+
+
 def tool_lines(lines: list[dict[str, object]]) -> list[dict[str, object]]:
     return [x for x in lines if x.get("kind") == "tool"]
 
@@ -794,7 +799,7 @@ def test_after_a_refusal_every_later_tool_fails_at_once() -> None:
     finally:
         state.install(None)
     assert ran == []
-    assert [x["action"] for x in sink.lines] == ["refused", "refused"]
+    assert [x["action"] for x in having(sink, "action")] == ["refused", "refused"]
 
 
 @pytest.mark.design("adapter.tools_made_before_the_hook")
@@ -814,7 +819,7 @@ def test_a_tool_made_before_the_hook_is_gated_when_it_is_called() -> None:
             early.run({})  # listed nowhere, so refused, not run
     finally:
         state.install(None)
-    assert sink.lines[0]["action"] == "refused"
+    assert having(sink, "action")[0]["action"] == "refused"
 
 
 @pytest.mark.design("adapter.late_assignment")
@@ -834,7 +839,7 @@ def test_a_run_function_assigned_later_is_still_gated() -> None:
             tool.run({})
     finally:
         state.install(None)
-    assert sink.lines[0]["action"] == "refused"
+    assert having(sink, "action")[0]["action"] == "refused"
 
 
 @pytest.mark.design("adapter.not_a_function_refused")
@@ -854,7 +859,7 @@ def test_a_run_that_is_not_a_plain_function_is_refused_and_never_seen() -> None:
             tool.run({})
     finally:
         state.install(None)
-    assert "cannot be gated" in str(sink.lines[0]["mistake"])
+    assert "cannot be gated" in str(having(sink, "mistake")[0]["mistake"])
 
 
 @pytest.mark.parametrize(
@@ -1062,7 +1067,7 @@ def test_an_async_override_is_refused_and_a_mixin_stays_as_it_was() -> None:
     finally:
         state.install(None)
     assert asyncio.run(Mixin().ainvoke({})) == "REAL WRITE RAN"
-    assert "overrides ainvoke" in str(sink.lines[0]["mistake"])
+    assert "overrides ainvoke" in str(having(sink, "mistake")[0]["mistake"])
 
 
 @pytest.mark.design("labels.only_the_root_reports_tools")
@@ -1114,7 +1119,7 @@ def test_the_async_entry_point_checks_the_tool_too() -> None:
             asyncio.run(tool.arun({}))
     finally:
         state.install(None)
-    assert "cannot be gated" in str(sink.lines[0]["mistake"])
+    assert "cannot be gated" in str(having(sink, "mistake")[0]["mistake"])
 
 
 @pytest.mark.design("check.no_model_calls_only_when_it_means_something")

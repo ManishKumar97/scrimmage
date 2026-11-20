@@ -236,6 +236,15 @@ The probe costs $0 in model calls Scrimmage sees; a paid call through a library 
 | 2 | No entry point was found, or the target file exists |
 | 3 | Scrimmage's own failure, or the probe's infrastructure error |
 
+## --version
+
+```text
+scrimmage --version
+```
+
+It prints `scrimmage` and the installed version on one line, and exits 0.
+The runner and the SDK in a service must run the same version, so this is the line to compare.
+
 ## --json
 
 `scrimmage test --json`, `scrimmage check --json`, `scrimmage record --json` and `scrimmage show --json` print exactly one JSON document on standard output and nothing else.

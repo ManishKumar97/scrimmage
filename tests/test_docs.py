@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import tempfile
 from collections import Counter
@@ -13,7 +14,7 @@ from typing import cast
 import pytest
 
 import scrimmage_core
-from conftest import doc_pages
+from conftest import EXAMPLE, doc_pages
 from k8s import cluster as kubernetes
 from scrimmage_core import cli, config, judge, mcp_gate, outcomes, record, render, suggest
 
@@ -786,3 +787,18 @@ def test_each_service_use_case_has_its_own_page() -> None:
         for heading in headings:
             assert re.search(rf"(?m)^{re.escape(heading)}$", page(name)), heading
             assert not re.search(rf"(?m)^{re.escape(heading)}$", guide), heading
+
+
+def test_the_readme_on_pypi_is_a_page_for_a_new_visitor(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    readme = (Path(scrimmage_core.__file__).parents[2] / "README.md").read_text()
+    assert "\N{EM DASH}" not in readme
+    old = [n for n in ("scrimmage-core", "derail", "faultline") if n in readme.lower()]
+    assert not old, f"the README names an old project: {old}"
+    (block,) = re.findall(r"```toml\n(.*?)```", readme, re.S)
+    project = tmp_path / "project"
+    shutil.copytree(EXAMPLE, project, ignore=shutil.ignore_patterns("__pycache__"))
+    (project / "scrimmage.toml").write_text(block)
+    assert cli.main(["check", str(project / "scrimmage.toml")]) == 0
+    assert "2 rows" in capsys.readouterr().out  # the baseline and the timeout fault

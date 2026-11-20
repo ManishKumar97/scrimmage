@@ -28,7 +28,7 @@ from scrimmage_core.state import ProcessState, RunState, carried, in_service
 
 LIBRARY = "langchain-core"
 MODULE = "langchain_core.tools.base"
-TESTED = ((1, 7), (1, 7))  # the minor versions this release was tested with
+TESTED = ((1, 8), (1, 8))  # the minor versions this release was tested with
 METHODS = ("_run", "_arun")
 ENTRIES = ("run", "arun")
 # Overrides that are allowed. The gates sit at _run and _arun. model_post_init runs once as

@@ -5,7 +5,7 @@ Teams use it to run tool-calling agents in production.
 Scrimmage finds LangChain tools by itself when your code creates them, so this test has no `tools` list.
 
 Libraries this example needs: `langgraph`, `langchain-core` and `langchain-openai`.
-This page was checked with langgraph 1.2, langchain-core 1.7 and langchain-openai 1.7.
+This page was checked with langgraph 1.2, langchain-core 1.8 and langchain-openai 1.8.
 
 ## The files
 

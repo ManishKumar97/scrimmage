@@ -16,6 +16,7 @@ It patches functions inside your agent's process while a test runs, so it belong
 It depends on nothing outside Python's standard library.
 So installing it never changes the versions of the libraries your agent uses.
 You never type the import name: you write `scrimmage.toml` and run the commands.
+`scrimmage --version` prints the installed version.
 
 It has two extras.
 `scrimmage[mcp]` adds the Scrimmage MCP server, `scrimmage-mcp`, and the `mcp` library it needs; see [Driving Scrimmage from a coding agent](mcp-server.md).
