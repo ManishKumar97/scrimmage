@@ -348,6 +348,50 @@ def test_a_thread_started_in_a_request_is_freed_without_the_cyclic_collector(
         gc.enable()
 
 
+@pytest.mark.design("service.thread_no_cycle")
+def test_a_thread_pools_threads_are_freed_without_the_cyclic_collector(
+    service: state.ProcessState,
+) -> None:
+    """A pool's threads start outside any run, a path of their own."""
+    import gc
+    import weakref
+
+    def made_and_closed() -> list[weakref.ref[threading.Thread]]:
+        pool = multiprocessing.pool.ThreadPool(1)
+        threads: list[threading.Thread] = [
+            *pool._pool,  # type: ignore[attr-defined]
+            pool._worker_handler,  # type: ignore[attr-defined]
+            pool._task_handler,  # type: ignore[attr-defined]
+            pool._result_handler,  # type: ignore[attr-defined]
+        ]
+        pool.close()
+        pool.join()
+        return [weakref.ref(t) for t in threads]
+
+    gc.collect()
+    gc.disable()
+    try:
+        refs = plain().run(made_and_closed)
+        assert len(refs) == 4
+        assert [r for r in refs if r() is not None] == []
+    finally:
+        gc.enable()
+
+
+def test_a_start_that_fails_leaves_no_wrapper_on_the_thread(
+    service: state.ProcessState,
+) -> None:
+    def refuse(self: threading.Thread) -> None:
+        raise RuntimeError("can't start new thread")
+
+    worker = threading.Thread(target=lambda: None)
+    # The patched start over a real start that fails.
+    patched = threadctx.start_patched(refuse)
+    with pytest.raises(RuntimeError):
+        plain().run(patched, worker)
+    assert "run" not in worker.__dict__
+
+
 @pytest.mark.design("service.wrapped_once")
 def test_a_thread_is_never_wrapped_twice(service: state.ProcessState) -> None:
     start = threading.Thread.start

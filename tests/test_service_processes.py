@@ -59,8 +59,8 @@ def write_pair(path: str, _: object) -> str:
 def collected_between_tests() -> Iterator[None]:
     """The cyclic collector runs only here, between tests, never inside one.
 
-    A queue, its feeder thread and a pytest.raises traceback each leave a reference cycle,
-    and a lock in one holds a named semaphore that the collector frees by calling the
+    A refusal's traceback, held by pytest.raises or by a pool's result, leaves a reference
+    cycle, and a lock in it holds a named semaphore that the collector frees by calling the
     resource tracker. If that collection starts while a later test is making a lock, the
     tracker is in the middle of its own call. Python 3.11 and 3.12 then raise
     ReentrantCallError and warn (the fix for the hang in gh-109593 is gh-109629), and the

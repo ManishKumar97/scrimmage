@@ -108,6 +108,17 @@ def carrying(fn: Callable[..., Any]) -> Callable[..., Any]:
     return task
 
 
+def started(original: Callable[[threading.Thread], None], thread: threading.Thread) -> None:
+    """The real start of a thread run_in has wrapped. If it fails, as when the system can
+    start no more threads, the thread never runs, so the wrapper never takes itself off:
+    take it off here, or its cycle waits for the collector."""
+    try:
+        original(thread)
+    except BaseException:
+        thread.__dict__.pop("run", None)
+        raise
+
+
 def start_patched(original: Callable[[threading.Thread], None]) -> Callable[..., None]:
     def start(self: threading.Thread) -> None:
         if not state.in_service():
@@ -117,13 +128,13 @@ def start_patched(original: Callable[[threading.Thread], None]) -> Callable[...,
         state.note_feeder(self)
         if spawning() or isinstance(self, tuple(POOL_THREADS)):
             start_outside(self)
-            return original(self)
+            return started(original, self)
         slot = SLOT.get()
         if is_plain(slot) and not getattr(self, MARK, False):
             # A plain request's thread shares its marker: plain while the request is served.
             setattr(self, MARK, True)
             carry_into(self)
-            return original(self)
+            return started(original, self)
         if not isinstance(slot, Joined):
             return original(self)
         TAGS[self] = slot.run
@@ -131,7 +142,7 @@ def start_patched(original: Callable[[threading.Thread], None]) -> Callable[...,
             return original(self)
         setattr(self, MARK, True)
         carry_into(self)
-        return original(self)
+        return started(original, self)
 
     setattr(start, MARK, True)
     return start
