@@ -1723,3 +1723,30 @@ def test_a_word_that_holds_a_field_name_alone_does_not_start_the_pass() -> None:
     separator, so they skip the pattern. This is what keeps a model call cheap."""
     for text in ("max_tokens", "total_tokens: 9", "the secret is out", "password = x", "token"):
         assert not redact_module.holds_candidate(text), text
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_read_json_reads_a_string_as_a_json_reader_does() -> None:
+    rng = random.Random(20261121)
+    alphabet = ["\\", '"', "/", "n", "u", "0", "a", "\n", "\t", "é", "=", chr(0x2028)]
+    for _ in range(3000):
+        value = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 12)))
+        written = json.dumps(value, ensure_ascii=rng.random() < 0.5)[1:-1]
+        assert redact_module.read_json(written) == value, written
+    # the same read of a raw text, where a lone backslash is kept
+    assert redact_module.read_json("a\\\\u0041 \\u0041 \\x") == "a\\u0041 A \\x"
+
+
+@pytest.mark.design("security.redaction_shapes")
+def test_a_large_text_of_mostly_backslashes_is_not_read_it_runs_the_passes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pre-check must never cost more than skipping it: past its budget it answers True
+    at once, without reading the text."""
+
+    def refuse(text: str) -> str:
+        raise AssertionError("read a text over the budget")
+
+    monkeypatch.setattr(redact_module, "read_json", refuse)
+    assert redact_module.holds_candidate("\\\\" * 500_000)
+    assert redact_module.holds_candidate("a\x00\\n")  # PAIR in the text, so no safe read
