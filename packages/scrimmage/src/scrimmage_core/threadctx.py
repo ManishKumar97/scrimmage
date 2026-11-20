@@ -111,11 +111,13 @@ def carrying(fn: Callable[..., Any]) -> Callable[..., Any]:
 def started(original: Callable[[threading.Thread], None], thread: threading.Thread) -> None:
     """The real start of a thread run_in has wrapped. If it fails, as when the system can
     start no more threads, the thread never runs, so the wrapper never takes itself off:
-    take it off here, or its cycle waits for the collector."""
+    take it off here, or its cycle waits for the collector. Thread.start can also raise, as
+    on a KeyboardInterrupt in its wait, after the thread exists: that thread runs the wrapper."""
     try:
         original(thread)
     except BaseException:
-        thread.__dict__.pop("run", None)
+        if thread.ident is None:
+            thread.__dict__.pop("run", None)
         raise
 
 
