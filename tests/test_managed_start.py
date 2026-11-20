@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -105,6 +106,44 @@ said = {
 print(said[which], flush=True)
 raise SystemExit(1)
 """
+# Binds its port, then serves no request: a client that sends "hold" crashes it, and that
+# client keeps its end open, so the dead copy's end of that connection waits in FIN_WAIT2.
+HOLDS = """import socket
+import sys
+
+server = socket.socket()
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server.bind(("127.0.0.1", int(sys.argv[1])))
+server.listen()
+print("bound", flush=True)
+kept = []
+while True:
+    conn, _ = server.accept()
+    kept.append(conn)
+    conn.settimeout(1.0)
+    try:
+        if conn.recv(4) == b"hold":
+            raise RuntimeError("the shop crashed while it held a client")
+    except TimeoutError:
+        continue
+"""
+# Forks a daemon that leaves the copy's session, binds the port and writes its pid to $1;
+# the command itself exits 0.
+DAEMON = """import os
+import socket
+import sys
+import time
+
+if os.fork() == 0:
+    os.setsid()
+    server = socket.socket()
+    server.bind(("127.0.0.1", int(sys.argv[2])))
+    server.listen()
+    with open(sys.argv[1], "a") as out:
+        out.write(f"{os.getpid()}\\n")
+    time.sleep(120)
+    os._exit(0)
+"""
 # Leaves a child in the copy's group, notes its pid in $1, then becomes uvicorn on $2.
 LINGERS = """sleep 600 &
 echo $! >> "$1"
@@ -188,6 +227,8 @@ class Shop:
             "prints.py": PRINTS,
             "marking.py": MARKING,
             "chatty.py": CHATTY,
+            "holds.py": HOLDS,
+            "daemon.py": DAEMON,
             "lingers.sh": LINGERS.replace("PYTHON", sys.executable),
         }.items():
             (self.root / name).write_text(text)
@@ -665,6 +706,66 @@ def test_a_line_that_says_in_use_with_the_port_is_not_started_again(
     assert "exited with code 1 before it was ready" in out and "in use" in out, out
     assert "was taken before" not in out and "starts on ports" not in out, out
     assert len(shop.copies) == 1 and len(shop.copies[0].ports) == 1
+
+
+def test_a_dead_copys_own_connection_is_not_another_process_on_its_port(shop: Shop) -> None:
+    """The copy binds its port, takes a client's connection, and crashes while the client
+    keeps its end open. The copy's end then waits in FIN_WAIT2, owned by no process: that
+    is not another process on the port, so the copy is started once."""
+    real = managed.free_port
+    picked: list[int] = []
+    shop.monkeypatch.setattr(runner, "free_port", lambda: picked.append(real()) or picked[-1])
+    clients: list[socket.socket] = []
+    done = threading.Event()
+
+    def hold() -> None:
+        while not done.is_set():
+            if not picked:
+                time.sleep(0.02)
+                continue
+            client = socket.socket()
+            try:
+                client.connect(("127.0.0.1", picked[0]))
+            except OSError:
+                client.close()
+                time.sleep(0.02)
+                continue
+            client.sendall(b"hold")
+            clients.append(client)  # kept open until the test has ended
+            return
+
+    holder = threading.Thread(target=hold, daemon=True)
+    holder.start()
+    try:
+        code, out = shop.test(f"{sys.executable} holds.py {{port}}")
+    finally:
+        done.set()
+        holder.join(5)
+        for client in clients:
+            client.close()
+    assert clients, "the client never reached the copy"
+    assert code == 3, out
+    assert "RuntimeError: the shop crashed while it held a client" in out, out
+    assert "was taken before" not in out and "starts on ports" not in out, out
+    assert len(shop.copies) == 1 and shop.copies[0].ports == picked[:1], out
+
+
+def test_a_start_that_forks_a_daemon_and_exits_0_is_not_started_again(shop: Shop) -> None:
+    """The command forks a daemon into a session of its own, which binds the port, and
+    exits 0: a clean exit is no failed bind, so the copy is started once, and one daemon
+    is left, the documented limit of setsid."""
+    pids = shop.root / "daemons.txt"
+    try:
+        code, out = shop.test(f"{sys.executable} daemon.py {pids} {{port}}")
+        assert code == 3, out
+        assert "exited with code 0 before it was ready" in out, out
+        assert "was taken before" not in out and "starts on ports" not in out, out
+        assert len(shop.copies) == 1 and len(shop.copies[0].ports) == 1
+    finally:
+        wait_until(pids.exists, 10)
+        for pid in [int(pid) for pid in pids.read_text().split()]:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
 
 
 def alive(pid: int) -> bool:

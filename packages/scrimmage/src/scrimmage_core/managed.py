@@ -68,7 +68,11 @@ def listening(port: int) -> set[str] | None:
 
 def sockets_on(port: int, *, listen_only: bool = False) -> set[str] | None:
     """The sockets whose own end is this port and that hold it against a new bind, a
-    listener or a connection; listen_only: listeners only. None without /proc."""
+    listener or a connection; listen_only: listeners only. None without /proc.
+
+    A row with inode 0 is left out: an orphan the kernel keeps closing, such as the dead
+    copy's own accepted connection in FIN_WAIT2, which no process holds and which does not
+    stop a bind with SO_REUSEADDR."""
     found: set[str] = set()
     read = False
     for table in ("/proc/net/tcp", "/proc/net/tcp6"):
@@ -81,7 +85,8 @@ def sockets_on(port: int, *, listen_only: bool = False) -> set[str] | None:
             fields = row.split()
             state = fields[3]
             held = state == LISTEN if listen_only else state not in RELEASED
-            if held and int(fields[1].rsplit(":", 1)[1], 16) == port:
+            orphan = fields[9] == "0"
+            if held and not orphan and int(fields[1].rsplit(":", 1)[1], 16) == port:
                 found.add(f"socket:[{fields[9]}]")
     return found if read else None
 
@@ -162,10 +167,13 @@ class Managed:
     def port_taken(self) -> bool:
         """The copy exited because another process took its port before it bound it: a
         socket of no process of the copy's group holds that port. Never for a copy that
-        still runs, or failed another way, or could not bind a port the command fixes
+        still runs, exited with code 0, as a start that forks a daemon does, or failed
+        another way, or could not bind a port the command fixes
         itself, which a new port would not change. Where /proc cannot say, a line of this
         start's output must say its bind failed and name its port."""
         if self.proc is None or self.proc.poll() is None:
+            return False
+        if self.proc.returncode == 0:  # a failed bind is never a clean exit; a daemon's is
             return False
         if self.words() == start_args(self.config.agent, self.port + 1):
             return False  # the port is not in the command, so another would not help
