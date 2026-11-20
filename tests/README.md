@@ -6,7 +6,7 @@ The command for everyday work is the fast tier:
 uv run pytest -m "not slow"
 ```
 
-It takes about 1.5 minutes.
+It takes about 2 minutes.
 `uv run pytest` runs everything, and takes about 16 minutes.
 CI runs the fast tier first, then the slow tier, so a broken change fails early.
 
