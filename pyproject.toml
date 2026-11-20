@@ -67,6 +67,7 @@ markers = [
     "design(tag): the design point this test proves, as a short public name",
     "slow: starts a process or a real scrimmage test run; left out of the fast tier",
     "docker: needs a Docker daemon; run with -n 0",
+    "stub_record_lines: posts hand-made record lines on purpose, so the record-line schema check skips the store",
     "kind: makes a kind cluster; runs only with SCRIMMAGE_KIND=1 and -n 0",
 ]
 

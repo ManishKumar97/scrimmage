@@ -27,7 +27,7 @@ import jsonschema
 import pytest
 
 import scrimmage_core
-from conftest import EXAMPLE
+from conftest import EXAMPLE, RECORD_SCHEMA
 from ports import free_port
 from scrimmage_core import protocol
 from scrimmage_core.config import Mock, ModelHost
@@ -1107,6 +1107,21 @@ def test_a_reply_whose_plan_was_never_fetched_is_an_infrastructure_error_and_sto
     assert sum(1 for run in proxy.seen if run.startswith("run-")) == 1  # no run after the first
     runs = [s for name, s in bench.summaries().items() if name.startswith("run-")]
     assert [s["outcome"] for s in runs if "outcome" in s] == ["infrastructure error"]
+
+
+def test_an_unclaimed_runs_summary_has_a_null_claimed_by_and_fits_the_record_schema(
+    bench: Bench,
+) -> None:
+    reply = json.dumps({"reply": "shipped"}).encode()
+    ungated_runs(bench, 200, {"content-type": "application/json"}, reply)
+    ran = False
+    for path in (bench.root / "scrimmage-runs").glob("*/run-*.jsonl"):
+        last = json.loads(path.read_text().splitlines()[-1])
+        if "summary" in last:
+            ran = True
+            assert last["summary"]["claimed_by"] is None
+            jsonschema.validate(last, RECORD_SCHEMA)
+    assert ran
 
 
 @pytest.mark.design("service.gate_shape_exact")
