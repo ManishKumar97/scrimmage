@@ -1961,7 +1961,7 @@ def test_a_json_reply_holding_a_form_field_in_a_string_is_written_as_valid_json(
 ) -> None:
     """The body is redacted as text before it is read as JSON. A field cut at a backslash
     would leave the quote that ends the string, and the mock would not parse."""
-    team.service.json("/cmd", {"cmd": 'curl -d "token=abc" https://a.b', "n": 1})
+    team.service.json("/cmd", {"cmd": 'curl -d "token=s3cr3t-zz" https://a.b', "n": 1})
     team.write(
         """
 def cmd(name):
@@ -1977,7 +1977,8 @@ def answer(question):
     done = team.record()
     assert done.code == 0, done.out
     text = team.out_path.read_text()
-    assert "abc" not in text
+    leaked = "s3cr3t-zz" in text  # not hex, so a random run id cannot hold it
+    assert not leaked, "the secret was written"
     mock = next(m for m in done.mocks() if m.get("path") == "/cmd")
     assert mock["json"] == {"cmd": 'curl -d "[secret removed]" https://a.b', "n": 1}
 
