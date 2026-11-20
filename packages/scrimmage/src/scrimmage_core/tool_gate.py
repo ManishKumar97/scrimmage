@@ -518,16 +518,60 @@ def swap_method(
         cannot_gate(seen, f"{where} its class does not let Scrimmage set the gate on it: {exc}")
 
 
+class ImportedDuringLookup(Exception):
+    """A finder imported a module while the lookup ran, so the team's code may have run
+    before any gate was in place."""
+
+
 def module_spec(name: str, extra: list[str]) -> importlib.machinery.ModuleSpec | None:
-    """Where a module is, without importing it or its packages."""
-    path: list[str] | None = [*sys.path, *extra]
+    """Where a module is, without importing it or its packages.
+
+    This asks the finders on sys.meta_path, as an import does, so an editable install that
+    maps a name through its own finder is found. importlib.util.find_spec is not used: for a
+    dotted name it imports the parent packages, which would run the team's code early.
+    Scrimmage's own walk imports nothing. A finder of the team's that imports a module outside
+    the standard library while it looks raises ImportedDuringLookup, because that module's code
+    ran with no gate yet.
+    """
     spec = None
+    full = ""
     for part in name.split("."):
-        spec = importlib.machinery.PathFinder.find_spec(part, path)
+        full = f"{full}.{part}" if full else part
+        here: list[str] | None = None
+        if spec is not None:
+            here = list(spec.submodule_search_locations or [])
+        spec = _find_one(full, here, [*sys.path, *extra])
         if spec is None:
             return None
-        path = list(spec.submodule_search_locations or [])
     return spec
+
+
+def _find_one(
+    full: str, here: list[str] | None, top: list[str]
+) -> importlib.machinery.ModuleSpec | None:
+    """The first spec a finder gives. here is the parent's folders, None for a top name,
+    which the path finder searches in top, the folders of the run."""
+    for finder in list(sys.meta_path):
+        if isinstance(finder, hooks.ImportHook) or not hasattr(finder, "find_spec"):
+            continue  # our own hook only wraps a loader, it finds nothing new
+        path = top if here is None and finder is importlib.machinery.PathFinder else here
+        before = set(sys.modules)
+        spec = finder.find_spec(full, path)
+        # A finder may load a standard library helper on first use; that runs no team code.
+        imported = sorted(
+            m
+            for m in set(sys.modules) - before
+            if m.partition(".")[0] not in sys.stdlib_module_names
+        )
+        if imported:
+            who = getattr(finder, "__qualname__", type(finder).__qualname__)
+            raise ImportedDuringLookup(
+                f"{who} imported {', '.join(imported)} while Scrimmage looked up {full}, "
+                f"so {full} cannot be gated, as its code ran before any gate was in place"
+            )
+        if spec is not None:
+            return spec
+    return None
 
 
 def targets(paths: Sequence[str]) -> dict[str, list[str]]:

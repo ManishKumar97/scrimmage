@@ -126,6 +126,8 @@ The order they arrive in can change between runs, so when a model may call a too
 The faults on model calls work under any framework, because they sit below it, in the HTTP library.
 A tool on a framework with no adapter is not gated, so offering it to the model stops the test with a message naming it.
 To gate such a tool, list its function under `tools`; see [the settings](configuration.md#agent).
+The package may be installed editable, with `pip install -e` or `uv pip install -e`, under setuptools or hatchling.
+Scrimmage finds the tool's module without importing it.
 
 ## A tool that calls an MCP server
 

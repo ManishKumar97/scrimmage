@@ -61,6 +61,7 @@ ALL_TITLES = [
     "A model call from a thread is frozen inside a tool mock, with exit 0.",
     "A model name is compared whole.",
     "A model's path on a host under `real`.",
+    "A module reached through a `__path__` its parent changes.",
     "A name lookup can carry data out.",
     "A new certificate needs the agent's pods restarted.",
     "A plumbing type imported under another name.",

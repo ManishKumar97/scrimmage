@@ -365,7 +365,11 @@ def start_service() -> None:
     asgi_gate.GATE = asgi_gate.Gate(process, client, token, prefixes, tools, renames, senders, pool)
     folders = [os.getcwd(), *script_folder()]
     for module, tool_names in tool_gate.targets(tools).items():
-        if tool_gate.module_spec(module, folders) is None:
+        try:
+            found = tool_gate.module_spec(module, folders)
+        except tool_gate.ImportedDuringLookup as exc:
+            service_stop(str(exc))
+        if found is None:
             service_stop(f"{module} is listed in SCRIMMAGE_TOOLS but cannot be found")
         del tool_names
     tool_gate.install(tools, dict(renames))
@@ -435,13 +439,16 @@ def start(*, mode: Mode = "program", target: str | None = None) -> None:
     folders = [os.getcwd(), *script_folder()]
     for module, tool_names in tool_gate.targets(tools).items():
         message = None
-        if runs_as_main(module, target, folders):
-            message = (
-                f"{module} is the program itself, so {tool_names[0]} cannot be gated. Move the "
-                "tool into a module the program imports"
-            )
-        elif not child and tool_gate.module_spec(module, folders) is None:
-            message = f"{module} is listed under [agent] tools but cannot be found"
+        try:
+            if runs_as_main(module, target, folders):
+                message = (
+                    f"{module} is the program itself, so {tool_names[0]} cannot be gated. Move "
+                    "the tool into a module the program imports"
+                )
+            elif not child and tool_gate.module_spec(module, folders) is None:
+                message = f"{module} is listed under [agent] tools but cannot be found"
+        except tool_gate.ImportedDuringLookup as exc:
+            message = str(exc)
         if message is not None:
             run_state.cannot_gate(tool_names[0], message)
             sender.flush()
