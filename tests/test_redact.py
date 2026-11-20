@@ -1688,8 +1688,12 @@ def generated_field_texts() -> list[str]:
             text = f"Request max_tokens=4 total_tokens=9 {text} usage"
         if rng.random() < 0.3:
             text = text.replace("=", "\\u003d", 1)  # as raw text, for a decoder to undo
-        for _ in range(rng.choice([0, 0, 1, 2, 3])):
-            text = json.dumps(text, ensure_ascii=rng.random() < 0.5)
+        for _ in range(rng.choice([0, 0, 1, 2, 3, 4])):
+            if rng.random() < 0.3:  # a writer that escapes the backslash and quote as \\uXXXX
+                body = text.replace("\\", "\\u005c").replace('"', "\\u0022").replace("\n", "\\n")
+                text = f'"{body}"'
+            else:
+                text = json.dumps(text, ensure_ascii=rng.random() < 0.5)
             if rng.random() < 0.5:
                 text = json.dumps({"k": text})
             if rng.random() < 0.3:  # a writer that escapes the separator

@@ -370,22 +370,45 @@ def remove_keys(text: str, decoded: bool = False) -> tuple[str, int]:
 
 
 ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
+# One read of a JSON string: \uXXXX and the two-character escapes, left to right, so an
+# escaped backslash is one backslash and the text after it is not read as an escape.
+UNESCAPE = re.compile(r"\\(?:u([0-9a-fA-F]{4})|([\\\"/bfnrt]))")
+UNESCAPES = {"b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
+READS = 6  # reads of a JSON string inside a JSON string, then the passes run to be safe
 
 
-def holds_candidate(text: str) -> bool:
-    """Whether any pass could match: the text holds a string every match of that pass holds."""
-    nested = False
-    if "\\u" in text:  # a JSON escape can hide a letter: p\u0061ssword
-        # In a JSON string inside a JSON string the = is \\u003d, and one read leaves a
-        # backslash before it. Then the name alone, as it was before the separator was added.
-        nested = "\\\\u" in text
-        text = ESCAPE.sub(lambda found: chr(int(found.group(1), 16)), text)
+def read_once(found: re.Match[str]) -> str:
+    code, plain = found.groups()
+    return chr(int(code, 16)) if code else UNESCAPES.get(plain, plain)
+
+
+def holds_literal(text: str) -> bool:
     if "://" in text or "eyJ" in text or any(lit in text for lit in LITERALS):
         return True
     lowered = text.lower()
-    if any(lit in lowered for lit in LOWER_LITERALS):
+    return any(lit in lowered for lit in LOWER_LITERALS)
+
+
+def holds_candidate(text: str) -> bool:
+    """Whether any pass could match: the text holds a string every match of that pass holds.
+    A JSON escape can hide a letter or the = (p\\u0061ssword, password\\u003d), and a JSON string
+    inside a JSON string hides it deeper, so the text is also read as a JSON string again
+    and again until it stops changing, and each reading is looked at."""
+    if holds_literal(text):
         return True
-    return nested and any(name in lowered for name in FIELD_LITERAL_NAMES)
+    if "\\" not in text:
+        return False
+    current = text
+    for _ in range(READS):
+        if holds_literal(ESCAPE.sub(lambda found: chr(int(found.group(1), 16)), current)):
+            return True
+        read = UNESCAPE.sub(read_once, current)
+        if read == current:
+            return False
+        if holds_literal(read):
+            return True
+        current = read
+    return True  # still unreading after READS: too deep to rule out, so the passes run
 
 
 def plain(text: str, decoded: bool = False) -> tuple[str, int]:
