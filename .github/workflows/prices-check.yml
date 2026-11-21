@@ -1,0 +1,58 @@
+name: Prices check
+
+# Once a week, fetch OpenAI's pricing page and hash its pricing tables.
+# If the hash differs from tools/pricing-fingerprint.txt, open one issue.
+# A page with no pricing tables also opens the issue: a redesign is a reason to look by hand.
+# The workflow never reads a price and never writes one.
+# A person updates packages/scrimmage/src/scrimmage/prices.toml and the fingerprint file.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: Compare the pricing page with the committed fingerprint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - name: Fetch the page and compare
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PAGE_URL: https://developers.openai.com/api/docs/pricing
+          TITLE: "OpenAI's pricing page changed: check prices.toml"
+        run: |
+          set -euo pipefail
+          # A failed fetch fails the job, so the run shows red. It is not a price change.
+          curl --fail --silent --show-error --location \
+            --retry 5 --retry-delay 10 --retry-all-errors \
+            --user-agent "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36" \
+            --output page.html "$PAGE_URL"
+          old="$(cut -d' ' -f1 tools/pricing-fingerprint.txt)"
+          if new="$(python3 tools/pricing_fingerprint.py page.html)"; then
+            if [ "$new" = "$old" ]; then
+              echo "pricing tables unchanged: $new"
+              exit 0
+            fi
+            reason="The pricing tables changed."
+          else
+            new="none"
+            reason="Page shape changed: no pricing tables were found."
+          fi
+          open="$(gh issue list --state open --limit 100 --json title | jq --arg t "$TITLE" '[.[] | select(.title == $t)] | length')"
+          if [ "$open" -gt 0 ]; then
+            echo "an issue with this title is already open: $reason"
+            exit 0
+          fi
+          today="$(date -u +%F)"
+          body="$(printf '%s\n\n- Old fingerprint: %s\n- New fingerprint: %s\n- Date: %s\n- Page: %s\n\n%s\n' \
+            "$reason" "$old" "$new" "$today" "$PAGE_URL" \
+            "Check the page, then update packages/scrimmage/src/scrimmage/prices.toml and tools/pricing-fingerprint.txt by hand.")"
+          gh issue create --title "$TITLE" --body "$body"
