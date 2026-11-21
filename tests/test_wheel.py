@@ -181,3 +181,31 @@ def test_a_clean_venv_runs_the_quickstart_from_the_wheel(
     table = run(scrimmage, "test", cwd=project, env=env)
     passed = [line for line in table.splitlines() if line.rstrip().endswith("pass")]
     assert len(passed) == 2, table
+
+
+def quiet(*command: str | Path, cwd: Path) -> subprocess.CompletedProcess[str]:
+    """A command that may fail: its exit code and streams, as a team's shell sees them."""
+    return subprocess.run(
+        [str(c) for c in command],
+        cwd=cwd,
+        env=clean_env(),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+@pytest.mark.slow
+def test_a_clean_venv_imports_scrimmage_and_loads_nothing_else(
+    built: dict[str, Path], tmp_path: Path
+) -> None:
+    """A team's production code may `import scrimmage`, so that import must start nothing."""
+    python = venv(tmp_path / "env", "3.11")
+    run("uv", "pip", "install", "--python", python, "--no-index", built["wheel"], cwd=tmp_path)
+    probe = (
+        "import sys; before = set(sys.modules); import scrimmage; "
+        "print(sorted(set(sys.modules) - before))"
+    )
+    assert run(python, "-I", "-c", probe, cwd=tmp_path) == "['scrimmage']\n"
+    old = quiet(python, "-I", "-c", "import scrimmage_core", cwd=tmp_path)
+    assert old.returncode != 0 and "ModuleNotFoundError" in old.stderr, old.stderr
