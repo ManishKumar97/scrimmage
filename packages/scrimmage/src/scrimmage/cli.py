@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, TextIO, cast
 
 from scrimmage import compare as comparing
 from scrimmage import config as settings
-from scrimmage import entry, prices, prices_update, redact, shadow, versions
+from scrimmage import entry, prices, redact, shadow, versions
 from scrimmage import plan as planner
 from scrimmage import results as results_file
 from scrimmage.errors import ConfigError
@@ -199,6 +199,9 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
     if args.command == "cert":
         return cert_command(args)
     if args.command == "prices":
+        # Imported here, so no other command ever loads the one module that can connect out.
+        from scrimmage import prices_update
+
         return prices_update.update(args.path.resolve().parent)
     if args.command == "path":
         return path_command()

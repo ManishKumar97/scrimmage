@@ -9,6 +9,8 @@ import http.server
 import json
 import re
 import stat
+import subprocess
+import sys
 import threading
 import urllib.request
 from collections.abc import Callable, Iterator
@@ -93,6 +95,34 @@ def test_only_the_prices_update_command_calls_the_one_fetch() -> None:
     cli_text = (SDK / "cli.py").read_text()
     assert cli_text.count("prices_update.") == 1
     assert "prices_update.update(args.path" in cli_text
+    # Its import is inside the prices command, never at the top of the module.
+    assert "        from scrimmage import prices_update\n" in cli_text
+    assert not re.search(r"^(?:from|import) .*prices_update", cli_text, re.M)
+
+
+@pytest.mark.design("security.one_fetch")
+@pytest.mark.slow
+def test_loading_the_command_and_a_test_runs_modules_never_loads_the_fetch(tmp_path: Path) -> None:
+    """A fresh interpreter loads the command line, checks a file and imports what a test run
+    loads. The module that can connect out is not among them."""
+    (tmp_path / "scrimmage.toml").write_text(
+        '[agent]\nfunction = "acme.agent:answer"\n\n[[test]]\nname = "t"\nquestion = "q"\n'
+        'expect = ["x"]\n'
+    )
+    code = (
+        "import sys\n"
+        "from scrimmage import bootstrap, cli, config, control, http_gate, plan, runner\n"
+        "cli.main(['check', sys.argv[1]])\n"
+        "assert 'scrimmage.prices_update' not in sys.modules, 'loaded'\n"
+        "print('clean')\n"
+    )
+    found = subprocess.run(
+        [sys.executable, "-I", "-c", code, str(tmp_path / "scrimmage.toml")],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert found.stdout.strip().endswith("clean"), found.stderr
 
 
 # Every standard-library way to start a process, and the modules that hold them.
