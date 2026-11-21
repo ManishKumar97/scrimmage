@@ -21,8 +21,7 @@ def problem(root: Path) -> str | None:
     spec = PathFinder.find_spec("scrimmage", folders)
     if spec is None or spec.origin is None:  # nothing found, or a namespace folder
         return None
-    mine = scrimmage.__file__
-    if mine is not None and os.path.samefile(spec.origin, mine):
+    if os.path.samefile(spec.origin, scrimmage.__file__):
         return None
     return (
         f"{spec.origin} would be imported as scrimmage by the agent, in place of Scrimmage. "
