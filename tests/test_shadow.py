@@ -99,3 +99,19 @@ def test_what_is_not_a_shadow_is_not_refused(
     given = {"namespace": tmp_path / "libs", "installed": package.parent, "none": ""}[folder]
     monkeypatch.setenv("PYTHONPATH", str(given))
     assert shadow.problem(root) is None
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("shape", [":{x}", "{x}:", "{x}::{x}"])
+@pytest.mark.parametrize("command", ["check", "test"])
+def test_an_empty_pythonpath_entry_means_the_agents_folder(
+    tmp_path: Path, command: str, shape: str
+) -> None:
+    """An empty entry puts the folder the agent starts in on its path, even under -P."""
+    root = team(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    done = scrimmage(root, command, cwd=elsewhere, PYTHONPATH=shape.format(x=elsewhere))
+    assert done.returncode == 2, done.stdout + done.stderr
+    assert "team/scrimmage.py would be imported as scrimmage" in done.stderr
+    assert not list(tmp_path.rglob("SIDE_EFFECT")), "the team's scrimmage.py ran"

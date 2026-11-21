@@ -16,8 +16,9 @@ def problem(root: Path) -> str | None:
     (python -P) while Scrimmage's own modules load, and scrimmage is imported by then.
     A folder named scrimmage with no __init__.py is a namespace: a package found later wins.
     """
-    given = os.environ.get("PYTHONPATH", "").split(os.pathsep)
-    folders = [os.path.join(root, p) for p in given if p]  # a relative one means from root
+    path = os.environ.get("PYTHONPATH", "")
+    given = path.split(os.pathsep) if path else []  # an unset or empty one names no folder
+    folders = [os.path.join(root, p) for p in given]  # an empty one is the folder itself
     spec = PathFinder.find_spec("scrimmage", folders)
     if spec is None or spec.origin is None:  # nothing found, or a namespace folder
         return None
