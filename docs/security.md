@@ -11,6 +11,8 @@ The line "Checked by" under it names the test in the repository that fails if th
 Scrimmage has no telemetry and no hosted service.
 It sends nothing to its authors or to any third party.
 The only connections Scrimmage itself makes are to its own control server and, for a web service, to the service address your `scrimmage.toml` names.
+The one other connection is the fetch of `scrimmage prices update`, made only when you type that command, over HTTPS to the repository's `main`, for the file of model prices.
+No test run makes it, and nothing from your project is sent in it.
 The only processes it starts are the runs of your agent, the test copy of a service that `start` names, and, in a service, Python's own resource tracker, once, in the process that serves the app or supervises its workers, before any request.
 The Scrimmage MCP server, a command of its own, also starts the `scrimmage` command each of its tool calls runs; see [Driving Scrimmage from a coding agent](mcp-server.md).
 

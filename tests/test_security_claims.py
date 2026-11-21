@@ -65,6 +65,9 @@ def test_the_only_connections_are_to_the_control_server_and_the_service() -> Non
         ("service_client.py", "HTTPConnection"),
         # It binds 127.0.0.1 port 0 and closes it, to pick the port of a service it starts.
         ("managed.py", "socket"),
+        # The one fetch: `scrimmage prices update` reads prices.toml from the repository's main
+        # over HTTPS, when a person types it. No test run calls it.
+        ("prices_update.py", "urlopen"),
     }
     uses = {
         name
@@ -75,6 +78,21 @@ def test_the_only_connections_are_to_the_control_server_and_the_service() -> Non
     # socket: managed.py's free port, bound and closed, never connected.
     # gaierror, EAI_NONAME: the error http_gate builds for an injected dns fault; no lookup.
     assert uses == {"gethostname", "SHUT_RDWR", "socket", "gaierror", "EAI_NONAME"}
+
+
+@pytest.mark.design("security.one_fetch")
+def test_only_the_prices_update_command_calls_the_one_fetch() -> None:
+    """prices_update.py is the one module with a connection out, and the scrimmage command's
+    prices update is the only caller: nothing a test run loads reaches it."""
+    callers = {
+        path.name
+        for path in SDK.glob("*.py")
+        if path.name != "prices_update.py" and "prices_update" in path.read_text()
+    }
+    assert callers == {"cli.py"}
+    cli_text = (SDK / "cli.py").read_text()
+    assert cli_text.count("prices_update.") == 1
+    assert "prices_update.update(args.path" in cli_text
 
 
 # Every standard-library way to start a process, and the modules that hold them.
