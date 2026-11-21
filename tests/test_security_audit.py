@@ -157,7 +157,7 @@ def test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_
     # at each agent's start, before that agent's hook was installed, to the last record.
     received = [e for e in events if e["event"] == "received"]
     plans = [e for e in received if e["path"].startswith("/v1/plans/")]
-    runs = [e for e in agents if e["argv"][1:3] == ["-m", "scrimmage.start"]]
+    runs = [e for e in agents if e["argv"][1:4] == ["-P", "-m", "scrimmage.start"]]
     assert len(plans) == len(runs) > 0 and len(received) > len(plans)
     assert not [e for e in received if token in json.dumps(e["headers"]) + e["body"]]
 
@@ -179,10 +179,10 @@ def test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_
     # Every process any of them starts, from any thread, at exit or through any library, is
     # one a clean run starts: the runner starts scrimmage-run, which becomes the agent's own
     # program, and Python's platform module runs `uname -p` for the openai library.
-    starts = {(e["event"], e["program"], *e["args"][1:3]) for e in events if "program" in e}
+    starts = {(e["event"], e["program"], *e["args"][1:4]) for e in events if "program" in e}
     ours = {
-        ("subprocess.Popen", sys.executable, "-m", "scrimmage.run_command"),
-        ("os.exec", sys.executable, "-m", "scrimmage.start"),
+        ("subprocess.Popen", sys.executable, "-P", "-m", "scrimmage.run_command"),
+        ("os.exec", sys.executable, "-P", "-m", "scrimmage.start"),
     }
     assert ours <= starts <= ours | {("subprocess.Popen", "uname", "-p")}, starts
 

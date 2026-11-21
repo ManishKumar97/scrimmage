@@ -146,7 +146,7 @@ class Managed:
         try:
             self.log_from = os.fstat(log).st_size
             self.proc = subprocess.Popen(
-                [sys.executable, "-m", "scrimmage.run_command", *self.words()],
+                [sys.executable, "-P", "-m", "scrimmage.run_command", *self.words()],
                 cwd=self.config.root,
                 env=self.env(self.control_url, self.token_folder / "token"),
                 stdin=subprocess.DEVNULL,

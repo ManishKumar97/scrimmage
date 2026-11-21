@@ -420,7 +420,7 @@ class Runner:
         if agent.command:
             return command_args(agent, question)
         answer = [agent.answer] if agent.answer else []
-        return [sys.executable, "-m", "scrimmage.start", agent.function, question, *answer]
+        return [sys.executable, "-P", "-m", "scrimmage.start", agent.function, question, *answer]
 
     def one(self, row: planner.Row) -> "RunResult | Future[RunResult] | None":
         if self.config.agent.service:
@@ -476,6 +476,7 @@ class Runner:
             return self.served(run, row)
         command = [
             sys.executable,
+            "-P",
             "-m",
             "scrimmage.run_command",
             *self.program(row.test.question),

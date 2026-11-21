@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, TextIO, cast
 
 from scrimmage import compare as comparing
 from scrimmage import config as settings
-from scrimmage import entry, redact, versions
+from scrimmage import entry, redact, shadow, versions
 from scrimmage import plan as planner
 from scrimmage import results as results_file
 from scrimmage.errors import ConfigError
@@ -399,9 +399,12 @@ def document(
 def read(path: Path) -> tuple[settings.Config | None, list[str]]:
     """The file, or its problems: the one reading both scrimmage test and scrimmage check do."""
     try:
-        return settings.load(path.resolve()), []
+        config = settings.load(path.resolve())
     except ConfigError as exc:
         return None, list(exc.problems)
+    if (shadowed := shadow.problem(config.root)) is not None:
+        return None, [shadowed]
+    return config, []
 
 
 # A dollar amount as Python's repr prints a float: digits, a point, an exponent. Not float()
@@ -1037,6 +1040,12 @@ def run_init(folder: Path, out: Path, probe: str | None, found: Found | None) ->
     from scrimmage import init as drafting
     from scrimmage.runner import Interrupted
 
+    if probe is not None and (shadowed := shadow.problem(folder)) is not None:
+        if found is None:
+            print(f"scrimmage: {shadowed}", file=sys.stderr)
+        else:
+            found.messages.append((MISTAKES, shadowed))
+        return MISTAKE
     try:
         draft = drafting.prepare(
             folder,

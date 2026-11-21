@@ -834,3 +834,15 @@ def test_a_port_another_process_holds_names_the_copys_exit(shop: Shop) -> None:
     assert out.count("was taken before the service bound it") == tries - 1, out
     assert "address already in use" in out, out
     assert "does not reach Scrimmage" not in out, out
+
+
+def test_a_scrimmage_py_in_the_service_folder_is_not_run_by_the_copys_start(shop: Shop) -> None:
+    """The copy's supervisor is started with python -P, so the folder it starts in is not on
+    its path and a team file named scrimmage there neither stands in for Scrimmage nor runs."""
+    (shop.root / "scrimmage.py").write_text('open("SIDE_EFFECT", "w").write("ran")\n')
+    (shop.root / "serve.sh").write_text(
+        f"{UVICORN} acme.service:app --port $1 --loop asyncio &\nwait\n"
+    )
+    code, out = shop.test("sh serve.sh {port}")
+    assert code == 0, out
+    assert not (shop.root / "SIDE_EFFECT").exists(), "the team's scrimmage.py ran"
