@@ -87,6 +87,9 @@ def main(argv: list[str]) -> int:
     # in for the standard library's.
     here = os.getcwd()
     before = [p for p in sys.path if p not in ("", here)]
+    # python -P keeps the folder off the path while Scrimmage's own modules load, so a team
+    # file named scrimmage.py cannot stand in for it. The agent's module is found from it.
+    sys.path.insert(0, here)
     module, _, name = argv[1].partition(":")
     function = getattr(importlib.import_module(module), name)
     result = function(argv[2])
