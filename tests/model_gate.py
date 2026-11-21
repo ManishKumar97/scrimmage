@@ -8,10 +8,10 @@ from typing import Any
 import httpx2
 import openai
 
-from scrimmage_core import http_gate, provider_openai, state
-from scrimmage_core.budget import Ledger, Shortfall
-from scrimmage_core.config import Fault, ModelHost
-from scrimmage_core.plan import Plan
+from scrimmage import http_gate, provider_openai, state
+from scrimmage.budget import Ledger, Shortfall
+from scrimmage.config import Fault, ModelHost
+from scrimmage.plan import Plan
 
 GUARD = "llama-guard-test"
 URL = "https://guard.test/v1"

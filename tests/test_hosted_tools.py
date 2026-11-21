@@ -6,7 +6,7 @@ import pytest
 
 from conftest import ACME, EXAMPLE_FAULT, Project
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import provider_openai as table
+from scrimmage import provider_openai as table
 
 Fake = Callable[..., FakeOpenAI]
 TOOL_FAULT = EXAMPLE_FAULT

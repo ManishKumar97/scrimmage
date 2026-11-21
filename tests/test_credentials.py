@@ -3,8 +3,8 @@
 import httpx2
 import pytest
 
-from scrimmage_core import credentials, http_gate
-from scrimmage_core.redact import redacted
+from scrimmage import credentials, http_gate
+from scrimmage.redact import redacted
 from test_record_lines import Server, Sink, gated, no_scrimmage_error, sink, web
 
 __all__ = ["no_scrimmage_error", "sink", "web"]  # the fixtures, used by name

@@ -23,14 +23,14 @@ from pydantic import SecretStr
 
 from conftest import EXAMPLE_FAULT, Project
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import changes, cli, config, http_gate, runner, show, state, suggest
-from scrimmage_core import provider_openai as openai_table
-from scrimmage_core.config import Fault, ModelHost
-from scrimmage_core.decide import MISTAKE_REFUSAL
-from scrimmage_core.errors import ConfigError, ScrimmageMockError
-from scrimmage_core.plan import Plan
-from scrimmage_core.provider_openai import BROKEN_BODY
-from scrimmage_core.redact import REMOVED
+from scrimmage import changes, cli, config, http_gate, runner, show, state, suggest
+from scrimmage import provider_openai as openai_table
+from scrimmage.config import Fault, ModelHost
+from scrimmage.decide import MISTAKE_REFUSAL
+from scrimmage.errors import ConfigError, ScrimmageMockError
+from scrimmage.plan import Plan
+from scrimmage.provider_openai import BROKEN_BODY
+from scrimmage.redact import REMOVED
 from test_connection_faults import (
     LIBRARIES,
     PATH_IDS,

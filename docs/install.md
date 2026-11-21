@@ -11,7 +11,7 @@ It patches functions inside your agent's process while a test runs, so it belong
 
 | Package | Import name | What it is |
 |---|---|---|
-| `scrimmage` | `scrimmage_core` | The runner, the commands (`scrimmage`, `scrimmage-run` and `scrimmage-mcp`), and the code that runs inside your agent during a test |
+| `scrimmage` | `scrimmage` | The runner, the commands (`scrimmage`, `scrimmage-run` and `scrimmage-mcp`), and the code that runs inside your agent during a test |
 
 It depends on nothing outside Python's standard library.
 So installing it never changes the versions of the libraries your agent uses.
@@ -80,7 +80,7 @@ With pip, the second command is `pip install --no-index --find-links dist scrimm
 ```bash
 scrimmage --help
 scrimmage-run python -c "print('ok')"
-python -c "import scrimmage_core"
+python -c "import scrimmage"
 ```
 
 The first prints the commands, the second prints `ok`, and the last prints nothing.

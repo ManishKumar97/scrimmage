@@ -432,7 +432,7 @@ def egress_problems(
     problems: list[str] = []
     starts = [r for r in records if r["event"] == "start"]
     for start in starts:
-        if start["scrimmage_core"] or start["sitecustomize"]:
+        if start["scrimmage"] or start["sitecustomize"]:
             problems.append(f"pid {start['pid']}: the hook came after Scrimmage's startup: {start}")
     for r in records:
         if r["event"] in ("connect", "sendto", "sendmsg"):

@@ -22,9 +22,9 @@ import anyio.to_thread
 import httpx2
 import pytest
 
-from scrimmage_core import http_gate, process_gate, runner, state, threadctx, tool_gate
-from scrimmage_core.errors import ScrimmageRefused
-from scrimmage_core.plan import Plan
+from scrimmage import http_gate, process_gate, runner, state, threadctx, tool_gate
+from scrimmage.errors import ScrimmageRefused
+from scrimmage.plan import Plan
 from test_http_gate import Budget
 from test_service_units import Sink, sink_of
 

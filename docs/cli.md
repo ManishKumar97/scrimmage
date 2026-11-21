@@ -1,6 +1,6 @@
 # Commands
 
-`python -m scrimmage_core` is the same command as `scrimmage`, on the Python that runs it.
+`python -m scrimmage` is the same command as `scrimmage`, on the Python that runs it.
 
 ## scrimmage test
 

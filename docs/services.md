@@ -120,7 +120,7 @@ docker run --rm acme/agent:test scrimmage path
 command: ["uvicorn", "acme.service:app", "--host", "0.0.0.0", "--port", "8000"]
 env:
   - name: PYTHONPATH
-    value: /usr/local/lib/python3.12/site-packages/scrimmage_core/_boot   # first, then any of your own
+    value: /usr/local/lib/python3.12/site-packages/scrimmage/_boot   # first, then any of your own
   - name: SCRIMMAGE_SERVICE
     value: "1"
 ```

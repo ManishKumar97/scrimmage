@@ -30,9 +30,9 @@ mcp = ["mcp>=2.3,<2.4"]
 cert = ["cryptography>=46"]
 
 [project.scripts]
-scrimmage = "scrimmage_core.entry:main"
-scrimmage-run = "scrimmage_core.run_command:main"
-scrimmage-mcp = "scrimmage_core.mcp_server:main"
+scrimmage = "scrimmage.entry:main"
+scrimmage-run = "scrimmage.run_command:main"
+scrimmage-mcp = "scrimmage.mcp_server:main"
 
 [build-system]
 # Pinned: a byte-identical rebuild of a release needs the same hatchling that built it.
@@ -40,7 +40,7 @@ requires = ["hatchling==1.33.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/scrimmage_core"]
+packages = ["src/scrimmage"]
 
 # The sdist holds the package and nothing else that sits beside it in a working tree.
 [tool.hatch.build.targets.sdist]

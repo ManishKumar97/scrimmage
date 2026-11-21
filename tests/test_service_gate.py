@@ -20,10 +20,10 @@ from typing import Any, cast
 import httpx2
 import pytest
 
-from scrimmage_core import asgi_gate, http_gate, protocol, state, tool_gate
-from scrimmage_core.client import CAP
-from scrimmage_core.config import Mock
-from scrimmage_core.plan import Plan
+from scrimmage import asgi_gate, http_gate, protocol, state, tool_gate
+from scrimmage.client import CAP
+from scrimmage.config import Mock
+from scrimmage.plan import Plan
 from service_harness import Service, drive, eventually
 from service_harness import service as make_service
 from test_http_gate import Budget
@@ -212,7 +212,7 @@ class Jumped:
 def test_a_claim_refused_for_the_clock_gets_503_clock(
     svc: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from scrimmage_core import client as control_client
+    from scrimmage import client as control_client
 
     name = svc.open()
     monkeypatch.setattr(control_client, "time", Jumped())  # the clock jumps after the probe
@@ -293,10 +293,10 @@ def signed_probe(svc: Service, body: bytes, more: list[tuple[bytes, bytes]]) -> 
 def test_the_probes_report_with_a_notice_matches_its_schema(svc: Service) -> None:
     import jsonschema
 
-    import scrimmage_core
+    import scrimmage
 
     schema = json.loads(
-        (Path(scrimmage_core.__file__).parent / "schemas" / "startup-report.v2.json").read_text()
+        (Path(scrimmage.__file__).parent / "schemas" / "startup-report.v2.json").read_text()
     )
     svc.process.notice("newer_version", "httpx2", "httpx2 2.99.0 is newer than the versions")
     reply = signed_probe(svc, b"", [])
@@ -503,7 +503,7 @@ def test_a_call_in_the_grace_window_is_in_the_record_and_one_after_is_refused(
 def test_a_call_made_while_the_last_batch_is_sent_is_refused(
     svc: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from scrimmage_core.client import RunSender
+    from scrimmage.client import RunSender
 
     name = svc.open(mocks=mocked("x"))
     holder: list[state.RunState] = []
@@ -537,7 +537,7 @@ def test_a_forced_lost_plan_is_an_orphan_its_write_is_refused_and_the_run_is_an_
 ) -> None:
     import threading
 
-    from scrimmage_core import runner
+    from scrimmage import runner
 
     name = svc.open(mocks=mocked("x"), grace=0.3)
     told: list[str] = []
@@ -567,7 +567,7 @@ def test_both_gates_present_handle_a_request_once(svc: Service) -> None:
     from starlette.responses import JSONResponse
     from starlette.routing import Route
 
-    from scrimmage_core.asgi_gate import patch_starlette
+    from scrimmage.asgi_gate import patch_starlette
 
     async def chat(request: Any) -> Any:
         return JSONResponse({"answer": GATED("1")})
@@ -588,7 +588,7 @@ def test_starlette_gate_alone_under_testclient(svc: Service) -> None:
     from starlette.routing import Route
     from starlette.testclient import TestClient
 
-    from scrimmage_core.asgi_gate import patch_starlette
+    from scrimmage.asgi_gate import patch_starlette
 
     async def chat(request: Any) -> Any:
         try:
@@ -677,7 +677,7 @@ def test_uvicorn_loading_the_app_pops_the_token_path_and_says_it_is_active(
 def test_closes_waiting_for_every_slot_never_hold_up_the_claims_that_hold_them(
     svc: Service,
 ) -> None:
-    from scrimmage_core.client import RunSender
+    from scrimmage.client import RunSender
 
     closing, claiming = [svc.open() for _ in range(CAP)], [svc.open() for _ in range(CAP)]
     for name in closing:
@@ -713,7 +713,7 @@ def test_closes_waiting_for_every_slot_never_hold_up_the_claims_that_hold_them(
 def test_a_claim_thread_that_asks_for_a_slot_it_does_not_hold_fails_at_once(
     svc: Service,
 ) -> None:
-    from scrimmage_core.client import ControlError
+    from scrimmage.client import ControlError
 
     name = svc.open()
     with pytest.raises(ControlError, match="did not hold"):
@@ -814,7 +814,7 @@ def test_a_hand_made_call_to_the_app_runs_as_its_caller_where_uvicorns_gate_is(
     from starlette.responses import PlainTextResponse
     from starlette.routing import Route
 
-    from scrimmage_core.asgi_gate import patch_starlette
+    from scrimmage.asgi_gate import patch_starlette
 
     wrote: list[str] = []
 

@@ -145,7 +145,7 @@ import ssl, sys
 from pathlib import Path
 if len(sys.argv) > 4:
     sys.path.insert(0, sys.argv[4])
-from scrimmage_core import tls
+from scrimmage import tls
 ca, crt, key = (Path(p) for p in sys.argv[1:4])
 client = tls.client_context(ca)
 server = tls.server_context(crt, key)

@@ -7,8 +7,8 @@ from typing import NamedTuple, cast
 import pydantic
 import pytest
 
-from scrimmage_core import capture, mocks, state
-from scrimmage_core.redact import REMOVED
+from scrimmage import capture, mocks, state
+from scrimmage.redact import REMOVED
 
 
 @dataclasses.dataclass

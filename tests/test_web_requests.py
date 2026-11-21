@@ -20,10 +20,10 @@ import jsonschema
 import pytest
 
 from conftest import Project, Result
-from scrimmage_core import config, http_gate, labels, plan, provider_openai, state
-from scrimmage_core.config import Fault, Mock
-from scrimmage_core.errors import ConfigError, ScrimmageRefused, ScrimmageStopped
-from scrimmage_core.plan import Plan
+from scrimmage import config, http_gate, labels, plan, provider_openai, state
+from scrimmage.config import Fault, Mock
+from scrimmage.errors import ConfigError, ScrimmageRefused, ScrimmageStopped
+from scrimmage.plan import Plan
 
 HOST = "inventory.acme.internal"
 URL = f"https://{HOST}/stock/SKU-42"

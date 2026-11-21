@@ -12,10 +12,10 @@ import pytest
 
 from conftest import Project
 from report_cases import AGENT, FAULT, TEST, load, run
-from scrimmage_core import cli, config, entry, results, runner
-from scrimmage_core import plan as planner
-from scrimmage_core.records import RecordStore, Refused, read_regular
-from scrimmage_core.runner import Runner, RunResult, row_json, row_reports
+from scrimmage import cli, config, entry, results, runner
+from scrimmage import plan as planner
+from scrimmage.records import RecordStore, Refused, read_regular
+from scrimmage.runner import Runner, RunResult, row_json, row_reports
 
 pytestmark = pytest.mark.usefixtures("signals_kept")
 

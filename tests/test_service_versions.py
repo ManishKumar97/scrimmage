@@ -27,13 +27,13 @@ from typing import Any
 import pytest
 
 from ports import free_port
-from scrimmage_core import asgi_gate, control, protocol, service_client, tls, versions
-from scrimmage_core import runner as running
-from scrimmage_core.cert import make_certificates
-from scrimmage_core.client import PING_TIMEOUT_S, ControlClient
-from scrimmage_core.control import ControlServer
-from scrimmage_core.plan import Plan
-from scrimmage_core.records import RecordStore
+from scrimmage import asgi_gate, control, protocol, service_client, tls, versions
+from scrimmage import runner as running
+from scrimmage.cert import make_certificates
+from scrimmage.client import PING_TIMEOUT_S, ControlClient
+from scrimmage.control import ControlServer
+from scrimmage.plan import Plan
+from scrimmage.records import RecordStore
 from service_harness import Service, drive
 from test_service import BIN, Bench, bench
 

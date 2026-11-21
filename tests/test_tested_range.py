@@ -9,8 +9,8 @@ import importlib
 
 import pytest
 
-from scrimmage_core import http_gate, langchain_gate, mcp_gate
-from scrimmage_core.state import newer_version_message
+from scrimmage import http_gate, langchain_gate, mcp_gate
+from scrimmage.state import newer_version_message
 
 
 def found() -> list[tuple[str, tuple[int, int] | None, tuple[tuple[int, int], tuple[int, int]]]]:

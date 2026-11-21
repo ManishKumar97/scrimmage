@@ -13,8 +13,8 @@ import pytest
 from conftest import ACME, Project
 from fakes.openai_server import FakeOpenAI
 from report_cases import CASES
-from scrimmage_core import cli, results, show
-from scrimmage_core.runner import report
+from scrimmage import cli, results, show
+from scrimmage.runner import report
 from show_cases import call_line, faulted_run, real_id, summary_line, write_folder, write_lines
 
 pytestmark = pytest.mark.usefixtures("signals_kept")

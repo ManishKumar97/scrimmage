@@ -10,7 +10,7 @@ import pytest
 PACKAGES = Path(__file__).parents[1] / "packages"
 # Each source tree, with the first-party names it may import.
 ALLOWED = {
-    PACKAGES / "scrimmage" / "src" / "scrimmage_core": {"scrimmage_core"},
+    PACKAGES / "scrimmage" / "src" / "scrimmage": {"scrimmage"},
 }
 DYNAMIC = {"import_module", "__import__"}
 # The only places that import a computed name: the team's own module from a mock's
@@ -75,7 +75,7 @@ def test_imports_only_the_standard_library(path: Path, ours: set[str]) -> None:
     assert not outside, f"{path} imports {sorted(outside)}"
 
 
-SERVER = "scrimmage_core.mcp_server"
+SERVER = "scrimmage.mcp_server"
 
 
 def imports_the_server(path: Path) -> bool:
@@ -91,7 +91,7 @@ def imports_the_server(path: Path) -> bool:
             if node.level == 0 and (module == SERVER or module.startswith(SERVER + ".")):
                 return True
             names = {alias.name for alias in node.names}
-            package = module == "scrimmage_core" and node.level == 0
+            package = module == "scrimmage" and node.level == 0
             if (package or (node.level == 1 and not module)) and "mcp_server" in names:
                 return True
             if node.level == 1 and module == "mcp_server":
@@ -112,7 +112,7 @@ def test_only_the_mcp_server_command_loads_the_mcp_server(tmp_path: Path) -> Non
     """The server is a command of its own: no other module imports it, so the scrimmage
     command and the code that loads into the agent never bring in the MCP library. The
     import-linter contract cannot see this one, as the server is inside its source package."""
-    core = PACKAGES / "scrimmage" / "src" / "scrimmage_core"
+    core = PACKAGES / "scrimmage" / "src" / "scrimmage"
     found = [
         p.name
         for p in sorted(core.rglob("*.py"))
@@ -120,15 +120,15 @@ def test_only_the_mcp_server_command_loads_the_mcp_server(tmp_path: Path) -> Non
     ]
     assert not found, found
     for line in (  # every way of importing it is seen, so a pass above means something
-        "from scrimmage_core import mcp_server",
-        "from scrimmage_core import cli, mcp_server as server",
-        "import scrimmage_core.mcp_server",
-        "from scrimmage_core.mcp_server import main",
+        "from scrimmage import mcp_server",
+        "from scrimmage import cli, mcp_server as server",
+        "import scrimmage.mcp_server",
+        "from scrimmage.mcp_server import main",
         "from . import mcp_server",
         "from .mcp_server import main",
-        "importlib.import_module('scrimmage_core.mcp_server')",
+        "importlib.import_module('scrimmage.mcp_server')",
     ):
         (tmp_path / "probe.py").write_text(line + "\n")
         assert imports_the_server(tmp_path / "probe.py"), line
-    (tmp_path / "probe.py").write_text("from scrimmage_core import mcp_gate\n")
+    (tmp_path / "probe.py").write_text("from scrimmage import mcp_gate\n")
     assert not imports_the_server(tmp_path / "probe.py")

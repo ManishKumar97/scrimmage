@@ -29,14 +29,14 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from conftest import ACME, EXAMPLE
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import cli, mcp_server
+from scrimmage import cli, mcp_server
 
 pytestmark = pytest.mark.slow
 Fake = Callable[..., FakeOpenAI]
 SERVER = str(Path(sys.executable).parent / "scrimmage-mcp")
 SHIM = Path(__file__).parent / "mcp_shim"
 # The shim's test: is this process a scrimmage command the server started?
-IN_CHILD = "import sys\nchild = sys.orig_argv[1:4] == ['-P', '-m', 'scrimmage_core']\n"
+IN_CHILD = "import sys\nchild = sys.orig_argv[1:4] == ['-P', '-m', 'scrimmage']\n"
 IN_SERVER = "import sys\nserver = sys.orig_argv[1:2] == [" + repr(SERVER) + "]\n"
 # Each child the server starts writes a marker named for its pid.
 COUNT_STARTS = IN_CHILD + (
@@ -255,7 +255,7 @@ if server:
     provider.add_span_processor(SimpleSpanProcessor(ToFile()))
     trace.set_tracer_provider(provider)
     if os.environ.get("KEEP_TELEMETRY"):  # the server as mcp builds it, to show a span is seen
-        from scrimmage_core import mcp_server
+        from scrimmage import mcp_server
         mcp_server.without_telemetry = lambda server: None
 """
 
@@ -446,17 +446,17 @@ MODES = IN_CHILD + (
     "mode_file = pathlib.Path(os.environ.get('MODE', '/nonexistent'))\n"
     "mode = mode_file.read_text() if child and mode_file.exists() else ''\n"
     "if mode == 'check-raises':\n"
-    "    from scrimmage_core import config\n"
+    "    from scrimmage import config\n"
     "    def boom(path):\n"
     f"        raise RuntimeError('the reader broke on {SK}')\n"
     "    config.load = boom\n"
     "if mode == 'init-raises':\n"
-    "    from scrimmage_core import init\n"
+    "    from scrimmage import init\n"
     "    def boom(*args, **kwargs):\n"
     "        raise RuntimeError('the drafter broke')\n"
     "    init.prepare = boom\n"
     "if mode == 'show-raises':\n"
-    "    from scrimmage_core import show\n"
+    "    from scrimmage import show\n"
     "    def boom(*args, **kwargs):\n"
     "        raise RuntimeError('show broke')\n"
     "    show.build = boom\n"
@@ -1342,7 +1342,7 @@ LOOP_RAISES = IN_SERVER + (
     "if server:\n"
     "    import os, pathlib\n"
     "    import anyio\n"
-    "    from scrimmage_core import mcp_server\n"
+    "    from scrimmage import mcp_server\n"
     "    real = mcp_server.Scrimmage.supervise\n"
     "    async def supervise(self, child):\n"
     "        async def boom():\n"

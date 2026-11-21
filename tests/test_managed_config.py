@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from scrimmage_core import config
-from scrimmage_core.cli import main
-from scrimmage_core.errors import ConfigError
+from scrimmage import config
+from scrimmage.cli import main
+from scrimmage.errors import ConfigError
 
 TESTS = Path(__file__).parent
 SERVICE_LINE = re.compile(r"^service\s*=", re.M)

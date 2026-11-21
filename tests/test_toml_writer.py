@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import pytest
 
-from scrimmage_core import capture, config, toml_write
+from scrimmage import capture, config, toml_write
 
 ALPHABET = [chr(c) for c in range(0x00, 0x30)] + list('"\\#[]{}=., \'é漢🙂') + [
     "\u007f", "\u0085", "\u009f", "\u2028", "﻿", '"""', "[[test.fault]]", "${", "a", "Z", "9",

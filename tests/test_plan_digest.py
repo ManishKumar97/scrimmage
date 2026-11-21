@@ -20,11 +20,11 @@ from typing import Any
 import pytest
 
 from conftest import EXAMPLE
-from scrimmage_core import protocol, runner, versions
-from scrimmage_core.config import Mock
-from scrimmage_core.control import ControlServer
-from scrimmage_core.plan import Plan
-from scrimmage_core.records import RecordStore
+from scrimmage import protocol, runner, versions
+from scrimmage.config import Mock
+from scrimmage.control import ControlServer
+from scrimmage.plan import Plan
+from scrimmage.records import RecordStore
 from test_service import Bench, bench
 
 pytestmark = pytest.mark.slow
@@ -325,7 +325,7 @@ def test_a_new_plan_key_must_be_digested_or_listed_as_undigested() -> None:
 
 @pytest.mark.design("service.plan_digest")
 def test_the_seam_fails_loudly_for_a_plan_with_no_mock(monkeypatch: pytest.MonkeyPatch) -> None:
-    from scrimmage_core import asgi_gate
+    from scrimmage import asgi_gate
 
     spec = importlib.util.spec_from_file_location("plan_seam", EXAMPLE / "acme" / "plan_seam.py")
     assert spec is not None and spec.loader is not None

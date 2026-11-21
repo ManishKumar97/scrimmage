@@ -8,10 +8,10 @@ import httpx2
 import jsonschema
 import pytest
 
-import scrimmage_core
-from scrimmage_core import plan
-from scrimmage_core import provider_openai as table
-from scrimmage_core.errors import ConfigError
+import scrimmage
+from scrimmage import plan
+from scrimmage import provider_openai as table
+from scrimmage.errors import ConfigError
 from test_cached_tokens import priced
 from test_http_gate import Budget, gated, install, make_plan
 
@@ -371,7 +371,5 @@ def test_the_cache_write_rates_survive_the_plan_and_fit_its_schema(tmp_path: Pat
     want = {"input": 0.2, "output": 1.0, "cache_write_30m": 0.25, "cache_write_12h": 0.5}
     assert budget["prices"] == {"acme": want}
     assert plan.Plan.from_json(sent).prices == cfg.agent.prices
-    schema = json.loads(
-        (Path(scrimmage_core.__file__).parent / "schemas" / "plan.v1.json").read_text()
-    )
+    schema = json.loads((Path(scrimmage.__file__).parent / "schemas" / "plan.v1.json").read_text())
     jsonschema.Draft202012Validator(schema).validate(sent)

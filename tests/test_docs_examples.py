@@ -21,9 +21,9 @@ import pytest
 
 from conftest import ACME, EXAMPLE, doc_pages
 from fakes.openai_server import FakeOpenAI, Guard, Rule
-from scrimmage_core.cli import main
-from scrimmage_core.managed import Managed
-from scrimmage_core.outcomes import MISTAKE, OK, ROW_FAILED
+from scrimmage.cli import main
+from scrimmage.managed import Managed
+from scrimmage.outcomes import MISTAKE, OK, ROW_FAILED
 from test_managed_start import group
 
 DOCS = Path(__file__).parents[1] / "docs"

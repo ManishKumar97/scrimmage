@@ -10,12 +10,12 @@ from conftest import ACME, EXAMPLE_FAULT, Project, Result
 from fakes.openai_server import FakeOpenAI
 from report_cases import AGENT, TEST, load
 from report_cases import run as a_run
-from scrimmage_core import config as settings
-from scrimmage_core import plan, state, tool_gate
-from scrimmage_core.config import Mock
-from scrimmage_core.errors import ScrimmageRefused
-from scrimmage_core.plan import Plan
-from scrimmage_core.runner import recorded_call, unused_mocks
+from scrimmage import config as settings
+from scrimmage import plan, state, tool_gate
+from scrimmage.config import Mock
+from scrimmage.errors import ScrimmageRefused
+from scrimmage.plan import Plan
+from scrimmage.runner import recorded_call, unused_mocks
 
 # Every test here, or nearly, starts a process or a real scrimmage test run.
 pytestmark = pytest.mark.slow

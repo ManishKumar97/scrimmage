@@ -17,8 +17,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-from scrimmage_core import cert, cli, tls
-from scrimmage_core.cert import CertError, CertFiles, make_certificates
+from scrimmage import cert, cli, tls
+from scrimmage.cert import CertError, CertFiles, make_certificates
 
 NAME = "host.docker.internal"
 IP = "172.17.0.1"

@@ -412,7 +412,7 @@ def test_hook_logs_a_start_line_first_then_each_connect(tmp_path: Path) -> None:
         )
         records = _run_with_hook(tmp_path, code)
     assert records[0]["event"] == "start"
-    assert records[0]["scrimmage_core"] is False
+    assert records[0]["scrimmage"] is False
     assert records[0]["sitecustomize"] is False
     connects = [r for r in records if r["event"] == "connect"]
     assert [r["address"] for r in connects] == [["127.0.0.1", port]] * 2
@@ -424,9 +424,9 @@ def test_hook_start_line_shows_a_module_that_was_already_loaded(tmp_path: Path) 
     log = tmp_path / "egress.log"
     site_dir = tmp_path / "site"
     shutil.copytree(HOOK_DIR, site_dir, ignore=shutil.ignore_patterns("__pycache__"))
-    (tmp_path / "scrimmage_core.py").write_text("")
+    (tmp_path / "scrimmage.py").write_text("")
     code = (
-        f"import sys; sys.path.insert(0, {str(tmp_path)!r}); import scrimmage_core\n"
+        f"import sys; sys.path.insert(0, {str(tmp_path)!r}); import scrimmage\n"
         f"import site; site.addsitedir({str(site_dir)!r})\n"
     )
     subprocess.run(
@@ -436,7 +436,7 @@ def test_hook_start_line_shows_a_module_that_was_already_loaded(tmp_path: Path) 
         timeout=30,
     )
     start = json.loads(log.read_text().splitlines()[0])
-    assert start["scrimmage_core"] is True
+    assert start["scrimmage"] is True
 
 
 @pytest.mark.slow
@@ -492,7 +492,7 @@ def _start(
         "ppid": ppid,
         "argv": argv or [PY, "-m", "x"],
         "executable": PY,
-        "scrimmage_core": late,
+        "scrimmage": late,
         "sitecustomize": False,
     }
 

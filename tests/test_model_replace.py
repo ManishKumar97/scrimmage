@@ -20,10 +20,10 @@ import pytest
 from conftest import Project
 from fakes.openai_server import FakeOpenAI
 from model_gate import GUARD, PRICE, URL, Gate, Provider, ask, completion, guard
-from scrimmage_core import changes, config, outcomes, provider_openai, show, state
-from scrimmage_core.cli import main
-from scrimmage_core.config import Fault
-from scrimmage_core.errors import ConfigError
+from scrimmage import changes, config, outcomes, provider_openai, show, state
+from scrimmage.cli import main
+from scrimmage.config import Fault
+from scrimmage.errors import ConfigError
 
 SECRET = "sk-" + "a1b2c3d4" * 3  # a shape the redaction rules remove
 

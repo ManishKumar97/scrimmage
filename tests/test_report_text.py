@@ -6,7 +6,7 @@ from collections.abc import Callable
 import pytest
 
 from report_cases import CASES, FOLDER, GOLDEN, WEB_MISS
-from scrimmage_core.runner import RunResult, report
+from scrimmage.runner import RunResult, report
 
 
 @pytest.mark.design("json.text_unchanged")

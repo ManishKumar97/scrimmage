@@ -4,7 +4,7 @@ The Scrimmage MCP server lets a coding agent, such as Claude Code or Cursor, run
 It is a different thing from [MCP tools your agent calls](mcp.md), which are about mocking and failing the MCP tools of the agent under test.
 
 The server wraps five commands: `check`, `test`, `record`, `init` and `show`.
-Each tool call runs the command as a child process, `python -P -m scrimmage_core <command> --json`, on the server's own Python, and returns its one JSON document.
+Each tool call runs the command as a child process, `python -P -m scrimmage <command> --json`, on the server's own Python, and returns its one JSON document.
 It speaks MCP over stdio only: the client starts the server, and nothing listens on a socket.
 
 ## Install

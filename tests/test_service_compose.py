@@ -165,7 +165,7 @@ def test_the_container_connects_only_to_the_control_address_and_the_model_host(
         assert len(to_model) >= 1
         starts = [r for r in records if r["event"] == "start"]
         assert len(starts) >= 5, starts  # the supervisor twice (exec), the tracker, two workers
-        late = [s for s in starts if s["scrimmage_core"] or s["sitecustomize"]]
+        late = [s for s in starts if s["scrimmage"] or s["sitecustomize"]]
         assert late == [], f"the hook came after Scrimmage's startup file: {late}"
 
         # Nothing else: every address, every name, every child.

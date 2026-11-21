@@ -12,9 +12,9 @@ from typing import cast
 
 import pytest
 
-from scrimmage_core import capture, state
-from scrimmage_core import redact as redact_module
-from scrimmage_core.redact import redact, redacted
+from scrimmage import capture, state
+from scrimmage import redact as redact_module
+from scrimmage.redact import redact, redacted
 
 ROOT = Path(__file__).parents[1]
 

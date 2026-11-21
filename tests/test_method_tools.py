@@ -12,9 +12,9 @@ import pytest
 
 from conftest import ACME, Project
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import config, labels, state, tool_gate
-from scrimmage_core.config import Fault, Mock
-from scrimmage_core.errors import ConfigError, ScrimmageRefused
+from scrimmage import config, labels, state, tool_gate
+from scrimmage.config import Fault, Mock
+from scrimmage.errors import ConfigError, ScrimmageRefused
 from test_tool_gate import Lines, install
 
 Fake = Callable[..., FakeOpenAI]

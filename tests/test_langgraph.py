@@ -17,12 +17,12 @@ import pytest
 
 from conftest import ACME, EXAMPLE_FAULT, Project, Result, TimeLimit
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import config, langchain_gate, mocks, plan, state, tool_gate
-from scrimmage_core.config import Fault
-from scrimmage_core.errors import ScrimmageRefused
-from scrimmage_core.plan import Plan
-from scrimmage_core.runner import Runner, RunResult
-from scrimmage_core.start import BadAnswerPath, pick
+from scrimmage import config, langchain_gate, mocks, plan, state, tool_gate
+from scrimmage.config import Fault
+from scrimmage.errors import ScrimmageRefused
+from scrimmage.plan import Plan
+from scrimmage.runner import Runner, RunResult
+from scrimmage.start import BadAnswerPath, pick
 
 Fake = Callable[[list[str]], FakeOpenAI]
 TOOLS_LINE = (

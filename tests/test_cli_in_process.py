@@ -16,8 +16,8 @@ from typing import cast
 import pytest
 
 from conftest import Project
-from scrimmage_core import cli, config, entry, runner
-from scrimmage_core.runner import Runner, RunResult
+from scrimmage import cli, config, entry, runner
+from scrimmage.runner import Runner, RunResult
 
 pytestmark = pytest.mark.usefixtures("signals_kept")
 WAIT_S = 30  # a ceiling for an event that should come at once; it only ends a failing test

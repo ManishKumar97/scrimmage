@@ -25,9 +25,9 @@ import openai
 import pydantic
 import pytest
 
-import scrimmage_core
+import scrimmage
 from conftest import Project
-from scrimmage_core import (
+from scrimmage import (
     capture,
     changes,
     config,
@@ -37,18 +37,16 @@ from scrimmage_core import (
     toml_write,
     tool_gate,
 )
-from scrimmage_core import plan as planner
-from scrimmage_core import provider_openai as openai_table
-from scrimmage_core.config import Mock
-from scrimmage_core.plan import Plan
-from scrimmage_core.redact import REMOVED
+from scrimmage import plan as planner
+from scrimmage import provider_openai as openai_table
+from scrimmage.config import Mock
+from scrimmage.plan import Plan
+from scrimmage.redact import REMOVED
 from test_http_gate import Budget
 
 HERE = __name__
 ALLOWED = [f"{HERE}."]
-RECORD = json.loads(
-    (Path(scrimmage_core.__file__).parent / "schemas" / "record.v1.json").read_text()
-)
+RECORD = json.loads((Path(scrimmage.__file__).parent / "schemas" / "record.v1.json").read_text())
 SK = "sk-proj-" + "a1B2c3D4e5F6g7H8i9J0"
 JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
 
@@ -956,7 +954,7 @@ def test_a_find_holding_a_url_with_a_query_reaches_the_gate_raw(sink: Sink) -> N
     """The plan keeps find as written, so the gate compares the real text. The URL's query is
     a span the record removes, so the change is refused by name; a redacted find in the plan
     would instead read "find is not in the result", and the mistake would be silent."""
-    from scrimmage_core import runner
+    from scrimmage import runner
 
     url = "https://x.test/p?token=abc"
     fault = config.Fault("tool:page", "replace", "always", text="X", find=url)
@@ -1190,7 +1188,7 @@ def test_a_400_after_a_fault_that_is_not_in_a_reply_is_not_marked(sink: Sink) ->
 @pytest.mark.design("record.after_reply_fault")
 def test_a_400_before_a_reply_fault_fires_is_not_marked(sink: Sink) -> None:
     """The code catches the 400 and goes on, and unknown tool fires on call 2, after it."""
-    from scrimmage_core import runner
+    from scrimmage import runner
 
     with model_gate(sink, unknown_tool("call 2")):
         api = model_client(rejected)

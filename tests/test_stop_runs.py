@@ -10,8 +10,8 @@ import time
 import pytest
 
 from conftest import Project
-from scrimmage_core import config, runner
-from scrimmage_core.runner import Runner
+from scrimmage import config, runner
+from scrimmage.runner import Runner
 
 GRACE_S = 1.0
 LOADED_BOUND_S = 120  # a ceiling for a wait on another process; it only ends a failing test
@@ -91,7 +91,7 @@ SH = "trap '' TERM; while :; do sleep 1; done"
 import os, subprocess, sys, time
 env = {**os.environ, "SCRIMMAGE_RUNNER_PID": str(os.getpid())}
 proc = subprocess.Popen(
-    [sys.executable, "-m", "scrimmage_core.run_command", "sh", "-c", SH],
+    [sys.executable, "-m", "scrimmage.run_command", "sh", "-c", SH],
     env=env, start_new_session=True,
 )
 print(proc.pid, flush=True)

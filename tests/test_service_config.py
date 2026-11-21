@@ -18,10 +18,10 @@ import pytest
 
 from conftest import ACME, EXAMPLE, Project
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import config, plan, record, redact, results, state, toml_write
-from scrimmage_core.cli import main
-from scrimmage_core.errors import ConfigError
-from scrimmage_core.redact import REMOVED
+from scrimmage import config, plan, record, redact, results, state, toml_write
+from scrimmage.cli import main
+from scrimmage.errors import ConfigError
+from scrimmage.redact import REMOVED
 from test_record_units import result_for
 
 SERVICE = (
@@ -538,7 +538,7 @@ def test_a_token_file_of_another_user_names_both_uids_and_the_user_setting(
     a PermissionError, not the owner check; both name the file's uid, this uid and user:."""
     import os
 
-    from scrimmage_core import bootstrap, records
+    from scrimmage import bootstrap, records
 
     token = tmp_path / "token"
     token.write_text("x" * 40)

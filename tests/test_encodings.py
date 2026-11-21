@@ -26,12 +26,12 @@ from openai.types.chat import ChatCompletion
 
 from fakes.openai_server import FIXTURES
 from model_gate import Budget, Sink
-from scrimmage_core import changes, http_gate, provider_openai, state
-from scrimmage_core.budget import Ledger
-from scrimmage_core.changes import Unchangeable
-from scrimmage_core.config import Fault, ModelHost
-from scrimmage_core.errors import ScrimmageRefused
-from scrimmage_core.plan import Plan
+from scrimmage import changes, http_gate, provider_openai, state
+from scrimmage.budget import Ledger
+from scrimmage.changes import Unchangeable
+from scrimmage.config import Fault, ModelHost
+from scrimmage.errors import ScrimmageRefused
+from scrimmage.plan import Plan
 
 MODEL = "gpt-4o-mini"
 PRICE = provider_openai.Rates(1.0, 2.0)  # dollars per million tokens

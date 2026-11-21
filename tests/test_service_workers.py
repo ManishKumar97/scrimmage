@@ -20,11 +20,11 @@ from typing import Any, cast
 
 import pytest
 
-from scrimmage_core import asgi_gate, protocol
-from scrimmage_core.client import ControlClient
-from scrimmage_core.config import Mock
-from scrimmage_core.control import MAX_CONNECTIONS, ControlServer
-from scrimmage_core.records import RecordStore
+from scrimmage import asgi_gate, protocol
+from scrimmage.client import ControlClient
+from scrimmage.config import Mock
+from scrimmage.control import MAX_CONNECTIONS, ControlServer
+from scrimmage.records import RecordStore
 from service_harness import eventually
 from test_service import Bench, Lab, bench, lab
 

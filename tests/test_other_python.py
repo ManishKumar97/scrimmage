@@ -11,10 +11,10 @@ import jsonschema
 import pytest
 
 from conftest import Project, Result
-from scrimmage_core import python_args
-from scrimmage_core.control import ControlServer
-from scrimmage_core.records import RecordStore
-from scrimmage_core.run_command import BOOT
+from scrimmage import python_args
+from scrimmage.control import ControlServer
+from scrimmage.records import RecordStore
+from scrimmage.run_command import BOOT
 from test_bootstrap import this_python
 from test_scripts import RECORD, calls, lines_of, script, summary_of, write_config
 
@@ -90,7 +90,7 @@ def test_with_children_set_a_python_with_no_scrimmage_still_runs_untouched(
 
 
 def imported(python: Path) -> list[str]:
-    code = "import sys; print('scrimmage_core' in sys.modules, flush=True)"
+    code = "import sys; print('scrimmage' in sys.modules, flush=True)"
     return [str(python), "-c", code]
 
 

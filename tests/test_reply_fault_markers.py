@@ -7,9 +7,9 @@ import time
 import tracemalloc
 from collections.abc import Mapping, Sequence
 
-from scrimmage_core import provider_openai as openai_table
-from scrimmage_core import state
-from scrimmage_core.plan import Plan
+from scrimmage import provider_openai as openai_table
+from scrimmage import state
+from scrimmage.plan import Plan
 from test_http_gate import Sink
 
 LABEL = "model:openai"

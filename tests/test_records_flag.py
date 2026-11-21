@@ -10,7 +10,7 @@ import pytest
 
 from conftest import ACME, Project
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core.cli import main
+from scrimmage.cli import main
 
 pytestmark = [pytest.mark.usefixtures("signals_kept"), pytest.mark.slow]
 Fake = Callable[..., FakeOpenAI]

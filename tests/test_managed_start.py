@@ -26,9 +26,9 @@ from typing import Any
 import pytest
 
 from conftest import ACME, EXAMPLE
-from scrimmage_core import config, managed, runner
-from scrimmage_core.cli import main
-from scrimmage_core.managed import Managed
+from scrimmage import config, managed, runner
+from scrimmage.cli import main
+from scrimmage.managed import Managed
 
 pytestmark = pytest.mark.slow
 TOOLS = ["acme.tools:get_order", "acme.tools:check_inventory", "acme.tools:refund_order"]

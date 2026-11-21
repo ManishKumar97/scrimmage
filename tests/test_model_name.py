@@ -7,9 +7,9 @@ import pytest
 
 from conftest import Project, Result
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import config, labels
-from scrimmage_core.plan import Row
-from scrimmage_core.runner import RunResult, unused_model
+from scrimmage import config, labels
+from scrimmage.plan import Row
+from scrimmage.runner import RunResult, unused_model
 
 # Every test here, or nearly, starts a process or a real scrimmage test run.
 pytestmark = pytest.mark.slow

@@ -11,11 +11,11 @@ import jsonschema
 import pytest
 
 from conftest import OK, ROW_FAILED, Project
-from scrimmage_core import config, state, tool_gate
-from scrimmage_core import plan as planner
-from scrimmage_core.config import Mock
-from scrimmage_core.errors import ConfigError, ScrimmageMockError, ScrimmageRefused
-from scrimmage_core.plan import Plan
+from scrimmage import config, state, tool_gate
+from scrimmage import plan as planner
+from scrimmage.config import Mock
+from scrimmage.errors import ConfigError, ScrimmageMockError, ScrimmageRefused
+from scrimmage.plan import Plan
 
 HERE = "test_returns_from"
 PLAN_SCHEMA = Path(config.__file__).parent / "schemas" / "plan.v1.json"

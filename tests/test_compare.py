@@ -10,9 +10,9 @@ import pytest
 
 from conftest import Project
 from report_cases import AGENT, BAD, FAULT, GOOD, SORRY, TEST, run
-from scrimmage_core import cli, compare, config, entry, judge
-from scrimmage_core import plan as planner
-from scrimmage_core.runner import Runner, RunResult
+from scrimmage import cli, compare, config, entry, judge
+from scrimmage import plan as planner
+from scrimmage.runner import Runner, RunResult
 from show_cases import faulted_run, real_id
 
 pytestmark = pytest.mark.usefixtures("signals_kept")

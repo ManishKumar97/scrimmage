@@ -1,4 +1,4 @@
-"""Scrimmage installs as one package, `scrimmage`, which imports as `scrimmage_core` and gives
+"""Scrimmage installs as one package, `scrimmage`, which imports as `scrimmage` and gives
 three commands. The docs install that one package and name no other."""
 
 import importlib.metadata
@@ -9,12 +9,12 @@ from conftest import doc_pages
 from test_docs_examples import DOCS, FENCE
 
 COMMANDS = {
-    "scrimmage": "scrimmage_core.entry:main",
-    "scrimmage-run": "scrimmage_core.run_command:main",
-    "scrimmage-mcp": "scrimmage_core.mcp_server:main",
+    "scrimmage": "scrimmage.entry:main",
+    "scrimmage-run": "scrimmage.run_command:main",
+    "scrimmage-mcp": "scrimmage.mcp_server:main",
 }
-# The names that went: the second package and the short command.
-GONE = re.compile(r"scrimmage-core|(?<![\w-])scrim(?![\w-])")
+# The names that went: the second package, its old import name and the short command.
+GONE = re.compile(r"scrimmage-core|scrimmage_core|(?<![\w-])scrim(?![\w-])")
 
 
 def test_one_distribution_installs_and_it_is_named_scrimmage() -> None:
@@ -62,7 +62,8 @@ def test_no_page_names_the_old_package_or_the_short_command() -> None:
     found = {str(p.relative_to(DOCS)): GONE.findall(p.read_text()) for p in pages}
     assert {page: names for page, names in found.items() if names} == {}
     assert GONE.search("pip install scrimmage-core") and GONE.search("`scrim test`")
-    assert not GONE.search("scrimmage-run, scrimmage, scrimmage_core, scrimmage-runs")
+    assert GONE.search("import scrimmage_core")
+    assert not GONE.search("scrimmage-run, scrimmage, scrimmage, scrimmage-runs")
 
 
 def test_no_docs_command_installs_scrimmage_from_the_index() -> None:

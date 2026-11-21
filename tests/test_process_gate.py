@@ -9,8 +9,8 @@ import jsonschema
 import pytest
 
 from conftest import Project, Result
-from scrimmage_core import process_gate, python_args
-from scrimmage_core.run_command import BOOT
+from scrimmage import process_gate, python_args
+from scrimmage.run_command import BOOT
 from test_other_python import other_version  # noqa: F401  # a fixture
 from test_scripts import RECORD, calls, script, summary_of, write_config
 
@@ -281,7 +281,7 @@ def test_a_shell_script_is_not_python(tmp_path: Path) -> None:
 
 
 def test_any_scrimmage_startup_folder_counts_and_nothing_else_does(tmp_path: Path) -> None:
-    folder = tmp_path / "site-packages" / "scrimmage_core" / "_boot"
+    folder = tmp_path / "site-packages" / "scrimmage" / "_boot"
     folder.mkdir(parents=True)
     (folder / "sitecustomize.py").write_text("")
     other = str(folder)
@@ -302,12 +302,12 @@ def test_a_flag_after_the_program_is_the_programs_own() -> None:
 
 
 def test_a_lookalike_folder_is_not_scrimmages_startup_folder(tmp_path: Path) -> None:
-    fake = tmp_path / "my_scrimmage_core" / "_boot"
-    empty = tmp_path / "scrimmage_core" / "_boot"
+    fake = tmp_path / "my_scrimmage" / "_boot"
+    empty = tmp_path / "scrimmage" / "_boot"
     fake.mkdir(parents=True)
     empty.mkdir(parents=True)
     (fake / "sitecustomize.py").write_text("")
     assert not process_gate.is_boot(str(fake))
     assert not process_gate.is_boot(str(empty))
-    assert not process_gate.is_boot("scrimmage_core/_boot")
+    assert not process_gate.is_boot("scrimmage/_boot")
     assert process_gate.is_boot(str(BOOT))

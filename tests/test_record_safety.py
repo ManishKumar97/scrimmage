@@ -14,8 +14,8 @@ import pytest
 from mcp.types import ListToolsResult, Tool
 
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import capture, mcp_gate, state
-from scrimmage_core.decide import Call
+from scrimmage import capture, mcp_gate, state
+from scrimmage.decide import Call
 from test_record import SK, Team, many, team
 from test_record_lines import (
     Sink,

@@ -18,9 +18,9 @@ import httpx2
 import openai
 import pytest
 
-from scrimmage_core import http_gate, state
-from scrimmage_core.budget import Shortfall
-from scrimmage_core.config import Fault
+from scrimmage import http_gate, state
+from scrimmage.budget import Shortfall
+from scrimmage.config import Fault
 from test_http_gate import BODY, URL, Budget, Sink, make_plan
 
 LIBRARIES = {"httpx": httpx, "httpx2": httpx2}

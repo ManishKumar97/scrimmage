@@ -13,7 +13,7 @@ from compose import harness
 from k8s import cluster as kubernetes
 from k8s.cluster import Cluster, ClusterError
 from k8s.workloads import MANIFEST_FILES, WORKLOAD_KINDS, documents, pod_spec
-from scrimmage_core.config import load as load_config
+from scrimmage.config import load as load_config
 
 HERE = Path(kubernetes.__file__).parent
 

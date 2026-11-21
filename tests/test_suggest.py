@@ -11,7 +11,7 @@ from typing import Any, cast
 
 import pytest
 
-from scrimmage_core import judge, outcomes, runner, suggest
+from scrimmage import judge, outcomes, runner, suggest
 
 Doc = dict[str, object]
 Combo = tuple[str, str, str | None, frozenset[str], bool, bool]  # outcome, verdict, left_out,

@@ -106,46 +106,46 @@ paths = ["packages/scrimmage/src", "tools", "tests", "vulture_allowlist.py"]
 min_confidence = 60
 
 [tool.importlinter]
-root_packages = ["scrimmage_core"]
+root_packages = ["scrimmage"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "Product code never imports test support"
 type = "forbidden"
-source_modules = ["scrimmage_core"]
+source_modules = ["scrimmage"]
 forbidden_modules = ["fakes", "conftest"]
 
 [[tool.importlinter.contracts]]
 name = "The MCP server runs Scrimmage only as a child"
 type = "forbidden"
-source_modules = ["scrimmage_core.mcp_server"]
+source_modules = ["scrimmage.mcp_server"]
 forbidden_modules = [
-    "scrimmage_core.cli",
-    "scrimmage_core.entry",
-    "scrimmage_core.runner",
-    "scrimmage_core.state",
-    "scrimmage_core.init",
-    "scrimmage_core.record",
-    "scrimmage_core.show",
-    "scrimmage_core.budget",
-    "scrimmage_core.bootstrap",
-    "scrimmage_core.mcp_gate",
-    "scrimmage_core.http_gate",
-    "scrimmage_core.control",
-    "scrimmage_core.client",
+    "scrimmage.cli",
+    "scrimmage.entry",
+    "scrimmage.runner",
+    "scrimmage.state",
+    "scrimmage.init",
+    "scrimmage.record",
+    "scrimmage.show",
+    "scrimmage.budget",
+    "scrimmage.bootstrap",
+    "scrimmage.mcp_gate",
+    "scrimmage.http_gate",
+    "scrimmage.control",
+    "scrimmage.client",
 ]
 
 [[tool.importlinter.contracts]]
 name = "Only the Scrimmage MCP server loads the MCP library"
 type = "forbidden"
 # Every module of the package; the server is its own command, and the only one that may.
-source_modules = ["scrimmage_core"]
+source_modules = ["scrimmage"]
 # Importing the server itself is caught by tests/test_stdlib_only.py: the source package
 # holds it, so a contract here cannot.
 forbidden_modules = ["mcp", "mcp_types"]
 ignore_imports = [
-    "scrimmage_core.mcp_server -> mcp",
-    "scrimmage_core.mcp_server -> mcp_types",
+    "scrimmage.mcp_server -> mcp",
+    "scrimmage.mcp_server -> mcp_types",
 ]
 
 [[tool.importlinter.contracts]]
@@ -153,35 +153,35 @@ name = "The SDK never imports a service's web libraries"
 type = "forbidden"
 # The gates patch them through import hooks, when the service imports them, so a function
 # or a script never loads them, and a service gets the version it installed.
-source_modules = ["scrimmage_core"]
+source_modules = ["scrimmage"]
 forbidden_modules = ["uvicorn", "starlette", "fastapi", "anyio"]
 ignore_imports = [
-    "scrimmage_core.mcp_server -> anyio",  # the Scrimmage MCP server's own, a command apart
+    "scrimmage.mcp_server -> anyio",  # the Scrimmage MCP server's own, a command apart
 ]
 
 [[tool.importlinter.contracts]]
 name = "Only the certificate maker loads cryptography"
 type = "forbidden"
-source_modules = ["scrimmage_core"]
+source_modules = ["scrimmage"]
 forbidden_modules = ["cryptography"]
-ignore_imports = ["scrimmage_core.cert -> cryptography"]
+ignore_imports = ["scrimmage.cert -> cryptography"]
 
 [[tool.importlinter.contracts]]
 name = "Reading a finished test starts nothing and opens no socket"
 type = "forbidden"
 source_modules = [
-    "scrimmage_core.show",
-    "scrimmage_core.compare",
-    "scrimmage_core.results",
-    "scrimmage_core.render",
-    "scrimmage_core.suggest",
+    "scrimmage.show",
+    "scrimmage.compare",
+    "scrimmage.results",
+    "scrimmage.render",
+    "scrimmage.suggest",
 ]
 forbidden_modules = [
-    "scrimmage_core.runner",
-    "scrimmage_core.state",
-    "scrimmage_core.http_gate",
-    "scrimmage_core.control",
-    "scrimmage_core.client",
+    "scrimmage.runner",
+    "scrimmage.state",
+    "scrimmage.http_gate",
+    "scrimmage.control",
+    "scrimmage.client",
     "urllib",
     "http",
     "socket",
@@ -192,7 +192,7 @@ forbidden_modules = [
 
 [tool.coverage.run]
 branch = true
-source_pkgs = ["scrimmage_core"]
+source_pkgs = ["scrimmage"]
 # The SDK runs inside each run's own program, so measure child processes too.
 patch = ["subprocess"]
 # Keeps coverage from deleting a module another thread is importing: see its docstring.

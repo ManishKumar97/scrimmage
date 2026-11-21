@@ -1,0 +1,512 @@
+"""Switch the SDK on in a program scrimmage-run started with SCRIMMAGE_TOKEN set.
+
+The program the runner started fetches its plan before the team's code runs. If it cannot,
+the program ends here, so the agent never runs without its plan. A child process prints
+nothing and fetches its plan at its first gated call, so a short command costs nothing.
+A child whose plan cannot be fetched refuses each call, and tries again for the next one.
+"""
+
+import ast
+import atexit
+import contextlib
+import functools
+import ipaddress
+import os
+import signal
+import ssl
+import sys
+import threading
+import time
+from collections.abc import Callable
+from pathlib import Path
+from types import FrameType, ModuleType
+from typing import Literal, NoReturn
+from urllib.parse import urlsplit
+
+from scrimmage import (
+    hooks,
+    http_gate,
+    labels,
+    langchain_gate,
+    mcp_gate,
+    process_gate,
+    python_args,
+    records,
+    state,
+    threadctx,
+    threads,
+    tls,
+    tool_gate,
+)
+from scrimmage.client import ControlClient, ControlError, Sender, Senders
+from scrimmage.mocks import allowed
+from scrimmage.plan import Plan, no_plan, tools_from
+from scrimmage.redact import remove_values
+
+TERM_WAIT_S = 4.0  # under the runner's five seconds before SIGKILL
+# What a process is: the program the runner started, a child of it, or a service process.
+Mode = Literal["program", "child", "service"]
+
+
+def stop(message: str) -> NoReturn:
+    print(
+        f"scrimmage: {message}; the program stops before the agent runs",
+        file=sys.stderr,
+    )
+    sys.stderr.flush()
+    os._exit(1)
+
+
+# The modules whose main a helper process of multiprocessing or loky runs, started as
+# `python [options] -c "from <module> import main; main(...)"`.
+HELPERS = (
+    "multiprocessing.resource_tracker",
+    "multiprocessing.forkserver",
+    "joblib.externals.loky.backend.resource_tracker",
+    "loky.backend.resource_tracker",
+)
+
+
+def multiprocessing_helper() -> bool:
+    """A helper process multiprocessing or loky starts, which inherits the service's
+    environment: Scrimmage stays off in it, so it never starts a helper of its own.
+    Only the exact command line such a helper is started with counts."""
+    argv: list[str] = list(getattr(sys, "orig_argv", []))[1:]
+    at = python_args.separate_command(argv)  # stops at the first -c or -m, joined or not
+    if at is None:
+        return False  # a script, a module, or code given some other way: no helper
+    return helper_command(argv[at], extra=argv[at + 1 :])
+
+
+def helper_command(command: str, extra: list[str]) -> bool:
+    """`[import sys;] from <helper> import main; main(<literals>)`, and nothing else. Only
+    the forkserver's `sys_argv=sys.argv[1:]` reads anything: the arguments after it."""
+    try:
+        body = ast.parse(command).body
+    except (SyntaxError, ValueError):
+        return False
+    if body and isinstance(body[0], ast.Import) and ast.unparse(body[0]) == "import sys":
+        body = body[1:]
+    if len(body) != 2:
+        return False
+    imported, called = body
+    if not isinstance(imported, ast.ImportFrom):
+        return False
+    if imported.module not in HELPERS or imported.level:
+        return False
+    if [(name.name, name.asname) for name in imported.names] != [("main", None)]:
+        return False
+    call = called.value if isinstance(called, ast.Expr) else None
+    if not isinstance(call, ast.Call) or ast.unparse(call.func) != "main":
+        return False
+    reads_argv = False
+    for keyword in call.keywords:
+        if keyword.arg == "sys_argv" and ast.unparse(keyword.value) == "sys.argv[1:]":
+            reads_argv = True
+        elif not literal(keyword.value):
+            return False
+    if extra and not reads_argv:
+        return False
+    return all(literal(arg) for arg in call.args)
+
+
+def literal(node: ast.expr) -> bool:
+    try:
+        ast.literal_eval(node)
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        return False
+    return True
+
+
+def service_stop(message: str) -> NoReturn:
+    """A service process whose start is wrong: it stops before it serves a request."""
+    print(f"scrimmage: {message}; the service stops before it serves a request", file=sys.stderr)
+    sys.stderr.flush()
+    os._exit(1)
+
+
+def structure_stop(message: str) -> NoReturn:
+    """A library a gate cannot work with, found before the service listens, or as it is first
+    imported: the service stops. One found while it serves marks it broken instead."""
+    print(f"scrimmage: {message}; the service stops", file=sys.stderr)
+    sys.stderr.flush()
+    os._exit(1)
+
+
+def report_tools(run_state: state.RunState) -> None:
+    # A child made only some of the agent's tools, so it does not speak for them.
+    if run_state.child:
+        return
+    # A blocked tool is still one the agent has: its label is spelled right.
+    tools = sorted(run_state.seen | run_state.blocked.keys())
+    run_state.notice("tools_seen", "scrimmage", "the tools the agent has", tools=tools)
+
+
+def outside(plan: Plan, prefixes: list[str]) -> str | None:
+    """The first import path in the plan that SCRIMMAGE_ALLOW_IMPORTS does not cover."""
+    raises = [f.raises for f in plan.faults if f.raises and ":" in f.raises]
+    made = [m.returns_from for m in plan.mocks if m.returns_from]
+    paths = [*plan.tools, *(m.type for m in plan.mocks if m.type), *made, *raises]
+    return next((path for path in paths if not allowed(path, prefixes)), None)
+
+
+def script_folder() -> list[str]:
+    """Python adds a script's folder to its path after this file has run."""
+    script = sys.argv[0]
+    return [] if script in ("", "-c", "-m") else [os.path.dirname(os.path.abspath(script))]
+
+
+def runs_as_main(module: str, target: str | None, folders: list[str]) -> bool:
+    """Whether this module is the program itself, which runs as __main__ and is never
+    imported, so no import can put a gate on its tools. target is the -m module, if any."""
+    if target is not None:
+        return module in (target, f"{target}.__main__")
+    spec = tool_gate.module_spec(module, folders)
+    if spec is None or spec.origin is None or sys.argv[0] in ("", "-c"):
+        return False
+    return os.path.realpath(spec.origin) == os.path.realpath(sys.argv[0])
+
+
+def handle_sigterm(last_lines: Callable[[], None], sender: Sender) -> None:
+    """On SIGTERM send the last record lines, then end as Python would have with no handler.
+
+    The handler runs on the main thread, which may hold a lock the lines need, so a thread
+    does the sending and the wait for it has a limit. A program with a handler of its own
+    replaces this one. The sender thread has then sent all but the last 100 ms.
+
+    A signal that arrives while this thread is itself sending the exit batches waits for them
+    to end: they hold the send lock, and the thread that would send the rest needs it. That
+    wait has no limit of its own, so a drain stuck on a silent runner ends at the runner's
+    SIGKILL, exit 137, about a second later than the four seconds above. No line is lost to
+    it that the old path kept.
+    """
+    if signal.getsignal(signal.SIGTERM) is not signal.SIG_DFL:
+        return
+
+    def on_term(signum: int, frame: FrameType | None) -> None:
+        del frame
+        signal.signal(signum, signal.SIG_IGN)  # the runner may send it twice
+
+        def end() -> None:
+            try:
+                worker = threading.Thread(target=last_lines, daemon=True)
+                threads.start(worker)
+                worker.join(TERM_WAIT_S)
+            except RuntimeError:  # Python is already shutting down, so no new thread
+                pass
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+
+        if not sender.defer_to_drain(end):
+            end()
+
+    signal.signal(signal.SIGTERM, on_term)
+
+
+TOKEN_MIN = 32  # characters a service's token needs: the MAC of a run header rests on it
+
+
+def other_owner(path: str, error: Exception) -> str:
+    """The reason a token file was not opened. A file owned by another uid is the usual
+    mistake in a container, so it names both uids and the setting that fixes it."""
+    other = isinstance(error, records.Refused) and "owned by another user" in str(error)
+    if other or isinstance(error, PermissionError):
+        # A mode 0600 file of another user is refused at open, before the owner check.
+        with contextlib.suppress(OSError):
+            owner = os.stat(path).st_uid
+            if owner == os.getuid():
+                return str(error)
+            return (
+                f"the token file is owned by uid {owner} and this process runs as uid "
+                f"{os.getuid()}; in Docker, set user: to the file owner's uid and gid"
+            )
+    return str(error)
+
+
+def read_token_file(path: str) -> str:
+    """The token, from a plain file this user owns, mode 0600 exactly, or from a Kubernetes
+    Secret volume file (records.open_secret). Else the process stops: a token another user
+    could read is not the boundary the design rests on."""
+    try:
+        fd = records.open_secret(Path(path))
+    except records.WrongMode as exc:
+        service_stop(
+            f"SCRIMMAGE_TOKEN_FILE {path} has mode {exc.mode:o}; it must be 600, readable by "
+            "its owner only"
+        )
+    except (OSError, records.Refused) as exc:
+        service_stop(f"SCRIMMAGE_TOKEN_FILE {path} cannot be read: {other_owner(path, exc)}")
+    with os.fdopen(fd, "rb") as handle:
+        data = handle.read(4096)
+    token = data.decode("utf-8", "replace").strip()
+    if len(token) < TOKEN_MIN:
+        service_stop(f"SCRIMMAGE_TOKEN_FILE {path} holds a token under {TOKEN_MIN} characters")
+    return token
+
+
+def loopback(url: str) -> bool:
+    """http:// on this machine: the one form that needs no TLS."""
+    parts = urlsplit(url)
+    if parts.scheme != "http" or not parts.hostname:
+        return False
+    if parts.hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(parts.hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def control_context(url: str) -> ssl.SSLContext | None:
+    """The TLS settings for SCRIMMAGE_CONTROL_URL, or None for http:// on this machine. The
+    service stops at its start on a form it cannot use: http:// elsewhere, or https:// with no
+    SCRIMMAGE_CONTROL_CA that holds exactly one certificate."""
+    scheme = urlsplit(url).scheme
+    if scheme == "http":
+        if not loopback(url):
+            service_stop(
+                f"SCRIMMAGE_CONTROL_URL {url!r} is http:// beyond this machine, which would send "
+                "the plans in clear; use https://host:port and set SCRIMMAGE_CONTROL_CA to the "
+                "authority's certificate, which scrimmage cert makes"
+            )
+        return None
+    if scheme != "https" or not urlsplit(url).hostname:
+        service_stop(
+            f"SCRIMMAGE_CONTROL_URL {url!r} must be http://127.0.0.1:port on this machine, or "
+            "https://host:port with SCRIMMAGE_CONTROL_CA set"
+        )
+    ca = os.environ.get("SCRIMMAGE_CONTROL_CA", "")
+    if not ca:
+        service_stop(
+            f"SCRIMMAGE_CONTROL_URL {url!r} is https://, so SCRIMMAGE_CONTROL_CA must name the "
+            "authority's certificate (ca.pem from scrimmage cert), and it is not set"
+        )
+    try:
+        return tls.client_context(Path(ca))
+    except tls.TlsError as exc:
+        service_stop(f"SCRIMMAGE_CONTROL_CA: {exc}")
+
+
+# Set by uvicorn's supervisor, in a copy the runner started, just before it starts each
+# worker: its own pid, so the worker knows it is one.
+SUPERVISOR = "SCRIMMAGE_SUPERVISOR"
+
+
+def stop_with_the_copy() -> None:
+    """In a copy the runner started with [agent] start, ask Linux to SIGKILL each of uvicorn's
+    workers when its supervisor dies, so a runner killed with SIGKILL leaves no worker serving
+    the port. The supervisor that is the copy's first process goes with the runner already,
+    as scrimmage-run asked for it.
+
+    Linux sends the signal when the thread that started the process exits, not the process.
+    uvicorn's supervisor starts its workers from its main thread, which lives as long as it
+    does, but a helper your app starts from a thread that then ends would be killed with that
+    thread. So only uvicorn's workers ask: a multiprocessing child whose parent is the
+    supervisor that marked it. A worker whose supervisor died before the setting ends here."""
+    if os.environ.get("SCRIMMAGE_MANAGED") != "1":
+        return
+    hooks.on_import("uvicorn.supervisors.multiprocess", mark_workers)
+    supervisor = os.environ.pop(SUPERVISOR, "")  # a program the worker starts is no worker
+    if not supervisor.isdigit() or "spawn_main" not in " ".join(getattr(sys, "orig_argv", [])):
+        return
+    from scrimmage import run_command  # only a managed copy needs it
+
+    run_command.stop_with_parent(lambda parent: parent == int(supervisor))
+
+
+def mark_workers(module: ModuleType) -> None:
+    """uvicorn's supervisor: each worker it starts inherits the supervisor's pid in SUPERVISOR."""
+    process = getattr(module, "Process", None)
+    start = getattr(process, "start", None)
+    if process is None or start is None:
+        return  # another uvicorn: its workers are not asked to go with the runner
+
+    @functools.wraps(start)
+    def started(self: object) -> None:
+        os.environ[SUPERVISOR] = str(os.getpid())
+        start(self)
+
+    process.start = started
+
+
+def start_service() -> None:
+    """A service process: the uvicorn supervisor, each worker, a reloader. None has a run; each
+    request brings its own. Nothing here asks the runner for anything, so a service with no
+    runner serves every request without the header as it would without Scrimmage."""
+    if multiprocessing_helper():
+        # Python's own helper, such as the resource tracker: it runs no team code, and it
+        # exits by itself once every process that holds its pipe has, after its cleanup.
+        return
+    stop_with_the_copy()
+    # Only a service needs these, and a function or a script must not pay for their import.
+    from scrimmage import asgi_gate, executor
+
+    if "SCRIMMAGE_TOKEN" in os.environ:
+        service_stop(
+            "SCRIMMAGE_TOKEN is set, and a service reads its token from SCRIMMAGE_TOKEN_FILE only, "
+            "so no environment holds it; unset SCRIMMAGE_TOKEN and set SCRIMMAGE_TOKEN_FILE"
+        )
+    path = os.environ.get("SCRIMMAGE_TOKEN_FILE", "")
+    token = read_token_file(path)
+    if "spawn_main" in " ".join(getattr(sys, "orig_argv", [])):
+        # A worker uvicorn spawned: the team's own children never learn the file's path.
+        os.environ.pop("SCRIMMAGE_TOKEN_FILE", None)
+    url = os.environ.get("SCRIMMAGE_CONTROL_URL", "")
+    context = control_context(url)
+    prefixes = [p for p in os.environ.get("SCRIMMAGE_ALLOW_IMPORTS", "").split(",") if p]
+    tools, renames = tools_from(os.environ.get("SCRIMMAGE_TOOLS", ""))
+    names = tuple(labels.tool_name(path, dict(renames)) for path in tools)
+    process = state.ProcessState(names, service=True)
+    process.stop = structure_stop
+    state.install_process(process)
+    client = ControlClient(url, token, context)
+    senders = Senders()
+    pool = executor.Executor()
+    executor.EXECUTOR = pool
+    asgi_gate.GATE = asgi_gate.Gate(process, client, token, prefixes, tools, renames, senders, pool)
+    folders = [os.getcwd(), *script_folder()]
+    for module, tool_names in tool_gate.targets(tools).items():
+        try:
+            found = tool_gate.module_spec(module, folders)
+        except tool_gate.ImportedDuringLookup as exc:
+            service_stop(str(exc))
+        if found is None:
+            service_stop(f"{module} is listed in SCRIMMAGE_TOOLS but cannot be found")
+        del tool_names
+    tool_gate.install(tools, dict(renames))
+    http_gate.install(process, client, None, structure_stop)
+    langchain_gate.install(process, structure_stop)
+    mcp_gate.install(process, None, structure_stop)
+    process_gate.install(lambda: None)
+    process_gate.install_service()
+    threadctx.install(process)
+    asgi_gate.install(process)
+    senders.start()
+
+
+def start(*, mode: Mode = "program", target: str | None = None) -> None:
+    child = mode == "child"
+    token = os.environ.get("SCRIMMAGE_TOKEN", "")
+    url = os.environ.get("SCRIMMAGE_CONTROL_URL", "")
+    run = os.environ.get("SCRIMMAGE_RUN", "")
+    if not token or not url or not run:
+        # A script's child that lost its run still fails closed. A service has no run at
+        # startup, and says so with SCRIMMAGE_SERVICE=1.
+        stop(
+            "SCRIMMAGE_TOKEN, SCRIMMAGE_CONTROL_URL and SCRIMMAGE_RUN must be set; to start a "
+            "web service under scrimmage-run, set SCRIMMAGE_SERVICE=1 and SCRIMMAGE_TOKEN_FILE"
+        )
+    prefixes = [p for p in os.environ.get("SCRIMMAGE_ALLOW_IMPORTS", "").split(",") if p]
+    plan: Plan | None = None
+    asked = time.monotonic()
+    try:
+        client = ControlClient(url, token)
+        if not child:
+            plan = Plan.from_json(client.fetch_plan(run))
+    except (ControlError, ValueError) as exc:
+        stop(f"cannot get the plan for {run} from {url}: {exc}")
+    if plan is not None and (path := outside(plan, prefixes)) is not None:
+        stop(f"{path} is outside SCRIMMAGE_ALLOW_IMPORTS ({','.join(prefixes) or 'empty'})")
+
+    def load() -> Plan:
+        """A child's plan, at its first gated call. With no plan, the call is refused."""
+        try:
+            fetched = Plan.from_json(client.fetch_plan(run))
+        except (ControlError, ValueError) as exc:
+            return no_plan(run, str(exc))
+        path = outside(fetched, prefixes)
+        return fetched if path is None else no_plan(run, f"{path} is outside the allowed imports")
+
+    # G2: a child's code imports its tools before any plan could arrive.
+    tools, renames = tools_from(os.environ.get("SCRIMMAGE_TOOLS", ""))
+    names = tuple(labels.tool_name(path, dict(renames)) for path in tools)
+    sender = Sender(client, run, eager=child)
+    process = state.ProcessState(names if plan is None else plan.tool_names())
+    process.stop = stop
+    run_state = state.RunState(
+        plan,
+        sender,
+        prefixes,
+        load=load,
+        tools=names,
+        blobs=sender,
+        process=process,
+        asked=asked,
+    )
+    sender.proc = run_state.proc
+    sender.on_closed = run_state.run_closed
+    if plan is not None:
+        tools, renames = plan.tools, plan.renames
+        sender.start()
+        run_state.announce()
+    atexit.register(sender.flush)
+    atexit.register(run_state.stop_open)  # a call on a daemon thread, after the replies below
+    if not tools and not child:  # registered after the flush, so it runs first
+        # With no tools list the runner cannot know the names; a framework's adapter does.
+        atexit.register(lambda: report_tools(run_state))
+    state.install(run_state)
+    folders = [os.getcwd(), *script_folder()]
+    for module, tool_names in tool_gate.targets(tools).items():
+        message = None
+        try:
+            if runs_as_main(module, target, folders):
+                message = (
+                    f"{module} is the program itself, so {tool_names[0]} cannot be gated. Move "
+                    "the tool into a module the program imports"
+                )
+            elif not child and tool_gate.module_spec(module, folders) is None:
+                message = f"{module} is listed under [agent] tools but cannot be found"
+        except tool_gate.ImportedDuringLookup as exc:
+            message = str(exc)
+        if message is not None:
+            run_state.cannot_gate(tool_names[0], message)
+            sender.flush()
+            stop(message)
+    tool_gate.install(tools, dict(renames))
+
+    def cannot_gate(message: str) -> None:
+        sender.flush()
+        stop(message)
+
+    ctx = http_gate.install(process, client, sender, cannot_gate)
+    langchain_gate.install(process, cannot_gate)
+    mcp_gate.install(process, sender, cannot_gate)
+
+    def forked() -> None:
+        run_state.forked()  # which drops the replies the parent is reading
+        sender.forked(run_state.proc)
+
+    os.register_at_fork(after_in_child=forked)
+
+    def last_lines() -> None:
+        ctx.close_open()
+        run_state.stop_open()
+        sender.flush()
+
+    def end_program() -> None:
+        """scrimmage init --probe has what it came for, so no more of the team's code runs.
+
+        os._exit skips the flush Python does at exit, so what the agent printed is flushed here,
+        first: sending the last lines delivers the refusal, and the runner then signals this
+        process, which ends it before anything after that point.
+        """
+        for stream in (sys.stdout, sys.stderr):
+            with contextlib.suppress(BaseException):  # a stream the agent closed or replaced, even
+                # one whose flush raises SystemExit: os._exit below must still run
+                stream.flush()
+        last_lines()
+        os._exit(0)
+
+    run_state.end_program = end_program
+
+    def before_exec() -> None:
+        """exec ends this image with no exit steps, and if it fails the program goes on."""
+        last_lines()
+        sender.eager = True
+
+    process_gate.install(before_exec)
+    handle_sigterm(last_lines, sender)
+    if plan is not None:
+        # The test's name can hold a value from the environment, and this line is in the log.
+        line = f"active for run {run} ({plan.test}, {plan.row}); calls follow this test's plan"
+        print(f"scrimmage: {remove_values(line, plan.scrub)[0]}", file=sys.stderr)

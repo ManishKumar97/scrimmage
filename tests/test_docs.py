@@ -14,15 +14,13 @@ from typing import cast
 import pytest
 import yaml
 
-import scrimmage_core
+import scrimmage
 from conftest import EXAMPLE, doc_pages
 from k8s import cluster as kubernetes
-from scrimmage_core import cli, config, judge, mcp_gate, outcomes, record, render, suggest
+from scrimmage import cli, config, judge, mcp_gate, outcomes, record, render, suggest
 
 DOCS = Path(__file__).parents[1] / "docs"
-CLI_SCHEMA = json.loads(
-    (Path(scrimmage_core.__file__).parent / "schemas" / "cli.v1.json").read_text()
-)
+CLI_SCHEMA = json.loads((Path(scrimmage.__file__).parent / "schemas" / "cli.v1.json").read_text())
 
 
 def page(name: str) -> str:
@@ -539,7 +537,7 @@ def test_the_mcp_server_page_says_what_it_guards_and_what_it_does_not() -> None:
 
 @pytest.mark.design("docs.services")
 def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> None:
-    from scrimmage_core import asgi_gate
+    from scrimmage import asgi_gate
 
     guide = page("services.md")
     assert "An agent inside a web service: services.md" in (DOCS.parent / "mkdocs.yml").read_text()
@@ -568,7 +566,7 @@ def test_the_service_shape_its_placeholders_and_its_limits_are_documented() -> N
         "record_wait_s",
     ):
         assert words in guide, words
-    from scrimmage_core import runner as running
+    from scrimmage import runner as running
 
     assert f"it asks again for up to {running.READY_S:g} seconds" in guide
     assert "--loop asyncio" in guide and "process:<command>" in guide
@@ -793,9 +791,13 @@ def test_each_service_use_case_has_its_own_page() -> None:
 def test_the_readme_on_pypi_is_a_page_for_a_new_visitor(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    readme = (Path(scrimmage_core.__file__).parents[2] / "README.md").read_text()
+    readme = (Path(scrimmage.__file__).parents[2] / "README.md").read_text()
     assert "\N{EM DASH}" not in readme
-    old = [n for n in ("scrimmage-core", "derail", "faultline") if n in readme.lower()]
+    old = [
+        n
+        for n in ("scrimmage-core", "scrimmage_core", "derail", "faultline")
+        if n in readme.lower()
+    ]
     assert not old, f"the README names an old project: {old}"
     (block,) = re.findall(r"```toml\n(.*?)```", readme, re.S)
     project = tmp_path / "project"

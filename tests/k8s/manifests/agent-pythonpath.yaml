@@ -30,7 +30,7 @@ spec:
           env:
             # First on the path: the folder `scrimmage path` prints in this image. Read it once with
             # docker run --rm <image> scrimmage path
-            - {name: PYTHONPATH, value: /usr/local/lib/python3.12/site-packages/scrimmage_core/_boot}
+            - {name: PYTHONPATH, value: /usr/local/lib/python3.12/site-packages/scrimmage/_boot}
             - {name: SCRIMMAGE_SERVICE, value: "1"}
             - {name: SCRIMMAGE_TOKEN_FILE, value: /run/scrimmage/token/token}
             - {name: SCRIMMAGE_CONTROL_URL, value: "https://scrimmage:7700"}

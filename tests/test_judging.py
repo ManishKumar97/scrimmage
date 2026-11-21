@@ -9,12 +9,12 @@ from typing import cast
 import jsonschema
 import pytest
 
-import scrimmage_core
+import scrimmage
 from conftest import ACME, Project, Result, TimeLimit
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import config, judge, plan
-from scrimmage_core.errors import ConfigError
-from scrimmage_core.judge import (
+from scrimmage import config, judge, plan
+from scrimmage.errors import ConfigError
+from scrimmage.judge import (
     Broken,
     Rules,
     RunJudgement,
@@ -25,15 +25,13 @@ from scrimmage_core.judge import (
     normal,
     wilson,
 )
-from scrimmage_core.runner import RunResult, report
+from scrimmage.runner import RunResult, report
 
 Fake = Callable[[list[str]], FakeOpenAI]
 DATE = ("Oct 30", "October 30")
 RULES = Rules((("shipped",), DATE), ("refunded",), 1.0)
 SECRET = "sk-" + "a1b2c3d4" * 3
-RECORD = json.loads(
-    (Path(scrimmage_core.__file__).parent / "schemas" / "record.v1.json").read_text()
-)
+RECORD = json.loads((Path(scrimmage.__file__).parent / "schemas" / "record.v1.json").read_text())
 AGENT = '''"""Plays one scripted step per run, in order, so a test says what each run does."""
 
 import json

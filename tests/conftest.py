@@ -22,13 +22,13 @@ import jsonschema
 import pytest
 from jsonschema.exceptions import best_match
 
-import scrimmage_core
+import scrimmage
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import runner
-from scrimmage_core.cli import main
-from scrimmage_core.outcomes import OK, ROW_FAILED
-from scrimmage_core.records import RecordStore
-from scrimmage_core.state import RunState
+from scrimmage import runner
+from scrimmage.cli import main
+from scrimmage.outcomes import OK, ROW_FAILED
+from scrimmage.records import RecordStore
+from scrimmage.state import RunState
 
 EXAMPLE = Path(__file__).parent / "example"
 
@@ -259,7 +259,7 @@ SEND_OWNERS: tuple[Any, ...] = tuple(
 
 
 RECORD_SCHEMA = json.loads(
-    (Path(scrimmage_core.__file__).parent / "schemas" / "record.v1.json").read_text()
+    (Path(scrimmage.__file__).parent / "schemas" / "record.v1.json").read_text()
 )
 RECORD_CHECK = jsonschema.Draft202012Validator(RECORD_SCHEMA)
 

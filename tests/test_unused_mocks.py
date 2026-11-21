@@ -10,8 +10,8 @@ from conftest import ACME, Project
 from fakes.openai_server import FakeOpenAI
 from report_cases import AGENT, FOLDER, GOOD, FakeRunner, load
 from report_cases import run as a_run
-from scrimmage_core import plan
-from scrimmage_core.runner import build_report, print_report
+from scrimmage import plan
+from scrimmage.runner import build_report, print_report
 
 NO_TOOLS_LIST = AGENT.replace('tools    = ["acme.tools:get_order", "acme.tools:get_stock"]\n', "")
 TEST = """

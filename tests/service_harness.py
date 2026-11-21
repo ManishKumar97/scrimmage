@@ -11,12 +11,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from scrimmage_core import asgi_gate, executor, protocol, state, threadctx
-from scrimmage_core.client import ControlClient, Senders
-from scrimmage_core.config import Mock
-from scrimmage_core.control import ControlServer
-from scrimmage_core.plan import Plan
-from scrimmage_core.records import RecordStore
+from scrimmage import asgi_gate, executor, protocol, state, threadctx
+from scrimmage.client import ControlClient, Senders
+from scrimmage.config import Mock
+from scrimmage.control import ControlServer
+from scrimmage.plan import Plan
+from scrimmage.records import RecordStore
 
 TOOLS = ("acme.tools:get_order",)
 

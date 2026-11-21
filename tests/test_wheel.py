@@ -17,7 +17,7 @@ import pytest
 
 from conftest import EXAMPLE
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core.cli import main
+from scrimmage.cli import main
 
 ROOT = Path(__file__).parents[1]
 PACKAGE = ROOT / "packages" / "scrimmage"
@@ -124,7 +124,7 @@ def test_the_sdist_holds_only_the_package(built: dict[str, Path]) -> None:
     assert sdist_top(built["sdist"]) - {".gitignore"} == TOP
     with tarfile.open(built["sdist"]) as sdist:
         names = [n.split("/", 1)[1] for n in sdist.getnames() if "/" in n]
-    assert "src/scrimmage_core/__init__.py" in names
+    assert "src/scrimmage/__init__.py" in names
 
 
 @pytest.mark.slow
@@ -162,9 +162,7 @@ def test_a_clean_venv_runs_the_quickstart_from_the_wheel(
     run("uv", "pip", "install", "--python", python, "openai", cwd=tmp_path)
 
     # Nothing of this repository is on the venv's path, and Scrimmage is the wheel's copy.
-    probe = (
-        "import json, sys, scrimmage_core; print(json.dumps([sys.path, scrimmage_core.__file__]))"
-    )
+    probe = "import json, sys, scrimmage; print(json.dumps([sys.path, scrimmage.__file__]))"
     paths, module = json.loads(run(python, "-c", probe, cwd=tmp_path))
     inside = [p for p in [*paths, module] if p and Path(p).resolve().is_relative_to(ROOT)]
     assert not inside, f"the venv sees this repository: {inside}"

@@ -49,8 +49,8 @@ def test_a_change_to_the_kubernetes_page_needs_kind() -> None:
 
 def test_a_product_only_change_does_not_need_kind() -> None:
     paths = [
-        "packages/scrimmage/src/scrimmage_core/runner.py",
-        "packages/scrimmage/src/scrimmage_core/records.py",
+        "packages/scrimmage/src/scrimmage/runner.py",
+        "packages/scrimmage/src/scrimmage/records.py",
         "tests/test_secret_file.py",
         "docs/services.md",
         "images/README.md",

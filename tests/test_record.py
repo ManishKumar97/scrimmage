@@ -20,15 +20,15 @@ from typing import Any, cast
 import jsonschema
 import pytest
 
-import scrimmage_core
+import scrimmage
 from conftest import Project, TimeLimit
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import capture, toml_write
-from scrimmage_core import config as settings
-from scrimmage_core import record as recording
-from scrimmage_core import runner as running
-from scrimmage_core.cli import main
-from scrimmage_core.control import ControlServer
+from scrimmage import capture, toml_write
+from scrimmage import config as settings
+from scrimmage import record as recording
+from scrimmage import runner as running
+from scrimmage.cli import main
+from scrimmage.control import ControlServer
 from test_cli_json import validate
 from test_record_units import loaded, result_for
 
@@ -291,9 +291,7 @@ def answer(question):
         position = new.index(line, position + 1)
     assert "\n".join(new).count("Written by scrimmage record") == 1
     # the record file's lines fit the schema, and a field of the wrong type does not.
-    schema = json.loads(
-        (Path(scrimmage_core.__file__).parent / "schemas/record.v1.json").read_text()
-    )
+    schema = json.loads((Path(scrimmage.__file__).parent / "schemas/record.v1.json").read_text())
     validator = jsonschema.Draft202012Validator(schema)
     bad = dict(call, call_id="one")
     for line in lines:
