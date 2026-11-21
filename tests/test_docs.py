@@ -838,3 +838,19 @@ def test_the_ci_page_warns_that_the_file_runs_code_and_its_sample_guards_the_for
     holders = [s for s in steps if "secrets." in str(s.get("env", {}))]
     assert [s["run"] for s in holders] == ["uv run scrimmage test --max-cost-usd 1"]
     assert not [s for s in steps if "secrets." in str({k: v for k, v in s.items() if k != "env"})]
+
+
+@pytest.mark.design("docs.prices_as_data")
+def test_the_price_files_the_command_and_the_tier_overshoot_are_documented() -> None:
+    config_page, cli_page, limits = page("configuration.md"), page("cli.md"), page("limits.md")
+    for key in ("as_of", "source", "service_tier", "tiers"):
+        assert mentioned(config_page, key), key
+    assert "## scrimmage prices update" in cli_page
+    assert "exit 2" in cli_page and "exit 3" in cli_page
+    for place in ("`[agent.prices]` in `scrimmage.toml`", "`scrimmage-runs/prices.toml`"):
+        assert place in config_page, place
+    assert "x-litellm-response-cost" in config_page and "usage.cost" in config_page
+    assert "A call served on a dearer tier than its hold" in limits
+    assert "built-in price table" not in limits  # it is the shipped price file now
+    # The one fetch is named where the page promises no other connection.
+    assert "scrimmage prices update" in page("security.md")

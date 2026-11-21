@@ -191,7 +191,7 @@ SIGKILL cannot be caught, so it leaves no document.
 |---|---|
 | `summary` | What the file holds: `tests`, `rows`, the `runs` a test would start, the `tools` listed, `budget_usd`, `real`, `entry` and `prices`. With `--runs N`, `runs` counts what `scrimmage record --runs N` would start: one baseline per test, N times. `null` when the file does not load. |
 | `real` | In `summary`: the labels under `[agent] real`, as the file writes them. |
-| `prices` | In `summary`: each model `[agent.prices]` prices, with its `input`, `output`, `cached_input`, `cache_write_30m` and `cache_write_12h` dollars per million tokens, `null` for a rate it does not set. Any other model is priced from the built-in table. A price of 0 makes that model's calls free against the budget. |
+| `prices` | In `summary`: each model `[agent.prices]` prices, with its `input`, `output`, `cached_input`, `cache_write_30m` and `cache_write_12h` dollars per million tokens, `null` for a rate it does not set. Any other model is priced from `scrimmage-runs/prices.toml` if there is one, and from the shipped price file otherwise. A price of 0 makes that model's calls free against the budget. |
 | `entry` | In `summary`: the entry point a test would start, its `kind`, `function` or `command`, and its `value`, the function or the command line. |
 | `service` | Only with `scrimmage check --service`, and only when the service answered as a gated one: what it reported. Absent otherwise. |
 | `url` | In `service`: the service's address, as the file writes it. |

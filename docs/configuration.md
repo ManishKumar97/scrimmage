@@ -53,7 +53,8 @@ See [Agents on a framework](frameworks.md) for the whole example.
 
 ## [agent.prices]
 
-Prices for models the built-in table does not know, in dollars per million tokens.
+Prices for models the shipped price file does not know, or that you price differently, in dollars per million tokens.
+See [Where prices come from](#where-prices-come-from).
 
 ```toml
 [agent.prices]
@@ -96,7 +97,44 @@ Scrimmage never adds a tier to the request: it would change what the model call 
 
 The `gpt-5.6-luna` example is its price up to 272K input tokens; a call over that costs more, so give the long-context price if your calls can be that long. See [One price per kind of token](limits.md#the-budget).
 
-A price here replaces the built-in one whole: `gpt-4o = {input = 2.5, output = 10}` has no cached price, even though the built-in table has one.
+A price here replaces a file's price whole: `gpt-4o = {input = 2.5, output = 10}` has no cached price, even though the shipped file has one.
+
+### Where prices come from
+
+Scrimmage looks a model's price up in three places, in this order.
+The first place that names the model gives the whole price.
+
+1. `[agent.prices]` in `scrimmage.toml`.
+2. `scrimmage-runs/prices.toml`, beside `scrimmage.toml`, which `scrimmage prices update` writes.
+3. The `prices.toml` shipped with Scrimmage, which holds OpenAI's prices.
+
+A dated name, such as `gpt-4o-mini-2024-07-18`, uses its family's price when no place names it exactly.
+A model that none of them names is refused before the call, with the line to paste under `[agent.prices]`.
+Scrimmage never guesses a price.
+
+A price file has the date of its prices, the page they came from, and a table for each model:
+
+```toml
+as_of = "2026-11-19"
+source = "https://openai.com/api/pricing/"
+
+[models."gpt-4.1"]
+input = 2.00
+output = 8.00
+cached_input = 0.50
+
+[models."gpt-4.1".tiers.flex]
+input = 1.00
+output = 4.00
+```
+
+`as_of` and `source` are required, and a model takes the keys of `[agent.prices]`.
+A file that fails its checks is exit 2, and the message names the file and the line.
+`scrimmage check` prints the date of the prices on its budget line, and, when you have prices of your own, the source of each.
+A price is only as new as its file, so run [`scrimmage prices update`](cli.md#scrimmage-prices-update) now and then.
+
+A call whose reply states its own cost, such as an OpenRouter reply's `usage.cost` or the LiteLLM proxy's `x-litellm-response-cost` header, is settled at that cost.
+Scrimmage adds nothing to the request to ask for it, and a model with no price is still refused before the call, because the hold needs one.
 
 Scrimmage imports only modules under your agent's own top-level packages, the ones `function` and `tools` name. For a script, that is the ones `tools` names.
 
