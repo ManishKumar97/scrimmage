@@ -854,3 +854,26 @@ def test_the_price_files_the_command_and_the_tier_overshoot_are_documented() -> 
     assert "built-in price table" not in limits  # it is the shipped price file now
     # The one fetch is named where the page promises no other connection.
     assert "scrimmage prices update" in page("security.md")
+
+
+@pytest.mark.design("docs.one_fetch_promise")
+def test_the_three_pages_make_the_same_promise_about_connections() -> None:
+    """README, the home page and the security page state the same sentences, word for word,
+    and the sentence names each of the three connections."""
+    readme = (DOCS.parent / "README.md").read_text()
+    start = "It has no telemetry and no hosted service"
+    blocks = []
+    for text in (readme, page("index.md"), page("security.md")):
+        first = text.index(start)
+        blocks.append(text[first : text.index("No test run makes that connection", first)])
+    assert blocks[0] == blocks[1] == blocks[2]
+    for named in (
+        "control server",
+        "your `scrimmage.toml` names",
+        "`scrimmage prices update`",
+        "GitHub",
+    ):
+        assert named in blocks[0], named
+    assert "any third party" not in readme and "any third party" not in page("security.md")
+    assert "your IP address" in blocks[0] and "`User-Agent`" in blocks[0]
+    assert "test_only_the_prices_update_command_calls_the_one_fetch" in page("security.md")

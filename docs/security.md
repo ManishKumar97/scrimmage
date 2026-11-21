@@ -8,15 +8,17 @@ The line "Checked by" under it names the test in the repository that fails if th
 
 ## Your data stays on your machine
 
-Scrimmage has no telemetry and no hosted service.
-It sends nothing to its authors or to any third party.
-The only connections Scrimmage itself makes are to its own control server and, for a web service, to the service address your `scrimmage.toml` names.
-The one other connection is the fetch of `scrimmage prices update`, made only when you type that command, over HTTPS to the repository's `main`, for the file of model prices.
-No test run makes it, and nothing from your project is sent in it.
+It has no telemetry and no hosted service, and it sends nothing to its authors.
+It makes three kinds of connection, and no others: to its own control server, to the service address your `scrimmage.toml` names for a web service, and to GitHub when you run `scrimmage prices update`, which downloads one public file of model prices.
+That command sends a plain GET request, so GitHub sees your IP address and the `User-Agent` of Python's urllib, and nothing about your agent, your tests or your data.
+No test run makes that connection, and nothing else in Scrimmage does.
+The fetch is over HTTPS to the repository's `main` and checks the server's certificate.
+It follows no redirect to another host or to plain HTTP, and it stops after 15 seconds or 1 MB.
+It is the only place Scrimmage reads from the network, and its module is loaded by no other command.
 The only processes it starts are the runs of your agent, the test copy of a service that `start` names, and, in a service, Python's own resource tracker, once, in the process that serves the app or supervises its workers, before any request.
 The Scrimmage MCP server, a command of its own, also starts the `scrimmage` command each of its tool calls runs; see [Driving Scrimmage from a coding agent](mcp-server.md).
 
-*Checked by: `tests/test_security_audit.py::test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_sends_the_token`, `tests/test_security_claims.py::test_the_only_connections_are_to_the_control_server_and_the_service`*
+*Checked by: `tests/test_security_audit.py::test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_sends_the_token`, `tests/test_security_claims.py::test_the_only_connections_are_to_the_control_server_and_the_service`, `tests/test_security_claims.py::test_only_the_prices_update_command_calls_the_one_fetch`, `tests/test_security_claims.py::test_loading_the_command_and_a_test_runs_modules_never_loads_the_fetch`, `tests/test_prices_update.py::test_a_redirect_is_refused_before_a_request_goes_to_the_other_place`*
 
 Scrimmage's start-up inside the agent is checked by a source scan, not watched.
 It runs before any watcher in that process could be installed, so the scan checks that no product module but the runner, its start of a service's test copy and `scrimmage-run` starts a process, and that only the SDK's client opens a connection.
