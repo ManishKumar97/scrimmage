@@ -114,7 +114,7 @@ Scrimmage never guesses a price.
 
 A price file has the date of its prices, the page they came from, and a table for each model:
 
-```toml
+```text
 as_of = "2026-11-19"
 source = "https://openai.com/api/pricing/"
 
