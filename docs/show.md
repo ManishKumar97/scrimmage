@@ -153,7 +153,7 @@ scrimmage show --compare EARLIER
 An `EARLIER` with no `result.json`, or one of another version, is exit 2 before any run, so it costs nothing.
 
 ```
-compared with scrimmage-runs/20261110T090000Z-9f8e7d (scrimmage 0.1.0rc1): 3 rows
+compared with scrimmage-runs/20261110T090000Z-9f8e7d (scrimmage 0.1.0rc2): 3 rows
 test          row                     before          after           change
 order-status  tool:check_stock error  3/3 0.44-1.00   1/3 0.06-0.79   got worse: pass -> fail; unclear: these runs cannot tell the rates apart
 order-status  baseline                3/3 0.44-1.00   3/3 0.44-1.00   unclear: these runs cannot tell the rates apart

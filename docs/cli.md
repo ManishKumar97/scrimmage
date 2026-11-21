@@ -104,7 +104,7 @@ Without `--service`, `scrimmage check` reads the file only, as above.
 $ scrimmage check --service
 scrimmage check: scrimmage.toml is valid: 1 test, 2 rows, 2 runs, 4 tools, no budget
 service     POST http://127.0.0.1:8765/chat   gated (asgi, starlette), pid 7
-version     scrimmage 0.1.0rc1 in the service and here
+version     scrimmage 0.1.0rc2 in the service and here
 python      3.12.9 (main, Oct  9 2026, 00:00:00) [GCC 12.2.0] at /usr/local/bin/python
 tools       check_inventory, get_order, get_stock, refund_order   (match the file)
 control     http://127.0.0.1:8766 reached, no TLS, on this machine, this runner, 3 ms

@@ -26,7 +26,7 @@ It has two extras.
 
 Scrimmage is not released yet, so install it from the repository.
 The name `scrimmage` on PyPI holds only an empty placeholder, version 0.0.0.
-The package in the repository is version 0.1.0rc1, a release candidate.
+The package in the repository is version 0.1.0rc2, a release candidate.
 pip and uv skip a pre-release when a final one is found, so a plain `pip install scrimmage` takes the placeholder.
 Install from the folder, or from a wheel with `--no-index`, as below.
 
