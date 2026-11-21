@@ -48,8 +48,9 @@ NETWORK = re.compile(
 
 
 @pytest.mark.design("security.no_telemetry")
-def test_the_only_connections_are_to_and_from_the_control_server() -> None:
-    """A fast check by name. test_security_audit.py watches a real run do the same."""
+def test_the_only_connections_are_to_the_control_server_and_the_service() -> None:
+    """A fast check by name. test_security_audit.py watches a script run do the same; no test
+    watches a service run's connections."""
     found = {
         (path.name, name)
         for path in PACKAGES.rglob("*.py")
