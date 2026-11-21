@@ -908,8 +908,24 @@ STARTUP_S = RUN_TIMEOUT_S - 60.0  # run_timeout less the margin: no time is left
 
 @pytest.mark.design("wait.slow_start_end_to_end")
 @pytest.mark.slow
+@pytest.mark.parametrize(
+    ("made_age", "reply_delay"),
+    [
+        (STARTUP_S, 0.0),
+        # The plan says 64 s are left when the server makes it. The request has by then waited
+        # at least 2 s for the hold, and the reply then takes 3 s more, so the margin is gone
+        # by the time the program has it. The run's age counts from its request, so it does not
+        # wait. Counted from the reply, it would have 64 s less its own start-up, and wait.
+        (STARTUP_S - 4.0, 3.0),
+    ],
+    ids=["start-up", "slow-reply"],
+)
 def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
-    project: Project, monkeypatch: pytest.MonkeyPatch, time_limit: TimeLimit
+    project: Project,
+    monkeypatch: pytest.MonkeyPatch,
+    time_limit: TimeLimit,
+    made_age: float,
+    reply_delay: float,
 ) -> None:
     """A program that takes most of its run_timeout to load, as `uv run` on a cold cache can,
     then waits on another run's hold. Its wait must end before the runner's limit, so the run
@@ -933,6 +949,7 @@ def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
     election = threading.Lock()
 
     def slow_start(server: control.ControlServer, run: str) -> tuple[int, dict[str, object]]:
+        requested = time.monotonic()
         with election:
             role = roles.setdefault(run, "wait" if roles else "hold")
         if role == "wait":  # the request waits here, so no plan reaches it before the hold
@@ -946,11 +963,15 @@ def test_a_slow_start_up_leaves_no_wait_past_the_runners_limit(
         fetches.append(f"{run} role={role} holding={held_on} age_before={age:.3f}")
         (project.root / f"role-{run}").write_text(role)
         if role == "wait":
-            server.runs[run].opened = time.monotonic() - STARTUP_S
+            server.runs[run].opened = time.monotonic() - made_age
         status, reply = real_plan(server, run)
         plan = reply.get("plan")
         sent = plan.get("elapsed_s") if isinstance(plan, dict) else None
         fetches[-1] += f" elapsed_s_sent={sent}"
+        if role == "wait":
+            # The reply was made with its age above, and is late. The whole request stays
+            # under 9 s, so the control client's 10 s timeout is never what ends it.
+            time.sleep(max(0.0, min(reply_delay, 9.0 - (time.monotonic() - requested))))
         return status, reply
 
     real_reserve = control.ControlServer._reserve

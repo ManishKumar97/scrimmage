@@ -842,3 +842,31 @@ def test_a_hand_made_call_to_the_app_runs_as_its_caller_where_uvicorns_gate_is(
         assert [x["call"] for x in sink_of(held).lines] == ["tool:write_order"]
     finally:
         svc.process.unregister(held)
+
+
+@pytest.mark.design("service.runs_apart")
+def test_a_slow_claim_counts_in_the_runs_age(svc: Service, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The run's age starts when the request for its plan starts, so the time the claim takes
+    is in it. A wait on another run's hold that is cut by the age then never ends past the
+    runner's limit. Counted after the claim, the run would look 0.5 s younger."""
+    name = svc.open()
+    real_claim = svc.client.claim
+
+    def slow_claim(run: str, proc: object, *, held: bool = False) -> object:
+        plan = real_claim(run, proc, held=held)  # the runner's age is read here
+        time.sleep(0.5)  # then the reply is slow to arrive
+        return plan
+
+    made: list[state.RunState] = []
+
+    def spy(*args: Any, **kwargs: Any) -> state.RunState:
+        made.append(state.RunState(*args, **kwargs))
+        return made[-1]
+
+    monkeypatch.setattr(svc.client, "claim", slow_claim)
+    monkeypatch.setattr(asgi_gate, "RunState", spy)
+    before = time.monotonic()
+    reply = run(drive(gated_app(), headers=[svc.header(name)]))
+    assert reply.status == 200
+    assert len(made) == 1
+    assert made[0].began <= before + 0.2, made[0].began - before

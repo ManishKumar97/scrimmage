@@ -16,6 +16,7 @@ import signal
 import ssl
 import sys
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from types import FrameType, ModuleType
@@ -397,6 +398,7 @@ def start(*, mode: Mode = "program", target: str | None = None) -> None:
         )
     prefixes = [p for p in os.environ.get("SCRIMMAGE_ALLOW_IMPORTS", "").split(",") if p]
     plan: Plan | None = None
+    asked = time.monotonic()
     try:
         client = ControlClient(url, token)
         if not child:
@@ -422,7 +424,14 @@ def start(*, mode: Mode = "program", target: str | None = None) -> None:
     process = state.ProcessState(names if plan is None else plan.tool_names())
     process.stop = stop
     run_state = state.RunState(
-        plan, sender, prefixes, load=load, tools=names, blobs=sender, process=process
+        plan,
+        sender,
+        prefixes,
+        load=load,
+        tools=names,
+        blobs=sender,
+        process=process,
+        asked=asked,
     )
     sender.proc = run_state.proc
     sender.on_closed = run_state.run_closed

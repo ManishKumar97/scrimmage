@@ -233,7 +233,7 @@ async def claimed(gate: Gate, name: str) -> tuple[RunState, RunSender]:
         raise Unavailable("plan-unavailable")
     sender = RunSender(client, name, gate.proc)
     sender.since = began
-    run = RunState(plan, sender, gate.prefixes, process=gate.process, blobs=sender)
+    run = RunState(plan, sender, gate.prefixes, process=gate.process, blobs=sender, asked=began)
     run.proc = gate.proc
     sender.on_closed = run.run_closed
     # The digest is of the plan this run's state holds when its last batch is built, not of
