@@ -20,6 +20,14 @@ A gated call that writes, such as a listed refund tool, an MCP tool call or an h
 Every gated call goes into a record on your machine, so you can see what the agent was given and what it did next.
 [Safety](safety.md) lists what is gated, and [Limits](limits.md) lists what is not.
 
+## Your data stays on your machine
+
+Scrimmage runs on your machine, in your CI or in your cluster.
+It has no telemetry and no hosted service, and it sends nothing to its authors or to any third party.
+The only connections it makes itself are to its own control server, on `127.0.0.1` for a local test.
+Your agent's own calls, such as model calls to your provider, go only where your agent sends them.
+Each of these statements is checked by a test; see [Security](security.md).
+
 ## Install
 
 Scrimmage needs Python 3.11 or later.

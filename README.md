@@ -6,6 +6,14 @@ Docs: <https://manishkumar97.github.io/scrimmage/>
 
 This repository is at an early stage.
 
+## Your data stays on your machine
+
+Scrimmage runs on your machine, in your CI or in your cluster.
+It has no telemetry and no hosted service, and it sends nothing to its authors or to any third party.
+The only connections it makes itself are to its own control server, on `127.0.0.1` for a local test.
+Your agent's own calls, such as model calls to your provider, go only where your agent sends them.
+Each of these statements is checked by a test; see [Security](docs/security.md).
+
 ## Install
 
 Scrimmage is not released on PyPI yet, so install it from a clone.
