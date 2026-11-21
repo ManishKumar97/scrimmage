@@ -238,3 +238,14 @@ def test_the_three_commands_of_a_clean_venv_find_their_code(
         done = quiet(scripts / name, "--version", cwd=tmp_path)
         assert said in done.stderr + done.stdout, (name, done.stdout, done.stderr)
         assert "No module named" not in done.stderr, (name, done.stderr)
+
+
+@pytest.mark.slow
+def test_the_wheel_record_lists_only_scrimmage_and_its_dist_info(
+    built: dict[str, Path],
+) -> None:
+    version = importlib.metadata.version("scrimmage")
+    with zipfile.ZipFile(built["wheel"]) as archive:
+        record = archive.read(f"scrimmage-{version}.dist-info/RECORD").decode()
+    tops = {line.split(",")[0].split("/")[0] for line in record.splitlines() if line}
+    assert tops == {"scrimmage", f"scrimmage-{version}.dist-info"}, tops
