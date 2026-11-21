@@ -155,7 +155,7 @@ def test_the_package_is_checked_in_a_job_that_cannot_change_it():
     check = jobs["check"]
     assert check["needs"] == "build"
     runs = [s["run"] for s in check["steps"] if "run" in s]
-    assert runs == ["uvx twine@6.2.0 check --strict dist/*"]
+    assert runs == ["uvx twine@7.0.0 check --strict dist/*"]
     assert uses_of(check["steps"], "actions/download-artifact@")
     assert not uses_of(check["steps"], "actions/checkout@")
     assert not any("twine" in s.get("run", "") for s in jobs["build"]["steps"])

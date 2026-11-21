@@ -89,7 +89,7 @@ jobs:
         with:
           name: dist
           path: dist/
-      - run: uvx twine@6.2.0 check --strict dist/*
+      - run: uvx twine@7.0.0 check --strict dist/*
 
   testpypi:
     name: Publish to TestPyPI
