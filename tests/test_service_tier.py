@@ -99,6 +99,12 @@ def test_the_services_tier_setting_holds_a_request_that_names_none(gated: None) 
 
 
 @pytest.mark.design("tier.hold")
+def test_a_request_naming_auto_is_held_as_if_it_named_none(gated: None) -> None:
+    held, _, body, _ = call({**BODY, "service_tier": "auto"}, setting="priority")
+    assert held == [pytest.approx(held_at(PRIORITY, body))]  # the setting, not the default
+
+
+@pytest.mark.design("tier.hold")
 def test_the_requests_own_tier_comes_before_the_services_setting(gated: None) -> None:
     held, _, body, _ = call({**BODY, "service_tier": "flex"}, setting="priority")
     assert held == [pytest.approx(held_at(FLEX, body))]

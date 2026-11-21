@@ -6,9 +6,11 @@ from typing import Any, cast
 import httpx2
 import pytest
 
+from scrimmage import http_gate, state
 from scrimmage import provider_openai as table
+from scrimmage.budget import Ledger
 from scrimmage.errors import ScrimmageRefused
-from test_http_gate import BODY, URL, Budget, gated, install, make_plan
+from test_http_gate import BODY, URL, Budget, Sink, gated, install, make_plan
 
 __all__ = ["gated"]  # the fixture, used by name
 
@@ -92,3 +94,52 @@ def test_a_model_with_no_price_is_still_refused_before_the_call(gated: None) -> 
         httpx2.Client(transport=httpx2.MockTransport(answer)).post(URL, content=body)
     assert sent == []
     assert cast(str, sink.lines[0]["reason"]) == "no_price"
+
+
+class Settling(Sink):
+    """Hands each settle straight to the ledger, as the runner does."""
+
+    def __init__(self, ledger: Ledger) -> None:
+        super().__init__()
+        self.ledger = ledger
+
+    def put_settle(self, reservation: int, usd: float) -> None:
+        super().put_settle(reservation, usd)
+        self.ledger.settle(reservation, usd)
+
+
+@pytest.mark.design("gateway.cost_never_lowers")
+@pytest.mark.parametrize(
+    ("cost", "header"),
+    [(0, None), (1e-9, None), (None, "0.0"), (None, "1e-9")],
+    ids=["usage.cost 0", "usage.cost 1e-9", "header 0.0", "header 1e-9"],
+)
+def test_a_gateway_that_states_a_tiny_cost_cannot_turn_the_budget_off(
+    gated: None, cost: float | None, header: str | None
+) -> None:
+    """50 gpt-4.1 calls of 100k in and 10k out cost $0.28 each by the table, against a $0.10
+    budget. The real ledger, settled as the runner settles, refuses once spent passes it."""
+    budget = Budget(limit=0.10)
+    sink = Settling(budget.ledger)
+    run = state.RunState(make_plan(budget=0.10), sink, [])
+    state.install(run)
+    http_gate.patch(httpx2, http_gate.Context(run, budget, sink, list[str]().append))
+    usage: dict[str, Any] = {"prompt_tokens": 100_000, "completion_tokens": 10_000}
+    if cost is not None:
+        usage["cost"] = cost
+    headers = {COST_HEADER: header} if header is not None else None
+    sent = json.dumps({"model": "gpt-4.1", "messages": [], "max_tokens": 10}).encode()
+    send = httpx2.Client(
+        transport=httpx2.MockTransport(
+            lambda request: httpx2.Response(200, json={"usage": usage}, headers=headers)
+        )
+    ).post
+    refused = 0
+    for _ in range(50):
+        try:
+            send(URL, content=sent)
+        except ScrimmageRefused:
+            refused += 1
+    table_cost = (100_000 * 2.00 + 10_000 * 8.00) / 1e6
+    assert budget.ledger.spent == pytest.approx(table_cost)  # the first call, at the table's cost
+    assert refused == 49

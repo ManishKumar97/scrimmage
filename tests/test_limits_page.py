@@ -43,6 +43,7 @@ ALL_TITLES = [
     "A few faults.",
     "A form field is cut at the first space, quote or `&`.",
     "A form the model never sent while recording still misses.",
+    "A gateway's stated cost can only raise a call's cost.",
     "A hold that cannot end while a call waits.",
     "A hook that posts to the MCP endpoint.",
     "A hung call under your own SIGTERM handler.",

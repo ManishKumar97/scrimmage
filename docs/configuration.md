@@ -133,7 +133,7 @@ A file that fails its checks is exit 2, and the message names the file and the l
 `scrimmage check` prints the date of the prices on its budget line, and, when you have prices of your own, the source of each.
 A price is only as new as its file, so run [`scrimmage prices update`](cli.md#scrimmage-prices-update) now and then.
 
-A call whose reply states its own cost, such as an OpenRouter reply's `usage.cost` or the LiteLLM proxy's `x-litellm-response-cost` header, is settled at that cost.
+A call whose reply states its own cost, such as an OpenRouter reply's `usage.cost` or the LiteLLM proxy's `x-litellm-response-cost` header, is settled at the larger of that cost and the cost of its tokens at your prices.
 Scrimmage adds nothing to the request to ask for it, and a model with no price is still refused before the call, because the hold needs one.
 
 Scrimmage imports only modules under your agent's own top-level packages, the ones `function` and `tools` name. For a script, that is the ones `tools` names.

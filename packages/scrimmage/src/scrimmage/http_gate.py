@@ -1778,25 +1778,27 @@ def record(
     rates = openai_table.Rates(0.0, 0.0) if free else prices_of(ctx, str(extra.get("model", "")))
     usd = None
     # A gateway that says what the call cost: OpenRouter in usage.cost, the LiteLLM proxy in a
-    # header. It is the bill, so it settles the call. Nothing is added to the request to ask.
+    # header. Nothing is added to the request to ask.
     exact = used.cost
     if exact is None:
         exact = openai_table.gateway_cost(response.headers.get(COST_HEADER))
-    if rates and exact is not None and not free:
-        usd = exact
-    elif rates and used.known:
+    if rates and used.known:
         writes = used.written_30m, used.written_12h
         # The reply says its tier; a reply that does not is settled at the tier it was held at.
         at = rates.at(used.tier or held_tier(ctx, request))
         usd = openai_table.cost(tokens_in, tokens_out, at, cached, *writes)
     elif rates:  # a guess from the sizes, so every input token at its dearest rate
         usd = worst(ctx, request, tokens_in, tokens_out, rates)
+    if usd is not None and exact is not None and not free:
+        # A gateway's figure can raise a call's cost, never lower it: a gateway that reports 0,
+        # or only its own fee, must not turn the budget off.
+        usd = max(usd, exact)
     extra.update(
         status=response.status_code,
         result=blob(body, ctx.sender, total=size, scrub=ctx.run.secrets),
         tokens={"input": tokens_in, "output": tokens_out, "cached": cached},
         cost_usd=None if usd is None else round(usd, 8),
-        cost_estimated=usd is not None and exact is None and not used.known and not free,
+        cost_estimated=usd is not None and not used.known and not free,
     )
     return usd or 0.0
 
