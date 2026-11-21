@@ -115,3 +115,20 @@ def test_an_empty_pythonpath_entry_means_the_agents_folder(
     assert done.returncode == 2, done.stdout + done.stderr
     assert "team/scrimmage.py would be imported as scrimmage" in done.stderr
     assert not list(tmp_path.rglob("SIDE_EFFECT")), "the team's scrimmage.py ran"
+
+
+@pytest.mark.usefixtures("signals_kept")
+def test_init_with_a_probe_refuses_a_shadow_before_it_runs_anything(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = team(tmp_path)
+    (root / "scrimmage.py").unlink()
+    (root / "libs").mkdir()
+    (root / "libs" / "scrimmage.py").write_text(SIDE_EFFECT)
+    monkeypatch.setenv("PYTHONPATH", str(root / "libs"))
+    out = root / "draft.toml"
+    code = cli.main(["init", str(root), "--probe", "plain:run", "--out", str(out)])
+    err = capsys.readouterr().err
+    assert code == 2, err
+    assert "libs/scrimmage.py would be imported as scrimmage" in err
+    assert not out.exists() and not list(tmp_path.rglob("SIDE_EFFECT"))

@@ -1040,6 +1040,12 @@ def run_init(folder: Path, out: Path, probe: str | None, found: Found | None) ->
     from scrimmage import init as drafting
     from scrimmage.runner import Interrupted
 
+    if probe is not None and (shadowed := shadow.problem(folder)) is not None:
+        if found is None:
+            print(f"scrimmage: {shadowed}", file=sys.stderr)
+        else:
+            found.messages.append((MISTAKES, shadowed))
+        return MISTAKE
     try:
         draft = drafting.prepare(
             folder,
