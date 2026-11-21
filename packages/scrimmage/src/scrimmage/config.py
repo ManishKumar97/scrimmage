@@ -22,11 +22,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from scrimmage import labels, provider_openai, python_args
+from scrimmage import labels, prices, provider_openai, python_args
 from scrimmage.errors import ConfigError
 from scrimmage.judge import Rules, impossible, normal
 from scrimmage.mocks import allowed
-from scrimmage.prices import Rates, read_prices
+from scrimmage.prices import PriceFile, Rates, read_prices
 from scrimmage.redact import SCRUB_MIN, redact, remove_values
 
 READ_METHODS = ("GET", "HEAD")  # the web requests that run for real without being listed
@@ -497,6 +497,8 @@ class Config:
     root: Path
     # Every value ${NAME} filled in, of SCRUB_MIN characters or more: removed from records.
     scrub: tuple[str, ...] = ()
+    # scrimmage-runs/prices.toml beside the file, if `scrimmage prices update` wrote one.
+    team_prices: PriceFile | None = None
 
 
 def command_args(agent: Agent, question: str) -> list[str]:
@@ -588,7 +590,9 @@ def read_file(path: Path, data: dict[str, object], reader: Reader) -> Config:
                     "how many times every row runs"
                 )
         parsed.append(test)
-    config = Config(agent, tuple(parsed), path.parent, tuple(sorted(reader.scrub)))
+    config = Config(
+        agent, tuple(parsed), path.parent, tuple(sorted(reader.scrub)), prices.team(path.parent)
+    )
     problems = check_references(config)
     if problems:
         raise ConfigError(*problems)

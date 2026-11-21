@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, TextIO, cast
 
 from scrimmage import compare as comparing
 from scrimmage import config as settings
-from scrimmage import entry, redact, shadow, versions
+from scrimmage import entry, prices, redact, shadow, versions
 from scrimmage import plan as planner
 from scrimmage import results as results_file
 from scrimmage.errors import ConfigError
@@ -854,11 +854,17 @@ def run_check(
         found.fields["summary"] = summary
         return OK
     tools = plural(len(agent.tools), "tool") if agent.tools else "no tools list"
-    budget = "no budget" if agent.max_cost_usd is None else f"a budget of ${agent.max_cost_usd:g}"
+    budget = "no budget"
+    if agent.max_cost_usd is not None:
+        budget = (
+            f"a budget of ${agent.max_cost_usd:g}, prices as of {prices.age(config.team_prices)}"
+        )
     print(
         f"scrimmage check: {path} is valid: {plural(len(config.tests), 'test')}, "
         f"{plural(rows, 'row')}, {plural(runs, 'run')}, {tools}, {budget}"
     )
+    for line in prices.sources(agent.prices, config.team_prices):
+        print(line)
     if agent.start:  # the runner starts it, with every setting: nothing is set by hand
         print(f"the service starts with: {agent.start_written}")
     elif agent.service and hint:

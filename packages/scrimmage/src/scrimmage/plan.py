@@ -18,7 +18,7 @@ from scrimmage.config import (
     word_problem,
 )
 from scrimmage.judge import Rules
-from scrimmage.provider_openai import Rates
+from scrimmage.prices import Rates, in_order
 
 PLAN_VERSION = 1
 # The keys a fault has in a plan. A runner of a later version may send one this SDK does not
@@ -332,7 +332,7 @@ def plan_for(config: Config, row: Row, run: str) -> Plan:
         model_hosts=config.agent.model_hosts,
         budget_usd=config.agent.max_cost_usd,
         reserve_output_tokens=config.agent.reserve_output_tokens,
-        prices=config.agent.prices,
+        prices=in_order(config.agent.prices, config.team_prices),
         children=config.agent.children,
         scrub=config.scrub,
         service=bool(config.agent.service),

@@ -11,12 +11,14 @@ import tomllib
 from dataclasses import dataclass
 from datetime import date
 from importlib import resources
+from pathlib import Path
 from typing import cast
 
 from scrimmage.errors import ConfigError
 
 DOCS = "docs/configuration.md"
 SHIPPED = "prices.toml"
+RUNS = "scrimmage-runs"
 PRICE_KEYS = {"input", "output", "cached_input", "cache_write_30m", "cache_write_12h"}
 FILE_KEYS = {"as_of", "source", "models"}
 DATED = re.compile(r"-\d{4}-\d{2}-\d{2}$")
@@ -149,3 +151,47 @@ def price(model: str, *tables: dict[str, Rates]) -> Rates | None:
             if name in table:
                 return table[name]
     return None
+
+
+def team_path(root: Path) -> Path:
+    return root / RUNS / SHIPPED
+
+
+def team(root: Path) -> PriceFile | None:
+    """scrimmage-runs/prices.toml beside scrimmage.toml, if `scrimmage prices update` wrote it."""
+    try:
+        text = team_path(root).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ConfigError(f"{RUNS}/{SHIPPED}: cannot read it: {exc}") from None
+    return parse(text, f"{RUNS}/{SHIPPED}")
+
+
+def in_order(
+    agent: tuple[tuple[str, Rates], ...], file: PriceFile | None
+) -> tuple[tuple[str, Rates], ...]:
+    """The rows a run prices with before the shipped file: [agent.prices], then the team's
+    file. A model in both takes the first."""
+    named = {model for model, _ in agent}
+    rows = () if file is None else tuple(row for row in file.models if row[0] not in named)
+    return agent + rows
+
+
+def age(file: PriceFile | None) -> str:
+    """The as_of date of the file that prices a model the team did not price itself."""
+    return (file or shipped()).as_of
+
+
+def sources(agent: tuple[tuple[str, Rates], ...], file: PriceFile | None) -> list[str]:
+    """The lines `scrimmage check` adds when the team has its own prices: each source, and how
+    old a file's are. With none, the one budget line says it all."""
+    if not agent and file is None:
+        return []
+    lines = [f"price {model}: [agent.prices]" for model, _ in agent]
+    if file is not None:
+        lines.append(f"prices: {RUNS}/{SHIPPED}, as of {file.as_of} ({len(file.models)} models)")
+    lines.append(
+        f"prices: the shipped {SHIPPED}, as of {shipped().as_of} ({len(shipped().models)} models)"
+    )
+    return lines
