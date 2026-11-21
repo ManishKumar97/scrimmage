@@ -24,8 +24,9 @@ Every gated call goes into a record on your machine, so you can see what the age
 
 Scrimmage runs on your machine, in your CI or in your cluster.
 It has no telemetry and no hosted service, and it sends nothing to its authors or to any third party.
-The only connections it makes itself are to its own control server, on `127.0.0.1` for a local test.
-Your agent's own calls, such as model calls to your provider, go only where your agent sends them.
+The only connections it makes itself are to its own control server and, for a web service, to the service address your `scrimmage.toml` names.
+The control server listens on `127.0.0.1`, or, for a service in a container or a cluster, on the `control` address you set, over TLS.
+Your agent's own calls, such as model calls to your provider, go where your agent sends them, or nowhere when a test mocks, faults or refuses them.
 Each of these statements is checked by a test; see [Security](security.md).
 
 ## Install
