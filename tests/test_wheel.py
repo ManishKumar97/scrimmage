@@ -196,6 +196,13 @@ def quiet(*command: str | Path, cwd: Path) -> subprocess.CompletedProcess[str]:
 
 
 @pytest.mark.slow
+def test_the_wheel_holds_scrimmage_and_no_scrimmage_core(built: dict[str, Path]) -> None:
+    tops = {n.split("/")[0] for n in wheel_names(built["wheel"])}
+    version = importlib.metadata.version("scrimmage")
+    assert tops == {"scrimmage", f"scrimmage-{version}.dist-info"}, tops
+
+
+@pytest.mark.slow
 def test_a_clean_venv_imports_scrimmage_and_loads_nothing_else(
     built: dict[str, Path], tmp_path: Path
 ) -> None:
@@ -209,3 +216,25 @@ def test_a_clean_venv_imports_scrimmage_and_loads_nothing_else(
     assert run(python, "-I", "-c", probe, cwd=tmp_path) == "['scrimmage']\n"
     old = quiet(python, "-I", "-c", "import scrimmage_core", cwd=tmp_path)
     assert old.returncode != 0 and "ModuleNotFoundError" in old.stderr, old.stderr
+
+
+@pytest.mark.slow
+def test_the_three_commands_of_a_clean_venv_find_their_code(
+    built: dict[str, Path], tmp_path: Path
+) -> None:
+    python = venv(tmp_path / "env", "3.11")
+    run("uv", "pip", "install", "--python", python, "--no-index", built["wheel"], cwd=tmp_path)
+    scripts = python.parent
+    assert run(scripts / "scrimmage", "--version", cwd=tmp_path) == (
+        f"scrimmage {importlib.metadata.version('scrimmage')}\n"
+    )
+    # scrimmage-run takes a command to run, so --version is a command that does not exist, and
+    # the message is its own. scrimmage-mcp without its extra says what to install. Neither
+    # says "No module named", so each entry point found its module.
+    for name, said in (
+        ("scrimmage-run", "scrimmage-run: cannot run --version"),
+        ("scrimmage-mcp", 'pip install "scrimmage[mcp]"'),
+    ):
+        done = quiet(scripts / name, "--version", cwd=tmp_path)
+        assert said in done.stderr + done.stdout, (name, done.stdout, done.stderr)
+        assert "No module named" not in done.stderr, (name, done.stderr)

@@ -2,6 +2,7 @@
 three commands. The docs install that one package and name no other."""
 
 import importlib.metadata
+import importlib.util
 import re
 import shlex
 
@@ -96,3 +97,8 @@ def test_the_package_ships_the_repo_license_under_apache_2() -> None:
     shipped = (root / "packages" / "scrimmage" / "LICENSE").read_bytes()
     assert shipped == (root / "LICENSE").read_bytes()
     assert shipped.lstrip().startswith(b"Apache License\n")
+
+
+def test_the_old_import_name_is_gone() -> None:
+    assert importlib.util.find_spec("scrimmage_core") is None
+    assert importlib.util.find_spec("scrimmage") is not None
