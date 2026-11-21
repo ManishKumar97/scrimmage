@@ -102,3 +102,8 @@ def test_the_package_ships_the_repo_license_under_apache_2() -> None:
 def test_the_old_import_name_is_gone() -> None:
     assert importlib.util.find_spec("scrimmage_core") is None
     assert importlib.util.find_spec("scrimmage") is not None
+
+
+def test_the_install_page_checks_the_import_by_its_one_name() -> None:
+    text = (DOCS / "install.md").read_text()
+    assert 'python -c "import scrimmage"\n' in text
