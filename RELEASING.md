@@ -36,5 +36,16 @@ The final version is tagged only after an rc has passed.
 
 ## Verifying the attestation
 
-The upload action signs each file with Sigstore.
-The command to verify it is to be confirmed on the first rc.
+The upload action signs each file with Sigstore, and the index serves the signature as a provenance file.
+To verify a file, download it and its provenance, then check both against this repository.
+For TestPyPI, use `test.pypi.org` in the provenance URL; for PyPI, use `pypi.org`.
+
+```bash
+f=scrimmage-0.1.0rc1-py3-none-any.whl
+uvx pip download --no-deps --only-binary :all: --index-url https://test.pypi.org/simple/ scrimmage==0.1.0rc1
+curl -s -o "$f.provenance" "https://test.pypi.org/integrity/scrimmage/0.1.0rc1/$f/provenance"
+uvx pypi-attestations verify pypi --repository https://github.com/ManishKumar97/scrimmage --provenance-file "$f.provenance" "$f"
+```
+
+It prints `OK:` and the file name when the file was built and uploaded by `release.yml` in this repository.
+It fails when the file was changed after the upload, or when another repository signed it.
