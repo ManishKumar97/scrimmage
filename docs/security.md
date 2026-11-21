@@ -22,7 +22,7 @@ It runs before any watcher in that process could be installed, so the scan check
 *Checked by: `tests/test_security_claims.py::test_the_only_processes_scrimmage_starts_are_its_runs`, `tests/test_security_claims.py::test_the_only_connections_are_to_the_control_server_and_the_service`*
 
 The runner and the code inside your agent talk over one local connection, to a control server that listens on `127.0.0.1` only, on a port chosen for each test.
-A [service in a container](docker.md#a-service-in-a-container) is the one exception: there `control` names the address the runner listens on, and the channel runs over TLS.
+A [service in a container](docker.md#a-service-in-a-container) or in a [Kubernetes cluster](kubernetes.md) is the exception: there `control` names the address the runner listens on, and the channel runs over TLS.
 
 *Checked by: `tests/test_security_claims.py::test_the_control_server_listens_on_loopback_only`*
 
