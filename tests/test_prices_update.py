@@ -1,10 +1,13 @@
 """scrimmage prices update: fetch over HTTPS, check the schema, print the diff, then write."""
 
+import contextlib
 import http.server
+import socket
 import ssl
 import stat
 import threading
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from importlib import resources
 from pathlib import Path
 
@@ -187,3 +190,147 @@ def test_a_fetched_file_that_makes_a_model_free_writes_nothing_and_exits_2(
     assert cli.main(["prices", "update", str(folder / "scrimmage.toml")]) == 2
     assert "is not above 0" in capsys.readouterr().err
     assert not (folder / "scrimmage-runs").exists()
+
+
+class Raw:
+    """A TLS server that answers a request with whatever its function writes, byte by byte."""
+
+    def __init__(self, certs: Path, answer: Callable[[ssl.SSLSocket], None]) -> None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certs / "server.pem", certs / "server.key")
+        self.listener = socket.create_server(("127.0.0.1", 0))
+        self.url = f"https://127.0.0.1:{self.listener.getsockname()[1]}/prices.toml"
+        self.answer, self.context, self.asked = answer, context, 0
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+        self.thread.start()
+
+    def serve(self) -> None:
+        while True:
+            try:
+                raw, _ = self.listener.accept()
+            except OSError:
+                return
+            try:
+                with self.context.wrap_socket(raw, server_side=True) as tls:
+                    tls.recv(65536)
+                    self.asked += 1
+                    self.answer(tls)
+            except OSError:
+                pass
+
+    def stop(self) -> None:
+        with contextlib.suppress(OSError):
+            self.listener.shutdown(socket.SHUT_RDWR)  # wakes the accept that is waiting
+        self.listener.close()
+        self.thread.join(5)
+
+
+@pytest.fixture
+def raw(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., Raw]]:
+    files = make_certificates(tmp_path / "certs", ips=("127.0.0.1",))
+    monkeypatch.setattr(prices_update, "CAFILE", str(files.ca))
+    started: list[Raw] = []
+
+    def start(answer: Callable[[ssl.SSLSocket], None]) -> Raw:
+        server = Raw(tmp_path / "certs", answer)
+        started.append(server)
+        monkeypatch.setattr(prices_update, "URL", server.url)
+        return server
+
+    yield start
+    for server in started:
+        server.stop()
+
+
+def says(data: bytes) -> Callable[[ssl.SSLSocket], None]:
+    return lambda tls: tls.sendall(data)
+
+
+def nothing_written(folder: Path) -> bool:
+    return not (folder / "scrimmage-runs").exists()
+
+
+@pytest.mark.design("prices.update_hardened")
+@pytest.mark.parametrize(
+    ("reply", "words"),
+    [
+        (b"NOT HTTP AT ALL\r\n\r\n", "cannot fetch"),
+        (b"HTTP/1.1 200 OK\r\nX: " + b"a" * 70_000 + b"\r\n\r\n", "cannot fetch"),
+        (b"HTTP/1.1 200 OK\r\nContent-Length: 5000\r\n\r\nabcde", "5000 it promised"),
+        (b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n\xff\xfe\xfd", "not UTF-8"),
+    ],
+    ids=["bad status line", "oversized header", "short body", "not text"],
+)
+def test_a_broken_reply_exits_3_with_a_message_and_writes_nothing(
+    raw: Callable[..., Raw],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    reply: bytes,
+    words: str,
+) -> None:
+    folder = project(tmp_path)
+    raw(says(reply))
+    assert cli.main(["prices", "update", str(folder / "scrimmage.toml")]) == 3
+    err = capsys.readouterr().err
+    assert words in err and "nothing was written" in err and "Traceback" not in err
+    assert nothing_written(folder)
+
+
+@pytest.mark.design("prices.update_hardened")
+def test_a_file_nested_too_deeply_exits_2_with_a_message(
+    raw: Callable[..., Raw], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    folder = project(tmp_path)
+    body = b"x = " + b"[" * 5000
+    raw(says(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body) + body))
+    assert cli.main(["prices", "update", str(folder / "scrimmage.toml")]) == 2
+    assert "nested too deeply" in capsys.readouterr().err
+    assert nothing_written(folder)
+
+
+@pytest.mark.design("prices.update_hardened")
+def test_a_redirect_is_refused_before_a_request_goes_to_the_other_place(
+    raw: Callable[..., Raw], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    folder = project(tmp_path)
+    plain = socket.create_server(("127.0.0.1", 0))  # a plain-text host the redirect names
+    plain.settimeout(0.5)
+    other = raw(says(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"))
+    for target in (f"http://127.0.0.1:{plain.getsockname()[1]}/x", other.url):
+        first = raw(
+            says(
+                b"HTTP/1.1 302 Found\r\nLocation: %s\r\nContent-Length: 0\r\n\r\n" % target.encode()
+            )
+        )
+        assert cli.main(["prices", "update", str(folder / "scrimmage.toml")]) == 3
+        assert "so it was refused" in capsys.readouterr().err
+        assert first.asked == 1
+    with pytest.raises(TimeoutError):
+        plain.accept()  # nothing ever connected to the plain host
+    plain.close()
+    assert other.asked == 0
+    assert nothing_written(folder)
+
+
+@pytest.mark.design("prices.update_hardened")
+def test_the_deadline_covers_the_whole_fetch_not_each_read(
+    raw: Callable[..., Raw],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    folder = project(tmp_path)
+    monkeypatch.setattr(prices_update, "TIMEOUT_S", 1.0)
+
+    def drip(tls: ssl.SSLSocket) -> None:
+        tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\n")
+        for _ in range(60):  # a byte every 0.2 s: each read is quick, the whole is slow
+            tls.sendall(b"#")
+            time.sleep(0.2)
+
+    raw(drip)
+    began = time.monotonic()
+    assert cli.main(["prices", "update", str(folder / "scrimmage.toml")]) == 3
+    assert time.monotonic() - began < 4
+    assert "took longer than 1 seconds" in capsys.readouterr().err
+    assert nothing_written(folder)

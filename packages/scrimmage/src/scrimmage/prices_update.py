@@ -5,14 +5,15 @@ prices.py so that the modules that read a finished test never reach a network li
 """
 
 import dataclasses
+import http.client
 import os
 import ssl
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import cast
 from urllib.parse import urlsplit
 
 from scrimmage.errors import ConfigError
@@ -25,7 +26,8 @@ URL = (
     "packages/scrimmage/src/scrimmage/prices.toml"
 )
 CAFILE: str | None = None  # the authority to trust instead of the system's; a test sets it
-TIMEOUT_S = 15.0
+TIMEOUT_S = 15.0  # the whole fetch
+READ_S = 5.0  # one read of the socket
 MAX_BYTES = 1_000_000
 
 
@@ -68,27 +70,60 @@ class FetchError(Exception):
     """The file could not be fetched."""
 
 
+class SameHostHttps(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect only to https on the same host. Any other raises before a request is
+    made, so nothing is ever sent to another host or in plain text."""
+
+    def redirect_request(  # type: ignore[override]
+        self,
+        req: urllib.request.Request,
+        fp: object,
+        code: int,
+        msg: str,
+        headers: object,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        here, there = urlsplit(req.full_url), urlsplit(newurl)
+        if there.scheme != "https" or there.netloc != here.netloc:
+            raise FetchError(
+                f"the server tried to send the request on to {newurl}, so it was refused"
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)  # type: ignore[arg-type]
+
+
 def fetch(url: str) -> str:
-    """The one place Scrimmage reads from the network, called only by `scrimmage prices update`."""
+    """The one place Scrimmage reads from the network, called only by `scrimmage prices update`.
+
+    The whole fetch has TIMEOUT_S seconds, and no single read waits longer than READ_S.
+    """
     parts = urlsplit(url)
     if parts.scheme != "https":
         raise FetchError(f"{url} is not an https address")
     context = ssl.create_default_context(cafile=CAFILE)
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=context), SameHostHttps
+    )
+    deadline = time.monotonic() + TIMEOUT_S
+    chunks: list[bytes] = []
     try:
-        with urllib.request.urlopen(url, timeout=TIMEOUT_S, context=context) as reply:
-            sent_to = cast(str, reply.geturl())
-            final = urlsplit(sent_to)
-            if final.scheme != "https" or final.netloc != parts.netloc:
-                raise FetchError(f"the server sent the request on to {sent_to}")
-            raw = reply.read(MAX_BYTES + 1)
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+        with opener.open(url, timeout=min(READ_S, TIMEOUT_S)) as reply:
+            size = 0
+            while chunk := reply.read1(65536):
+                chunks.append(chunk)
+                size += len(chunk)
+                if size > MAX_BYTES:
+                    raise FetchError(f"{url} is larger than {MAX_BYTES} bytes")
+                if time.monotonic() > deadline:
+                    raise FetchError(f"{url} took longer than {TIMEOUT_S:g} seconds")
+            promised = reply.headers.get("Content-Length")
+            if promised is not None and promised.strip().isdigit() and int(promised) != size:
+                raise FetchError(f"{url} sent {size} bytes of the {promised} it promised")
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as exc:
         if isinstance(exc, urllib.error.HTTPError):
             exc.close()  # an error reply holds a file until it is closed
-        raise FetchError(f"cannot fetch {url}: {getattr(exc, 'reason', exc)}") from None
-    if len(raw) > MAX_BYTES:
-        raise FetchError(f"{url} is larger than {MAX_BYTES} bytes")
+        raise FetchError(f"cannot fetch {url}: {getattr(exc, 'reason', None) or exc!r}") from None
     try:
-        return raw.decode("utf-8")
+        return b"".join(chunks).decode("utf-8")
     except UnicodeDecodeError:
         raise FetchError(f"{url} is not UTF-8 text") from None
 

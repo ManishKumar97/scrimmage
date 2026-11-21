@@ -40,7 +40,7 @@ PACKAGES = ROOT / "packages"
 SDK = PACKAGES / "scrimmage" / "src" / "scrimmage"
 # Every standard-library name that opens a connection or listens for one.
 NETWORK = re.compile(
-    r"\b(HTTPS?Connection|urlopen|urlretrieve|create_connection|open_connection|"
+    r"\b(HTTPS?Connection|urlopen|build_opener|urlretrieve|create_connection|open_connection|"
     r"open_unix_connection|create_server|start_server|SMTP(?:_SSL)?|FTP(?:_TLS)?|"
     r"ServerProxy|ThreadingHTTPServer|HTTPServer|TCPServer|UDPServer|wrap_socket|"
     r"socket(?=\())\b"
@@ -67,7 +67,7 @@ def test_the_only_connections_are_to_the_control_server_and_the_service() -> Non
         ("managed.py", "socket"),
         # The one fetch: `scrimmage prices update` reads prices.toml from the repository's main
         # over HTTPS, when a person types it. No test run calls it.
-        ("prices_update.py", "urlopen"),
+        ("prices_update.py", "build_opener"),
     }
     uses = {
         name

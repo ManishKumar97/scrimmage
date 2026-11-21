@@ -114,6 +114,8 @@ def parse(text: str, name: str) -> PriceFile:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"{name}: {exc}") from None
+    except RecursionError:
+        raise ConfigError(f"{name}: tables or arrays nested too deeply to read") from None
     for key in data:
         if key not in FILE_KEYS:
             raise ConfigError(f"{name} {key}: unknown setting; see {DOCS}")
