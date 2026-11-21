@@ -82,6 +82,8 @@ def fetch(url: str) -> str:
                 raise FetchError(f"the server sent the request on to {sent_to}")
             raw = reply.read(MAX_BYTES + 1)
     except (urllib.error.URLError, OSError, ValueError) as exc:
+        if isinstance(exc, urllib.error.HTTPError):
+            exc.close()  # an error reply holds a file until it is closed
         raise FetchError(f"cannot fetch {url}: {getattr(exc, 'reason', exc)}") from None
     if len(raw) > MAX_BYTES:
         raise FetchError(f"{url} is larger than {MAX_BYTES} bytes")
