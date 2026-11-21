@@ -7,6 +7,7 @@ also takes the time and new ids, as a real one has.
 """
 
 import json
+import math
 import string
 import time
 from collections.abc import Iterable, Iterator, Sequence
@@ -550,6 +551,7 @@ class Usage:
     written_30m: int = 0  # input tokens written to the cache for 30 minutes
     written_12h: int = 0  # and for 12 hours
     tier: str | None = None  # the service tier the reply says it was billed at
+    cost: float | None = None  # dollars, if a gateway's reply says what the call cost
 
 
 def usage(body: bytes, *, output_required: bool = True) -> Usage:
@@ -565,6 +567,7 @@ def usage(body: bytes, *, output_required: bool = True) -> Usage:
     data = [line[5:].strip() for line in text.split("\n") if line.startswith("data:")]
     found = Usage()
     tier: str | None = None
+    cost: float | None = None
     for doc in data or [text]:
         try:
             parsed = _obj(json.loads(doc))
@@ -576,6 +579,7 @@ def usage(body: bytes, *, output_required: bool = True) -> Usage:
         numbers = _obj(parsed.get("usage"))
         if not numbers:  # the Responses API puts it in its last event's response
             numbers = _obj(_obj(parsed.get("response")).get("usage"))
+        cost = gateway_cost(numbers.get("cost"), cost)
         tokens_in = _count(numbers, "prompt_tokens", "input_tokens")
         tokens_out = _count(numbers, "completion_tokens", "output_tokens")
         if tokens_out is None and not output_required:
@@ -584,8 +588,22 @@ def usage(body: bytes, *, output_required: bool = True) -> Usage:
             cached = cached_count(numbers, tokens_in)
             found = Usage(tokens_in, tokens_out, True, cached)
             found.written_30m, found.written_12h = written(numbers, tokens_in - cached)
-    found.tier = tier
+    found.tier, found.cost = tier, cost
     return found
+
+
+def gateway_cost(value: object, before: float | None = None) -> float | None:
+    """A cost in dollars a gateway put in its reply, such as OpenRouter's usage.cost, or the
+    LiteLLM proxy's x-litellm-response-cost header, which is text. Anything that is not a
+    finite number of at least 0 is no cost, and the call is priced from its tokens."""
+    if isinstance(value, str):
+        try:
+            value = float(value)
+        except ValueError:
+            return before
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return before
+    return float(value) if math.isfinite(value) and value >= 0 else before
 
 
 def request_tier(fields: dict[str, object] | None) -> str | None:

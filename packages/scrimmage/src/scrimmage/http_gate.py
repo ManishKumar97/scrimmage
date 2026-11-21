@@ -78,6 +78,7 @@ BUILT_FROM = ("Response", "ByteStream", "ReadTimeout", "ConnectError", "ReadErro
 BROKEN_WEB_BODY = b'{"data": [{"id": 1, "name": "'
 # The transport library each one raises its connection errors from.
 CORE = {"httpx": "httpcore", "httpx2": "httpcore2"}
+COST_HEADER = "x-litellm-response-cost"  # the LiteLLM proxy's cost for the call, in dollars
 CHAR_PER_TOKEN = 4  # the rough size of a token, for estimates only
 PRICE_KEY_CAP = 300  # a longer name is not shown whole as a price key to paste
 BUDGET_WAIT_S = 30.0  # the longest a call waits for calls in flight to free the budget
@@ -1776,7 +1777,14 @@ def record(
     free = step.call.name in openai_table.FREE_OPS
     rates = openai_table.Rates(0.0, 0.0) if free else prices_of(ctx, str(extra.get("model", "")))
     usd = None
-    if rates and used.known:
+    # A gateway that says what the call cost: OpenRouter in usage.cost, the LiteLLM proxy in a
+    # header. It is the bill, so it settles the call. Nothing is added to the request to ask.
+    exact = used.cost
+    if exact is None:
+        exact = openai_table.gateway_cost(response.headers.get(COST_HEADER))
+    if rates and exact is not None and not free:
+        usd = exact
+    elif rates and used.known:
         writes = used.written_30m, used.written_12h
         # The reply says its tier; a reply that does not is settled at the tier it was held at.
         at = rates.at(used.tier or held_tier(ctx, request))
@@ -1788,7 +1796,7 @@ def record(
         result=blob(body, ctx.sender, total=size, scrub=ctx.run.secrets),
         tokens={"input": tokens_in, "output": tokens_out, "cached": cached},
         cost_usd=None if usd is None else round(usd, 8),
-        cost_estimated=usd is not None and not used.known and not free,
+        cost_estimated=usd is not None and exact is None and not used.known and not free,
     )
     return usd or 0.0
 
