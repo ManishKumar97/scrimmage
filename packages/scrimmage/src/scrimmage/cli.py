@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, TextIO, cast
 
 from scrimmage import compare as comparing
 from scrimmage import config as settings
-from scrimmage import entry, prices, redact, shadow, versions
+from scrimmage import entry, prices, prices_update, redact, shadow, versions
 from scrimmage import plan as planner
 from scrimmage import results as results_file
 from scrimmage.errors import ConfigError
@@ -170,6 +170,17 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
         help="compare with an earlier records folder or its result.json",
     )
     show.add_argument("--json", action="store_true", help="print one JSON document")
+    price_files = commands.add_parser(
+        "prices", help="update the model prices Scrimmage budgets with", allow_abbrev=False
+    )
+    price_action = price_files.add_subparsers(dest="action", required=True)
+    refresh = price_action.add_parser(
+        "update",
+        help="fetch the newest prices.toml from the repository's main and save it as "
+        "scrimmage-runs/prices.toml beside scrimmage.toml",
+        allow_abbrev=False,
+    )
+    refresh.add_argument("path", nargs="?", default="scrimmage.toml", type=Path)
     cert = commands.add_parser(
         "cert",
         help="make the certificates for a control server a container reaches",
@@ -187,6 +198,8 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
     args = parser.parse_args(argv)
     if args.command == "cert":
         return cert_command(args)
+    if args.command == "prices":
+        return prices_update.update(args.path.resolve().parent)
     if args.command == "path":
         return path_command()
     if args.command == "init":
