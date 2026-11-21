@@ -959,10 +959,21 @@ def prices_of(ctx: Bound, model: str) -> openai_table.Rates | None:
     return openai_table.price(model, dict(ctx.run.plan.prices))
 
 
-def worst(request: Any, tokens_in: int, tokens_out: int, rates: openai_table.Rates) -> float:
-    """What the call could cost at most on the API its path names."""
+def worst(
+    ctx: Bound, request: Any, tokens_in: int, tokens_out: int, rates: openai_table.Rates
+) -> float:
+    """What the call could cost at most on the API its path names, at the service tier the
+    request names, else the file's [agent] service_tier, else the default tier."""
     responses = openai_table.is_responses(str(request.url.path))
-    return openai_table.most_cost(tokens_in, tokens_out, rates, responses=responses)
+    tier = held_tier(ctx, request)
+    return openai_table.most_cost(tokens_in, tokens_out, rates.at(tier), responses=responses)
+
+
+def held_tier(ctx: Bound, request: Any) -> str | None:
+    """The tier a call is held at: the one the request names, else [agent] service_tier, else
+    none, which is the default tier. Nothing is ever added to the request."""
+    fields = openai_table.request_fields(body_of(request) or b"")
+    return openai_table.request_tier(fields) or ctx.run.plan.service_tier
 
 
 def no_price(model: str) -> str:
@@ -1025,7 +1036,7 @@ def hold_for(ctx: Bound, step: Step, request: Any, extra: dict[str, object]) -> 
     output = openai_table.max_output(fields or {}) or plan.reserve_output_tokens
     if step.call.name == "chat" and not openai_table.is_responses(str(request.url.path)):
         output *= openai_table.choices(fields or {})  # Responses has no n
-    return worst(request, len(body) // CHAR_PER_TOKEN, output, rates)
+    return worst(ctx, request, len(body) // CHAR_PER_TOKEN, output, rates)
 
 
 def reserve(ctx: Bound, step: Step, request: Any, extra: dict[str, object]) -> int | None:
@@ -1305,7 +1316,7 @@ def redirected_away(
     """Stop here: past this hop the gate would not see the call, so nothing could price it."""
     rates = prices_of(ctx, str(extra.get("model", "")))
     tokens = len(body_of(request) or b"") // CHAR_PER_TOKEN
-    usd = worst(request, tokens, 0, rates) if rates else None
+    usd = worst(ctx, request, tokens, 0, rates) if rates else None
     extra.update(cost_usd=usd, cost_estimated=usd is not None)
     settle(ctx, reservation, usd or 0.0)
     ctx.run.refuse(step, "redirect_off_host")
@@ -1336,7 +1347,7 @@ def failed(
     usd: float | None = 0.0
     if not isinstance(error, never_sent):
         tokens = len(body_of(request) or b"") // CHAR_PER_TOKEN
-        usd = worst(request, tokens, 0, rates) if rates else None
+        usd = worst(ctx, request, tokens, 0, rates) if rates else None
         extra["cost_estimated"] = usd is not None
     extra["cost_usd"] = usd
     ctx.run.finish(step, error=error)
@@ -1767,9 +1778,11 @@ def record(
     usd = None
     if rates and used.known:
         writes = used.written_30m, used.written_12h
-        usd = openai_table.cost(tokens_in, tokens_out, rates, cached, *writes)
+        # The reply says its tier; a reply that does not is settled at the tier it was held at.
+        at = rates.at(used.tier or held_tier(ctx, request))
+        usd = openai_table.cost(tokens_in, tokens_out, at, cached, *writes)
     elif rates:  # a guess from the sizes, so every input token at its dearest rate
-        usd = worst(request, tokens_in, tokens_out, rates)
+        usd = worst(ctx, request, tokens_in, tokens_out, rates)
     extra.update(
         status=response.status_code,
         result=blob(body, ctx.sender, total=size, scrub=ctx.run.secrets),

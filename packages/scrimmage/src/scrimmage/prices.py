@@ -19,7 +19,8 @@ from scrimmage.errors import ConfigError
 DOCS = "docs/configuration.md"
 SHIPPED = "prices.toml"
 RUNS = "scrimmage-runs"
-PRICE_KEYS = {"input", "output", "cached_input", "cache_write_30m", "cache_write_12h"}
+RATE_KEYS = {"input", "output", "cached_input", "cache_write_30m", "cache_write_12h"}
+PRICE_KEYS = {*RATE_KEYS, "tiers"}  # a model's keys; a tier's are RATE_KEYS
 FILE_KEYS = {"as_of", "source", "models"}
 DATED = re.compile(r"-\d{4}-\d{2}-\d{2}$")
 
@@ -29,13 +30,19 @@ class Rates:
     """Dollars per million tokens. With no cached rate, cached tokens cost the full input
     rate: a price that guesses must guess high, or the budget could let through more. With
     no cache-write rate, a written token costs the full input rate, as on a model that
-    charges nothing extra to write its cache."""
+    charges nothing extra to write its cache. tiers: the rates of each service tier, by name.
+    A tier not listed costs these rates."""
 
     input: float
     output: float
     cached_input: float | None = None
     cache_write_30m: float | None = None  # a token written to the cache for 30 minutes
     cache_write_12h: float | None = None  # for 12 hours, a Responses API choice
+    tiers: tuple[tuple[str, "Rates"], ...] = ()
+
+    def at(self, tier: str | None) -> "Rates":
+        """The rates a call on this service tier pays."""
+        return dict(self.tiers).get(tier or "", self)
 
 
 @dataclass(frozen=True)
@@ -53,9 +60,10 @@ def read_prices(value: object, where: str) -> tuple[tuple[str, Rates], ...]:
     )
 
 
-def read_rates(entry: dict[str, object], item: str) -> Rates:
+def read_rates(entry: dict[str, object], item: str, *, tiers: bool = True) -> Rates:
+    known = PRICE_KEYS if tiers else RATE_KEYS
     for key in entry:
-        if key not in PRICE_KEYS:
+        if key not in known:
             raise ConfigError(f"{item} {key}: unknown setting; see {DOCS}")
     rate, output = dollars(entry, "input", item), dollars(entry, "output", item)
     cached = dollars(entry, "cached_input", item) if "cached_input" in entry else None
@@ -73,7 +81,13 @@ def read_rates(entry: dict[str, object], item: str) -> Rates:
                 "the cache costs at least a full one"
             )
         writes.append(write)
-    return Rates(rate, output, cached, *writes)
+    named: list[tuple[str, Rates]] = []
+    for tier, raw in as_table(entry.get("tiers", {}), f"{item} tiers").items():
+        where = f"{item} tiers {tier}"
+        if not tier.strip():
+            raise ConfigError(f"{item} tiers: a tier needs a name")
+        named.append((tier, read_rates(as_table(raw, where), where, tiers=False)))
+    return Rates(rate, output, cached, *writes, tiers=tuple(named))
 
 
 def dollars(entry: dict[str, object], key: str, item: str) -> float:

@@ -549,6 +549,7 @@ class Usage:
     cached: int = 0  # input tokens the provider served from its prompt cache
     written_30m: int = 0  # input tokens written to the cache for 30 minutes
     written_12h: int = 0  # and for 12 hours
+    tier: str | None = None  # the service tier the reply says it was billed at
 
 
 def usage(body: bytes, *, output_required: bool = True) -> Usage:
@@ -563,11 +564,15 @@ def usage(body: bytes, *, output_required: bool = True) -> Usage:
     # Split on newlines only: text in a reply can hold other line separators.
     data = [line[5:].strip() for line in text.split("\n") if line.startswith("data:")]
     found = Usage()
+    tier: str | None = None
     for doc in data or [text]:
         try:
             parsed = _obj(json.loads(doc))
         except (ValueError, RecursionError):
             continue
+        named = parsed.get("service_tier", _obj(parsed.get("response")).get("service_tier"))
+        if isinstance(named, str) and named:  # a stream's every chunk may carry it
+            tier = named
         numbers = _obj(parsed.get("usage"))
         if not numbers:  # the Responses API puts it in its last event's response
             numbers = _obj(_obj(parsed.get("response")).get("usage"))
@@ -579,7 +584,15 @@ def usage(body: bytes, *, output_required: bool = True) -> Usage:
             cached = cached_count(numbers, tokens_in)
             found = Usage(tokens_in, tokens_out, True, cached)
             found.written_30m, found.written_12h = written(numbers, tokens_in - cached)
+    found.tier = tier
     return found
+
+
+def request_tier(fields: dict[str, object] | None) -> str | None:
+    """The service tier a request names. auto leaves the choice to the project's setting, so
+    it names none."""
+    value = (fields or {}).get("service_tier")
+    return value if isinstance(value, str) and value not in ("", "auto") else None
 
 
 def _details(numbers: dict[str, object]) -> dict[str, object]:

@@ -29,6 +29,7 @@ Anything this version does not support is rejected as unknown, with exit code 2.
 | `model_hosts` | Extra hosts whose requests are model calls, such as a gateway, each with the format it speaks: `[{host = "llm-gateway.internal", provider = "openai"}]`. A host name only, with no port. | empty |
 | `reserve_output_tokens` | The output tokens a budget reservation assumes when a request does not set `max_tokens`. A call that does not fit while others hold the budget waits for them; see [When calls in flight hold the budget](model-faults.md#when-calls-in-flight-hold-the-budget). | 4096 |
 | `prices` | Prices for other models, as the table below. The key `""` prices a call that sends no model name. | empty |
+| `service_tier` | The service tier OpenAI bills a model request that names none, such as `"priority"`. It is used only to hold the budget before the call, at that tier's rates. Scrimmage never adds it to the request. See [Service tiers](#service-tiers). | the default tier |
 | `answer` | Where the answer is in what the function returns, such as `"messages[-1].text"`, or in a service's JSON reply, such as `"reply"`. With `function` or `service`. Required when the function returns anything but text, as the whole value would hold tool results too. See [Agents on a framework](frameworks.md). | the returned text, or a service's whole reply |
 
 ### The function and its input
@@ -68,6 +69,30 @@ acme-gpt = {input = 2.0, cached_input = 0.5, output = 8.0}
 | `cached_input` | The price of an input token the provider served from its prompt cache. Optional, and at most `input`. Without it, cached tokens cost the full `input` price, which can only overstate the cost. |
 | `cache_write_30m` | The price of an input token the provider wrote to its prompt cache for 30 minutes. Optional, and at least `input`. Without it, written tokens cost the full `input` price, as on a model that charges nothing extra to write its cache. |
 | `cache_write_12h` | The same for a token written for 12 hours, a choice on the Responses API. Optional, and at least `input`. |
+| `tiers` | The rates of each service tier, as a table of tables, such as `[agent.prices."gpt-4.1".tiers.flex]`. Each tier takes the same keys, and needs `input` and `output`. Optional. A tier not listed costs the model's own rates. See [Service tiers](#service-tiers). |
+
+### Service tiers
+
+OpenAI bills a call at the tier it was served on, such as `default`, `flex` or `priority`.
+The reply names the tier, and Scrimmage settles the call at that tier's rates.
+Before the call it holds the budget at one tier's rates.
+That is the tier the request names, else `[agent] service_tier`, else the default tier.
+A request that names `auto` names no tier.
+
+```toml
+[agent]
+service_tier = "priority"
+
+[agent.prices."gpt-4.1"]
+input = 2.0
+output = 8.0
+
+[agent.prices."gpt-4.1".tiers.priority]
+input = 3.5
+output = 14.0
+```
+
+Scrimmage never adds a tier to the request: it would change what the model call does.
 
 The `gpt-5.6-luna` example is its price up to 272K input tokens; a call over that costs more, so give the long-context price if your calls can be that long. See [One price per kind of token](limits.md#the-budget).
 

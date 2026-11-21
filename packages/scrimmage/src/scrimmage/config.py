@@ -43,6 +43,7 @@ AGENT_KEYS = {
     "model_hosts",
     "reserve_output_tokens",
     "prices",
+    "service_tier",
     "answer",
     "service",
     "body",
@@ -453,6 +454,7 @@ class Agent:
     max_cost_usd: float | None = DEFAULT_BUDGET_USD  # None: the budget is off, on purpose
     reserve_output_tokens: int = DEFAULT_RESERVE_OUTPUT_TOKENS
     prices: tuple[tuple[str, Rates], ...] = ()
+    service_tier: str | None = None  # the tier a request that names none is held at
     answer: str | None = None  # where the answer is in what the agent returns
     command: tuple[str, ...] = ()  # a script's arguments; function is then empty
     children: bool = False  # child processes fire faults, and join on any Python
@@ -1015,6 +1017,7 @@ def read_agent(table: dict[str, object], reader: Reader | None = None) -> Agent:
             table, "reserve_output_tokens", DEFAULT_RESERVE_OUTPUT_TOKENS, where
         ),
         prices=read_prices(table.get("prices", {}), f"{where}.prices"),
+        service_tier=text(table, "service_tier", where) if "service_tier" in table else None,
         answer=answer,
         command=command,
         children=children,
