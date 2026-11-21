@@ -158,7 +158,8 @@ def check_file_rates(model: str, rates: Rates, item: str) -> None:
         )
     if rates.output <= 0 and "embedding" not in model:
         raise ConfigError(
-            f"{item} output: {rates.output:g} is not above 0; only an embedding model has no output price"
+            f"{item} output: {rates.output:g} is not above 0; "
+            "only an embedding model has no output price"
         )
     for tier, tiered in rates.tiers:
         if tier in RESERVED_TIERS:

@@ -132,23 +132,24 @@ def _written(tmp_path: Path) -> Path:
 
 
 HEAD = 'as_of = "2026-11-20"\nsource = "https://example.test/prices"\n'
+BASE = '[models."gpt-4.1"]\ninput = 2\noutput = 8\n[models."gpt-4.1".tiers.'
 FREE_FILES = {
     "input 0": ('[models."gpt-4.1"]\ninput = 0\noutput = 8\n', "input: 0 is not above 0"),
     "output 0": ('[models."gpt-4.1"]\ninput = 2\noutput = 0\n', "output: 0 is not above 0"),
     "tier input 0": (
-        '[models."gpt-4.1"]\ninput = 2\noutput = 8\n[models."gpt-4.1".tiers.flex]\ninput = 0\noutput = 4\n',
+        BASE + "flex]\ninput = 0\noutput = 4\n",
         "tiers flex input: 0 is not above 0",
     ),
     "tier output 0": (
-        '[models."gpt-4.1"]\ninput = 2\noutput = 8\n[models."gpt-4.1".tiers.flex]\ninput = 1\noutput = 0\n',
+        BASE + "flex]\ninput = 1\noutput = 0\n",
         "tiers flex output: 0 is not above 0",
     ),
     "tier default": (
-        '[models."gpt-4.1"]\ninput = 2\noutput = 8\n[models."gpt-4.1".tiers.default]\ninput = 1\noutput = 4\n',
+        BASE + "default]\ninput = 1\noutput = 4\n",
         "tiers default: default is not a tier a file may price",
     ),
     "tier auto": (
-        '[models."gpt-4.1"]\ninput = 2\noutput = 8\n[models."gpt-4.1".tiers.auto]\ninput = 1\noutput = 4\n',
+        BASE + "auto]\ninput = 1\noutput = 4\n",
         "tiers auto: auto is not a tier a file may price",
     ),
     "not finite": ('[models."gpt-4.1"]\ninput = inf\noutput = 8\n', "input: expected dollars"),
@@ -185,5 +186,5 @@ def test_a_team_file_that_makes_a_model_free_stops_the_run_at_load(tmp_path: Pat
     (tmp_path / "scrimmage-runs").mkdir()
     free = HEAD + '[models."gpt-4.1"]\ninput = 0\noutput = 0\n'
     (tmp_path / "scrimmage-runs" / "prices.toml").write_text(free)
-    with pytest.raises(ConfigError, match="scrimmage-runs/prices.toml models gpt-4.1 input: 0"):
+    with pytest.raises(ConfigError, match=r"scrimmage-runs/prices\.toml models gpt-4\.1 input: 0"):
         config.load(tmp_path / "scrimmage.toml")
