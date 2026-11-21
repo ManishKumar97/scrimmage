@@ -129,3 +129,61 @@ def test_check_names_each_prices_source_and_age(
 def _written(tmp_path: Path) -> Path:
     a_plan(tmp_path)
     return tmp_path / "scrimmage.toml"
+
+
+HEAD = 'as_of = "2026-11-20"\nsource = "https://example.test/prices"\n'
+FREE_FILES = {
+    "input 0": ('[models."gpt-4.1"]\ninput = 0\noutput = 8\n', "input: 0 is not above 0"),
+    "output 0": ('[models."gpt-4.1"]\ninput = 2\noutput = 0\n', "output: 0 is not above 0"),
+    "tier input 0": (
+        '[models."gpt-4.1"]\ninput = 2\noutput = 8\n[models."gpt-4.1".tiers.flex]\ninput = 0\noutput = 4\n',
+        "tiers flex input: 0 is not above 0",
+    ),
+    "tier output 0": (
+        '[models."gpt-4.1"]\ninput = 2\noutput = 8\n[models."gpt-4.1".tiers.flex]\ninput = 1\noutput = 0\n',
+        "tiers flex output: 0 is not above 0",
+    ),
+    "tier default": (
+        '[models."gpt-4.1"]\ninput = 2\noutput = 8\n[models."gpt-4.1".tiers.default]\ninput = 1\noutput = 4\n',
+        "tiers default: default is not a tier a file may price",
+    ),
+    "tier auto": (
+        '[models."gpt-4.1"]\ninput = 2\noutput = 8\n[models."gpt-4.1".tiers.auto]\ninput = 1\noutput = 4\n',
+        "tiers auto: auto is not a tier a file may price",
+    ),
+    "not finite": ('[models."gpt-4.1"]\ninput = inf\noutput = 8\n', "input: expected dollars"),
+    "nan": ('[models."gpt-4.1"]\ninput = 2\noutput = nan\n', "output: expected dollars"),
+}
+
+
+@pytest.mark.design("prices.file_never_free")
+@pytest.mark.parametrize("name", FREE_FILES)
+def test_a_price_file_may_not_make_a_model_free(name: str) -> None:
+    body, message = FREE_FILES[name]
+    with pytest.raises(ConfigError, match=message) as caught:
+        prices.parse(HEAD + body, "the file")
+    assert "(line " in caught.value.problems[0] or "expected dollars" in message
+
+
+@pytest.mark.design("prices.file_never_free")
+def test_an_embedding_model_may_have_no_output_price_in_a_file() -> None:
+    body = '[models."text-embedding-9"]\ninput = 0.02\noutput = 0\n'
+    assert dict(prices.parse(HEAD + body, "the file").models)["text-embedding-9"].output == 0.0
+
+
+@pytest.mark.design("prices.file_never_free")
+def test_agent_prices_may_still_price_a_model_at_zero(tmp_path: Path) -> None:
+    (tmp_path / "scrimmage.toml").write_text(
+        config_cases.AGENT + '\n[agent.prices."mine"]\ninput = 0\noutput = 0\n' + config_cases.TEST
+    )
+    assert dict(config.load(tmp_path / "scrimmage.toml").agent.prices)["mine"].input == 0.0
+
+
+@pytest.mark.design("prices.file_never_free")
+def test_a_team_file_that_makes_a_model_free_stops_the_run_at_load(tmp_path: Path) -> None:
+    (tmp_path / "scrimmage.toml").write_text(config_cases.MINIMAL)
+    (tmp_path / "scrimmage-runs").mkdir()
+    free = HEAD + '[models."gpt-4.1"]\ninput = 0\noutput = 0\n'
+    (tmp_path / "scrimmage-runs" / "prices.toml").write_text(free)
+    with pytest.raises(ConfigError, match="scrimmage-runs/prices.toml models gpt-4.1 input: 0"):
+        config.load(tmp_path / "scrimmage.toml")

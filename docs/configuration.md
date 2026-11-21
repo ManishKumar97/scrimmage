@@ -129,6 +129,9 @@ output = 4.00
 ```
 
 `as_of` and `source` are required, and a model takes the keys of `[agent.prices]`.
+A file may not price a model at 0, because that would turn the budget off for it: `input` must be above 0, and so must `output` unless the model is an embedding model.
+A tier cannot be named `default` or `auto`.
+Only `[agent.prices]` may price a model at 0, as your own choice.
 A file that fails its checks is exit 2, and the message names the file and the line.
 `scrimmage check` prints the date of the prices on its budget line, and, when you have prices of your own, the source of each.
 A price is only as new as its file, so run [`scrimmage prices update`](cli.md#scrimmage-prices-update) now and then.

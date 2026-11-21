@@ -133,10 +133,37 @@ def parse(text: str, name: str) -> PriceFile:
     for model, raw in table.items():
         try:
             item = f"{name} models {model}"
-            models.append((model, read_rates(as_table(raw, item), item)))
+            rates = read_rates(as_table(raw, item), item)
+            check_file_rates(model, rates, item)
+            models.append((model, rates))
         except ConfigError as exc:
             raise ConfigError(f"{exc.problems[0]}{line_of(text, model)}") from None
     return PriceFile(as_of, source, tuple(models))
+
+
+RESERVED_TIERS = ("default", "auto")
+
+
+def check_file_rates(model: str, rates: Rates, item: str) -> None:
+    """What a price file may not hold, as it could turn the budget off for a model.
+
+    [agent.prices] may price a model at 0, as the team's own choice. A file is fetched, and
+    kept where no commit shows it, so it may not: input must be above 0, and so must output
+    unless the model is an embedding model, which has no output. A tier cannot be named
+    default or auto, which are not tiers OpenAI bills at a rate of their own.
+    """
+    if rates.input <= 0:
+        raise ConfigError(
+            f"{item} input: {rates.input:g} is not above 0; a price file may not make a model free"
+        )
+    if rates.output <= 0 and "embedding" not in model:
+        raise ConfigError(
+            f"{item} output: {rates.output:g} is not above 0; only an embedding model has no output price"
+        )
+    for tier, tiered in rates.tiers:
+        if tier in RESERVED_TIERS:
+            raise ConfigError(f"{item} tiers {tier}: {tier} is not a tier a file may price")
+        check_file_rates(model, tiered, f"{item} tiers {tier}")
 
 
 def line_of(text: str, model: str) -> str:

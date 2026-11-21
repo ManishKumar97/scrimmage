@@ -172,3 +172,18 @@ def test_only_an_https_address_is_fetched(tmp_path: Path) -> None:
         prices_update.fetch("http://127.0.0.1:1/prices.toml")
     with pytest.raises(prices_update.FetchError, match="not an https address"):
         prices_update.fetch("file:///etc/passwd")
+
+
+@pytest.mark.design("prices.file_never_free")
+@pytest.mark.parametrize(
+    "free",
+    ['[models."gpt-4.1"]\ninput = 0\noutput = 0\n', '[models."gpt-4.1"]\ninput = 1\noutput = 0\n'],
+)
+def test_a_fetched_file_that_makes_a_model_free_writes_nothing_and_exits_2(
+    served: Server, tmp_path: Path, capsys: pytest.CaptureFixture[str], free: str
+) -> None:
+    folder = project(tmp_path)
+    served.body = ('as_of = "2026-12-01"\nsource = "x"\n' + free).encode()
+    assert cli.main(["prices", "update", str(folder / "scrimmage.toml")]) == 2
+    assert "is not above 0" in capsys.readouterr().err
+    assert not (folder / "scrimmage-runs").exists()
