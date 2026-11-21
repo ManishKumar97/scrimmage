@@ -36,5 +36,24 @@ The final version is tagged only after an rc has passed.
 
 ## Verifying the attestation
 
-The upload action signs each file with Sigstore.
-The command to verify it is to be confirmed on the first rc.
+The upload action signs each file with Sigstore, and the index serves the signature as a provenance file.
+To verify a file, download it and its provenance, then check both against this repository.
+Set `f` to the wheel or the sdist name.
+For a PyPI release, set `host` to `pypi.org`.
+
+```bash
+host=test.pypi.org
+v=0.1.0rc1
+f=scrimmage-$v-py3-none-any.whl
+url=$(curl -sSf "https://$host/pypi/scrimmage/$v/json" | python3 -I -c 'import json,sys; print(next(u["url"] for u in json.load(sys.stdin)["urls"] if u["filename"]==sys.argv[1]))' "$f")
+curl -sSf -o "$f" "$url"
+curl -sSf -o "$f.provenance" "https://$host/integrity/scrimmage/$v/$f/provenance"
+uvx pypi-attestations@0.0.31 verify pypi --repository https://github.com/ManishKumar97/scrimmage --provenance-file "$f.provenance" "$f"
+```
+
+The download builds and installs nothing, so no code from the index runs before the check.
+It prints `OK:` and the file name when a workflow in this repository signed the file.
+It fails when the file was changed after the upload, or when another repository signed it.
+The index accepts uploads only from `release.yml`, through the trusted publisher set on each index.
+The signature says who uploaded the file, not which commit it was built from.
+The reproducible build covers that: a local build of the tagged commit gives the same bytes.
