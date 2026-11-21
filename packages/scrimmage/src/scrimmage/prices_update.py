@@ -4,13 +4,15 @@ It runs only when a person types the command, never while a test runs. It lives 
 prices.py so that the modules that read a finished test never reach a network library.
 """
 
+import contextlib
 import dataclasses
 import http.client
 import os
+import socket
 import ssl
 import sys
 import tempfile
-import time
+import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -91,19 +93,52 @@ class SameHostHttps(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)  # type: ignore[arg-type]
 
 
+class Watched(urllib.request.HTTPSHandler):
+    """An HTTPS handler that hands every connection it opens to a list, so a timer can cut
+    them at the deadline. A cut connection ends a read that is waiting, in the status line,
+    a header or the body alike."""
+
+    def __init__(self, context: ssl.SSLContext, opened: list[http.client.HTTPSConnection]) -> None:
+        super().__init__(context=context)
+        self.context, self.opened = context, opened
+
+    def https_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        opened = self.opened
+
+        class Connection(http.client.HTTPSConnection):
+            def connect(self) -> None:
+                super().connect()
+                opened.append(self)
+
+        return self.do_open(Connection, req, context=self.context)
+
+
+def cut(opened: list[http.client.HTTPSConnection], expired: threading.Event) -> None:
+    expired.set()
+    for connection in list(opened):
+        if connection.sock is not None:
+            with contextlib.suppress(OSError):
+                # The plain socket's shutdown, not the TLS wrapper's: it wakes a read that
+                # is blocked in another thread without touching the TLS state under it.
+                socket.socket.shutdown(connection.sock, socket.SHUT_RDWR)
+
+
 def fetch(url: str) -> str:
     """The one place Scrimmage reads from the network, called only by `scrimmage prices update`.
 
-    The whole fetch has TIMEOUT_S seconds, and no single read waits longer than READ_S.
+    The whole exchange, connecting, the headers and the body, has TIMEOUT_S seconds: a timer
+    cuts the connection when they are up. No single read waits longer than READ_S.
     """
     parts = urlsplit(url)
     if parts.scheme != "https":
         raise FetchError(f"{url} is not an https address")
     context = ssl.create_default_context(cafile=CAFILE)
-    opener = urllib.request.build_opener(
-        urllib.request.HTTPSHandler(context=context), SameHostHttps
-    )
-    deadline = time.monotonic() + TIMEOUT_S
+    opened: list[http.client.HTTPSConnection] = []
+    opener = urllib.request.build_opener(Watched(context, opened), SameHostHttps)
+    expired = threading.Event()
+    timer = threading.Timer(TIMEOUT_S, cut, (opened, expired))
+    timer.daemon = True
+    timer.start()
     chunks: list[bytes] = []
     try:
         with opener.open(url, timeout=min(READ_S, TIMEOUT_S)) as reply:
@@ -113,15 +148,23 @@ def fetch(url: str) -> str:
                 size += len(chunk)
                 if size > MAX_BYTES:
                     raise FetchError(f"{url} is larger than {MAX_BYTES} bytes")
-                if time.monotonic() > deadline:
+                if expired.is_set():  # a slow drip may keep every read short
                     raise FetchError(f"{url} took longer than {TIMEOUT_S:g} seconds")
             promised = reply.headers.get("Content-Length")
+            if expired.is_set():
+                raise FetchError(f"{url} took longer than {TIMEOUT_S:g} seconds")
             if promised is not None and promised.strip().isdigit() and int(promised) != size:
                 raise FetchError(f"{url} sent {size} bytes of the {promised} it promised")
     except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as exc:
         if isinstance(exc, urllib.error.HTTPError):
             exc.close()  # an error reply holds a file until it is closed
+        if expired.is_set():
+            raise FetchError(f"{url} took longer than {TIMEOUT_S:g} seconds") from None
         raise FetchError(f"cannot fetch {url}: {getattr(exc, 'reason', None) or exc!r}") from None
+    finally:
+        timer.cancel()
+        for connection in opened:
+            connection.close()
     try:
         return b"".join(chunks).decode("utf-8")
     except UnicodeDecodeError:

@@ -334,3 +334,27 @@ def test_the_deadline_covers_the_whole_fetch_not_each_read(
     assert time.monotonic() - began < 4
     assert "took longer than 1 seconds" in capsys.readouterr().err
     assert nothing_written(folder)
+
+
+@pytest.mark.design("prices.update_hardened")
+def test_the_deadline_covers_the_headers_too(
+    raw: Callable[..., Raw],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    folder = project(tmp_path)
+    monkeypatch.setattr(prices_update, "TIMEOUT_S", 1.0)
+
+    def drip(tls: ssl.SSLSocket) -> None:
+        tls.sendall(b"HTTP/1.1 200 OK\r\n")
+        for number in range(40):  # a header line every 0.3 s, so no read waits long
+            tls.sendall(b"X-%d: y\r\n" % number)
+            time.sleep(0.3)
+
+    raw(drip)
+    began = time.monotonic()
+    assert cli.main(["prices", "update", str(folder / "scrimmage.toml")]) == 3
+    assert time.monotonic() - began < 4
+    assert "took longer than 1 seconds" in capsys.readouterr().err
+    assert nothing_written(folder)
