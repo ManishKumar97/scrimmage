@@ -7,11 +7,11 @@ from typing import cast
 
 import pytest
 
-from scrimmage_core import config as settings
-from scrimmage_core import record, state, toml_write
-from scrimmage_core.judge import RunJudgement
-from scrimmage_core.plan import Row
-from scrimmage_core.runner import RunResult
+from scrimmage import config as settings
+from scrimmage import record, state, toml_write
+from scrimmage.judge import RunJudgement
+from scrimmage.plan import Row
+from scrimmage.runner import RunResult
 
 FILE = """# leading comment
 [agent]

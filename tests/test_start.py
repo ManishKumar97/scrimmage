@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from scrimmage_core import mocks
-from scrimmage_core.start import main
+from scrimmage import mocks
+from scrimmage.start import main
 
 
 @pytest.mark.design("start.waits_for_async")
@@ -95,7 +95,7 @@ def test_a_stray_asyncio_in_the_working_folder_never_runs(tmp_path: Path, kind: 
     env = {**os.environ, "SCRIMMAGE_ANSWER_FILE": str(answer)}
     env.pop("SCRIMMAGE_TOKEN", None)
     done = subprocess.run(
-        [sys.executable, "-m", "scrimmage_core.start", "an_agent:run", "hi"],
+        [sys.executable, "-m", "scrimmage.start", "an_agent:run", "hi"],
         cwd=tmp_path,
         env=env,
         capture_output=True,

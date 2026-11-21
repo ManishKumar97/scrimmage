@@ -9,12 +9,12 @@ import httpx2
 import jsonschema
 import pytest
 
-import scrimmage_core
+import scrimmage
 from conftest import EXAMPLE_FAULT, Project
 from fakes.openai_server import FIXTURES, FakeOpenAI
-from scrimmage_core import config, plan
-from scrimmage_core import provider_openai as table
-from scrimmage_core.errors import ConfigError
+from scrimmage import config, plan
+from scrimmage import provider_openai as table
+from scrimmage.errors import ConfigError
 from test_http_gate import BODY, URL, Budget, gated, install, make_plan
 
 Fake = Callable[..., FakeOpenAI]
@@ -158,7 +158,7 @@ def test_a_stream_priced_from_the_built_in_table_uses_its_cached_rate(
     # gpt-4o-mini: 2048 cached at $0.075 and 1 out at $0.60, per million tokens.
     assert line["cost_usd"] == pytest.approx((2048 * 0.075 + 0.60) / 1e6)
     schema = json.loads(
-        (Path(scrimmage_core.__file__).parent / "schemas" / "record.v1.json").read_text()
+        (Path(scrimmage.__file__).parent / "schemas" / "record.v1.json").read_text()
     )
     jsonschema.Draft202012Validator(schema).validate(line)
 
@@ -206,9 +206,7 @@ def test_the_cached_rate_survives_the_plan_and_fits_its_schema(tmp_path: Path) -
     assert isinstance(budget, dict)
     assert budget["prices"] == {"acme": {"input": 0.6, "output": 0.7, "cached_input": 0.3}}
     assert plan.Plan.from_json(sent).prices == (("acme", table.Rates(0.6, 0.7, 0.3)),)
-    schema = json.loads(
-        (Path(scrimmage_core.__file__).parent / "schemas" / "plan.v1.json").read_text()
-    )
+    schema = json.loads((Path(scrimmage.__file__).parent / "schemas" / "plan.v1.json").read_text())
     jsonschema.Draft202012Validator(schema).validate(sent)
     plain = plan.plan_for(priced(tmp_path, "{input = 0.6, output = 0.7}"), row, "run-1")
     assert plain.to_json()["budget"]["prices"] == {"acme": {"input": 0.6, "output": 0.7}}  # type: ignore[index]

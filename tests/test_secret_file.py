@@ -14,9 +14,9 @@ from typing import NoReturn
 
 import pytest
 
-from scrimmage_core import bootstrap, records, service_client
-from scrimmage_core import config as settings
-from scrimmage_core.records import Refused, SecretFacts, WrongMode
+from scrimmage import bootstrap, records, service_client
+from scrimmage import config as settings
+from scrimmage.records import Refused, SecretFacts, WrongMode
 from test_control_tls import pki, runner_file
 
 TOKEN = secrets.token_hex(32)

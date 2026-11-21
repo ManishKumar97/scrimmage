@@ -8,7 +8,7 @@ import pytest
 
 from config_cases import BAD, GOOD
 from conftest import EXAMPLE, Project
-from scrimmage_core import cli, config, control, outcomes, runner
+from scrimmage import cli, config, control, outcomes, runner
 
 TESTS = Path(__file__).parent
 pytestmark = pytest.mark.usefixtures("signals_kept")

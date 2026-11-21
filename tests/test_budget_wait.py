@@ -21,14 +21,14 @@ import pytest
 
 from conftest import EXAMPLE_FAULT, Project, Result, TimeLimit
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import budget as budget_module
-from scrimmage_core import control, http_gate, state
-from scrimmage_core.budget import LOST_S, Held, Ledger, Shortfall
-from scrimmage_core.client import ControlClient, ControlError
-from scrimmage_core.config import Agent
-from scrimmage_core.control import ControlServer
-from scrimmage_core.errors import ScrimmageRefused
-from scrimmage_core.records import RecordStore
+from scrimmage import budget as budget_module
+from scrimmage import control, http_gate, state
+from scrimmage.budget import LOST_S, Held, Ledger, Shortfall
+from scrimmage.client import ControlClient, ControlError
+from scrimmage.config import Agent
+from scrimmage.control import ControlServer
+from scrimmage.errors import ScrimmageRefused
+from scrimmage.records import RecordStore
 from test_http_gate import BODY, URL, Budget, client, gated, install, make_plan
 
 Fake = Callable[..., FakeOpenAI]
@@ -293,7 +293,7 @@ def test_closing_a_run_on_the_server_clears_its_tickets(server: ControlServer) -
 
 WAITER = """
 import sys, time
-from scrimmage_core.client import ControlClient
+from scrimmage.client import ControlClient
 talk, ticket = ControlClient(sys.argv[1], sys.argv[2]), None
 while True:
     answer = talk.reserve("run-1", 0.06, "model:openai", ticket)
@@ -434,7 +434,7 @@ def test_the_jitter_leaves_the_programs_own_random_sequence_alone() -> None:
 
 FORKS = """
 import os
-from scrimmage_core import http_gate
+from scrimmage import http_gate
 read, write = os.pipe()
 pid = os.fork()
 if pid == 0:  # the child: its next jitter, for the parent to read
@@ -841,7 +841,7 @@ def test_parallel_runs_whose_holds_overlap_all_answer(project: Project) -> None:
 
 DEADLOCK = '''"""The agent that holds a stream open, with a short wait for its own holds."""
 
-from scrimmage_core import http_gate
+from scrimmage import http_gate
 
 from acme.rag import answer_holding_a_stream as answer
 
@@ -879,7 +879,7 @@ import time
 from pathlib import Path
 
 import openai
-from scrimmage_core import http_gate
+from scrimmage import http_gate
 
 question = sys.argv[1]
 # The role file exists because the plan is fetched at bootstrap import, before this code runs,
@@ -1167,7 +1167,7 @@ def test_waiters_ahead_that_would_fit_are_served_together_in_order() -> None:
 
 @pytest.mark.design("wait.report_says_reached_only_when_spent")
 def test_the_report_says_reached_only_when_money_spent_reached_the_limit() -> None:
-    from scrimmage_core.runner import budget_line, reached
+    from scrimmage.runner import budget_line, reached
 
     agent_ = config_agent(parallel=4)
     numbers: dict[str, object] = {
@@ -1194,7 +1194,7 @@ def test_the_report_says_reached_only_when_money_spent_reached_the_limit() -> No
 @pytest.mark.design("wait.report_advice_fits")
 @pytest.mark.parametrize("parallel", [1, 2])
 def test_the_reports_advice_fits_the_case_and_the_parallel_setting(parallel: int) -> None:
-    from scrimmage_core.runner import budget_line
+    from scrimmage.runner import budget_line
 
     base: dict[str, object] = {"usd": 0.03, "spent": 0.0, "held": 0.08, "limit": 0.1}
     hold = {"run": "run-7", "label": LABEL, "usd": 0.08, "ended": False}
@@ -1210,7 +1210,7 @@ def test_the_reports_advice_fits_the_case_and_the_parallel_setting(parallel: int
 
 
 def config_agent(parallel: int) -> Agent:
-    from scrimmage_core import config
+    from scrimmage import config
 
     loaded = config.load(Path(__file__).parent / "example" / "scrimmage.toml").agent
     return dataclasses.replace(loaded, parallel=parallel)
@@ -1218,7 +1218,7 @@ def config_agent(parallel: int) -> Agent:
 
 @pytest.mark.design("wait.numbers_from_the_stopping_run")
 def test_the_report_takes_its_numbers_from_the_run_that_stopped_the_test() -> None:
-    from scrimmage_core.runner import RunResult, budget_refusal, stop_numbers
+    from scrimmage.runner import RunResult, budget_refusal, stop_numbers
 
     def result(reason: str, spent: float) -> RunResult:
         made = RunResult("run", None, "not reserved", None, None, {})  # type: ignore[arg-type]

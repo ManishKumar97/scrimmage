@@ -11,9 +11,9 @@ import openai
 import pytest
 
 from model_gate import GUARD, URL, Gate, Provider, ask, guard
-from scrimmage_core import state
-from scrimmage_core.config import Fault
-from scrimmage_core.errors import ScrimmageStopped
+from scrimmage import state
+from scrimmage.config import Fault
+from scrimmage.errors import ScrimmageStopped
 
 
 @pytest.fixture(autouse=True)

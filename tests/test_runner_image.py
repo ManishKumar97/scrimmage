@@ -27,14 +27,14 @@ def image() -> str:
 
 
 # Run inside the image: the top-level entries of site-packages, and every startup file on
-# sys.path outside scrimmage_core/_boot.
+# sys.path outside scrimmage/_boot.
 INSPECT = """
 import json, os, sys, sysconfig
 top = sorted(os.listdir(sysconfig.get_paths()["purelib"]))
 startup = []
 for base in sys.path:
     for root, _, files in os.walk(base) if os.path.isdir(base) else []:
-        if root.endswith("scrimmage_core/_boot") or "/scrimmage_core/_boot/" in root + "/":
+        if root.endswith("scrimmage/_boot") or "/scrimmage/_boot/" in root + "/":
             continue
         for f in files:
             if f.endswith(".pth") or f.split(".")[0] in ("sitecustomize", "usercustomize"):
@@ -114,7 +114,7 @@ def test_the_runner_image_holds_no_agent_code(image: str) -> None:
     # pip list cannot see code that has no .dist-info, so read site-packages itself, and look
     # for startup files that would run code in every Python: a .pth, sitecustomize, usercustomize.
     found = json.loads(run(image, "-c", INSPECT, entrypoint="python").stdout)
-    allowed = r"README\.txt|pip|pip-[^/]+\.dist-info|scrimmage_core|scrimmage-[^/]+\.dist-info"
+    allowed = r"README\.txt|pip|pip-[^/]+\.dist-info|scrimmage|scrimmage-[^/]+\.dist-info"
     stray = [x for x in found["site_packages"] if not re.fullmatch(allowed, x)]
     assert stray == [], f"in site-packages: {stray}"
     assert found["startup_files"] == []

@@ -21,19 +21,19 @@ from conftest import ACME, EXAMPLE_FAULT, Project
 from fakes.openai_server import FakeOpenAI
 from report_cases import AGENT, TEST, load
 from report_cases import run as a_run
-from scrimmage_core import changes, mocks, state, tool_gate
-from scrimmage_core import decide as engine
-from scrimmage_core import plan as planner
-from scrimmage_core.config import Fault, Mock
-from scrimmage_core.errors import (
+from scrimmage import changes, mocks, state, tool_gate
+from scrimmage import decide as engine
+from scrimmage import plan as planner
+from scrimmage.config import Fault, Mock
+from scrimmage.errors import (
     ScrimmageMockError,
     ScrimmageRefused,
     ScrimmageStopped,
     ScrimmageTimeLimit,
 )
-from scrimmage_core.plan import Plan
-from scrimmage_core.redact import redact
-from scrimmage_core.runner import miss_groups
+from scrimmage.plan import Plan
+from scrimmage.redact import redact
+from scrimmage.runner import miss_groups
 
 if TYPE_CHECKING:  # imported for the type checker only, so no annotation of them resolves
     from decimal import Decimal
@@ -408,8 +408,7 @@ def test_the_refusal_error_is_scrimmages_own() -> None:
     # Every base is Scrimmage's own or Python's Exception itself, never a library's error.
     bases = ScrimmageRefused.__mro__[1:]
     assert all(
-        b.__module__ == "scrimmage_core.errors" or b in (Exception, BaseException, object)
-        for b in bases
+        b.__module__ == "scrimmage.errors" or b in (Exception, BaseException, object) for b in bases
     )
     assert not issubclass(ScrimmageRefused, (OSError, TimeoutError, ValueError, RuntimeError))
 
@@ -1048,7 +1047,7 @@ def test_append_on_a_tool_declared_to_return_a_model_is_a_mistake_and_not_fired(
 def test_a_tool_that_returns_none_once_in_ten_leaves_that_run_out_and_judges_the_rest(
     lines: Lines,
 ) -> None:
-    from scrimmage_core import judge
+    from scrimmage import judge
 
     judged = left_out = 0
     for i in range(10):

@@ -1,0 +1,541 @@
+# pyright: standard
+"""The entry gate of a service: where uvicorn loads the app, and at Starlette's own call.
+
+A request without x-scrimmage-run runs exactly as it would without Scrimmage: the slot is
+set to plain, and the app gets the server's own scope, receive and send. A request with it
+is a test's run: its MAC is checked here, its plan claimed from the runner once, and the app
+called with that run in the slot and every x-scrimmage-* header removed. No request with
+the header ever reaches the app without its plan.
+
+The SDK never imports uvicorn or Starlette: the hook patches each when the app imports it.
+"""
+
+import asyncio
+import contextlib
+import functools
+import importlib.metadata
+import json
+import os
+import re
+import sys
+import time
+from collections.abc import Awaitable, Callable, MutableMapping
+from dataclasses import dataclass, field
+from types import ModuleType
+from typing import Any
+
+from scrimmage import hooks, labels, process_gate, protocol, state, threadctx, versions
+from scrimmage.client import (
+    Busy,
+    ClaimRefused,
+    ControlClient,
+    ControlError,
+    RunSender,
+    Senders,
+)
+from scrimmage.executor import Executor
+from scrimmage.mocks import allowed
+from scrimmage.plan import Plan
+from scrimmage.redact import redact
+from scrimmage.state import SLOT, Joined, Plain, ProcessState, RunState, is_plain
+
+Scope = MutableMapping[str, Any]
+Message = MutableMapping[str, Any]
+Receive = Callable[[], Awaitable[Message]]
+Send = Callable[[Message], Awaitable[None]]
+App = Callable[[Scope, Receive, Send], Awaitable[None]]
+
+RUN = b"x-scrimmage-run"
+PROBE = b"x-scrimmage-probe"
+PREFIX = b"x-scrimmage-"
+HEADER = re.compile(r"((?:run|setup)-[0-9a-f]{12})\.([0-9a-f]{16})")
+CLAIM_WAIT_S = 0.25  # how long a claim waits on the loop for a free control slot
+CLAIM_STEP_S = 0.01
+GATED = "__scrimmage_gate__"
+LIBRARIES = ("uvicorn", "starlette", "fastapi", "anyio", "httpx", "httpx2", "mcp")
+ACTIVE = (
+    "active in service mode (pid {pid}); requests with x-scrimmage-run follow their test's plan"
+)
+
+
+class Unavailable(Exception):
+    """A run request is answered 503 with this code, before the app sees it."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+@dataclass
+class Gate:
+    """What the entry gate needs in this process."""
+
+    process: ProcessState
+    client: ControlClient
+    token: str
+    prefixes: list[str]
+    tools: tuple[str, ...]  # the import paths SCRIMMAGE_TOOLS names, as the gates swap them
+    renames: tuple[tuple[str, str], ...]
+    senders: Senders
+    executor: Executor
+    proc: dict[str, object] = field(default_factory=state.this_process)
+    nonces: protocol.NonceStore = field(default_factory=protocol.NonceStore)
+    gates: list[str] = field(default_factory=list[str])  # the entry gates installed, by name
+    serving: bool = False  # this process loaded or served the app
+
+
+GATE: Gate | None = None  # set by bootstrap.start_service
+
+
+def is_own_boot(path: str) -> bool:
+    """True when `path` is this package's own `_boot/sitecustomize.py`."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    return os.path.dirname(os.path.realpath(path)) == os.path.join(here, "_boot")
+
+
+def active(name: str) -> None:
+    """An entry gate is installed in this process. A supervisor installs them too, as it
+    imports the same libraries, so this alone says nothing."""
+    gate = GATE
+    if gate is not None and name not in gate.gates:
+        gate.gates.append(name)
+
+
+def serving() -> None:
+    """This process loaded the app or serves it: say so once. The team's own children,
+    started from here, never learn where the token is; a supervisor that loads no app keeps
+    it for its workers."""
+    gate = GATE
+    if gate is None or gate.serving:
+        return
+    gate.serving = True
+    if gate.proc.get("pid") != os.getpid():
+        # Scrimmage started in another process and this one is its fork, such as a gunicorn
+        # worker: the threads that claim plans and send lines did not come with it.
+        gate.process.structure(
+            "scrimmage",
+            "this process is a fork of the one Scrimmage started in, such as a gunicorn "
+            "worker, so it has none of Scrimmage's threads, and the service is stopped; run "
+            "the app with uvicorn, whose workers each start Scrimmage themselves",
+            gate.process.stop,
+        )
+        return
+    os.environ.pop("SCRIMMAGE_TOKEN_FILE", None)
+    process_gate.start_tracker()  # only a process that serves starts it
+    print(f"scrimmage: {ACTIVE.format(pid=os.getpid())}", file=sys.stderr, flush=True)
+
+
+async def entry(app: App, scope: Scope, receive: Receive, send: Send) -> None:
+    gate = GATE
+    if gate is None:
+        return await app(scope, receive, send)
+    listening(gate)
+    kind = scope.get("type")
+    if kind not in ("http", "websocket"):
+        return await app(scope, receive, send)  # lifespan: untouched, the slot as it is
+    headers = list(scope.get("headers") or [])
+    runs = [value for name, value in headers if bytes(name).lower() == RUN]
+    # A probe is a run request too: the header alone, as any client may send, is plain.
+    probe = bool(runs) and any(bytes(name).lower() == PROBE for name, _ in headers)
+    if kind == "websocket" and runs:
+        await close_websocket(receive, send)
+        return None
+    if kind == "websocket" or (not runs and not probe):
+        if state.IN_PROCESS_CALL.get():
+            # Sent by code in this process, such as a test client: the app runs as its caller.
+            return await app(scope, receive, send)
+        # Every request sets the slot, so a value leaked between tasks is overwritten.
+        return await served_plain(app, scope, receive, send)
+    copied = dict(scope)
+    copied["headers"] = [(n, v) for n, v in headers if not bytes(n).lower().startswith(PREFIX)]
+    if probe:
+        return await answer_probe(gate, app, scope, copied, receive, send)
+    try:
+        name = checked_name(gate, runs)
+        if gate.process.broken is not None:
+            raise Unavailable("structure")
+        run, sender = await claimed(gate, name)
+    except Unavailable as unavailable:
+        return await refuse(send, unavailable.code)
+    await joined(gate, app, copied, receive, send, run, sender)
+    return None
+
+
+async def served_plain(app: App, scope: Scope, receive: Receive, send: Send) -> None:
+    """A request with no run, under its own plain marker. Its threads and tasks share it, so
+    work it waits for, background tasks included, stays plain; once the call returns, work it
+    left running reads as outside any request."""
+    plain = Plain()
+    token = SLOT.set(plain)
+    try:
+        return await app(scope, receive, send)
+    finally:
+        plain.done = True
+        SLOT.reset(token)
+
+
+def listening(gate: Gate) -> None:
+    """From the first call, of any scope, the process is listening; each loop is watched."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    if not gate.process.listening:
+        why = threadctx.check_loop(loop)
+        if why is not None:
+            gate.process.structure("scrimmage", why, gate.process.stop)
+        gate.process.listening = True
+    threadctx.watch_loop(loop)
+
+
+def checked_name(gate: Gate, runs: list[bytes]) -> str:
+    """The run's name, if its one header carries the MAC only a token holder can make. No
+    control request is made for any other header."""
+    if len(runs) != 1:
+        raise Unavailable("bad-run-header")
+    found = HEADER.fullmatch(bytes(runs[0]).decode("latin-1"))
+    if found is None:
+        raise Unavailable("bad-run-header")
+    name, mac = found.groups()
+    if not protocol.same(mac, protocol.run_mac(gate.token, name)):
+        raise Unavailable("bad-run-header")
+    return name
+
+
+# The control server's claim refusals the gate names as its own 503 code. A clock refusal: this
+# process's clock left the runner's 60 s window after the probe. Any other refusal is a run
+# the runner does not hold open.
+CLAIM_REFUSALS = {"claimed": "claimed", "version": "version", "clock": "clock"}
+NO_SUCH_RUN = "no-such-run"
+
+
+async def claimed(gate: Gate, name: str) -> tuple[RunState, RunSender]:
+    """The run's plan, claimed on Scrimmage's own threads with a control slot taken on the
+    loop: with none free in about 250 ms the request gets 503, holding no thread."""
+    loop = asyncio.get_running_loop()
+    began = time.monotonic()
+    deadline = loop.time() + CLAIM_WAIT_S
+    client = gate.client
+    while not client.try_slot(count=False):
+        if loop.time() >= deadline:
+            client.turned_away()
+            raise Unavailable("plan-unavailable")
+        await asyncio.sleep(CLAIM_STEP_S)
+    work = functools.partial(client.run_held, lambda: client.claim(name, gate.proc))
+    try:
+        doc = await asyncio.wrap_future(gate.executor.submit(work))
+    except ClaimRefused as refused:
+        code = CLAIM_REFUSALS.get(refused.code, NO_SUCH_RUN)
+        raise Unavailable(code) from None
+    except (ControlError, Busy):
+        raise Unavailable("plan-unavailable") from None
+    try:
+        plan = Plan.from_json(doc)
+    except ValueError:
+        await abandon(gate, name)
+        raise Unavailable("plan-unavailable") from None
+    if problem(gate, plan) is not None:
+        await abandon(gate, name)
+        raise Unavailable("plan-unavailable")
+    sender = RunSender(client, name, gate.proc)
+    sender.since = began
+    run = RunState(plan, sender, gate.prefixes, process=gate.process, blobs=sender, asked=began)
+    run.proc = gate.proc
+    sender.on_closed = run.run_closed
+    # The digest is of the plan this run's state holds when its last batch is built, not of
+    # the reply that carried it, so a plan changed in this process after the claim shows.
+    sender.plan_of = lambda: run.plan.to_json()
+    gate.senders.add(sender)
+    gate.process.register(run)
+    gate.process.claimed(run)
+    return run, sender
+
+
+def problem(gate: Gate, plan: Plan) -> str | None:
+    """Why this process cannot follow the plan: an import outside SCRIMMAGE_ALLOW_IMPORTS, or
+    tools other than the ones its gates swap."""
+    raises = [f.raises for f in plan.faults if f.raises and ":" in f.raises]
+    made = [m.returns_from for m in plan.mocks if m.returns_from]
+    paths = [*plan.tools, *(m.type for m in plan.mocks if m.type), *made, *raises]
+    outside = next((path for path in paths if not allowed(path, gate.prefixes)), None)
+    if outside is not None:
+        return f"{outside} is outside SCRIMMAGE_ALLOW_IMPORTS"
+    if tuple(plan.tools) != gate.tools or dict(plan.renames) != dict(gate.renames):
+        return "the plan's tools are not the ones this service gates"
+    return None
+
+
+async def abandon(gate: Gate, name: str) -> None:
+    """The claimed plan cannot be used: the runner ends the run at once, not at its wait. It
+    takes a slot when one is free, so it waits on a thread that may."""
+    work = functools.partial(gate.client.abandoned, name)
+    with contextlib.suppress(Exception):
+        await asyncio.wrap_future(gate.executor.waiting.submit(work))
+
+
+async def joined(
+    gate: Gate,
+    app: App,
+    scope: Scope,
+    receive: Receive,
+    send: Send,
+    run: RunState,
+    sender: RunSender,
+) -> None:
+    """Call the app with the run in the slot. Its record closes record_grace_s after the
+    reply's last byte, or after the call ends with no reply, so a late call is its own."""
+    scheduled: list[bool] = []
+
+    def close_later() -> None:
+        if scheduled:
+            return
+        scheduled.append(True)
+        gate.executor.timers.later(run.plan.record_grace_s, close)
+
+    def close() -> None:
+        try:
+            threadctx.close_run(run)
+            # Closed before the last batch, so a call that starts now is refused, not a line
+            # sent after the record was made.
+            run.run_closed()
+            sender.close()
+        finally:
+            run.run_closed()
+            gate.process.unregister(run)
+            gate.senders.remove(sender)
+
+    async def watched(message: Message) -> None:
+        await send(message)
+        if message.get("type") == "http.response.body" and not message.get("more_body", False):
+            close_later()
+
+    token = SLOT.set(Joined(run.name, run))
+    try:
+        await app(scope, receive, watched)
+    finally:
+        run.entry_done = True
+        close_later()
+        SLOT.reset(token)
+
+
+async def refuse(send: Send, code: str) -> None:
+    """The gate's own 503: a JSON body naming the code, and nothing of the app's."""
+    body = json.dumps({"error": code}).encode()
+    headers = [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(body)).encode()),
+        (b"x-scrimmage-error", code.encode()),
+    ]
+    await send({"type": "http.response.start", "status": 503, "headers": headers})
+    await send({"type": "http.response.body", "body": body})
+
+
+async def close_websocket(receive: Receive, send: Send) -> None:
+    """One run is one HTTP request in this version: a WebSocket with the header is closed."""
+    message = await receive()
+    if message.get("type") == "websocket.connect":
+        await send({"type": "websocket.close", "code": 1008})
+
+
+async def answer_probe(
+    gate: Gate, app: App, scope: Scope, copied: Scope, receive: Receive, send: Send
+) -> None:
+    """The runner's signed probe gets the startup report, signed. Anything else, a stranger's
+    or a replay, goes to the app as a plain request with Scrimmage's headers removed. The
+    probe's body is empty, and is signed as empty: the gate never reads a body, so one that
+    says it has one cannot hold the gate while it is sent."""
+    fields = {
+        bytes(k).decode("latin-1").title(): bytes(v).decode("latin-1") for k, v in scope["headers"]
+    }
+    target = bytes(scope.get("raw_path") or scope.get("path", "").encode())
+    query = bytes(scope.get("query_string") or b"")
+    path = target.decode("latin-1") + (f"?{query.decode('latin-1')}" if query else "")
+    method = str(scope.get("method", ""))
+    declared = fields.get("Content-Length", "0") != "0" or "Transfer-Encoding" in fields
+    now = time.time()
+    error = declared or protocol.check_request(
+        gate.token, gate.nonces, method, path, fields, b"", now
+    )
+    if error == "clock" and gate.nonces.first_use(fields.get(protocol.NONCE, ""), now):
+        # The signature, nonce and body are good and only the time is outside the window:
+        # the runner's clock and this one differ. Only a token holder can make this probe, and
+        # a nonce seen before goes to the app as plain, like any replay.
+        return await send_clock(gate, fields, send)
+    if error:
+        return await served_plain(app, copied, receive, send)
+    report = json.dumps(startup_report(gate, await pinged(gate))).encode()
+    signature = protocol.sign_reply(gate.token, fields.get(protocol.SIGNATURE, ""), 200, report)
+    headers = [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(report)).encode()),
+        (PROBE, b"report"),
+        (protocol.SIGNATURE.lower().encode(), signature.encode()),
+    ]
+    await send({"type": "http.response.start", "status": 200, "headers": headers})
+    await send({"type": "http.response.body", "body": report})
+    return None
+
+
+async def send_clock(gate: Gate, fields: dict[str, str], send: Send) -> None:
+    """The signed answer to a probe whose time is outside the window: 409 and no time, so a
+    replay of it learns only that the clocks differ."""
+    body = json.dumps({"error": "clock"}).encode()
+    signature = protocol.sign_reply(gate.token, fields.get(protocol.SIGNATURE, ""), 409, body)
+    headers = [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(body)).encode()),
+        (PROBE, b"clock"),
+        (protocol.SIGNATURE.lower().encode(), signature.encode()),
+    ]
+    await send({"type": "http.response.start", "status": 409, "headers": headers})
+    await send({"type": "http.response.body", "body": body})
+
+
+async def pinged(gate: Gate) -> dict[str, object]:
+    """One signed ping to the control server, on Scrimmage's own threads, with a control slot
+    taken on the loop as a claim does: with none free in about 250 ms, the answer says so
+    and no request is made."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + CLAIM_WAIT_S
+    client = gate.client
+    while not client.try_slot(count=False):
+        if loop.time() >= deadline:
+            client.turned_away()
+            return unreached(client, "all of this process's control slots were busy")
+        await asyncio.sleep(CLAIM_STEP_S)
+    work = functools.partial(client.run_held, client.ping)
+    try:
+        return dict(await asyncio.wrap_future(gate.executor.submit(work)))
+    except Exception as exc:  # the ping reports its own failures; this is a bug in the gate
+        return unreached(client, f"{type(exc).__name__}")
+
+
+def unreached(client: ControlClient, detail: str) -> dict[str, object]:
+    """No ping was made: no connection was tried, so an https setup has verified nothing."""
+    return {
+        "reached": False,
+        "tls": "none" if client.context is None else "not connected",
+        "error": None,  # no ping was made, so nothing the runner could ask again about
+        "detail": detail,
+        "rtt_ms": 0.0,
+        "runner_id": None,
+        "url": client.url,
+    }
+
+
+def startup_report(gate: Gate, control: dict[str, object]) -> dict[str, object]:
+    """Versions, gate names, tools and the control server's ping: no token, no plan, nothing
+    of a run."""
+    found: dict[str, str] = {}
+    for name in LIBRARIES:
+        if name in sys.modules:
+            with contextlib.suppress(importlib.metadata.PackageNotFoundError):
+                found[name] = importlib.metadata.version(name)
+    chained = getattr(sys.modules.get("sitecustomize"), "__file__", "") or ""
+    renames = dict(gate.renames)
+    return {
+        "v": 2,
+        "sdk": versions.installed(),
+        "python": sys.version,
+        "executable": redact(sys.executable),
+        "pid": os.getpid(),
+        "mode": "service",
+        "gates": list(gate.gates),
+        "libraries": found,
+        "chained_sitecustomize": bool(chained) and not is_own_boot(chained),
+        "tools": sorted(labels.tool_name(path, renames) for path in gate.tools),
+        "notices": [dict(entry) for entry in gate.process.report],
+        "control": control,
+    }
+
+
+class Entry:
+    """The app uvicorn loaded, behind the entry gate, outermost, so the header is removed
+    before uvicorn's own proxy-header or message-logging middleware sees it."""
+
+    def __init__(self, app: App) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await entry(self.app, scope, receive, send)
+
+
+def install(process: ProcessState) -> None:
+    hooks.on_import("uvicorn.config", lambda module: patch_uvicorn(module, process))
+    hooks.on_import("starlette.applications", lambda module: patch_starlette(module, process))
+
+
+def patch_uvicorn(module: ModuleType, process: ProcessState) -> None:
+    config: Any = getattr(module, "Config", None)
+    load = getattr(config, "load", None)
+    from scrimmage.http_gate import params  # the gate's own structural check
+
+    if load is None or params(load) != ["self"]:
+        process.structure(
+            "uvicorn",
+            "uvicorn's Config has no load(self), so its requests cannot be gated, and the service "
+            "is stopped",
+            process.stop,
+        )
+        return
+    if getattr(load, GATED, False):
+        return
+
+    @functools.wraps(load)
+    def gated_load(self: Any) -> None:
+        protocol_name = getattr(self, "http", None)
+        if protocol_name == "zttp" or getattr(self, "http2", False):
+            flag = "--http zttp" if protocol_name == "zttp" else "--http2"
+            process.structure(
+                "uvicorn",
+                f"uvicorn {flag} is not tested with Scrimmage in this version, so the service is "
+                "stopped; start it with the default --http",
+                process.stop,
+            )
+            return
+        load(self)
+        if not hasattr(self, "loaded_app"):
+            process.structure(
+                "uvicorn",
+                "uvicorn's Config has no loaded_app after load, so its requests cannot be gated",
+                process.stop,
+            )
+            return
+        self.loaded_app = Entry(self.loaded_app)
+        active("asgi")
+        serving()
+
+    setattr(gated_load, GATED, True)
+    config.load = gated_load
+
+
+def patch_starlette(module: ModuleType, process: ProcessState) -> None:
+    app: Any = getattr(module, "Starlette", None)
+    call = vars(app).get("__call__") if isinstance(app, type) else None
+    if call is None:
+        process.structure(
+            "starlette",
+            "starlette has no Starlette.__call__, so its requests cannot be gated, and the "
+            "service is stopped",
+            process.stop,
+        )
+        return
+    if getattr(call, GATED, False):
+        return
+
+    @functools.wraps(call)
+    async def gated_call(self: Any, scope: Scope, receive: Receive, send: Send) -> None:
+        slot = SLOT.get()
+        if isinstance(slot, Joined) or is_plain(slot):  # the uvicorn gate has been, once
+            return await call(self, scope, receive, send)
+        gate = GATE
+        if gate is not None and "asgi" in gate.gates:
+            # uvicorn's gate sets the slot of every request it serves, so a call that comes
+            # here without one was made by code in this process: it runs as that code.
+            return await call(self, scope, receive, send)
+        serving()
+        return await entry(functools.partial(call, self), scope, receive, send)
+
+    setattr(gated_call, GATED, True)
+    app.__call__ = gated_call
+    active("starlette")

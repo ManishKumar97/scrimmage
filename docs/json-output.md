@@ -7,7 +7,7 @@ Read the document with one `json.loads` of standard output, then act on its fiel
 The document is printed when the command ends.
 A test can take minutes, so nothing is printed before then.
 
-Its shape is the JSON Schema `scrimmage_core/schemas/cli.v1.json`, which ships in the package.
+Its shape is the JSON Schema `scrimmage/schemas/cli.v1.json`, which ships in the package.
 The schema is open: a field it does not list, and a value it does not list for a field that lists its values, both fit, so any version 1 copy of it reads any version 1 document.
 
 ## The envelope

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from scrimmage_core.config import FAULTS
+from scrimmage.config import FAULTS
 
 CATALOG = Path(__file__).parents[1] / "docs" / "fault-catalog.toml"
 ORIGINS = {"public incident", "trace", "provider docs"}

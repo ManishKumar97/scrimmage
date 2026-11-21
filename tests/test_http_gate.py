@@ -19,16 +19,16 @@ import jsonschema
 import openai
 import pytest
 
-from scrimmage_core import http_gate, provider_openai, state
-from scrimmage_core import plan as plan_module
-from scrimmage_core.budget import Ledger, Shortfall
-from scrimmage_core.client import ControlClient
-from scrimmage_core.config import Fault, Mock, ModelHost
-from scrimmage_core.decide import Call, Counters
-from scrimmage_core.errors import ScrimmageRefused
-from scrimmage_core.plan import Plan
-from scrimmage_core.provider_openai import Rates
-from scrimmage_core.runner import STOP_TEST, real_error
+from scrimmage import http_gate, provider_openai, state
+from scrimmage import plan as plan_module
+from scrimmage.budget import Ledger, Shortfall
+from scrimmage.client import ControlClient
+from scrimmage.config import Fault, Mock, ModelHost
+from scrimmage.decide import Call, Counters
+from scrimmage.errors import ScrimmageRefused
+from scrimmage.plan import Plan
+from scrimmage.provider_openai import Rates
+from scrimmage.runner import STOP_TEST, real_error
 
 URL = "https://api.openai.com/v1/chat/completions"
 BODY = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}

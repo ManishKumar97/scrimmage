@@ -80,7 +80,7 @@ Others moved and are not explained.
   A profile in the bisect measured about 3 µs of that from miss recording (PR #42) and about 4 µs from the scan for secret literals.
   These are about figures from a profile, not exact shares.
 - Startup grew.
-  The first line of a root process went from 68.2 to 86.2 ms (+18.0), and the import of `scrimmage_core.cli` from 45.2 to 61.0 ms (+15.8).
+  The first line of a root process went from 68.2 to 86.2 ms (+18.0), and the import of `scrimmage.cli` from 45.2 to 61.0 ms (+15.8).
   It was measured with `python -X importtime`.
   The redactor's own import time went from 1.1 to 5.6 ms, mostly regex compiling, and the config module's from 5.1 to 8.5 ms.
 
@@ -124,7 +124,7 @@ Wall time in milliseconds, with the median of 5 repeats of 5 commands each.
 | Command | Wall ms (spread) | Added to plain Python |
 |---|---|---|
 | Plain Python | 11.5 (11.2 to 11.7) | 0 |
-| Import of `scrimmage_core.cli` | 72.6 (71.9 to 72.7) | 61.0 |
+| Import of `scrimmage.cli` | 72.6 (71.9 to 72.7) | 61.0 |
 | `scrimmage --help` | 76.8 (76.7 to 78.0) | 65.6 |
 | `scrimmage check` on the example | 76.5 (75.7 to 77.0) | 65.0 |
 
@@ -157,7 +157,7 @@ One counts the requests to the runner that a gated call waits on, as they go on 
 That holds for a program's root process, whose record lines go through a sender thread.
 A child process sends each line as it is made, and the call waits on that request.
 The count leaves the sender thread out, and the child case is not measured here.
-The other two import `scrimmage_core.cli` and `scrimmage_core.bootstrap` in new processes.
+The other two import `scrimmage.cli` and `scrimmage.bootstrap` in new processes.
 The first checks that the runner, `openai`, `httpx`, `importlib.metadata` and the modules the runner brings are not loaded.
 The second checks that the SDK has not loaded `asyncio`, `importlib.metadata`, `concurrent.futures`, `logging`, `openai` or `httpx`.
 
@@ -174,7 +174,7 @@ Nothing enforces a smaller slowdown.
 | Startup, added to process exit | 1150 ms |
 | `scrimmage check`, added | 520 ms |
 | `scrimmage --help`, added | 600 ms |
-| Import of `scrimmage_core.cli`, added | 500 ms |
+| Import of `scrimmage.cli`, added | 500 ms |
 | One run, added | 1450 ms |
 
 ## What the test suite already shows

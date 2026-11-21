@@ -34,7 +34,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from k8s import cluster as kubernetes
 from k8s import images
 from k8s.cluster import Cluster
-from scrimmage_core import tls
+from scrimmage import tls
 
 pytestmark = [pytest.mark.slow, pytest.mark.kind]
 
@@ -227,7 +227,7 @@ def handshake(ca: Path, certificate: Path, key: Path, host: str = "scrimmage") -
 TLS_SERVER = """
 import socket
 from pathlib import Path
-from scrimmage_core import tls
+from scrimmage import tls
 folder = Path("/run/scrimmage/tls")
 context = tls.server_context(folder / "tls.crt", folder / "tls.key")
 server = socket.create_server(("0.0.0.0", 7700))
@@ -244,7 +244,7 @@ while True:
 TLS_CLIENT = """
 import socket, sys
 from pathlib import Path
-from scrimmage_core import tls
+from scrimmage import tls
 context = tls.client_context(Path("/run/scrimmage/ca/ca.pem"))
 for host in sys.argv[1:]:
     with socket.create_connection((host, 7700), timeout=10) as raw:

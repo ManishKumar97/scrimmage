@@ -99,12 +99,12 @@ def test_an_editable_package_tool_is_found_gated_and_never_imported(
     python = str(venv / "bin" / "python")
     # The lookup alone finds the module and runs none of the package.
     code = (
-        "from scrimmage_core import tool_gate; "
+        "from scrimmage import tool_gate; "
         "print(tool_gate.module_spec('shop.tools', []) is not None, "
         "tool_gate.module_spec('shop.nope', []) is None)"
     )
     assert run([python, "-c", code], folder, env).split() == ["True", "True"]
-    code = "from scrimmage_core import tool_gate; print(tool_gate.module_spec('shopp.tools', []))"
+    code = "from scrimmage import tool_gate; print(tool_gate.module_spec('shopp.tools', []))"
     assert run([python, "-c", code], folder, env).strip() == "None"
     assert not (folder / "imported").exists(), "the lookup imported the package"
 
@@ -192,7 +192,7 @@ def test_a_finder_that_imports_the_package_stops_the_service(tmp_path: Path) -> 
         "        if name == 'svc_pkg.tools':\n"
         "            importlib.import_module('svc_pkg')\n"
         "sys.meta_path.insert(0, Front)\n"
-        "from scrimmage_core import bootstrap\n"
+        "from scrimmage import bootstrap\n"
         "bootstrap.start_service()\n"
         "print('served')\n"
     )

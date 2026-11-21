@@ -25,8 +25,8 @@ from pydantic import SecretStr
 
 from conftest import ACME, EXAMPLE_FAULT, Project
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import changes, http_gate, state
-from scrimmage_core import provider_openai as openai_table
+from scrimmage import changes, http_gate, state
+from scrimmage import provider_openai as openai_table
 from test_connection_faults import LIBRARIES, PATH_IDS, PATHS, WEB, gated, install, raised
 from test_reply_faults import (
     FIXTURES,

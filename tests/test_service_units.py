@@ -19,8 +19,8 @@ from typing import Any, cast
 import httpx2
 import pytest
 
-import scrimmage_core
-from scrimmage_core import (
+import scrimmage
+from scrimmage import (
     asgi_gate,
     http_gate,
     langchain_gate,
@@ -30,11 +30,11 @@ from scrimmage_core import (
     state,
     tool_gate,
 )
-from scrimmage_core.client import ControlClient, Senders
-from scrimmage_core.config import Mock
-from scrimmage_core.errors import ScrimmageRefused
-from scrimmage_core.executor import Executor
-from scrimmage_core.plan import Plan
+from scrimmage.client import ControlClient, Senders
+from scrimmage.config import Mock
+from scrimmage.errors import ScrimmageRefused
+from scrimmage.executor import Executor
+from scrimmage.plan import Plan
 from service_harness import drive
 from test_http_gate import Budget
 from test_langgraph import Shape, base_tool, module
@@ -221,14 +221,14 @@ def test_a_notice_with_no_run_goes_to_the_startup_report(
 
 
 def scrimmage_modules() -> Iterator[types.ModuleType]:
-    for info in pkgutil.walk_packages(scrimmage_core.__path__, "scrimmage_core."):
-        if info.name.startswith("scrimmage_core._boot") or info.name.endswith("__main__"):
+    for info in pkgutil.walk_packages(scrimmage.__path__, "scrimmage."):
+        if info.name.startswith("scrimmage._boot") or info.name.endswith("__main__"):
             continue
         yield importlib.import_module(info.name)
 
 
 @pytest.mark.design("service.every_contextvar_carried")
-def test_every_contextvar_in_scrimmage_core_is_carried() -> None:
+def test_every_contextvar_in_scrimmage_is_carried() -> None:
     found = {
         (mod.__name__, name): value
         for mod in scrimmage_modules()
@@ -238,12 +238,12 @@ def test_every_contextvar_in_scrimmage_core_is_carried() -> None:
     names = {(mod, name) for mod, name in found}
     # The ones the design names, so a walk that found nothing could not pass.
     assert {
-        ("scrimmage_core.state", "SLOT"),
-        ("scrimmage_core.state", "PARENT"),
-        ("scrimmage_core.mcp_gate", "FORWARDING"),
-        ("scrimmage_core.http_gate", "MCP_TRANSPORT"),
-        ("scrimmage_core.process_gate", "EXEMPT"),
-        ("scrimmage_core.langchain_gate", "_inside"),
+        ("scrimmage.state", "SLOT"),
+        ("scrimmage.state", "PARENT"),
+        ("scrimmage.mcp_gate", "FORWARDING"),
+        ("scrimmage.http_gate", "MCP_TRANSPORT"),
+        ("scrimmage.process_gate", "EXEMPT"),
+        ("scrimmage.langchain_gate", "_inside"),
     } <= names
     carried = {id(var) for var in state.CARRIED}
     missing = [f"{mod}.{name}" for (mod, name), var in found.items() if id(var) not in carried]

@@ -30,11 +30,11 @@ import pytest
 import fakes
 from conftest import Project, Result
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import changes, config, decide, labels, mcp_gate, plan, state, toml_write
-from scrimmage_core.config import Fault, Mock
-from scrimmage_core.errors import ConfigError, ScrimmageRefused
-from scrimmage_core.http_gate import MCP_TRANSPORT
-from scrimmage_core.plan import Plan
+from scrimmage import changes, config, decide, labels, mcp_gate, plan, state, toml_write
+from scrimmage.config import Fault, Mock
+from scrimmage.errors import ConfigError, ScrimmageRefused
+from scrimmage.http_gate import MCP_TRANSPORT
+from scrimmage.plan import Plan
 
 SERVER = Path(fakes.__file__).parent / "docs_server.py"
 LABEL = "mcp:docs/search"

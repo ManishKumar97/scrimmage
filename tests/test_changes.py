@@ -10,9 +10,9 @@ from typing import Any
 
 import pytest
 
-from scrimmage_core import changes
-from scrimmage_core.changes import Changed, Unchangeable
-from scrimmage_core.config import Fault
+from scrimmage import changes
+from scrimmage.changes import Changed, Unchangeable
+from scrimmage.config import Fault
 
 KEY = "ghp_" + "a" * 36
 

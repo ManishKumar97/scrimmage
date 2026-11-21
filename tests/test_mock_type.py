@@ -12,9 +12,9 @@ from typing import Any, cast
 import pytest
 
 from conftest import OK, ROW_FAILED, Project, Result
-from scrimmage_core import changes, mocks, runner
-from scrimmage_core.cli import main
-from scrimmage_core.outcomes import MISTAKE
+from scrimmage import changes, mocks, runner
+from scrimmage.cli import main
+from scrimmage.outcomes import MISTAKE
 
 # Every test here, or nearly, runs scrimmage test, which starts the agent's process.
 pytestmark = pytest.mark.slow

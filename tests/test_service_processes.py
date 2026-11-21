@@ -29,16 +29,14 @@ from typing import Any
 import jsonschema
 import pytest
 
-import scrimmage_core
-from scrimmage_core import process_gate, state, threadctx
-from scrimmage_core.errors import ScrimmageRefused
-from scrimmage_core.plan import Plan
+import scrimmage
+from scrimmage import process_gate, state, threadctx
+from scrimmage.errors import ScrimmageRefused
+from scrimmage.plan import Plan
 from service_harness import eventually
 from test_service_units import Sink, sink_of
 
-RECORD = json.loads(
-    (Path(scrimmage_core.__file__).parent / "schemas" / "record.v1.json").read_text()
-)
+RECORD = json.loads((Path(scrimmage.__file__).parent / "schemas" / "record.v1.json").read_text())
 PLAIN = state.Plain()  # one plain request, still being served
 
 pytestmark = pytest.mark.slow
@@ -526,7 +524,7 @@ def test_threadpool_and_scrimmage_traffic_never_meet_a_send_point(
                 await send({"type": "http.response.start", "status": 200, "headers": []})
                 await send({"type": "http.response.body", "body": b"ok"})
 
-            from scrimmage_core import asgi_gate
+            from scrimmage import asgi_gate
 
             reply = asyncio.run(drive(asgi_gate.Entry(app), headers=[svc.header(name)]))
             assert reply.status == 200
@@ -1031,7 +1029,7 @@ def test_an_mcp_stdio_server_started_in_a_run_is_decided_as_its_program(
 
     import mcp.client.stdio as stdio
 
-    from scrimmage_core import mcp_gate
+    from scrimmage import mcp_gate
 
     if not getattr(stdio, "_patched_for_tests", False):
         mcp_gate.patch_stdio(stdio)

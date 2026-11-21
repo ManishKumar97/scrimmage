@@ -23,13 +23,13 @@ from mcp.server.mcpserver import MCPServer
 
 from conftest import ACME, Project
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import config, http_gate, mcp_gate, protocol, state, tool_gate
-from scrimmage_core.config import Fault, ModelHost
-from scrimmage_core.control import ControlServer
-from scrimmage_core.errors import ConfigError
-from scrimmage_core.plan import Plan
-from scrimmage_core.records import RecordStore
-from scrimmage_core.redact import REMOVED, redact
+from scrimmage import config, http_gate, mcp_gate, protocol, state, tool_gate
+from scrimmage.config import Fault, ModelHost
+from scrimmage.control import ControlServer
+from scrimmage.errors import ConfigError
+from scrimmage.plan import Plan
+from scrimmage.records import RecordStore
+from scrimmage.redact import REMOVED, redact
 from test_connection_faults import never_stopped
 from test_http_gate import Budget, Sink
 from test_stdlib_only import imported_roots
@@ -37,7 +37,7 @@ from test_stdlib_only import imported_roots
 TOKEN = "f00d" * 16
 ROOT = Path(__file__).parents[1]
 PACKAGES = ROOT / "packages"
-SDK = PACKAGES / "scrimmage" / "src" / "scrimmage_core"
+SDK = PACKAGES / "scrimmage" / "src" / "scrimmage"
 # Every standard-library name that opens a connection or listens for one.
 NETWORK = re.compile(
     r"\b(HTTPS?Connection|urlopen|urlretrieve|create_connection|open_connection|"

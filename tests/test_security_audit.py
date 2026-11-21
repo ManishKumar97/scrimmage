@@ -24,7 +24,7 @@ import pytest
 
 from conftest import ACME, Project
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import protocol
+from scrimmage import protocol
 
 # Every test here, or nearly, starts a process or a real scrimmage test run.
 pytestmark = pytest.mark.slow
@@ -83,8 +83,8 @@ HOOK = textwrap.dedent(
 RUNNER = textwrap.dedent(
     """
     import json, os, sys
-    from scrimmage_core import protocol, runner
-    from scrimmage_core.cli import main
+    from scrimmage import protocol, runner
+    from scrimmage.cli import main
 
     def log(record):
         with open(os.environ["AUDIT_LOG"], "a") as out:
@@ -157,7 +157,7 @@ def test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_
     # at each agent's start, before that agent's hook was installed, to the last record.
     received = [e for e in events if e["event"] == "received"]
     plans = [e for e in received if e["path"].startswith("/v1/plans/")]
-    runs = [e for e in agents if e["argv"][1:3] == ["-m", "scrimmage_core.start"]]
+    runs = [e for e in agents if e["argv"][1:3] == ["-m", "scrimmage.start"]]
     assert len(plans) == len(runs) > 0 and len(received) > len(plans)
     assert not [e for e in received if token in json.dumps(e["headers"]) + e["body"]]
 
@@ -181,8 +181,8 @@ def test_a_watched_run_talks_only_to_loopback_starts_only_its_program_and_never_
     # program, and Python's platform module runs `uname -p` for the openai library.
     starts = {(e["event"], e["program"], *e["args"][1:3]) for e in events if "program" in e}
     ours = {
-        ("subprocess.Popen", sys.executable, "-m", "scrimmage_core.run_command"),
-        ("os.exec", sys.executable, "-m", "scrimmage_core.start"),
+        ("subprocess.Popen", sys.executable, "-m", "scrimmage.run_command"),
+        ("os.exec", sys.executable, "-m", "scrimmage.start"),
     }
     assert ours <= starts <= ours | {("subprocess.Popen", "uname", "-p")}, starts
 

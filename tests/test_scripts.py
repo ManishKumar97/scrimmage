@@ -17,22 +17,20 @@ from typing import cast
 import jsonschema
 import pytest
 
-import scrimmage_core
+import scrimmage
 from conftest import ACME, Project, Result, TimeLimit
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import bootstrap, runner
-from scrimmage_core.client import ControlClient, Sender
-from scrimmage_core.control import ControlServer
-from scrimmage_core.runner import stop_group
+from scrimmage import bootstrap, runner
+from scrimmage.client import ControlClient, Sender
+from scrimmage.control import ControlServer
+from scrimmage.runner import stop_group
 
 # Every test here, or nearly, starts a process or a real scrimmage test run.
 pytestmark = pytest.mark.slow
 
 Fake = Callable[[list[str]], FakeOpenAI]
 Line = dict[str, object]
-RECORD = json.loads(
-    (Path(scrimmage_core.__file__).parent / "schemas" / "record.v1.json").read_text()
-)
+RECORD = json.loads((Path(scrimmage.__file__).parent / "schemas" / "record.v1.json").read_text())
 TOOLS = """["acme.tools:get_order", "acme.tools:check_inventory", "acme.tools:get_stock",
     "acme.tools:refund_order"]"""
 QUESTION = "Where is order 1234; rm -rf ~"
@@ -359,7 +357,7 @@ def test_two_pythons_started_at_once_make_one_root(project: Project) -> None:
 
 def test_scrimmage_run_in_front_of_the_script_changes_nothing(project: Project) -> None:
     (project.root / "bot.py").write_text("print('the answer')\n")
-    command = f"{sys.executable} -m scrimmage_core.run_command {sys.executable} bot.py {{question}}"
+    command = f"{sys.executable} -m scrimmage.run_command {sys.executable} bot.py {{question}}"
     write_config(project, command)
     assert summary_of(project.test())["answer"] == "the answer"
 
@@ -618,7 +616,7 @@ def test_a_question_at_the_limit_runs(project: Project) -> None:
 
 def test_scrimmage_run_says_why_a_program_cannot_start(tmp_path: Path) -> None:
     def scrimmage_run(program: str) -> subprocess.CompletedProcess[str]:
-        command = [sys.executable, "-m", "scrimmage_core.run_command", program]
+        command = [sys.executable, "-m", "scrimmage.run_command", program]
         return subprocess.run(command, capture_output=True, text=True, timeout=60)
 
     missing = scrimmage_run(str(tmp_path / "missing"))
@@ -719,7 +717,7 @@ def test_a_child_that_binds_a_tool_at_import_is_gated_before_any_plan_arrives(
 ) -> None:
     (project.root / "report.py").write_text(
         "from acme.tools import refund_order\n"
-        "import scrimmage_core.state as state\n"
+        "import scrimmage.state as state\n"
         "assert state.current()._plan is None\n"
         "refund_order('1234')\n"
     )
@@ -986,7 +984,7 @@ def test_a_forked_child_fires_no_fault_unless_children_is_set(project: Project) 
 def test_a_fork_while_another_thread_holds_the_locks_does_not_hang(project: Project) -> None:
     code = (
         "import os, threading\n"
-        "import scrimmage_core.state as state\n"
+        "import scrimmage.state as state\n"
         "from acme import tools\n"
         "run = state.current()\n"
         "held, done = threading.Event(), threading.Event()\n"
@@ -1012,7 +1010,7 @@ def test_a_fork_while_another_thread_holds_the_locks_does_not_hang(project: Proj
 def test_a_fork_does_not_send_the_parents_waiting_lines_or_tools_twice(project: Project) -> None:
     code = (
         "import os\n"
-        "import scrimmage_core.state as state\n"
+        "import scrimmage.state as state\n"
         "from acme import tools\n"
         "tools.check_inventory('parent')\n"
         "if os.fork() == 0:\n"
@@ -1474,7 +1472,7 @@ def test_a_runs_log_is_scrubbed_even_when_the_runs_end_fails(
 
 @pytest.mark.design("redact.files_scrubbed_on_failure")
 def test_a_scrubbed_file_is_replaced_whole_and_stays_this_users_only(tmp_path: Path) -> None:
-    from scrimmage_core.records import RecordStore
+    from scrimmage.records import RecordStore
 
     store = RecordStore(tmp_path / "records")
     store.scrub = ("qv-0123456789abcdef",)

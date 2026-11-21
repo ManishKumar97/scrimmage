@@ -18,14 +18,14 @@ from typing import Any, cast
 
 import pytest
 
-from scrimmage_core import client as client_module
-from scrimmage_core import config, protocol, service_client, state
-from scrimmage_core import plan as plan_module
-from scrimmage_core.budget import Ledger
-from scrimmage_core.client import WAKE, ControlClient, ControlError, Sender
-from scrimmage_core.control import ControlServer, proc_key
-from scrimmage_core.plan import Plan, no_plan
-from scrimmage_core.records import RecordStore
+from scrimmage import client as client_module
+from scrimmage import config, protocol, service_client, state
+from scrimmage import plan as plan_module
+from scrimmage.budget import Ledger
+from scrimmage.client import WAKE, ControlClient, ControlError, Sender
+from scrimmage.control import ControlServer, proc_key
+from scrimmage.plan import Plan, no_plan
+from scrimmage.records import RecordStore
 
 TOKEN = "a" * 64
 PLAN: dict[str, object] = {"v": 1}
@@ -651,7 +651,7 @@ def test_a_line_for_a_closed_run_poisons_the_process(server: ControlServer) -> N
 
 
 def test_a_server_away_for_long_keeps_a_bounded_backlog(monkeypatch: pytest.MonkeyPatch) -> None:
-    import scrimmage_core.client as client_module
+    import scrimmage.client as client_module
 
     monkeypatch.setattr(client_module, "QUEUE_SIZE", 3)
     sender = Sender(ControlClient("http://127.0.0.1:9", TOKEN), "run-1")
@@ -717,7 +717,7 @@ def test_a_bad_length_is_refused_and_an_idle_connection_is_let_go(
 ) -> None:
     import socket
 
-    import scrimmage_core.control as control_module
+    import scrimmage.control as control_module
 
     monkeypatch.setattr(control_module, "READ_TIMEOUT_S", 0.5)
     control = ControlServer(TOKEN, RecordStore(tmp_path / "r"))
@@ -912,7 +912,7 @@ class Died(BaseException):
 def test_a_sigterm_inside_the_exit_drain_loses_no_line(monkeypatch: pytest.MonkeyPatch) -> None:
     """The handler runs on the thread that holds the send lock, and the worker it starts to
     send the last lines needs that lock. The drain must end first, then the process."""
-    from scrimmage_core import bootstrap
+    from scrimmage import bootstrap
 
     delivered: list[dict[str, object]] = []
     finals: list[object] = []

@@ -26,19 +26,19 @@ from typing import Any
 import jsonschema
 import pytest
 
-import scrimmage_core
+import scrimmage
 from conftest import EXAMPLE, RECORD_SCHEMA
 from ports import free_port
-from scrimmage_core import protocol
-from scrimmage_core.config import Mock, ModelHost
-from scrimmage_core.control import ControlServer
-from scrimmage_core.plan import Plan
-from scrimmage_core.records import RecordStore
+from scrimmage import protocol
+from scrimmage.config import Mock, ModelHost
+from scrimmage.control import ControlServer
+from scrimmage.plan import Plan
+from scrimmage.records import RecordStore
 from service_harness import eventually
 
 pytestmark = pytest.mark.slow
 BIN = Path(sys.executable).parent
-RECORD = json.loads((Path(scrimmage_core.__file__).parent / "schemas/record.v1.json").read_text())
+RECORD = json.loads((Path(scrimmage.__file__).parent / "schemas/record.v1.json").read_text())
 TOOLS = (
     "acme.tools:get_order,acme.tools:check_inventory,acme.tools:refund_order,acme.tools:get_stock"
 )
@@ -279,7 +279,7 @@ def test_a_service_mode_python_that_never_serves_starts_no_tracker(lab: Lab) -> 
     """Only a process that serves the app, or supervises its workers, starts the tracker."""
     code = (
         "from multiprocessing import resource_tracker\n"
-        "from scrimmage_core import state\n"
+        "from scrimmage import state\n"
         "print(state.process() is not None, resource_tracker._resource_tracker._pid)\n"
     )
     done = subprocess.run(
@@ -347,7 +347,7 @@ LOOKALIKE_LINES = {
 def test_a_helpers_exact_command_line_keeps_scrimmage_off(
     monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
-    from scrimmage_core import bootstrap
+    from scrimmage import bootstrap
 
     monkeypatch.setattr(sys, "orig_argv", [sys.executable, *HELPER_LINES[name]])
     assert bootstrap.multiprocessing_helper()
@@ -358,7 +358,7 @@ def test_a_helpers_exact_command_line_keeps_scrimmage_off(
 def test_a_command_line_that_only_looks_like_a_helpers_keeps_scrimmage_on(
     monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
-    from scrimmage_core import bootstrap
+    from scrimmage import bootstrap
 
     monkeypatch.setattr(sys, "orig_argv", [sys.executable, *LOOKALIKE_LINES[name]])
     assert not bootstrap.multiprocessing_helper()
@@ -777,7 +777,7 @@ class Bench:
         parallel: int = 1,
         timeout: int = 30,
     ) -> tuple[int, str]:
-        from scrimmage_core.cli import main
+        from scrimmage.cli import main
 
         text = FILE.replace("PORT", str(port)).replace("PATH", path)
         text = text.replace("EXTRA", f"parallel = {parallel}")
@@ -835,9 +835,9 @@ def test_a_service_test_answers_its_runs_and_keeps_the_setup_record(bench: Bench
 def test_every_line_of_a_service_runs_setup_record_fits_the_record_schema(bench: Bench) -> None:
     import jsonschema
 
-    import scrimmage_core
+    import scrimmage
 
-    body = json.loads((Path(scrimmage_core.__file__).parent / "schemas/record.v1.json").read_text())
+    body = json.loads((Path(scrimmage.__file__).parent / "schemas/record.v1.json").read_text())
     check = jsonschema.Draft202012Validator(body, format_checker=jsonschema.FormatChecker())
     service = bench.start()
     code, out = bench.test(service.port, runs=1)
@@ -856,8 +856,8 @@ def a_service_runner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, address: str = "127.0.0.1:9"
 ) -> Any:
     """A runner for a service test, with a long grace and wait, and no service."""
-    from scrimmage_core import config as settings
-    from scrimmage_core import runner
+    from scrimmage import config as settings
+    from scrimmage import runner
 
     token = tmp_path / "token"
     token.write_text(secrets.token_hex(32))
@@ -877,7 +877,7 @@ def a_service_runner(
 def test_ctrl_c_ends_the_wait_for_a_service_to_listen(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from scrimmage_core import runner
+    from scrimmage import runner
 
     made = a_service_runner(tmp_path, monkeypatch)  # nothing listens at 127.0.0.1:9
     stopped: list[BaseException] = []
@@ -911,7 +911,7 @@ def test_ctrl_c_ends_the_wait_for_a_service_to_listen(
 def test_an_address_that_cannot_be_reached_is_named_as_that(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from scrimmage_core import service_client
+    from scrimmage import service_client
 
     made = a_service_runner(tmp_path, monkeypatch, "no-such-host.invalid:8765")
     try:
@@ -928,7 +928,7 @@ def test_an_address_whose_connection_times_out_is_asked_again_and_named_as_that(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """10.255.255.1 drops the connection, as a firewall would: each try waits 2 s."""
-    from scrimmage_core import runner, service_client
+    from scrimmage import runner, service_client
 
     monkeypatch.setattr(runner, "READY_S", 3.0)
     made = a_service_runner(tmp_path, monkeypatch, "10.255.255.1:8765")
@@ -979,7 +979,7 @@ def test_a_test_started_with_its_service_waits_for_the_service_to_listen(bench: 
 
 @pytest.mark.design("service.waits_to_listen")
 def test_a_service_that_never_listens_stops_the_test_naming_that(bench: Bench) -> None:
-    from scrimmage_core import runner
+    from scrimmage import runner
 
     bench.monkeypatch.setattr(runner, "READY_S", 0.5)
     code, out = bench.test(free_port())
@@ -1000,7 +1000,7 @@ def test_a_port_that_resets_connections_until_the_app_listens_is_asked_again(ben
 
 @pytest.mark.design("service.waits_to_listen")
 def test_a_port_that_always_resets_stops_the_test_naming_it_after_the_wait(bench: Bench) -> None:
-    from scrimmage_core import runner
+    from scrimmage import runner
 
     bench.monkeypatch.setattr(runner, "READY_S", 1.0)
     eager = EagerPort(None, reset_for=0)
@@ -1014,7 +1014,7 @@ def test_a_port_that_always_resets_stops_the_test_naming_it_after_the_wait(bench
 
 @pytest.mark.design("service.waits_to_listen")
 def test_a_reset_after_part_of_a_reply_is_final_at_once(bench: Bench) -> None:
-    from scrimmage_core import runner
+    from scrimmage import runner
 
     bench.monkeypatch.setattr(runner, "READY_S", 30.0)
     eager = EagerPort(None, reset_for=0, half=True)
@@ -1363,7 +1363,7 @@ def test_control_load_reaches_the_summary_the_report_and_json(bench: Bench) -> N
     assert summary["control_busy"] == 0 and summary["control_p99_ms"] == run["control_p99_ms"]
     # A row whose runs had a busy count gets a line under the table. The load is set on the
     # result, as a busy process would report it, so the line's text is what is checked.
-    from scrimmage_core import runner
+    from scrimmage import runner
 
     served = runner.Runner.served_result
 

@@ -26,9 +26,9 @@ from typing import Any, cast
 
 import benchmark_agent
 from fakes import fast_server
-from scrimmage_core.control import ControlServer
-from scrimmage_core.plan import Plan
-from scrimmage_core.records import RecordStore
+from scrimmage.control import ControlServer
+from scrimmage.plan import Plan
+from scrimmage.records import RecordStore
 
 HERE = Path(__file__).parent
 FAST_SERVER = Path(fast_server.__file__)
@@ -86,7 +86,7 @@ PROCESS_BUDGETS_MS = {
     "startup, whole process": 1150.0,  # 102 ms quiet, 558 ms seen under load
     "scrimmage check": 520.0,  # 49 ms quiet, 253 ms seen under load
     "scrimmage --help": 600.0,  # 49 ms quiet, 289 ms seen under load
-    "import scrimmage_core.cli": 500.0,  # 45 ms quiet, 232 ms seen under load
+    "import scrimmage.cli": 500.0,  # 45 ms quiet, 232 ms seen under load
 }
 RUN_BUDGET_MS = {"run": 1450.0}  # 150 ms quiet, 654 ms seen under load
 # Requests to the runner that one gated call waits on: a count, so no machine can change it.
@@ -109,9 +109,9 @@ NOT_IMPORTED_BY_CLI = (
     "openai",
     "httpx",
     "importlib.metadata",
-    "scrimmage_core.runner",
-    "scrimmage_core.record",
-    "scrimmage_core.control",
+    "scrimmage.runner",
+    "scrimmage.record",
+    "scrimmage.control",
     "http.server",
     "concurrent.futures",
 )
@@ -461,7 +461,7 @@ def first_line_ms(args: Sequence[str], env: dict[str, str], cwd: Path) -> float:
 
 
 def boot_env(env: dict[str, str]) -> dict[str, str]:
-    from scrimmage_core.run_command import BOOT
+    from scrimmage.run_command import BOOT
 
     return {**env, "PYTHONPATH": f"{BOOT}{os.pathsep}{HERE}"}
 
@@ -476,7 +476,7 @@ def measure_startup(rounds: int, per_round: int, tmp: Path) -> list[Startup]:
     server, env = start_control(tmp)
     plain = [PYTHON, "-c", FIRST_LINE]
     direct = [PYTHON, "-c", FIRST_LINE]
-    via_run = [PYTHON, "-m", "scrimmage_core.run_command", PYTHON, "-c", FIRST_LINE]
+    via_run = [PYTHON, "-m", "scrimmage.run_command", PYTHON, "-c", FIRST_LINE]
     forms: list[tuple[str, list[str], dict[str, str]]] = [
         ("plain python", plain, env_with({})),
         ("hooks loaded, root process", direct, boot_env(env)),
@@ -517,7 +517,7 @@ def cli_timings(rounds: int, per_round: int, tmp: Path) -> dict[str, list[float]
     config = HERE / "example" / "scrimmage.toml"
     forms: list[tuple[str, list[str]]] = [
         ("plain python", [PYTHON, "-c", "pass"]),
-        ("import scrimmage_core.cli", [PYTHON, "-c", "import scrimmage_core.cli"]),
+        ("import scrimmage.cli", [PYTHON, "-c", "import scrimmage.cli"]),
         ("scrimmage --help", [SCRIMMAGE, "--help"]),
         ("scrimmage check (example)", [SCRIMMAGE, "check", str(config)]),
     ]
@@ -658,7 +658,7 @@ def process_added_ms(tmp: Path, count: int = 5) -> dict[str, float]:
     """Each process budget's added ms over plain python, the smallest of alternating runs."""
     config = HERE / "example" / "scrimmage.toml"
     server, env = start_control(tmp)
-    via_run = [PYTHON, "-m", "scrimmage_core.run_command", PYTHON, "-c", FIRST_LINE]
+    via_run = [PYTHON, "-m", "scrimmage.run_command", PYTHON, "-c", FIRST_LINE]
     plain_env = env_with({})
     bare_first: list[float] = []
     bare_exit: list[float] = []
@@ -675,8 +675,8 @@ def process_added_ms(tmp: Path, count: int = 5) -> dict[str, float]:
             forms["scrimmage --help"].append(
                 1000 * timed_spawn([SCRIMMAGE, "--help"], plain_env, tmp)
             )
-            forms["import scrimmage_core.cli"].append(
-                1000 * timed_spawn([PYTHON, "-c", "import scrimmage_core.cli"], plain_env, tmp)
+            forms["import scrimmage.cli"].append(
+                1000 * timed_spawn([PYTHON, "-c", "import scrimmage.cli"], plain_env, tmp)
             )
     finally:
         server.stop()
@@ -734,8 +734,8 @@ def main(argv: list[str] | None = None) -> int:
             print(cli_table(cli))
             raw["cli"] = cli
         if "imports" in sections:
-            print(import_table("scrimmage_core.cli"))
-            print(import_table("scrimmage_core.bootstrap"))
+            print(import_table("scrimmage.cli"))
+            print(import_table("scrimmage.bootstrap"))
         if "profile" in sections:
             with running_servers(tmp) as servers:
                 for case, budget in PROFILED:

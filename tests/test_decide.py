@@ -6,11 +6,11 @@ from collections.abc import Sequence
 
 import pytest
 
-from scrimmage_core.config import Fault, Mock
-from scrimmage_core.decide import Call, Counters, Decision, decide, fires, missed, names
-from scrimmage_core.labels import matches
-from scrimmage_core.plan import Plan
-from scrimmage_core.state import RunState
+from scrimmage.config import Fault, Mock
+from scrimmage.decide import Call, Counters, Decision, decide, fires, missed, names
+from scrimmage.labels import matches
+from scrimmage.plan import Plan
+from scrimmage.state import RunState
 
 GET_ORDER = Call("tool", "tool:get_order", "get_order")
 

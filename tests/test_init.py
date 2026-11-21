@@ -15,15 +15,15 @@ from typing import Any, cast
 import jsonschema
 import pytest
 
-import scrimmage_core
+import scrimmage
 from conftest import Project, TimeLimit
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import cli, entry
-from scrimmage_core import init as drafting
-from scrimmage_core import probe as probing
-from scrimmage_core.outcomes import INFRA, MISTAKE, OK
+from scrimmage import cli, entry
+from scrimmage import init as drafting
+from scrimmage import probe as probing
+from scrimmage.outcomes import INFRA, MISTAKE, OK
 
-SCHEMA = json.loads((Path(scrimmage_core.__file__).parent / "schemas" / "cli.v1.json").read_text())
+SCHEMA = json.loads((Path(scrimmage.__file__).parent / "schemas" / "cli.v1.json").read_text())
 
 # A ceiling only: it ends a read that would otherwise never return.
 PIPE_TIMEOUT_S = 60
@@ -1199,7 +1199,7 @@ def test_a_file_name_that_is_not_utf_8_prints_on_a_strict_stream(tmp_path: Path)
         handle.write("X = 1\n")
     write(tmp_path, {"bot.py": ENTRY})
     done = subprocess.run(
-        [sys.executable, "-m", "scrimmage_core.cli", "init", str(tmp_path)],
+        [sys.executable, "-m", "scrimmage.cli", "init", str(tmp_path)],
         capture_output=True,
         env={**os.environ, "PYTHONIOENCODING": "utf-8:strict"},
         check=False,
@@ -1260,7 +1260,7 @@ def test_a_named_pipe_is_not_opened(tmp_path: Path) -> None:
     write(tmp_path, {"bot.py": ENTRY})
     os.mkfifo(tmp_path / "pipe.py")
     done = subprocess.run(
-        [sys.executable, "-m", "scrimmage_core.cli", "init", "--json", str(tmp_path)],
+        [sys.executable, "-m", "scrimmage.cli", "init", "--json", str(tmp_path)],
         capture_output=True,
         timeout=PIPE_TIMEOUT_S,
         check=False,
@@ -1356,7 +1356,7 @@ def test_the_probe_s_lines_fit_the_record_schema(
     files = list((tmp_path / "scrimmage-runs").glob("*/*.jsonl"))
     lines = [json.loads(line) for line in files[0].read_text().splitlines()]
     schema = json.loads(
-        (Path(scrimmage_core.__file__).parent / "schemas" / "record.v1.json").read_text()
+        (Path(scrimmage.__file__).parent / "schemas" / "record.v1.json").read_text()
     )
     for line in lines:
         jsonschema.validate(line, schema)
@@ -1372,7 +1372,7 @@ def test_the_probe_s_lines_fit_the_record_schema(
 def test_json_is_one_document_on_a_real_process_for_every_exit_code(tmp_path: Path) -> None:
     def scrimmage(*args: str) -> tuple[int, str, str]:
         done = subprocess.run(
-            [sys.executable, "-m", "scrimmage_core.cli", "init", "--json", *args],
+            [sys.executable, "-m", "scrimmage.cli", "init", "--json", *args],
             capture_output=True,
             text=True,
             check=False,
@@ -1383,7 +1383,7 @@ def test_json_is_one_document_on_a_real_process_for_every_exit_code(tmp_path: Pa
     good = scrimmage(str(tmp_path / "good"))
     missing = scrimmage(str(tmp_path / "empty"))
     breaks = (
-        "import sys; from scrimmage_core import cli, init\n"
+        "import sys; from scrimmage import cli, init\n"
         "def boom(*a): raise RuntimeError('broke')\ninit.read_folder = boom\n"
         f"sys.exit(cli.main(['init', '--json', {str(tmp_path / 'empty')!r}, "
         f"'--out', {str(tmp_path / 'c.toml')!r}]))\n"

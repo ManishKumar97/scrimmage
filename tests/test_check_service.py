@@ -21,7 +21,7 @@ from typing import Any, cast
 import pytest
 
 from ports import free_port
-from scrimmage_core import asgi_gate, cli, config, protocol, service_client, versions
+from scrimmage import asgi_gate, cli, config, protocol, service_client, versions
 from service_harness import Service, drive
 from test_cli_json import validate
 from test_service import FILE, TOOLS, Bench, bench
@@ -45,7 +45,7 @@ LOG = os.environ["REQUEST_LOG"]
 SHIFT = float(os.environ.get("GATE_CLOCK_SHIFT", "0"))
 
 if SHIFT:
-    from scrimmage_core import asgi_gate
+    from scrimmage import asgi_gate
 
     class Shifted:
         """The gate's view of the time module, with the wall clock moved."""
@@ -61,7 +61,7 @@ if SHIFT:
 JUMP = float(os.environ.get("CLAIM_CLOCK_JUMP", "0"))
 
 if JUMP:
-    from scrimmage_core import client as control_client
+    from scrimmage import client as control_client
 
     claims = []
 

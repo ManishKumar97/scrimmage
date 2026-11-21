@@ -29,7 +29,7 @@ def hook() -> ModuleType:
 def test_every_shipped_schema_is_on_the_page_with_every_table() -> None:
     schemas = hook()
     files = schemas.shipped()
-    shipped = ROOT / "packages/scrimmage/src/scrimmage_core/schemas"
+    shipped = ROOT / "packages/scrimmage/src/scrimmage/schemas"
     assert {p.name for p in files} == {p.name for p in shipped.glob("*.json")}
     page = schemas.render(files)
     for path in files:
@@ -92,7 +92,7 @@ def test_the_quickstart_shows_the_example_as_it_is() -> None:
     # Each key a record line shows is a key the record schema allows, and real records are
     # checked against that schema in tests/test_schemas.py.
     schema = json.loads(
-        (ROOT / "packages/scrimmage/src/scrimmage_core/schemas/record.v1.json").read_text()
+        (ROOT / "packages/scrimmage/src/scrimmage/schemas/record.v1.json").read_text()
     )
     defs = schema["$defs"]
     call_keys = set(defs["call"]["properties"])

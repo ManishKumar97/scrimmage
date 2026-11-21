@@ -70,7 +70,7 @@ def child_view() -> dict[str, Any]:
     import sys
 
     return {
-        "scrimmage": "scrimmage_core.state" in sys.modules,
+        "scrimmage": "scrimmage.state" in sys.modules,
         "token_file": "SCRIMMAGE_TOKEN_FILE" in os.environ,
     }
 

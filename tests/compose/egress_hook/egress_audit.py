@@ -7,7 +7,7 @@ threads do not interleave.
 
 The first line a process writes, "start", has its pid, parent pid, sys.orig_argv and
 executable, and says whether
-scrimmage_core and sitecustomize were already imported, which tells an early hook from a late
+scrimmage and sitecustomize were already imported, which tells an early hook from a late
 one. An exec keeps the pid and loads the hook again, so it writes a second start line.
 Then one line per event, by kind:
 connect, sendto, sendmsg (the address), getaddrinfo (host and port),
@@ -81,7 +81,7 @@ def install() -> None:
             "ppid": os.getppid(),
             "argv": list(sys.orig_argv),
             "executable": sys.executable,
-            "scrimmage_core": "scrimmage_core" in sys.modules,
+            "scrimmage": "scrimmage" in sys.modules,
             "sitecustomize": "sitecustomize" in sys.modules,
         },
     )

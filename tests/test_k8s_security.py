@@ -403,7 +403,7 @@ def test_the_agents_pods_connect_only_to_the_control_service_and_the_model(
             to_control += connects.count(control)
             starts = [r for r in records if r["event"] == "start"]
             assert len(starts) >= 5, starts  # scrimmage-run, uvicorn, the tracker, two workers
-            late = [s for s in starts if s["scrimmage_core"] or s["sitecustomize"]]
+            late = [s for s in starts if s["scrimmage"] or s["sitecustomize"]]
             assert late == [], f"the hook came after Scrimmage's startup file: {late}"
             # Nothing else: every address, every name, every child.
             problems = harness.egress_problems(
@@ -433,7 +433,7 @@ def test_scrimmage_path_in_the_agent_image_names_a_folder_there(tags: Tags) -> N
     ).stdout
     assert said.endswith("\n") and said.count("\n") == 1, f"one line: {said!r}"
     folder = said.strip()
-    assert folder.startswith("/") and folder.endswith("/scrimmage_core/_boot"), folder
+    assert folder.startswith("/") and folder.endswith("/scrimmage/_boot"), folder
     # In that image, the folder holds Scrimmage's startup file, so PYTHONPATH can name it.
     check = harness.sh(
         [

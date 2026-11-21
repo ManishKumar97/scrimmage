@@ -113,7 +113,7 @@ def test_importing_the_cli_loads_no_heavy_library() -> None:
     one has already imported them."""
     names = ", ".join(repr(name) for name in benchmark.NOT_IMPORTED_BY_CLI)
     code = (
-        "import sys, scrimmage_core.cli\n"
+        "import sys, scrimmage.cli\n"
         f"print(','.join(name for name in ({names}) if name in sys.modules))"
     )
     done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
@@ -124,7 +124,7 @@ def test_the_sdk_loads_no_heavy_library_at_start() -> None:
     """The same, for what the SDK loads in every process it starts in. A new process."""
     names = ", ".join(repr(name) for name in benchmark.NOT_IMPORTED_BY_SDK)
     code = (
-        "import sys, scrimmage_core.bootstrap\n"
+        "import sys, scrimmage.bootstrap\n"
         f"print(','.join(name for name in ({names}) if name in sys.modules))"
     )
     done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)

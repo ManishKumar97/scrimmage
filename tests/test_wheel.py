@@ -17,7 +17,7 @@ import pytest
 
 from conftest import EXAMPLE
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core.cli import main
+from scrimmage.cli import main
 
 ROOT = Path(__file__).parents[1]
 PACKAGE = ROOT / "packages" / "scrimmage"
@@ -124,7 +124,7 @@ def test_the_sdist_holds_only_the_package(built: dict[str, Path]) -> None:
     assert sdist_top(built["sdist"]) - {".gitignore"} == TOP
     with tarfile.open(built["sdist"]) as sdist:
         names = [n.split("/", 1)[1] for n in sdist.getnames() if "/" in n]
-    assert "src/scrimmage_core/__init__.py" in names
+    assert "src/scrimmage/__init__.py" in names
 
 
 @pytest.mark.slow
@@ -162,9 +162,7 @@ def test_a_clean_venv_runs_the_quickstart_from_the_wheel(
     run("uv", "pip", "install", "--python", python, "openai", cwd=tmp_path)
 
     # Nothing of this repository is on the venv's path, and Scrimmage is the wheel's copy.
-    probe = (
-        "import json, sys, scrimmage_core; print(json.dumps([sys.path, scrimmage_core.__file__]))"
-    )
+    probe = "import json, sys, scrimmage; print(json.dumps([sys.path, scrimmage.__file__]))"
     paths, module = json.loads(run(python, "-c", probe, cwd=tmp_path))
     inside = [p for p in [*paths, module] if p and Path(p).resolve().is_relative_to(ROOT)]
     assert not inside, f"the venv sees this repository: {inside}"
@@ -183,3 +181,71 @@ def test_a_clean_venv_runs_the_quickstart_from_the_wheel(
     table = run(scrimmage, "test", cwd=project, env=env)
     passed = [line for line in table.splitlines() if line.rstrip().endswith("pass")]
     assert len(passed) == 2, table
+
+
+def quiet(*command: str | Path, cwd: Path) -> subprocess.CompletedProcess[str]:
+    """A command that may fail: its exit code and streams, as a team's shell sees them."""
+    return subprocess.run(
+        [str(c) for c in command],
+        cwd=cwd,
+        env=clean_env(),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+@pytest.mark.slow
+def test_the_wheel_holds_scrimmage_and_no_scrimmage_core(built: dict[str, Path]) -> None:
+    tops = {n.split("/")[0] for n in wheel_names(built["wheel"])}
+    version = importlib.metadata.version("scrimmage")
+    assert tops == {"scrimmage", f"scrimmage-{version}.dist-info"}, tops
+
+
+@pytest.mark.slow
+def test_a_clean_venv_imports_scrimmage_and_loads_nothing_else(
+    built: dict[str, Path], tmp_path: Path
+) -> None:
+    """A team's production code may `import scrimmage`, so that import must start nothing."""
+    python = venv(tmp_path / "env", "3.11")
+    run("uv", "pip", "install", "--python", python, "--no-index", built["wheel"], cwd=tmp_path)
+    probe = (
+        "import sys; before = set(sys.modules); import scrimmage; "
+        "print(sorted(set(sys.modules) - before))"
+    )
+    assert run(python, "-I", "-c", probe, cwd=tmp_path) == "['scrimmage']\n"
+    old = quiet(python, "-I", "-c", "import scrimmage_core", cwd=tmp_path)
+    assert old.returncode != 0 and "ModuleNotFoundError" in old.stderr, old.stderr
+
+
+@pytest.mark.slow
+def test_the_three_commands_of_a_clean_venv_find_their_code(
+    built: dict[str, Path], tmp_path: Path
+) -> None:
+    python = venv(tmp_path / "env", "3.11")
+    run("uv", "pip", "install", "--python", python, "--no-index", built["wheel"], cwd=tmp_path)
+    scripts = python.parent
+    assert run(scripts / "scrimmage", "--version", cwd=tmp_path) == (
+        f"scrimmage {importlib.metadata.version('scrimmage')}\n"
+    )
+    # scrimmage-run takes a command to run, so --version is a command that does not exist, and
+    # the message is its own. scrimmage-mcp without its extra says what to install. Neither
+    # says "No module named", so each entry point found its module.
+    for name, said in (
+        ("scrimmage-run", "scrimmage-run: cannot run --version"),
+        ("scrimmage-mcp", 'pip install "scrimmage[mcp]"'),
+    ):
+        done = quiet(scripts / name, "--version", cwd=tmp_path)
+        assert said in done.stderr + done.stdout, (name, done.stdout, done.stderr)
+        assert "No module named" not in done.stderr, (name, done.stderr)
+
+
+@pytest.mark.slow
+def test_the_wheel_record_lists_only_scrimmage_and_its_dist_info(
+    built: dict[str, Path],
+) -> None:
+    version = importlib.metadata.version("scrimmage")
+    with zipfile.ZipFile(built["wheel"]) as archive:
+        record = archive.read(f"scrimmage-{version}.dist-info/RECORD").decode()
+    tops = {line.split(",")[0].split("/")[0] for line in record.splitlines() if line}
+    assert tops == {"scrimmage", f"scrimmage-{version}.dist-info"}, tops

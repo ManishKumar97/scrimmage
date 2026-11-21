@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from scrimmage_core.control import ControlServer
-from scrimmage_core.records import RecordStore
-from scrimmage_core.run_command import BOOT, main
+from scrimmage.control import ControlServer
+from scrimmage.records import RecordStore
+from scrimmage.run_command import BOOT, main
 
 # Every test here, or nearly, starts a process or a real scrimmage test run.
 pytestmark = pytest.mark.slow
@@ -22,7 +22,7 @@ TOKEN = "d" * 64
 UBUNTU_PYTHON = Path("/usr/bin/python3.12")
 APPORT = Path("/usr/lib/python3.12/sitecustomize.py")
 GATES_LOADED = (
-    "import sys; print('scrimmage_core' in sys.modules, "
+    "import sys; print('scrimmage' in sys.modules, "
     "any(type(f).__name__ == 'ImportHook' for f in sys.meta_path))"
 )
 
@@ -102,9 +102,7 @@ def test_without_the_token_nothing_is_imported_or_patched() -> None:
 
 @pytest.mark.design("boot.import_never_switches_on")
 def test_importing_the_sdk_never_switches_gates_on() -> None:
-    result = python(
-        "import scrimmage_core.tool_gate, scrimmage_core.bootstrap; " + GATES_LOADED, {}
-    )
+    result = python("import scrimmage.tool_gate, scrimmage.bootstrap; " + GATES_LOADED, {})
     assert result.stdout.strip() == "True False"
 
 
@@ -176,7 +174,7 @@ def test_the_program_under_test_on_a_python_without_the_sdk_stops() -> None:
     command = [
         sys.executable,
         "-m",
-        "scrimmage_core.run_command",
+        "scrimmage.run_command",
         str(UBUNTU_PYTHON),
         "-c",
         "print('agent ran')",
@@ -272,7 +270,7 @@ def test_scrimmage_run_puts_its_folder_first() -> None:
     code = "import os, sys; print(os.environ['PYTHONPATH'].split(os.pathsep)[0])"
     env = {k: v for k, v in os.environ.items() if not k.startswith("SCRIMMAGE_")}
     result = subprocess.run(
-        [sys.executable, "-m", "scrimmage_core.run_command", sys.executable, "-c", code],
+        [sys.executable, "-m", "scrimmage.run_command", sys.executable, "-c", code],
         env={**env, "PYTHONPATH": "/somewhere"}, capture_output=True, text=True, timeout=60,
     )  # fmt: skip
     assert result.stdout.strip() == str(BOOT)
@@ -352,7 +350,7 @@ def test_a_child_refuses_a_plan_that_names_an_import_it_may_not_make(
 def test_a_child_process_keeps_the_mocks_but_fires_no_faults(control: ControlServer) -> None:
     faults = [{"call": "tool:a", "do": "timeout", "when": "always"}]
     control.open_run("run-1", "baseline", plan(faults=faults))
-    code = "import scrimmage_core.state as s; print(len(s.current().plan.faults))"
+    code = "import scrimmage.state as s; print(len(s.current().plan.faults))"
     root = python(code, joined(control))  # SCRIMMAGE_ROOT_PID unset: this is the root
     child = python(code, as_child(control))
     assert (root.stdout.strip(), child.stdout.strip()) == ("1", "0")
@@ -367,7 +365,7 @@ def test_a_stream_whose_flush_raises_systemexit_still_ends_a_probe(
     after = tmp_path / "after-refusal"
     code = (
         "import sys\n"
-        "from scrimmage_core.state import current\n"
+        "from scrimmage.state import current\n"
         "class Stream:\n"
         "    def write(self, text): return len(text)\n"
         "    def flush(self): raise SystemExit(5)\n"

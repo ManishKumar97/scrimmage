@@ -13,8 +13,8 @@ import pytest
 
 from conftest import Project
 from report_cases import CASES
-from scrimmage_core import cli, mcp_server, show
-from scrimmage_core.runner import Runner
+from scrimmage import cli, mcp_server, show
+from scrimmage.runner import Runner
 from show_cases import case_result, write_folder
 
 CLI_SCHEMA = mcp_server.cli_schema()
@@ -336,6 +336,6 @@ def test_the_summary_comes_from_fields_and_never_says_wrong(
 def test_stop_grace_is_the_runners_grace_plus_ten() -> None:
     """The server may not import the runner, so its grace is written out: the runner's own
     stop, then 10 s for the report and its printing."""
-    from scrimmage_core import runner
+    from scrimmage import runner
 
     assert mcp_server.STOP_GRACE_S == runner.KILL_GRACE_S + 10

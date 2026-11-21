@@ -12,13 +12,13 @@ from typing import Any, cast
 import jsonschema
 import pytest
 
-import scrimmage_core
+import scrimmage
 from config_cases import AGENT, BAD, GOOD, MINIMAL, TEST, Bad
 from conftest import EXAMPLE
-from scrimmage_core import cli, config, plan
-from scrimmage_core.errors import ConfigError
+from scrimmage import cli, config, plan
+from scrimmage.errors import ConfigError
 
-SCHEMAS = Path(scrimmage_core.__file__).parent / "schemas"
+SCHEMAS = Path(scrimmage.__file__).parent / "schemas"
 TESTS = Path(__file__).parent
 DOCS = TESTS.parent / "docs"
 
@@ -467,14 +467,14 @@ class Gates:
                 return self.resolve(stem, n.value, None, depth)
             if isinstance(n, ast.ImportFrom) and n.module is not None:
                 for a in n.names:
-                    if (a.asname or a.name) == name and n.module.startswith("scrimmage_core."):
+                    if (a.asname or a.name) == name and n.module.startswith("scrimmage."):
                         return self.constant(n.module.rpartition(".")[2], a.name, depth)
         raise ValueError(f"a reason name the test cannot follow: {name}")
 
     def module_alias(self, stem: str, name: str) -> str | None:
-        """`from scrimmage_core import decide as engine` makes `engine` the module `decide`."""
+        """`from scrimmage import decide as engine` makes `engine` the module `decide`."""
         for n in self.trees[stem].body:
-            if isinstance(n, ast.ImportFrom) and n.module == "scrimmage_core":
+            if isinstance(n, ast.ImportFrom) and n.module == "scrimmage":
                 for a in n.names:
                     if (a.asname or a.name) == name and a.name in self.trees:
                         return a.name
@@ -492,7 +492,7 @@ def params(func: Func) -> set[str]:
 
 def refusal_reasons(package: Path | None = None) -> set[str]:
     """Every reason the gates write on a refused call, read from the code that writes it."""
-    gates = Gates(package or Path(scrimmage_core.__file__).parent)
+    gates = Gates(package or Path(scrimmage.__file__).parent)
     assert not gates.unreadable, "\n".join(gates.unreadable)
     return gates.found
 

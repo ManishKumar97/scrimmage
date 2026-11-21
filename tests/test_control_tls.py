@@ -33,13 +33,13 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 import test_service
-from scrimmage_core import asgi_gate, bootstrap, cli, control, protocol, service_client, tls
-from scrimmage_core import config as settings
-from scrimmage_core import runner as running
-from scrimmage_core.cert import CertFiles, make_certificates
-from scrimmage_core.client import ClaimRefused, ControlClient, ControlError
-from scrimmage_core.control import ControlServer
-from scrimmage_core.records import RecordStore
+from scrimmage import asgi_gate, bootstrap, cli, control, protocol, service_client, tls
+from scrimmage import config as settings
+from scrimmage import runner as running
+from scrimmage.cert import CertFiles, make_certificates
+from scrimmage.client import ClaimRefused, ControlClient, ControlError
+from scrimmage.control import ControlServer
+from scrimmage.records import RecordStore
 from service_harness import Service, drive, eventually
 from test_service import bench
 

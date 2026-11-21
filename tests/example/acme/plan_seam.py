@@ -19,7 +19,7 @@ def install() -> None:
         return
     # Imported only here: a process that does not switch the seam on, such as a team's spawned
     # worker, must not load Scrimmage because the test app does.
-    from scrimmage_core import asgi_gate
+    from scrimmage import asgi_gate
 
     if getattr(asgi_gate.claimed, "changes_the_plan", False):
         return

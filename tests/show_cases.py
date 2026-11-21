@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import cast
 
 from report_cases import CASES, FOLDER
-from scrimmage_core import cli, results, runner
-from scrimmage_core.records import RECORD_VERSION
+from scrimmage import cli, results, runner
+from scrimmage.records import RECORD_VERSION
 
 Doc = dict[str, object]
 T0 = datetime(2026, 11, 11, 10, 15, 0, tzinfo=UTC)

@@ -182,13 +182,13 @@ _.answer_raising_uncaught  # tests/example/acme/guarded.py: a test's scrimmage.t
 _.answer_registry  # tests/example/acme/guarded.py: a test's scrimmage.toml names it
 _.answer_moderated  # tests/example/acme/guarded.py: a test's scrimmage.toml names it
 _.answer_in_threads  # tests/example/acme/guarded.py: a test's scrimmage.toml names it
-_.__call__  # scrimmage_core/asgi_gate.py: the server calls it, as an ASGI app
+_.__call__  # scrimmage/asgi_gate.py: the server calls it, as an ASGI app
 _.chat_sync  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
 _.chat_held  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
 _.left_running  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
 _.stream_json  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
 _.go_on  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
-_._state  # scrimmage_core/process_gate.py: multiprocessing's Pool.__del__ reads it
+_._state  # scrimmage/process_gate.py: multiprocessing's Pool.__del__ reads it
 _.dies  # tests/example/acme/service.py: a FastAPI route, which FastAPI calls
 _._on_queue_feeder_error  # tests/test_service_processes.py: a queue's hook its feeder calls
 _.kind_load  # tests/k8s/images.py: the kind tests call it once they load the runner image

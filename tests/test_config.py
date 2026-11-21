@@ -9,9 +9,9 @@ import pytest
 
 import config_cases
 from conftest import EXAMPLE
-from scrimmage_core import config, judge, plan
-from scrimmage_core.errors import ConfigError
-from scrimmage_core.provider_openai import Rates
+from scrimmage import config, judge, plan
+from scrimmage.errors import ConfigError
+from scrimmage.provider_openai import Rates
 
 
 def load_text(tmp_path: Path, text: str) -> config.Config:
@@ -559,7 +559,7 @@ def test_two_identical_fault_rows_are_refused(tmp_path: Path) -> None:
 
 @pytest.mark.design("budget.snapshot_prices")
 def test_a_snapshot_priced_apart_from_its_family_has_its_own_row() -> None:
-    from scrimmage_core import provider_openai as table
+    from scrimmage import provider_openai as table
 
     assert table.price("gpt-4o-2024-05-13", {}) == Rates(5.00, 15.00)  # not gpt-4o's $2.50
     for snapshot in ("gpt-4o-2024-08-06", "gpt-4o-2024-11-20"):
@@ -985,7 +985,7 @@ def test_a_tool_listed_by_name_under_real_is_named_as_a_write(tmp_path: Path) ->
 
 
 def test_the_find_is_raw_in_the_plan_and_redacted_in_the_results(tmp_path: Path) -> None:
-    from scrimmage_core import runner
+    from scrimmage import runner
 
     key = "sk-" + "b" * 20
     fault = config.Fault("tool:t", "replace", "always", text="x", find=f"a {key}")

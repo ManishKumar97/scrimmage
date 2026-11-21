@@ -16,11 +16,11 @@ import pytest
 
 from conftest import ACME, EXAMPLE_FAULT, Project, Result
 from fakes.openai_server import FakeOpenAI
-from scrimmage_core import config, suggest
-from scrimmage_core import runner as runner_module
-from scrimmage_core.decide import MISTAKE_REFUSAL
-from scrimmage_core.errors import ConfigError, ScrimmageMockError
-from scrimmage_core.runner import Runner
+from scrimmage import config, suggest
+from scrimmage import runner as runner_module
+from scrimmage.decide import MISTAKE_REFUSAL
+from scrimmage.errors import ConfigError, ScrimmageMockError
+from scrimmage.runner import Runner
 from test_connection_faults import gated, install
 from test_http_gate import Sink
 

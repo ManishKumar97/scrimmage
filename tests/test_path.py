@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from scrimmage_core import cli, run_command
+from scrimmage import cli, run_command
 from test_service import BIN, Bench, bench
 
 __all__ = ["bench"]
@@ -109,7 +109,7 @@ def test_a_wrong_pythonpath_stops_the_probe_naming_scrimmage_path(
 def test_path_on_a_folder_that_is_not_on_disk_is_exit_2(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    gone = tmp_path / "wheel.zip" / "scrimmage_core" / "_boot"
+    gone = tmp_path / "wheel.zip" / "scrimmage" / "_boot"
     monkeypatch.setattr(run_command, "BOOT", gone)
     code, out, err = path_output(capsys)
     assert code == 2 and out == ""

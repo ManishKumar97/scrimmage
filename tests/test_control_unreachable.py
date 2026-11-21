@@ -19,10 +19,10 @@ import pytest
 
 import test_service
 from ports import free_port
-from scrimmage_core import asgi_gate, service_client, tls
-from scrimmage_core import runner as running
-from scrimmage_core.cert import make_certificates
-from scrimmage_core.client import ControlClient
+from scrimmage import asgi_gate, service_client, tls
+from scrimmage import runner as running
+from scrimmage.cert import make_certificates
+from scrimmage.client import ControlClient
 from service_harness import eventually
 from test_service import Bench, Forwarder, a_service_runner, bench
 from test_service_versions import against, sent_nothing
@@ -423,7 +423,7 @@ def test_a_service_that_goes_silent_in_a_test_says_so_and_how_long_it_asked(
 def test_check_service_says_the_same_when_the_service_goes_silent(
     bench: Bench, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from scrimmage_core.cli import main
+    from scrimmage.cli import main
 
     relay = refused_then_silent(bench, monkeypatch)
     text = test_service.FILE.replace("PORT", str(relay.port)).replace("PATH", "/chat")

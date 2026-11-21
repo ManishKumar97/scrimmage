@@ -25,7 +25,7 @@ from typing import Any
 
 import pytest
 
-from scrimmage_core import managed, runner, service_client
+from scrimmage import managed, runner, service_client
 from test_managed_start import (
     UVICORN,
     NotFound,
