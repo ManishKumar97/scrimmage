@@ -559,14 +559,16 @@ def test_two_identical_fault_rows_are_refused(tmp_path: Path) -> None:
 
 @pytest.mark.design("budget.snapshot_prices")
 def test_a_snapshot_priced_apart_from_its_family_has_its_own_row() -> None:
+    from scrimmage import prices
     from scrimmage import provider_openai as table
 
+    shipped = dict(prices.shipped().models)
     assert table.price("gpt-4o-2024-05-13", {}) == Rates(5.00, 15.00)  # not gpt-4o's $2.50
     for snapshot in ("gpt-4o-2024-08-06", "gpt-4o-2024-11-20"):
-        assert table.price(snapshot, {}) == table.PRICES["gpt-4o"]
-    assert table.price("gpt-4o-mini-2024-07-18", {}) == table.PRICES["gpt-4o-mini"]
-    assert table.price("gpt-4.1-2025-04-14", {}) == table.PRICES["gpt-4.1"]
-    assert table.price("gpt-4.1-mini-2025-04-14", {}) == table.PRICES["gpt-4.1-mini"]
+        assert table.price(snapshot, {}) == shipped["gpt-4o"]
+    assert table.price("gpt-4o-mini-2024-07-18", {}) == shipped["gpt-4o-mini"]
+    assert table.price("gpt-4.1-2025-04-14", {}) == shipped["gpt-4.1"]
+    assert table.price("gpt-4.1-mini-2025-04-14", {}) == shipped["gpt-4.1-mini"]
 
 
 @pytest.mark.design("config.recorded_setting")

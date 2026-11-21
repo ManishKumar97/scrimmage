@@ -17,7 +17,7 @@ import yaml
 import scrimmage
 from conftest import EXAMPLE, doc_pages
 from k8s import cluster as kubernetes
-from scrimmage import cli, config, judge, mcp_gate, outcomes, record, render, suggest
+from scrimmage import cli, config, judge, mcp_gate, outcomes, prices, record, render, suggest
 
 DOCS = Path(__file__).parents[1] / "docs"
 CLI_SCHEMA = json.loads((Path(scrimmage.__file__).parent / "schemas" / "cli.v1.json").read_text())
@@ -138,7 +138,7 @@ def test_a_fault_on_one_model_and_its_limits_are_documented() -> None:
 @pytest.mark.design("docs.cached_input")
 def test_cached_input_prices_and_their_default_are_documented() -> None:
     text = page("configuration.md")
-    assert all(mentioned(text, key) for key in config.PRICE_KEYS)
+    assert all(mentioned(text, key) for key in prices.PRICE_KEYS)
     assert "cached tokens cost the full `input` price" in text
     guide = page("model-faults.md")
     for word in ("prompt_tokens_details.cached_tokens", "input_tokens_details.cached_tokens"):

@@ -15,7 +15,7 @@ import pytest
 import scrimmage
 from config_cases import AGENT, BAD, GOOD, MINIMAL, TEST, Bad
 from conftest import EXAMPLE
-from scrimmage import cli, config, plan
+from scrimmage import cli, config, plan, prices
 from scrimmage.errors import ConfigError
 
 SCHEMAS = Path(scrimmage.__file__).parent / "schemas"
@@ -194,7 +194,7 @@ CONFIG_TABLES = {
     "model_fault": config.MODEL_FAULT_KEYS,
     "web_fault": config.WEB_FAULT_KEYS,
     "mcp_fault": config.MCP_FAULT_KEYS,
-    "price": config.PRICE_KEYS,
+    "price": prices.PRICE_KEYS,
 }
 
 

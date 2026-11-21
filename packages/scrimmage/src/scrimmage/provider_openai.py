@@ -7,12 +7,14 @@ also takes the time and new ids, as a real one has.
 """
 
 import json
-import re
 import string
 import time
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import cast
+
+from scrimmage import prices
+from scrimmage.prices import Rates as Rates
 
 HOSTS = ("api.openai.com",)
 CHAT_PATHS = ("/chat/completions", "/responses")
@@ -64,48 +66,6 @@ CONTEXT_TOO_LONG = {
 }
 
 
-@dataclass(frozen=True)
-class Rates:
-    """Dollars per million tokens. With no cached rate, cached tokens cost the full input
-    rate: a price that guesses must guess high, or the budget could let through more. With
-    no cache-write rate, a written token costs the full input rate, as on a model that
-    charges nothing extra to write its cache."""
-
-    input: float
-    output: float
-    cached_input: float | None = None
-    cache_write_30m: float | None = None  # a token written to the cache for 30 minutes
-    cache_write_12h: float | None = None  # for 12 hours, a Responses API choice
-
-
-# Checked against OpenAI's pricing page on 19 November 2026, standard tier; check again
-# before each release. A team overrides or adds a model under [agent.prices]. A model with
-# a long-context price, above 272K input tokens, is left out, such as gpt-5.4, gpt-5.5
-# and the gpt-5.6 models: one rate per kind of token would price a long call low. Only
-# those models price a cache write, so no model here has one.
-PRICES: dict[str, Rates] = {
-    "gpt-4o": Rates(2.50, 10.00, 1.25),
-    # Its own price, not its family's; shut down, so no longer on the pricing page. No
-    # cached rate: it had no prompt cache discount. A guess high is safe, low is not.
-    "gpt-4o-2024-05-13": Rates(5.00, 15.00),
-    "gpt-4o-mini": Rates(0.15, 0.60, 0.075),
-    "gpt-4.1": Rates(2.00, 8.00, 0.50),
-    "gpt-4.1-mini": Rates(0.40, 1.60, 0.10),
-    "gpt-4.1-nano": Rates(0.10, 0.40, 0.025),  # as on 7 November; off the page since
-    "gpt-5": Rates(1.25, 10.00, 0.125),
-    "gpt-5-mini": Rates(0.25, 2.00, 0.025),
-    "gpt-5-nano": Rates(0.05, 0.40, 0.005),
-    "gpt-5-pro": Rates(15.00, 120.00),  # the page gives no cached rate
-    "gpt-5.1": Rates(1.25, 10.00, 0.125),
-    "gpt-5.2": Rates(1.75, 14.00, 0.175),
-    "gpt-5.2-pro": Rates(21.00, 168.00),
-    "gpt-5.3-codex": Rates(1.75, 14.00, 0.175),
-    "gpt-5.4-mini": Rates(0.75, 4.50, 0.075),
-    "gpt-5.4-nano": Rates(0.20, 1.25, 0.02),
-    "text-embedding-3-small": Rates(0.02, 0.0),
-    "text-embedding-3-large": Rates(0.13, 0.0),
-}
-
 # Tool types, per API: run at the provider and only read; run at the provider and can
 # change data; run by the agent, so a gate must see them.
 RESPONSES_READ = {
@@ -126,7 +86,6 @@ RESPONSES_AGENT = {
     "computer_use_preview",
 }
 CHAT_AGENT = {"function", "custom"}
-DATED = re.compile(r"-\d{4}-\d{2}-\d{2}$")
 MAX_TOKENS = 1_000_000_000  # a larger count is not a count
 MAX_CHOICES = 128  # the most choices, n, a Chat request may ask for
 
@@ -666,17 +625,8 @@ def written(numbers: dict[str, object], uncached: int) -> tuple[int, int]:
 
 
 def price(model: str, overrides: dict[str, Rates]) -> Rates | None:
-    """The team's price first, whole, then the built-in table.
-
-    A dated snapshot, such as gpt-4o-mini-2024-07-18, uses its family's price. Nothing
-    else does: gpt-4o-audio-preview is not priced like gpt-4o.
-    """
-    family = DATED.sub("", model)
-    for name in (model, family):
-        for table in (overrides, PRICES):
-            if name in table:
-                return table[name]
-    return None
+    """The team's price first, whole, then the shipped table: see prices.price."""
+    return prices.price(model, overrides, dict(prices.shipped().models))
 
 
 def cost(

@@ -12,7 +12,7 @@ import pytest
 import scrimmage
 from conftest import EXAMPLE_FAULT, Project
 from fakes.openai_server import FIXTURES, FakeOpenAI
-from scrimmage import config, plan
+from scrimmage import config, plan, prices
 from scrimmage import provider_openai as table
 from scrimmage.errors import ConfigError
 from test_http_gate import BODY, URL, Budget, gated, install, make_plan
@@ -84,12 +84,12 @@ def test_cached_tokens_cost_the_cached_rate(rates: table.Rates, dollars: float) 
 @pytest.mark.design("cached.builtin_rates")
 def test_the_built_in_table_has_openais_cached_rates() -> None:
     # OpenAI's pricing page, standard tier, checked on 7 November 2026 and 19 November 2026.
-    assert table.PRICES["gpt-4o"] == table.Rates(2.50, 10.00, 1.25)
-    assert table.PRICES["gpt-4o-mini"] == table.Rates(0.15, 0.60, 0.075)
-    assert table.PRICES["gpt-4.1"] == table.Rates(2.00, 8.00, 0.50)
-    assert table.PRICES["gpt-4.1-mini"] == table.Rates(0.40, 1.60, 0.10)
-    assert table.PRICES["gpt-4.1-nano"] == table.Rates(0.10, 0.40, 0.025)
-    assert table.PRICES["text-embedding-3-small"].cached_input is None
+    assert dict(prices.shipped().models)["gpt-4o"] == table.Rates(2.50, 10.00, 1.25)
+    assert dict(prices.shipped().models)["gpt-4o-mini"] == table.Rates(0.15, 0.60, 0.075)
+    assert dict(prices.shipped().models)["gpt-4.1"] == table.Rates(2.00, 8.00, 0.50)
+    assert dict(prices.shipped().models)["gpt-4.1-mini"] == table.Rates(0.40, 1.60, 0.10)
+    assert dict(prices.shipped().models)["gpt-4.1-nano"] == table.Rates(0.10, 0.40, 0.025)
+    assert dict(prices.shipped().models)["text-embedding-3-small"].cached_input is None
 
 
 @pytest.mark.design("cached.reservation_full_rate")

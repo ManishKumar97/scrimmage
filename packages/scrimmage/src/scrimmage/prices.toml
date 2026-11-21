@@ -1,0 +1,96 @@
+# Model prices in dollars per million tokens, standard tier.
+# Checked against OpenAI's pricing page on 19 November 2026; a price changes by a plain PR to this file.
+# A team overrides or adds a model under [agent.prices] in scrimmage.toml.
+# A model with a long-context price, above 272K input tokens, is left out, such as gpt-5.4, gpt-5.5
+# and the gpt-5.6 models: one rate per kind of token would price a long call low.
+# A missing cached_input costs the full input rate: a price that guesses must guess high.
+
+as_of = "2026-11-19"
+source = "https://openai.com/api/pricing/"
+
+[models."gpt-4o"]
+input = 2.50
+output = 10.00
+cached_input = 1.25
+
+# Its own price, not its family's; shut down, so no longer on the pricing page.
+# No cached rate: it had no prompt cache discount.
+[models."gpt-4o-2024-05-13"]
+input = 5.00
+output = 15.00
+
+[models."gpt-4o-mini"]
+input = 0.15
+output = 0.60
+cached_input = 0.075
+
+[models."gpt-4.1"]
+input = 2.00
+output = 8.00
+cached_input = 0.50
+
+[models."gpt-4.1-mini"]
+input = 0.40
+output = 1.60
+cached_input = 0.10
+
+[models."gpt-4.1-nano"]
+input = 0.10
+output = 0.40  # as on 7 November; off the page since
+cached_input = 0.025
+
+[models."gpt-5"]
+input = 1.25
+output = 10.00
+cached_input = 0.125
+
+[models."gpt-5-mini"]
+input = 0.25
+output = 2.00
+cached_input = 0.025
+
+[models."gpt-5-nano"]
+input = 0.05
+output = 0.40
+cached_input = 0.005
+
+[models."gpt-5-pro"]
+input = 15.00
+output = 120.00  # the page gives no cached rate
+
+[models."gpt-5.1"]
+input = 1.25
+output = 10.00
+cached_input = 0.125
+
+[models."gpt-5.2"]
+input = 1.75
+output = 14.00
+cached_input = 0.175
+
+[models."gpt-5.2-pro"]
+input = 21.00
+output = 168.00
+
+[models."gpt-5.3-codex"]
+input = 1.75
+output = 14.00
+cached_input = 0.175
+
+[models."gpt-5.4-mini"]
+input = 0.75
+output = 4.50
+cached_input = 0.075
+
+[models."gpt-5.4-nano"]
+input = 0.20
+output = 1.25
+cached_input = 0.02
+
+[models."text-embedding-3-small"]
+input = 0.02
+output = 0.0
+
+[models."text-embedding-3-large"]
+input = 0.13
+output = 0.0
