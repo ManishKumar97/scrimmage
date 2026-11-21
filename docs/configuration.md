@@ -108,7 +108,8 @@ The first place that names the model gives the whole price.
 2. `scrimmage-runs/prices.toml`, beside `scrimmage.toml`, which `scrimmage prices update` writes.
 3. The `prices.toml` shipped with Scrimmage, which holds OpenAI's prices.
 
-A dated name, such as `gpt-4o-mini-2024-07-18`, uses its family's price when no place names it exactly.
+A dated name, such as `gpt-4o-mini-2024-07-18`, uses its family's price when the place it is looking in does not name it exactly.
+A place higher in the list speaks first: your `[agent.prices]` row for `gpt-4.1` also prices `gpt-4.1-2025-04-14`, whatever a file holds for the dated name.
 A model that none of them names is refused before the call, with the line to paste under `[agent.prices]`.
 Scrimmage never guesses a price.
 

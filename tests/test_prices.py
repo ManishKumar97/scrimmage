@@ -188,3 +188,41 @@ def test_a_team_file_that_makes_a_model_free_stops_the_run_at_load(tmp_path: Pat
     (tmp_path / "scrimmage-runs" / "prices.toml").write_text(free)
     with pytest.raises(ConfigError, match=r"scrimmage-runs/prices\.toml models gpt-4\.1 input: 0"):
         config.load(tmp_path / "scrimmage.toml")
+
+
+MINE, FILE_EXACT, SHIPPED_ROW = Rates(50.0, 50.0), Rates(1e-3, 1e-3), Rates(7.0, 7.0)
+
+
+@pytest.mark.design("prices.authority_first")
+def test_a_family_row_of_a_higher_table_beats_an_exact_dated_row_of_a_lower_one() -> None:
+    dated = "gpt-4.1-2025-04-14"
+    assert prices.price(dated, {"gpt-4.1": MINE}, {dated: FILE_EXACT}) == MINE
+    assert prices.price(dated, {}, {dated: FILE_EXACT}, {"gpt-4.1": SHIPPED_ROW}) == FILE_EXACT
+    assert prices.price("gpt-4.1", {"gpt-4.1": MINE}, {dated: FILE_EXACT}) == MINE
+
+
+@pytest.mark.design("prices.authority_first")
+def test_within_one_table_the_exact_dated_row_beats_its_family() -> None:
+    dated = "gpt-4.1-2025-04-14"
+    assert prices.price(dated, {"gpt-4.1": MINE, dated: FILE_EXACT}) == FILE_EXACT
+
+
+@pytest.mark.design("prices.authority_first")
+def test_a_fetched_dated_row_cannot_undercut_the_teams_own_family_row(tmp_path: Path) -> None:
+    dated = "gpt-4.1-2025-04-14"
+    (tmp_path / "scrimmage.toml").write_text(
+        config_cases.AGENT
+        + '\n[agent.prices."gpt-4.1"]\ninput = 50.0\noutput = 50.0\n'
+        + config_cases.TEST
+    )
+    (tmp_path / "scrimmage-runs").mkdir()
+    (tmp_path / "scrimmage-runs" / "prices.toml").write_text(
+        f'as_of = "2026-11-20"\nsource = "x"\n[models."{dated}"]\ninput = 0.01\noutput = 0.01\n'
+    )
+    cfg = config.load(tmp_path / "scrimmage.toml")
+    held = dict(plan.plan_for(cfg, plan.rows(cfg)[0], "run-1").prices)
+    for name in (dated, "gpt-4.1"):
+        found = provider_openai.price(name, held)
+        assert found is not None and found.input == 50.0, name
+    # The shipped dated row still beats nothing: with no team row, it is its own price.
+    assert provider_openai.price("gpt-4o-2024-05-13", {}) == Rates(5.00, 15.00)

@@ -184,14 +184,15 @@ def shipped() -> PriceFile:
 
 
 def price(model: str, *tables: dict[str, Rates]) -> Rates | None:
-    """The first table that names the model, whole. Tables are in order of authority.
+    """The first table that names the model, whole. Tables are in order of authority, and a
+    table's say comes before any table below it: a family row in [agent.prices] beats an
+    exact dated row in a file. Within one table, the exact name beats its family.
 
     A dated snapshot, such as gpt-4o-mini-2024-07-18, uses its family's price. Nothing
-    else does: gpt-4o-audio-preview is not priced like gpt-4o. An exact name wins over its
-    family in every table.
+    else does: gpt-4o-audio-preview is not priced like gpt-4o.
     """
-    for name in (model, DATED.sub("", model)):
-        for table in tables:
+    for table in tables:
+        for name in (model, DATED.sub("", model)):
             if name in table:
                 return table[name]
     return None
@@ -216,9 +217,16 @@ def in_order(
     agent: tuple[tuple[str, Rates], ...], file: PriceFile | None
 ) -> tuple[tuple[str, Rates], ...]:
     """The rows a run prices with before the shipped file: [agent.prices], then the team's
-    file. A model in both takes the first."""
+    file. The two are one table once merged, so a file row is left out when the team's own
+    rows already speak for its name: the same name, or the family of a dated name."""
     named = {model for model, _ in agent}
-    rows = () if file is None else tuple(row for row in file.models if row[0] not in named)
+    rows = ()
+    if file is not None:
+        rows = tuple(
+            row
+            for row in file.models
+            if row[0] not in named and DATED.sub("", row[0]) not in named
+        )
     return agent + rows
 
 
