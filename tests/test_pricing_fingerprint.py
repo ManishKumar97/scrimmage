@@ -3,6 +3,7 @@
 import html
 import importlib.util
 import io
+import re
 from pathlib import Path
 from types import ModuleType
 
@@ -97,3 +98,8 @@ def test_the_script_reads_a_file_argument(tmp_path: Path, capsys: pytest.Capture
     path.write_text(page(table("standard", 1)))
     assert pricing_fingerprint.main(["pricing_fingerprint.py", str(path)]) == 0
     assert capsys.readouterr().out.strip() == pricing_fingerprint.fingerprint(path.read_text())
+
+
+def test_the_committed_fingerprint_is_a_hash_and_a_date():
+    text = (ROOT / "tools" / "pricing-fingerprint.txt").read_text()
+    assert re.fullmatch(r"[0-9a-f]{64} \d{4}-\d{2}-\d{2}\n", text), text
