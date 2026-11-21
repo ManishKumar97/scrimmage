@@ -7,6 +7,8 @@ The page is server-rendered. Its pricing tables sit in Astro island `props` attr
 as HTML-escaped JSON that holds a "rows" key.
 This script hashes those values and nothing else, so a change to the page around them
 does not change the hash.
+The hash covers everything in those props, display text included, so a copy edit to a
+tooltip or footnote can also open an issue.
 It never reads a number. It only says that the tables changed, and a person then updates
 prices.toml by hand.
 
