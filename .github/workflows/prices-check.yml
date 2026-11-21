@@ -37,7 +37,7 @@ jobs:
           # Only the bot's issues count, so an outside user cannot mute the alert.
           open_issue() {
             local title="$1" body="$2" open
-            open="$(gh issue list --state open --author app/github-actions --limit 100 --json title | jq --arg t "$title" '[.[] | select(.title == $t)] | length')"
+            open="$(gh issue list --state open --author "github-actions[bot]" --limit 100 --json title | jq --arg t "$title" '[.[] | select(.title == $t)] | length')"
             if [ "$open" -gt 0 ]; then
               echo "an issue titled \"$title\" is already open"
               return 0

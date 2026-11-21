@@ -110,10 +110,24 @@ args = sys.argv[1:]
 if args[:2] == ["issue", "list"]:
     with open(os.environ["STUB_ISSUES"]) as f:
         issues = json.load(f)
+    # The real gh filters on the login, which for the Actions bot is github-actions[bot].
+    # It only displays that author as app/github-actions; a filter of that value matches nothing.
+    # The stub exits non-zero on it, so that old bug fails loudly.
+    if "--state" in args:
+        state = args[args.index("--state") + 1]
+        if state != "all":
+            issues = [i for i in issues if i["state"].lower() == state]
+    else:
+        issues = [i for i in issues if i["state"] == "OPEN"]
     if "--author" in args:
         author = args[args.index("--author") + 1]
-        issues = [i for i in issues if i["author"] == author]
-    print(json.dumps([{"title": i["title"]} for i in issues]))
+        if author.startswith("app/"):
+            sys.exit("gh matches no issue for --author " + author + ": use the login")
+        issues = [i for i in issues if i["login"] == author]
+    def shown(login):
+        return "app/github-actions" if login == "github-actions[bot]" else login
+    out = [{"title": i["title"], "author": {"login": shown(i["login"])}} for i in issues]
+    print(json.dumps(out))
 elif args[:2] == ["issue", "create"]:
     entry = {"title": args[args.index("--title") + 1], "body": args[args.index("--body") + 1]}
     with open(os.environ["STUB_CREATED"], "a") as log:
@@ -187,7 +201,7 @@ def current_hash() -> str:
 
 CHANGE_TITLE = "OpenAI's pricing page changed: check prices.toml"
 FETCH_TITLE = "Prices check cannot fetch OpenAI's pricing page"
-BOT = "app/github-actions"
+BOT = "github-actions[bot]"
 OLD = "0" * 64
 
 
@@ -204,7 +218,7 @@ def test_a_changed_hash_opens_one_change_issue(tmp_path: Path):
 
 @pytest.mark.slow
 def test_a_changed_hash_with_an_open_bot_issue_opens_none(tmp_path: Path):
-    issues = [{"title": CHANGE_TITLE, "author": BOT}]
+    issues = [{"title": CHANGE_TITLE, "login": BOT, "state": "OPEN"}]
     result = run_script(tmp_path, page=island(TABLE), committed=OLD, issues=issues)
     assert result.code == 0, result.out
     assert result.created == []
@@ -212,8 +226,16 @@ def test_a_changed_hash_with_an_open_bot_issue_opens_none(tmp_path: Path):
 
 
 @pytest.mark.slow
+def test_a_closed_bot_issue_lets_the_alert_open_again(tmp_path: Path):
+    issues = [{"title": CHANGE_TITLE, "login": BOT, "state": "CLOSED"}]
+    result = run_script(tmp_path, page=island(TABLE), committed=OLD, issues=issues)
+    assert result.code == 0, result.out
+    assert [i["title"] for i in result.created] == [CHANGE_TITLE]
+
+
+@pytest.mark.slow
 def test_an_open_issue_by_another_author_does_not_mute_the_alert(tmp_path: Path):
-    issues = [{"title": CHANGE_TITLE, "author": "someone-else"}]
+    issues = [{"title": CHANGE_TITLE, "login": "someone-else", "state": "OPEN"}]
     result = run_script(tmp_path, page=island(TABLE), committed=OLD, issues=issues)
     assert result.code == 0, result.out
     assert [i["title"] for i in result.created] == [CHANGE_TITLE]
@@ -246,7 +268,7 @@ def test_a_failed_fetch_opens_one_fetch_issue_and_fails_the_job(tmp_path: Path):
 
 @pytest.mark.slow
 def test_a_failed_fetch_with_an_open_bot_issue_opens_none_but_still_fails(tmp_path: Path):
-    issues = [{"title": FETCH_TITLE, "author": BOT}]
+    issues = [{"title": FETCH_TITLE, "login": BOT, "state": "OPEN"}]
     result = run_script(tmp_path, page="", committed=OLD, issues=issues, curl_rc=28, status="000")
     assert result.code == 1
     assert result.created == []
