@@ -211,3 +211,23 @@ def test_every_action_is_pinned_to_a_full_sha():
     assert used
     unpinned = [u for u in used if not re.fullmatch(SHA_PIN, u)]
     assert not unpinned, f"pin by full SHA: {unpinned}"
+
+
+def test_no_job_or_step_can_fail_silently():
+    workflow = load()
+    assert "continue-on-error" not in workflow
+    for name, job in workflow["jobs"].items():
+        assert "continue-on-error" not in job, name
+        for s in job["steps"]:
+            assert "continue-on-error" not in s, s
+
+
+def test_the_publish_steps_take_exactly_these_inputs():
+    jobs = load()["jobs"]
+    (pypi,) = uses_of(jobs["pypi"]["steps"], "pypa/gh-action-pypi-publish@")
+    (testpypi,) = uses_of(jobs["testpypi"]["steps"], "pypa/gh-action-pypi-publish@")
+    assert pypi["with"] == {"attestations": True}
+    assert testpypi["with"] == {
+        "attestations": True,
+        "repository-url": "https://test.pypi.org/legacy/",
+    }
