@@ -32,6 +32,7 @@ from scrimmage import (
     entry,
     judge,
     outcomes,
+    prices,
     record,
     runner,
     show,
@@ -179,6 +180,13 @@ def check_runs(project: Project) -> dict[int, Done]:
     return done
 
 
+SHIPPED_SOURCE = {
+    "source": "the shipped prices.toml",
+    "as_of": prices.shipped().as_of,
+    "models": len(prices.shipped().models),
+}
+
+
 @pytest.mark.design("json.one_document")
 @pytest.mark.slow
 def test_each_command_prints_one_document_for_each_exit_code(
@@ -206,6 +214,8 @@ def test_each_command_prints_one_document_for_each_exit_code(
         "real": ["tool:check_inventory"],
         "entry": {"kind": "function", "value": "acme.agent:answer"},
         "prices": {},
+        "service_tier": None,
+        "price_sources": [SHIPPED_SOURCE],
     }
     assert checks[2].doc["summary"] is None
 
@@ -1648,7 +1658,8 @@ def test_check_summary_lists_the_labels_under_real_and_the_entry_point(project: 
     assert summary["entry"] == {"kind": "command", "value": value}
     project.edit('real = ["tool:check_inventory", "tool:*"]', "real = []")
     assert summary_of(check_doc(project))["real"] == []
-    assert summary_of(check_doc(project))["prices"] == {}  # every model at the built-in table
+    assert summary_of(check_doc(project))["prices"] == {}  # every model at the price files
+    assert summary_of(check_doc(project))["price_sources"] == [SHIPPED_SOURCE]
     project.edit(
         "[[test]]\n", "[agent.prices]\ngpt-4o-mini = {input = 0, output = 0.6}\n\n[[test]]\n"
     )
@@ -1661,6 +1672,11 @@ def test_check_summary_lists_the_labels_under_real_and_the_entry_point(project: 
             "cache_write_12h": None,
         }
     }
+    assert summary_of(check_doc(project))["price_sources"] == [
+        {"source": "[agent.prices]", "as_of": None, "models": 1},
+        SHIPPED_SOURCE,
+    ]
+    assert summary_of(check_doc(project))["service_tier"] is None
 
 
 @pytest.mark.design("json.check_runs")

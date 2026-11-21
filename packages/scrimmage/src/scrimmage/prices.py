@@ -239,3 +239,24 @@ def sources(agent: tuple[tuple[str, Rates], ...], file: PriceFile | None) -> lis
         f"prices: the shipped {SHIPPED}, as of {shipped().as_of} ({len(shipped().models)} models)"
     )
     return lines
+
+
+def source_list(
+    agent: tuple[tuple[str, Rates], ...], file: PriceFile | None
+) -> list[dict[str, object]]:
+    """The places prices come from, in order of authority, for `scrimmage check --json`."""
+    found: list[dict[str, object]] = []
+    if agent:
+        found.append({"source": "[agent.prices]", "as_of": None, "models": len(agent)})
+    if file is not None:
+        found.append(
+            {"source": f"{RUNS}/{SHIPPED}", "as_of": file.as_of, "models": len(file.models)}
+        )
+    found.append(
+        {
+            "source": f"the shipped {SHIPPED}",
+            "as_of": shipped().as_of,
+            "models": len(shipped().models),
+        }
+    )
+    return found

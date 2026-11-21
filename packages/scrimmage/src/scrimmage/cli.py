@@ -854,17 +854,11 @@ def run_check(
         "budget_usd": agent.max_cost_usd,
         "real": list(agent.real),
         "entry": {"kind": entry_kind, "value": entry_value},
-        # The prices [agent.prices] sets; any other model takes the built-in table's.
-        "prices": {
-            model: {
-                "input": r.input,
-                "output": r.output,
-                "cached_input": r.cached_input,
-                "cache_write_30m": r.cache_write_30m,
-                "cache_write_12h": r.cache_write_12h,
-            }
-            for model, r in agent.prices
-        },
+        # The prices [agent.prices] sets; any other model takes the price files', in the order
+        # price_sources lists them.
+        "prices": {model: price_summary(r) for model, r in agent.prices},
+        "service_tier": agent.service_tier,
+        "price_sources": prices.source_list(agent.prices, config.team_prices),
     }
     if found is not None:
         found.fields["summary"] = summary
@@ -888,6 +882,19 @@ def run_check(
         for line in service_lines(agent):
             print(f"  {line}")
     return OK
+
+
+def price_summary(rates: prices.Rates) -> dict[str, object]:
+    doc: dict[str, object] = {
+        "input": rates.input,
+        "output": rates.output,
+        "cached_input": rates.cached_input,
+        "cache_write_30m": rates.cache_write_30m,
+        "cache_write_12h": rates.cache_write_12h,
+    }
+    if rates.tiers:
+        doc["tiers"] = {tier: price_summary(tiered) for tier, tiered in rates.tiers}
+    return doc
 
 
 def run_check_service(path: Path, found: Found | None) -> int:

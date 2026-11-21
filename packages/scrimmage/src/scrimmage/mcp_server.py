@@ -329,7 +329,7 @@ def summary_lines(doc: Mapping[str, Any], guard: Mapping[str, Any]) -> list[str]
             lines += [line for line in (entry_line(summary.get("entry")),) if line]
             lines.append(f"cost cap: {cap_text(summary.get('budget_usd'))}")
             lines.append(real_line or "real: nothing")
-            lines.append(prices_line(summary.get("prices")))
+            lines.append(prices_line(summary.get("prices"), summary.get("price_sources")))
     elif command == "test":
         rows = cast(list[Mapping[str, Any]], doc.get("rows") or [])
         lines.append(f"rows: {counted(rows, 'result', RESULTS) or 'none ran'}")
@@ -376,17 +376,25 @@ def summary_lines(doc: Mapping[str, Any], guard: Mapping[str, Any]) -> list[str]
     return lines
 
 
-def prices_line(prices: object) -> str:
-    """The prices the cap is measured at: the file's own, by model, and the built-in table's
-    for any other. A price of 0 makes that model's calls free against the cap."""
-    if not isinstance(prices, dict) or not prices:
-        return "prices: the built-in table"
-    table = cast(dict[str, dict[str, float]], prices)
-    named = ", ".join(
-        f"{model} ${rate['input']:g}/${rate['output']:g} per million tokens in/out"
-        for model, rate in sorted(table.items())
-    )
-    return f"prices: {named}; any other model the built-in table"
+def prices_line(prices: object, sources: object = None) -> str:
+    """The prices the cap is measured at: the file's own, by model, then the price files, each
+    with the date of its prices. A price of 0 makes that model's calls free against the cap."""
+    named = ""
+    if isinstance(prices, dict) and prices:
+        table = cast(dict[str, dict[str, float]], prices)
+        named = ", ".join(
+            f"{model} ${rate['input']:g}/${rate['output']:g} per million tokens in/out"
+            for model, rate in sorted(table.items())
+        )
+    files = ""
+    if isinstance(sources, list):
+        listed = cast(list[Mapping[str, Any]], sources)
+        files = ", ".join(
+            f"{s.get('source')} as of {s.get('as_of')}" for s in listed if s.get("as_of")
+        )
+    if named and files:
+        return f"prices: {named}; any other model from {files}"
+    return f"prices: {named or files or 'the price files'}"
 
 
 def entry_line(entry: object) -> str:
@@ -556,6 +564,7 @@ def checked_guard(doc: Mapping[str, Any] | None) -> dict[str, Any]:
         "entry": summary.get("entry"),
         "real": summary.get("real"),
         "prices": summary.get("prices"),
+        "price_sources": summary.get("price_sources"),
         "checked_by": {"command": "check", "exit": doc.get("exit"), "status": doc.get("status")},
     }
 
@@ -770,6 +779,7 @@ class Scrimmage:
                 "entry": guard.get("entry"),
                 "real": guard.get("real"),
                 "prices": guard.get("prices"),
+                "price_sources": guard.get("price_sources"),
                 "session_spent_usd": round(self.spent, 8),
                 "session_cap_usd": ceiling,
                 **({"checked_by": guard["checked_by"]} if "checked_by" in guard else {}),
