@@ -134,15 +134,15 @@ def _written(tmp_path: Path) -> Path:
 HEAD = 'as_of = "2026-11-20"\nsource = "https://example.test/prices"\n'
 BASE = '[models."gpt-4.1"]\ninput = 2\noutput = 8\n[models."gpt-4.1".tiers.'
 FREE_FILES = {
-    "input 0": ('[models."gpt-4.1"]\ninput = 0\noutput = 8\n', "input: 0 is not above 0"),
-    "output 0": ('[models."gpt-4.1"]\ninput = 2\noutput = 0\n', "output: 0 is not above 0"),
+    "input 0": ('[models."gpt-4.1"]\ninput = 0\noutput = 8\n', "input: 0 is below 0.001"),
+    "output 0": ('[models."gpt-4.1"]\ninput = 2\noutput = 0\n', "output: 0 is below 0.001"),
     "tier input 0": (
         BASE + "flex]\ninput = 0\noutput = 4\n",
-        "tiers flex input: 0 is not above 0",
+        "tiers flex input: 0 is below 0.001",
     ),
     "tier output 0": (
         BASE + "flex]\ninput = 1\noutput = 0\n",
-        "tiers flex output: 0 is not above 0",
+        "tiers flex output: 0 is below 0.001",
     ),
     "tier default": (
         BASE + "default]\ninput = 1\noutput = 4\n",
@@ -152,6 +152,27 @@ FREE_FILES = {
         BASE + "auto]\ninput = 1\noutput = 4\n",
         "tiers auto: auto is not a tier a file may price",
     ),
+    "input 1e-300": (
+        '[models."gpt-4.1"]\ninput = 1e-300\noutput = 8\n',
+        "input: 1e-300 is below 0.001",
+    ),
+    "input just under": (
+        '[models."gpt-4.1"]\ninput = 0.0009\noutput = 8\n',
+        "input: 0.0009 is below 0.001",
+    ),
+    "output 1e-300": (
+        '[models."gpt-4.1"]\ninput = 2\noutput = 1e-300\n',
+        "output: 1e-300 is below 0.001",
+    ),
+    "tier 1e-300": (
+        BASE + "priority]\ninput = 1e-300\noutput = 4\n",
+        "tiers priority input: 1e-300 is below 0.001",
+    ),
+    "tier Default": (
+        BASE + "Default]\ninput = 1\noutput = 4\n",
+        "tiers Default: Default is not a tier",
+    ),
+    "tier AUTO": (BASE + "AUTO]\ninput = 1\noutput = 4\n", "tiers AUTO: AUTO is not a tier"),
     "not finite": ('[models."gpt-4.1"]\ninput = inf\noutput = 8\n', "input: expected dollars"),
     "nan": ('[models."gpt-4.1"]\ninput = 2\noutput = nan\n', "output: expected dollars"),
 }
@@ -226,3 +247,10 @@ def test_a_fetched_dated_row_cannot_undercut_the_teams_own_family_row(tmp_path: 
         assert found is not None and found.input == 50.0, name
     # The shipped dated row still beats nothing: with no team row, it is its own price.
     assert provider_openai.price("gpt-4o-2024-05-13", {}) == Rates(5.00, 15.00)
+
+
+@pytest.mark.design("prices.file_never_free")
+def test_a_price_at_the_floor_is_accepted_and_an_embedding_model_needs_no_output() -> None:
+    body = '[models."gpt-4.1"]\ninput = 0.001\noutput = 0.001\n'
+    body += '[models."text-embedding-9"]\ninput = 0.001\noutput = 0\n'
+    assert len(prices.parse(HEAD + body, "the file").models) == 2

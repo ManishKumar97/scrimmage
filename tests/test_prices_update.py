@@ -188,7 +188,7 @@ def test_a_fetched_file_that_makes_a_model_free_writes_nothing_and_exits_2(
     folder = project(tmp_path)
     served.body = ('as_of = "2026-12-01"\nsource = "x"\n' + free).encode()
     assert cli.main(["prices", "update", str(folder / "scrimmage.toml")]) == 2
-    assert "is not above 0" in capsys.readouterr().err
+    assert "is below 0.001" in capsys.readouterr().err
     assert not (folder / "scrimmage-runs").exists()
 
 

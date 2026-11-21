@@ -130,8 +130,10 @@ output = 4.00
 ```
 
 `as_of` and `source` are required, and a model takes the keys of `[agent.prices]`.
-A file may not price a model at 0, because that would turn the budget off for it: `input` must be above 0, and so must `output` unless the model is an embedding model.
-A tier cannot be named `default` or `auto`.
+A file may not make a model free, because that would turn the budget off for it.
+Every `input`, in a model or a tier, must be at least 0.001 dollars per million tokens, and so must every `output`, unless the model's name contains `embedding`.
+That is far below any real price, the cheapest today being 0.02.
+A tier cannot be named `default` or `auto`, in any case.
 Only `[agent.prices]` may price a model at 0, as your own choice.
 A file that fails its checks is exit 2, and the message names the file and the line.
 `scrimmage check` prints the date of the prices on its budget line, and, when you have prices of your own, the source of each.

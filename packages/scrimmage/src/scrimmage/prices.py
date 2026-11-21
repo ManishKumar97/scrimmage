@@ -144,27 +144,32 @@ def parse(text: str, name: str) -> PriceFile:
 
 
 RESERVED_TIERS = ("default", "auto")
+# Dollars per million tokens. The cheapest real price today is 0.02, so no honest file is
+# below this, and a file that is has made the model free in all but name.
+FLOOR = 0.001
 
 
 def check_file_rates(model: str, rates: Rates, item: str) -> None:
     """What a price file may not hold, as it could turn the budget off for a model.
 
     [agent.prices] may price a model at 0, as the team's own choice. A file is fetched, and
-    kept where no commit shows it, so it may not: input must be above 0, and so must output
-    unless the model is an embedding model, which has no output. A tier cannot be named
-    default or auto, which are not tiers OpenAI bills at a rate of their own.
+    kept where no commit shows it, so it may not: input must be at least FLOOR, and so must
+    output unless the model's name contains embedding, as such a model has no output. A tier
+    cannot be named default or auto, in any case, which are not tiers OpenAI bills at a rate
+    of their own.
     """
-    if rates.input <= 0:
+    if rates.input < FLOOR:
         raise ConfigError(
-            f"{item} input: {rates.input:g} is not above 0; a price file may not make a model free"
+            f"{item} input: {rates.input:g} is below {FLOOR:g}, the least a price file may "
+            "state; a price file may not make a model free"
         )
-    if rates.output <= 0 and "embedding" not in model:
+    if rates.output < FLOOR and "embedding" not in model:
         raise ConfigError(
-            f"{item} output: {rates.output:g} is not above 0; "
-            "only an embedding model has no output price"
+            f"{item} output: {rates.output:g} is below {FLOOR:g}, the least a price file may "
+            "state, except for a model whose name contains embedding"
         )
     for tier, tiered in rates.tiers:
-        if tier in RESERVED_TIERS:
+        if tier.lower() in RESERVED_TIERS:
             raise ConfigError(f"{item} tiers {tier}: {tier} is not a tier a file may price")
         check_file_rates(model, tiered, f"{item} tiers {tier}")
 
@@ -223,9 +228,7 @@ def in_order(
     rows = ()
     if file is not None:
         rows = tuple(
-            row
-            for row in file.models
-            if row[0] not in named and DATED.sub("", row[0]) not in named
+            row for row in file.models if row[0] not in named and DATED.sub("", row[0]) not in named
         )
     return agent + rows
 
