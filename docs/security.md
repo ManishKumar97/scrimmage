@@ -8,9 +8,9 @@ The line "Checked by" under it names the test in the repository that fails if th
 
 ## Your data stays on your machine
 
-It has no telemetry and no hosted service, and it sends nothing to its authors.
+Scrimmage has no telemetry and no hosted service, and it sends nothing to its authors.
 It makes three kinds of connection, and no others: to its own control server, to the service address your `scrimmage.toml` names for a web service, and to GitHub when you run `scrimmage prices update`, which downloads one public file of model prices.
-That command sends a plain GET request, so GitHub sees your IP address and the `User-Agent` of Python's urllib, and nothing about your agent, your tests or your data.
+That command sends a GET request, so GitHub sees your IP address and the `User-Agent` of Python's urllib, and nothing about your agent, your tests or your data.
 No test run makes that connection, and nothing else in Scrimmage does.
 The fetch is over HTTPS to the repository's `main` and checks the server's certificate.
 It follows no redirect to another host or to plain HTTP, and it stops after 15 seconds or 1 MB.

@@ -861,7 +861,7 @@ def test_the_three_pages_make_the_same_promise_about_connections() -> None:
     """README, the home page and the security page state the same sentences, word for word,
     and the sentence names each of the three connections."""
     readme = (DOCS.parent / "README.md").read_text()
-    start = "It has no telemetry and no hosted service"
+    start = "Scrimmage has no telemetry and no hosted service"
     blocks = []
     for text in (readme, page("index.md"), page("security.md")):
         first = text.index(start)
