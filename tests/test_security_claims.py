@@ -70,6 +70,10 @@ def test_the_only_connections_are_to_the_control_server_and_the_service() -> Non
         # The one fetch: `scrimmage prices update` reads prices.toml from the repository's main
         # over HTTPS, when a person types it. No test run calls it.
         ("prices_update.py", "build_opener"),
+        (
+            "prices_update.py",
+            "HTTPSConnection",
+        ),  # the same fetch: its connection, cut at the deadline
     }
     uses = {
         name
