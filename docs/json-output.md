@@ -17,7 +17,7 @@ Every command's document starts with the same fields:
 ```json
 {
   "v": 1,
-  "scrimmage": "0.1.0.dev0",
+  "scrimmage": "0.1.0rc1",
   "command": "test",
   "exit": 1,
   "status": "failed",
@@ -58,7 +58,7 @@ The text of a message can change in any release.
 
 ```json
 {
-  "v": 1, "scrimmage": "0.1.0.dev0", "command": "test", "exit": 1, "status": "failed", "config": "scrimmage.toml",
+  "v": 1, "scrimmage": "0.1.0rc1", "command": "test", "exit": 1, "status": "failed", "config": "scrimmage.toml",
   "records": "/home/acme/bot/scrimmage-runs/20261107T101500Z-a1b2c3",
   "tests": 1,
   "rows": [
@@ -181,7 +181,7 @@ SIGKILL cannot be caught, so it leaves no document.
 
 ```json
 {
-  "v": 1, "scrimmage": "0.1.0.dev0", "command": "check", "exit": 0, "status": "valid", "config": "scrimmage.toml",
+  "v": 1, "scrimmage": "0.1.0rc1", "command": "check", "exit": 0, "status": "valid", "config": "scrimmage.toml",
   "summary": {"tests": 2, "rows": 5, "runs": 15, "tools": 4, "budget_usd": 5.0, "real": ["tool:check_inventory"], "entry": {"kind": "function", "value": "acme.agent:answer"}},
   "mistakes": [], "notes": [], "warnings": [], "infra": []
 }
@@ -210,7 +210,7 @@ SIGKILL cannot be caught, so it leaves no document.
 
 ```json
 {
-  "v": 1, "scrimmage": "0.1.0.dev0", "command": "record", "exit": 1, "status": "incomplete", "config": "scrimmage.toml",
+  "v": 1, "scrimmage": "0.1.0rc1", "command": "record", "exit": 1, "status": "incomplete", "config": "scrimmage.toml",
   "out": "scrimmage.recorded.toml",
   "records": "scrimmage-runs/20261107T101500Z-a1b2c3",
   "cost_usd": 0.0012,
@@ -271,7 +271,7 @@ With `--runs` above 1, the line the text form prints before the first run, how m
 
 ```json
 {
-  "v": 1, "scrimmage": "0.1.0.dev0", "command": "init", "exit": 0, "status": "written", "config": "scrimmage.toml",
+  "v": 1, "scrimmage": "0.1.0rc1", "command": "init", "exit": 0, "status": "written", "config": "scrimmage.toml",
   "out": "scrimmage.toml",
   "entry": {"kind": "function", "value": "support.agent:answer", "guess": false, "candidates": [{"value": "support.agent:answer", "why": "one argument, named question, in a module that imports openai"}]},
   "probe": {"ran": true, "function": "support.agent:answer", "outcome": "stopped at POST /v1/chat/completions on gateway.acme.internal, refused before it was sent"},
@@ -299,7 +299,7 @@ With `--runs` above 1, the line the text form prints before the first run, how m
 
 ```json
 {
-  "v": 1, "scrimmage": "0.1.0.dev0", "command": "show", "exit": 0, "status": "shown",
+  "v": 1, "scrimmage": "0.1.0rc1", "command": "show", "exit": 0, "status": "shown",
   "config": "scrimmage-runs/20261111T101500Z-a1b2c3",
   "records": "scrimmage-runs/20261111T101500Z-a1b2c3",
   "result": {"v": 1, "command": "test", "rows": ["..."]},
@@ -385,7 +385,7 @@ Exit 3 is `infra`.
 ```json
 {
   "earlier": "scrimmage-runs/20261110T090000Z-9f8e7d",
-  "earlier_scrimmage": "0.1.0.dev0",
+  "earlier_scrimmage": "0.1.0rc1",
   "rows_compared": 1,
   "rows": [
     {
