@@ -154,7 +154,8 @@ def check_file_rates(model: str, rates: Rates, item: str) -> None:
 
     [agent.prices] may price a model at 0, as the team's own choice. A file is fetched, and
     kept where no commit shows it, so it may not: input must be at least FLOOR, and so must
-    output unless the model's name contains embedding, as such a model has no output. A tier
+    output unless the model's name contains embedding, as such a model has no output. A cached
+    or cache-write rate, if given, must reach FLOOR too, with no exception. A tier
     cannot be named default or auto, in any case, which are not tiers OpenAI bills at a rate
     of their own.
     """
@@ -168,6 +169,12 @@ def check_file_rates(model: str, rates: Rates, item: str) -> None:
             f"{item} output: {rates.output:g} is below {FLOOR:g}, the least a price file may "
             "state, except for a model whose name contains embedding"
         )
+    for key in ("cached_input", "cache_write_30m", "cache_write_12h"):
+        value = getattr(rates, key)
+        if value is not None and value < FLOOR:
+            raise ConfigError(
+                f"{item} {key}: {value:g} is below {FLOOR:g}, the least a price file may state"
+            )
     for tier, tiered in rates.tiers:
         if tier.lower() in RESERVED_TIERS:
             raise ConfigError(f"{item} tiers {tier}: {tier} is not a tier a file may price")

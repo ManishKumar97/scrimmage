@@ -173,6 +173,22 @@ FREE_FILES = {
         "tiers Default: Default is not a tier",
     ),
     "tier AUTO": (BASE + "AUTO]\ninput = 1\noutput = 4\n", "tiers AUTO: AUTO is not a tier"),
+    "cached 0": (
+        '[models."gpt-4.1"]\ninput = 2\noutput = 8\ncached_input = 0\n',
+        "cached_input: 0 is below 0.001",
+    ),
+    "cached 1e-300": (
+        '[models."gpt-4.1"]\ninput = 2\noutput = 8\ncached_input = 1e-300\n',
+        "cached_input: 1e-300 is below 0.001",
+    ),
+    "tier cached 0": (
+        BASE + "flex]\ninput = 1\noutput = 4\ncached_input = 0\n",
+        "tiers flex cached_input: 0 is below 0.001",
+    ),
+    "embedding cached 0": (
+        '[models."text-embedding-9"]\ninput = 0.02\noutput = 0\ncached_input = 0\n',
+        "cached_input: 0 is below 0.001",
+    ),
     "not finite": ('[models."gpt-4.1"]\ninput = inf\noutput = 8\n', "input: expected dollars"),
     "nan": ('[models."gpt-4.1"]\ninput = 2\noutput = nan\n', "output: expected dollars"),
 }
@@ -254,3 +270,9 @@ def test_a_price_at_the_floor_is_accepted_and_an_embedding_model_needs_no_output
     body = '[models."gpt-4.1"]\ninput = 0.001\noutput = 0.001\n'
     body += '[models."text-embedding-9"]\ninput = 0.001\noutput = 0\n'
     assert len(prices.parse(HEAD + body, "the file").models) == 2
+
+
+@pytest.mark.design("prices.file_never_free")
+def test_a_cached_rate_at_the_floor_is_accepted_in_a_file() -> None:
+    body = '[models."gpt-4.1"]\ninput = 2\noutput = 8\ncached_input = 0.001\n'
+    assert dict(prices.parse(HEAD + body, "the file").models)["gpt-4.1"].cached_input == 0.001
