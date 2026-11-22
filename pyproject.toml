@@ -199,10 +199,12 @@ type = "forbidden"
 # providers package, is the one that loads them, so only a direct import is forbidden here.
 # A provider's table module is listed here and in the ignore line below; the guard in
 # tests/test_provider_registry.py fails when a provider_*.py file is missing from either.
-source_modules = ["scrimmage"]
+# The sources are the package's modules one by one: with the package itself as the source, every
+# provider module would overlap it and the contract would check nothing.
+source_modules = ["scrimmage.*"]
 forbidden_modules = ["scrimmage.providers.impl", "scrimmage.provider_openai"]
 ignore_imports = [
-    "scrimmage.providers.** -> scrimmage.providers.impl.**",
+    "scrimmage.providers.registry -> scrimmage.providers.impl",
     "scrimmage.providers.** -> scrimmage.provider_openai",
 ]
 

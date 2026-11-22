@@ -364,10 +364,11 @@ def test_every_provider_table_is_listed_in_the_import_contract() -> None:
     forbidden = set(contract["forbidden_modules"])
     ignored = set(contract["ignore_imports"])
     assert "scrimmage.providers.impl" in forbidden
+    assert "scrimmage.providers.registry -> scrimmage.providers.impl" in ignored
     for table in table_modules():
         assert f"scrimmage.{table}" in forbidden, f"{table} is not forbidden to the product"
         assert f"scrimmage.providers.** -> scrimmage.{table}" in ignored, f"{table} cannot load"
     listed = {re.sub(r"^scrimmage\.", "", m) for m in forbidden} - {"providers.impl"}
     assert listed == table_modules(), "the contract names a table module that does not exist"
-    assert contract["source_modules"] == ["scrimmage"], "the contract guards every module"
+    assert contract["source_modules"] == ["scrimmage.*"], "the contract guards every module"
     assert not contract.get("allow_indirect_imports", False)
