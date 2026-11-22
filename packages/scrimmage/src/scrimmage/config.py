@@ -22,11 +22,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from scrimmage import labels, prices, provider_openai, python_args
+from scrimmage import labels, prices, python_args
 from scrimmage.errors import ConfigError
 from scrimmage.judge import Rules, impossible, normal
 from scrimmage.mocks import allowed
 from scrimmage.prices import PriceFile, Rates, read_prices
+from scrimmage.providers.registry import built_in, registry_for
 from scrimmage.redact import SCRUB_MIN, redact, remove_values
 
 READ_METHODS = ("GET", "HEAD")  # the web requests that run for real without being listed
@@ -609,7 +610,7 @@ def model_paths_in_real(agent: Agent) -> list[str]:
             continue
         label, _, rest = entry.partition(" ")
         method, _, path = rest.partition(" ")
-        if path and provider_openai.op_for(path, method) is not None:
+        if path and built_in().recognizes(path, method):
             host = label.removeprefix("http:")
             found.append(
                 f"[agent] real: {entry!r} lists a model call as a web request, which is never "
@@ -1405,11 +1406,11 @@ def read_pass_rate(table: dict[str, object], where: str) -> float | None:
 
 def reject_model_mocks(test: Test, agent: Agent) -> None:
     """A web mock on a model path would never answer: that request is a model call."""
-    hosts = {*provider_openai.HOSTS, *(h.host for h in agent.model_hosts)}
+    registry = registry_for(tuple((h.host, h.provider) for h in agent.model_hosts))
     for mock in test.mocks:
         host = mock.call.removeprefix("http:")
         method = mock.method or "POST"
-        if host in hosts and mock.path and provider_openai.op_for(mock.path, method):
+        if mock.path and registry.resolve(host, mock.path, method) is not None:
             raise ConfigError(
                 f"[[test]] {test.name!r}: {mock.call} {mock.path} is a model call, which "
                 f"cannot be mocked: it is real or a fault; see {DOCS}"

@@ -32,7 +32,6 @@ from typing import TYPE_CHECKING, Any, NoReturn, Protocol, cast
 
 from scrimmage import changes, credentials, delay, hooks, threads
 from scrimmage import probe as probing
-from scrimmage import provider_openai as openai_table
 from scrimmage.budget import ASK_MAX_S, Held, Shortfall
 from scrimmage.changes import Changed, Unchangeable
 from scrimmage.client import ControlError
@@ -49,6 +48,8 @@ from scrimmage.errors import ScrimmageMockError, ScrimmageRefused
 from scrimmage.judge import normal
 from scrimmage.labels import shown_name
 from scrimmage.plan import Plan
+from scrimmage.prices import Rates
+from scrimmage.providers.base import RESPONSES, ModelProvider
 from scrimmage.redact import redact, redacted
 from scrimmage.state import (
     BLOB_CAP,
@@ -348,9 +349,9 @@ def body_of(request: Any) -> bytes | None:
     return held if isinstance(held, bytes) else None
 
 
-def provider_of(ctx: Bound, host: str) -> str | None:
-    named = next((h.provider for h in ctx.run.plan.model_hosts if h.host == host), None)
-    return named or ("openai" if host in openai_table.HOSTS else None)
+def provider_for(run: RunState, step: Step) -> ModelProvider:
+    """The provider a model call is for, found by the name describe gave its call."""
+    return run.plan.registry.get(str(step.call.provider))
 
 
 def host_of(url: Any) -> str:
@@ -371,13 +372,18 @@ def endpoint_of(url: Any) -> tuple[object, ...]:
 def describe(ctx: Bound, request: Any, who: str, body: bytes) -> Call:
     """The call this request is: a model call, or a web request to its own host."""
     host = host_of(request.url)
-    provider = provider_of(ctx, host)
     method = str(request.method).upper()
-    if provider is None and ctx.run.plan.probe and openai_table.op_for(request.url.path, method):
-        provider = "openai"  # a gateway not named yet: the probe is how it gets found
-    op = openai_table.op_for(str(request.url.path), method) if provider is not None else None
-    if provider is None or op is None:
-        return Call("http", f"http:{host}", path_of(request.url), provider, method)
+    registry = ctx.run.plan.registry
+    owners = registry.candidates(host)
+    found = registry.resolve(host, str(request.url.path), method)
+    if found is None and not owners and ctx.run.plan.probe:
+        # A gateway not named yet: the probe is how it gets found.
+        found = registry.probe(str(request.url.path), method)
+    if found is None:
+        named = owners[0].name if owners else None
+        return Call("http", f"http:{host}", path_of(request.url), named, method)
+    provider = found[0].name
+    op = found[1]
     marked = RETRY_HEADER in request.headers
     try:
         retry = max(0, int(request.headers.get(RETRY_HEADER, "0")))
@@ -440,9 +446,10 @@ def prepare(
     ctx = process_ctx.bound(run)
     body = body_of(request)
     call = describe(ctx, request, who, body or b"")
-    fields = openai_table.request_fields(body) if body and call.kind == "model" else None
-    if call.kind == "model":
-        call = dataclasses.replace(call, model=openai_table.model_name(fields))
+    model = run.plan.registry.get(call.provider or "") if call.kind == "model" else None
+    fields = model.request_fields(body) if model and body else None
+    if model is not None:
+        call = dataclasses.replace(call, model=model.model_name(fields))
     # The method and path only: headers, cookies and a query string are never recorded.
     extra: dict[str, object] = {
         "method": call.method,
@@ -482,8 +489,8 @@ def prepare(
         check_tools(ctx, run, step, fields, str(request.url.path))
     if call.kind == "model" and step.decision.action == "fault":
         reply_checks(run, step, fields or {}, str(request.url.path))
-    if call.kind == "model" and call.name == "chat" and fields is not None:
-        if openai_table.is_responses(str(request.url.path)):
+    if model is not None and call.name == "chat" and fields is not None:
+        if model.api(str(request.url.path)) == RESPONSES:
             # Never marked: OpenAI takes an item id it never made and reads the item as sent,
             # and a request that looks up a faulted reply is a mistake, so no 400 is known to
             # follow a fault here. One that does stays an infrastructure error.
@@ -555,7 +562,7 @@ def stop_probe(
     host, path, method = host_of(url), path_of(url), str(step.call.method)
     with contextlib.suppress(Exception):  # the probe only reads, so it fails no call
         run.recheck_tools()
-    names = [] if fields is None else openai_table.offered(str(url.path), fields).agent
+    names = [] if fields is None else provider_for(run, step).offered(str(url.path), fields).agent
     tools = [
         {
             "name": redact(name),
@@ -605,7 +612,7 @@ def check_tools(
     ctx: Bound, run: RunState, step: Step, fields: dict[str, object], path: str
 ) -> None:
     """Hosted writes, unknown tool types and tools no gate sees: all stop before sending."""
-    tools = openai_table.offered(path, fields)
+    tools = provider_for(run, step).offered(path, fields)
     if tools.hosted_reads:
         step.extra["hosted_reads"] = tools.hosted_reads
     if tools.unknown:
@@ -662,21 +669,23 @@ def reply_checks(run: RunState, step: Step, fields: dict[str, object], path: str
             f"is a streamed request, and {word} changes a reply that is not streamed; turn "
             "streaming off for this model, or use timeout or a status on this one",
         )
-    if word == "unknown tool" and openai_table.is_responses(path):
+    provider = provider_for(run, step)
+    responses = provider.api(path) == RESPONSES
+    if word == "unknown tool" and responses:
         not_carried_out(
             run,
             step,
             "is a Responses call, and a call to a tool no one offered is seen on Chat "
             "Completions only; fault a chat call",
         )
-    if openai_table.is_responses(path) and fields.get("conversation") is not None:
+    if responses and fields.get("conversation") is not None:
         not_carried_out(
             run,
             step,
             f"is a Responses call in a conversation OpenAI keeps, and {word} would leave the "
             f"real reply, or none, in it for the next turn; {IN_INPUT}",
         )
-    if word == "unknown tool" and (why := openai_table.no_free_tool_call(path, fields)):
+    if word == "unknown tool" and (why := provider.no_free_tool_call(path, fields)):
         run.unchanged(step, why)
         step.decision = Decision("real")
 
@@ -689,7 +698,7 @@ def chain_check(run: RunState, step: Step, fields: dict[str, object]) -> None:
     an item a fault changed or built, as previous_response_id or an item_reference, is a
     mistake in the test. Its id is made up, so OpenAI holds nothing under it, and the model
     could not build the next turn from what the agent got."""
-    found = run.chains_to_a_fault(fields)
+    found = run.chains_to_a_fault(provider_for(run, step), fields)
     if found is None:
         return
     why = (
@@ -714,17 +723,16 @@ def built_reply(
     """refuse or unknown tool: the whole 200 reply, made from a real one. Nothing is sent, so
     the counts are an estimate and the line costs nothing."""
     body = body_of(request) or b""
-    fields = openai_table.request_fields(body) or {}
+    provider = provider_for(ctx.run, step)
+    fields = provider.request_fields(body) or {}
     tokens = len(body) // CHAR_PER_TOKEN
     path = str(request.url.path)
-    responses = openai_table.is_responses(path)
-    if word == "refuse" and responses:
-        built = openai_table.response_refusal_reply(fields, tokens)
-    elif word == "refuse":
-        built = openai_table.refusal_reply(fields, tokens)
+    responses = provider.api(path) == RESPONSES
+    if word == "refuse":
+        built = provider.refusal_reply(path, fields, tokens)
     else:  # reply_checks let it through only on chat, with a tool offered
-        tool = openai_table.tool_call_tools(path, fields)[0]
-        built = openai_table.unknown_tool_reply(fields, tokens, tool)
+        tool = provider.tool_call_tools(path, fields)[0]
+        built = provider.unknown_tool_reply(fields, tokens, tool)
     headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
     faulted(ctx, step, fields, built, responses=responses, ids_only=word == "unknown tool")
     return reply(ctx, module, client, step, request, extra, (200, headers, built))
@@ -742,11 +750,12 @@ def faulted(
     """Keep what a fired fault in a model's reply gave the agent: on Responses its ids,
     which a later request may not chain to; on chat what a later request built from it
     carries."""
+    provider = provider_for(ctx.run, step)
     if responses:
-        ctx.run.add_faulted_reply(openai_table.response_ids(gave))
+        ctx.run.add_faulted_reply(provider.response_ids(gave))
     else:
         ctx.run.add_reply_fault_markers(
-            step.call.label, openai_table.given(fields, gave, ids_only=ids_only)
+            step.call.label, provider.given(fields, gave, ids_only=ids_only)
         )
 
 
@@ -778,7 +787,8 @@ def fault(
     if plan_fault.do in BUILT_REPLIES:
         return built_reply(ctx, module, client, step, request, extra, plan_fault.do)
     if plan_fault.do == "context too long":
-        if openai_table.is_responses(str(request.url.path)):
+        provider = provider_for(run, step)
+        if provider.api(str(request.url.path)) == RESPONSES:
             not_carried_out(
                 run,
                 step,
@@ -786,12 +796,13 @@ def fault(
                 "fault a chat call, or use a status on this one",
             )
         headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
-        body = openai_table.context_too_long_body()
+        body = provider.context_too_long_body()
         return reply(ctx, module, client, step, request, extra, (400, headers, body))
     status = int(plan_fault.do.split()[1])
     if step.call.kind == "model":
-        body = openai_table.error_body(status)
-        kind = openai_table.error_type(status)
+        provider = provider_for(run, step)
+        body = provider.error_body(status)
+        kind = provider.error_type(status)
         headers = {"content-type": kind, "x-request-id": "req_scrimmage_injected"}
     else:
         body = reason_phrase(status).encode()
@@ -817,7 +828,7 @@ def bad_body(
         )
     if step.call.kind == "model":
         headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
-        body = openai_table.broken_body(str(request.url.path), step.call.name)
+        body = provider_for(run, step).broken_body(str(request.url.path), step.call.name)
     else:
         headers = {"content-type": "application/json; charset=utf-8"}
         body = BROKEN_WEB_BODY
@@ -956,25 +967,29 @@ def mocked(
     return response
 
 
-def prices_of(ctx: Bound, model: str) -> openai_table.Rates | None:
-    return openai_table.price(model, dict(ctx.run.plan.prices))
+def prices_of(ctx: Bound, provider: ModelProvider, model: str) -> Rates | None:
+    return provider.price(model, dict(ctx.run.plan.prices))
 
 
 def worst(
-    ctx: Bound, request: Any, tokens_in: int, tokens_out: int, rates: openai_table.Rates
+    ctx: Bound,
+    provider: ModelProvider,
+    request: Any,
+    tokens_in: int,
+    tokens_out: int,
+    rates: Rates,
 ) -> float:
     """What the call could cost at most on the API its path names, at the service tier the
     request names, else the file's [agent] service_tier, else the default tier."""
-    responses = openai_table.is_responses(str(request.url.path))
-    tier = held_tier(ctx, request)
-    return openai_table.most_cost(tokens_in, tokens_out, rates.at(tier), responses=responses)
+    tier = held_tier(ctx, provider, request)
+    return provider.most_cost(tokens_in, tokens_out, rates.at(tier), path=str(request.url.path))
 
 
-def held_tier(ctx: Bound, request: Any) -> str | None:
+def held_tier(ctx: Bound, provider: ModelProvider, request: Any) -> str | None:
     """The tier a call is held at: the one the request names, else [agent] service_tier, else
     none, which is the default tier. Nothing is ever added to the request."""
-    fields = openai_table.request_fields(body_of(request) or b"")
-    return openai_table.request_tier(fields) or ctx.run.plan.service_tier
+    fields = provider.request_fields(body_of(request) or b"")
+    return provider.request_tier(fields) or ctx.run.plan.service_tier
 
 
 def no_price(model: str) -> str:
@@ -1025,19 +1040,20 @@ def hold_for(ctx: Bound, step: Step, request: Any, extra: dict[str, object]) -> 
     plan = ctx.run.plan
     if step.call.kind != "model" or plan.budget_usd is None:
         return None
-    if step.call.name in openai_table.FREE_OPS:
+    provider = provider_for(ctx.run, step)
+    if step.call.name in provider.free_ops:
         return None
     model = str(extra.get("model", ""))
-    rates = prices_of(ctx, model)
+    rates = prices_of(ctx, provider, model)
     if rates is None:
         ctx.run.refuse(step, "no_price")
         refuse(ctx.run, step, no_price(model))
     body = body_of(request) or b""
-    fields = openai_table.request_fields(body) if body else None
-    output = openai_table.max_output(fields or {}) or plan.reserve_output_tokens
-    if step.call.name == "chat" and not openai_table.is_responses(str(request.url.path)):
-        output *= openai_table.choices(fields or {})  # Responses has no n
-    return worst(ctx, request, len(body) // CHAR_PER_TOKEN, output, rates)
+    fields = provider.request_fields(body) if body else None
+    output = provider.max_output(fields or {}) or plan.reserve_output_tokens
+    if step.call.name == "chat" and provider.api(str(request.url.path)) != RESPONSES:
+        output *= provider.choices(fields or {})  # Responses has no n
+    return worst(ctx, provider, request, len(body) // CHAR_PER_TOKEN, output, rates)
 
 
 def reserve(ctx: Bound, step: Step, request: Any, extra: dict[str, object]) -> int | None:
@@ -1289,7 +1305,7 @@ def off_host(ctx: Bound, step: Step, request: Any, response: Any) -> str | None:
         host = host_of(request.url.join(response.headers["location"]))
     except Exception:  # not a usable address: the library raises its own error on it
         return None
-    return None if provider_of(ctx, host) else host
+    return None if ctx.run.plan.registry.candidates(host) else host
 
 
 async def close_keeping_cancel(response: Any) -> "asyncio.CancelledError | None":
@@ -1315,9 +1331,10 @@ def redirected_away(
     host: str,
 ) -> NoReturn:
     """Stop here: past this hop the gate would not see the call, so nothing could price it."""
-    rates = prices_of(ctx, str(extra.get("model", "")))
+    provider = provider_for(ctx.run, step)
+    rates = prices_of(ctx, provider, str(extra.get("model", "")))
     tokens = len(body_of(request) or b"") // CHAR_PER_TOKEN
-    usd = worst(ctx, request, tokens, 0, rates) if rates else None
+    usd = worst(ctx, provider, request, tokens, 0, rates) if rates else None
     extra.update(cost_usd=usd, cost_estimated=usd is not None)
     settle(ctx, reservation, usd or 0.0)
     ctx.run.refuse(step, "redirect_off_host")
@@ -1344,11 +1361,12 @@ def failed(
         ctx.run.finish(step, error=error)
         return
     never_sent = (getattr(module, "ConnectError", ()), getattr(module, "ConnectTimeout", ()))
-    rates = prices_of(ctx, str(extra.get("model", "")))
+    provider = provider_for(ctx.run, step)
+    rates = prices_of(ctx, provider, str(extra.get("model", "")))
     usd: float | None = 0.0
     if not isinstance(error, never_sent):
         tokens = len(body_of(request) or b"") // CHAR_PER_TOKEN
-        usd = worst(ctx, request, tokens, 0, rates) if rates else None
+        usd = worst(ctx, provider, request, tokens, 0, rates) if rates else None
         extra["cost_estimated"] = usd is not None
     extra["cost_usd"] = usd
     ctx.run.finish(step, error=error)
@@ -1430,10 +1448,10 @@ def left_as_it_is(ctx: Bound, step: Step, extra: dict[str, object], said: Unchan
         extra["mistake"] = message
 
 
-def model_op(step: Step, request: Any) -> str:
+def model_op(run: RunState, step: Step, request: Any) -> str:
     """What a model call is, for a change to its reply: a Responses call is a chat to the
     engine, yet its reply has no choices to change."""
-    if openai_table.is_responses(path_of(request.url)):
+    if provider_for(run, step).api(path_of(request.url)) == RESPONSES:
         return "responses"
     return str(step.call.name)
 
@@ -1446,7 +1464,7 @@ def decided_by_headers(
     headers = response.headers.multi_items()
     word = ctx.run.plan.faults[step.decision.fault or 0].do
     verdict = (
-        changes.chat_kind(response.status_code, model_op(step, request), headers, word)
+        changes.chat_kind(response.status_code, model_op(ctx.run, step, request), headers, word)
         if step.call.kind == "model"
         else changes.web_kind(response.status_code, str(request.method), headers)
     )
@@ -1505,7 +1523,7 @@ def changed_reply(
     body = b"".join(chunks)
     headers = response.headers.multi_items()
     status = response.status_code
-    op = model_op(step, request)
+    op = model_op(ctx.run, step, request) if step.call.kind == "model" else ""
     if step.call.kind == "model":
         change = changes.model_change(fault.do, op)
         done = change(status, op, headers, body, fault, decoded=loaded)
@@ -1521,7 +1539,7 @@ def changed_reply(
     reply = blob(done.body, ctx.sender, scrub=ctx.run.secrets)
     ctx.run.changed(step, Changed(None, done.count, done.parts), reply=reply, status=done.status)
     if step.call.kind == "model" and fault.do in REPLY_FAULTS:  # never a model replace
-        asked = openai_table.request_fields(body_of(request) or b"") or {}
+        asked = provider_for(ctx.run, step).request_fields(body_of(request) or b"") or {}
         faulted(ctx, step, asked, done.body, responses=op == "responses")
     stream = module.ByteStream(done.body)
     return rebuilt(module, client, request, response, done.headers, stream, done.status)
@@ -1769,31 +1787,32 @@ def record(
                 lambda: web_recorded(request, response, body, encoding)
             )
         return 0.0
-    used = openai_table.usage(body, output_required=step.call.name == "chat")
+    provider = provider_for(ctx.run, step)
+    used = provider.usage(body, output_required=step.call.name == "chat")
     tokens_in, tokens_out, cached = used.input, used.output, used.cached
     if not used.known:
         tokens_in = len(body_of(request) or b"") // CHAR_PER_TOKEN
         tokens_out = len(body) // CHAR_PER_TOKEN
-    free = step.call.name in openai_table.FREE_OPS
-    rates = openai_table.Rates(0.0, 0.0) if free else prices_of(ctx, str(extra.get("model", "")))
+    free = step.call.name in provider.free_ops
+    rates = Rates(0.0, 0.0) if free else prices_of(ctx, provider, str(extra.get("model", "")))
     usd = None
     unpriced: str | None = None
     # A gateway that says what the call cost: OpenRouter in usage.cost, the LiteLLM proxy in a
     # header. Nothing is added to the request to ask.
     exact = used.cost
     if exact is None:
-        exact = openai_table.gateway_cost(response.headers.get(COST_HEADER))
+        exact = provider.gateway_cost(response.headers.get(COST_HEADER))
     if rates and used.known:
-        writes = used.written_30m, used.written_12h
+        writes = used.writes
         # The reply says its tier; a reply that does not is settled at the tier it was held at.
-        at = rates.at(used.tier or held_tier(ctx, request))
+        at = rates.at(used.tier or held_tier(ctx, provider, request))
         if rates.unpriced(used.tier):
             # A tier the row does not price: settle at the dearest it does, and say so.
-            at = openai_table.dearest(rates, tokens_in, tokens_out, cached, *writes)
+            at = provider.dearest(rates, tokens_in, tokens_out, cached, *writes)
             unpriced = used.tier
-        usd = openai_table.cost(tokens_in, tokens_out, at, cached, *writes)
+        usd = provider.cost(tokens_in, tokens_out, at, cached, *writes)
     elif rates:  # a guess from the sizes, so every input token at its dearest rate
-        usd = worst(ctx, request, tokens_in, tokens_out, rates)
+        usd = worst(ctx, provider, request, tokens_in, tokens_out, rates)
     if usd is not None and exact is not None and not free:
         # A gateway's figure can raise a call's cost, never lower it: a gateway that reports 0,
         # or only its own fee, must not turn the budget off.

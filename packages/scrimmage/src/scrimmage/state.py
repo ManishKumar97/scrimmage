@@ -32,12 +32,13 @@ from typing import Any, NamedTuple, NoReturn, Protocol, TypeVar, cast
 
 from scrimmage import capture, labels
 from scrimmage import decide as engine
-from scrimmage import provider_openai as openai_table
 from scrimmage.changes import Changed
 from scrimmage.decide import missed
 from scrimmage.errors import ScrimmageRefused, ScrimmageStopped, ScrimmageTimeLimit
 from scrimmage.outcomes import PREVIEW
 from scrimmage.plan import Plan
+from scrimmage.providers.base import Given, ModelProvider
+from scrimmage.providers.registry import built_in
 from scrimmage.records import RECORD_VERSION
 from scrimmage.redact import redact, redact_decoded, redacted, remove_values, scrubbed
 
@@ -186,7 +187,7 @@ def model_path_hint(label: str, detail: str) -> str | None:
     """For a POST to a model's path on a host no one named: where to name it. None for any
     other request. Listed under real it would run as a plain web request, never budgeted."""
     method, _, path = detail.partition(" ")
-    if not label.startswith("http:") or openai_table.op_for(path, method) is None:
+    if not label.startswith("http:") or not built_in().recognizes(path, method):
         return None
     host = label.removeprefix("http:")
     return (
@@ -364,7 +365,7 @@ class RunState:
         self.injected: list[str] = []
         # What each fault in a model's reply gave the agent, by the call's label: a later
         # request to that label that carries one was built from the faulted reply.
-        self.reply_fault_markers: dict[str, list[openai_table.Given]] = {}
+        self.reply_fault_markers: dict[str, list[Given]] = {}
         # The ids of the Responses replies a fault changed or built, and of their items: they
         # are made up, so OpenAI holds nothing under them, and a later request may not ask
         # OpenAI to look one up.
@@ -772,7 +773,7 @@ class RunState:
             line.update(extra)
         self.put(line, keep=True)
 
-    def add_reply_fault_markers(self, label: str, gave: openai_table.Given) -> None:
+    def add_reply_fault_markers(self, label: str, gave: Given) -> None:
         """Keep what a fired fault in a model's reply gave the agent. Called where the faulted
         reply is made, built or changed, and only then."""
         if gave.ids or gave.prefixes:
@@ -784,12 +785,12 @@ class RunState:
         with self._lock:
             self.faulted_reply_ids.update(ids)
 
-    def chains_to_a_fault(self, fields: dict[str, object]) -> str | None:
+    def chains_to_a_fault(self, provider: ModelProvider, fields: dict[str, object]) -> str | None:
         """The first id this Responses request asks OpenAI to look up, as previous_response_id
         or an item_reference, that a fault made; else None."""
         with self._lock:
             return next(
-                (i for i in openai_table.references(fields) if i in self.faulted_reply_ids), None
+                (i for i in provider.references(fields) if i in self.faulted_reply_ids), None
             )
 
     def carries_reply_fault(self, label: str, fields: dict[str, object]) -> bool:
@@ -797,7 +798,9 @@ class RunState:
         same label gave the agent."""
         with self._lock:
             kept = list(self.reply_fault_markers.get(label, ()))
-        return openai_table.carries(fields, kept)
+        # The label is model:NAME, or model:NAME/op: the provider that made the markers.
+        name = label.removeprefix("model:").partition("/")[0]
+        return self.plan.registry.get(name).carries(fields, kept)
 
     def unchanged(self, step: Step, why: str) -> None:
         """A carried fault could not change this call: it gets what the baseline gives it, and
