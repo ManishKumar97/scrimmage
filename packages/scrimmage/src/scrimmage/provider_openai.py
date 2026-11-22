@@ -11,11 +11,13 @@ import math
 import string
 import time
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass, field
 from typing import cast
 
 from scrimmage import prices
 from scrimmage.prices import Rates as Rates
+from scrimmage.providers.base import Given as Given
+from scrimmage.providers.base import Offered as Offered
+from scrimmage.providers.base import Usage as Usage
 
 HOSTS = ("api.openai.com",)
 CHAT_PATHS = ("/chat/completions", "/responses")
@@ -413,18 +415,6 @@ def unknown_tool_reply(fields: dict[str, object], tokens_in: int, tool: str) -> 
     return chat_reply(fields, tokens_in, message, "tool_calls")
 
 
-@dataclass(frozen=True)
-class Given:
-    """What a faulted chat reply gave the agent, in the forms a request built from it carries
-    back. ids: the reply's tool call ids, made fresh for each reply, so no other conversation
-    holds them. prefixes: for each choice, the faulted request's messages and then the
-    message the agent got, with None and empty values left out, kept as their count and
-    digest. A run that faults every call keeps a few bytes per fault, not the conversation."""
-
-    ids: frozenset[str] = frozenset()
-    prefixes: frozenset[tuple[int, bytes]] = frozenset()
-
-
 def given(fields: dict[str, object], reply: bytes, *, ids_only: bool) -> Given:
     """What this reply to this request gave the agent. ids_only: the tool call ids alone, for
     a reply whose message any model may send, such as a call to multi_tool_use.parallel."""
@@ -540,18 +530,6 @@ def choices(fields: dict[str, object]) -> int:
     if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_CHOICES:
         return value
     return 1
-
-
-@dataclass
-class Usage:
-    input: int = 0
-    output: int = 0
-    known: bool = False
-    cached: int = 0  # input tokens the provider served from its prompt cache
-    written_30m: int = 0  # input tokens written to the cache for 30 minutes
-    written_12h: int = 0  # and for 12 hours
-    tier: str | None = None  # the service tier the reply says it was billed at
-    cost: float | None = None  # dollars, if a gateway's reply says what the call cost
 
 
 def usage(body: bytes, *, output_required: bool = True) -> Usage:
@@ -702,16 +680,6 @@ def most_cost(tokens_in: int, tokens_out: int, rates: Rates, *, responses: bool)
 
 def _or_input(rate: float | None, rates: Rates) -> float:
     return rates.input if rate is None else rate
-
-
-@dataclass
-class Offered:
-    """The tools a model request offers, sorted."""
-
-    agent: list[str] = field(default_factory=list[str])  # names the agent runs itself
-    hosted_reads: list[str] = field(default_factory=list[str])  # provider tools that only read
-    hosted_writes: list[str] = field(default_factory=list[str])  # MCP server labels
-    unknown: list[str] = field(default_factory=list[str])  # tool types not in the table
 
 
 def offered(path: str, fields: dict[str, object]) -> Offered:
