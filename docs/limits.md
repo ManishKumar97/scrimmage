@@ -149,6 +149,8 @@ If none of these applies, the rest of this page is detail for your use case.
 
 - **Another process can take the port before the copy binds it.** Scrimmage picks a free port, and the copy binds it a moment later. If another process takes it in between, the copy exits and is started again on a new port, up to 3 starts. After the third, the test stops with exit 3, the ports it tried and the copy's last lines.
 
+- **A copy's bind error that names no address can blame the wrong port.** Where the log's "address in use" line has no address, as with `uvicorn --workers` or hypercorn, Scrimmage asks `/proc` instead. Any socket on the picked port counts, an outgoing connection's local port too, because it blocks a bind as a listener does. A copy that fails on a port its command fixes can then be started again, up to 3 starts; the last message shows the copy's own log lines.
+
 - **Without `/proc`, a copy that answers with no gate is named only after 30 seconds.** On a system with no `/proc`, such as macOS, Scrimmage cannot tell whether the copy or another process answered the probe. So it waits up to the probe's 30 seconds for the copy to exit, as one that lost its port does once it has loaded the app. On Linux it names a copy with no gate at once.
 
 - **A process that leaves the copy's group with `setsid` is not stopped.** With `start`, Scrimmage stops the copy of the service by its process group, so a process the service starts in a session of its own keeps running after the test.

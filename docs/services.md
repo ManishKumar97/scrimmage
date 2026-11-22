@@ -55,7 +55,7 @@ It has mode `600`, and each value `${NAME}` filled in is removed from it when th
 On Ctrl-C or SIGTERM the copy is stopped at once, so a run waiting on its reply ends then, not at `run_timeout`.
 
 Another process can take the port in the moment before the copy binds it.
-If the copy then exits before it is ready while another process holds that port, Scrimmage starts it again on a new port, up to 3 starts in all, and prints a line for each new start.
+If the copy then exits before it is ready, and its log says that port is in use, or names no address while another process holds that port, Scrimmage starts it again on a new port, up to 3 starts in all, and prints a line for each new start.
 A service that takes longer than 30 seconds to start is not covered in this version.
 
 `scrimmage check --service` starts and stops a copy the same way, and sends no run; see [scrimmage check --service](cli.md#scrimmage-check-service).
