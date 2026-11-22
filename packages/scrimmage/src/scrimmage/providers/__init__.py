@@ -1,8 +1,8 @@
 """Model providers behind one interface.
 
-The gate, the changes, the run's state, the config and init know a provider only through
-`ModelProvider` and `ProviderRegistry`: none imports a provider's own module. A provider is
-a module of pure functions, and a strategy class in this package that implements the
-interface by calling them. This file imports nothing, so reading a provider's types costs
-no provider module.
+Every module of scrimmage outside this package knows a provider only through `ModelProvider`,
+`ServerChains` and `ProviderRegistry`: none imports a provider's own module, its class or a
+name the registry does not export. A provider is a class in `providers.impl`, over the pure
+functions of its own table module (provider_openai for OpenAI), and an entry in the registry.
+This file imports nothing, so reading a provider's types costs no provider module.
 """
