@@ -38,10 +38,18 @@ STARTED = "the service started with [agent] start"
 # A copy whose port another process took between the pick and its bind is started again on
 # a new port, up to this many starts in all.
 START_TRIES = 3
-# Where /proc cannot say who holds the port: how a server says its bind failed, as uvicorn
-# and Python "address already in use" or "Errno 98", and Node "EADDRINUSE". The same line
-# must name the copy's port as an address does, ":PORT" or ", PORT)".
+# How a server says its bind failed, as uvicorn and Python "address already in use" or
+# "Errno 98", and Node "EADDRINUSE". The same line must name the copy's port as an address
+# does, ":PORT" or ", PORT)", for that port to be the one taken.
 IN_USE = re.compile(r"address already in use|EADDRINUSE|Errno 98", re.IGNORECASE)
+# An address with a port: a Python socket tuple, as uvicorn and gunicorn print ("127.0.0.1",
+# 8000) or ('::1', 8000, 0, 0), or host:port with an IPv4, bracketed IPv6 or localhost, or
+# ":::PORT". A time such as 18:37:33 or a file:line such as config.py:605 is not one.
+ADDRESS = re.compile(
+    r"\('[^']*', \d+[,)]"
+    r"|(?<![\w.:])(?:\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-fA-F:]+\]|localhost):\d+(?!\d)"
+    r"|:::\d+(?!\d)"
+)
 
 
 class CopyFailed(Setup):
@@ -161,22 +169,27 @@ class Managed:
         return start_args(self.config.agent, self.port)
 
     def port_taken(self) -> bool:
-        """The copy exited because another process took its port before it bound it: a
-        socket of no process of the copy's group holds that port. Never for a copy that
-        still runs, exited with code 0, as a start that forks a daemon does, or failed
-        another way, or could not bind a port the command fixes
-        itself, which a new port would not change. Where /proc cannot say, a line of this
-        start's output must say its bind failed and name its port."""
+        """The copy exited because another process took its port before it bound it. The
+        copy's log decides first: a line saying an address is in use names the port, or
+        names another address, which a new port would not change. Where no line names an
+        address, a socket of no process of the copy's group holds the port, as /proc says;
+        without /proc, it is not taken. Never for a copy that still runs, exited with code
+        0, as a start that forks a daemon does, or whose command fixes its own port."""
         if self.proc is None or self.proc.poll() is None:
             return False
         if self.proc.returncode == 0:  # a failed bind is never a clean exit; a daemon's is
             return False
         if self.words() == start_args(self.config.agent, self.port + 1):
             return False  # the port is not in the command, so another would not help
+        said = self.bind_errors()
+        if any(self.names_port(line) for line in said):
+            return True
+        if any(ADDRESS.search(line) for line in said):
+            return False  # its bind failed on another address, whatever else holds this port
         held = sockets_on(self.port)
         if held is not None:
             return bool(held - self.group_sockets())
-        return self.said_port_taken()
+        return False
 
     def group_sockets(self) -> set[str]:
         """What the fds of the copy's group's processes link to, its sockets among them."""
@@ -192,16 +205,21 @@ class Managed:
                 continue
         return found
 
-    def said_port_taken(self) -> bool:
-        """A line of this start's last output says its bind failed, on the copy's port."""
+    def names_port(self, line: str) -> bool:
+        """A line names the copy's port as an address does, ":PORT", ", PORT)" or ", PORT,"."""
+        return re.search(rf"(?::{self.port}|, {self.port}[,)])(?!\d)", line) is not None
+
+    def bind_errors(self) -> list[str]:
+        """The lines of this start's last output that say an address is in use. When the
+        copy bound a port of its own that another process holds, they name that port, and
+        a socket on the picked port that /proc shows is not the cause."""
         try:
             with self.log.open("rb") as handle:
                 handle.seek(max(self.log_from, self.log.stat().st_size - TAIL_BYTES))
                 text = handle.read().decode("utf-8", "replace")
         except OSError:
-            return False
-        port = re.compile(rf"(?::{self.port}|, {self.port}\))(?!\d)")
-        return any(IN_USE.search(line) and port.search(line) for line in text.splitlines())
+            return []
+        return [line for line in text.splitlines() if IN_USE.search(line)]
 
     def start_again(self, port: int, config: Config, stopping: Callable[[], bool]) -> bool:
         """After port_taken: the copy's group reaped, then the copy started on port, its

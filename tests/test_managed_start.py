@@ -106,6 +106,22 @@ said = {
 print(said[which], flush=True)
 raise SystemExit(1)
 """
+# Prints the line uvicorn prints when its bind fails, in one of its wordings, then exits 3.
+BINDS = """import sys
+
+port, which = sys.argv[1], sys.argv[2]
+said = {
+    "ipv6": f"ERROR:    [Errno 98] error while attempting to bind on address ('::1', {port}, 0, 0):"
+    " address already in use",
+    "ipv4": f"ERROR:    [Errno 98] error while attempting to bind on address ('127.0.0.1', {port}):"
+    " address already in use",
+    "time": "2026-11-22 18:37:33,068 ERROR [Errno 98] Address already in use",
+    "fileline": "2026-11-22 18:37:33,068 config.py:605 uvicorn.error:605 ERROR [Errno 98]"
+    " Address already in use",
+}
+print(said[which], flush=True)
+raise SystemExit(3)
+"""
 # Binds its port, then serves no request: a client that sends "hold" crashes it, and that
 # client keeps its end open, so the dead copy's end of that connection waits in FIN_WAIT2.
 HOLDS = """import socket
@@ -227,6 +243,7 @@ class Shop:
             "prints.py": PRINTS,
             "marking.py": MARKING,
             "chatty.py": CHATTY,
+            "binds.py": BINDS,
             "holds.py": HOLDS,
             "daemon.py": DAEMON,
             "lingers.sh": LINGERS.replace("PYTHON", sys.executable),
@@ -816,6 +833,46 @@ def test_a_port_the_command_fixes_is_not_started_again(shop: Shop) -> None:
     assert f"('127.0.0.1', {fixed}): " in out and "address already in use" in out, out
     assert "was taken before" not in out and "starts on ports" not in out, out
     assert len(shop.copies) == 1 and len(shop.copies[0].ports) == 1
+
+
+@pytest.mark.parametrize("proc", [True, False], ids=["proc", "no-proc"])
+def test_a_port_held_by_another_is_not_blamed_for_a_bind_that_failed_elsewhere(
+    shop: Shop, proc: bool
+) -> None:
+    """Another process holds the picked port, but the copy fails to bind a port its command
+    fixes: its log names that address, so a new picked port would not help. The copy is
+    started once and its bind error shown, not blamed on the picked port."""
+    if not proc:
+        no_proc(shop)
+    with held_port() as picked, held_port() as fixed:
+        shop.monkeypatch.setattr(runner, "free_port", lambda: picked)
+        start = f"{UVICORN} acme.service:app --port {fixed} --root-path /{{port}} --loop asyncio"
+        code, out = shop.test(start)
+    assert code == 3, out
+    assert f"('127.0.0.1', {fixed}): " in out and "address already in use" in out, out
+    assert "was taken before" not in out and "starts on ports" not in out, out
+    assert len(shop.copies) == 1 and len(shop.copies[0].ports) == 1
+
+
+@pytest.mark.parametrize(
+    ("which", "proc"),
+    [("ipv4", True), ("ipv6", True), ("ipv6", False), ("time", True), ("fileline", True)],
+    ids=["ipv4", "ipv6", "ipv6-no-proc", "time-no-address", "file-line-no-address"],
+)
+def test_a_bind_error_in_any_wording_blames_the_picked_port_it_names(
+    shop: Shop, which: str, proc: bool
+) -> None:
+    """Another process holds the picked port and the copy's log says the bind failed on it,
+    as ('::1', PORT, 0, 0) for an IPv6 host, or with no address at all but a time in the
+    line: the copy is started again, as many times as are allowed."""
+    if not proc:
+        no_proc(shop)
+    with held_port() as taken:
+        shop.monkeypatch.setattr(runner, "free_port", lambda: taken)
+        code, out = shop.test(f"{sys.executable} binds.py {{port}} {which}")
+    assert code == 3, out
+    assert f"scrimmage: port {taken} was taken before the service bound it" in out, out
+    assert len(shop.copies[0].ports) == managed.START_TRIES, out
 
 
 def test_a_port_another_process_holds_names_the_copys_exit(shop: Shop) -> None:
