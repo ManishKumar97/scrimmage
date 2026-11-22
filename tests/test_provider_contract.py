@@ -60,6 +60,9 @@ class Case:
     # (word, path, fields) that cannot be carried out: a mistake in the test.
     not_carried: tuple[tuple[str, str, dict[str, object]], ...]
     capped: Callable[[int], dict[str, object]]  # a request that caps its output at this many
+    # A request that asks for this many replies, each capped at this many tokens; None when the
+    # provider's API gives one reply for each request.
+    replies: Callable[[int, int], dict[str, object]] | None = None
     chain: Chain | None = None
 
 
@@ -126,6 +129,7 @@ CASES = {
             ("context too long", "/v1/responses", {"model": "m", "input": "hi"}),
         ),
         capped=lambda n: {"model": "gpt-4o-mini", "messages": [], "max_tokens": n},
+        replies=lambda n, cap: {"model": "gpt-4o-mini", "messages": [], "n": n, "max_tokens": cap},
         chain=Chain(
             path="/v1/responses",
             reply=OPENAI / "response_text.json",
@@ -408,7 +412,14 @@ def test_the_output_a_call_could_bill_is_its_cap_or_the_default(provider: ModelP
             assert provider.output_cap(case.capped(bad), path, 4096) >= 4096, bad  # type: ignore[arg-type]
     capped = provider.output_cap(case.capped(50), case.chat_path, 4096)
     assert 50 <= capped < 4096, "a cap holds less than the default"
-    assert provider.output_cap(case.capped(50), case.chat_path, 4096) >= capped
+    if case.replies is not None:
+        # Each reply is billed for its own output, so asking for more holds more.
+        one, three = case.replies(1, 50), case.replies(3, 50)
+        assert provider.output_cap(three, case.chat_path, 4096) >= 3 * 50
+        assert provider.output_cap(three, case.chat_path, 4096) >= 3 * (
+            provider.output_cap(one, case.chat_path, 4096)
+        )
+        assert provider.output_cap(case.replies(3, 77), case.chat_path, 4096) >= 3 * 77
 
 
 def test_a_text_is_found_in_a_request_that_holds_it_and_junk_is_never_an_error(
@@ -504,3 +515,13 @@ def test_the_dearest_rates_are_the_ones_the_call_costs_most_at(provider: ModelPr
     tier = Rates(4.0, 16.0)
     rates = Rates(2.0, 8.0, tiers=(("priority", tier),))
     assert provider.dearest(rates, 100, 100, 0, {}) == tier
+
+
+def test_the_dearest_rates_count_the_writes_of_the_call(provider: ModelProvider) -> None:
+    """A tier that writes dearer is the dearest only for a call that wrote."""
+    case = case_of(provider)
+    for field in case.write_fields:
+        tier = dataclasses.replace(Rates(1.0, 1.0), **{field: 10.0})
+        rates = Rates(1.0, 1.0, tiers=(("t", tier),))
+        assert provider.dearest(rates, 100, 0, 0, {field: 100}) == tier
+        assert provider.dearest(rates, 100, 0, 0, {}) == rates
