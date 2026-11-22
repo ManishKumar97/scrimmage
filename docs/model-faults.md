@@ -518,11 +518,15 @@ To hold less, set `max_tokens` on the call, lower `reserve_output_tokens`, or lo
 
 ### Prices
 
-Scrimmage ships prices for common OpenAI models, cached input included, checked against OpenAI's pricing page on 19 November 2026.
-They cover `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5-pro`, `gpt-5.1`, `gpt-5.2`, `gpt-5.2-pro`, `gpt-5.3-codex`, `gpt-5.4-mini`, `gpt-5.4-nano` and the `text-embedding-3` models.
-`gpt-4.1-nano` is no longer on that page, so its price is the one listed on 7 November 2026.
-A model with a higher price above 272K input tokens, such as `gpt-5.4`, `gpt-5.5` or a `gpt-5.6` model, is not in the table, because one price per kind of token would price a long call too low.
-Give it under `[agent.prices]`, at the long-context price if a call can go over 272K input tokens.
+Scrimmage ships prices for OpenAI models, cached input included, checked against OpenAI's pricing page on 22 November 2026.
+They cover `gpt-4o`, `gpt-4o-mini`, the `gpt-4.1` family, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5-pro`, `gpt-5.1` to `gpt-5.6`, the `gpt-6` family, `o3`, `o3-pro`, `chat-latest`, `gpt-5-search-api`, `gpt-5.3-codex` and the `text-embedding` models.
+`gpt-4o-2024-05-13` and `gpt-4.1-nano` are no longer on that page, so their prices are the ones listed on 7 November 2026.
+A model that the page lists with a higher price above 272K input tokens, such as `gpt-5.4`, `gpt-5.5` or `gpt-6.2-astra`, has a `long` table with the price of a call over that size, charged on the whole call.
+The `flex`, `fast`, `priority` and `ultrafast` service tiers have their own rates where the page lists them.
+`fast` and `priority` are the same tier under two names, so each model holds both.
+See [Long-context prices](configuration.md#long-context-prices) and [Service tiers](configuration.md#service-tiers).
+`gpt-5.6-sol` is not in the table: the page lists only a promotional price, which ends on 30 November 2026.
+Give it under `[agent.prices]`.
 A dated model, such as `gpt-4o-mini-2024-07-18`, uses its family's price.
 For any other model, give the price in dollars per million tokens:
 

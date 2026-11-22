@@ -1,5 +1,6 @@
 """Model prices as data: the shipped file holds every price the code once held."""
 
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -33,12 +34,409 @@ TODAYS = {
 }
 
 
+# OpenAI's pricing page as read by hand on 22 November 2026, every row the file holds: the rates
+# of the standard tier, then each other tier and the long-context rates. The file holds the fast
+# tier twice, under fast and under priority, which the test adds back with expand().
+PAGE = {
+    "gpt-4o": Rates(2.5, 10.0, 1.25, tiers=(("fast", Rates(4.25, 17.0, 2.125)),)),
+    "gpt-4o-2024-05-13": Rates(5.0, 15.0),
+    "gpt-4o-mini": Rates(0.15, 0.6, 0.075, tiers=(("fast", Rates(0.25, 1.0, 0.125)),)),
+    "gpt-4.1": Rates(2.0, 8.0, 0.5, tiers=(("fast", Rates(3.5, 14.0, 0.875)),)),
+    "gpt-4.1-mini": Rates(0.4, 1.6, 0.1, tiers=(("fast", Rates(0.7, 2.8, 0.175)),)),
+    "gpt-4.1-nano": Rates(0.1, 0.4, 0.025),
+    "gpt-5": Rates(
+        1.25,
+        10.0,
+        0.125,
+        tiers=(
+            ("flex", Rates(0.625, 5.0, 0.0625)),
+            ("fast", Rates(2.5, 20.0, 0.25)),
+        ),
+    ),
+    "gpt-5-mini": Rates(
+        0.25,
+        2.0,
+        0.025,
+        tiers=(
+            ("flex", Rates(0.125, 1.0, 0.0125)),
+            ("fast", Rates(0.45, 3.6, 0.045)),
+        ),
+    ),
+    "gpt-5-nano": Rates(0.05, 0.4, 0.005, tiers=(("flex", Rates(0.025, 0.2, 0.0025)),)),
+    "gpt-5-pro": Rates(15.0, 120.0),
+    "gpt-5.1": Rates(
+        1.25,
+        10.0,
+        0.125,
+        tiers=(
+            ("flex", Rates(0.625, 5.0, 0.0625)),
+            ("fast", Rates(2.5, 20.0, 0.25)),
+        ),
+    ),
+    "gpt-5.2": Rates(
+        1.75,
+        14.0,
+        0.175,
+        tiers=(
+            ("flex", Rates(0.875, 7.0, 0.0875)),
+            ("fast", Rates(3.5, 28.0, 0.35)),
+        ),
+    ),
+    "gpt-5.2-pro": Rates(21.0, 168.0),
+    "gpt-5.3-codex": Rates(1.75, 14.0, 0.175, tiers=(("fast", Rates(3.5, 28.0, 0.35)),)),
+    "gpt-5.4-mini": Rates(
+        0.75,
+        4.5,
+        0.075,
+        tiers=(
+            ("flex", Rates(0.375, 2.25, 0.0375)),
+            ("fast", Rates(1.5, 9.0, 0.15)),
+        ),
+    ),
+    "gpt-5.4-nano": Rates(0.2, 1.25, 0.02, tiers=(("flex", Rates(0.1, 0.625, 0.01)),)),
+    "gpt-6.2-astra": Rates(
+        8.0,
+        40.0,
+        0.4,
+        10.0,
+        20.0,
+        above=272000,
+        long=Rates(16.0, 60.0, 0.8, 20.0, 40.0),
+        tiers=(
+            (
+                "fast",
+                Rates(
+                    16.0,
+                    80.0,
+                    0.8,
+                    20.0,
+                    40.0,
+                    above=272000,
+                    long=Rates(32.0, 120.0, 1.6, 40.0, 80.0),
+                ),
+            ),
+        ),
+    ),
+    "gpt-6.2-sol": Rates(
+        2.0,
+        10.0,
+        0.1,
+        2.5,
+        5.0,
+        above=272000,
+        long=Rates(4.0, 15.0, 0.2, 5.0, 10.0),
+        tiers=(
+            (
+                "fast",
+                Rates(
+                    4.0, 20.0, 0.2, 5.0, 10.0, above=272000, long=Rates(8.0, 30.0, 0.4, 10.0, 20.0)
+                ),
+            ),
+        ),
+    ),
+    "gpt-6-astra": Rates(
+        10.0,
+        50.0,
+        1.0,
+        12.5,
+        25.0,
+        above=272000,
+        long=Rates(20.0, 75.0, 2.0, 25.0, 50.0),
+        tiers=(
+            (
+                "flex",
+                Rates(
+                    5.0,
+                    25.0,
+                    0.5,
+                    6.25,
+                    12.5,
+                    above=272000,
+                    long=Rates(10.0, 37.5, 1.0, 12.5, 25.0),
+                ),
+            ),
+            (
+                "fast",
+                Rates(
+                    20.0,
+                    100.0,
+                    2.0,
+                    25.0,
+                    50.0,
+                    above=272000,
+                    long=Rates(40.0, 150.0, 4.0, 50.0, 100.0),
+                ),
+            ),
+            (
+                "ultrafast",
+                Rates(
+                    60.0,
+                    300.0,
+                    6.0,
+                    75.0,
+                    150.0,
+                    above=272000,
+                    long=Rates(120.0, 450.0, 12.0, 150.0, 300.0),
+                ),
+            ),
+        ),
+    ),
+    "gpt-6.1-sol": Rates(
+        2.0,
+        10.0,
+        0.1,
+        2.5,
+        5.0,
+        above=272000,
+        long=Rates(4.0, 15.0, 0.2, 5.0, 10.0),
+        tiers=(
+            (
+                "flex",
+                Rates(1.0, 5.0, 0.05, 1.25, 2.5, above=272000, long=Rates(2.0, 7.5, 0.1, 2.5, 5.0)),
+            ),
+            (
+                "fast",
+                Rates(
+                    4.0, 20.0, 0.2, 5.0, 10.0, above=272000, long=Rates(8.0, 30.0, 0.4, 10.0, 20.0)
+                ),
+            ),
+            (
+                "ultrafast",
+                Rates(
+                    12.0,
+                    60.0,
+                    0.6,
+                    15.0,
+                    30.0,
+                    above=272000,
+                    long=Rates(24.0, 90.0, 1.2, 30.0, 60.0),
+                ),
+            ),
+        ),
+    ),
+    "gpt-6.1-terra": Rates(
+        1.0,
+        5.0,
+        0.05,
+        1.25,
+        2.5,
+        above=272000,
+        long=Rates(2.0, 7.5, 0.1, 2.5, 5.0),
+        tiers=(
+            (
+                "flex",
+                Rates(
+                    0.5,
+                    2.5,
+                    0.025,
+                    0.625,
+                    1.25,
+                    above=272000,
+                    long=Rates(1.0, 3.75, 0.05, 1.25, 2.5),
+                ),
+            ),
+            (
+                "fast",
+                Rates(
+                    2.0, 10.0, 0.1, 2.5, 5.0, above=272000, long=Rates(4.0, 15.0, 0.2, 5.0, 10.0)
+                ),
+            ),
+        ),
+    ),
+    "gpt-6-luna": Rates(
+        0.1,
+        0.5,
+        0.01,
+        0.125,
+        0.25,
+        above=272000,
+        long=Rates(0.2, 0.75, 0.02, 0.25, 0.5),
+        tiers=(
+            (
+                "flex",
+                Rates(
+                    0.05,
+                    0.25,
+                    0.005,
+                    0.0625,
+                    0.125,
+                    above=272000,
+                    long=Rates(0.1, 0.375, 0.01, 0.125, 0.25),
+                ),
+            ),
+            (
+                "fast",
+                Rates(
+                    0.2, 1.0, 0.02, 0.25, 0.5, above=272000, long=Rates(0.4, 1.5, 0.04, 0.5, 1.0)
+                ),
+            ),
+        ),
+    ),
+    "gpt-6-sol": Rates(
+        2.0,
+        10.0,
+        0.2,
+        2.5,
+        5.0,
+        above=272000,
+        long=Rates(4.0, 15.0, 0.4, 5.0, 10.0),
+        tiers=(
+            (
+                "flex",
+                Rates(1.0, 5.0, 0.1, 1.25, 2.5, above=272000, long=Rates(2.0, 7.5, 0.2, 2.5, 5.0)),
+            ),
+            (
+                "fast",
+                Rates(
+                    4.0, 20.0, 0.4, 5.0, 10.0, above=272000, long=Rates(8.0, 30.0, 0.8, 10.0, 20.0)
+                ),
+            ),
+        ),
+    ),
+    "gpt-5.6-terra": Rates(
+        2.0,
+        12.0,
+        0.2,
+        2.5,
+        5.0,
+        above=272000,
+        long=Rates(4.0, 18.0, 0.4, 5.0, 10.0),
+        tiers=(
+            (
+                "flex",
+                Rates(1.0, 6.0, 0.1, 1.25, 2.5, above=272000, long=Rates(2.0, 9.0, 0.2, 2.5, 5.0)),
+            ),
+            (
+                "fast",
+                Rates(
+                    4.0, 24.0, 0.4, 5.0, 10.0, above=272000, long=Rates(8.0, 36.0, 0.8, 10.0, 20.0)
+                ),
+            ),
+        ),
+    ),
+    "gpt-5.6-luna": Rates(
+        0.2,
+        1.2,
+        0.02,
+        0.25,
+        0.5,
+        above=272000,
+        long=Rates(0.4, 1.8, 0.04, 0.5, 1.0),
+        tiers=(
+            (
+                "flex",
+                Rates(
+                    0.1, 0.6, 0.01, 0.125, 0.25, above=272000, long=Rates(0.2, 0.9, 0.02, 0.25, 0.5)
+                ),
+            ),
+            (
+                "fast",
+                Rates(0.4, 2.4, 0.04, 0.5, 1.0, above=272000, long=Rates(0.8, 3.6, 0.08, 1.0, 2.0)),
+            ),
+        ),
+    ),
+    "gpt-5.5": Rates(
+        5.0,
+        30.0,
+        0.5,
+        above=272000,
+        long=Rates(10.0, 45.0, 1.0),
+        tiers=(
+            ("flex", Rates(2.5, 15.0, 0.25, above=272000, long=Rates(5.0, 22.5, 0.5))),
+            ("fast", Rates(12.5, 75.0, 1.25)),
+        ),
+    ),
+    "gpt-5.5-pro": Rates(30.0, 180.0, above=272000, long=Rates(60.0, 270.0)),
+    "gpt-5.4": Rates(
+        2.5,
+        15.0,
+        0.25,
+        above=272000,
+        long=Rates(5.0, 22.5, 0.5),
+        tiers=(
+            ("flex", Rates(1.25, 7.5, 0.13, above=272000, long=Rates(2.5, 11.25, 0.25))),
+            ("fast", Rates(5.0, 30.0, 0.5)),
+        ),
+    ),
+    "gpt-5.4-pro": Rates(
+        30.0,
+        180.0,
+        above=272000,
+        long=Rates(60.0, 270.0),
+        tiers=(("flex", Rates(15.0, 90.0, above=272000, long=Rates(30.0, 135.0))),),
+    ),
+    "o3-pro": Rates(20.0, 80.0),
+    "o3": Rates(
+        2.0,
+        8.0,
+        0.5,
+        tiers=(
+            ("flex", Rates(1.0, 4.0, 0.25)),
+            ("fast", Rates(3.5, 14.0, 0.875)),
+        ),
+    ),
+    "chat-latest": Rates(5.0, 30.0, 0.5),
+    "gpt-5-search-api": Rates(1.25, 10.0, 0.125),
+    "text-embedding-3-small": Rates(0.02, 0.0),
+    "text-embedding-3-large": Rates(0.13, 0.0),
+    "text-embedding-ada-002": Rates(0.1, 0.0),
+}
+
+
+def expand(rates: Rates) -> Rates:
+    """The same rates with a priority tier beside every fast tier, as the file holds them."""
+    tiers: list[tuple[str, Rates]] = []
+    for name, tier in rates.tiers:
+        tiers.append((name, expand(tier)))
+        if name == "fast":
+            tiers.append(("priority", expand(tier)))
+    longer = None if rates.long is None else expand(rates.long)
+    return dataclasses.replace(rates, tiers=tuple(tiers), long=longer)
+
+
 @pytest.mark.design("prices.shipped_file")
-def test_the_shipped_file_holds_every_row_of_the_old_table_with_equal_rates() -> None:
+def test_the_shipped_file_holds_the_rows_read_from_the_page() -> None:
     shipped = prices.shipped()
-    assert dict(shipped.models) == TODAYS
-    assert shipped.as_of == "2026-11-19"
-    assert shipped.source.startswith("https://")
+    assert dict(shipped.models) == {model: expand(rates) for model, rates in PAGE.items()}
+    assert shipped.as_of == "2026-11-22"
+    assert shipped.source == "https://developers.openai.com/api/docs/pricing"
+
+
+@pytest.mark.design("prices.shipped_file")
+def test_the_file_still_holds_every_row_of_the_old_table_at_equal_standard_rates() -> None:
+    plain = {
+        model: dataclasses.replace(r, tiers=(), above=None, long=None)
+        for model, r in dict(prices.shipped().models).items()
+    }
+    for model, rates in TODAYS.items():
+        assert plain[model] == rates, model
+
+
+@pytest.mark.design("prices.shipped_file")
+def test_a_model_with_a_long_price_is_in_the_file_with_its_threshold() -> None:
+    for model in (
+        "gpt-5.4",
+        "gpt-5.4-pro",
+        "gpt-5.5",
+        "gpt-5.5-pro",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+    ):
+        rates = dict(prices.shipped().models)[model]
+        assert rates.above == 272000 and rates.long is not None, model
+    # A short call is at the short rate, a long one at the long rate, the whole call.
+    five = dict(prices.shipped().models)["gpt-5.5"]
+    assert five.sized(272000).input == 5.0
+    assert five.sized(272001).input == 10.0 and five.sized(272001).output == 45.0
+
+
+@pytest.mark.design("prices.shipped_file")
+def test_every_fast_tier_has_a_priority_twin_and_no_batch_tier_is_priced() -> None:
+    for model, rates in prices.shipped().models:
+        names = [name for name, _ in rates.tiers]
+        assert ("fast" in names) == ("priority" in names), model
+        assert "batch" not in names, model
+        assert rates.at("fast") == rates.at("priority"), model
 
 
 @pytest.mark.design("prices.shipped_file")
@@ -119,7 +517,7 @@ def test_check_names_each_prices_source_and_age(
     assert lines == [
         "price gpt-4.1: [agent.prices]",
         "prices: scrimmage-runs/prices.toml, as of 2026-11-20 (2 models)",
-        "prices: the shipped prices.toml, as of 2026-11-19 (18 models)",
+        "prices: the shipped prices.toml, as of 2026-11-22 (36 models)",
     ]
     assert cli.main(["check", str(tmp_path / "scrimmage.toml")]) == 0
     out = capsys.readouterr().out

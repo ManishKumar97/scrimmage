@@ -69,7 +69,7 @@ It does not import your code. A misspelled import path, such as `acme.tools:get_
 
 ```
 $ scrimmage check
-scrimmage check: scrimmage.toml is valid: 2 tests, 5 rows, 15 runs, 4 tools, a budget of $5, prices as of 2026-11-19
+scrimmage check: scrimmage.toml is valid: 2 tests, 5 rows, 15 runs, 4 tools, a budget of $5, prices as of 2026-11-22
 ```
 
 The budget line ends with the date of the prices the budget is measured at.

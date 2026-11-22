@@ -152,7 +152,7 @@ def test_cache_write_prices_and_the_current_table_are_documented() -> None:
     assert "### Cache writes" in guide
     for word in ("input_tokens_details.cache_write_tokens", "ttl_12h_tokens", "ttl_30m_tokens"):
         assert word in guide, word
-    assert "checked against OpenAI's pricing page on 19 November 2026" in guide
+    assert "checked against OpenAI's pricing page on 22 November 2026" in guide
     for model in ("gpt-5", "gpt-5-mini", "gpt-5-nano"):
         assert f"`{model}`" in guide.split("### Prices")[1].split("### ")[0], model
     assert "`cache_write_30m`" in page("json-output.md")
