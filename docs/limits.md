@@ -433,7 +433,7 @@ Also read the control-path limits under An agent inside a web service.
 
 - **Prices need checking.** The shipped price file is small and as old as your installed version; its `as_of` date shows on `scrimmage check`. Run `scrimmage prices update` for the newest, check it against your provider's pricing, and use `[agent.prices]` for anything else.
 
-- **One price per kind of token.** A price has no long-context tier, so models priced higher above 272K input tokens, such as `gpt-5.4`, `gpt-5.5` and the `gpt-5.6` models, are not in the shipped price file. Under `[agent.prices]`, give such a model its long-context price if a call can go over 272K input tokens, or a long call costs more than the record says.
+- **A long prompt costed from an estimate.** A model that charges more above a number of input tokens has a `long` price with an `above` threshold. A call is settled at the long rates when the reply's input tokens are over `above`. Before the call, its input is estimated from the size of the request, so a call whose estimate is under `above` but whose real input is over it is held at the normal rates, and calls in flight can pass `max_cost_usd` by the difference. A tier with no `long` price of its own costs its normal rates at any length. See [Long-context prices](configuration.md#long-context-prices).
 
 - **A hold that cannot end while a call waits.** A call that its own run's calls would keep out, even if every other run finished, waits at most 30 seconds, or half the time its run has left. A stream the agent keeps open across a second call, or one it stopped reading without closing, keeps its hold, so the second call ends in a "not reserved" stop. A hold in another run is waited for until near this run's `run_timeout`.
 

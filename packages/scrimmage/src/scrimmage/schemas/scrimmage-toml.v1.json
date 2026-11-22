@@ -161,6 +161,9 @@
             "$ref": "#/$defs/tier_price"
           },
           "description": "The rates of each service tier, by name, such as flex or priority. A tier not listed costs the model's own rates."
+        },
+        "long": {
+          "$ref": "#/$defs/long_price"
         }
       }
     },
@@ -1159,8 +1162,43 @@
         },
         "cache_write_12h": {
           "$ref": "#/$defs/dollars"
+        },
+        "long": {
+          "$ref": "#/$defs/long_price"
         }
       }
+    },
+    "long_price": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "above",
+        "input",
+        "output"
+      ],
+      "properties": {
+        "above": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "A call with more input tokens than this is priced at these rates, whole: its input and its output, not only the tokens past it."
+        },
+        "input": {
+          "$ref": "#/$defs/dollars"
+        },
+        "output": {
+          "$ref": "#/$defs/dollars"
+        },
+        "cached_input": {
+          "$ref": "#/$defs/dollars"
+        },
+        "cache_write_30m": {
+          "$ref": "#/$defs/dollars"
+        },
+        "cache_write_12h": {
+          "$ref": "#/$defs/dollars"
+        }
+      },
+      "description": "The rates of a long prompt, for a model that charges more above a number of input tokens. Each rate is at least the model's own."
     }
   }
 }

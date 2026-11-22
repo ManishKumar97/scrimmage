@@ -810,7 +810,7 @@
                       }
                     }
                   },
-                  "description": "Each model [agent.prices] prices, in dollars per million tokens, with its tiers if it has any. Any other model is priced from the first of price_sources that names it."
+                  "description": "Each model [agent.prices] prices, in dollars per million tokens, with its tiers and its long-context rates, under long with the above threshold, if it has any. Any other model is priced from the first of price_sources that names it."
                 },
                 "service_tier": {
                   "type": [

@@ -668,7 +668,9 @@ def cost(
     written_30m: int = 0,
     written_12h: int = 0,
 ) -> float:
-    """What a call costs. cached and the written counts are parts of tokens_in."""
+    """What a call costs. cached and the written counts are parts of tokens_in. A call over the
+    long-context threshold costs every token at the long rates, not only those past it."""
+    rates = rates.sized(tokens_in)
     plain = tokens_in - cached - written_30m - written_12h
     full = plain * rates.input + cached * _or_input(rates.cached_input, rates)
     full += written_30m * _or_input(rates.cache_write_30m, rates)
@@ -679,7 +681,9 @@ def cost(
 def most_cost(tokens_in: int, tokens_out: int, rates: Rates, *, responses: bool) -> float:
     """What a call could cost at most: every input token at the input or cache-write rate,
     whichever is dearer, since the provider may write any of them to its cache. Only the
-    Responses API can write for 12 hours; Chat Completions writes for 30 minutes."""
+    Responses API can write for 12 hours; Chat Completions writes for 30 minutes. An input over
+    the long-context threshold is held at the long rates."""
+    rates = rates.sized(tokens_in)
     longest = rates.cache_write_12h if responses else None
     rate = max(rates.input, rates.cache_write_30m or 0.0, longest or 0.0)
     return (tokens_in * rate + tokens_out * rates.output) / 1_000_000

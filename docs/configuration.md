@@ -71,6 +71,7 @@ acme-gpt = {input = 2.0, cached_input = 0.5, output = 8.0}
 | `cache_write_30m` | The price of an input token the provider wrote to its prompt cache for 30 minutes. Optional, and at least `input`. Without it, written tokens cost the full `input` price, as on a model that charges nothing extra to write its cache. |
 | `cache_write_12h` | The same for a token written for 12 hours, a choice on the Responses API. Optional, and at least `input`. |
 | `tiers` | The rates of each service tier, as a table of tables, such as `[agent.prices."gpt-4.1".tiers.flex]`. Each tier takes the same keys, and needs `input` and `output`. Optional. A tier not listed costs the model's own rates. See [Service tiers](#service-tiers). |
+| `long` | The rates of a long prompt, as a table such as `[agent.prices."gpt-5.5".long]`. It takes the same rate keys, needs `input` and `output`, and needs `above`, a whole number of input tokens. Optional. A tier may have its own `long`. See [Long-context prices](#long-context-prices). |
 
 ### Service tiers
 
@@ -95,7 +96,34 @@ output = 14.0
 
 Scrimmage never adds a tier to the request: it would change what the model call does.
 
-The `gpt-5.6-luna` example is its price up to 272K input tokens; a call over that costs more, so give the long-context price if your calls can be that long. See [One price per kind of token](limits.md#the-budget).
+The `gpt-5.6-luna` example is its price up to 272K input tokens; a call over that costs more, so give its long-context price too if your calls can be that long. See [Long-context prices](#long-context-prices).
+
+### Long-context prices
+
+Some models cost more per token once the prompt is long.
+OpenAI charges `gpt-5.5` and `gpt-5.4` twice the input price and one and a half times the output price when a call has more than 272K input tokens.
+The whole call is charged at the higher rates, not only the tokens past the threshold.
+
+```toml
+[agent.prices."gpt-5.5"]
+input = 5.0
+cached_input = 0.5
+output = 30.0
+
+[agent.prices."gpt-5.5".long]
+above = 272000
+input = 10.0
+cached_input = 1.0
+output = 45.0
+```
+
+`above` is a whole number of input tokens, at least 1.
+A call whose input tokens are more than `above` is settled at the `long` rates, and a call held before it is sent is held at them when its estimated input is more than `above`.
+A call of exactly `above` tokens costs the normal rates.
+Each `long` rate must be at least the same rate of the model, so a long call never costs less per token.
+A rate that `long` leaves out costs its `input`, as it does for the model.
+A tier may have its own long rates, such as `[models."gpt-5.5".tiers.flex.long]`; a tier with none costs its own rates at any length.
+`long` works the same in a price file and in `[agent.prices]`.
 
 A price here replaces a file's price whole: `gpt-4o = {input = 2.5, output = 10}` has no cached price, even though the shipped file has one.
 

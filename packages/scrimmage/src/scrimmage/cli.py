@@ -894,6 +894,8 @@ def price_summary(rates: prices.Rates) -> dict[str, object]:
     }
     if rates.tiers:
         doc["tiers"] = {tier: price_summary(tiered) for tier, tiered in rates.tiers}
+    if rates.long is not None:
+        doc["long"] = {**price_summary(rates.long), "above": rates.above}
     return doc
 
 

@@ -34,9 +34,12 @@ MAX_BYTES = 1_000_000
 
 
 def flat(rates: Rates) -> dict[str, float]:
-    out = {k: v for k, v in dataclasses.asdict(rates).items() if k != "tiers" and v is not None}
+    skip = {"tiers", "long"}
+    out = {k: v for k, v in dataclasses.asdict(rates).items() if k not in skip and v is not None}
     for tier, tiered in rates.tiers:
         out.update({f"tiers.{tier}.{k}": v for k, v in flat(tiered).items()})
+    if rates.long is not None:
+        out.update({f"long.{k}": v for k, v in flat(rates.long).items()})
     return out
 
 
