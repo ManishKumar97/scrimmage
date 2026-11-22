@@ -22,8 +22,9 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
 
-from scrimmage import provider_openai as openai_table
 from scrimmage.config import Fault
+from scrimmage.providers.base import RESPONSES
+from scrimmage.providers.registry import built_in
 from scrimmage.redact import redact, spans
 
 MAX_DEPTH = 100  # nesting deeper than this is not changed, so no value can overflow the stack
@@ -1094,17 +1095,12 @@ def no_output_text(output: list[object]) -> str:
 
 
 def with_fresh_ids(value: dict[str, object], output: list[object]) -> dict[str, object]:
-    """The changed reply under new ids in OpenAI's forms, for the reply and each message and
-    function call. OpenAI stored the real reply under the real ids, and an item resent with a
-    stored id is read as stored, not as sent: under a made-up id the model reads what the
-    agent got. call_id stays, as the agent pairs its function_call_output by it."""
-    value["id"] = openai_table.made_up_hex_id("resp_")
-    for raw in output:
-        item = as_dict(raw)
-        prefix = None if item is None else openai_table.ITEM_PREFIXES.get(str(item.get("type")))
-        if item is not None and prefix is not None and "id" in item:
-            item["id"] = openai_table.made_up_hex_id(prefix)
-    return value
+    """The changed reply under new ids in its provider's forms, for the reply and each item.
+    Only the Responses changes call it, so it is the provider of the Responses API that
+    makes the ids."""
+    provider = built_in().for_api(RESPONSES)
+    assert provider is not None, "no provider has a Responses API"
+    return provider.fresh_ids(value, output)
 
 
 def garble_responses(

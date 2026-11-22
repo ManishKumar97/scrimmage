@@ -19,6 +19,7 @@ from scrimmage.config import (
 )
 from scrimmage.judge import Rules
 from scrimmage.prices import Rates, in_order
+from scrimmage.providers.registry import ProviderRegistry, registry_for
 
 PLAN_VERSION = 1
 # The keys a fault has in a plan. A runner of a later version may send one this SDK does not
@@ -26,6 +27,10 @@ PLAN_VERSION = 1
 PLAN_FAULT_KEYS = frozenset(
     {"call", "do", "when", "raises", "method", "path", "model", "text", "find", "retry_after"}
 )
+
+
+def listed_hosts(hosts: tuple[ModelHost, ...]) -> tuple[tuple[str, str], ...]:
+    return tuple((h.host, h.provider) for h in hosts)
 
 
 @dataclass(frozen=True)
@@ -60,6 +65,11 @@ class Plan:
     record_grace_s: float = 0.0  # in a service: the record stays open this long after the reply
     # In a service: calls work outside any request may make for real while this run is open.
     background_real: tuple[str, ...] = ()
+
+    @property
+    def registry(self) -> ProviderRegistry:
+        """The providers this run's requests are for, built once for these model hosts."""
+        return registry_for(listed_hosts(self.model_hosts))
 
     def tool_names(self) -> list[str]:
         """Every tool's final name: the one the model sees."""
@@ -121,6 +131,7 @@ class Plan:
             ModelHost(string(h, "host"), string(h, "provider"))
             for h in map(obj, items(doc, "model_hosts"))
         )
+        registry_for(listed_hosts(hosts))  # a provider this SDK does not know is a bad plan
         reserve = int(number(budget, "reserve_output_tokens"))
         limit_usd = None if budget.get("limit_usd") is None else number(budget, "limit_usd")
         elapsed = number(doc, "elapsed_s") if "elapsed_s" in doc else 0.0

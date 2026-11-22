@@ -28,7 +28,7 @@ from scrimmage import probe as probing
 from scrimmage import toml_write
 from scrimmage.config import IMPORT_PATH, Agent, Config, Test
 from scrimmage.outcomes import INFRA, MISTAKE, MISTAKES, NOTES, OK, WARNINGS
-from scrimmage.provider_openai import HOSTS
+from scrimmage.providers.registry import built_in
 from scrimmage.runner import Runner, RunResult
 
 NOT_FOUND = re.compile(r"ModuleNotFoundError: No module named '([^']+)'")
@@ -519,7 +519,7 @@ def client_host(node: ast.Call) -> str | None:
         return None
     if parts.scheme not in ("http", "https") or not host or ":" in host:
         return None
-    return None if host.lower() in HOSTS else host.lower()
+    return None if built_in().is_built_in_host(host.lower()) else host.lower()
 
 
 def is_script(tree: ast.Module, imports: set[str]) -> bool:
@@ -664,7 +664,7 @@ def model_hosts(result: Probe, reading: Reading) -> list[dict[str, str]]:
     """The hosts to name in the draft. The built-in OpenAI host needs no line."""
     hosts = {host: "static" for host in reading.hosts}
     request = cast("dict[str, str] | None", (result.notice or {}).get("model_request"))
-    if request is not None and request["host"] not in HOSTS:
+    if request is not None and not built_in().is_built_in_host(request["host"]):
         hosts[request["host"]] = "probe"
     return [{"host": h, "provider": "openai", "found_by": hosts[h]} for h in sorted(hosts)]
 
