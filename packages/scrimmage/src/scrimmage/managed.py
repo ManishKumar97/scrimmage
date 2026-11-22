@@ -43,11 +43,11 @@ START_TRIES = 3
 # does, ":PORT" or ", PORT)", for that port to be the one taken.
 IN_USE = re.compile(r"address already in use|EADDRINUSE|Errno 98", re.IGNORECASE)
 # An address with a port: a Python socket tuple, as uvicorn and gunicorn print ("127.0.0.1",
-# 8000) or ('::1', 8000, 0, 0), or host:port with an IPv4, bracketed IPv6, localhost or
-# dotted host, or ":::PORT". A time such as 18:37:33 is not one.
+# 8000) or ('::1', 8000, 0, 0), or host:port with an IPv4, bracketed IPv6 or localhost, or
+# ":::PORT". A time such as 18:37:33 or a file:line such as config.py:605 is not one.
 ADDRESS = re.compile(
     r"\('[^']*', \d+[,)]"
-    r"|(?<![\w.:])(?:\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-fA-F:]+\]|localhost|[A-Za-z][\w-]*(?:\.[\w-]+)+):\d+(?!\d)"
+    r"|(?<![\w.:])(?:\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-fA-F:]+\]|localhost):\d+(?!\d)"
     r"|:::\d+(?!\d)"
 )
 

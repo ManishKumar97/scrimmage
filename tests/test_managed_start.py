@@ -116,6 +116,8 @@ said = {
     "ipv4": f"ERROR:    [Errno 98] error while attempting to bind on address ('127.0.0.1', {port}):"
     " address already in use",
     "time": "2026-11-22 18:37:33,068 ERROR [Errno 98] Address already in use",
+    "fileline": "2026-11-22 18:37:33,068 config.py:605 uvicorn.error:605 ERROR [Errno 98]"
+    " Address already in use",
 }
 print(said[which], flush=True)
 raise SystemExit(3)
@@ -854,8 +856,8 @@ def test_a_port_held_by_another_is_not_blamed_for_a_bind_that_failed_elsewhere(
 
 @pytest.mark.parametrize(
     ("which", "proc"),
-    [("ipv4", True), ("ipv6", True), ("ipv6", False), ("time", True)],
-    ids=["ipv4", "ipv6", "ipv6-no-proc", "time-no-address"],
+    [("ipv4", True), ("ipv6", True), ("ipv6", False), ("time", True), ("fileline", True)],
+    ids=["ipv4", "ipv6", "ipv6-no-proc", "time-no-address", "file-line-no-address"],
 )
 def test_a_bind_error_in_any_wording_blames_the_picked_port_it_names(
     shop: Shop, which: str, proc: bool

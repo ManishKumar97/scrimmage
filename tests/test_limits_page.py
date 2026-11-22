@@ -37,6 +37,7 @@ ALL_TITLES = [
     "A command that clears Scrimmage's path.",
     "A connection fault's cause chain, in detail.",
     "A control path cut mid-test does not stop the test.",
+    "A copy's bind error that names no address can blame the wrong port.",
     "A credential request from a thread is not seen as a tool's.",
     "A daemon that starts its own session.",
     "A fault with `model` needs a name it can read.",
