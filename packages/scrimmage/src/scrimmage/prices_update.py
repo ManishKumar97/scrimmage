@@ -98,17 +98,24 @@ class Watched(urllib.request.HTTPSHandler):
     them at the deadline. A cut connection ends a read that is waiting, in the status line,
     a header or the body alike."""
 
-    def __init__(self, context: ssl.SSLContext, opened: list[http.client.HTTPSConnection]) -> None:
+    def __init__(
+        self,
+        context: ssl.SSLContext,
+        opened: list[http.client.HTTPSConnection],
+        expired: threading.Event,
+    ) -> None:
         super().__init__(context=context)
-        self.context, self.opened = context, opened
+        self.context, self.opened, self.expired = context, opened, expired
 
     def https_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
-        opened = self.opened
+        opened, expired = self.opened, self.expired
 
         class Connection(http.client.HTTPSConnection):
             def connect(self) -> None:
                 super().connect()
                 opened.append(self)
+                if expired.is_set():  # the time went on the lookup and the handshake
+                    raise FetchError(f"took longer than {TIMEOUT_S:g} seconds")
 
         return self.do_open(Connection, req, context=self.context)
 
@@ -116,11 +123,12 @@ class Watched(urllib.request.HTTPSHandler):
 def cut(opened: list[http.client.HTTPSConnection], expired: threading.Event) -> None:
     expired.set()
     for connection in list(opened):
-        if connection.sock is not None:
+        sock = connection.sock  # read once: the reading thread may close it
+        if sock is not None:
             with contextlib.suppress(OSError):
                 # The plain socket's shutdown, not the TLS wrapper's: it wakes a read that
                 # is blocked in another thread without touching the TLS state under it.
-                socket.socket.shutdown(connection.sock, socket.SHUT_RDWR)
+                socket.socket.shutdown(sock, socket.SHUT_RDWR)
 
 
 def fetch(url: str) -> str:
@@ -134,8 +142,8 @@ def fetch(url: str) -> str:
         raise FetchError(f"{url} is not an https address")
     context = ssl.create_default_context(cafile=CAFILE)
     opened: list[http.client.HTTPSConnection] = []
-    opener = urllib.request.build_opener(Watched(context, opened), SameHostHttps)
     expired = threading.Event()
+    opener = urllib.request.build_opener(Watched(context, opened, expired), SameHostHttps)
     timer = threading.Timer(TIMEOUT_S, cut, (opened, expired))
     timer.daemon = True
     timer.start()

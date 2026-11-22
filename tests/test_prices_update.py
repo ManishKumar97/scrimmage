@@ -10,6 +10,7 @@ import time
 from collections.abc import Callable, Iterator
 from importlib import resources
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -212,9 +213,9 @@ class Raw:
                 return
             try:
                 with self.context.wrap_socket(raw, server_side=True) as tls:
-                    tls.recv(65536)
-                    self.asked += 1
-                    self.answer(tls)
+                    if tls.recv(65536):  # a connection that sends no request is not asked
+                        self.asked += 1
+                        self.answer(tls)
             except OSError:
                 pass
 
@@ -357,4 +358,29 @@ def test_the_deadline_covers_the_headers_too(
     assert cli.main(["prices", "update", str(folder / "scrimmage.toml")]) == 3
     assert time.monotonic() - began < 4
     assert "took longer than 1 seconds" in capsys.readouterr().err
+    assert nothing_written(folder)
+
+
+@pytest.mark.design("prices.update_hardened")
+def test_the_deadline_covers_the_name_lookup_before_a_connection_exists(
+    raw: Callable[..., Raw],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    folder = project(tmp_path)
+    monkeypatch.setattr(prices_update, "TIMEOUT_S", 0.5)
+    lookup = socket.getaddrinfo
+
+    def slow(*args: Any, **kwargs: Any) -> Any:
+        time.sleep(1.2)  # a resolver that takes longer than the whole deadline
+        return lookup(*args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", slow)
+    server = raw(says(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"))
+    began = time.monotonic()
+    assert cli.main(["prices", "update", str(folder / "scrimmage.toml")]) == 3
+    assert time.monotonic() - began < 4
+    assert "took longer than 0.5 seconds" in capsys.readouterr().err
+    assert server.asked == 0  # no request was sent on a connection that came too late
     assert nothing_written(folder)
