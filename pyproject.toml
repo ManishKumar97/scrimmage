@@ -191,20 +191,20 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "The gate reaches a model provider only through the registry"
+name = "Only the providers package reaches a model provider"
 type = "forbidden"
-# A provider is a module and a registry entry, so the gate, the changes, the run's state, the
-# config and init import none of them. The registry itself imports them, so only a direct
-# import is forbidden here.
-source_modules = [
-    "scrimmage.http_gate",
-    "scrimmage.changes",
-    "scrimmage.state",
-    "scrimmage.config",
-    "scrimmage.init",
+# A provider is a module and a registry entry. Every other module of scrimmage, the gate, the
+# changes, the run's state, the config, init and the rest, imports no provider: not a table
+# module, such as provider_openai, and not the classes in providers.impl. The registry, in the
+# providers package, is the one that loads them, so only a direct import is forbidden here.
+# A provider's table module is listed here and in the ignore line below; the guard in
+# tests/test_provider_registry.py fails when a provider_*.py file is missing from either.
+source_modules = ["scrimmage"]
+forbidden_modules = ["scrimmage.providers.impl", "scrimmage.provider_openai"]
+ignore_imports = [
+    "scrimmage.providers.** -> scrimmage.providers.impl.**",
+    "scrimmage.providers.** -> scrimmage.provider_openai",
 ]
-forbidden_modules = ["scrimmage.provider_openai", "scrimmage.providers.openai"]
-allow_indirect_imports = true
 
 [tool.coverage.run]
 branch = true

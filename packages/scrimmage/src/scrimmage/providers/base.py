@@ -1,18 +1,24 @@
 """The interface every model provider implements, and the types it passes to the gate.
 
 Small interfaces, so a caller depends on the part it uses: a Recognizer reads a request, a
-Meter counts tokens and prices, a FaultMaker builds the replies faults send, and a
-ReplyChanger rewrites a real reply. ModelProvider is all four, with a name.
+Meter counts tokens and prices, a FaultMaker builds the replies faults send and says what a
+faulted reply gave the agent, and a ReplyChanger rewrites a real reply. ModelProvider is all
+four, with a name. A provider whose replies are kept on the provider's side also implements
+ServerChains.
+
+Nothing here names a provider's API. Where an API differs, the provider decides: the gate
+passes the request's path and fields, and the provider says what they mean.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from scrimmage.prices import Rates
 
-CHAT = "chat"  # the api of a chat call, as Recognizer.api names it
-RESPONSES = "responses"  # and of a Responses-style call
+if TYPE_CHECKING:
+    from scrimmage.changes import Unchangeable, WebChanged
+    from scrimmage.config import Fault
 
 
 @dataclass
@@ -21,20 +27,16 @@ class Usage:
     output: int = 0
     known: bool = False
     cached: int = 0  # input tokens the provider served from its prompt cache
-    written_30m: int = 0  # input tokens written to the cache for 30 minutes
-    written_12h: int = 0  # and for 12 hours
+    # Input tokens written to the cache, by the field of Rates that prices them, such as
+    # {"cache_write_30m": 90}. A provider with no cache writes leaves it empty.
+    writes: dict[str, int] = field(default_factory=dict[str, int])
     tier: str | None = None  # the service tier the reply says it was billed at
     cost: float | None = None  # dollars, if a gateway's reply says what the call cost
-
-    @property
-    def writes(self) -> tuple[int, int]:
-        """The cache-write counts, in the order Meter.cost takes them."""
-        return self.written_30m, self.written_12h
 
 
 @dataclass(frozen=True)
 class Given:
-    """What a faulted chat reply gave the agent, in the forms a request built from it carries
+    """What a faulted reply gave the agent, in the forms a request built from it carries
     back. ids: the reply's tool call ids, made fresh for each reply, so no other conversation
     holds them. prefixes: for each choice, the faulted request's messages and then the
     message the agent got, with None and empty values left out, kept as their count and
@@ -63,11 +65,6 @@ class Recognizer(Protocol):
         ...
 
     @property
-    def apis(self) -> tuple[str, ...]:
-        """The names api() returns: the provider's APIs."""
-        ...
-
-    @property
     def free_ops(self) -> tuple[str, ...]:
         """The ops that bill no tokens, so nothing is reserved for them."""
         ...
@@ -76,15 +73,16 @@ class Recognizer(Protocol):
         """The op a request to this path is, or None when it is not a model call."""
         ...
 
-    def api(self, path: str) -> str:
-        """Which of the provider's APIs a path is, such as chat or responses."""
-        ...
-
     def request_fields(self, body: bytes) -> dict[str, object] | None: ...
 
     def model_name(self, fields: dict[str, object] | None) -> str | None: ...
 
     def offered(self, path: str, fields: dict[str, object]) -> Offered: ...
+
+    def carries_text(self, fields: dict[str, object], texts: Sequence[str]) -> bool:
+        """Whether a request holds any of these texts, as the provider's request form lays
+        out text. A heuristic."""
+        ...
 
 
 class Meter(Protocol):
@@ -92,9 +90,10 @@ class Meter(Protocol):
 
     def usage(self, body: bytes, *, output_required: bool = True) -> Usage: ...
 
-    def max_output(self, fields: dict[str, object]) -> int | None: ...
-
-    def choices(self, fields: dict[str, object]) -> int: ...
+    def output_cap(self, fields: dict[str, object], path: str, default: int) -> int:
+        """The most output tokens a call to this path could bill: what the request caps it at,
+        else default, times what the API bills it for, such as one reply for each choice."""
+        ...
 
     def request_tier(self, fields: dict[str, object] | None) -> str | None: ...
 
@@ -103,26 +102,44 @@ class Meter(Protocol):
     def price(self, model: str, overrides: dict[str, Rates]) -> Rates | None: ...
 
     def cost(
-        self, tokens_in: int, tokens_out: int, rates: Rates, cached: int = 0, *writes: int
+        self,
+        tokens_in: int,
+        tokens_out: int,
+        rates: Rates,
+        cached: int = 0,
+        writes: Mapping[str, int] | None = None,
     ) -> float: ...
 
     def dearest(
-        self, rates: Rates, tokens_in: int, tokens_out: int, cached: int, *writes: int
+        self,
+        rates: Rates,
+        tokens_in: int,
+        tokens_out: int,
+        cached: int,
+        writes: Mapping[str, int],
     ) -> Rates: ...
 
     def most_cost(self, tokens_in: int, tokens_out: int, rates: Rates, *, path: str) -> float: ...
 
 
 class FaultMaker(Protocol):
-    """The replies a fault sends, built as the provider's own would be."""
+    """The replies a fault sends, built as the provider's own would be, and what a faulted
+    reply gave the agent."""
 
     def error_body(self, status: int) -> bytes: ...
 
-    def error_type(self, status: int) -> str: ...
+    def error_content_type(self, status: int) -> str:
+        """The content type of an error reply with this status."""
+        ...
 
     def broken_body(self, path: str, op: str) -> bytes: ...
 
     def context_too_long_body(self) -> bytes: ...
+
+    def not_carried_out(self, word: str, path: str, fields: dict[str, object]) -> str | None:
+        """Why this fault cannot be carried out on this request, which is then a mistake in
+        the test, or None when it can."""
+        ...
 
     def refusal_reply(self, path: str, fields: dict[str, object], tokens_in: int) -> bytes: ...
 
@@ -132,23 +149,61 @@ class FaultMaker(Protocol):
 
     def unknown_tool_reply(self, fields: dict[str, object], tokens_in: int, tool: str) -> bytes: ...
 
-    def given(self, fields: dict[str, object], reply: bytes, *, ids_only: bool) -> Given: ...
+    def given(self, path: str, fields: dict[str, object], reply: bytes, *, ids_only: bool) -> Given:
+        """What this faulted reply to a request to this path gave the agent, in the forms a
+        later request carries back. Empty when the API keeps replies on its own side."""
+        ...
 
-    def carries(self, fields: dict[str, object], kept: Sequence[Given]) -> bool: ...
+    def carries(self, path: str, fields: dict[str, object], kept: Sequence[Given]) -> bool: ...
 
-    def references(self, fields: dict[str, object]) -> list[str]: ...
 
-    def response_ids(self, reply: bytes) -> list[str]: ...
+class ReplyChange(Protocol):
+    """One change to a real reply, for one fault word on one API."""
+
+    def blocked(self, status: int, headers: Sequence[tuple[str, str]]) -> "Unchangeable | None":
+        """None when the reply's headers allow the change, else why not. Decided by the
+        headers alone, so a stream is never read to find out."""
+        ...
+
+    def __call__(
+        self,
+        status: int,
+        headers: Sequence[tuple[str, str]],
+        body: bytes,
+        fault: "Fault",
+        *,
+        decoded: bool,
+    ) -> "WebChanged | Unchangeable": ...
 
 
 class ReplyChanger(Protocol):
-    """What a change to a real reply needs from the provider."""
+    """What a change to a real reply needs from the provider: replace, garble, truncate and
+    bad tool args, each as the provider's own replies hold their text."""
 
-    def fresh_ids(self, value: dict[str, object], output: list[object]) -> dict[str, object]:
-        """The changed reply under new ids in this provider's forms."""
-        ...
+    def change(self, word: str, op: str, path: str) -> ReplyChange: ...
 
 
 class ModelProvider(Recognizer, Meter, FaultMaker, ReplyChanger, Protocol):
     @property
     def name(self) -> str: ...
+
+
+@runtime_checkable
+class ServerChains(Protocol):
+    """A provider whose replies are kept on its side, so a later request can name one by id.
+    A request that names a reply or an item a fault changed or built asks the provider to
+    look up something it never held. Both answer for any path: an API that keeps nothing
+    gives an empty list."""
+
+    def chain_ids(self, path: str, reply: bytes) -> list[str]:
+        """The ids of this reply and of its items that a later request may name."""
+        ...
+
+    def chain_references(self, path: str, fields: dict[str, object]) -> list[str]:
+        """What this request asks the provider to look up by id."""
+        ...
+
+    def chain_broken(self, found: str) -> str:
+        """Why a request that looks up this faulted id is a mistake in the test, as it
+        follows the call's label."""
+        ...

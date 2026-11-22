@@ -1,23 +1,43 @@
 """One contract every model provider keeps, run over each provider the registry holds.
 
 A provider needs a Case here before it can be registered, so a new provider is held to the
-same checks as OpenAI: it reads usage, builds error bodies, names ops, and never prices a
-call below its table."""
+same checks as OpenAI: it reads requests and usage, builds error bodies and replies, names ops,
+changes a real reply, says what a faulted reply gave the agent, and never prices a call below
+its table. A provider that keeps its replies on its own side also keeps the chain contract."""
 
+import dataclasses
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from scrimmage.prices import Rates
-from scrimmage.providers.base import ModelProvider
-from scrimmage.providers.registry import PROVIDERS
+from scrimmage import changes
+from scrimmage.config import Fault
+from scrimmage.prices import RATE_KEYS, Rates
+from scrimmage.providers.base import ModelProvider, ServerChains
+from scrimmage.providers.registry import builtin_providers
 
 OPENAI = Path(__file__).parent / "fixtures" / "openai"
 STATUSES = (400, 401, 403, 404, 408, 409, 422, 429, 500, 502, 503, 504, 529)
 RATES = Rates(2.0, 8.0, 0.5, 3.0, 4.0)
 JUNK = (b"", b"{", b"[]", b"null", b'"text"', b"data: not json\n\ndata: [DONE]\n", b"\xff\xfe")
+JSON = [("content-type", "application/json")]
+REPLY_WORDS = ("replace", "garble", "truncate")
+EVERY_WORD = (*REPLY_WORDS, "unknown tool", "refuse", "bad tool args", "context too long")
+
+
+@dataclass(frozen=True)
+class Chain:
+    """What a provider that keeps its replies gives: the path of that API, a saved reply to it,
+    the id the reply holds, and a request that names that id."""
+
+    path: str
+    reply: Path
+    reply_id: str
+    names_it: Callable[[str], dict[str, object]]
 
 
 @dataclass(frozen=True)
@@ -30,6 +50,37 @@ class Case:
     chat_path: str
     other_paths: tuple[str, ...]  # the provider's other model APIs
     shipped_model: str  # a model the shipped price table has
+    write_fields: tuple[str, ...]  # the Rates fields that price a cache write
+    request: dict[str, object]  # a request the provider reads, with its model
+    model: str
+    tool_request: Callable[[str], dict[str, object]]  # a request that offers one agent tool
+    text_request: Callable[[str], dict[str, object]]  # a request whose input holds this text
+    follow_up: Callable[[dict[str, object], bytes], dict[str, object]]  # the agent's next request
+    changeable: Path  # a saved reply the three changes can change
+    # (word, path, fields) that cannot be carried out: a mistake in the test.
+    not_carried: tuple[tuple[str, str, dict[str, object]], ...]
+    capped: Callable[[int], dict[str, object]]  # a request that caps its output at this many
+    chain: Chain | None = None
+
+
+def openai_tool_request(name: str) -> dict[str, object]:
+    function = {"name": name, "parameters": {"type": "object", "properties": {}}}
+    return {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [{"type": "function", "function": function}],
+    }
+
+
+def openai_follow_up(fields: dict[str, object], reply: bytes) -> dict[str, object]:
+    """The next request an agent builds from a reply: its message, then each tool's result."""
+    message = json.loads(reply)["choices"][0]["message"]
+    results = [
+        {"role": "tool", "tool_call_id": call["id"], "content": "ok"}
+        for call in message.get("tool_calls") or []
+    ]
+    asked: list[Any] = list(fields["messages"])  # type: ignore[arg-type]
+    return {**fields, "messages": [*asked, message, *results]}
 
 
 CASES = {
@@ -59,11 +110,33 @@ CASES = {
         chat_path="/v1/chat/completions",
         other_paths=("/v1/responses",),
         shipped_model="gpt-4o-mini",
+        write_fields=("cache_write_30m", "cache_write_12h"),
+        request={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+        model="gpt-4o-mini",
+        tool_request=openai_tool_request,
+        text_request=lambda text: {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "tool", "content": f"note: {text}"}],
+        },
+        follow_up=openai_follow_up,
+        changeable=OPENAI / "chat_answer.json",
+        not_carried=(
+            ("unknown tool", "/v1/responses", {"model": "m", "input": "hi"}),
+            ("garble", "/v1/responses", {"model": "m", "conversation": "c"}),
+            ("context too long", "/v1/responses", {"model": "m", "input": "hi"}),
+        ),
+        capped=lambda n: {"model": "gpt-4o-mini", "messages": [], "max_tokens": n},
+        chain=Chain(
+            path="/v1/responses",
+            reply=OPENAI / "response_text.json",
+            reply_id="resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3795b",
+            names_it=lambda found: {"model": "m", "previous_response_id": found},
+        ),
     )
 }
 
 
-@pytest.fixture(params=PROVIDERS, ids=lambda p: p.name)
+@pytest.fixture(params=builtin_providers(), ids=lambda p: p.name)
 def provider(request: pytest.FixtureRequest) -> ModelProvider:
     return request.param
 
@@ -73,8 +146,17 @@ def case_of(provider: ModelProvider) -> Case:
     return CASES[provider.name]
 
 
+def body_of(fields: dict[str, object]) -> bytes:
+    return json.dumps(fields).encode()
+
+
+def counts(provider: ModelProvider, body: bytes) -> tuple[bool, int, int, int]:
+    used = provider.usage(body)
+    return used.known, used.input, used.output, used.cached
+
+
 def test_every_case_is_for_a_registered_provider() -> None:
-    assert set(CASES) == {p.name for p in PROVIDERS}
+    assert set(CASES) == {p.name for p in builtin_providers()}
 
 
 def test_a_provider_names_itself_and_its_hosts(provider: ModelProvider) -> None:
@@ -94,6 +176,41 @@ def test_free_ops_are_ops_the_provider_names(provider: ModelProvider) -> None:
     assert set(provider.free_ops) <= named
 
 
+def test_a_request_is_read_as_the_object_it_is_and_nothing_else(provider: ModelProvider) -> None:
+    case = case_of(provider)
+    assert provider.request_fields(body_of(case.request)) == case.request
+    for body in JUNK:
+        assert provider.request_fields(body) is None, body
+
+
+def test_the_model_is_the_name_a_request_gives_and_none_when_it_gives_none(
+    provider: ModelProvider,
+) -> None:
+    case = case_of(provider)
+    assert provider.model_name(case.request) == case.model
+    nameless: list[dict[str, object] | None] = [
+        None,
+        {},
+        {"model": ""},
+        {"model": 7},
+        {"model": None},
+        {"model": ["m"]},
+    ]
+    for fields in nameless:
+        assert provider.model_name(fields) is None, fields
+
+
+def test_the_tools_a_request_offers_are_sorted(provider: ModelProvider) -> None:
+    case = case_of(provider)
+    offered = provider.offered(case.chat_path, case.tool_request("get_order"))
+    assert offered.agent == ["get_order"]
+    assert not (offered.hosted_reads or offered.hosted_writes or offered.unknown)
+    for fields in ({}, case.request):
+        nothing = provider.offered(case.chat_path, fields)
+        assert not (nothing.agent or nothing.hosted_reads or nothing.hosted_writes)
+        assert not nothing.unknown
+
+
 def test_usage_reads_a_saved_reply(provider: ModelProvider) -> None:
     for fixture, tokens_in, tokens_out, cached in case_of(provider).usages:
         used = provider.usage(fixture.read_bytes())
@@ -109,6 +226,19 @@ def test_usage_of_a_body_with_no_counts_is_not_known(provider: ModelProvider) ->
         assert (used.input, used.output) == (0, 0)
 
 
+def test_the_cache_writes_a_reply_makes_are_counts_by_a_price_field(
+    provider: ModelProvider,
+) -> None:
+    """usage names each write count by the Rates field that prices it, and no other."""
+    case = case_of(provider)
+    for fixture, *_ in case.usages:
+        used = provider.usage(fixture.read_bytes())
+        assert set(used.writes) <= set(case.write_fields), fixture.name
+        assert set(case.write_fields) <= RATE_KEYS
+        assert all(isinstance(n, int) and n >= 0 for n in used.writes.values())
+        assert sum(used.writes.values()) <= used.input
+
+
 @pytest.mark.parametrize("status", STATUSES)
 def test_an_error_body_is_the_providers_error_for_each_status(
     provider: ModelProvider, status: int
@@ -119,7 +249,7 @@ def test_an_error_body_is_the_providers_error_for_each_status(
     assert isinstance(error, dict)
     assert isinstance(error["message"], str)
     assert error["message"]
-    assert "/" in provider.error_type(status), "a content type"
+    assert "/" in provider.error_content_type(status), "a content type"
 
 
 def test_a_broken_body_does_not_parse(provider: ModelProvider) -> None:
@@ -136,10 +266,181 @@ def test_context_too_long_is_a_json_error(provider: ModelProvider) -> None:
     assert body["error"]["message"]
 
 
-def test_the_api_of_a_path_is_one_the_provider_lists(provider: ModelProvider) -> None:
-    for _, path, op in case_of(provider).ops:
-        if op:
-            assert provider.api(path.split("?")[0]) in provider.apis
+def test_a_built_refusal_is_a_whole_reply_the_provider_would_read(provider: ModelProvider) -> None:
+    case = case_of(provider)
+    for path in (case.chat_path, *case.other_paths):
+        built = provider.refusal_reply(path, case.request, 25)
+        assert isinstance(json.loads(built), dict), path
+        used = provider.usage(built)
+        assert used.known, path
+        assert (used.input, used.cached) == (25, 0), path
+        assert used.output > 0, path
+
+
+def test_a_built_call_to_an_unknown_tool_names_it_and_is_a_whole_reply(
+    provider: ModelProvider,
+) -> None:
+    case = case_of(provider)
+    fields = case.tool_request("get_order")
+    assert provider.tool_call_tools(case.chat_path, fields) == ["get_order"]
+    assert provider.no_free_tool_call(case.chat_path, fields) is None
+    built = provider.unknown_tool_reply(fields, 25, "get_order")
+    assert isinstance(json.loads(built), dict)
+    assert "get_order" in built.decode()
+    used = provider.usage(built)
+    assert (used.known, used.input) == (True, 25)
+
+
+def test_a_request_with_no_tool_to_call_says_why(provider: ModelProvider) -> None:
+    case = case_of(provider)
+    assert provider.tool_call_tools(case.chat_path, case.request) == []
+    why = provider.no_free_tool_call(case.chat_path, case.request)
+    assert isinstance(why, str) and why
+
+
+def test_a_fault_that_cannot_be_carried_out_says_why_and_the_rest_do_not(
+    provider: ModelProvider,
+) -> None:
+    case = case_of(provider)
+    for word in EVERY_WORD:
+        assert provider.not_carried_out(word, case.chat_path, case.request) is None, word
+    for word, path, fields in case.not_carried:
+        why = provider.not_carried_out(word, path, fields)
+        assert isinstance(why, str) and why, (word, path)
+
+
+def test_what_a_faulted_reply_gave_is_carried_back_by_the_request_built_from_it(
+    provider: ModelProvider,
+) -> None:
+    """The round trip: a faulted reply, the request an agent builds from it, and a request it
+    did not build."""
+    case = case_of(provider)
+    fields = case.tool_request("get_order")
+    reply = provider.unknown_tool_reply(fields, 25, "get_order")
+    for ids_only in (True, False):
+        gave = provider.given(case.chat_path, fields, reply, ids_only=ids_only)
+        assert gave.ids, "a reply that calls a tool gave its call id"
+        built = case.follow_up(fields, reply)
+        assert provider.carries(case.chat_path, built, [gave]), ids_only
+        assert not provider.carries(case.chat_path, fields, [gave]), ids_only
+        assert not provider.carries(case.chat_path, built, []), ids_only
+    refused = provider.refusal_reply(case.chat_path, case.request, 25)
+    gave = provider.given(case.chat_path, case.request, refused, ids_only=False)
+    assert gave.prefixes, "a reply with a message gave its message"
+    assert provider.carries(case.chat_path, case.follow_up(case.request, refused), [gave])
+    assert not provider.carries(case.chat_path, case.request, [gave])
+
+
+def test_a_provider_that_keeps_its_replies_keeps_the_chain_contract(
+    provider: ModelProvider,
+) -> None:
+    """ServerChains is optional: a provider has it exactly when its case describes a chain."""
+    case = case_of(provider)
+    assert isinstance(provider, ServerChains) == (case.chain is not None)
+    if case.chain is None or not isinstance(provider, ServerChains):
+        return
+    chain = case.chain
+    ids = provider.chain_ids(chain.path, chain.reply.read_bytes())
+    assert chain.reply_id in ids
+    assert provider.chain_ids(chain.path, b"{") == []
+    assert provider.chain_ids(case.chat_path, chain.reply.read_bytes()) == []
+    named = provider.chain_references(chain.path, chain.names_it(chain.reply_id))
+    assert named == [chain.reply_id]
+    assert provider.chain_references(case.chat_path, chain.names_it(chain.reply_id)) == []
+    assert provider.chain_references(chain.path, case.request) == []
+    assert chain.reply_id in provider.chain_broken(chain.reply_id)
+    gave = provider.given(chain.path, case.request, chain.reply.read_bytes(), ids_only=False)
+    assert not (gave.ids or gave.prefixes), "a reply kept on the provider's side gives no markers"
+    assert not provider.carries(chain.path, case.request, [gave])
+
+
+def test_a_provider_with_no_chain_has_none_of_it(provider: ModelProvider) -> None:
+    if case_of(provider).chain is None:
+        assert not hasattr(provider, "chain_ids")
+
+
+@pytest.mark.parametrize("word", REPLY_WORDS)
+def test_a_real_reply_is_changed_and_keeps_what_it_billed(
+    provider: ModelProvider, word: str
+) -> None:
+    case = case_of(provider)
+    real = case.changeable.read_bytes()
+    fault = Fault("model", word, "always", text="NEW" if word == "replace" else None)
+    change = provider.change(word, "chat", case.chat_path)
+    assert change.blocked(200, JSON) is None
+    done = change(200, JSON, real, fault, decoded=False)
+    assert isinstance(done, changes.WebChanged), done
+    assert done.body != real
+    assert isinstance(json.loads(done.body), dict)
+    assert counts(provider, done.body) == counts(provider, real), "the change left usage alone"
+    assert ("NEW" in done.body.decode()) == (word == "replace")
+    assert dict(done.headers)["content-length"] == str(len(done.body))
+
+
+@pytest.mark.parametrize("word", REPLY_WORDS)
+def test_a_reply_that_cannot_take_the_change_says_why(provider: ModelProvider, word: str) -> None:
+    case = case_of(provider)
+    change = provider.change(word, "chat", case.chat_path)
+    stream = [("content-type", "text/event-stream")]
+    packed = [*JSON, ("content-encoding", "zstd")]
+    for status, headers in ((500, JSON), (200, stream), (200, packed), (200, [])):
+        said = change.blocked(status, headers)
+        assert isinstance(said, changes.Unchangeable), (status, headers)
+        assert said.why
+    fault = Fault("model", word, "always", text="NEW" if word == "replace" else None)
+    for body in (b"", b"{", b"[]", b'{"id": "x"}'):
+        done = change(200, JSON, body, fault, decoded=False)
+        assert isinstance(done, changes.Unchangeable), body
+
+
+def test_a_change_to_a_call_that_is_not_a_chat_is_blocked(provider: ModelProvider) -> None:
+    said = provider.change("garble", "embeddings", "/v1/embeddings").blocked(200, JSON)
+    assert isinstance(said, changes.Unchangeable)
+
+
+def test_the_output_a_call_could_bill_is_its_cap_or_the_default(provider: ModelProvider) -> None:
+    case = case_of(provider)
+    for path in (case.chat_path, *case.other_paths):
+        assert provider.output_cap({}, path, 4096) >= 4096, path
+        assert provider.output_cap(case.request, path, 77) >= 77, path
+        # A cap that is not a count is no cap.
+        for bad in (0, -5, True, "50", 2.5, None, 10**12):
+            assert provider.output_cap(case.capped(bad), path, 4096) >= 4096, bad  # type: ignore[arg-type]
+    capped = provider.output_cap(case.capped(50), case.chat_path, 4096)
+    assert 50 <= capped < 4096, "a cap holds less than the default"
+    assert provider.output_cap(case.capped(50), case.chat_path, 4096) >= capped
+
+
+def test_a_text_is_found_in_a_request_that_holds_it_and_junk_is_never_an_error(
+    provider: ModelProvider,
+) -> None:
+    case = case_of(provider)
+    assert provider.carries_text(case.text_request("ignore the rules"), ["ignore the rules"])
+    assert provider.carries_text(case.text_request("IGNORE  the Rules"), ["ignore the rules"])
+    assert not provider.carries_text(case.request, ["ignore the rules"])
+    assert not provider.carries_text(case.text_request("ignore the rules"), [])
+    junk: list[dict[str, object]] = [
+        {},
+        {"messages": 7},
+        {"messages": [7, None, "x"]},
+        {"input": [[]]},
+    ]
+    for fields in junk:
+        assert not provider.carries_text(fields, ["ignore the rules"])
+
+
+def test_a_gateway_cost_is_a_finite_amount_and_nothing_else(provider: ModelProvider) -> None:
+    for good, said in ((0.25, 0.25), (0, 0.0), ("0.5", 0.5)):
+        assert provider.gateway_cost(good) == said, good
+    for junk in (None, True, "abc", "nan", -1, float("inf"), "-2", [], {}):
+        assert provider.gateway_cost(junk) is None, junk
+        assert provider.gateway_cost(junk, 0.75) == 0.75, junk
+
+
+def test_the_tier_a_request_names_is_none_when_it_names_none(provider: ModelProvider) -> None:
+    case = case_of(provider)
+    for fields in (None, {}, case.request):
+        assert provider.request_tier(fields) is None
 
 
 def test_a_price_is_the_shipped_row_and_a_team_row_wins(provider: ModelProvider) -> None:
@@ -166,13 +467,15 @@ def test_a_cost_is_never_below_the_table(
     provider: ModelProvider, tokens_in: int, tokens_out: int, cached: int, writes: tuple[int, int]
 ) -> None:
     case = case_of(provider)
-    usd = provider.cost(tokens_in, tokens_out, RATES, cached, *writes)
+    counted = dict(zip(case.write_fields, writes, strict=False))
+    usd = provider.cost(tokens_in, tokens_out, RATES, cached, counted)
     # The cheapest any input token can cost is the cached rate, and each output token costs the
     # output rate: no breakdown of the tokens prices the call under that.
     floor = (tokens_in * (RATES.cached_input or 0.0) + tokens_out * RATES.output) / 1_000_000
     assert usd >= floor - 1e-12
     if not cached and not any(writes):
         assert usd == pytest.approx((tokens_in * RATES.input + tokens_out * RATES.output) / 1e6)
+        assert provider.cost(tokens_in, tokens_out, RATES) == pytest.approx(usd)
     # The hold is the most the call can cost on the API its path names, so on some API of the
     # provider it is never under what the call settles at.
     held = max(
@@ -182,7 +485,22 @@ def test_a_cost_is_never_below_the_table(
     assert held >= usd - 1e-12
 
 
+def test_a_write_is_priced_at_its_own_rate(provider: ModelProvider) -> None:
+    """A write count moves the cost by the rate of the Rates field it is named by."""
+    case = case_of(provider)
+    free = dict.fromkeys(case.write_fields, 0.0)
+    rates = dataclasses.replace(Rates(1.0, 1.0, 0.1), **free)
+    base = provider.cost(1000, 0, rates, 0, {})
+    for field in case.write_fields:
+        dear = dataclasses.replace(rates, **{**free, field: 5.0})
+        assert provider.cost(1000, 0, dear, 0, {field: 100}) == pytest.approx(base + 100 * 4 / 1e6)
+        for other in set(case.write_fields) - {field}:
+            assert provider.cost(1000, 0, dear, 0, {other: 100}) == pytest.approx(
+                base - 100 * 1 / 1e6
+            )
+
+
 def test_the_dearest_rates_are_the_ones_the_call_costs_most_at(provider: ModelProvider) -> None:
     tier = Rates(4.0, 16.0)
     rates = Rates(2.0, 8.0, tiers=(("priority", tier),))
-    assert provider.dearest(rates, 100, 100, 0, 0, 0) == tier
+    assert provider.dearest(rates, 100, 100, 0, {}) == tier

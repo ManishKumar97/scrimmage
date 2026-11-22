@@ -45,11 +45,10 @@ from scrimmage.decide import (
     schedule,
 )
 from scrimmage.errors import ScrimmageMockError, ScrimmageRefused
-from scrimmage.judge import normal
 from scrimmage.labels import shown_name
 from scrimmage.plan import Plan
 from scrimmage.prices import Rates
-from scrimmage.providers.base import RESPONSES, ModelProvider
+from scrimmage.providers.base import ModelProvider, ServerChains
 from scrimmage.redact import redact, redacted
 from scrimmage.state import (
     BLOB_CAP,
@@ -64,7 +63,7 @@ from scrimmage.state import (
     current,
     error_text,
     in_service,
-    model_path_hint,
+    model_path_provider,
 )
 
 if TYPE_CHECKING:
@@ -460,7 +459,12 @@ def prepare(
         extra["provider"] = call.provider
     if call.kind == "model":
         extra.update(model=call.model or "", retry=call.retry)
-        if run.injected and fields is not None and carries(run.injected, fields):
+        if (
+            run.injected
+            and fields is not None
+            and model is not None
+            and model.carries_text(fields, run.injected)
+        ):
             extra["carries_injected"] = True
         extra["stream"] = (fields or {}).get("stream") is True
     step = run.decide(call, {})
@@ -490,22 +494,21 @@ def prepare(
     if call.kind == "model" and step.decision.action == "fault":
         reply_checks(run, step, fields or {}, str(request.url.path))
     if model is not None and call.name == "chat" and fields is not None:
-        if model.api(str(request.url.path)) == RESPONSES:
-            # Never marked: OpenAI takes an item id it never made and reads the item as sent,
-            # and a request that looks up a faulted reply is a mistake, so no 400 is known to
-            # follow a fault here. One that does stays an infrastructure error.
-            chain_check(run, step, fields)
-        else:
-            # Decided as the request is sent: one sent before a fault fired holds nothing.
-            step.carries_reply_fault = run.carries_reply_fault(call.label, fields)
+        path = str(request.url.path)
+        if isinstance(model, ServerChains):
+            # A request that looks up a faulted reply is a mistake, so no 400 is known to
+            # follow a fault there. One that does stays an infrastructure error.
+            chain_check(run, step, model, path, fields)
+        # Decided as the request is sent: one sent before a fault fired holds nothing.
+        step.carries_reply_fault = run.carries_reply_fault(call.label, model, path, fields)
     return ctx, step, extra
 
 
 def model_path_notice(ctx: Bound, call: Call, where: str) -> None:
     """A POST to a model's path ran for real as a web request: real lists its host. It is then
     never budgeted, nor faulted by model name. Said once per path, as a run notice."""
-    hint = model_path_hint(call.label, where)
-    if hint is None or where in ctx.model_paths:
+    named = model_path_provider(call.label, where)
+    if named is None or where in ctx.model_paths:
         return
     ctx.model_paths.add(where)
     host = call.label.removeprefix("http:")
@@ -515,7 +518,7 @@ def model_path_notice(ctx: Bound, call: Call, where: str) -> None:
         redact(
             f"{call.label} {where} ran for real as a web request, so it was never budgeted or "
             f'faulted by model name; if it is a model call, add {{host = "{host}", provider = '
-            '"openai"} to [agent] model_hosts'
+            f'"{named}"}} to [agent] model_hosts'
         ),
     )
 
@@ -523,32 +526,6 @@ def model_path_notice(ctx: Bound, call: Call, where: str) -> None:
 def counts_requests(plan: Plan, call: Call) -> bool:
     """Whether a requests N fault names this call."""
     return any(names(f, call) and schedule(f.when)[0] == "requests" for f in plan.faults)
-
-
-def carries(injected: list[str], fields: dict[str, object]) -> bool:
-    """Whether a chat request holds a text a fault put in a result. Only the strings of the
-    parsed body are searched, each message's content as text or as parts, compared as a rule
-    compares text; the raw body would hold the text escaped. A heuristic."""
-    messages = fields.get("messages")
-    if not isinstance(messages, list):
-        return False
-    wanted = [normal(text) for text in injected]
-    for message in cast("list[object]", messages):
-        if not isinstance(message, dict):
-            continue
-        content = cast("dict[str, object]", message).get("content")
-        parts = cast("list[object]", content) if isinstance(content, list) else [content]
-        for part in parts:
-            text = (
-                part
-                if isinstance(part, str)
-                else cast("dict[str, object]", part).get("text")
-                if isinstance(part, dict)
-                else None
-            )
-            if isinstance(text, str) and any(w in normal(text) for w in wanted):
-                return True
-    return False
 
 
 def stop_probe(
@@ -670,41 +647,24 @@ def reply_checks(run: RunState, step: Step, fields: dict[str, object], path: str
             "streaming off for this model, or use timeout or a status on this one",
         )
     provider = provider_for(run, step)
-    responses = provider.api(path) == RESPONSES
-    if word == "unknown tool" and responses:
-        not_carried_out(
-            run,
-            step,
-            "is a Responses call, and a call to a tool no one offered is seen on Chat "
-            "Completions only; fault a chat call",
-        )
-    if responses and fields.get("conversation") is not None:
-        not_carried_out(
-            run,
-            step,
-            f"is a Responses call in a conversation OpenAI keeps, and {word} would leave the "
-            f"real reply, or none, in it for the next turn; {IN_INPUT}",
-        )
+    if why := provider.not_carried_out(word, path, fields):
+        not_carried_out(run, step, why)
     if word == "unknown tool" and (why := provider.no_free_tool_call(path, fields)):
         run.unchanged(step, why)
         step.decision = Decision("real")
 
 
-IN_INPUT = "send the conversation in input instead, as the OpenAI Agents SDK does by default"
-
-
-def chain_check(run: RunState, step: Step, fields: dict[str, object]) -> None:
-    """Before anything is sent: a Responses request that asks OpenAI to look up a reply or
-    an item a fault changed or built, as previous_response_id or an item_reference, is a
-    mistake in the test. Its id is made up, so OpenAI holds nothing under it, and the model
-    could not build the next turn from what the agent got."""
-    found = run.chains_to_a_fault(provider_for(run, step), fields)
+def chain_check(
+    run: RunState, step: Step, provider: ServerChains, path: str, fields: dict[str, object]
+) -> None:
+    """Before anything is sent: a request that asks the provider to look up, by id, a reply
+    or an item a fault changed or built is a mistake in the test. Its id is made up, so the
+    provider holds nothing under it, and the model could not build the next turn from what
+    the agent got."""
+    found = run.chains_to_a_fault(provider, path, fields)
     if found is None:
         return
-    why = (
-        f"asks OpenAI to look up {found}, a reply or an item a fault changed or built, and "
-        f"OpenAI holds nothing under that id; {IN_INPUT}"
-    )
+    why = provider.chain_broken(found)
     if step.decision.fault is not None:
         not_carried_out(run, step, why)
     step.decision = Decision("refused", reason=MISTAKE_REFUSAL)
@@ -727,36 +687,34 @@ def built_reply(
     fields = provider.request_fields(body) or {}
     tokens = len(body) // CHAR_PER_TOKEN
     path = str(request.url.path)
-    responses = provider.api(path) == RESPONSES
     if word == "refuse":
         built = provider.refusal_reply(path, fields, tokens)
     else:  # reply_checks let it through only on chat, with a tool offered
         tool = provider.tool_call_tools(path, fields)[0]
         built = provider.unknown_tool_reply(fields, tokens, tool)
     headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
-    faulted(ctx, step, fields, built, responses=responses, ids_only=word == "unknown tool")
+    faulted(ctx, step, path, fields, built, ids_only=word == "unknown tool")
     return reply(ctx, module, client, step, request, extra, (200, headers, built))
 
 
 def faulted(
     ctx: Bound,
     step: Step,
+    path: str,
     fields: dict[str, object],
     gave: bytes,
     *,
-    responses: bool,
     ids_only: bool = False,
 ) -> None:
-    """Keep what a fired fault in a model's reply gave the agent: on Responses its ids,
-    which a later request may not chain to; on chat what a later request built from it
-    carries."""
+    """Keep what a fired fault in a model's reply gave the agent: the ids of a reply the
+    provider keeps, which a later request may not chain to, and what a later request built
+    from it carries. Each API of the provider gives one or the other, or nothing."""
     provider = provider_for(ctx.run, step)
-    if responses:
-        ctx.run.add_faulted_reply(provider.response_ids(gave))
-    else:
-        ctx.run.add_reply_fault_markers(
-            step.call.label, provider.given(fields, gave, ids_only=ids_only)
-        )
+    if isinstance(provider, ServerChains):
+        ctx.run.add_faulted_reply(provider.chain_ids(path, gave))
+    ctx.run.add_reply_fault_markers(
+        step.call.label, provider.given(path, fields, gave, ids_only=ids_only)
+    )
 
 
 def fault(
@@ -788,13 +746,9 @@ def fault(
         return built_reply(ctx, module, client, step, request, extra, plan_fault.do)
     if plan_fault.do == "context too long":
         provider = provider_for(run, step)
-        if provider.api(str(request.url.path)) == RESPONSES:
-            not_carried_out(
-                run,
-                step,
-                "is a Responses call, and context too long sends Chat Completions' error; "
-                "fault a chat call, or use a status on this one",
-            )
+        asked = provider.request_fields(body_of(request) or b"") or {}
+        if why := provider.not_carried_out(plan_fault.do, str(request.url.path), asked):
+            not_carried_out(run, step, why)
         headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
         body = provider.context_too_long_body()
         return reply(ctx, module, client, step, request, extra, (400, headers, body))
@@ -802,7 +756,7 @@ def fault(
     if step.call.kind == "model":
         provider = provider_for(run, step)
         body = provider.error_body(status)
-        kind = provider.error_type(status)
+        kind = provider.error_content_type(status)
         headers = {"content-type": kind, "x-request-id": "req_scrimmage_injected"}
     else:
         body = reason_phrase(status).encode()
@@ -1050,9 +1004,7 @@ def hold_for(ctx: Bound, step: Step, request: Any, extra: dict[str, object]) -> 
         refuse(ctx.run, step, no_price(model))
     body = body_of(request) or b""
     fields = provider.request_fields(body) if body else None
-    output = provider.max_output(fields or {}) or plan.reserve_output_tokens
-    if step.call.name == "chat" and provider.api(str(request.url.path)) != RESPONSES:
-        output *= provider.choices(fields or {})  # Responses has no n
+    output = provider.output_cap(fields or {}, str(request.url.path), plan.reserve_output_tokens)
     return worst(ctx, provider, request, len(body) // CHAR_PER_TOKEN, output, rates)
 
 
@@ -1448,14 +1400,6 @@ def left_as_it_is(ctx: Bound, step: Step, extra: dict[str, object], said: Unchan
         extra["mistake"] = message
 
 
-def model_op(run: RunState, step: Step, request: Any) -> str:
-    """What a model call is, for a change to its reply: a Responses call is a chat to the
-    engine, yet its reply has no choices to change."""
-    if provider_for(run, step).api(path_of(request.url)) == RESPONSES:
-        return "responses"
-    return str(step.call.name)
-
-
 def decided_by_headers(
     ctx: Bound, step: Step, extra: dict[str, object], request: Any, response: Any
 ) -> bool:
@@ -1464,7 +1408,9 @@ def decided_by_headers(
     headers = response.headers.multi_items()
     word = ctx.run.plan.faults[step.decision.fault or 0].do
     verdict = (
-        changes.chat_kind(response.status_code, model_op(ctx.run, step, request), headers, word)
+        provider_for(ctx.run, step)
+        .change(word, str(step.call.name), path_of(request.url))
+        .blocked(response.status_code, headers)
         if step.call.kind == "model"
         else changes.web_kind(response.status_code, str(request.method), headers)
     )
@@ -1523,10 +1469,10 @@ def changed_reply(
     body = b"".join(chunks)
     headers = response.headers.multi_items()
     status = response.status_code
-    op = model_op(ctx.run, step, request) if step.call.kind == "model" else ""
     if step.call.kind == "model":
-        change = changes.model_change(fault.do, op)
-        done = change(status, op, headers, body, fault, decoded=loaded)
+        provider = provider_for(ctx.run, step)
+        change = provider.change(fault.do, str(step.call.name), path_of(request.url))
+        done = change(status, headers, body, fault, decoded=loaded)
     else:
         done = changes.change_web(status, str(request.method), headers, body, fault, decoded=loaded)
     if isinstance(done, Unchangeable):
@@ -1540,7 +1486,7 @@ def changed_reply(
     ctx.run.changed(step, Changed(None, done.count, done.parts), reply=reply, status=done.status)
     if step.call.kind == "model" and fault.do in REPLY_FAULTS:  # never a model replace
         asked = provider_for(ctx.run, step).request_fields(body_of(request) or b"") or {}
-        faulted(ctx, step, asked, done.body, responses=op == "responses")
+        faulted(ctx, step, path_of(request.url), asked, done.body)
     stream = module.ByteStream(done.body)
     return rebuilt(module, client, request, response, done.headers, stream, done.status)
 
@@ -1808,9 +1754,9 @@ def record(
         at = rates.at(used.tier or held_tier(ctx, provider, request))
         if rates.unpriced(used.tier):
             # A tier the row does not price: settle at the dearest it does, and say so.
-            at = provider.dearest(rates, tokens_in, tokens_out, cached, *writes)
+            at = provider.dearest(rates, tokens_in, tokens_out, cached, writes)
             unpriced = used.tier
-        usd = provider.cost(tokens_in, tokens_out, at, cached, *writes)
+        usd = provider.cost(tokens_in, tokens_out, at, cached, writes)
     elif rates:  # a guess from the sizes, so every input token at its dearest rate
         usd = worst(ctx, provider, request, tokens_in, tokens_out, rates)
     if usd is not None and exact is not None and not free:

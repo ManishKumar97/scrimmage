@@ -37,7 +37,7 @@ from scrimmage.decide import missed
 from scrimmage.errors import ScrimmageRefused, ScrimmageStopped, ScrimmageTimeLimit
 from scrimmage.outcomes import PREVIEW
 from scrimmage.plan import Plan
-from scrimmage.providers.base import Given, ModelProvider
+from scrimmage.providers.base import Given, ModelProvider, ServerChains
 from scrimmage.providers.registry import built_in
 from scrimmage.records import RECORD_VERSION
 from scrimmage.redact import redact, redact_decoded, redacted, remove_values, scrubbed
@@ -183,16 +183,26 @@ def this_process() -> dict[str, object]:
     return {"host": socket.gethostname(), "pid": os.getpid(), "started": now_iso()}
 
 
+def model_path_provider(label: str, detail: str) -> str | None:
+    """For a POST to a model's path on a host no one named: the provider whose path it is,
+    which is the provider to name the host with. None for any other request."""
+    method, _, path = detail.partition(" ")
+    if not label.startswith("http:"):
+        return None
+    found = built_in().probe(path, method)
+    return None if found is None else found[0].name
+
+
 def model_path_hint(label: str, detail: str) -> str | None:
     """For a POST to a model's path on a host no one named: where to name it. None for any
     other request. Listed under real it would run as a plain web request, never budgeted."""
-    method, _, path = detail.partition(" ")
-    if not label.startswith("http:") or not built_in().recognizes(path, method):
+    named = model_path_provider(label, detail)
+    if named is None:
         return None
     host = label.removeprefix("http:")
     return (
         f"{label} {detail} is a model request to a host not under [agent] model_hosts, so it "
-        f'was refused as a web write. Add {{host = "{host}", provider = "openai"}} to [agent] '
+        f'was refused as a web write. Add {{host = "{host}", provider = "{named}"}} to [agent] '
         "model_hosts; a model call listed under real is never budgeted or faulted by model name."
     )
 
@@ -366,9 +376,9 @@ class RunState:
         # What each fault in a model's reply gave the agent, by the call's label: a later
         # request to that label that carries one was built from the faulted reply.
         self.reply_fault_markers: dict[str, list[Given]] = {}
-        # The ids of the Responses replies a fault changed or built, and of their items: they
-        # are made up, so OpenAI holds nothing under them, and a later request may not ask
-        # OpenAI to look one up.
+        # The ids of the replies a fault changed or built that a provider keeps on its side, and
+        # of their items: they are made up, so the provider holds nothing under them, and a
+        # later request may not ask it to look one up.
         self.faulted_reply_ids: set[str] = set()
         self.end_program: Callable[[], None] = lambda: None  # set where a run has a sender
         # The web gate's replies not read to their end, and the model paths it ran as web
@@ -781,26 +791,29 @@ class RunState:
                 self.reply_fault_markers.setdefault(label, []).append(gave)
 
     def add_faulted_reply(self, ids: list[str]) -> None:
-        """Keep the ids of a Responses reply a fired fault changed or built, and its items'."""
+        """Keep the ids of a kept reply a fired fault changed or built, and its items'."""
         with self._lock:
             self.faulted_reply_ids.update(ids)
 
-    def chains_to_a_fault(self, provider: ModelProvider, fields: dict[str, object]) -> str | None:
-        """The first id this Responses request asks OpenAI to look up, as previous_response_id
-        or an item_reference, that a fault made; else None."""
+    def chains_to_a_fault(
+        self, provider: ServerChains, path: str, fields: dict[str, object]
+    ) -> str | None:
+        """The first id this request asks the provider to look up that a fault made, such as
+        a previous response or an item reference; else None."""
         with self._lock:
             return next(
-                (i for i in provider.references(fields) if i in self.faulted_reply_ids), None
+                (i for i in provider.chain_references(path, fields) if i in self.faulted_reply_ids),
+                None,
             )
 
-    def carries_reply_fault(self, label: str, fields: dict[str, object]) -> bool:
-        """Whether this chat request, as it is sent, carries what a fault in a reply from the
-        same label gave the agent."""
+    def carries_reply_fault(
+        self, label: str, provider: ModelProvider, path: str, fields: dict[str, object]
+    ) -> bool:
+        """Whether this request, as it is sent, carries what a fault in a reply from the same
+        label gave the agent. provider: the one the call went to, which made the markers."""
         with self._lock:
             kept = list(self.reply_fault_markers.get(label, ()))
-        # The label is model:NAME, or model:NAME/op: the provider that made the markers.
-        name = label.removeprefix("model:").partition("/")[0]
-        return self.plan.registry.get(name).carries(fields, kept)
+        return provider.carries(path, fields, kept)
 
     def unchanged(self, step: Step, why: str) -> None:
         """A carried fault could not change this call: it gets what the baseline gives it, and

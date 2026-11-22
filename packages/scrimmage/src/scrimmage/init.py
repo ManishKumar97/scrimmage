@@ -45,6 +45,7 @@ FRAMEWORKS = ("langchain", "langgraph")  # their tools reach a gate with no tool
 WEB_SERVICES = ("fastapi", "flask", "starlette")
 TOOL_DECORATORS = ("tool", "is_tool", "function_tool")
 CLIENTS = ("OpenAI", "AsyncOpenAI", "AzureOpenAI")
+CLIENT_PROVIDER = "openai"  # the provider whose API those client classes speak
 MODEL_CLIENTS = (*CLIENTS, "ChatOpenAI", "AzureChatOpenAI")  # what building an agent's client calls
 NAME_ARGUMENT_DECORATORS = ("tool",)  # LangChain's @tool("name"); elsewhere text is a description
 READ_PREFIXES = ("get_", "list_", "search_", "find_", "lookup_", "read_", "check_", "fetch_")
@@ -661,12 +662,17 @@ def named(reading: Reading, name: str) -> list[Definition]:
 
 
 def model_hosts(result: Probe, reading: Reading) -> list[dict[str, str]]:
-    """The hosts to name in the draft. The built-in OpenAI host needs no line."""
-    hosts = {host: "static" for host in reading.hosts}
+    """The hosts to name in the draft. A provider's own host needs no line. A host the code
+    names for a client class has that client's provider; one the probe stopped at has the
+    provider whose path the request was."""
+    hosts = {host: (CLIENT_PROVIDER, "static") for host in reading.hosts}
     request = cast("dict[str, str] | None", (result.notice or {}).get("model_request"))
     if request is not None and not built_in().is_built_in_host(request["host"]):
-        hosts[request["host"]] = "probe"
-    return [{"host": h, "provider": "openai", "found_by": hosts[h]} for h in sorted(hosts)]
+        hosts[request["host"]] = (request["provider"], "probe")
+    return [
+        {"host": h, "provider": provider, "found_by": found_by}
+        for h, (provider, found_by) in sorted(hosts.items())
+    ]
 
 
 # The probe

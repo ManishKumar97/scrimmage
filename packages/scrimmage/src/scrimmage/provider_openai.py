@@ -11,9 +11,11 @@ import math
 import string
 import time
 from collections.abc import Iterable, Iterator, Sequence
+from dataclasses import dataclass
 from typing import cast
 
 from scrimmage import prices
+from scrimmage.judge import normal
 from scrimmage.prices import Rates as Rates
 from scrimmage.providers.base import Given as Given
 from scrimmage.providers.base import Offered as Offered
@@ -91,6 +93,21 @@ RESPONSES_AGENT = {
 CHAT_AGENT = {"function", "custom"}
 MAX_TOKENS = 1_000_000_000  # a larger count is not a count
 MAX_CHOICES = 128  # the most choices, n, a Chat request may ask for
+WRITE_30M = "cache_write_30m"  # the Rates fields that price a cache write, by its lifetime
+WRITE_12H = "cache_write_12h"
+
+
+@dataclass
+class OpenAIUsage(Usage):
+    """Usage, with OpenAI's two cache lifetimes named, which its tests and docs speak of."""
+
+    @property
+    def written_30m(self) -> int:
+        return self.writes.get(WRITE_30M, 0)
+
+    @property
+    def written_12h(self) -> int:
+        return self.writes.get(WRITE_12H, 0)
 
 
 def op_for(path: str, method: str) -> str | None:
@@ -109,6 +126,11 @@ def op_for(path: str, method: str) -> str | None:
 def is_responses(path: str) -> bool:
     """A Responses API call, not a chat completion."""
     return path.split("?", 1)[0].rstrip("/").endswith("/responses")
+
+
+def is_chat_completions(path: str) -> bool:
+    """A Chat Completions call, which is billed for each choice it asks for."""
+    return path.split("?", 1)[0].rstrip("/").endswith("/chat/completions")
 
 
 def broken_body(path: str, op: str) -> bytes:
@@ -132,7 +154,7 @@ def error_body(status: int) -> bytes:
     return json.dumps({"error": error}).encode()
 
 
-def error_type(status: int) -> str:
+def error_content_type(status: int) -> str:
     """The content type of an error reply with this status."""
     return "text/plain" if status in TEXT_PLAIN else "application/json"
 
@@ -366,6 +388,69 @@ def response_ids(reply: bytes) -> list[str]:
     return [i for i in found if isinstance(i, str) and i]
 
 
+IN_INPUT = "send the conversation in input instead, as the OpenAI Agents SDK does by default"
+
+
+def not_carried_out(word: str, path: str, fields: dict[str, object]) -> str | None:
+    """Why a reply fault, or context too long, cannot be carried out on this request: the
+    mistake in the test. Only Responses has such cases."""
+    if not is_responses(path):
+        return None
+    if word == "context too long":
+        return (
+            "is a Responses call, and context too long sends Chat Completions' error; "
+            "fault a chat call, or use a status on this one"
+        )
+    if word == "unknown tool":
+        return (
+            "is a Responses call, and a call to a tool no one offered is seen on Chat "
+            "Completions only; fault a chat call"
+        )
+    if fields.get("conversation") is not None:
+        return (
+            f"is a Responses call in a conversation OpenAI keeps, and {word} would leave the "
+            f"real reply, or none, in it for the next turn; {IN_INPUT}"
+        )
+    return None
+
+
+def chain_ids(path: str, reply: bytes) -> list[str]:
+    """The ids a later request may chain to, for a reply to this path: Responses keeps its
+    replies; Chat Completions keeps none."""
+    return response_ids(reply) if is_responses(path) else []
+
+
+def chain_references(path: str, fields: dict[str, object]) -> list[str]:
+    """What a request to this path asks OpenAI to look up by id."""
+    return references(fields) if is_responses(path) else []
+
+
+def chain_broken(found: str) -> str:
+    """Why a request that looks up this faulted id is a mistake in the test, said of the call."""
+    return (
+        f"asks OpenAI to look up {found}, a reply or an item a fault changed or built, and "
+        f"OpenAI holds nothing under that id; {IN_INPUT}"
+    )
+
+
+def carries_text(fields: dict[str, object], texts: Sequence[str]) -> bool:
+    """Whether a chat request holds a text a fault put in a result. Only the strings of the
+    parsed body are searched, each message's content as text or as parts, compared as a rule
+    compares text; the raw body would hold the text escaped. A heuristic."""
+    messages = _list(fields.get("messages"))
+    if not messages:
+        return False
+    wanted = [normal(text) for text in texts]
+    for message in messages:
+        content = _obj(message).get("content")
+        parts = _list(content) or [content]
+        for part in parts:
+            text = part if isinstance(part, str) else _obj(part).get("text")
+            if isinstance(text, str) and any(w in normal(text) for w in wanted):
+                return True
+    return False
+
+
 def references(fields: dict[str, object]) -> list[str]:
     """What a Responses request asks OpenAI to look up: its previous_response_id, and the id
     of each item_reference in its input."""
@@ -523,6 +608,13 @@ def max_output(fields: dict[str, object]) -> int | None:
     return None
 
 
+def output_cap(fields: dict[str, object], path: str, default: int) -> int:
+    """The most output tokens a call to this path could bill. A Chat request bills each
+    choice, n, for its own output and its own limit; Responses has no n."""
+    cap = max_output(fields) or default
+    return cap * choices(fields) if is_chat_completions(path) else cap
+
+
 def choices(fields: dict[str, object]) -> int:
     """How many choices a Chat request asks for. Each is billed for its own output, and
     each has its own output limit. A value the API refuses is never billed, so it is 1."""
@@ -532,7 +624,7 @@ def choices(fields: dict[str, object]) -> int:
     return 1
 
 
-def usage(body: bytes, *, output_required: bool = True) -> Usage:
+def usage(body: bytes, *, output_required: bool = True) -> OpenAIUsage:
     """Token counts from a reply: a JSON body, or the events of a streamed one.
 
     A stream's lines may start with "event:" or be a ": ping", so only "data:" lines are
@@ -543,7 +635,7 @@ def usage(body: bytes, *, output_required: bool = True) -> Usage:
     text = body.decode("utf-8", "replace")
     # Split on newlines only: text in a reply can hold other line separators.
     data = [line[5:].strip() for line in text.split("\n") if line.startswith("data:")]
-    found = Usage()
+    found = OpenAIUsage()
     tier: str | None = None
     cost: float | None = None
     for doc in data or [text]:
@@ -564,8 +656,9 @@ def usage(body: bytes, *, output_required: bool = True) -> Usage:
             tokens_out = 0
         if tokens_in is not None and tokens_out is not None:
             cached = cached_count(numbers, tokens_in)
-            found = Usage(tokens_in, tokens_out, True, cached)
-            found.written_30m, found.written_12h = written(numbers, tokens_in - cached)
+            found = OpenAIUsage(tokens_in, tokens_out, True, cached)
+            short, long = written(numbers, tokens_in - cached)
+            found.writes = {WRITE_30M: short, WRITE_12H: long}
     found.tier, found.cost = tier, cost
     return found
 

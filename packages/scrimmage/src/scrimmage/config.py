@@ -610,12 +610,13 @@ def model_paths_in_real(agent: Agent) -> list[str]:
             continue
         label, _, rest = entry.partition(" ")
         method, _, path = rest.partition(" ")
-        if path and built_in().recognizes(path, method):
+        owner = built_in().probe(path, method) if path else None
+        if owner is not None:
             host = label.removeprefix("http:")
             found.append(
                 f"[agent] real: {entry!r} lists a model call as a web request, which is never "
                 f'budgeted or faulted; name the host under model_hosts as {{host = "{host}", '
-                'provider = "openai"} and take it out of real'
+                f'provider = "{owner[0].name}"}} and take it out of real'
             )
     return found
 

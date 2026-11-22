@@ -19,7 +19,7 @@ import jsonschema
 import openai
 import pytest
 
-from scrimmage import http_gate, provider_openai, state
+from scrimmage import http_gate, state
 from scrimmage import plan as plan_module
 from scrimmage.budget import Ledger, Shortfall
 from scrimmage.client import ControlClient
@@ -28,6 +28,7 @@ from scrimmage.decide import Call, Counters
 from scrimmage.errors import ScrimmageRefused
 from scrimmage.plan import Plan
 from scrimmage.provider_openai import Rates
+from scrimmage.providers.impl.openai import OpenAI
 from scrimmage.runner import STOP_TEST, real_error
 
 URL = "https://api.openai.com/v1/chat/completions"
@@ -929,9 +930,28 @@ def test_a_failure_in_the_cost_code_never_reaches_the_agent(
         raise ArithmeticError
 
     sink, _ = install(make_plan())
-    monkeypatch.setattr(provider_openai, "usage", boom)
+    monkeypatch.setattr(OpenAI, "usage", staticmethod(boom))
     assert client().post(URL, json=BODY).status_code == 200
     assert sink.lines[0]["cost_usd"] is None
+
+
+def test_a_model_call_is_read_by_the_provider_the_patches_above_reach(
+    gated: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The control of the patches on OpenAI's methods: a model call does go through them, so
+    a patch that is never reached would show here."""
+    read: list[bytes] = []
+    original = OpenAI.request_fields
+
+    def spy(body: bytes) -> dict[str, object] | None:
+        read.append(body)
+        return original(body)
+
+    sink, _ = install(make_plan())
+    monkeypatch.setattr(OpenAI, "request_fields", staticmethod(spy))
+    assert client().post(URL, json=BODY).status_code == 200
+    assert read, "the gate did not read the model body through the provider"
+    assert sink.lines[0]["cost_usd"] is not None
 
 
 @pytest.mark.design("budget.no_price_is_null")

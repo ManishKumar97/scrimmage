@@ -6,6 +6,10 @@ values, never on keys. A value that cannot take the change comes back unchanged 
 reason, so the gate can say why on the line. Redaction comes first: a change that lands on
 text the record would remove is not made, because the line could then not show what the
 agent saw.
+
+The changes to a model's reply, chat_kind to model_change below, are OpenAI's: its Chat
+Completions and Responses shapes. They are reached only through the OpenAI provider's change,
+and import nothing of a provider, so another provider's changes live with it.
 """
 
 import copy
@@ -20,11 +24,9 @@ import typing
 import zlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Literal, Protocol, cast
 
 from scrimmage.config import Fault
-from scrimmage.providers.base import RESPONSES
-from scrimmage.providers.registry import built_in
 from scrimmage.redact import redact, spans
 
 MAX_DEPTH = 100  # nesting deeper than this is not changed, so no value can overflow the stack
@@ -1094,12 +1096,17 @@ def no_output_text(output: list[object]) -> str:
     return "the reply has no text"
 
 
-def with_fresh_ids(value: dict[str, object], output: list[object]) -> dict[str, object]:
-    """The changed reply under new ids in its provider's forms, for the reply and each item.
-    Only the Responses changes call it, so it is the provider of the Responses API that
-    makes the ids."""
-    provider = built_in().for_api(RESPONSES)
-    assert provider is not None, "no provider has a Responses API"
+class FreshIds(Protocol):
+    """A provider that keeps the replies it made, so a changed reply must not carry their ids."""
+
+    def fresh_ids(self, value: dict[str, object], output: list[object]) -> dict[str, object]: ...
+
+
+def with_fresh_ids(
+    provider: FreshIds, value: dict[str, object], output: list[object]
+) -> dict[str, object]:
+    """The changed reply under new ids in the call's provider's forms, for the reply and each
+    item. The provider is the one the call went to, passed in."""
     return provider.fresh_ids(value, output)
 
 
@@ -1110,6 +1117,7 @@ def garble_responses(
     body: bytes,
     fault: Fault,
     *,
+    provider: FreshIds,
     decoded: bool = False,
 ) -> WebChanged | Unchangeable:
     """Put the stray token in each output_text part. Every other field stays as it was sent."""
@@ -1125,7 +1133,7 @@ def garble_responses(
         parts.append(f"output[{i}].content[{j}].text")
     if not count:
         return Unchangeable(no_output_text(output), "data")
-    return rewritten(with_fresh_ids(value, output), headers, count, parts)
+    return rewritten(with_fresh_ids(provider, value, output), headers, count, parts)
 
 
 def truncate_responses(
@@ -1135,6 +1143,7 @@ def truncate_responses(
     body: bytes,
     fault: Fault,
     *,
+    provider: FreshIds,
     decoded: bool = False,
 ) -> WebChanged | Unchangeable:
     """Stop the reply as max_output_tokens does: the first text is cut, and what came after it
@@ -1166,7 +1175,7 @@ def truncate_responses(
     value.update(status="incomplete", incomplete_details={"reason": "max_output_tokens"})
     if "completed_at" in value:  # an incomplete reply never completed
         value["completed_at"] = None
-    return rewritten(with_fresh_ids(value, output), headers, 1, [where])
+    return rewritten(with_fresh_ids(provider, value, output), headers, 1, [where])
 
 
 def break_args_responses(
@@ -1176,6 +1185,7 @@ def break_args_responses(
     body: bytes,
     fault: Fault,
     *,
+    provider: FreshIds,
     decoded: bool = False,
 ) -> WebChanged | Unchangeable:
     """Break the arguments of every function_call item."""
@@ -1193,7 +1203,7 @@ def break_args_responses(
         parts.append(f"output[{i}].arguments")
     if not count:
         return Unchangeable("the reply has no tool call with arguments to break", "data")
-    return rewritten(with_fresh_ids(value, output), headers, count, parts)
+    return rewritten(with_fresh_ids(provider, value, output), headers, count, parts)
 
 
 RESPONSES_CHANGES = {
