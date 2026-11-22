@@ -68,12 +68,89 @@ def test_a_reply_that_says_flex_settles_at_the_flex_rate(gated: None) -> None:
 
 
 @pytest.mark.design("tier.settle")
-@pytest.mark.parametrize("tier", ["default", "auto", "scale", None])
-def test_a_reply_on_the_default_or_an_unlisted_tier_settles_at_the_model_rate(
+@pytest.mark.parametrize("tier", ["default", "auto", None])
+def test_a_reply_on_the_default_tier_settles_at_the_model_rate(
     gated: None, tier: str | None
 ) -> None:
     _, cost, _, _ = call(BODY, tier=tier)
     assert cost == pytest.approx((1000 * 1000 + 10 * 2000) / 1e6)
+
+
+def line_for(tier: str, rates: Rates = TEAM, prompt: int = 1000) -> dict[str, Any]:
+    """The record line of one call whose reply names this tier."""
+    sink, _ = install(
+        make_plan(budget=1000.0, prices=(("gpt-4o-mini", rates),)), Budget(limit=1000.0)
+    )
+    usage = {"prompt_tokens": prompt, "completion_tokens": 10}
+
+    def answer(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json={"choices": [], "usage": usage, "service_tier": tier})
+
+    httpx2.Client(transport=httpx2.MockTransport(answer)).post(
+        URL, content=json.dumps({**BODY, "max_tokens": 10}).encode()
+    )
+    return sink.lines[0]
+
+
+@pytest.mark.design("tier.unpriced")
+@pytest.mark.parametrize("tier", ["turbo", "scale"])
+def test_a_reply_naming_a_tier_the_row_does_not_price_settles_at_the_dearest_tier(
+    gated: None, tier: str
+) -> None:
+    line = line_for(tier)
+    assert line["cost_usd"] == pytest.approx((1000 * 2000 + 10 * 4000) / 1e6)  # priority
+    assert line["unpriced_tier"] == tier
+    assert line["cost_estimated"] is True
+
+
+@pytest.mark.design("tier.unpriced")
+def test_the_dearest_tier_is_chosen_at_the_calls_size_and_long_rates_count(gated: None) -> None:
+    cheap_short = Rates(
+        10.0,
+        10.0,
+        above=100,
+        long=Rates(20.0, 20.0),
+        tiers=(("flex", Rates(5.0, 5.0)), ("priority", Rates(12.0, 12.0))),
+    )
+    # Over the threshold the default's long rates, 20, are dearer than priority's 12.
+    line = line_for("turbo", cheap_short, prompt=1000)
+    assert line["cost_usd"] == pytest.approx((1000 * 20 + 10 * 20) / 1e6)
+    assert line["unpriced_tier"] == "turbo"
+
+
+@pytest.mark.design("tier.unpriced")
+@pytest.mark.parametrize("tier", ["default", "auto", "flex", "priority", "fast"])
+def test_a_reply_naming_a_priced_or_default_tier_has_no_unpriced_notice(
+    gated: None, tier: str
+) -> None:
+    line = line_for(tier)
+    assert "unpriced_tier" not in line and line["cost_estimated"] is False
+
+
+@pytest.mark.design("tier.unpriced")
+def test_the_hold_of_a_request_naming_an_unpriced_tier_is_unchanged(gated: None) -> None:
+    held, _, body, _ = call({**BODY, "service_tier": "turbo"})
+    assert held == [pytest.approx(held_at(DEFAULT, body))]  # the default tier, as decided
+
+
+@pytest.mark.design("tier.ultrafast_62")
+@pytest.mark.parametrize("model", ["gpt-6.2-astra", "gpt-6.2-sol"])
+@pytest.mark.parametrize("prompt", [1000, 300_000])
+def test_an_ultrafast_reply_on_a_62_model_costs_at_least_three_times_standard(
+    gated: None, model: str, prompt: int
+) -> None:
+    sink, _ = install(make_plan(budget=1000.0), Budget(limit=1000.0))
+    usage = {"prompt_tokens": prompt, "completion_tokens": 10}
+
+    def answer(_: httpx2.Request) -> httpx2.Response:
+        reply = {"choices": [], "usage": usage, "service_tier": "ultrafast"}
+        return httpx2.Response(200, json=reply)
+
+    body = json.dumps({**BODY, "model": model, "max_tokens": 10}).encode()
+    httpx2.Client(transport=httpx2.MockTransport(answer)).post(URL, content=body)
+    standard = table.cost(prompt, 10, dict(prices.shipped().models)[model])
+    assert cast(float, sink.lines[0]["cost_usd"]) >= 3 * standard
+    assert "unpriced_tier" not in sink.lines[0]
 
 
 @pytest.mark.design("tier.hold")

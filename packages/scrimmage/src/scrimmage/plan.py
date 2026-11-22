@@ -170,6 +170,8 @@ def price_json(price: Rates) -> dict[str, object]:
     doc.update({key: rate for key, rate in optional.items() if rate is not None})
     if price.tiers:
         doc["tiers"] = {tier: price_json(rates) for tier, rates in price.tiers}
+    if price.long is not None:
+        doc["long"] = {**price_json(price.long), "above": price.above}
     return doc
 
 
@@ -177,6 +179,7 @@ def price_from(doc: dict[str, object]) -> Rates:
     def rate(key: str) -> float | None:
         return None if doc.get(key) is None else number(doc, key)
 
+    longer = doc.get("long")
     return Rates(
         number(doc, "input"),
         number(doc, "output"),
@@ -184,6 +187,8 @@ def price_from(doc: dict[str, object]) -> Rates:
         rate("cache_write_30m"),
         rate("cache_write_12h"),
         tuple((tier, price_from(obj(p))) for tier, p in obj(doc.get("tiers", {})).items()),
+        above=None if longer is None else int(number(obj(longer), "above")),
+        long=None if longer is None else price_from(obj(longer)),
     )
 
 

@@ -21,7 +21,7 @@ NEWER = (
     resources.files("scrimmage")
     .joinpath("prices.toml")
     .read_text(encoding="utf-8")
-    .replace('as_of = "2026-11-19"', 'as_of = "2026-12-01"')
+    .replace('as_of = "2026-11-22"', 'as_of = "2026-12-01"')
     .replace("input = 2.00\n", "input = 2.25\n", 1)  # gpt-4.1
     .replace(
         '[models."gpt-5-nano"]',

@@ -358,7 +358,77 @@
                     "cache_write_12h": {
                       "type": "number",
                       "minimum": 0
+                    },
+                    "long": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "above",
+                        "input",
+                        "output"
+                      ],
+                      "properties": {
+                        "above": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "input": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "output": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "cached_input": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "cache_write_30m": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "cache_write_12h": {
+                          "type": "number",
+                          "minimum": 0
+                        }
+                      }
                     }
+                  }
+                }
+              },
+              "long": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "above",
+                  "input",
+                  "output"
+                ],
+                "properties": {
+                  "above": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "input": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "output": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cached_input": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cache_write_30m": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cache_write_12h": {
+                    "type": "number",
+                    "minimum": 0
                   }
                 }
               }

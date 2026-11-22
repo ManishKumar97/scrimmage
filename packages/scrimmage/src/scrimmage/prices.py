@@ -4,6 +4,7 @@ A price changes by a plain change to prices.toml. A team's own prices under [age
 in scrimmage.toml are read by the same code, so both files take the same keys.
 """
 
+import dataclasses
 import functools
 import math
 import re
@@ -19,8 +20,12 @@ from scrimmage.errors import ConfigError
 DOCS = "docs/configuration.md"
 SHIPPED = "prices.toml"
 RUNS = "scrimmage-runs"
-RATE_KEYS = {"input", "output", "cached_input", "cache_write_30m", "cache_write_12h"}
-PRICE_KEYS = {*RATE_KEYS, "tiers"}  # a model's keys; a tier's are RATE_KEYS
+RATE_KEYS_ORDER = ("input", "output", "cached_input", "cache_write_30m", "cache_write_12h")
+RATE_KEYS = set(RATE_KEYS_ORDER)
+PRICE_KEYS = {*RATE_KEYS, "tiers", "long"}  # a model's keys
+TIER_KEYS = {*RATE_KEYS, "long"}  # a tier's keys
+TIER_ALIASES = {"fast": "priority", "priority": "fast"}  # OpenAI renamed one to the other
+LONG_KEYS = {*RATE_KEYS, "above"}  # a long table's keys: the rates, and where they start
 FILE_KEYS = {"as_of", "source", "models"}
 DATED = re.compile(r"-\d{4}-\d{2}-\d{2}$")
 
@@ -31,7 +36,9 @@ class Rates:
     rate: a price that guesses must guess high, or the budget could let through more. With
     no cache-write rate, a written token costs the full input rate, as on a model that
     charges nothing extra to write its cache. tiers: the rates of each service tier, by name.
-    A tier not listed costs these rates."""
+    A tier not listed costs these rates. long: the rates of a call whose input is over `above`
+    tokens, for a model that charges more for a long prompt. OpenAI charges the whole call at
+    them, input and output, not only the tokens past the threshold."""
 
     input: float
     output: float
@@ -39,10 +46,29 @@ class Rates:
     cache_write_30m: float | None = None  # a token written to the cache for 30 minutes
     cache_write_12h: float | None = None  # for 12 hours, a Responses API choice
     tiers: tuple[tuple[str, "Rates"], ...] = ()
+    above: int | None = None  # input tokens; a call with more pays the long rates
+    long: "Rates | None" = None
 
     def at(self, tier: str | None) -> "Rates":
-        """The rates a call on this service tier pays."""
-        return dict(self.tiers).get(tier or "", self)
+        """The rates a call on this service tier pays. fast and priority are one tier under two
+        names, so a row that writes only one of them prices both."""
+        named = dict(self.tiers)
+        name = tier or ""
+        found = named.get(name) or named.get(TIER_ALIASES.get(name, ""))
+        return self if found is None else found
+
+    def unpriced(self, tier: str | None) -> bool:
+        """True when a reply names a tier that is neither the default tier nor one this row
+        prices, so its rates are not known."""
+        if not tier or tier.lower() in RESERVED_TIERS:
+            return False
+        return self.at(tier) is self
+
+    def sized(self, tokens_in: int) -> "Rates":
+        """The rates a call with this many input tokens pays: the long rates when it is over."""
+        if self.long is not None and self.above is not None and tokens_in > self.above:
+            return self.long
+        return self
 
 
 @dataclass(frozen=True)
@@ -60,8 +86,9 @@ def read_prices(value: object, where: str) -> tuple[tuple[str, Rates], ...]:
     )
 
 
-def read_rates(entry: dict[str, object], item: str, *, tiers: bool = True) -> Rates:
-    known = PRICE_KEYS if tiers else RATE_KEYS
+def read_rates(entry: dict[str, object], item: str, *, level: str = "model") -> Rates:
+    """level is model, tier or long, and says which keys the table may hold."""
+    known = {"model": PRICE_KEYS, "tier": TIER_KEYS, "long": LONG_KEYS}[level]
     for key in entry:
         if key not in known:
             raise ConfigError(f"{item} {key}: unknown setting; see {DOCS}")
@@ -82,12 +109,47 @@ def read_rates(entry: dict[str, object], item: str, *, tiers: bool = True) -> Ra
             )
         writes.append(write)
     named: list[tuple[str, Rates]] = []
-    for tier, raw in as_table(entry.get("tiers", {}), f"{item} tiers").items():
-        where = f"{item} tiers {tier}"
-        if not tier.strip():
-            raise ConfigError(f"{item} tiers: a tier needs a name")
-        named.append((tier, read_rates(as_table(raw, where), where, tiers=False)))
-    return Rates(rate, output, cached, *writes, tiers=tuple(named))
+    if level == "model":
+        for tier, raw in as_table(entry.get("tiers", {}), f"{item} tiers").items():
+            where = f"{item} tiers {tier}"
+            if not tier.strip():
+                raise ConfigError(f"{item} tiers: a tier needs a name")
+            named.append((tier, read_rates(as_table(raw, where), where, level="tier")))
+    above: int | None = None
+    if level == "long":
+        found = entry.get("above")
+        if isinstance(found, bool) or not isinstance(found, int) or found < 1:
+            raise ConfigError(
+                f"{item} above: expected a whole number of input tokens, at least 1, such as 272000"
+            )
+        above = found
+    rates = Rates(rate, output, cached, *writes, tiers=tuple(named), above=above)
+    if level == "long" or "long" not in entry:
+        return rates
+    where = f"{item} long"
+    longer = read_rates(as_table(entry["long"], where), where, level="long")
+    check_long(rates, longer, where)
+    return dataclasses.replace(
+        rates, above=longer.above, long=dataclasses.replace(longer, above=None)
+    )
+
+
+def check_long(base: Rates, longer: Rates, item: str) -> None:
+    """A long call may not cost less per token than a short one, in any kind of token. A rate
+    a table leaves out costs its input rate, so that is what is compared."""
+    for key in RATE_KEYS_ORDER:
+        was, now = effective(base, key), effective(longer, key)
+        if now < was:
+            raise ConfigError(
+                f"{item} {key}: {now:g} is below the {was:g} of a short call; "
+                "a long call costs at least as much per token"
+            )
+
+
+def effective(rates: Rates, key: str) -> float:
+    """What a token of this kind costs: a rate left out costs the input rate."""
+    value: float | None = getattr(rates, key)
+    return rates.input if value is None else value
 
 
 def dollars(entry: dict[str, object], key: str, item: str) -> float:
@@ -157,7 +219,8 @@ def check_file_rates(model: str, rates: Rates, item: str) -> None:
     output unless the model's name contains embedding, as such a model has no output. A cached
     or cache-write rate, if given, must reach FLOOR too, with no exception. A tier
     cannot be named default or auto, in any case, which are not tiers OpenAI bills at a rate
-    of their own.
+    of their own. A long table needs no floor of its own: each of its rates is at least the
+    same rate of its base, which has passed.
     """
     if rates.input < FLOOR:
         raise ConfigError(

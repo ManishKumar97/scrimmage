@@ -188,8 +188,9 @@ def test_a_reply_that_is_not_json_has_no_counts() -> None:
 
 @pytest.mark.design("budget.price_lookup")
 def test_prices_come_from_the_team_then_the_table_then_the_family() -> None:
-    mini = table.Rates(0.15, 0.60, 0.075)
-    assert table.price("gpt-4o-mini", {}) == mini
+    mini = table.price("gpt-4o-mini", {})
+    assert mini is not None and mini.input == 0.15 and mini.output == 0.60  # with its tiers
+    assert mini.cached_input == 0.075
     assert table.price("gpt-4o-mini-2024-07-18", {}) == mini  # a dated snapshot
     team = table.Rates(9.0, 9.0)
     assert table.price("gpt-4o-mini", {"gpt-4o-mini": team}) == team  # whole, no cached rate

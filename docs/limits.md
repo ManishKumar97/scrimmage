@@ -425,6 +425,8 @@ Also read the control-path limits under An agent inside a web service.
   Once money spent passes the limit, every later call is refused at once.
   Set `max_tokens`, `max_completion_tokens` or `max_output_tokens` on each call, in a body Scrimmage can read, to bound its output, `n` choices included; nothing bounds the input estimate.
 
+- **Regional and FedRAMP endpoints cost more.** The shipped prices are OpenAI's global rates. Regional (data residency) endpoints and FedRAMP endpoints charge a 10% uplift on models released on or after 5 March 2026. A team on those endpoints sets its own rates under `[agent.prices]`, or its calls settle 10% low.
+
 - **A call served on a dearer tier than its hold.** A call is held at the service tier its request names, else at `[agent] service_tier`, else at the default tier, and is settled at the tier the reply names. OpenAI can serve a call on a dearer tier than that, such as `priority` for a request that names none. It then costs more than its hold, and calls in flight can pass `max_cost_usd` by the difference, as for the hold above. Set `service_tier` to your account's tier to avoid it. See [Service tiers](configuration.md#service-tiers).
 
 - **A gateway's stated cost can only raise a call's cost.** A reply that states its cost, such as OpenRouter's `usage.cost` or the LiteLLM proxy's `x-litellm-response-cost` header, is settled at the larger of that figure and the cost of its tokens at your prices. A gateway that reports 0, or only its own fee, as OpenRouter does for a key you brought, or that does not know a model, as LiteLLM does for one missing from its cost map, would otherwise turn `max_cost_usd` off. So a gateway that charges less than your price file says is still counted at your price file's figure.
@@ -433,7 +435,7 @@ Also read the control-path limits under An agent inside a web service.
 
 - **Prices need checking.** The shipped price file is small and as old as your installed version; its `as_of` date shows on `scrimmage check`. Run `scrimmage prices update` for the newest, check it against your provider's pricing, and use `[agent.prices]` for anything else.
 
-- **One price per kind of token.** A price has no long-context tier, so models priced higher above 272K input tokens, such as `gpt-5.4`, `gpt-5.5` and the `gpt-5.6` models, are not in the shipped price file. Under `[agent.prices]`, give such a model its long-context price if a call can go over 272K input tokens, or a long call costs more than the record says.
+- **A long prompt costed from an estimate.** A model that charges more above a number of input tokens has a `long` price with an `above` threshold. A call is settled at the long rates when the reply's input tokens are over `above`. Before the call, its input is estimated from the size of the request, so a call whose estimate is under `above` but whose real input is over it is held at the normal rates, and calls in flight can pass `max_cost_usd` by the difference. A tier with no `long` price of its own costs its normal rates at any length. See [Long-context prices](configuration.md#long-context-prices).
 
 - **A hold that cannot end while a call waits.** A call that its own run's calls would keep out, even if every other run finished, waits at most 30 seconds, or half the time its run has left. A stream the agent keeps open across a second call, or one it stopped reading without closing, keeps its hold, so the second call ends in a "not reserved" stop. A hold in another run is waited for until near this run's `run_timeout`.
 

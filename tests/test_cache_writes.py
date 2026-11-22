@@ -1,5 +1,6 @@
 """Current OpenAI models are priced, and cache writes are read, priced and held for."""
 
+import dataclasses
 import json
 from pathlib import Path
 from typing import Any
@@ -73,14 +74,23 @@ def reply_of(usage: dict[str, object]) -> bytes:
 def test_the_built_in_table_has_current_models_at_openais_prices(
     model: str, rates: table.Rates
 ) -> None:
-    # OpenAI's pricing page, standard tier, checked on 19 November 2026.
-    assert table.price(model, {}) == rates
+    # OpenAI's pricing page, standard tier, checked on 22 November 2026.
+    found = table.price(model, {})
+    assert found is not None
+    assert dataclasses.replace(found, tiers=(), above=None, long=None) == rates
 
 
-@pytest.mark.design("prices.long_context_left_out")
-@pytest.mark.parametrize("model", ["gpt-5.4", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol"])
-def test_a_model_with_a_long_context_price_is_not_in_the_table(model: str) -> None:
-    assert table.price(model, {}) is None
+@pytest.mark.design("prices.long_context_in_the_table")
+@pytest.mark.parametrize("model", ["gpt-5.4", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-terra"])
+def test_a_model_with_a_long_context_price_has_its_long_rates(model: str) -> None:
+    found = table.price(model, {})
+    assert found is not None and found.above == 272000 and found.long is not None
+    assert found.long.input > found.input and found.long.output > found.output
+
+
+@pytest.mark.design("prices.long_context_in_the_table")
+def test_a_model_with_only_a_promotional_price_is_not_in_the_table() -> None:
+    assert table.price("gpt-5.6-sol", {}) is None
 
 
 @pytest.mark.design("prices.current_model_runs")

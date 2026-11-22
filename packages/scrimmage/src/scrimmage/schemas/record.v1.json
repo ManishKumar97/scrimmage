@@ -559,6 +559,10 @@
         "after_reply_fault": {
           "const": true,
           "description": "A model's real 400 to a chat request that, as sent, held what a fault in a model's reply gave the agent: the agent's result, not an infrastructure error."
+        },
+        "unpriced_tier": {
+          "type": "string",
+          "description": "On a model call whose reply named a service tier the price row does not list: that tier. The call is settled at the dearest rates the row does list, and cost_estimated is true."
         }
       }
     },
