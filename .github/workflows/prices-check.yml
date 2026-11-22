@@ -1,0 +1,78 @@
+name: Prices check
+
+# Once a week, fetch OpenAI's pricing page and hash its pricing tables.
+# If the hash differs from tools/pricing-fingerprint.txt, open one issue.
+# A page with no pricing tables also opens the issue: a redesign is a reason to look by hand.
+# A fetch that fails opens a separate issue, and the run still fails.
+# The workflow never reads a price and never writes one.
+# A person updates packages/scrimmage/src/scrimmage/prices.toml and the fingerprint file.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: Compare the pricing page with the committed fingerprint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - name: Fetch the page and compare
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PAGE_URL: https://developers.openai.com/api/docs/pricing
+          TITLE: "OpenAI's pricing page changed: check prices.toml"
+          FETCH_TITLE: "Prices check cannot fetch OpenAI's pricing page"
+        run: |
+          set -euo pipefail
+          # Open an issue unless the workflow's own bot already has one open with this title.
+          # Only the bot's issues count, so an outside user cannot mute the alert.
+          open_issue() {
+            local title="$1" body="$2" open
+            open="$(gh issue list --state open --author "github-actions[bot]" --limit 100 --json title | jq --arg t "$title" '[.[] | select(.title == $t)] | length')"
+            if [ "$open" -gt 0 ]; then
+              echo "an issue titled \"$title\" is already open"
+              return 0
+            fi
+            gh issue create --title "$title" --body "$body"
+          }
+          today="$(date -u +%F)"
+          rc=0
+          status="$(curl --silent --show-error --fail --location \
+            --max-time 60 --retry 5 --retry-delay 10 --retry-all-errors \
+            --user-agent "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36" \
+            --write-out '%{http_code}' --output page.html "$PAGE_URL")" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            # The job still fails, so the run shows red. The issue is for the weeks nobody reads the run.
+            echo "fetch failed: curl exit $rc, HTTP status $status"
+            open_issue "$FETCH_TITLE" "$(printf '%s\n\n- curl exit code: %s\n- HTTP status: %s\n- Date: %s\n- Page: %s\n' \
+              "The weekly prices check could not fetch the page." "$rc" "$status" "$today" "$PAGE_URL")"
+            exit 1
+          fi
+          old="$(cut -d' ' -f1 tools/pricing-fingerprint.txt)"
+          rc=0
+          new="$(python3 tools/pricing_fingerprint.py page.html)" || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            if [ "$new" = "$old" ]; then
+              echo "pricing tables unchanged: $new"
+              exit 0
+            fi
+            reason="The pricing tables changed."
+          elif [ "$rc" -eq 1 ]; then
+            new="none"
+            reason="Page shape changed: no pricing tables were found."
+          else
+            echo "the fingerprint script failed with exit $rc"
+            exit "$rc"
+          fi
+          open_issue "$TITLE" "$(printf '%s\n\n- Old fingerprint: %s\n- New fingerprint: %s\n- Date: %s\n- Page: %s\n\n%s\n' \
+            "$reason" "$old" "$new" "$today" "$PAGE_URL" \
+            "Check the page, then update packages/scrimmage/src/scrimmage/prices.toml and tools/pricing-fingerprint.txt by hand.")"
