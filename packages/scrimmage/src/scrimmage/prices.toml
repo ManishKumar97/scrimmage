@@ -7,13 +7,16 @@
 # whole call at them, input and output, not only the tokens past the threshold.
 # A tier with no long table costs its own rates at any length: the page lists no long rate for it.
 # A missing cached_input costs the full input rate: a price that guesses must guess high.
-# The fast and priority tiers hold the same rates: OpenAI renamed priority processing to Fast mode on
-# 30 July 2026 and accepts either name in a request. A reply from a model up to gpt-5.6 names
-# priority; a later model's reply is not documented, so both names are priced.
+# The fast tier is also priced under its old name, priority: OpenAI renamed priority processing to
+# Fast mode on 30 July 2026 and accepts either name in a request, so a lookup of either finds fast.
+# These are OpenAI's global rates; regional and FedRAMP endpoints charge 10% more on models released
+# on or after 5 March 2026.
+# Ultrafast for gpt-6.2-astra and gpt-6.2-sol is the page's list rate, 6 times Standard. Until
+# 28 February 2027 OpenAI bills 3 times Standard, so these two tiers are twice the bill until then
+# and exact after.
 # Left out on purpose: gpt-5.6-sol, whose listed price is promotional until 30 November 2026 and has
-# no list price on the page; the Batch tier, which is not a service_tier a reply names; Ultrafast for
-# gpt-6.2-astra and gpt-6.2-sol, whose rate changes on 1 March 2027; flex for gpt-5.5-pro, which has no
-# long rate on the page; and the trusted-access models.
+# no list price on the page; the Batch tier, which is not a service_tier a reply names; flex for
+# gpt-5.5-pro, which has no long rate on the page; and the trusted-access models.
 
 as_of = "2026-11-22"
 source = "https://developers.openai.com/api/docs/pricing"
@@ -24,11 +27,6 @@ output = 10.00
 cached_input = 1.25
 
 [models."gpt-4o".tiers.fast]
-input = 4.25
-output = 17.00
-cached_input = 2.125
-
-[models."gpt-4o".tiers.priority]
 input = 4.25
 output = 17.00
 cached_input = 2.125
@@ -49,11 +47,6 @@ input = 0.25
 output = 1.00
 cached_input = 0.125
 
-[models."gpt-4o-mini".tiers.priority]
-input = 0.25
-output = 1.00
-cached_input = 0.125
-
 [models."gpt-4.1"]
 input = 2.00
 output = 8.00
@@ -64,22 +57,12 @@ input = 3.50
 output = 14.00
 cached_input = 0.875
 
-[models."gpt-4.1".tiers.priority]
-input = 3.50
-output = 14.00
-cached_input = 0.875
-
 [models."gpt-4.1-mini"]
 input = 0.40
 output = 1.60
 cached_input = 0.10
 
 [models."gpt-4.1-mini".tiers.fast]
-input = 0.70
-output = 2.80
-cached_input = 0.175
-
-[models."gpt-4.1-mini".tiers.priority]
 input = 0.70
 output = 2.80
 cached_input = 0.175
@@ -105,11 +88,6 @@ input = 2.50
 output = 20.00
 cached_input = 0.25
 
-[models."gpt-5".tiers.priority]
-input = 2.50
-output = 20.00
-cached_input = 0.25
-
 [models."gpt-5-mini"]
 input = 0.25
 output = 2.00
@@ -121,11 +99,6 @@ output = 1.00
 cached_input = 0.0125
 
 [models."gpt-5-mini".tiers.fast]
-input = 0.45
-output = 3.60
-cached_input = 0.045
-
-[models."gpt-5-mini".tiers.priority]
 input = 0.45
 output = 3.60
 cached_input = 0.045
@@ -159,11 +132,6 @@ input = 2.50
 output = 20.00
 cached_input = 0.25
 
-[models."gpt-5.1".tiers.priority]
-input = 2.50
-output = 20.00
-cached_input = 0.25
-
 [models."gpt-5.2"]
 input = 1.75
 output = 14.00
@@ -175,11 +143,6 @@ output = 7.00
 cached_input = 0.0875
 
 [models."gpt-5.2".tiers.fast]
-input = 3.50
-output = 28.00
-cached_input = 0.35
-
-[models."gpt-5.2".tiers.priority]
 input = 3.50
 output = 28.00
 cached_input = 0.35
@@ -198,11 +161,6 @@ input = 3.50
 output = 28.00
 cached_input = 0.35
 
-[models."gpt-5.3-codex".tiers.priority]
-input = 3.50
-output = 28.00
-cached_input = 0.35
-
 [models."gpt-5.4-mini"]
 input = 0.75
 output = 4.50
@@ -214,11 +172,6 @@ output = 2.25
 cached_input = 0.0375
 
 [models."gpt-5.4-mini".tiers.fast]
-input = 1.50
-output = 9.00
-cached_input = 0.15
-
-[models."gpt-5.4-mini".tiers.priority]
 input = 1.50
 output = 9.00
 cached_input = 0.15
@@ -263,20 +216,20 @@ cached_input = 1.60
 cache_write_30m = 40.00
 cache_write_12h = 80.00
 
-[models."gpt-6.2-astra".tiers.priority]
-input = 16.00
-output = 80.00
-cached_input = 0.80
-cache_write_30m = 20.00
-cache_write_12h = 40.00
+[models."gpt-6.2-astra".tiers.ultrafast]
+input = 48.00
+output = 240.00
+cached_input = 2.40
+cache_write_30m = 60.00
+cache_write_12h = 120.00
 
-[models."gpt-6.2-astra".tiers.priority.long]
+[models."gpt-6.2-astra".tiers.ultrafast.long]
 above = 272000
-input = 32.00
-output = 120.00
-cached_input = 1.60
-cache_write_30m = 40.00
-cache_write_12h = 80.00
+input = 96.00
+output = 360.00
+cached_input = 4.80
+cache_write_30m = 120.00
+cache_write_12h = 240.00
 
 [models."gpt-6.2-sol"]
 input = 2.00
@@ -308,20 +261,20 @@ cached_input = 0.40
 cache_write_30m = 10.00
 cache_write_12h = 20.00
 
-[models."gpt-6.2-sol".tiers.priority]
-input = 4.00
-output = 20.00
-cached_input = 0.20
-cache_write_30m = 5.00
-cache_write_12h = 10.00
+[models."gpt-6.2-sol".tiers.ultrafast]
+input = 12.00
+output = 60.00
+cached_input = 0.60
+cache_write_30m = 15.00
+cache_write_12h = 30.00
 
-[models."gpt-6.2-sol".tiers.priority.long]
+[models."gpt-6.2-sol".tiers.ultrafast.long]
 above = 272000
-input = 8.00
-output = 30.00
-cached_input = 0.40
-cache_write_30m = 10.00
-cache_write_12h = 20.00
+input = 24.00
+output = 90.00
+cached_input = 1.20
+cache_write_30m = 30.00
+cache_write_12h = 60.00
 
 [models."gpt-6-astra"]
 input = 10.00
@@ -361,21 +314,6 @@ cache_write_30m = 25.00
 cache_write_12h = 50.00
 
 [models."gpt-6-astra".tiers.fast.long]
-above = 272000
-input = 40.00
-output = 150.00
-cached_input = 4.00
-cache_write_30m = 50.00
-cache_write_12h = 100.00
-
-[models."gpt-6-astra".tiers.priority]
-input = 20.00
-output = 100.00
-cached_input = 2.00
-cache_write_30m = 25.00
-cache_write_12h = 50.00
-
-[models."gpt-6-astra".tiers.priority.long]
 above = 272000
 input = 40.00
 output = 150.00
@@ -443,21 +381,6 @@ cached_input = 0.40
 cache_write_30m = 10.00
 cache_write_12h = 20.00
 
-[models."gpt-6.1-sol".tiers.priority]
-input = 4.00
-output = 20.00
-cached_input = 0.20
-cache_write_30m = 5.00
-cache_write_12h = 10.00
-
-[models."gpt-6.1-sol".tiers.priority.long]
-above = 272000
-input = 8.00
-output = 30.00
-cached_input = 0.40
-cache_write_30m = 10.00
-cache_write_12h = 20.00
-
 [models."gpt-6.1-sol".tiers.ultrafast]
 input = 12.00
 output = 60.00
@@ -518,21 +441,6 @@ cached_input = 0.20
 cache_write_30m = 5.00
 cache_write_12h = 10.00
 
-[models."gpt-6.1-terra".tiers.priority]
-input = 2.00
-output = 10.00
-cached_input = 0.10
-cache_write_30m = 2.50
-cache_write_12h = 5.00
-
-[models."gpt-6.1-terra".tiers.priority.long]
-above = 272000
-input = 4.00
-output = 15.00
-cached_input = 0.20
-cache_write_30m = 5.00
-cache_write_12h = 10.00
-
 [models."gpt-6-luna"]
 input = 0.10
 output = 0.50
@@ -571,21 +479,6 @@ cache_write_30m = 0.25
 cache_write_12h = 0.50
 
 [models."gpt-6-luna".tiers.fast.long]
-above = 272000
-input = 0.40
-output = 1.50
-cached_input = 0.04
-cache_write_30m = 0.50
-cache_write_12h = 1.00
-
-[models."gpt-6-luna".tiers.priority]
-input = 0.20
-output = 1.00
-cached_input = 0.02
-cache_write_30m = 0.25
-cache_write_12h = 0.50
-
-[models."gpt-6-luna".tiers.priority.long]
 above = 272000
 input = 0.40
 output = 1.50
@@ -638,21 +531,6 @@ cached_input = 0.80
 cache_write_30m = 10.00
 cache_write_12h = 20.00
 
-[models."gpt-6-sol".tiers.priority]
-input = 4.00
-output = 20.00
-cached_input = 0.40
-cache_write_30m = 5.00
-cache_write_12h = 10.00
-
-[models."gpt-6-sol".tiers.priority.long]
-above = 272000
-input = 8.00
-output = 30.00
-cached_input = 0.80
-cache_write_30m = 10.00
-cache_write_12h = 20.00
-
 [models."gpt-5.6-terra"]
 input = 2.00
 output = 12.00
@@ -691,21 +569,6 @@ cache_write_30m = 5.00
 cache_write_12h = 10.00
 
 [models."gpt-5.6-terra".tiers.fast.long]
-above = 272000
-input = 8.00
-output = 36.00
-cached_input = 0.80
-cache_write_30m = 10.00
-cache_write_12h = 20.00
-
-[models."gpt-5.6-terra".tiers.priority]
-input = 4.00
-output = 24.00
-cached_input = 0.40
-cache_write_30m = 5.00
-cache_write_12h = 10.00
-
-[models."gpt-5.6-terra".tiers.priority.long]
 above = 272000
 input = 8.00
 output = 36.00
@@ -758,21 +621,6 @@ cached_input = 0.08
 cache_write_30m = 1.00
 cache_write_12h = 2.00
 
-[models."gpt-5.6-luna".tiers.priority]
-input = 0.40
-output = 2.40
-cached_input = 0.04
-cache_write_30m = 0.50
-cache_write_12h = 1.00
-
-[models."gpt-5.6-luna".tiers.priority.long]
-above = 272000
-input = 0.80
-output = 3.60
-cached_input = 0.08
-cache_write_30m = 1.00
-cache_write_12h = 2.00
-
 [models."gpt-5.5"]
 input = 5.00
 output = 30.00
@@ -796,11 +644,6 @@ output = 22.50
 cached_input = 0.50
 
 [models."gpt-5.5".tiers.fast]
-input = 12.50
-output = 75.00
-cached_input = 1.25
-
-[models."gpt-5.5".tiers.priority]
 input = 12.50
 output = 75.00
 cached_input = 1.25
@@ -841,11 +684,6 @@ input = 5.00
 output = 30.00
 cached_input = 0.50
 
-[models."gpt-5.4".tiers.priority]
-input = 5.00
-output = 30.00
-cached_input = 0.50
-
 [models."gpt-5.4-pro"]
 input = 30.00
 output = 180.00
@@ -879,11 +717,6 @@ output = 4.00
 cached_input = 0.25
 
 [models."o3".tiers.fast]
-input = 3.50
-output = 14.00
-cached_input = 0.875
-
-[models."o3".tiers.priority]
 input = 3.50
 output = 14.00
 cached_input = 0.875

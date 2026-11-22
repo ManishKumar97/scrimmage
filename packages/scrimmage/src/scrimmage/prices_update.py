@@ -43,8 +43,13 @@ def flat(rates: Rates) -> dict[str, float]:
     return out
 
 
+def num(key: str, value: float) -> str:
+    """A rate in short form; a threshold, `above`, as the whole number a team approves."""
+    return str(int(value)) if key.rpartition(".")[2] == "above" else f"{value:g}"
+
+
 def fmt(rates: Rates) -> str:
-    return ", ".join(f"{k} {v:g}" for k, v in flat(rates).items())
+    return ", ".join(f"{k} {num(k, v)}" for k, v in flat(rates).items())
 
 
 def diff(old: PriceFile, new: PriceFile) -> list[str]:
@@ -62,11 +67,11 @@ def diff(old: PriceFile, new: PriceFile) -> list[str]:
             if a.get(key) == b.get(key):
                 continue
             if key in a and key in b:
-                moves.append(f"{key} {a[key]:g} to {b[key]:g}")
+                moves.append(f"{key} {num(key, a[key])} to {num(key, b[key])}")
             elif key in b:
-                moves.append(f"{key} added at {b[key]:g}")
+                moves.append(f"{key} added at {num(key, b[key])}")
             else:
-                moves.append(f"{key} removed, was {a[key]:g}")
+                moves.append(f"{key} removed, was {num(key, a[key])}")
         lines.append(f"changed {model}: {'; '.join(moves)}")
     return lines
 

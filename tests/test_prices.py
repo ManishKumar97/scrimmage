@@ -35,8 +35,9 @@ TODAYS = {
 
 
 # OpenAI's pricing page as read by hand on 22 November 2026, every row the file holds: the rates
-# of the standard tier, then each other tier and the long-context rates. The file holds the fast
-# tier twice, under fast and under priority, which the test adds back with expand().
+# of the standard tier, then each other tier and the long-context rates. The fast tier is written
+# once; Rates.at finds it under priority too. The Ultrafast rows of gpt-6.2-astra and gpt-6.2-sol
+# are the page's list rates, 6 times Standard, from the "Ultrafast list pricing data" table.
 PAGE = {
     "gpt-4o": Rates(2.5, 10.0, 1.25, tiers=(("fast", Rates(4.25, 17.0, 2.125)),)),
     "gpt-4o-2024-05-13": Rates(5.0, 15.0),
@@ -115,6 +116,18 @@ PAGE = {
                     long=Rates(32.0, 120.0, 1.6, 40.0, 80.0),
                 ),
             ),
+            (
+                "ultrafast",
+                Rates(
+                    48.0,
+                    240.0,
+                    2.4,
+                    60.0,
+                    120.0,
+                    above=272000,
+                    long=Rates(96.0, 360.0, 4.8, 120.0, 240.0),
+                ),
+            ),
         ),
     ),
     "gpt-6.2-sol": Rates(
@@ -130,6 +143,18 @@ PAGE = {
                 "fast",
                 Rates(
                     4.0, 20.0, 0.2, 5.0, 10.0, above=272000, long=Rates(8.0, 30.0, 0.4, 10.0, 20.0)
+                ),
+            ),
+            (
+                "ultrafast",
+                Rates(
+                    12.0,
+                    60.0,
+                    0.6,
+                    15.0,
+                    30.0,
+                    above=272000,
+                    long=Rates(24.0, 90.0, 1.2, 30.0, 60.0),
                 ),
             ),
         ),
@@ -383,21 +408,10 @@ PAGE = {
 }
 
 
-def expand(rates: Rates) -> Rates:
-    """The same rates with a priority tier beside every fast tier, as the file holds them."""
-    tiers: list[tuple[str, Rates]] = []
-    for name, tier in rates.tiers:
-        tiers.append((name, expand(tier)))
-        if name == "fast":
-            tiers.append(("priority", expand(tier)))
-    longer = None if rates.long is None else expand(rates.long)
-    return dataclasses.replace(rates, tiers=tuple(tiers), long=longer)
-
-
 @pytest.mark.design("prices.shipped_file")
 def test_the_shipped_file_holds_the_rows_read_from_the_page() -> None:
     shipped = prices.shipped()
-    assert dict(shipped.models) == {model: expand(rates) for model, rates in PAGE.items()}
+    assert dict(shipped.models) == PAGE
     assert shipped.as_of == "2026-11-22"
     assert shipped.source == "https://developers.openai.com/api/docs/pricing"
 
@@ -430,13 +444,49 @@ def test_a_model_with_a_long_price_is_in_the_file_with_its_threshold() -> None:
     assert five.sized(272001).input == 10.0 and five.sized(272001).output == 45.0
 
 
-@pytest.mark.design("prices.shipped_file")
-def test_every_fast_tier_has_a_priority_twin_and_no_batch_tier_is_priced() -> None:
+@pytest.mark.design("prices.tier_alias")
+def test_fast_and_priority_are_one_tier_and_no_batch_tier_is_priced() -> None:
     for model, rates in prices.shipped().models:
         names = [name for name, _ in rates.tiers]
-        assert ("fast" in names) == ("priority" in names), model
-        assert "batch" not in names, model
-        assert rates.at("fast") == rates.at("priority"), model
+        assert "priority" not in names and "batch" not in names, model
+        assert rates.at("fast") is rates.at("priority"), model
+        if "fast" in names:
+            assert rates.at("priority") is not rates, model
+
+
+@pytest.mark.design("prices.tier_alias")
+def test_a_row_with_only_one_of_fast_and_priority_prices_both_names() -> None:
+    fast, priority = Rates(4.0, 8.0), Rates(5.0, 9.0)
+    only_fast = Rates(1.0, 2.0, tiers=(("fast", fast),))
+    only_priority = Rates(1.0, 2.0, tiers=(("priority", priority),))
+    assert only_fast.at("fast") is fast and only_fast.at("priority") is fast
+    assert only_priority.at("priority") is priority and only_priority.at("fast") is priority
+    both = Rates(1.0, 2.0, tiers=(("fast", fast), ("priority", priority)))
+    assert both.at("fast") is fast and both.at("priority") is priority  # its own name first
+    assert only_fast.at("flex") is only_fast and only_fast.at(None) is only_fast
+
+
+@pytest.mark.design("prices.tier_alias")
+def test_a_team_row_with_only_tiers_fast_prices_a_reply_naming_priority(tmp_path: Path) -> None:
+    (tmp_path / "scrimmage.toml").write_text(
+        config_cases.AGENT
+        + '\n[agent.prices."gpt-4.1"]\ninput = 2.0\noutput = 8.0\n'
+        + '\n[agent.prices."gpt-4.1".tiers.fast]\ninput = 3.5\noutput = 14.0\n'
+        + config_cases.TEST
+    )
+    rates = dict(config.load(tmp_path / "scrimmage.toml").agent.prices)["gpt-4.1"]
+    assert rates.at("priority").input == 3.5 and rates.at("fast").input == 3.5
+
+
+@pytest.mark.design("prices.ultrafast_62")
+@pytest.mark.parametrize("model", ["gpt-6.2-astra", "gpt-6.2-sol"])
+def test_ultrafast_on_a_62_model_is_at_least_three_times_standard(model: str) -> None:
+    rates = dict(prices.shipped().models)[model]
+    ultra = rates.at("ultrafast")
+    assert ultra is not rates
+    assert ultra.input >= 3 * rates.input and ultra.output >= 3 * rates.output
+    assert rates.long is not None and ultra.long is not None
+    assert ultra.long.input >= 3 * rates.long.input and ultra.long.output >= 3 * rates.long.output
 
 
 @pytest.mark.design("prices.shipped_file")

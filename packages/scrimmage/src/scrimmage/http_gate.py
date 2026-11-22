@@ -1777,6 +1777,7 @@ def record(
     free = step.call.name in openai_table.FREE_OPS
     rates = openai_table.Rates(0.0, 0.0) if free else prices_of(ctx, str(extra.get("model", "")))
     usd = None
+    unpriced: str | None = None
     # A gateway that says what the call cost: OpenRouter in usage.cost, the LiteLLM proxy in a
     # header. Nothing is added to the request to ask.
     exact = used.cost
@@ -1786,6 +1787,10 @@ def record(
         writes = used.written_30m, used.written_12h
         # The reply says its tier; a reply that does not is settled at the tier it was held at.
         at = rates.at(used.tier or held_tier(ctx, request))
+        if rates.unpriced(used.tier):
+            # A tier the row does not price: settle at the dearest it does, and say so.
+            at = openai_table.dearest(rates, tokens_in, tokens_out, cached, *writes)
+            unpriced = used.tier
         usd = openai_table.cost(tokens_in, tokens_out, at, cached, *writes)
     elif rates:  # a guess from the sizes, so every input token at its dearest rate
         usd = worst(ctx, request, tokens_in, tokens_out, rates)
@@ -1798,8 +1803,10 @@ def record(
         result=blob(body, ctx.sender, total=size, scrub=ctx.run.secrets),
         tokens={"input": tokens_in, "output": tokens_out, "cached": cached},
         cost_usd=None if usd is None else round(usd, 8),
-        cost_estimated=usd is not None and not used.known and not free,
+        cost_estimated=usd is not None and (not used.known or unpriced is not None) and not free,
     )
+    if unpriced is not None:
+        extra["unpriced_tier"] = unpriced
     return usd or 0.0
 
 

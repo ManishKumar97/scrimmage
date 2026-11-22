@@ -334,3 +334,18 @@ def test_prices_update_prints_a_changed_long_rate() -> None:
         prices.PriceFile("2026-11-22", "x", (("gpt-5.5", again),)),
     )
     assert moved == ["changed gpt-5.5: long.input 2000 to 2500"]
+
+
+@pytest.mark.design("long.update_diff")
+def test_prices_update_prints_the_threshold_as_a_whole_number() -> None:
+    from scrimmage import prices_update
+
+    big = Rates(1000.0, 2000.0, above=1000001, long=Rates(2000.0, 3000.0))
+    bigger = Rates(1000.0, 2000.0, above=999999999, long=Rates(2000.0, 3000.0))
+    old = prices.PriceFile("2026-11-20", "x", (("gpt-5.5", big),))
+    new = prices.PriceFile("2026-11-21", "x", (("gpt-5.5", bigger),))
+    assert prices_update.diff(old, new) == ["changed gpt-5.5: above 1000001 to 999999999"]
+    assert (
+        prices_update.fmt(big)
+        == "input 1000, output 2000, above 1000001, long.input 2000, long.output 3000"
+    )

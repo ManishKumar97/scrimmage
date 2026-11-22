@@ -24,6 +24,7 @@ RATE_KEYS_ORDER = ("input", "output", "cached_input", "cache_write_30m", "cache_
 RATE_KEYS = set(RATE_KEYS_ORDER)
 PRICE_KEYS = {*RATE_KEYS, "tiers", "long"}  # a model's keys
 TIER_KEYS = {*RATE_KEYS, "long"}  # a tier's keys
+TIER_ALIASES = {"fast": "priority", "priority": "fast"}  # OpenAI renamed one to the other
 LONG_KEYS = {*RATE_KEYS, "above"}  # a long table's keys: the rates, and where they start
 FILE_KEYS = {"as_of", "source", "models"}
 DATED = re.compile(r"-\d{4}-\d{2}-\d{2}$")
@@ -49,8 +50,19 @@ class Rates:
     long: "Rates | None" = None
 
     def at(self, tier: str | None) -> "Rates":
-        """The rates a call on this service tier pays."""
-        return dict(self.tiers).get(tier or "", self)
+        """The rates a call on this service tier pays. fast and priority are one tier under two
+        names, so a row that writes only one of them prices both."""
+        named = dict(self.tiers)
+        name = tier or ""
+        found = named.get(name) or named.get(TIER_ALIASES.get(name, ""))
+        return self if found is None else found
+
+    def unpriced(self, tier: str | None) -> bool:
+        """True when a reply names a tier that is neither the default tier nor one this row
+        prices, so its rates are not known."""
+        if not tier or tier.lower() in RESERVED_TIERS:
+            return False
+        return self.at(tier) is self
 
     def sized(self, tokens_in: int) -> "Rates":
         """The rates a call with this many input tokens pays: the long rates when it is over."""
