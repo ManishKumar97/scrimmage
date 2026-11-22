@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, TextIO, cast
 
 from scrimmage import compare as comparing
 from scrimmage import config as settings
-from scrimmage import entry, redact, shadow, versions
+from scrimmage import entry, prices, redact, shadow, versions
 from scrimmage import plan as planner
 from scrimmage import results as results_file
 from scrimmage.errors import ConfigError
@@ -170,6 +170,17 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
         help="compare with an earlier records folder or its result.json",
     )
     show.add_argument("--json", action="store_true", help="print one JSON document")
+    price_files = commands.add_parser(
+        "prices", help="update the model prices Scrimmage budgets with", allow_abbrev=False
+    )
+    price_action = price_files.add_subparsers(dest="action", required=True)
+    refresh = price_action.add_parser(
+        "update",
+        help="fetch the newest prices.toml from the repository's main and save it as "
+        "scrimmage-runs/prices.toml beside scrimmage.toml",
+        allow_abbrev=False,
+    )
+    refresh.add_argument("path", nargs="?", default="scrimmage.toml", type=Path)
     cert = commands.add_parser(
         "cert",
         help="make the certificates for a control server a container reaches",
@@ -187,6 +198,11 @@ def main(argv: list[str] | None = None, *, process: bool = False) -> int:
     args = parser.parse_args(argv)
     if args.command == "cert":
         return cert_command(args)
+    if args.command == "prices":
+        # Imported here, so no other command ever loads the one module that can connect out.
+        from scrimmage import prices_update
+
+        return prices_update.update(args.path.resolve().parent)
     if args.command == "path":
         return path_command()
     if args.command == "init":
@@ -838,27 +854,27 @@ def run_check(
         "budget_usd": agent.max_cost_usd,
         "real": list(agent.real),
         "entry": {"kind": entry_kind, "value": entry_value},
-        # The prices [agent.prices] sets; any other model takes the built-in table's.
-        "prices": {
-            model: {
-                "input": r.input,
-                "output": r.output,
-                "cached_input": r.cached_input,
-                "cache_write_30m": r.cache_write_30m,
-                "cache_write_12h": r.cache_write_12h,
-            }
-            for model, r in agent.prices
-        },
+        # The prices [agent.prices] sets; any other model takes the price files', in the order
+        # price_sources lists them.
+        "prices": {model: price_summary(r) for model, r in agent.prices},
+        "service_tier": agent.service_tier,
+        "price_sources": prices.source_list(agent.prices, config.team_prices),
     }
     if found is not None:
         found.fields["summary"] = summary
         return OK
     tools = plural(len(agent.tools), "tool") if agent.tools else "no tools list"
-    budget = "no budget" if agent.max_cost_usd is None else f"a budget of ${agent.max_cost_usd:g}"
+    budget = "no budget"
+    if agent.max_cost_usd is not None:
+        budget = (
+            f"a budget of ${agent.max_cost_usd:g}, prices as of {prices.age(config.team_prices)}"
+        )
     print(
         f"scrimmage check: {path} is valid: {plural(len(config.tests), 'test')}, "
         f"{plural(rows, 'row')}, {plural(runs, 'run')}, {tools}, {budget}"
     )
+    for line in prices.sources(agent.prices, config.team_prices):
+        print(line)
     if agent.start:  # the runner starts it, with every setting: nothing is set by hand
         print(f"the service starts with: {agent.start_written}")
     elif agent.service and hint:
@@ -866,6 +882,19 @@ def run_check(
         for line in service_lines(agent):
             print(f"  {line}")
     return OK
+
+
+def price_summary(rates: prices.Rates) -> dict[str, object]:
+    doc: dict[str, object] = {
+        "input": rates.input,
+        "output": rates.output,
+        "cached_input": rates.cached_input,
+        "cache_write_30m": rates.cache_write_30m,
+        "cache_write_12h": rates.cache_write_12h,
+    }
+    if rates.tiers:
+        doc["tiers"] = {tier: price_summary(tiered) for tier, tiered in rates.tiers}
+    return doc
 
 
 def run_check_service(path: Path, found: Found | None) -> int:

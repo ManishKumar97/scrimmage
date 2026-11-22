@@ -902,7 +902,7 @@ def test_the_cap_entry_and_real_are_in_every_check_test_and_record_result(
         said = texts(result)[0]
         assert f"entry: function {point['value']}" in said and f"real: {real}" in said
         assert "cost cap: $5" in said or "of a $5 cap" in said, said
-        assert usd is not None or "prices: the built-in table" in said, said
+        assert usd is not None or "prices: the shipped prices.toml as of" in said, said
 
 
 def test_the_session_ceiling_refuses_the_call_that_could_pass_it(

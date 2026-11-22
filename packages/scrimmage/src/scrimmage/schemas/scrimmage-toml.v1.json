@@ -154,6 +154,13 @@
         },
         "cache_write_12h": {
           "$ref": "#/$defs/dollars"
+        },
+        "tiers": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/tier_price"
+          },
+          "description": "The rates of each service tier, by name, such as flex or priority. A tier not listed costs the model's own rates."
         }
       }
     },
@@ -358,6 +365,11 @@
           "additionalProperties": {
             "$ref": "#/$defs/price"
           }
+        },
+        "service_tier": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The service tier OpenAI bills a request that names none. Used only to hold the budget, never added to the request."
         },
         "answer": {
           "type": "string",
@@ -1124,6 +1136,31 @@
           }
         }
       ]
+    },
+    "tier_price": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input",
+        "output"
+      ],
+      "properties": {
+        "input": {
+          "$ref": "#/$defs/dollars"
+        },
+        "output": {
+          "$ref": "#/$defs/dollars"
+        },
+        "cached_input": {
+          "$ref": "#/$defs/dollars"
+        },
+        "cache_write_30m": {
+          "$ref": "#/$defs/dollars"
+        },
+        "cache_write_12h": {
+          "$ref": "#/$defs/dollars"
+        }
+      }
     }
   }
 }

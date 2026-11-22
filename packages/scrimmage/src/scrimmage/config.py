@@ -22,11 +22,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from scrimmage import labels, provider_openai, python_args
+from scrimmage import labels, prices, provider_openai, python_args
 from scrimmage.errors import ConfigError
 from scrimmage.judge import Rules, impossible, normal
 from scrimmage.mocks import allowed
-from scrimmage.provider_openai import Rates
+from scrimmage.prices import PriceFile, Rates, read_prices
 from scrimmage.redact import SCRUB_MIN, redact, remove_values
 
 READ_METHODS = ("GET", "HEAD")  # the web requests that run for real without being listed
@@ -43,6 +43,7 @@ AGENT_KEYS = {
     "model_hosts",
     "reserve_output_tokens",
     "prices",
+    "service_tier",
     "answer",
     "service",
     "body",
@@ -117,7 +118,6 @@ RETRY_AFTER = ("status 429", "status 503")
 MAX_CHANGE_TEXT = 64 * 1024  # bytes, for text and for find
 SCHEDULE = re.compile(r"always|(?:first|requests|call) (?P<n>[1-9]\d*)")
 MODEL_KEYS = {"host", "provider"}
-PRICE_KEYS = {"input", "output", "cached_input", "cache_write_30m", "cache_write_12h"}
 DEFAULT_BUDGET_USD = 5.0
 DEFAULT_RESERVE_OUTPUT_TOKENS = 4096
 # Where the answer is in what the agent returns, such as messages[-1].content.
@@ -454,6 +454,7 @@ class Agent:
     max_cost_usd: float | None = DEFAULT_BUDGET_USD  # None: the budget is off, on purpose
     reserve_output_tokens: int = DEFAULT_RESERVE_OUTPUT_TOKENS
     prices: tuple[tuple[str, Rates], ...] = ()
+    service_tier: str | None = None  # the tier a request that names none is held at
     answer: str | None = None  # where the answer is in what the agent returns
     command: tuple[str, ...] = ()  # a script's arguments; function is then empty
     children: bool = False  # child processes fire faults, and join on any Python
@@ -498,6 +499,8 @@ class Config:
     root: Path
     # Every value ${NAME} filled in, of SCRUB_MIN characters or more: removed from records.
     scrub: tuple[str, ...] = ()
+    # scrimmage-runs/prices.toml beside the file, if `scrimmage prices update` wrote one.
+    team_prices: PriceFile | None = None
 
 
 def command_args(agent: Agent, question: str) -> list[str]:
@@ -589,7 +592,9 @@ def read_file(path: Path, data: dict[str, object], reader: Reader) -> Config:
                     "how many times every row runs"
                 )
         parsed.append(test)
-    config = Config(agent, tuple(parsed), path.parent, tuple(sorted(reader.scrub)))
+    config = Config(
+        agent, tuple(parsed), path.parent, tuple(sorted(reader.scrub)), prices.team(path.parent)
+    )
     problems = check_references(config)
     if problems:
         raise ConfigError(*problems)
@@ -1012,6 +1017,7 @@ def read_agent(table: dict[str, object], reader: Reader | None = None) -> Agent:
             table, "reserve_output_tokens", DEFAULT_RESERVE_OUTPUT_TOKENS, where
         ),
         prices=read_prices(table.get("prices", {}), f"{where}.prices"),
+        service_tier=text(table, "service_tier", where) if "service_tier" in table else None,
         answer=answer,
         command=command,
         children=children,
@@ -1307,44 +1313,6 @@ def read_budget(value: object, where: str) -> float | None:
             f"off, got {value!r}"
         )
     return float(value)
-
-
-def read_prices(value: object, where: str) -> tuple[tuple[str, Rates], ...]:
-    prices: list[tuple[str, Rates]] = []
-    for model, raw in as_table(value, where).items():
-        item = f"{where} {model}"
-        entry = as_table(raw, item)
-        check_keys(entry, PRICE_KEYS, item)
-        rate, output = dollars(entry, "input", item), dollars(entry, "output", item)
-        cached = dollars(entry, "cached_input", item) if "cached_input" in entry else None
-        if cached is not None and cached > rate:
-            raise ConfigError(
-                f"{item} cached_input: {cached:g} is above input, {rate:g}; a cached token "
-                "costs at most a full one"
-            )
-        writes: list[float | None] = []
-        for key in ("cache_write_30m", "cache_write_12h"):
-            write = dollars(entry, key, item) if key in entry else None
-            if write is not None and write < rate:
-                raise ConfigError(
-                    f"{item} {key}: {write:g} is below input, {rate:g}; a token written to "
-                    "the cache costs at least a full one"
-                )
-            writes.append(write)
-        prices.append((model, Rates(rate, output, cached, *writes)))
-    return tuple(prices)
-
-
-def dollars(entry: dict[str, object], key: str, item: str) -> float:
-    number = entry.get(key)
-    if (
-        isinstance(number, bool)
-        or not isinstance(number, int | float)
-        or not math.isfinite(number)
-        or number < 0
-    ):
-        raise ConfigError(f"{item} {key}: expected dollars per million tokens")
-    return float(number)
 
 
 def read_tool(entry: object, where: str) -> tuple[str, str | None]:

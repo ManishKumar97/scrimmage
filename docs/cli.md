@@ -69,8 +69,11 @@ It does not import your code. A misspelled import path, such as `acme.tools:get_
 
 ```
 $ scrimmage check
-scrimmage check: scrimmage.toml is valid: 2 tests, 5 rows, 15 runs, 4 tools, a budget of $5
+scrimmage check: scrimmage.toml is valid: 2 tests, 5 rows, 15 runs, 4 tools, a budget of $5, prices as of 2026-11-19
 ```
+
+The budget line ends with the date of the prices the budget is measured at.
+When you price models yourself or have run `scrimmage prices update`, more lines name each price's source, the file and its date.
 
 Each problem goes to standard error, one line each, and the last line to standard output:
 
@@ -121,6 +124,21 @@ The exit code is that of the first problem, in the order of the lines.
 | 3 | The service is not gated, cannot reach the control server, or its clock and this machine's differ by more than 60 seconds; with `start`, the copy exited or did not answer in 30 seconds |
 
 `--json` adds a `service` object to the `check` document; see [JSON output](json-output.md#scrimmage-check-json).
+
+## scrimmage prices update
+
+```bash
+scrimmage prices update [path/to/scrimmage.toml]
+```
+
+Fetches the newest `prices.toml` from the repository's `main`, over HTTPS, and saves it as `scrimmage-runs/prices.toml` beside the file.
+It is the only time Scrimmage reads from the network, and it runs only when you type it; see [Security](security.md).
+It checks the file against the schema first, prints what changed from your last copy, or from the shipped prices if there is none, then writes it.
+The diff lists each model added or removed, and each changed rate, old to new.
+A file that fails its checks is exit 2, and a fetch that fails is exit 3.
+In both nothing is written.
+The folder is made mode `0700` with a `.gitignore` inside it, as `scrimmage test` makes it.
+See [Where prices come from](configuration.md#where-prices-come-from).
 
 ## scrimmage record
 

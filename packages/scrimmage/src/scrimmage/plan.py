@@ -18,7 +18,7 @@ from scrimmage.config import (
     word_problem,
 )
 from scrimmage.judge import Rules
-from scrimmage.provider_openai import Rates
+from scrimmage.prices import Rates, in_order
 
 PLAN_VERSION = 1
 # The keys a fault has in a plan. A runner of a later version may send one this SDK does not
@@ -44,6 +44,7 @@ class Plan:
     budget_usd: float | None = None  # None: no budget, so no reservations
     reserve_output_tokens: int = DEFAULT_RESERVE_OUTPUT_TOKENS
     prices: tuple[tuple[str, Rates], ...] = ()
+    service_tier: str | None = None  # the tier a request that names none is held at
     children: bool = False  # child processes fire faults too
     unavailable: str | None = None  # why a child has no plan; such a plan is never sent
     record: bool = False  # scrimmage record: real calls' lines carry what a mock needs
@@ -84,6 +85,9 @@ class Plan:
                 "prices": {m: price_json(p) for m, p in self.prices},
             },
         }
+        if self.service_tier is not None:
+            budget = cast(dict[str, object], doc["budget"])
+            budget["service_tier"] = self.service_tier
         if self.renames:
             doc["renames"] = dict(self.renames)
         if self.record:
@@ -140,6 +144,9 @@ class Plan:
             budget_usd=limit_usd,
             reserve_output_tokens=reserve,
             prices=prices,
+            service_tier=None
+            if budget.get("service_tier") is None
+            else string(budget, "service_tier"),
             children=doc.get("children") is True,
             record=doc.get("record") is True,
             probe=doc.get("probe") is True,
@@ -153,14 +160,16 @@ class Plan:
         )
 
 
-def price_json(price: Rates) -> dict[str, float]:
-    doc = {"input": price.input, "output": price.output}
+def price_json(price: Rates) -> dict[str, object]:
+    doc: dict[str, object] = {"input": price.input, "output": price.output}
     optional = {
         "cached_input": price.cached_input,
         "cache_write_30m": price.cache_write_30m,
         "cache_write_12h": price.cache_write_12h,
     }
     doc.update({key: rate for key, rate in optional.items() if rate is not None})
+    if price.tiers:
+        doc["tiers"] = {tier: price_json(rates) for tier, rates in price.tiers}
     return doc
 
 
@@ -174,6 +183,7 @@ def price_from(doc: dict[str, object]) -> Rates:
         rate("cached_input"),
         rate("cache_write_30m"),
         rate("cache_write_12h"),
+        tuple((tier, price_from(obj(p))) for tier, p in obj(doc.get("tiers", {})).items()),
     )
 
 
@@ -332,7 +342,8 @@ def plan_for(config: Config, row: Row, run: str) -> Plan:
         model_hosts=config.agent.model_hosts,
         budget_usd=config.agent.max_cost_usd,
         reserve_output_tokens=config.agent.reserve_output_tokens,
-        prices=config.agent.prices,
+        prices=in_order(config.agent.prices, config.team_prices),
+        service_tier=config.agent.service_tier,
         children=config.agent.children,
         scrub=config.scrub,
         service=bool(config.agent.service),

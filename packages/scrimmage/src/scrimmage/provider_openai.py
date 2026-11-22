@@ -7,12 +7,15 @@ also takes the time and new ids, as a real one has.
 """
 
 import json
-import re
+import math
 import string
 import time
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import cast
+
+from scrimmage import prices
+from scrimmage.prices import Rates as Rates
 
 HOSTS = ("api.openai.com",)
 CHAT_PATHS = ("/chat/completions", "/responses")
@@ -64,48 +67,6 @@ CONTEXT_TOO_LONG = {
 }
 
 
-@dataclass(frozen=True)
-class Rates:
-    """Dollars per million tokens. With no cached rate, cached tokens cost the full input
-    rate: a price that guesses must guess high, or the budget could let through more. With
-    no cache-write rate, a written token costs the full input rate, as on a model that
-    charges nothing extra to write its cache."""
-
-    input: float
-    output: float
-    cached_input: float | None = None
-    cache_write_30m: float | None = None  # a token written to the cache for 30 minutes
-    cache_write_12h: float | None = None  # for 12 hours, a Responses API choice
-
-
-# Checked against OpenAI's pricing page on 19 November 2026, standard tier; check again
-# before each release. A team overrides or adds a model under [agent.prices]. A model with
-# a long-context price, above 272K input tokens, is left out, such as gpt-5.4, gpt-5.5
-# and the gpt-5.6 models: one rate per kind of token would price a long call low. Only
-# those models price a cache write, so no model here has one.
-PRICES: dict[str, Rates] = {
-    "gpt-4o": Rates(2.50, 10.00, 1.25),
-    # Its own price, not its family's; shut down, so no longer on the pricing page. No
-    # cached rate: it had no prompt cache discount. A guess high is safe, low is not.
-    "gpt-4o-2024-05-13": Rates(5.00, 15.00),
-    "gpt-4o-mini": Rates(0.15, 0.60, 0.075),
-    "gpt-4.1": Rates(2.00, 8.00, 0.50),
-    "gpt-4.1-mini": Rates(0.40, 1.60, 0.10),
-    "gpt-4.1-nano": Rates(0.10, 0.40, 0.025),  # as on 7 November; off the page since
-    "gpt-5": Rates(1.25, 10.00, 0.125),
-    "gpt-5-mini": Rates(0.25, 2.00, 0.025),
-    "gpt-5-nano": Rates(0.05, 0.40, 0.005),
-    "gpt-5-pro": Rates(15.00, 120.00),  # the page gives no cached rate
-    "gpt-5.1": Rates(1.25, 10.00, 0.125),
-    "gpt-5.2": Rates(1.75, 14.00, 0.175),
-    "gpt-5.2-pro": Rates(21.00, 168.00),
-    "gpt-5.3-codex": Rates(1.75, 14.00, 0.175),
-    "gpt-5.4-mini": Rates(0.75, 4.50, 0.075),
-    "gpt-5.4-nano": Rates(0.20, 1.25, 0.02),
-    "text-embedding-3-small": Rates(0.02, 0.0),
-    "text-embedding-3-large": Rates(0.13, 0.0),
-}
-
 # Tool types, per API: run at the provider and only read; run at the provider and can
 # change data; run by the agent, so a gate must see them.
 RESPONSES_READ = {
@@ -126,7 +87,6 @@ RESPONSES_AGENT = {
     "computer_use_preview",
 }
 CHAT_AGENT = {"function", "custom"}
-DATED = re.compile(r"-\d{4}-\d{2}-\d{2}$")
 MAX_TOKENS = 1_000_000_000  # a larger count is not a count
 MAX_CHOICES = 128  # the most choices, n, a Chat request may ask for
 
@@ -590,6 +550,8 @@ class Usage:
     cached: int = 0  # input tokens the provider served from its prompt cache
     written_30m: int = 0  # input tokens written to the cache for 30 minutes
     written_12h: int = 0  # and for 12 hours
+    tier: str | None = None  # the service tier the reply says it was billed at
+    cost: float | None = None  # dollars, if a gateway's reply says what the call cost
 
 
 def usage(body: bytes, *, output_required: bool = True) -> Usage:
@@ -604,14 +566,20 @@ def usage(body: bytes, *, output_required: bool = True) -> Usage:
     # Split on newlines only: text in a reply can hold other line separators.
     data = [line[5:].strip() for line in text.split("\n") if line.startswith("data:")]
     found = Usage()
+    tier: str | None = None
+    cost: float | None = None
     for doc in data or [text]:
         try:
             parsed = _obj(json.loads(doc))
         except (ValueError, RecursionError):
             continue
+        named = parsed.get("service_tier", _obj(parsed.get("response")).get("service_tier"))
+        if isinstance(named, str) and named:  # a stream's every chunk may carry it
+            tier = named
         numbers = _obj(parsed.get("usage"))
         if not numbers:  # the Responses API puts it in its last event's response
             numbers = _obj(_obj(parsed.get("response")).get("usage"))
+        cost = gateway_cost(numbers.get("cost"), cost)
         tokens_in = _count(numbers, "prompt_tokens", "input_tokens")
         tokens_out = _count(numbers, "completion_tokens", "output_tokens")
         if tokens_out is None and not output_required:
@@ -620,7 +588,29 @@ def usage(body: bytes, *, output_required: bool = True) -> Usage:
             cached = cached_count(numbers, tokens_in)
             found = Usage(tokens_in, tokens_out, True, cached)
             found.written_30m, found.written_12h = written(numbers, tokens_in - cached)
+    found.tier, found.cost = tier, cost
     return found
+
+
+def gateway_cost(value: object, before: float | None = None) -> float | None:
+    """A cost in dollars a gateway put in its reply, such as OpenRouter's usage.cost, or the
+    LiteLLM proxy's x-litellm-response-cost header, which is text. Anything that is not a
+    finite number of at least 0 is no cost, and the call is priced from its tokens."""
+    if isinstance(value, str):
+        try:
+            value = float(value)
+        except ValueError:
+            return before
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return before
+    return float(value) if math.isfinite(value) and value >= 0 else before
+
+
+def request_tier(fields: dict[str, object] | None) -> str | None:
+    """The service tier a request names. auto leaves the choice to the project's setting, so
+    it names none."""
+    value = (fields or {}).get("service_tier")
+    return value if isinstance(value, str) and value not in ("", "auto") else None
 
 
 def _details(numbers: dict[str, object]) -> dict[str, object]:
@@ -666,17 +656,8 @@ def written(numbers: dict[str, object], uncached: int) -> tuple[int, int]:
 
 
 def price(model: str, overrides: dict[str, Rates]) -> Rates | None:
-    """The team's price first, whole, then the built-in table.
-
-    A dated snapshot, such as gpt-4o-mini-2024-07-18, uses its family's price. Nothing
-    else does: gpt-4o-audio-preview is not priced like gpt-4o.
-    """
-    family = DATED.sub("", model)
-    for name in (model, family):
-        for table in (overrides, PRICES):
-            if name in table:
-                return table[name]
-    return None
+    """The team's price first, whole, then the shipped table: see prices.price."""
+    return prices.price(model, overrides, dict(prices.shipped().models))
 
 
 def cost(

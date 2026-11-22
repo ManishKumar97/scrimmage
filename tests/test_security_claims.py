@@ -9,6 +9,8 @@ import http.server
 import json
 import re
 import stat
+import subprocess
+import sys
 import threading
 import urllib.request
 from collections.abc import Callable, Iterator
@@ -40,7 +42,7 @@ PACKAGES = ROOT / "packages"
 SDK = PACKAGES / "scrimmage" / "src" / "scrimmage"
 # Every standard-library name that opens a connection or listens for one.
 NETWORK = re.compile(
-    r"\b(HTTPS?Connection|urlopen|urlretrieve|create_connection|open_connection|"
+    r"\b(HTTPS?Connection|urlopen|build_opener|urlretrieve|create_connection|open_connection|"
     r"open_unix_connection|create_server|start_server|SMTP(?:_SSL)?|FTP(?:_TLS)?|"
     r"ServerProxy|ThreadingHTTPServer|HTTPServer|TCPServer|UDPServer|wrap_socket|"
     r"socket(?=\())\b"
@@ -65,6 +67,13 @@ def test_the_only_connections_are_to_the_control_server_and_the_service() -> Non
         ("service_client.py", "HTTPConnection"),
         # It binds 127.0.0.1 port 0 and closes it, to pick the port of a service it starts.
         ("managed.py", "socket"),
+        # The one fetch: `scrimmage prices update` reads prices.toml from the repository's main
+        # over HTTPS, when a person types it. No test run calls it.
+        ("prices_update.py", "build_opener"),
+        (
+            "prices_update.py",
+            "HTTPSConnection",
+        ),  # the same fetch: its connection, cut at the deadline
     }
     uses = {
         name
@@ -75,6 +84,49 @@ def test_the_only_connections_are_to_the_control_server_and_the_service() -> Non
     # socket: managed.py's free port, bound and closed, never connected.
     # gaierror, EAI_NONAME: the error http_gate builds for an injected dns fault; no lookup.
     assert uses == {"gethostname", "SHUT_RDWR", "socket", "gaierror", "EAI_NONAME"}
+
+
+@pytest.mark.design("security.one_fetch")
+def test_only_the_prices_update_command_calls_the_one_fetch() -> None:
+    """prices_update.py is the one module with a connection out, and the scrimmage command's
+    prices update is the only caller: nothing a test run loads reaches it."""
+    callers = {
+        path.name
+        for path in SDK.glob("*.py")
+        if path.name != "prices_update.py" and "prices_update" in path.read_text()
+    }
+    assert callers == {"cli.py"}
+    cli_text = (SDK / "cli.py").read_text()
+    assert cli_text.count("prices_update.") == 1
+    assert "prices_update.update(args.path" in cli_text
+    # Its import is inside the prices command, never at the top of the module.
+    assert "        from scrimmage import prices_update\n" in cli_text
+    assert not re.search(r"^(?:from|import) .*prices_update", cli_text, re.M)
+
+
+@pytest.mark.design("security.one_fetch")
+@pytest.mark.slow
+def test_loading_the_command_and_a_test_runs_modules_never_loads_the_fetch(tmp_path: Path) -> None:
+    """A fresh interpreter loads the command line, checks a file and imports what a test run
+    loads. The module that can connect out is not among them."""
+    (tmp_path / "scrimmage.toml").write_text(
+        '[agent]\nfunction = "acme.agent:answer"\n\n[[test]]\nname = "t"\nquestion = "q"\n'
+        'expect = ["x"]\n'
+    )
+    code = (
+        "import sys\n"
+        "from scrimmage import bootstrap, cli, config, control, http_gate, plan, runner\n"
+        "cli.main(['check', sys.argv[1]])\n"
+        "assert 'scrimmage.prices_update' not in sys.modules, 'loaded'\n"
+        "print('clean')\n"
+    )
+    found = subprocess.run(
+        [sys.executable, "-I", "-c", code, str(tmp_path / "scrimmage.toml")],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert found.stdout.strip().endswith("clean"), found.stderr
 
 
 # Every standard-library way to start a process, and the modules that hold them.

@@ -17,7 +17,7 @@ import yaml
 import scrimmage
 from conftest import EXAMPLE, doc_pages
 from k8s import cluster as kubernetes
-from scrimmage import cli, config, judge, mcp_gate, outcomes, record, render, suggest
+from scrimmage import cli, config, judge, mcp_gate, outcomes, prices, record, render, suggest
 
 DOCS = Path(__file__).parents[1] / "docs"
 CLI_SCHEMA = json.loads((Path(scrimmage.__file__).parent / "schemas" / "cli.v1.json").read_text())
@@ -138,7 +138,7 @@ def test_a_fault_on_one_model_and_its_limits_are_documented() -> None:
 @pytest.mark.design("docs.cached_input")
 def test_cached_input_prices_and_their_default_are_documented() -> None:
     text = page("configuration.md")
-    assert all(mentioned(text, key) for key in config.PRICE_KEYS)
+    assert all(mentioned(text, key) for key in prices.PRICE_KEYS)
     assert "cached tokens cost the full `input` price" in text
     guide = page("model-faults.md")
     for word in ("prompt_tokens_details.cached_tokens", "input_tokens_details.cached_tokens"):
@@ -838,3 +838,42 @@ def test_the_ci_page_warns_that_the_file_runs_code_and_its_sample_guards_the_for
     holders = [s for s in steps if "secrets." in str(s.get("env", {}))]
     assert [s["run"] for s in holders] == ["uv run scrimmage test --max-cost-usd 1"]
     assert not [s for s in steps if "secrets." in str({k: v for k, v in s.items() if k != "env"})]
+
+
+@pytest.mark.design("docs.prices_as_data")
+def test_the_price_files_the_command_and_the_tier_overshoot_are_documented() -> None:
+    config_page, cli_page, limits = page("configuration.md"), page("cli.md"), page("limits.md")
+    for key in ("as_of", "source", "service_tier", "tiers"):
+        assert mentioned(config_page, key), key
+    assert "## scrimmage prices update" in cli_page
+    assert "exit 2" in cli_page and "exit 3" in cli_page
+    for place in ("`[agent.prices]` in `scrimmage.toml`", "`scrimmage-runs/prices.toml`"):
+        assert place in config_page, place
+    assert "x-litellm-response-cost" in config_page and "usage.cost" in config_page
+    assert "A call served on a dearer tier than its hold" in limits
+    assert "built-in price table" not in limits  # it is the shipped price file now
+    # The one fetch is named where the page promises no other connection.
+    assert "scrimmage prices update" in page("security.md")
+
+
+@pytest.mark.design("docs.one_fetch_promise")
+def test_the_three_pages_make_the_same_promise_about_connections() -> None:
+    """README, the home page and the security page state the same sentences, word for word,
+    and the sentence names each of the three connections."""
+    readme = (DOCS.parent / "README.md").read_text()
+    start = "Scrimmage has no telemetry and no hosted service"
+    blocks = []
+    for text in (readme, page("index.md"), page("security.md")):
+        first = text.index(start)
+        blocks.append(text[first : text.index("No test run makes that connection", first)])
+    assert blocks[0] == blocks[1] == blocks[2]
+    for named in (
+        "control server",
+        "your `scrimmage.toml` names",
+        "`scrimmage prices update`",
+        "GitHub",
+    ):
+        assert named in blocks[0], named
+    assert "any third party" not in readme and "any third party" not in page("security.md")
+    assert "your IP address" in blocks[0] and "`User-Agent`" in blocks[0]
+    assert "test_only_the_prices_update_command_calls_the_one_fetch" in page("security.md")

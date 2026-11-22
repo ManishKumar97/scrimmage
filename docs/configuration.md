@@ -29,6 +29,7 @@ Anything this version does not support is rejected as unknown, with exit code 2.
 | `model_hosts` | Extra hosts whose requests are model calls, such as a gateway, each with the format it speaks: `[{host = "llm-gateway.internal", provider = "openai"}]`. A host name only, with no port. | empty |
 | `reserve_output_tokens` | The output tokens a budget reservation assumes when a request does not set `max_tokens`. A call that does not fit while others hold the budget waits for them; see [When calls in flight hold the budget](model-faults.md#when-calls-in-flight-hold-the-budget). | 4096 |
 | `prices` | Prices for other models, as the table below. The key `""` prices a call that sends no model name. | empty |
+| `service_tier` | The service tier OpenAI bills a model request that names none, such as `"priority"`. It is used only to hold the budget before the call, at that tier's rates. Scrimmage never adds it to the request. See [Service tiers](#service-tiers). | the default tier |
 | `answer` | Where the answer is in what the function returns, such as `"messages[-1].text"`, or in a service's JSON reply, such as `"reply"`. With `function` or `service`. Required when the function returns anything but text, as the whole value would hold tool results too. See [Agents on a framework](frameworks.md). | the returned text, or a service's whole reply |
 
 ### The function and its input
@@ -52,7 +53,8 @@ See [Agents on a framework](frameworks.md) for the whole example.
 
 ## [agent.prices]
 
-Prices for models the built-in table does not know, in dollars per million tokens.
+Prices for models the shipped price file does not know, or that you price differently, in dollars per million tokens.
+See [Where prices come from](#where-prices-come-from).
 
 ```toml
 [agent.prices]
@@ -68,10 +70,78 @@ acme-gpt = {input = 2.0, cached_input = 0.5, output = 8.0}
 | `cached_input` | The price of an input token the provider served from its prompt cache. Optional, and at most `input`. Without it, cached tokens cost the full `input` price, which can only overstate the cost. |
 | `cache_write_30m` | The price of an input token the provider wrote to its prompt cache for 30 minutes. Optional, and at least `input`. Without it, written tokens cost the full `input` price, as on a model that charges nothing extra to write its cache. |
 | `cache_write_12h` | The same for a token written for 12 hours, a choice on the Responses API. Optional, and at least `input`. |
+| `tiers` | The rates of each service tier, as a table of tables, such as `[agent.prices."gpt-4.1".tiers.flex]`. Each tier takes the same keys, and needs `input` and `output`. Optional. A tier not listed costs the model's own rates. See [Service tiers](#service-tiers). |
+
+### Service tiers
+
+OpenAI bills a call at the tier it was served on, such as `default`, `flex` or `priority`.
+The reply names the tier, and Scrimmage settles the call at that tier's rates.
+Before the call it holds the budget at one tier's rates.
+That is the tier the request names, else `[agent] service_tier`, else the default tier.
+A request that names `auto` names no tier.
+
+```toml
+[agent]
+service_tier = "priority"
+
+[agent.prices."gpt-4.1"]
+input = 2.0
+output = 8.0
+
+[agent.prices."gpt-4.1".tiers.priority]
+input = 3.5
+output = 14.0
+```
+
+Scrimmage never adds a tier to the request: it would change what the model call does.
 
 The `gpt-5.6-luna` example is its price up to 272K input tokens; a call over that costs more, so give the long-context price if your calls can be that long. See [One price per kind of token](limits.md#the-budget).
 
-A price here replaces the built-in one whole: `gpt-4o = {input = 2.5, output = 10}` has no cached price, even though the built-in table has one.
+A price here replaces a file's price whole: `gpt-4o = {input = 2.5, output = 10}` has no cached price, even though the shipped file has one.
+
+### Where prices come from
+
+Scrimmage looks a model's price up in three places, in this order.
+The first place that names the model gives the whole price.
+
+1. `[agent.prices]` in `scrimmage.toml`.
+2. `scrimmage-runs/prices.toml`, beside `scrimmage.toml`, which `scrimmage prices update` writes.
+3. The `prices.toml` shipped with Scrimmage, which holds OpenAI's prices.
+
+A dated name, such as `gpt-4o-mini-2024-07-18`, uses its family's price when the place it is looking in does not name it exactly.
+A place higher in the list speaks first: your `[agent.prices]` row for `gpt-4.1` also prices `gpt-4.1-2025-04-14`, whatever a file holds for the dated name.
+A model that none of them names is refused before the call, with the line to paste under `[agent.prices]`.
+Scrimmage never guesses a price.
+
+A price file has the date of its prices, the page they came from, and a table for each model:
+
+```text
+as_of = "2026-11-19"
+source = "https://openai.com/api/pricing/"
+
+[models."gpt-4.1"]
+input = 2.00
+output = 8.00
+cached_input = 0.50
+
+[models."gpt-4.1".tiers.flex]
+input = 1.00
+output = 4.00
+```
+
+`as_of` and `source` are required, and a model takes the keys of `[agent.prices]`.
+A file may not make a model free, because that would turn the budget off for it.
+Every `input`, in a model or a tier, must be at least 0.001 dollars per million tokens, and so must every `output`, unless the model's name contains `embedding`.
+A `cached_input` or cache-write rate, if you give one, must be at least 0.001 too, even for an embedding model.
+That is far below any real price, the cheapest today being 0.02.
+A tier cannot be named `default` or `auto`, in any case.
+Only `[agent.prices]` may price a model at 0, as your own choice.
+A file that fails its checks is exit 2, and the message names the file and the line.
+`scrimmage check` prints the date of the prices on its budget line, and, when you have prices of your own, the source of each.
+A price is only as new as its file, so run [`scrimmage prices update`](cli.md#scrimmage-prices-update) now and then.
+
+A call whose reply states its own cost, such as an OpenRouter reply's `usage.cost` or the LiteLLM proxy's `x-litellm-response-cost` header, is settled at the larger of that cost and the cost of its tokens at your prices.
+Scrimmage adds nothing to the request to ask for it, and a model with no price is still refused before the call, because the hold needs one.
 
 Scrimmage imports only modules under your agent's own top-level packages, the ones `function` and `tools` name. For a script, that is the ones `tools` names.
 

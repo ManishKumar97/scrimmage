@@ -8,7 +8,7 @@ import pytest
 
 from config_cases import BAD, GOOD
 from conftest import EXAMPLE, Project
-from scrimmage import cli, config, control, outcomes, runner
+from scrimmage import cli, config, control, outcomes, prices, runner
 
 TESTS = Path(__file__).parent
 pytestmark = pytest.mark.usefixtures("signals_kept")
@@ -119,7 +119,7 @@ def test_a_valid_file_gets_one_line_with_what_it_holds(
     assert captured.err == ""
     assert captured.out == (
         f"scrimmage check: {project.toml} is valid: 1 test, 2 rows, 6 runs, 4 tools, "
-        "a budget of $5\n"
+        f"a budget of $5, prices as of {prices.shipped().as_of}\n"
     )
     project.edit("[agent]\n", '[agent]\nmax_cost_usd = "none"\nruns = 1\n')
     project.edit(

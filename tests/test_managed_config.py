@@ -227,6 +227,7 @@ BEFORE: dict[str, object] = {
     "max_cost_usd": 5.0,
     "reserve_output_tokens": 4096,
     "prices": (),
+    "service_tier": None,
     "answer": None,
     "command": (),
     "children": False,

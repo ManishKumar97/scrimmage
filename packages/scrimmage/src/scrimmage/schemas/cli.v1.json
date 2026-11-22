@@ -810,7 +810,43 @@
                       }
                     }
                   },
-                  "description": "Each model [agent.prices] prices, in dollars per million tokens. Any other model is priced from Scrimmage's built-in table."
+                  "description": "Each model [agent.prices] prices, in dollars per million tokens, with its tiers if it has any. Any other model is priced from the first of price_sources that names it."
+                },
+                "service_tier": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "[agent] service_tier: the tier a request that names none is held at, or null."
+                },
+                "price_sources": {
+                  "type": "array",
+                  "description": "Where prices come from, in order of authority: [agent.prices], scrimmage-runs/prices.toml if there is one, and the prices.toml shipped with Scrimmage.",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "source",
+                      "as_of",
+                      "models"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "source": {
+                        "type": "string"
+                      },
+                      "as_of": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "The date of the file's prices; null for [agent.prices]."
+                      },
+                      "models": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  }
                 }
               }
             }
