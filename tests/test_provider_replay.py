@@ -1,6 +1,7 @@
-"""The OpenAI model calls of tests/provider_replay.py, through the real gate and the fake
-OpenAI server, give the bytes that origin/main gave before the provider seam: the same
-replies, lines, holds and settled costs. A change on purpose regenerates the golden file with
+"""The OpenAI model calls of tests/provider_replay.py, through the real gate and a fake or
+scripted OpenAI server, give the bytes the golden file holds: the same replies, lines, holds
+and settled costs. The golden file was captured on the source of the provider seam's first
+phase, before the seam was completed. A change on purpose regenerates the golden file with
 `python tests/provider_replay.py`, and the diff is the review."""
 
 import json
@@ -27,7 +28,33 @@ def test_the_replay_is_deterministic() -> None:
     assert once == twice
 
 
-@pytest.mark.parametrize("name", ["chat chat_answer", "fault refuse chat", "marker chat"])
+PINNED = [
+    "chat chat_answer",
+    "fault refuse chat",
+    "marker chat",
+    # The paths the first capture was blind to.
+    "httpx2 async: chat answer",
+    "httpx: chat answer",
+    "openai: chat answer",
+    "openai async: fault garble responses",
+    "httpx2: redirect off host priced",
+    "httpx2 async: redirect off host priced",
+    "httpx2: connect error",
+    "httpx2: ReadError after sending",
+    "retry fault requests 1",
+    "budget shortfall chat tiny",
+    "reply tier 'scale' chat",
+    "host listed twice",
+    "stream cut",
+    "stream gzip",
+    "packed gzip fault garble",
+    "gateway cost header high custom",
+    "cache writes responses split short",
+    "injected text one string",
+]
+
+
+@pytest.mark.parametrize("name", PINNED)
 def test_the_replay_keeps_what_it_is_meant_to_pin(name: str) -> None:
     golden = json.loads(provider_replay.GOLDEN.read_text())[name]
     assert golden["lines"], "the call left no line"
