@@ -58,7 +58,10 @@ VOLATILE = {
     "pid",
     "start",
     "host",
+    "slowed_ms",  # measured: how long a slowed call waited, which load stretches
 }
+MEASURED_KEYS = {"slowed_ms"}
+MEASURED: dict[str, list[int]] = {}  # the measured values settled() dropped, by key
 SEED = 20261122
 NOW = 1_700_000_000.0
 KEPT_HEADERS = ("content-type", "x-request-id", "retry-after", "content-length")
@@ -428,6 +431,8 @@ def scenarios() -> list[Scenario]:
 def settled(value: object) -> object:
     """A line without the keys that hold a clock reading."""
     if isinstance(value, dict):
+        for key in MEASURED_KEYS & value.keys():
+            MEASURED.setdefault(key, []).append(value[key])
         return {k: settled(v) for k, v in sorted(value.items()) if k not in VOLATILE}
     if isinstance(value, list):
         return [settled(v) for v in value]

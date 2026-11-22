@@ -11,7 +11,10 @@ import provider_replay
 
 
 def test_openai_calls_replay_byte_for_byte_as_before_the_provider_seam() -> None:
-    golden = json.loads(provider_replay.GOLDEN.read_text())
+    # The golden file keeps the one measured time it was captured with; only the comparison
+    # ignores it, as it ignores every clock reading.
+    saved = json.loads(provider_replay.GOLDEN.read_text())
+    golden = {name: provider_replay.settled(run) for name, run in saved.items()}
     found = json.loads(provider_replay.dumps(provider_replay.capture()))
     assert list(found) == list(golden), "the scenarios changed"
     changed = [name for name in golden if found[name] != golden[name]]
@@ -28,3 +31,11 @@ def test_the_replay_is_deterministic() -> None:
 def test_the_replay_keeps_what_it_is_meant_to_pin(name: str) -> None:
     golden = json.loads(provider_replay.GOLDEN.read_text())[name]
     assert golden["lines"], "the call left no line"
+
+
+def test_a_slowed_call_waited_at_least_its_delay() -> None:
+    """slowed_ms is measured, so the replay ignores it; here it is held to its floor."""
+    provider_replay.MEASURED.clear()
+    provider_replay.capture(lambda s: s.name == "fault slow")
+    assert provider_replay.MEASURED["slowed_ms"], "the slowed call recorded no wait"
+    assert all(ms >= 10 for ms in provider_replay.MEASURED["slowed_ms"])  # slow 0.01s
