@@ -818,6 +818,25 @@ def test_a_port_the_command_fixes_is_not_started_again(shop: Shop) -> None:
     assert len(shop.copies) == 1 and len(shop.copies[0].ports) == 1
 
 
+@pytest.mark.parametrize("proc", [True, False], ids=["proc", "no-proc"])
+def test_a_port_held_by_another_is_not_blamed_for_a_bind_that_failed_elsewhere(
+    shop: Shop, proc: bool
+) -> None:
+    """Another process holds the picked port, but the copy fails to bind a port its command
+    fixes: its log names that address, so a new picked port would not help. The copy is
+    started once and its bind error shown, not blamed on the picked port."""
+    if not proc:
+        no_proc(shop)
+    with held_port() as picked, held_port() as fixed:
+        shop.monkeypatch.setattr(runner, "free_port", lambda: picked)
+        start = f"{UVICORN} acme.service:app --port {fixed} --root-path /{{port}} --loop asyncio"
+        code, out = shop.test(start)
+    assert code == 3, out
+    assert f"('127.0.0.1', {fixed}): " in out and "address already in use" in out, out
+    assert "was taken before" not in out and "starts on ports" not in out, out
+    assert len(shop.copies) == 1 and len(shop.copies[0].ports) == 1
+
+
 def test_a_port_another_process_holds_names_the_copys_exit(shop: Shop) -> None:
     """Another process takes the port before the copy binds it, and answers the probe with
     404, at every start. The test names the copy's exit and its log's "address already in
