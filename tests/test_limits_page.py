@@ -205,6 +205,7 @@ ALL_TITLES = [
     "`scrimmage check` does not import your code.",
     "`scrimmage init --probe` can run calls a test baseline would refuse.",
     "`scrimmage init` reads the code, so it only guesses.",
+    "`scrimmage prices update` trusts this repository's `main`.",
     "`scrimmage record` runs one baseline.",
     "`slow` is not a late reply after the work.",
     "`slow` outside asyncio.",

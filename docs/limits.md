@@ -429,6 +429,8 @@ Also read the control-path limits under An agent inside a web service.
 
 - **A gateway's stated cost can only raise a call's cost.** A reply that states its cost, such as OpenRouter's `usage.cost` or the LiteLLM proxy's `x-litellm-response-cost` header, is settled at the larger of that figure and the cost of its tokens at your prices. A gateway that reports 0, or only its own fee, as OpenRouter does for a key you brought, or that does not know a model, as LiteLLM does for one missing from its cost map, would otherwise turn `max_cost_usd` off. So a gateway that charges less than your price file says is still counted at your price file's figure.
 
+- **`scrimmage prices update` trusts this repository's `main`.** It writes the file it finds there, after checking its schema and refusing a rate below $0.001 per million tokens, and it prints every change before it writes. It does not compare the new rates with the old ones, so a price set too low there, but above that floor, would let a test spend more than its budget intends. Read the printed changes before you run a test on them.
+
 - **Prices need checking.** The shipped price file is small and as old as your installed version; its `as_of` date shows on `scrimmage check`. Run `scrimmage prices update` for the newest, check it against your provider's pricing, and use `[agent.prices]` for anything else.
 
 - **One price per kind of token.** A price has no long-context tier, so models priced higher above 272K input tokens, such as `gpt-5.4`, `gpt-5.5` and the `gpt-5.6` models, are not in the shipped price file. Under `[agent.prices]`, give such a model its long-context price if a call can go over 272K input tokens, or a long call costs more than the record says.
