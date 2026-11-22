@@ -519,11 +519,22 @@ To hold less, set `max_tokens` on the call, lower `reserve_output_tokens`, or lo
 ### Prices
 
 Scrimmage ships prices for OpenAI models, cached input included, checked against OpenAI's pricing page on 22 November 2026.
-They cover `gpt-4o`, `gpt-4o-mini`, the `gpt-4.1` family, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5-pro`, `gpt-5.1` to `gpt-5.6`, the `gpt-6` family, `o3`, `o3-pro`, `chat-latest`, `gpt-5-search-api`, `gpt-5.3-codex` and the `text-embedding` models.
+They cover `gpt-4o`, `gpt-4o-mini`, the `gpt-4.1` family, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5-pro`, `gpt-5.1`, `gpt-5.2`, `gpt-5.2-pro`, `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.5`, `gpt-5.5-pro`, `gpt-5.6-terra`, `gpt-5.6-luna`, the `gpt-6` family, `o3`, `o3-pro`, `chat-latest`, `gpt-5-search-api` and the `text-embedding` models.
 `gpt-4o-2024-05-13` and `gpt-4.1-nano` are no longer on that page, so their prices are the ones listed on 7 November 2026.
-A model that the page lists with a higher price above 272K input tokens, such as `gpt-5.4`, `gpt-5.5` or `gpt-6.2-astra`, has a `long` table with the price of a call over that size, charged on the whole call.
-The `flex`, `fast`, `priority` and `ultrafast` service tiers have their own rates where the page lists them.
-`fast` and `priority` are the same tier under two names, so each model holds both.
+A model with a higher price above 272K input tokens has a `long` table with the price of a call over that size, charged on the whole call.
+Those are `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.5`, `gpt-5.5-pro`, `gpt-5.6-terra`, `gpt-5.6-luna` and every `gpt-6` model.
+The page lists these service tiers, and the file holds each for these models only:
+
+| Tier | Models |
+|---|---|
+| `flex` | `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5.1`, `gpt-5.2`, `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.5`, `gpt-5.6-terra`, `gpt-5.6-luna`, `o3`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol` and `gpt-6.1-terra` |
+| `fast`, also found as `priority` | `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-5`, `gpt-5-mini`, `gpt-5.1`, `gpt-5.2`, `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-terra`, `gpt-5.6-luna`, `o3` and every `gpt-6` model |
+| `ultrafast` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6.2-astra` and `gpt-6.2-sol` |
+
+`fast` and `priority` are one tier under two names, so a price that holds one of them prices both.
+`gpt-6.2-astra` and `gpt-6.2-sol` list a promotional Ultrafast rate, 3 times Standard, until 28 February 2027, and 6 times Standard after.
+The file holds the 6 times rate, so those two tiers cost twice the bill until that date.
+A reply that names a tier a model's row does not list is settled at the dearest rates the row does list, and its record line has `unpriced_tier` set and `cost_estimated` true.
 See [Long-context prices](configuration.md#long-context-prices) and [Service tiers](configuration.md#service-tiers).
 `gpt-5.6-sol` is not in the table: the page lists only a promotional price, which ends on 30 November 2026.
 Give it under `[agent.prices]`.

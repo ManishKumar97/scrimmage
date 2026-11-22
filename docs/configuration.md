@@ -60,7 +60,7 @@ See [Where prices come from](#where-prices-come-from).
 [agent.prices]
 llama-70b = {input = 0.6, output = 0.6}
 acme-gpt = {input = 2.0, cached_input = 0.5, output = 8.0}
-"gpt-5.6-luna" = {input = 0.2, cached_input = 0.02, cache_write_30m = 0.25, cache_write_12h = 0.5, output = 1.2}
+acme-cache = {input = 0.2, cached_input = 0.02, cache_write_30m = 0.25, cache_write_12h = 0.5, output = 1.2}
 ```
 
 | Key | What it is |
@@ -96,7 +96,14 @@ output = 14.0
 
 Scrimmage never adds a tier to the request: it would change what the model call does.
 
-The `gpt-5.6-luna` example is its price up to 272K input tokens; a call over that costs more, so give its long-context price too if your calls can be that long. See [Long-context prices](#long-context-prices).
+`fast` and `priority` are one tier under two names, since OpenAI renamed priority processing to Fast mode.
+A price that holds only `tiers.fast` or only `tiers.priority` prices both names, in `[agent.prices]` as in a price file.
+If a reply names a tier that the price does not list, such as `scale`, the call is settled at the dearest rates the price does list, long rates included.
+Its record line then has `unpriced_tier` set and `cost_estimated` true.
+The hold stays at the tier the request names, else `[agent] service_tier`, else the default tier.
+
+A price here replaces the shipped row whole, its tiers and its `long` table too.
+If you price a model the file ships, such as `gpt-5.6-luna`, give its `long` table and the tiers you use as well. See [Long-context prices](#long-context-prices).
 
 ### Long-context prices
 

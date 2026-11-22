@@ -148,6 +148,7 @@ ALL_TITLES = [
     "Python only.",
     "Ray and Dask are not covered.",
     "Refusals that can surprise you.",
+    "Regional and FedRAMP endpoints cost more.",
     "Request bodies that are not in memory.",
     "Rules are plain text.",
     "Rules match text, not meaning.",

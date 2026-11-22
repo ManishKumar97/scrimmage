@@ -425,6 +425,8 @@ Also read the control-path limits under An agent inside a web service.
   Once money spent passes the limit, every later call is refused at once.
   Set `max_tokens`, `max_completion_tokens` or `max_output_tokens` on each call, in a body Scrimmage can read, to bound its output, `n` choices included; nothing bounds the input estimate.
 
+- **Regional and FedRAMP endpoints cost more.** The shipped prices are OpenAI's global rates. Regional (data residency) endpoints and FedRAMP endpoints charge a 10% uplift on models released on or after 5 March 2026. A team on those endpoints sets its own rates under `[agent.prices]`, or its calls settle 10% low.
+
 - **A call served on a dearer tier than its hold.** A call is held at the service tier its request names, else at `[agent] service_tier`, else at the default tier, and is settled at the tier the reply names. OpenAI can serve a call on a dearer tier than that, such as `priority` for a request that names none. It then costs more than its hold, and calls in flight can pass `max_cost_usd` by the difference, as for the hold above. Set `service_tier` to your account's tier to avoid it. See [Service tiers](configuration.md#service-tiers).
 
 - **A gateway's stated cost can only raise a call's cost.** A reply that states its cost, such as OpenRouter's `usage.cost` or the LiteLLM proxy's `x-litellm-response-cost` header, is settled at the larger of that figure and the cost of its tokens at your prices. A gateway that reports 0, or only its own fee, as OpenRouter does for a key you brought, or that does not know a model, as LiteLLM does for one missing from its cost map, would otherwise turn `max_cost_usd` off. So a gateway that charges less than your price file says is still counted at your price file's figure.
