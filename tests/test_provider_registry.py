@@ -249,11 +249,16 @@ OWN_PATTERNS = {
     ("labels.py", r"/(?:(?![?#])[\x21-\x7e])*"),
 }
 # The modules that get parsed wire data only from a provider, so they never parse JSON
-# themselves: json.loads returns Any, which the opaque types cannot see through. Today neither
-# parses any, so no site is allowed.
-NO_JSON_PARSING = {"http_gate.py", "state.py"}
+# themselves: json.loads returns Any, which the opaque types cannot see through. The report
+# hands a recorded reply's bytes to its provider. Its two other readers parse the records the
+# run wrote, whose keys are Scrimmage's own, so those two functions are the only allowed sites.
+NO_JSON_PARSING = {"http_gate.py", "state.py", "show.py"}
+JSON_SITES = {("show.py", "summary_of"), ("show.py", "timeline")}
 JSON_LIBRARIES = {"json", "orjson", "ujson", "simplejson"}
-JSON_READERS = {"loads", "load"}
+# Every way to read JSON the libraries offer: the functions, and the decoder class, whose
+# .decode and .raw_decode read a string.
+JSON_READERS = {"loads", "load", "JSONDecoder", "decoder", "decode", "raw_decode"}
+RE_LIBRARIES = {"re", "regex"}
 # No module outside the providers may build or look up a provider's module by name.
 MODULE_NAMES = ("scrimmage.provider_", "providers.impl")
 
@@ -336,23 +341,95 @@ def reaches_a_provider(module: str) -> bool:
     return parts[1] == "providers" and len(parts) > 2 and parts[2] not in ("base", "registry")
 
 
-def paths_in_patterns(tree: ast.AST, module: str) -> list[str]:
-    """The re calls and the match cases of this tree whose pattern starts with a slash: a path
-    matched by its form, which is the provider's to know."""
-    found: list[str] = []
+def imported(tree: ast.AST, libraries: set[str]) -> tuple[set[str], set[str], bool]:
+    """How a tree names these libraries, in every import form: the names bound to a library
+    module (import re as r), the names bound to one of its members (from re import search as
+    s), and whether it star-imports one."""
+    modules: set[str] = set()
+    members: set[str] = set()
+    star = False
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "re"
-            and node.args
-            and isinstance(node.args[0], ast.Constant)
-            and isinstance(node.args[0].value, str)
-            and node.args[0].value.startswith("/")
-            and (module, node.args[0].value) not in OWN_PATTERNS
-        ):
-            found.append(f"matches a path with re.{node.func.attr}, {node.args[0].value!r}")
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name.split(".")[0] in libraries:
+                    modules.add(a.asname or a.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] in libraries:
+            for a in node.names:
+                star = star or a.name == "*"
+                members.add(a.asname or a.name)
+    return modules, members, star
+
+
+def constants(tree: ast.AST) -> dict[str, str]:
+    """The names a tree sets once to a string, so a pattern held in a constant is seen."""
+    found: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            value: ast.expr | None = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names, value = [node.target.id], node.value
+        else:
+            continue
+        text = text_of(value, found) if value is not None else None
+        if text is not None:
+            for name in names:
+                found[name] = text
+    return found
+
+
+def text_of(node: ast.expr, named: dict[str, str]) -> str | None:
+    """The string an expression holds when it is a literal, a constant's name, or a sum or an
+    f-string of those; the parts it cannot know are left out."""
+    if isinstance(node, ast.Constant):
+        return node.value if isinstance(node.value, str) else None
+    if isinstance(node, ast.Name):
+        return named.get(node.id)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = text_of(node.left, named), text_of(node.right, named)
+        return None if left is None and right is None else (left or "") + (right or "")
+    if isinstance(node, ast.JoinedStr):
+        return "".join(
+            part.value
+            for part in node.values
+            if isinstance(part, ast.Constant) and isinstance(part.value, str)
+        )
+    return None
+
+
+def paths_in_patterns(tree: ast.AST, module: str) -> list[str]:
+    """The re and regex calls and the match cases of this tree whose pattern names an API's
+    path, anywhere in it, or starts with a slash: a path matched by its form, which is the
+    provider's to know. The libraries are seen under every import form, and a pattern held in
+    a constant is read."""
+    modules, members, star = imported(tree, RE_LIBRARIES)
+    named = constants(tree)
+    literals = api_literals()
+    found: list[str] = []
+    if star:
+        found.append("imports * from a regex library, which no guard can read")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if (
+                isinstance(func, ast.Attribute)
+                and isinstance(func.value, ast.Name)
+                and func.value.id in modules
+            ):
+                call = f"{func.value.id}.{func.attr}"
+            elif isinstance(func, ast.Name) and func.id in members:
+                call = func.id
+            else:
+                continue
+            argument = node.args[0] if node.args else None
+            for keyword in node.keywords:
+                if keyword.arg == "pattern":
+                    argument = keyword.value
+            text = None if argument is None else text_of(argument, named)
+            if text is None or (module, text) in OWN_PATTERNS:
+                continue
+            if text.startswith("/") or any(lit in text for lit in literals):
+                found.append(f"matches a path with {call}, {text!r}")
         elif isinstance(node, ast.match_case):
             found += [
                 f"matches a path in a case, {leaf.value!r}"
@@ -364,26 +441,118 @@ def paths_in_patterns(tree: ast.AST, module: str) -> list[str]:
     return found
 
 
+def enclosing_functions(tree: ast.AST) -> dict[int, str]:
+    """The name of the function each node sits in, by the node's id."""
+    names: dict[int, str] = {}
+    for fn in ast.walk(tree):
+        if isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef):
+            for node in ast.walk(fn):
+                names[id(node)] = fn.name
+    return names
+
+
 def parses_json(tree: ast.AST, module: str) -> list[str]:
-    """The calls and imports of a JSON reader, in a module that gets wire data from a provider."""
+    """The uses and imports of a JSON reader, in a module that gets wire data from a provider:
+    loads and load, the decoder class and its decode and raw_decode, under any import form."""
     if module not in NO_JSON_PARSING:
         return []
+    modules, _, _ = imported(tree, JSON_LIBRARIES)
+    inside = enclosing_functions(tree)
     found: list[str] = []
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in JSON_LIBRARIES
-            and node.func.attr in JSON_READERS
+        site = (module, inside.get(id(node), ""))
+        if site in JSON_SITES:
+            continue
+        if isinstance(node, ast.Attribute) and (
+            node.attr == "raw_decode"
+            or (
+                node.attr in JSON_READERS
+                and isinstance(node.value, ast.Name)
+                and node.value.id in modules
+            )
         ):
-            found.append(f"parses JSON with {node.func.value.id}.{node.func.attr}")
-        elif isinstance(node, ast.ImportFrom) and node.module in JSON_LIBRARIES:
+            owner = node.value.id if isinstance(node.value, ast.Name) else "a decoder"
+            found.append(f"parses JSON with {owner}.{node.attr}")
+        elif (
+            isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] in JSON_LIBRARIES
+        ):
             found += [
                 f"imports {node.module}.{a.name}, a JSON reader"
                 for a in node.names
-                if a.name in JSON_READERS
+                if a.name in JSON_READERS or node.module != (node.module or "").split(".")[0]
             ]
+        elif isinstance(node, ast.Import):
+            found += [
+                f"imports {a.name}, a JSON reader"
+                for a in node.names
+                if a.name.split(".")[0] in JSON_LIBRARIES and "." in a.name
+            ]
+    return found
+
+
+OPAQUE_TYPES = {"Fields", "Reply"}
+# What reads an object without the type checker's say: it takes any object, so pyright passes
+# Fields to it, and at run time it sees the class, not the dict inside.
+PROBES = {"isinstance", "getattr", "hasattr", "vars", "repr", "str", "ascii", "format", "cast"}
+
+
+def opaque_names(tree: ast.AST) -> set[str]:
+    """The names in a module that hold an opaque wire value: parameters and variables typed
+    Fields or Reply, from the provider interface, and what request_fields and parse_reply
+    return. A module that imports neither type holds none."""
+    types: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "scrimmage.providers.base":
+            types |= {a.asname or a.name for a in node.names if a.name in OPAQUE_TYPES}
+    if not types:
+        return set()
+
+    def typed(annotation: ast.expr | None) -> bool:
+        return annotation is not None and any(
+            (isinstance(n, ast.Name) and n.id in types)
+            or (isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value in types)
+            for n in ast.walk(annotation)
+        )
+
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.arg) and typed(node.annotation):
+            names.add(node.arg)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            if typed(node.annotation):
+                names.add(node.target.id)
+        elif isinstance(node, ast.Assign):
+            made = ast.unparse(node.value)
+            if any(word in made for word in ("request_fields(", "parse_reply(", "NO_FIELDS")):
+                names |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+    return names
+
+
+def probes_opaque(tree: ast.AST) -> list[str]:
+    """The places a module reads an opaque wire value by a way the type checker lets through:
+    isinstance, getattr, hasattr, vars, repr, str, format, a cast, an f-string, or a variable
+    typed Any, on a name that holds a Fields or a Reply."""
+    held = opaque_names(tree)
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id in PROBES:
+                checked = node.args[1:2] if node.func.id == "cast" else node.args[:1]
+                found += [
+                    f"probes the opaque {a.id} with {node.func.id}"
+                    for a in checked
+                    if isinstance(a, ast.Name) and a.id in held
+                ]
+        elif isinstance(node, ast.FormattedValue) and isinstance(node.value, ast.Name):
+            if node.value.id in held:
+                found.append(f"formats the opaque {node.value.id}")
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in held
+            and ast.unparse(node.annotation) == "Any"
+        ):
+            found.append(f"holds the opaque {node.value.id} as Any")
     return found
 
 
@@ -469,6 +638,7 @@ def problems_in(source: str, module: str = "") -> list[str]:
         + paths_in_patterns(tree, module)
         + names_in_strings(tree, docstrings, module)
         + parses_json(tree, module)
+        + probes_opaque(tree)
     )
 
 
@@ -571,6 +741,84 @@ GATE = "def f(x):\n    return x\n"
             "def g(p):\n    match p:\n        case 'a' | '/b':\n            return 1\n",
             "matches a path in a case, '/b'",
         ),
+        # Review of the opaque type, AN-C0-1 to AN-C0-3: the bypasses that passed before.
+        (
+            "from scrimmage.providers.impl.wire import fields_dict\n",
+            "imports from scrimmage.providers.impl.wire",
+        ),
+        (
+            "from scrimmage.providers.impl import wire\n",
+            "imports scrimmage.providers.impl.wire",
+        ),
+        (
+            "from re import search\ndef g(p):\n    return search(r'/messages$', p)\n",
+            "matches a path with search, '/messages$'",
+        ),
+        (
+            "from re import compile as c\nP = c('x/messages')\n",
+            "matches a path with c, 'x/messages'",
+        ),
+        (
+            "import re as r\ndef g(p):\n    return r.match('/v1/zzz', p)\n",
+            "matches a path with r.match, '/v1/zzz'",
+        ),
+        (
+            "import regex\ndef g(p):\n    return regex.search('/v1/zzz', p)\n",
+            "matches a path with regex.search, '/v1/zzz'",
+        ),
+        (
+            "import re\ndef g(p):\n    return re.compile(pattern=r'/v1/zzz')\n",
+            "matches a path with re.compile, '/v1/zzz'",
+        ),
+        (
+            "import re\nP = '/messages$'\ndef g(p):\n    return re.search(P, p)\n",
+            "matches a path with re.search, '/messages$'",
+        ),
+        (
+            "import re\ndef g(p):\n    return re.search(r'.*/messages$', p)\n",
+            "matches a path with re.search, '.*/messages$'",
+        ),
+        (
+            "import re\ndef g(p):\n    return re.search('v1/' + 'chat/completions', p)\n",
+            "matches a path with re.search, 'v1/chat/completions'",
+        ),
+        ("from re import *\n", "imports * from a regex library"),
+        (
+            "from scrimmage.providers.base import Fields\n"
+            "def g(fields: Fields):\n    return getattr(fields, 'get')('stream')\n",
+            "probes the opaque fields with getattr",
+        ),
+        (
+            "from scrimmage.providers.base import Fields\n"
+            "def g(fields: Fields):\n    return isinstance(fields, dict)\n",
+            "probes the opaque fields with isinstance",
+        ),
+        (
+            "from scrimmage.providers.base import Fields\n"
+            "def g(fields: Fields):\n    return \"'stream': True\" in repr(fields)\n",
+            "probes the opaque fields with repr",
+        ),
+        (
+            "from typing import Any, cast\nfrom scrimmage.providers.base import Fields\n"
+            "def g(fields: Fields):\n    return cast(Any, fields).get('stream')\n",
+            "probes the opaque fields with cast",
+        ),
+        (
+            "from typing import Any\nfrom scrimmage.providers.base import Fields\n"
+            "def g(fields: Fields):\n    held: Any = fields\n    return held\n",
+            "holds the opaque fields as Any",
+        ),
+        (
+            "from scrimmage.providers.base import Fields\n"
+            "def g(provider, body):\n    asked = provider.request_fields(body)\n"
+            "    return vars(asked), str(asked)\n",
+            "probes the opaque asked with vars",
+        ),
+        (
+            "from scrimmage.providers.base import Reply\n"
+            "def g(reply: Reply):\n    return f'{reply}'\n",
+            "formats the opaque reply",
+        ),
         (
             "def g():\n    return sys.modules['scrimmage.provider_openai']\n",
             "names a provider's module in the string 'scrimmage.provider_openai'",
@@ -605,6 +853,11 @@ def test_the_guard_catches_each_way_a_module_could_reach_a_provider(added: str, 
         "def g(p):\n    match p:\n        case 'chat' | 'x/y':\n            return 1\n",
         'def g():\n    """Reads scrimmage.provider_openai, the openai one."""\n    return 1\n',
         "def g(x):\n    return x.replace('openai-key', 'k').split('/')\n",
+        "import re as r\nP = r.compile(r'\\d+')\nQ = r.sub('[a-z]', '', 'x')\n",
+        "from re import search\ndef g(p):\n    return search(r'\\d+', p)\n",
+        "from scrimmage.providers.base import Fields\n"
+        "def g(fields: Fields, provider):\n    return provider.model_name(fields), str(7)\n",
+        "def g(x):\n    return isinstance(x, dict) and getattr(x, 'get')\n",
     ],
 )
 def test_the_guard_leaves_alone_what_a_module_may_use(fine: str) -> None:
@@ -621,6 +874,20 @@ def test_the_guard_leaves_alone_what_a_module_may_use(fine: str) -> None:
         ("import ujson\ndef g(b):\n    return ujson.loads(b)\n", "ujson.loads"),
         ("import simplejson\ndef g(b):\n    return simplejson.loads(b)\n", "simplejson.loads"),
         ("from json import loads\n", "imports json.loads"),
+        (
+            "import json\ndef g(b):\n    return json.JSONDecoder().decode(b)['content']\n",
+            "parses JSON with json.JSONDecoder",
+        ),
+        (
+            "import json\ndef g(b):\n    return json.JSONDecoder().raw_decode(b)\n",
+            "parses JSON with json.JSONDecoder",
+        ),
+        ("def g(d, b):\n    return d.raw_decode(b)\n", "parses JSON with d.raw_decode"),
+        ("import json as j\ndef g(b):\n    return j.loads(b)\n", "parses JSON with j.loads"),
+        ("from json import JSONDecoder\n", "imports json.JSONDecoder"),
+        ("from json.decoder import JSONDecoder\n", "imports json.decoder.JSONDecoder"),
+        ("import json.decoder\n", "imports json.decoder, a JSON reader"),
+        ("import json\nD = json.decoder.JSONDecoder\n", "parses JSON with json.decoder"),
     ],
 )
 def test_the_gate_and_the_run_state_never_parse_json_themselves(
@@ -628,7 +895,23 @@ def test_the_gate_and_the_run_state_never_parse_json_themselves(
 ) -> None:
     bad = problems_in(reads, module)
     assert any(says in problem for problem in bad), bad
-    assert problems_in(reads, "show.py") == [], "only the two modules are held to it"
+    assert problems_in(reads, "cli.py") == [], "only the listed modules are held to it"
+
+
+def test_show_reads_the_records_it_prints_and_nothing_else_as_json() -> None:
+    """Its two record readers are the only places show parses JSON: a reply goes to the
+    provider as bytes."""
+    source = (SRC / "show.py").read_text()
+    assert parses_json(ast.parse(source), "show.py") == []
+    assert sorted(JSON_SITES) == [("show.py", "summary_of"), ("show.py", "timeline")]
+    tree = ast.parse(source)
+    inside = enclosing_functions(tree)
+    sites = {
+        inside[id(n)]
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Attribute) and n.attr == "loads" and id(n) in inside
+    }
+    assert sites == {"summary_of", "timeline"}
 
 
 def test_writing_json_is_no_parsing() -> None:
@@ -674,3 +957,31 @@ def test_every_provider_table_is_listed_in_the_import_contract() -> None:
     assert listed == table_modules(), "the contract names a table module that does not exist"
     assert contract["source_modules"] == ["scrimmage.*"], "the contract guards every module"
     assert not contract.get("allow_indirect_imports", False)
+
+
+def test_the_coming_sets_name_nothing_that_is_registered() -> None:
+    """Registering a provider turns what the guard knew of it ahead of time into its contract
+    case, so the coming-sets must then be cleaned: this fails until they are."""
+    registered = {p.name for p in builtin_providers()}
+    assert not COMING_PROVIDERS & registered, "a coming provider is registered: remove its name"
+    paths = {path for case in CASES.values() for _, path, _ in case.ops}
+    forms = set(paths).union(*(path_forms(path) for path in paths))
+    assert not COMING_PATHS & forms, "a coming path is a registered path: remove it"
+    keys = {key for case in CASES.values() for key in case.wire_keys}
+    assert not COMING_KEYS & keys, "a coming key is a registered key: remove it"
+    assert not COMING_PROVIDERS & set(labels.PROVIDERS)
+
+
+def test_every_table_module_may_open_the_wire_types_and_no_other_module_may() -> None:
+    config = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    contracts = config["tool"]["importlinter"]["contracts"]
+    (contract,) = [c for c in contracts if c["name"].startswith("Only the providers package")]
+    for table in table_modules():
+        line = f"scrimmage.{table} -> scrimmage.providers.impl.wire"
+        assert line in contract["ignore_imports"], f"{table} cannot open the wire types"
+    assert len([i for i in contract["ignore_imports"] if i.endswith("impl.wire")]) == len(
+        table_modules()
+    ), "a module that is no table module may open the wire types"
+    base = (SRC / "providers" / "base.py").read_text()
+    for helper in ("fields_dict", "wrap_fields", "reply_value"):
+        assert helper not in base, f"{helper} is public in the interface module"

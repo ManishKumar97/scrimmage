@@ -11,7 +11,7 @@ from collections.abc import Mapping, Sequence
 from scrimmage import provider_openai as table
 from scrimmage.changes import Unchangeable, WebChanged
 from scrimmage.config import Fault
-from scrimmage.prices import Rates, dashed_family
+from scrimmage.prices import Rates
 from scrimmage.providers.base import Fields, Given, ReplyChange
 from scrimmage.providers.impl import openai_changes
 
@@ -65,7 +65,10 @@ class OpenAI:
     request_tier = staticmethod(table.request_tier)
     gateway_cost = staticmethod(table.gateway_cost)
 
-    snapshot_family = staticmethod(dashed_family)
+    @staticmethod
+    def snapshot_family(model: str) -> str:
+        """The table module's one rule, which its own price lookup reads too."""
+        return table.snapshot_family(model)
 
     def price(self, model: str, overrides: dict[str, Rates]) -> Rates | None:
         return table.price(model, overrides)
@@ -142,6 +145,7 @@ class OpenAI:
         return False if table.is_responses(path) else table.carries(wire, kept)
 
     # ReplyReader
+    parse_reply = staticmethod(table.parse_reply)
     called_tool = staticmethod(table.called_tool)
     said = staticmethod(table.said)
 

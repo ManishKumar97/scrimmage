@@ -12,7 +12,7 @@ passes the request's path and fields, and the provider says what they mean.
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, NewType, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, final, runtime_checkable
 
 from scrimmage.prices import Rates
 
@@ -21,30 +21,39 @@ if TYPE_CHECKING:
     from scrimmage.config import Fault
 
 
-# Parsed wire data, opaque outside the providers. Fields is a parsed model request body and
-# Reply a parsed model reply. Both are an object to the type checker, so a subscript, a .get, an
-# `in`, an iteration or an attribute on one is a pyright error in any module that is not a
-# provider. Only a provider looks inside, through fields_dict, so the gate cannot decide by a
-# wire key or shape.
-Fields = NewType("Fields", object)
-Reply = NewType("Reply", object)
+@final
+class Fields:
+    """A parsed model request body, opaque outside the providers.
+
+    A real class, not a dict in disguise: it is no dict, has no .get, no subscript and no
+    iteration, and its repr shows nothing. So outside a provider, isinstance(x, dict) is False,
+    getattr(x, "get") raises and x._value is a private-usage error. Only a provider looks
+    inside, through providers.impl.wire, which the import contract keeps from every other
+    module, so the gate cannot decide by a wire key or shape."""
+
+    __slots__ = ("_value",)
+
+    def __init__(self, value: dict[str, object]) -> None:
+        self._value = value
+
+    def __repr__(self) -> str:
+        return "Fields(...)"
+
+
+@final
+class Reply:
+    """A parsed model reply, opaque in the same way as Fields."""
+
+    __slots__ = ("_value",)
+
+    def __init__(self, value: object) -> None:
+        self._value = value
+
+    def __repr__(self) -> str:
+        return "Reply(...)"
+
 
 NO_FIELDS = Fields({})  # what a request with no readable JSON object body holds
-
-
-def fields_dict(fields: Fields | None) -> dict[str, object]:
-    """The request's JSON object, for a provider to read. Empty for None."""
-    return {} if fields is None else cast(dict[str, object], fields)
-
-
-def wrap_fields(value: dict[str, object]) -> Fields:
-    """A provider's own dict, as a request's Fields to hand on."""
-    return Fields(value)
-
-
-def reply_value(reply: Reply) -> object:
-    """The parsed reply, for a provider to read."""
-    return reply
 
 
 @dataclass
@@ -206,6 +215,11 @@ class FaultMaker(Protocol):
 
 class ReplyReader(Protocol):
     """What a report prints of a recorded reply: what the model said and which tool it called."""
+
+    def parse_reply(self, data: bytes) -> Reply:
+        """A recorded reply's bytes, parsed. A reply that cannot be read reads as nothing, so
+        the report holds the bytes and never the parsed value."""
+        ...
 
     def called_tool(self, wire: Reply) -> str | None:
         """The name of the first tool the parsed reply calls, or None."""

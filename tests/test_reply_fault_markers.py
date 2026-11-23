@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from scrimmage import provider_openai as openai_table
 from scrimmage import state
 from scrimmage.plan import Plan
-from scrimmage.providers.base import fields_dict, wrap_fields
+from scrimmage.providers.impl.wire import fields_dict, wrap_fields
 from scrimmage.providers.registry import built_in
 from test_http_gate import Sink
 
