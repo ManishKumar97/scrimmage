@@ -48,7 +48,7 @@ from scrimmage.errors import ScrimmageMockError, ScrimmageRefused
 from scrimmage.labels import shown_name
 from scrimmage.plan import Plan
 from scrimmage.prices import Rates
-from scrimmage.providers.base import ModelProvider, ServerChains
+from scrimmage.providers.base import NO_FIELDS, Fields, ModelProvider, ServerChains
 from scrimmage.redact import redact, redacted
 from scrimmage.state import (
     BLOB_CAP,
@@ -466,7 +466,7 @@ def prepare(
             and model.carries_text(fields, run.injected)
         ):
             extra["carries_injected"] = True
-        extra["stream"] = (fields or {}).get("stream") is True
+        extra["stream"] = model is not None and model.streams(fields)
     step = run.decide(call, {})
     step.extra = extra
     if call.kind == "model" and not call.marked and counts_requests(run.plan, call):
@@ -492,7 +492,7 @@ def prepare(
             )
         check_tools(ctx, run, step, fields, str(request.url.path))
     if call.kind == "model" and step.decision.action == "fault":
-        reply_checks(run, step, fields or {}, str(request.url.path))
+        reply_checks(run, step, fields or NO_FIELDS, str(request.url.path))
     if model is not None and call.name == "chat" and fields is not None:
         path = str(request.url.path)
         if isinstance(model, ServerChains):
@@ -528,9 +528,7 @@ def counts_requests(plan: Plan, call: Call) -> bool:
     return any(names(f, call) and schedule(f.when)[0] == "requests" for f in plan.faults)
 
 
-def stop_probe(
-    ctx: Bound, run: RunState, step: Step, fields: dict[str, object] | None, url: Any
-) -> NoReturn:
+def stop_probe(ctx: Bound, run: RunState, step: Step, fields: Fields | None, url: Any) -> NoReturn:
     """Note the tools this first model request offers, refuse it unsent, and end the program.
 
     The note is put before the refusal, so the runner has it when the refusal stops the run.
@@ -585,9 +583,7 @@ def refuse(run: RunState, step: Step, detail: str) -> NoReturn:
     )
 
 
-def check_tools(
-    ctx: Bound, run: RunState, step: Step, fields: dict[str, object], path: str
-) -> None:
+def check_tools(ctx: Bound, run: RunState, step: Step, fields: Fields, path: str) -> None:
     """Hosted writes, unknown tool types and tools no gate sees: all stop before sending."""
     tools = provider_for(run, step).offered(path, fields)
     if tools.hosted_reads:
@@ -631,7 +627,7 @@ def check_tools(
         )
 
 
-def reply_checks(run: RunState, step: Step, fields: dict[str, object], path: str) -> None:
+def reply_checks(run: RunState, step: Step, fields: Fields, path: str) -> None:
     """Before anything is sent: a reply fault this request cannot take is a mistake in the
     test, and unknown tool on a request where the model could not pick a tool of its own is
     left as it is: no tools, tool_choice "none" or a named tool. The call then goes on as in
@@ -655,7 +651,7 @@ def reply_checks(run: RunState, step: Step, fields: dict[str, object], path: str
 
 
 def chain_check(
-    run: RunState, step: Step, provider: ServerChains, path: str, fields: dict[str, object]
+    run: RunState, step: Step, provider: ServerChains, path: str, fields: Fields
 ) -> None:
     """Before anything is sent: a request that asks the provider to look up, by id, a reply
     or an item a fault changed or built is a mistake in the test. Its id is made up, so the
@@ -684,7 +680,7 @@ def built_reply(
     the counts are an estimate and the line costs nothing."""
     body = body_of(request) or b""
     provider = provider_for(ctx.run, step)
-    fields = provider.request_fields(body) or {}
+    fields = provider.request_fields(body) or NO_FIELDS
     tokens = len(body) // CHAR_PER_TOKEN
     path = str(request.url.path)
     if word == "refuse":
@@ -701,7 +697,7 @@ def faulted(
     ctx: Bound,
     step: Step,
     path: str,
-    fields: dict[str, object],
+    fields: Fields,
     gave: bytes,
     *,
     ids_only: bool = False,
@@ -746,7 +742,7 @@ def fault(
         return built_reply(ctx, module, client, step, request, extra, plan_fault.do)
     if plan_fault.do == "context too long":
         provider = provider_for(run, step)
-        asked = provider.request_fields(body_of(request) or b"") or {}
+        asked = provider.request_fields(body_of(request) or b"") or NO_FIELDS
         if why := provider.not_carried_out(plan_fault.do, str(request.url.path), asked):
             not_carried_out(run, step, why)
         headers = provider.fault_headers("application/json")
@@ -939,7 +935,11 @@ def worst(
     fields = provider.request_fields(body_of(request) or b"")
     tier = provider.request_tier(fields) or ctx.run.plan.service_tier
     return provider.most_cost(
-        tokens_in, tokens_out, rates.at(tier), path=str(request.url.path), fields=fields or {}
+        tokens_in,
+        tokens_out,
+        rates.at(tier),
+        path=str(request.url.path),
+        fields=fields or NO_FIELDS,
     )
 
 
@@ -1008,7 +1008,9 @@ def hold_for(ctx: Bound, step: Step, request: Any, extra: dict[str, object]) -> 
         refuse(ctx.run, step, no_price(model))
     body = body_of(request) or b""
     fields = provider.request_fields(body) if body else None
-    output = provider.output_cap(fields or {}, str(request.url.path), plan.reserve_output_tokens)
+    output = provider.output_cap(
+        fields or NO_FIELDS, str(request.url.path), plan.reserve_output_tokens
+    )
     return worst(ctx, provider, request, len(body) // CHAR_PER_TOKEN, output, rates)
 
 
@@ -1489,7 +1491,7 @@ def changed_reply(
     reply = blob(done.body, ctx.sender, scrub=ctx.run.secrets)
     ctx.run.changed(step, Changed(None, done.count, done.parts), reply=reply, status=done.status)
     if step.call.kind == "model" and fault.do in REPLY_FAULTS:  # never a model replace
-        asked = provider_for(ctx.run, step).request_fields(body_of(request) or b"") or {}
+        asked = provider_for(ctx.run, step).request_fields(body_of(request) or b"") or NO_FIELDS
         faulted(ctx, step, path_of(request.url), asked, done.body)
     stream = module.ByteStream(done.body)
     return rebuilt(module, client, request, response, done.headers, stream, done.status)

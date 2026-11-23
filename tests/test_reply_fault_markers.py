@@ -10,6 +10,7 @@ from collections.abc import Mapping, Sequence
 from scrimmage import provider_openai as openai_table
 from scrimmage import state
 from scrimmage.plan import Plan
+from scrimmage.providers.base import fields_dict, wrap_fields
 from scrimmage.providers.registry import built_in
 from test_http_gate import Sink
 
@@ -26,7 +27,7 @@ MAX_CHECK_S = 0.050  # the goal is under 10 ms
 def sent(messages: Sequence[Mapping[str, object]]) -> dict[str, object]:
     """A chat request as the gate reads it: its body parsed fresh, as from a real request."""
     body = json.dumps({"model": "gpt-4o-mini", "messages": messages}).encode()
-    return openai_table.request_fields(body) or {}
+    return fields_dict(openai_table.request_fields(body))
 
 
 def faulted_run() -> tuple[state.RunState, list[dict[str, object]]]:
@@ -39,7 +40,9 @@ def faulted_run() -> tuple[state.RunState, list[dict[str, object]]]:
         fields = sent(messages)
         reply = {"role": "assistant", "content": f"{turn} {REPLY}", "refusal": None}
         built = openai_table.chat_reply(fields, 0, reply, "stop")
-        run.add_reply_fault_markers(LABEL, openai_table.given(fields, built, ids_only=False))
+        run.add_reply_fault_markers(
+            LABEL, openai_table.given(wrap_fields(fields), built, ids_only=False)
+        )
         messages.append({"role": "assistant", "content": reply["content"]})
     messages.append({"role": "user", "content": f"next {USER}"})
     return run, messages
@@ -51,7 +54,7 @@ def check_time(run: state.RunState, fields: dict[str, object]) -> tuple[bool, fl
     carried = False
     for _ in range(3):
         start = time.perf_counter()
-        carried = run.carries_reply_fault(LABEL, OPENAI, CHAT_PATH, fields)
+        carried = run.carries_reply_fault(LABEL, OPENAI, CHAT_PATH, wrap_fields(fields))
         times.append(time.perf_counter() - start)
     return carried, min(times)
 
@@ -93,7 +96,9 @@ def faulted(
     fields = sent(asked)
     reply = {"role": "assistant", "content": text, "refusal": None}
     built = openai_table.chat_reply(fields, 0, reply, "stop")
-    run.add_reply_fault_markers(LABEL, openai_table.given(fields, built, ids_only=False))
+    run.add_reply_fault_markers(
+        LABEL, openai_table.given(wrap_fields(fields), built, ids_only=False)
+    )
     return {"role": "assistant", "content": text}
 
 
@@ -108,13 +113,15 @@ def test_two_faults_of_different_lengths_on_one_label_are_each_matched_alone() -
     long = faulted(run, [first, *more], "Long reply.")
     then = {"role": "user", "content": "Try again."}
     assert run.carries_reply_fault(
-        LABEL, OPENAI, CHAT_PATH, sent([first, *more, long, then])
+        LABEL, OPENAI, CHAT_PATH, wrap_fields(sent([first, *more, long, then]))
     )  # the long one
     assert run.carries_reply_fault(
-        LABEL, OPENAI, CHAT_PATH, sent([first, short, then])
+        LABEL, OPENAI, CHAT_PATH, wrap_fields(sent([first, short, then]))
     )  # the short one
     changed = {"role": "user", "content": "Help!"}
     assert not run.carries_reply_fault(
-        LABEL, OPENAI, CHAT_PATH, sent([first, more[0], changed, long, then])
+        LABEL, OPENAI, CHAT_PATH, wrap_fields(sent([first, more[0], changed, long, then]))
     )
-    assert not run.carries_reply_fault(LABEL, OPENAI, CHAT_PATH, sent([first, *more, then]))
+    assert not run.carries_reply_fault(
+        LABEL, OPENAI, CHAT_PATH, wrap_fields(sent([first, *more, then]))
+    )

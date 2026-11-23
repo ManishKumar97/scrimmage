@@ -7,6 +7,7 @@ import pytest
 from conftest import ACME, EXAMPLE_FAULT, Project
 from fakes.openai_server import FakeOpenAI
 from scrimmage import provider_openai as table
+from scrimmage.providers.base import wrap_fields
 
 Fake = Callable[..., FakeOpenAI]
 TOOL_FAULT = EXAMPLE_FAULT
@@ -196,7 +197,7 @@ def test_the_tool_table(
     writes: list[str],
     unknown: list[str],
 ) -> None:
-    found = table.offered(path, {"tools": [tool]})
+    found = table.offered(path, wrap_fields({"tools": [tool]}))
     assert (found.agent, found.hosted_writes, found.unknown) == (agent, writes, unknown)
 
 
@@ -222,7 +223,7 @@ def test_model_addresses_match_by_path_and_method(path: str, method: str, op: st
 def test_web_search_options_and_old_functions_are_read_on_chat() -> None:
     found = table.offered(
         "/v1/chat/completions",
-        {"web_search_options": {}, "functions": [{"name": "old"}]},
+        wrap_fields({"web_search_options": {}, "functions": [{"name": "old"}]}),
     )
     assert (found.agent, found.hosted_reads) == (["old"], ["web_search"])
 

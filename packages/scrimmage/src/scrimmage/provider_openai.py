@@ -18,9 +18,12 @@ from typing import cast
 from scrimmage import prices
 from scrimmage.judge import normal
 from scrimmage.prices import Rates as Rates
+from scrimmage.providers.base import Fields as Fields
 from scrimmage.providers.base import Given as Given
 from scrimmage.providers.base import Offered as Offered
+from scrimmage.providers.base import Reply as Reply
 from scrimmage.providers.base import Usage as Usage
+from scrimmage.providers.base import fields_dict, reply_value, wrap_fields
 
 HOSTS = ("api.openai.com",)
 CHAT_PATHS = ("/chat/completions", "/responses")
@@ -221,7 +224,7 @@ def chat_reply(
     reply.update(
         id=made_up_id("chatcmpl-", CHAT_ID_LENGTH),
         created=int(time.time()),
-        model=model_name(fields) or "",
+        model=name_in(fields) or "",
         choices=[
             {
                 "index": 0,
@@ -240,9 +243,10 @@ def chat_reply(
     return json.dumps(reply, ensure_ascii=False, indent=2).encode()
 
 
-def refusal_reply(fields: dict[str, object], tokens_in: int) -> bytes:
+def refusal_reply(wire: Fields, tokens_in: int) -> bytes:
     """refuse: the refusal field under Structured Outputs, else plain text. Either way the
     model stopped, so finish_reason is stop."""
+    fields = fields_dict(wire)
     if structured(fields):
         message: dict[str, object] = {"content": None, "refusal": STRUCTURED_REFUSAL}
     else:
@@ -339,9 +343,10 @@ def structured_response(fields: dict[str, object]) -> bool:
     return _obj(_obj(fields.get("text")).get("format")).get("type") == "json_schema"
 
 
-def response_refusal_reply(fields: dict[str, object], tokens_in: int) -> bytes:
+def response_refusal_reply(wire: Fields, tokens_in: int) -> bytes:
     """refuse on Responses: a refusal content part under Structured Outputs, else plain text,
     in one completed assistant message."""
+    fields = fields_dict(wire)
     if structured_response(fields):
         part: dict[str, object] = {"type": "refusal", "refusal": STRUCTURED_REFUSAL}
     else:
@@ -356,7 +361,7 @@ def response_refusal_reply(fields: dict[str, object], tokens_in: int) -> bytes:
         id=made_up_hex_id("resp_"),
         created_at=now,
         completed_at=now,
-        model=model_name(fields) or "",
+        model=name_in(fields) or "",
         output=[
             {
                 "id": made_up_hex_id("msg_"),
@@ -392,9 +397,10 @@ def response_ids(reply: bytes) -> list[str]:
 IN_INPUT = "send the conversation in input instead, as the OpenAI Agents SDK does by default"
 
 
-def not_carried_out(word: str, path: str, fields: dict[str, object]) -> str | None:
+def not_carried_out(word: str, path: str, wire: Fields) -> str | None:
     """Why a reply fault, or context too long, cannot be carried out on this request: the
     mistake in the test. Only Responses has such cases."""
+    fields = fields_dict(wire)
     if not is_responses(path):
         return None
     if word == "context too long":
@@ -421,8 +427,9 @@ def chain_ids(path: str, reply: bytes) -> list[str]:
     return response_ids(reply) if is_responses(path) else []
 
 
-def chain_references(path: str, fields: dict[str, object]) -> list[str]:
+def chain_references(path: str, wire: Fields) -> list[str]:
     """What a request to this path asks OpenAI to look up by id."""
+    fields = fields_dict(wire)
     return references(fields) if is_responses(path) else []
 
 
@@ -441,8 +448,9 @@ CHOICE_PART = re.compile(
 FIRST_TEXT = "choices[0].message.content"
 
 
-def called_tool(reply: object) -> str | None:
+def called_tool(wire: Reply) -> str | None:
     """The name of the first tool a chat completion calls."""
+    reply = reply_value(wire)
     for choice in _list(_obj(reply).get("choices")):
         calls = _list(_obj(_obj(choice).get("message")).get("tool_calls"))
         name = _obj(_obj(calls[0] if calls else None).get("function")).get("name")
@@ -451,10 +459,11 @@ def called_tool(reply: object) -> str | None:
     return None
 
 
-def said(reply: object, parts: Sequence[object]) -> str | None:
+def said(wire: Reply, parts: Sequence[object]) -> str | None:
     """The string at the first of these parts a change named, such as
     choices[0].message.content, or at the first choice's text if it named none: a message's
     content, or a tool call's arguments. None when the reply holds no string there."""
+    reply = reply_value(wire)
     part = next((str(p) for p in parts if CHOICE_PART.fullmatch(str(p))), FIRST_TEXT)
     found = CHOICE_PART.fullmatch(part)
     choices = _list(_obj(reply).get("choices"))
@@ -473,10 +482,11 @@ def said(reply: object, parts: Sequence[object]) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def carries_text(fields: dict[str, object], texts: Sequence[str]) -> bool:
+def carries_text(wire: Fields, texts: Sequence[str]) -> bool:
     """Whether a chat request holds a text a fault put in a result. Only the strings of the
     parsed body are searched, each message's content as text or as parts, compared as a rule
     compares text; the raw body would hold the text escaped. A heuristic."""
+    fields = fields_dict(wire)
     messages = _list(fields.get("messages"))
     if not messages:
         return False
@@ -503,16 +513,18 @@ def references(fields: dict[str, object]) -> list[str]:
     return [i for i in found if isinstance(i, str)]
 
 
-def tool_call_tools(path: str, fields: dict[str, object]) -> list[str]:
+def tool_call_tools(path: str, wire: Fields) -> list[str]:
     """The tools a chat request offers in tools, the field tool_calls answer. The old
     functions field gets a function_call reply instead, never a tool call."""
-    return offered(path, {k: v for k, v in fields.items() if k != "functions"}).agent
+    fields = fields_dict(wire)
+    return offered(path, wrap_fields({k: v for k, v in fields.items() if k != "functions"})).agent
 
 
-def no_free_tool_call(path: str, fields: dict[str, object]) -> str | None:
+def no_free_tool_call(path: str, wire: Fields) -> str | None:
     """Why the model could not pick a tool of its own on this request, or None when it could:
     unknown tool fires only where a real model chose a tool no one offered."""
-    if not tool_call_tools(path, fields):
+    fields = fields_dict(wire)
+    if not tool_call_tools(path, wire):
         if _list(fields.get("functions")):
             return (
                 "the request offers tools in the old functions field only, which a model "
@@ -527,8 +539,9 @@ def no_free_tool_call(path: str, fields: dict[str, object]) -> str | None:
     return None
 
 
-def unknown_tool_reply(fields: dict[str, object], tokens_in: int, tool: str) -> bytes:
+def unknown_tool_reply(wire: Fields, tokens_in: int, tool: str) -> bytes:
     """unknown tool: one call to multi_tool_use.parallel, naming the tool the model meant."""
+    fields = fields_dict(wire)
     use: dict[str, object] = {"recipient_name": f"functions.{tool}", "parameters": {}}
     uses = {"tool_uses": [use]}
     call = {
@@ -540,9 +553,10 @@ def unknown_tool_reply(fields: dict[str, object], tokens_in: int, tool: str) -> 
     return chat_reply(fields, tokens_in, message, "tool_calls")
 
 
-def given(fields: dict[str, object], reply: bytes, *, ids_only: bool) -> Given:
+def given(wire: Fields, reply: bytes, *, ids_only: bool) -> Given:
     """What this reply to this request gave the agent. ids_only: the tool call ids alone, for
     a reply whose message any model may send, such as a call to multi_tool_use.parallel."""
+    fields = fields_dict(wire)
     messages = [
         _obj(_obj(choice).get("message"))
         for choice in _list(_obj(request_fields(reply)).get("choices"))
@@ -560,13 +574,14 @@ def given(fields: dict[str, object], reply: bytes, *, ids_only: bool) -> Given:
     return Given(ids, prefixes)
 
 
-def carries(fields: dict[str, object], kept: Sequence[Given]) -> bool:
+def carries(wire: Fields, kept: Sequence[Given]) -> bool:
     """Whether a chat request's messages carry what any of these faulted replies gave: an
     assistant tool call or a tool result with one of its tool call ids, or messages that
     start with a faulted request's messages and its reply's message. The request is hashed
     once, message by message, so the check grows with the request, not with the faults. An
     id that is not a string is the agent's own mistake: it matches nothing, and the request
     goes on to the provider, which answers it."""
+    fields = fields_dict(wire)
     if not kept:
         return False
     ids = frozenset[str]().union(*(gave.ids for gave in kept))
@@ -625,18 +640,27 @@ def _normal(value: object) -> object:
     return value
 
 
-def request_fields(body: bytes) -> dict[str, object] | None:
+def request_fields(body: bytes) -> Fields | None:
     """A request's JSON fields, or None when the body cannot be read as a JSON object."""
     try:
         value: object = json.loads(body)
     except (ValueError, RecursionError):  # not JSON, not text, or empty
         return None
-    return _obj(value) or None
+    found = _obj(value)
+    return wrap_fields(found) if found else None
 
 
-def model_name(fields: dict[str, object] | None) -> str | None:
+def model_name(wire: Fields | None) -> str | None:
     """The model a request names, or None when it names none that can be read."""
-    value = (fields or {}).get("model")
+    return name_in(fields_dict(wire))
+
+
+def streams(wire: Fields | None) -> bool:
+    return fields_dict(wire).get("stream") is True
+
+
+def name_in(fields: dict[str, object]) -> str | None:
+    value = fields.get("model")
     return value if isinstance(value, str) and value else None
 
 
@@ -648,9 +672,10 @@ def max_output(fields: dict[str, object]) -> int | None:
     return None
 
 
-def output_cap(fields: dict[str, object], path: str, default: int) -> int:
+def output_cap(wire: Fields, path: str, default: int) -> int:
     """The most output tokens a call to this path could bill. A Chat request bills each
     choice, n, for its own output and its own limit; Responses has no n."""
+    fields = fields_dict(wire)
     cap = max_output(fields) or default
     return cap * choices(fields) if is_chat_completions(path) else cap
 
@@ -717,9 +742,10 @@ def gateway_cost(value: object, before: float | None = None) -> float | None:
     return float(value) if math.isfinite(value) and value >= 0 else before
 
 
-def request_tier(fields: dict[str, object] | None) -> str | None:
+def request_tier(wire: Fields | None) -> str | None:
     """The service tier a request names. auto leaves the choice to the project's setting, so
     it names none."""
+    fields = fields_dict(wire)
     value = (fields or {}).get("service_tier")
     return value if isinstance(value, str) and value not in ("", "auto") else None
 
@@ -815,7 +841,8 @@ def _or_input(rate: float | None, rates: Rates) -> float:
     return rates.input if rate is None else rate
 
 
-def offered(path: str, fields: dict[str, object]) -> Offered:
+def offered(path: str, wire: Fields) -> Offered:
+    fields = fields_dict(wire)
     found = Offered()
     responses = path.split("?", 1)[0].rstrip("/").endswith("/responses")
     if not responses:

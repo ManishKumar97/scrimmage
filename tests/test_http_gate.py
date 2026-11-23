@@ -28,6 +28,7 @@ from scrimmage.decide import Call, Counters
 from scrimmage.errors import ScrimmageRefused
 from scrimmage.plan import Plan
 from scrimmage.provider_openai import Rates
+from scrimmage.providers.base import Fields
 from scrimmage.providers.impl.openai import OpenAI
 from scrimmage.runner import STOP_TEST, real_error
 
@@ -943,7 +944,7 @@ def test_a_model_call_is_read_by_the_provider_the_patches_above_reach(
     read: list[bytes] = []
     original = OpenAI.request_fields
 
-    def spy(body: bytes) -> dict[str, object] | None:
+    def spy(body: bytes) -> Fields | None:
         read.append(body)
         return original(body)
 

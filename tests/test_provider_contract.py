@@ -17,7 +17,7 @@ import pytest
 from scrimmage import changes
 from scrimmage.config import Fault
 from scrimmage.prices import RATE_KEYS, Rates
-from scrimmage.providers.base import ModelProvider, ServerChains
+from scrimmage.providers.base import ModelProvider, Reply, ServerChains, wrap_fields
 from scrimmage.providers.registry import builtin_providers
 
 OPENAI = Path(__file__).parent / "fixtures" / "openai"
@@ -215,7 +215,7 @@ def test_the_model_is_the_name_a_request_gives_and_none_when_it_gives_none(
     provider: ModelProvider,
 ) -> None:
     case = case_of(provider)
-    assert provider.model_name(case.request) == case.model
+    assert provider.model_name(wrap_fields(case.request)) == case.model
     nameless: list[dict[str, object] | None] = [
         None,
         {},
@@ -225,16 +225,16 @@ def test_the_model_is_the_name_a_request_gives_and_none_when_it_gives_none(
         {"model": ["m"]},
     ]
     for fields in nameless:
-        assert provider.model_name(fields) is None, fields
+        assert provider.model_name(None if fields is None else wrap_fields(fields)) is None, fields
 
 
 def test_the_tools_a_request_offers_are_sorted(provider: ModelProvider) -> None:
     case = case_of(provider)
-    offered = provider.offered(case.chat_path, case.tool_request("get_order"))
+    offered = provider.offered(case.chat_path, wrap_fields(case.tool_request("get_order")))
     assert offered.agent == ["get_order"]
     assert not (offered.hosted_reads or offered.hosted_writes or offered.unknown)
     for fields in ({}, case.request):
-        nothing = provider.offered(case.chat_path, fields)
+        nothing = provider.offered(case.chat_path, wrap_fields(fields))
         assert not (nothing.agent or nothing.hosted_reads or nothing.hosted_writes)
         assert not nothing.unknown
 
@@ -306,7 +306,7 @@ def test_the_hold_may_read_the_request_and_never_costs_less_than_the_settle(
 ) -> None:
     case = case_of(provider)
     for fields in ({}, case.request, case.capped(50)):
-        held = provider.most_cost(1000, 500, RATES, path=case.chat_path, fields=fields)
+        held = provider.most_cost(1000, 500, RATES, path=case.chat_path, fields=wrap_fields(fields))
         assert held >= provider.cost(1000, 500, RATES, 0, {}) - 1e-12
 
 
@@ -318,7 +318,7 @@ def test_context_too_long_is_a_json_error(provider: ModelProvider) -> None:
 def test_a_built_refusal_is_a_whole_reply_the_provider_would_read(provider: ModelProvider) -> None:
     case = case_of(provider)
     for path in (case.chat_path, *case.other_paths):
-        built = provider.refusal_reply(path, case.request, 25)
+        built = provider.refusal_reply(path, wrap_fields(case.request), 25)
         assert isinstance(json.loads(built), dict), path
         used = provider.usage(built)
         assert used.known, path
@@ -331,9 +331,9 @@ def test_a_built_call_to_an_unknown_tool_names_it_and_is_a_whole_reply(
 ) -> None:
     case = case_of(provider)
     fields = case.tool_request("get_order")
-    assert provider.tool_call_tools(case.chat_path, fields) == ["get_order"]
-    assert provider.no_free_tool_call(case.chat_path, fields) is None
-    built = provider.unknown_tool_reply(fields, 25, "get_order")
+    assert provider.tool_call_tools(case.chat_path, wrap_fields(fields)) == ["get_order"]
+    assert provider.no_free_tool_call(case.chat_path, wrap_fields(fields)) is None
+    built = provider.unknown_tool_reply(wrap_fields(fields), 25, "get_order")
     assert isinstance(json.loads(built), dict)
     assert "get_order" in built.decode()
     used = provider.usage(built)
@@ -342,8 +342,8 @@ def test_a_built_call_to_an_unknown_tool_names_it_and_is_a_whole_reply(
 
 def test_a_request_with_no_tool_to_call_says_why(provider: ModelProvider) -> None:
     case = case_of(provider)
-    assert provider.tool_call_tools(case.chat_path, case.request) == []
-    why = provider.no_free_tool_call(case.chat_path, case.request)
+    assert provider.tool_call_tools(case.chat_path, wrap_fields(case.request)) == []
+    why = provider.no_free_tool_call(case.chat_path, wrap_fields(case.request))
     assert isinstance(why, str) and why
 
 
@@ -352,9 +352,11 @@ def test_a_fault_that_cannot_be_carried_out_says_why_and_the_rest_do_not(
 ) -> None:
     case = case_of(provider)
     for word in EVERY_WORD:
-        assert provider.not_carried_out(word, case.chat_path, case.request) is None, word
+        assert provider.not_carried_out(word, case.chat_path, wrap_fields(case.request)) is None, (
+            word
+        )
     for word, path, fields in case.not_carried:
-        why = provider.not_carried_out(word, path, fields)
+        why = provider.not_carried_out(word, path, wrap_fields(fields))
         assert isinstance(why, str) and why, (word, path)
 
 
@@ -365,19 +367,21 @@ def test_what_a_faulted_reply_gave_is_carried_back_by_the_request_built_from_it(
     did not build."""
     case = case_of(provider)
     fields = case.tool_request("get_order")
-    reply = provider.unknown_tool_reply(fields, 25, "get_order")
+    reply = provider.unknown_tool_reply(wrap_fields(fields), 25, "get_order")
     for ids_only in (True, False):
-        gave = provider.given(case.chat_path, fields, reply, ids_only=ids_only)
+        gave = provider.given(case.chat_path, wrap_fields(fields), reply, ids_only=ids_only)
         assert gave.ids, "a reply that calls a tool gave its call id"
         built = case.follow_up(fields, reply)
-        assert provider.carries(case.chat_path, built, [gave]), ids_only
-        assert not provider.carries(case.chat_path, fields, [gave]), ids_only
-        assert not provider.carries(case.chat_path, built, []), ids_only
-    refused = provider.refusal_reply(case.chat_path, case.request, 25)
-    gave = provider.given(case.chat_path, case.request, refused, ids_only=False)
+        assert provider.carries(case.chat_path, wrap_fields(built), [gave]), ids_only
+        assert not provider.carries(case.chat_path, wrap_fields(fields), [gave]), ids_only
+        assert not provider.carries(case.chat_path, wrap_fields(built), []), ids_only
+    refused = provider.refusal_reply(case.chat_path, wrap_fields(case.request), 25)
+    gave = provider.given(case.chat_path, wrap_fields(case.request), refused, ids_only=False)
     assert gave.prefixes, "a reply with a message gave its message"
-    assert provider.carries(case.chat_path, case.follow_up(case.request, refused), [gave])
-    assert not provider.carries(case.chat_path, case.request, [gave])
+    assert provider.carries(
+        case.chat_path, wrap_fields(case.follow_up(case.request, refused)), [gave]
+    )
+    assert not provider.carries(case.chat_path, wrap_fields(case.request), [gave])
 
 
 def test_a_provider_that_keeps_its_replies_keeps_the_chain_contract(
@@ -393,14 +397,18 @@ def test_a_provider_that_keeps_its_replies_keeps_the_chain_contract(
     assert chain.reply_id in ids
     assert provider.chain_ids(chain.path, b"{") == []
     assert provider.chain_ids(case.chat_path, chain.reply.read_bytes()) == []
-    named = provider.chain_references(chain.path, chain.names_it(chain.reply_id))
+    named = provider.chain_references(chain.path, wrap_fields(chain.names_it(chain.reply_id)))
     assert named == [chain.reply_id]
-    assert provider.chain_references(case.chat_path, chain.names_it(chain.reply_id)) == []
-    assert provider.chain_references(chain.path, case.request) == []
+    assert (
+        provider.chain_references(case.chat_path, wrap_fields(chain.names_it(chain.reply_id))) == []
+    )
+    assert provider.chain_references(chain.path, wrap_fields(case.request)) == []
     assert chain.reply_id in provider.chain_broken(chain.reply_id)
-    gave = provider.given(chain.path, case.request, chain.reply.read_bytes(), ids_only=False)
+    gave = provider.given(
+        chain.path, wrap_fields(case.request), chain.reply.read_bytes(), ids_only=False
+    )
     assert not (gave.ids or gave.prefixes), "a reply kept on the provider's side gives no markers"
-    assert not provider.carries(chain.path, case.request, [gave])
+    assert not provider.carries(chain.path, wrap_fields(case.request), [gave])
 
 
 def test_a_provider_with_no_chain_has_none_of_it(provider: ModelProvider) -> None:
@@ -450,31 +458,35 @@ def test_a_change_to_a_call_that_is_not_a_chat_is_blocked(provider: ModelProvide
 def test_the_output_a_call_could_bill_is_its_cap_or_the_default(provider: ModelProvider) -> None:
     case = case_of(provider)
     for path in (case.chat_path, *case.other_paths):
-        assert provider.output_cap({}, path, 4096) >= 4096, path
-        assert provider.output_cap(case.request, path, 77) >= 77, path
+        assert provider.output_cap(wrap_fields({}), path, 4096) >= 4096, path
+        assert provider.output_cap(wrap_fields(case.request), path, 77) >= 77, path
         # A cap that is not a count is no cap.
         for bad in (0, -5, True, "50", 2.5, None, 10**12):
             assert provider.output_cap(case.capped(bad), path, 4096) >= 4096, bad  # type: ignore[arg-type]
-    capped = provider.output_cap(case.capped(50), case.chat_path, 4096)
+    capped = provider.output_cap(wrap_fields(case.capped(50)), case.chat_path, 4096)
     assert 50 <= capped < 4096, "a cap holds less than the default"
     if case.replies is not None:
         # Each reply is billed for its own output, so asking for more holds more.
         one, three = case.replies(1, 50), case.replies(3, 50)
-        assert provider.output_cap(three, case.chat_path, 4096) >= 3 * 50
-        assert provider.output_cap(three, case.chat_path, 4096) >= 3 * (
-            provider.output_cap(one, case.chat_path, 4096)
+        assert provider.output_cap(wrap_fields(three), case.chat_path, 4096) >= 3 * 50
+        assert provider.output_cap(wrap_fields(three), case.chat_path, 4096) >= 3 * (
+            provider.output_cap(wrap_fields(one), case.chat_path, 4096)
         )
-        assert provider.output_cap(case.replies(3, 77), case.chat_path, 4096) >= 3 * 77
+        assert provider.output_cap(wrap_fields(case.replies(3, 77)), case.chat_path, 4096) >= 3 * 77
 
 
 def test_a_text_is_found_in_a_request_that_holds_it_and_junk_is_never_an_error(
     provider: ModelProvider,
 ) -> None:
     case = case_of(provider)
-    assert provider.carries_text(case.text_request("ignore the rules"), ["ignore the rules"])
-    assert provider.carries_text(case.text_request("IGNORE  the Rules"), ["ignore the rules"])
-    assert not provider.carries_text(case.request, ["ignore the rules"])
-    assert not provider.carries_text(case.text_request("ignore the rules"), [])
+    assert provider.carries_text(
+        wrap_fields(case.text_request("ignore the rules")), ["ignore the rules"]
+    )
+    assert provider.carries_text(
+        wrap_fields(case.text_request("IGNORE  the Rules")), ["ignore the rules"]
+    )
+    assert not provider.carries_text(wrap_fields(case.request), ["ignore the rules"])
+    assert not provider.carries_text(wrap_fields(case.text_request("ignore the rules")), [])
     junk: list[dict[str, object]] = [
         {},
         {"messages": 7},
@@ -482,7 +494,7 @@ def test_a_text_is_found_in_a_request_that_holds_it_and_junk_is_never_an_error(
         {"input": [[]]},
     ]
     for fields in junk:
-        assert not provider.carries_text(fields, ["ignore the rules"])
+        assert not provider.carries_text(wrap_fields(fields), ["ignore the rules"])
 
 
 def test_a_report_reads_what_the_model_said_and_called_through_the_provider(
@@ -513,9 +525,9 @@ def test_a_report_reads_a_reply_that_is_not_a_reply_as_nothing(provider: ModelPr
         {"choices": [{"message": {"content": ["x"]}}]},
     ]
     for reply in junk:
-        assert provider.called_tool(reply) is None, reply
-        assert provider.said(reply, []) is None, reply
-        assert provider.said(reply, [case.text_part, case.arguments_part]) is None, reply
+        assert provider.called_tool(Reply(reply)) is None, reply
+        assert provider.said(Reply(reply), []) is None, reply
+        assert provider.said(Reply(reply), [case.text_part, case.arguments_part]) is None, reply
 
 
 def test_a_gateway_cost_is_a_finite_amount_and_nothing_else(provider: ModelProvider) -> None:
@@ -529,7 +541,7 @@ def test_a_gateway_cost_is_a_finite_amount_and_nothing_else(provider: ModelProvi
 def test_the_tier_a_request_names_is_none_when_it_names_none(provider: ModelProvider) -> None:
     case = case_of(provider)
     for fields in (None, {}, case.request):
-        assert provider.request_tier(fields) is None
+        assert provider.request_tier(None if fields is None else wrap_fields(fields)) is None
 
 
 def test_a_price_is_the_shipped_row_and_a_team_row_wins(provider: ModelProvider) -> None:
@@ -568,7 +580,9 @@ def test_a_cost_is_never_below_the_table(
     # The hold is the most the call can cost on the API its path names, so on some API of the
     # provider it is never under what the call settles at.
     held = max(
-        provider.most_cost(tokens_in, tokens_out, RATES, path=path, fields=case.request)
+        provider.most_cost(
+            tokens_in, tokens_out, RATES, path=path, fields=wrap_fields(case.request)
+        )
         for path in (case.chat_path, *case.other_paths)
     )
     assert held >= usd - 1e-12

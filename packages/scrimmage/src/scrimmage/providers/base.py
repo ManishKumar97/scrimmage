@@ -12,13 +12,39 @@ passes the request's path and fields, and the provider says what they mean.
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, NewType, Protocol, cast, runtime_checkable
 
 from scrimmage.prices import Rates
 
 if TYPE_CHECKING:
     from scrimmage.changes import Unchangeable, WebChanged
     from scrimmage.config import Fault
+
+
+# Parsed wire data, opaque outside the providers. Fields is a parsed model request body and
+# Reply a parsed model reply. Both are an object to the type checker, so a subscript, a .get, an
+# `in`, an iteration or an attribute on one is a pyright error in any module that is not a
+# provider. Only a provider looks inside, through fields_dict, so the gate cannot decide by a
+# wire key or shape.
+Fields = NewType("Fields", object)
+Reply = NewType("Reply", object)
+
+NO_FIELDS = Fields({})  # what a request with no readable JSON object body holds
+
+
+def fields_dict(fields: Fields | None) -> dict[str, object]:
+    """The request's JSON object, for a provider to read. Empty for None."""
+    return {} if fields is None else cast(dict[str, object], fields)
+
+
+def wrap_fields(value: dict[str, object]) -> Fields:
+    """A provider's own dict, as a request's Fields to hand on."""
+    return Fields(value)
+
+
+def reply_value(reply: Reply) -> object:
+    """The parsed reply, for a provider to read."""
+    return reply
 
 
 @dataclass
@@ -73,13 +99,17 @@ class Recognizer(Protocol):
         """The op a request to this path is, or None when it is not a model call."""
         ...
 
-    def request_fields(self, body: bytes) -> dict[str, object] | None: ...
+    def request_fields(self, body: bytes) -> Fields | None: ...
 
-    def model_name(self, fields: dict[str, object] | None) -> str | None: ...
+    def model_name(self, wire: Fields | None) -> str | None: ...
 
-    def offered(self, path: str, fields: dict[str, object]) -> Offered: ...
+    def offered(self, path: str, wire: Fields) -> Offered: ...
 
-    def carries_text(self, fields: dict[str, object], texts: Sequence[str]) -> bool:
+    def streams(self, wire: Fields | None) -> bool:
+        """Whether the request asks for a streamed reply."""
+        ...
+
+    def carries_text(self, wire: Fields, texts: Sequence[str]) -> bool:
         """Whether a request holds any of these texts, as the provider's request form lays
         out text. A heuristic."""
         ...
@@ -90,12 +120,12 @@ class Meter(Protocol):
 
     def usage(self, body: bytes, *, output_required: bool = True) -> Usage: ...
 
-    def output_cap(self, fields: dict[str, object], path: str, default: int) -> int:
+    def output_cap(self, wire: Fields, path: str, default: int) -> int:
         """The most output tokens a call to this path could bill: what the request caps it at,
         else default, times what the API bills it for, such as one reply for each choice."""
         ...
 
-    def request_tier(self, fields: dict[str, object] | None) -> str | None: ...
+    def request_tier(self, wire: Fields | None) -> str | None: ...
 
     def gateway_cost(self, value: object, before: float | None = None) -> float | None: ...
 
@@ -126,7 +156,7 @@ class Meter(Protocol):
         rates: Rates,
         *,
         path: str,
-        fields: dict[str, object],
+        fields: Fields,
     ) -> float:
         """What a call could cost at most: the dearest the provider may bill each token for,
         given the API the path names and what the request asks for."""
@@ -153,35 +183,35 @@ class FaultMaker(Protocol):
 
     def context_too_long_body(self) -> bytes: ...
 
-    def not_carried_out(self, word: str, path: str, fields: dict[str, object]) -> str | None:
+    def not_carried_out(self, word: str, path: str, wire: Fields) -> str | None:
         """Why this fault cannot be carried out on this request, which is then a mistake in
         the test, or None when it can."""
         ...
 
-    def refusal_reply(self, path: str, fields: dict[str, object], tokens_in: int) -> bytes: ...
+    def refusal_reply(self, path: str, wire: Fields, tokens_in: int) -> bytes: ...
 
-    def tool_call_tools(self, path: str, fields: dict[str, object]) -> list[str]: ...
+    def tool_call_tools(self, path: str, wire: Fields) -> list[str]: ...
 
-    def no_free_tool_call(self, path: str, fields: dict[str, object]) -> str | None: ...
+    def no_free_tool_call(self, path: str, wire: Fields) -> str | None: ...
 
-    def unknown_tool_reply(self, fields: dict[str, object], tokens_in: int, tool: str) -> bytes: ...
+    def unknown_tool_reply(self, wire: Fields, tokens_in: int, tool: str) -> bytes: ...
 
-    def given(self, path: str, fields: dict[str, object], reply: bytes, *, ids_only: bool) -> Given:
+    def given(self, path: str, wire: Fields, reply: bytes, *, ids_only: bool) -> Given:
         """What this faulted reply to a request to this path gave the agent, in the forms a
         later request carries back. Empty when the API keeps replies on its own side."""
         ...
 
-    def carries(self, path: str, fields: dict[str, object], kept: Sequence[Given]) -> bool: ...
+    def carries(self, path: str, wire: Fields, kept: Sequence[Given]) -> bool: ...
 
 
 class ReplyReader(Protocol):
     """What a report prints of a recorded reply: what the model said and which tool it called."""
 
-    def called_tool(self, reply: object) -> str | None:
+    def called_tool(self, wire: Reply) -> str | None:
         """The name of the first tool the parsed reply calls, or None."""
         ...
 
-    def said(self, reply: object, parts: Sequence[object]) -> str | None:
+    def said(self, wire: Reply, parts: Sequence[object]) -> str | None:
         """The text, or a tool call's arguments, at the first of these parts a change recorded,
         in the provider's own part names, or the reply's first text if none is named."""
         ...
@@ -229,7 +259,7 @@ class ServerChains(Protocol):
         """The ids of this reply and of its items that a later request may name."""
         ...
 
-    def chain_references(self, path: str, fields: dict[str, object]) -> list[str]:
+    def chain_references(self, path: str, wire: Fields) -> list[str]:
         """What this request asks the provider to look up by id."""
         ...
 
