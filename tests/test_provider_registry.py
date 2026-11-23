@@ -556,6 +556,53 @@ def probes_opaque(tree: ast.AST) -> list[str]:
     return found
 
 
+# The one slot a Fields or a Reply keeps its value in, and the other doors to it: reflection by
+# the slot's name, pickle and copy's hooks, and the readers of an object's referents and members.
+# No product module outside the providers uses any of them.
+SLOT = "_wire_value"
+STATE_HOOKS = {"__reduce__", "__reduce_ex__", "__getstate__"}
+REFLECTORS = {"gc": {"get_referents", "get_referrers", "get_objects"}, "inspect": {"getmembers"}}
+
+
+def reads_the_slot(tree: ast.AST, docstrings: set[int]) -> list[str]:
+    """The identifiers and strings that name the slot an opaque value keeps its content in, the
+    hooks that would hand it over, and gc.get_referents or inspect.getmembers, under any import
+    form: each reads the wire where the type checker cannot see it."""
+    found: list[str] = []
+    modules = {name: imported(tree, {name})[0] for name in REFLECTORS}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if SLOT in node.value and id(node) not in docstrings:
+                found.append(f"names the wire slot in the string {node.value!r}")
+            if node.value in STATE_HOOKS and id(node) not in docstrings:
+                found.append(f"names {node.value}, which hands over an opaque value's state")
+        for name in (
+            getattr(node, "id", None),
+            getattr(node, "attr", None),
+            getattr(node, "arg", None),
+            getattr(node, "name", None),
+        ):
+            if isinstance(name, str) and SLOT in name:
+                found.append(f"names {name}, the slot of an opaque wire value")
+            # A class may define a hook of its own (a str subclass that pickles itself); only
+            # a name or an attribute that is read, to call it on something, is the door.
+            read = isinstance(node, ast.Name | ast.Attribute)
+            if read and isinstance(name, str) and name in STATE_HOOKS:
+                found.append(f"uses {name}, which hands over an opaque value's state")
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            for library, readers in REFLECTORS.items():
+                if node.value.id in modules[library] and node.attr in readers:
+                    found.append(f"reads an object's content with {library}.{node.attr}")
+        if isinstance(node, ast.ImportFrom) and (node.module or "") in REFLECTORS:
+            readers = REFLECTORS[node.module or ""]
+            found += [
+                f"imports {node.module}.{a.name}, which reads an object's content"
+                for a in node.names
+                if a.name in readers or a.name == "*"
+            ]
+    return found
+
+
 def names_in_strings(tree: ast.AST, docstrings: set[int], module: str) -> list[str]:
     """The strings of this tree that name a provider, or a provider's module."""
     names = {p.name for p in builtin_providers()} | COMING_PROVIDERS
@@ -639,6 +686,7 @@ def problems_in(source: str, module: str = "") -> list[str]:
         + names_in_strings(tree, docstrings, module)
         + parses_json(tree, module)
         + probes_opaque(tree)
+        + reads_the_slot(tree, docstrings)
     )
 
 
@@ -831,6 +879,42 @@ GATE = "def f(x):\n    return x\n"
             "def g():\n    return importlib.import_module('scrimmage.providers.impl.openai')\n",
             "names a provider's module in the string 'scrimmage.providers.impl.openai'",
         ),
+        # Review of the opaque class, AN-C1-1 and AN-C1-2: reflection by the slot's name.
+        ("def g(fields):\n    return fields._wire_value\n", "names _wire_value, the slot"),
+        (
+            "def g(fields):\n    return getattr(fields, '_wire_value')\n",
+            "names the wire slot in the string '_wire_value'",
+        ),
+        (
+            "def g(step):\n    return getattr(step.fields, '_wire_value')\n",
+            "names the wire slot in the string '_wire_value'",
+        ),
+        (
+            "import operator\ndef g(f):\n    return operator.attrgetter('_wire_value')(f)\n",
+            "names the wire slot in the string '_wire_value'",
+        ),
+        (
+            "def g(f):\n    return object.__getattribute__(f, '_wire_value')\n",
+            "names the wire slot in the string '_wire_value'",
+        ),
+        (
+            "import inspect\ndef g(f):\n    return dict(inspect.getmembers(f))\n",
+            "reads an object's content with inspect.getmembers",
+        ),
+        (
+            "import gc\ndef g(f):\n    return gc.get_referents(f)[0]\n",
+            "reads an object's content with gc.get_referents",
+        ),
+        (
+            "import gc as g\nx = g.get_referents\n",
+            "reads an object's content with gc.get_referents",
+        ),
+        ("from gc import get_referents\n", "imports gc.get_referents"),
+        ("from inspect import getmembers as m\n", "imports inspect.getmembers"),
+        ("def g(f):\n    return f.__reduce_ex__(2)\n", "uses __reduce_ex__"),
+        ("def g(f):\n    return f.__reduce__()\n", "uses __reduce__"),
+        ("def g(f):\n    return object.__reduce_ex__(f, 2)\n", "uses __reduce_ex__"),
+        ("def g(f):\n    return getattr(f, '__getstate__')()\n", "names __getstate__"),
     ],
 )
 def test_the_guard_catches_each_way_a_module_could_reach_a_provider(added: str, says: str) -> None:
@@ -858,6 +942,9 @@ def test_the_guard_catches_each_way_a_module_could_reach_a_provider(added: str, 
         "from scrimmage.providers.base import Fields\n"
         "def g(fields: Fields, provider):\n    return provider.model_name(fields), str(7)\n",
         "def g(x):\n    return isinstance(x, dict) and getattr(x, 'get')\n",
+        "import inspect\ndef g(x):\n    return inspect.signature(x), inspect.isclass(x)\n",
+        "import gc\ndef g():\n    gc.collect()\n",
+        "class E(str):\n    def __reduce__(self):\n        return E, (str(self),)\n",
     ],
 )
 def test_the_guard_leaves_alone_what_a_module_may_use(fine: str) -> None:

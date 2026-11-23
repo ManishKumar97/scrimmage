@@ -1,4 +1,4 @@
-# pyright: standard
+# pyright: standard, reportPrivateUsage=true
 """Carry a service run's slot into the threads and pool tasks the run starts.
 
 A thread the team starts while its code belongs to a run is tagged with that run, and gets a

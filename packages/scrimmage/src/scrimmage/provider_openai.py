@@ -897,6 +897,10 @@ def _name(tool: dict[str, object]) -> str:
 
 
 def _obj(value: object) -> dict[str, object]:
+    """A dict's items under string keys, or {} for anything else. A Fields or a Reply is no dict:
+    handed one, the caller forgot fields_dict or reply_value, and {} would read it as empty."""
+    if isinstance(value, Fields | Reply):
+        raise TypeError("_obj was handed an opaque wire value; open it with fields_dict first")
     if not isinstance(value, dict):
         return {}
     return {str(k): v for k, v in cast(dict[object, object], value).items()}

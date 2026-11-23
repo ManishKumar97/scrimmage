@@ -1,4 +1,4 @@
-# pyright: standard
+# pyright: standard, reportPrivateUsage=true
 """The entry gate of a service: where uvicorn loads the app, and at Starlette's own call.
 
 A request without x-scrimmage-run runs exactly as it would without Scrimmage: the slot is

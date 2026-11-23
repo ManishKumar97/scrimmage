@@ -10,7 +10,7 @@ from scrimmage.providers.base import Fields, Reply
 
 def fields_dict(fields: Fields | None) -> dict[str, object]:
     """The request's JSON object, for a provider to read. Empty for None."""
-    return {} if fields is None else fields._value
+    return {} if fields is None else fields._wire_value
 
 
 def wrap_fields(value: dict[str, object]) -> Fields:
@@ -20,4 +20,4 @@ def wrap_fields(value: dict[str, object]) -> Fields:
 
 def reply_value(reply: Reply) -> object:
     """The parsed reply, for a provider to read."""
-    return reply._value
+    return reply._wire_value

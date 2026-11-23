@@ -12,7 +12,7 @@ passes the request's path and fields, and the provider says what they mean.
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol, final, runtime_checkable
+from typing import TYPE_CHECKING, NoReturn, Protocol, SupportsIndex, final, runtime_checkable
 
 from scrimmage.prices import Rates
 
@@ -21,36 +21,57 @@ if TYPE_CHECKING:
     from scrimmage.config import Fault
 
 
+OPAQUE = "an opaque wire value cannot be pickled, copied or reduced"
+
+
 @final
 class Fields:
     """A parsed model request body, opaque outside the providers.
 
     A real class, not a dict in disguise: it is no dict, has no .get, no subscript and no
     iteration, and its repr shows nothing. So outside a provider, isinstance(x, dict) is False,
-    getattr(x, "get") raises and x._value is a private-usage error. Only a provider looks
+    getattr(x, "get") raises and x._wire_value is a private-usage error. Only a provider looks
     inside, through providers.impl.wire, which the import contract keeps from every other
     module, so the gate cannot decide by a wire key or shape."""
 
-    __slots__ = ("_value",)
+    __slots__ = ("_wire_value",)
 
     def __init__(self, value: dict[str, object]) -> None:
-        self._value = value
+        self._wire_value = value
 
     def __repr__(self) -> str:
         return "Fields(...)"
+
+    def __reduce__(self) -> NoReturn:
+        raise TypeError(OPAQUE)
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> NoReturn:
+        raise TypeError(OPAQUE)
+
+    def __getstate__(self) -> NoReturn:
+        raise TypeError(OPAQUE)
 
 
 @final
 class Reply:
     """A parsed model reply, opaque in the same way as Fields."""
 
-    __slots__ = ("_value",)
+    __slots__ = ("_wire_value",)
 
     def __init__(self, value: object) -> None:
-        self._value = value
+        self._wire_value = value
 
     def __repr__(self) -> str:
         return "Reply(...)"
+
+    def __reduce__(self) -> NoReturn:
+        raise TypeError(OPAQUE)
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> NoReturn:
+        raise TypeError(OPAQUE)
+
+    def __getstate__(self) -> NoReturn:
+        raise TypeError(OPAQUE)
 
 
 NO_FIELDS = Fields({})  # what a request with no readable JSON object body holds
