@@ -206,6 +206,8 @@ forbidden_modules = ["scrimmage.providers.impl", "scrimmage.provider_openai"]
 ignore_imports = [
     "scrimmage.providers.registry -> scrimmage.providers.impl",
     "scrimmage.providers.** -> scrimmage.provider_openai",
+    # A table module opens the wire types through providers.impl.wire, which no other module may.
+    "scrimmage.provider_openai -> scrimmage.providers.impl.wire",
 ]
 
 [tool.coverage.run]

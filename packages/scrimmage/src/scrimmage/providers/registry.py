@@ -16,9 +16,9 @@ from scrimmage.providers.base import ModelProvider
 @functools.cache
 def builtin_providers() -> tuple[ModelProvider, ...]:
     """Every provider there is, in the order a probe tries them."""
-    from scrimmage.providers.impl import PROVIDERS
+    from scrimmage.providers.impl import providers
 
-    return PROVIDERS
+    return providers()
 
 
 @dataclass(frozen=True)

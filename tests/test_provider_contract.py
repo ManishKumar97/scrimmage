@@ -17,7 +17,8 @@ import pytest
 from scrimmage import changes
 from scrimmage.config import Fault
 from scrimmage.prices import RATE_KEYS, Rates
-from scrimmage.providers.base import ModelProvider, Reply, ServerChains, wrap_fields
+from scrimmage.providers.base import ModelProvider, Reply, ServerChains
+from scrimmage.providers.impl.wire import fields_dict, wrap_fields
 from scrimmage.providers.registry import builtin_providers
 
 OPENAI = Path(__file__).parent / "fixtures" / "openai"
@@ -206,7 +207,7 @@ def test_free_ops_are_ops_the_provider_names(provider: ModelProvider) -> None:
 
 def test_a_request_is_read_as_the_object_it_is_and_nothing_else(provider: ModelProvider) -> None:
     case = case_of(provider)
-    assert provider.request_fields(body_of(case.request)) == case.request
+    assert fields_dict(provider.request_fields(body_of(case.request))) == case.request
     for body in JUNK:
         assert provider.request_fields(body) is None, body
 
@@ -462,7 +463,7 @@ def test_the_output_a_call_could_bill_is_its_cap_or_the_default(provider: ModelP
         assert provider.output_cap(wrap_fields(case.request), path, 77) >= 77, path
         # A cap that is not a count is no cap.
         for bad in (0, -5, True, "50", 2.5, None, 10**12):
-            assert provider.output_cap(case.capped(bad), path, 4096) >= 4096, bad  # type: ignore[arg-type]
+            assert provider.output_cap(wrap_fields(case.capped(bad)), path, 4096) >= 4096, bad  # type: ignore[arg-type]
     capped = provider.output_cap(wrap_fields(case.capped(50)), case.chat_path, 4096)
     assert 50 <= capped < 4096, "a cap holds less than the default"
     if case.replies is not None:
@@ -502,13 +503,13 @@ def test_a_report_reads_what_the_model_said_and_called_through_the_provider(
 ) -> None:
     case = case_of(provider)
     assert case.call_reply is not None
-    text = json.loads(case.changeable.read_text())
+    text = Reply(json.loads(case.changeable.read_text()))
     said = provider.said(text, [case.text_part])
     assert isinstance(said, str) and said
     assert provider.said(text, []) == said, "the first text when a change named no part"
     assert provider.said(text, ["no-such-part", case.text_part]) == said
     assert provider.called_tool(text) is None
-    call = json.loads(case.call_reply.read_text())
+    call = Reply(json.loads(case.call_reply.read_text()))
     assert provider.called_tool(call) == case.call_name
     arguments = provider.said(call, [case.arguments_part])
     assert isinstance(arguments, str)

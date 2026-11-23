@@ -23,7 +23,7 @@ from scrimmage.providers.base import Given as Given
 from scrimmage.providers.base import Offered as Offered
 from scrimmage.providers.base import Reply as Reply
 from scrimmage.providers.base import Usage as Usage
-from scrimmage.providers.base import fields_dict, reply_value, wrap_fields
+from scrimmage.providers.impl.wire import fields_dict, reply_value, wrap_fields
 
 HOSTS = ("api.openai.com",)
 CHAT_PATHS = ("/chat/completions", "/responses")
@@ -389,7 +389,7 @@ def response_refusal_reply(wire: Fields, tokens_in: int) -> bytes:
 def response_ids(reply: bytes) -> list[str]:
     """The ids of a Responses reply and of its output items: a later request may name the
     reply as previous_response_id, and an item in an item_reference."""
-    value = _obj(request_fields(reply))
+    value = _obj(fields_dict(request_fields(reply)))
     found = [value.get("id"), *(_obj(item).get("id") for item in _list(value.get("output")))]
     return [i for i in found if isinstance(i, str) and i]
 
@@ -567,7 +567,7 @@ def given(wire: Fields, reply: bytes, *, ids_only: bool) -> Given:
     fields = fields_dict(wire)
     messages = [
         _obj(_obj(choice).get("message"))
-        for choice in _list(_obj(request_fields(reply)).get("choices"))
+        for choice in _list(_obj(fields_dict(request_fields(reply))).get("choices"))
     ]
     ids = frozenset(
         found
@@ -800,6 +800,12 @@ def written(numbers: dict[str, object], uncached: int) -> tuple[int, int]:
     return total - long, long
 
 
+def snapshot_family(model: str) -> str:
+    """A dated snapshot's family: OpenAI dates one -YYYY-MM-DD. The provider's one rule, read by
+    the price lookup below and by the plan's dedupe of the price rows."""
+    return prices.dashed_family(model)
+
+
 def price(model: str, overrides: dict[str, Rates]) -> Rates | None:
     """The team's price first, whole, then the shipped table: see prices.price."""
     return prices.priced("openai", model, overrides, family=snapshot_family)
@@ -808,12 +814,6 @@ def price(model: str, overrides: dict[str, Rates]) -> Rates | None:
 def cost(
     tokens_in: int,
     tokens_out: int,
-def snapshot_family(model: str) -> str:
-    """A dated snapshot's family: OpenAI dates one -YYYY-MM-DD. The provider's one rule, read by
-    the price lookup below and by the plan's dedupe of the price rows."""
-    return prices.dashed_family(model)
-
-
     rates: Rates,
     cached: int = 0,
     written_30m: int = 0,

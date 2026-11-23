@@ -1,4 +1,4 @@
-# pyright: standard
+# pyright: standard, reportPrivateUsage=true
 """The gate at a client's single attempt, Client._send_single_request, sync and async.
 
 httpx and httpx2 share this function. The openai library sends every attempt through
