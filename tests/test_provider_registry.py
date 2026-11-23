@@ -248,6 +248,12 @@ OWN_PATTERNS = {
     ("credentials.py", r"/{2,}"),
     ("labels.py", r"/(?:(?![?#])[\x21-\x7e])*"),
 }
+# The modules that get parsed wire data only from a provider, so they never parse JSON
+# themselves: json.loads returns Any, which the opaque types cannot see through. Today neither
+# parses any, so no site is allowed.
+NO_JSON_PARSING = {"http_gate.py", "state.py"}
+JSON_LIBRARIES = {"json", "orjson", "ujson", "simplejson"}
+JSON_READERS = {"loads", "load"}
 # No module outside the providers may build or look up a provider's module by name.
 MODULE_NAMES = ("scrimmage.provider_", "providers.impl")
 
@@ -358,6 +364,29 @@ def paths_in_patterns(tree: ast.AST, module: str) -> list[str]:
     return found
 
 
+def parses_json(tree: ast.AST, module: str) -> list[str]:
+    """The calls and imports of a JSON reader, in a module that gets wire data from a provider."""
+    if module not in NO_JSON_PARSING:
+        return []
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in JSON_LIBRARIES
+            and node.func.attr in JSON_READERS
+        ):
+            found.append(f"parses JSON with {node.func.value.id}.{node.func.attr}")
+        elif isinstance(node, ast.ImportFrom) and node.module in JSON_LIBRARIES:
+            found += [
+                f"imports {node.module}.{a.name}, a JSON reader"
+                for a in node.names
+                if a.name in JSON_READERS
+            ]
+    return found
+
+
 def names_in_strings(tree: ast.AST, docstrings: set[int], module: str) -> list[str]:
     """The strings of this tree that name a provider, or a provider's module."""
     names = {p.name for p in builtin_providers()} | COMING_PROVIDERS
@@ -435,7 +464,12 @@ def problems_in(source: str, module: str = "") -> list[str]:
                 found.append(f"names the API path {node.value!r}")
             elif node.value in keys:
                 found.append(f"names the wire key {node.value!r}")
-    return found + paths_in_patterns(tree, module) + names_in_strings(tree, docstrings, module)
+    return (
+        found
+        + paths_in_patterns(tree, module)
+        + names_in_strings(tree, docstrings, module)
+        + parses_json(tree, module)
+    )
 
 
 @pytest.mark.parametrize("path", product_modules(), ids=lambda p: str(p.relative_to(SRC)))
@@ -575,6 +609,32 @@ def test_the_guard_catches_each_way_a_module_could_reach_a_provider(added: str, 
 )
 def test_the_guard_leaves_alone_what_a_module_may_use(fine: str) -> None:
     assert problems_in(GATE + fine) == []
+
+
+@pytest.mark.parametrize("module", sorted(NO_JSON_PARSING))
+@pytest.mark.parametrize(
+    ("reads", "says"),
+    [
+        ("import json\ndef g(b):\n    return json.loads(b)['content']\n", "json.loads"),
+        ("import json\ndef g(f):\n    return json.load(f)\n", "json.load"),
+        ("import orjson\ndef g(b):\n    return orjson.loads(b)\n", "orjson.loads"),
+        ("import ujson\ndef g(b):\n    return ujson.loads(b)\n", "ujson.loads"),
+        ("import simplejson\ndef g(b):\n    return simplejson.loads(b)\n", "simplejson.loads"),
+        ("from json import loads\n", "imports json.loads"),
+    ],
+)
+def test_the_gate_and_the_run_state_never_parse_json_themselves(
+    module: str, reads: str, says: str
+) -> None:
+    bad = problems_in(reads, module)
+    assert any(says in problem for problem in bad), bad
+    assert problems_in(reads, "show.py") == [], "only the two modules are held to it"
+
+
+def test_writing_json_is_no_parsing() -> None:
+    writes = "import json\ndef g(x):\n    return json.dumps(x).encode()\n"
+    assert problems_in(writes, "http_gate.py") == []
+    assert problems_in("import json\nfrom json import dumps\n", "state.py") == []
 
 
 def test_only_the_vocabulary_modules_may_name_a_provider() -> None:
