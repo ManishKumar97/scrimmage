@@ -615,26 +615,55 @@ def most_cost(tokens_in: int, tokens_out: int, rates: Rates, *, fields: Fields) 
     cache_control may write every input token: for 5 minutes, or for 1 hour if any of its
     cache_control says ttl 1h. A server tool caches its results by itself, as 5 minute writes. An
     input over the long-context threshold is held at the long rates. A web search is held at its
-    fee for max_uses searches, or for DEFAULT_SEARCHES. A request with fallbacks may run each
-    model it names after the first, so it is held for every attempt at the dearest of them: the
-    fallbacks list names the models, and "default" is one more attempt."""
+    fee for max_uses searches, or for DEFAULT_SEARCHES.
+
+    A request with fallbacks may run one more attempt for each model it names, and each attempt
+    is held on its own: at its model's row, at its own max_tokens if it names one and that is
+    over the request's, and at its own speed, which is the request's if it names none. A model
+    with no row, and each attempt of "default", whose model is not known until the reply, are held
+    at the dearest row there is, so no attempt is held under what it could settle at."""
     asked = fields_dict(fields)
-    attempts = 1
-    rows = [rates]
+    speed = _speed(asked.get("speed"))
+    holds = [_one_attempt(tokens_in, tokens_out, rates, asked)]
     fallbacks = asked.get("fallbacks")
     if fallbacks == "default":
-        attempts = 2
+        holds.append(_dearest_attempt(tokens_in, tokens_out, rates, asked, speed))
     elif isinstance(fallbacks, list):
-        named = _list(cast("list[object]", fallbacks))
-        attempts = 1 + len(named)
-        for entry in named:
-            model = _obj(entry).get("model")
+        for raw in _list(cast("list[object]", fallbacks)):
+            entry = _obj(raw)
+            out = max(tokens_out, _cap(entry.get("max_tokens")))
+            tier = _speed(entry.get("speed")) if "speed" in entry else speed
+            model = entry.get("model")
             row = _row_for(model, rates) if isinstance(model, str) else None
-            if row is not None:
-                rows.append(row)
+            if row is None:
+                holds.append(_dearest_attempt(tokens_in, out, rates, asked, tier))
+            else:
+                holds.append(_one_attempt(tokens_in, out, _at_speed(row, tier), asked))
     fee = dict(rates.fees).get(SEARCH, 0.0) * _searches(asked)
-    held = max(_one_attempt(tokens_in, tokens_out, row, asked) for row in rows)
-    return attempts * (held + fee)
+    return sum(holds) + len(holds) * fee
+
+
+def _speed(value: object) -> str | None:
+    """The tier a speed names: fast for fast, none for any other."""
+    return "fast" if value == "fast" else None
+
+
+def _cap(value: object) -> int:
+    """A max_tokens that is a count, else 0, which is no cap."""
+    ok = isinstance(value, int) and not isinstance(value, bool) and 0 < value <= MAX_TOKENS
+    return value if ok and isinstance(value, int) else 0
+
+
+def _at_speed(row: Rates, tier: str | None) -> Rates:
+    return row.at(tier)
+
+
+def _dearest_attempt(
+    tokens_in: int, tokens_out: int, rates: Rates, asked: dict[str, object], tier: str | None
+) -> float:
+    """One attempt on whichever row is dearest, the call's own included."""
+    rows = [rates, *(_at_speed(row, tier) for _, row in rates.models)]
+    return max(_one_attempt(tokens_in, tokens_out, row, asked) for row in rows)
 
 
 def _one_attempt(tokens_in: int, tokens_out: int, rates: Rates, asked: dict[str, object]) -> float:

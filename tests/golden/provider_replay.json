@@ -10954,7 +10954,7 @@
   "replies": [
     {"body": "0b1ec6d6564369aa221442f414fbe6001c08d17d468433284375fe4078807c7a", "headers": {"content-length": "1115", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 1115, "status": 200}
   ],
-  "reserved": [0.0107],
+  "reserved": [0.008025],
   "sent": ["8781d93b1300646cc7976058eb84790874f5c96ed0fac02f61ef885ea7c1c440"],
   "settles": [[1, 0.014009999999999998]],
   "stops": []

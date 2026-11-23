@@ -52,7 +52,11 @@ def settled(run: Gate) -> float:
 # Server-side fallback. The refusals page: Claude Fable 5 declines a request before any output and
 # Claude Opus 4.8 serves it. usage.iterations holds both attempts, and the top-level usage only
 # the one that produced the message: 412 input and 264 output. Each attempt is billed at the rates
-# of the model that ran it, and the one that declined is billed when its category is.
+# of the model that ran it. The attempt that declined is billed only in some categories (bio,
+# frontier_llm, reasoning_extraction, or a decline partway through), and this one is cyber, which
+# is not: its real bill is Opus's attempt alone, 412 * 5 + 264 * 25 = 8660, $0.00866. Every
+# attempt is settled, which counts the declined one too, so the figure below is the high side,
+# on purpose: the reply does not say which categories were billed.
 # Hand sum, at $10 and $50 for Fable and $5 and $25 for Opus, per million tokens:
 #   Fable's attempt   535 * 10 + 0 * 50    =  5350
 #   Opus's attempt    412 *  5 + 264 * 25  =  2060 + 6600 = 8660
@@ -123,24 +127,107 @@ def test_an_iteration_that_cannot_be_read_makes_the_reply_not_known() -> None:
     assert not provider_anthropic.usage(json.dumps(reply).encode()).known
 
 
-def test_a_request_with_fallbacks_is_held_for_every_attempt_at_the_dearest_model() -> None:
-    row = (
-        built_in()
-        .get("anthropic")
-        .price("claude-opus-4-8", {"claude-opus-4-8": OPUS, "claude-fable-5": FABLE})
+def team_row(model: str, **rows: Rates) -> Rates:
+    found = built_in().get("anthropic").price(model, rows)
+    assert found is not None
+    return found
+
+
+def hold(row: Rates, **asked: Any) -> float:
+    return provider_anthropic.most_cost(1000, 500, row, fields=wrap_fields(asked))
+
+
+def test_each_attempt_of_a_request_with_fallbacks_is_held_on_its_own() -> None:
+    """The attempts are added, each at its own row: the call's own, and one for each entry."""
+    row = team_row("claude-opus-4-8", **{"claude-opus-4-8": OPUS, "claude-fable-5": FABLE})
+    opus, fable = (1000 * 5 + 500 * 25) / 1e6, (1000 * 10 + 500 * 50) / 1e6
+    assert hold(row) == pytest.approx(opus)
+    assert hold(row, fallbacks=[{"model": "claude-fable-5"}]) == pytest.approx(opus + fable)
+    two = [{"model": "claude-fable-5"}, {"model": "claude-opus-4-8"}]
+    assert hold(row, fallbacks=two) == pytest.approx(opus + fable + opus)
+
+
+def test_an_attempt_that_names_its_own_max_tokens_or_speed_is_held_at_them() -> None:
+    fast = Rates(20.0, 100.0)
+    row = team_row(
+        "claude-opus-4-8",
+        **{"claude-opus-4-8": OPUS, "claude-fable-5": Rates(10.0, 50.0, tiers=(("fast", fast),))},
     )
-    assert row is not None
-    most = provider_anthropic.most_cost
-    one = most(1000, 500, row, fields=wrap_fields({}))
-    assert one == pytest.approx((1000 * 5 + 500 * 25) / 1e6)
-    named = wrap_fields({"fallbacks": [{"model": "claude-fable-5"}]})
-    assert most(1000, 500, row, fields=named) == pytest.approx(2 * (1000 * 10 + 500 * 50) / 1e6)
-    two = wrap_fields({"fallbacks": [{"model": "claude-fable-5"}, {"model": "claude-opus-4-8"}]})
-    assert most(1000, 500, row, fields=two) == pytest.approx(3 * (1000 * 10 + 500 * 50) / 1e6)
-    default = wrap_fields({"fallbacks": "default"})
-    assert most(1000, 500, row, fields=default) == pytest.approx(2 * one)
-    unknown = wrap_fields({"fallbacks": [{"model": "claude-nonesuch"}]})
-    assert most(1000, 500, row, fields=unknown) == pytest.approx(2 * one)
+    opus = (1000 * 5 + 500 * 25) / 1e6
+    big = [{"model": "claude-fable-5", "max_tokens": 8000}]
+    assert hold(row, fallbacks=big) == pytest.approx(opus + (1000 * 10 + 8000 * 50) / 1e6)
+    small = [{"model": "claude-fable-5", "max_tokens": 10}]
+    assert hold(row, fallbacks=small) == pytest.approx(opus + (1000 * 10 + 500 * 50) / 1e6)
+    quick = [{"model": "claude-fable-5", "speed": "fast"}]
+    assert hold(row, fallbacks=quick) == pytest.approx(opus + (1000 * 20 + 500 * 100) / 1e6)
+    both = [{"model": "claude-fable-5", "speed": "fast", "max_tokens": 8000}]
+    assert hold(row, fallbacks=both) == pytest.approx(opus + (1000 * 20 + 8000 * 100) / 1e6)
+    junk = [{"model": "claude-fable-5", "max_tokens": True, "speed": 5}]
+    assert hold(row, fallbacks=junk) == pytest.approx(opus + (1000 * 10 + 500 * 50) / 1e6)
+
+
+def test_a_model_with_no_row_and_every_default_attempt_are_held_at_the_dearest_row() -> None:
+    row = team_row("claude-opus-4-8", **{"claude-opus-4-8": OPUS, "claude-fable-5": FABLE})
+    opus, fable = (1000 * 5 + 500 * 25) / 1e6, (1000 * 10 + 500 * 50) / 1e6
+    assert hold(row, fallbacks=[{"model": "claude-nonesuch"}]) == pytest.approx(opus + fable)
+    assert hold(row, fallbacks="default") == pytest.approx(opus + fable)
+
+
+# The three cases the round 2 review probed: the hold of a request with fallbacks, against what
+# its reply settles at, hop by hop. Each reply has an attempt on every model it names.
+
+
+def reply_of(*hops: tuple[str, int, int]) -> bytes:
+    iterations = [
+        {"type": "message", "model": m, "input_tokens": i, "output_tokens": o} for m, i, o in hops
+    ]
+    last = hops[-1]
+    usage = {"input_tokens": last[1], "output_tokens": last[2], "iterations": iterations}
+    return json.dumps({"type": "message", "model": last[0], "usage": usage}).encode()
+
+
+def settle(reply: bytes, row: Rates) -> float:
+    used = provider_anthropic.usage(reply)
+    assert used.known
+    return provider_anthropic.cost(
+        used.input, used.output, row, used.cached, used.writes["cache_write_5m"],
+        used.writes["cache_write_1h"], used.writes,
+    )  # fmt: skip
+
+
+def held_and_settled(row: Rates, reply: bytes, **asked: Any) -> tuple[float, float]:
+    fields = wrap_fields({"max_tokens": 100, **asked})
+    held = provider_anthropic.most_cost(1000, 100, row, fields=fields)
+    return held, settle(reply, row)
+
+
+def test_the_hold_covers_the_settle_when_an_entry_names_a_bigger_max_tokens_and_fast_speed() -> (
+    None
+):
+    cheap, dear = Rates(1.0, 5.0), Rates(10.0, 50.0, tiers=(("fast", Rates(20.0, 100.0)),))
+    row = team_row("claude-a", **{"claude-a": cheap, "claude-b": dear})
+    entry = {"model": "claude-b", "max_tokens": 8000, "speed": "fast"}
+    reply = reply_of(("claude-a", 1000, 100), ("claude-b", 1000, 8000))
+    held, settled_at = held_and_settled(row, reply, fallbacks=[entry])
+    assert held >= settled_at
+    assert settled_at == pytest.approx((1000 * 1 + 100 * 5 + 1000 * 10 + 8000 * 50) / 1e6)
+
+
+def test_the_hold_covers_the_settle_when_the_named_model_has_no_row() -> None:
+    row = team_row("claude-a", **{"claude-a": Rates(1.0, 5.0), "claude-b": Rates(10.0, 50.0)})
+    reply = reply_of(("claude-a", 1000, 0), ("claude-c", 1000, 100))
+    held, settled_at = held_and_settled(row, reply, fallbacks=[{"model": "claude-c"}])
+    assert held >= settled_at
+    # claude-c has no row, so its attempt is priced at the dearest, claude-b's.
+    assert settled_at == pytest.approx((1000 * 1 + 1000 * 10 + 100 * 50) / 1e6)
+
+
+def test_the_hold_covers_the_settle_when_default_falls_back_to_a_dearer_model() -> None:
+    row = team_row("claude-a", **{"claude-a": Rates(1.0, 5.0), "claude-b": Rates(10.0, 50.0)})
+    reply = reply_of(("claude-a", 1000, 0), ("claude-b", 1000, 100))
+    held, settled_at = held_and_settled(row, reply, fallbacks="default")
+    assert held >= settled_at
+    assert settled_at == pytest.approx((1000 * 1 + 1000 * 10 + 100 * 50) / 1e6)
 
 
 def test_the_hold_of_a_fallbacks_request_covers_its_settle() -> None:
@@ -156,7 +243,7 @@ def test_the_hold_of_a_fallbacks_request_covers_its_settle() -> None:
     assert run.budget.reserved[0] >= settled(run)
     plain = fallback_run()
     send(plain, fixture("real_answer.json"), model="claude-fable-5", messages=long_input)
-    assert run.budget.reserved[0] > 1.9 * plain.budget.reserved[0], "two attempts are held"
+    assert run.budget.reserved[0] > plain.budget.reserved[0], "the second attempt is held too"
 
 
 # Web search: $10 for each 1,000 searches on top of the tokens (the pricing page). A real reply to a
@@ -337,9 +424,11 @@ def test_a_price_file_reads_a_providers_fees_and_a_rows_own() -> None:
 @pytest.mark.parametrize(
     ("line", "message"),
     [
-        ("web_search_request = -1", "expected dollars"),
-        ('web_search_request = "x"', "expected dollars"),
-        ("web_search_request = true", "expected dollars"),
+        ("web_search_request = -1", "expected dollars for each request"),
+        ('web_search_request = "x"', "expected dollars for each request"),
+        ("web_search_request = true", "expected dollars for each request"),
+        ("web_search_request = 0", r"below 0\.0001"),
+        ("web_search_request = 0.00001", "may not make it free"),
         ("web_crawl_request = 1", "unknown fee"),
     ],
 )
@@ -388,3 +477,33 @@ def test_an_update_prints_a_changed_fee() -> None:
     assert prices_update.diff(section(0.01), section(0.02)) == [
         "changed fee web_search_request: 0.01 to 0.02"
     ]
+
+
+def test_a_fee_in_a_models_row_of_a_file_has_the_same_floor() -> None:
+    text = (
+        '[anthropic]\nurl = "https://x"\nas_of = "2026-11-23"\n'
+        '[anthropic.models."m"]\ninput = 3\noutput = 15\nweb_search_request = 0\n'
+    )
+    with pytest.raises(ConfigError, match=r"below 0\.0001"):
+        prices.parse(text, "t")
+    assert prices.parse(text.replace("= 0\n", "= 0.02\n"), "t")
+
+
+def test_a_team_may_set_a_fee_of_zero_in_agent_prices_as_it_may_set_a_price_of_zero() -> None:
+    row = Rates(3.0, 15.0, fees=(("web_search_request", 0.0),))
+    run = Gate(hosts=(), prices=(("claude-test", row),))
+    send(run, fixture("real_web_search.json"))
+    assert settled(run) == pytest.approx((13646 * 3.0 + 391 * 15.0) / 1e6, abs=TOLERANCE)
+
+
+def test_check_warns_of_a_fee_a_provider_does_not_charge() -> None:
+    text = (
+        '[openai]\nurl = "https://x"\nas_of = "2026-11-23"\n[openai.fees]\n'
+        'web_search_request = 0.01\n[openai.models."m"]\ninput = 3\noutput = 15\n'
+        '[anthropic]\nurl = "https://x"\nas_of = "2026-11-23"\n[anthropic.fees]\n'
+        'web_search_request = 0.01\n[anthropic.models."m"]\ninput = 3\noutput = 15\n'
+    )
+    assert prices.unused_fees(prices.parse(text, "t")) == ["openai web_search_request"]
+    assert prices.unused_fees(None) == []
+    assert built_in().get("openai").fees == ()
+    assert built_in().get("anthropic").fees == ("web_search_request",)
