@@ -137,6 +137,10 @@ class OpenAI:
     def carries(self, path: str, fields: dict[str, object], kept: Sequence[Given]) -> bool:
         return False if table.is_responses(path) else table.carries(fields, kept)
 
+    # ReplyReader
+    called_tool = staticmethod(table.called_tool)
+    said = staticmethod(table.said)
+
     # ServerChains: Responses keeps its replies, Chat Completions keeps none.
     chain_ids = staticmethod(table.chain_ids)
     chain_references = staticmethod(table.chain_references)

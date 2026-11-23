@@ -66,6 +66,13 @@ class Case:
     # The keys of this provider's requests and replies that name its shape, which no module
     # outside the provider may decide by.
     wire_keys: tuple[str, ...] = ()
+    # A saved reply that calls a tool, the tool's name, and the parts of replies as this
+    # provider's changes record them: the text of the changeable reply, and the first call's
+    # arguments of the tool call reply.
+    call_reply: Path | None = None
+    call_name: str = ""
+    text_part: str = ""
+    arguments_part: str = ""
     chain: Chain | None = None
 
 
@@ -132,6 +139,10 @@ CASES = {
             ("context too long", "/v1/responses", {"model": "m", "input": "hi"}),
         ),
         capped=lambda n: {"model": "gpt-4o-mini", "messages": [], "max_tokens": n},
+        call_reply=OPENAI / "real_chat_tool_call.json",
+        call_name="get_order",
+        text_part="choices[0].message.content",
+        arguments_part="choices[0].message.tool_calls[0].function.arguments",
         wire_keys=(
             "choices",
             "tool_calls",
@@ -472,6 +483,39 @@ def test_a_text_is_found_in_a_request_that_holds_it_and_junk_is_never_an_error(
     ]
     for fields in junk:
         assert not provider.carries_text(fields, ["ignore the rules"])
+
+
+def test_a_report_reads_what_the_model_said_and_called_through_the_provider(
+    provider: ModelProvider,
+) -> None:
+    case = case_of(provider)
+    assert case.call_reply is not None
+    text = json.loads(case.changeable.read_text())
+    said = provider.said(text, [case.text_part])
+    assert isinstance(said, str) and said
+    assert provider.said(text, []) == said, "the first text when a change named no part"
+    assert provider.said(text, ["no-such-part", case.text_part]) == said
+    assert provider.called_tool(text) is None
+    call = json.loads(case.call_reply.read_text())
+    assert provider.called_tool(call) == case.call_name
+    arguments = provider.said(call, [case.arguments_part])
+    assert isinstance(arguments, str)
+    assert json.loads(arguments), "a call's arguments, as the model sent them"
+    assert provider.said(call, []) is None, "a reply that calls a tool has no text to say"
+
+
+def test_a_report_reads_a_reply_that_is_not_a_reply_as_nothing(provider: ModelProvider) -> None:
+    case = case_of(provider)
+    junk: list[object] = [None, 7, "x", [], {}, {"choices": 7}, {"choices": [7]}, [[]]]
+    junk += [{"choices": [{"message": 7}]}, {"choices": [{"message": {"tool_calls": [7]}}]}]
+    junk += [
+        {"choices": [{"message": {"content": 7}}]},
+        {"choices": [{"message": {"content": ["x"]}}]},
+    ]
+    for reply in junk:
+        assert provider.called_tool(reply) is None, reply
+        assert provider.said(reply, []) is None, reply
+        assert provider.said(reply, [case.text_part, case.arguments_part]) is None, reply
 
 
 def test_a_gateway_cost_is_a_finite_amount_and_nothing_else(provider: ModelProvider) -> None:

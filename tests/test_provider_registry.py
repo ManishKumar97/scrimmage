@@ -233,9 +233,6 @@ def test_the_agreement_check_sees_a_provider_left_out_of_a_schema() -> None:
 # a registry entry; nothing else changes.
 
 REGISTRY_NAMES = {"ProviderRegistry", "registry_for", "built_in"}  # what a module may import
-# A report shows what a model said, so it reads the keys of a recorded reply. That is display,
-# not a decision, and it is the one module allowed to name a provider's keys.
-READS_REPLIES_TO_SHOW = {"show.py"}
 # The APIs of the providers that are not registered yet, named here so the guard bites before
 # they are. Each provider that is registered adds its own through its contract case.
 COMING_PATHS = {"/messages", "/v1/messages", "/messages/count_tokens"}
@@ -320,7 +317,7 @@ def reaches_a_provider(module: str) -> bool:
     return parts[1] == "providers" and len(parts) > 2 and parts[2] not in ("base", "registry")
 
 
-def problems_in(source: str, *, reads_replies: bool = False) -> list[str]:
+def problems_in(source: str) -> list[str]:
     """What in this source reaches a provider, or decides by the wire form of an API of one."""
     tree = ast.parse(source)
     docstrings = {
@@ -377,7 +374,7 @@ def problems_in(source: str, *, reads_replies: bool = False) -> list[str]:
         ):
             if node.value in literals:
                 found.append(f"names the API path {node.value!r}")
-            elif node.value in keys and not reads_replies:
+            elif node.value in keys:
                 found.append(f"names the wire key {node.value!r}")
     return found
 
@@ -386,7 +383,7 @@ def problems_in(source: str, *, reads_replies: bool = False) -> list[str]:
 def test_no_product_module_reaches_a_provider_or_decides_by_one_of_its_apis(path: Path) -> None:
     """The gate, the changes, the run's state, the config, init and every other module know a
     provider only through the interface and the registry."""
-    bad = problems_in(path.read_text(), reads_replies=path.name in READS_REPLIES_TO_SHOW)
+    bad = problems_in(path.read_text())
     assert not bad, f"{path.relative_to(SRC)}: {bad}"
 
 
@@ -477,14 +474,11 @@ def test_the_guard_leaves_alone_what_a_module_may_use(fine: str) -> None:
     assert problems_in(GATE + fine) == []
 
 
-def test_the_one_module_that_shows_replies_may_name_their_keys_and_nothing_more() -> None:
+def test_a_module_that_prints_what_a_model_said_may_not_name_the_keys_of_its_reply() -> None:
+    """A report reads a recorded reply through the provider, as the gate does."""
     shows = "def g(r):\n    return r.get('choices')\n"
-    assert problems_in(shows, reads_replies=True) == []
     assert problems_in(shows)
-    assert problems_in(shows + "from scrimmage.provider_openai import x\n", reads_replies=True)
-    assert problems_in(
-        shows + "def h(p):\n    return p.endswith('/responses')\n", reads_replies=True
-    )
+    assert problems_in("def g(r):\n    return r['message']['tool_calls']\n")
 
 
 def test_every_provider_table_is_listed_in_the_import_contract() -> None:

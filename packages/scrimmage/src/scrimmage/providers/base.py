@@ -174,6 +174,19 @@ class FaultMaker(Protocol):
     def carries(self, path: str, fields: dict[str, object], kept: Sequence[Given]) -> bool: ...
 
 
+class ReplyReader(Protocol):
+    """What a report prints of a recorded reply: what the model said and which tool it called."""
+
+    def called_tool(self, reply: object) -> str | None:
+        """The name of the first tool the parsed reply calls, or None."""
+        ...
+
+    def said(self, reply: object, parts: Sequence[object]) -> str | None:
+        """The text, or a tool call's arguments, at the first of these parts a change recorded,
+        in the provider's own part names, or the reply's first text if none is named."""
+        ...
+
+
 class ReplyChange(Protocol):
     """One change to a real reply, for one fault word on one API."""
 
@@ -200,7 +213,7 @@ class ReplyChanger(Protocol):
     def change(self, word: str, op: str, path: str) -> ReplyChange: ...
 
 
-class ModelProvider(Recognizer, Meter, FaultMaker, ReplyChanger, Protocol):
+class ModelProvider(Recognizer, Meter, FaultMaker, ReplyChanger, ReplyReader, Protocol):
     @property
     def name(self) -> str: ...
 
