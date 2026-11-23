@@ -63,9 +63,11 @@ MESSAGES = {
 # count gets the start of its own reply.
 BROKEN_BODY = b'{"id":"msg_01XFDUDYJgAACzvnptvVoYEL","type":"message","role"'
 BROKEN_COUNT = b'{"input_tok'
-# What Anthropic's clients report for a prompt over the context window, with status 400. The
-# numbers are those of a request of 210000 tokens, not the faulted one's: the gate does not
-# count a request's tokens. From memory of those reports, to be checked against a capture.
+# UNCONFIRMED. The message Anthropic's clients report for a prompt over the context window, with
+# status 400, written from memory of those reports: no real capture of it has been made, and the
+# dev key was rejected. The numbers are those of a request of 210000 tokens, not the faulted
+# one's: the gate does not count a request's tokens. Replace it from the first real capture, and
+# take the word out of tests/fixtures/anthropic/SOURCE.md when it is.
 CONTEXT_TOO_LONG = "prompt is too long: 210000 tokens > 200000 maximum"
 
 # Tool types, by family, with the date of the version, _YYYYMMDD, taken off. Run by the agent:
