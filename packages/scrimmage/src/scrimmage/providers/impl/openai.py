@@ -145,6 +145,7 @@ class OpenAI:
         return False if table.is_responses(path) else table.carries(wire, kept)
 
     # ReplyReader
+    parse_reply = staticmethod(table.parse_reply)
     called_tool = staticmethod(table.called_tool)
     said = staticmethod(table.said)
 

@@ -226,7 +226,9 @@ def model_part(line: Doc, folder: Path | None) -> str | None:
         if not isinstance(result, dict):
             return None
         reader = reader_of(line)
-        called = None if reader is None else reader.called_tool(reply_of(cast(Doc, result), folder))
+        called = None
+        if reader is not None:
+            called = reader.called_tool(reply_of(reader, cast(Doc, result), folder))
         return None if called is None else f"the model called {redact_decoded(called)}"
     said = model_said(line, folder)
     return None if said is None else f"the model said {redact_decoded(said)}"
@@ -251,28 +253,28 @@ def model_said(line: Doc, folder: Path | None) -> str | None:
     result = line.get("result")
     if not isinstance(result, dict):
         return None
-    return said_by(line, reply_of(cast(Doc, result), folder))
+    return said_by(line, cast(Doc, result), folder)
 
 
-def reply_of(entry: Doc, folder: Path | None) -> Reply:
-    """A recorded reply, parsed; None if it cannot be read or parsed."""
+def reply_of(reader: ModelProvider, entry: Doc, folder: Path | None) -> Reply:
+    """A recorded reply, parsed by the provider it came from, which reads one that cannot be
+    parsed as nothing. This module holds the bytes, never the parsed value."""
     data = reply_data(entry, folder)
     if data is None:
-        data = str(entry.get("preview") or "")
-    try:
-        return Reply(json.loads(data))
-    except ValueError:
-        return Reply(None)
+        data = str(entry.get("preview") or "").encode("utf-8", "replace")
+    return reader.parse_reply(data)
 
 
-def said_by(line: Doc, reply: Reply) -> str | None:
+def said_by(line: Doc, entry: Doc, folder: Path | None) -> str | None:
     """The string a change to a model reply put at its first named part, read as the call's
     provider lays its replies out: a message's text, or a tool call's arguments."""
     reader = reader_of(line)
-    return None if reader is None else reader.said(reply, changed_parts(line))
+    if reader is None:
+        return None
+    return reader.said(reply_of(reader, entry, folder), changed_parts(line))
 
 
-def reply_data(entry: Doc, folder: Path | None) -> str | None:
+def reply_data(entry: Doc, folder: Path | None) -> bytes | None:
     """A recorded reply's whole content, from the records folder's side folder, or None."""
     sha = entry.get("sha256")
     if folder is None or entry.get("cut") or not isinstance(sha, str) or not SHA256.fullmatch(sha):
@@ -286,7 +288,7 @@ def reply_data(entry: Doc, folder: Path | None) -> str | None:
 
     if data is None or hashlib.sha256(data).hexdigest() != sha:
         return None
-    return data.decode("utf-8", "replace")
+    return data
 
 
 def blob_bytes(blobs: Path, name: str) -> bytes | None:
@@ -325,8 +327,7 @@ def agent_got(line: Doc, folder: Path | None) -> str:
     status = changed.get("status")
     if status is not None:
         return f"a {status} error"
-    reply = reply_of(cast(Doc, entry), folder)
-    held = said_by(line, reply)
+    held = said_by(line, cast(Doc, entry), folder)
     if held is None:
         return str(cast(Doc, entry).get("preview") or "")
     return redact_decoded(held)

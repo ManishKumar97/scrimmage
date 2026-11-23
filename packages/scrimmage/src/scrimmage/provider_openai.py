@@ -448,6 +448,14 @@ CHOICE_PART = re.compile(
 FIRST_TEXT = "choices[0].message.content"
 
 
+def parse_reply(data: bytes) -> Reply:
+    """A recorded reply's bytes, parsed. A reply that is not JSON reads as nothing."""
+    try:
+        return Reply(json.loads(data.decode("utf-8", "replace")))
+    except ValueError:
+        return Reply(None)
+
+
 def called_tool(wire: Reply) -> str | None:
     """The name of the first tool a chat completion calls."""
     reply = reply_value(wire)

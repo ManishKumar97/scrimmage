@@ -216,6 +216,11 @@ class ReplyReader(Protocol):
         in the provider's own part names, or the reply's first text if none is named."""
         ...
 
+    def parse_reply(self, data: bytes) -> Reply:
+        """A recorded reply's bytes, parsed. A reply that cannot be read reads as nothing, so
+        the report holds the bytes and never the parsed value."""
+        ...
+
 
 class ReplyChange(Protocol):
     """One change to a real reply, for one fault word on one API."""
