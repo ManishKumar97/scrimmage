@@ -6,7 +6,7 @@ from pathlib import Path
 DOCS = Path(__file__).parents[1] / "docs"
 FIT = "Will Scrimmage work for your agent?"
 SIX = [
-    "OpenAI only.",
+    "OpenAI and Anthropic only.",
     "LangChain only.",
     "httpx only.",
     "No streaming replies.",
@@ -102,6 +102,7 @@ ALL_TITLES = [
     "A web mock cannot match a query or a body.",
     "A wrapper that is a Python program with no Scrimmage.",
     "A wrapper whose `__wrapped__` was set by hand to another function.",
+    "An Anthropic call that more than one model serves.",
     "An MCP label that reads two ways.",
     "An MCP result with several text items.",
     "An `_arun` that starts `_run` on the default executor itself",
@@ -109,6 +110,8 @@ ALL_TITLES = [
     "An injected `reset` never reaches the server.",
     "An outage from a thread is frozen into the mock, with exit 0.",
     "Another process can take the port before the copy binds it.",
+    "Anthropic's `inference_geo` of `us` is priced at the normal rate.",
+    "Anthropic's server tools.",
     "Cache writes on Chat Completions are unconfirmed.",
     "Cached input on OpenAI only.",
     "Code that rewrites private internals is out of scope.",
@@ -140,7 +143,7 @@ ALL_TITLES = [
     "One web mock answers any query, at any N.",
     "Only MCP tool calls are gated.",
     "Only text and plain data take `append` and `replace`.",
-    "OpenAI only.",
+    "OpenAI and Anthropic only.",
     "Other ways to another process are not gated.",
     "POSTs a library sends by itself.",
     "Prices need checking.",
@@ -181,7 +184,7 @@ ALL_TITLES = [
     "Two HTTP libraries.",
     "Two MCP servers with one name.",
     "Two `model` keys in one body.",
-    "Two cache-write rates nothing uses yet.",
+    "Two cache-write rates only Anthropic uses.",
     "Two calls to one model.",
     "Two toolkits with the same method names.",
     "Web bodies that are not text or JSON.",

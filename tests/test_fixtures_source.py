@@ -39,3 +39,16 @@ def test_a_file_named_real_is_a_capture_and_one_named_doc_is_not() -> None:
             assert name in real_section, f"{name} is not in the captures section"
         else:
             assert name not in real_section, f"{name} is no capture"
+
+
+def test_the_context_length_message_is_marked_unconfirmed_until_it_is_captured() -> None:
+    """No real capture of it exists, and the code's own comment and this page both say so."""
+    from scrimmage import provider_anthropic
+
+    real = [name for name in listed() if name.startswith("real_") and "context" in name]
+    if real:
+        return
+    assert "UNCONFIRMED" in (DIRECTORY / "SOURCE.md").read_text()
+    code = Path(provider_anthropic.__file__).read_text()
+    marked = code[: code.index("CONTEXT_TOO_LONG =")].rsplit("\n\n", 1)[-1]
+    assert "UNCONFIRMED" in marked
