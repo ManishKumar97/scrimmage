@@ -60,7 +60,7 @@ MESSAGES = {
 # What bad body sends a model call: the first 60 bytes of the answer example on the Messages
 # page, so a reader that logs the body sees a real reply's start, and it cannot parse. A token
 # count gets the start of its own reply.
-BROKEN_BODY = b'{"id":"msg_01XFDUDYJgAACzvnptvVoYEL","type":"message","role":"assi'
+BROKEN_BODY = b'{"id":"msg_01XFDUDYJgAACzvnptvVoYEL","type":"message","role"'
 BROKEN_COUNT = b'{"input_tok'
 # What Anthropic's clients report for a prompt over the context window, with status 400. The
 # numbers are those of a request of 210000 tokens, not the faulted one's: the gate does not

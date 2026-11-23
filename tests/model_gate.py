@@ -58,11 +58,13 @@ class Budget:
     def __init__(self, events: list[str]) -> None:
         self.ledger = Ledger(10.0)
         self.events = events
+        self.reserved: list[float] = []  # the dollars of each reservation asked for
 
     def reserve(
         self, run: str, usd: float, label: str = "", ticket: int | None = None
     ) -> int | Shortfall:
         self.events.append("reserve")
+        self.reserved.append(usd)
         return self.ledger.reserve(usd, run, label, ticket)
 
     def release(self, ticket: int) -> None:
@@ -91,13 +93,21 @@ SENDS = (httpx2.Client._send_single_request, httpx2.AsyncClient._send_single_req
 
 
 class Gate:
-    def __init__(self, *faults: Fault) -> None:
+    def __init__(
+        self,
+        *faults: Fault,
+        hosts: tuple[ModelHost, ...] = (ModelHost("guard.test", "openai"),),
+        prices: tuple[tuple[str, Any], ...] = ((GUARD, PRICE),),
+        real: tuple[str, ...] = (),
+        **settings: Any,
+    ) -> None:
+        """hosts, prices and any other plan setting stand in for the guard test's own."""
         httpx2.Client._send_single_request, httpx2.AsyncClient._send_single_request = SENDS
         self.events: list[str] = []
         self.sink = Sink()
         plan = Plan(
-            "run-1", "t", "row", (), faults, (), (), 60.0, budget_usd=10.0,
-            model_hosts=(ModelHost("guard.test", "openai"),), prices=((GUARD, PRICE),),
+            "run-1", "t", "row", (), faults, (), real, 60.0,
+            model_hosts=hosts, prices=prices, **{"budget_usd": 10.0, **settings},
         )  # fmt: skip
         self.run = state.RunState(plan, self.sink, [])
         state.install(self.run)

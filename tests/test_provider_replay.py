@@ -27,6 +27,16 @@ def test_openai_calls_replay_byte_for_byte_as_before_the_provider_seam() -> None
     assert not changed, f"these calls no longer replay as before, by scenario and field: {changed}"
 
 
+def test_the_anthropic_scenarios_are_added_after_every_openai_one() -> None:
+    """The OpenAI scenarios keep their order and their place, so a new provider's scenarios
+    are additions to the golden file and never change what was captured before."""
+    names = list(json.loads(provider_replay.GOLDEN.read_text()))
+    first = next(i for i, name in enumerate(names) if name.startswith("anthropic "))
+    assert all(n.startswith("anthropic ") for n in names[first:])
+    assert not any(n.startswith("anthropic ") for n in names[:first])
+    assert len(names[:first]) >= 674, "an OpenAI scenario was dropped"
+
+
 def test_the_replay_is_deterministic() -> None:
     once = provider_replay.dumps(provider_replay.capture(lambda s: "fault" in s.name))
     twice = provider_replay.dumps(provider_replay.capture(lambda s: "fault" in s.name))
@@ -56,6 +66,17 @@ PINNED = [
     "gateway cost header high custom",
     "cache writes responses split short",
     "injected text one string",
+    # Anthropic's Messages API, added after the OpenAI scenarios, which are unchanged above.
+    "anthropic messages doc_cached",
+    "anthropic messages doc_stream_cached",
+    "anthropic hold cache control 1h",
+    "anthropic hold speed fast",
+    "anthropic fault status 529",
+    "anthropic anthropic: retry fault",
+    "anthropic stream cut",
+    "anthropic fault refuse not yet",
+    "anthropic host listed for both",
+    "anthropic messages count tokens",
 ]
 
 

@@ -69,7 +69,11 @@ def blocks_of(message: dict[str, Any]) -> list[dict[str, Any]]:
 
 def tool_failed(request: dict[str, Any]) -> bool:
     """A tool_result in the request failed: it says is_error, or its text starts with error."""
-    for message in request.get("messages", []):
+    messages = request.get("messages")
+    held: list[Any] = messages if isinstance(messages, list) else []  # type: ignore[assignment]
+    for message in held:
+        if not isinstance(message, dict):
+            continue
         for block in blocks_of(message):
             if block.get("type") != "tool_result":
                 continue
@@ -86,7 +90,9 @@ def tool_failed(request: dict[str, Any]) -> bool:
 
 def turn_of(request: dict[str, Any]) -> int:
     """How many assistant messages the request already holds."""
-    return sum(1 for m in request.get("messages", []) if m.get("role") == "assistant")
+    messages = request.get("messages")
+    held: list[Any] = messages if isinstance(messages, list) else []  # type: ignore[assignment]
+    return sum(1 for m in held if isinstance(m, dict) and m.get("role") == "assistant")
 
 
 Rule = Callable[[dict[str, Any]], "Reply | None"]
@@ -140,7 +146,10 @@ class FakeAnthropic:
         self._server.server_close()
         self._thread.join()
 
-    def _next(self, path: str, body: bytes) -> Reply | str:
+    def _next(self, target: str, body: bytes) -> Reply | str:
+        path = target.split("?", 1)[0].rstrip(
+            "/"
+        )  # a query string and a trailing slash are the same path
         with self._lock:
             self.paths.append(path)
             try:
