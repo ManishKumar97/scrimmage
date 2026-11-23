@@ -374,6 +374,7 @@ def test_a_port_held_by_a_process_that_never_answers_ends_the_probe_when_the_cop
     probe_service = runner.Runner.probe_service
     exits: list[float] = []  # when each copy's process ended, in the order they were started
     ended: list[float] = []
+    watchers: list[threading.Thread] = []
 
     def launched(self: managed.Managed, log: int) -> None:
         launch(self, log)
@@ -386,16 +387,18 @@ def test_a_port_held_by_a_process_that_never_answers_ends_the_probe_when_the_cop
             proc.wait()
             exits[slot] = time.monotonic()
 
-        threading.Thread(target=watch, daemon=True).start()
+        watcher = threading.Thread(target=watch, daemon=True)
+        watchers.append(watcher)
+        watcher.start()
 
-    def raised(self: runner.Runner) -> service_client.Probed:
+    def probe_ended(self: runner.Runner) -> service_client.Probed:
         try:
             return probe_service(self)
         finally:
             ended.append(time.monotonic())
 
     shop.monkeypatch.setattr(managed.Managed, "launch", launched)
-    shop.monkeypatch.setattr(runner.Runner, "probe_service", raised)
+    shop.monkeypatch.setattr(runner.Runner, "probe_service", probe_ended)
     try:
         port = int(hole.getsockname()[1])
         shop.monkeypatch.setattr(runner, "free_port", lambda: port)
@@ -407,8 +410,13 @@ def test_a_port_held_by_a_process_that_never_answers_ends_the_probe_when_the_cop
     assert "address already in use" in out, out
     # From the last copy's exit, not from the start: loading the app takes as long as the
     # machine's load makes it. The probe's own limit is 30 s.
+    for watcher in watchers:
+        watcher.join(timeout=10)
+        assert not watcher.is_alive(), "a copy's exit was never recorded"
+    # The watcher can wake after the probe has already seen the exit under load, so its
+    # time is capped at the probe's end: the exit came no later than that.
     [end] = ended
-    named = end - exits[-1]
+    named = end - min(exits[-1], end)
     assert 0 <= named < AT_ONCE_S, named
 
 
