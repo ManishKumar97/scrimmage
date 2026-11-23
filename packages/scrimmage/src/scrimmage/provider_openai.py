@@ -768,7 +768,7 @@ def written(numbers: dict[str, object], uncached: int) -> tuple[int, int]:
 
 def price(model: str, overrides: dict[str, Rates]) -> Rates | None:
     """The team's price first, whole, then the shipped table: see prices.price."""
-    return prices.price(model, overrides, dict(prices.shipped().models))
+    return prices.priced("openai", model, overrides)
 
 
 def cost(

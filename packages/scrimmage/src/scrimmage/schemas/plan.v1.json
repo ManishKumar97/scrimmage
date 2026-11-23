@@ -329,6 +329,14 @@
                 "type": "number",
                 "minimum": 0
               },
+              "cache_write_5m": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cache_write_1h": {
+                "type": "number",
+                "minimum": 0
+              },
               "tiers": {
                 "type": "object",
                 "additionalProperties": {
@@ -356,6 +364,14 @@
                       "minimum": 0
                     },
                     "cache_write_12h": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "cache_write_5m": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "cache_write_1h": {
                       "type": "number",
                       "minimum": 0
                     },
@@ -389,6 +405,14 @@
                           "minimum": 0
                         },
                         "cache_write_12h": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "cache_write_5m": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "cache_write_1h": {
                           "type": "number",
                           "minimum": 0
                         }
@@ -429,6 +453,187 @@
                   "cache_write_12h": {
                     "type": "number",
                     "minimum": 0
+                  },
+                  "cache_write_5m": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cache_write_1h": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "description": "[agent.prices]: flat, by model name."
+        },
+        "file_prices": {
+          "type": "object",
+          "description": "The team's scrimmage-runs/prices.toml: its rows for each provider, by provider name and then model name.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "input",
+                "output"
+              ],
+              "properties": {
+                "input": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "output": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "cached_input": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "cache_write_30m": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "cache_write_12h": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "cache_write_5m": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "cache_write_1h": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "tiers": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "input",
+                      "output"
+                    ],
+                    "properties": {
+                      "input": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "output": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "cached_input": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "cache_write_30m": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "cache_write_12h": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "cache_write_5m": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "cache_write_1h": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "long": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "above",
+                          "input",
+                          "output"
+                        ],
+                        "properties": {
+                          "above": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "input": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "output": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "cached_input": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "cache_write_30m": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "cache_write_12h": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "cache_write_5m": {
+                            "type": "number",
+                            "minimum": 0
+                          },
+                          "cache_write_1h": {
+                            "type": "number",
+                            "minimum": 0
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "long": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "above",
+                    "input",
+                    "output"
+                  ],
+                  "properties": {
+                    "above": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "input": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "output": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "cached_input": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "cache_write_30m": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "cache_write_12h": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "cache_write_5m": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "cache_write_1h": {
+                      "type": "number",
+                      "minimum": 0
+                    }
                   }
                 }
               }

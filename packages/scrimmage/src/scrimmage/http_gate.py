@@ -923,7 +923,7 @@ def mocked(
 
 
 def prices_of(ctx: Bound, provider: ModelProvider, model: str) -> Rates | None:
-    return provider.price(model, dict(ctx.run.plan.prices))
+    return provider.price(model, dict(ctx.run.plan.prices_for(provider.name)))
 
 
 def worst(

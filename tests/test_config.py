@@ -562,7 +562,7 @@ def test_a_snapshot_priced_apart_from_its_family_has_its_own_row() -> None:
     from scrimmage import prices
     from scrimmage import provider_openai as table
 
-    shipped = dict(prices.shipped().models)
+    shipped = dict(prices.shipped().models("openai"))
     assert table.price("gpt-4o-2024-05-13", {}) == Rates(5.00, 15.00)  # not gpt-4o's $2.50
     for snapshot in ("gpt-4o-2024-08-06", "gpt-4o-2024-11-20"):
         assert table.price(snapshot, {}) == shipped["gpt-4o"]

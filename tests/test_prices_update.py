@@ -21,11 +21,11 @@ NEWER = (
     resources.files("scrimmage")
     .joinpath("prices.toml")
     .read_text(encoding="utf-8")
-    .replace('as_of = "2026-11-22"', 'as_of = "2026-12-01"')
+    .replace('as_of = "2026-11-22"', 'as_of = "2026-12-01"', 1)
     .replace("input = 2.00\n", "input = 2.25\n", 1)  # gpt-4.1
     .replace(
-        '[models."gpt-5-nano"]',
-        '[models."gpt-9"]\ninput = 1.0\noutput = 2.0\n\n[models."gpt-5-nano"]',
+        '[openai.models."gpt-5-nano"]',
+        '[openai.models."gpt-9"]\ninput = 1.0\noutput = 2.0\n\n[openai.models."gpt-5-nano"]',
     )
 )
 BAD = NEWER.replace("input = 2.25", 'input = "two"')
@@ -89,7 +89,7 @@ def test_update_prints_the_diff_and_writes_the_team_file(
     assert "added gpt-9: input 1, output 2" in out
     assert "changed gpt-4.1: input 2 to 2.25" in out
     assert "removed" not in out
-    assert "the new file is as of 2026-12-01" in out
+    assert "openai: as of 2026-11-22, the new file is as of 2026-12-01" in out
     runs = folder / "scrimmage-runs"
     assert (runs / "prices.toml").read_text() == NEWER
     assert (runs / ".gitignore").read_text() == "*\n"
@@ -133,7 +133,7 @@ def test_a_bad_file_does_not_replace_a_good_team_file(
 ) -> None:
     folder = project(tmp_path)
     cli.main(["prices", "update", str(folder / "scrimmage.toml")])
-    served.body = b"as_of = 5"
+    served.body = b"[openai]\nas_of = 5"
     assert cli.main(["prices", "update", str(folder / "scrimmage.toml")]) == 2
     assert (folder / "scrimmage-runs" / "prices.toml").read_text() == NEWER
 
@@ -181,13 +181,16 @@ def test_only_an_https_address_is_fetched(tmp_path: Path) -> None:
 @pytest.mark.design("prices.file_never_free")
 @pytest.mark.parametrize(
     "free",
-    ['[models."gpt-4.1"]\ninput = 0\noutput = 0\n', '[models."gpt-4.1"]\ninput = 1\noutput = 0\n'],
+    [
+        '[openai.models."gpt-4.1"]\ninput = 0\noutput = 0\n',
+        '[openai.models."gpt-4.1"]\ninput = 1\noutput = 0\n',
+    ],
 )
 def test_a_fetched_file_that_makes_a_model_free_writes_nothing_and_exits_2(
     served: Server, tmp_path: Path, capsys: pytest.CaptureFixture[str], free: str
 ) -> None:
     folder = project(tmp_path)
-    served.body = ('as_of = "2026-12-01"\nsource = "x"\n' + free).encode()
+    served.body = ('[openai]\nas_of = "2026-12-01"\nurl = "x"\n' + free).encode()
     assert cli.main(["prices", "update", str(folder / "scrimmage.toml")]) == 2
     assert "is below 0.001" in capsys.readouterr().err
     assert not (folder / "scrimmage-runs").exists()

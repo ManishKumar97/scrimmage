@@ -20,7 +20,7 @@ from urllib.parse import urlsplit
 
 from scrimmage.errors import ConfigError
 from scrimmage.outcomes import INFRA, MISTAKE, OK
-from scrimmage.prices import RUNS, SHIPPED, PriceFile, Rates, parse, shipped, team
+from scrimmage.prices import RUNS, SHIPPED, PriceFile, Rates, Section, parse, shipped, team
 
 # The one address Scrimmage ever fetches, and only when a person runs `scrimmage prices update`.
 URL = (
@@ -52,8 +52,9 @@ def fmt(rates: Rates) -> str:
     return ", ".join(f"{k} {num(k, v)}" for k, v in flat(rates).items())
 
 
-def diff(old: PriceFile, new: PriceFile) -> list[str]:
-    """What an update changes: added, removed and changed rows, old rate to new."""
+def diff(old: Section, new: Section) -> list[str]:
+    """What an update changes in one provider's section: added, removed and changed rows, old
+    rate to new."""
     before, after = dict(old.models), dict(new.models)
     lines = [f"added {m}: {fmt(r)}" for m, r in after.items() if m not in before]
     lines += [f"removed {m}: {fmt(r)}" for m, r in before.items() if m not in after]
@@ -73,6 +74,26 @@ def diff(old: PriceFile, new: PriceFile) -> list[str]:
             else:
                 moves.append(f"{key} removed, was {num(key, a[key])}")
         lines.append(f"changed {model}: {'; '.join(moves)}")
+    return lines
+
+
+def diff_files(old: PriceFile, new: PriceFile) -> list[str]:
+    """What an update changes, grouped by provider: a heading for each section, with both
+    dates, and under it the changes to its rows. A section only one file has is added or
+    removed whole."""
+    before, after = dict(old.sections), dict(new.sections)
+    lines: list[str] = []
+    for provider in [*after, *(p for p in before if p not in after)]:
+        was, now = before.get(provider), after.get(provider)
+        if now is None:
+            lines.append(f"{provider}: section removed")
+        elif was is None:
+            lines.append(f"{provider}: section added, as of {now.as_of}")
+            lines += [f"  added {m}: {fmt(r)}" for m, r in now.models]
+        else:
+            lines.append(f"{provider}: as of {was.as_of}, the new file is as of {now.as_of}")
+            changes = diff(was, now)
+            lines += [f"  {line}" for line in changes] or ["  no price changed"]
     return lines
 
 
@@ -206,8 +227,8 @@ def update(root: Path, url: str | None = None) -> int:
         old, was = None, ""
     if old is None:
         old, was = shipped(), f"the shipped {SHIPPED}"
-    print(f"compared with {was}, as of {old.as_of}; the new file is as of {new.as_of}")
-    print("\n".join(diff(old, new)) or "no price changed")
+    print(f"compared with {was}")
+    print("\n".join(diff_files(old, new)))
     write(root, text)
     print(f"wrote {RUNS}/{SHIPPED}")
     return OK

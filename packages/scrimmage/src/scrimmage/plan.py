@@ -49,7 +49,9 @@ class Plan:
     model_hosts: tuple[ModelHost, ...] = ()
     budget_usd: float | None = None  # None: no budget, so no reservations
     reserve_output_tokens: int = DEFAULT_RESERVE_OUTPUT_TOKENS
-    prices: tuple[tuple[str, Rates], ...] = ()
+    prices: tuple[tuple[str, Rates], ...] = ()  # [agent.prices]: flat, by model name
+    # The team's scrimmage-runs/prices.toml, as (provider, rows) for each of its sections.
+    file_prices: tuple[tuple[str, tuple[tuple[str, Rates], ...]], ...] = ()
     service_tier: str | None = None  # the tier a request that names none is held at
     children: bool = False  # child processes fire faults too
     unavailable: str | None = None  # why a child has no plan; such a plan is never sent
@@ -72,6 +74,11 @@ class Plan:
         """The providers this run's requests are for, built once for these model hosts and
         kept on the plan."""
         return registry_for(listed_hosts(self.model_hosts))
+
+    def prices_for(self, provider: str) -> tuple[tuple[str, Rates], ...]:
+        """The rows that price this provider's calls before the shipped file: [agent.prices],
+        then the team's file section for the provider."""
+        return in_order(self.prices, dict(self.file_prices).get(provider, ()))
 
     def tool_names(self) -> list[str]:
         """Every tool's final name: the one the model sees."""
@@ -100,6 +107,11 @@ class Plan:
         if self.service_tier is not None:
             budget = cast(dict[str, object], doc["budget"])
             budget["service_tier"] = self.service_tier
+        if self.file_prices:
+            budget = cast(dict[str, object], doc["budget"])
+            budget["file_prices"] = {
+                provider: {m: price_json(p) for m, p in rows} for provider, rows in self.file_prices
+            }
         if self.renames:
             doc["renames"] = dict(self.renames)
         if self.record:
@@ -129,6 +141,10 @@ class Plan:
         prices = tuple(
             (model, price_from(obj(p))) for model, p in obj(budget.get("prices", {})).items()
         )
+        file_prices = tuple(
+            (provider, tuple((model, price_from(obj(p))) for model, p in obj(rows).items()))
+            for provider, rows in obj(budget.get("file_prices", {})).items()
+        )
         hosts = tuple(
             ModelHost(string(h, "host"), string(h, "provider"))
             for h in map(obj, items(doc, "model_hosts"))
@@ -157,6 +173,7 @@ class Plan:
             budget_usd=limit_usd,
             reserve_output_tokens=reserve,
             prices=prices,
+            file_prices=file_prices,
             service_tier=None
             if budget.get("service_tier") is None
             else string(budget, "service_tier"),
@@ -179,6 +196,8 @@ def price_json(price: Rates) -> dict[str, object]:
         "cached_input": price.cached_input,
         "cache_write_30m": price.cache_write_30m,
         "cache_write_12h": price.cache_write_12h,
+        "cache_write_5m": price.cache_write_5m,
+        "cache_write_1h": price.cache_write_1h,
     }
     doc.update({key: rate for key, rate in optional.items() if rate is not None})
     if price.tiers:
@@ -202,6 +221,8 @@ def price_from(doc: dict[str, object]) -> Rates:
         tuple((tier, price_from(obj(p))) for tier, p in obj(doc.get("tiers", {})).items()),
         above=None if longer is None else int(number(obj(longer), "above")),
         long=None if longer is None else price_from(obj(longer)),
+        cache_write_5m=rate("cache_write_5m"),
+        cache_write_1h=rate("cache_write_1h"),
     )
 
 
@@ -360,7 +381,10 @@ def plan_for(config: Config, row: Row, run: str) -> Plan:
         model_hosts=config.agent.model_hosts,
         budget_usd=config.agent.max_cost_usd,
         reserve_output_tokens=config.agent.reserve_output_tokens,
-        prices=in_order(config.agent.prices, config.team_prices),
+        prices=config.agent.prices,
+        file_prices=()
+        if config.team_prices is None
+        else tuple((p, s.models) for p, s in config.team_prices.sections),
         service_tier=config.agent.service_tier,
         children=config.agent.children,
         scrub=config.scrub,

@@ -155,6 +155,12 @@
         "cache_write_12h": {
           "$ref": "#/$defs/dollars"
         },
+        "cache_write_5m": {
+          "$ref": "#/$defs/dollars"
+        },
+        "cache_write_1h": {
+          "$ref": "#/$defs/dollars"
+        },
         "tiers": {
           "type": "object",
           "additionalProperties": {
@@ -1163,6 +1169,12 @@
         "cache_write_12h": {
           "$ref": "#/$defs/dollars"
         },
+        "cache_write_5m": {
+          "$ref": "#/$defs/dollars"
+        },
+        "cache_write_1h": {
+          "$ref": "#/$defs/dollars"
+        },
         "long": {
           "$ref": "#/$defs/long_price"
         }
@@ -1195,6 +1207,12 @@
           "$ref": "#/$defs/dollars"
         },
         "cache_write_12h": {
+          "$ref": "#/$defs/dollars"
+        },
+        "cache_write_5m": {
+          "$ref": "#/$defs/dollars"
+        },
+        "cache_write_1h": {
           "$ref": "#/$defs/dollars"
         }
       },
