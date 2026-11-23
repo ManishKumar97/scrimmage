@@ -753,3 +753,20 @@ def test_a_cached_rate_at_the_floor_is_accepted_in_a_file() -> None:
         dict(prices.parse(HEAD + body, "the file").models("openai"))["gpt-4.1"].cached_input
         == 0.001
     )
+
+
+def test_the_lookup_and_the_plans_dedupe_read_one_snapshot_rule_from_the_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scrimmage.providers.registry import built_in
+
+    provider = built_in().get("openai")
+    team = Rates(1.0, 2.0)
+    assert provider.snapshot_family("gpt-4.1-2025-04-14") == "gpt-4.1"
+    assert provider.price("gpt-4.1-2025-04-14", {"gpt-4.1": team}) == team
+    # The rule has one definition. Change it, and the lookup follows, so the lookup and the
+    # dedupe in plan.py, which reads provider.snapshot_family, cannot hold two rules.
+    monkeypatch.setattr(provider_openai, "snapshot_family", lambda model: "family-of-all")
+    assert provider.snapshot_family("gpt-4.1-2025-04-14") == "family-of-all"
+    assert provider.price("gpt-4.1-2025-04-14", {"family-of-all": team}) == team
+    assert provider.price("gpt-4.1-2025-04-14", {"gpt-4.1": team}) is None

@@ -794,12 +794,18 @@ def written(numbers: dict[str, object], uncached: int) -> tuple[int, int]:
 
 def price(model: str, overrides: dict[str, Rates]) -> Rates | None:
     """The team's price first, whole, then the shipped table: see prices.price."""
-    return prices.priced("openai", model, overrides, family=prices.dashed_family)
+    return prices.priced("openai", model, overrides, family=snapshot_family)
 
 
 def cost(
     tokens_in: int,
     tokens_out: int,
+def snapshot_family(model: str) -> str:
+    """A dated snapshot's family: OpenAI dates one -YYYY-MM-DD. The provider's one rule, read by
+    the price lookup below and by the plan's dedupe of the price rows."""
+    return prices.dashed_family(model)
+
+
     rates: Rates,
     cached: int = 0,
     written_30m: int = 0,
