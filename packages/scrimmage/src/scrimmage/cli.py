@@ -873,6 +873,12 @@ def run_check(
     )
     for line in prices.sources(agent.prices, config.team_prices):
         print(line)
+    for unused in prices.unused_fees(config.team_prices):
+        print(
+            f"scrimmage: warning: {prices.RUNS}/{prices.SHIPPED} sets the fee {unused}, which "
+            "that provider does not charge, so it is never used",
+            file=sys.stderr,
+        )
     for section in prices.unregistered(config.team_prices):
         print(
             f"scrimmage: warning: {prices.RUNS}/{prices.SHIPPED} has a section [{section}] that "

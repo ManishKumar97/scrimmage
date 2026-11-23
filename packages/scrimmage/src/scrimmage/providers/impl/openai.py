@@ -70,6 +70,8 @@ class OpenAI:
         """The table module's one rule, which its own price lookup reads too."""
         return table.snapshot_family(model)
 
+    fees: tuple[str, ...] = ()  # OpenAI bills nothing for each request
+
     def price(self, model: str, overrides: dict[str, Rates]) -> Rates | None:
         return table.price(model, overrides)
 

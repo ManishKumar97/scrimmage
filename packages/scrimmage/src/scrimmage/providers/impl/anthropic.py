@@ -48,6 +48,7 @@ class Anthropic:
     name = "anthropic"
     display_name = "Anthropic"
     hosts = table.HOSTS
+    fees = (table.SEARCH,)
     free_ops = table.FREE_OPS
 
     # Recognizer

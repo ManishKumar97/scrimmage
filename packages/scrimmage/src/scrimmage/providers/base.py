@@ -159,6 +159,11 @@ class Meter(Protocol):
 
     def gateway_cost(self, value: object, before: float | None = None) -> float | None: ...
 
+    @property
+    def fees(self) -> tuple[str, ...]:
+        """The per-request fees a price file may set for this provider, such as a search."""
+        ...
+
     def price(self, model: str, overrides: dict[str, Rates]) -> Rates | None: ...
 
     def cost(

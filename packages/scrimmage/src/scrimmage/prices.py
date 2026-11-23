@@ -177,7 +177,7 @@ def read_rates(entry: dict[str, object], item: str, *, level: str = "model") -> 
                 f"{item} above: expected a whole number of input tokens, at least 1, such as 272000"
             )
         above = found
-    fees = tuple((key, dollars(entry, key, item)) for key in FEE_KEYS if key in entry)
+    fees = tuple((key, fee_dollars(entry, key, item)) for key in FEE_KEYS if key in entry)
     rates = Rates(
         rate,
         output,
@@ -206,7 +206,7 @@ def read_fees(value: object, where: str) -> tuple[tuple[str, float], ...]:
     for key in found:
         if key not in FEE_KEYS:
             raise ConfigError(f"{where} {key}: unknown fee; the fees are {', '.join(FEE_KEYS)}")
-    return tuple((key, dollars(found, key, where)) for key in FEE_KEYS if key in found)
+    return tuple((key, fee_dollars(found, key, where)) for key in FEE_KEYS if key in found)
 
 
 def check_long(base: Rates, longer: Rates, item: str) -> None:
@@ -236,6 +236,19 @@ def dollars(entry: dict[str, object], key: str, item: str) -> float:
         or number < 0
     ):
         raise ConfigError(f"{item} {key}: expected dollars per million tokens")
+    return float(number)
+
+
+def fee_dollars(entry: dict[str, object], key: str, item: str) -> float:
+    """A fee: dollars for each request, not for a million tokens."""
+    number = entry.get(key)
+    if (
+        isinstance(number, bool)
+        or not isinstance(number, int | float)
+        or not math.isfinite(number)
+        or number < 0
+    ):
+        raise ConfigError(f"{item} {key}: expected dollars for each request, such as 0.01")
     return float(number)
 
 
@@ -315,13 +328,23 @@ def parse_section(text: str, item: str, provider: str, raw: object) -> Section:
             models.append((model, rates))
         except ConfigError as exc:
             raise ConfigError(f"{exc.problems[0]}{line_of(text, provider, model)}") from None
-    return Section(url, as_of, tuple(models), read_fees(table.get("fees", {}), f"{item} fees"))
+    fees = read_fees(table.get("fees", {}), f"{item} fees")
+    for key, fee in fees:
+        if fee < FEE_FLOOR:
+            raise ConfigError(
+                f"{item} fees {key}: {fee:g} is below {FEE_FLOOR:g}, the least a price file may "
+                "state for a request; a price file may not make it free"
+            )
+    return Section(url, as_of, tuple(models), fees)
 
 
 RESERVED_TIERS = ("default", "auto")
 # Dollars per million tokens. The cheapest real price today is 0.02, so no honest file is
 # below this, and a file that is has made the model free in all but name.
 FLOOR = 0.001
+# The same for a fee, in dollars for each request, whose honest values are cents: a file that
+# states less has made the request free in all but name.
+FEE_FLOOR = 0.0001
 
 
 def check_file_rates(model: str, rates: Rates, item: str) -> None:
@@ -350,6 +373,12 @@ def check_file_rates(model: str, rates: Rates, item: str) -> None:
         if value is not None and value < FLOOR:
             raise ConfigError(
                 f"{item} {key}: {value:g} is below {FLOOR:g}, the least a price file may state"
+            )
+    for key, fee in rates.fees:
+        if fee < FEE_FLOOR:
+            raise ConfigError(
+                f"{item} {key}: {fee:g} is below {FEE_FLOOR:g}, the least a price file may "
+                "state for a request; a price file may not make it free"
             )
     for tier, tiered in rates.tiers:
         if tier.lower() in RESERVED_TIERS:
@@ -443,6 +472,23 @@ def unregistered(file: PriceFile | None) -> list[str]:
 
     known = {p.name for p in built_in().providers}
     return [] if file is None else [name for name, _ in file.sections if name not in known]
+
+
+def unused_fees(file: PriceFile | None) -> list[str]:
+    """Each fee a section of this file sets that its provider does not charge, as
+    'openai web_search_request'. Such a fee is read and never used."""
+    from scrimmage.providers.registry import built_in
+
+    if file is None:
+        return []
+    named = {p.name: p.fees for p in built_in().providers}
+    return [
+        f"{provider} {key}"
+        for provider, section in file.sections
+        if provider in named
+        for key, _ in section.fees
+        if key not in named[provider]
+    ]
 
 
 def age(file: PriceFile | None) -> str:
