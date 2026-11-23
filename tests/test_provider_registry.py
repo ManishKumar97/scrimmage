@@ -25,6 +25,7 @@ from scrimmage.providers.registry import (
     builtin_providers,
     registry_for,
 )
+from test_provider_contract import CASES
 
 SRC = Path(scrimmage.__file__).parent
 ROOT = Path(__file__).parents[1]
@@ -198,6 +199,28 @@ def test_a_registered_provider_is_one_a_config_can_name(name: str) -> None:
     registry_for((("gw.test", name),))
 
 
+LABEL_WORDS = {"model", "embeddings", "moderations", "input_tokens"}
+
+
+@pytest.mark.parametrize("schema", ["plan.v1.json", "scrimmage-toml.v1.json"])
+def test_the_model_label_pattern_of_each_schema_names_the_registered_providers(
+    schema: str,
+) -> None:
+    """A label such as model:openai/embeddings is matched by a pattern that lists the providers;
+    one left behind passes until a config uses the new provider's label."""
+    pattern = json.loads((SRC / "schemas" / schema).read_text())["$defs"]["model_label"]["pattern"]
+    names = [p.name for p in builtin_providers()]
+    for name in names:
+        assert re.search(pattern, f"model:{name}"), f"{schema} does not take model:{name}"
+        assert re.search(pattern, f"model:{name}/embeddings"), name
+    assert re.search(pattern, "model")
+    assert re.search(pattern, "model:*/embeddings")
+    assert not re.search(pattern, "model:nonesuch")
+    assert not re.search(pattern, "model:*/nonesuch")
+    listed = set(re.findall(r"[a-z][a-z0-9_-]+", pattern)) - LABEL_WORDS
+    assert listed == set(names), f"{schema} names {sorted(listed)}, the registry {sorted(names)}"
+
+
 def test_the_agreement_check_sees_a_provider_left_out_of_a_schema() -> None:
     """The check above is not vacuous: an enum short of a provider is not the registry's."""
     schema = {"a": {"properties": {"provider": {"enum": ["openai"]}}}}
@@ -206,15 +229,38 @@ def test_the_agreement_check_sees_a_provider_left_out_of_a_schema() -> None:
 
 
 # The guard: no module outside the providers package reaches a provider except through the
-# registry's own names. A provider is a module and a registry entry; nothing else changes.
+# registry's own names, and none decides by the wire form of an API. A provider is a module and
+# a registry entry; nothing else changes.
 
 REGISTRY_NAMES = {"ProviderRegistry", "registry_for", "built_in"}  # what a module may import
-# Names an OpenAI API goes by in a path or an op. A module that compares a path or an op to one
-# of these decides by API, which is the provider's job. changes.py holds OpenAI's reply shapes,
-# the code that changes a Chat Completions or a Responses reply, and reaches no provider: only
-# the OpenAI provider calls them.
-API_LITERALS = {"responses", "/responses", "chat/completions", "/chat/completions"}
-HOLDS_OPENAI_SHAPES = {"changes.py"}
+# The APIs of the providers that are not registered yet, named here so the guard bites before
+# they are. Each provider that is registered adds its own through its contract case.
+COMING_PATHS = {"/messages", "/v1/messages", "/messages/count_tokens"}
+COMING_KEYS = {"stop_reason", "content_block", "input_json_delta", "tool_use", "tool_result"}
+
+
+def path_forms(path: str) -> set[str]:
+    """The ways a path names its API: its last one and two segments, with and without the slash."""
+    parts = path.split("?")[0].strip("/").split("/")
+    tails = {"/".join(parts[-k:]) for k in (1, 2) if len(parts) >= k}
+    return tails | {"/" + tail for tail in tails}
+
+
+def api_literals() -> set[str]:
+    """The paths that name an API of any registered provider, from its contract case, and the
+    paths of those to come. Only a chat op is an API of its own: embeddings, moderations and
+    input_tokens are the same words for every provider."""
+    found = set(COMING_PATHS)
+    for case in CASES.values():
+        for _, path, op in case.ops:
+            if op == "chat":
+                found |= path_forms(path)
+    return found
+
+
+def wire_keys() -> set[str]:
+    """The keys of a registered provider's requests and replies that name its shape."""
+    return {key for case in CASES.values() for key in case.wire_keys} | COMING_KEYS
 
 
 def product_modules() -> list[Path]:
@@ -236,6 +282,30 @@ def provider_classes() -> set[str]:
     return {type(p).__name__ for p in builtin_providers()}
 
 
+def defined_in(path: Path) -> set[str]:
+    """The top-level names a module defines."""
+    names: set[str] = set()
+    for node in ast.parse(path.read_text()).body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            names |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+    return names
+
+
+def shape_names() -> set[str]:
+    """The names of a provider's reply shapes, from its *_changes.py modules, that no product
+    module defines for itself: a product module that uses one is calling into a shape."""
+    shapes: set[str] = set()
+    for path in (SRC / "providers" / "impl").glob("*_changes.py"):
+        shapes |= defined_in(path)
+    for path in product_modules():
+        shapes -= defined_in(path)
+    return {name for name in shapes if not name.startswith("_")}
+
+
 def reaches_a_provider(module: str) -> bool:
     """Whether this module name is a provider's own: a table module or anything in providers
     beside the interface and the registry."""
@@ -247,8 +317,8 @@ def reaches_a_provider(module: str) -> bool:
     return parts[1] == "providers" and len(parts) > 2 and parts[2] not in ("base", "registry")
 
 
-def problems_in(source: str, *, holds_shapes: bool = False) -> list[str]:
-    """What in this source reaches a provider, or decides by an API of one."""
+def problems_in(source: str) -> list[str]:
+    """What in this source reaches a provider, or decides by the wire form of an API of one."""
     tree = ast.parse(source)
     docstrings = {
         id(node.body[0].value)
@@ -258,7 +328,8 @@ def problems_in(source: str, *, holds_shapes: bool = False) -> list[str]:
         and isinstance(node.body[0], ast.Expr)
         and isinstance(node.body[0].value, ast.Constant)
     }
-    classes, tables = provider_classes(), table_modules()
+    classes, tables, shapes = provider_classes(), table_modules(), shape_names()
+    literals, keys = api_literals(), wire_keys()
     found: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -276,18 +347,35 @@ def problems_in(source: str, *, holds_shapes: bool = False) -> list[str]:
                     found.append(f"imports {alias.name} from the registry")
                 if alias.name in classes:
                     found.append(f"imports {alias.name}, a provider's class")
+                if alias.name in shapes:
+                    found.append(f"imports {alias.name}, one of a provider's reply shapes")
         elif isinstance(node, ast.Name) and (node.id in classes or node.id in tables):
             found.append(f"names {node.id}")
         elif isinstance(node, ast.Attribute) and (node.attr in classes or node.attr in tables):
             found.append(f"names {node.attr}")
+        elif isinstance(node, ast.Attribute) and node.attr in shapes:
+            found.append(f"calls into {node.attr}, one of a provider's reply shapes")
+        elif isinstance(node, ast.Name) and node.id in shapes:
+            found.append(f"calls into {node.id}, one of a provider's reply shapes")
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in ("endswith", "startswith")
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+            and node.args[0].value.startswith("/")
+        ):
+            found.append(f"matches a path, {node.args[0].value!r}, which is the provider's to know")
         elif (
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
             and id(node) not in docstrings
-            and node.value in API_LITERALS
-            and not holds_shapes
         ):
-            found.append(f"compares to the API name {node.value!r}")
+            if node.value in literals:
+                found.append(f"names the API path {node.value!r}")
+            elif node.value in keys:
+                found.append(f"names the wire key {node.value!r}")
     return found
 
 
@@ -295,8 +383,20 @@ def problems_in(source: str, *, holds_shapes: bool = False) -> list[str]:
 def test_no_product_module_reaches_a_provider_or_decides_by_one_of_its_apis(path: Path) -> None:
     """The gate, the changes, the run's state, the config, init and every other module know a
     provider only through the interface and the registry."""
-    bad = problems_in(path.read_text(), holds_shapes=path.name in HOLDS_OPENAI_SHAPES)
+    bad = problems_in(path.read_text())
     assert not bad, f"{path.relative_to(SRC)}: {bad}"
+
+
+def test_the_literals_the_guard_looks_for_come_from_every_registered_provider() -> None:
+    assert set(CASES) == {p.name for p in builtin_providers()}
+    literals = api_literals()
+    assert {"/responses", "responses", "/chat/completions", "chat/completions"} <= literals
+    assert "/messages" in literals
+    assert not literals & {"embeddings", "moderations", "input_tokens", "/embeddings"}
+    assert {"choices", "previous_response_id", "stop_reason"} <= wire_keys()
+    names = shape_names()
+    assert {"chat_kind", "model_change", "CHAT_CHANGES", "RESPONSES_CHANGES"} <= names
+    assert "change_chat" in names
 
 
 GATE = "def f(x):\n    return x\n"
@@ -313,6 +413,10 @@ GATE = "def f(x):\n    return x\n"
             "from scrimmage.providers.impl.openai import OpenAI\n",
             "imports from scrimmage.providers",
         ),
+        (
+            "from scrimmage.providers.impl import openai_changes\n",
+            "imports scrimmage.providers.impl.openai_changes",
+        ),
         ("from scrimmage.providers.registry import OpenAI\n", "imports OpenAI from the registry"),
         ("from scrimmage.providers.registry import PROVIDERS\n", "imports PROVIDERS from the reg"),
         (
@@ -324,11 +428,28 @@ GATE = "def f(x):\n    return x\n"
             "imports from scrimmage.providers.anth",
         ),
         ("from .provider_openai import usage\n", "which no guard can read"),
-        ("def g(op):\n    return op == 'responses'\n", "compares to the API name 'responses'"),
+        ("def g(op):\n    return op == 'responses'\n", "names the API path 'responses'"),
         ("def g(path):\n    return path.endswith('/responses')\n", "'/responses'"),
         ("def g(path):\n    return path.endswith('/chat/completions')\n", "'/chat/completions'"),
         ("def g(x):\n    return x.provider_openai.usage\n", "names provider_openai"),
         ("def g():\n    return OpenAI()\n", "names OpenAI"),
+        # The reviewer's S5: the gate decides by another API's path, or by a key of its replies.
+        ("def g(path):\n    return path.endswith('/messages')\n", "names the API path '/messages'"),
+        ("def g(path):\n    return path.endswith('/v1/other')\n", "matches a path, '/v1/other'"),
+        ("def g(path):\n    return path.startswith('/x')\n", "matches a path, '/x'"),
+        ("def g(fields):\n    return fields.get('choices')\n", "names the wire key 'choices'"),
+        ("def g(fields):\n    return fields['stop_reason']\n", "names the wire key 'stop_reason'"),
+        # The reviewer's S6: the gate calls a provider's reply shape itself.
+        (
+            "def g(x):\n    return changes.chat_kind(1, 'chat', [], 'garble')\n",
+            "calls into chat_kind",
+        ),
+        (
+            "def g(x):\n    return changes.model_change('garble', 'chat')\n",
+            "calls into model_change",
+        ),
+        ("from scrimmage.changes import chat_kind\n", "imports chat_kind, one of"),
+        ("def g(x):\n    return CHAT_CHANGES[x]\n", "CHAT_CHANGES"),
     ],
 )
 def test_the_guard_catches_each_way_a_module_could_reach_a_provider(added: str, says: str) -> None:
@@ -344,16 +465,20 @@ def test_the_guard_catches_each_way_a_module_could_reach_a_provider(added: str, 
         "from scrimmage import changes, state\n",
         "def g(op):\n    '''A responses call.'''\n    return op == 'chat'\n",
         "def g(provider):\n    return provider.name\n",
+        "def g(fields):\n    return fields.get('stream') is True and fields.get('model')\n",
+        "def g(x):\n    return changes.change_text(x, 1)\n",
+        "def g(x):\n    return x.endswith('.py')\n",
     ],
 )
 def test_the_guard_leaves_alone_what_a_module_may_use(fine: str) -> None:
     assert problems_in(GATE + fine) == []
 
 
-def test_a_module_that_holds_openais_reply_shapes_may_name_its_apis_and_nothing_more() -> None:
-    shapes = "def g(op):\n    return op == 'responses'\n"
-    assert problems_in(shapes, holds_shapes=True) == []
-    assert problems_in(shapes + "from scrimmage.provider_openai import x\n", holds_shapes=True)
+def test_a_module_that_prints_what_a_model_said_may_not_name_the_keys_of_its_reply() -> None:
+    """A report reads a recorded reply through the provider, as the gate does."""
+    shows = "def g(r):\n    return r.get('choices')\n"
+    assert problems_in(shows)
+    assert problems_in("def g(r):\n    return r['message']['tool_calls']\n")
 
 
 def test_every_provider_table_is_listed_in_the_import_contract() -> None:

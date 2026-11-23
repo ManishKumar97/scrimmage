@@ -32,6 +32,7 @@ from scrimmage.changes import Unchangeable
 from scrimmage.config import Fault, ModelHost
 from scrimmage.errors import ScrimmageRefused
 from scrimmage.plan import Plan
+from scrimmage.providers.impl import openai_changes
 
 MODEL = "gpt-4o-mini"
 PRICE = provider_openai.Rates(1.0, 2.0)  # dollars per million tokens
@@ -257,7 +258,7 @@ def test_with_no_brotli_a_br_reply_is_left_as_it_is_and_says_why(
         # The record keeps the bytes, so the cost is estimated from their size.
         assert http_gate.decoded(PACKED_BR, "br") == PACKED_BR
         for done in (
-            changes.change_chat(200, "chat", headers, PACKED_BR, replace),
+            openai_changes.change_chat(200, "chat", headers, PACKED_BR, replace),
             changes.change_web(200, "GET", headers, PACKED_BR, replace),
         ):
             assert isinstance(done, Unchangeable) and done.why == changes.NO_BROTLI
@@ -364,7 +365,7 @@ def test_a_zstd_reply_is_left_as_it_is_and_says_why() -> None:
     assert http_gate.decoded(body, "zstd") == body
     json_headers = [("content-type", "application/json"), ("content-encoding", "zstd")]
     replace = Fault("model", "replace", "always", model=MODEL, text="safe")
-    chat = changes.change_chat(200, "chat", json_headers, body, replace)
+    chat = openai_changes.change_chat(200, "chat", json_headers, body, replace)
     text_headers = [("content-type", "text/plain"), ("content-encoding", "zstd")]
     append = Fault("web", "append", "always", text="!")
     web = changes.change_web(200, "GET", text_headers, body, append)

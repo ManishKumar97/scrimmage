@@ -316,7 +316,8 @@ Func = ast.FunctionDef | ast.AsyncFunctionDef
 NOT_A_LINE = {
     ("state.py", "unreadable_miss"),  # the mock_miss object, its own field of a line
     ("state.py", "miss_evidence"),  # the same, for a miss that has a mock to name
-    ("changes.py", "truncate_responses"),  # a provider's `incomplete_details` on a model reply
+    # a provider's `incomplete_details` on a model reply
+    ("openai_changes.py", "truncate_responses"),
     ("runner.py", "miss_groups"),  # a report's miss rows, built from lines already read
 }
 

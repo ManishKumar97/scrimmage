@@ -8,11 +8,12 @@ is. Nothing outside this package asks which API a path is.
 
 from collections.abc import Mapping, Sequence
 
-from scrimmage import changes
 from scrimmage import provider_openai as table
+from scrimmage.changes import Unchangeable, WebChanged
 from scrimmage.config import Fault
 from scrimmage.prices import Rates
 from scrimmage.providers.base import Given, ReplyChange
+from scrimmage.providers.impl import openai_changes
 
 RESPONSES = "responses"  # the op the change of a Responses reply is looked up under
 
@@ -22,13 +23,10 @@ class OpenAIChange:
 
     def __init__(self, word: str, op: str, provider: "OpenAI") -> None:
         self.word, self.op = word, op
-        self.make = changes.model_change(word, op)
         self.provider = provider
 
-    def blocked(
-        self, status: int, headers: Sequence[tuple[str, str]]
-    ) -> changes.Unchangeable | None:
-        return changes.chat_kind(status, self.op, headers, self.word)
+    def blocked(self, status: int, headers: Sequence[tuple[str, str]]) -> Unchangeable | None:
+        return openai_changes.chat_kind(status, self.op, headers, self.word)
 
     def __call__(
         self,
@@ -38,12 +36,13 @@ class OpenAIChange:
         fault: Fault,
         *,
         decoded: bool,
-    ) -> changes.WebChanged | changes.Unchangeable:
-        if self.op == RESPONSES and self.word in changes.RESPONSES_CHANGES:
-            return self.make(
+    ) -> WebChanged | Unchangeable:
+        make = openai_changes.model_change(self.word, self.op)
+        if self.op == RESPONSES and self.word in openai_changes.RESPONSES_CHANGES:
+            return make(
                 status, self.op, headers, body, fault, decoded=decoded, provider=self.provider
             )
-        return self.make(status, self.op, headers, body, fault, decoded=decoded)
+        return make(status, self.op, headers, body, fault, decoded=decoded)
 
 
 class OpenAI:
@@ -95,13 +94,28 @@ class OpenAI:
         found = writes or {}
         return found.get(table.WRITE_30M, 0), found.get(table.WRITE_12H, 0)
 
-    def most_cost(self, tokens_in: int, tokens_out: int, rates: Rates, *, path: str) -> float:
+    def most_cost(
+        self,
+        tokens_in: int,
+        tokens_out: int,
+        rates: Rates,
+        *,
+        path: str,
+        fields: dict[str, object],
+    ) -> float:
+        """Only the path matters to OpenAI: Responses alone writes the cache for 12 hours."""
+        del fields
         return table.most_cost(tokens_in, tokens_out, rates, responses=table.is_responses(path))
 
     # FaultMaker
     error_body = staticmethod(table.error_body)
     error_content_type = staticmethod(table.error_content_type)
     broken_body = staticmethod(table.broken_body)
+
+    @staticmethod
+    def fault_headers(content_type: str) -> dict[str, str]:
+        return {"content-type": content_type, "x-request-id": "req_scrimmage_injected"}
+
     context_too_long_body = staticmethod(table.context_too_long_body)
     not_carried_out = staticmethod(table.not_carried_out)
     tool_call_tools = staticmethod(table.tool_call_tools)
@@ -122,6 +136,10 @@ class OpenAI:
 
     def carries(self, path: str, fields: dict[str, object], kept: Sequence[Given]) -> bool:
         return False if table.is_responses(path) else table.carries(fields, kept)
+
+    # ReplyReader
+    called_tool = staticmethod(table.called_tool)
+    said = staticmethod(table.said)
 
     # ServerChains: Responses keeps its replies, Chat Completions keeps none.
     chain_ids = staticmethod(table.chain_ids)

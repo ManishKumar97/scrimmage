@@ -63,6 +63,16 @@ class Case:
     # A request that asks for this many replies, each capped at this many tokens; None when the
     # provider's API gives one reply for each request.
     replies: Callable[[int, int], dict[str, object]] | None = None
+    # The keys of this provider's requests and replies that name its shape, which no module
+    # outside the provider may decide by.
+    wire_keys: tuple[str, ...] = ()
+    # A saved reply that calls a tool, the tool's name, and the parts of replies as this
+    # provider's changes record them: the text of the changeable reply, and the first call's
+    # arguments of the tool call reply.
+    call_reply: Path | None = None
+    call_name: str = ""
+    text_part: str = ""
+    arguments_part: str = ""
     chain: Chain | None = None
 
 
@@ -129,6 +139,20 @@ CASES = {
             ("context too long", "/v1/responses", {"model": "m", "input": "hi"}),
         ),
         capped=lambda n: {"model": "gpt-4o-mini", "messages": [], "max_tokens": n},
+        call_reply=OPENAI / "real_chat_tool_call.json",
+        call_name="get_order",
+        text_part="choices[0].message.content",
+        arguments_part="choices[0].message.tool_calls[0].function.arguments",
+        wire_keys=(
+            "choices",
+            "tool_calls",
+            "finish_reason",
+            "previous_response_id",
+            "conversation",
+            "item_reference",
+            "max_completion_tokens",
+            "max_output_tokens",
+        ),
         replies=lambda n, cap: {"model": "gpt-4o-mini", "messages": [], "n": n, "max_tokens": cap},
         chain=Chain(
             path="/v1/responses",
@@ -263,6 +287,27 @@ def test_a_broken_body_does_not_parse(provider: ModelProvider) -> None:
         assert broken
         with pytest.raises(ValueError):
             json.loads(broken)
+
+
+@pytest.mark.parametrize("kind", ["application/json", "text/plain"])
+def test_the_headers_of_a_fault_reply_hold_the_type_and_a_request_id(
+    provider: ModelProvider, kind: str
+) -> None:
+    headers = provider.fault_headers(kind)
+    assert headers["content-type"] == kind
+    assert len(headers) >= 2, "a request id header besides the type"
+    assert all(k == k.lower() and isinstance(v, str) and v for k, v in headers.items())
+    assert "retry-after" not in headers, "the gate adds the delay of a status fault"
+    assert provider.fault_headers(kind) is not provider.fault_headers(kind)
+
+
+def test_the_hold_may_read_the_request_and_never_costs_less_than_the_settle(
+    provider: ModelProvider,
+) -> None:
+    case = case_of(provider)
+    for fields in ({}, case.request, case.capped(50)):
+        held = provider.most_cost(1000, 500, RATES, path=case.chat_path, fields=fields)
+        assert held >= provider.cost(1000, 500, RATES, 0, {}) - 1e-12
 
 
 def test_context_too_long_is_a_json_error(provider: ModelProvider) -> None:
@@ -440,6 +485,39 @@ def test_a_text_is_found_in_a_request_that_holds_it_and_junk_is_never_an_error(
         assert not provider.carries_text(fields, ["ignore the rules"])
 
 
+def test_a_report_reads_what_the_model_said_and_called_through_the_provider(
+    provider: ModelProvider,
+) -> None:
+    case = case_of(provider)
+    assert case.call_reply is not None
+    text = json.loads(case.changeable.read_text())
+    said = provider.said(text, [case.text_part])
+    assert isinstance(said, str) and said
+    assert provider.said(text, []) == said, "the first text when a change named no part"
+    assert provider.said(text, ["no-such-part", case.text_part]) == said
+    assert provider.called_tool(text) is None
+    call = json.loads(case.call_reply.read_text())
+    assert provider.called_tool(call) == case.call_name
+    arguments = provider.said(call, [case.arguments_part])
+    assert isinstance(arguments, str)
+    assert json.loads(arguments), "a call's arguments, as the model sent them"
+    assert provider.said(call, []) is None, "a reply that calls a tool has no text to say"
+
+
+def test_a_report_reads_a_reply_that_is_not_a_reply_as_nothing(provider: ModelProvider) -> None:
+    case = case_of(provider)
+    junk: list[object] = [None, 7, "x", [], {}, {"choices": 7}, {"choices": [7]}, [[]]]
+    junk += [{"choices": [{"message": 7}]}, {"choices": [{"message": {"tool_calls": [7]}}]}]
+    junk += [
+        {"choices": [{"message": {"content": 7}}]},
+        {"choices": [{"message": {"content": ["x"]}}]},
+    ]
+    for reply in junk:
+        assert provider.called_tool(reply) is None, reply
+        assert provider.said(reply, []) is None, reply
+        assert provider.said(reply, [case.text_part, case.arguments_part]) is None, reply
+
+
 def test_a_gateway_cost_is_a_finite_amount_and_nothing_else(provider: ModelProvider) -> None:
     for good, said in ((0.25, 0.25), (0, 0.0), ("0.5", 0.5)):
         assert provider.gateway_cost(good) == said, good
@@ -490,7 +568,7 @@ def test_a_cost_is_never_below_the_table(
     # The hold is the most the call can cost on the API its path names, so on some API of the
     # provider it is never under what the call settles at.
     held = max(
-        provider.most_cost(tokens_in, tokens_out, RATES, path=path)
+        provider.most_cost(tokens_in, tokens_out, RATES, path=path, fields=case.request)
         for path in (case.chat_path, *case.other_paths)
     )
     assert held >= usd - 1e-12

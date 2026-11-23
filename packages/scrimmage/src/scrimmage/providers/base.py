@@ -119,7 +119,18 @@ class Meter(Protocol):
         writes: Mapping[str, int],
     ) -> Rates: ...
 
-    def most_cost(self, tokens_in: int, tokens_out: int, rates: Rates, *, path: str) -> float: ...
+    def most_cost(
+        self,
+        tokens_in: int,
+        tokens_out: int,
+        rates: Rates,
+        *,
+        path: str,
+        fields: dict[str, object],
+    ) -> float:
+        """What a call could cost at most: the dearest the provider may bill each token for,
+        given the API the path names and what the request asks for."""
+        ...
 
 
 class FaultMaker(Protocol):
@@ -130,6 +141,12 @@ class FaultMaker(Protocol):
 
     def error_content_type(self, status: int) -> str:
         """The content type of an error reply with this status."""
+        ...
+
+    def fault_headers(self, content_type: str) -> dict[str, str]:
+        """The headers of a reply a fault builds, as the provider's own replies carry them: the
+        content type and the header its client reads a request id from. The gate adds the
+        retry-after of a status fault to these."""
         ...
 
     def broken_body(self, path: str, op: str) -> bytes: ...
@@ -155,6 +172,19 @@ class FaultMaker(Protocol):
         ...
 
     def carries(self, path: str, fields: dict[str, object], kept: Sequence[Given]) -> bool: ...
+
+
+class ReplyReader(Protocol):
+    """What a report prints of a recorded reply: what the model said and which tool it called."""
+
+    def called_tool(self, reply: object) -> str | None:
+        """The name of the first tool the parsed reply calls, or None."""
+        ...
+
+    def said(self, reply: object, parts: Sequence[object]) -> str | None:
+        """The text, or a tool call's arguments, at the first of these parts a change recorded,
+        in the provider's own part names, or the reply's first text if none is named."""
+        ...
 
 
 class ReplyChange(Protocol):
@@ -183,7 +213,7 @@ class ReplyChanger(Protocol):
     def change(self, word: str, op: str, path: str) -> ReplyChange: ...
 
 
-class ModelProvider(Recognizer, Meter, FaultMaker, ReplyChanger, Protocol):
+class ModelProvider(Recognizer, Meter, FaultMaker, ReplyChanger, ReplyReader, Protocol):
     @property
     def name(self) -> str: ...
 

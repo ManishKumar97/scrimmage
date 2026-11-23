@@ -8,6 +8,7 @@ also takes the time and new ids, as a real one has.
 
 import json
 import math
+import re
 import string
 import time
 from collections.abc import Iterable, Iterator, Sequence
@@ -431,6 +432,45 @@ def chain_broken(found: str) -> str:
         f"asks OpenAI to look up {found}, a reply or an item a fault changed or built, and "
         f"OpenAI holds nothing under that id; {IN_INPUT}"
     )
+
+
+# A part a change to a Chat Completions reply names: a choice's text, or a tool call's arguments.
+CHOICE_PART = re.compile(
+    r"choices\[(\d+)\]\.message\.(?:content|tool_calls\[(\d+)\]\.function\.arguments)"
+)
+FIRST_TEXT = "choices[0].message.content"
+
+
+def called_tool(reply: object) -> str | None:
+    """The name of the first tool a chat completion calls."""
+    for choice in _list(_obj(reply).get("choices")):
+        calls = _list(_obj(_obj(choice).get("message")).get("tool_calls"))
+        name = _obj(_obj(calls[0] if calls else None).get("function")).get("name")
+        if isinstance(name, str):
+            return name
+    return None
+
+
+def said(reply: object, parts: Sequence[object]) -> str | None:
+    """The string at the first of these parts a change named, such as
+    choices[0].message.content, or at the first choice's text if it named none: a message's
+    content, or a tool call's arguments. None when the reply holds no string there."""
+    part = next((str(p) for p in parts if CHOICE_PART.fullmatch(str(p))), FIRST_TEXT)
+    found = CHOICE_PART.fullmatch(part)
+    choices = _list(_obj(reply).get("choices"))
+    if found is None or not isinstance(_obj(reply).get("choices"), list):
+        return None
+    index = int(found.group(1))
+    message = _obj(_obj(choices[index] if index < len(choices) else None).get("message"))
+    if not message:
+        return None
+    value: object = message.get("content")
+    if found.group(2) is not None:
+        calls = _list(message.get("tool_calls"))
+        call = int(found.group(2))
+        function = _obj(_obj(calls[call] if call < len(calls) else None).get("function"))
+        value = function.get("arguments")
+    return value if isinstance(value, str) else None
 
 
 def carries_text(fields: dict[str, object], texts: Sequence[str]) -> bool:

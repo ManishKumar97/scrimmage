@@ -5,6 +5,7 @@ phase, before the seam was completed. A change on purpose regenerates the golden
 `python tests/provider_replay.py`, and the diff is the review."""
 
 import json
+from typing import Any
 
 import pytest
 
@@ -15,11 +16,15 @@ def test_openai_calls_replay_byte_for_byte_as_before_the_provider_seam() -> None
     # The golden file keeps the one measured time it was captured with; only the comparison
     # ignores it, as it ignores every clock reading.
     saved = json.loads(provider_replay.GOLDEN.read_text())
-    golden = {name: provider_replay.settled(run) for name, run in saved.items()}
-    found = json.loads(provider_replay.dumps(provider_replay.capture()))
+    golden: dict[str, Any] = {n: provider_replay.settled(run) for n, run in saved.items()}
+    found: dict[str, Any] = json.loads(provider_replay.dumps(provider_replay.capture()))
     assert list(found) == list(golden), "the scenarios changed"
-    changed = [name for name in golden if found[name] != golden[name]]
-    assert not changed, f"these calls no longer replay as before: {changed}"
+    changed = {
+        name: [key for key in golden[name] if found[name][key] != golden[name][key]]
+        for name in golden
+        if found[name] != golden[name]
+    }
+    assert not changed, f"these calls no longer replay as before, by scenario and field: {changed}"
 
 
 def test_the_replay_is_deterministic() -> None:

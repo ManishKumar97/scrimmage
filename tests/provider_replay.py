@@ -21,7 +21,7 @@ import time
 import zlib
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import httpx2
@@ -1491,8 +1491,8 @@ def noted(got: Any) -> dict[str, object]:
         "status": got.status_code,
         "headers": {k: got.headers[k] for k in KEPT_HEADERS if k in got.headers},
         "body": hashlib.sha256(got.content).hexdigest(),
-        # A reply too big to read in a diff is kept as its length and its digest alone.
-        "bytes": got.content.decode("latin-1") if len(got.content) <= 65536 else len(got.content),
+        # The reply is kept as its digest and its length, so a line of the golden file stays short.
+        "length": len(got.content),
     }
 
 
@@ -1679,10 +1679,25 @@ GOLDEN = Path(__file__).parent / "golden" / "provider_replay.json"
 
 
 def dumps(found: dict[str, object]) -> str:
-    rows = [
-        f"{json.dumps(k)}: {json.dumps(v, sort_keys=True, default=str)}" for k, v in found.items()
-    ]
-    return "{\n" + ",\n".join(rows) + "\n}\n"  # one scenario a line, so a change diffs by line
+    """One scenario is a block, one field of it a line, and one reply or log line of it a line, so
+    a change shows on the line of the field that changed."""
+
+    def put(value: object) -> str:
+        return json.dumps(value, sort_keys=True, default=str)
+
+    blocks: list[str] = []
+    for name, run in found.items():
+        fields = cast("dict[str, object]", run)
+        rows: list[str] = []
+        for key in sorted(fields):
+            value = fields[key]
+            if isinstance(value, list) and value and isinstance(value[0], dict):
+                items = ",\n".join(f"    {put(item)}" for item in cast("list[object]", value))
+                rows.append(f"  {put(key)}: [\n{items}\n  ]")
+            else:
+                rows.append(f"  {put(key)}: {put(value)}")
+        blocks.append(f"{put(name)}: {{\n" + ",\n".join(rows) + "\n}")
+    return "{\n" + ",\n".join(blocks) + "\n}\n"
 
 
 if __name__ == "__main__":
