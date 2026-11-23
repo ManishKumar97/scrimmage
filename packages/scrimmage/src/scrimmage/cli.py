@@ -866,15 +866,19 @@ def run_check(
     tools = plural(len(agent.tools), "tool") if agent.tools else "no tools list"
     budget = "no budget"
     if agent.max_cost_usd is not None:
-        budget = (
-            f"a budget of ${agent.max_cost_usd:g}, prices as of {prices.age(config.team_prices)}"
-        )
+        budget = f"a budget of ${agent.max_cost_usd:g}, {prices.age(config.team_prices)}"
     print(
         f"scrimmage check: {path} is valid: {plural(len(config.tests), 'test')}, "
         f"{plural(rows, 'row')}, {plural(runs, 'run')}, {tools}, {budget}"
     )
     for line in prices.sources(agent.prices, config.team_prices):
         print(line)
+    for section in prices.unregistered(config.team_prices):
+        print(
+            f"scrimmage: warning: {prices.RUNS}/{prices.SHIPPED} has a section [{section}] that "
+            "names no provider Scrimmage knows, so no price in it is used",
+            file=sys.stderr,
+        )
     if agent.start:  # the runner starts it, with every setting: nothing is set by hand
         print(f"the service starts with: {agent.start_written}")
     elif agent.service and hint:
@@ -891,6 +895,8 @@ def price_summary(rates: prices.Rates) -> dict[str, object]:
         "cached_input": rates.cached_input,
         "cache_write_30m": rates.cache_write_30m,
         "cache_write_12h": rates.cache_write_12h,
+        "cache_write_5m": rates.cache_write_5m,
+        "cache_write_1h": rates.cache_write_1h,
     }
     if rates.tiers:
         doc["tiers"] = {tier: price_summary(tiered) for tier, tiered in rates.tiers}

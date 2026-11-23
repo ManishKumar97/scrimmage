@@ -69,11 +69,11 @@ It does not import your code. A misspelled import path, such as `acme.tools:get_
 
 ```
 $ scrimmage check
-scrimmage check: scrimmage.toml is valid: 2 tests, 5 rows, 15 runs, 4 tools, a budget of $5, prices as of 2026-11-22
+scrimmage check: scrimmage.toml is valid: 2 tests, 5 rows, 15 runs, 4 tools, a budget of $5, OpenAI prices as of 2026-11-22
 ```
 
 The budget line ends with the date of the prices the budget is measured at.
-When you price models yourself or have run `scrimmage prices update`, more lines name each price's source, the file and its date.
+When you price models yourself or have run `scrimmage prices update`, more lines name each price's source, the file and the date of each provider's section of it.
 
 Each problem goes to standard error, one line each, and the last line to standard output:
 
@@ -134,7 +134,9 @@ scrimmage prices update [path/to/scrimmage.toml]
 Fetches the newest `prices.toml` from the repository's `main`, over HTTPS, and saves it as `scrimmage-runs/prices.toml` beside the file.
 It is the only time Scrimmage reads from the network, and it runs only when you type it; see [Security](security.md).
 It checks the file against the schema first, prints what changed from your last copy, or from the shipped prices if there is none, then writes it.
-The diff lists each model added or removed, and each changed rate, old to new.
+The diff is grouped by provider, with the dates of the old and the new section at the head of each group.
+Each group lists each model added or removed, and each changed rate, old to new.
+A provider's section that only the new file has is listed as added, whole, and one that only your copy has as removed.
 A file that fails its checks is exit 2, and a fetch that fails is exit 3.
 In both nothing is written.
 The folder is made mode `0700` with a `.gitignore` inside it, as `scrimmage test` makes it.

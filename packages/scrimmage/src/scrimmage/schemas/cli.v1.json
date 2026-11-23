@@ -776,7 +776,9 @@
                       "output",
                       "cached_input",
                       "cache_write_30m",
-                      "cache_write_12h"
+                      "cache_write_12h",
+                      "cache_write_5m",
+                      "cache_write_1h"
                     ],
                     "properties": {
                       "input": {
@@ -807,6 +809,20 @@
                           "null"
                         ],
                         "minimum": 0
+                      },
+                      "cache_write_5m": {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "minimum": 0
+                      },
+                      "cache_write_1h": {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "minimum": 0
                       }
                     }
                   },
@@ -821,11 +837,12 @@
                 },
                 "price_sources": {
                   "type": "array",
-                  "description": "Where prices come from, in order of authority: [agent.prices], scrimmage-runs/prices.toml if there is one, and the prices.toml shipped with Scrimmage.",
+                  "description": "Where prices come from, in order of authority: [agent.prices], scrimmage-runs/prices.toml if there is one, and the prices.toml shipped with Scrimmage. A file is listed once for each provider section it holds.",
                   "items": {
                     "type": "object",
                     "required": [
                       "source",
+                      "provider",
                       "as_of",
                       "models"
                     ],
@@ -834,12 +851,19 @@
                       "source": {
                         "type": "string"
                       },
+                      "provider": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "The provider whose section of the file this is, such as openai; null for [agent.prices], which is flat."
+                      },
                       "as_of": {
                         "type": [
                           "string",
                           "null"
                         ],
-                        "description": "The date of the file's prices; null for [agent.prices]."
+                        "description": "The date of the section's prices; null for [agent.prices]."
                       },
                       "models": {
                         "type": "integer",

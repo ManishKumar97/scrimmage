@@ -181,6 +181,7 @@ ALL_TITLES = [
     "Two HTTP libraries.",
     "Two MCP servers with one name.",
     "Two `model` keys in one body.",
+    "Two cache-write rates nothing uses yet.",
     "Two calls to one model.",
     "Two toolkits with the same method names.",
     "Web bodies that are not text or JSON.",

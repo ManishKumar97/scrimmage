@@ -148,7 +148,7 @@ def test_an_ultrafast_reply_on_a_62_model_costs_at_least_three_times_standard(
 
     body = json.dumps({**BODY, "model": model, "max_tokens": 10}).encode()
     httpx2.Client(transport=httpx2.MockTransport(answer)).post(URL, content=body)
-    standard = table.cost(prompt, 10, dict(prices.shipped().models)[model])
+    standard = table.cost(prompt, 10, dict(prices.shipped().models("openai"))[model])
     assert cast(float, sink.lines[0]["cost_usd"]) >= 3 * standard
     assert "unpriced_tier" not in sink.lines[0]
 
@@ -215,8 +215,8 @@ def test_the_tier_is_read_from_a_reply_and_a_streamed_one(reply: dict[str, Any])
 def test_a_row_in_agent_prices_wins_whole_over_the_team_files_row() -> None:
     mine = Rates(1.0, 2.0, tiers=(("flex", Rates(0.5, 1.0)),))
     theirs = Rates(7.0, 7.0, tiers=(("flex", Rates(3.0, 3.0)), ("priority", Rates(9.0, 9.0))))
-    file = prices.PriceFile("2026-11-20", "x", (("gpt-4.1", theirs),))
-    held = dict(prices.in_order((("gpt-4.1", mine),), file))
+    file = (("gpt-4.1", theirs),)
+    held = dict(prices.in_order((("gpt-4.1", mine),), file, prices.dashed_family))
     found = table.price("gpt-4.1", held)
     assert found == mine
     assert found is not None and found.at("priority") == mine  # no tier of the file's leaks in

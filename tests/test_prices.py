@@ -411,16 +411,18 @@ PAGE = {
 @pytest.mark.design("prices.shipped_file")
 def test_the_shipped_file_holds_the_rows_read_from_the_page() -> None:
     shipped = prices.shipped()
-    assert dict(shipped.models) == PAGE
-    assert shipped.as_of == "2026-11-22"
-    assert shipped.source == "https://developers.openai.com/api/docs/pricing"
+    section = shipped.section("openai")
+    assert section is not None
+    assert dict(section.models) == PAGE
+    assert section.as_of == "2026-11-22"
+    assert section.url == "https://developers.openai.com/api/docs/pricing"
 
 
 @pytest.mark.design("prices.shipped_file")
 def test_the_file_still_holds_every_row_of_the_old_table_at_equal_standard_rates() -> None:
     plain = {
         model: dataclasses.replace(r, tiers=(), above=None, long=None)
-        for model, r in dict(prices.shipped().models).items()
+        for model, r in dict(prices.shipped().models("openai")).items()
     }
     for model, rates in TODAYS.items():
         assert plain[model] == rates, model
@@ -436,17 +438,17 @@ def test_a_model_with_a_long_price_is_in_the_file_with_its_threshold() -> None:
         "gpt-5.6-terra",
         "gpt-5.6-luna",
     ):
-        rates = dict(prices.shipped().models)[model]
+        rates = dict(prices.shipped().models("openai"))[model]
         assert rates.above == 272000 and rates.long is not None, model
     # A short call is at the short rate, a long one at the long rate, the whole call.
-    five = dict(prices.shipped().models)["gpt-5.5"]
+    five = dict(prices.shipped().models("openai"))["gpt-5.5"]
     assert five.sized(272000).input == 5.0
     assert five.sized(272001).input == 10.0 and five.sized(272001).output == 45.0
 
 
 @pytest.mark.design("prices.tier_alias")
 def test_fast_and_priority_are_one_tier_and_no_batch_tier_is_priced() -> None:
-    for model, rates in prices.shipped().models:
+    for model, rates in prices.shipped().models("openai"):
         names = [name for name, _ in rates.tiers]
         assert "priority" not in names and "batch" not in names, model
         assert rates.at("fast") is rates.at("priority"), model
@@ -481,7 +483,7 @@ def test_a_team_row_with_only_tiers_fast_prices_a_reply_naming_priority(tmp_path
 @pytest.mark.design("prices.ultrafast_62")
 @pytest.mark.parametrize("model", ["gpt-6.2-astra", "gpt-6.2-sol"])
 def test_ultrafast_on_a_62_model_is_at_least_three_times_standard(model: str) -> None:
-    rates = dict(prices.shipped().models)[model]
+    rates = dict(prices.shipped().models("openai"))[model]
     ultra = rates.at("ultrafast")
     assert ultra is not rates
     assert ultra.input >= 3 * rates.input and ultra.output >= 3 * rates.output
@@ -497,14 +499,15 @@ def test_the_code_no_longer_holds_a_price_table() -> None:
 
 
 TEAM_FILE = """
+[openai]
+url = "https://example.test/prices"
 as_of = "2026-11-20"
-source = "https://example.test/prices"
 
-[models."gpt-4.1"]
+[openai.models."gpt-4.1"]
 input = 7.0
 output = 7.0
 
-[models."gpt-4o"]
+[openai.models."gpt-4o"]
 input = 6.0
 output = 6.0
 """
@@ -522,7 +525,7 @@ def a_plan(tmp_path: Path, *, team: bool = True) -> plan.Plan:
 
 @pytest.mark.design("prices.order")
 def test_agent_prices_then_the_team_file_then_the_shipped_file(tmp_path: Path) -> None:
-    held = dict(a_plan(tmp_path).prices)
+    held = dict(a_plan(tmp_path).prices_for("openai"))
 
     def priced(model: str) -> float | None:
         found = provider_openai.price(model, held)
@@ -540,9 +543,9 @@ def test_agent_prices_then_the_team_file_then_the_shipped_file(tmp_path: Path) -
 
 @pytest.mark.design("prices.order")
 def test_without_a_team_file_the_shipped_file_prices_the_rest(tmp_path: Path) -> None:
-    held = dict(a_plan(tmp_path, team=False).prices)
+    held = dict(a_plan(tmp_path, team=False).prices_for("openai"))
     found = provider_openai.price("gpt-4o", held)
-    assert found == dict(prices.shipped().models)["gpt-4o"]
+    assert found == dict(prices.shipped().models("openai"))["gpt-4o"]
 
 
 @pytest.mark.design("prices.order")
@@ -553,8 +556,8 @@ def test_a_bad_team_file_is_a_config_error_naming_the_line(tmp_path: Path) -> No
     (tmp_path / "scrimmage-runs" / "prices.toml").write_text(bad)
     with pytest.raises(ConfigError) as caught:
         config.load(tmp_path / "scrimmage.toml")
-    assert "scrimmage-runs/prices.toml models gpt-4.1 input" in caught.value.problems[0]
-    assert "(line 5)" in caught.value.problems[0]
+    assert "scrimmage-runs/prices.toml openai models gpt-4.1 input" in caught.value.problems[0]
+    assert "(line 6)" in caught.value.problems[0]
 
 
 @pytest.mark.design("prices.order")
@@ -566,12 +569,12 @@ def test_check_names_each_prices_source_and_age(
     lines = prices.sources(cfg.agent.prices, cfg.team_prices)
     assert lines == [
         "price gpt-4.1: [agent.prices]",
-        "prices: scrimmage-runs/prices.toml, as of 2026-11-20 (2 models)",
-        "prices: the shipped prices.toml, as of 2026-11-22 (36 models)",
+        "prices: scrimmage-runs/prices.toml, OpenAI prices as of 2026-11-20 (2 models)",
+        "prices: the shipped prices.toml, OpenAI prices as of 2026-11-22 (36 models)",
     ]
     assert cli.main(["check", str(tmp_path / "scrimmage.toml")]) == 0
     out = capsys.readouterr().out
-    assert "a budget of $5, prices as of 2026-11-20\n" + "\n".join(lines) in out
+    assert "a budget of $5, OpenAI prices as of 2026-11-20\n" + "\n".join(lines) in out
 
 
 def _written(tmp_path: Path) -> Path:
@@ -579,11 +582,11 @@ def _written(tmp_path: Path) -> Path:
     return tmp_path / "scrimmage.toml"
 
 
-HEAD = 'as_of = "2026-11-20"\nsource = "https://example.test/prices"\n'
-BASE = '[models."gpt-4.1"]\ninput = 2\noutput = 8\n[models."gpt-4.1".tiers.'
+HEAD = '[openai]\nurl = "https://example.test/prices"\nas_of = "2026-11-20"\n'
+BASE = '[openai.models."gpt-4.1"]\ninput = 2\noutput = 8\n[openai.models."gpt-4.1".tiers.'
 FREE_FILES = {
-    "input 0": ('[models."gpt-4.1"]\ninput = 0\noutput = 8\n', "input: 0 is below 0.001"),
-    "output 0": ('[models."gpt-4.1"]\ninput = 2\noutput = 0\n', "output: 0 is below 0.001"),
+    "input 0": ('[openai.models."gpt-4.1"]\ninput = 0\noutput = 8\n', "input: 0 is below 0.001"),
+    "output 0": ('[openai.models."gpt-4.1"]\ninput = 2\noutput = 0\n', "output: 0 is below 0.001"),
     "tier input 0": (
         BASE + "flex]\ninput = 0\noutput = 4\n",
         "tiers flex input: 0 is below 0.001",
@@ -601,15 +604,15 @@ FREE_FILES = {
         "tiers auto: auto is not a tier a file may price",
     ),
     "input 1e-300": (
-        '[models."gpt-4.1"]\ninput = 1e-300\noutput = 8\n',
+        '[openai.models."gpt-4.1"]\ninput = 1e-300\noutput = 8\n',
         "input: 1e-300 is below 0.001",
     ),
     "input just under": (
-        '[models."gpt-4.1"]\ninput = 0.0009\noutput = 8\n',
+        '[openai.models."gpt-4.1"]\ninput = 0.0009\noutput = 8\n',
         "input: 0.0009 is below 0.001",
     ),
     "output 1e-300": (
-        '[models."gpt-4.1"]\ninput = 2\noutput = 1e-300\n',
+        '[openai.models."gpt-4.1"]\ninput = 2\noutput = 1e-300\n',
         "output: 1e-300 is below 0.001",
     ),
     "tier 1e-300": (
@@ -622,11 +625,11 @@ FREE_FILES = {
     ),
     "tier AUTO": (BASE + "AUTO]\ninput = 1\noutput = 4\n", "tiers AUTO: AUTO is not a tier"),
     "cached 0": (
-        '[models."gpt-4.1"]\ninput = 2\noutput = 8\ncached_input = 0\n',
+        '[openai.models."gpt-4.1"]\ninput = 2\noutput = 8\ncached_input = 0\n',
         "cached_input: 0 is below 0.001",
     ),
     "cached 1e-300": (
-        '[models."gpt-4.1"]\ninput = 2\noutput = 8\ncached_input = 1e-300\n',
+        '[openai.models."gpt-4.1"]\ninput = 2\noutput = 8\ncached_input = 1e-300\n',
         "cached_input: 1e-300 is below 0.001",
     ),
     "tier cached 0": (
@@ -634,11 +637,14 @@ FREE_FILES = {
         "tiers flex cached_input: 0 is below 0.001",
     ),
     "embedding cached 0": (
-        '[models."text-embedding-9"]\ninput = 0.02\noutput = 0\ncached_input = 0\n',
+        '[openai.models."text-embedding-9"]\ninput = 0.02\noutput = 0\ncached_input = 0\n',
         "cached_input: 0 is below 0.001",
     ),
-    "not finite": ('[models."gpt-4.1"]\ninput = inf\noutput = 8\n', "input: expected dollars"),
-    "nan": ('[models."gpt-4.1"]\ninput = 2\noutput = nan\n', "output: expected dollars"),
+    "not finite": (
+        '[openai.models."gpt-4.1"]\ninput = inf\noutput = 8\n',
+        "input: expected dollars",
+    ),
+    "nan": ('[openai.models."gpt-4.1"]\ninput = 2\noutput = nan\n', "output: expected dollars"),
 }
 
 
@@ -653,8 +659,11 @@ def test_a_price_file_may_not_make_a_model_free(name: str) -> None:
 
 @pytest.mark.design("prices.file_never_free")
 def test_an_embedding_model_may_have_no_output_price_in_a_file() -> None:
-    body = '[models."text-embedding-9"]\ninput = 0.02\noutput = 0\n'
-    assert dict(prices.parse(HEAD + body, "the file").models)["text-embedding-9"].output == 0.0
+    body = '[openai.models."text-embedding-9"]\ninput = 0.02\noutput = 0\n'
+    assert (
+        dict(prices.parse(HEAD + body, "the file").models("openai"))["text-embedding-9"].output
+        == 0.0
+    )
 
 
 @pytest.mark.design("prices.file_never_free")
@@ -669,9 +678,11 @@ def test_agent_prices_may_still_price_a_model_at_zero(tmp_path: Path) -> None:
 def test_a_team_file_that_makes_a_model_free_stops_the_run_at_load(tmp_path: Path) -> None:
     (tmp_path / "scrimmage.toml").write_text(config_cases.MINIMAL)
     (tmp_path / "scrimmage-runs").mkdir()
-    free = HEAD + '[models."gpt-4.1"]\ninput = 0\noutput = 0\n'
+    free = HEAD + '[openai.models."gpt-4.1"]\ninput = 0\noutput = 0\n'
     (tmp_path / "scrimmage-runs" / "prices.toml").write_text(free)
-    with pytest.raises(ConfigError, match=r"scrimmage-runs/prices\.toml models gpt-4\.1 input: 0"):
+    with pytest.raises(
+        ConfigError, match=r"scrimmage-runs/prices\.toml openai models gpt-4\.1 input: 0"
+    ):
         config.load(tmp_path / "scrimmage.toml")
 
 
@@ -681,15 +692,29 @@ MINE, FILE_EXACT, SHIPPED_ROW = Rates(50.0, 50.0), Rates(1e-3, 1e-3), Rates(7.0,
 @pytest.mark.design("prices.authority_first")
 def test_a_family_row_of_a_higher_table_beats_an_exact_dated_row_of_a_lower_one() -> None:
     dated = "gpt-4.1-2025-04-14"
-    assert prices.price(dated, {"gpt-4.1": MINE}, {dated: FILE_EXACT}) == MINE
-    assert prices.price(dated, {}, {dated: FILE_EXACT}, {"gpt-4.1": SHIPPED_ROW}) == FILE_EXACT
-    assert prices.price("gpt-4.1", {"gpt-4.1": MINE}, {dated: FILE_EXACT}) == MINE
+    assert (
+        prices.price(dated, {"gpt-4.1": MINE}, {dated: FILE_EXACT}, family=prices.dashed_family)
+        == MINE
+    )
+    assert (
+        prices.price(
+            dated, {}, {dated: FILE_EXACT}, {"gpt-4.1": SHIPPED_ROW}, family=prices.dashed_family
+        )
+        == FILE_EXACT
+    )
+    assert (
+        prices.price("gpt-4.1", {"gpt-4.1": MINE}, {dated: FILE_EXACT}, family=prices.dashed_family)
+        == MINE
+    )
 
 
 @pytest.mark.design("prices.authority_first")
 def test_within_one_table_the_exact_dated_row_beats_its_family() -> None:
     dated = "gpt-4.1-2025-04-14"
-    assert prices.price(dated, {"gpt-4.1": MINE, dated: FILE_EXACT}) == FILE_EXACT
+    assert (
+        prices.price(dated, {"gpt-4.1": MINE, dated: FILE_EXACT}, family=prices.dashed_family)
+        == FILE_EXACT
+    )
 
 
 @pytest.mark.design("prices.authority_first")
@@ -702,10 +727,11 @@ def test_a_fetched_dated_row_cannot_undercut_the_teams_own_family_row(tmp_path: 
     )
     (tmp_path / "scrimmage-runs").mkdir()
     (tmp_path / "scrimmage-runs" / "prices.toml").write_text(
-        f'as_of = "2026-11-20"\nsource = "x"\n[models."{dated}"]\ninput = 0.01\noutput = 0.01\n'
+        f'[openai]\nurl = "x"\nas_of = "2026-11-20"\n'
+        f'[openai.models."{dated}"]\ninput = 0.01\noutput = 0.01\n'
     )
     cfg = config.load(tmp_path / "scrimmage.toml")
-    held = dict(plan.plan_for(cfg, plan.rows(cfg)[0], "run-1").prices)
+    held = dict(plan.plan_for(cfg, plan.rows(cfg)[0], "run-1").prices_for("openai"))
     for name in (dated, "gpt-4.1"):
         found = provider_openai.price(name, held)
         assert found is not None and found.input == 50.0, name
@@ -715,12 +741,15 @@ def test_a_fetched_dated_row_cannot_undercut_the_teams_own_family_row(tmp_path: 
 
 @pytest.mark.design("prices.file_never_free")
 def test_a_price_at_the_floor_is_accepted_and_an_embedding_model_needs_no_output() -> None:
-    body = '[models."gpt-4.1"]\ninput = 0.001\noutput = 0.001\n'
-    body += '[models."text-embedding-9"]\ninput = 0.001\noutput = 0\n'
-    assert len(prices.parse(HEAD + body, "the file").models) == 2
+    body = '[openai.models."gpt-4.1"]\ninput = 0.001\noutput = 0.001\n'
+    body += '[openai.models."text-embedding-9"]\ninput = 0.001\noutput = 0\n'
+    assert len(prices.parse(HEAD + body, "the file").models("openai")) == 2
 
 
 @pytest.mark.design("prices.file_never_free")
 def test_a_cached_rate_at_the_floor_is_accepted_in_a_file() -> None:
-    body = '[models."gpt-4.1"]\ninput = 2\noutput = 8\ncached_input = 0.001\n'
-    assert dict(prices.parse(HEAD + body, "the file").models)["gpt-4.1"].cached_input == 0.001
+    body = '[openai.models."gpt-4.1"]\ninput = 2\noutput = 8\ncached_input = 0.001\n'
+    assert (
+        dict(prices.parse(HEAD + body, "the file").models("openai"))["gpt-4.1"].cached_input
+        == 0.001
+    )

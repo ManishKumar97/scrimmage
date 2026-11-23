@@ -142,9 +142,9 @@ def hold(rates: Rates) -> tuple[list[float], float]:
     return held, cast(float, sink.lines[0]["cost_usd"])
 
 
-HEAD = 'as_of = "2026-11-20"\nsource = "https://example.test/prices"\n'
-MODEL_TABLE = '[models."gpt-5.5"]\ninput = 5\noutput = 30\ncached_input = 0.5\n'
-LONG_TABLE = '[models."gpt-5.5".long]\n'
+HEAD = '[openai]\nurl = "https://example.test/prices"\nas_of = "2026-11-20"\n'
+MODEL_TABLE = '[openai.models."gpt-5.5"]\ninput = 5\noutput = 30\ncached_input = 0.5\n'
+LONG_TABLE = '[openai.models."gpt-5.5".long]\n'
 
 
 def long_file(long: str, base: str = MODEL_TABLE) -> str:
@@ -154,9 +154,9 @@ def long_file(long: str, base: str = MODEL_TABLE) -> str:
 @pytest.mark.design("long.format")
 def test_a_price_file_reads_a_long_table_and_a_tier_long_table() -> None:
     text = long_file("above = 272000\ninput = 10\noutput = 45\ncached_input = 1\n")
-    text += '[models."gpt-5.5".tiers.flex]\ninput = 2.5\noutput = 15\n'
-    text += '[models."gpt-5.5".tiers.flex.long]\nabove = 272000\ninput = 5\noutput = 22.5\n'
-    rates = dict(prices.parse(text, "the file").models)["gpt-5.5"]
+    text += '[openai.models."gpt-5.5".tiers.flex]\ninput = 2.5\noutput = 15\n'
+    text += '[openai.models."gpt-5.5".tiers.flex.long]\nabove = 272000\ninput = 5\noutput = 22.5\n'
+    rates = dict(prices.parse(text, "the file").models("openai"))["gpt-5.5"]
     assert rates.above == 272000
     assert rates.long == Rates(10.0, 45.0, 1.0)
     flex = rates.at("flex")
@@ -189,12 +189,12 @@ BAD_LONG = {
     "no input": ("above = 9\noutput = 45\n", "long input: expected dollars"),
     "unknown key": ("above = 9\ninput = 10\noutput = 45\nspeed = 3\n", "long speed: unknown"),
     "nested long": (
-        'above = 9\ninput = 10\noutput = 45\n[models."gpt-5.5".long.long]\nabove = 9\n'
+        'above = 9\ninput = 10\noutput = 45\n[openai.models."gpt-5.5".long.long]\nabove = 9\n'
         "input = 11\noutput = 46\n",
         "long long: unknown setting",
     ),
     "tiers in long": (
-        'above = 9\ninput = 10\noutput = 45\n[models."gpt-5.5".long.tiers.flex]\ninput = 1\n'
+        'above = 9\ninput = 10\noutput = 45\n[openai.models."gpt-5.5".long.tiers.flex]\ninput = 1\n'
         "output = 1\n",
         "long tiers: unknown setting",
     ),
@@ -214,15 +214,15 @@ def test_a_bad_long_table_is_a_config_error_naming_the_line(name: str) -> None:
 def test_above_is_not_a_key_of_a_model_or_a_tier() -> None:
     with pytest.raises(ConfigError, match=r"models gpt-5\.5 above: unknown setting"):
         prices.parse(HEAD + MODEL_TABLE + "above = 9\n", "the file")
-    tier = MODEL_TABLE + '[models."gpt-5.5".tiers.flex]\ninput = 1\noutput = 1\nabove = 9\n'
+    tier = MODEL_TABLE + '[openai.models."gpt-5.5".tiers.flex]\ninput = 1\noutput = 1\nabove = 9\n'
     with pytest.raises(ConfigError, match=r"tiers flex above: unknown setting"):
         prices.parse(HEAD + tier, "the file")
 
 
 @pytest.mark.design("long.validated")
 def test_a_tier_long_may_not_be_below_its_tier() -> None:
-    tier = MODEL_TABLE + '[models."gpt-5.5".tiers.flex]\ninput = 2.5\noutput = 15\n'
-    tier += '[models."gpt-5.5".tiers.flex.long]\nabove = 9\ninput = 2\noutput = 22\n'
+    tier = MODEL_TABLE + '[openai.models."gpt-5.5".tiers.flex]\ninput = 2.5\noutput = 15\n'
+    tier += '[openai.models."gpt-5.5".tiers.flex.long]\nabove = 9\ninput = 2\noutput = 22\n'
     with pytest.raises(ConfigError, match=r"tiers flex long input: 2 is below the 2\.5"):
         prices.parse(HEAD + tier, "the file")
 
@@ -230,10 +230,10 @@ def test_a_tier_long_may_not_be_below_its_tier() -> None:
 @pytest.mark.design("long.validated")
 def test_a_long_table_cannot_get_under_the_floor_of_a_price_file() -> None:
     # The long rates are at least the base rates, so the floor on the base holds for them.
-    low = '[models."gpt-5.5"]\ninput = 0.0005\noutput = 0.001\n'
+    low = '[openai.models."gpt-5.5"]\ninput = 0.0005\noutput = 0.001\n'
     with pytest.raises(ConfigError, match=r"input: 0\.0005 is below 0\.001"):
         prices.parse(long_file("above = 9\ninput = 0.0005\noutput = 0.001\n", low), "the file")
-    at = '[models."gpt-5.5"]\ninput = 0.001\noutput = 0.001\n'
+    at = '[openai.models."gpt-5.5"]\ninput = 0.001\noutput = 0.001\n'
     with pytest.raises(ConfigError, match=r"long input: 0\.0005 is below the 0\.001"):
         prices.parse(long_file("above = 9\ninput = 0.0005\noutput = 0.001\n", at), "the file")
 
@@ -241,7 +241,7 @@ def test_a_long_table_cannot_get_under_the_floor_of_a_price_file() -> None:
 @pytest.mark.design("long.validated")
 def test_a_long_table_at_the_base_rates_is_accepted() -> None:
     body = "above = 9\ninput = 5\noutput = 30\ncached_input = 0.5\n"
-    found = dict(prices.parse(long_file(body), "the file").models)["gpt-5.5"]
+    found = dict(prices.parse(long_file(body), "the file").models("openai"))["gpt-5.5"]
     assert found.long == Rates(5.0, 30.0, 0.5)
 
 
@@ -316,22 +316,26 @@ def test_cost_and_most_cost_use_the_long_rates_only_over_the_threshold() -> None
     )
 
 
+def section(as_of: str, row: tuple[str, Rates]) -> prices.Section:
+    return prices.Section("x", as_of, (row,))
+
+
 @pytest.mark.design("long.update_diff")
 def test_prices_update_prints_a_changed_long_rate() -> None:
     from scrimmage import prices_update
 
     plain = Rates(1000.0, 2000.0, 500.0)
-    old = prices.PriceFile("2026-11-20", "x", (("gpt-5.5", plain),))
+    old = section("2026-11-20", ("gpt-5.5", plain))
     longer = Rates(1000.0, 2000.0, 500.0, above=ABOVE, long=Rates(2000.0, 3000.0, 1000.0))
     again = Rates(1000.0, 2000.0, 500.0, above=ABOVE, long=Rates(2500.0, 3000.0, 1000.0))
-    added = prices_update.diff(old, prices.PriceFile("2026-11-21", "x", (("gpt-5.5", longer),)))
+    added = prices_update.diff(old, section("2026-11-21", ("gpt-5.5", longer)))
     assert added == [
         "changed gpt-5.5: above added at 1000; long.cached_input added at 1000; "
         "long.input added at 2000; long.output added at 3000"
     ]
     moved = prices_update.diff(
-        prices.PriceFile("2026-11-21", "x", (("gpt-5.5", longer),)),
-        prices.PriceFile("2026-11-22", "x", (("gpt-5.5", again),)),
+        section("2026-11-21", ("gpt-5.5", longer)),
+        section("2026-11-22", ("gpt-5.5", again)),
     )
     assert moved == ["changed gpt-5.5: long.input 2000 to 2500"]
 
@@ -342,8 +346,8 @@ def test_prices_update_prints_the_threshold_as_a_whole_number() -> None:
 
     big = Rates(1000.0, 2000.0, above=1000001, long=Rates(2000.0, 3000.0))
     bigger = Rates(1000.0, 2000.0, above=999999999, long=Rates(2000.0, 3000.0))
-    old = prices.PriceFile("2026-11-20", "x", (("gpt-5.5", big),))
-    new = prices.PriceFile("2026-11-21", "x", (("gpt-5.5", bigger),))
+    old = section("2026-11-20", ("gpt-5.5", big))
+    new = section("2026-11-21", ("gpt-5.5", bigger))
     assert prices_update.diff(old, new) == ["changed gpt-5.5: above 1000001 to 999999999"]
     assert (
         prices_update.fmt(big)

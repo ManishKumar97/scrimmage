@@ -390,7 +390,9 @@ def prices_line(prices: object, sources: object = None) -> str:
     if isinstance(sources, list):
         listed = cast(list[Mapping[str, Any]], sources)
         files = ", ".join(
-            f"{s.get('source')} as of {s.get('as_of')}" for s in listed if s.get("as_of")
+            f"{s.get('source')} as of {s.get('as_of')} ({s.get('provider')})"
+            for s in listed
+            if s.get("as_of")
         )
     if named and files:
         return f"prices: {named}; any other model from {files}"

@@ -85,7 +85,7 @@ def test_cached_tokens_cost_the_cached_rate(rates: table.Rates, dollars: float) 
 @pytest.mark.design("cached.builtin_rates")
 def test_the_built_in_table_has_openais_cached_rates() -> None:
     # OpenAI's pricing page, standard tier, checked on 7 November 2026 and 22 November 2026.
-    shipped = dict(prices.shipped().models)
+    shipped = dict(prices.shipped().models("openai"))
 
     def standard(model: str) -> table.Rates:
         return dataclasses.replace(shipped[model], tiers=(), above=None, long=None)

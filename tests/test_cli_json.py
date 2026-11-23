@@ -182,8 +182,9 @@ def check_runs(project: Project) -> dict[int, Done]:
 
 SHIPPED_SOURCE = {
     "source": "the shipped prices.toml",
-    "as_of": prices.shipped().as_of,
-    "models": len(prices.shipped().models),
+    "provider": "openai",
+    "as_of": dict(prices.shipped().sections)["openai"].as_of,
+    "models": len(prices.shipped().models("openai")),
 }
 
 
@@ -1670,10 +1671,12 @@ def test_check_summary_lists_the_labels_under_real_and_the_entry_point(project: 
             "cached_input": None,
             "cache_write_30m": None,
             "cache_write_12h": None,
+            "cache_write_5m": None,
+            "cache_write_1h": None,
         }
     }
     assert summary_of(check_doc(project))["price_sources"] == [
-        {"source": "[agent.prices]", "as_of": None, "models": 1},
+        {"source": "[agent.prices]", "provider": None, "as_of": None, "models": 1},
         SHIPPED_SOURCE,
     ]
     assert summary_of(check_doc(project))["service_tier"] is None
