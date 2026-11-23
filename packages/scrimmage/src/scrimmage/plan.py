@@ -78,7 +78,11 @@ class Plan:
     def prices_for(self, provider: str) -> tuple[tuple[str, Rates], ...]:
         """The rows that price this provider's calls before the shipped file: [agent.prices],
         then the team's file section for the provider."""
-        return in_order(self.prices, dict(self.file_prices).get(provider, ()))
+        return in_order(
+            self.prices,
+            dict(self.file_prices).get(provider, ()),
+            self.registry.get(provider).snapshot_family,
+        )
 
     def tool_names(self) -> list[str]:
         """Every tool's final name: the one the model sees."""

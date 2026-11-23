@@ -11,6 +11,7 @@ import functools
 import math
 import re
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from importlib import resources
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import cast
 
 from scrimmage.errors import ConfigError
+from scrimmage.outcomes import plural
 
 DOCS = "docs/configuration.md"
 SHIPPED = "prices.toml"
@@ -38,6 +40,7 @@ TIER_KEYS = {*RATE_KEYS, "long"}  # a tier's keys
 TIER_ALIASES = {"fast": "priority", "priority": "fast"}  # OpenAI renamed one to the other
 LONG_KEYS = {*RATE_KEYS, "above"}  # a long table's keys: the rates, and where they start
 SECTION_KEYS = {"url", "as_of", "models"}
+OLD_KEYS = {"as_of", "source", "models"}  # the top-level keys of the one-provider file
 SECTION_NAME = re.compile(r"[a-z][a-z0-9_-]*$")
 # A dated snapshot name: OpenAI's gpt-4o-mini-2024-07-18, and Anthropic's claude-haiku-4-5-20251001.
 # The eight digits must read as a real date, so a model whose name ends in some other 8-digit
@@ -215,9 +218,14 @@ def as_table(value: object, where: str) -> dict[str, object]:
     return {str(k): v for k, v in cast(dict[object, object], value).items()}
 
 
-def family(model: str) -> str:
-    """The name of the model a dated snapshot belongs to, or the name itself. OpenAI dates a
-    snapshot -YYYY-MM-DD and Anthropic -YYYYMMDD. Eight digits that are not a date, such as
+def dashed_family(model: str) -> str:
+    """The name of the model a snapshot dated -YYYY-MM-DD belongs to, or the name itself: how
+    OpenAI dates a snapshot. A provider's `snapshot_family` is this or compact_family."""
+    return DATED.sub("", model)
+
+
+def compact_family(model: str) -> str:
+    """The same for a snapshot dated -YYYYMMDD. Eight digits that are not a date, such as
     -12345678, are part of the name."""
     found = COMPACT.search(model)
     if found is not None:
@@ -227,7 +235,7 @@ def family(model: str) -> str:
         except ValueError:
             return model
         return model[: found.start()]
-    return DATED.sub("", model)
+    return model
 
 
 def parse(text: str, name: str) -> PriceFile:
@@ -238,6 +246,8 @@ def parse(text: str, name: str) -> PriceFile:
         raise ConfigError(f"{name}: {exc}") from None
     except RecursionError:
         raise ConfigError(f"{name}: tables or arrays nested too deeply to read") from None
+    if OLD_KEYS & data.keys():
+        raise ConfigError(f"{name}: this file is in the old format; run `scrimmage prices update`")
     sections: list[tuple[str, Section]] = []
     for provider in data:
         if not SECTION_NAME.match(provider) or not isinstance(data[provider], dict):
@@ -335,13 +345,14 @@ def shipped() -> PriceFile:
     return parse(text, SHIPPED)
 
 
-def price(model: str, *tables: dict[str, Rates]) -> Rates | None:
+def price(model: str, *tables: dict[str, Rates], family: Callable[[str], str]) -> Rates | None:
     """The first table that names the model, whole. Tables are in order of authority, and a
     table's say comes before any table below it: a family row in [agent.prices] beats an
     exact dated row in a file. Within one table, the exact name beats its family.
 
-    A dated snapshot, such as gpt-4o-mini-2024-07-18 or claude-haiku-4-5-20251001, uses its
-    family's price. Nothing else does: gpt-4o-audio-preview is not priced like gpt-4o.
+    A dated snapshot, such as gpt-4o-mini-2024-07-18, uses its family's price. What a snapshot
+    is, is the provider's rule, `family`. Nothing else does: gpt-4o-audio-preview is not priced
+    like gpt-4o.
     """
     for table in tables:
         for name in (model, family(model)):
@@ -350,10 +361,12 @@ def price(model: str, *tables: dict[str, Rates]) -> Rates | None:
     return None
 
 
-def priced(provider: str, model: str, *tables: dict[str, Rates]) -> Rates | None:
+def priced(
+    provider: str, model: str, *tables: dict[str, Rates], family: Callable[[str], str]
+) -> Rates | None:
     """price(), with the shipped section for this provider as the last table. A model is looked
     up in its own provider's section only: another provider's row of the same name is not it."""
-    return price(model, *tables, dict(shipped().models(provider)))
+    return price(model, *tables, dict(shipped().models(provider)), family=family)
 
 
 def team_path(root: Path) -> Path:
@@ -372,7 +385,9 @@ def team(root: Path) -> PriceFile | None:
 
 
 def in_order(
-    agent: tuple[tuple[str, Rates], ...], file: tuple[tuple[str, Rates], ...] = ()
+    agent: tuple[tuple[str, Rates], ...],
+    file: tuple[tuple[str, Rates], ...],
+    family: Callable[[str], str],
 ) -> tuple[tuple[str, Rates], ...]:
     """The rows a run prices a provider's calls with before the shipped file: [agent.prices],
     then the team's file section for that provider. The two are one table once merged, so a
@@ -383,7 +398,24 @@ def in_order(
     return agent + rows
 
 
-NAMES = {"openai": "OpenAI", "anthropic": "Anthropic"}
+def shown(provider: str) -> str:
+    """The name a provider goes by in what `scrimmage check` prints: the provider's own
+    display_name, or the section's raw name when no registered provider has it."""
+    from scrimmage.providers.registry import built_in
+
+    try:
+        return built_in().get(provider).display_name
+    except ValueError:
+        return provider
+
+
+def unregistered(file: PriceFile | None) -> list[str]:
+    """The sections of this file that name no registered provider: a typo, or a provider this
+    version of Scrimmage does not gate. Such a section is read and never used."""
+    from scrimmage.providers.registry import built_in
+
+    known = {p.name for p in built_in().providers}
+    return [] if file is None else [name for name, _ in file.sections if name not in known]
 
 
 def age(file: PriceFile | None) -> str:
@@ -392,7 +424,7 @@ def age(file: PriceFile | None) -> str:
     dates = {provider: section.as_of for provider, section in shipped().sections}
     if file is not None:
         dates.update({provider: section.as_of for provider, section in file.sections})
-    return ", ".join(f"{NAMES.get(p, p)} prices as of {as_of}" for p, as_of in dates.items())
+    return ", ".join(f"{shown(p)} prices as of {as_of}" for p, as_of in dates.items())
 
 
 def sources(agent: tuple[tuple[str, Rates], ...], file: PriceFile | None) -> list[str]:
@@ -404,8 +436,8 @@ def sources(agent: tuple[tuple[str, Rates], ...], file: PriceFile | None) -> lis
     for where, found in ((f"{RUNS}/{SHIPPED}", file), (f"the shipped {SHIPPED}", shipped())):
         for provider, section in () if found is None else found.sections:
             lines.append(
-                f"prices: {where}, {NAMES.get(provider, provider)} prices as of "
-                f"{section.as_of} ({len(section.models)} models)"
+                f"prices: {where}, {shown(provider)} prices as of "
+                f"{section.as_of} ({plural(len(section.models), 'model')})"
             )
     return lines
 

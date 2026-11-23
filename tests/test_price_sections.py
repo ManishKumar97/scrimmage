@@ -8,6 +8,7 @@ import config_cases
 from scrimmage import cli, config, plan, prices, prices_update, provider_openai
 from scrimmage.errors import ConfigError
 from scrimmage.prices import PriceFile, Rates
+from scrimmage.providers.registry import built_in, builtin_providers
 
 TWO = """
 [openai]
@@ -51,8 +52,8 @@ def test_a_lookup_goes_to_the_section_of_the_calls_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(prices, "shipped", two)
-    assert input_rate(prices.priced("openai", "shared")) == 2
-    assert input_rate(prices.priced("anthropic", "shared")) == 3
+    assert input_rate(prices.priced("openai", "shared", family=prices.dashed_family)) == 2
+    assert input_rate(prices.priced("anthropic", "shared", family=prices.compact_family)) == 3
 
 
 @pytest.mark.design("anthropic.price_sections")
@@ -60,18 +61,23 @@ def test_a_lookup_in_the_wrong_providers_section_finds_nothing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(prices, "shipped", two)
-    assert prices.priced("anthropic", "only-openai") is None
-    assert prices.priced("openai", "claude-haiku-4-5") is None
-    assert prices.priced("openai", "claude-haiku-4-5-20251001") is None
-    assert input_rate(prices.priced("anthropic", "claude-haiku-4-5-20251001")) == 1
+    assert prices.priced("anthropic", "only-openai", family=prices.compact_family) is None
+    assert prices.priced("openai", "claude-haiku-4-5", family=prices.dashed_family) is None
+    assert prices.priced("openai", "claude-haiku-4-5-20251001", family=prices.dashed_family) is None
+    assert (
+        input_rate(
+            prices.priced("anthropic", "claude-haiku-4-5-20251001", family=prices.compact_family)
+        )
+        == 1
+    )
     # A provider with no section prices nothing.
-    assert prices.priced("mistral", "shared") is None
+    assert prices.priced("mistral", "shared", family=prices.dashed_family) is None
 
 
 @pytest.mark.design("anthropic.price_sections")
 def test_the_shipped_openai_table_is_not_looked_up_for_another_provider() -> None:
     assert provider_openai.price("gpt-4.1", {}) is not None
-    assert prices.priced("anthropic", "gpt-4.1") is None
+    assert prices.priced("anthropic", "gpt-4.1", family=prices.compact_family) is None
 
 
 TEAM = """
@@ -122,7 +128,6 @@ def test_the_team_files_section_for_another_provider_prices_no_openai_call(
 ) -> None:
     built = a_plan(tmp_path)
     assert dict(built.prices_for("openai")).keys() == {"gpt-5", "gpt-4.1"}
-    assert dict(built.prices_for("anthropic")).keys() == {"gpt-5", "gpt-4o"}
 
 
 @pytest.mark.design("anthropic.price_sections")
@@ -130,7 +135,6 @@ def test_the_team_files_sections_survive_the_plans_json_round_trip(tmp_path: Pat
     built = a_plan(tmp_path)
     again = plan.Plan.from_json(built.to_json())
     assert again.prices_for("openai") == built.prices_for("openai")
-    assert again.prices_for("anthropic") == built.prices_for("anthropic")
 
 
 FILE = '[anthropic]\nurl = "x"\nas_of = "2026-11-20"\n'
@@ -257,8 +261,8 @@ def test_a_team_may_set_the_new_keys_in_agent_prices(tmp_path: Path) -> None:
     ("name", "family"),
     [
         ("claude-haiku-4-5-20251001", "claude-haiku-4-5"),
-        ("gpt-4o-mini-2024-07-18", "gpt-4o-mini"),
         ("claude-haiku-4-5", "claude-haiku-4-5"),
+        ("claude-sonnet-4-20250514", "claude-sonnet-4"),
         ("gpt-4o", "gpt-4o"),
         # Eight digits that are no date are part of the name.
         ("model-12345678", "model-12345678"),
@@ -271,29 +275,38 @@ def test_a_team_may_set_the_new_keys_in_agent_prices(tmp_path: Path) -> None:
     ],
 )
 def test_a_dated_name_falls_back_to_its_family(name: str, family: str) -> None:
-    assert prices.family(name) == family
+    assert prices.compact_family(name) == family
 
 
 @pytest.mark.design("anthropic.dated_names")
 def test_a_dated_anthropic_name_is_priced_as_its_family_and_a_non_date_is_not() -> None:
     table = {"claude-haiku-4-5": Rates(1.0, 5.0)}
-    assert prices.price("claude-haiku-4-5-20251001", table) == Rates(1.0, 5.0)
-    assert prices.price("claude-haiku-4-5", table) == Rates(1.0, 5.0)
-    assert prices.price("claude-haiku-4-5-12345678", table) is None
-    assert prices.price("claude-haiku-4-5-20251301", table) is None
+    assert prices.price("claude-haiku-4-5-20251001", table, family=prices.compact_family) == Rates(
+        1.0, 5.0
+    )
+    assert prices.price("claude-haiku-4-5", table, family=prices.compact_family) == Rates(1.0, 5.0)
+    assert prices.price("claude-haiku-4-5-12345678", table, family=prices.compact_family) is None
+    assert prices.price("claude-haiku-4-5-20251301", table, family=prices.compact_family) is None
     # The exact dated row beats the family's, in one table, as an OpenAI one does.
     exact = {"claude-haiku-4-5": Rates(1.0, 5.0), "claude-haiku-4-5-20251001": Rates(2.0, 6.0)}
-    assert prices.price("claude-haiku-4-5-20251001", exact) == Rates(2.0, 6.0)
+    assert prices.price("claude-haiku-4-5-20251001", exact, family=prices.compact_family) == Rates(
+        2.0, 6.0
+    )
     # A team's family row beats a file's dated row, as for OpenAI's names.
     mine = {"claude-haiku-4-5": Rates(9.0, 9.0)}
-    assert prices.price("claude-haiku-4-5-20251001", mine, exact) == Rates(9.0, 9.0)
+    assert prices.price(
+        "claude-haiku-4-5-20251001", mine, exact, family=prices.compact_family
+    ) == Rates(9.0, 9.0)
 
 
 @pytest.mark.design("anthropic.dated_names")
 def test_a_team_files_dated_row_is_left_out_when_the_team_prices_the_family() -> None:
     agent = (("claude-haiku-4-5", Rates(9.0, 9.0)),)
     file = (("claude-haiku-4-5-20251001", Rates(0.5, 0.5)), ("other", Rates(1.0, 1.0)))
-    assert [m for m, _ in prices.in_order(agent, file)] == ["claude-haiku-4-5", "other"]
+    assert [m for m, _ in prices.in_order(agent, file, prices.compact_family)] == [
+        "claude-haiku-4-5",
+        "other",
+    ]
 
 
 @pytest.mark.design("anthropic.price_sections")
@@ -331,15 +344,15 @@ def test_check_prints_each_providers_date(
     (tmp_path / "scrimmage.toml").write_text(config_cases.MINIMAL)
     assert cli.main(["check", str(tmp_path / "scrimmage.toml")]) == 0
     out = capsys.readouterr().out
-    assert "OpenAI prices as of 2026-11-20, Anthropic prices as of 2026-11-25" in out
+    assert "OpenAI prices as of 2026-11-20, anthropic prices as of 2026-11-25" in out
     # A section of the team's file stands for the shipped one, per provider.
     (tmp_path / "scrimmage-runs").mkdir()
     (tmp_path / "scrimmage-runs" / "prices.toml").write_text(TEAM)
     assert cli.main(["check", str(tmp_path / "scrimmage.toml")]) == 0
     out = capsys.readouterr().out
-    assert "OpenAI prices as of 2026-11-21, Anthropic prices as of 2026-11-21" in out
+    assert "OpenAI prices as of 2026-11-21, anthropic prices as of 2026-11-21" in out
     assert "scrimmage-runs/prices.toml, OpenAI prices as of 2026-11-21 (2 models)" in out
-    assert "the shipped prices.toml, Anthropic prices as of 2026-11-25 (2 models)" in out
+    assert "the shipped prices.toml, anthropic prices as of 2026-11-25 (2 models)" in out
 
 
 @pytest.mark.design("anthropic.price_sections")
@@ -366,7 +379,7 @@ def test_check_json_lists_each_section_of_each_file(
 FILE_ERRORS = {
     "the old flat shape": (
         'as_of = "2026-11-20"\nsource = "x"\n[models."m"]\ninput = 1\noutput = 1\n',
-        "as_of: expected a provider's section",
+        "this file is in the old format; run `scrimmage prices update`",
     ),
     "a section with no url": (
         '[openai]\nas_of = "2026-11-20"\n[openai.models."m"]\ninput = 1\noutput = 1\n',
@@ -410,3 +423,62 @@ def test_an_error_names_the_line_of_the_models_table_in_its_own_section() -> Non
     assert "the file anthropic models shared input: 0 is below 0.001" in caught.value.problems[0]
     line = text.splitlines().index('[anthropic.models."shared"]') + 1
     assert f"(line {line})" in caught.value.problems[0]
+
+
+@pytest.mark.design("anthropic.price_sections")
+@pytest.mark.parametrize("key", ["as_of", "source", "models"])
+def test_an_old_format_file_says_to_run_prices_update(key: str) -> None:
+    text = {"as_of": 'as_of = "2026-11-20"\n', "source": 'source = "x"\n', "models": "[models]\n"}
+    with pytest.raises(ConfigError, match=r"old format; run `scrimmage prices update`"):
+        prices.parse(text[key] + '[openai]\nurl = "x"\nas_of = "2026-11-20"\n', "the file")
+
+
+@pytest.mark.design("anthropic.price_sections")
+def test_every_section_of_the_shipped_file_is_a_registered_provider() -> None:
+    known = {p.name for p in builtin_providers()}
+    assert {name for name, _ in prices.shipped().sections} <= known
+
+
+@pytest.mark.design("anthropic.price_sections")
+def test_a_provider_names_itself_and_an_unregistered_section_shows_its_raw_name() -> None:
+    assert built_in().get("openai").display_name == "OpenAI"
+    assert prices.shown("openai") == "OpenAI"
+    assert prices.shown("opnai") == "opnai"
+
+
+@pytest.mark.design("anthropic.price_sections")
+def test_check_warns_of_a_section_no_provider_owns_and_still_accepts_the_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "scrimmage.toml").write_text(config_cases.MINIMAL)
+    (tmp_path / "scrimmage-runs").mkdir()
+    typo = TEAM.replace("[anthropic", "[opnai")
+    dated = '[openai.models."gpt-5-2025-08-07"]\ninput = 0.5\noutput = 0.5\n'
+    typo = typo.replace(dated, "")
+    (tmp_path / "scrimmage-runs" / "prices.toml").write_text(typo)
+    assert cli.main(["check", str(tmp_path / "scrimmage.toml")]) == 0
+    captured = capsys.readouterr()
+    assert "[opnai] that names no provider Scrimmage knows" in captured.err
+    assert "opnai prices as of 2026-11-21 (1 model)" in captured.out
+    assert "(1 models)" not in captured.out
+    # A file whose sections are all registered gives no warning.
+    (tmp_path / "scrimmage-runs" / "prices.toml").write_text(TEAM[: TEAM.index("[anthropic]")])
+    assert cli.main(["check", str(tmp_path / "scrimmage.toml")]) == 0
+    assert capsys.readouterr().err == ""
+    assert prices.unregistered(None) == []
+
+
+@pytest.mark.design("anthropic.dated_names")
+def test_a_name_ending_in_a_date_is_not_a_snapshot_under_openai(tmp_path: Path) -> None:
+    mine = {"acme": Rates(1.0, 2.0), "gpt-4.1": Rates(3.0, 4.0)}
+    assert provider_openai.price("acme-20250101", mine) is None
+    assert provider_openai.price("gpt-4.1-2025-04-14", mine) == Rates(3.0, 4.0)
+    assert built_in().get("openai").snapshot_family("acme-20250101") == "acme-20250101"
+    assert built_in().get("openai").snapshot_family("gpt-4.1-2025-04-14") == "gpt-4.1"
+    # The same holds through a run's plan, where the team's rows and file rows are merged.
+    (tmp_path / "scrimmage.toml").write_text(
+        config_cases.AGENT + '\n[agent.prices."acme"]\ninput = 1\noutput = 2\n' + config_cases.TEST
+    )
+    cfg = config.load(tmp_path / "scrimmage.toml")
+    held = dict(plan.plan_for(cfg, plan.rows(cfg)[0], "run-1").prices_for("openai"))
+    assert provider_openai.price("acme-20250101", held) is None

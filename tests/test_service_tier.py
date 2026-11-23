@@ -216,7 +216,7 @@ def test_a_row_in_agent_prices_wins_whole_over_the_team_files_row() -> None:
     mine = Rates(1.0, 2.0, tiers=(("flex", Rates(0.5, 1.0)),))
     theirs = Rates(7.0, 7.0, tiers=(("flex", Rates(3.0, 3.0)), ("priority", Rates(9.0, 9.0))))
     file = (("gpt-4.1", theirs),)
-    held = dict(prices.in_order((("gpt-4.1", mine),), file))
+    held = dict(prices.in_order((("gpt-4.1", mine),), file, prices.dashed_family))
     found = table.price("gpt-4.1", held)
     assert found == mine
     assert found is not None and found.at("priority") == mine  # no tier of the file's leaks in

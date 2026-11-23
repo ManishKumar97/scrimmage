@@ -247,6 +247,16 @@ class ModelProvider(Recognizer, Meter, FaultMaker, ReplyChanger, ReplyReader, Pr
     @property
     def name(self) -> str: ...
 
+    @property
+    def display_name(self) -> str:
+        """How `scrimmage check` names the provider, such as OpenAI."""
+        ...
+
+    def snapshot_family(self, model: str) -> str:
+        """The model a dated snapshot belongs to, by this provider's own way of dating one, or
+        the name itself: the price of a snapshot is its family's."""
+        ...
+
 
 @runtime_checkable
 class ServerChains(Protocol):

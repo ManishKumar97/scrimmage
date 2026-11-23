@@ -11,7 +11,7 @@ from collections.abc import Mapping, Sequence
 from scrimmage import provider_openai as table
 from scrimmage.changes import Unchangeable, WebChanged
 from scrimmage.config import Fault
-from scrimmage.prices import Rates
+from scrimmage.prices import Rates, dashed_family
 from scrimmage.providers.base import Fields, Given, ReplyChange
 from scrimmage.providers.impl import openai_changes
 
@@ -47,6 +47,7 @@ class OpenAIChange:
 
 class OpenAI:
     name = "openai"
+    display_name = "OpenAI"
     hosts = table.HOSTS
     free_ops = table.FREE_OPS
 
@@ -63,6 +64,8 @@ class OpenAI:
     output_cap = staticmethod(table.output_cap)
     request_tier = staticmethod(table.request_tier)
     gateway_cost = staticmethod(table.gateway_cost)
+
+    snapshot_family = staticmethod(dashed_family)
 
     def price(self, model: str, overrides: dict[str, Rates]) -> Rates | None:
         return table.price(model, overrides)

@@ -873,6 +873,12 @@ def run_check(
     )
     for line in prices.sources(agent.prices, config.team_prices):
         print(line)
+    for section in prices.unregistered(config.team_prices):
+        print(
+            f"scrimmage: warning: {prices.RUNS}/{prices.SHIPPED} has a section [{section}] that "
+            "names no provider Scrimmage knows, so no price in it is used",
+            file=sys.stderr,
+        )
     if agent.start:  # the runner starts it, with every setting: nothing is set by hand
         print(f"the service starts with: {agent.start_written}")
     elif agent.service and hint:

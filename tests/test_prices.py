@@ -692,15 +692,29 @@ MINE, FILE_EXACT, SHIPPED_ROW = Rates(50.0, 50.0), Rates(1e-3, 1e-3), Rates(7.0,
 @pytest.mark.design("prices.authority_first")
 def test_a_family_row_of_a_higher_table_beats_an_exact_dated_row_of_a_lower_one() -> None:
     dated = "gpt-4.1-2025-04-14"
-    assert prices.price(dated, {"gpt-4.1": MINE}, {dated: FILE_EXACT}) == MINE
-    assert prices.price(dated, {}, {dated: FILE_EXACT}, {"gpt-4.1": SHIPPED_ROW}) == FILE_EXACT
-    assert prices.price("gpt-4.1", {"gpt-4.1": MINE}, {dated: FILE_EXACT}) == MINE
+    assert (
+        prices.price(dated, {"gpt-4.1": MINE}, {dated: FILE_EXACT}, family=prices.dashed_family)
+        == MINE
+    )
+    assert (
+        prices.price(
+            dated, {}, {dated: FILE_EXACT}, {"gpt-4.1": SHIPPED_ROW}, family=prices.dashed_family
+        )
+        == FILE_EXACT
+    )
+    assert (
+        prices.price("gpt-4.1", {"gpt-4.1": MINE}, {dated: FILE_EXACT}, family=prices.dashed_family)
+        == MINE
+    )
 
 
 @pytest.mark.design("prices.authority_first")
 def test_within_one_table_the_exact_dated_row_beats_its_family() -> None:
     dated = "gpt-4.1-2025-04-14"
-    assert prices.price(dated, {"gpt-4.1": MINE, dated: FILE_EXACT}) == FILE_EXACT
+    assert (
+        prices.price(dated, {"gpt-4.1": MINE, dated: FILE_EXACT}, family=prices.dashed_family)
+        == FILE_EXACT
+    )
 
 
 @pytest.mark.design("prices.authority_first")
