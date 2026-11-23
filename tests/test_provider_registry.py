@@ -263,7 +263,7 @@ def api_literals() -> set[str]:
     """The paths that name an API of any registered provider, from its contract case, and the
     paths of those to come. Only a chat op is an API of its own: embeddings, moderations and
     input_tokens are the same words for every provider."""
-    found = set(COMING_PATHS)
+    found = set(COMING_PATHS).union(*(path_forms(path) for path in COMING_PATHS))
     for case in CASES.values():
         for _, path, op in case.ops:
             if op == "chat":
@@ -450,7 +450,7 @@ def test_the_literals_the_guard_looks_for_come_from_every_registered_provider() 
     assert set(CASES) == {p.name for p in builtin_providers()}
     literals = api_literals()
     assert {"/responses", "responses", "/chat/completions", "chat/completions"} <= literals
-    assert "/messages" in literals
+    assert {"/messages", "messages", "messages/count_tokens"} <= literals
     assert not literals & {"embeddings", "moderations", "input_tokens", "/embeddings"}
     assert {"choices", "previous_response_id", "stop_reason"} <= wire_keys()
     names = shape_names()
@@ -516,6 +516,11 @@ GATE = "def f(x):\n    return x\n"
             "names the provider 'anthropic'",
         ),
         ("def g(p):\n    return p in ('openai', 'x')\n", "names the provider 'openai'"),
+        ("def g(path):\n    return 'messages' in path\n", "names the API path 'messages'"),
+        (
+            "def g(path):\n    return path.rsplit('/', 1)[-1] == 'messages'\n",
+            "names the API path 'messages'",
+        ),
         (
             "import re\ndef g(p):\n    return re.search(r'/messages$', p)\n",
             "matches a path with re.search, '/messages$'",
