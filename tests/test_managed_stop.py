@@ -370,18 +370,54 @@ def test_a_port_held_by_a_process_that_never_answers_ends_the_probe_when_the_cop
     hole = socket.socket()
     hole.bind(("127.0.0.1", 0))
     hole.listen(8)
+    launch = managed.Managed.launch
+    probe_service = runner.Runner.probe_service
+    exits: list[float] = []  # when each copy's process ended, in the order they were started
+    ended: list[float] = []
+    watchers: list[threading.Thread] = []
+
+    def launched(self: managed.Managed, log: int) -> None:
+        launch(self, log)
+        proc = self.proc
+        assert proc is not None
+        slot = len(exits)
+        exits.append(float("inf"))
+
+        def watch() -> None:
+            proc.wait()
+            exits[slot] = time.monotonic()
+
+        watcher = threading.Thread(target=watch, daemon=True)
+        watchers.append(watcher)
+        watcher.start()
+
+    def probe_ended(self: runner.Runner) -> service_client.Probed:
+        try:
+            return probe_service(self)
+        finally:
+            ended.append(time.monotonic())
+
+    shop.monkeypatch.setattr(managed.Managed, "launch", launched)
+    shop.monkeypatch.setattr(runner.Runner, "probe_service", probe_ended)
     try:
         port = int(hole.getsockname()[1])
         shop.monkeypatch.setattr(runner, "free_port", lambda: port)
-        began = time.monotonic()
         code, out = shop.test(f"{UVICORN} acme.service:app --port {{port}} --loop asyncio")
-        took = time.monotonic() - began
     finally:
         hole.close()
     assert code == 3, out
     assert "the service started with [agent] start exited with code 3 before it was ready" in out
     assert "address already in use" in out, out
-    assert took < service_client.PROBE_S / 2, took
+    # From the last copy's exit, not from the start: loading the app takes as long as the
+    # machine's load makes it. The probe's own limit is 30 s.
+    for watcher in watchers:
+        watcher.join(timeout=10)
+        assert not watcher.is_alive(), "a copy's exit was never recorded"
+    # The watcher can wake after the probe has already seen the exit under load, so its
+    # time is capped at the probe's end: the exit came no later than that.
+    [end] = ended
+    named = end - min(exits[-1], end)
+    assert 0 <= named < AT_ONCE_S, named
 
 
 def test_a_helper_started_from_a_thread_that_ends_runs_until_the_copy_stops(
