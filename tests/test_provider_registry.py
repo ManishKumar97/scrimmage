@@ -237,6 +237,19 @@ REGISTRY_NAMES = {"ProviderRegistry", "registry_for", "built_in"}  # what a modu
 # they are. Each provider that is registered adds its own through its contract case.
 COMING_PATHS = {"/messages", "/v1/messages", "/messages/count_tokens"}
 COMING_KEYS = {"stop_reason", "content_block", "input_json_delta", "tool_use", "tool_result"}
+COMING_PROVIDERS = {"anthropic"}  # the names of providers not registered yet
+# The modules that may name a provider: the vocabulary of the labels, and init's list of what an
+# agent imports.
+NAMES_PROVIDERS = {"labels.py", "init.py"}
+# The three product regexes that start with a slash and are no provider's path: the control
+# plane's own API, the slash runs of a credential's path, and the shape of a web path.
+OWN_PATTERNS = {
+    ("control.py", r"/v1/plans/([A-Za-z0-9_-]{1,64})"),
+    ("credentials.py", r"/{2,}"),
+    ("labels.py", r"/(?:(?![?#])[\x21-\x7e])*"),
+}
+# No module outside the providers may build or look up a provider's module by name.
+MODULE_NAMES = ("scrimmage.provider_", "providers.impl")
 
 
 def path_forms(path: str) -> set[str]:
@@ -317,8 +330,54 @@ def reaches_a_provider(module: str) -> bool:
     return parts[1] == "providers" and len(parts) > 2 and parts[2] not in ("base", "registry")
 
 
-def problems_in(source: str) -> list[str]:
-    """What in this source reaches a provider, or decides by the wire form of an API of one."""
+def paths_in_patterns(tree: ast.AST, module: str) -> list[str]:
+    """The re calls and the match cases of this tree whose pattern starts with a slash: a path
+    matched by its form, which is the provider's to know."""
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "re"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+            and node.args[0].value.startswith("/")
+            and (module, node.args[0].value) not in OWN_PATTERNS
+        ):
+            found.append(f"matches a path with re.{node.func.attr}, {node.args[0].value!r}")
+        elif isinstance(node, ast.match_case):
+            found += [
+                f"matches a path in a case, {leaf.value!r}"
+                for leaf in ast.walk(node.pattern)
+                if isinstance(leaf, ast.Constant)
+                and isinstance(leaf.value, str)
+                and leaf.value.startswith("/")
+            ]
+    return found
+
+
+def names_in_strings(tree: ast.AST, docstrings: set[int], module: str) -> list[str]:
+    """The strings of this tree that name a provider, or a provider's module."""
+    names = {p.name for p in builtin_providers()} | COMING_PROVIDERS
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or id(node) in docstrings:
+            continue
+        text = node.value
+        if not isinstance(text, str):
+            continue
+        if text in names and module not in NAMES_PROVIDERS:
+            found.append(f"names the provider {text!r}")
+        if any(part in text for part in MODULE_NAMES):
+            found.append(f"names a provider's module in the string {text!r}")
+    return found
+
+
+def problems_in(source: str, module: str = "") -> list[str]:
+    """What in this source reaches a provider, or decides by the wire form of an API of one.
+    module is the file's name, for the few that may name a provider or hold a path pattern."""
     tree = ast.parse(source)
     docstrings = {
         id(node.body[0].value)
@@ -376,14 +435,14 @@ def problems_in(source: str) -> list[str]:
                 found.append(f"names the API path {node.value!r}")
             elif node.value in keys:
                 found.append(f"names the wire key {node.value!r}")
-    return found
+    return found + paths_in_patterns(tree, module) + names_in_strings(tree, docstrings, module)
 
 
 @pytest.mark.parametrize("path", product_modules(), ids=lambda p: str(p.relative_to(SRC)))
 def test_no_product_module_reaches_a_provider_or_decides_by_one_of_its_apis(path: Path) -> None:
     """The gate, the changes, the run's state, the config, init and every other module know a
     provider only through the interface and the registry."""
-    bad = problems_in(path.read_text())
+    bad = problems_in(path.read_text(), path.name)
     assert not bad, f"{path.relative_to(SRC)}: {bad}"
 
 
@@ -450,6 +509,41 @@ GATE = "def f(x):\n    return x\n"
         ),
         ("from scrimmage.changes import chat_kind\n", "imports chat_kind, one of"),
         ("def g(x):\n    return CHAT_CHANGES[x]\n", "CHAT_CHANGES"),
+        # Review of the seam, AN-A3-1: a name, a pattern or a module string the lists miss.
+        ("def g(call):\n    return call.provider == 'openai'\n", "names the provider 'openai'"),
+        (
+            "def g(call):\n    return call.provider == 'anthropic'\n",
+            "names the provider 'anthropic'",
+        ),
+        ("def g(p):\n    return p in ('openai', 'x')\n", "names the provider 'openai'"),
+        (
+            "import re\ndef g(p):\n    return re.search(r'/messages$', p)\n",
+            "matches a path with re.search, '/messages$'",
+        ),
+        (
+            "import re\nP = re.compile('/v1/other/[a-z]+')\n",
+            "matches a path with re.compile, '/v1/other/[a-z]+'",
+        ),
+        (
+            "def g(p):\n    match p:\n        case '/v1/zzz':\n            return 1\n",
+            "matches a path in a case, '/v1/zzz'",
+        ),
+        (
+            "def g(p):\n    match p:\n        case 'a' | '/b':\n            return 1\n",
+            "matches a path in a case, '/b'",
+        ),
+        (
+            "def g():\n    return sys.modules['scrimmage.provider_openai']\n",
+            "names a provider's module in the string 'scrimmage.provider_openai'",
+        ),
+        (
+            "def g():\n    return importlib.import_module('scrimmage.provider_' + 'openai')\n",
+            "names a provider's module in the string 'scrimmage.provider_'",
+        ),
+        (
+            "def g():\n    return importlib.import_module('scrimmage.providers.impl.openai')\n",
+            "names a provider's module in the string 'scrimmage.providers.impl.openai'",
+        ),
     ],
 )
 def test_the_guard_catches_each_way_a_module_could_reach_a_provider(added: str, says: str) -> None:
@@ -468,10 +562,28 @@ def test_the_guard_catches_each_way_a_module_could_reach_a_provider(added: str, 
         "def g(fields):\n    return fields.get('stream') is True and fields.get('model')\n",
         "def g(x):\n    return changes.change_text(x, 1)\n",
         "def g(x):\n    return x.endswith('.py')\n",
+        "import re\nP = re.compile(r'\\d+/\\d+')\nQ = re.sub('a/b', '', 'a/b')\n",
+        "def g(p):\n    match p:\n        case 'chat' | 'x/y':\n            return 1\n",
+        'def g():\n    """Reads scrimmage.provider_openai, the openai one."""\n    return 1\n',
+        "def g(x):\n    return x.replace('openai-key', 'k').split('/')\n",
     ],
 )
 def test_the_guard_leaves_alone_what_a_module_may_use(fine: str) -> None:
     assert problems_in(GATE + fine) == []
+
+
+def test_only_the_vocabulary_modules_may_name_a_provider() -> None:
+    naming = "LIBRARIES = ('openai', 'anthropic')\n"
+    assert problems_in(naming, "labels.py") == []
+    assert problems_in(naming, "init.py") == []
+    assert len(problems_in(naming, "http_gate.py")) == 2
+
+
+def test_only_the_three_own_patterns_may_start_with_a_slash() -> None:
+    own = "import re\nP = re.compile(r'/{2,}')\n"
+    assert problems_in(own, "credentials.py") == []
+    assert problems_in(own, "http_gate.py") != []
+    assert problems_in(own.replace("{2,}", "{3,}"), "credentials.py") != []
 
 
 def test_a_module_that_prints_what_a_model_said_may_not_name_the_keys_of_its_reply() -> None:
