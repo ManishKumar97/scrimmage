@@ -342,3 +342,49 @@ def test_the_output_a_call_could_bill_is_max_tokens_and_there_is_one_reply() -> 
     assert provider.output_cap(wrap_fields({"max_tokens": 77}), "/v1/messages", 4096) == 77
     assert provider.output_cap(wrap_fields({"n": 3, "max_tokens": 77}), "/v1/messages", 4096) == 77
     assert provider.output_cap(wrap_fields({"max_tokens": 0}), "/v1/messages", 4096) == 4096
+
+
+# A team's row of input and output alone, as the paste template writes it, has no write rates. The
+# prompt caching page's pre-warm: 8 input tokens, 5120 written for 5 minutes, no output. At $3 in a
+# write for 5 minutes costs 1.25 times that, $3.75, and for 1 hour 2 times, $6.
+BARE = Rates(3.0, 15.0)
+PREWARM = (8 * 3.0 + 5120 * 3.75) / 1e6
+
+
+def test_a_row_with_no_write_rates_settles_writes_at_anthropics_multiples_of_input() -> None:
+    assert pytest.approx(0.019224, abs=1e-12) == PREWARM
+    run = Gate(hosts=(), prices=((MODEL, BARE),))
+    send(run, fixture("doc_prewarm.json"))
+    assert settled(run) == pytest.approx(0.019224, abs=TOLERANCE)
+    assert run.line["tokens"] == {"input": 5128, "output": 0, "cached": 0}
+    assert run.line["cost_estimated"] is False
+
+
+def test_a_one_hour_write_with_no_rate_costs_twice_the_input_rate() -> None:
+    reply = json.loads(fixture("doc_prewarm.json"))
+    reply["usage"]["cache_creation"] = {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 5120,
+    }
+    del reply["usage"]["iterations"]
+    run = Gate(hosts=(), prices=((MODEL, BARE),))
+    send(run, json.dumps(reply).encode())
+    assert settled(run) == pytest.approx((8 * 3.0 + 5120 * 6.0) / 1e6, abs=TOLERANCE)
+
+
+def test_a_cached_read_with_no_rate_stays_at_the_input_rate_which_is_high_and_safe() -> None:
+    run = Gate(hosts=(), prices=((MODEL, BARE),))
+    send(run, fixture("doc_cached.json"))
+    assert settled(run) == pytest.approx(
+        (2048 * 3.0 + 1800 * 3.0 + 148 * 3.75 + 100 * 6.0 + 503 * 15.0) / 1e6, abs=TOLERANCE
+    )
+
+
+def test_the_hold_of_a_row_with_no_write_rates_uses_the_multiples_too() -> None:
+    from scrimmage.providers.impl.wire import wrap_fields
+
+    five = wrap_fields({"cache_control": {"type": "ephemeral"}})
+    hour = wrap_fields({"cache_control": {"type": "ephemeral", "ttl": "1h"}})
+    most = provider_anthropic.most_cost
+    assert most(1000, 0, BARE, fields=five) == pytest.approx(1000 * 3.75 / 1e6)
+    assert most(1000, 0, BARE, fields=hour) == pytest.approx(1000 * 6.0 / 1e6)

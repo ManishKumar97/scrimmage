@@ -418,8 +418,8 @@ def cost(
     rates = rates.sized(tokens_in)
     plain = tokens_in - cached - written_5m - written_1h
     full = plain * rates.input + cached * _or_input(rates.cached_input, rates)
-    full += written_5m * _or_input(rates.cache_write_5m, rates)
-    full += written_1h * _or_input(rates.cache_write_1h, rates)
+    full += written_5m * _write_rate(rates, WRITE_5M)
+    full += written_1h * _write_rate(rates, WRITE_1H)
     return (full + tokens_out * rates.output) / 1_000_000
 
 
@@ -441,9 +441,9 @@ def most_cost(tokens_in: int, tokens_out: int, rates: Rates, *, fields: Fields) 
     marks = _cache_controls(fields_dict(fields))
     rate = rates.input
     if marks:
-        rate = max(rate, _or_input(rates.cache_write_5m, rates))
+        rate = max(rate, _write_rate(rates, WRITE_5M))
     if any(_obj(mark).get("ttl") == "1h" for mark in marks):
-        rate = max(rate, _or_input(rates.cache_write_1h, rates))
+        rate = max(rate, _write_rate(rates, WRITE_1H))
     return (tokens_in * rate + tokens_out * rates.output) / 1_000_000
 
 
@@ -527,3 +527,18 @@ def _count(numbers: dict[str, object], key: str) -> int | None:
 
 def _or_input(rate: float | None, rates: Rates) -> float:
     return rates.input if rate is None else rate
+
+
+# What Anthropic charges to write the cache, as a multiple of the model's input price: 1.25 times
+# for 5 minutes and 2 times for 1 hour (prompt caching page, "Pricing"; the pricing page's table).
+# A row that leaves a write rate out is a team's row of input and output alone, and its writes
+# cost these, not the input rate, which would be 20% and 50% low. A cached read left out stays at
+# the input rate, which is high and so safe.
+WRITE_MULTIPLE = {WRITE_5M: 1.25, WRITE_1H: 2.0}
+
+
+def _write_rate(rates: Rates, kind: str) -> float:
+    """The price of a token written to the cache for this long: the row's own, else Anthropic's
+    multiple of its input price."""
+    own: float | None = getattr(rates, kind)
+    return WRITE_MULTIPLE[kind] * rates.input if own is None else own

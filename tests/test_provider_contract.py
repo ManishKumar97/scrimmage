@@ -75,6 +75,9 @@ class Case:
     call_name: str = ""
     text_part: str = ""
     arguments_part: str = ""
+    # A request that may write the cache, for a provider whose hold looks at the request: the hold
+    # of `request` need not cover the writes of a reply, since it asked for none.
+    writing_request: dict[str, object] | None = None
     request_cap: int | None = None  # the output cap `request` carries, for an API that needs one
     call_text: str | None = None  # what the reply that calls a tool says by default, if it says
     chain: Chain | None = None
@@ -180,6 +183,12 @@ CASES = {
         call_reply=ANTHROPIC / "doc_tool_use.json",
         call_name="get_weather",
         request_cap=64,
+        writing_request={
+            "model": "claude-haiku-5-5",
+            "max_tokens": 64,
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            "messages": [{"role": "user", "content": "hi"}],
+        },
         call_text="I'll check the current weather in San Francisco for you.",
         text_part="content[0].text",
         arguments_part="content[1].input",
@@ -713,7 +722,11 @@ def test_a_cost_is_never_below_the_table(
     # provider it is never under what the call settles at.
     held = max(
         provider.most_cost(
-            tokens_in, tokens_out, RATES, path=path, fields=wrap_fields(case.request)
+            tokens_in,
+            tokens_out,
+            RATES,
+            path=path,
+            fields=wrap_fields(case.writing_request or case.request),
         )
         for path in (case.chat_path, *case.other_paths)
     )

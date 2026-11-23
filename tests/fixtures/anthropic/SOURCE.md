@@ -45,6 +45,7 @@ The models named in them are the docs' own.
 | `doc_tool_use.json` | Handle tool calls, "Example API response with a `tool_use` content block" | Unchanged; the page shows no `usage` | `46aaca3fa3adf87588c86e187847e24a8f78456cd8b141d0f2866e438a6574fa` |
 | `doc_stream_answer.sse` | Streaming, "Streaming request" | Unchanged | `bee1873e5b02de52e95ae9dd226868cc8aed2680ec6c84572c3fa49926436c3e` |
 | `doc_stream_tool_use.sse` | Streaming, "Streaming request with tool use" | Unchanged | `08451c8c92b1f6e316efead626151b817d7f6cef67c2ad982de9acd6a5afdea5` |
+| `doc_prewarm.json` | Prompt caching, "Pre-warming the cache": the empty reply of a request with `max_tokens` 0 | Unchanged, laid out with an indent; 8 input, 5120 written for 5 minutes, no output | `a8d7ed5380104c0606dfdc591b938466a9687456b8f6acc4b0f9bd8979546cb5` |
 | `doc_refusal.json` | Refusals and fallback, "What a refusal looks like" | Unchanged | `ac0daeae51d3e266fe595cb319339b91ed83bc843de3423891f8bffd1f5dadde` |
 
 `doc_count_tokens.json` is the answer of `POST /v1/messages/count_tokens`, from the Token counting page's first example, `{ "input_tokens": 14 }`, written with indent.
