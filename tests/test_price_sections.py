@@ -83,6 +83,10 @@ as_of = "2026-11-21"
 input = 7
 output = 7
 
+[openai.models."gpt-5-2025-08-07"]
+input = 0.5
+output = 0.5
+
 [anthropic]
 url = "x"
 as_of = "2026-11-21"
@@ -334,7 +338,7 @@ def test_check_prints_each_providers_date(
     assert cli.main(["check", str(tmp_path / "scrimmage.toml")]) == 0
     out = capsys.readouterr().out
     assert "OpenAI prices as of 2026-11-21, Anthropic prices as of 2026-11-21" in out
-    assert "scrimmage-runs/prices.toml, OpenAI prices as of 2026-11-21 (1 models)" in out
+    assert "scrimmage-runs/prices.toml, OpenAI prices as of 2026-11-21 (2 models)" in out
     assert "the shipped prices.toml, Anthropic prices as of 2026-11-25 (2 models)" in out
 
 
