@@ -119,7 +119,18 @@ class Meter(Protocol):
         writes: Mapping[str, int],
     ) -> Rates: ...
 
-    def most_cost(self, tokens_in: int, tokens_out: int, rates: Rates, *, path: str) -> float: ...
+    def most_cost(
+        self,
+        tokens_in: int,
+        tokens_out: int,
+        rates: Rates,
+        *,
+        path: str,
+        fields: dict[str, object],
+    ) -> float:
+        """What a call could cost at most: the dearest the provider may bill each token for,
+        given the API the path names and what the request asks for."""
+        ...
 
 
 class FaultMaker(Protocol):
@@ -130,6 +141,12 @@ class FaultMaker(Protocol):
 
     def error_content_type(self, status: int) -> str:
         """The content type of an error reply with this status."""
+        ...
+
+    def fault_headers(self, content_type: str) -> dict[str, str]:
+        """The headers of a reply a fault builds, as the provider's own replies carry them: the
+        content type and the header its client reads a request id from. The gate adds the
+        retry-after of a status fault to these."""
         ...
 
     def broken_body(self, path: str, op: str) -> bytes: ...

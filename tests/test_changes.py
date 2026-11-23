@@ -13,6 +13,7 @@ import pytest
 from scrimmage import changes
 from scrimmage.changes import Changed, Unchangeable
 from scrimmage.config import Fault
+from scrimmage.providers.impl import openai_changes
 from scrimmage.providers.registry import built_in
 
 KEY = "ghp_" + "a" * 36
@@ -294,14 +295,14 @@ JSON = [("content-type", "application/json")]
 def test_a_chat_reply_that_cannot_take_a_replace_says_why(
     status: int, op: str, headers: list[tuple[str, str]], body: bytes, why: str
 ) -> None:
-    said = changes.change_chat(status, op, headers, body, fault("replace", "safe"))
+    said = openai_changes.change_chat(status, op, headers, body, fault("replace", "safe"))
     assert isinstance(said, Unchangeable) and why in said.why
 
 
 def test_a_chat_replace_drops_the_body_headers_and_counts_its_length() -> None:
     body = json.dumps({"choices": [{"message": {"content": "unsafe"}}]}).encode()
     headers = [*JSON, ("transfer-encoding", "chunked"), ("x-request-id", "r1")]
-    done = changes.change_chat(200, "chat", headers, body, fault("replace", "safe"))
+    done = openai_changes.change_chat(200, "chat", headers, body, fault("replace", "safe"))
     assert not isinstance(done, Unchangeable)
     assert json.loads(done.body)["choices"][0]["message"]["content"] == "safe"
     assert dict(done.headers) == {
@@ -311,7 +312,7 @@ def test_a_chat_replace_drops_the_body_headers_and_counts_its_length() -> None:
     }
     # A find that touches a secret is not made: the line could not show what changed.
     near = json.dumps({"choices": [{"message": {"content": f"x {KEY}"}}]}).encode()
-    said = changes.change_chat(200, "chat", JSON, near, fault("replace", "y", find=KEY[:6]))
+    said = openai_changes.change_chat(200, "chat", JSON, near, fault("replace", "y", find=KEY[:6]))
     assert isinstance(said, Unchangeable) and said.mistake
 
 
@@ -365,7 +366,7 @@ def change(
 ) -> changes.WebChanged | Unchangeable:
     body = reply if isinstance(reply, bytes) else json.dumps(reply).encode()
     held = REAL_HEADERS if headers is None else headers
-    return changes.CHAT_CHANGES[word](status, op, held, body, reply_fault(word))
+    return openai_changes.CHAT_CHANGES[word](status, op, held, body, reply_fault(word))
 
 
 def made(word: str, reply: object) -> tuple[dict[str, Any], changes.WebChanged]:

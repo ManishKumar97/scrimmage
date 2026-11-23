@@ -692,7 +692,7 @@ def built_reply(
     else:  # reply_checks let it through only on chat, with a tool offered
         tool = provider.tool_call_tools(path, fields)[0]
         built = provider.unknown_tool_reply(fields, tokens, tool)
-    headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
+    headers = provider.fault_headers("application/json")
     faulted(ctx, step, path, fields, built, ids_only=word == "unknown tool")
     return reply(ctx, module, client, step, request, extra, (200, headers, built))
 
@@ -749,7 +749,7 @@ def fault(
         asked = provider.request_fields(body_of(request) or b"") or {}
         if why := provider.not_carried_out(plan_fault.do, str(request.url.path), asked):
             not_carried_out(run, step, why)
-        headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
+        headers = provider.fault_headers("application/json")
         body = provider.context_too_long_body()
         return reply(ctx, module, client, step, request, extra, (400, headers, body))
     status = int(plan_fault.do.split()[1])
@@ -757,7 +757,7 @@ def fault(
         provider = provider_for(run, step)
         body = provider.error_body(status)
         kind = provider.error_content_type(status)
-        headers = {"content-type": kind, "x-request-id": "req_scrimmage_injected"}
+        headers = provider.fault_headers(kind)
     else:
         body = reason_phrase(status).encode()
         headers = {"content-type": "text/plain; charset=utf-8"}
@@ -781,8 +781,9 @@ def bad_body(
             "a request without stream, or use timeout or a status on this one",
         )
     if step.call.kind == "model":
-        headers = {"content-type": "application/json", "x-request-id": "req_scrimmage_injected"}
-        body = provider_for(run, step).broken_body(str(request.url.path), step.call.name)
+        provider = provider_for(run, step)
+        headers = provider.fault_headers("application/json")
+        body = provider.broken_body(str(request.url.path), step.call.name)
     else:
         headers = {"content-type": "application/json; charset=utf-8"}
         body = BROKEN_WEB_BODY
@@ -935,8 +936,11 @@ def worst(
 ) -> float:
     """What the call could cost at most on the API its path names, at the service tier the
     request names, else the file's [agent] service_tier, else the default tier."""
-    tier = held_tier(ctx, provider, request)
-    return provider.most_cost(tokens_in, tokens_out, rates.at(tier), path=str(request.url.path))
+    fields = provider.request_fields(body_of(request) or b"")
+    tier = provider.request_tier(fields) or ctx.run.plan.service_tier
+    return provider.most_cost(
+        tokens_in, tokens_out, rates.at(tier), path=str(request.url.path), fields=fields or {}
+    )
 
 
 def held_tier(ctx: Bound, provider: ModelProvider, request: Any) -> str | None:
