@@ -140,6 +140,9 @@
         "output"
       ],
       "properties": {
+        "web_search_request": {
+          "$ref": "#/$defs/dollars"
+        },
         "input": {
           "$ref": "#/$defs/dollars"
         },

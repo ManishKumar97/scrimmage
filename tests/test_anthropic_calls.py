@@ -181,7 +181,6 @@ def test_tools_a_built_in_with_no_name_is_named_by_its_family() -> None:
     [
         "web_search_20250305",
         "web_fetch_20250910",
-        "code_execution_20250825",
         "tool_search_tool_regex_20251119",
         "tool_search_tool_bm25",
     ],

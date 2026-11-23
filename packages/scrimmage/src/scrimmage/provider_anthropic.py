@@ -6,10 +6,11 @@ The faults that change or build a reply are not done yet: each says so, and the 
 the row.
 """
 
+import dataclasses
 import json
 import math
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -294,6 +295,13 @@ def usage(body: bytes, *, output_required: bool = True) -> AnthropicUsage:
     sensible whole number is not trusted, and neither is a reply whose cache writes do not add
     up: its writes are read high, as one hour writes. A token count has no usage of its own: with
     output_required False its top-level input_tokens is read.
+
+    When the reply has usage.iterations beyond one plain message, the attempts that were billed
+    are each in it, with their own model: a server-side fallback, an advisor, a compaction. The
+    top-level counts describe only the attempt that produced the message, so the settle is the
+    sum over the iterations, each at its own model's rates. Each hop is kept in writes under
+    hop<i>:<model>:<field>, which cost reads, and the totals are the sums. The searches a reply
+    counts are kept in writes as web_search_request, which the fee prices.
     """
     text = body.decode("utf-8", "replace")
     # Split on newlines only: text in a reply can hold other line separators.
@@ -304,6 +312,8 @@ def usage(body: bytes, *, output_required: bool = True) -> AnthropicUsage:
     tier: object = None
     speed: object = None
     cost: float | None = None
+    searches = 0
+    iterations: list[object] = []
     for doc in data or [text]:
         try:
             parsed = _obj(json.loads(doc))
@@ -317,34 +327,116 @@ def usage(body: bytes, *, output_required: bool = True) -> AnthropicUsage:
             streamed = True
         if kind == "message_delta" and numbers.get("output_tokens") is not None:
             ended = True
-        for key in COUNT_KEYS:
-            if numbers.get(key) is not None:
-                value = _count(numbers, key)
-                bad = bad or value is None
-                if value is not None:
-                    counts[key] = value
-        for key, value in _obj(numbers.get("cache_creation")).items():
-            if key in SPLIT_KEYS and value is not None:
-                found = _count({key: value}, key)
-                bad = bad or found is None
-                if found is not None:
-                    split[key] = found
+        bad = _fold(numbers, counts, split) or bad
+        used = _obj(numbers.get("server_tool_use"))
+        if used.get("web_search_requests") is not None:
+            found = _count(used, "web_search_requests")
+            bad = bad or found is None
+            searches = found or 0
+        listed = _list(numbers.get("iterations"))
+        if listed:
+            iterations = listed
         tier = numbers.get("service_tier") or tier
         speed = numbers.get("speed") or speed
         cost = gateway_cost(numbers.get("cost"), cost)
     result = AnthropicUsage(tier=_tier(tier, speed), cost=cost)
-    if bad or "input_tokens" not in counts or (streamed and not ended):
+    hops = _hops(iterations)
+    if bad or hops is None or (streamed and not ended):
         return result
-    if output_required and "output_tokens" not in counts:
+    billed = len(hops) > 1 or any(kind != "message" for kind, *_ in hops)
+    if not billed and "input_tokens" not in counts:
         return result
+    if not billed and output_required and "output_tokens" not in counts:
+        return result
+    result.known = True
+    if billed:
+        result.writes = _hop_writes(result, [(m, _totals(c, sp)) for _, m, c, sp in hops])
+    else:
+        total, out, read, short, long = _totals(counts, split)
+        result.input, result.output, result.cached = total, out, read
+        result.writes = {WRITE_5M: short, WRITE_1H: long}
+    if searches:
+        result.writes[SEARCH] = searches
+    return result
+
+
+# The Rates fee a web search is priced by, and the key a reply's count of searches is kept under.
+SEARCH = "web_search_request"
+# What Anthropic charges for a web search: $10 for each 1,000 searches, on top of the tokens
+# (pricing page, "Web search tool"). A search that fails with an error is not billed, and the
+# reply counts only the searches it did. A price file's [anthropic.fees] and a row's own
+# web_search_request come before this.
+DEFAULT_FEES = {SEARCH: 0.01}
+# How many searches a request that offers web search with no max_uses is held for. The docs give
+# no default; they say a question of one fact takes 1 to 3 searches and research 10 or more.
+DEFAULT_SEARCHES = 10
+HOP_FIELDS = ("input", "output", "cached", WRITE_5M, WRITE_1H)
+
+
+def _fold(numbers: dict[str, object], counts: dict[str, int], split: dict[str, int]) -> bool:
+    """Fold one usage object into the counts, a later count that is not null winning. True when
+    a count in it is not a sensible whole number."""
+    bad = False
+    for key in COUNT_KEYS:
+        if numbers.get(key) is not None:
+            value = _count(numbers, key)
+            bad = bad or value is None
+            if value is not None:
+                counts[key] = value
+    for key, value in _obj(numbers.get("cache_creation")).items():
+        if key in SPLIT_KEYS and value is not None:
+            found = _count({key: value}, key)
+            bad = bad or found is None
+            if found is not None:
+                split[key] = found
+    return bad
+
+
+def _totals(counts: dict[str, int], split: dict[str, int]) -> tuple[int, int, int, int, int]:
+    """The total input, the output, the cache reads and the 5 minute and 1 hour writes."""
     read = counts.get("cache_read_input_tokens", 0)
     short, long = _written(counts, split)
-    result.input = counts["input_tokens"] + read + short + long
-    result.output = counts.get("output_tokens", 0)
-    result.known = True
-    result.cached = read
-    result.writes = {WRITE_5M: short, WRITE_1H: long}
-    return result
+    return (
+        counts.get("input_tokens", 0) + read + short + long,
+        counts.get("output_tokens", 0),
+        read,
+        short,
+        long,
+    )
+
+
+def _hops(
+    iterations: list[object],
+) -> list[tuple[str, str, dict[str, int], dict[str, int]]] | None:
+    """The attempts of usage.iterations: type, model and counts of each. None when one cannot be
+    read, which makes the reply not known."""
+    found: list[tuple[str, str, dict[str, int], dict[str, int]]] = []
+    for raw in iterations:
+        hop = _obj(raw)
+        counts: dict[str, int] = {}
+        split: dict[str, int] = {}
+        if (
+            _fold(hop, counts, split)
+            or "input_tokens" not in counts
+            or "output_tokens" not in counts
+        ):
+            return None
+        found.append((str(hop.get("type") or ""), str(hop.get("model") or ""), counts, split))
+    return found
+
+
+def _hop_writes(
+    result: AnthropicUsage, hops: list[tuple[str, tuple[int, int, int, int, int]]]
+) -> dict[str, int]:
+    """Set the sums on the usage, and give each hop's counts under its own key."""
+    writes: dict[str, int] = {}
+    totals = [0, 0, 0, 0, 0]
+    for index, (model, counted) in enumerate(hops):
+        for field, value in zip(HOP_FIELDS, counted, strict=True):
+            writes[f"hop{index}:{model}:{field}"] = value
+        totals = [a + b for a, b in zip(totals, counted, strict=True)]
+    result.input, result.output, result.cached = totals[0], totals[1], totals[2]
+    return {WRITE_5M: totals[3], WRITE_1H: totals[4], **writes}
 
 
 COUNT_KEYS = (
@@ -401,8 +493,23 @@ def snapshot_family(model: str) -> str:
 
 
 def price(model: str, overrides: dict[str, Rates]) -> Rates | None:
-    """The team's price first, whole, then the shipped table: see prices.price."""
-    return prices.priced("anthropic", model, overrides, family=snapshot_family)
+    """The team's price first, whole, then the shipped table: see prices.price. The row comes with
+    what a call needs beyond its own rates: the fee of a web search, which a row's own beats the
+    price file's, which beats Anthropic's; and the provider's other rows, for a call that more than
+    one model served. Anthropic's tiers have no alias: fast mode is no Priority Tier."""
+    found = prices.priced("anthropic", model, overrides, family=snapshot_family)
+    if found is None:
+        return None
+    section = prices.shipped().section("anthropic")
+    fees = {**DEFAULT_FEES, **dict(section.fees if section else ()), **dict(found.fees)}
+    every = (*overrides.items(), *prices.shipped().models("anthropic"))
+
+    def with_extras(row: Rates) -> Rates:
+        return dataclasses.replace(row, fees=tuple(fees.items()), models=every, name=model)
+
+    return dataclasses.replace(
+        with_extras(found), tiers=tuple((name, with_extras(row)) for name, row in found.tiers)
+    )
 
 
 def cost(
@@ -412,9 +519,24 @@ def cost(
     cached: int = 0,
     written_5m: int = 0,
     written_1h: int = 0,
+    counted: Mapping[str, int] | None = None,
 ) -> float:
     """What a call costs. cached and the written counts are parts of tokens_in. A call over the
-    long-context threshold costs every token at the long rates, not only those past it."""
+    long-context threshold costs every token at the long rates, not only those past it. counted
+    holds what usage kept beyond the tokens: each hop of a call that several models served, which
+    is then priced hop by hop, each at its own model's row, and the searches, at their fee."""
+    held = counted or {}
+    fee = dict(rates.fees)
+    extra = sum(n * fee.get(key, 0.0) for key, n in held.items() if key == SEARCH)
+    hops = _hops_in(held)
+    if not hops:
+        return _tokens_cost(tokens_in, tokens_out, rates, cached, written_5m, written_1h) + extra
+    return sum(_hop_cost(model, mine, rates) for model, mine in hops) + extra
+
+
+def _tokens_cost(
+    tokens_in: int, tokens_out: int, rates: Rates, cached: int, written_5m: int, written_1h: int
+) -> float:
     rates = rates.sized(tokens_in)
     plain = tokens_in - cached - written_5m - written_1h
     full = plain * rates.input + cached * _or_input(rates.cached_input, rates)
@@ -423,28 +545,129 @@ def cost(
     return (full + tokens_out * rates.output) / 1_000_000
 
 
+def _hops_in(counted: Mapping[str, int]) -> list[tuple[str, dict[str, int]]]:
+    """The hops usage kept, in order, as (model, counts by field)."""
+    found: dict[str, tuple[str, dict[str, int]]] = {}
+    for key, value in counted.items():
+        if not key.startswith("hop"):
+            continue
+        index, _, rest = key.partition(":")
+        model, _, field = rest.rpartition(":")
+        found.setdefault(index, (model, {}))[1][field] = value
+    return [found[index] for index in sorted(found, key=lambda i: int(i[3:]))]
+
+
+def _row_for(model: str, rates: Rates) -> Rates | None:
+    """The row that prices this model: the call's own row for its own model and for a hop that
+    names none, else the provider's row by name or by its family. None for a model no row prices."""
+    if not model or not rates.models or snapshot_family(model) == snapshot_family(rates.name):
+        return rates
+    for name, row in rates.models:
+        if name == model:
+            return row
+    for name, row in rates.models:
+        if name == snapshot_family(model):
+            return row
+    return None
+
+
+def _hop_cost(model: str, mine: dict[str, int], rates: Rates) -> float:
+    """One hop at its model's row. A model no row prices is priced at the dearest row there is,
+    so a hop never costs less than its model could."""
+    row = _row_for(model, rates)
+    rows = [row] if row is not None else [rates, *(r for _, r in rates.models)]
+    return max(
+        _tokens_cost(
+            mine.get("input", 0),
+            mine.get("output", 0),
+            candidate,
+            mine.get("cached", 0),
+            mine.get(WRITE_5M, 0),
+            mine.get(WRITE_1H, 0),
+        )
+        for candidate in rows
+    )
+
+
 def dearest(
-    rates: Rates, tokens_in: int, tokens_out: int, cached: int, written_5m: int, written_1h: int
+    rates: Rates,
+    tokens_in: int,
+    tokens_out: int,
+    cached: int,
+    written_5m: int,
+    written_1h: int,
+    counted: Mapping[str, int] | None = None,
 ) -> Rates:
     """Of the default rates and every tier the row prices, the ones this call costs most at,
     long rates included at the call's size: for a reply that names a tier the row does not price."""
     every = (rates, *(tier for _, tier in rates.tiers))
-    return max(every, key=lambda r: cost(tokens_in, tokens_out, r, cached, written_5m, written_1h))
+    return max(
+        every,
+        key=lambda r: cost(tokens_in, tokens_out, r, cached, written_5m, written_1h, counted),
+    )
 
 
 def most_cost(tokens_in: int, tokens_out: int, rates: Rates, *, fields: Fields) -> float:
-    """What a call could cost at most. A request that sets no cache_control is never written to
-    the cache, so each input token costs the input rate. One that sets it may write every input
-    token: for 5 minutes, or for 1 hour if any of its cache_control says ttl 1h. An input over the
-    long-context threshold is held at the long rates."""
+    """What a call could cost at most. A request that sets no cache_control and offers no server
+    tool is never written to the cache, so each input token costs the input rate. One that sets
+    cache_control may write every input token: for 5 minutes, or for 1 hour if any of its
+    cache_control says ttl 1h. A server tool caches its results by itself, as 5 minute writes. An
+    input over the long-context threshold is held at the long rates. A web search is held at its
+    fee for max_uses searches, or for DEFAULT_SEARCHES. A request with fallbacks may run each
+    model it names after the first, so it is held for every attempt at the dearest of them: the
+    fallbacks list names the models, and "default" is one more attempt."""
+    asked = fields_dict(fields)
+    attempts = 1
+    rows = [rates]
+    fallbacks = asked.get("fallbacks")
+    if fallbacks == "default":
+        attempts = 2
+    elif isinstance(fallbacks, list):
+        named = _list(cast("list[object]", fallbacks))
+        attempts = 1 + len(named)
+        for entry in named:
+            model = _obj(entry).get("model")
+            row = _row_for(model, rates) if isinstance(model, str) else None
+            if row is not None:
+                rows.append(row)
+    fee = dict(rates.fees).get(SEARCH, 0.0) * _searches(asked)
+    held = max(_one_attempt(tokens_in, tokens_out, row, asked) for row in rows)
+    return attempts * (held + fee)
+
+
+def _one_attempt(tokens_in: int, tokens_out: int, rates: Rates, asked: dict[str, object]) -> float:
     rates = rates.sized(tokens_in)
-    marks = _cache_controls(fields_dict(fields))
+    marks = _cache_controls(asked)
     rate = rates.input
-    if marks:
+    if marks or _offers_server_tool(asked):
         rate = max(rate, _write_rate(rates, WRITE_5M))
     if any(_obj(mark).get("ttl") == "1h" for mark in marks):
         rate = max(rate, _write_rate(rates, WRITE_1H))
     return (tokens_in * rate + tokens_out * rates.output) / 1_000_000
+
+
+def _tool_family(tool: object) -> str:
+    return VERSION.sub("", str(_obj(tool).get("type") or ""))
+
+
+def _offers_server_tool(asked: dict[str, object]) -> bool:
+    return any(
+        _tool_family(t) in READ_FAMILIES or _tool_family(t).startswith("tool_search_tool")
+        for t in _list(asked.get("tools"))
+    )
+
+
+def _searches(asked: dict[str, object]) -> int:
+    """The most searches the request's web search tools may run: each one's max_uses, or the
+    default."""
+    total = 0
+    for tool in _list(asked.get("tools")):
+        if _tool_family(tool) != "web_search":
+            continue
+        uses = _obj(tool).get("max_uses")
+        ok = isinstance(uses, int) and not isinstance(uses, bool) and 0 < uses <= MAX_TOKENS
+        total += uses if ok and isinstance(uses, int) else DEFAULT_SEARCHES
+    return total
 
 
 def _cache_controls(fields: dict[str, object]) -> list[object]:
@@ -482,6 +705,8 @@ def offered(path: str, wire: Fields) -> Offered:
             found.agent.append(str(tool.get("name", "")))
         elif family in AGENT_FAMILIES:
             found.agent.append(str(tool.get("name") or family))
+        elif family == "code_execution" and not free_code_execution(fields):
+            found.unknown.append(f"{kind} ({CODE_EXECUTION_WHY})")
         elif family in READ_FAMILIES or family.startswith("tool_search_tool"):
             found.hosted_reads.append(family)
         elif kind == "mcp_toolset":
@@ -496,6 +721,30 @@ def offered(path: str, wire: Fields) -> Offered:
     ]
     found.hosted_writes = list(dict.fromkeys(servers))
     return found
+
+
+# Code execution is billed by the hour of container time, after 1,550 free hours a month for the
+# organization, and a reply counts only its requests, never the time (pricing page, "Code execution
+# tool"). A budget cannot count it, so it is refused. With web search or web fetch of the 20260209
+# versions or later it costs nothing beyond tokens, and that is the one case that is let through.
+CODE_EXECUTION_WHY = (
+    "code execution is billed by container time, which a reply does not report, so a budget "
+    "cannot count it; offer it with web_search_20260209 or web_fetch_20260209 or later, where it "
+    "is free"
+)
+FREE_WITH = ("web_search", "web_fetch")
+FREE_FROM = "20260209"
+
+
+def free_code_execution(fields: dict[str, object]) -> bool:
+    """Whether the request offers a web search or web fetch tool of the version that makes code
+    execution free."""
+    for tool in _list(fields.get("tools")):
+        kind = str(_obj(tool).get("type") or "")
+        found = VERSION.search(kind)
+        if VERSION.sub("", kind) in FREE_WITH and found and found.group(0)[1:] >= FREE_FROM:
+            return True
+    return False
 
 
 def _content(value: object) -> list[dict[str, object]]:

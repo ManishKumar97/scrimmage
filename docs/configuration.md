@@ -70,8 +70,9 @@ acme-cache = {input = 0.2, cached_input = 0.02, cache_write_30m = 0.25, cache_wr
 | `cached_input` | The price of an input token the provider served from its prompt cache. Optional, and at most `input`. Without it, cached tokens cost the full `input` price, which can only overstate the cost. |
 | `cache_write_30m` | The price of an input token the provider wrote to its prompt cache for 30 minutes. Optional, and at least `input`. Without it, written tokens cost the full `input` price, as on a model that charges nothing extra to write its cache. |
 | `cache_write_12h` | The same for a token written for 12 hours, a choice on the Responses API. Optional, and at least `input`. |
-| `cache_write_5m` | The same for a token written for 5 minutes. Optional, and at least `input`. Read and checked like the other write rates, in a model, a tier and a `long` table. Anthropic's calls use it; OpenAI's do not. |
-| `cache_write_1h` | The same for a token written for 1 hour. Optional, and at least `input`. Anthropic's calls use it; OpenAI's do not. |
+| `cache_write_5m` | The same for a token written for 5 minutes. Optional, and at least `input`. Read and checked like the other write rates, in a model, a tier and a `long` table. Anthropic's calls use it; OpenAI's do not. A row that leaves it out is settled at 1.25 times `input`, Anthropic's own multiple. |
+| `cache_write_1h` | The same for a token written for 1 hour. Optional, and at least `input`. Anthropic's calls use it; OpenAI's do not. A row that leaves it out is settled at 2 times `input`. |
+| `web_search_request` | Dollars for each web search a reply counts, not for a million tokens. Optional. Anthropic charges $0.01, and a row's own beats the price file's `[anthropic.fees]`, which beats that. Only a model's row takes it, not a tier or a `long` table. |
 | `tiers` | The rates of each service tier, as a table of tables, such as `[agent.prices."gpt-4.1".tiers.flex]`. Each tier takes the same keys, and needs `input` and `output`. Optional. A tier not listed costs the model's own rates. See [Service tiers](#service-tiers). |
 | `long` | The rates of a long prompt, as a table such as `[agent.prices."gpt-5.5".long]`. It takes the same rate keys, needs `input` and `output`, and needs `above`, a whole number of input tokens. Optional. A tier may have its own `long`. See [Long-context prices](#long-context-prices). |
 
@@ -175,6 +176,8 @@ output = 4.00
 ```
 
 `url` and `as_of` are required in each section, and a model takes the keys of `[agent.prices]`.
+A section may also have a `[provider.fees]` table, such as `[anthropic.fees]` with `web_search_request = 0.01`: dollars for each request of that kind, which every model of the provider pays unless its own row says otherwise.
+A fee is read like a rate, and may not be negative.
 A section's name is the provider's, such as `openai`.
 A section for a provider this version of Scrimmage does not gate is read and kept, and never used.
 `scrimmage check` warns of such a section in `scrimmage-runs/prices.toml`, which may be a typo in its name.

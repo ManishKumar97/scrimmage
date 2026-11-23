@@ -19,7 +19,7 @@ from scrimmage.config import (
     word_problem,
 )
 from scrimmage.judge import Rules
-from scrimmage.prices import Rates, in_order
+from scrimmage.prices import FEE_KEYS, Rates, in_order
 from scrimmage.providers.registry import ProviderRegistry, registry_for
 
 PLAN_VERSION = 1
@@ -204,6 +204,7 @@ def price_json(price: Rates) -> dict[str, object]:
         "cache_write_1h": price.cache_write_1h,
     }
     doc.update({key: rate for key, rate in optional.items() if rate is not None})
+    doc.update(dict(price.fees))
     if price.tiers:
         doc["tiers"] = {tier: price_json(rates) for tier, rates in price.tiers}
     if price.long is not None:
@@ -227,6 +228,7 @@ def price_from(doc: dict[str, object]) -> Rates:
         long=None if longer is None else price_from(obj(longer)),
         cache_write_5m=rate("cache_write_5m"),
         cache_write_1h=rate("cache_write_1h"),
+        fees=tuple((key, number(doc, key)) for key in FEE_KEYS if doc.get(key) is not None),
     )
 
 

@@ -35,10 +35,13 @@ RATE_KEYS_ORDER = (
 )
 WRITE_KEYS = tuple(key for key in RATE_KEYS_ORDER if key.startswith("cache_write_"))
 RATE_KEYS = set(RATE_KEYS_ORDER)
-PRICE_KEYS = {*RATE_KEYS, "tiers", "long"}  # a model's keys
+# What a provider charges for a request of a kind its reply counts, in dollars for each request,
+# not for a million tokens: a web search. A model's row may set one, which beats the provider's own.
+FEE_KEYS = ("web_search_request",)
+PRICE_KEYS = {*RATE_KEYS, *FEE_KEYS, "tiers", "long"}  # a model's keys
 TIER_KEYS = {*RATE_KEYS, "long"}  # a tier's keys
 LONG_KEYS = {*RATE_KEYS, "above"}  # a long table's keys: the rates, and where they start
-SECTION_KEYS = {"url", "as_of", "models"}
+SECTION_KEYS = {"url", "as_of", "models", "fees"}
 OLD_KEYS = {"as_of", "source", "models"}  # the top-level keys of the one-provider file
 SECTION_NAME = re.compile(r"[a-z][a-z0-9_-]*$")
 # A dated snapshot name: OpenAI's gpt-4o-mini-2024-07-18, and Anthropic's claude-haiku-4-5-20251001.
@@ -111,6 +114,7 @@ class Section:
     url: str
     as_of: str
     models: tuple[tuple[str, Rates], ...]
+    fees: tuple[tuple[str, float], ...] = ()  # [provider.fees]: dollars for each request
 
 
 @dataclass(frozen=True)
@@ -173,6 +177,7 @@ def read_rates(entry: dict[str, object], item: str, *, level: str = "model") -> 
                 f"{item} above: expected a whole number of input tokens, at least 1, such as 272000"
             )
         above = found
+    fees = tuple((key, dollars(entry, key, item)) for key in FEE_KEYS if key in entry)
     rates = Rates(
         rate,
         output,
@@ -183,6 +188,7 @@ def read_rates(entry: dict[str, object], item: str, *, level: str = "model") -> 
         above=above,
         cache_write_5m=writes["cache_write_5m"],
         cache_write_1h=writes["cache_write_1h"],
+        fees=fees,
     )
     if level == "long" or "long" not in entry:
         return rates
@@ -192,6 +198,15 @@ def read_rates(entry: dict[str, object], item: str, *, level: str = "model") -> 
     return dataclasses.replace(
         rates, above=longer.above, long=dataclasses.replace(longer, above=None)
     )
+
+
+def read_fees(value: object, where: str) -> tuple[tuple[str, float], ...]:
+    """A provider's [fees] table: dollars for each request, read like a rate."""
+    found = as_table(value, where)
+    for key in found:
+        if key not in FEE_KEYS:
+            raise ConfigError(f"{where} {key}: unknown fee; the fees are {', '.join(FEE_KEYS)}")
+    return tuple((key, dollars(found, key, where)) for key in FEE_KEYS if key in found)
 
 
 def check_long(base: Rates, longer: Rates, item: str) -> None:
@@ -300,7 +315,7 @@ def parse_section(text: str, item: str, provider: str, raw: object) -> Section:
             models.append((model, rates))
         except ConfigError as exc:
             raise ConfigError(f"{exc.problems[0]}{line_of(text, provider, model)}") from None
-    return Section(url, as_of, tuple(models))
+    return Section(url, as_of, tuple(models), read_fees(table.get("fees", {}), f"{item} fees"))
 
 
 RESERVED_TIERS = ("default", "auto")

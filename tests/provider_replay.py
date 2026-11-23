@@ -1397,6 +1397,10 @@ ANTHROPIC_PRICES = (
             cache_write_1h=4.0,
         ),
     ),
+    # A row of input and output alone, and the two models of a server-side fallback.
+    ("claude-bare", Rates(3.0, 15.0)),
+    ("claude-fable-5", Rates(10.0, 50.0)),
+    ("claude-opus-4-8", Rates(5.0, 25.0)),
 )
 MESSAGES = "/v1/messages"
 COUNT = "/v1/messages/count_tokens"
@@ -1730,6 +1734,27 @@ def anthropic_scenarios(add_to: Callable[..., None]) -> None:
     )
     for name, body in sent:
         add(f"injected text {name}", [(MESSAGES, body)], ["doc_answer"], injected=(NOTE,))
+    # What the tokens of the top level leave out: each attempt of a fallback, a search, code.
+    add("billing fallback", [(MESSAGES, message(model="claude-fable-5"))], ["doc_fallback"])
+    listed = {"fallbacks": [{"model": "claude-opus-4-8"}]}
+    add(
+        "billing fallback held",
+        [(MESSAGES, message(model="claude-fable-5", **listed))],
+        ["doc_fallback"],
+    )
+    add(
+        "billing fallback default held",
+        [(MESSAGES, message(model="claude-fable-5", fallbacks="default"))],
+        ["doc_fallback"],
+    )
+    add("billing web search", [(MESSAGES, message(model="claude-bare"))], ["doc_web_search"])
+    add("billing no write rates", [(MESSAGES, message(model="claude-bare"))], ["doc_prewarm"])
+    searching = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}]
+    add("billing search held", [(MESSAGES, message(tools=searching))], ["doc_web_search"])
+    code = [{"type": "code_execution_20250825", "name": "code_execution"}]
+    add("billing code execution alone", [(MESSAGES, message(tools=code))], ["doc_answer"])
+    free_code = [*code, {"type": "web_fetch_20260209", "name": "web_fetch"}]
+    add("billing code execution free", [(MESSAGES, message(tools=free_code))], ["doc_answer"])
     # A fault, then the request the agent builds from the real reply: no marker is kept yet.
     add(
         "fault status then follow-up",

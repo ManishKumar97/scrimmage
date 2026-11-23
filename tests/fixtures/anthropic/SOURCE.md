@@ -32,7 +32,8 @@ These captures are still to do, each with a valid key, as `real_*` files with th
 
 Until then the tests use the documented examples below.
 They are not captures, and nothing here may be called real.
-The message of the context-length 400 in `provider_anthropic.py` is the one Anthropic's clients report, from memory, and is to be checked against a capture.
+UNCONFIRMED: the message of the context-length 400 in `provider_anthropic.py`, `prompt is too long: 210000 tokens > 200000 maximum`, is from memory of what Anthropic's clients report, not from any capture or any docs page.
+It is to be replaced from the first real capture, and this word taken out then.
 
 ## Documented examples
 
@@ -45,6 +46,7 @@ The models named in them are the docs' own.
 | `doc_tool_use.json` | Handle tool calls, "Example API response with a `tool_use` content block" | Unchanged; the page shows no `usage` | `46aaca3fa3adf87588c86e187847e24a8f78456cd8b141d0f2866e438a6574fa` |
 | `doc_stream_answer.sse` | Streaming, "Streaming request" | Unchanged | `bee1873e5b02de52e95ae9dd226868cc8aed2680ec6c84572c3fa49926436c3e` |
 | `doc_stream_tool_use.sse` | Streaming, "Streaming request with tool use" | Unchanged | `08451c8c92b1f6e316efead626151b817d7f6cef67c2ad982de9acd6a5afdea5` |
+| `doc_fallback.json` | Refusals and fallback, "What the response contains": Claude Fable 5 declines before output and Claude Opus 4.8 serves | Unchanged, laid out with an indent; `usage.iterations` has a `message` hop of 535 input and a `fallback_message` hop of 412 input and 264 output | `0b1ec6d6564369aa221442f414fbe6001c08d17d468433284375fe4078807c7a` |
 | `doc_prewarm.json` | Prompt caching, "Pre-warming the cache": the empty reply of a request with `max_tokens` 0 | Unchanged, laid out with an indent; 8 input, 5120 written for 5 minutes, no output | `a8d7ed5380104c0606dfdc591b938466a9687456b8f6acc4b0f9bd8979546cb5` |
 | `doc_refusal.json` | Refusals and fallback, "What a refusal looks like" | Unchanged | `ac0daeae51d3e266fe595cb319339b91ed83bc843de3423891f8bffd1f5dadde` |
 
@@ -61,4 +63,5 @@ The cache counts are the ones in the prompt caching page's "Output" example, whi
 | File | Derived from | What changed | sha256 |
 |---|---|---|---|
 | `doc_cached.json` | `doc_answer.json` | `usage` is the caching page's: 2048 input, 1800 read, 248 written, 148 for 5 minutes and 100 for 1 hour, 503 output | `75804c2a1077df1c2300eb9aa1daed22db0639b142edeaf2870ded0e0b7bf176` |
+| `doc_web_search.json` | `doc_answer.json` | `usage` is the pricing page's web search example: 105 input, 7123 read, 7345 written with no split, 6039 output, and `server_tool_use.web_search_requests` 1 | `cece06a097c446b2cf0d26793ee8fdc6318f32597d114abc6a5d6b880b17e292` |
 | `doc_stream_cached.sse` | `doc_stream_answer.sse` | `message_start` carries those counts, and `message_delta` carries them as `null` with 503 output, as the docs say its other fields may | `9325eaa7b6adb599ee44b50414466323726f497c580d441c4398534972ea53ff` |

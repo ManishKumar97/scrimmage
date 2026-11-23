@@ -81,7 +81,7 @@ class Anthropic:
         writes: Mapping[str, int] | None = None,
     ) -> float:
         short, long = self.writes_of(writes)
-        return table.cost(tokens_in, tokens_out, rates, cached, short, long)
+        return table.cost(tokens_in, tokens_out, rates, cached, short, long, writes)
 
     def dearest(
         self,
@@ -92,7 +92,7 @@ class Anthropic:
         writes: Mapping[str, int],
     ) -> Rates:
         short, long = self.writes_of(writes)
-        return table.dearest(rates, tokens_in, tokens_out, cached, short, long)
+        return table.dearest(rates, tokens_in, tokens_out, cached, short, long, writes)
 
     @staticmethod
     def writes_of(writes: Mapping[str, int] | None) -> tuple[int, int]:
