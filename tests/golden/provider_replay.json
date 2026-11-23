@@ -9277,14 +9277,14 @@
 "anthropic hold speed fast": {
   "blobs": ["75804c2a1077df1c2300eb9aa1daed22db0639b142edeaf2870ded0e0b7bf176", "d8d8ad15fcc2087daa20b23930209e24b81e546a6a67173a144a8dd204da944a"],
   "lines": [
-    {"action": "real", "args": {"bytes": 111, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"speed\": \"fast\"}", "sha256": "d8d8ad15fcc2087daa20b23930209e24b81e546a6a67173a144a8dd204da944a"}, "call": "model:anthropic", "cost_estimated": false, "cost_usd": 0.024432, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 504, "preview": "{\n  \"id\": \"msg_01XFDUDYJgAACzvnptvVoYEL\",\n  \"type\": \"message\",\n  \"role\": \"assistant\",\n  \"content\": [\n    {\n      \"type\": \"text\",\n      \"text\": \"Hello!\"\n    }\n  ],\n  \"model\": \"claude-opus-5-5\",\n  \"stop", "sha256": "75804c2a1077df1c2300eb9aa1daed22db0639b142edeaf2870ded0e0b7bf176"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 1800, "input": 4096, "output": 503}, "v": 1}
+    {"action": "real", "args": {"bytes": 111, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"speed\": \"fast\"}", "sha256": "d8d8ad15fcc2087daa20b23930209e24b81e546a6a67173a144a8dd204da944a"}, "call": "model:anthropic", "cost_estimated": false, "cost_usd": 0.02498, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 504, "preview": "{\n  \"id\": \"msg_01XFDUDYJgAACzvnptvVoYEL\",\n  \"type\": \"message\",\n  \"role\": \"assistant\",\n  \"content\": [\n    {\n      \"type\": \"text\",\n      \"text\": \"Hello!\"\n    }\n  ],\n  \"model\": \"claude-opus-5-5\",\n  \"stop", "sha256": "75804c2a1077df1c2300eb9aa1daed22db0639b142edeaf2870ded0e0b7bf176"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 1800, "input": 4096, "output": 503}, "v": 1}
   ],
   "replies": [
     {"body": "75804c2a1077df1c2300eb9aa1daed22db0639b142edeaf2870ded0e0b7bf176", "headers": {"content-length": "504", "content-type": "application/json", "request-id": "req_fake_scrimmage"}, "length": 504, "status": 200}
   ],
   "reserved": [0.001708],
   "sent": ["d8d8ad15fcc2087daa20b23930209e24b81e546a6a67173a144a8dd204da944a"],
-  "settles": [[1, 0.024432]],
+  "settles": [[1, 0.02498]],
   "stops": []
 },
 "anthropic hold speed standard": {
@@ -10005,27 +10005,27 @@
 "anthropic reply tier priority": {
   "blobs": ["60875cf9b5793be5fc21eb28896c79f59e4c813ee91a3cdb676872659c949615", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
   "lines": [
-    {"action": "real", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "cost_estimated": true, "cost_usd": 0.024432, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 445, "preview": "{\"id\": \"msg_01XFDUDYJgAACzvnptvVoYEL\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Hello!\"}], \"model\": \"claude-opus-5-5\", \"stop_reason\": \"end_turn\", \"stop_sequence\": ", "sha256": "60875cf9b5793be5fc21eb28896c79f59e4c813ee91a3cdb676872659c949615"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 1800, "input": 4096, "output": 503}, "unpriced_tier": "priority", "v": 1}
+    {"action": "real", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "cost_estimated": true, "cost_usd": 0.02498, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 445, "preview": "{\"id\": \"msg_01XFDUDYJgAACzvnptvVoYEL\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Hello!\"}], \"model\": \"claude-opus-5-5\", \"stop_reason\": \"end_turn\", \"stop_sequence\": ", "sha256": "60875cf9b5793be5fc21eb28896c79f59e4c813ee91a3cdb676872659c949615"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 1800, "input": 4096, "output": 503}, "unpriced_tier": "priority", "v": 1}
   ],
   "replies": [
     {"body": "60875cf9b5793be5fc21eb28896c79f59e4c813ee91a3cdb676872659c949615", "headers": {"content-type": "application/json"}, "length": 445, "status": 200}
   ],
   "reserved": [0.000846],
   "sent": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
-  "settles": [[1, 0.024432]],
+  "settles": [[1, 0.02498]],
   "stops": []
 },
 "anthropic reply tier batch": {
   "blobs": ["462ebae5e4e1c7f5c29c42e8e209ce88c6aa469a603cf25b296dae4e6192f9db", "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
   "lines": [
-    {"action": "real", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "cost_estimated": true, "cost_usd": 0.024432, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 442, "preview": "{\"id\": \"msg_01XFDUDYJgAACzvnptvVoYEL\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Hello!\"}], \"model\": \"claude-opus-5-5\", \"stop_reason\": \"end_turn\", \"stop_sequence\": ", "sha256": "462ebae5e4e1c7f5c29c42e8e209ce88c6aa469a603cf25b296dae4e6192f9db"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 1800, "input": 4096, "output": 503}, "unpriced_tier": "batch", "v": 1}
+    {"action": "real", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "cost_estimated": true, "cost_usd": 0.02498, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 442, "preview": "{\"id\": \"msg_01XFDUDYJgAACzvnptvVoYEL\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Hello!\"}], \"model\": \"claude-opus-5-5\", \"stop_reason\": \"end_turn\", \"stop_sequence\": ", "sha256": "462ebae5e4e1c7f5c29c42e8e209ce88c6aa469a603cf25b296dae4e6192f9db"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 1800, "input": 4096, "output": 503}, "unpriced_tier": "batch", "v": 1}
   ],
   "replies": [
     {"body": "462ebae5e4e1c7f5c29c42e8e209ce88c6aa469a603cf25b296dae4e6192f9db", "headers": {"content-type": "application/json"}, "length": 442, "status": 200}
   ],
   "reserved": [0.000846],
   "sent": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
-  "settles": [[1, 0.024432]],
+  "settles": [[1, 0.02498]],
   "stops": []
 },
 "anthropic reply tier standard": {
@@ -10044,14 +10044,14 @@
 "anthropic reply speed fast": {
   "blobs": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a", "db9dbaa232924a917e791adb9986012745ff3aac23e05d204c123cd7866974a9"],
   "lines": [
-    {"action": "real", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "cost_estimated": false, "cost_usd": 0.024432, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 462, "preview": "{\"id\": \"msg_01XFDUDYJgAACzvnptvVoYEL\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Hello!\"}], \"model\": \"claude-opus-5-5\", \"stop_reason\": \"end_turn\", \"stop_sequence\": ", "sha256": "db9dbaa232924a917e791adb9986012745ff3aac23e05d204c123cd7866974a9"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 1800, "input": 4096, "output": 503}, "v": 1}
+    {"action": "real", "args": {"bytes": 94, "preview": "{\"model\": \"claude-replay\", \"max_tokens\": 100, \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}", "sha256": "d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"}, "call": "model:anthropic", "cost_estimated": false, "cost_usd": 0.02498, "error": null, "kind": "model", "method": "POST", "model": "claude-replay", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 462, "preview": "{\"id\": \"msg_01XFDUDYJgAACzvnptvVoYEL\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Hello!\"}], \"model\": \"claude-opus-5-5\", \"stop_reason\": \"end_turn\", \"stop_sequence\": ", "sha256": "db9dbaa232924a917e791adb9986012745ff3aac23e05d204c123cd7866974a9"}, "retry": 0, "row": "row", "run": "run-1", "seq": 1, "status": 200, "stream": false, "test": "t", "tokens": {"cached": 1800, "input": 4096, "output": 503}, "v": 1}
   ],
   "replies": [
     {"body": "db9dbaa232924a917e791adb9986012745ff3aac23e05d204c123cd7866974a9", "headers": {"content-type": "application/json"}, "length": 462, "status": 200}
   ],
   "reserved": [0.000846],
   "sent": ["d18964d36d345ff062d2b51d02df88fb48367ed669225e0be3720e10b8bac04a"],
-  "settles": [[1, 0.024432]],
+  "settles": [[1, 0.02498]],
   "stops": []
 },
 "anthropic usage total only": {
