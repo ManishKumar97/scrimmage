@@ -435,7 +435,9 @@ Also read the control-path limits under An agent inside a web service.
 
 - **`scrimmage prices update` trusts this repository's `main`.** It writes the file it finds there, after checking its schema and refusing a rate below $0.001 per million tokens, except the output rate of a model whose name contains `embedding`, and it prints every change before it writes. It does not compare the new rates with the old ones, so a price set too low there, but above that floor, would let a test spend more than its budget intends. Read the printed changes before you run a test on them.
 
-- **Prices need checking.** The shipped price file is small and as old as your installed version; its `as_of` date shows on `scrimmage check`. Run `scrimmage prices update` for the newest, check it against your provider's pricing, and use `[agent.prices]` for anything else.
+- **Prices need checking.** The shipped price file is small and as old as your installed version; the `as_of` date of each provider's section shows on `scrimmage check`. Run `scrimmage prices update` for the newest, check it against your provider's pricing, and use `[agent.prices]` for anything else.
+
+- **Two cache-write rates nothing uses yet.** `cache_write_5m` and `cache_write_1h` are valid in a price file and in `[agent.prices]`, with the same checks as the other write rates. A call to OpenAI never settles at them, because OpenAI writes its cache for 30 minutes or 12 hours. They take effect when a provider that writes for 5 minutes or an hour is gated.
 
 - **A long prompt costed from an estimate.** A model that charges more above a number of input tokens has a `long` price with an `above` threshold. A call is settled at the long rates when the reply's input tokens are over `above`. Before the call, its input is estimated from the size of the request, so a call whose estimate is under `above` but whose real input is over it is held at the normal rates, and calls in flight can pass `max_cost_usd` by the difference. A tier with no `long` price of its own costs its normal rates at any length. See [Long-context prices](configuration.md#long-context-prices).
 

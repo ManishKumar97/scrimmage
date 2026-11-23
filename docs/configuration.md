@@ -70,6 +70,8 @@ acme-cache = {input = 0.2, cached_input = 0.02, cache_write_30m = 0.25, cache_wr
 | `cached_input` | The price of an input token the provider served from its prompt cache. Optional, and at most `input`. Without it, cached tokens cost the full `input` price, which can only overstate the cost. |
 | `cache_write_30m` | The price of an input token the provider wrote to its prompt cache for 30 minutes. Optional, and at least `input`. Without it, written tokens cost the full `input` price, as on a model that charges nothing extra to write its cache. |
 | `cache_write_12h` | The same for a token written for 12 hours, a choice on the Responses API. Optional, and at least `input`. |
+| `cache_write_5m` | The same for a token written for 5 minutes. Optional, and at least `input`. Read and checked like the other write rates, in a model, a tier and a `long` table. No provider Scrimmage gates uses it yet. |
+| `cache_write_1h` | The same for a token written for 1 hour. Optional, and at least `input`. No provider Scrimmage gates uses it yet. |
 | `tiers` | The rates of each service tier, as a table of tables, such as `[agent.prices."gpt-4.1".tiers.flex]`. Each tier takes the same keys, and needs `input` and `output`. Optional. A tier not listed costs the model's own rates. See [Service tiers](#service-tiers). |
 | `long` | The rates of a long prompt, as a table such as `[agent.prices."gpt-5.5".long]`. It takes the same rate keys, needs `input` and `output`, and needs `above`, a whole number of input tokens. Optional. A tier may have its own `long`. See [Long-context prices](#long-context-prices). |
 
@@ -129,7 +131,7 @@ A call whose input tokens are more than `above` is settled at the `long` rates, 
 A call of exactly `above` tokens costs the normal rates.
 Each `long` rate must be at least the same rate of the model, so a long call never costs less per token.
 A rate that `long` leaves out costs its `input`, as it does for the model.
-A tier may have its own long rates, such as `[models."gpt-5.5".tiers.flex.long]`; a tier with none costs its own rates at any length.
+A tier may have its own long rates, such as `[openai.models."gpt-5.5".tiers.flex.long]`; a tier with none costs its own rates at any length.
 `long` works the same in a price file and in `[agent.prices]`.
 
 A price here replaces a file's price whole: `gpt-4o = {input = 2.5, output = 10}` has no cached price, even though the shipped file has one.
@@ -143,28 +145,38 @@ The first place that names the model gives the whole price.
 2. `scrimmage-runs/prices.toml`, beside `scrimmage.toml`, which `scrimmage prices update` writes.
 3. The `prices.toml` shipped with Scrimmage, which holds OpenAI's prices.
 
-A dated name, such as `gpt-4o-mini-2024-07-18`, uses its family's price when the place it is looking in does not name it exactly.
+A price file has one section for each provider, and a call is priced from the section of its own provider.
+A row of the same name in another provider's section is not used.
+`[agent.prices]` is flat, by model name, and speaks for a model whatever its provider.
+
+A dated name, such as `gpt-4o-mini-2024-07-18` or `claude-haiku-4-5-20251001`, uses its family's price when the place it is looking in does not name it exactly.
+OpenAI dates a snapshot `-YYYY-MM-DD` and Anthropic `-YYYYMMDD`.
+Eight digits at the end of a name that are not a date, such as `-12345678`, are part of the name, so the name has no family.
 A place higher in the list speaks first: your `[agent.prices]` row for `gpt-4.1` also prices `gpt-4.1-2025-04-14`, whatever a file holds for the dated name.
 A model that none of them names is refused before the call, with the line to paste under `[agent.prices]`.
 Scrimmage never guesses a price.
 
-A price file has the date of its prices, the page they came from, and a table for each model:
+A price file has a section for each provider.
+A section has the date of its prices, the page they came from, and a table for each model under `models`:
 
 ```text
-as_of = "2026-11-19"
-source = "https://openai.com/api/pricing/"
+[openai]
+url = "https://developers.openai.com/api/docs/pricing"
+as_of = "2026-11-22"
 
-[models."gpt-4.1"]
+[openai.models."gpt-4.1"]
 input = 2.00
 output = 8.00
 cached_input = 0.50
 
-[models."gpt-4.1".tiers.flex]
+[openai.models."gpt-4.1".tiers.flex]
 input = 1.00
 output = 4.00
 ```
 
-`as_of` and `source` are required, and a model takes the keys of `[agent.prices]`.
+`url` and `as_of` are required in each section, and a model takes the keys of `[agent.prices]`.
+A section's name is the provider's, such as `openai`.
+A section for a provider this version of Scrimmage does not gate is read and kept, and never used.
 A file may not make a model free, because that would turn the budget off for it.
 Every `input`, in a model or a tier, must be at least 0.001 dollars per million tokens, and so must every `output`, unless the model's name contains `embedding`.
 A `cached_input` or cache-write rate, if you give one, must be at least 0.001 too, even for an embedding model.
@@ -172,7 +184,7 @@ That is far below any real price, the cheapest today being 0.02.
 A tier cannot be named `default` or `auto`, in any case.
 Only `[agent.prices]` may price a model at 0, as your own choice.
 A file that fails its checks is exit 2, and the message names the file and the line.
-`scrimmage check` prints the date of the prices on its budget line, and, when you have prices of your own, the source of each.
+`scrimmage check` prints the date of each provider's prices on its budget line, such as `OpenAI prices as of 2026-11-22`, and, when you have prices of your own, the source of each.
 A price is only as new as its file, so run [`scrimmage prices update`](cli.md#scrimmage-prices-update) now and then.
 
 A call whose reply states its own cost, such as an OpenRouter reply's `usage.cost` or the LiteLLM proxy's `x-litellm-response-cost` header, is settled at the larger of that cost and the cost of its tokens at your prices.
