@@ -453,7 +453,9 @@ def test_the_last_batch_counts_control_busy_and_control_p99_ms(svc: Service) -> 
         waiting = not freed.is_set()
         entered.release()
         assert freed.wait(30)  # a control server under load: held until the test lets go
-        if waiting:  # the eight claims; later requests of the runs are not held
+        # Only the eight claims block here. Once `freed` is set, a run's later requests
+        # (its batches, its close) pass at once and are not a hold to measure.
+        if waiting:
             holds.append(time.monotonic() - began)
         return real_handle(*args)
 
@@ -466,18 +468,26 @@ def test_the_last_batch_counts_control_busy_and_control_p99_ms(svc: Service) -> 
         first = [
             asyncio.ensure_future(drive(gated_app(), headers=[svc.header(n)])) for n in names[:CAP]
         ]
-        for _ in range(CAP):
-            while not entered.acquire(blocking=False):
-                await asyncio.sleep(0.01)
+        deadline = time.monotonic() + 30
+        count = 0
+        while count < CAP:
+            if entered.acquire(blocking=False):
+                count += 1
+                continue
+            early = [f.result().status for f in first if f.done() and not f.cancelled()]
+            assert not early, f"a claim came back before the ninth arrived: statuses {early}"
+            assert time.monotonic() < deadline, f"only {count} of {CAP} handlers entered"
+            await asyncio.sleep(0.01)
         extra = await drive(gated_app(), headers=[svc.header(names[CAP])])
         freed.set()
         return [*await asyncio.gather(*first), extra]
 
     try:
-        replies = run(nine())
+        replies = run(asyncio.wait_for(nine(), 60))
     finally:
         freed.set()
-    assert [r.status for r in replies] == [200] * CAP + [503]
+    statuses = [r.status for r in replies]
+    assert statuses == [200] * CAP + [503], f"statuses {statuses}, wanted {CAP} of 200 then 503"
     claimed = names[:CAP]
     for name in claimed:
         svc.closed(name)
