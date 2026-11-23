@@ -12,7 +12,7 @@ from scrimmage import provider_openai as table
 from scrimmage.changes import Unchangeable, WebChanged
 from scrimmage.config import Fault
 from scrimmage.prices import Rates
-from scrimmage.providers.base import Given, ReplyChange
+from scrimmage.providers.base import Fields, Given, ReplyChange
 from scrimmage.providers.impl import openai_changes
 
 RESPONSES = "responses"  # the op the change of a Responses reply is looked up under
@@ -56,6 +56,7 @@ class OpenAI:
     model_name = staticmethod(table.model_name)
     offered = staticmethod(table.offered)
     carries_text = staticmethod(table.carries_text)
+    streams = staticmethod(table.streams)
 
     # Meter
     usage = staticmethod(table.usage)
@@ -101,7 +102,7 @@ class OpenAI:
         rates: Rates,
         *,
         path: str,
-        fields: dict[str, object],
+        fields: Fields,
     ) -> float:
         """Only the path matters to OpenAI: Responses alone writes the cache for 12 hours."""
         del fields
@@ -122,20 +123,20 @@ class OpenAI:
     no_free_tool_call = staticmethod(table.no_free_tool_call)
     unknown_tool_reply = staticmethod(table.unknown_tool_reply)
 
-    def refusal_reply(self, path: str, fields: dict[str, object], tokens_in: int) -> bytes:
+    def refusal_reply(self, path: str, wire: Fields, tokens_in: int) -> bytes:
         if table.is_responses(path):
-            return table.response_refusal_reply(fields, tokens_in)
-        return table.refusal_reply(fields, tokens_in)
+            return table.response_refusal_reply(wire, tokens_in)
+        return table.refusal_reply(wire, tokens_in)
 
-    def given(self, path: str, fields: dict[str, object], reply: bytes, *, ids_only: bool) -> Given:
+    def given(self, path: str, wire: Fields, reply: bytes, *, ids_only: bool) -> Given:
         """Chat Completions replies are carried back by their tool call ids and messages;
         a Responses reply is kept by OpenAI and named by id, so it gives nothing to carry."""
         if table.is_responses(path):
             return Given()
-        return table.given(fields, reply, ids_only=ids_only)
+        return table.given(wire, reply, ids_only=ids_only)
 
-    def carries(self, path: str, fields: dict[str, object], kept: Sequence[Given]) -> bool:
-        return False if table.is_responses(path) else table.carries(fields, kept)
+    def carries(self, path: str, wire: Fields, kept: Sequence[Given]) -> bool:
+        return False if table.is_responses(path) else table.carries(wire, kept)
 
     # ReplyReader
     called_tool = staticmethod(table.called_tool)
