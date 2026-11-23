@@ -47,6 +47,12 @@ The models named in them are the docs' own.
 | `doc_stream_tool_use.sse` | Streaming, "Streaming request with tool use" | Unchanged | `08451c8c92b1f6e316efead626151b817d7f6cef67c2ad982de9acd6a5afdea5` |
 | `doc_refusal.json` | Refusals and fallback, "What a refusal looks like" | Unchanged | `ac0daeae51d3e266fe595cb319339b91ed83bc843de3423891f8bffd1f5dadde` |
 
+`doc_count_tokens.json` is the answer of `POST /v1/messages/count_tokens`, from the Token counting page's first example, `{ "input_tokens": 14 }`, written with indent.
+
+| File | Docs page and example | What changed | sha256 |
+|---|---|---|---|
+| `doc_count_tokens.json` | Token counting, "Count tokens in basic messages" | Laid out with an indent | `91cf004d8ccdb967cb8b539abdbfe45aef8d78fff1700e93d82dea2912b81251` |
+
 These are derived from the files above for cache counts.
 Only the `usage` changes.
 The cache counts are the ones in the prompt caching page's "Output" example, which has `cache_creation` of 148 tokens for 5 minutes and 100 for 1 hour.

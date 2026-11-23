@@ -5,6 +5,7 @@ list. Shared by the tests of replace and slow on a model call."""
 from collections.abc import Callable
 from typing import Any
 
+import anthropic
 import httpx2
 import openai
 
@@ -115,6 +116,14 @@ class Gate:
 def guard(provider: Provider, **kw: Any) -> openai.OpenAI:
     http = openai.DefaultHttpxClient(transport=httpx2.MockTransport(provider))
     return openai.OpenAI(base_url=URL, api_key="k", max_retries=0, http_client=http, **kw)
+
+
+def anthropic_client(provider: Provider, **kw: Any) -> anthropic.Anthropic:
+    """The anthropic library over the same mock transport, as `guard` gives the openai one."""
+    http = anthropic.DefaultHttpxClient(transport=httpx2.MockTransport(provider))
+    return anthropic.Anthropic(
+        base_url="https://api.anthropic.com", api_key="k", max_retries=0, http_client=http, **kw
+    )
 
 
 def ask(client: openai.OpenAI, text: str = "Order 1042 shipped.") -> str:
