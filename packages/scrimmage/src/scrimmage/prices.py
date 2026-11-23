@@ -12,7 +12,7 @@ import math
 import re
 import tomllib
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from importlib import resources
 from pathlib import Path
@@ -37,7 +37,6 @@ WRITE_KEYS = tuple(key for key in RATE_KEYS_ORDER if key.startswith("cache_write
 RATE_KEYS = set(RATE_KEYS_ORDER)
 PRICE_KEYS = {*RATE_KEYS, "tiers", "long"}  # a model's keys
 TIER_KEYS = {*RATE_KEYS, "long"}  # a tier's keys
-TIER_ALIASES = {"fast": "priority", "priority": "fast"}  # OpenAI renamed one to the other
 LONG_KEYS = {*RATE_KEYS, "above"}  # a long table's keys: the rates, and where they start
 SECTION_KEYS = {"url", "as_of", "models"}
 OLD_KEYS = {"as_of", "source", "models"}  # the top-level keys of the one-provider file
@@ -69,13 +68,26 @@ class Rates:
     long: "Rates | None" = None
     cache_write_5m: float | None = None  # a token written to the cache for 5 minutes
     cache_write_1h: float | None = None  # for 1 hour
+    # What the provider attaches to a row it hands out, which a price file never holds, and which
+    # leave a row equal to the row it was made from.
+    # aliases: pairs of tier names that are one tier for this provider, such as OpenAI's fast and
+    # priority. Each provider owns its own: another provider's priority tier is no fast mode.
+    aliases: tuple[tuple[str, str], ...] = field(default=(), compare=False)
+    # fees: dollars for each request of a kind a reply counts, such as a web search.
+    fees: tuple[tuple[str, float], ...] = field(default=(), compare=False)
+    # models: the provider's other rows, for a call that more than one model served; name: the
+    # model this row prices.
+    models: tuple[tuple[str, "Rates"], ...] = field(default=(), compare=False)
+    name: str = field(default="", compare=False)
 
-    def at(self, tier: str | None) -> "Rates":
-        """The rates a call on this service tier pays. fast and priority are one tier under two
-        names, so a row that writes only one of them prices both."""
+    def at(self, tier: str | None, aliases: tuple[tuple[str, str], ...] | None = None) -> "Rates":
+        """The rates a call on this service tier pays. A provider whose tier has two names, such
+        as OpenAI's fast and priority, gives them as aliases, and a row that writes only one of
+        them prices both. aliases default to the row's own, which the provider attached."""
         named = dict(self.tiers)
         name = tier or ""
-        found = named.get(name) or named.get(TIER_ALIASES.get(name, ""))
+        same = dict(self.aliases if aliases is None else aliases)
+        found = named.get(name) or named.get(same.get(name, ""))
         return self if found is None else found
 
     def unpriced(self, tier: str | None) -> bool:

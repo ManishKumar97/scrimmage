@@ -34,7 +34,7 @@ MAX_BYTES = 1_000_000
 
 
 def flat(rates: Rates) -> dict[str, float]:
-    skip = {"tiers", "long"}
+    skip = {"tiers", "long", "aliases", "fees", "models", "name"}
     out = {k: v for k, v in dataclasses.asdict(rates).items() if k not in skip and v is not None}
     for tier, tiered in rates.tiers:
         out.update({f"tiers.{tier}.{k}": v for k, v in flat(tiered).items()})

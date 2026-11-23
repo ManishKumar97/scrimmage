@@ -10,6 +10,8 @@ from scrimmage import cli, config, plan, prices, provider_openai
 from scrimmage.errors import ConfigError
 from scrimmage.prices import Rates
 
+ALIASES = provider_openai.TIER_ALIASES
+
 # A copy of the table that was in provider_openai.py on 19 November 2026, before the prices
 # moved to prices.toml. The file must hold every one of these rows with equal rates.
 TODAYS = {
@@ -451,9 +453,9 @@ def test_fast_and_priority_are_one_tier_and_no_batch_tier_is_priced() -> None:
     for model, rates in prices.shipped().models("openai"):
         names = [name for name, _ in rates.tiers]
         assert "priority" not in names and "batch" not in names, model
-        assert rates.at("fast") is rates.at("priority"), model
+        assert rates.at("fast", ALIASES) is rates.at("priority", ALIASES), model
         if "fast" in names:
-            assert rates.at("priority") is not rates, model
+            assert rates.at("priority", ALIASES) is not rates, model
 
 
 @pytest.mark.design("prices.tier_alias")
@@ -461,10 +463,15 @@ def test_a_row_with_only_one_of_fast_and_priority_prices_both_names() -> None:
     fast, priority = Rates(4.0, 8.0), Rates(5.0, 9.0)
     only_fast = Rates(1.0, 2.0, tiers=(("fast", fast),))
     only_priority = Rates(1.0, 2.0, tiers=(("priority", priority),))
-    assert only_fast.at("fast") is fast and only_fast.at("priority") is fast
-    assert only_priority.at("priority") is priority and only_priority.at("fast") is priority
+    assert only_fast.at("fast", ALIASES) is fast and only_fast.at("priority", ALIASES) is fast
+    assert (
+        only_priority.at("priority", ALIASES) is priority
+        and only_priority.at("fast", ALIASES) is priority
+    )
     both = Rates(1.0, 2.0, tiers=(("fast", fast), ("priority", priority)))
-    assert both.at("fast") is fast and both.at("priority") is priority  # its own name first
+    assert (
+        both.at("fast", ALIASES) is fast and both.at("priority", ALIASES) is priority
+    )  # its own name first
     assert only_fast.at("flex") is only_fast and only_fast.at(None) is only_fast
 
 
@@ -477,7 +484,7 @@ def test_a_team_row_with_only_tiers_fast_prices_a_reply_naming_priority(tmp_path
         + config_cases.TEST
     )
     rates = dict(config.load(tmp_path / "scrimmage.toml").agent.prices)["gpt-4.1"]
-    assert rates.at("priority").input == 3.5 and rates.at("fast").input == 3.5
+    assert rates.at("priority", ALIASES).input == 3.5 and rates.at("fast", ALIASES).input == 3.5
 
 
 @pytest.mark.design("prices.ultrafast_62")
@@ -770,3 +777,36 @@ def test_the_lookup_and_the_plans_dedupe_read_one_snapshot_rule_from_the_provide
     assert provider.snapshot_family("gpt-4.1-2025-04-14") == "family-of-all"
     assert provider.price("gpt-4.1-2025-04-14", {"family-of-all": team}) == team
     assert provider.price("gpt-4.1-2025-04-14", {"gpt-4.1": team}) is None
+
+
+@pytest.mark.design("prices.tier_alias")
+def test_each_provider_owns_its_tier_aliases_and_anthropics_are_none() -> None:
+    """OpenAI's priority is its fast tier renamed. Anthropic's fast mode and its Priority Tier are
+    two things, so a row of Anthropic's prices neither as the other."""
+    from scrimmage.providers.registry import built_in
+
+    fast, priority = Rates(10.0, 50.0), Rates(6.0, 30.0)
+    only_fast = Rates(5.0, 25.0, tiers=(("fast", fast),))
+    only_priority = Rates(5.0, 25.0, tiers=(("priority", priority),))
+    anthropic = built_in().get("anthropic")
+    openai = built_in().get("openai")
+    for row, own, other in ((only_fast, "fast", "priority"), (only_priority, "priority", "fast")):
+        mine = anthropic.price("m", {"m": row})
+        assert mine is not None and mine.aliases == ()
+        assert mine.at(other) is mine, "no alias: the other name is no tier of this row"
+        assert mine.unpriced(other), "so a reply naming it is flagged, not priced at the other"
+        assert mine.at(own) is not mine
+        theirs = openai.price("m", {"m": row})
+        assert theirs is not None
+        assert theirs.at(other) is not theirs, "OpenAI's two names are one tier"
+        assert not theirs.unpriced(other)
+
+
+@pytest.mark.design("prices.tier_alias")
+def test_a_row_is_equal_to_the_row_a_provider_made_of_it() -> None:
+    from scrimmage.providers.registry import built_in
+
+    row = Rates(2.0, 8.0, tiers=(("fast", Rates(4.0, 16.0)),))
+    for name in ("openai", "anthropic"):
+        made = built_in().get(name).price("m", {"m": row})
+        assert made == row
