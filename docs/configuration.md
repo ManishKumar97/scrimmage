@@ -177,6 +177,8 @@ output = 4.00
 `url` and `as_of` are required in each section, and a model takes the keys of `[agent.prices]`.
 A section's name is the provider's, such as `openai`.
 A section for a provider this version of Scrimmage does not gate is read and kept, and never used.
+`scrimmage check` warns of such a section in `scrimmage-runs/prices.toml`, which may be a typo in its name.
+A file in the old format, with `as_of`, `source` or `models` at the top, is refused with the line to run `scrimmage prices update`.
 A file may not make a model free, because that would turn the budget off for it.
 Every `input`, in a model or a tier, must be at least 0.001 dollars per million tokens, and so must every `output`, unless the model's name contains `embedding`.
 A `cached_input` or cache-write rate, if you give one, must be at least 0.001 too, even for an embedding model.
