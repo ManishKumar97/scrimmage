@@ -26,7 +26,7 @@ Anything this version does not support is rejected as unknown, with exit code 2.
 | `parallel` | How many runs go at the same time. | 4; 1 with `service` |
 | `run_timeout` | Seconds one run may take before it is stopped and marked "timed out". It counts from when Scrimmage starts the program, so start-up time counts too. | 120 |
 | `max_cost_usd` | The most the whole test may spend on model calls, in dollars. `"none"` turns the budget off, on purpose. | 5 |
-| `model_hosts` | Extra hosts whose requests are model calls, such as a gateway, each with the format it speaks: `[{host = "llm-gateway.internal", provider = "openai"}]`. A host name only, with no port. | empty |
+| `model_hosts` | Extra hosts whose requests are model calls, such as a gateway, each with the format it speaks: `[{host = "llm-gateway.internal", provider = "openai"}]`, or `provider = "anthropic"` for a host that speaks the Messages API. A host name only, with no port. | empty |
 | `reserve_output_tokens` | The output tokens a budget reservation assumes when a request does not set `max_tokens`. A call that does not fit while others hold the budget waits for them; see [When calls in flight hold the budget](model-faults.md#when-calls-in-flight-hold-the-budget). | 4096 |
 | `prices` | Prices for other models, as the table below. The key `""` prices a call that sends no model name. | empty |
 | `service_tier` | The service tier OpenAI bills a model request that names none, such as `"priority"`. It is used only to hold the budget before the call, at that tier's rates. Scrimmage never adds it to the request. See [Service tiers](#service-tiers). | the default tier |
@@ -70,8 +70,8 @@ acme-cache = {input = 0.2, cached_input = 0.02, cache_write_30m = 0.25, cache_wr
 | `cached_input` | The price of an input token the provider served from its prompt cache. Optional, and at most `input`. Without it, cached tokens cost the full `input` price, which can only overstate the cost. |
 | `cache_write_30m` | The price of an input token the provider wrote to its prompt cache for 30 minutes. Optional, and at least `input`. Without it, written tokens cost the full `input` price, as on a model that charges nothing extra to write its cache. |
 | `cache_write_12h` | The same for a token written for 12 hours, a choice on the Responses API. Optional, and at least `input`. |
-| `cache_write_5m` | The same for a token written for 5 minutes. Optional, and at least `input`. Read and checked like the other write rates, in a model, a tier and a `long` table. No provider Scrimmage gates uses it yet. |
-| `cache_write_1h` | The same for a token written for 1 hour. Optional, and at least `input`. No provider Scrimmage gates uses it yet. |
+| `cache_write_5m` | The same for a token written for 5 minutes. Optional, and at least `input`. Read and checked like the other write rates, in a model, a tier and a `long` table. Anthropic's calls use it; OpenAI's do not. |
+| `cache_write_1h` | The same for a token written for 1 hour. Optional, and at least `input`. Anthropic's calls use it; OpenAI's do not. |
 | `tiers` | The rates of each service tier, as a table of tables, such as `[agent.prices."gpt-4.1".tiers.flex]`. Each tier takes the same keys, and needs `input` and `output`. Optional. A tier not listed costs the model's own rates. See [Service tiers](#service-tiers). |
 | `long` | The rates of a long prompt, as a table such as `[agent.prices."gpt-5.5".long]`. It takes the same rate keys, needs `input` and `output`, and needs `above`, a whole number of input tokens. Optional. A tier may have its own `long`. See [Long-context prices](#long-context-prices). |
 
@@ -498,5 +498,5 @@ These are part of Scrimmage's design but not of this version.
 Using one now stops the test: it is rejected as unknown.
 
 - Settings: `records`.
-- Labels: `auth:`, and model providers other than OpenAI.
+- Labels: `auth:`, and model providers other than OpenAI and Anthropic.
 - Faults: `append` on a model call, and `status` on a tool.
