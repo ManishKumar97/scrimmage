@@ -273,7 +273,8 @@
           },
           "provider": {
             "enum": [
-              "openai"
+              "openai",
+              "anthropic"
             ]
           }
         }
@@ -689,7 +690,7 @@
     },
     "model_label": {
       "type": "string",
-      "pattern": "^model(:(openai|\\*)(/(embeddings|moderations|input_tokens))?)?$"
+      "pattern": "^model(:(openai|anthropic|\\*)(/(embeddings|moderations|input_tokens))?)?$"
     },
     "call_label": {
       "anyOf": [

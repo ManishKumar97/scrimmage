@@ -311,6 +311,15 @@ GOOD = {
 }
 
 
+GOOD["anthropic"] = (
+    AGENT
+    + 'model_hosts = [{host = "gateway.acme.internal", provider = "anthropic"}]\n'
+    + TEST
+    + '\n[[test.fault]]\ncall = "model:anthropic"\ndo = "status 529"\nwhen = "first 3"\n'
+    + '\n[[test.fault]]\ncall = "model:*/input_tokens"\ndo = "timeout"\nwhen = "first 1"\n'
+)
+
+
 @dataclass(frozen=True)
 class Bad:
     name: str
@@ -397,7 +406,7 @@ BAD = [
     Bad("budget_zero", agent("max_cost_usd = 0\n"), True),
     Bad("budget_word", agent('max_cost_usd = "off"\n'), True),
     Bad("host_with_port", agent('model_hosts = [{host = "gw:8080", provider = "openai"}]\n'), True),
-    Bad("unknown_provider", agent('model_hosts = [{host = "gw", provider = "anthropic"}]\n'), True),
+    Bad("unknown_provider", agent('model_hosts = [{host = "gw", provider = "gemini"}]\n'), True),
     Bad("price_no_output", agent('prices = {"gpt-4o" = {input = 1.0}}\n'), True),
     Bad("price_negative", agent('prices = {"gpt-4o" = {input = -1.0, output = 1.0}}\n'), True),
     Bad("price_unknown_key", agent("prices = {m = {input = 1, output = 1, cache = 1}}\n"), True),
@@ -574,7 +583,7 @@ BAD = [
     ),
     Bad(
         "unknown_provider_label",
-        fault('call = "model:anthropic"\ndo = "timeout"\nwhen = "first 1"\n'),
+        fault('call = "model:gemini"\ndo = "timeout"\nwhen = "first 1"\n'),
         True,
     ),
     Bad("model_star_alone", fault('call = "model:*"\ndo = "timeout"\nwhen = "first 1"\n'), True),

@@ -344,15 +344,15 @@ def test_check_prints_each_providers_date(
     (tmp_path / "scrimmage.toml").write_text(config_cases.MINIMAL)
     assert cli.main(["check", str(tmp_path / "scrimmage.toml")]) == 0
     out = capsys.readouterr().out
-    assert "OpenAI prices as of 2026-11-20, anthropic prices as of 2026-11-25" in out
+    assert "OpenAI prices as of 2026-11-20, Anthropic prices as of 2026-11-25" in out
     # A section of the team's file stands for the shipped one, per provider.
     (tmp_path / "scrimmage-runs").mkdir()
     (tmp_path / "scrimmage-runs" / "prices.toml").write_text(TEAM)
     assert cli.main(["check", str(tmp_path / "scrimmage.toml")]) == 0
     out = capsys.readouterr().out
-    assert "OpenAI prices as of 2026-11-21, anthropic prices as of 2026-11-21" in out
+    assert "OpenAI prices as of 2026-11-21, Anthropic prices as of 2026-11-21" in out
     assert "scrimmage-runs/prices.toml, OpenAI prices as of 2026-11-21 (2 models)" in out
-    assert "the shipped prices.toml, anthropic prices as of 2026-11-25 (2 models)" in out
+    assert "the shipped prices.toml, Anthropic prices as of 2026-11-25 (2 models)" in out
 
 
 @pytest.mark.design("anthropic.price_sections")

@@ -32,7 +32,7 @@ WRITE_1H = "cache_write_1h"
 REQUEST_ID = "req_scrimmage_injected"
 NOT_YET = "not yet for Anthropic"
 # The words whose reply an Anthropic call cannot be given yet.
-PENDING = ("garble", "truncate", "unknown tool", "bad tool args", "refuse")
+PENDING = ("replace", "garble", "truncate", "unknown tool", "bad tool args", "refuse")
 
 # Every body is {"type": "error", "error": {"type", "message"}, "request_id"}. The type is by
 # status, from Anthropic's errors page; any other 4xx is invalid_request_error and any other 5xx

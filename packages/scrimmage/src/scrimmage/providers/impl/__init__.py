@@ -11,6 +11,7 @@ from scrimmage.providers.base import ModelProvider
 
 def providers() -> tuple[ModelProvider, ...]:
     """Every provider there is, in the order a probe tries them."""
+    from scrimmage.providers.impl.anthropic import Anthropic
     from scrimmage.providers.impl.openai import OpenAI
 
-    return (OpenAI(),)
+    return (OpenAI(), Anthropic())

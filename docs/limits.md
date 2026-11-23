@@ -8,6 +8,8 @@ Every other limit is listed below, grouped by how your agent runs.
 
 - **OpenAI only.** Model calls are understood for OpenAI's API and for gateways that speak its format; a call to another provider stops the test until you list it.
   Either name a gateway that speaks OpenAI's format under `model_hosts`, or list the provider's host under `real`, where its calls run with no budget and no faults; see [Use a gateway](model-faults.md#use-a-gateway).
+  Anthropic's Messages API is recognized and its calls are counted, but this version ships no Anthropic prices, so a call with a budget on is refused until you add a price under `[agent.prices]`.
+  The faults that change or build an Anthropic reply are not done yet.
 - **LangChain only.** LangChain tools, which LangGraph runs, are found by themselves; a tool on another framework is not gated.
   List each tool's function under `tools`; see [the `tools` setting](configuration.md#agent).
 - **httpx only.** Web requests through httpx and httpx2 are gated; `requests`, `aiohttp`, `urllib` and raw sockets run unrecorded and ungated.
