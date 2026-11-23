@@ -1693,7 +1693,12 @@ def anthropic_scenarios(add_to: Callable[..., None]) -> None:
         listed=False,
         real=("http:127.0.0.1",),
     )
-    add("web get on a model path", [("GET " + MESSAGES, {})], ["doc_answer"])
+    refusing = json.dumps({"error": {"message": "no GET here"}}).encode()
+    add(
+        "web get on a model path",
+        [("GET " + MESSAGES, {})],
+        script=static(Served(501, chunks=(refusing,))),
+    )
     add("web batches", [(MESSAGES + "/batches", {"requests": []})], ["doc_answer"])
     add("web threads", [("/v1/threads/t1/messages", {"x": 1})], ["doc_answer"])
     add("messages query string", [(MESSAGES + "?beta=true", message())], ["doc_answer"])

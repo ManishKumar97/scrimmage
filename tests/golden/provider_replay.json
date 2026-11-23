@@ -10674,15 +10674,15 @@
   "stops": []
 },
 "anthropic web get on a model path": {
-  "blobs": ["44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a", "8bff40995d8ece040f6f368cbb117d4db9572adea9e5a58c47bbff7fb33f822e"],
+  "blobs": ["44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a", "e661ed248489c09af43b53c19f134a37e6722a39dce4b5687de68aad451d935a"],
   "lines": [
-    {"action": "real", "args": {"bytes": 2, "preview": "{}", "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}, "call": "http:127.0.0.1", "error": null, "kind": "http", "method": "GET", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 356, "preview": "<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 501</p>\n ", "sha256": "8bff40995d8ece040f6f368cbb117d4db9572adea9e5a58c47bbff7fb33f822e"}, "row": "row", "run": "run-1", "seq": 1, "status": 501, "test": "t", "v": 1}
+    {"action": "real", "args": {"bytes": 2, "preview": "{}", "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}, "call": "http:127.0.0.1", "error": null, "kind": "http", "method": "GET", "path": "/v1/messages", "proc": {}, "provider": "anthropic", "result": {"bytes": 37, "preview": "{\"error\": {\"message\": \"no GET here\"}}", "sha256": "e661ed248489c09af43b53c19f134a37e6722a39dce4b5687de68aad451d935a"}, "row": "row", "run": "run-1", "seq": 1, "status": 501, "test": "t", "v": 1}
   ],
   "replies": [
-    {"body": "8bff40995d8ece040f6f368cbb117d4db9572adea9e5a58c47bbff7fb33f822e", "headers": {"content-length": "356", "content-type": "text/html;charset=utf-8"}, "length": 356, "status": 501}
+    {"body": "e661ed248489c09af43b53c19f134a37e6722a39dce4b5687de68aad451d935a", "headers": {"content-type": "application/json"}, "length": 37, "status": 501}
   ],
   "reserved": [],
-  "sent": [],
+  "sent": ["44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"],
   "settles": [],
   "stops": []
 },
