@@ -2,6 +2,7 @@
 
 import math
 from dataclasses import dataclass
+from functools import cached_property
 from typing import cast
 
 from scrimmage import labels
@@ -66,9 +67,10 @@ class Plan:
     # In a service: calls work outside any request may make for real while this run is open.
     background_real: tuple[str, ...] = ()
 
-    @property
+    @cached_property
     def registry(self) -> ProviderRegistry:
-        """The providers this run's requests are for, built once for these model hosts."""
+        """The providers this run's requests are for, built once for these model hosts and
+        kept on the plan."""
         return registry_for(listed_hosts(self.model_hosts))
 
     def tool_names(self) -> list[str]:

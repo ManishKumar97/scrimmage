@@ -13,6 +13,7 @@ import pytest
 from scrimmage import changes
 from scrimmage.changes import Changed, Unchangeable
 from scrimmage.config import Fault
+from scrimmage.providers.registry import built_in
 
 KEY = "ghp_" + "a" * 36
 
@@ -578,9 +579,9 @@ def function_call(arguments: str, n: int = 1) -> dict[str, Any]:
 
 
 def on_responses(word: str, reply: object) -> changes.WebChanged | Unchangeable:
-    change_of = changes.model_change(word, "responses")
+    change_of = built_in().get("openai").change(word, "chat", "/v1/responses")
     body = json.dumps(reply).encode()
-    return change_of(200, "responses", REAL_HEADERS, body, reply_fault(word))
+    return change_of(200, REAL_HEADERS, body, reply_fault(word), decoded=False)
 
 
 def made_on_responses(word: str, reply: object) -> tuple[dict[str, Any], changes.WebChanged]:

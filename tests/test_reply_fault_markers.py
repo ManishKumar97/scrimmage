@@ -10,9 +10,12 @@ from collections.abc import Mapping, Sequence
 from scrimmage import provider_openai as openai_table
 from scrimmage import state
 from scrimmage.plan import Plan
+from scrimmage.providers.registry import built_in
 from test_http_gate import Sink
 
 LABEL = "model:openai"
+OPENAI = built_in().get("openai")
+CHAT_PATH = "/v1/chat/completions"
 TURNS = 300
 USER = "u" * 2000  # 2 KB from the user each turn
 REPLY = "r" * 500  # and a 500-byte reply
@@ -48,7 +51,7 @@ def check_time(run: state.RunState, fields: dict[str, object]) -> tuple[bool, fl
     carried = False
     for _ in range(3):
         start = time.perf_counter()
-        carried = run.carries_reply_fault(LABEL, fields)
+        carried = run.carries_reply_fault(LABEL, OPENAI, CHAT_PATH, fields)
         times.append(time.perf_counter() - start)
     return carried, min(times)
 
@@ -104,8 +107,14 @@ def test_two_faults_of_different_lengths_on_one_label_are_each_matched_alone() -
     short = faulted(run, [first], "Short reply.")
     long = faulted(run, [first, *more], "Long reply.")
     then = {"role": "user", "content": "Try again."}
-    assert run.carries_reply_fault(LABEL, sent([first, *more, long, then]))  # the long one
-    assert run.carries_reply_fault(LABEL, sent([first, short, then]))  # the short one
+    assert run.carries_reply_fault(
+        LABEL, OPENAI, CHAT_PATH, sent([first, *more, long, then])
+    )  # the long one
+    assert run.carries_reply_fault(
+        LABEL, OPENAI, CHAT_PATH, sent([first, short, then])
+    )  # the short one
     changed = {"role": "user", "content": "Help!"}
-    assert not run.carries_reply_fault(LABEL, sent([first, more[0], changed, long, then]))
-    assert not run.carries_reply_fault(LABEL, sent([first, *more, then]))
+    assert not run.carries_reply_fault(
+        LABEL, OPENAI, CHAT_PATH, sent([first, more[0], changed, long, then])
+    )
+    assert not run.carries_reply_fault(LABEL, OPENAI, CHAT_PATH, sent([first, *more, then]))

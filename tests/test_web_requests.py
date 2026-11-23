@@ -20,10 +20,11 @@ import jsonschema
 import pytest
 
 from conftest import Project, Result
-from scrimmage import config, http_gate, labels, plan, provider_openai, state
+from scrimmage import config, http_gate, labels, plan, state
 from scrimmage.config import Fault, Mock
 from scrimmage.errors import ConfigError, ScrimmageRefused, ScrimmageStopped
 from scrimmage.plan import Plan
+from scrimmage.providers.impl.openai import OpenAI
 
 HOST = "inventory.acme.internal"
 URL = f"https://{HOST}/stock/SKU-42"
@@ -743,7 +744,7 @@ def test_a_web_body_is_not_parsed_as_a_model_body(
     def parsed(body: bytes) -> dict[str, object]:
         raise AssertionError("a web body was parsed")
 
-    monkeypatch.setattr(provider_openai, "request_fields", parsed)
+    monkeypatch.setattr(OpenAI, "request_fields", staticmethod(parsed))
     gate(lib, real=("http:127.0.0.1",))
     with lib.Client() as client:
         assert client.post(web.url("/fine"), json={"a": 1}).status_code == 200

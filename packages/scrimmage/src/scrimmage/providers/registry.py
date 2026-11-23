@@ -2,15 +2,23 @@
 
 It is built once, from the providers there are and the hosts the config names, before the first
 run, and carried on the run's plan. One agent can call two providers, and one host can speak
-two formats, so a request is resolved by its host and path, each time."""
+two formats, so a request is resolved by its host and path, each time.
+
+The providers themselves are loaded on first use, not at import: a provider reads replies with
+the changes module, which imports the config, which imports this module."""
 
 import functools
 from dataclasses import dataclass
 
 from scrimmage.providers.base import ModelProvider
-from scrimmage.providers.openai import OpenAI
 
-PROVIDERS: tuple[ModelProvider, ...] = (OpenAI(),)
+
+@functools.cache
+def builtin_providers() -> tuple[ModelProvider, ...]:
+    """Every provider there is, in the order a probe tries them."""
+    from scrimmage.providers.impl import PROVIDERS
+
+    return PROVIDERS
 
 
 @dataclass(frozen=True)
@@ -65,15 +73,11 @@ class ProviderRegistry:
     def is_built_in_host(self, host: str) -> bool:
         return any(host in p.hosts for p in self.providers)
 
-    def for_api(self, api: str) -> ModelProvider | None:
-        """The provider whose paths are this API, for a change that works on one API's replies."""
-        return next((p for p in self.providers if api in p.apis), None)
-
 
 @functools.lru_cache(maxsize=64)
 def registry_for(listed: tuple[tuple[str, str], ...] = ()) -> ProviderRegistry:
     """The registry for these model hosts, built once for each distinct set."""
-    return ProviderRegistry(PROVIDERS, listed)
+    return ProviderRegistry(builtin_providers(), listed)
 
 
 def built_in() -> ProviderRegistry:
