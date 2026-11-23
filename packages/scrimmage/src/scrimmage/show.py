@@ -19,7 +19,7 @@ from scrimmage import results, suggest
 from scrimmage.config import CHANGED_REPLIES
 from scrimmage.judge import BASELINE_FAILED
 from scrimmage.outcomes import PREVIEW, plural
-from scrimmage.providers.base import ModelProvider
+from scrimmage.providers.base import ModelProvider, Reply
 from scrimmage.providers.registry import built_in
 from scrimmage.records import RECORD_VERSION, Refused, open_owned
 from scrimmage.redact import redact, redact_decoded
@@ -254,18 +254,18 @@ def model_said(line: Doc, folder: Path | None) -> str | None:
     return said_by(line, reply_of(cast(Doc, result), folder))
 
 
-def reply_of(entry: Doc, folder: Path | None) -> object:
+def reply_of(entry: Doc, folder: Path | None) -> Reply:
     """A recorded reply, parsed; None if it cannot be read or parsed."""
     data = reply_data(entry, folder)
     if data is None:
         data = str(entry.get("preview") or "")
     try:
-        return json.loads(data)
+        return Reply(json.loads(data))
     except ValueError:
-        return None
+        return Reply(None)
 
 
-def said_by(line: Doc, reply: object) -> str | None:
+def said_by(line: Doc, reply: Reply) -> str | None:
     """The string a change to a model reply put at its first named part, read as the call's
     provider lays its replies out: a message's text, or a tool call's arguments."""
     reader = reader_of(line)

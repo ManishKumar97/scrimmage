@@ -37,7 +37,7 @@ from scrimmage.decide import missed
 from scrimmage.errors import ScrimmageRefused, ScrimmageStopped, ScrimmageTimeLimit
 from scrimmage.outcomes import PREVIEW
 from scrimmage.plan import Plan
-from scrimmage.providers.base import Given, ModelProvider, ServerChains
+from scrimmage.providers.base import Fields, Given, ModelProvider, ServerChains
 from scrimmage.providers.registry import built_in
 from scrimmage.records import RECORD_VERSION
 from scrimmage.redact import redact, redact_decoded, redacted, remove_values, scrubbed
@@ -795,9 +795,7 @@ class RunState:
         with self._lock:
             self.faulted_reply_ids.update(ids)
 
-    def chains_to_a_fault(
-        self, provider: ServerChains, path: str, fields: dict[str, object]
-    ) -> str | None:
+    def chains_to_a_fault(self, provider: ServerChains, path: str, fields: Fields) -> str | None:
         """The first id this request asks the provider to look up that a fault made, such as
         a previous response or an item reference; else None."""
         with self._lock:
@@ -807,7 +805,7 @@ class RunState:
             )
 
     def carries_reply_fault(
-        self, label: str, provider: ModelProvider, path: str, fields: dict[str, object]
+        self, label: str, provider: ModelProvider, path: str, fields: Fields
     ) -> bool:
         """Whether this request, as it is sent, carries what a fault in a reply from the same
         label gave the agent. provider: the one the call went to, which made the markers."""
