@@ -26,6 +26,7 @@ RATES = Rates(
     3.0, 15.0, 0.3, cache_write_5m=3.75, cache_write_1h=6.0, tiers=(("fast", FAST),)
 )  # dollars per million tokens
 STREAM = {"content-type": "text/event-stream"}
+ORDER: dict[str, Any] = {"name": "get_weather", "input_schema": {"type": "object"}}
 ASK: dict[str, Any] = {"model": MODEL, "max_tokens": 100}
 TOLERANCE = 1e-8
 
@@ -63,17 +64,17 @@ def settled(run: Gate) -> float:
 
 def test_a_plain_reply_settles_to_the_hand_sum() -> None:
     run = gate()
-    send(run, fixture("doc_answer.json"))
-    assert settled(run) == pytest.approx((12 * 3.0 + 6 * 15.0) / 1e6, abs=TOLERANCE)
+    send(run, fixture("real_answer.json"))
+    assert settled(run) == pytest.approx((16 * 3.0 + 17 * 15.0) / 1e6, abs=TOLERANCE)
     assert run.line["cost_usd"] == pytest.approx(settled(run), abs=TOLERANCE)
     assert run.line["cost_estimated"] is False
-    assert run.line["tokens"] == {"input": 12, "output": 6, "cached": 0}
+    assert run.line["tokens"] == {"input": 16, "output": 17, "cached": 0}
     assert run.line["call"] == "model:anthropic"
 
 
 @pytest.mark.parametrize(
     ("name", "tokens_in", "tokens_out"),
-    [("doc_stream_answer.sse", 25, 15), ("doc_stream_tool_use.sse", 472, 89)],
+    [("real_stream_answer.sse", 16, 14), ("real_stream_tool_use.sse", 376, 50)],
 )
 def test_a_streamed_reply_settles_to_the_hand_sum(
     name: str, tokens_in: int, tokens_out: int
@@ -149,9 +150,9 @@ def test_a_stream_cut_before_its_message_delta_is_estimated_not_counted() -> Non
 
 
 def test_a_stream_is_never_known_from_its_message_start_alone() -> None:
-    start = fixture("doc_stream_answer.sse").split(b"event: content_block_start")[0]
+    start = fixture("real_stream_answer.sse").split(b"event: content_block_start")[0]
     assert not provider_anthropic.usage(start).known
-    assert provider_anthropic.usage(fixture("doc_stream_answer.sse")).known
+    assert provider_anthropic.usage(fixture("real_stream_answer.sse")).known
 
 
 def test_a_later_count_that_is_not_null_wins_and_a_null_leaves_the_earlier_one() -> None:
@@ -181,14 +182,14 @@ def test_a_count_that_is_not_a_whole_number_is_never_trusted(usage: dict[str, ob
 def test_a_token_count_has_no_usage_of_its_own_and_costs_nothing() -> None:
     run = gate()
     provider = Provider(
-        run.events, lambda r: httpx2.Response(200, content=fixture("doc_count_tokens.json"))
+        run.events, lambda r: httpx2.Response(200, content=fixture("real_count_tokens.json"))
     )
     anthropic_client(provider).messages.count_tokens(
         model=MODEL, messages=[{"role": "user", "content": "hi"}]
     )
     assert run.line["call"] == "model:anthropic/input_tokens"
     assert run.line["cost_usd"] == 0.0
-    assert run.line["tokens"]["input"] == 14
+    assert run.line["tokens"]["input"] == 15
     assert "reserve" not in run.events, "a free op reserves nothing"
 
 
@@ -213,14 +214,14 @@ def test_a_reply_that_says_it_was_fast_settles_at_the_fast_row_whatever_was_aske
 def test_a_service_tier_of_auto_or_standard_only_names_no_tier() -> None:
     for tier in ("auto", "standard_only"):
         run = gate()
-        send(run, fixture("doc_answer.json"), service_tier=tier)
-        assert settled(run) == pytest.approx((12 * 3.0 + 6 * 15.0) / 1e6, abs=TOLERANCE)
+        send(run, fixture("real_answer.json"), service_tier=tier)
+        assert settled(run) == pytest.approx((16 * 3.0 + 17 * 15.0) / 1e6, abs=TOLERANCE)
 
 
 def test_a_dated_name_is_priced_as_its_family() -> None:
     run = Gate(hosts=(), prices=(("claude-haiku-4-5", RATES),))
-    send(run, fixture("doc_answer.json"), model="claude-haiku-4-5-20251001")
-    assert settled(run) == pytest.approx((12 * 3.0 + 6 * 15.0) / 1e6, abs=TOLERANCE)
+    send(run, fixture("real_answer.json"), model="claude-haiku-4-5-20251001")
+    assert settled(run) == pytest.approx((16 * 3.0 + 17 * 15.0) / 1e6, abs=TOLERANCE)
     assert provider_anthropic.snapshot_family("claude-haiku-4-5-20251001") == "claude-haiku-4-5"
     assert provider_anthropic.snapshot_family("claude-x-12345678") == "claude-x-12345678"
     assert provider_anthropic.snapshot_family("claude-haiku-4-5") == "claude-haiku-4-5"
@@ -310,7 +311,7 @@ def test_the_hold_takes_its_write_rate_from_the_cache_control_of_the_request(
     tools = extra.get("tools")
     if tools:  # the gate refuses a tool no gate sees
         run.run.listed.add("t")
-    provider, _ = send(run, fixture("doc_answer.json"), **extra)
+    provider, _ = send(run, fixture("real_answer.json"), **extra)
     assert run.budget.reserved[0] == pytest.approx(expected_hold(provider, rate), abs=1e-12)
 
 
@@ -388,3 +389,74 @@ def test_the_hold_of_a_row_with_no_write_rates_uses_the_multiples_too() -> None:
     most = provider_anthropic.most_cost
     assert most(1000, 0, BARE, fields=five) == pytest.approx(1000 * 3.75 / 1e6)
     assert most(1000, 0, BARE, fields=hour) == pytest.approx(1000 * 6.0 / 1e6)
+
+
+# The real captures, at the same rates. Each hand sum is written from the counts in the file.
+#   real_answer      16 in, 17 out:                 16*3 + 17*15                    = 303
+#   real_tool_use    376 in, 50 out:                376*3 + 50*15                   = 1878
+#   real_cached      13 in, 4 out, 3605 written for 5 minutes and 4508 for 1 hour:
+#                    13*3 + 3605*3.75 + 4508*6 + 4*15                               = 40665.75
+#   real_cache_read  13 in, 8113 read, 4 out:       13*3 + 8113*0.3 + 4*15          = 2532.9
+REAL = [
+    ("real_answer.json", False, 303.0, (16, 17, 0)),
+    ("real_stream_answer.sse", True, 16 * 3.0 + 14 * 15.0, (16, 14, 0)),
+    ("real_tool_use.json", False, 1878.0, (376, 50, 0)),
+    ("real_stream_tool_use.sse", True, 1878.0, (376, 50, 0)),
+    ("real_cached.json", False, 40665.75, (8126, 4, 0)),
+    ("real_cache_read.json", False, 2532.9, (8126, 4, 8113)),
+]
+
+
+@pytest.mark.parametrize(("name", "stream", "micro", "counts"), REAL)
+def test_a_real_reply_settles_to_the_hand_sum(
+    name: str, stream: bool, micro: float, counts: tuple[int, int, int]
+) -> None:
+    run = gate()
+    run.run.listed.add("get_weather")  # the one tool the request offers is seen by a gate
+    send(run, fixture(name), stream=stream, **({"tools": [ORDER]} if "tool" in name else {}))
+    assert settled(run) == pytest.approx(micro / 1e6, abs=TOLERANCE)
+    assert (
+        run.line["tokens"]["input"],
+        run.line["tokens"]["output"],
+        run.line["tokens"]["cached"],
+    ) == counts
+    assert run.line["cost_estimated"] is False
+
+
+def test_a_real_reply_that_wrote_both_lifetimes_is_priced_at_each_rate_not_one() -> None:
+    used = provider_anthropic.usage(fixture("real_cached.json"))
+    assert used.writes == {"cache_write_5m": 3605, "cache_write_1h": 4508}
+    assert used.input == 13 + 3605 + 4508
+
+
+def test_a_real_search_adds_its_fee_to_its_tokens() -> None:
+    """13646 input and 391 output, no cache writes (the request set no cache_control), 1 search."""
+    run = gate()
+    send(run, fixture("real_web_search.json"))
+    assert settled(run) == pytest.approx((13646 * 3.0 + 391 * 15.0) / 1e6 + 0.01, abs=TOLERANCE)
+
+
+def test_a_real_reply_with_thinking_and_a_decline_in_plain_text_settles_on_its_usage() -> None:
+    run = gate()
+    send(run, fixture("real_decline.json"))
+    assert settled(run) == pytest.approx((45 * 3.0 + 437 * 15.0) / 1e6, abs=TOLERANCE)
+    assert run.line["tokens"]["output"] == 437
+
+
+def test_a_real_tool_use_cut_by_max_tokens_has_an_empty_input_and_is_still_billed() -> None:
+    used = provider_anthropic.usage(fixture("real_tool_use_cut.json"))
+    assert (used.known, used.input, used.output) == (True, 518, 20)
+    reply = json.loads(fixture("real_tool_use_cut.json"))
+    assert reply["stop_reason"] == "max_tokens"
+    assert reply["content"][0]["type"] == "tool_use" and reply["content"][0]["input"] == {}
+
+
+def test_a_stream_ends_with_the_input_counts_again_in_its_message_delta() -> None:
+    """Anthropic's real message_delta repeats the input and cache counts, not null as the docs say
+    it may, and the cumulative output: the last of each wins and the sum is the same."""
+    raw = fixture("real_stream_tool_use.sse").decode()
+    delta = next(
+        line for line in raw.split("\n") if line.startswith("data:") and "message_delta" in line
+    )
+    usage = json.loads(delta[5:])["usage"]
+    assert usage["input_tokens"] == 376 and usage["output_tokens"] == 50

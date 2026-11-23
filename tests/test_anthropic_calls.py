@@ -18,8 +18,8 @@ from scrimmage.prices import Rates
 from scrimmage.providers.impl.wire import wrap_fields
 from scrimmage.providers.registry import built_in, registry_for
 
-REPLY = (Path(__file__).parent / "fixtures" / "anthropic" / "doc_answer.json").read_bytes()
-COUNT = (Path(__file__).parent / "fixtures" / "anthropic" / "doc_count_tokens.json").read_bytes()
+REPLY = (Path(__file__).parent / "fixtures" / "anthropic" / "real_answer.json").read_bytes()
+COUNT = (Path(__file__).parent / "fixtures" / "anthropic" / "real_count_tokens.json").read_bytes()
 BODY = {"model": "claude-test", "max_tokens": 5, "messages": [{"role": "user", "content": "hi"}]}
 URL = "https://api.anthropic.com/v1/messages"
 
@@ -52,7 +52,7 @@ def test_recognize_messages_on_anthropics_host_with_no_model_hosts() -> None:
     assert line["call"] == "model:anthropic"
     assert line["status"] == 200
     assert line["action"] != "refused"
-    assert line["tokens"]["input"] == 12
+    assert line["tokens"]["input"] == 16
 
 
 def test_recognize_count_tokens_as_the_free_input_tokens_op() -> None:

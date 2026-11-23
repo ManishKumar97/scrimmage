@@ -58,17 +58,17 @@ MESSAGES = {
     404: "The requested resource could not be found.",
     529: "Overloaded",
 }
-# What bad body sends a model call: the first 60 bytes of the answer example on the Messages
-# page, so a reader that logs the body sees a real reply's start, and it cannot parse. A token
-# count gets the start of its own reply.
-BROKEN_BODY = b'{"id":"msg_01XFDUDYJgAACzvnptvVoYEL","type":"message","role"'
+# What bad body sends a model call: the first 60 bytes of a real Messages reply
+# (tests/fixtures/anthropic/real_answer.json), so a reader that logs the body sees a real reply's
+# start, and it cannot parse. A real reply starts with its model, not its id as the docs' example
+# does. A token count gets the start of its own reply.
+BROKEN_BODY = b'{"model":"claude-haiku-5-5","id":"msg_011ChLK89QC5hfqpA15gZ9'
 BROKEN_COUNT = b'{"input_tok'
-# UNCONFIRMED. The message Anthropic's clients report for a prompt over the context window, with
-# status 400, written from memory of those reports: no real capture of it has been made, and the
-# dev key was rejected. The numbers are those of a request of 210000 tokens, not the faulted
-# one's: the gate does not count a request's tokens. Replace it from the first real capture, and
-# take the word out of tests/fixtures/anthropic/SOURCE.md when it is.
-CONTEXT_TOO_LONG = "prompt is too long: 210000 tokens > 200000 maximum"
+# A real reply to a Messages request of 210023 tokens for claude-haiku-4-5-20251001, whose window
+# is 200000, saved on 23 November 2026 (tests/fixtures/anthropic/real_context_too_long.json), with
+# status 400. The numbers are that request's, not the faulted one's: the gate does not count a
+# request's tokens.
+CONTEXT_TOO_LONG = "prompt is too long: 210023 tokens > 200000 maximum"
 
 # Tool types, by family, with the date of the version, _YYYYMMDD, taken off. Run by the agent:
 # the model asks, the agent's code runs it. Run at Anthropic and only read.

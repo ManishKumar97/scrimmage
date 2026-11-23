@@ -67,7 +67,7 @@ PINNED = [
     "cache writes responses split short",
     "injected text one string",
     # Anthropic's Messages API, added after the OpenAI scenarios, which are unchanged above.
-    "anthropic messages doc_cached",
+    "anthropic messages real_cached",
     "anthropic messages doc_stream_cached",
     "anthropic hold cache control 1h",
     "anthropic hold speed fast",

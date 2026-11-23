@@ -155,26 +155,26 @@ def test_the_hold_of_a_fallbacks_request_covers_its_settle() -> None:
     )
     assert run.budget.reserved[0] >= settled(run)
     plain = fallback_run()
-    send(plain, fixture("doc_answer.json"), model="claude-fable-5", messages=long_input)
+    send(plain, fixture("real_answer.json"), model="claude-fable-5", messages=long_input)
     assert run.budget.reserved[0] > 1.9 * plain.budget.reserved[0], "two attempts are held"
 
 
-# Web search: $10 for each 1,000 searches on top of the tokens (the pricing page). Its own example
-# reply: 105 input, 7123 read, 7345 written with no split, 6039 output and 1 search. At the review's
-# Sonnet-like row a write with no split is read as 1 hour, $6:
-#   105 * 3 + 7123 * 0.3 + 7345 * 6 + 6039 * 15 = 315 + 2136.9 + 44070 + 90585 = 137106.9
-SEARCH_TOKENS = (105 * 3.0 + 7123 * 0.3 + 7345 * 6.0 + 6039 * 15.0) / 1e6
+# Web search: $10 for each 1,000 searches on top of the tokens (the pricing page). A real reply to a
+# request with one search tool and no cache_control: 13646 input, 391 output, no cache writes and
+# 1 search. At the review's Sonnet-like row, $3 and $15:
+#   13646 * 3 + 391 * 15 = 40938 + 5865 = 46803, so $0.046803 in tokens, and $0.01 for the search
+SEARCH_TOKENS = (13646 * 3.0 + 391 * 15.0) / 1e6
 
 
 def test_a_web_search_the_reply_counts_is_settled_at_ten_dollars_a_thousand() -> None:
-    assert pytest.approx(0.1371069, abs=1e-9) == SEARCH_TOKENS
+    assert pytest.approx(0.046803, abs=1e-9) == SEARCH_TOKENS
     run = Gate(hosts=(), prices=(("claude-test", SONNET),))
-    send(run, fixture("doc_web_search.json"))
+    send(run, fixture("real_web_search.json"))
     assert settled(run) == pytest.approx(SEARCH_TOKENS + 0.01, abs=TOLERANCE)
 
 
 def test_three_searches_cost_three_fees_and_none_cost_nothing() -> None:
-    reply = json.loads(fixture("doc_web_search.json"))
+    reply = json.loads(fixture("real_web_search.json"))
     reply["usage"]["server_tool_use"]["web_search_requests"] = 3
     run = Gate(hosts=(), prices=(("claude-test", SONNET),))
     send(run, json.dumps(reply).encode())
@@ -195,7 +195,7 @@ def test_a_rows_own_fee_beats_the_default() -> None:
         fees=(("web_search_request", 0.02),),
     )
     run = Gate(hosts=(), prices=(("claude-test", dear),))
-    send(run, fixture("doc_web_search.json"))
+    send(run, fixture("real_web_search.json"))
     assert settled(run) == pytest.approx(SEARCH_TOKENS + 0.02, abs=TOLERANCE)
 
 
@@ -305,7 +305,7 @@ def test_code_execution_with_web_search_or_fetch_of_the_free_version_goes_throug
 def test_code_execution_alone_stops_a_run_before_anything_is_sent() -> None:
     run = Gate(hosts=(), prices=(("claude-test", SONNET),))
     provider = Provider(
-        run.events, lambda r: httpx2.Response(200, content=fixture("doc_answer.json"))
+        run.events, lambda r: httpx2.Response(200, content=fixture("real_answer.json"))
     )
     asked: Any = {
         **OUTPUT,

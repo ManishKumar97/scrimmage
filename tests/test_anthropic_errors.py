@@ -120,9 +120,8 @@ def test_a_bad_body_is_the_start_of_a_real_reply_and_does_not_parse() -> None:
     assert len(cut) == 60
     with pytest.raises(ValueError):
         json.loads(cut)
-    real = (FIXTURES / "doc_answer.json").read_bytes()
-    compact = json.dumps(json.loads(real), separators=(",", ":")).encode()
-    assert compact.startswith(cut[:40]), "it starts as a Messages reply starts"
+    real = (FIXTURES / "real_answer.json").read_bytes()
+    assert real.startswith(cut), "it is the start of a real reply, byte for byte"
     assert caught.value is not None
 
 
@@ -133,7 +132,8 @@ def test_a_prompt_over_the_context_window_is_a_400_invalid_request() -> None:
     assert provider.sent == []
     body: Any = caught.value.body
     assert body["error"]["type"] == "invalid_request_error"
-    assert "prompt is too long" in body["error"]["message"]
+    real = json.loads((FIXTURES / "real_context_too_long.json").read_text())
+    assert body["error"]["message"] == real["body"]["error"]["message"]
     assert run.line["status"] == 400
 
 
