@@ -12,6 +12,7 @@ import anthropic
 import httpx2
 import pytest
 
+import config_cases
 from model_gate import Gate, Provider, anthropic_client
 from scrimmage import config, plan, prices, provider_anthropic, state
 from scrimmage.errors import ConfigError, ScrimmageRefused
@@ -586,3 +587,23 @@ def test_the_team_files_fees_survive_the_plans_trip_to_the_sdk() -> None:
     assert back.file_fees == sent.file_fees
     assert back.fees_for("anthropic") == {"web_search_request": 0.05}
     assert back.fees_for("openai") == {}
+
+
+def test_a_team_price_files_search_fee_goes_from_the_file_to_the_bill(tmp_path: Path) -> None:
+    """The whole way: scrimmage-runs/prices.toml, config.load, plan_for, the plan's JSON trip to
+    the SDK, then the gate's settle. AN-C2-4's bug was plan_for keeping the file's rows only."""
+    (tmp_path / "scrimmage.toml").write_text(config_cases.AGENT + config_cases.TEST)
+    (tmp_path / "scrimmage-runs").mkdir()
+    (tmp_path / "scrimmage-runs" / "prices.toml").write_text(
+        '[anthropic]\nurl = "https://example.test/prices"\nas_of = "2026-11-24"\n\n'
+        "[anthropic.fees]\nweb_search_request = 0.05\n\n"
+        '[anthropic.models."claude-test"]\ninput = 3.0\noutput = 15.0\ncached_input = 0.3\n'
+        "cache_write_5m = 3.75\ncache_write_1h = 6.0\n"
+    )
+    cfg = config.load(tmp_path / "scrimmage.toml")
+    made = plan.plan_for(cfg, plan.rows(cfg)[0], "run-1")
+    sent = plan.Plan.from_json(json.loads(json.dumps(made.to_json())))
+    assert sent.fees_for("anthropic") == {"web_search_request": 0.05}
+    run = Gate(hosts=(), prices=(), file_prices=sent.file_prices, file_fees=sent.file_fees)
+    send(run, fixture("real_web_search.json"))
+    assert settled(run) == pytest.approx(SEARCH_TOKENS + 0.05, abs=TOLERANCE)
