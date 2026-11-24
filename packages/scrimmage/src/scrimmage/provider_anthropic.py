@@ -17,6 +17,7 @@ from typing import cast
 from scrimmage import prices
 from scrimmage.judge import normal
 from scrimmage.prices import Rates as Rates
+from scrimmage.providers.base import NO_FIELDS
 from scrimmage.providers.base import Fields as Fields
 from scrimmage.providers.base import Offered as Offered
 from scrimmage.providers.base import Reply as Reply
@@ -102,6 +103,11 @@ class Attempt:
     cached: int
     written_5m: int
     written_1h: int
+    # The speed the attempt ran at, by the tier that prices it: "fast", or None for standard.
+    # The reply never says it, so it comes from the request; speed_known is False when the
+    # request was not read, and the attempt is then settled as the reply's own tier says.
+    tier: str | None = None
+    speed_known: bool = False
 
 
 @dataclass
@@ -323,7 +329,9 @@ def request_tier(wire: Fields | None) -> str | None:
     return "fast" if fields_dict(wire).get("speed") == "fast" else None
 
 
-def usage(body: bytes, *, output_required: bool = True) -> AnthropicUsage:
+def usage(
+    body: bytes, *, output_required: bool = True, asked: Fields = NO_FIELDS
+) -> AnthropicUsage:
     """Token counts from a reply: a JSON body, or the events of a streamed one.
 
     The total input is input_tokens plus the cache reads plus the cache writes, as Anthropic's
@@ -341,6 +349,9 @@ def usage(body: bytes, *, output_required: bool = True) -> AnthropicUsage:
     sum over the iterations, each at its own model's rates. Each billed attempt is kept in
     attempts, and the totals are the sums. The searches a reply counts are kept in searches,
     which the fee prices. writes holds only the cache writes.
+
+    No iteration says the speed it ran at, so each attempt's is read from asked, the request
+    the reply answers: see attempt_tier.
     """
     text = body.decode("utf-8", "replace")
     # Split on newlines only: text in a reply can hold other line separators.
@@ -389,7 +400,10 @@ def usage(body: bytes, *, output_required: bool = True) -> AnthropicUsage:
         return result
     result.known = True
     if billed:
-        result.attempts = tuple(Attempt(m, *_totals(c, sp)) for _, m, c, sp in hops)
+        request = fields_dict(asked)
+        result.attempts = tuple(
+            Attempt(m, *_totals(c, sp), *attempt_tier(kind, m, request)) for kind, m, c, sp in hops
+        )
         result.input = sum(a.input for a in result.attempts)
         result.output = sum(a.output for a in result.attempts)
         result.cached = sum(a.cached for a in result.attempts)
@@ -464,6 +478,35 @@ def _hops(
             return None
         found.append((str(hop.get("type") or ""), str(hop.get("model") or ""), counts, split))
     return found
+
+
+def attempt_tier(kind: str, model: str, request: dict[str, object]) -> tuple[str | None, bool]:
+    """The tier one attempt ran at, and whether the request said. The first attempt, a message,
+    runs at the request's speed. A fallback runs at the speed of the entry that names its model,
+    or the request's when the entry sets none, as the hold has it. An entry of speed null runs
+    at standard. When several entries name the model, or none does, the dearest speed any of
+    them could run at is taken, so the settle is never under the bill. Any other kind, such as
+    an advisor or a compaction, is not known, nor is any attempt of a request not read."""
+    if not request:
+        return None, False
+    own = _speed(request.get("speed"))
+    if kind == "message":
+        return own, True
+    if kind != "fallback_message":
+        return None, False
+    fallbacks = request.get("fallbacks")
+    if not isinstance(fallbacks, list):
+        return own, True  # "default": no entry may set a speed
+    entries = [_obj(raw) for raw in cast("list[object]", fallbacks)]
+    tiers = {
+        _speed(entry.get("speed")) if "speed" in entry else own
+        for entry in entries
+        if isinstance(entry.get("model"), str)
+        and snapshot_family(str(entry["model"])) == snapshot_family(model)
+    }
+    if not tiers:
+        tiers = {own, *(_speed(entry.get("speed")) for entry in entries if "speed" in entry)}
+    return ("fast" if "fast" in tiers else None), True
 
 
 COUNT_KEYS = (
@@ -579,6 +622,12 @@ def _row_for(model: str, rates: Rates) -> Rates | None:
     names none, else the provider's row by name or by its family. None for a model no row prices."""
     if not model or not rates.models or snapshot_family(model) == snapshot_family(rates.name):
         return rates
+    return _listed_row(model, rates)
+
+
+def _listed_row(model: str, rates: Rates) -> Rates | None:
+    """The model's own row among the provider's rows, by name or by its family, with its tiers:
+    rates may be one tier of the call's row, which has none of its own."""
     for name, row in rates.models:
         if name == model:
             return row
@@ -588,11 +637,27 @@ def _row_for(model: str, rates: Rates) -> Rates | None:
     return None
 
 
+def _row_at(model: str, rates: Rates, tier: str | None) -> Rates | None:
+    """The row this model runs at on this tier. The call's own model is found among the rows
+    first, so a tier other than the call's is priced too; a call row that lists no rows, as a
+    test's may, is the call's own."""
+    listed = _listed_row(model or rates.name, rates) if rates.models else None
+    if listed is not None:
+        return _at_speed(listed, tier)
+    row = _row_for(model, rates)
+    return None if row is None else _at_speed(row, tier)
+
+
 def _hop_cost(attempt: Attempt, rates: Rates) -> float:
     """One attempt at its model's row. A model no row prices is priced at the dearest row there
     is, so an attempt never costs less than its model could."""
-    row = _row_for(attempt.model, rates)
-    rows = [row] if row is not None else [rates, *(r for _, r in rates.models)]
+    if attempt.speed_known:
+        row = _row_at(attempt.model, rates, attempt.tier)
+        every = [rates, *(_at_speed(r, attempt.tier) for _, r in rates.models)]
+    else:
+        row = _row_for(attempt.model, rates)
+        every = [rates, *(r for _, r in rates.models)]
+    rows = [row] if row is not None else every
     return max(
         _tokens_cost(
             attempt.input,
@@ -652,11 +717,11 @@ def most_cost(tokens_in: int, tokens_out: int, rates: Rates, *, fields: Fields) 
             out = max(tokens_out, _cap(entry.get("max_tokens")))
             tier = _speed(entry.get("speed")) if "speed" in entry else speed
             model = entry.get("model")
-            row = _row_for(model, rates) if isinstance(model, str) else None
+            row = _row_at(model, rates, tier) if isinstance(model, str) else None
             if row is None:
                 holds.append(_dearest_attempt(tokens_in, out, rates, asked, tier))
             else:
-                holds.append(_one_attempt(tokens_in, out, _at_speed(row, tier), asked))
+                holds.append(_one_attempt(tokens_in, out, row, asked))
     fee = dict(rates.fees).get(SEARCH, 0.0) * _searches(asked)
     return sum(holds) + len(holds) * fee
 
