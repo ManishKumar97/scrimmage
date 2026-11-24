@@ -296,7 +296,8 @@ DIGESTED_KEYS = {
 }  # fmt: skip
 PLAN_FIELDS = {
     "run", "test", "row", "mocks", "faults", "tools", "real", "time_limit_s", "renames",
-    "model_hosts", "budget_usd", "reserve_output_tokens", "prices", "file_prices", "service_tier",
+    "model_hosts", "budget_usd", "reserve_output_tokens", "prices", "file_prices", "file_fees",
+    "service_tier",
     "children",
     "unavailable",
     "record", "probe", "elapsed_s", "scrub", "service", "record_grace_s", "background_real",

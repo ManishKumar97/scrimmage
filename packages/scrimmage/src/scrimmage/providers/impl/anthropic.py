@@ -75,8 +75,10 @@ class Anthropic:
         """The table module's one rule, which its own price lookup reads too."""
         return table.snapshot_family(model)
 
-    def price(self, model: str, overrides: dict[str, Rates]) -> Rates | None:
-        return table.price(model, overrides)
+    def price(
+        self, model: str, overrides: dict[str, Rates], fees: Mapping[str, float] | None = None
+    ) -> Rates | None:
+        return table.price(model, overrides, fees)
 
     def cost(self, rates: Rates, used: Usage) -> float:
         short, long = self.writes_of(used.writes)

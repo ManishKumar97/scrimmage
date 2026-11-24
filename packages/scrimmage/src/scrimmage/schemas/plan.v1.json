@@ -649,6 +649,17 @@
             }
           }
         },
+        "file_fees": {
+          "type": "object",
+          "description": "The team's scrimmage-runs/prices.toml: its [provider.fees] for each provider, by provider name and then fee, in dollars for each request.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        },
         "service_tier": {
           "type": "string",
           "minLength": 1

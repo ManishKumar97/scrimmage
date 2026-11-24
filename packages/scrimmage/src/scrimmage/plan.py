@@ -52,6 +52,8 @@ class Plan:
     prices: tuple[tuple[str, Rates], ...] = ()  # [agent.prices]: flat, by model name
     # The team's scrimmage-runs/prices.toml, as (provider, rows) for each of its sections.
     file_prices: tuple[tuple[str, tuple[tuple[str, Rates], ...]], ...] = ()
+    # The same file's [provider.fees], as (provider, (fee, dollars for each request)).
+    file_fees: tuple[tuple[str, tuple[tuple[str, float], ...]], ...] = ()
     service_tier: str | None = None  # the tier a request that names none is held at
     children: bool = False  # child processes fire faults too
     unavailable: str | None = None  # why a child has no plan; such a plan is never sent
@@ -83,6 +85,11 @@ class Plan:
             dict(self.file_prices).get(provider, ()),
             self.registry.get(provider).snapshot_family,
         )
+
+    def fees_for(self, provider: str) -> dict[str, float]:
+        """The team file's per-request fees for this provider, which come before the shipped
+        file's: a fee a model row sets for itself still comes first."""
+        return dict(dict(self.file_fees).get(provider, ()))
 
     def tool_names(self) -> list[str]:
         """Every tool's final name: the one the model sees."""
@@ -116,6 +123,9 @@ class Plan:
             budget["file_prices"] = {
                 provider: {m: price_json(p) for m, p in rows} for provider, rows in self.file_prices
             }
+        if self.file_fees:
+            budget = cast(dict[str, object], doc["budget"])
+            budget["file_fees"] = {provider: dict(fees) for provider, fees in self.file_fees}
         if self.renames:
             doc["renames"] = dict(self.renames)
         if self.record:
@@ -149,6 +159,10 @@ class Plan:
             (provider, tuple((model, price_from(obj(p))) for model, p in obj(rows).items()))
             for provider, rows in obj(budget.get("file_prices", {})).items()
         )
+        file_fees = tuple(
+            (provider, tuple((fee, number(obj(fees), fee)) for fee in obj(fees)))
+            for provider, fees in obj(budget.get("file_fees", {})).items()
+        )
         hosts = tuple(
             ModelHost(string(h, "host"), string(h, "provider"))
             for h in map(obj, items(doc, "model_hosts"))
@@ -178,6 +192,7 @@ class Plan:
             reserve_output_tokens=reserve,
             prices=prices,
             file_prices=file_prices,
+            file_fees=file_fees,
             service_tier=None
             if budget.get("service_tier") is None
             else string(budget, "service_tier"),
@@ -391,6 +406,9 @@ def plan_for(config: Config, row: Row, run: str) -> Plan:
         file_prices=()
         if config.team_prices is None
         else tuple((p, s.models) for p, s in config.team_prices.sections),
+        file_fees=()
+        if config.team_prices is None
+        else tuple((p, s.fees) for p, s in config.team_prices.sections if s.fees),
         service_tier=config.agent.service_tier,
         children=config.agent.children,
         scrub=config.scrub,

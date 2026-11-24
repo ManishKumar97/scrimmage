@@ -10,7 +10,7 @@ import dataclasses
 import json
 import math
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -501,16 +501,20 @@ def snapshot_family(model: str) -> str:
     return prices.compact_family(model)
 
 
-def price(model: str, overrides: dict[str, Rates]) -> Rates | None:
+def price(
+    model: str, overrides: dict[str, Rates], team_fees: Mapping[str, float] | None = None
+) -> Rates | None:
     """The team's price first, whole, then the shipped table: see prices.price. The row comes with
-    what a call needs beyond its own rates: the fee of a web search, which a row's own beats the
-    price file's, which beats Anthropic's; and the provider's other rows, for a call that more than
-    one model served. Anthropic's tiers have no alias: fast mode is no Priority Tier."""
+    what a call needs beyond its own rates: the fee of a web search, where a row's own beats the
+    team price file's [anthropic.fees], which beats the shipped file's, which beats Anthropic's;
+    and the provider's other rows, for a call that more than one model served. Anthropic's tiers
+    have no alias: fast mode is no Priority Tier."""
     found = prices.priced("anthropic", model, overrides, family=snapshot_family)
     if found is None:
         return None
     section = prices.shipped().section("anthropic")
-    fees = {**DEFAULT_FEES, **dict(section.fees if section else ()), **dict(found.fees)}
+    shipped_fees = dict(section.fees if section else ())
+    fees = {**DEFAULT_FEES, **shipped_fees, **dict(team_fees or {}), **dict(found.fees)}
     every = (*overrides.items(), *prices.shipped().models("anthropic"))
 
     def with_extras(row: Rates) -> Rates:

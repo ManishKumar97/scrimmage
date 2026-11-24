@@ -527,3 +527,55 @@ def test_openais_price_example_is_the_line_it_always_gave() -> None:
     assert built_in().get("openai").price_example == (
         "{input = 0.15, output = 0.60} (dollars per million tokens)"
     )
+
+
+def test_the_team_files_search_fee_reaches_the_bill() -> None:
+    """scrimmage-runs/prices.toml's [anthropic.fees] prices a search the reply counts, through the
+    gate: before, the plan carried the file's rows and dropped its fees, so a team that set $0.05
+    was billed Anthropic's $0.01."""
+    run = Gate(
+        hosts=(),
+        prices=(),
+        file_prices=(("anthropic", (("claude-test", SONNET),)),),
+        file_fees=(("anthropic", (("web_search_request", 0.05),)),),
+    )
+    send(run, fixture("real_web_search.json"))
+    assert settled(run) == pytest.approx(SEARCH_TOKENS + 0.05, abs=TOLERANCE)
+
+
+def test_a_rows_fee_beats_the_team_files_which_beats_the_shipped_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = (
+        '[anthropic]\nurl = "https://x"\nas_of = "2026-11-23"\n'
+        "[anthropic.fees]\nweb_search_request = 0.03\n"
+        '[anthropic.models."claude-file"]\ninput = 3\noutput = 15\n'
+    )
+    monkeypatch.setattr(prices, "shipped", lambda: prices.parse(text, "test"))
+    table = built_in().get("anthropic")
+    team = {"web_search_request": 0.05}
+    plain = table.price("m", {"m": Rates(3.0, 15.0)}, team)
+    assert plain is not None and dict(plain.fees) == {"web_search_request": 0.05}
+    shipped = table.price("m", {"m": Rates(3.0, 15.0)})
+    assert shipped is not None and dict(shipped.fees) == {"web_search_request": 0.03}
+    own = Rates(3.0, 15.0, fees=(("web_search_request", 0.07),))
+    row = table.price("m", {"m": own}, team)
+    assert row is not None and dict(row.fees) == {"web_search_request": 0.07}
+
+
+def test_the_team_files_fees_survive_the_plans_trip_to_the_sdk() -> None:
+    sent = plan.Plan(
+        run="r",
+        test="t",
+        row="w",
+        mocks=(),
+        faults=(),
+        tools=(),
+        real=(),
+        time_limit_s=60.0,
+        file_fees=(("anthropic", (("web_search_request", 0.05),)),),
+    )
+    back = plan.Plan.from_json(json.loads(json.dumps(sent.to_json())))
+    assert back.file_fees == sent.file_fees
+    assert back.fees_for("anthropic") == {"web_search_request": 0.05}
+    assert back.fees_for("openai") == {}

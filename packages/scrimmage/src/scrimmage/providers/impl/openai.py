@@ -73,8 +73,10 @@ class OpenAI:
     fees: tuple[str, ...] = ()  # OpenAI bills nothing for each request
     price_example = "{input = 0.15, output = 0.60} (dollars per million tokens)"
 
-    def price(self, model: str, overrides: dict[str, Rates]) -> Rates | None:
-        return table.price(model, overrides)
+    def price(
+        self, model: str, overrides: dict[str, Rates], fees: Mapping[str, float] | None = None
+    ) -> Rates | None:
+        return table.price(model, overrides)  # OpenAI charges no per-request fee
 
     def cost(self, rates: Rates, used: Usage) -> float:
         short, long = self.writes_of(used.writes)

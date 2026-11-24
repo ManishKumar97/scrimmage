@@ -10,7 +10,7 @@ Nothing here names a provider's API. Where an API differs, the provider decides:
 passes the request's path and fields, and the provider says what they mean.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, NoReturn, Protocol, SupportsIndex, final, runtime_checkable
 
@@ -172,7 +172,12 @@ class Meter(Protocol):
         parse until the team fills in the real rates."""
         ...
 
-    def price(self, model: str, overrides: dict[str, Rates]) -> Rates | None: ...
+    def price(
+        self, model: str, overrides: dict[str, Rates], fees: Mapping[str, float] | None = None
+    ) -> Rates | None:
+        """The rates that price this model: overrides first, then the shipped file. fees are the
+        team file's per-request fees for this provider, which a row's own fee still beats."""
+        ...
 
     def cost(self, rates: Rates, used: Usage) -> float:
         """What the call cost at these rates. used is the provider's own reading of the reply,
