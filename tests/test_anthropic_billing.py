@@ -369,8 +369,9 @@ def offered(tools: list[dict[str, Any]]) -> Any:
 def test_code_execution_alone_is_refused_with_its_reason() -> None:
     found = offered([{"type": "code_execution_20250825", "name": "code_execution"}])
     assert not found.hosted_reads
-    (kind,) = found.unknown
-    assert kind.startswith("code_execution_20250825") and "container time" in kind
+    assert not found.unknown, "Scrimmage knows code execution; it cannot budget it"
+    ((kind, why),) = found.refused
+    assert kind == "code_execution_20250825" and "container time" in why
 
 
 def test_code_execution_with_web_search_or_fetch_of_the_free_version_goes_through() -> None:
@@ -381,7 +382,7 @@ def test_code_execution_with_web_search_or_fetch_of_the_free_version_goes_throug
                 {"type": companion, "name": "w"},
             ]
         )
-        assert not found.unknown, companion
+        assert not found.unknown and not found.refused, companion
         assert "code_execution" in found.hosted_reads
     old = offered(
         [
@@ -389,7 +390,7 @@ def test_code_execution_with_web_search_or_fetch_of_the_free_version_goes_throug
             {"type": "web_search_20250305", "name": "w"},
         ]
     )
-    assert old.unknown, "an older web search does not make code execution free"
+    assert old.refused, "an older web search does not make code execution free"
 
 
 def test_code_execution_alone_stops_a_run_before_anything_is_sent() -> None:
@@ -405,7 +406,13 @@ def test_code_execution_alone_stops_a_run_before_anything_is_sent() -> None:
     with pytest.raises(anthropic.APIConnectionError) as caught:
         anthropic_client(provider).messages.create(**asked)
     assert isinstance(caught.value.__cause__, ScrimmageRefused)
-    assert "container time" in str(caught.value.__cause__)
+    said = str(caught.value.__cause__)
+    assert said.startswith(
+        "the model request offers code_execution_20250825, which Scrimmage cannot budget: "
+        "code execution is billed by container time"
+    )
+    assert "does not know" not in said
+    assert run.line["reason"] == "unmetered_tool"
     assert provider.sent == []
 
 

@@ -79,6 +79,7 @@ STOP_TEST = (
     "budget_held",
     "no_price",
     "unknown_tool_type",
+    "unmetered_tool",
     "unseen_tool",
     "structure",
     "ambiguous_label",

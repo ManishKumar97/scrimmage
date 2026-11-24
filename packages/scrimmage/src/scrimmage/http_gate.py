@@ -99,6 +99,7 @@ WEB_CAP = changes.WEB_CAP  # a reply body over this is not read to be changed
 MISTAKE_REASONS = (
     "no_price",
     "unknown_tool_type",
+    "unmetered_tool",
     "unseen_tool",
     "hosted",
     "web_write",
@@ -597,6 +598,11 @@ def check_tools(ctx: Bound, run: RunState, step: Step, fields: Fields, path: str
             f"the model request offers a tool of type {kinds}, which Scrimmage does not "
             "know, so the test stops; a newer Scrimmage may know it",
         )
+    if tools.refused:
+        kinds = ", ".join(sorted({kind for kind, _ in tools.refused}))
+        why = "; ".join(dict.fromkeys(reason for _, reason in tools.refused))
+        run.refuse(step, "unmetered_tool")
+        refuse(run, step, f"the model request offers {kinds}, which Scrimmage cannot budget: {why}")
     for label in tools.hosted_writes:
         if f"hosted:mcp/{label}" not in run.plan.real:
             run.refuse(step, "hosted")

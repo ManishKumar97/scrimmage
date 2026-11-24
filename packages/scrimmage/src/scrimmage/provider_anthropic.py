@@ -723,8 +723,9 @@ def offered(path: str, wire: Fields) -> Offered:
     """The tools a Messages request offers, sorted. A tool with no type, or the type custom, is
     the agent's, by its name. So is a built-in the agent runs: bash, a text editor, memory and
     computer use. Anthropic runs, and only reads: web search, web fetch, code execution and tool
-    search. An MCP server the request names runs at Anthropic and can change data. Any other type,
-    the computer and browser toolsets included, is not known."""
+    search. Code execution is refused when its container time is billed, which no reply reports.
+    An MCP server the request names runs at Anthropic and can change data. Any other type, the
+    computer and browser toolsets included, is not known."""
     del path
     fields = fields_dict(wire)
     found = Offered()
@@ -737,7 +738,7 @@ def offered(path: str, wire: Fields) -> Offered:
         elif family in AGENT_FAMILIES:
             found.agent.append(str(tool.get("name") or family))
         elif family == "code_execution" and not free_code_execution(fields):
-            found.unknown.append(f"{kind} ({CODE_EXECUTION_WHY})")
+            found.refused.append((kind, CODE_EXECUTION_WHY))
         elif family in READ_FAMILIES or family.startswith("tool_search_tool"):
             found.hosted_reads.append(family)
         elif kind == "mcp_toolset":

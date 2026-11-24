@@ -110,6 +110,9 @@ class Offered:
     hosted_reads: list[str] = field(default_factory=list[str])  # provider tools that only read
     hosted_writes: list[str] = field(default_factory=list[str])  # MCP server labels
     unknown: list[str] = field(default_factory=list[str])  # tool types not in the table
+    # Tool types the provider knows but whose cost no reply reports, as (type, why): Scrimmage
+    # cannot budget them, so the request is refused.
+    refused: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
 
 
 class Recognizer(Protocol):
