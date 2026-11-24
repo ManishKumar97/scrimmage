@@ -510,3 +510,20 @@ def test_check_warns_of_a_fee_a_provider_does_not_charge() -> None:
     assert prices.unused_fees(None) == []
     assert built_in().get("openai").fees == ()
     assert built_in().get("anthropic").fees == ("web_search_request",)
+
+
+def test_a_call_with_no_price_is_told_where_anthropics_rates_are_and_given_no_number() -> None:
+    """Scrimmage ships no Anthropic prices, so the line to paste names the pricing page and holds
+    no rate. A line with OpenAI's example rates would price a Claude model 20 to 25 times low."""
+    example = built_in().get("anthropic").price_example
+    assert "https://platform.claude.com/docs/en/about-claude/pricing" in example
+    assert not any(ch.isdigit() for ch in example.split("(")[0]), "no rate is suggested"
+    pasted = f'[anthropic.models."claude-x"]\nprice = {example.split(" (")[0]}\n'
+    with pytest.raises(ConfigError, match="Invalid value"):  # not a price until filled in
+        prices.parse(pasted, "pasted")
+
+
+def test_openais_price_example_is_the_line_it_always_gave() -> None:
+    assert built_in().get("openai").price_example == (
+        "{input = 0.15, output = 0.60} (dollars per million tokens)"
+    )

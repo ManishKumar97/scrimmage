@@ -49,6 +49,11 @@ class Anthropic:
     display_name = "Anthropic"
     hosts = table.HOSTS
     fees = (table.SEARCH,)
+    # Scrimmage ships no Anthropic prices yet, so the line names where they are and no number.
+    price_example = (
+        "{input = ..., output = ...} (dollars per million tokens, from "
+        "https://platform.claude.com/docs/en/about-claude/pricing)"
+    )
     free_ops = table.FREE_OPS
 
     # Recognizer

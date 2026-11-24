@@ -164,6 +164,14 @@ class Meter(Protocol):
         """The per-request fees a price file may set for this provider, such as a search."""
         ...
 
+    @property
+    def price_example(self) -> str:
+        """The rates a call with no price is told to add under [agent.prices], as it would be
+        pasted, such as {input = 0.15, output = 0.60} (dollars per million tokens). A provider
+        that ships no prices names its pricing page and no number, so a pasted line does not
+        parse until the team fills in the real rates."""
+        ...
+
     def price(self, model: str, overrides: dict[str, Rates]) -> Rates | None: ...
 
     def cost(self, rates: Rates, used: Usage) -> float:

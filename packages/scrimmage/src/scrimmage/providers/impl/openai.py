@@ -71,6 +71,7 @@ class OpenAI:
         return table.snapshot_family(model)
 
     fees: tuple[str, ...] = ()  # OpenAI bills nothing for each request
+    price_example = "{input = 0.15, output = 0.60} (dollars per million tokens)"
 
     def price(self, model: str, overrides: dict[str, Rates]) -> Rates | None:
         return table.price(model, overrides)

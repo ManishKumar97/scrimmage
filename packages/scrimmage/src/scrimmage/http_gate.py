@@ -950,9 +950,9 @@ def held_tier(ctx: Bound, provider: ModelProvider, request: Any) -> str | None:
     return provider.request_tier(fields) or ctx.run.plan.service_tier
 
 
-def no_price(model: str) -> str:
-    """Why a call cannot be budgeted, with a price key the team can paste, if it fits a line."""
-    rate = "{input = 0.15, output = 0.60} (dollars per million tokens)"
+def no_price(model: str, rate: str) -> str:
+    """Why a call cannot be budgeted, with a price key the team can paste, if it fits a line.
+    rate is the provider's own example of the rates to add."""
     off = 'or set max_cost_usd = "none"'
     if not model:
         return (
@@ -1005,7 +1005,7 @@ def hold_for(ctx: Bound, step: Step, request: Any, extra: dict[str, object]) -> 
     rates = prices_of(ctx, provider, model)
     if rates is None:
         ctx.run.refuse(step, "no_price")
-        refuse(ctx.run, step, no_price(model))
+        refuse(ctx.run, step, no_price(model, provider.price_example))
     body = body_of(request) or b""
     fields = provider.request_fields(body) if body else None
     output = provider.output_cap(
