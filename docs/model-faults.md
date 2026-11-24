@@ -195,7 +195,7 @@ Each fault changes the blocks it names, and leaves every other byte as Anthropic
 | `truncate` | the first `text` block cut at the last space at or before its middle, the blocks after it dropped, and `stop_reason` set to `max_tokens` | the reply has no text and no tool call | the `max_tokens` stop reason of the Messages API, which ends a reply that reached its limit |
 | `truncate`, on a reply of tool calls alone | the first `tool_use` block with an empty `input`, the blocks after it dropped, and `stop_reason` set to `max_tokens` | | a real `claude-haiku-5-5` reply cut inside a tool call, saved on 23 November 2026 |
 | `refuse` | a plain decline: one `text` block, `I can't provide that.`, and `stop_reason` `end_turn` | | a real `claude-haiku-5-5` decline, saved on 24 November 2026 |
-| `refuse`, with `form = "classifier"` | no content, `stop_reason` `refusal`, and `stop_details` with a `category` and an `explanation` | | Anthropic's Refusals page |
+| `refuse`, with `form = "classifier"` | no content, `stop_reason` `refusal`, and `stop_details` of type `refusal` with a `null` category and explanation | | the shape on Anthropic's Refusals page |
 
 Anthropic's API never sends a tool call cut in the middle as an error, as OpenAI's does.
 A real reply cut inside a tool call is a 200 with the block there and an `input` of `{}`, so that is what `truncate` builds.
@@ -216,7 +216,7 @@ Its `usage` holds a rough count of your request's tokens and, for the plain form
 | `form` | The reply | Where it comes from |
 |---|---|---|
 | `"plain"`, the default | `stop_reason` `end_turn`, and a `text` block with the first sentence of a real decline: `I can't provide that.` | Claude declining in its own words |
-| `"classifier"` | `stop_reason` `refusal`, no content, and `stop_details` of type `refusal` with the category `cyber` and its explanation | the example on Anthropic's Refusals page, from its safety classifier |
+| `"classifier"` | `stop_reason` `refusal`, no content, and `stop_details` of type `refusal` with a `null` category and explanation, as for a refusal that maps to no named category | the shape on Anthropic's Refusals page, from its safety classifier |
 
 ```toml
 [[test.fault]]

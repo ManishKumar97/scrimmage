@@ -203,13 +203,15 @@ def never_carried_out(word: str) -> str | None:
 # text is the first sentence of a real decline (tests/fixtures/anthropic/real_decline_address.json,
 # saved on 24 November 2026), which names no subject, so it fits any request. The classifier form
 # is the refusal of Anthropic's safety classifier: no content, stop_reason refusal and
-# stop_details, as the Refusals page shows (tests/fixtures/anthropic/doc_refusal.json).
+# stop_details (tests/fixtures/anthropic/doc_refusal.json shows the shape). Its category and
+# explanation are null, which the library's RefusalStopDetails allows "when the refusal doesn't map
+# to a named category": no named category is claimed, so no harm is named.
 FORMS = ("plain", "classifier")
 PLAIN_REFUSAL = "I can't provide that."
 CLASSIFIER_DETAILS: dict[str, object] = {
     "type": "refusal",
-    "category": "cyber",
-    "explanation": "This request was declined because it could enable cyber harm.",
+    "category": None,
+    "explanation": None,
 }
 BUILT_OUTPUT_TOKENS = 10  # a built plain reply's output count: about its own length
 ID_LETTERS = string.ascii_letters + string.digits

@@ -258,7 +258,9 @@ def test_a_refuse_reply_of_the_classifier_form_is_stop_reason_refusal_with_stop_
     docs = json.loads(fixture("doc_refusal.json"))
     assert message.stop_reason == "refusal"
     assert made["content"] == docs["content"] == []
-    assert made["stop_details"] == docs["stop_details"], "as the Refusals page shows it"
+    assert made["stop_details"] == {"type": "refusal", "category": None, "explanation": None}
+    assert list(made["stop_details"]) == list(docs["stop_details"]), "the Refusals page's keys"
+    assert message.stop_details is not None and message.stop_details.category is None
     assert made["usage"]["output_tokens"] == 0 == docs["usage"]["output_tokens"]
     assert run.budget.reserved == [] and run.sink.settles == []
 

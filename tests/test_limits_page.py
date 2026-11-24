@@ -207,7 +207,7 @@ ALL_TITLES = [
     "`os.fork` warns on Python 3.12 and later.",
     "`passphrase`, `pw` and other short names are not key-name secrets.",
     "`process:sh` lets any shell command through.",
-    '`refuse` with `form = "classifier"` always says the category `cyber`.',
+    '`refuse` with `form = "classifier"` names no category.',
     "`replace` on a model reply is for Chat Completions text.",
     "`requests N` needs a library that marks its retries.",
     "`scrimmage check` does not import your code.",

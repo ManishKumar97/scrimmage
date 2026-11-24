@@ -451,10 +451,10 @@ An attempt of another kind, such as an advisor, is settled at the reply's tier f
 A request Scrimmage cannot read, such as a compressed one, is settled the same way.
 The hold covers only the models the request names, so a reply in which a model no entry names served can settle above its hold.
 
-- **`refuse` with `form = "classifier"` always says the category `cyber`.**
-  The only classifier refusal Scrimmage has a source for is the example on Anthropic's Refusals page, and its category is `cyber`.
-  An agent that branches on another category is not reached by this fault.
-  No real classifier refusal could be captured with a harmless request.
+- **`refuse` with `form = "classifier"` names no category.**
+  Its `stop_details` has `category` and `explanation` set to `null`, which the anthropic library reads as a refusal that maps to no named category.
+  An agent that branches on a category, such as `cyber` or `bio`, is not reached by this fault.
+  No real classifier refusal could be captured with a harmless request, so none is copied.
 
 - **A reply fault on an Anthropic stream is a mistake in the test.**
   `garble`, `truncate` and `refuse` stop before sending, and `replace` lets the real stream through with the mistake on the line.
