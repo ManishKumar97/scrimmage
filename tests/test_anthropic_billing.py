@@ -694,3 +694,23 @@ def test_without_the_request_an_attempt_is_settled_as_the_reply_says() -> None:
     """usage() with no request knows no speed, and keeps the earlier rule."""
     used = provider_anthropic.usage(fallback_reply("claude-a", "claude-b", "fast"))
     assert used.known and not any(a.speed_known for a in used.attempts)
+
+
+def test_a_fallback_on_a_model_no_entry_names_is_settled_at_the_dearer_speed() -> None:
+    """The request ran fast, and its one entry is standard on claude-a, yet claude-b served. No
+    entry says how claude-b ran, so it is taken at the dearer speed any of them could run at."""
+    run = speed_run(
+        fallback_reply("claude-a", "claude-b", "standard"),
+        speed="fast",
+        fallbacks=[{"model": "claude-a", "speed": None}],
+    )
+    assert settled(run) == pytest.approx(billed("claude-a", "fast", "claude-b", "fast"))
+
+
+def test_an_entry_on_the_same_model_is_held_at_its_own_speed_not_the_requests() -> None:
+    """A fast request with a standard entry on its own model holds one fast and one standard
+    attempt. Before, the entry was found as the call's own row, already at fast."""
+    row = team_row("claude-a", **{"claude-a": SPEEDY_A, "claude-b": SPEEDY_B})
+    fields = wrap_fields({"speed": "fast", "fallbacks": [{"model": "claude-a", "speed": None}]})
+    held = provider_anthropic.most_cost(1000, 500, row.at("fast"), fields=fields)
+    assert held == pytest.approx((1000 * 6 + 500 * 30 + 1000 * 1 + 500 * 5) / 1e6)
