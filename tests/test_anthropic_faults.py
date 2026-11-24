@@ -389,3 +389,17 @@ def test_what_a_faulted_reply_gave_is_its_toolu_ids_and_the_message_it_sent() ->
     nothing = provider_anthropic.given(wire, b"not a reply", ids_only=False)
     assert not (nothing.ids or nothing.prefixes)
     assert not provider_anthropic.carries(wire, [])
+
+
+def test_the_thinking_check_behind_leaving_thinking_blocks_alone_is_the_saved_capture() -> None:
+    """A real 200 came back to a request whose text block was changed and whose signed thinking
+    block was sent as it came: the claim the docs make for leaving those blocks alone."""
+    first = json.loads(fixture("real_thinking_reply.json"))
+    sent = json.loads(fixture("real_thinking_resent_request.json"))
+    again = json.loads(fixture("real_thinking_resent_reply.json"))
+    [thinking, said] = first["content"]
+    [_, turn, _] = sent["messages"]
+    assert turn["content"][0] == thinking and thinking["type"] == "thinking"
+    assert turn["content"][1]["text"] != said["text"]
+    assert changes.GARBLE_TOKEN in turn["content"][1]["text"]
+    assert again["type"] == "message" and again["stop_reason"] == "end_turn"

@@ -204,7 +204,8 @@ A reply that is left as it is goes to your agent unchanged, and the line says wh
 
 `thinking` and `redacted_thinking` blocks are never changed.
 Anthropic signs them, and your agent sends them back as they came, so a changed `text` block beside one is sent back as the agent got it.
-A real request with a garbled text block next to an intact signed `thinking` block got a 200 from `claude-haiku-5-5`, on 24 November 2026.
+A real request with a changed text block next to an intact signed `thinking` block got a 200 from `claude-haiku-5-5`, on 24 November 2026.
+The request and the reply are saved as `real_thinking_resent_request.json` and `real_thinking_resent_reply.json` in the test fixtures.
 
 `refuse` is built, not sent: nothing is reserved and the line costs 0.
 It is made from a real reply's fields, in their order, with a new `msg_` id and the model your request named.
