@@ -6,6 +6,7 @@ tokens and sort the tools the model is offered. A built reply, for refuse and un
 also takes the time and new ids, as a real one has.
 """
 
+import dataclasses
 import json
 import math
 import re
@@ -806,9 +807,16 @@ def snapshot_family(model: str) -> str:
     return prices.dashed_family(model)
 
 
+# OpenAI renamed its fast tier priority, so a row that prices one prices both. Rates.at reads this
+# off the row, which is the only row it is ever used on: another provider has no such alias.
+TIER_ALIASES = (("fast", "priority"), ("priority", "fast"))
+
+
 def price(model: str, overrides: dict[str, Rates]) -> Rates | None:
-    """The team's price first, whole, then the shipped table: see prices.price."""
-    return prices.priced("openai", model, overrides, family=snapshot_family)
+    """The team's price first, whole, then the shipped table: see prices.price. The row comes
+    with OpenAI's tier aliases."""
+    found = prices.priced("openai", model, overrides, family=snapshot_family)
+    return None if found is None else dataclasses.replace(found, aliases=TIER_ALIASES)
 
 
 def cost(
@@ -897,6 +905,10 @@ def _name(tool: dict[str, object]) -> str:
 
 
 def _obj(value: object) -> dict[str, object]:
+    """A dict's items under string keys, or {} for anything else. A Fields or a Reply is no dict:
+    handed one, the caller forgot fields_dict or reply_value, and {} would read it as empty."""
+    if isinstance(value, Fields | Reply):
+        raise TypeError("_obj was handed an opaque wire value; open it with fields_dict first")
     if not isinstance(value, dict):
         return {}
     return {str(k): v for k, v in cast(dict[object, object], value).items()}

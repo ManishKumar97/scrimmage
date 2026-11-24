@@ -6,8 +6,10 @@ Six limits decide this.
 Check them first.
 Every other limit is listed below, grouped by how your agent runs.
 
-- **OpenAI only.** Model calls are understood for OpenAI's API and for gateways that speak its format; a call to another provider stops the test until you list it.
-  Either name a gateway that speaks OpenAI's format under `model_hosts`, or list the provider's host under `real`, where its calls run with no budget and no faults; see [Use a gateway](model-faults.md#use-a-gateway).
+- **OpenAI and Anthropic only.** Model calls are understood for OpenAI's API, for Anthropic's Messages API, and for gateways that speak either format; a call to another provider stops the test until you list it.
+  Either name a gateway that speaks OpenAI's or Anthropic's format under `model_hosts`, or list the provider's host under `real`, where its calls run with no budget and no faults; see [Use a gateway](model-faults.md#use-a-gateway).
+  Anthropic's Messages API is recognized and its calls are counted, but this version ships no Anthropic prices, so a call with a budget on is refused until you add a price under `[agent.prices]`.
+  The faults that change or build an Anthropic reply are not done yet.
 - **LangChain only.** LangChain tools, which LangGraph runs, are found by themselves; a tool on another framework is not gated.
   List each tool's function under `tools`; see [the `tools` setting](configuration.md#agent).
 - **httpx only.** Web requests through httpx and httpx2 are gated; `requests`, `aiohttp`, `urllib` and raw sockets run unrecorded and ungated.
@@ -437,7 +439,16 @@ Also read the control-path limits under An agent inside a web service.
 
 - **Prices need checking.** The shipped price file is small and as old as your installed version; the `as_of` date of each provider's section shows on `scrimmage check`. Run `scrimmage prices update` for the newest, check it against your provider's pricing, and use `[agent.prices]` for anything else.
 
-- **Two cache-write rates nothing uses yet.** `cache_write_5m` and `cache_write_1h` are valid in a price file and in `[agent.prices]`, with the same checks as the other write rates. A call to OpenAI never settles at them, because OpenAI writes its cache for 30 minutes or 12 hours. They take effect when a provider that writes for 5 minutes or an hour is gated.
+- **Two cache-write rates only Anthropic uses.** `cache_write_5m` and `cache_write_1h` are valid in a price file and in `[agent.prices]`, with the same checks as the other write rates. A call to OpenAI never settles at them, because OpenAI writes its cache for 30 minutes or 12 hours. A call to Anthropic settles at them, and a row that leaves one out is settled at Anthropic's own multiple of its `input`: 1.25 times for 5 minutes and 2 times for 1 hour, as its prompt caching page says.
+
+- **Anthropic's `inference_geo` of `us` is priced at the normal rate.** A request that sets it costs about 10% more at Anthropic, 1.1 times, and Scrimmage settles it at the row's normal rates, so its cost is about 10% low. Set your own price for the model under `[agent.prices]` with the 1.1 times in it.
+
+- **An Anthropic call that more than one model serves.** With server-side fallback, `usage.iterations` lists each attempt, and each is settled at the row of the model that ran it, the attempt that declined included, which Anthropic bills only in some refusal categories, so the cost can be high by that attempt. A request with `fallbacks` is held for every attempt: each model named at its own row, at the larger of its entry's `max_tokens` and the request's, and at its entry's `speed` when it sets one. Each attempt is also held for the request's web searches.
+A model with no row is held and settled at the dearest row there is. Every attempt of `"default"` is held at the dearest row, because its model is not known until the reply, and settled at the row of the model that ran it.
+The reply does not say which speed each attempt ran at, only the models and the tokens. An attempt on the requested model is settled at the reply's own tier, and an attempt on another model at that model's normal rates. So a call whose attempts ran at different speeds can be settled above its hold or below its real cost.
+
+- **Anthropic's server tools.** A web search is settled at $0.01 each, from the searches the reply counts, unless `[anthropic.fees]` in a price file or `web_search_request` in a model's `[agent.prices]` row says otherwise. The hold adds `max_uses` searches, or 10 when there is none. A server tool loop adds input at Anthropic's side that the hold cannot see, and writes the cache by itself, so a hold can be low for such a call; the hold uses at least the 5 minute write rate. Code execution is billed by container time, which a reply never reports, so a budget cannot count it: a request that offers it is refused, with the reason `unmetered_tool`, unless it also offers `web_search_20260209` or `web_fetch_20260209` or later, with which it is free. The refusal does not depend on whether a budget is set.
+  The searches are counted from the reply's own `usage.server_tool_use`, which no real reply Scrimmage has seen spreads over `usage.iterations`; a search an attempt of a fallback or an advisor ran, if the API counts it in that attempt's entry only, is not counted.
 
 - **A long prompt costed from an estimate.** A model that charges more above a number of input tokens has a `long` price with an `above` threshold. A call is settled at the long rates when the reply's input tokens are over `above`. Before the call, its input is estimated from the size of the request, so a call whose estimate is under `above` but whose real input is over it is held at the normal rates, and calls in flight can pass `max_cost_usd` by the difference. A tier with no `long` price of its own costs its normal rates at any length. See [Long-context prices](configuration.md#long-context-prices).
 

@@ -34,8 +34,9 @@ MAX_BYTES = 1_000_000
 
 
 def flat(rates: Rates) -> dict[str, float]:
-    skip = {"tiers", "long"}
+    skip = {"tiers", "long", "aliases", "fees", "models", "name"}
     out = {k: v for k, v in dataclasses.asdict(rates).items() if k not in skip and v is not None}
+    out.update({f"fee.{k}": v for k, v in rates.fees})
     for tier, tiered in rates.tiers:
         out.update({f"tiers.{tier}.{k}": v for k, v in flat(tiered).items()})
     if rates.long is not None:
@@ -58,6 +59,16 @@ def diff(old: Section, new: Section) -> list[str]:
     before, after = dict(old.models), dict(new.models)
     lines = [f"added {m}: {fmt(r)}" for m, r in after.items() if m not in before]
     lines += [f"removed {m}: {fmt(r)}" for m, r in before.items() if m not in after]
+    was_fees, now_fees = dict(old.fees), dict(new.fees)
+    for fee in sorted(was_fees.keys() | now_fees.keys()):
+        if was_fees.get(fee) == now_fees.get(fee):
+            continue
+        if fee in was_fees and fee in now_fees:
+            lines.append(f"changed fee {fee}: {was_fees[fee]:g} to {now_fees[fee]:g}")
+        elif fee in now_fees:
+            lines.append(f"added fee {fee}: {now_fees[fee]:g}")
+        else:
+            lines.append(f"removed fee {fee}, was {was_fees[fee]:g}")
     for model, now in after.items():
         was = before.get(model)
         if was is None or was == now:

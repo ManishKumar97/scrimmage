@@ -99,6 +99,7 @@ WEB_CAP = changes.WEB_CAP  # a reply body over this is not read to be changed
 MISTAKE_REASONS = (
     "no_price",
     "unknown_tool_type",
+    "unmetered_tool",
     "unseen_tool",
     "hosted",
     "web_write",
@@ -597,6 +598,11 @@ def check_tools(ctx: Bound, run: RunState, step: Step, fields: Fields, path: str
             f"the model request offers a tool of type {kinds}, which Scrimmage does not "
             "know, so the test stops; a newer Scrimmage may know it",
         )
+    if tools.refused:
+        kinds = ", ".join(sorted({kind for kind, _ in tools.refused}))
+        why = "; ".join(dict.fromkeys(reason for _, reason in tools.refused))
+        run.refuse(step, "unmetered_tool")
+        refuse(run, step, f"the model request offers {kinds}, which Scrimmage cannot budget: {why}")
     for label in tools.hosted_writes:
         if f"hosted:mcp/{label}" not in run.plan.real:
             run.refuse(step, "hosted")
@@ -919,7 +925,8 @@ def mocked(
 
 
 def prices_of(ctx: Bound, provider: ModelProvider, model: str) -> Rates | None:
-    return provider.price(model, dict(ctx.run.plan.prices_for(provider.name)))
+    plan = ctx.run.plan
+    return provider.price(model, dict(plan.prices_for(provider.name)), plan.fees_for(provider.name))
 
 
 def worst(
@@ -950,9 +957,9 @@ def held_tier(ctx: Bound, provider: ModelProvider, request: Any) -> str | None:
     return provider.request_tier(fields) or ctx.run.plan.service_tier
 
 
-def no_price(model: str) -> str:
-    """Why a call cannot be budgeted, with a price key the team can paste, if it fits a line."""
-    rate = "{input = 0.15, output = 0.60} (dollars per million tokens)"
+def no_price(model: str, rate: str) -> str:
+    """Why a call cannot be budgeted, with a price key the team can paste, if it fits a line.
+    rate is the provider's own example of the rates to add."""
     off = 'or set max_cost_usd = "none"'
     if not model:
         return (
@@ -1005,7 +1012,7 @@ def hold_for(ctx: Bound, step: Step, request: Any, extra: dict[str, object]) -> 
     rates = prices_of(ctx, provider, model)
     if rates is None:
         ctx.run.refuse(step, "no_price")
-        refuse(ctx.run, step, no_price(model))
+        refuse(ctx.run, step, no_price(model, provider.price_example))
     body = body_of(request) or b""
     fields = provider.request_fields(body) if body else None
     output = provider.output_cap(
@@ -1755,14 +1762,13 @@ def record(
     if exact is None:
         exact = provider.gateway_cost(response.headers.get(COST_HEADER))
     if rates and used.known:
-        writes = used.writes
         # The reply says its tier; a reply that does not is settled at the tier it was held at.
         at = rates.at(used.tier or held_tier(ctx, provider, request))
         if rates.unpriced(used.tier):
             # A tier the row does not price: settle at the dearest it does, and say so.
-            at = provider.dearest(rates, tokens_in, tokens_out, cached, writes)
+            at = provider.dearest(rates, used)
             unpriced = used.tier
-        usd = provider.cost(tokens_in, tokens_out, at, cached, writes)
+        usd = provider.cost(at, used)
     elif rates:  # a guess from the sizes, so every input token at its dearest rate
         usd = worst(ctx, provider, request, tokens_in, tokens_out, rates)
     if usd is not None and exact is not None and not free:

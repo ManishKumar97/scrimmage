@@ -1,4 +1,4 @@
-# pyright: standard
+# pyright: standard, reportPrivateUsage=true
 """The adapter for LangChain tools, which LangGraph runs.
 
 A tool's run calls its _run or _arun inside LangChain's error handling, so the gate sits

@@ -273,7 +273,8 @@
           },
           "provider": {
             "enum": [
-              "openai"
+              "openai",
+              "anthropic"
             ]
           }
         }
@@ -326,6 +327,10 @@
                 "minimum": 0
               },
               "cache_write_12h": {
+                "type": "number",
+                "minimum": 0
+              },
+              "web_search_request": {
                 "type": "number",
                 "minimum": 0
               },
@@ -501,6 +506,10 @@
                   "type": "number",
                   "minimum": 0
                 },
+                "web_search_request": {
+                  "type": "number",
+                  "minimum": 0
+                },
                 "cache_write_5m": {
                   "type": "number",
                   "minimum": 0
@@ -640,6 +649,17 @@
             }
           }
         },
+        "file_fees": {
+          "type": "object",
+          "description": "The team's scrimmage-runs/prices.toml: its [provider.fees] for each provider, by provider name and then fee, in dollars for each request.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        },
         "service_tier": {
           "type": "string",
           "minLength": 1
@@ -689,7 +709,7 @@
     },
     "model_label": {
       "type": "string",
-      "pattern": "^model(:(openai|\\*)(/(embeddings|moderations|input_tokens))?)?$"
+      "pattern": "^model(:(openai|anthropic|\\*)(/(embeddings|moderations|input_tokens))?)?$"
     },
     "call_label": {
       "anyOf": [

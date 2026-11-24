@@ -489,7 +489,7 @@ A reader that gets a value it does not know reads it as other.
 | `reason` | `arguments`, `request`, `no_mock`, `unreadable` | read as other |
 | `action` | `real`, `refused` in a mock miss; `real`, `mock`, `fault`, `refused` in a line of a run | read as other |
 | `change` | `better`, `worse`, `unclear`, `no result`, `new`, `gone` | read as other |
-| `stopped_by` | `budget`, `budget_held`, `no_price`, `unknown_tool_type`, `unseen_tool`, `structure`, `ambiguous_label`, `unknown_label`; in a test's document also `interrupted` | read as other |
+| `stopped_by` | `budget`, `budget_held`, `no_price`, `unknown_tool_type`, `unmetered_tool`, `unseen_tool`, `structure`, `ambiguous_label`, `unknown_label`; in a test's document also `interrupted` | read as other |
 
 `cli.v1.json` lists the values of the release that ships it, and also takes any other text there, so a reader may check a document against any version 1 copy of the schema.
 A field or value it does not list then fits; the reader ignores the field and reads the value as other.

@@ -11,7 +11,7 @@ from scrimmage.errors import ConfigError
 
 # The name the model sees. Providers allow hyphens, which a Python function cannot have.
 TOOL_NAME = re.compile(r"[A-Za-z0-9_-]+")
-PROVIDERS = ("openai",)  # providers with a built-in address table
+PROVIDERS = ("openai", "anthropic")  # providers with a built-in address table
 MODEL_OPS = ("embeddings", "moderations", "input_tokens")  # calls that only read or compute
 MODEL = re.compile(r"model(?::(?P<provider>[a-z*][a-z0-9_-]*)(?:/(?P<op>[a-z_]+))?)?")
 HOSTED = re.compile(r"hosted:mcp/[A-Za-z0-9_.-]+")

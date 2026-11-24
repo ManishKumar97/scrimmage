@@ -20,6 +20,7 @@ dev = [
     "ruff>=0.17",
     "pyright>=1.1.414",
     "openai>=3.46",
+    "anthropic>=2.12",
     "httpx>=0.28",
     "vulture>=2.16",
     "import-linter>=2.15",
@@ -202,12 +203,18 @@ type = "forbidden"
 # The sources are the package's modules one by one: with the package itself as the source, every
 # provider module would overlap it and the contract would check nothing.
 source_modules = ["scrimmage.*"]
-forbidden_modules = ["scrimmage.providers.impl", "scrimmage.provider_openai"]
+forbidden_modules = [
+    "scrimmage.providers.impl",
+    "scrimmage.provider_openai",
+    "scrimmage.provider_anthropic",
+]
 ignore_imports = [
     "scrimmage.providers.registry -> scrimmage.providers.impl",
     "scrimmage.providers.** -> scrimmage.provider_openai",
+    "scrimmage.providers.** -> scrimmage.provider_anthropic",
     # A table module opens the wire types through providers.impl.wire, which no other module may.
     "scrimmage.provider_openai -> scrimmage.providers.impl.wire",
+    "scrimmage.provider_anthropic -> scrimmage.providers.impl.wire",
 ]
 
 [tool.coverage.run]

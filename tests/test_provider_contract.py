@@ -17,11 +17,20 @@ import pytest
 from scrimmage import changes
 from scrimmage.config import Fault
 from scrimmage.prices import RATE_KEYS, Rates
-from scrimmage.providers.base import ModelProvider, Reply, ServerChains
+from scrimmage.providers.base import ModelProvider, Reply, ServerChains, Usage
 from scrimmage.providers.impl.wire import fields_dict, wrap_fields
 from scrimmage.providers.registry import builtin_providers
 
+
+def reading(
+    tokens_in: int, tokens_out: int, cached: int = 0, writes: dict[str, int] | None = None
+) -> Usage:
+    """A reading of a reply from its counts alone, as the cost and dearest tests pass it."""
+    return Usage(tokens_in, tokens_out, True, cached, dict(writes or {}))
+
+
 OPENAI = Path(__file__).parent / "fixtures" / "openai"
+ANTHROPIC = Path(__file__).parent / "fixtures" / "anthropic"
 STATUSES = (400, 401, 403, 404, 408, 409, 422, 429, 500, 502, 503, 504, 529)
 RATES = Rates(2.0, 8.0, 0.5, 3.0, 4.0)
 JUNK = (b"", b"{", b"[]", b"null", b'"text"', b"data: not json\n\ndata: [DONE]\n", b"\xff\xfe")
@@ -50,7 +59,7 @@ class Case:
     usages: tuple[tuple[Path, int, int, int], ...]
     chat_path: str
     other_paths: tuple[str, ...]  # the provider's other model APIs
-    shipped_model: str  # a model the shipped price table has
+    shipped_model: str | None  # a model the shipped price table has; None when it has none yet
     write_fields: tuple[str, ...]  # the Rates fields that price a cache write
     request: dict[str, object]  # a request the provider reads, with its model
     model: str
@@ -74,7 +83,15 @@ class Case:
     call_name: str = ""
     text_part: str = ""
     arguments_part: str = ""
+    # A request that may write the cache, for a provider whose hold looks at the request: the hold
+    # of `request` need not cover the writes of a reply, since it asked for none.
+    writing_request: dict[str, object] | None = None
+    request_cap: int | None = None  # the output cap `request` carries, for an API that needs one
+    call_text: str | None = None  # what the reply that calls a tool says by default, if it says
     chain: Chain | None = None
+    # The fault words whose replies this provider does not build or change yet: each is a
+    # mistake in the test that says so, and the provider's built replies refuse.
+    pending: tuple[str, ...] = ()
 
 
 def openai_tool_request(name: str) -> dict[str, object]:
@@ -97,7 +114,109 @@ def openai_follow_up(fields: dict[str, object], reply: bytes) -> dict[str, objec
     return {**fields, "messages": [*asked, message, *results]}
 
 
+def anthropic_tool_request(name: str) -> dict[str, object]:
+    schema = {"type": "object", "properties": {}}
+    return {
+        "model": "claude-haiku-5-5",
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [{"name": name, "description": "A tool.", "input_schema": schema}],
+    }
+
+
+def anthropic_follow_up(fields: dict[str, object], reply: bytes) -> dict[str, object]:
+    """The next request an agent builds from a reply: its content, then each tool's result."""
+    content = json.loads(reply)["content"]
+    results = [
+        {"type": "tool_result", "tool_use_id": block["id"], "content": "ok"}
+        for block in content
+        if block["type"] == "tool_use"
+    ]
+    asked: list[Any] = list(fields["messages"])  # type: ignore[arg-type]
+    turn = [{"role": "assistant", "content": content}]
+    return {**fields, "messages": [*asked, *turn, {"role": "user", "content": results}]}
+
+
+def anthropic_text_request(text: str) -> dict[str, object]:
+    """A request whose tool result holds this text, as a tool's result goes back to the model."""
+    result = {"type": "tool_result", "tool_use_id": "toolu_1", "content": f"note: {text}"}
+    return {
+        "model": "claude-haiku-5-5",
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": [result]}],
+    }
+
+
 CASES = {
+    "anthropic": Case(
+        host="api.anthropic.com",
+        ops=(
+            ("POST", "/v1/messages", "chat"),
+            ("POST", "/v1/messages/", "chat"),
+            ("POST", "/v1/messages?beta=true", "chat"),
+            ("POST", "/anthropic/v1/messages", "chat"),
+            ("POST", "/v1/messages/count_tokens", "input_tokens"),
+            ("POST", "/v1/messages/count_tokens?beta=true", "input_tokens"),
+            ("GET", "/v1/messages", None),
+            ("POST", "/v1/messages/batches", None),
+            ("POST", "/v1/threads/t_1/messages", None),
+            ("POST", "/v1/models", None),
+            ("POST", "/", None),
+            ("POST", "", None),
+        ),
+        usages=(
+            (ANTHROPIC / "real_answer.json", 16, 17, 0),
+            (ANTHROPIC / "real_cached.json", 8126, 4, 0),
+            (ANTHROPIC / "real_cache_read.json", 8126, 4, 8113),
+            (ANTHROPIC / "real_tool_use.json", 376, 50, 0),
+            (ANTHROPIC / "real_decline.json", 45, 437, 0),
+            (ANTHROPIC / "doc_refusal.json", 412, 0, 0),
+            (ANTHROPIC / "real_stream_answer.sse", 16, 14, 0),
+            (ANTHROPIC / "real_stream_tool_use.sse", 376, 50, 0),
+            (ANTHROPIC / "doc_stream_cached.sse", 4096, 503, 1800),
+        ),
+        chat_path="/v1/messages",
+        other_paths=(),
+        shipped_model=None,  # the shipped table has no Anthropic rows yet: a separate task
+        write_fields=("cache_write_5m", "cache_write_1h"),
+        request={
+            "model": "claude-haiku-5-5",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        model="claude-haiku-5-5",
+        tool_request=anthropic_tool_request,
+        text_request=anthropic_text_request,
+        follow_up=anthropic_follow_up,
+        changeable=ANTHROPIC / "real_answer.json",
+        not_carried=(),
+        capped=lambda n: {"model": "claude-haiku-5-5", "max_tokens": n, "messages": []},
+        call_reply=ANTHROPIC / "real_tool_use.json",
+        call_name="get_weather",
+        request_cap=64,
+        writing_request={
+            "model": "claude-haiku-5-5",
+            "max_tokens": 64,
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        text_part="content[0].text",
+        arguments_part="content[0].input",
+        wire_keys=(
+            "stop_reason",
+            "tool_use",
+            "tool_result",
+            "input_json_delta",
+            "content_block_start",
+            "message_start",
+            "message_delta",
+            "cache_control",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+            "mcp_servers",
+        ),
+        pending=("replace", "garble", "truncate", "unknown tool", "bad tool args", "refuse"),
+    ),
     "openai": Case(
         host="api.openai.com",
         ops=(
@@ -161,7 +280,7 @@ CASES = {
             reply_id="resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3795b",
             names_it=lambda found: {"model": "m", "previous_response_id": found},
         ),
-    )
+    ),
 }
 
 
@@ -308,7 +427,7 @@ def test_the_hold_may_read_the_request_and_never_costs_less_than_the_settle(
     case = case_of(provider)
     for fields in ({}, case.request, case.capped(50)):
         held = provider.most_cost(1000, 500, RATES, path=case.chat_path, fields=wrap_fields(fields))
-        assert held >= provider.cost(1000, 500, RATES, 0, {}) - 1e-12
+        assert held >= provider.cost(RATES, reading(1000, 500)) - 1e-12
 
 
 def test_context_too_long_is_a_json_error(provider: ModelProvider) -> None:
@@ -318,6 +437,10 @@ def test_context_too_long_is_a_json_error(provider: ModelProvider) -> None:
 
 def test_a_built_refusal_is_a_whole_reply_the_provider_would_read(provider: ModelProvider) -> None:
     case = case_of(provider)
+    if "refuse" in case.pending:
+        with pytest.raises(NotImplementedError, match="not yet for"):
+            provider.refusal_reply(case.chat_path, wrap_fields(case.request), 25)
+        return
     for path in (case.chat_path, *case.other_paths):
         built = provider.refusal_reply(path, wrap_fields(case.request), 25)
         assert isinstance(json.loads(built), dict), path
@@ -334,6 +457,10 @@ def test_a_built_call_to_an_unknown_tool_names_it_and_is_a_whole_reply(
     fields = case.tool_request("get_order")
     assert provider.tool_call_tools(case.chat_path, wrap_fields(fields)) == ["get_order"]
     assert provider.no_free_tool_call(case.chat_path, wrap_fields(fields)) is None
+    if "unknown tool" in case.pending:
+        with pytest.raises(NotImplementedError, match="not yet for"):
+            provider.unknown_tool_reply(wrap_fields(fields), 25, "get_order")
+        return
     built = provider.unknown_tool_reply(wrap_fields(fields), 25, "get_order")
     assert isinstance(json.loads(built), dict)
     assert "get_order" in built.decode()
@@ -353,9 +480,11 @@ def test_a_fault_that_cannot_be_carried_out_says_why_and_the_rest_do_not(
 ) -> None:
     case = case_of(provider)
     for word in EVERY_WORD:
-        assert provider.not_carried_out(word, case.chat_path, wrap_fields(case.request)) is None, (
-            word
-        )
+        said = provider.not_carried_out(word, case.chat_path, wrap_fields(case.request))
+        if word in case.pending:
+            assert isinstance(said, str) and "not yet for" in said, word
+        else:
+            assert said is None, word
     for word, path, fields in case.not_carried:
         why = provider.not_carried_out(word, path, wrap_fields(fields))
         assert isinstance(why, str) and why, (word, path)
@@ -368,6 +497,17 @@ def test_what_a_faulted_reply_gave_is_carried_back_by_the_request_built_from_it(
     did not build."""
     case = case_of(provider)
     fields = case.tool_request("get_order")
+    if "unknown tool" in case.pending:
+        # Nothing is built, so a reply the agent got from the real model gave it nothing marked.
+        assert case.call_reply is not None
+        real = case.call_reply.read_bytes()
+        for ids_only in (True, False):
+            gave = provider.given(case.chat_path, wrap_fields(fields), real, ids_only=ids_only)
+            assert not (gave.ids or gave.prefixes)
+            assert not provider.carries(
+                case.chat_path, wrap_fields(case.follow_up(fields, real)), [gave]
+            )
+        return
     reply = provider.unknown_tool_reply(wrap_fields(fields), 25, "get_order")
     for ids_only in (True, False):
         gave = provider.given(case.chat_path, wrap_fields(fields), reply, ids_only=ids_only)
@@ -425,6 +565,13 @@ def test_a_real_reply_is_changed_and_keeps_what_it_billed(
     real = case.changeable.read_bytes()
     fault = Fault("model", word, "always", text="NEW" if word == "replace" else None)
     change = provider.change(word, "chat", case.chat_path)
+    if word in case.pending:
+        # A change that is not done yet refuses, whatever the reply, naming the provider.
+        said = change.blocked(200, JSON)
+        assert isinstance(said, changes.Unchangeable) and said.mistake
+        assert "not yet for" in said.why
+        assert change(200, JSON, real, fault, decoded=False) == said
+        return
     assert change.blocked(200, JSON) is None
     done = change(200, JSON, real, fault, decoded=False)
     assert isinstance(done, changes.WebChanged), done
@@ -460,7 +607,8 @@ def test_the_output_a_call_could_bill_is_its_cap_or_the_default(provider: ModelP
     case = case_of(provider)
     for path in (case.chat_path, *case.other_paths):
         assert provider.output_cap(wrap_fields({}), path, 4096) >= 4096, path
-        assert provider.output_cap(wrap_fields(case.request), path, 77) >= 77, path
+        held = provider.output_cap(wrap_fields(case.request), path, 77)
+        assert held == case.request_cap if case.request_cap is not None else held >= 77, path
         # A cap that is not a count is no cap.
         for bad in (0, -5, True, "50", 2.5, None, 10**12):
             assert provider.output_cap(wrap_fields(case.capped(bad)), path, 4096) >= 4096, bad  # type: ignore[arg-type]
@@ -514,7 +662,7 @@ def test_a_report_reads_what_the_model_said_and_called_through_the_provider(
     arguments = provider.said(call, [case.arguments_part])
     assert isinstance(arguments, str)
     assert json.loads(arguments), "a call's arguments, as the model sent them"
-    assert provider.said(call, []) is None, "a reply that calls a tool has no text to say"
+    assert provider.said(call, []) == case.call_text, "what a reply that calls a tool says"
 
 
 def test_a_report_reads_a_reply_that_is_not_a_reply_as_nothing(provider: ModelProvider) -> None:
@@ -546,9 +694,11 @@ def test_the_tier_a_request_names_is_none_when_it_names_none(provider: ModelProv
 
 
 def test_a_price_is_the_shipped_row_and_a_team_row_wins(provider: ModelProvider) -> None:
-    model = case_of(provider).shipped_model
-    assert provider.price(model, {}) is not None
-    assert provider.price(model, {model: RATES}) == RATES
+    shipped = case_of(provider).shipped_model
+    if shipped is not None:
+        assert provider.price(shipped, {}) is not None
+    for model in (shipped or "a-team-priced-model",):
+        assert provider.price(model, {model: RATES}) == RATES
     assert provider.price("no-such-model-anywhere", {}) is None
 
 
@@ -570,19 +720,23 @@ def test_a_cost_is_never_below_the_table(
 ) -> None:
     case = case_of(provider)
     counted = dict(zip(case.write_fields, writes, strict=False))
-    usd = provider.cost(tokens_in, tokens_out, RATES, cached, counted)
+    usd = provider.cost(RATES, reading(tokens_in, tokens_out, cached, counted))
     # The cheapest any input token can cost is the cached rate, and each output token costs the
     # output rate: no breakdown of the tokens prices the call under that.
     floor = (tokens_in * (RATES.cached_input or 0.0) + tokens_out * RATES.output) / 1_000_000
     assert usd >= floor - 1e-12
     if not cached and not any(writes):
         assert usd == pytest.approx((tokens_in * RATES.input + tokens_out * RATES.output) / 1e6)
-        assert provider.cost(tokens_in, tokens_out, RATES) == pytest.approx(usd)
+        assert provider.cost(RATES, reading(tokens_in, tokens_out)) == pytest.approx(usd)
     # The hold is the most the call can cost on the API its path names, so on some API of the
     # provider it is never under what the call settles at.
     held = max(
         provider.most_cost(
-            tokens_in, tokens_out, RATES, path=path, fields=wrap_fields(case.request)
+            tokens_in,
+            tokens_out,
+            RATES,
+            path=path,
+            fields=wrap_fields(case.writing_request or case.request),
         )
         for path in (case.chat_path, *case.other_paths)
     )
@@ -594,12 +748,14 @@ def test_a_write_is_priced_at_its_own_rate(provider: ModelProvider) -> None:
     case = case_of(provider)
     free = dict.fromkeys(case.write_fields, 0.0)
     rates = dataclasses.replace(Rates(1.0, 1.0, 0.1), **free)
-    base = provider.cost(1000, 0, rates, 0, {})
+    base = provider.cost(rates, reading(1000, 0))
     for field in case.write_fields:
         dear = dataclasses.replace(rates, **{**free, field: 5.0})
-        assert provider.cost(1000, 0, dear, 0, {field: 100}) == pytest.approx(base + 100 * 4 / 1e6)
+        assert provider.cost(dear, reading(1000, 0, 0, {field: 100})) == pytest.approx(
+            base + 100 * 4 / 1e6
+        )
         for other in set(case.write_fields) - {field}:
-            assert provider.cost(1000, 0, dear, 0, {other: 100}) == pytest.approx(
+            assert provider.cost(dear, reading(1000, 0, 0, {other: 100})) == pytest.approx(
                 base - 100 * 1 / 1e6
             )
 
@@ -607,7 +763,7 @@ def test_a_write_is_priced_at_its_own_rate(provider: ModelProvider) -> None:
 def test_the_dearest_rates_are_the_ones_the_call_costs_most_at(provider: ModelProvider) -> None:
     tier = Rates(4.0, 16.0)
     rates = Rates(2.0, 8.0, tiers=(("priority", tier),))
-    assert provider.dearest(rates, 100, 100, 0, {}) == tier
+    assert provider.dearest(rates, reading(100, 100)) == tier
 
 
 def test_the_dearest_rates_count_the_writes_of_the_call(provider: ModelProvider) -> None:
@@ -616,5 +772,5 @@ def test_the_dearest_rates_count_the_writes_of_the_call(provider: ModelProvider)
     for field in case.write_fields:
         tier = dataclasses.replace(Rates(1.0, 1.0), **{field: 10.0})
         rates = Rates(1.0, 1.0, tiers=(("t", tier),))
-        assert provider.dearest(rates, 100, 0, 0, {field: 100}) == tier
-        assert provider.dearest(rates, 100, 0, 0, {}) == rates
+        assert provider.dearest(rates, reading(100, 0, 0, {field: 100})) == tier
+        assert provider.dearest(rates, reading(100, 0)) == rates

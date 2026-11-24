@@ -23,6 +23,7 @@ import pytest
 from jsonschema.exceptions import best_match
 
 import scrimmage
+from fakes.anthropic_server import FakeAnthropic
 from fakes.openai_server import FakeOpenAI
 from scrimmage import runner
 from scrimmage.cli import main
@@ -540,6 +541,30 @@ def fake_openai() -> Iterator[Callable[..., FakeOpenAI]]:
         fake.stop()
         assert not fake.errors, (
             f"the fake OpenAI API got requests it had no reply for: {fake.errors}"
+        )
+        assert not fake.unused, f"fixtures listed but never asked for: {fake.unused}"
+
+
+@pytest.fixture
+def fake_anthropic() -> Iterator[Callable[..., FakeAnthropic]]:
+    """Start a fake Anthropic API that serves the given fixtures, one per turn.
+
+    At the end of the test it fails if the fake answered any request with an error or if a
+    listed fixture was never asked for.
+    """
+    started: list[FakeAnthropic] = []
+
+    def start(replies: list[str], **fixtures: Any) -> FakeAnthropic:
+        fake = FakeAnthropic(replies, **fixtures)
+        fake.start()
+        started.append(fake)
+        return fake
+
+    yield start
+    for fake in started:
+        fake.stop()
+        assert not fake.errors, (
+            f"the fake Anthropic API got requests it had no reply for: {fake.errors}"
         )
         assert not fake.unused, f"fixtures listed but never asked for: {fake.unused}"
 

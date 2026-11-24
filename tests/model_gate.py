@@ -5,6 +5,7 @@ list. Shared by the tests of replace and slow on a model call."""
 from collections.abc import Callable
 from typing import Any
 
+import anthropic
 import httpx2
 import openai
 
@@ -57,11 +58,13 @@ class Budget:
     def __init__(self, events: list[str]) -> None:
         self.ledger = Ledger(10.0)
         self.events = events
+        self.reserved: list[float] = []  # the dollars of each reservation asked for
 
     def reserve(
         self, run: str, usd: float, label: str = "", ticket: int | None = None
     ) -> int | Shortfall:
         self.events.append("reserve")
+        self.reserved.append(usd)
         return self.ledger.reserve(usd, run, label, ticket)
 
     def release(self, ticket: int) -> None:
@@ -90,13 +93,21 @@ SENDS = (httpx2.Client._send_single_request, httpx2.AsyncClient._send_single_req
 
 
 class Gate:
-    def __init__(self, *faults: Fault) -> None:
+    def __init__(
+        self,
+        *faults: Fault,
+        hosts: tuple[ModelHost, ...] = (ModelHost("guard.test", "openai"),),
+        prices: tuple[tuple[str, Any], ...] = ((GUARD, PRICE),),
+        real: tuple[str, ...] = (),
+        **settings: Any,
+    ) -> None:
+        """hosts, prices and any other plan setting stand in for the guard test's own."""
         httpx2.Client._send_single_request, httpx2.AsyncClient._send_single_request = SENDS
         self.events: list[str] = []
         self.sink = Sink()
         plan = Plan(
-            "run-1", "t", "row", (), faults, (), (), 60.0, budget_usd=10.0,
-            model_hosts=(ModelHost("guard.test", "openai"),), prices=((GUARD, PRICE),),
+            "run-1", "t", "row", (), faults, (), real, 60.0,
+            model_hosts=hosts, prices=prices, **{"budget_usd": 10.0, **settings},
         )  # fmt: skip
         self.run = state.RunState(plan, self.sink, [])
         state.install(self.run)
@@ -115,6 +126,14 @@ class Gate:
 def guard(provider: Provider, **kw: Any) -> openai.OpenAI:
     http = openai.DefaultHttpxClient(transport=httpx2.MockTransport(provider))
     return openai.OpenAI(base_url=URL, api_key="k", max_retries=0, http_client=http, **kw)
+
+
+def anthropic_client(provider: Provider, **kw: Any) -> anthropic.Anthropic:
+    """The anthropic library over the same mock transport, as `guard` gives the openai one."""
+    http = anthropic.DefaultHttpxClient(transport=httpx2.MockTransport(provider))
+    return anthropic.Anthropic(
+        base_url="https://api.anthropic.com", api_key="k", max_retries=0, http_client=http, **kw
+    )
 
 
 def ask(client: openai.OpenAI, text: str = "Order 1042 shipped.") -> str:

@@ -32,7 +32,7 @@ ROOT = Path(__file__).parents[1]
 
 
 class Stub:
-    """A second provider that speaks POST .../v1/messages, as Anthropic does."""
+    """A third provider that speaks POST .../v1/stubs: a path of its own, no real provider's."""
 
     name = "stub"
     hosts = ("api.stub.test",)
@@ -42,9 +42,9 @@ class Stub:
         clean = path.split("?", 1)[0].rstrip("/")
         if method != "POST" or "/threads/" in clean:
             return None
-        if clean.endswith("/v1/messages/count_tokens"):
+        if clean.endswith("/v1/stubs/count_tokens"):
             return "input_tokens"
-        return "chat" if clean.endswith("/v1/messages") else None
+        return "chat" if clean.endswith("/v1/stubs") else None
 
 
 def with_stub(*listed: tuple[str, str]) -> ProviderRegistry:
@@ -60,7 +60,7 @@ def test_a_built_in_host_resolves_to_its_provider() -> None:
     assert found is not None
     provider, op = found
     assert (provider.name, op) == ("openai", "chat")
-    found = two().resolve("api.stub.test", "/v1/messages", "POST")
+    found = two().resolve("api.stub.test", "/v1/stubs", "POST")
     assert found is not None
     assert (found[0].name, found[1]) == ("stub", "chat")
 
@@ -68,8 +68,8 @@ def test_a_built_in_host_resolves_to_its_provider() -> None:
 def test_a_host_listed_once_for_each_provider_is_picked_by_its_path() -> None:
     both = with_stub(("gw.test", "openai"), ("gw.test", "stub"))
     chat = both.resolve("gw.test", "/v1/chat/completions", "POST")
-    messages = both.resolve("gw.test", "/v1/messages", "POST")
-    count = both.resolve("gw.test", "/v1/messages/count_tokens", "POST")
+    messages = both.resolve("gw.test", "/v1/stubs", "POST")
+    count = both.resolve("gw.test", "/v1/stubs/count_tokens", "POST")
     assert chat is not None
     assert messages is not None
     assert count is not None
@@ -88,6 +88,45 @@ def test_the_order_a_host_is_listed_in_does_not_change_which_provider_a_path_pic
 def test_openais_threads_messages_path_is_no_call_on_a_host_for_both() -> None:
     both = with_stub(("gw.test", "openai"), ("gw.test", "stub"))
     assert both.resolve("gw.test", "/v1/threads/t_1/messages", "POST") is None
+
+
+def test_the_two_real_providers_share_a_host_and_the_path_picks() -> None:
+    """A LiteLLM or OpenRouter host speaks both formats: listed for both, each path goes to the
+    provider that knows it, whatever order the host is listed in."""
+    for listed in (
+        (("gw.test", "openai"), ("gw.test", "anthropic")),
+        (("gw.test", "anthropic"), ("gw.test", "openai")),
+    ):
+        registry = registry_for(listed)
+        for path, method, name, op in (
+            ("/v1/chat/completions", "POST", "openai", "chat"),
+            ("/v1/responses", "POST", "openai", "chat"),
+            ("/v1/embeddings", "POST", "openai", "embeddings"),
+            ("/v1/messages", "POST", "anthropic", "chat"),
+            ("/anthropic/v1/messages?beta=true", "POST", "anthropic", "chat"),
+            ("/v1/messages/count_tokens", "POST", "anthropic", "input_tokens"),
+        ):
+            found = registry.resolve("gw.test", path, method)
+            assert found is not None, path
+            assert (found[0].name, found[1]) == (name, op), path
+        for path, method in (
+            ("/v1/threads/t_1/messages", "POST"),  # OpenAI's Assistants, a call of neither
+            ("/v1/messages", "GET"),
+            ("/v1/messages/batches", "POST"),
+            ("/v1/models", "POST"),
+        ):
+            assert registry.resolve("gw.test", path, method) is None, (method, path)
+
+
+def test_each_real_provider_owns_its_own_host_and_no_other() -> None:
+    registry = built_in()
+    assert [p.name for p in registry.candidates("api.anthropic.com")] == ["anthropic"]
+    assert [p.name for p in registry.candidates("api.openai.com")] == ["openai"]
+    assert registry.resolve("api.anthropic.com", "/v1/chat/completions", "POST") is None
+    assert registry.resolve("api.openai.com", "/v1/messages", "POST") is None
+    found = registry.probe("/v1/messages", "POST")
+    assert found is not None
+    assert found[0].name == "anthropic"
 
 
 def test_a_host_no_one_owns_resolves_to_nothing_and_has_no_candidates() -> None:
@@ -115,7 +154,7 @@ def test_a_host_listed_twice_for_one_provider_has_it_once() -> None:
 
 def test_the_probe_tries_every_provider() -> None:
     registry = two()
-    found = registry.probe("/v1/messages", "POST")
+    found = registry.probe("/v1/stubs", "POST")
     assert found is not None
     assert found[0].name == "stub"
     assert registry.probe("/v1/models", "POST") is None
@@ -234,10 +273,11 @@ def test_the_agreement_check_sees_a_provider_left_out_of_a_schema() -> None:
 
 REGISTRY_NAMES = {"ProviderRegistry", "registry_for", "built_in"}  # what a module may import
 # The APIs of the providers that are not registered yet, named here so the guard bites before
-# they are. Each provider that is registered adds its own through its contract case.
-COMING_PATHS = {"/messages", "/v1/messages", "/messages/count_tokens"}
-COMING_KEYS = {"stop_reason", "content_block", "input_json_delta", "tool_use", "tool_result"}
-COMING_PROVIDERS = {"anthropic"}  # the names of providers not registered yet
+# they are. Each provider that is registered adds its own through its contract case. None is
+# coming now: both providers are registered, so these are empty until the next one.
+COMING_PATHS: set[str] = set()
+COMING_KEYS: set[str] = set()
+COMING_PROVIDERS: set[str] = set()  # the names of providers not registered yet
 # The modules that may name a provider: the vocabulary of the labels, and init's list of what an
 # agent imports.
 NAMES_PROVIDERS = {"labels.py", "init.py"}
@@ -556,6 +596,53 @@ def probes_opaque(tree: ast.AST) -> list[str]:
     return found
 
 
+# The one slot a Fields or a Reply keeps its value in, and the other doors to it: reflection by
+# the slot's name, pickle and copy's hooks, and the readers of an object's referents and members.
+# No product module outside the providers uses any of them.
+SLOT = "_wire_value"
+STATE_HOOKS = {"__reduce__", "__reduce_ex__", "__getstate__"}
+REFLECTORS = {"gc": {"get_referents", "get_referrers", "get_objects"}, "inspect": {"getmembers"}}
+
+
+def reads_the_slot(tree: ast.AST, docstrings: set[int]) -> list[str]:
+    """The identifiers and strings that name the slot an opaque value keeps its content in, the
+    hooks that would hand it over, and gc.get_referents or inspect.getmembers, under any import
+    form: each reads the wire where the type checker cannot see it."""
+    found: list[str] = []
+    modules = {name: imported(tree, {name})[0] for name in REFLECTORS}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if SLOT in node.value and id(node) not in docstrings:
+                found.append(f"names the wire slot in the string {node.value!r}")
+            if node.value in STATE_HOOKS and id(node) not in docstrings:
+                found.append(f"names {node.value}, which hands over an opaque value's state")
+        for name in (
+            getattr(node, "id", None),
+            getattr(node, "attr", None),
+            getattr(node, "arg", None),
+            getattr(node, "name", None),
+        ):
+            if isinstance(name, str) and SLOT in name:
+                found.append(f"names {name}, the slot of an opaque wire value")
+            # A class may define a hook of its own (a str subclass that pickles itself); only
+            # a name or an attribute that is read, to call it on something, is the door.
+            read = isinstance(node, ast.Name | ast.Attribute)
+            if read and isinstance(name, str) and name in STATE_HOOKS:
+                found.append(f"uses {name}, which hands over an opaque value's state")
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            for library, readers in REFLECTORS.items():
+                if node.value.id in modules[library] and node.attr in readers:
+                    found.append(f"reads an object's content with {library}.{node.attr}")
+        if isinstance(node, ast.ImportFrom) and (node.module or "") in REFLECTORS:
+            readers = REFLECTORS[node.module or ""]
+            found += [
+                f"imports {node.module}.{a.name}, which reads an object's content"
+                for a in node.names
+                if a.name in readers or a.name == "*"
+            ]
+    return found
+
+
 def names_in_strings(tree: ast.AST, docstrings: set[int], module: str) -> list[str]:
     """The strings of this tree that name a provider, or a provider's module."""
     names = {p.name for p in builtin_providers()} | COMING_PROVIDERS
@@ -639,6 +726,7 @@ def problems_in(source: str, module: str = "") -> list[str]:
         + names_in_strings(tree, docstrings, module)
         + parses_json(tree, module)
         + probes_opaque(tree)
+        + reads_the_slot(tree, docstrings)
     )
 
 
@@ -654,7 +742,7 @@ def test_the_literals_the_guard_looks_for_come_from_every_registered_provider() 
     assert set(CASES) == {p.name for p in builtin_providers()}
     literals = api_literals()
     assert {"/responses", "responses", "/chat/completions", "chat/completions"} <= literals
-    assert {"/messages", "messages", "messages/count_tokens"} <= literals
+    assert {"/messages", "messages", "/v1/messages", "v1/messages"} <= literals
     assert not literals & {"embeddings", "moderations", "input_tokens", "/embeddings"}
     assert {"choices", "previous_response_id", "stop_reason"} <= wire_keys()
     names = shape_names()
@@ -698,6 +786,7 @@ GATE = "def f(x):\n    return x\n"
         ("def g():\n    return OpenAI()\n", "names OpenAI"),
         # The reviewer's S5: the gate decides by another API's path, or by a key of its replies.
         ("def g(path):\n    return path.endswith('/messages')\n", "names the API path '/messages'"),
+        ("def g(r):\n    return r.get('cache_control')\n", "names the wire key 'cache_control'"),
         ("def g(path):\n    return path.endswith('/v1/other')\n", "matches a path, '/v1/other'"),
         ("def g(path):\n    return path.startswith('/x')\n", "matches a path, '/x'"),
         ("def g(fields):\n    return fields.get('choices')\n", "names the wire key 'choices'"),
@@ -831,6 +920,42 @@ GATE = "def f(x):\n    return x\n"
             "def g():\n    return importlib.import_module('scrimmage.providers.impl.openai')\n",
             "names a provider's module in the string 'scrimmage.providers.impl.openai'",
         ),
+        # Review of the opaque class, AN-C1-1 and AN-C1-2: reflection by the slot's name.
+        ("def g(fields):\n    return fields._wire_value\n", "names _wire_value, the slot"),
+        (
+            "def g(fields):\n    return getattr(fields, '_wire_value')\n",
+            "names the wire slot in the string '_wire_value'",
+        ),
+        (
+            "def g(step):\n    return getattr(step.fields, '_wire_value')\n",
+            "names the wire slot in the string '_wire_value'",
+        ),
+        (
+            "import operator\ndef g(f):\n    return operator.attrgetter('_wire_value')(f)\n",
+            "names the wire slot in the string '_wire_value'",
+        ),
+        (
+            "def g(f):\n    return object.__getattribute__(f, '_wire_value')\n",
+            "names the wire slot in the string '_wire_value'",
+        ),
+        (
+            "import inspect\ndef g(f):\n    return dict(inspect.getmembers(f))\n",
+            "reads an object's content with inspect.getmembers",
+        ),
+        (
+            "import gc\ndef g(f):\n    return gc.get_referents(f)[0]\n",
+            "reads an object's content with gc.get_referents",
+        ),
+        (
+            "import gc as g\nx = g.get_referents\n",
+            "reads an object's content with gc.get_referents",
+        ),
+        ("from gc import get_referents\n", "imports gc.get_referents"),
+        ("from inspect import getmembers as m\n", "imports inspect.getmembers"),
+        ("def g(f):\n    return f.__reduce_ex__(2)\n", "uses __reduce_ex__"),
+        ("def g(f):\n    return f.__reduce__()\n", "uses __reduce__"),
+        ("def g(f):\n    return object.__reduce_ex__(f, 2)\n", "uses __reduce_ex__"),
+        ("def g(f):\n    return getattr(f, '__getstate__')()\n", "names __getstate__"),
     ],
 )
 def test_the_guard_catches_each_way_a_module_could_reach_a_provider(added: str, says: str) -> None:
@@ -858,6 +983,9 @@ def test_the_guard_catches_each_way_a_module_could_reach_a_provider(added: str, 
         "from scrimmage.providers.base import Fields\n"
         "def g(fields: Fields, provider):\n    return provider.model_name(fields), str(7)\n",
         "def g(x):\n    return isinstance(x, dict) and getattr(x, 'get')\n",
+        "import inspect\ndef g(x):\n    return inspect.signature(x), inspect.isclass(x)\n",
+        "import gc\ndef g():\n    gc.collect()\n",
+        "class E(str):\n    def __reduce__(self):\n        return E, (str(self),)\n",
     ],
 )
 def test_the_guard_leaves_alone_what_a_module_may_use(fine: str) -> None:

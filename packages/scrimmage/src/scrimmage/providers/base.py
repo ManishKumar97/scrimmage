@@ -12,7 +12,7 @@ passes the request's path and fields, and the provider says what they mean.
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol, final, runtime_checkable
+from typing import TYPE_CHECKING, NoReturn, Protocol, SupportsIndex, final, runtime_checkable
 
 from scrimmage.prices import Rates
 
@@ -21,36 +21,57 @@ if TYPE_CHECKING:
     from scrimmage.config import Fault
 
 
+OPAQUE = "an opaque wire value cannot be pickled, copied or reduced"
+
+
 @final
 class Fields:
     """A parsed model request body, opaque outside the providers.
 
     A real class, not a dict in disguise: it is no dict, has no .get, no subscript and no
     iteration, and its repr shows nothing. So outside a provider, isinstance(x, dict) is False,
-    getattr(x, "get") raises and x._value is a private-usage error. Only a provider looks
+    getattr(x, "get") raises and x._wire_value is a private-usage error. Only a provider looks
     inside, through providers.impl.wire, which the import contract keeps from every other
     module, so the gate cannot decide by a wire key or shape."""
 
-    __slots__ = ("_value",)
+    __slots__ = ("_wire_value",)
 
     def __init__(self, value: dict[str, object]) -> None:
-        self._value = value
+        self._wire_value = value
 
     def __repr__(self) -> str:
         return "Fields(...)"
+
+    def __reduce__(self) -> NoReturn:
+        raise TypeError(OPAQUE)
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> NoReturn:
+        raise TypeError(OPAQUE)
+
+    def __getstate__(self) -> NoReturn:
+        raise TypeError(OPAQUE)
 
 
 @final
 class Reply:
     """A parsed model reply, opaque in the same way as Fields."""
 
-    __slots__ = ("_value",)
+    __slots__ = ("_wire_value",)
 
     def __init__(self, value: object) -> None:
-        self._value = value
+        self._wire_value = value
 
     def __repr__(self) -> str:
         return "Reply(...)"
+
+    def __reduce__(self) -> NoReturn:
+        raise TypeError(OPAQUE)
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> NoReturn:
+        raise TypeError(OPAQUE)
+
+    def __getstate__(self) -> NoReturn:
+        raise TypeError(OPAQUE)
 
 
 NO_FIELDS = Fields({})  # what a request with no readable JSON object body holds
@@ -89,6 +110,9 @@ class Offered:
     hosted_reads: list[str] = field(default_factory=list[str])  # provider tools that only read
     hosted_writes: list[str] = field(default_factory=list[str])  # MCP server labels
     unknown: list[str] = field(default_factory=list[str])  # tool types not in the table
+    # Tool types the provider knows but whose cost no reply reports, as (type, why): Scrimmage
+    # cannot budget them, so the request is refused.
+    refused: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
 
 
 class Recognizer(Protocol):
@@ -138,25 +162,35 @@ class Meter(Protocol):
 
     def gateway_cost(self, value: object, before: float | None = None) -> float | None: ...
 
-    def price(self, model: str, overrides: dict[str, Rates]) -> Rates | None: ...
+    @property
+    def fees(self) -> tuple[str, ...]:
+        """The per-request fees a price file may set for this provider, such as a search."""
+        ...
 
-    def cost(
-        self,
-        tokens_in: int,
-        tokens_out: int,
-        rates: Rates,
-        cached: int = 0,
-        writes: Mapping[str, int] | None = None,
-    ) -> float: ...
+    @property
+    def price_example(self) -> str:
+        """The rates a call with no price is told to add under [agent.prices], as it would be
+        pasted, such as {input = 0.15, output = 0.60} (dollars per million tokens). A provider
+        that ships no prices names its pricing page and no number, so a pasted line does not
+        parse until the team fills in the real rates."""
+        ...
 
-    def dearest(
-        self,
-        rates: Rates,
-        tokens_in: int,
-        tokens_out: int,
-        cached: int,
-        writes: Mapping[str, int],
-    ) -> Rates: ...
+    def price(
+        self, model: str, overrides: dict[str, Rates], fees: Mapping[str, float] | None = None
+    ) -> Rates | None:
+        """The rates that price this model: overrides first, then the shipped file. fees are the
+        team file's per-request fees for this provider, which a row's own fee still beats."""
+        ...
+
+    def cost(self, rates: Rates, used: Usage) -> float:
+        """What the call cost at these rates. used is the provider's own reading of the reply,
+        passed whole, so a provider that keeps more than the token counts, such as the
+        attempts of a call several models served, reads it here."""
+        ...
+
+    def dearest(self, rates: Rates, used: Usage) -> Rates:
+        """Of the default rates and every tier the row prices, the ones this call costs most at."""
+        ...
 
     def most_cost(
         self,

@@ -1,4 +1,4 @@
-# pyright: standard
+# pyright: standard, reportPrivateUsage=true
 """The gate for MCP tools, at ClientSession.send_request.
 
 The official client sends every tool call through this one function, on every transport,

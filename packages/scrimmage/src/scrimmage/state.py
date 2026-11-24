@@ -605,6 +605,7 @@ class RunState:
             "no_price": detail,
             "hosted": detail,
             "unknown_tool_type": detail,
+            "unmetered_tool": detail,
             "unseen_tool": detail,
             "unreadable_body": detail,
             "unreadable_model": (

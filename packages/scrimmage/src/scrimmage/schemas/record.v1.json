@@ -220,6 +220,7 @@
             "no_price",
             "hosted",
             "unknown_tool_type",
+            "unmetered_tool",
             "unseen_tool",
             "web_write",
             "control_unreachable",

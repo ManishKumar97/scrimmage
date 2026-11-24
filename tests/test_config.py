@@ -79,7 +79,7 @@ def test_a_bad_value_names_its_table_and_key(tmp_path: Path) -> None:
         ('do   = "timeout"', 'do   = "status 429"', "works on a model call or a web request"),
         ('call = "tool:get_order"\ndo', 'call = "auth:a"\ndo', "'auth:a' is not a label"),
         ('call = "tool:get_order"\ndo', 'call = "model:x"\ndo', "not a known provider"),
-        ('call = "tool:get_order"\ndo', 'call = "model:anthropic"\ndo', "not a known provider"),
+        ('call = "tool:get_order"\ndo', 'call = "model:gemini"\ndo', "not a known provider"),
         ('call = "tool:get_order"\ndo', 'call = "model:openai/images"\ndo', "not a model call"),
         ("[agent]\n", '[agent]\nrecords = "x"\n', "records: unknown setting"),
         ("[agent]\n", "[agent]\nrnus = 50\n", "rnus: unknown setting"),

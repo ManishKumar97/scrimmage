@@ -68,7 +68,7 @@
     },
     "model_label": {
       "type": "string",
-      "pattern": "^model(:openai(/(embeddings|moderations|input_tokens))?|:\\*/(embeddings|moderations|input_tokens))?$"
+      "pattern": "^model(:(openai|anthropic)(/(embeddings|moderations|input_tokens))?|:\\*/(embeddings|moderations|input_tokens))?$"
     },
     "real_label": {
       "type": "string",
@@ -140,6 +140,9 @@
         "output"
       ],
       "properties": {
+        "web_search_request": {
+          "$ref": "#/$defs/dollars"
+        },
         "input": {
           "$ref": "#/$defs/dollars"
         },
@@ -360,7 +363,8 @@
               },
               "provider": {
                 "enum": [
-                  "openai"
+                  "openai",
+                  "anthropic"
                 ]
               }
             }

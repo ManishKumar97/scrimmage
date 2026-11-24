@@ -873,6 +873,12 @@ def run_check(
     )
     for line in prices.sources(agent.prices, config.team_prices):
         print(line)
+    for unused in prices.unused_fees(config.team_prices):
+        print(
+            f"scrimmage: warning: {prices.RUNS}/{prices.SHIPPED} sets the fee {unused}, which "
+            "that provider does not charge, so it is never used",
+            file=sys.stderr,
+        )
     for section in prices.unregistered(config.team_prices):
         print(
             f"scrimmage: warning: {prices.RUNS}/{prices.SHIPPED} has a section [{section}] that "
@@ -898,6 +904,8 @@ def price_summary(rates: prices.Rates) -> dict[str, object]:
         "cache_write_5m": rates.cache_write_5m,
         "cache_write_1h": rates.cache_write_1h,
     }
+    if rates.fees:
+        doc["fees"] = dict(rates.fees)
     if rates.tiers:
         doc["tiers"] = {tier: price_summary(tiered) for tier, tiered in rates.tiers}
     if rates.long is not None:

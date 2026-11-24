@@ -1025,7 +1025,7 @@ def test_an_agent_that_catches_a_refused_web_write_runs_nothing_more(
         "import httpx\n\n\ndef refund():\n"
         f"    open({str(marker)!r}, 'w').close()\n\n\n"
         "def answer(question):\n    try:\n"
-        '        httpx.post("http://127.0.0.1:1/v1/messages", json={})\n'
+        '        httpx.post("http://127.0.0.1:1/v1/refunds", json={})\n'
         "    except Exception:\n        refund()\n    return 'done'\n"
     )
     write(tmp_path, {"bot.py": code})
@@ -1439,7 +1439,7 @@ def test_a_caught_refusal_in_a_normal_run_lets_the_code_after_it_run(
     marker = tmp_path / "fallback-ran"
     code = (
         "import httpx\n\n\ndef answer(question):\n    try:\n"
-        '        httpx.post("http://127.0.0.1:1/v1/messages", json={})\n'
+        '        httpx.post("http://127.0.0.1:1/v1/refunds", json={})\n'
         "    except Exception:\n"
         f"        open({str(marker)!r}, 'w').close()\n"
         "    return 'done'\n"
