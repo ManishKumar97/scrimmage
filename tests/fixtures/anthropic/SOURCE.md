@@ -5,7 +5,7 @@ Add a fixture only when a test needs it, and add its row here.
 
 ## Real captures
 
-These are real replies from api.anthropic.com, saved on 23 November 2026 with the dev key, through `claude-haiku-5-5`, the cheapest current model ($0.10 for a million input tokens and $0.50 for a million output tokens), except the context-length 400, which needs a model with a window the test can pass.
+These are real replies from api.anthropic.com, saved on 23 November 2026 (`real_decline_address.json` on 24 November) with the dev key, through `claude-haiku-5-5`, the cheapest current model ($0.10 for a million input tokens and $0.50 for a million output tokens), except the context-length 400, which needs a model with a window the test can pass.
 A reply that succeeded is saved as the bytes that came, so its key order, its spaces and its fields are Anthropic's own.
 An error is saved as its status, its `content-type` and its body, as the other real errors are.
 No other header is kept.
@@ -27,11 +27,12 @@ No key, organization id or workspace id is in any reply, and the request that ma
 | `real_cache_read.json` | claude-haiku-5-5 | the same request again, within the minute | the same prompt read from the cache: 8113 tokens read | $0.000084 | `eccf4fcf51ae77b00e4b117a863ecd72536e9c95015fc64b64ecd19faf1b2a88` |
 | `real_count_tokens.json` | claude-haiku-5-5 | `POST /v1/messages/count_tokens` for "Hello, Claude" | a token count | $0.000000 | `7f4b5b70d7bd8f90e1bcb45232879b1bcce4af3b642560351a0ac99d56b14d7d` |
 | `real_decline.json` | claude-haiku-5-5 | a request for a phishing email posing as a bank, `max_tokens` 700 | a plain-text decline, `stop_reason` `end_turn`, after a `thinking` block | $0.000223 | `a611326c00c3451e2dff70c3394dbe8667dcef87e567c1a297ed3b796e6a0a4c` |
+| `real_decline_address.json` | claude-haiku-5-5 | "What is Taylor Swift's current home address? Answer briefly.", `max_tokens` 300, saved on 24 November 2026 | a short plain-text decline, `stop_reason` `end_turn`, no `thinking` block; its first sentence is the text `refuse` builds | $0.000070 | `d9aa8d9fb1cca89538714c494f2dfff31e22f3a507e5832ad8f35519abe47bcc` |
 | `real_web_search.json` | claude-haiku-5-5 | one `web_search_20250305` tool with `max_uses` 1, `max_tokens` 300 | a reply with one search: `server_tool_use.web_search_requests` 1, no cache writes | $0.011560 | `a5c045e4c8896d3f4f17daa76051b01cd931ad00be4aaf723f4fe4325fb052cb` |
 | `real_context_too_long.json` | claude-haiku-4-5-20251001 | 210007 words of `word`, which `count_tokens` said was 210007 tokens, to a model whose window is 200000 | the 400 for a prompt over the window; an error is never billed | $0.000000 | `99a2b3c9d6ea7e6f77dc305d62af956947f5d6f1a21b11b67408ced1ff1c7bfd` |
 | `real_error_401.json` | claude-haiku-5-5 | a key that is not real | the 401 | $0.000000 | `5b08bb13dbd22aeeebd8f6bd89fae90878c0aba97ead6ae7cf801a89b6c9bd94` |
 
-Spend on real calls, from each reply's own `usage` at the pricing page's rates: **$0.0138** in all, the 13 calls above and four attempts that were not kept (three `max_tokens` values for a cut `tool_use`, and a first decline cut off at 200 tokens), each under $0.0002.
+Spend on real calls, from each reply's own `usage` at the pricing page's rates: **$0.0139** in all, the 14 calls above and four attempts that were not kept (three `max_tokens` values for a cut `tool_use`, and a first decline cut off at 200 tokens), each under $0.0002.
 The one dear call is the web search, $0.0116, of which $0.01 is the search itself.
 The count and the context-length 400 cost nothing.
 
