@@ -166,3 +166,97 @@ def test_bad_tool_args_is_a_mistake_at_the_call_and_says_why_it_can_never_be_bui
     assert provider.sent == [], "nothing was sent"
     assert run.line["reason"] == "mistake"
 
+
+# The library's default is 2 retries, so 3 attempts in one create(). The gate counts attempts, so
+# first N faults the first N attempts of the agent's calls together, retries included.
+REAL_ANSWER = (FIXTURES / "real_answer.json").read_bytes()
+
+
+class Sleeps:
+    """The waits the library chose between attempts, kept and never slept, so the test is fast.
+    Only the sleep is replaced: the library still works the wait out from the reply's headers
+    and its own backoff, and the attempts go through the gate as in a real run."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.waits: list[float] = []
+        original = anthropic.Anthropic._calculate_retry_timeout  # pyright: ignore[reportPrivateUsage]
+
+        def sleep(
+            self_: Any, *, retries_taken: int, max_retries: int, options: Any, response: Any
+        ) -> None:
+            remaining = max_retries - retries_taken
+            headers = response.headers if response else None
+            self.waits.append(original(self_, remaining, options, headers))
+
+        monkeypatch.setattr(anthropic.Anthropic, "_sleep_for_retry", sleep)
+
+
+def retrying(
+    when: str, monkeypatch: pytest.MonkeyPatch, **kw: Any
+) -> tuple[Gate, Provider, anthropic.Anthropic, Sleeps]:
+    sleeps = Sleeps(monkeypatch)
+    run = Gate(
+        Fault("model", "status 529", when, **kw), hosts=(), prices=((MODEL, Rates(3.0, 15.0)),)
+    )
+    provider = Provider(run.events, lambda r: httpx2.Response(200, content=REAL_ANSWER))
+    return run, provider, anthropic_client(provider, max_retries=2), sleeps
+
+
+def attempts(run: Gate) -> list[int]:
+    return [x["status"] for x in run.sink.lines if x.get("kind") == "model"]
+
+
+def test_first_2_is_got_past_by_the_libraries_own_two_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run, provider, client, sleeps = retrying("first 2", monkeypatch)
+    assert ask(client).stop_reason == "end_turn"
+    assert attempts(run) == [529, 529, 200], "the third attempt is the second retry"
+    assert len(provider.sent) == 1
+    first, second = sleeps.waits
+    assert 0.375 <= first <= 0.5, "0.5 s backoff with up to 25% jitter"
+    assert 0.75 <= second <= 1.0, "doubled"
+
+
+def test_first_3_fails_every_attempt_of_one_call_and_the_agents_next_call_gets_past_on_the_4th(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run, provider, client, sleeps = retrying("first 3", monkeypatch)
+    with pytest.raises(anthropic.OverloadedError):
+        ask(client)
+    assert attempts(run) == [529, 529, 529], "1 attempt and 2 retries, all faulted"
+    assert provider.sent == []
+    assert ask(client).stop_reason == "end_turn", "the agent's own second call"
+    assert attempts(run) == [529, 529, 529, 200], "the 4th attempt gets through"
+    assert len(provider.sent) == 1
+    assert len(sleeps.waits) == 2, "the second call needed no retry"
+
+
+def test_first_4_still_fails_the_first_call_and_costs_the_second_a_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run, _provider, client, sleeps = retrying("first 4", monkeypatch)
+    with pytest.raises(anthropic.OverloadedError):
+        ask(client)
+    assert ask(client).stop_reason == "end_turn"
+    assert attempts(run) == [529, 529, 529, 529, 200], "the second call's first attempt is faulted"
+    assert len(sleeps.waits) == 3
+
+
+def test_first_6_fails_both_calls_of_an_agent_that_tries_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run, provider, client, _sleeps = retrying("first 6", monkeypatch)
+    for _ in range(2):
+        with pytest.raises(anthropic.OverloadedError):
+            ask(client)
+    assert attempts(run) == [529] * 6
+    assert provider.sent == []
+
+
+def test_a_retry_after_on_the_fault_is_the_wait_the_library_takes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _run, _provider, client, sleeps = retrying("first 2", monkeypatch, retry_after=3)
+    ask(client)
+    assert sleeps.waits == [3.0, 3.0], "the header replaces the library's backoff"

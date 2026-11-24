@@ -131,8 +131,9 @@ def guard(provider: Provider, **kw: Any) -> openai.OpenAI:
 def anthropic_client(provider: Provider, **kw: Any) -> anthropic.Anthropic:
     """The anthropic library over the same mock transport, as `guard` gives the openai one."""
     http = anthropic.DefaultHttpxClient(transport=httpx2.MockTransport(provider))
+    kw.setdefault("max_retries", 0)  # a test of the library's own retries passes its own
     return anthropic.Anthropic(
-        base_url="https://api.anthropic.com", api_key="k", max_retries=0, http_client=http, **kw
+        base_url="https://api.anthropic.com", api_key="k", http_client=http, **kw
     )
 
 
