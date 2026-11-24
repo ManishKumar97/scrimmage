@@ -607,3 +607,90 @@ def test_a_team_price_files_search_fee_goes_from_the_file_to_the_bill(tmp_path: 
     run = Gate(hosts=(), prices=(), file_prices=sent.file_prices, file_fees=sent.file_fees)
     send(run, fixture("real_web_search.json"))
     assert settled(run) == pytest.approx(SEARCH_TOKENS + 0.05, abs=TOLERANCE)
+
+
+# The speed of each attempt of a fallback call. The reply never says it, only its models and
+# counts (refusals and fallback page, usage.iterations), so the settle reads it from the request.
+# Rates per million tokens: claude-a $1/$5, fast $6/$30; claude-b $10/$50, fast $60/$300.
+SPEEDY_A = Rates(1.0, 5.0, tiers=(("fast", Rates(6.0, 30.0)),))
+SPEEDY_B = Rates(10.0, 50.0, tiers=(("fast", Rates(60.0, 300.0)),))
+RATE = {("claude-a", None): (1.0, 5.0), ("claude-a", "fast"): (6.0, 30.0)}
+RATE |= {("claude-b", None): (10.0, 50.0), ("claude-b", "fast"): (60.0, 300.0)}
+
+
+def fallback_reply(first: str, then: str, speed: str) -> bytes:
+    """A declined attempt of 5 input tokens, then a fallback that answers with 5 in and 50 out."""
+    iterations = [
+        {"type": "message", "model": first, "input_tokens": 5, "output_tokens": 0},
+        {"type": "fallback_message", "model": then, "input_tokens": 5, "output_tokens": 50},
+    ]
+    usage = {"input_tokens": 5, "output_tokens": 50, "speed": speed, "iterations": iterations}
+    return json.dumps({"type": "message", "model": then, "usage": usage}).encode()
+
+
+def billed(first: str, first_tier: str | None, then: str, then_tier: str | None) -> float:
+    a_in, _ = RATE[(first, first_tier)]
+    b_in, b_out = RATE[(then, then_tier)]
+    return (5 * a_in + 5 * b_in + 50 * b_out) / 1e6
+
+
+def speed_run(reply: bytes, **body: Any) -> Gate:
+    run = Gate(hosts=(), prices=(("claude-a", SPEEDY_A), ("claude-b", SPEEDY_B)))
+    send(run, reply, model="claude-a", extra_body=body)
+    return run
+
+
+def test_a_standard_attempt_then_a_fast_one_on_the_same_model_is_settled_at_each_speed() -> None:
+    """The round 3 review's probe 4: held $0.010724 and settled $0.018 before, both attempts at
+    the reply's fast."""
+    run = speed_run(
+        fallback_reply("claude-a", "claude-a", "fast"),
+        fallbacks=[{"model": "claude-a", "speed": "fast"}],
+    )
+    assert settled(run) == pytest.approx(billed("claude-a", None, "claude-a", "fast"))
+    assert run.budget.reserved[0] >= settled(run)
+
+
+def test_a_fast_attempt_that_falls_back_to_standard_is_not_settled_low() -> None:
+    """The reverse: the reply's speed is the fallback's standard, and the first attempt ran
+    fast. Settled at the reply's speed, it was $0.000025 under the bill."""
+    run = speed_run(
+        fallback_reply("claude-a", "claude-b", "standard"),
+        speed="fast",
+        fallbacks=[{"model": "claude-b", "speed": None}],
+    )
+    assert settled(run) == pytest.approx(billed("claude-a", "fast", "claude-b", None))
+    assert run.budget.reserved[0] >= settled(run)
+
+
+@pytest.mark.parametrize("asked", [None, "fast"])
+@pytest.mark.parametrize("entry", ["absent", None, "fast"])
+@pytest.mark.parametrize("then", ["claude-a", "claude-b"])
+def test_every_mix_of_speeds_is_settled_at_the_bill_and_held_at_least_that(
+    asked: str | None, entry: str | None, then: str
+) -> None:
+    body: dict[str, Any] = {} if asked is None else {"speed": "fast"}
+    fallback: dict[str, Any] = {"model": then}
+    if entry != "absent":
+        fallback["speed"] = entry
+    then_tier = asked if entry == "absent" else entry
+    for said in ("standard", "fast"):  # what the reply says changes nothing
+        run = speed_run(fallback_reply("claude-a", then, said), **body, fallbacks=[fallback])
+        assert settled(run) == pytest.approx(billed("claude-a", asked, then, then_tier)), said
+        assert run.budget.reserved[0] >= settled(run) - 1e-12, said
+
+
+def test_two_entries_on_one_model_settle_its_fallback_at_the_dearer_speed() -> None:
+    """A reply does not say which entry ran, so the fallback is taken at the dearest it could."""
+    run = speed_run(
+        fallback_reply("claude-a", "claude-b", "standard"),
+        fallbacks=[{"model": "claude-b", "speed": None}, {"model": "claude-b", "speed": "fast"}],
+    )
+    assert settled(run) == pytest.approx(billed("claude-a", None, "claude-b", "fast"))
+    assert run.budget.reserved[0] >= settled(run)
+
+
+def test_without_the_request_an_attempt_is_settled_as_the_reply_says() -> None:
+    """usage() with no request knows no speed, and keeps the earlier rule."""
+    used = provider_anthropic.usage(fallback_reply("claude-a", "claude-b", "fast"))
+    assert used.known and not any(a.speed_known for a in used.attempts)

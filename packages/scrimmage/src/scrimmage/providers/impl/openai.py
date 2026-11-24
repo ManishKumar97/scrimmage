@@ -12,7 +12,7 @@ from scrimmage import provider_openai as table
 from scrimmage.changes import Unchangeable, WebChanged
 from scrimmage.config import Fault
 from scrimmage.prices import Rates
-from scrimmage.providers.base import Fields, Given, ReplyChange, Usage
+from scrimmage.providers.base import NO_FIELDS, Fields, Given, ReplyChange, Usage
 from scrimmage.providers.impl import openai_changes
 
 RESPONSES = "responses"  # the op the change of a Responses reply is looked up under
@@ -60,7 +60,12 @@ class OpenAI:
     streams = staticmethod(table.streams)
 
     # Meter
-    usage = staticmethod(table.usage)
+    @staticmethod
+    def usage(body: bytes, *, output_required: bool = True, asked: Fields = NO_FIELDS) -> Usage:
+        """An OpenAI reply says all it used, so the request adds nothing."""
+        del asked
+        return table.usage(body, output_required=output_required)
+
     output_cap = staticmethod(table.output_cap)
     request_tier = staticmethod(table.request_tier)
     gateway_cost = staticmethod(table.gateway_cost)

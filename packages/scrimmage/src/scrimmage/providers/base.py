@@ -151,7 +151,12 @@ class Recognizer(Protocol):
 class Meter(Protocol):
     """Tokens, tiers and what a call costs."""
 
-    def usage(self, body: bytes, *, output_required: bool = True) -> Usage: ...
+    def usage(
+        self, body: bytes, *, output_required: bool = True, asked: Fields = NO_FIELDS
+    ) -> Usage:
+        """What a reply says it used. asked is the request it answers, for what the reply leaves
+        out, such as the speed each attempt of a fallback ran at."""
+        ...
 
     def output_cap(self, wire: Fields, path: str, default: int) -> int:
         """The most output tokens a call to this path could bill: what the request caps it at,
