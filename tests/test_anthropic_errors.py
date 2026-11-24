@@ -137,9 +137,7 @@ def test_a_prompt_over_the_context_window_is_a_400_invalid_request() -> None:
     assert run.line["status"] == 400
 
 
-@pytest.mark.parametrize(
-    "word", ["replace", "garble", "truncate", "refuse", "unknown tool", "bad tool args"]
-)
+@pytest.mark.parametrize("word", ["replace", "garble", "truncate", "refuse", "unknown tool"])
 def test_a_fault_that_is_not_done_yet_refuses_and_says_so_and_sends_nothing(word: str) -> None:
     kw = {"text": "NEW"} if word == "replace" else {}
     run, provider, client = call(word, **kw)
@@ -156,3 +154,15 @@ def test_a_fault_that_is_not_done_yet_refuses_and_says_so_and_sends_nothing(word
     assert "not yet for Anthropic" in str(caught.value.__cause__)
     assert provider.sent == [], "nothing was sent"
     assert run.line["reason"] == "mistake"
+
+
+def test_bad_tool_args_is_a_mistake_at_the_call_and_says_why_it_can_never_be_built() -> None:
+    run, provider, client = call("bad tool args")
+    with pytest.raises(anthropic.APIConnectionError) as caught:
+        ask(client)
+    said = str(caught.value.__cause__)
+    assert "JSON object on the wire" in said
+    assert "not yet" not in said
+    assert provider.sent == [], "nothing was sent"
+    assert run.line["reason"] == "mistake"
+

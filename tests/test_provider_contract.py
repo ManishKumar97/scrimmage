@@ -92,6 +92,9 @@ class Case:
     # The fault words whose replies this provider does not build or change yet: each is a
     # mistake in the test that says so, and the provider's built replies refuse.
     pending: tuple[str, ...] = ()
+    # The fault words no reply of this provider can take, whatever the request: a mistake in the
+    # test that is known before the run.
+    never: tuple[str, ...] = ()
 
 
 def openai_tool_request(name: str) -> dict[str, object]:
@@ -215,7 +218,8 @@ CASES = {
             "cache_creation_input_tokens",
             "mcp_servers",
         ),
-        pending=("replace", "garble", "truncate", "unknown tool", "bad tool args", "refuse"),
+        pending=("replace", "garble", "truncate", "unknown tool", "refuse"),
+        never=("bad tool args",),
     ),
     "openai": Case(
         host="api.openai.com",
@@ -483,11 +487,25 @@ def test_a_fault_that_cannot_be_carried_out_says_why_and_the_rest_do_not(
         said = provider.not_carried_out(word, case.chat_path, wrap_fields(case.request))
         if word in case.pending:
             assert isinstance(said, str) and "not yet for" in said, word
+        elif word in case.never:
+            assert isinstance(said, str) and "not yet for" not in said and said, word
         else:
             assert said is None, word
     for word, path, fields in case.not_carried:
         why = provider.not_carried_out(word, path, wrap_fields(fields))
         assert isinstance(why, str) and why, (word, path)
+
+
+def test_a_fault_no_request_can_take_is_known_before_the_run(provider: ModelProvider) -> None:
+    case = case_of(provider)
+    for word in EVERY_WORD:
+        said = provider.never_carried_out(word)
+        if word in case.never:
+            assert isinstance(said, str) and said, word
+            # The same reason on a request, so the two can never tell different stories.
+            assert provider.not_carried_out(word, case.chat_path, wrap_fields(case.request)) == said
+        else:
+            assert said is None, word
 
 
 def test_what_a_faulted_reply_gave_is_carried_back_by_the_request_built_from_it(

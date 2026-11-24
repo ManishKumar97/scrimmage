@@ -23,11 +23,11 @@ class NotYet:
 
     def blocked(self, status: int, headers: Sequence[tuple[str, str]]) -> Unchangeable | None:
         del status, headers
-        return Unchangeable(
+        why = table.never_carried_out(self.word) or (
             f"is an Anthropic call, and {self.word} is {table.NOT_YET}; use a status, bad body, "
-            "context too long or timeout on this one",
-            "unsupported",
+            "context too long or timeout on this one"
         )
+        return Unchangeable(why, "unsupported")
 
     def __call__(
         self,
@@ -128,6 +128,7 @@ class Anthropic:
     broken_body = staticmethod(table.broken_body)
     context_too_long_body = staticmethod(table.context_too_long_body)
     not_carried_out = staticmethod(table.not_carried_out)
+    never_carried_out = staticmethod(table.never_carried_out)
     tool_call_tools = staticmethod(table.tool_call_tools)
     no_free_tool_call = staticmethod(table.no_free_tool_call)
     refusal_reply = staticmethod(table.refusal_reply)

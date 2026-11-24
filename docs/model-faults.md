@@ -181,6 +181,14 @@ Text in a script that puts no spaces between words, such as Thai or Japanese, is
 
 A reply in gzip or deflate is unpacked, changed and sent to your agent with no encoding, and so is one in `br` when your program has `brotli` or `brotlicffi` 1.2 or later, see [Limits](limits.md).
 
+### `bad tool args` on an Anthropic call
+
+It is a mistake in the test, and it is found before any run.
+An Anthropic tool call's `input` is a JSON object on the wire, never JSON text, so it cannot fail to parse the way an OpenAI call's `arguments` can.
+`scrimmage check` and `scrimmage test` stop with exit code 2 on a row that writes `call = "model:anthropic"` with `do = "bad tool args"`, and say why, before any run starts.
+A row that writes `call = "model"` does not name its provider, so it is refused at the call instead, where the request shows which provider it is, and nothing is sent.
+Use `status`, `bad body`, `context too long` or `timeout` on an Anthropic call.
+
 ### The 400 after a reply fault
 
 A real 400 from the model, on a chat request built from a faulted reply, is your agent's result, not an infrastructure error.
