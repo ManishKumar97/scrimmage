@@ -12,7 +12,7 @@ from scrimmage import provider_openai as table
 from scrimmage.changes import Unchangeable, WebChanged
 from scrimmage.config import Fault
 from scrimmage.prices import Rates
-from scrimmage.providers.base import Fields, Given, ReplyChange
+from scrimmage.providers.base import Fields, Given, ReplyChange, Usage
 from scrimmage.providers.impl import openai_changes
 
 RESPONSES = "responses"  # the op the change of a Responses reply is looked up under
@@ -75,27 +75,13 @@ class OpenAI:
     def price(self, model: str, overrides: dict[str, Rates]) -> Rates | None:
         return table.price(model, overrides)
 
-    def cost(
-        self,
-        tokens_in: int,
-        tokens_out: int,
-        rates: Rates,
-        cached: int = 0,
-        writes: Mapping[str, int] | None = None,
-    ) -> float:
-        short, long = self.writes_of(writes)
-        return table.cost(tokens_in, tokens_out, rates, cached, short, long)
+    def cost(self, rates: Rates, used: Usage) -> float:
+        short, long = self.writes_of(used.writes)
+        return table.cost(used.input, used.output, rates, used.cached, short, long)
 
-    def dearest(
-        self,
-        rates: Rates,
-        tokens_in: int,
-        tokens_out: int,
-        cached: int,
-        writes: Mapping[str, int],
-    ) -> Rates:
-        short, long = self.writes_of(writes)
-        return table.dearest(rates, tokens_in, tokens_out, cached, short, long)
+    def dearest(self, rates: Rates, used: Usage) -> Rates:
+        short, long = self.writes_of(used.writes)
+        return table.dearest(rates, used.input, used.output, used.cached, short, long)
 
     @staticmethod
     def writes_of(writes: Mapping[str, int] | None) -> tuple[int, int]:

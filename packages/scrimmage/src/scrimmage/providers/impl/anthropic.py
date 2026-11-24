@@ -12,7 +12,7 @@ from scrimmage import provider_anthropic as table
 from scrimmage.changes import Unchangeable, WebChanged
 from scrimmage.config import Fault
 from scrimmage.prices import Rates
-from scrimmage.providers.base import Fields, Given, ReplyChange
+from scrimmage.providers.base import Fields, Given, ReplyChange, Usage
 
 
 class NotYet:
@@ -73,27 +73,27 @@ class Anthropic:
     def price(self, model: str, overrides: dict[str, Rates]) -> Rates | None:
         return table.price(model, overrides)
 
-    def cost(
-        self,
-        tokens_in: int,
-        tokens_out: int,
-        rates: Rates,
-        cached: int = 0,
-        writes: Mapping[str, int] | None = None,
-    ) -> float:
-        short, long = self.writes_of(writes)
-        return table.cost(tokens_in, tokens_out, rates, cached, short, long, writes)
+    def cost(self, rates: Rates, used: Usage) -> float:
+        short, long = self.writes_of(used.writes)
+        attempts, searches = self.extras_of(used)
+        return table.cost(
+            used.input, used.output, rates, used.cached, short, long, attempts, searches
+        )
 
-    def dearest(
-        self,
-        rates: Rates,
-        tokens_in: int,
-        tokens_out: int,
-        cached: int,
-        writes: Mapping[str, int],
-    ) -> Rates:
-        short, long = self.writes_of(writes)
-        return table.dearest(rates, tokens_in, tokens_out, cached, short, long, writes)
+    def dearest(self, rates: Rates, used: Usage) -> Rates:
+        short, long = self.writes_of(used.writes)
+        attempts, searches = self.extras_of(used)
+        return table.dearest(
+            rates, used.input, used.output, used.cached, short, long, attempts, searches
+        )
+
+    @staticmethod
+    def extras_of(used: Usage) -> tuple[tuple[table.Attempt, ...], int]:
+        """The attempts and the searches this provider's own reading of a reply keeps. A plain
+        Usage, such as one a test builds from counts alone, has neither."""
+        if isinstance(used, table.AnthropicUsage):
+            return used.attempts, used.searches
+        return (), 0
 
     @staticmethod
     def writes_of(writes: Mapping[str, int] | None) -> tuple[int, int]:

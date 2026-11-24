@@ -17,9 +17,17 @@ import pytest
 from scrimmage import changes
 from scrimmage.config import Fault
 from scrimmage.prices import RATE_KEYS, Rates
-from scrimmage.providers.base import ModelProvider, Reply, ServerChains
+from scrimmage.providers.base import ModelProvider, Reply, ServerChains, Usage
 from scrimmage.providers.impl.wire import fields_dict, wrap_fields
 from scrimmage.providers.registry import builtin_providers
+
+
+def reading(
+    tokens_in: int, tokens_out: int, cached: int = 0, writes: dict[str, int] | None = None
+) -> Usage:
+    """A reading of a reply from its counts alone, as the cost and dearest tests pass it."""
+    return Usage(tokens_in, tokens_out, True, cached, dict(writes or {}))
+
 
 OPENAI = Path(__file__).parent / "fixtures" / "openai"
 ANTHROPIC = Path(__file__).parent / "fixtures" / "anthropic"
@@ -419,7 +427,7 @@ def test_the_hold_may_read_the_request_and_never_costs_less_than_the_settle(
     case = case_of(provider)
     for fields in ({}, case.request, case.capped(50)):
         held = provider.most_cost(1000, 500, RATES, path=case.chat_path, fields=wrap_fields(fields))
-        assert held >= provider.cost(1000, 500, RATES, 0, {}) - 1e-12
+        assert held >= provider.cost(RATES, reading(1000, 500)) - 1e-12
 
 
 def test_context_too_long_is_a_json_error(provider: ModelProvider) -> None:
@@ -712,14 +720,14 @@ def test_a_cost_is_never_below_the_table(
 ) -> None:
     case = case_of(provider)
     counted = dict(zip(case.write_fields, writes, strict=False))
-    usd = provider.cost(tokens_in, tokens_out, RATES, cached, counted)
+    usd = provider.cost(RATES, reading(tokens_in, tokens_out, cached, counted))
     # The cheapest any input token can cost is the cached rate, and each output token costs the
     # output rate: no breakdown of the tokens prices the call under that.
     floor = (tokens_in * (RATES.cached_input or 0.0) + tokens_out * RATES.output) / 1_000_000
     assert usd >= floor - 1e-12
     if not cached and not any(writes):
         assert usd == pytest.approx((tokens_in * RATES.input + tokens_out * RATES.output) / 1e6)
-        assert provider.cost(tokens_in, tokens_out, RATES) == pytest.approx(usd)
+        assert provider.cost(RATES, reading(tokens_in, tokens_out)) == pytest.approx(usd)
     # The hold is the most the call can cost on the API its path names, so on some API of the
     # provider it is never under what the call settles at.
     held = max(
@@ -740,12 +748,14 @@ def test_a_write_is_priced_at_its_own_rate(provider: ModelProvider) -> None:
     case = case_of(provider)
     free = dict.fromkeys(case.write_fields, 0.0)
     rates = dataclasses.replace(Rates(1.0, 1.0, 0.1), **free)
-    base = provider.cost(1000, 0, rates, 0, {})
+    base = provider.cost(rates, reading(1000, 0))
     for field in case.write_fields:
         dear = dataclasses.replace(rates, **{**free, field: 5.0})
-        assert provider.cost(1000, 0, dear, 0, {field: 100}) == pytest.approx(base + 100 * 4 / 1e6)
+        assert provider.cost(dear, reading(1000, 0, 0, {field: 100})) == pytest.approx(
+            base + 100 * 4 / 1e6
+        )
         for other in set(case.write_fields) - {field}:
-            assert provider.cost(1000, 0, dear, 0, {other: 100}) == pytest.approx(
+            assert provider.cost(dear, reading(1000, 0, 0, {other: 100})) == pytest.approx(
                 base - 100 * 1 / 1e6
             )
 
@@ -753,7 +763,7 @@ def test_a_write_is_priced_at_its_own_rate(provider: ModelProvider) -> None:
 def test_the_dearest_rates_are_the_ones_the_call_costs_most_at(provider: ModelProvider) -> None:
     tier = Rates(4.0, 16.0)
     rates = Rates(2.0, 8.0, tiers=(("priority", tier),))
-    assert provider.dearest(rates, 100, 100, 0, {}) == tier
+    assert provider.dearest(rates, reading(100, 100)) == tier
 
 
 def test_the_dearest_rates_count_the_writes_of_the_call(provider: ModelProvider) -> None:
@@ -762,5 +772,5 @@ def test_the_dearest_rates_count_the_writes_of_the_call(provider: ModelProvider)
     for field in case.write_fields:
         tier = dataclasses.replace(Rates(1.0, 1.0), **{field: 10.0})
         rates = Rates(1.0, 1.0, tiers=(("t", tier),))
-        assert provider.dearest(rates, 100, 0, 0, {field: 100}) == tier
-        assert provider.dearest(rates, 100, 0, 0, {}) == rates
+        assert provider.dearest(rates, reading(100, 0, 0, {field: 100})) == tier
+        assert provider.dearest(rates, reading(100, 0)) == rates

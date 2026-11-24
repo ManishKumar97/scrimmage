@@ -107,7 +107,8 @@ def test_a_single_plain_iteration_is_the_top_level_and_changes_nothing() -> None
     run = Gate(hosts=(), prices=(("claude-test", Rates(3.0, 15.0)),))
     send(run, fixture("doc_prewarm.json"))
     used = provider_anthropic.usage(fixture("doc_prewarm.json"))
-    assert set(used.writes) == {"cache_write_5m", "cache_write_1h"}, "no hop was kept"
+    assert set(used.writes) == {"cache_write_5m", "cache_write_1h"}
+    assert used.attempts == (), "no attempt was kept"
     assert settled(run) == pytest.approx(0.019224, abs=TOLERANCE)
 
 
@@ -115,8 +116,13 @@ def test_usage_reads_each_iteration_and_sums_them() -> None:
     used = provider_anthropic.usage(fixture("doc_fallback.json"))
     assert (used.input, used.output, used.cached) == (535 + 412, 264, 0)
     assert used.known
-    assert used.writes["hop0:claude-fable-5:input"] == 535
-    assert used.writes["hop1:claude-opus-4-8:output"] == 264
+    assert [(a.model, a.input, a.output) for a in used.attempts] == [
+        ("claude-fable-5", 535, 0),
+        ("claude-opus-4-8", 412, 264),
+    ]
+    assert set(used.writes) == {"cache_write_5m", "cache_write_1h"}, (
+        "writes holds cache writes only"
+    )
 
 
 def test_an_iteration_that_cannot_be_read_makes_the_reply_not_known() -> None:
@@ -189,10 +195,7 @@ def reply_of(*hops: tuple[str, int, int]) -> bytes:
 def settle(reply: bytes, row: Rates) -> float:
     used = provider_anthropic.usage(reply)
     assert used.known
-    return provider_anthropic.cost(
-        used.input, used.output, row, used.cached, used.writes["cache_write_5m"],
-        used.writes["cache_write_1h"], used.writes,
-    )  # fmt: skip
+    return built_in().get("anthropic").cost(row, used)
 
 
 def held_and_settled(row: Rates, reply: bytes, **asked: Any) -> tuple[float, float]:

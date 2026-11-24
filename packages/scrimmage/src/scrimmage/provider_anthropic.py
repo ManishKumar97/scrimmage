@@ -10,7 +10,7 @@ import dataclasses
 import json
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -79,9 +79,28 @@ VERSION = re.compile(r"_\d{8}$")
 CONTENT_PART = re.compile(r"content\[(\d+)\]\.(text|input)")
 
 
+@dataclass(frozen=True)
+class Attempt:
+    """One billed attempt of a call that more than one model served, as usage.iterations lists
+    it: its model and its own counts. input holds the cache reads and writes, as Usage.input
+    does."""
+
+    model: str
+    input: int
+    output: int
+    cached: int
+    written_5m: int
+    written_1h: int
+
+
 @dataclass
 class AnthropicUsage(Usage):
-    """Usage, with Anthropic's two cache lifetimes named, which its tests and docs speak of."""
+    """Usage, with Anthropic's two cache lifetimes named, which its tests and docs speak of.
+    attempts holds each billed attempt of a call several models served, in order, and is empty
+    for a call one model answered. searches is the number of web searches the reply counts."""
+
+    attempts: tuple[Attempt, ...] = ()
+    searches: int = 0
 
     @property
     def written_5m(self) -> int:
@@ -301,9 +320,9 @@ def usage(body: bytes, *, output_required: bool = True) -> AnthropicUsage:
     When the reply has usage.iterations beyond one plain message, the attempts that were billed
     are each in it, with their own model: a server-side fallback, an advisor, a compaction. The
     top-level counts describe only the attempt that produced the message, so the settle is the
-    sum over the iterations, each at its own model's rates. Each hop is kept in writes under
-    hop<i>:<model>:<field>, which cost reads, and the totals are the sums. The searches a reply
-    counts are kept in writes as web_search_request, which the fee prices.
+    sum over the iterations, each at its own model's rates. Each billed attempt is kept in
+    attempts, and the totals are the sums. The searches a reply counts are kept in searches,
+    which the fee prices. writes holds only the cache writes.
     """
     text = body.decode("utf-8", "replace")
     # Split on newlines only: text in a reply can hold other line separators.
@@ -352,13 +371,16 @@ def usage(body: bytes, *, output_required: bool = True) -> AnthropicUsage:
         return result
     result.known = True
     if billed:
-        result.writes = _hop_writes(result, [(m, _totals(c, sp)) for _, m, c, sp in hops])
+        result.attempts = tuple(Attempt(m, *_totals(c, sp)) for _, m, c, sp in hops)
+        result.input = sum(a.input for a in result.attempts)
+        result.output = sum(a.output for a in result.attempts)
+        result.cached = sum(a.cached for a in result.attempts)
+        short = sum(a.written_5m for a in result.attempts)
+        long = sum(a.written_1h for a in result.attempts)
     else:
-        total, out, read, short, long = _totals(counts, split)
-        result.input, result.output, result.cached = total, out, read
-        result.writes = {WRITE_5M: short, WRITE_1H: long}
-    if searches:
-        result.writes[SEARCH] = searches
+        result.input, result.output, result.cached, short, long = _totals(counts, split)
+    result.writes = {WRITE_5M: short, WRITE_1H: long}
+    result.searches = searches
     return result
 
 
@@ -372,7 +394,6 @@ DEFAULT_FEES = {SEARCH: 0.01}
 # How many searches a request that offers web search with no max_uses is held for. The docs give
 # no default; they say a question of one fact takes 1 to 3 searches and research 10 or more.
 DEFAULT_SEARCHES = 10
-HOP_FIELDS = ("input", "output", "cached", WRITE_5M, WRITE_1H)
 
 
 def _fold(numbers: dict[str, object], counts: dict[str, int], split: dict[str, int]) -> bool:
@@ -425,20 +446,6 @@ def _hops(
             return None
         found.append((str(hop.get("type") or ""), str(hop.get("model") or ""), counts, split))
     return found
-
-
-def _hop_writes(
-    result: AnthropicUsage, hops: list[tuple[str, tuple[int, int, int, int, int]]]
-) -> dict[str, int]:
-    """Set the sums on the usage, and give each hop's counts under its own key."""
-    writes: dict[str, int] = {}
-    totals = [0, 0, 0, 0, 0]
-    for index, (model, counted) in enumerate(hops):
-        for field, value in zip(HOP_FIELDS, counted, strict=True):
-            writes[f"hop{index}:{model}:{field}"] = value
-        totals = [a + b for a, b in zip(totals, counted, strict=True)]
-    result.input, result.output, result.cached = totals[0], totals[1], totals[2]
-    return {WRITE_5M: totals[3], WRITE_1H: totals[4], **writes}
 
 
 COUNT_KEYS = (
@@ -521,19 +528,17 @@ def cost(
     cached: int = 0,
     written_5m: int = 0,
     written_1h: int = 0,
-    counted: Mapping[str, int] | None = None,
+    attempts: Sequence[Attempt] = (),
+    searches: int = 0,
 ) -> float:
     """What a call costs. cached and the written counts are parts of tokens_in. A call over the
-    long-context threshold costs every token at the long rates, not only those past it. counted
-    holds what usage kept beyond the tokens: each hop of a call that several models served, which
-    is then priced hop by hop, each at its own model's row, and the searches, at their fee."""
-    held = counted or {}
-    fee = dict(rates.fees)
-    extra = sum(n * fee.get(key, 0.0) for key, n in held.items() if key == SEARCH)
-    hops = _hops_in(held)
-    if not hops:
+    long-context threshold costs every token at the long rates, not only those past it. A call
+    several models served is priced attempt by attempt, each at its own model's row, and its
+    searches at their fee."""
+    extra = searches * dict(rates.fees).get(SEARCH, 0.0)
+    if not attempts:
         return _tokens_cost(tokens_in, tokens_out, rates, cached, written_5m, written_1h) + extra
-    return sum(_hop_cost(model, mine, rates) for model, mine in hops) + extra
+    return sum(_hop_cost(attempt, rates) for attempt in attempts) + extra
 
 
 def _tokens_cost(
@@ -545,18 +550,6 @@ def _tokens_cost(
     full += written_5m * _write_rate(rates, WRITE_5M)
     full += written_1h * _write_rate(rates, WRITE_1H)
     return (full + tokens_out * rates.output) / 1_000_000
-
-
-def _hops_in(counted: Mapping[str, int]) -> list[tuple[str, dict[str, int]]]:
-    """The hops usage kept, in order, as (model, counts by field)."""
-    found: dict[str, tuple[str, dict[str, int]]] = {}
-    for key, value in counted.items():
-        if not key.startswith("hop"):
-            continue
-        index, _, rest = key.partition(":")
-        model, _, field = rest.rpartition(":")
-        found.setdefault(index, (model, {}))[1][field] = value
-    return [found[index] for index in sorted(found, key=lambda i: int(i[3:]))]
 
 
 def _row_for(model: str, rates: Rates) -> Rates | None:
@@ -573,19 +566,19 @@ def _row_for(model: str, rates: Rates) -> Rates | None:
     return None
 
 
-def _hop_cost(model: str, mine: dict[str, int], rates: Rates) -> float:
-    """One hop at its model's row. A model no row prices is priced at the dearest row there is,
-    so a hop never costs less than its model could."""
-    row = _row_for(model, rates)
+def _hop_cost(attempt: Attempt, rates: Rates) -> float:
+    """One attempt at its model's row. A model no row prices is priced at the dearest row there
+    is, so an attempt never costs less than its model could."""
+    row = _row_for(attempt.model, rates)
     rows = [row] if row is not None else [rates, *(r for _, r in rates.models)]
     return max(
         _tokens_cost(
-            mine.get("input", 0),
-            mine.get("output", 0),
+            attempt.input,
+            attempt.output,
             candidate,
-            mine.get("cached", 0),
-            mine.get(WRITE_5M, 0),
-            mine.get(WRITE_1H, 0),
+            attempt.cached,
+            attempt.written_5m,
+            attempt.written_1h,
         )
         for candidate in rows
     )
@@ -598,14 +591,17 @@ def dearest(
     cached: int,
     written_5m: int,
     written_1h: int,
-    counted: Mapping[str, int] | None = None,
+    attempts: Sequence[Attempt] = (),
+    searches: int = 0,
 ) -> Rates:
     """Of the default rates and every tier the row prices, the ones this call costs most at,
     long rates included at the call's size: for a reply that names a tier the row does not price."""
     every = (rates, *(tier for _, tier in rates.tiers))
     return max(
         every,
-        key=lambda r: cost(tokens_in, tokens_out, r, cached, written_5m, written_1h, counted),
+        key=lambda r: cost(
+            tokens_in, tokens_out, r, cached, written_5m, written_1h, attempts, searches
+        ),
     )
 
 

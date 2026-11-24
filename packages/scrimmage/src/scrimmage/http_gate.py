@@ -1755,14 +1755,13 @@ def record(
     if exact is None:
         exact = provider.gateway_cost(response.headers.get(COST_HEADER))
     if rates and used.known:
-        writes = used.writes
         # The reply says its tier; a reply that does not is settled at the tier it was held at.
         at = rates.at(used.tier or held_tier(ctx, provider, request))
         if rates.unpriced(used.tier):
             # A tier the row does not price: settle at the dearest it does, and say so.
-            at = provider.dearest(rates, tokens_in, tokens_out, cached, writes)
+            at = provider.dearest(rates, used)
             unpriced = used.tier
-        usd = provider.cost(tokens_in, tokens_out, at, cached, writes)
+        usd = provider.cost(at, used)
     elif rates:  # a guess from the sizes, so every input token at its dearest rate
         usd = worst(ctx, provider, request, tokens_in, tokens_out, rates)
     if usd is not None and exact is not None and not free:

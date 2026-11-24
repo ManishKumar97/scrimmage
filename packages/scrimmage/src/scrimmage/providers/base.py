@@ -10,7 +10,7 @@ Nothing here names a provider's API. Where an API differs, the provider decides:
 passes the request's path and fields, and the provider says what they mean.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, NoReturn, Protocol, SupportsIndex, final, runtime_checkable
 
@@ -166,23 +166,15 @@ class Meter(Protocol):
 
     def price(self, model: str, overrides: dict[str, Rates]) -> Rates | None: ...
 
-    def cost(
-        self,
-        tokens_in: int,
-        tokens_out: int,
-        rates: Rates,
-        cached: int = 0,
-        writes: Mapping[str, int] | None = None,
-    ) -> float: ...
+    def cost(self, rates: Rates, used: Usage) -> float:
+        """What the call cost at these rates. used is the provider's own reading of the reply,
+        passed whole, so a provider that keeps more than the token counts, such as the
+        attempts of a call several models served, reads it here."""
+        ...
 
-    def dearest(
-        self,
-        rates: Rates,
-        tokens_in: int,
-        tokens_out: int,
-        cached: int,
-        writes: Mapping[str, int],
-    ) -> Rates: ...
+    def dearest(self, rates: Rates, used: Usage) -> Rates:
+        """Of the default rates and every tier the row prices, the ones this call costs most at."""
+        ...
 
     def most_cost(
         self,
