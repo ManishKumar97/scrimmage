@@ -232,6 +232,7 @@ expect = [["cannot", "declined"]]
 It is a mistake in the test on an OpenAI call, whose refusal has one form chosen by the request.
 A row that writes `call = "model:openai"` is stopped by `scrimmage check` and `scrimmage test` with exit code 2 before any run.
 A row that writes `call = "model"` is stopped at the call instead, and nothing is sent.
+The row's `form` shows in `scrimmage test --json` under the row's `fault`, and on the line of the call, so two `refuse` rows that differ only by form are told apart.
 
 Reply faults need a reply that is not streamed.
 On a stream, `garble`, `truncate` and `refuse` are a mistake in the test and nothing is sent.

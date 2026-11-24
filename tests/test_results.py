@@ -231,6 +231,7 @@ def test_a_faults_own_rules_are_in_its_row() -> None:
         "text": None,
         "find": None,
         "retry_after": None,
+        "form": None,
         "expect": [["unable", "sorry"]],
         "forbid": ["Oct 30"],
         "pass_rate": 0.5,

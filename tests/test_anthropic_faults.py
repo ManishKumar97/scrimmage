@@ -405,3 +405,25 @@ def test_the_thinking_check_behind_leaving_thinking_blocks_alone_is_the_saved_ca
     assert turn["content"][1]["text"] != said["text"]
     assert changes.GARBLE_TOKEN in turn["content"][1]["text"]
     assert again["type"] == "message" and again["stop_reason"] == "end_turn"
+
+
+def test_two_refuse_rows_that_differ_only_by_form_are_told_apart_in_json_and_in_the_record() -> (
+    None
+):
+    import jsonschema
+
+    import scrimmage
+    from scrimmage import runner
+
+    path = Path(scrimmage.__file__).parent / "schemas" / "record.v1.json"
+    schema = json.loads(path.read_text())
+    seen: list[tuple[object, object]] = []
+    for form in ("plain", "classifier", None):
+        extra = {} if form is None else {"form": form}
+        fault = Fault("model", "refuse", "always", model=MODEL, **extra)
+        run = new_gate("refuse", **extra)
+        asked(anthropic_client(Provider(run.events)))
+        jsonschema.Draft202012Validator(schema).validate(run.line)
+        seen.append((runner.fault_json(fault)["form"], run.line["fault"].get("form")))
+    assert seen == [("plain", "plain"), ("classifier", "classifier"), (None, None)]
+    assert "form" not in run.line["fault"], "a row that names no form says none"
