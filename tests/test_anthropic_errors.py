@@ -161,8 +161,22 @@ def test_bad_tool_args_is_a_mistake_at_the_call_and_says_why_it_can_never_be_bui
     with pytest.raises(anthropic.APIConnectionError) as caught:
         ask(client)
     said = str(caught.value.__cause__)
-    assert "JSON object on the wire" in said
+    assert "input is a JSON object" in said
     assert "not yet" not in said
+    assert provider.sent == [], "nothing was sent"
+    assert run.line["reason"] == "mistake"
+
+
+def test_a_streamed_bad_tool_args_gets_the_reason_that_holds_not_turn_streaming_off() -> None:
+    """Turning streaming off would not help: the reason that holds for every reply comes first."""
+    run, provider, client = call("bad tool args")
+    with pytest.raises(anthropic.APIConnectionError) as caught:
+        client.messages.create(
+            model=MODEL, max_tokens=5, messages=[{"role": "user", "content": "hi"}], stream=True
+        )
+    said = str(caught.value.__cause__)
+    assert "input is a JSON object" in said
+    assert "turn streaming off" not in said
     assert provider.sent == [], "nothing was sent"
     assert run.line["reason"] == "mistake"
 
@@ -199,7 +213,10 @@ def retrying(
         Fault("model", "status 529", when, **kw), hosts=(), prices=((MODEL, Rates(3.0, 15.0)),)
     )
     provider = Provider(run.events, lambda r: httpx2.Response(200, content=REAL_ANSWER))
-    return run, provider, anthropic_client(provider, max_retries=2), sleeps
+    # The library's own default, which the docs' arithmetic is about: 3 attempts a call.
+    assert anthropic.DEFAULT_MAX_RETRIES == 2
+    client = anthropic_client(provider, max_retries=anthropic.DEFAULT_MAX_RETRIES)
+    return run, provider, client, sleeps
 
 
 def attempts(run: Gate) -> list[int]:

@@ -184,7 +184,8 @@ A reply in gzip or deflate is unpacked, changed and sent to your agent with no e
 ### `bad tool args` on an Anthropic call
 
 It is a mistake in the test, and it is found before any run.
-An Anthropic tool call's `input` is a JSON object on the wire, never JSON text, so it cannot fail to parse the way an OpenAI call's `arguments` can.
+In an Anthropic reply that is not streamed, a tool call's `input` is a JSON object, not JSON text, so it cannot fail to parse the way an OpenAI call's `arguments` can.
+A streamed reply sends the input as text, but Scrimmage changes no streamed reply.
 `scrimmage check` and `scrimmage test` stop with exit code 2 on a row that writes `call = "model:anthropic"` with `do = "bad tool args"`, and say why, before any run starts.
 A row that writes `call = "model"` does not name its provider, so it is refused at the call instead, where the request shows which provider it is, and nothing is sent.
 Use `status`, `bad body`, `context too long` or `timeout` on an Anthropic call.

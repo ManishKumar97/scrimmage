@@ -35,12 +35,14 @@ NOT_YET = "not yet for Anthropic"
 # The words whose reply an Anthropic call cannot be given yet.
 PENDING = ("replace", "garble", "truncate", "unknown tool", "refuse")
 # The words no Anthropic reply can take, whatever the request: a mistake in the test, known
-# before the run. A tool call's input is a JSON object on the wire, never JSON text.
+# before the run. In a reply that is not streamed, a tool call's input is a JSON object, not
+# JSON text; a streamed reply sends it as text, but Scrimmage changes no streamed reply.
 NEVER = {
     "bad tool args": (
-        "is an Anthropic call, and bad tool args cannot be built: a tool call's input is a "
-        "JSON object on the wire, so it cannot fail to parse; use a status, bad body, "
-        "context too long or timeout on this one"
+        "is an Anthropic call, and bad tool args cannot be built: in a reply that is not "
+        "streamed a tool call's input is a JSON object, so it cannot fail to parse, and "
+        "Scrimmage changes no streamed reply; use a status, bad body, context too long or "
+        "timeout on this one"
     )
 }
 

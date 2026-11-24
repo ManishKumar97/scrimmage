@@ -83,7 +83,7 @@ Each call gets its own copy of the value, so a change the agent makes to it is n
 | `unknown tool` | a chat model call that offers tools gets a 200 that calls `multi_tool_use.parallel`, a tool no agent offers, as OpenAI's models have done; nothing is sent |
 | `garble` | the chat model call happens, and every fifth word of its reply becomes a stray token, as in a real incident |
 | `truncate` | the chat model call happens, and its reply is cut short with `finish_reason` `length`; a reply of tool calls alone becomes the 400 OpenAI sends when the limit lands inside a tool call |
-| `bad tool args` | the chat model call happens, and the arguments of its tool calls no longer parse as JSON; on an Anthropic call it is a mistake in the test, because a tool call's input is a JSON object on the wire and cannot fail to parse |
+| `bad tool args` | the chat model call happens, and the arguments of its tool calls no longer parse as JSON; on an Anthropic call it is a mistake in the test, because in a reply that is not streamed a tool call's input is a JSON object and cannot fail to parse |
 
 Under `empty` the tool's declared return type gives the value:
 

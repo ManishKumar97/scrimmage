@@ -694,7 +694,7 @@ BAD = [
         fault('call = "tool:t"\ndo = "error"\nraises = "UnicodeDecodeError"\nwhen = "first 1"\n'),
         False,
     ),
-    # The row names Anthropic, whose tool input is a JSON object on the wire: known before any run.
+    # The row names Anthropic, whose tool input is a JSON object in a reply: known before any run.
     Bad(
         "anthropic_bad_tool_args",
         fault(
