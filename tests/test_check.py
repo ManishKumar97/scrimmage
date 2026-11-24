@@ -82,12 +82,12 @@ def test_bad_tool_args_on_an_anthropic_row_is_refused_before_any_run_naming_why(
     project.toml.write_text(text)
     assert cli.main(["check", str(project.toml)]) == outcomes.MISTAKE
     checked = capsys.readouterr()
-    assert "bad tool args is an Anthropic call" in checked.err
-    assert "JSON object on the wire" in checked.err
+    assert "model:anthropic is an Anthropic call" in checked.err
+    assert "input is a JSON object" in checked.err
     assert cli.main(["test", str(project.toml)]) == outcomes.MISTAKE
     tested = capsys.readouterr()
     assert "Reached" not in tested.err, "scrimmage test stopped before its runner started"
-    assert "JSON object on the wire" in tested.err
+    assert "input is a JSON object" in tested.err
     # The same word on an OpenAI row, which can take it, gets past the file.
     project.toml.write_text(text.replace("model:anthropic", "model:openai"))
     assert cli.main(["check", str(project.toml)]) == outcomes.OK

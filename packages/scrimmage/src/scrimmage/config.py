@@ -820,7 +820,7 @@ def never_for_provider(test: Test, fault: Fault) -> str | None:
     why = provider.never_carried_out(fault.do)
     if why is None:
         return None
-    return f"[[test]] {test.name!r}: fault on {fault.target}: {fault.do} {why}"
+    return f"[[test]] {test.name!r}: fault on {fault.target}: {fault.call} {why}"
 
 
 def long_wait(test: Test, fault: Fault, agent: Agent) -> str | None:
