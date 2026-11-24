@@ -9,7 +9,7 @@ Every other limit is listed below, grouped by how your agent runs.
 - **OpenAI and Anthropic only.** Model calls are understood for OpenAI's API, for Anthropic's Messages API, and for gateways that speak either format; a call to another provider stops the test until you list it.
   Either name a gateway that speaks OpenAI's or Anthropic's format under `model_hosts`, or list the provider's host under `real`, where its calls run with no budget and no faults; see [Use a gateway](model-faults.md#use-a-gateway).
   Anthropic's Messages API is recognized and its calls are counted, but this version ships no Anthropic prices, so a call with a budget on is refused until you add a price under `[agent.prices]`.
-  The faults that change or build an Anthropic reply are not done yet, and `bad tool args` never will be: see [`bad tool args` on an Anthropic call](model-faults.md#bad-tool-args-on-an-anthropic-call).
+  `replace`, `garble`, `truncate` and `refuse` work on an Anthropic reply, but `unknown tool` is not done yet, and `bad tool args` never will be: see [Reply faults on an Anthropic call](model-faults.md#reply-faults-on-an-anthropic-call) and [`bad tool args` on an Anthropic call](model-faults.md#bad-tool-args-on-an-anthropic-call).
 - **LangChain only.** LangChain tools, which LangGraph runs, are found by themselves; a tool on another framework is not gated.
   List each tool's function under `tools`; see [the `tools` setting](configuration.md#agent).
 - **httpx only.** Web requests through httpx and httpx2 are gated; `requests`, `aiohttp`, `urllib` and raw sockets run unrecorded and ungated.
@@ -450,6 +450,15 @@ When two entries name the same model, or none names the model that ran, the fall
 An attempt of another kind, such as an advisor, is settled at the reply's tier for the requested model and at the normal rates for any other.
 A request Scrimmage cannot read, such as a compressed one, is settled the same way.
 The hold covers only the models the request names, so a reply in which a model no entry names served can settle above its hold.
+
+- **`refuse` with `form = "classifier"` always says the category `cyber`.**
+  The only classifier refusal Scrimmage has a source for is the example on Anthropic's Refusals page, and its category is `cyber`.
+  An agent that branches on another category is not reached by this fault.
+  No real classifier refusal could be captured with a harmless request.
+
+- **A reply fault on an Anthropic stream is a mistake in the test.**
+  `garble`, `truncate` and `refuse` stop before sending, and `replace` lets the real stream through with the mistake on the line.
+  An agent that streams, as the anthropic library requires for a large `max_tokens`, is reached by `status`, `timeout` and the connection faults only.
 
 - **Anthropic's server tools.** A web search is settled at $0.01 each, from the searches the reply counts, unless `[anthropic.fees]` in a price file or `web_search_request` in a model's `[agent.prices]` row says otherwise. The hold adds `max_uses` searches, or 10 when there is none. A server tool loop adds input at Anthropic's side that the hold cannot see, and writes the cache by itself, so a hold can be low for such a call; the hold uses at least the 5 minute write rate. Code execution is billed by container time, which a reply never reports, so a budget cannot count it: a request that offers it is refused, with the reason `unmetered_tool`, unless it also offers `web_search_20260209` or `web_fetch_20260209` or later, with which it is free. The refusal does not depend on whether a budget is set.
   The searches are counted from the reply's own `usage.server_tool_use`, which no real reply Scrimmage has seen spreads over `usage.iterations`; a search an attempt of a fallback or an advisor ran, if the API counts it in that attempt's entry only, is not counted.

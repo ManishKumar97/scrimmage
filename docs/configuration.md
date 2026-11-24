@@ -386,6 +386,7 @@ These are mistakes in the test, exit code 2:
 | `text` | With `"append"` and `"replace"`: the text to add, or to put in place. Up to 64 KiB. Required with those two, refused with any other fault. |
 | `find` | With `"replace"`: replace only this text, wherever it is, compared exactly. Without it the whole result is replaced. On a model call, it is looked for in the text of each choice of the reply. Optional. |
 | `retry_after` | With `"status 429"` or `"status 503"` on a model call or a web request: the reply's `Retry-After` header, in whole seconds from 0. It must be under `run_timeout`. See [A rate limit that says how long to wait](model-faults.md#a-rate-limit-that-says-how-long-to-wait). Optional. |
+| `form` | With `"refuse"` on a model call: `"plain"`, the default, or `"classifier"`. On an Anthropic call `"plain"` is a decline in the model's own words with `stop_reason` `end_turn`, and `"classifier"` is a refusal with `stop_reason` `refusal` and `stop_details`. On an OpenAI call any `form` is a mistake in the test. See [Reply faults on an Anthropic call](model-faults.md#reply-faults-on-an-anthropic-call). Optional. |
 | `when` | When it fires: `"always"`, the default; `"first N"`, the first N attempts; `"call N"`, the Nth attempt alone; or on a model call `"requests N"`, the first N requests and every retry of each. `"once"` and a bare number are refused: write `"first 1"` or `"call N"`. |
 | `method` | On a web request: fail only this method. |
 | `path` | On a web request: fail only this exact path, with no query string. |

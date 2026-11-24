@@ -111,6 +111,7 @@ expect = [["sorry", "could not"]]
 ```
 
 They work on a chat call, `model` or `model:openai`, and take no `text`, `find` or `retry_after`.
+`refuse` alone takes `form`, which is for an Anthropic call: see [Reply faults on an Anthropic call](#reply-faults-on-an-anthropic-call).
 Under `when = "always"` each needs its own `expect` or `forbid`, as any fault that hides the data does.
 
 What each costs:
@@ -181,6 +182,60 @@ Text in a script that puts no spaces between words, such as Thai or Japanese, is
 
 A reply in gzip or deflate is unpacked, changed and sent to your agent with no encoding, and so is one in `br` when your program has `brotli` or `brotlicffi` 1.2 or later, see [Limits](limits.md).
 
+### Reply faults on an Anthropic call
+
+`replace`, `garble`, `truncate` and `refuse` work on a call to Anthropic's Messages API, in its own form.
+A reply there is a list of content blocks, not choices.
+Each fault changes the blocks it names, and leaves every other byte as Anthropic sent it: `id`, `model`, `usage` and every other block.
+
+| Fault | What your agent gets | Left as it is when | Where it was seen |
+|---|---|---|---|
+| `replace` | the text of every `text` block replaced, or the `find` text in each of them | the reply has no `text` block | the same fault as on OpenAI |
+| `garble` | every fifth word of each `text` block becomes `สวัสดี` | the reply has no `text` block | Anthropic's postmortem of August and September 2025: stray Thai or Chinese tokens in English replies |
+| `truncate` | the first `text` block cut at the last space at or before its middle, the blocks after it dropped, and `stop_reason` set to `max_tokens` | the reply has no text and no tool call | the `max_tokens` stop reason of the Messages API, which ends a reply that reached its limit |
+| `truncate`, on a reply of tool calls alone | the first `tool_use` block with an empty `input`, the blocks after it dropped, and `stop_reason` set to `max_tokens` | | a real `claude-haiku-5-5` reply cut inside a tool call, saved on 23 November 2026 |
+| `refuse` | a plain decline: one `text` block, `I can't provide that.`, and `stop_reason` `end_turn` | | a real `claude-haiku-5-5` decline, saved on 24 November 2026 |
+| `refuse`, with `form = "classifier"` | no content, `stop_reason` `refusal`, and `stop_details` with a `category` and an `explanation` | | Anthropic's Refusals page |
+
+Anthropic's API never sends a tool call cut in the middle as an error, as OpenAI's does.
+A real reply cut inside a tool call is a 200 with the block there and an `input` of `{}`, so that is what `truncate` builds.
+`usage` stays as the model billed it, and the line's cost is that.
+A reply that is left as it is goes to your agent unchanged, and the line says why in `unchanged`.
+
+`thinking` and `redacted_thinking` blocks are never changed.
+Anthropic signs them, and your agent sends them back as they came, so a changed `text` block beside one is sent back as the agent got it.
+A real request with a garbled text block next to an intact signed `thinking` block got a 200 from `claude-haiku-5-5`, on 24 November 2026.
+
+`refuse` is built, not sent: nothing is reserved and the line costs 0.
+It is made from a real reply's fields, in their order, with a new `msg_` id and the model your request named.
+Its `usage` holds a rough count of your request's tokens and, for the plain form, 10 output tokens.
+
+#### The two forms of `refuse` on Anthropic
+
+| `form` | The reply | Where it comes from |
+|---|---|---|
+| `"plain"`, the default | `stop_reason` `end_turn`, and a `text` block with the first sentence of a real decline: `I can't provide that.` | Claude declining in its own words |
+| `"classifier"` | `stop_reason` `refusal`, no content, and `stop_details` of type `refusal` with the category `cyber` and its explanation | the example on Anthropic's Refusals page, from its safety classifier |
+
+```toml
+[[test.fault]]
+call   = "model:anthropic"
+model  = "claude-haiku-5-5"
+do     = "refuse"
+form   = "classifier"
+when   = "call 2"
+expect = [["cannot", "declined"]]
+```
+
+`form` works only with `do = "refuse"`, and is `"plain"` or `"classifier"`.
+It is a mistake in the test on an OpenAI call, whose refusal has one form chosen by the request.
+A row that writes `call = "model:openai"` is stopped by `scrimmage check` and `scrimmage test` with exit code 2 before any run.
+A row that writes `call = "model"` is stopped at the call instead, and nothing is sent.
+
+Reply faults need a reply that is not streamed.
+On a stream, `garble`, `truncate` and `refuse` are a mistake in the test and nothing is sent.
+`replace` runs the real call, the agent gets its stream whole, and the line records the mistake: `replace on a model call needs a reply that is not streamed`.
+
 ### `bad tool args` on an Anthropic call
 
 It is a mistake in the test, and it is found before any run.
@@ -196,8 +251,8 @@ A real 400 from the model, on a chat request built from a faulted reply, is your
 The 400 is what the real misbehaviour leads to.
 "Built from it" is read from the request as it is sent, to the same model call, such as `model:openai`, and means one of two things:
 
-- its messages hold a tool call id the faulted reply made, as an assistant tool call or a tool result's `tool_call_id`;
-- its messages start with the faulted request's messages and then the message your agent got, compared with null and empty fields left out.
+- its messages hold a tool call id the faulted reply made, as an assistant tool call or a tool result's `tool_call_id`, or on an Anthropic call an assistant `tool_use` block's `id` or a `tool_result` block's `tool_use_id`;
+- its messages start with the faulted request's messages and then the message your agent got, compared with null and empty fields left out; on an Anthropic call a message's text sent as a string is the same as one `text` block.
 
 After `unknown tool` only the first counts, as a real model sends calls to `multi_tool_use.parallel` too.
 After `refuse`, `garble`, `truncate` and `bad tool args` either counts.
